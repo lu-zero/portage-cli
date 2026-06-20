@@ -20,58 +20,74 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use portage_atom::interner::Interned;
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_atom_pubgrub::UseConfig;
 
 use super::repo::mask_matches;
+
+/// An interned USE flag.
+type Flag = Interned<DefaultInterner>;
+
+/// A parsed per-atom force/mask token: the interned flag and whether it is the
+/// incremental removal form (`-flag`, i.e. unforce/unmask).
+type ForceTok = (Flag, bool);
 
 /// Per-atom force/mask entries grouped by `Cpn`. The profile chain contributes
 /// hundreds of `package.use.{force,mask}` atoms; grouping by `Cpn` turns a
 /// package's lookup into O(1) (a miss costs nothing) instead of a scan over the
 /// whole list for every package the solver evaluates. Per-`Cpn` insertion order
 /// is preserved so the incremental `-flag` (unforce/unmask) resolution is exact.
-pub(super) type PkgRules = HashMap<Cpn, Vec<(Dep, Vec<String>)>>;
+pub(super) type PkgRules = HashMap<Cpn, Vec<(Dep, Vec<ForceTok>)>>;
 
-/// Resolved profile force/mask policy. The `Vec<String>` globals are already
-/// `-`-resolved (`merge_use_flags`); the per-atom sets keep raw tokens so a
-/// `-flag` (unforce/unmask) is resolved against the accumulated set per package.
+/// Resolved profile force/mask policy, flags interned once at config-read time.
+/// The globals are already `-`-resolved (`merge_use_flags`); the per-atom sets
+/// keep the removal bit so a `-flag` (unforce/unmask) is resolved against the
+/// accumulated set per package.
 #[derive(Default)]
 pub(super) struct ForceMask {
-    pub use_force: Vec<String>,
-    pub use_mask: Vec<String>,
-    pub use_stable_force: Vec<String>,
-    pub use_stable_mask: Vec<String>,
+    pub use_force: Vec<Flag>,
+    pub use_mask: Vec<Flag>,
+    pub use_stable_force: Vec<Flag>,
+    pub use_stable_mask: Vec<Flag>,
     pub pkg_force: PkgRules,
     pub pkg_mask: PkgRules,
     pub pkg_stable_force: PkgRules,
     pub pkg_stable_mask: PkgRules,
 }
 
-/// Group flat per-atom entries by `Cpn` (see [`PkgRules`]).
+/// Group flat per-atom entries by `Cpn` (see [`PkgRules`]), parsing each token
+/// to interned form (`-flag` → removal) once.
 pub(super) fn index_by_cpn(entries: Vec<(Dep, Vec<String>)>) -> PkgRules {
     let mut map = PkgRules::new();
     for (dep, flags) in entries {
-        map.entry(dep.cpn).or_default().push((dep, flags));
+        let toks: Vec<ForceTok> = flags
+            .iter()
+            .map(|f| match f.strip_prefix('-') {
+                Some(name) => (Interned::intern(name), true),
+                None => (Interned::intern(f), false),
+            })
+            .collect();
+        map.entry(dep.cpn).or_default().push((dep, toks));
     }
     map
 }
 
-/// Accumulate per-atom flag entries matching `cpv` into `set`, honouring `-flag`
+/// Accumulate per-atom tokens matching `cpv` into `set`, honouring `-flag`
 /// removal (incremental, in list order).
-fn accumulate(rules: &PkgRules, cpv: &Cpv, set: &mut BTreeSet<String>) {
+fn accumulate(rules: &PkgRules, cpv: &Cpv, set: &mut BTreeSet<Flag>) {
     let Some(entries) = rules.get(&cpv.cpn) else {
         return;
     };
-    for (dep, flags) in entries {
+    for (dep, toks) in entries {
         if !mask_matches(dep, cpv) {
             continue;
         }
-        for f in flags {
-            if let Some(name) = f.strip_prefix('-') {
-                set.remove(name);
+        for &(flag, remove) in toks {
+            if remove {
+                set.remove(&flag);
             } else {
-                set.insert(f.clone());
+                set.insert(flag);
             }
         }
     }
@@ -82,11 +98,7 @@ impl ForceMask {
     /// the base config — i.e. package-level force/mask always, plus the
     /// `*.stable.*` sets when `stable`. Global non-stable `use.force`/`use.mask`
     /// are excluded (they live in the base config). Mask wins over force.
-    pub(super) fn effective(
-        &self,
-        cpv: &Cpv,
-        stable: bool,
-    ) -> (BTreeSet<String>, BTreeSet<String>) {
+    pub(super) fn effective(&self, cpv: &Cpv, stable: bool) -> (BTreeSet<Flag>, BTreeSet<Flag>) {
         let mut forced = BTreeSet::new();
         let mut masked = BTreeSet::new();
         // Global `use.mask` must force a flag *off* per package, overriding the
@@ -95,13 +107,13 @@ impl ForceMask {
         // `llvm-runtimes/compiler-rt-sanitizers`'s `+abi_x86_32`, masked on
         // arm64 by `arch/base/use.mask`) would otherwise re-enable. Added before
         // the per-package rules so `package.use.mask -flag` can unmask it.
-        masked.extend(self.use_mask.iter().cloned());
+        masked.extend(self.use_mask.iter().copied());
         accumulate(&self.pkg_force, cpv, &mut forced);
         accumulate(&self.pkg_mask, cpv, &mut masked);
         if stable {
-            forced.extend(self.use_stable_force.iter().cloned());
+            forced.extend(self.use_stable_force.iter().copied());
             accumulate(&self.pkg_stable_force, cpv, &mut forced);
-            masked.extend(self.use_stable_mask.iter().cloned());
+            masked.extend(self.use_stable_mask.iter().copied());
             accumulate(&self.pkg_stable_mask, cpv, &mut masked);
         }
         forced.retain(|f| !masked.contains(f));
@@ -110,24 +122,24 @@ impl ForceMask {
 
     /// Apply force/mask to a package's effective USE: enable forced flags, then
     /// disable masked ones (mask wins). Overrides `package.use` and the
-    /// configured value, matching Portage.
+    /// configured value, matching Portage. Flags are already interned.
     pub(super) fn apply(&self, cfg: &mut UseConfig, cpv: &Cpv, stable: bool) {
         let (forced, masked) = self.effective(cpv, stable);
-        for f in &forced {
-            cfg.enable(Interned::intern(f));
+        for &f in &forced {
+            cfg.enable(f);
         }
-        for f in &masked {
-            cfg.disable(Interned::intern(f));
+        for &f in &masked {
+            cfg.disable(f);
         }
     }
 
-    /// Every flag name pinned for `cpv` (global force/mask + the package-level and
+    /// Every flag pinned for `cpv` (global force/mask + the package-level and
     /// stable sets) — the Level-C cede gate must never cede any of these.
-    pub(super) fn pins(&self, cpv: &Cpv, stable: bool) -> BTreeSet<String> {
+    pub(super) fn pins(&self, cpv: &Cpv, stable: bool) -> BTreeSet<Flag> {
         let (mut pins, masked) = self.effective(cpv, stable);
         pins.extend(masked);
-        pins.extend(self.use_force.iter().cloned());
-        pins.extend(self.use_mask.iter().cloned());
+        pins.extend(self.use_force.iter().copied());
+        pins.extend(self.use_mask.iter().copied());
         pins
     }
 
@@ -164,6 +176,10 @@ mod tests {
         Dep::parse(s).unwrap()
     }
 
+    fn flag(s: &str) -> Flag {
+        Interned::intern(s)
+    }
+
     #[test]
     fn package_force_and_mask_apply_with_mask_winning() {
         let fm = ForceMask {
@@ -179,13 +195,13 @@ mod tests {
         };
         let c = cpv("cross-foo/gcc-13.2");
         let (forced, masked) = fm.effective(&c, false);
-        assert!(forced.contains("multilib"));
+        assert!(forced.contains(&flag("multilib")));
         assert!(
-            !forced.contains("shared"),
+            !forced.contains(&flag("shared")),
             "shared is masked → dropped from force"
         );
-        assert!(masked.contains("cet"));
-        assert!(masked.contains("shared"));
+        assert!(masked.contains(&flag("cet")));
+        assert!(masked.contains(&flag("shared")));
 
         let mut cfg = UseConfig::new();
         cfg.enable(Interned::intern("cet")); // user tried to enable a masked flag
@@ -206,7 +222,7 @@ mod tests {
             ..Default::default()
         };
         let (forced, _) = fm.effective(&cpv("cross-foo/gcc-13.2"), false);
-        assert!(!forced.contains("multilib"), "-multilib unforced it");
+        assert!(!forced.contains(&flag("multilib")), "-multilib unforced it");
     }
 
     #[test]
@@ -217,11 +233,11 @@ mod tests {
         };
         let c = cpv("dev-libs/foo-1");
         assert!(
-            !fm.effective(&c, false).1.contains("risky"),
+            !fm.effective(&c, false).1.contains(&flag("risky")),
             "ignored when unstable"
         );
         assert!(
-            fm.effective(&c, true).1.contains("risky"),
+            fm.effective(&c, true).1.contains(&flag("risky")),
             "applied when stable"
         );
     }

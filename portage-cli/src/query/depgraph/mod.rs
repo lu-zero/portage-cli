@@ -409,15 +409,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 if !forced.is_empty() || !masked.is_empty() {
                     let mut overrides: Vec<UseOverride> = forced
                         .iter()
-                        .map(|f| UseOverride {
-                            flag: Interned::intern(f),
-                            enable: true,
-                        })
+                        .map(|&flag| UseOverride { flag, enable: true })
                         .collect();
-                    overrides.extend(masked.iter().map(|m| UseOverride {
-                        flag: Interned::intern(m),
-                        enable: false,
-                    }));
+                    overrides.extend(masked.iter().map(|&flag| UseOverride { flag, enable: false }));
                     combined.push((dep.clone(), overrides));
                 }
             }

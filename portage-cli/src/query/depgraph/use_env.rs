@@ -1,5 +1,6 @@
 use camino::Utf8Path;
 use portage_atom::Dep;
+use portage_atom::interner::Interned;
 use portage_atom_pubgrub::{UseConfig, UseFlagState, UseOverride};
 use portage_repo::{AcceptLicense, LicenseGroupRegistry, ProfileStack, Repository};
 
@@ -200,11 +201,12 @@ async fn compute_use_env(
     // IUSE default rather than merely being absent from the enabled set. The
     // package-level and *.stable.* sets are also per package; they carry raw
     // `-flag` tokens so unforce/unmask is resolved per package.
+    let intern_flags = |v: Vec<String>| v.iter().map(|s| Interned::intern(s)).collect();
     let force_mask = ForceMask {
-        use_force: stack.use_force().unwrap_or_default(),
-        use_mask: stack.use_mask().unwrap_or_default(),
-        use_stable_force: stack.use_stable_force().unwrap_or_default(),
-        use_stable_mask: stack.use_stable_mask().unwrap_or_default(),
+        use_force: intern_flags(stack.use_force().unwrap_or_default()),
+        use_mask: intern_flags(stack.use_mask().unwrap_or_default()),
+        use_stable_force: intern_flags(stack.use_stable_force().unwrap_or_default()),
+        use_stable_mask: intern_flags(stack.use_stable_mask().unwrap_or_default()),
         pkg_force: index_by_cpn(stack.package_use_force().unwrap_or_default()),
         pkg_mask: index_by_cpn(stack.package_use_mask().unwrap_or_default()),
         pkg_stable_force: index_by_cpn(stack.package_use_stable_force().unwrap_or_default()),

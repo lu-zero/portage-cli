@@ -577,7 +577,7 @@ impl Adapter<'_> {
             // forced/masked.
             if !iuse.contains(name.as_str())
                 || pins.get_opt(flag).is_some()
-                || forced_masked.contains(name.as_str())
+                || forced_masked.contains(&flag)
             {
                 continue;
             }
@@ -1203,7 +1203,7 @@ mod tests {
         use_config.enable(Interned::intern("b")); // both on ⇒ ?? ( a b ) violated
 
         let fm = ForceMask {
-            use_force: vec!["a".to_string()],
+            use_force: vec![Interned::intern("a")],
             ..Default::default()
         };
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
