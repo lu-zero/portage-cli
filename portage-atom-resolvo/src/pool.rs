@@ -39,18 +39,28 @@ pub struct DepEdge {
 /// - **`disabled`** — flags eagerly excluded (`use?` skips children, `!use?`
 ///   includes them). This is the implicit default for any flag not listed.
 /// - **`solver_decided`** — the SAT solver decides whether the flag is active.
-///   A virtual solvable `virtual/USE_<flag>` is created; when the solver
-///   selects it the corresponding `use? ( deps )` become active.  Negated
-///   `!use? ( deps )` on solver-decided flags are included **unconditionally**
-///   (conservative: resolvo conditions have no NOT operator).
+///   A pair of virtual solvables (`__internal__/USE_<cpn>_<flag>` and
+///   `__internal__/NotUSE_<cpn>_<flag>`) is created per (package, flag); when
+///   the solver selects the `USE_` variant the corresponding `use? ( deps )`
+///   become active. Negated `!use? ( deps )` on solver-decided flags are
+///   included **unconditionally** (conservative: resolvo conditions have no
+///   NOT operator).
+///
+/// `solver_decided_prefer` optionally biases the solver's choice per flag:
+/// `true` lists the ON variant first in the choice union (prefer on),
+/// `false` (the default for any unlisted flag) lists OFF first (prefer off).
 #[derive(Debug, Clone, Default)]
 pub struct UseConfig {
     /// Flags forced ON: `use? ( deps )` active, `!use? ( deps )` skipped.
     pub enabled: HashSet<Interned<DefaultInterner>>,
     /// Flags forced OFF: `use? ( deps )` skipped, `!use? ( deps )` active.
     pub disabled: HashSet<Interned<DefaultInterner>>,
-    /// Flags left for the SAT solver to decide (via a `virtual/USE_<flag>`).
+    /// Flags left for the SAT solver to decide (via per-(cpn,flag) virtuals).
     pub solver_decided: HashSet<Interned<DefaultInterner>>,
+    /// Per-flag preferred value for solver-decided flags: `true` biases the
+    /// solver toward ON, `false` (default for unlisted) toward OFF. This is
+    /// the greedy keep-configured bias pubgrub applies to `UseDecision` nodes.
+    pub solver_decided_prefer: HashMap<Interned<DefaultInterner>, bool>,
 }
 
 impl From<HashSet<Interned<DefaultInterner>>> for UseConfig {
@@ -59,6 +69,7 @@ impl From<HashSet<Interned<DefaultInterner>>> for UseConfig {
             enabled,
             disabled: HashSet::new(),
             solver_decided: HashSet::new(),
+            solver_decided_prefer: HashMap::new(),
         }
     }
 }
@@ -189,7 +200,7 @@ pub enum Violation {
 /// Mirrors the solver-agnostic `portage_solver::UseFlagRequirement` (minus
 /// `upgrade_to`, which resolvo does not model — no upgrade fixpoint).
 ///
-/// Produced by [`PortageDependencyProvider::use_flag_requirements`] from the
+/// Produced by `PortageDependencyProvider::use_flag_requirements` from the
 /// same use-dep analysis as the violations: where a violation reports a
 /// breakage, a requirement reports the fix (the autounmask "needed" set).
 #[derive(Debug, Clone)]

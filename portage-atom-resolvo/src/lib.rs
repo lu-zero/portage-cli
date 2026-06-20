@@ -524,15 +524,18 @@ mod tests {
             "libressl should be pulled in (flag biased off): {:?}",
             cpvs
         );
-        // virtual/NotUSE_ssl should be selected, virtual/USE_ssl should not.
+        // __internal__/NotUSE_<cpn>_ssl should be selected, USE_ should not.
         assert!(
-            cpvs.iter().any(|c| c.contains("NotUSE_ssl")),
-            "virtual/NotUSE_ssl should be selected: {:?}",
+            cpvs.iter()
+                .any(|c| c.contains("__internal__/NotUSE_app-misc_foo_ssl")),
+            "__internal__/NotUSE_...ssl should be selected: {:?}",
             cpvs
         );
         assert!(
-            !cpvs.iter().any(|c| c.contains("virtual/USE_ssl")),
-            "virtual/USE_ssl should NOT be selected: {:?}",
+            !cpvs
+                .iter()
+                .any(|c| c.contains("__internal__/USE_app-misc_foo_ssl")),
+            "__internal__/USE_...ssl should NOT be selected: {:?}",
             cpvs
         );
     }
@@ -663,10 +666,11 @@ mod tests {
             "libressl conflicts with openssl: {:?}",
             cpvs
         );
-        // virtual/USE_ssl should be selected (flag forced on).
+        // __internal__/USE_<cpn>_ssl should be selected (flag forced on).
         assert!(
-            cpvs.iter().any(|c| c.contains("virtual/USE_ssl")),
-            "virtual/USE_ssl should be selected: {:?}",
+            cpvs.iter()
+                .any(|c| c.contains("__internal__/USE_app-misc_foo_ssl")),
+            "__internal__/USE_...ssl should be selected: {:?}",
             cpvs
         );
     }
