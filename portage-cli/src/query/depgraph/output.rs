@@ -84,18 +84,18 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
 /// Report blocker (`!`/`!!`) and `::repo` violations detected post-solve.
 /// The solver does not model these, so they are surfaced here like slot
 /// conflicts rather than failing resolution.
-pub(super) fn report_solver_violations(violations: &[portage_atom_pubgrub::Error]) {
-    use portage_atom_pubgrub::Error;
+pub(super) fn report_solver_violations(violations: &[portage_solver::Violation]) {
+    use portage_solver::Violation;
     let mut out = anstream::stderr();
 
-    let blockers: Vec<&Error> = violations
+    let blockers: Vec<&Violation> = violations
         .iter()
-        .filter(|e| matches!(e, Error::BlockerConflict { .. }))
+        .filter(|e| matches!(e, Violation::Blocker { .. }))
         .collect();
     if !blockers.is_empty() {
         writeln!(out, "\n{C_OFF}!!!{C_OFF:#} Blocker conflict(s) detected:\n").ok();
         for e in blockers {
-            if let Error::BlockerConflict {
+            if let Violation::Blocker {
                 pkg,
                 blocker,
                 strength,
@@ -110,9 +110,9 @@ pub(super) fn report_solver_violations(violations: &[portage_atom_pubgrub::Error
         }
     }
 
-    let repos: Vec<&Error> = violations
+    let repos: Vec<&Violation> = violations
         .iter()
-        .filter(|e| matches!(e, Error::RepoConstraintConflict(..)))
+        .filter(|e| matches!(e, Violation::Repo(..)))
         .collect();
     if !repos.is_empty() {
         writeln!(
@@ -121,7 +121,7 @@ pub(super) fn report_solver_violations(violations: &[portage_atom_pubgrub::Error
         )
         .ok();
         for e in repos {
-            if let Error::RepoConstraintConflict(pkg, msg) = e {
+            if let Violation::Repo(pkg, msg) = e {
                 writeln!(out, "  {C_PKG}{pkg}{C_PKG:#}: {msg}").ok();
             }
         }

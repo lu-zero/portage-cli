@@ -792,8 +792,17 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             output::report_conflicts(&dep_conflicts);
         }
 
-        let mut violations = provider.check_blockers(&solution);
-        violations.extend(provider.check_repo_constraints(&solution));
+        let mut violations: Vec<portage_solver::Violation> = provider
+            .check_blockers(&solution)
+            .into_iter()
+            .map(portage_solver::Violation::from)
+            .collect();
+        violations.extend(
+            provider
+                .check_repo_constraints(&solution)
+                .into_iter()
+                .map(portage_solver::Violation::from),
+        );
         if !violations.is_empty() {
             output::report_solver_violations(&violations);
         }

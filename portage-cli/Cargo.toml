@@ -23,12 +23,14 @@ lasso = [
     "portage-atom/lasso",
     "portage-metadata/lasso",
     "portage-atom-pubgrub/lasso",
+    "portage-solver/lasso",
     "portage-repo/lasso",
 ]
 symbol-table = [
     "portage-atom/symbol-table",
     "portage-metadata/symbol-table",
     "portage-atom-pubgrub/symbol-table",
+    "portage-solver/symbol-table",
     "portage-repo/symbol-table",
 ]
 
@@ -41,6 +43,7 @@ camino = { workspace = true }
 gentoo-core = { workspace = true }
 portage-atom = { workspace = true }
 portage-atom-pubgrub = { workspace = true }
+portage-solver = { workspace = true }
 portage-metadata = { workspace = true }
 portage-repo = { workspace = true }
 portage-distfiles = { workspace = true }
