@@ -1104,6 +1104,33 @@ impl PortageDependencyProvider {
         }
     }
 
+    /// CPNs referenced by the solution's dependency trees that have no
+    /// candidates in the provider — i.e. deps the solver had to drop because
+    /// the target package is absent from the (filtered) repository closure.
+    ///
+    /// Mirrors the pubgrub bridge's `dropped_deps` advisory: reported for
+    /// diagnostics only; the plan is still produced. Each CPN appears once,
+    /// deterministically sorted.
+    ///
+    /// Blockers (`!atom`/`!!atom`) are excluded — a package blocking something
+    /// absent is not a dropped requirement.
+    pub fn dropped_deps(&self, solution: &[SolvableId]) -> Vec<Cpn> {
+        use std::collections::BTreeSet;
+
+        let mut referenced: BTreeSet<Cpn> = BTreeSet::new();
+        for &from in solution {
+            let meta = self.pool.resolve_solvable(from);
+            for (_class, entries) in meta.dependencies.iter_classes() {
+                collect_referenced_cpns(entries, &mut referenced);
+            }
+        }
+
+        referenced
+            .into_iter()
+            .filter(|cpn| !self.cpn_slots.contains_key(cpn))
+            .collect()
+    }
+
     /// Compute an install order from a solver solution.
     ///
     /// Returns `Ok(ordered)` with solvables in installation order
@@ -1392,6 +1419,31 @@ impl resolvo::DependencyProvider for PortageDependencyProvider {
 /// Returns `(slot, subslot)`. `:*` and `:=` return `(None, None)`,
 /// which makes `slot_matches` accept all candidates regardless of
 /// their slot.
+/// Walk a dependency tree and collect the CPN of every non-blocker atom.
+/// Used by [`PortageDependencyProvider::dropped_deps`] to find referenced
+/// packages that have no candidates in the provider.
+fn collect_referenced_cpns(entries: &[DepEntry], out: &mut std::collections::BTreeSet<Cpn>) {
+    use portage_atom::DepEntry;
+    for entry in entries {
+        match entry {
+            DepEntry::Atom(dep) => {
+                if dep.blocker.is_none() {
+                    out.insert(dep.cpn);
+                }
+            }
+            DepEntry::UseConditional { children, .. } => {
+                collect_referenced_cpns(children, out);
+            }
+            DepEntry::AnyOf(children)
+            | DepEntry::ExactlyOneOf(children)
+            | DepEntry::AtMostOneOf(children)
+            | DepEntry::AllOf(children) => {
+                collect_referenced_cpns(children, out);
+            }
+        }
+    }
+}
+
 fn extract_slot(
     dep: &Dep,
 ) -> (
