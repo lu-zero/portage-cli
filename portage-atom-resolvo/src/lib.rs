@@ -13,7 +13,7 @@ mod version_match;
 
 pub use pool::{
     DepClass, DepEdge, InstalledPolicy, InstalledSet, PackageDeps, PackageMetadata, PackageName,
-    PortagePool, UseConfig, VersionConstraint,
+    PortagePool, UseConfig, VersionConstraint, Violation,
 };
 pub use portage_atom::DepEntry;
 pub use portage_atom::interner;

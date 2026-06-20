@@ -254,10 +254,20 @@ fn build_plan(provider: &PortageDependencyProvider, solution: &[resolvo::Solvabl
             .into_iter()
             .map(|cpn| portage_solver::DroppedDep { cpn })
             .collect(),
+        // Only USE-dep violations are possible from a successful resolvo solve
+        // (blockers and ::repo are hard-enforced; see pool::Violation docs).
+        violations: provider
+            .check_use_dep_violations(solution)
+            .into_iter()
+            .map(|v| match v {
+                crate::pool::Violation::UseDep { pkg, detail } => {
+                    portage_solver::Violation::UseDep(pkg, detail)
+                }
+            })
+            .collect(),
         // Not yet modelled by the resolvo bridge:
         ceded_flags: Vec::new(),
         use_flag_requirements: Vec::new(),
-        violations: Vec::new(),
     }
 }
 
@@ -480,5 +490,80 @@ mod tests {
             .map(|d| format!("{}/{}", d.cpn.category, d.cpn.package))
             .collect();
         assert_eq!(dropped, vec!["dev-libs/missing".to_string()]);
+    }
+
+    /// A USE-dep constraint (`[flag]`) not satisfied by the target's effective
+    /// USE is reported as a post-solve violation — the solve still succeeds
+    /// because resolvo does not enforce USE-deps during solving.
+    #[test]
+    fn resolvo_solver_reports_use_dep_violation() {
+        struct Repo;
+        impl SolverRepo for Repo {
+            fn all_packages(&self) -> Vec<Cpn> {
+                vec![
+                    Cpn::parse("app-misc/foo").unwrap(),
+                    Cpn::parse("dev-libs/bar").unwrap(),
+                ]
+            }
+            fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, VersionFacts)> {
+                let mk = |v: &str, iuse: Vec<Interned<DefaultInterner>>, deps: SolverDeps| {
+                    (
+                        Cpv::parse(v).unwrap(),
+                        VersionFacts {
+                            slot: slot("0"),
+                            subslot: None,
+                            repo: None,
+                            iuse,
+                            iuse_defaults: Default::default(),
+                            deps,
+                            required_use: None,
+                        },
+                    )
+                };
+                match format!("{}/{}", cpn.category, cpn.package).as_str() {
+                    "app-misc/foo" => vec![mk(
+                        "app-misc/foo-1.0",
+                        Vec::new(),
+                        SolverDeps {
+                            depend: vec![DepEntry::Atom(Dep::parse("dev-libs/bar[ssl]").unwrap())],
+                            ..SolverDeps::default()
+                        },
+                    )],
+                    // bar declares ssl in IUSE but its desired USE leaves it off,
+                    // so the [ssl] use-dep is unsatisfied.
+                    "dev-libs/bar" => vec![mk(
+                        "dev-libs/bar-1.0",
+                        vec![Interned::intern("ssl")],
+                        SolverDeps::default(),
+                    )],
+                    _ => Vec::new(),
+                }
+            }
+            fn desired_use(&self, _: &Cpv) -> UseConfig {
+                UseConfig::new()
+            }
+        }
+
+        let mut solver = SolverAdapter::new(Box::new(Repo));
+        let plan = Solver::resolve_targets(
+            &mut solver,
+            &[TargetSpec::any_in(
+                Cpn::parse("app-misc/foo").unwrap(),
+                None,
+            )],
+        )
+        .expect("resolve");
+
+        // foo and bar are both selected (use-deps don't block the solve);
+        // the unsatisfied [ssl] is surfaced as a violation.
+        let has_use_dep = plan
+            .violations
+            .iter()
+            .any(|v| matches!(v, portage_solver::Violation::UseDep(_, _)));
+        assert!(
+            has_use_dep,
+            "expected a [ssl] use-dep violation, got {:?}",
+            plan.violations
+        );
     }
 }
