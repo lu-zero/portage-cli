@@ -1,0 +1,19 @@
+[package]
+name = "portage-solver"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+authors = ["Luca Barbato <lu_zero@gentoo.org>"]
+license = "MIT"
+description = "Solver-agnostic vocabulary and Solver trait for Portage dependency resolution"
+repository = "https://github.com/lu-zero/portage-cli"
+keywords = ["gentoo", "portage", "solver", "dependency", "pms"]
+categories = ["algorithms", "development-tools"]
+
+[features]
+lasso = ["portage-atom/lasso"]
+symbol-table = ["portage-atom/symbol-table"]
+
+[dependencies]
+portage-atom = { workspace = true }
+thiserror = { workspace = true }
