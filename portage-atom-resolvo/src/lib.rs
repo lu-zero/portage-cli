@@ -8,6 +8,7 @@
 mod pool;
 mod provider;
 mod repository;
+mod solver_impl;
 mod version_match;
 
 pub use pool::{
@@ -18,6 +19,12 @@ pub use portage_atom::DepEntry;
 pub use portage_atom::interner;
 pub use provider::PortageDependencyProvider;
 pub use repository::{InMemoryRepository, PackageRepository};
+// Re-export the shared solver abstraction: this crate implements
+// `portage_solver::Solver` (via `solver_impl::SolverAdapter`) so consumers can
+// drive resolvo and pubgrub through the same trait.
+pub use portage_solver;
+pub use portage_solver::Solver;
+pub use solver_impl::SolverAdapter;
 pub use version_match::version_matches;
 
 #[cfg(test)]
