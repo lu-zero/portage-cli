@@ -48,9 +48,16 @@ mod package;
 mod provider;
 mod repository;
 mod required_use;
+mod solver_impl;
 mod use_config;
 mod validate;
 mod version_set;
+
+// Re-export the shared solver abstraction so consumers that already depend on
+// `portage-atom-pubgrub` can reach `portage_solver::Solver` (which this crate
+// implements) and the solver-agnostic vocabulary without an extra dependency.
+pub use portage_solver;
+pub use portage_solver::Solver;
 
 pub use error::{Error, Result};
 pub use graph::{DepClass, DepEdge};

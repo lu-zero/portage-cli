@@ -11,11 +11,12 @@ keywords = ["gentoo", "portage", "pubgrub", "dependency", "solver"]
 categories = ["algorithms", "development-tools"]
 
 [features]
-lasso = ["portage-atom/lasso"]
-symbol-table = ["portage-atom/symbol-table"]
+lasso = ["portage-atom/lasso", "portage-solver/lasso"]
+symbol-table = ["portage-atom/symbol-table", "portage-solver/symbol-table"]
 
 [dependencies]
 portage-atom = { workspace = true }
+portage-solver = { workspace = true }
 pubgrub = { workspace = true }
 version-ranges = "0.1"
 thiserror = { workspace = true }
