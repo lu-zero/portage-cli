@@ -1131,6 +1131,77 @@ impl PortageDependencyProvider {
             .collect()
     }
 
+    /// Post-solve advisory USE-dep violations: a solution edge whose USE-dep
+    /// brackets (`[flag]`, `[flag?]`, `[flag=]`, …) are not satisfied by the
+    /// target's effective USE. Reported for diagnostics only; the plan is still
+    /// produced (as portage does). USE-deps are not enforced during the
+    /// resolvo solve, so these are the only violations a successful solve can
+    /// produce — blockers and `::repo` constraints are hard-enforced and
+    /// surface as `Unsolvable` instead.
+    pub fn check_use_dep_violations(&self, solution: &[SolvableId]) -> Vec<crate::pool::Violation> {
+        use crate::pool::Violation;
+        use std::collections::BTreeSet;
+
+        let mut out = Vec::new();
+        let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+
+        for &from in solution {
+            let from_meta = self.pool.resolve_solvable(from);
+            let from_str = from_meta.cpv.to_string();
+            // Collect atoms carrying USE-dep brackets from this solvable's
+            // dependency trees.
+            let mut use_dep_atoms: Vec<portage_atom::Dep> = Vec::new();
+            for (_class, entries) in from_meta.dependencies.iter_classes() {
+                collect_use_dep_atoms(entries, &mut use_dep_atoms);
+            }
+            for dep in &use_dep_atoms {
+                // Find the solution member this atom structurally targets
+                // (cpn + version + slot + subslot + repo), ignoring USE-deps.
+                let Some(to_meta) = solution
+                    .iter()
+                    .map(|&to| self.pool.resolve_solvable(to))
+                    .find(|to| matches_structure(dep, to))
+                else {
+                    continue;
+                };
+                // Resolve the USE-dep constraints (handles [flag?] etc. via the
+                // global use_config's parent flag state) and find any unsatisfied.
+                let constraints = resolve_use_deps(dep, &self.use_config);
+                let unsatisfied: Vec<_> = constraints
+                    .iter()
+                    .filter(|(flag, must_be_enabled)| {
+                        to_meta.use_flags.contains(flag) != *must_be_enabled
+                    })
+                    .collect();
+                if unsatisfied.is_empty() {
+                    continue;
+                }
+                let detail = format!(
+                    "{} requires {} but target {} lacks [{}]",
+                    dep,
+                    unsatisfied
+                        .iter()
+                        .map(|(f, on)| { if *on { format!("{f}") } else { format!("-{f}") } })
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    to_meta.cpv,
+                    unsatisfied
+                        .iter()
+                        .map(|(f, on)| if *on { format!("{f}") } else { format!("-{f}") })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                if seen.insert((from_str.clone(), detail.clone())) {
+                    out.push(Violation::UseDep {
+                        pkg: from_str.clone(),
+                        detail,
+                    });
+                }
+            }
+        }
+        out
+    }
+
     /// Compute an install order from a solver solution.
     ///
     /// Returns `Ok(ordered)` with solvables in installation order
@@ -1442,6 +1513,65 @@ fn collect_referenced_cpns(entries: &[DepEntry], out: &mut std::collections::BTr
             }
         }
     }
+}
+
+/// Walk a dependency tree and collect every non-blocker atom carrying USE-dep
+/// brackets (`[flag]`/`[-flag]`/`[flag?]`/…). Used by
+/// [`PortageDependencyProvider::check_use_dep_violations`]. USE conditionals
+/// are explored unconditionally: a use-dep that fires only under a disabled
+/// flag resolves to no constraint via `resolve_use_deps`, so it cannot produce
+/// a false positive.
+fn collect_use_dep_atoms(entries: &[DepEntry], out: &mut Vec<portage_atom::Dep>) {
+    use portage_atom::DepEntry;
+    for entry in entries {
+        match entry {
+            DepEntry::Atom(dep) => {
+                if dep.blocker.is_none() && dep.use_deps.is_some() {
+                    out.push(dep.clone());
+                }
+            }
+            DepEntry::UseConditional { children, .. } => {
+                collect_use_dep_atoms(children, out);
+            }
+            DepEntry::AnyOf(children)
+            | DepEntry::ExactlyOneOf(children)
+            | DepEntry::AtMostOneOf(children)
+            | DepEntry::AllOf(children) => {
+                collect_use_dep_atoms(children, out);
+            }
+        }
+    }
+}
+
+/// Whether `dep` structurally matches `meta` — CPN, version operator, slot,
+/// subslot, and repository — ignoring USE-dep brackets. The structural
+/// counterpart of [`dep_matches_solvable`] used to isolate USE-dep violations:
+/// a structurally-matching edge whose USE-deps are unsatisfied is a violation.
+fn matches_structure(dep: &Dep, meta: &PackageMetadata) -> bool {
+    if dep.cpn != meta.cpv.cpn {
+        return false;
+    }
+    let (op, constraint_version) = dep_op_version(dep);
+    if !version_matches(&meta.cpv.version, &op, dep.glob, &constraint_version) {
+        return false;
+    }
+    let (slot, subslot) = extract_slot(dep);
+    if let Some(required_slot) = slot
+        && meta.slot != Some(required_slot)
+    {
+        return false;
+    }
+    if let Some(required_subslot) = subslot
+        && meta.subslot != Some(required_subslot)
+    {
+        return false;
+    }
+    if let Some(required_repo) = dep.repo
+        && meta.repo != Some(required_repo)
+    {
+        return false;
+    }
+    true
 }
 
 fn extract_slot(

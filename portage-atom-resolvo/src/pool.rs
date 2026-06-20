@@ -161,6 +161,29 @@ pub enum DepClass {
     Idepend,
 }
 
+/// A post-solve advisory violation, mirroring the solver-agnostic
+/// [`portage_solver::Violation`] but kept local so the provider crate does not
+/// depend on `portage-solver`. The adapter maps it at the trait boundary.
+///
+/// Only the `UseDep` arm is produced: resolvo encodes blockers (`!`/`!!`) and
+/// `::repo` constraints as hard `constrains`, so a solution that would violate
+/// either is rejected as unsolvable during the solve — they can never surface
+/// post-solve. USE-dep brackets (`[flag]`) are *not* enforced during solving
+/// (deferred to post-solve validation), so those are the only advisory
+/// violations a successful resolvo solve can produce. This is a deliberate
+/// divergence from the pubgrub bridge, which treats blockers as advisory too.
+#[derive(Debug, Clone)]
+pub enum Violation {
+    /// A USE-dep constraint (`[flag]`, `[flag?]`, `[flag=]`, …) on a solution
+    /// edge was not satisfied by the target's effective USE.
+    UseDep {
+        /// The package declaring the use-dep (e.g. `cat/pkg-1.0`).
+        pkg: String,
+        /// Human-readable detail (the unsatisfied constraint + target).
+        detail: String,
+    },
+}
+
 impl std::fmt::Display for DepClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
