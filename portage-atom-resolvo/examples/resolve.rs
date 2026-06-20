@@ -14,7 +14,7 @@ use portage_atom_resolvo::{
     DepEntry, InMemoryRepository, PackageDeps, PackageMetadata, PortageDependencyProvider,
     UseConfig, interner,
 };
-use resolvo::{ArenaId, Problem, Solver, VersionSetId};
+use resolvo::{DenseIndex, Problem, Solver, VersionSetId};
 
 /// Shorthand to build a PackageMetadata from a CPV string.
 fn pkg(cpv: &str, slot: &str, deps: Vec<DepEntry>) -> PackageMetadata {
@@ -275,7 +275,7 @@ fn solve_and_print(repo: &InMemoryRepository, use_config: &UseConfig) {
             let pool = provider.pool();
             let mut blockers = Vec::new();
             for i in 0..pool.version_set_count() {
-                let vs_id = VersionSetId::from_usize(i);
+                let vs_id = VersionSetId::from_index(i);
                 if let Some(blocker) = provider.blocker_type(vs_id) {
                     let constraint = pool.resolve_version_set(vs_id);
                     let kind = match blocker {
@@ -297,7 +297,7 @@ fn solve_and_print(repo: &InMemoryRepository, use_config: &UseConfig) {
             // Show rebuild triggers (:=).
             let mut triggers = Vec::new();
             for i in 0..pool.version_set_count() {
-                let vs_id = VersionSetId::from_usize(i);
+                let vs_id = VersionSetId::from_index(i);
                 if provider.is_rebuild_trigger(vs_id) {
                     let constraint = pool.resolve_version_set(vs_id);
                     triggers.push(format!("    {constraint}"));

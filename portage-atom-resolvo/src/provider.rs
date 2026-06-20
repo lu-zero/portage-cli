@@ -1275,6 +1275,9 @@ impl fmt::Display for DisplayString<'_> {
 // --- Interner ---
 
 impl resolvo::Interner for PortageDependencyProvider {
+    type NameId = NameId;
+    type SolvableId = SolvableId;
+
     fn display_solvable(&self, solvable: SolvableId) -> impl fmt::Display + '_ {
         DisplaySolvable(&self.pool, solvable)
     }

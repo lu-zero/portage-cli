@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, DepEntry, Operator, Version};
 use resolvo::{
-    ArenaId, ConditionId, NameId, SolvableId, StringId, VersionSetId, VersionSetUnionId,
+    ConditionId, DenseIndex, NameId, SolvableId, StringId, VersionSetId, VersionSetUnionId,
 };
 
 /// A labeled dependency edge between two solvables in a solution.
@@ -305,7 +305,7 @@ impl PortagePool {
         if let Some(&id) = self.names_rev.get(&name) {
             return id;
         }
-        let id = NameId::from_usize(self.names.len());
+        let id = NameId::from_index(self.names.len());
         self.names_rev.insert(name.clone(), id);
         self.names.push(name);
         id
@@ -313,14 +313,14 @@ impl PortagePool {
 
     /// Look up the [`PackageName`] for a [`NameId`].
     pub fn resolve_name(&self, id: NameId) -> &PackageName {
-        &self.names[id.to_usize()]
+        &self.names[id.to_index()]
     }
 
     // --- SolvableId ---
 
     /// Add a solvable (concrete package version) to the pool.
     pub fn intern_solvable(&mut self, name_id: NameId, meta: PackageMetadata) -> SolvableId {
-        let id = SolvableId::from_usize(self.solvables.len());
+        let id = SolvableId::from_index(self.solvables.len());
         self.solvables.push(meta);
         self.solvable_names.push(name_id);
         id
@@ -328,12 +328,12 @@ impl PortagePool {
 
     /// Look up the metadata for a [`SolvableId`].
     pub fn resolve_solvable(&self, id: SolvableId) -> &PackageMetadata {
-        &self.solvables[id.to_usize()]
+        &self.solvables[id.to_index()]
     }
 
     /// Look up the [`NameId`] for a [`SolvableId`].
     pub fn solvable_name(&self, id: SolvableId) -> NameId {
-        self.solvable_names[id.to_usize()]
+        self.solvable_names[id.to_index()]
     }
 
     // --- VersionSetId ---
@@ -348,7 +348,7 @@ impl PortagePool {
         if let Some(&id) = self.version_sets_rev.get(&key) {
             return id;
         }
-        let id = VersionSetId::from_usize(self.version_sets.len());
+        let id = VersionSetId::from_index(self.version_sets.len());
         self.version_sets_rev.insert(key, id);
         self.version_sets.push(constraint);
         self.version_set_names.push(name_id);
@@ -357,12 +357,12 @@ impl PortagePool {
 
     /// Look up the constraint for a [`VersionSetId`].
     pub fn resolve_version_set(&self, id: VersionSetId) -> &VersionConstraint {
-        &self.version_sets[id.to_usize()]
+        &self.version_sets[id.to_index()]
     }
 
     /// Look up the [`NameId`] for a [`VersionSetId`].
     pub fn version_set_name(&self, id: VersionSetId) -> NameId {
-        self.version_set_names[id.to_usize()]
+        self.version_set_names[id.to_index()]
     }
 
     /// Return the number of interned version sets.
@@ -374,42 +374,42 @@ impl PortagePool {
 
     /// Intern a union (OR) of version sets.
     pub fn intern_version_set_union(&mut self, sets: Vec<VersionSetId>) -> VersionSetUnionId {
-        let id = VersionSetUnionId::from_usize(self.version_set_unions.len());
+        let id = VersionSetUnionId::from_index(self.version_set_unions.len());
         self.version_set_unions.push(sets);
         id
     }
 
     /// Look up the version sets in a union.
     pub fn resolve_version_set_union(&self, id: VersionSetUnionId) -> &[VersionSetId] {
-        &self.version_set_unions[id.to_usize()]
+        &self.version_set_unions[id.to_index()]
     }
 
     // --- ConditionId ---
 
     /// Intern a condition.
     pub fn intern_condition(&mut self, condition: resolvo::Condition) -> ConditionId {
-        let id = ConditionId::from_usize(self.conditions.len());
+        let id = ConditionId::from_index(self.conditions.len());
         self.conditions.push(condition);
         id
     }
 
     /// Look up a condition.
     pub fn resolve_condition(&self, id: ConditionId) -> &resolvo::Condition {
-        &self.conditions[id.to_usize()]
+        &self.conditions[id.to_index()]
     }
 
     // --- StringId ---
 
     /// Intern a string (used for solver error messages).
     pub fn intern_string(&mut self, s: String) -> StringId {
-        let id = StringId::from_usize(self.strings.len());
+        let id = StringId::from_index(self.strings.len());
         self.strings.push(s);
         id
     }
 
     /// Look up an interned string.
     pub fn resolve_string(&self, id: StringId) -> &str {
-        &self.strings[id.to_usize()]
+        &self.strings[id.to_index()]
     }
 }
 

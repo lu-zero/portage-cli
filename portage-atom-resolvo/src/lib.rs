@@ -26,7 +26,7 @@ mod tests {
 
     use crate::interner::Interned;
     use portage_atom::{Blocker, Cpv, Dep};
-    use resolvo::{ArenaId, Problem, Solver, VersionSetId};
+    use resolvo::{DenseIndex, Problem, Solver, VersionSetId};
 
     use crate::pool::{DepClass, InstalledSet, PackageDeps, PackageMetadata, UseConfig};
     use crate::provider::PortageDependencyProvider;
@@ -342,7 +342,7 @@ mod tests {
         let mut found_weak = false;
         let mut found_strong = false;
         for i in 0..vs_count {
-            let vs_id = VersionSetId::from_usize(i);
+            let vs_id = VersionSetId::from_index(i);
             if let Some(blocker) = solver.provider().blocker_type(vs_id) {
                 let constraint = pool.resolve_version_set(vs_id);
                 if constraint.cpn.package == "bar" {
@@ -390,7 +390,7 @@ mod tests {
         let mut bar_is_trigger = false;
         let mut baz_is_trigger = false;
         for i in 0..vs_count {
-            let vs_id = VersionSetId::from_usize(i);
+            let vs_id = VersionSetId::from_index(i);
             let constraint = pool.resolve_version_set(vs_id);
             if constraint.cpn.package == "bar" {
                 bar_is_trigger = solver.provider().is_rebuild_trigger(vs_id);

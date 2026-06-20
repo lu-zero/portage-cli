@@ -41,7 +41,7 @@ mimalloc = "0.1.50"
 parking_lot = "0.12"
 papaya = "0.2"
 pubgrub = "0.4"
-resolvo = "0.10.2"
+resolvo = "0.11.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 symbol_table = { version = "0.5", features = ["global"] }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1
+
+### Other
+
+- Bump `resolvo` to 0.11. The upstream `ArenaId` trait became `DenseIndex`
+  (`from_usize`/`to_usize` → `from_index`/`to_index`), and `Interner` gained the
+  `NameId`/`SolvableId` associated types. `portage-atom-resolvo` now uses
+  resolvo's dense solvable-ID layout (a ~12% solve speedup upstream). The
+  crate's own public API is unchanged; no MSRV change (resolvo 0.11 MSRV is
+  1.85.1, below the workspace floor of 1.92).
+
 ## 0.7.0
 
 ### Breaking changes
