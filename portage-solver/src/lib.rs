@@ -39,8 +39,8 @@ pub use facts::{
 };
 pub use required_use::RequiredUse;
 pub use solution::{
-    CededFlag, DepEdge, DroppedDep, InstalledPackage, InstalledPolicy, MergeRoot, SelectedPackage,
-    SolveError, TargetSpec, UseFlagRequirement, Violation,
+    CededFlag, DepEdge, DroppedDep, InstalledPackage, InstalledPolicy, MergeRoot, Plan,
+    SelectedPackage, SolveError, TargetSpec, UseFlagRequirement, Violation,
 };
 pub use solver::Solver;
 pub use use_config::{UseConfig, UseFlagState, UseOverride, apply_package_use, atom_matches_cpv};

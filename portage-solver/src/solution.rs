@@ -146,6 +146,41 @@ impl TargetSpec {
     }
 }
 
+/// The complete result of a resolve: the selected packages, their labelled
+/// dependency graph, install order, and the solver's advisory output.
+///
+/// Produced by [`crate::Solver::resolve_targets`] as an **owned value** the
+/// consumer holds. This matches how both bridges solve natively (pubgrub and
+/// resolvo each *return* a solution) and lets the consumer inspect a result
+/// across a re-solve — which the autounmask USE-dep fixpoint needs: it solves,
+/// reads [`Plan::use_flag_requirements`], folds them into `package.use`, and
+/// solves again, holding the prior `Plan` throughout.
+#[derive(Clone, Debug, Default)]
+pub struct Plan {
+    /// Selected real packages (virtual/decision nodes stripped), in no
+    /// guaranteed order.
+    pub selected: Vec<SelectedPackage>,
+    /// The labelled dependency graph (edges with both endpoints selected).
+    pub graph: Vec<DepEdge>,
+    /// The selected packages in topological install order: a dependency is
+    /// merged before the package that needs it. Cycles are broken on soft
+    /// (RDEPEND) edges, falling back to a deterministic tie-break on genuine
+    /// build-time cycles.
+    pub install_order: Vec<SelectedPackage>,
+    /// Dependencies the solver had to drop (no satisfying candidate in the
+    /// reachable closure). Reported for diagnostics.
+    pub dropped_deps: Vec<DroppedDep>,
+    /// USE flags the solver was ceded (Level-C `REQUIRED_USE`) and the values
+    /// it picked. Empty when nothing was ceded.
+    pub ceded_flags: Vec<CededFlag>,
+    /// Per-target USE-flag requirements the solve derived (the "needed" set),
+    /// surfaced as autounmask `package.use` suggestions.
+    pub use_flag_requirements: Vec<UseFlagRequirement>,
+    /// Post-solve advisory violations (blockers, USE-deps, `::repo`), reported
+    /// after the plan as portage does. Empty when the solution is clean.
+    pub violations: Vec<Violation>,
+}
+
 /// A dependency the solver had to drop because no candidate satisfied it in the
 /// reachable closure (e.g. an atom referencing a package absent from the
 /// repository). Reported for diagnostics; the plan is still produced.
