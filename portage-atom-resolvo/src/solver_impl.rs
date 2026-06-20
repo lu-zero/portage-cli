@@ -249,8 +249,12 @@ fn build_plan(provider: &PortageDependencyProvider, solution: &[resolvo::Solvabl
         selected,
         graph,
         install_order,
+        dropped_deps: provider
+            .dropped_deps(solution)
+            .into_iter()
+            .map(|cpn| portage_solver::DroppedDep { cpn })
+            .collect(),
         // Not yet modelled by the resolvo bridge:
-        dropped_deps: Vec::new(),
         ceded_flags: Vec::new(),
         use_flag_requirements: Vec::new(),
         violations: Vec::new(),
@@ -418,5 +422,63 @@ mod tests {
                 .unwrap()
         };
         assert!(pos("bottom") < pos("top"));
+    }
+
+    /// A dep on a package absent from the repo is reported as dropped, while
+    /// the resolvable packages still form the plan.
+    #[test]
+    fn resolvo_solver_reports_dropped_dep() {
+        struct Repo;
+        impl SolverRepo for Repo {
+            fn all_packages(&self) -> Vec<Cpn> {
+                vec![Cpn::parse("app-misc/top").unwrap()]
+            }
+            fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, VersionFacts)> {
+                if cpn != &Cpn::parse("app-misc/top").unwrap() {
+                    return Vec::new();
+                }
+                vec![(
+                    Cpv::parse("app-misc/top-1.0").unwrap(),
+                    VersionFacts {
+                        slot: slot("0"),
+                        subslot: None,
+                        repo: None,
+                        iuse: Vec::new(),
+                        iuse_defaults: Default::default(),
+                        deps: SolverDeps {
+                            depend: vec![DepEntry::Atom(Dep::parse("dev-libs/missing").unwrap())],
+                            ..SolverDeps::default()
+                        },
+                        required_use: None,
+                    },
+                )]
+            }
+            fn desired_use(&self, _: &Cpv) -> UseConfig {
+                UseConfig::new()
+            }
+        }
+
+        let mut solver = SolverAdapter::new(Box::new(Repo));
+        let plan = Solver::resolve_targets(
+            &mut solver,
+            &[TargetSpec::any_in(
+                Cpn::parse("app-misc/top").unwrap(),
+                None,
+            )],
+        )
+        .expect("resolve");
+
+        // top is selected; the missing dep is reported as dropped.
+        assert!(
+            plan.selected
+                .iter()
+                .any(|p| p.cpn.package.as_str() == "top")
+        );
+        let dropped: Vec<String> = plan
+            .dropped_deps
+            .iter()
+            .map(|d| format!("{}/{}", d.cpn.category, d.cpn.package))
+            .collect();
+        assert_eq!(dropped, vec!["dev-libs/missing".to_string()]);
     }
 }
