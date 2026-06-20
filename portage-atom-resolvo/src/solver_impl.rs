@@ -31,7 +31,7 @@
 //! fixpoint, ceded-USE (Level-C), cross-compilation, and `--with-bdeps` are
 //! not yet modelled — the corresponding `Plan` fields stay empty.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Slot, SlotDep};
@@ -59,6 +59,10 @@ pub struct SolverAdapter {
     /// Installed packages registered via [`Solver::add_installed`], folded into
     /// the provider at each resolve.
     installed: Vec<InstalledPackage>,
+    /// Solver-decided (ceded) flags harvested from `desired_use` across all
+    /// repo versions: the flag and the caller's preferred value. Drives the
+    /// per-(cpn, flag) decision virtuals in the resolvo provider.
+    ceded: HashMap<Interned<DefaultInterner>, bool>,
 }
 
 impl SolverAdapter {
@@ -69,10 +73,16 @@ impl SolverAdapter {
     /// candidate's effective `use_flags`. USE-conditional deps are then
     /// evaluated eagerly against this set, matching pubgrub's behaviour when
     /// no flags are ceded to the solver.
+    ///
+    /// Flags a version's `desired_use` marks `SolverDecided` are ceded to the
+    /// solver: a per-(cpn, flag) decision virtual is created so the solver
+    /// chooses the value, biased toward the caller's `prefer`.
     pub fn new(repo: Box<dyn portage_solver::PackageRepository>) -> Self {
+        let ceded = harvest_ceded_flags(repo.as_ref());
         Self {
             repo,
             installed: Vec::new(),
+            ceded,
         }
     }
 
@@ -82,11 +92,12 @@ impl SolverAdapter {
         let adapted = RepoAdapter {
             repo: self.repo.as_ref(),
         };
+        let use_config = ceded_resolvo_config(&self.ceded);
         if self.installed.is_empty() {
-            PortageDependencyProvider::new(&adapted, &ResUseConfig::default())
+            PortageDependencyProvider::new(&adapted, &use_config)
         } else {
             let set = self.installed_set();
-            PortageDependencyProvider::with_installed(&adapted, &ResUseConfig::default(), &set)
+            PortageDependencyProvider::with_installed(&adapted, &use_config, &set)
         }
     }
 
@@ -137,7 +148,7 @@ impl Solver for SolverAdapter {
         let mut solver = ResolvoSolver::new(provider);
 
         let solution = solver.solve(problem).map_err(map_unsolvable)?;
-        Ok(build_plan(solver.provider(), &solution))
+        Ok(build_plan(solver.provider(), &solution, &self.ceded))
     }
 }
 
@@ -193,6 +204,42 @@ fn effective_use_flags(
         .collect()
 }
 
+/// Harvest every `SolverDecided` flag declared by any version's `desired_use`
+/// across the repository, with the caller's preferred value. If a flag is
+/// ceded with differing `prefer` across versions, the last-wins order is
+/// deterministic but arbitrary — consistent with pubgrub's per-(cpn,flag)
+/// granularity only when the flag's ceding is uniform within a package.
+fn harvest_ceded_flags(
+    repo: &dyn portage_solver::PackageRepository,
+) -> HashMap<Interned<DefaultInterner>, bool> {
+    let mut ceded: HashMap<Interned<DefaultInterner>, bool> = HashMap::new();
+    for cpn in repo.all_packages() {
+        for (cpv, _facts) in repo.versions_for(&cpn) {
+            let desired = repo.desired_use(&cpv);
+            for flag in desired.solver_decided_flags() {
+                let prefer = match desired.get(flag) {
+                    UseFlagState::SolverDecided { prefer } => prefer,
+                    _ => false,
+                };
+                ceded.entry(flag).or_insert(prefer);
+            }
+        }
+    }
+    ceded
+}
+
+/// Translate the harvested ceded-flag map into a resolvo `UseConfig`:
+/// `solver_decided` carries the flags, `solver_decided_prefer` carries each
+/// flag's preferred value.
+fn ceded_resolvo_config(ceded: &HashMap<Interned<DefaultInterner>, bool>) -> ResUseConfig {
+    ResUseConfig {
+        enabled: HashSet::new(),
+        disabled: HashSet::new(),
+        solver_decided: ceded.keys().copied().collect(),
+        solver_decided_prefer: ceded.iter().map(|(f, p)| (*f, *p)).collect(),
+    }
+}
+
 /// Build a `Dep` from a solver-agnostic [`TargetSpec`].
 fn target_to_dep(spec: &TargetSpec) -> Dep {
     let mut dep = Dep::new(spec.cpn);
@@ -224,19 +271,32 @@ fn map_unsolvable(err: resolvo::UnsolvableOrCancelled) -> SolveError {
 }
 
 /// Build the solver-agnostic [`Plan`] from a resolvo solution.
-fn build_plan(provider: &PortageDependencyProvider, solution: &[resolvo::SolvableId]) -> Plan {
-    let selected: Vec<SelectedPackage> = solution
+fn build_plan(
+    provider: &PortageDependencyProvider,
+    solution: &[resolvo::SolvableId],
+    ceded: &HashMap<Interned<DefaultInterner>, bool>,
+) -> Plan {
+    // Strip solver-internal decision virtuals (__internal__/USE_* / NotUSE_*):
+    // they encode ceded-USE choices, not real packages, and are surfaced
+    // separately via `ceded_flags`.
+    let real_sids: Vec<resolvo::SolvableId> = solution
+        .iter()
+        .copied()
+        .filter(|&sid| provider.pool().resolve_solvable(sid).cpv.cpn.category != "__internal__")
+        .collect();
+
+    let selected: Vec<SelectedPackage> = real_sids
         .iter()
         .map(|&sid| solvable_to_selected(provider, sid))
         .collect();
 
     let graph: Vec<DepEdge> = provider
-        .dependency_graph(solution)
+        .dependency_graph(&real_sids)
         .into_iter()
         .map(|edge| map_dep_edge(provider, &edge))
         .collect();
 
-    let install_order: Vec<SelectedPackage> = match provider.install_order(solution) {
+    let install_order: Vec<SelectedPackage> = match provider.install_order(&real_sids) {
         Ok(order) => order
             .iter()
             .map(|&sid| solvable_to_selected(provider, sid))
@@ -250,14 +310,14 @@ fn build_plan(provider: &PortageDependencyProvider, solution: &[resolvo::Solvabl
         graph,
         install_order,
         dropped_deps: provider
-            .dropped_deps(solution)
+            .dropped_deps(&real_sids)
             .into_iter()
             .map(|cpn| portage_solver::DroppedDep { cpn })
             .collect(),
         // Only USE-dep violations are possible from a successful resolvo solve
         // (blockers and ::repo are hard-enforced; see pool::Violation docs).
         violations: provider
-            .check_use_dep_violations(solution)
+            .check_use_dep_violations(&real_sids)
             .into_iter()
             .map(|v| match v {
                 crate::pool::Violation::UseDep { pkg, detail } => {
@@ -268,7 +328,7 @@ fn build_plan(provider: &PortageDependencyProvider, solution: &[resolvo::Solvabl
         // The "needed" set derived from unsatisfied USE-deps. upgrade_to is
         // always None (resolvo has no upgrade fixpoint).
         use_flag_requirements: provider
-            .use_flag_requirements(solution)
+            .use_flag_requirements(&real_sids)
             .into_iter()
             .map(|r| portage_solver::UseFlagRequirement {
                 cpn: r.cpn,
@@ -279,8 +339,16 @@ fn build_plan(provider: &PortageDependencyProvider, solution: &[resolvo::Solvabl
                 required_by: r.required_by,
             })
             .collect(),
-        // Not yet modelled by the resolvo bridge:
-        ceded_flags: Vec::new(),
+        ceded_flags: provider
+            .ceded_flags(solution, ceded)
+            .into_iter()
+            .map(|(cpn, flag, value, prefer)| portage_solver::CededFlag {
+                cpn,
+                flag,
+                value,
+                flipped: value != prefer,
+            })
+            .collect(),
     }
 }
 
@@ -613,9 +681,7 @@ mod tests {
                         "app-misc/foo-1.0",
                         Vec::new(),
                         SolverDeps {
-                            depend: vec![DepEntry::Atom(
-                                Dep::parse("dev-libs/bar[ssl]").unwrap(),
-                            )],
+                            depend: vec![DepEntry::Atom(Dep::parse("dev-libs/bar[ssl]").unwrap())],
                             ..SolverDeps::default()
                         },
                     )],
@@ -635,7 +701,10 @@ mod tests {
         let mut solver = SolverAdapter::new(Box::new(Repo));
         let plan = Solver::resolve_targets(
             &mut solver,
-            &[TargetSpec::any_in(Cpn::parse("app-misc/foo").unwrap(), None)],
+            &[TargetSpec::any_in(
+                Cpn::parse("app-misc/foo").unwrap(),
+                None,
+            )],
         )
         .expect("resolve");
 
@@ -655,5 +724,90 @@ mod tests {
             req.required_by
         );
         assert!(req.upgrade_to.is_none(), "resolvo has no upgrade fixpoint");
+    }
+
+    /// A ceded (solver-decided) flag is chosen by the solver and reported in
+    /// Plan.ceded_flags, with the owning cpn and the picked value. The flag's
+    /// conditional dep fires accordingly. Decision virtuals stay out of
+    /// `selected`.
+    #[test]
+    fn resolvo_solver_reports_ceded_flag() {
+        struct Repo;
+        impl SolverRepo for Repo {
+            fn all_packages(&self) -> Vec<Cpn> {
+                vec![Cpn::parse("app-misc/foo").unwrap()]
+            }
+            fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, VersionFacts)> {
+                if cpn != &Cpn::parse("app-misc/foo").unwrap() {
+                    return Vec::new();
+                }
+                vec![(
+                    Cpv::parse("app-misc/foo-1.0").unwrap(),
+                    VersionFacts {
+                        slot: slot("0"),
+                        subslot: None,
+                        repo: None,
+                        iuse: vec![Interned::intern("ssl")],
+                        iuse_defaults: Default::default(),
+                        deps: SolverDeps {
+                            depend: vec![DepEntry::UseConditional {
+                                flag: Interned::intern("ssl"),
+                                negate: false,
+                                children: vec![DepEntry::Atom(
+                                    Dep::parse("dev-libs/openssl").unwrap(),
+                                )],
+                            }],
+                            ..SolverDeps::default()
+                        },
+                        required_use: None,
+                    },
+                )]
+            }
+            // Cede `ssl` to the solver, preferring OFF. The deps only reference
+            // ssl on foo itself, so nothing forces it on → solver keeps it off.
+            fn desired_use(&self, _: &Cpv) -> UseConfig {
+                let mut cfg = UseConfig::new();
+                cfg.solver_decide(Interned::intern("ssl"), false);
+                cfg
+            }
+        }
+
+        let mut solver = SolverAdapter::new(Box::new(Repo));
+        let plan = Solver::resolve_targets(
+            &mut solver,
+            &[TargetSpec::any_in(
+                Cpn::parse("app-misc/foo").unwrap(),
+                None,
+            )],
+        )
+        .expect("resolve");
+
+        // No decision virtual leaked into selected.
+        assert!(
+            plan.selected
+                .iter()
+                .all(|p| p.cpn.category != "__internal__")
+        );
+        // The ceded flag is reported with its owning cpn and chosen value (off).
+        let ceded: Vec<_> = plan
+            .ceded_flags
+            .iter()
+            .filter(|c| c.flag.as_str() == "ssl")
+            .collect();
+        assert!(
+            !ceded.is_empty(),
+            "expected a ceded ssl flag, got {:?}",
+            plan.ceded_flags
+        );
+        assert!(ceded.iter().all(|c| c.cpn.package.as_str() == "foo"));
+        assert!(
+            ceded.iter().all(|c| !c.value),
+            "expected ssl ceded to OFF (prefer off, nothing forces on), got {:?}",
+            ceded
+        );
+        assert!(
+            ceded.iter().all(|c| !c.flipped),
+            "value matches prefer → not flipped"
+        );
     }
 }

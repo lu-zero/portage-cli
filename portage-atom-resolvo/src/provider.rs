@@ -25,22 +25,37 @@ use crate::pool::{
 use crate::repository::PackageRepository;
 use crate::version_match::version_matches;
 
-/// Internal data for a solver-decided USE flag.
+/// Internal data for a solver-decided USE flag on a specific package.
 ///
-/// Each solver-decided flag is modelled as a complementary pair of virtual
-/// solvables (`virtual/USE_<flag>` and `virtual/NotUSE_<flag>`) with mutual
-/// exclusion.  Packages that reference the flag get a
-/// `|| ( NotUSE_<flag> USE_<flag> )` requirement so the solver is forced to
-/// pick exactly one.
+/// Each `(cpn, flag)` pair the solver may decide is modelled as a
+/// complementary pair of virtual solvables
+/// (`__internal__/USE_<cpn>_<flag>` and `__internal__/NotUSE_<cpn>_<flag>`)
+/// with mutual exclusion. Packages that reference the flag get a
+/// `|| ( NotUSE_<cpn>_<flag> USE_<cpn>_<flag> )` requirement so the solver is
+/// forced to pick exactly one. The preferred variant is listed first so the
+/// solver's newest-first bias honours the caller's `prefer`.
 struct FlagVirtuals {
-    /// Condition true when the flag is ON (`virtual/USE_<flag>` selected).
+    /// Condition true when the flag is ON (`__internal__/USE_<cpn>_<flag>`
+    /// selected).
     on_condition: ConditionId,
-    /// Condition true when the flag is OFF (`virtual/NotUSE_<flag>` selected).
+    /// Condition true when the flag is OFF
+    /// (`__internal__/NotUSE_<cpn>_<flag>` selected).
     off_condition: ConditionId,
-    /// Pre-computed union `|| ( NotUSE_<flag> USE_<flag> )` — injected into
-    /// every solvable that references the flag.  `NotUSE` is listed first
-    /// to bias the solver toward flag-off (minimal deps).
+    /// Pre-computed union `|| ( <off> <on> )` or `|| ( <on> <off> )` —
+    /// injected into the solvable that references the flag, with the
+    /// preferred variant first so the solver biases toward it.
     choice_union: VersionSetUnionId,
+}
+
+/// Encode a `(cpn, flag)` pair as a single interned identifier used in the
+/// synthetic virtual names (`USE_<cpn>_<flag>`). The cpn's `/` is replaced
+/// with `_` so the result is a flat token (mirrors pubgrub's encoding).
+fn cpn_flag_token(cpn: &Cpn, flag: Interned<DefaultInterner>) -> Interned<DefaultInterner> {
+    Interned::intern(&format!(
+        "{}_{}",
+        cpn.to_string().replace('/', "_"),
+        flag.as_str()
+    ))
 }
 
 /// Mutable state threaded through dependency tree conversion.
@@ -49,9 +64,15 @@ struct ConvertContext<'a> {
     cpn_slots: &'a mut HashMap<Cpn, Vec<NameId>>,
     blocker_types: &'a mut HashMap<VersionSetId, Blocker>,
     rebuild_triggers: &'a mut HashSet<VersionSetId>,
-    flag_virtuals: &'a HashMap<Interned<DefaultInterner>, FlagVirtuals>,
+    /// Per-(cpn, flag) decision virtuals, created lazily during conversion.
+    flag_virtuals: &'a mut HashMap<(Cpn, Interned<DefaultInterner>), FlagVirtuals>,
     use_config: &'a UseConfig,
-    encountered_flags: HashSet<Interned<DefaultInterner>>,
+    /// The CPN of the solvable currently being converted — the "owner" for
+    /// per-(cpn, flag) decision virtuals.
+    owner_cpn: Cpn,
+    /// `(cpn, flag)` pairs the solvable currently being converted references.
+    /// Cleared per solvable; drives the per-solvable choice-union injection.
+    encountered_flags: HashSet<(Cpn, Interned<DefaultInterner>)>,
     candidates: &'a mut HashMap<NameId, Vec<SolvableId>>,
     dep_map: &'a mut HashMap<SolvableId, KnownDependencies>,
     xof_counter: &'a mut usize,
@@ -78,7 +99,8 @@ pub struct PortageDependencyProvider {
     /// When the dependency's slot or sub-slot changes, the dependent
     /// package must be rebuilt.
     rebuild_triggers: HashSet<VersionSetId>,
-    flag_virtuals: HashMap<Interned<DefaultInterner>, FlagVirtuals>,
+    /// Per-(cpn, flag) decision virtuals, created lazily during conversion.
+    flag_virtuals: HashMap<(Cpn, Interned<DefaultInterner>), FlagVirtuals>,
     use_config: UseConfig,
     /// SolvableId to favor per NameId (installed, soft preference).
     favored: HashMap<NameId, SolvableId>,
@@ -126,7 +148,7 @@ impl PortageDependencyProvider {
         }
 
         // Phase 1: intern all real solvables.
-        let mut solvable_meta: Vec<(SolvableId, PackageDeps)> = Vec::new();
+        let mut solvable_meta: Vec<(SolvableId, Cpn, PackageDeps)> = Vec::new();
         let mut found_installed: HashSet<Cpv> = HashSet::new();
 
         for cpn in repo.all_packages() {
@@ -144,9 +166,10 @@ impl PortageDependencyProvider {
                 }
 
                 let pkg_deps = meta.dependencies.clone();
+                let pkg_cpn = meta.cpv.cpn;
                 let sid = pool.intern_solvable(name_id, meta.clone());
                 candidates.entry(name_id).or_default().push(sid);
-                solvable_meta.push((sid, pkg_deps));
+                solvable_meta.push((sid, pkg_cpn, pkg_deps));
 
                 // Check if this solvable matches an installed package.
                 if let Some(&policy) = installed_index.get(&meta.cpv) {
@@ -180,9 +203,10 @@ impl PortageDependencyProvider {
             }
 
             let pkg_deps = meta.dependencies.clone();
+            let pkg_cpn = meta.cpv.cpn;
             let sid = pool.intern_solvable(name_id, meta.clone());
             candidates.entry(name_id).or_default().push(sid);
-            solvable_meta.push((sid, pkg_deps));
+            solvable_meta.push((sid, pkg_cpn, pkg_deps));
 
             match policy {
                 InstalledPolicy::Favored => {
@@ -194,118 +218,14 @@ impl PortageDependencyProvider {
             }
         }
 
-        // Phase 1.5: create virtual solvables for solver-decided USE flags.
-        //
-        // For each flag we create two virtual packages that mutually exclude
-        // each other.  Selecting `virtual/USE_<flag>` means the flag is ON;
-        // selecting `virtual/NotUSE_<flag>` means the flag is OFF.
-        let mut flag_virtuals: HashMap<Interned<DefaultInterner>, FlagVirtuals> = HashMap::new();
-        let version_zero = Version::parse("0").unwrap();
-
-        for flag in &use_config.solver_decided {
-            // --- ON virtual: virtual/USE_<flag>-1.0 ---
-            let on_cpn = Cpn::new("virtual", format!("USE_{flag}"));
-            let on_name = PackageName {
-                cpn: on_cpn,
-                slot: None,
-            };
-            let on_name_id = pool.intern_name(on_name);
-            cpn_slots.entry(on_cpn).or_default().push(on_name_id);
-
-            let on_meta = PackageMetadata {
-                cpv: Cpv::parse(&format!("virtual/USE_{flag}-1.0")).unwrap(),
-                slot: None,
-                subslot: None,
-                iuse: vec![],
-                use_flags: HashSet::new(),
-                repo: None,
-                dependencies: PackageDeps::default(),
-            };
-            let on_sid = pool.intern_solvable(on_name_id, on_meta);
-            candidates.entry(on_name_id).or_default().push(on_sid);
-
-            let on_constraint = VersionConstraint {
-                cpn: on_cpn,
-                operator: Operator::GreaterOrEqual,
-                version: version_zero.clone(),
-                glob: false,
-                slot: None,
-                subslot: None,
-                repo: None,
-                use_constraints: vec![],
-                inverted: false,
-            };
-            let on_vs = pool.intern_version_set(on_name_id, on_constraint);
-            let on_cond = pool.intern_condition(Condition::Requirement(on_vs));
-
-            // --- OFF virtual: virtual/NotUSE_<flag>-1.0 ---
-            let off_cpn = Cpn::new("virtual", format!("NotUSE_{flag}"));
-            let off_name = PackageName {
-                cpn: off_cpn,
-                slot: None,
-            };
-            let off_name_id = pool.intern_name(off_name);
-            cpn_slots.entry(off_cpn).or_default().push(off_name_id);
-
-            let off_meta = PackageMetadata {
-                cpv: Cpv::parse(&format!("virtual/NotUSE_{flag}-1.0")).unwrap(),
-                slot: None,
-                subslot: None,
-                iuse: vec![],
-                use_flags: HashSet::new(),
-                repo: None,
-                dependencies: PackageDeps::default(),
-            };
-            let off_sid = pool.intern_solvable(off_name_id, off_meta);
-            candidates.entry(off_name_id).or_default().push(off_sid);
-
-            let off_constraint = VersionConstraint {
-                cpn: off_cpn,
-                operator: Operator::GreaterOrEqual,
-                version: version_zero.clone(),
-                glob: false,
-                slot: None,
-                subslot: None,
-                repo: None,
-                use_constraints: vec![],
-                inverted: false,
-            };
-            let off_vs = pool.intern_version_set(off_name_id, off_constraint);
-            let off_cond = pool.intern_condition(Condition::Requirement(off_vs));
-
-            // --- Mutual exclusion: each virtual blocks the other ---
-            dep_map.insert(
-                on_sid,
-                KnownDependencies {
-                    requirements: vec![],
-                    constrains: vec![off_vs],
-                },
-            );
-            dep_map.insert(
-                off_sid,
-                KnownDependencies {
-                    requirements: vec![],
-                    constrains: vec![on_vs],
-                },
-            );
-
-            // --- Choice union: || ( NotUSE_<flag> USE_<flag> ) ---
-            // NotUSE listed first to bias the solver toward flag-off.
-            let choice_union = pool.intern_version_set_union(vec![off_vs, on_vs]);
-
-            flag_virtuals.insert(
-                *flag,
-                FlagVirtuals {
-                    on_condition: on_cond,
-                    off_condition: off_cond,
-                    choice_union,
-                },
-            );
-        }
+        // Per-(cpn, flag) decision virtuals, created lazily during conversion
+        // (Phase 2) the first time a solvable references a solver-decided flag.
+        let mut flag_virtuals: HashMap<(Cpn, Interned<DefaultInterner>), FlagVirtuals> =
+            HashMap::new();
 
         // Phase 2: convert dependency trees into resolvo requirements.
         let mut xof_counter: usize = 0;
-        for (sid, pkg_deps) in solvable_meta {
+        for (sid, pkg_cpn, pkg_deps) in solvable_meta {
             let mut requirements = Vec::new();
             let mut constrains = Vec::new();
 
@@ -314,8 +234,9 @@ impl PortageDependencyProvider {
                 cpn_slots: &mut cpn_slots,
                 blocker_types: &mut blocker_types,
                 rebuild_triggers: &mut rebuild_triggers,
-                flag_virtuals: &flag_virtuals,
+                flag_virtuals: &mut flag_virtuals,
                 use_config,
+                owner_cpn: pkg_cpn,
                 encountered_flags: HashSet::new(),
                 candidates: &mut candidates,
                 dep_map: &mut dep_map,
@@ -326,9 +247,10 @@ impl PortageDependencyProvider {
             }
 
             // Inject choice requirements for each solver-decided flag
-            // referenced by this solvable's dependency tree.
-            for flag in &ctx.encountered_flags {
-                if let Some(fv) = ctx.flag_virtuals.get(flag) {
+            // referenced by this solvable's dependency tree. The virtuals are
+            // keyed per (owner cpn, flag), so the choice is per-package.
+            for key in &ctx.encountered_flags {
+                if let Some(fv) = ctx.flag_virtuals.get(key) {
                     requirements.push(ConditionalRequirement {
                         condition: None,
                         requirement: Requirement::Union(fv.choice_union),
@@ -359,6 +281,129 @@ impl PortageDependencyProvider {
         }
     }
 
+    /// Lazily create the per-(cpn, flag) decision virtual pair for `key` if it
+    /// does not yet exist: `__internal__/USE_<cpn>_<flag>` (ON) and
+    /// `__internal__/NotUSE_<cpn>_<flag>` (OFF), mutually exclusive, plus a
+    /// choice union `|| ( <preferred> <other> )` honouring the caller's
+    /// `prefer` (preferred variant first → solver biases toward it).
+    fn ensure_flag_virtual(ctx: &mut ConvertContext<'_>, key: (Cpn, Interned<DefaultInterner>)) {
+        use portage_atom::Version as PVersion;
+        if ctx.flag_virtuals.contains_key(&key) {
+            return;
+        }
+        let (cpn, flag) = key;
+        let token = cpn_flag_token(&cpn, flag);
+        let prefer_on = ctx
+            .use_config
+            .solver_decided_prefer
+            .get(&flag)
+            .copied()
+            .unwrap_or(false);
+        let version_zero = PVersion::parse("0").unwrap();
+
+        // ON virtual: __internal__/USE_<cpn>_<flag>.
+        let on_cpn = Cpn::new("__internal__", format!("USE_{token}"));
+        let on_name = PackageName {
+            cpn: on_cpn,
+            slot: None,
+        };
+        let on_name_id = ctx.pool.intern_name(on_name);
+        ctx.cpn_slots.entry(on_cpn).or_default().push(on_name_id);
+        let on_meta = PackageMetadata {
+            cpv: Cpv::parse(&format!("__internal__/USE_{token}-1.0")).unwrap(),
+            slot: None,
+            subslot: None,
+            iuse: vec![],
+            use_flags: HashSet::new(),
+            repo: None,
+            dependencies: PackageDeps::default(),
+        };
+        let on_sid = ctx.pool.intern_solvable(on_name_id, on_meta);
+        ctx.candidates.entry(on_name_id).or_default().push(on_sid);
+        let on_vs = ctx.pool.intern_version_set(
+            on_name_id,
+            VersionConstraint {
+                cpn: on_cpn,
+                operator: Operator::GreaterOrEqual,
+                version: version_zero.clone(),
+                glob: false,
+                slot: None,
+                subslot: None,
+                repo: None,
+                use_constraints: vec![],
+                inverted: false,
+            },
+        );
+        let on_cond = ctx.pool.intern_condition(Condition::Requirement(on_vs));
+
+        // OFF virtual: __internal__/NotUSE_<cpn>_<flag>.
+        let off_cpn = Cpn::new("__internal__", format!("NotUSE_{token}"));
+        let off_name = PackageName {
+            cpn: off_cpn,
+            slot: None,
+        };
+        let off_name_id = ctx.pool.intern_name(off_name);
+        ctx.cpn_slots.entry(off_cpn).or_default().push(off_name_id);
+        let off_meta = PackageMetadata {
+            cpv: Cpv::parse(&format!("__internal__/NotUSE_{token}-1.0")).unwrap(),
+            slot: None,
+            subslot: None,
+            iuse: vec![],
+            use_flags: HashSet::new(),
+            repo: None,
+            dependencies: PackageDeps::default(),
+        };
+        let off_sid = ctx.pool.intern_solvable(off_name_id, off_meta);
+        ctx.candidates.entry(off_name_id).or_default().push(off_sid);
+        let off_vs = ctx.pool.intern_version_set(
+            off_name_id,
+            VersionConstraint {
+                cpn: off_cpn,
+                operator: Operator::GreaterOrEqual,
+                version: version_zero,
+                glob: false,
+                slot: None,
+                subslot: None,
+                repo: None,
+                use_constraints: vec![],
+                inverted: false,
+            },
+        );
+        let off_cond = ctx.pool.intern_condition(Condition::Requirement(off_vs));
+
+        // Mutual exclusion: each virtual constrains (forbids) the other.
+        ctx.dep_map.insert(
+            on_sid,
+            KnownDependencies {
+                requirements: vec![],
+                constrains: vec![off_vs],
+            },
+        );
+        ctx.dep_map.insert(
+            off_sid,
+            KnownDependencies {
+                requirements: vec![],
+                constrains: vec![on_vs],
+            },
+        );
+
+        // Choice union: preferred variant first so the solver biases toward it.
+        let choice_union = if prefer_on {
+            ctx.pool.intern_version_set_union(vec![on_vs, off_vs])
+        } else {
+            ctx.pool.intern_version_set_union(vec![off_vs, on_vs])
+        };
+
+        ctx.flag_virtuals.insert(
+            key,
+            FlagVirtuals {
+                on_condition: on_cond,
+                off_condition: off_cond,
+                choice_union,
+            },
+        );
+    }
+
     /// Recursively convert a slice of [`DepEntry`]s into resolvo requirements
     /// and constrains.
     fn convert_deps(
@@ -377,9 +422,13 @@ impl PortageDependencyProvider {
                     negate,
                     children,
                 } => {
-                    if let Some(fv) = ctx.flag_virtuals.get(flag) {
-                        // Solver-decided flag — attach the appropriate condition.
-                        ctx.encountered_flags.insert(*flag);
+                    if ctx.use_config.solver_decided.contains(flag) {
+                        // Solver-decided flag — lazily create the per-(cpn,
+                        // flag) decision virtual and attach its condition.
+                        let key = (ctx.owner_cpn, *flag);
+                        ctx.encountered_flags.insert(key);
+                        Self::ensure_flag_virtual(ctx, key);
+                        let fv = &ctx.flag_virtuals[&key];
                         let cond_id = if *negate {
                             fv.off_condition
                         } else {
@@ -782,9 +831,12 @@ impl PortageDependencyProvider {
                     negate,
                     children,
                 } => {
-                    if let Some(fv) = ctx.flag_virtuals.get(flag) {
+                    if ctx.use_config.solver_decided.contains(flag) {
                         // Solver-decided flag inside || ( ).
-                        ctx.encountered_flags.insert(*flag);
+                        let key = (ctx.owner_cpn, *flag);
+                        ctx.encountered_flags.insert(key);
+                        Self::ensure_flag_virtual(ctx, key);
+                        let fv = &ctx.flag_virtuals[&key];
                         let cond_id = if *negate {
                             fv.off_condition
                         } else {
@@ -1025,16 +1077,28 @@ impl PortageDependencyProvider {
         self.rebuild_triggers.contains(&vs_id)
     }
 
-    /// resolvo condition that holds when `flag` is enabled, if the flag has a
-    /// solver-decided virtual.
-    pub fn flag_condition(&self, flag: Interned<DefaultInterner>) -> Option<ConditionId> {
-        self.flag_virtuals.get(&flag).map(|fv| fv.on_condition)
+    /// resolvo condition that holds when `flag` is enabled on `cpn`, if the
+    /// `(cpn, flag)` pair has a solver-decided virtual.
+    pub fn flag_condition(
+        &self,
+        cpn: &Cpn,
+        flag: Interned<DefaultInterner>,
+    ) -> Option<ConditionId> {
+        self.flag_virtuals
+            .get(&(*cpn, flag))
+            .map(|fv| fv.on_condition)
     }
 
-    /// resolvo condition that holds when `flag` is disabled, if the flag has a
-    /// solver-decided virtual.
-    pub fn flag_off_condition(&self, flag: Interned<DefaultInterner>) -> Option<ConditionId> {
-        self.flag_virtuals.get(&flag).map(|fv| fv.off_condition)
+    /// resolvo condition that holds when `flag` is disabled on `cpn`, if the
+    /// `(cpn, flag)` pair has a solver-decided virtual.
+    pub fn flag_off_condition(
+        &self,
+        cpn: &Cpn,
+        flag: Interned<DefaultInterner>,
+    ) -> Option<ConditionId> {
+        self.flag_virtuals
+            .get(&(*cpn, flag))
+            .map(|fv| fv.off_condition)
     }
 
     /// Build a labeled dependency graph from a solver solution.
@@ -1288,7 +1352,49 @@ impl PortageDependencyProvider {
             .collect()
     }
 
-    /// Compute an install order from a solver solution.
+    /// Read the solver's per-(cpn, flag) decisions back from the solution.
+    ///
+    /// Scans the solution for the `__internal__/USE_<cpn>_<flag>` / `NotUSE_*`
+    /// virtual solvables, decodes `(cpn, flag, value)` (true = ON), and joins
+    /// with the caller's `prefer` map so the adapter can flag flips.
+    ///
+    /// `prefer` maps each ceded flag to the caller's preferred value; a flag
+    /// absent from `prefer` defaults to `false` (off).
+    pub fn ceded_flags(
+        &self,
+        solution: &[SolvableId],
+        prefer: &HashMap<Interned<DefaultInterner>, bool>,
+    ) -> Vec<(Cpn, Interned<DefaultInterner>, bool, bool)> {
+        let mut out = Vec::new();
+        for &sid in solution {
+            let cpv = &self.pool.resolve_solvable(sid).cpv;
+            // Only the decision virtuals live under __internal__/.
+            if cpv.cpn.category != "__internal__" {
+                continue;
+            }
+            // Package name is USE_<cpn>_<flag> or NotUSE_<cpn>_<flag>.
+            let name = cpv.cpn.package.as_str();
+            let (value, rest) = if let Some(r) = name.strip_prefix("USE_") {
+                (true, r)
+            } else if let Some(r) = name.strip_prefix("NotUSE_") {
+                (false, r)
+            } else {
+                continue;
+            };
+            // rest = "<cat>_<pkg>_<flag>" — split off the trailing flag, the
+            // rest rejoined with "/" is the owning cpn.
+            if let Some(idx) = rest.rfind('_') {
+                let flag = Interned::intern(&rest[idx + 1..]);
+                let cpn_str = rest[..idx].replace('_', "/");
+                if let Ok(cpn) = Cpn::parse(&cpn_str) {
+                    let preferred = prefer.get(&flag).copied().unwrap_or(false);
+                    out.push((cpn, flag, value, preferred));
+                }
+            }
+        }
+        out
+    }
+
     ///
     /// Returns `Ok(ordered)` with solvables in installation order
     /// (dependencies before dependents), or `Err(cycle_members)` if
