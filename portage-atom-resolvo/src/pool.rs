@@ -184,6 +184,28 @@ pub enum Violation {
     },
 }
 
+/// A derived USE-flag requirement on a target package: the flags the solution
+/// needs enabled or disabled to satisfy the use-deps declared against it.
+/// Mirrors the solver-agnostic `portage_solver::UseFlagRequirement` (minus
+/// `upgrade_to`, which resolvo does not model — no upgrade fixpoint).
+///
+/// Produced by [`PortageDependencyProvider::use_flag_requirements`] from the
+/// same use-dep analysis as the violations: where a violation reports a
+/// breakage, a requirement reports the fix (the autounmask "needed" set).
+#[derive(Debug, Clone)]
+pub struct UseFlagRequirement {
+    /// The target package whose flags must change.
+    pub cpn: Cpn,
+    /// The target version.
+    pub version: portage_atom::Version,
+    /// Flags that must be enabled.
+    pub required_enabled: Vec<Interned<DefaultInterner>>,
+    /// Flags that must be disabled.
+    pub required_disabled: Vec<Interned<DefaultInterner>>,
+    /// CPV strings of the packages demanding the change.
+    pub required_by: Vec<String>,
+}
+
 impl std::fmt::Display for DepClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -265,9 +265,22 @@ fn build_plan(provider: &PortageDependencyProvider, solution: &[resolvo::Solvabl
                 }
             })
             .collect(),
+        // The "needed" set derived from unsatisfied USE-deps. upgrade_to is
+        // always None (resolvo has no upgrade fixpoint).
+        use_flag_requirements: provider
+            .use_flag_requirements(solution)
+            .into_iter()
+            .map(|r| portage_solver::UseFlagRequirement {
+                cpn: r.cpn,
+                version: r.version,
+                upgrade_to: None,
+                required_enabled: r.required_enabled,
+                required_disabled: r.required_disabled,
+                required_by: r.required_by,
+            })
+            .collect(),
         // Not yet modelled by the resolvo bridge:
         ceded_flags: Vec::new(),
-        use_flag_requirements: Vec::new(),
     }
 }
 
@@ -565,5 +578,82 @@ mod tests {
             "expected a [ssl] use-dep violation, got {:?}",
             plan.violations
         );
+    }
+
+    /// The same unsatisfied USE-dep that produces a violation also produces a
+    /// use_flag_requirement: bar must enable ssl. Grouped by target, with the
+    /// requirer recorded, and no upgrade_to (resolvo has no upgrade fixpoint).
+    #[test]
+    fn resolvo_solver_reports_use_flag_requirement() {
+        struct Repo;
+        impl SolverRepo for Repo {
+            fn all_packages(&self) -> Vec<Cpn> {
+                vec![
+                    Cpn::parse("app-misc/foo").unwrap(),
+                    Cpn::parse("dev-libs/bar").unwrap(),
+                ]
+            }
+            fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, VersionFacts)> {
+                let mk = |v: &str, iuse: Vec<Interned<DefaultInterner>>, deps: SolverDeps| {
+                    (
+                        Cpv::parse(v).unwrap(),
+                        VersionFacts {
+                            slot: slot("0"),
+                            subslot: None,
+                            repo: None,
+                            iuse,
+                            iuse_defaults: Default::default(),
+                            deps,
+                            required_use: None,
+                        },
+                    )
+                };
+                match format!("{}/{}", cpn.category, cpn.package).as_str() {
+                    "app-misc/foo" => vec![mk(
+                        "app-misc/foo-1.0",
+                        Vec::new(),
+                        SolverDeps {
+                            depend: vec![DepEntry::Atom(
+                                Dep::parse("dev-libs/bar[ssl]").unwrap(),
+                            )],
+                            ..SolverDeps::default()
+                        },
+                    )],
+                    "dev-libs/bar" => vec![mk(
+                        "dev-libs/bar-1.0",
+                        vec![Interned::intern("ssl")],
+                        SolverDeps::default(),
+                    )],
+                    _ => Vec::new(),
+                }
+            }
+            fn desired_use(&self, _: &Cpv) -> UseConfig {
+                UseConfig::new()
+            }
+        }
+
+        let mut solver = SolverAdapter::new(Box::new(Repo));
+        let plan = Solver::resolve_targets(
+            &mut solver,
+            &[TargetSpec::any_in(Cpn::parse("app-misc/foo").unwrap(), None)],
+        )
+        .expect("resolve");
+
+        let req = plan
+            .use_flag_requirements
+            .iter()
+            .find(|r| r.cpn.package.as_str() == "bar")
+            .expect("expected a use_flag_requirement for bar");
+        assert!(
+            req.required_enabled.iter().any(|f| f.as_str() == "ssl"),
+            "expected ssl in required_enabled, got {:?}",
+            req.required_enabled
+        );
+        assert!(
+            req.required_by.iter().any(|s| s.contains("foo")),
+            "expected foo in required_by, got {:?}",
+            req.required_by
+        );
+        assert!(req.upgrade_to.is_none(), "resolvo has no upgrade fixpoint");
     }
 }

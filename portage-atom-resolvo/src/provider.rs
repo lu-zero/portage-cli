@@ -1202,6 +1202,92 @@ impl PortageDependencyProvider {
         out
     }
 
+    /// Derive the "needed" USE-flag set: for each solution edge whose USE-dep
+    /// brackets are unsatisfied by the target, report the flags the target
+    /// must enable or disable to satisfy them. Grouped by target (cpn +
+    /// version); each group accumulates the union of demanded flags and the
+    /// packages demanding them. This is the autounmask `package.use`
+    /// suggestion set, the constructive counterpart of
+    /// [`Self::check_use_dep_violations`].
+    ///
+    /// `upgrade_to` is always `None` here: resolvo does not run the
+    /// post-solve upgrade fixpoint, so it never suggests a version upgrade.
+    pub fn use_flag_requirements(
+        &self,
+        solution: &[SolvableId],
+    ) -> Vec<crate::pool::UseFlagRequirement> {
+        use crate::pool::UseFlagRequirement;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        /// Per-target accumulator: flags to enable, flags to disable, and the
+        /// CPVs demanding the change.
+        struct Acc {
+            enable: BTreeSet<Interned<DefaultInterner>>,
+            disable: BTreeSet<Interned<DefaultInterner>>,
+            required_by: BTreeSet<String>,
+        }
+        impl Acc {
+            fn new() -> Self {
+                Self {
+                    enable: BTreeSet::new(),
+                    disable: BTreeSet::new(),
+                    required_by: BTreeSet::new(),
+                }
+            }
+        }
+
+        // Group by (target cpn, target version); accumulate enabled/disabled
+        // flag sets and the requirer CPV strings.
+        let mut by_target: BTreeMap<(portage_atom::Cpn, portage_atom::Version), Acc> =
+            BTreeMap::new();
+
+        for &from in solution {
+            let from_meta = self.pool.resolve_solvable(from);
+            let from_str = from_meta.cpv.to_string();
+            let mut use_dep_atoms: Vec<portage_atom::Dep> = Vec::new();
+            for (_class, entries) in from_meta.dependencies.iter_classes() {
+                collect_use_dep_atoms(entries, &mut use_dep_atoms);
+            }
+            for dep in &use_dep_atoms {
+                let Some(to_meta) = solution
+                    .iter()
+                    .map(|&to| self.pool.resolve_solvable(to))
+                    .find(|to| matches_structure(dep, to))
+                else {
+                    continue;
+                };
+                let constraints = resolve_use_deps(dep, &self.use_config);
+                let entry = by_target
+                    .entry((to_meta.cpv.cpn, to_meta.cpv.version.clone()))
+                    .or_insert_with(Acc::new);
+                for (flag, must_be_enabled) in &constraints {
+                    let satisfied = to_meta.use_flags.contains(flag) == *must_be_enabled;
+                    if satisfied {
+                        continue;
+                    }
+                    if *must_be_enabled {
+                        entry.enable.insert(*flag);
+                    } else {
+                        entry.disable.insert(*flag);
+                    }
+                    entry.required_by.insert(from_str.clone());
+                }
+            }
+        }
+
+        by_target
+            .into_iter()
+            .filter(|(_, acc)| !acc.enable.is_empty() || !acc.disable.is_empty())
+            .map(|((cpn, version), acc)| UseFlagRequirement {
+                cpn,
+                version,
+                required_enabled: acc.enable.into_iter().collect(),
+                required_disabled: acc.disable.into_iter().collect(),
+                required_by: acc.required_by.into_iter().collect(),
+            })
+            .collect()
+    }
+
     /// Compute an install order from a solver solution.
     ///
     /// Returns `Ok(ordered)` with solvables in installation order
