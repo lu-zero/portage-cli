@@ -1,9 +1,12 @@
 # `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` visibility gates (+ `package.env`)
 
-STATUS: **deferred — lowest priority.** Do these *last*, after the rest of the
-`package.*` and interning work. The two `ACCEPT_*` gates almost never mask
-anything (defaults accept all), so this is parity polish, not a correctness
-blocker.
+STATUS: **deferred — lowest priority; prerequisites now DONE.** The rest of the
+`package.*` and interning work this note waited on has landed (commits 26fa1d7 →
+10f3ffd: `package.accept_keywords`, `package.license`, and the fully-interned
+keyword/license/`package.use`/force-mask hot paths — a net 1.16–1.27× resolve
+speedup, see below). These two `ACCEPT_*` gates almost never mask anything
+(defaults accept all), so they remain parity polish, not a correctness blocker —
+the last visibility gate left after keywords/license/mask.
 
 ## The gap
 
