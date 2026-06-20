@@ -1,6 +1,8 @@
 use portage_atom::interner::Interned;
 use portage_atom::{Cpv, Dep, Version};
-use portage_atom_pubgrub::{PortagePackage, UseConfig, UseFlagState, UseOverride, apply_package_use};
+use portage_atom_pubgrub::{
+    PortagePackage, UseConfig, UseFlagState, UseOverride, apply_package_use,
+};
 use portage_metadata::IUseDefault;
 
 use super::repo::{RepoData, find_cache};

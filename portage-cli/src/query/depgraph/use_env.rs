@@ -115,13 +115,16 @@ async fn compute_use_env(
             (dep, parsed)
         })
         .collect();
-    package_accept_keywords
-        .extend(load_package_keywords(portage_dir.join("package.accept_keywords").as_str()));
-    package_accept_keywords
-        .extend(load_package_keywords(portage_dir.join("package.keywords").as_str()));
+    package_accept_keywords.extend(load_package_keywords(
+        portage_dir.join("package.accept_keywords").as_str(),
+    ));
+    package_accept_keywords.extend(load_package_keywords(
+        portage_dir.join("package.keywords").as_str(),
+    ));
     if let Some(overlay) = config_overlay {
-        package_accept_keywords
-            .extend(load_package_keywords(overlay.join("package.accept_keywords").as_str()));
+        package_accept_keywords.extend(load_package_keywords(
+            overlay.join("package.accept_keywords").as_str(),
+        ));
     }
     let license_groups = LicenseGroupRegistry::from_repo(repo)
         .map_err(|e| anyhow::anyhow!("failed to load license groups: {e}"))?;
@@ -344,10 +347,7 @@ fn load_package_keywords(path: &str) -> Vec<(Dep, Vec<AcceptToken>)> {
 /// directory. Each line's license tokens (`@GROUP`, `-deny`, `*`, names) are
 /// expanded against `groups` into a per-package [`AcceptLicense`] overlay now,
 /// so resolution never re-parses them.
-fn load_package_license(
-    path: &str,
-    groups: &LicenseGroupRegistry,
-) -> Vec<(Dep, AcceptLicense)> {
+fn load_package_license(path: &str, groups: &LicenseGroupRegistry) -> Vec<(Dep, AcceptLicense)> {
     let p = std::path::Path::new(path);
     if !p.exists() {
         return Vec::new();

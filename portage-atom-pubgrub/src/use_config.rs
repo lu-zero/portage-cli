@@ -233,7 +233,11 @@ mod tests {
         let on = UseOverride::parse("ssl");
         assert_eq!(on.flag, Interned::intern("ssl"));
         assert!(on.enable);
-        assert_eq!(UseOverride::parse("+ssl"), on, "`+flag` enables like `flag`");
+        assert_eq!(
+            UseOverride::parse("+ssl"),
+            on,
+            "`+flag` enables like `flag`"
+        );
         let off = UseOverride::parse("-ssl");
         assert_eq!(off.flag, Interned::intern("ssl"));
         assert!(!off.enable);

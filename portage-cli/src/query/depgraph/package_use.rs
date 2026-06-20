@@ -109,8 +109,11 @@ fn ver_str(v: &Version) -> String {
 /// Result of [`cosolve_use_deps`]: the augmented `package.use`, the
 /// requirements that drove at least one applied flag, and the converged solve
 /// (if the fixpoint ended on a solve of the returned `package.use`).
-pub(super) type CosolveOutcome<T> =
-    (Vec<(Dep, Vec<UseOverride>)>, Vec<UseFlagRequirement>, Option<T>);
+pub(super) type CosolveOutcome<T> = (
+    Vec<(Dep, Vec<UseOverride>)>,
+    Vec<UseFlagRequirement>,
+    Option<T>,
+);
 
 /// Auto-apply cross-package `[flag]` USE-deps to a fixpoint (emerge's
 /// autounmask-preview dependency calculation).

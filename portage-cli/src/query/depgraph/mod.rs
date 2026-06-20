@@ -411,7 +411,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         .iter()
                         .map(|&flag| UseOverride { flag, enable: true })
                         .collect();
-                    overrides.extend(masked.iter().map(|&flag| UseOverride { flag, enable: false }));
+                    overrides.extend(masked.iter().map(|&flag| UseOverride {
+                        flag,
+                        enable: false,
+                    }));
                     combined.push((dep.clone(), overrides));
                 }
             }

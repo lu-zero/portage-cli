@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use camino::Utf8Path;
 use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Dep, Version};
-use portage_atom_pubgrub::{PortagePackage, UseConfig, UseFlagState, UseOverride, apply_package_use};
+use portage_atom_pubgrub::{
+    PortagePackage, UseConfig, UseFlagState, UseOverride, apply_package_use,
+};
 use portage_metadata::IUseDefault;
 use portage_repo::{Manifest, ManifestEntry};
 

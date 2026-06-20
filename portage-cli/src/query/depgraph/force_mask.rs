@@ -157,7 +157,6 @@ impl ForceMask {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +240,4 @@ mod tests {
             "applied when stable"
         );
     }
-
 }

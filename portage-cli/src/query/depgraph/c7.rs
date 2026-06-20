@@ -78,7 +78,11 @@ impl Outcome {
 
 /// Solve `targets` against `data` with the given `package_use`. Returns `None`
 /// for an unsatisfiable problem.
-fn solve_with(data: &RepoData, targets: &[&str], pu: &[(Dep, Vec<UseOverride>)]) -> Option<Outcome> {
+fn solve_with(
+    data: &RepoData,
+    targets: &[&str],
+    pu: &[(Dep, Vec<UseOverride>)],
+) -> Option<Outcome> {
     let arch = Arch::intern("amd64");
     let accept = AcceptKeywords::from_global(&arch, &["amd64"]);
     let lic = AcceptLicenses::new(
@@ -104,17 +108,7 @@ fn solve_with(data: &RepoData, targets: &[&str], pu: &[(Dep, Vec<UseOverride>)])
         .iter()
         .map(|t| {
             let dep = Dep::parse(t).unwrap();
-            let pkg = target_package(
-                data,
-                &dep,
-                &accept,
-                &[],
-                &[],
-                &lic,
-                &use_config,
-                pu,
-                &fm,
-            );
+            let pkg = target_package(data, &dep, &accept, &[], &[], &lic, &use_config, pu, &fm);
             (pkg, PortageVersionSet::any())
         })
         .collect();

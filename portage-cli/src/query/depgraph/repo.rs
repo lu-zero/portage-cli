@@ -174,7 +174,10 @@ impl AcceptKeywords {
     /// Test-only constructor from a global token list (no per-package entries).
     #[cfg(test)]
     pub(super) fn from_global(arch: &Arch, global: &[&str]) -> Self {
-        let toks: Vec<AcceptToken> = global.iter().filter_map(|s| AcceptToken::parse(s)).collect();
+        let toks: Vec<AcceptToken> = global
+            .iter()
+            .filter_map(|s| AcceptToken::parse(s))
+            .collect();
         Self::new(arch, &toks, Vec::new())
     }
 
@@ -275,7 +278,9 @@ impl AcceptLicenses {
         let mut merged: Option<portage_repo::AcceptLicense> = None;
         for (dep, overlay) in &self.per_package {
             if dep.matches_cpv(cpv, slot_str) {
-                merged.get_or_insert_with(|| self.global.clone()).merge(overlay);
+                merged
+                    .get_or_insert_with(|| self.global.clone())
+                    .merge(overlay);
             }
         }
         merged.map_or(Cow::Borrowed(&self.global), Cow::Owned)
