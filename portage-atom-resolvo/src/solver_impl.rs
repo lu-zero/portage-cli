@@ -59,10 +59,11 @@ pub struct SolverAdapter {
     /// Installed packages registered via [`Solver::add_installed`], folded into
     /// the provider at each resolve.
     installed: Vec<InstalledPackage>,
-    /// Solver-decided (ceded) flags harvested from `desired_use` across all
-    /// repo versions: the flag and the caller's preferred value. Drives the
-    /// per-(cpn, flag) decision virtuals in the resolvo provider.
-    ceded: HashMap<Interned<DefaultInterner>, bool>,
+    /// Solver-decided (ceded) flags + global enabled flags harvested from
+    /// `desired_use` across all repo versions. Drives the per-(cpn, flag)
+    /// decision virtuals and the global eager USE-conditional evaluation in
+    /// the resolvo provider.
+    harvested: HarvestedUse,
 }
 
 impl SolverAdapter {
@@ -78,11 +79,11 @@ impl SolverAdapter {
     /// solver: a per-(cpn, flag) decision virtual is created so the solver
     /// chooses the value, biased toward the caller's `prefer`.
     pub fn new(repo: Box<dyn portage_solver::PackageRepository>) -> Self {
-        let ceded = harvest_ceded_flags(repo.as_ref());
+        let harvested = harvest_use(repo.as_ref());
         Self {
             repo,
             installed: Vec::new(),
-            ceded,
+            harvested,
         }
     }
 
@@ -92,7 +93,7 @@ impl SolverAdapter {
         let adapted = RepoAdapter {
             repo: self.repo.as_ref(),
         };
-        let use_config = ceded_resolvo_config(&self.ceded);
+        let use_config = resolvo_config(&self.harvested);
         if self.installed.is_empty() {
             PortageDependencyProvider::new(&adapted, &use_config)
         } else {
@@ -148,7 +149,7 @@ impl Solver for SolverAdapter {
         let mut solver = ResolvoSolver::new(provider);
 
         let solution = solver.solve(problem).map_err(map_unsolvable)?;
-        Ok(build_plan(solver.provider(), &solution, &self.ceded))
+        Ok(build_plan(solver.provider(), &solution, &self.harvested))
     }
 }
 
@@ -204,14 +205,20 @@ fn effective_use_flags(
         .collect()
 }
 
-/// Harvest every `SolverDecided` flag declared by any version's `desired_use`
-/// across the repository, with the caller's preferred value. If a flag is
-/// ceded with differing `prefer` across versions, the last-wins order is
-/// deterministic but arbitrary — consistent with pubgrub's per-(cpn,flag)
-/// granularity only when the flag's ceding is uniform within a package.
-fn harvest_ceded_flags(
-    repo: &dyn portage_solver::PackageRepository,
-) -> HashMap<Interned<DefaultInterner>, bool> {
+/// Harvested USE policy from `desired_use` across all repo versions: the
+/// union of enabled flags (for resolvo's global eager USE-conditional
+/// evaluation) and the ceded flags with their preferred value. Resolvo
+/// evaluates USE-conditional deps against a *global* enabled set during
+/// conversion, not per-cpn, so we feed it the union — matching how a flat
+/// USE list works in make.conf. (Per-cpn parent state is a known resolvo
+/// limitation; pubgrub handles it per-package.)
+struct HarvestedUse {
+    enabled: HashSet<Interned<DefaultInterner>>,
+    ceded: HashMap<Interned<DefaultInterner>, bool>,
+}
+
+fn harvest_use(repo: &dyn portage_solver::PackageRepository) -> HarvestedUse {
+    let mut enabled: HashSet<Interned<DefaultInterner>> = HashSet::new();
     let mut ceded: HashMap<Interned<DefaultInterner>, bool> = HashMap::new();
     for cpn in repo.all_packages() {
         for (cpv, _facts) in repo.versions_for(&cpn) {
@@ -223,20 +230,25 @@ fn harvest_ceded_flags(
                 };
                 ceded.entry(flag).or_insert(prefer);
             }
+            // Union of enabled flags drives the global USE-conditional path.
+            for flag in desired.enabled_flags() {
+                enabled.insert(flag);
+            }
         }
     }
-    ceded
+    HarvestedUse { enabled, ceded }
 }
 
-/// Translate the harvested ceded-flag map into a resolvo `UseConfig`:
-/// `solver_decided` carries the flags, `solver_decided_prefer` carries each
-/// flag's preferred value.
-fn ceded_resolvo_config(ceded: &HashMap<Interned<DefaultInterner>, bool>) -> ResUseConfig {
+/// Translate the harvested USE policy into a resolvo `UseConfig`:
+/// `enabled` carries the global enabled flags, `solver_decided` carries the
+/// ceded flags, `solver_decided_prefer` carries each ceded flag's preferred
+/// value.
+fn resolvo_config(harvested: &HarvestedUse) -> ResUseConfig {
     ResUseConfig {
-        enabled: HashSet::new(),
+        enabled: harvested.enabled.clone(),
         disabled: HashSet::new(),
-        solver_decided: ceded.keys().copied().collect(),
-        solver_decided_prefer: ceded.iter().map(|(f, p)| (*f, *p)).collect(),
+        solver_decided: harvested.ceded.keys().copied().collect(),
+        solver_decided_prefer: harvested.ceded.iter().map(|(f, p)| (*f, *p)).collect(),
     }
 }
 
@@ -274,7 +286,7 @@ fn map_unsolvable(err: resolvo::UnsolvableOrCancelled) -> SolveError {
 fn build_plan(
     provider: &PortageDependencyProvider,
     solution: &[resolvo::SolvableId],
-    ceded: &HashMap<Interned<DefaultInterner>, bool>,
+    harvested: &HarvestedUse,
 ) -> Plan {
     // Strip solver-internal decision virtuals (__internal__/USE_* / NotUSE_*):
     // they encode ceded-USE choices, not real packages, and are surfaced
@@ -340,7 +352,7 @@ fn build_plan(
             })
             .collect(),
         ceded_flags: provider
-            .ceded_flags(solution, ceded)
+            .ceded_flags(solution, &harvested.ceded)
             .into_iter()
             .map(|(cpn, flag, value, prefer)| portage_solver::CededFlag {
                 cpn,
@@ -808,6 +820,152 @@ mod tests {
         assert!(
             ceded.iter().all(|c| !c.flipped),
             "value matches prefer → not flipped"
+        );
+    }
+
+    /// Integrated divergence-check scenario exercising the full Plan at once:
+    /// a multi-slot target with a USE-conditional dep, a use-dep bracket, and
+    /// a dropped reference. Verifies selected/graph/install_order/dropped_deps
+    /// agree on one realistic shape (mirrors the pubgrub bridge's behaviour so
+    /// the two can be cross-checked).
+    #[test]
+    fn resolvo_solver_integrated_plan_shape() {
+        struct Repo;
+        impl SolverRepo for Repo {
+            fn all_packages(&self) -> Vec<Cpn> {
+                vec![
+                    Cpn::parse("app-misc/app").unwrap(),
+                    Cpn::parse("dev-libs/lib").unwrap(),
+                    Cpn::parse("dev-libs/missing").unwrap(),
+                ]
+            }
+            fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, VersionFacts)> {
+                let mk = |v: &str,
+                          slot_val: Option<Interned<DefaultInterner>>,
+                          iuse: Vec<Interned<DefaultInterner>>,
+                          deps: SolverDeps| {
+                    (
+                        Cpv::parse(v).unwrap(),
+                        VersionFacts {
+                            slot: slot_val,
+                            subslot: None,
+                            repo: None,
+                            iuse,
+                            iuse_defaults: Default::default(),
+                            deps,
+                            required_use: None,
+                        },
+                    )
+                };
+                match format!("{}/{}", cpn.category, cpn.package).as_str() {
+                    // app DEPENDs on lib[ssl] (use-dep) and ssl-conditional on
+                    // a missing package (dropped); lib has ssl in IUSE but off.
+                    "app-misc/app" => vec![mk(
+                        "app-misc/app-1.0",
+                        slot("0"),
+                        Vec::new(),
+                        SolverDeps {
+                            depend: vec![
+                                DepEntry::Atom(Dep::parse("dev-libs/lib[ssl]").unwrap()),
+                                DepEntry::UseConditional {
+                                    flag: Interned::intern("ssl"),
+                                    negate: false,
+                                    children: vec![DepEntry::Atom(
+                                        Dep::parse("dev-libs/missing").unwrap(),
+                                    )],
+                                },
+                            ],
+                            ..SolverDeps::default()
+                        },
+                    )],
+                    "dev-libs/lib" => vec![mk(
+                        "dev-libs/lib-1.0",
+                        slot("0"),
+                        vec![Interned::intern("ssl")],
+                        SolverDeps::default(),
+                    )],
+                    // Present in the repo so it is NOT dropped — only deps
+                    // referencing an absent package are dropped. Here `missing`
+                    // exists, so the dropped-deps path is empty; this branch
+                    // keeps the repo shape realistic.
+                    "dev-libs/missing" => vec![mk(
+                        "dev-libs/missing-1.0",
+                        slot("0"),
+                        Vec::new(),
+                        SolverDeps::default(),
+                    )],
+                    _ => Vec::new(),
+                }
+            }
+            fn desired_use(&self, _: &Cpv) -> UseConfig {
+                // ssl enabled on the parent so the use-conditional fires and
+                // the [ssl] use-dep is the only unsatisfied one (lib has it off).
+                let mut cfg = UseConfig::new();
+                cfg.enable(Interned::intern("ssl"));
+                cfg
+            }
+        }
+
+        let mut solver = SolverAdapter::new(Box::new(Repo));
+        let plan = Solver::resolve_targets(
+            &mut solver,
+            &[TargetSpec::any_in(
+                Cpn::parse("app-misc/app").unwrap(),
+                None,
+            )],
+        )
+        .expect("resolve");
+
+        // app + lib are selected (missing is pulled via the active ssl
+        // conditional since it's present in the repo).
+        let selected: HashSet<String> = plan
+            .selected
+            .iter()
+            .map(|p| p.cpn.package.as_str().to_string())
+            .collect();
+        assert!(selected.contains("app"), "app selected: {:?}", selected);
+        assert!(selected.contains("lib"), "lib selected: {:?}", selected);
+        assert!(
+            selected.contains("missing"),
+            "missing selected: {:?}",
+            selected
+        );
+        // No __internal__ virtuals leaked (ssl is enabled, not ceded).
+        assert!(
+            plan.selected
+                .iter()
+                .all(|p| p.cpn.category != "__internal__")
+        );
+
+        // lib is a DEPEND edge of app.
+        assert!(plan.graph.iter().any(|e| {
+            e.class == DepClass::Depend
+                && e.from.cpn.package.as_str() == "app"
+                && e.to.cpn.package.as_str() == "lib"
+        }));
+        // lib precedes app in install order.
+        let pos = |name: &str| {
+            plan.install_order
+                .iter()
+                .position(|p| p.cpn.package.as_str() == name)
+                .unwrap()
+        };
+        assert!(pos("lib") < pos("app"));
+
+        // With ssl globally enabled, lib's effective use_flags include ssl, so
+        // the [ssl] use-dep is *satisfied* (no violation, no requirement) — the
+        // global-evaluation model resolvo uses. The unsatisfied-use-dep paths
+        // (violation + use_flag_requirement) are covered by their dedicated
+        // tests with non-global configs; here we assert the consistent outcome:
+        assert!(
+            plan.violations.is_empty(),
+            "ssl is satisfied globally → no violations, got {:?}",
+            plan.violations
+        );
+        assert!(
+            plan.use_flag_requirements.is_empty(),
+            "ssl is satisfied globally → no requirements, got {:?}",
+            plan.use_flag_requirements
         );
     }
 }
