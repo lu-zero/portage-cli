@@ -22,6 +22,12 @@ struct Args {
     /// Accept versions keyworded for this arch (stable or ~testing).
     #[clap(long, default_value = "arm64")]
     keyword: String,
+
+    /// Run the comparison through the shared `portage_solver::Solver` trait
+    /// (Box<dyn Solver>) instead of each bridge's concrete API. Exercises the
+    /// unified Plan surface end-to-end.
+    #[clap(long)]
+    trait_compare: bool,
 }
 
 struct RepoData {
@@ -36,6 +42,54 @@ fn keyword_accepts(keywords: &[Keyword], arch: &str) -> bool {
         kw.arch.as_str() == arch && matches!(kw.stability, Stability::Stable | Stability::Testing)
     })
 }
+
+/// Hardcoded effective USE for the benchmark comparison (the flags the pubgrub
+/// path enables). Shared by both the concrete-API and `--trait-compare` paths
+/// so they solve the same policy.
+const BENCH_USE_FLAGS: &[&str] = &[
+    "acl",
+    "arm64",
+    "big-endian",
+    "bzip2",
+    "cpu_flags_arm_edsp",
+    "cpu_flags_arm_v8",
+    "cpu_flags_arm_vfp",
+    "cpu_flags_arm_vfp-d32",
+    "cpu_flags_arm_vfpv3",
+    "cpu_flags_arm_vfpv4",
+    "crypt",
+    "dist",
+    "elibc_glibc",
+    "gdbm",
+    "iconv",
+    "ipv6",
+    "kernel_linux",
+    "libtirpc",
+    "llvm_targets_AArch64",
+    "llvm_targets_RISCV",
+    "mimalloc",
+    "ncurses",
+    "nls",
+    "npm",
+    "openmp",
+    "pam",
+    "pcre",
+    "python_single_target_python3_13",
+    "python_targets_python3_13",
+    "python_targets_python3_14",
+    "qemu",
+    "readline",
+    "relapack",
+    "rust-analyzer",
+    "rust-src",
+    "seccomp",
+    "split-usr",
+    "ssl",
+    "test-rust",
+    "unicode",
+    "xattr",
+    "zlib",
+];
 
 fn load_repo(path: &PathBuf, keyword: &str) -> RepoData {
     eprintln!("Loading repository from {}...", path.display());
@@ -92,7 +146,7 @@ fn load_repo(path: &PathBuf, keyword: &str) -> RepoData {
     }
 }
 
-mod pubgrub_solver {
+pub(crate) mod pubgrub_solver {
     use super::*;
     use portage_atom_pubgrub::{
         IUseDefault, PackageDeps, PackageRepository, PackageVersions, PortageDependencyProvider,
@@ -210,50 +264,7 @@ mod pubgrub_solver {
 
     pub fn resolve(data: &RepoData, targets: &[String]) -> Result<Vec<String>, String> {
         let mut use_config = UseConfig::new();
-        for flag in &[
-            "acl",
-            "arm64",
-            "big-endian",
-            "bzip2",
-            "cpu_flags_arm_edsp",
-            "cpu_flags_arm_v8",
-            "cpu_flags_arm_vfp",
-            "cpu_flags_arm_vfp-d32",
-            "cpu_flags_arm_vfpv3",
-            "cpu_flags_arm_vfpv4",
-            "crypt",
-            "dist",
-            "elibc_glibc",
-            "gdbm",
-            "iconv",
-            "ipv6",
-            "kernel_linux",
-            "libtirpc",
-            "llvm_targets_AArch64",
-            "llvm_targets_RISCV",
-            "mimalloc",
-            "ncurses",
-            "nls",
-            "npm",
-            "openmp",
-            "pam",
-            "pcre",
-            "python_single_target_python3_13",
-            "python_targets_python3_13",
-            "python_targets_python3_14",
-            "qemu",
-            "readline",
-            "relapack",
-            "rust-analyzer",
-            "rust-src",
-            "seccomp",
-            "split-usr",
-            "ssl",
-            "test-rust",
-            "unicode",
-            "xattr",
-            "zlib",
-        ] {
+        for flag in BENCH_USE_FLAGS {
             use_config.enable(Interned::intern(flag));
         }
         use_config.disable(Interned::intern("pthread"));
@@ -383,7 +394,7 @@ mod pubgrub_solver {
     }
 }
 
-mod resolvo_solver {
+pub(crate) mod resolvo_solver {
     use super::*;
     use portage_atom_resolvo::{
         PackageDeps, PackageMetadata, PackageRepository as ResolvoRepo, PortageDependencyProvider,
@@ -535,12 +546,236 @@ mod resolvo_solver {
     }
 }
 
+/// Trait-based comparison: build one shared `portage_solver::PackageRepository`
+/// from the loaded repo data and run both bridges through `Box<dyn Solver>`,
+/// diffing the unified `Plan` surface. This exercises everything the
+/// `portage-solver` abstraction provides end-to-end, independent of each
+/// bridge's concrete API.
+mod trait_compare {
+    use super::*;
+    use portage_solver::{
+        PackageDeps as SolverDeps, PackageRepository as SolverRepo, TargetSpec,
+        UseConfig as SolverUseConfig, VersionFacts,
+    };
+    // `Solver` is brought in via `portage_solver::Solver` at the call site to
+    // avoid ambiguity with pubgrub's re-export.
+
+    /// Shared solver-agnostic repository over the loaded `RepoData`. Each
+    /// version's `desired_use` is the benchmark USE set intersected with the
+    /// version's IUSE — the same policy the concrete pubgrub path applies.
+    struct SharedRepo<'a> {
+        data: &'a RepoData,
+        use_config: SolverUseConfig,
+    }
+
+    impl<'a> SolverRepo for SharedRepo<'a> {
+        fn all_packages(&self) -> Vec<Cpn> {
+            self.data.cpns.clone()
+        }
+
+        fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, VersionFacts)> {
+            self.data
+                .versions
+                .get(cpn)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|(_, cache)| {
+                            keyword_accepts(&cache.metadata.keywords, &self.data.keyword)
+                        })
+                        .map(|(cpv, cache)| {
+                            let meta = &cache.metadata;
+                            let slot = if meta.slot.slot.as_str().is_empty() {
+                                None
+                            } else {
+                                Some(meta.slot.slot)
+                            };
+                            let subslot = meta.slot.subslot;
+                            let repo =
+                                Some(Interned::<DefaultInterner>::intern(&self.data.repo_name));
+                            let iuse: Vec<Interned<DefaultInterner>> = meta
+                                .iuse
+                                .iter()
+                                .map(|iu| Interned::intern(iu.name()))
+                                .collect();
+                            (
+                                cpv.clone(),
+                                VersionFacts {
+                                    slot,
+                                    subslot,
+                                    repo,
+                                    iuse,
+                                    iuse_defaults: HashMap::new(),
+                                    deps: SolverDeps {
+                                        depend: meta.depend.clone(),
+                                        rdepend: meta.rdepend.clone(),
+                                        bdepend: meta.bdepend.clone(),
+                                        pdepend: meta.pdepend.clone(),
+                                        idepend: meta.idepend.clone(),
+                                    },
+                                    required_use: None,
+                                },
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        fn desired_use(&self, _: &Cpv) -> SolverUseConfig {
+            self.use_config.clone()
+        }
+    }
+
+    fn bench_use_config() -> SolverUseConfig {
+        let mut cfg = SolverUseConfig::new();
+        for flag in BENCH_USE_FLAGS {
+            cfg.enable(Interned::intern(flag));
+        }
+        cfg.disable(Interned::intern("pthread"));
+        cfg
+    }
+
+    /// PubGrub's own `UseConfig` from the same benchmark flag set, for the
+    /// pubgrub bridge's concrete `PackageRepository` adapter.
+    fn pubgrub_use_config() -> portage_atom_pubgrub::UseConfig {
+        let mut cfg = portage_atom_pubgrub::UseConfig::new();
+        for flag in BENCH_USE_FLAGS {
+            cfg.enable(Interned::intern(flag));
+        }
+        cfg.disable(Interned::intern("pthread"));
+        cfg
+    }
+
+    /// Build a `TargetSpec` from a CLI atom string, picking the newest-keyworded
+    /// slot when the atom is unqualified (mirrors the concrete paths' choice).
+    fn target_spec(data: &RepoData, target: &str) -> Result<TargetSpec, String> {
+        let dep = Dep::parse(target).map_err(|e| format!("bad target '{target}': {e}"))?;
+        let entries = data
+            .versions
+            .get(&dep.cpn)
+            .ok_or_else(|| format!("no versions for {target}"))?;
+        // Newest accepted version's slot, mirroring the concrete paths.
+        let slot = entries
+            .iter()
+            .filter(|(_, c)| keyword_accepts(&c.metadata.keywords, &data.keyword))
+            .max_by(|a, b| a.0.version.cmp(&b.0.version))
+            .and_then(|(_, c)| {
+                let s = c.metadata.slot.slot;
+                if s.as_str().is_empty() { None } else { Some(s) }
+            });
+        Ok(TargetSpec {
+            cpn: dep.cpn,
+            slot,
+            op: dep.op,
+            version: dep.version,
+            glob: dep.glob,
+        })
+    }
+
+    fn run_solver(
+        label: &str,
+        solver: &mut dyn portage_solver::Solver,
+        targets: &[TargetSpec],
+    ) -> Result<Vec<String>, String> {
+        let start = Instant::now();
+        match solver.resolve_targets(targets) {
+            Ok(plan) => {
+                let elapsed = start.elapsed();
+                let mut names: Vec<String> = plan
+                    .selected
+                    .iter()
+                    .map(|p| format!("{}-{}", p.cpn, p.version))
+                    .collect();
+                names.sort();
+                eprintln!(
+                    "\n=== {label}: resolved {} packages in {:.1}ms (dropped {}, violations {}, ceded {}) ===",
+                    names.len(),
+                    elapsed.as_secs_f64() * 1000.0,
+                    plan.dropped_deps.len(),
+                    plan.violations.len(),
+                    plan.ceded_flags.len(),
+                );
+                Ok(names)
+            }
+            Err(e) => Err(format!("{label}: {e:?}")),
+        }
+    }
+
+    pub fn run(data: &RepoData, targets: &[String], _keyword: &str) {
+        let specs: Vec<TargetSpec> = match targets
+            .iter()
+            .map(|t| target_spec(data, t))
+            .collect::<Result<_, _>>()
+        {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                return;
+            }
+        };
+
+        // Two independent solvers over the same shared repository.
+        //
+        // PubGrub's bridge still consumes its own `PackageRepository` (the
+        // vocabulary dedup is not yet done), so we reuse `pubgrub_solver`'s
+        // adapter for it and `SharedRepo` for resolvo. Both providers implement
+        // `portage_solver::Solver`, so they're driven uniformly behind
+        // `Box<dyn Solver>` after construction.
+        let mut pg: Box<dyn portage_solver::Solver> =
+            Box::new(portage_atom_pubgrub::PortageDependencyProvider::new(
+                pubgrub_solver::Adapter::new(data, pubgrub_use_config()),
+            ));
+        let mut res: Box<dyn portage_solver::Solver> = Box::new(
+            portage_atom_resolvo::SolverAdapter::new(Box::new(SharedRepo {
+                data,
+                use_config: bench_use_config(),
+            })),
+        );
+
+        let pg_result = run_solver("PubGrub(trait)", &mut *pg, &specs);
+        let res_result = run_solver("Resolvo(trait)", &mut *res, &specs);
+
+        for r in [&pg_result, &res_result] {
+            if let Err(e) = r {
+                eprintln!("ERROR: {e}");
+            }
+        }
+
+        if let (Ok(pg_pkgs), Ok(res_pkgs)) = (&pg_result, &res_result) {
+            let pg_set: HashSet<&str> = pg_pkgs.iter().map(|s| s.as_str()).collect();
+            let res_set: HashSet<&str> = res_pkgs.iter().map(|s| s.as_str()).collect();
+            let only_pg: Vec<_> = pg_set.difference(&res_set).copied().collect();
+            let only_res: Vec<_> = res_set.difference(&pg_set).copied().collect();
+            eprintln!(
+                "\n=== Trait diff: {} shared, {} only PubGrub, {} only Resolvo ===",
+                pg_set.intersection(&res_set).count(),
+                only_pg.len(),
+                only_res.len(),
+            );
+            for (label, mut s) in [("Only in Resolvo", only_res), ("Only in PubGrub", only_pg)] {
+                if !s.is_empty() {
+                    s.sort();
+                    eprintln!("\n  {label}:");
+                    for p in s {
+                        eprintln!("    {p}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
     let data = load_repo(&args.repo, &args.keyword);
     eprintln!("Accepting keywords: {} ~{}", args.keyword, args.keyword);
 
     let targets: Vec<String> = args.packages;
+
+    if args.trait_compare {
+        return trait_compare::run(&data, &targets, &args.keyword);
+    }
 
     let mut all_dep_cpns: HashSet<Cpn> = HashSet::new();
     for entries in data.versions.values() {

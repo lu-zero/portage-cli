@@ -11,12 +11,14 @@ lasso = [
     "portage-metadata/lasso",
     "portage-atom-pubgrub/lasso",
     "portage-atom-resolvo/lasso",
+    "portage-solver/lasso",
     "portage-repo/lasso",
 ]
 symbol-table = [
     "portage-atom/symbol-table",
     "portage-metadata/symbol-table",
     "portage-atom-pubgrub/symbol-table",
+    "portage-solver/symbol-table",
     "portage-atom-resolvo/symbol-table",
     "portage-repo/symbol-table",
 ]
@@ -29,6 +31,7 @@ portage-metadata = { workspace = true }
 portage-repo = { workspace = true }
 portage-atom-pubgrub = { workspace = true }
 portage-atom-resolvo = { workspace = true }
+portage-solver = { workspace = true }
 
 pubgrub = { workspace = true }
 resolvo = { workspace = true }

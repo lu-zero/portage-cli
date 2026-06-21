@@ -54,8 +54,8 @@ use crate::repository::PackageRepository as ResolvoRepo;
 /// Construct with [`SolverAdapter::new`], then call
 /// [`Solver::resolve_targets`] (or hold the value as `Box<dyn Solver>` to swap
 /// with the pubgrub bridge).
-pub struct SolverAdapter {
-    repo: Box<dyn portage_solver::PackageRepository>,
+pub struct SolverAdapter<'repo> {
+    repo: Box<dyn portage_solver::PackageRepository + 'repo>,
     /// Installed packages registered via [`Solver::add_installed`], folded into
     /// the provider at each resolve.
     installed: Vec<InstalledPackage>,
@@ -65,7 +65,7 @@ pub struct SolverAdapter {
     ceded: HashMap<Interned<DefaultInterner>, bool>,
 }
 
-impl SolverAdapter {
+impl<'repo> SolverAdapter<'repo> {
     /// Build a resolvo-backed solver over a solver-agnostic repository.
     ///
     /// Desired USE is resolved per version via `repo.desired_use(cpv)`; the
@@ -77,7 +77,7 @@ impl SolverAdapter {
     /// Flags a version's `desired_use` marks `SolverDecided` are ceded to the
     /// solver: a per-(cpn, flag) decision virtual is created so the solver
     /// chooses the value, biased toward the caller's `prefer`.
-    pub fn new(repo: Box<dyn portage_solver::PackageRepository>) -> Self {
+    pub fn new(repo: Box<dyn portage_solver::PackageRepository + 'repo>) -> Self {
         let ceded = harvest_ceded_flags(repo.as_ref());
         Self {
             repo,
@@ -132,7 +132,7 @@ impl SolverAdapter {
     }
 }
 
-impl Solver for SolverAdapter {
+impl<'repo> Solver for SolverAdapter<'repo> {
     fn add_installed(&mut self, pkg: InstalledPackage) {
         self.installed.push(pkg);
     }
