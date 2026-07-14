@@ -1158,6 +1158,111 @@ pub(super) fn find_autounmask_candidates(
     candidates
 }
 
+/// Explain why a root target ended up with zero usable versions, for
+/// surfacing alongside pubgrub's terse "root depends on X" failure. `pkg`'s
+/// versions were never registered with the solver at all (unlike a pruned
+/// transitive dep), so this recomputes filter reasons directly from the
+/// unfiltered repo data rather than reusing `DroppedDep`-based candidates.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn explain_unresolved_root(
+    data: &RepoData,
+    cpn: &Cpn,
+    accept_keywords: &AcceptKeywords,
+    package_mask: &[Dep],
+    package_unmask: &[Dep],
+    accept_licenses: &AcceptLicenses,
+    arch: &str,
+) -> String {
+    let Some(entries) = data.versions.get(cpn) else {
+        return format!("{cpn}: no ebuilds found in any configured repository");
+    };
+    if entries.is_empty() {
+        return format!("{cpn}: no ebuilds found in any configured repository");
+    }
+
+    let mut keywords_needed: HashSet<String> = HashSet::new();
+    let mut unkeyworded_for_arch = false;
+    let mut any_masked = false;
+    let mut licenses_needed_all: HashSet<String> = HashSet::new();
+    let mut all_filtered = true;
+
+    for (cpv, cache) in entries {
+        let meta = &cache.metadata;
+        let slot = Some(meta.slot.slot);
+        let mut filtered = false;
+
+        if !accept_keywords.accepts(&meta.keywords, cpv, slot) {
+            filtered = true;
+            match accept_keywords.keyword_needed(&meta.keywords, cpv, slot) {
+                Some(kw) => {
+                    keywords_needed.insert(kw);
+                }
+                None => unkeyworded_for_arch = true,
+            }
+        }
+        if is_masked(package_mask, package_unmask, cpv, &meta.slot) {
+            any_masked = true;
+            filtered = true;
+        }
+        if let Some(lic) = &meta.license {
+            let accept = accept_licenses.effective_for(cpv, slot);
+            let needed = licenses_needed(lic, &accept, &|_| false);
+            if !needed.is_empty() {
+                licenses_needed_all.extend(needed);
+                filtered = true;
+            }
+        }
+        if !filtered {
+            all_filtered = false;
+        }
+    }
+
+    if !all_filtered {
+        // Some version passed every filter; the failure must be from
+        // dependencies/REQUIRED_USE rather than keywords/mask/license, so
+        // there's nothing more specific to add here.
+        return format!("{cpn}: no version satisfies the requested constraints");
+    }
+
+    let mut reasons = Vec::new();
+    if !keywords_needed.is_empty() {
+        let mut kws: Vec<&String> = keywords_needed.iter().collect();
+        kws.sort();
+        let kws = kws
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        reasons.push(format!(
+            "not keyworded for {arch} (would need one of: {kws} in ACCEPT_KEYWORDS)"
+        ));
+    }
+    if unkeyworded_for_arch {
+        reasons.push(format!(
+            "no version has a keyword for {arch} (stable or testing) — this package \
+             is not known to work on your arch/OS"
+        ));
+    }
+    if any_masked {
+        reasons.push("masked by package.mask (or a profile mask)".to_string());
+    }
+    if !licenses_needed_all.is_empty() {
+        let mut lics: Vec<&String> = licenses_needed_all.iter().collect();
+        lics.sort();
+        let lics = lics
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        reasons.push(format!("requires accepting license(s): {lics}"));
+    }
+
+    format!(
+        "{cpn}: every version is filtered out — {}",
+        reasons.join("; ")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::force_mask::{ForceMask, index_by_cpn};

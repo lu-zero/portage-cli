@@ -558,10 +558,34 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     (provider, sol)
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
+                    let mut msg = format!(
                         "resolution failed:\n{}",
                         portage_atom_pubgrub::format_solve_error(e)
-                    ));
+                    );
+                    let notes: Vec<String> = root_deps
+                        .iter()
+                        .filter(|(pkg, _)| provider.versions_for_pkg(pkg).is_empty())
+                        .map(|(pkg, _)| {
+                            repo::explain_unresolved_root(
+                                &data,
+                                pkg.cpn(),
+                                &accept_keywords,
+                                &package_mask,
+                                &package_unmask,
+                                &accept_licenses,
+                                arch.as_str(),
+                            )
+                        })
+                        .collect();
+                    if !notes.is_empty() {
+                        msg.push_str("\n\nnote:\n");
+                        for n in notes {
+                            msg.push_str("  - ");
+                            msg.push_str(&n);
+                            msg.push('\n');
+                        }
+                    }
+                    return Err(anyhow::anyhow!(msg));
                 }
             }
         }
