@@ -363,6 +363,11 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     if cli.unmerge {
         return unmerge_atoms(cli, &cli.atoms).await;
     }
+    // emerge --depclean / -c: the safe alternative to -C, walking the
+    // installed dependency graph first.
+    if cli.depclean {
+        return crate::depclean::run(cli).await;
+    }
     // emerge -s / -S: the arguments are search patterns, not atoms.
     if cli.search || cli.searchdesc {
         return search::run_emerge_style(&cli.search_repos(), &cli.atoms, cli.searchdesc).await;
@@ -446,18 +451,13 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
 
     if cli.pretend {
         // Preview what preserve-libs would keep, without registering or
-        // touching disk (read-only load, no store).
+        // touching disk (read-only load, no store). One shared graph for
+        // the whole batch — see `preserve_libs::build_link_graph`'s doc.
         let registry = preserve_libs::PreservedLibsRegistry::load(&root);
+        let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, &root);
         for pkg in &matched {
             if let Ok(old_contents) = pkg.contents() {
-                let preserved = preserve_libs::find_libs_to_preserve(
-                    &vdb,
-                    &exclude,
-                    pkg,
-                    &old_contents,
-                    &registry,
-                    &root,
-                );
+                let preserved = preserve_libs::find_libs_to_preserve(&graph, pkg, &old_contents);
                 preserve_libs::report_preserved(pkg.cpv(), &preserved, &vdb);
             }
         }
@@ -488,11 +488,24 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
         );
     }
 
+    // One shared graph + registry for the whole batch, not rebuilt per
+    // package — see `preserve_libs::build_link_graph`'s doc.
+    let mut registry = preserve_libs::PreservedLibsRegistry::load(&root);
+    let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, &root);
+
     let mut failures = 0usize;
     for pkg in &matched {
         println!(">>> Unmerging {pkg}...");
-        if let Err(e) =
-            ebuild::unmerge_standalone(&mut shell, pkg, &work_base, &root, &vdb, &exclude).await
+        if let Err(e) = ebuild::unmerge_standalone(
+            &mut shell,
+            pkg,
+            &work_base,
+            &root,
+            &vdb,
+            &graph,
+            &mut registry,
+        )
+        .await
         {
             eprintln!("!!! failed to unmerge {pkg}: {e:#}");
             failures += 1;
@@ -500,6 +513,7 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
         }
         println!(">>> unmerge success: {pkg}");
     }
+    registry.store();
 
     if failures > 0 {
         bail!(

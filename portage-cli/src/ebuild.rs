@@ -1423,6 +1423,9 @@ async fn run_merge(
     }
 
     if let Some(ref old) = old_pkg {
+        let exclude: HashSet<Cpv> = std::iter::once(old.cpv().clone()).collect();
+        let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
+        let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, root);
         unmerge_slot_occupant(
             shell,
             old,
@@ -1431,8 +1434,11 @@ async fn run_merge(
             &vdb,
             &contents,
             &ebuild.cpv().version,
+            &graph,
+            &mut registry,
         )
         .await?;
+        registry.store();
         shell.preset_var("REPLACED_BY_VERSION", "");
     }
 
@@ -1506,6 +1512,7 @@ async fn run_merge(
 /// merge, which also presets `REPLACED_BY_VERSION` before calling this) and
 /// [`unmerge_standalone`] (the standalone `-C`/`--unmerge` command — no
 /// replacement, so no `REPLACED_BY_VERSION`).
+#[allow(clippy::too_many_arguments)]
 async fn unmerge_package(
     shell: &mut portage_repo::EbuildShell,
     old_pkg: &InstalledPackage,
@@ -1513,7 +1520,8 @@ async fn unmerge_package(
     root: &Utf8Path,
     vdb: &Vdb,
     new_contents: &[ContentsEntry],
-    exclude: &HashSet<Cpv>,
+    graph: &preserve_libs::LinkGraph,
+    registry: &mut preserve_libs::PreservedLibsRegistry,
 ) -> Result<()> {
     let old_pn = old_pkg.cpv().cpn.package.as_ref();
     let old_pvr = old_pkg.cpv().version.to_string();
@@ -1570,10 +1578,9 @@ async fn unmerge_package(
     // preserve-libs (portage's FEATURES=preserve-libs): never physically
     // delete a shared library some other still-installed object's
     // NEEDED.ELF.2 genuinely requires and that nothing else provides. See
-    // `preserve_libs` module doc.
-    let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
-    let to_preserve =
-        preserve_libs::find_libs_to_preserve(vdb, exclude, old_pkg, &old_contents, &registry, root);
+    // `preserve_libs` module doc. `graph`/`registry` are built/loaded once
+    // per batch by the caller, not per package here.
+    let to_preserve = preserve_libs::find_libs_to_preserve(graph, old_pkg, &old_contents);
     let preserve_paths: HashSet<Utf8PathBuf> = to_preserve
         .iter()
         .flat_map(|e| std::iter::once(e.path.clone()).chain(e.soname_symlink.clone()))
@@ -1587,7 +1594,6 @@ async fn unmerge_package(
         old_pkg.counter().ok().flatten().unwrap_or(0),
         preserve_paths.iter().cloned().collect(),
     );
-    registry.store();
 
     remove_old_unique_files(&old_contents, new_contents, &preserve_paths, root)?;
 
@@ -1612,6 +1618,11 @@ async fn unmerge_package(
     Ok(())
 }
 
+/// `graph`/`registry`: built/loaded once by the caller (a single in-place
+/// replace only ever removes this one old occupant, so "once per batch"
+/// and "once per call" coincide here — no batching concern like `-C`'s
+/// multi-atom case).
+#[allow(clippy::too_many_arguments)]
 async fn unmerge_slot_occupant(
     shell: &mut portage_repo::EbuildShell,
     old_pkg: &InstalledPackage,
@@ -1620,6 +1631,8 @@ async fn unmerge_slot_occupant(
     vdb: &Vdb,
     new_contents: &[ContentsEntry],
     new_version: &portage_atom::Version,
+    graph: &preserve_libs::LinkGraph,
+    registry: &mut preserve_libs::PreservedLibsRegistry,
 ) -> Result<()> {
     // PMS 11.1: the old package's pkg_prerm/pkg_postrm see the version
     // replacing it.
@@ -1632,10 +1645,6 @@ async fn unmerge_slot_occupant(
         .unwrap_or(work_root)
         .join(format!("{old_pf}.old"));
 
-    // A single in-place replace only ever removes this one old occupant —
-    // no batching concern like `-C`'s multi-atom case (see
-    // `unmerge_standalone`'s `exclude`).
-    let exclude: HashSet<Cpv> = std::iter::once(old_pkg.cpv().clone()).collect();
     unmerge_package(
         shell,
         old_pkg,
@@ -1643,7 +1652,8 @@ async fn unmerge_slot_occupant(
         root,
         vdb,
         new_contents,
-        &exclude,
+        graph,
+        registry,
     )
     .await?;
     let _ = std::fs::remove_dir_all(old_work_root.as_std_path());
@@ -1656,23 +1666,34 @@ async fn unmerge_slot_occupant(
 /// [`unmerge_package`] with an empty `new_contents`, so every file the
 /// package owns is removed (except any preserve-libs finds still in use).
 ///
-/// `exclude` is every cpv this same `-C` invocation is committed to
-/// removing (all atoms matched on the command line, not just `old_pkg`) —
-/// see `preserve_libs::find_libs_to_preserve`'s doc for why a multi-atom
-/// batch needs the whole set, not just the package being removed this call.
+/// `graph`/`registry`: built/loaded once by the caller for the *whole*
+/// removal batch (all atoms matched on the command line, not just
+/// `old_pkg`) — see `preserve_libs::build_link_graph`'s doc for why a
+/// multi-atom batch needs one shared graph, not one per package.
 pub async fn unmerge_standalone(
     shell: &mut portage_repo::EbuildShell,
     old_pkg: &InstalledPackage,
     work_base: &Utf8Path,
     root: &Utf8Path,
     vdb: &Vdb,
-    exclude: &HashSet<Cpv>,
+    graph: &preserve_libs::LinkGraph,
+    registry: &mut preserve_libs::PreservedLibsRegistry,
 ) -> Result<()> {
     let old_work_root = work_base
         .join(old_pkg.category())
         .join(format!("{}.unmerge", old_pkg.pf()));
 
-    unmerge_package(shell, old_pkg, &old_work_root, root, vdb, &[], exclude).await?;
+    unmerge_package(
+        shell,
+        old_pkg,
+        &old_work_root,
+        root,
+        vdb,
+        &[],
+        graph,
+        registry,
+    )
+    .await?;
     let _ = std::fs::remove_dir_all(old_work_root.as_std_path());
     Ok(())
 }

@@ -154,21 +154,34 @@ pub struct PreserveEntry {
     pub consumers: Vec<Utf8PathBuf>,
 }
 
-/// Which of `old_contents`' own files must survive `old_pkg`'s removal,
-/// because something outside `exclude` still needs them via `DT_NEEDED`,
-/// and no other installed copy of that soname remains.
+/// The workspace-wide `(category, soname)` provider/consumer index —
+/// everything [`find_libs_to_preserve`] needs to decide what to preserve,
+/// minus the one package actually being removed. Expensive to build (a
+/// full VDB scan), cheap to query — build **once per invocation** (not
+/// once per removed package) and reuse it across an entire `-C`/depclean
+/// batch. Correct to share across the whole batch because `exclude`
+/// already names every cpv the batch is committed to removing, so the
+/// graph doesn't change as individual removals within it actually happen.
+pub struct LinkGraph {
+    providers: HashSet<(String, String)>,
+    consumer_files: HashMap<(String, String), Vec<Utf8PathBuf>>,
+}
+
+/// Build the [`LinkGraph`] for a removal batch: every installed package
+/// **not** in `exclude`, plus every registry-carried preserved lib from a
+/// previous run (re-scanned directly via [`elfscan::scan_file`] — no
+/// longer part of any live package's CONTENTS/NEEDED.ELF.2).
 ///
-/// `exclude` is every cpv this same `-C`/replace invocation is already
-/// committed to removing (so a multi-atom `em -C a b`, where `a` needs a
-/// lib only `b` provides, doesn't falsely think `b` still provides it).
-pub fn find_libs_to_preserve(
+/// `exclude` is every cpv this same `-C`/depclean/replace invocation is
+/// already committed to removing (so a multi-atom `em -C a b`, where `a`
+/// needs a lib only `b` provides, doesn't falsely think `b` still
+/// provides it).
+pub fn build_link_graph(
     vdb: &Vdb,
     exclude: &HashSet<Cpv>,
-    old_pkg: &InstalledPackage,
-    old_contents: &[ContentsEntry],
     registry: &PreservedLibsRegistry,
     root: &Utf8Path,
-) -> Vec<PreserveEntry> {
+) -> LinkGraph {
     let mut providers: HashSet<(String, String)> = HashSet::new();
     let mut consumer_files: HashMap<(String, String), Vec<Utf8PathBuf>> = HashMap::new();
 
@@ -201,16 +214,33 @@ pub fn find_libs_to_preserve(
         }
     }
 
+    LinkGraph {
+        providers,
+        consumer_files,
+    }
+}
+
+/// Which of `old_contents`' own files must survive `old_pkg`'s removal,
+/// because something outside the batch `graph` was built for still needs
+/// them via `DT_NEEDED`, and no other installed copy of that soname
+/// remains. Cheap: only reads `old_pkg`'s own `NEEDED.ELF.2` and queries
+/// the already-built `graph` — call once per removed package, reusing the
+/// same `graph` for the whole batch (see [`build_link_graph`]'s doc).
+pub fn find_libs_to_preserve(
+    graph: &LinkGraph,
+    old_pkg: &InstalledPackage,
+    old_contents: &[ContentsEntry],
+) -> Vec<PreserveEntry> {
     let mut preserve = Vec::new();
     for rec in package_needed(old_pkg) {
         let Some(soname) = rec.soname else { continue };
         let key = (rec.category.clone(), soname.clone());
         // Nobody outside this package needs it -> nothing to preserve.
-        if !consumer_files.contains_key(&key) {
+        if !graph.consumer_files.contains_key(&key) {
             continue;
         }
         // Another installed copy already provides it -> nothing orphaned.
-        if providers.contains(&key) {
+        if graph.providers.contains(&key) {
             continue;
         }
         let Some(entry) = old_contents
@@ -226,7 +256,7 @@ pub fn find_libs_to_preserve(
         preserve.push(PreserveEntry {
             path: entry.path.clone(),
             soname_symlink,
-            consumers: consumer_files.get(&key).cloned().unwrap_or_default(),
+            consumers: graph.consumer_files.get(&key).cloned().unwrap_or_default(),
         });
     }
     preserve
@@ -376,8 +406,8 @@ mod tests {
         let exclude: HashSet<Cpv> = std::iter::once(libfoo.cpv().clone()).collect();
         let registry = PreservedLibsRegistry::load(&root);
 
-        let preserved =
-            find_libs_to_preserve(&vdb, &exclude, &libfoo, &old_contents, &registry, &root);
+        let graph = build_link_graph(&vdb, &exclude, &registry, &root);
+        let preserved = find_libs_to_preserve(&graph, &libfoo, &old_contents);
 
         assert_eq!(preserved.len(), 1);
         assert_eq!(
@@ -414,8 +444,8 @@ mod tests {
         let exclude: HashSet<Cpv> = std::iter::once(libfoo.cpv().clone()).collect();
         let registry = PreservedLibsRegistry::load(&root);
 
-        let preserved =
-            find_libs_to_preserve(&vdb, &exclude, &libfoo, &old_contents, &registry, &root);
+        let graph = build_link_graph(&vdb, &exclude, &registry, &root);
+        let preserved = find_libs_to_preserve(&graph, &libfoo, &old_contents);
 
         assert!(preserved.is_empty());
     }
