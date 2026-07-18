@@ -96,6 +96,14 @@ pub struct Cli {
     #[arg(short = 'C', long)]
     pub unmerge: bool,
 
+    /// Remove installed packages that are not needed by @world (with no
+    /// atoms, cleans everything unreachable; with atoms, only considers
+    /// removing those, protecting everything else). Unlike `-C`, this
+    /// walks the installed dependency graph first — matches real emerge's
+    /// safe alternative to `-C`.
+    #[arg(short = 'c', long)]
+    pub depclean: bool,
+
     #[command(flatten)]
     pub merge_flags: MergeFlags,
 

@@ -165,12 +165,13 @@ pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
 /// Whether this invocation has no per-package `__worker` seam to delegate
 /// privileged work to, so the *whole* process needs wrapping instead:
 /// `em ebuild … install/qmerge` (the debug applet runs phases in-process),
-/// `-C`/`--unmerge` (pure removal, no install to attach a worker to), and
-/// `-B`/`--buildpkgonly` (single-process by design — src_install's
-/// fowners/fperms and the `${D}` ownership packed into the GPKG still need
-/// the fake root, but there is no live-root install to scope it to).
+/// `-C`/`--unmerge` and `-c`/`--depclean` (pure removal, no install to
+/// attach a worker to), and `-B`/`--buildpkgonly` (single-process by
+/// design — src_install's fowners/fperms and the `${D}` ownership packed
+/// into the GPKG still need the fake root, but there is no live-root
+/// install to scope it to).
 fn needs_whole_process_wrap(cli: &Cli) -> bool {
-    ebuild_applet_installs(cli) || cli.unmerge || cli.merge_flags.buildpkgonly
+    ebuild_applet_installs(cli) || cli.unmerge || cli.depclean || cli.merge_flags.buildpkgonly
 }
 
 /// `em ebuild … <phase>` with a merge-side phase: the only build path that does

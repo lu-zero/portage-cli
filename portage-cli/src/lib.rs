@@ -3,6 +3,7 @@
 pub(crate) mod binpkg;
 pub mod cli;
 pub(crate) mod crossdev;
+pub(crate) mod depclean;
 pub(crate) mod dispatch;
 pub(crate) mod ebuild;
 pub(crate) mod elfscan;

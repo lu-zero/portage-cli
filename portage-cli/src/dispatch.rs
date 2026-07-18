@@ -19,7 +19,10 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     match &cli.applet {
         Some(applet) => run_applet(applet, cli).await,
         None => {
-            if cli.atoms.is_empty() {
+            // `-c`/`--depclean` with no atoms is its primary mode ("clean
+            // everything unreachable from @world"), unlike every other bare
+            // invocation, which needs at least one atom to act on.
+            if cli.atoms.is_empty() && !cli.depclean {
                 eprintln!("em: no atoms or applet specified. Use --help for usage.");
                 std::process::exit(1);
             }
