@@ -84,10 +84,15 @@ scans, and the full resolve, not just an isolated function.
 ```sh
 cargo build --release -p portage-cli
 
-# Package-set parity + hyperfine timing vs real emerge
+# Package-set parity + hyperfine timing vs real emerge (plain -p / -s)
 ./benchmarks/bench-em-vs-emerge.sh                 # EM=target/release/em, RUNS=5
 SKIP_TIMING=1 ./benchmarks/bench-em-vs-emerge.sh    # parity only, fast — use this for
                                                      # quick "did I break something" checks
+
+# Resolve flag matrix: -p / -up / -uNp / -uDp / -uNDp (counts + timing vs emerge)
+./benchmarks/bench-resolve-modes.sh                # default PKG=www-client/firefox
+PKG=app-office/libreoffice RUNS=3 ./benchmarks/bench-resolve-modes.sh
+SKIP_TIMING=1 ./benchmarks/bench-resolve-modes.sh  # counts/parity only
 
 # BDEPEND-trim-specific and crossdev-specific comparisons
 ./benchmarks/bench-bdepend-trim.sh
@@ -105,6 +110,10 @@ target list (qtbase, texlive-core, firefox, qtwebengine, thunderbird,
 libreoffice, qemu, a crossdev target) and reports per-target diff counts —
 seconds, not minutes, and catches package-set regressions before they reach
 the slower timing runs.
+
+Use `bench-resolve-modes.sh` after changing `-u`/`-D`/`-N` behaviour: it
+reports package counts and cpn-set diffs per mode, em mode-to-mode deltas
+(shallow → deep → newuse), and hyperfine wall times for each flag set.
 
 ## Before/after comparisons for a specific change
 

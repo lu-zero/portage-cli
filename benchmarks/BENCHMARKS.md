@@ -191,7 +191,8 @@ Repro: `cargo build --release -p portage-cli`, then the two-binary
   - `benches/*.rs`: dep_parsing, realworld_dep_parsing, resolve, dedup (criterion)
   - `src/main.rs`: custom solver comparison tool (used for profiling)
   - `scripts/`: bench-sweep.sh, bench-eval.sh, compare-*.sh, maint.sh
-  - `bench-em-vs-emerge.sh`: parity + timing vs real emerge (for roadmap parity checks)
+  - `bench-em-vs-emerge.sh`: parity + timing vs real emerge (plain `-p`/`-s`)
+  - `bench-resolve-modes.sh`: `-p`/`-up`/`-uNp`/`-uDp`/`-uNDp` counts + hyperfine vs emerge
   - `bench-elfscan.sh`: wall-clock install-image ELF scan (`em` serial/parallel vs Portage `scanelf`)
   - Data: `MEMORY.md`, `PROFILES.md`, `results.md`, `README.md`
 
