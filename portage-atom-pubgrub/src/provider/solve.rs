@@ -510,43 +510,19 @@ fn broot_filtered(
         .map(|(p, vs, _)| (p.clone(), vs.clone()))
         .collect();
     // `-uD` (`prefer_update`): keep *all* host-satisfied build edges so in-slot
-    // upgrades can select them.
-    // `-N`/`-U` (`prefer_newuse`): keep an edge only when the host package is
-    // registered as `Rebuild` for USE drift — otherwise host-satisfied edges
-    // stay dropped (avoids mass-rebuilding every BDEPEND of a new package).
+    // upgrades can select them. `--newuse` alone does **not** re-inject
+    // host-satisfied BDEPEND (Portage leaves those off the merge list; USE-deps
+    // on atoms still fail host satisfaction when an impl is missing).
     if provider.prefer_update {
         for (p, vs, _) in vd.depend().iter().chain(vd.bdepend()).chain(vd.idepend()) {
             out.push((p.clone(), vs.clone()));
         }
-    } else if provider.prefer_newuse {
-        append_unsatisfied_or_use_rebuild(provider, vd, &mut out, vd.depend());
-        append_unsatisfied_or_use_rebuild(provider, vd, &mut out, vd.bdepend());
-        append_unsatisfied_or_use_rebuild(provider, vd, &mut out, vd.idepend());
     } else {
         append_unsatisfied_broot(&mut out, vd.depend(), provider, vd, MergeRoot::Target);
         append_unsatisfied_broot(&mut out, vd.bdepend(), provider, vd, MergeRoot::Target);
         append_unsatisfied_broot(&mut out, vd.idepend(), provider, vd, MergeRoot::Target);
     }
     out.into_iter().collect()
-}
-
-/// Like [`append_unsatisfied_broot`], but also keeps edges whose package is
-/// `InstalledPolicy::Rebuild` (USE-drift under `-N`/`-U`).
-fn append_unsatisfied_or_use_rebuild(
-    provider: &PortageDependencyProvider,
-    parent_vd: &VersionData,
-    out: &mut Vec<(PortagePackage, PortageVersionSet)>,
-    edges: &[crate::convert::Req],
-) {
-    for (p, vs, _) in edges {
-        let rebuild = provider
-            .installed
-            .get(p)
-            .is_some_and(|(_, pol)| matches!(pol, InstalledPolicy::Rebuild));
-        if rebuild || !host_satisfied_on_broot(provider, parent_vd, p, vs) {
-            out.push((p.clone(), vs.clone()));
-        }
-    }
 }
 
 /// Whether the host (BROOT) satisfies a dependency edge `(p, vs)`: the host

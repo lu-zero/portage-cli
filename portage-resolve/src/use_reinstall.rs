@@ -18,12 +18,18 @@ pub enum UseReinstallMode {
 
 /// Return `true` when Portage would reinstall for USE/IUSE drift.
 ///
-/// Portage reference (`_emerge/depgraph.py` `_reinstall_for_flags`):
-/// - **newuse**: `(orig_iuse ⊕ cur_iuse) \ forced  ∪  (orig_iuse∩orig_use ⊕ cur_iuse∩cur_use)`
-/// - **changed-use**: `orig_iuse∩orig_use ⊕ cur_iuse∩cur_use`
+/// Portage reference (`_emerge/depgraph.py` `_reinstall_for_flags`), with one
+/// practical filter for multi-impl noise:
+/// - **newuse**: IUSE set XOR (minus forced/masked, minus *stale never-enabled*
+///   tokens only on the installed IUSE) ∪ enabled-set XOR within IUSE
+/// - **changed-use**: enabled-set XOR only (`orig_iuse∩orig_use ⊕ cur_iuse∩cur_use`)
 ///
-/// `forced_flags` is `use.force ∪ use.mask` for the package (those flags are
-/// not user-controllable rebuild reasons under `--newuse`).
+/// `forced_flags` is `use.force ∪ use.mask` for the package.
+///
+/// Stale IUSE-only tokens (e.g. VDB still lists `python_targets_python3_11`
+/// though it was never enabled) are ignored so shallow `-Np` does not flood
+/// the plan; real enabled-target flips and new IUSE flags still rebuild.
+/// Full python-target cleanups belong on **`-uND`**, matching Portage.
 pub fn needs_use_reinstall(
     mode: UseReinstallMode,
     forced_flags: &HashSet<Interned<DefaultInterner>>,
@@ -37,8 +43,17 @@ pub fn needs_use_reinstall(
 
     match mode {
         UseReinstallMode::Newuse => {
+            // IUSE set change, minus forced/masked. Drop *stale never-enabled*
+            // tokens that exist only on installed IUSE (common PYTHON_TARGETS:
+            // VDB still lists python3_11 while the ebuild dropped them). New
+            // IUSE flags and enabled-set flips still count.
+            // Each f is in exactly one of orig_iuse / cur_iuse: keep if new in
+            // the ebuild, or was enabled on the install; drop stale never-on
+            // IUSE-only tokens.
             let mut flags: HashSet<_> = orig_iuse.symmetric_difference(cur_iuse).copied().collect();
-            flags.retain(|f| !forced_flags.contains(f));
+            flags.retain(|f| {
+                !forced_flags.contains(f) && (cur_iuse.contains(f) || orig_use.contains(f))
+            });
             let old_en: HashSet<_> = orig_iuse.intersection(&orig_use).copied().collect();
             let new_en: HashSet<_> = cur_iuse.intersection(cur_use_enabled).copied().collect();
             flags.extend(old_en.symmetric_difference(&new_en).copied());
@@ -90,6 +105,49 @@ mod tests {
             &orig_use,
             &orig_iuse,
             &cur_en,
+            &cur_iuse,
+        ));
+    }
+
+    #[test]
+    fn newuse_ignores_stale_never_enabled_iuse_only() {
+        // VDB IUSE still has python3_11; ebuild dropped it; never was enabled.
+        let forced = HashSet::new();
+        let orig_use = vec![i("python_targets_python3_13")];
+        let orig_iuse = vec![
+            i("python_targets_python3_11"),
+            i("python_targets_python3_13"),
+            i("python_targets_python3_14"),
+        ];
+        let cur_iuse: HashSet<_> = [
+            i("python_targets_python3_13"),
+            i("python_targets_python3_14"),
+        ]
+        .into_iter()
+        .collect();
+        let cur_en: HashSet<_> = [
+            i("python_targets_python3_13"),
+            i("python_targets_python3_14"),
+        ]
+        .into_iter()
+        .collect();
+        // Enabled set also grew (3.14 on) → still reinstall.
+        assert!(needs_use_reinstall(
+            UseReinstallMode::Newuse,
+            &forced,
+            &orig_use,
+            &orig_iuse,
+            &cur_en,
+            &cur_iuse,
+        ));
+        // Same enabled set: only stale IUSE token → no reinstall.
+        let cur_en2: HashSet<_> = [i("python_targets_python3_13")].into_iter().collect();
+        assert!(!needs_use_reinstall(
+            UseReinstallMode::Newuse,
+            &forced,
+            &orig_use,
+            &orig_iuse,
+            &cur_en2,
             &cur_iuse,
         ));
     }

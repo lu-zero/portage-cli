@@ -1,58 +1,43 @@
-# `--newuse` / `-N` — reinstall when USE (or IUSE) changed
+# `--newuse` / `-N` and `--changed-use` / `-U`
 
-STATUS: **implemented 2026-07-18** (`-N`/`--newuse` and `-U`/`--changed-use`).
+STATUS: **implemented** (2026-07-18), Portage-aligned (no eager BDEPEND mode).
 
-**Not the same as `-uD`:** [[deep-in-slot-upgrades]] upgrades *versions* in the
-deep graph. `--newuse` forces rebuilds when USE/IUSE drifted — orthogonal.
+## What it does
 
-## Implementation
+| Flag | Effect |
+|------|--------|
+| `-N` / `--newuse` | Rebuild packages **already in the depgraph** when planned USE/IUSE differs from the VDB |
+| `-U` / `--changed-use` | Same, but only for **enabled** flag flips (ignore pure IUSE add/drop) |
 
-- `portage_resolve::use_reinstall` — Portage `_reinstall_for_flags` (newuse vs
-  changed-use modes).
-- At `add_installed`, packages with USE drift get `InstalledPolicy::Rebuild`.
-- `-N` alone: same-CPV rebuild when installed version still available (`[R]`);
-  with `-uD`, fall through to newest (upgrade).
-- Host-satisfied BDEPEND edges are kept only for packages marked Rebuild (not
-  all build tools).
-- Plan filter keeps `Rebuild` same-version selections as `[R]`.
+Detection: `portage_resolve::use_reinstall` (Portage `_reinstall_for_flags` + filter for stale never-enabled IUSE tokens).
 
-## Residual
+Wiring:
 
-- IUSE set comparison can be stricter than emerge on some packages (VDB IUSE
-  vs md5-cache IUSE differ on PYTHON_TARGETS tokens) → `-Np` may list more
-  `[R]` than emerge. Tighten if live diffs are painful.
-- Shallow `-p` without `-N` can still miss some emerge-only U/R python modules
-  (emerge best-visible path for some BDEPEND); separate from USE-drift.
+1. `add_installed` → `InstalledPolicy::Rebuild` when drift is detected  
+2. `-N` alone → same-CPV `[R]` if that version is still available  
+3. `-N` + `-uD` → prefer newest (upgrade) when drift forces a rebuild  
+4. Plan filter keeps Rebuild same-version rows as `[R]`
 
-## The gap
+## What it deliberately does *not* do
 
-`em` decides "already satisfied / skip" purely on **installed CPV vs planned
-CPV** — it does not compare the *installed USE* (recorded in the VDB `USE` /
-`IUSE` files) against the *planned USE*. So a pure USE change (no version bump)
-is invisible: `em foo` after editing `package.use` is a no-op where
-`emerge -N foo` rebuilds.
+**No eager re-injection of host-satisfied BDEPEND under `-N` alone.**  
+That mode listed dozens of tool `[R]`s (`setuptools`, …) emerge never shows on shallow `-uNp`. Dropped for Portage parity.
 
-This is the general form of the cross-toolchain two-stage skip
-([[crossdev-target]]): `glibc[headers-only]` → `glibc[]` and `gcc[stage1 USE]` →
-`gcc[stage2 USE]` are the same CPV with different USE; `--newuse` semantics would
-naturally rebuild them. (The explicit-target *replace* default — see below — is
-a separate, blunter mechanism that also fixes the toolchain case; `--newuse` is
-the precise, deps-included version emerge users expect.)
+Missing python impls are still forced when atoms carry USE-deps, e.g.
+`mako[python_targets_python3_14(-)]` (host satisfaction fails → package enters the plan).
 
-## Mechanism (emerge parity)
+## Cleanup after `PYTHON_TARGETS` changes
 
-- Compare planned effective USE (from `effective_use`) against the VDB-recorded
-  USE for the installed CPV. Reinstall (`[ebuild  rR ]` / `N` reason) when they
-  differ, restricted to flags in the package's current IUSE.
-- `--newuse` applies to the whole graph (deps too); `--changed-use`/`-U` is the
-  variant that ignores flags added/removed from IUSE. Implement `-N` first.
-- Read installed USE from `var/db/pkg/<cat>/<pf>/USE` + `IUSE` (already parsed by
-  `portage-vdb`? verify) and intersect with current IUSE.
+Use the same path as emerge:
 
-## Coordination
+```bash
+em -uNDp @world    # pretend
+em -uND @world     # real
+```
 
-- Resolver display + the merge-skip decision (`run_merge_plan`, main.rs) must
-  agree: a USE-changed package is in the plan AND not skipped at merge time.
-- Pairs with the **explicit-target replace default** ([[reinstall-default]]):
-  that one forces a rebuild of *named* atoms regardless of USE; `--newuse` forces
-  a rebuild of *any* graph node whose USE drifted.
+Not shallow `-uNp`. Deep update brings the tree into the graph; `-N` rebuilds USE drift; atom USE-deps catch tools that only provide a dropped impl.
+
+## Related
+
+- [[deep-in-slot-upgrades]] — `-uD` version upgrades  
+- [[deep-slot-bump]] — `:*` slot bumps under `-D` / emptytree  

@@ -99,8 +99,7 @@ Older micro-tables (sub-second depgraph on lighter hosts) live in
 and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`).
 
 **Gaps vs `emerge`:**
-- Shallow `-p` package-set can still differ slightly from emerge on some hosts (emerge may list extra BDEPEND upgrades without `-u`); `-uDp` is near-parity on firefox-class targets
-- `-Np` may list more `[R]` than emerge when VDB IUSE tokens differ from md5-cache (PYTHON_TARGETS set churn)
+- Shallow `-p` package-set can still differ slightly from emerge on some hosts (emerge may list extra BDEPEND upgrades without `-u`); `-uDp` / `-uNDp` are near-parity on firefox-class targets
 - Wrapper packages for old-slot BDEPEND (`autoconf-wrapper`, `gcc-config`, …) not fully modelled
 - Flag ordering / `(-flag)` USE_EXPAND_IMPLICIT display polish
 - Upgrade display shows full USE rather than only changed flags

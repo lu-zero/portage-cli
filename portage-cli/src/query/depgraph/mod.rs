@@ -497,9 +497,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // `--deep` and native emptytree bump `:*` deps to the newest slot.
         provider.set_prefer_newest_slot(deep || emptytree_native);
         // `-uD`: in-slot upgrades for the whole solve (not emptytree Rebuild).
+        // Also the path that re-opens host-satisfied build edges so deep tools
+        // can upgrade/rebuild; `-N` alone must not do that (Portage parity).
         provider.set_prefer_update(update && deep && !emptytree_native);
-        // `-N`/`-U`: retain host-satisfied build edges for USE-drift rebuilds.
-        provider.set_prefer_newuse(use_reinstall_mode.is_some() && !emptytree_native);
         for (pkg, version) in &sysroot_installed {
             provider.add_sysroot_installed(pkg.clone(), version.clone());
         }
@@ -823,11 +823,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         );
     }
 
-    // `-uD` / `-N` / `-U`: do not post-trim host-satisfied BDEPEND tools.
-    // The trim treats "host has *some* version that matches the atom" as
-    // enough and would drop an intentional upgrade or USE-drift rebuild.
-    let skip_bdepend_trim = (update && deep && !emptytree_native)
-        || (use_reinstall_mode.is_some() && !emptytree_native);
+    // `-uD` only: do not post-trim host-satisfied BDEPEND tools (deep update
+    // intentionally re-selected them). `-N` alone leaves normal trim — USE-drift
+    // packages already in the graph are kept via `use_rebuild` / reinstall_cpns.
+    let skip_bdepend_trim = update && deep && !emptytree_native;
     if !emptytree_native && !skip_bdepend_trim {
         // Built packages always carry their BDEPEND now (it's required to build
         // them), so always run the within-run trim to drop entries only needed

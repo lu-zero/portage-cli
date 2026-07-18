@@ -279,10 +279,7 @@ pub struct PortageDependencyProvider {
     /// [`Self::prefer_newest_slot`] (cross-slot `:*` bumps) and from
     /// [`InstalledPolicy::Rebuild`] (emptytree full build-closure expansion).
     pub(crate) prefer_update: bool,
-    /// `--newuse` / `--changed-use`: keep host-satisfied build edges so packages
-    /// registered with [`InstalledPolicy::Rebuild`] for USE drift can enter the
-    /// graph (otherwise broot drops them before selection).
-    pub(crate) prefer_newuse: bool,
+
     /// `--root-deps=rdeps` (crossdev cross builds): discard a target package's
     /// `DEPEND` from the target-root graph. Only `RDEPEND`/`PDEPEND` install into
     /// the sysroot; build-time deps resolve against the build host (`/`), where
@@ -665,7 +662,6 @@ impl PortageDependencyProvider {
             rebuild_tree: false,
             prefer_newest_slot: false,
             prefer_update: false,
-            prefer_newuse: false,
             root_deps_rdeps: false,
             nodeps: false,
             use_decision_prefer,
@@ -826,12 +822,6 @@ impl PortageDependencyProvider {
     /// the solve (disable the Favor early-return for non-root packages).
     pub fn set_prefer_update(&mut self, active: bool) {
         self.prefer_update = active;
-    }
-
-    /// `--newuse` / `--changed-use`: retain host-satisfied build deps so
-    /// USE-drift rebuilds can be selected.
-    pub fn set_prefer_newuse(&mut self, active: bool) {
-        self.prefer_newuse = active;
     }
 
     /// Policy registered for an installed package, if any (`-N`/`-U` mark USE
