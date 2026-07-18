@@ -30,7 +30,7 @@ After systematic re-verification of the entire codebase:
 |----------|-------|--------|
 | P0 (User-facing production) | ~15 | Most fixed or in test code |
 | P1 (Library production) | **2 confirmed** | Being addressed |
-| P2 (Provably safe) | ~20+ | Documented with SAFETY comments |
+| P2 (Provably safe) | ~9 | Documented with SAFETY comments |
 | P3 (Test code) | ~503+ | Acceptable |
 
 **Key Discovery**: Most panic! calls are in test functions (P3), not in production code.
@@ -138,6 +138,10 @@ All items from the original 2026-07-08/09 survey have been addressed:
 
 *All production panics are now documented with SAFETY comments or # Panics sections*
 
+*Note: this per-crate table was not re-verified during the 2026-07-18
+correction above (which only fixed the P2 table's test/production
+misclassification) — treat these counts as approximate, not re-audited.*
+
 ### Test Code
 
 | Category | Count |
@@ -167,9 +171,6 @@ These panics are provably safe and have been documented with SAFETY comments:
 | `src/query/depgraph/output.rs` | 561 | f is `[b' '; 7]` - ASCII array, valid UTF-8 |
 | `src/query/meta.rs` | 40 | Non-empty sorted vec has last element |
 | `src/query/uses.rs` | 39 | Non-empty sorted vec has last element |
-| `src/crossdev/stages.rs` | 676 | Self-contained cross plan must merge virtual/os-headers |
-| `src/crossdev/mod.rs` | 1873, 1880 | crossdev entry/alias present by construction |
-| `src/ebuild.rs` | 2547 | Re-merge over read-only file must succeed (unlink before copy) |
 
 ### portage-binpkg
 
@@ -177,11 +178,17 @@ These panics are provably safe and have been documented with SAFETY comments:
 |------|------|---------------|
 | `src/scan.rs` | 33 | root is always ancestor of full (by construction) |
 
-### portage-resolve
+---
 
-| File | Line | Justification |
-|------|------|---------------|
-| `src/repo.rs` | 76, 82 | Hardcoded valid CPNs in test utility functions |
+**Correction (2026-07-18):** four entries previously listed here were
+misclassified — all inside `#[cfg(test)]` modules (P3, not P2):
+`crossdev/mod.rs:1873,1880` and `crossdev/stages.rs:676` are test-assertion
+`.expect()`s inside `mod tests`; `ebuild.rs:2547` is inside `mod tests`
+(starts line 2331); `portage-resolve/src/repo.rs:76,82` no longer matches
+any `unwrap`/`expect`/`panic!` call at all (stale line numbers from before
+a later refactor shifted the file — its only such calls are already inside
+its own `#[cfg(test)]` block starting line 1184). Removed rather than
+re-numbered, since they were self-described as test code to begin with.
 
 ---
 
