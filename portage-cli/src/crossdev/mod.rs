@@ -710,6 +710,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         with_bdeps: false,
         root_deps_rdeps: false,
         deep: false,
+        update: false,
         nodeps: true,
         extra_use_override: None,
         binpkg_index: None,

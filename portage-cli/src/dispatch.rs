@@ -294,6 +294,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 with_bdeps: *with_bdeps || globals.merge_flags.with_bdeps,
                 root_deps_rdeps: *root_deps || globals.merge_flags.root_deps,
                 deep: depgraph_flags.deep || globals.depgraph_flags.deep,
+                update: globals.merge_flags.update,
                 nodeps: globals.nodeps,
                 extra_use_override: None,
                 binpkg_index: binpkg_index.as_ref(),

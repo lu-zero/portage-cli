@@ -124,10 +124,15 @@ pub struct DepgraphOpts<'a> {
     /// against an already-working toolchain should not), not of the sysroot's
     /// CHOST/CBUILD alone. See `todo/stage-build-shakeout.md`.
     pub root_deps_rdeps: bool,
-    /// `--deep`: re-examine transitive deps for updates. Used here to bump a
-    /// `:*` any-slot dep to the newest slot (like `emerge -uD`) rather than
-    /// keeping a satisfying installed slot.
+    /// `--deep`: re-examine transitive deps. With [`Self::update`], enables
+    /// in-slot upgrades for packages in the graph (emerge `-uD`). Alone, bumps
+    /// `:*` any-slot deps to the newest slot rather than keeping a satisfying
+    /// installed slot.
     pub deep: bool,
+    /// `--update`: prefer newest accepted versions. Combined with [`Self::deep`]
+    /// for transitive in-slot upgrades; alone only affects atom disambiguation
+    /// at the CLI and root-target selection (roots already take best in-slot).
+    pub update: bool,
     /// `--nodeps` (emerge `-O`): merge only the named atoms, no dependency
     /// expansion. Used by the staged toolchain bootstrap.
     pub nodeps: bool,
@@ -161,6 +166,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         with_bdeps,
         root_deps_rdeps,
         deep,
+        update,
         nodeps,
         host_merge_root,
         extra_use_override,
@@ -479,6 +485,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         provider.set_rebuild_tree(emptytree_native);
         // `--deep` and native emptytree bump `:*` deps to the newest slot.
         provider.set_prefer_newest_slot(deep || emptytree_native);
+        // `-uD`: in-slot upgrades for the whole solve (not emptytree Rebuild).
+        provider.set_prefer_update(update && deep && !emptytree_native);
         for (pkg, version) in &sysroot_installed {
             provider.add_sysroot_installed(pkg.clone(), version.clone());
         }

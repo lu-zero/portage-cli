@@ -5,8 +5,10 @@ use clap::Args;
 /// Flags related to dependency graph resolution that can be used by multiple commands.
 #[derive(Args, Debug, Clone, Default)]
 pub struct DepgraphFlags {
-    /// Re-examine transitive dependencies for updates. Bumps `:*` any-slot deps
-    /// to the newest slot rather than keeping a satisfying installed slot.
+    /// Re-examine transitive dependencies. With `--update` (`-uD`), upgrades
+    /// installed packages in the depgraph to the newest accepted in-slot
+    /// version (emerge `-uD`). Alone, still bumps `:*` any-slot deps to the
+    /// newest slot rather than keeping a satisfying installed slot.
     #[arg(short = 'D', long)]
     pub deep: bool,
 

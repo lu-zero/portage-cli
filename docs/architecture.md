@@ -258,7 +258,10 @@ Intended target semantics (all match emerge):
 - An **explicit target pulls the best in-slot version** even without `-u`
   (`em -p gcc` → newest accepted `gcc:16`, listed `[U]`), and is reinstalled when
   already at best (`[R]`). A *dependency* on the same atom instead favours the
-  installed version.
+  installed version (**`InstalledPolicy::Favor`**), unless **`-uD`**
+  (`prefer_update`): then every package in the solve takes the newest accepted
+  in-slot version (emerge `--update --deep`). `-u` alone does **not** mass-upgrade
+  transitive deps; `-D` alone still only bumps `:*` slots (`prefer_newest_slot`).
 - A **bare command-line target denotes the best accepted version** of the matched
   set = its newest accepted slot (`em -p python` ≡ `em -p python:3.14`; `python:*`
   likewise). Multi-slot is not an ambiguity; it is a deterministic best-slot pick.

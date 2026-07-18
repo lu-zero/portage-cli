@@ -331,6 +331,7 @@ async fn emerge_atoms_inner(
         with_bdeps: merge_flags.with_bdeps,
         root_deps_rdeps: merge_flags.root_deps,
         deep: depgraph_flags.0,
+        update: merge_flags.update,
         nodeps,
         extra_use_override,
         binpkg_index: binpkg_index.as_ref(),
