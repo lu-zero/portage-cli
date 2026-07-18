@@ -334,16 +334,18 @@ Stages 1–3 run concurrently via `tokio::join!`.
 
 This is the part most easily gotten wrong, so it is pinned here. `em` resolves a
 package's effective USE in the same incremental order Portage does
-(low → high precedence; later layers override earlier, `-flag` removes):
+(low → high precedence; later layers override earlier, `-flag` removes) —
+matching Portage's `USE_ORDER` (`env` beats `pkg`):
 
-1. `make.globals`
-2. profile `make.defaults` (stacked through the profile parents)
-3. `make.conf`
-4. **the `USE` environment variable** (and each `USE_EXPAND` key read from the
-   process env, e.g. `PYTHON_TARGETS=...`)
-5. `package.use` (profile + `/etc/portage/package.use`)
-6. `use.force` / `use.mask`, and the per-package `package.use.force` /
-   `package.use.mask` (plus the `*.stable.*` variants for stable-keyword merges)
+1. IUSE defaults (`+flag` / `-flag` on the ebuild)
+2. `make.globals` + profile `make.defaults` + `make.conf` (`pre_env` fold)
+3. `package.use` (profile + `/etc/portage/package.use`)
+4. **the `USE` environment variable** (and each `USE_EXPAND` key from the
+   process env, e.g. `PYTHON_TARGETS=...`) — env wins over package.use
+5. **post-fold** `use.force` / `use.mask` and per-package
+   `package.use.force` / `package.use.mask` (plus `*.stable.*` for
+   stable-keyword merges) — unconditional, not smuggled through package.use
+6. Level-C ceded flags under `--autosolve-use` (also post-fold)
 
 Portage also appends **`/etc/portage/profile/`** as a *site-local profile layer*
 on top of the resolved `make.profile` chain (portage(5),
@@ -355,40 +357,32 @@ profile files may be a *directory* whose regular files are concatenated in
 filename order (`/etc/portage/profile/package.use.mask/<name>` is the common
 case); `read_lines` handles both forms.
 
-Layers 1–4, plus the **global** `use.force`/`use.mask`, are computed in
-`portage-repo`'s `resolve_use_flags` (`build/profile.rs`): the profile chain and
-`make.conf` are sourced through the embedded shell, then `apply_env_layer` merges
-the `USE`/`USE_EXPAND` env vars, and finally global `use.force`/`use.mask` add/remove
-flags. So `USE="-X" em -p www-client/firefox` *does* enter the stack — but
-`package.use`/`use.force` (layers 5–6) sit above it and can pin a flag back on.
+The `pre_env` fold (layer 2 above) is computed in `portage-repo`'s
+`resolve_use_flags` (`build/profile.rs`): the profile chain and `make.conf` are
+sourced through the embedded shell. Process-env `USE`/`USE_EXPAND` is applied
+later as layer 4 inside `resolve_effective_use` (not baked into `pre_env`), so
+`USE="-X" em -p www-client/firefox` enters the stack, and force/mask (layer 5)
+can still pin a flag back on afterward.
 
-Within each of layers 2–4, `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` variable values
-are translated into USE tokens (`ELIBC="glibc"` → `elibc_glibc`, `ARCH="amd64"`
-→ `amd64`) and folded *at that layer's position*, exactly as Portage's
-`config.py` `regenerate()` does: prepended to each `make.defaults` file's own
-`USE` (layer 2), and folded after the file's/environment's `USE` for
-`make.conf`/env (layers 3–4, so `PYTHON_TARGETS=…` survives a `USE="-*"` in
-the same layer). This is how the implicit `elibc_*`/`kernel_*` flags and
-profile defaults like `python_targets_*` reach `ResolvedUse::pre_env` and every
-per-package `resolve_effective_use` fold — and why a later layer's `-*`
-legitimately clears expansions from the layers below it.
+Within the profile/`make.conf` portion of `pre_env`, `USE_EXPAND`/
+`USE_EXPAND_UNPREFIXED` variable values are translated into USE tokens
+(`ELIBC="glibc"` → `elibc_glibc`, `ARCH="amd64"` → `amd64`) and folded at that
+layer's position, exactly as Portage's `config.py` `regenerate()` does. This is
+how the implicit `elibc_*`/`kernel_*` flags and profile defaults like
+`python_targets_*` reach every per-package `resolve_effective_use` fold.
 
-Layer 5 (`package.use`) is applied **per package** at solve/display time via
-`apply_package_use`. The **per-package** parts of layer 6 — `package.use.force`/
-`package.use.mask` and all `*.stable.*` variants — are applied on top of that by
-`force_mask.rs` (`ForceMask`): force enables a flag, mask disables it (mask wins),
-overriding `package.use` and the configured value, exactly as Portage does. The
-`*.stable.*` sets apply only when the version is "merged due to a stable keyword"
-(`force_mask::is_stable`, mirroring Portage's `KeywordsManager.isStable`: accepted
-*and* `ACCEPT_KEYWORDS` does not accept `~arch`), so they are inert on a `~arch`
-system. Force/mask are applied in **both** consumers: `desired_use` (the solver's
-view, so conditional deps fire correctly) and the display fold in `mod.rs` (which
-appends synthetic `package.use` entries so output, the `REQUIRED_USE` check,
-download-size and autounmask all agree). The solver itself never recomputes any of
-this; it consumes the resolved `desired` set (see the
+Layer 3 (`package.use`) is applied **per package** at solve/display time.
+Layer 5 force/mask is applied as a true post-fold step by `force_mask.rs`
+(`ForceMask::apply`): force enables, mask disables (mask wins), overriding
+package.use and env. The `*.stable.*` sets apply only when the version is
+"merged due to a stable keyword" (`AcceptKeywords::is_stable`). The same
+`apply_force_mask` path is used by `Adapter::desired_use` (solver),
+`effective_use::effective_use` (display / `PlannedMerge` / REQUIRED_USE /
+download-size), so they cannot disagree. The solver itself never recomputes any
+of this; it consumes the resolved `desired` set (see the
 [USE/solver boundary doc](../portage-atom-pubgrub/docs/use-and-solver-boundary.md)).
 
-**Layer 7 (`em`-only, no PMS equivalent): `--autosolve-use` ceded flags.**
+**Layer 6 (`em`-only, no PMS equivalent): `--autosolve-use` ceded flags.**
 When a package's `REQUIRED_USE` is violated, `cede_required_use` hands its
 flags to the solver as preferences (`UseFlagState::SolverDecided`); once the
 solve picks a final value, `effective_use::apply_ceded` applies it as a
