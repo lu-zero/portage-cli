@@ -12,8 +12,10 @@
 //! ordinary version-bump replacement funnel through, so both benefit.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 
 use camino::{Utf8Path, Utf8PathBuf};
+use tempfile::NamedTempFile;
 
 use portage_atom::Cpv;
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, Vdb};
@@ -101,14 +103,20 @@ impl PreservedLibsRegistry {
         }
         match serde_json::to_string_pretty(&self.data) {
             Ok(json) => {
-                let tmp = self.path.with_file_name(format!(
-                    "{}.tmp",
-                    self.path.file_name().unwrap_or("preserved_libs_registry")
-                ));
-                if let Err(e) =
-                    std::fs::write(&tmp, &json).and_then(|_| std::fs::rename(&tmp, &self.path))
-                {
-                    let _ = std::fs::remove_file(tmp.as_std_path());
+                let Some(parent) = self.path.parent() else {
+                    eprintln!(
+                        "warning: could not write {}: no parent directory",
+                        self.path
+                    );
+                    return;
+                };
+                let write = (|| -> std::io::Result<()> {
+                    let mut tmp = NamedTempFile::new_in(parent.as_std_path())?;
+                    tmp.write_all(json.as_bytes())?;
+                    tmp.persist(self.path.as_std_path()).map_err(|e| e.error)?;
+                    Ok(())
+                })();
+                if let Err(e) = write {
                     eprintln!("warning: could not write {}: {e}", self.path);
                 }
             }
