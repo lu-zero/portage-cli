@@ -141,6 +141,62 @@ fn tar_metadata(dir: &Path, out: &Path) -> Result<()> {
     run("tar", &mut cmd)
 }
 
+/// Verify `file` against a GLEP 74 `DATA <name> <size> SHA512 …` Manifest line.
+/// `member_name` is the path as stored in the Manifest (e.g. `pkg/image.tar.zst`).
+fn verify_data_member(manifest: &Path, member_name: &Path, file: &Path) -> Result<()> {
+    let text = std::fs::read_to_string(manifest)?;
+    let want_name = member_name
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let line = text.lines().find(|l| {
+        let mut parts = l.split_whitespace();
+        parts.next() == Some("DATA")
+            && parts.next().is_some_and(|n| {
+                Path::new(n).file_name().and_then(|f| f.to_str()) == Some(want_name)
+            })
+    });
+    let Some(line) = line else {
+        // Older/hand-built packages may lack a Manifest entry; warn is too
+        // noisy for a library — require it for integrity of written GPKGs.
+        return Err(Error::Corrupt(format!(
+            "Manifest has no DATA line for {want_name}"
+        )));
+    };
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    // DATA name size SHA512 <hex> BLAKE2B <hex>
+    if parts.len() < 5 || parts[0] != "DATA" {
+        return Err(Error::Corrupt(format!("malformed Manifest line: {line}")));
+    }
+    let size: u64 = parts[2]
+        .parse()
+        .map_err(|_| Error::Corrupt(format!("bad size in Manifest: {}", parts[2])))?;
+    let data = std::fs::read(file)?;
+    if data.len() as u64 != size {
+        return Err(Error::Corrupt(format!(
+            "size mismatch for {want_name}: Manifest {size}, file {}",
+            data.len()
+        )));
+    }
+    if let Some(i) = parts.iter().position(|&p| p == "SHA512")
+        && let Some(expect) = parts.get(i + 1)
+    {
+        let got = hex::encode(Sha512::digest(&data));
+        if got != *expect {
+            return Err(Error::Corrupt(format!("SHA512 mismatch for {want_name}")));
+        }
+    }
+    if let Some(i) = parts.iter().position(|&p| p == "BLAKE2B")
+        && let Some(expect) = parts.get(i + 1)
+    {
+        let got = hex::encode(Blake2b512::digest(&data));
+        if got != *expect {
+            return Err(Error::Corrupt(format!("BLAKE2B mismatch for {want_name}")));
+        }
+    }
+    Ok(())
+}
+
 /// Write a GLEP 74-style Manifest with one `DATA` line per member.
 fn write_manifest(out: &Path, members: &[(&str, &std::path::PathBuf)]) -> Result<()> {
     let mut text = String::new();
@@ -186,15 +242,28 @@ pub fn extract_image(container: &Path, dest: &Path) -> Result<()> {
             Error::Corrupt(format!("no image.tar.* member in {}", container.display()))
         })?;
     let compressed = root.join(member);
-    run(
-        "tar",
-        Command::new("tar")
-            .arg("-xf")
-            .arg(container)
-            .arg("-C")
-            .arg(&root)
-            .arg(member),
-    )?;
+    // Also pull Manifest so we can verify the image member before trust.
+    let manifest_member = listing
+        .lines()
+        .map(|l| l.trim_end_matches('/'))
+        .find(|m| Path::new(m).file_name().and_then(|n| n.to_str()) == Some("Manifest"));
+    let mut extract_args = vec![member.to_string()];
+    if let Some(m) = manifest_member {
+        extract_args.push(m.to_string());
+    }
+    let mut tar_xf = Command::new("tar");
+    tar_xf
+        .arg("-xf")
+        .arg(container)
+        .arg("-C")
+        .arg(&root)
+        .args(&extract_args);
+    run("tar", &mut tar_xf)?;
+
+    if let Some(m) = manifest_member {
+        let manifest_path = root.join(m);
+        verify_data_member(&manifest_path, Path::new(member), &compressed)?;
+    }
 
     // Decompress to image.tar.
     let image_tar = root.join("image.tar");
