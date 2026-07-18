@@ -702,7 +702,34 @@ async fn merge_parallel(
                             )
                             .await
                         }
-                        Err(e) => Err(e),
+                        Err(e) if enforce_no_source => Err(e),
+                        // Mirror the sequential path: remote fetch failure
+                        // falls back to a source build unless -K/-G.
+                        Err(e) => {
+                            eprintln!(
+                                ">>> Failed to fetch binpkg {url} — {e:#}; building from source"
+                            );
+                            ebuild::build_and_merge(
+                                &planned.ebuild_path,
+                                &planned.cpv,
+                                &planned.use_flags,
+                                work_base,
+                                merge_root,
+                                distdir,
+                                quiet,
+                                ebuild::RootContext {
+                                    config_root: entry_roots.config(),
+                                    sysroot: entry_roots.build_sysroot(),
+                                    eprefix: entry_roots.eprefix(),
+                                    broot: Some(host_roots.merge_root()),
+                                    self_contained_bootstrap,
+                                },
+                                Some(gate),
+                                buildpkg,
+                                buildpkgonly,
+                            )
+                            .await
+                        }
                     }
                 } else if enforce_no_source {
                     Err(anyhow::anyhow!(
