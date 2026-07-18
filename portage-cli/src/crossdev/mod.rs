@@ -709,6 +709,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         deep: false,
         nodeps: true,
         extra_use_override: None,
+        binpkg_index: None,
     })
     .await
     .ok()?;

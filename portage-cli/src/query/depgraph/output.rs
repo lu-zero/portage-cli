@@ -608,6 +608,15 @@ pub(super) struct PrettyCtx<'a> {
     pub slot_op_cpns: &'a std::collections::HashSet<Cpn>,
     pub verbose: u8,
     pub ceded: &'a [CededFlag],
+    /// Local binpkg index, when `-k`/`-K` (usepkg/usepkgonly) is active —
+    /// used to show `[binary ...]` instead of `[ebuild ...]` for an entry
+    /// whose USE matches an available binpkg, matching real emerge's `-p`.
+    /// `None` when neither flag is set, or for callers with no binpkg-reuse
+    /// concept at all (`equery depgraph`, the crossdev gcc probe). Remote
+    /// binhosts (`-g`/`-G`) are deliberately not checked here — that would
+    /// add a network fetch to a plain `-p` preview; the merge itself still
+    /// checks them via `run_merge_plan`'s own index.
+    pub binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
 }
 
 /// Print the emerge-style pretty plan, honouring each entry's
@@ -656,6 +665,7 @@ fn print_pretty_with_roots(
         slot_op_cpns,
         verbose,
         ceded,
+        binpkg_index,
     } = ctx;
     let mut out = anstream::stdout();
 
@@ -686,6 +696,19 @@ fn print_pretty_with_roots(
         let mut effective_use =
             resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
         super::effective_use::apply_ceded(&mut effective_use, *cpn, ceded);
+
+        // Would `-k`/`-K` reuse a local binpkg for this exact (cpv, USE)?
+        // Same `use_compatible` rule `run_merge_plan` uses to actually pick
+        // one — see `PrettyCtx::binpkg_index`'s doc for why remote (`-g`/
+        // `-G`) isn't checked here.
+        let is_binary = binpkg_index.is_some_and(|idx| {
+            let desired_use: Vec<String> = effective_use
+                .enabled_flags()
+                .iter()
+                .map(|f| f.as_str().to_string())
+                .collect();
+            idx.find_reusable(&cpv.to_string(), &desired_use).is_some()
+        });
 
         // For upgrades/downgrades, find the installed entry to compare USE flags
         let installed_active_use = if tag == "U" || tag == "D" {
@@ -737,9 +760,10 @@ fn print_pretty_with_roots(
         };
         let field = status_field(tag, slot_op_cpns.contains(cpn));
         let colored_field = colorize_status_field(&field);
+        let kind = if is_binary { "binary" } else { "ebuild" };
         writeln!(
             out,
-            "[{C_BRACKET}ebuild {colored_field}{C_BRACKET:#}] {C_PKG}{cpn}-{ver}{slot_repo}{C_PKG:#}{old}{flag_str}{size_str}{dest_suffix}",
+            "[{C_BRACKET}{kind} {colored_field}{C_BRACKET:#}] {C_PKG}{cpn}-{ver}{slot_repo}{C_PKG:#}{old}{flag_str}{size_str}{dest_suffix}",
         ).ok();
     }
 

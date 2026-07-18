@@ -10,7 +10,7 @@ use crate::error::{self, Result};
 use crate::merge::confirm_action;
 use crate::merge::run_merge_plan;
 use crate::vdb::open_cli_vdb;
-use crate::{ebuild, preflight, query, search};
+use crate::{binpkg, ebuild, preflight, query, search};
 
 pub(crate) fn parse_atoms(raw: &[String]) -> Vec<portage_atom::Dep> {
     raw.iter()
@@ -267,6 +267,7 @@ async fn emerge_atoms_inner(
         .as_ref()
         .map(|f| (f.deep, f.newuse))
         .unwrap_or((cli.depgraph_flags.deep, cli.depgraph_flags.newuse));
+    let binpkg_index = binpkg::open_local_index_for_preview(cli, merge_flags);
     let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
         repo_path,
         atoms: &atoms,
@@ -285,6 +286,7 @@ async fn emerge_atoms_inner(
         deep: depgraph_flags.0,
         nodeps,
         extra_use_override,
+        binpkg_index: binpkg_index.as_ref(),
     })
     .await?;
 

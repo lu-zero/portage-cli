@@ -140,6 +140,9 @@ pub struct DepgraphOpts<'a> {
     /// `portage_repo::build::profile::resolve_use_flags`'s
     /// `extra_use_override` doc.
     pub extra_use_override: Option<&'a str>,
+    /// See `output::PrettyCtx::binpkg_index`'s doc — passed straight through
+    /// to the `Pretty` printer so `-p` can show `[binary ...]`.
+    pub binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
 }
 
 pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome> {
@@ -161,6 +164,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         nodeps,
         host_merge_root,
         extra_use_override,
+        binpkg_index,
     } = opts;
     let cross = root_aware::detect(roots, host_merge_root);
     let config_root = roots.config();
@@ -995,6 +999,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     slot_op_cpns: &slot_op_cpns,
                     verbose,
                     ceded: &ceded,
+                    binpkg_index,
                 },
                 &plan_entries,
                 &cross,

@@ -66,6 +66,26 @@ pub(crate) fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
     merge_root.join("var/cache/binpkgs")
 }
 
+/// Open the local `PKGDIR` binpkg index if `-k`/`--usepkg` or
+/// `-K`/`--usepkgonly` is active, for the `-p` display to check binary
+/// reuse against (see `query::depgraph::output::PrettyCtx::binpkg_index`).
+/// `None` when neither flag is set — matching `run_merge_plan`'s own
+/// `want_local` condition, minus the remote (`-g`/`-G`) half: checking a
+/// binhost here would add a network fetch to a plain preview, so `-p`
+/// under `-g`/`-G` alone still shows `[ebuild ...]` even though the real
+/// merge may reuse a remote binpkg. Silent on error (unlike
+/// `run_merge_plan`'s own open, which warns) — this is a best-effort
+/// preview hint, not the path that actually performs the reuse.
+pub(crate) fn open_local_index_for_preview(
+    globals: &Cli,
+    merge_flags: &crate::cli::MergeFlags,
+) -> Option<portage_binpkg::BinpkgIndex> {
+    if !(merge_flags.usepkg || merge_flags.usepkgonly) {
+        return None;
+    }
+    portage_binpkg::BinpkgIndex::open(resolve_pkgdir(globals).as_std_path()).ok()
+}
+
 /// Read a variable from `make.conf` under the resolved config root.
 pub(crate) fn read_make_conf_var(globals: &Cli, var: &str) -> Option<String> {
     let cfg_root = globals

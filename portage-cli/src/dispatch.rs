@@ -12,7 +12,7 @@ use crate::ebuild;
 use crate::emerge::{self, parse_atoms};
 use crate::error::Result;
 use crate::vdb::open_cli_vdb;
-use crate::{maint, pkg, query, regen, search, select, setup, use_flags, vdb};
+use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, vdb};
 
 /// Dispatch one parsed invocation to its applet or the default emerge path.
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
@@ -275,6 +275,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             // See `DepgraphOpts::host_merge_root`: `Cli::broot()` stays
             // overlay-aware under `--target` substitution, unlike `roots`.
             let host_roots = globals.broot();
+            let binpkg_index = binpkg::open_local_index_for_preview(globals, &globals.merge_flags);
             let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
                 repo_path,
                 atoms: &atoms,
@@ -296,6 +297,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 deep: depgraph_flags.deep || globals.depgraph_flags.deep,
                 nodeps: globals.nodeps,
                 extra_use_override: None,
+                binpkg_index: binpkg_index.as_ref(),
             })
             .await?;
             if outcome.exit_code != 0 {
