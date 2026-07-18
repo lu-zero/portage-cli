@@ -194,6 +194,21 @@ impl Roots {
         self.relocate
     }
 
+    /// Directory under which relocated distfiles / work trees live when
+    /// [`relocate`](Self::relocate) is true.
+    ///
+    /// Prefer [`eprefix`](Self::eprefix) when set so that under
+    /// `--prefix P --target T` (or `--local` + `--target`) trees stay under
+    /// the outer prefix `P`, not under the cross sysroot `P/usr/T`. Falls
+    /// back to [`merge_root`](Self::merge_root) for self-contained offsets
+    /// where eprefix is unset. `None` when relocate is off.
+    pub fn relocate_root(&self) -> Option<&Utf8Path> {
+        if !self.relocate {
+            return None;
+        }
+        Some(self.eprefix().unwrap_or_else(|| self.merge_root()))
+    }
+
     /// Where an unsatisfied dependency of `class` resolves and is checked
     /// against (docs/root-topology.md's satisfaction-root table, PMS table
     /// 8.2): `BDEPEND` always resolves on `broot` (the true build host,

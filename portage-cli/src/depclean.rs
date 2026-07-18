@@ -309,7 +309,7 @@ pub async fn run(cli: &cli::Cli) -> Result<()> {
         return Ok(());
     }
 
-    let work_base = ebuild::default_work_base(roots.relocate().then(|| roots.merge_root()));
+    let work_base = ebuild::default_work_base(roots.relocate_root());
     let repo = crate::crossdev::main_repo(cli)?;
     let mut shell = repo.shell().await.context("creating shell")?;
     shell.set_build_roots(

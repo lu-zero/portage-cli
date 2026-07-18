@@ -270,9 +270,16 @@ impl Cli {
             // would just be `--root`). No `IDepend` caller exists yet to
             // need finer CHOST/CBUILD-derived precision than this.
             .with_cross_arch(true)
-            .with_eprefix(None)
-            .with_config_overlay(None)
-            .with_relocate(false)
+            // Preserve the outer overlay identity: under `--prefix`/`--local`,
+            // distfiles and work trees live under the outer EROOT (via
+            // eprefix + relocate), and user config under `config_overlay`
+            // (`P/etc/portage`). Clearing these forced host `/var/cache/
+            // distfiles` and dropped overlay package.use for target builds.
+            // eprefix stays the *outer* prefix path so relocate anchors there
+            // rather than under the sysroot (`P/usr/T/...`).
+            .with_eprefix(outer.eprefix().map(|p| p.to_owned()))
+            .with_config_overlay(outer.config_overlay().map(|p| p.to_owned()))
+            .with_relocate(outer.relocate())
             .with_config_root_explicit(outer.config_root_explicit().map(|p| p.to_owned()))
     }
 
@@ -499,6 +506,35 @@ mod tests {
         assert_eq!(
             cli.roots().merge_root().as_str(),
             "/usr/riscv64-unknown-linux-gnu"
+        );
+    }
+
+    /// `--prefix P --target T` must keep distfiles/work under P (relocate +
+    /// eprefix), not fall back to host paths or nest under the sysroot.
+    #[test]
+    fn prefix_plus_target_preserves_overlay_relocate() {
+        let cli = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/p",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let r = cli.roots();
+        let sysroot = "/tmp/p/usr/riscv64-unknown-linux-gnu";
+        assert_eq!(r.merge_root().as_str(), sysroot);
+        assert!(r.relocate(), "overlay relocate must survive --target");
+        assert_eq!(r.eprefix().map(|p| p.as_str()), Some("/tmp/p"));
+        assert_eq!(
+            r.config_overlay().map(|p| p.as_str()),
+            Some("/tmp/p/etc/portage")
+        );
+        assert_eq!(
+            r.relocate_root().map(|p| p.as_str()),
+            Some("/tmp/p"),
+            "distfiles/work must anchor under the outer prefix, not the sysroot"
         );
     }
 

@@ -377,9 +377,9 @@ async fn emerge_atoms_inner(
         return Ok(());
     }
 
-    // --prefix additionally relocates distfiles and the build trees under the
-    // target (a self-contained tree); --root leaves them at the host defaults.
-    let relocate = roots.relocate().then(|| roots.merge_root());
+    // --prefix/--local relocates distfiles and work trees under the outer
+    // prefix (eprefix), not under a --target sysroot — see Roots::relocate_root.
+    let relocate = roots.relocate_root();
     let distdir = relocate.map(|p| p.join("var/cache/distfiles"));
     let work_base = ebuild::default_work_base(relocate);
 
@@ -530,7 +530,7 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     }
     // Scratch trees for pkg_prerm/postrm land where builds would
     // (`emerge_atoms_inner`'s relocation rule).
-    let work_base = ebuild::default_work_base(roots.relocate().then(|| roots.merge_root()));
+    let work_base = ebuild::default_work_base(roots.relocate_root());
 
     let repo = crate::crossdev::main_repo(cli)?;
     let mut shell = repo.shell().await.context("creating shell")?;

@@ -464,10 +464,9 @@ mod hakoniwa {
         // bound above; the em binary itself is bound by reexec.
         bind_ro(container, "/var/db/repos");
         bind_rw(container, "/var/cache/distfiles");
-        if roots.relocate() {
-            let merge = roots.merge_root();
-            bind_rw(container, merge.join("var/cache/distfiles").as_ref());
-            bind_rw(container, merge.join("var/tmp").as_ref());
+        if let Some(relocate) = roots.relocate_root() {
+            bind_rw(container, relocate.join("var/cache/distfiles").as_ref());
+            bind_rw(container, relocate.join("var/tmp").as_ref());
         }
     }
 
