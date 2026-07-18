@@ -1,6 +1,7 @@
 # package.env — per-package build environment (RESOLVER-FREE slice)
 
 STATUS: **build-env slice DONE (commit 7ce7c5b); USE part remains, resolver-side.**
+On the 2026-07-18 next-pending queue as row 9 ([[PENDING]]).
 The non-USE build environment is applied: `build_and_merge` (ebuild.rs) sources
 matching `/etc/portage/env/<file>` entries on top of make.conf via the new
 `EbuildShell::source_env_file` and the new `portage-cli/src/package_env.rs`

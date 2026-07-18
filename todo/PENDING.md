@@ -2,11 +2,74 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated 2026-07-09.
+here briefly for context). Updated **2026-07-18**.
 
 **Also closed outside this arc (2026-07-18):** emerge-style **`-uD` in-slot
-upgrades** — [[deep-in-slot-upgrades]]; **`-N`/`-U` USE-drift rebuilds** —
-[[newuse]]. Slot-only `:*` bumps remain [[deep-slot-bump]].
+upgrades** — [[deep-in-slot-upgrades]]; **`-N`/`-U` USE-drift rebuilds**
+(Portage-aligned, no eager BDEPEND) — [[newuse]]; parallel + mmap
+**elfscan** vs scanelf; **`benchmarks/bench-resolve-modes.sh`** (`-p`/`-up`/
+`-uNp`/`-uDp`/`-uNDp` vs emerge). Slot-only `:*` bumps remain
+[[deep-slot-bump]].
+
+## RESUME HERE (2026-07-18) — next pending queue
+
+Resolver deep-update / newuse are landed. Prefer the next work by **value for
+stages + host parity**, not by file age. Detail lives in the linked notes;
+this table is the triage index.
+
+### Suggested order
+
+| Pri | Item | Status | Detail |
+|-----|------|--------|--------|
+| **1** | **Native `--root`/`--prefix` builds prefer the ROOT’s own `<chost>-gcc`** — likely already solved (user will re-verify); build shell PATH prefer if still open | 🟡 verify | [[select-toolchain]] |
+| **2** | **CLI short-flag remnants** — `-P`/`--prune`, `-r`/`--resume`, `-W`/`--deselect`, `-F`/`--fetch-all-uri` | 🔴 | [[cli-flag-parity]] |
+| **3** | **Binhost polish** — GPG verify/sign still open; **URI BASE_URI, auto-reindex, stages default `-b`, CHOST reuse gate** done 2026-07-18 | 🟡 | [[em-stages-and-binhosts]]; binhosts section below |
+| **4** | **Parser audit** — incremental `-*`, package.*, sets, USE-deps, md5-cache faithfulness | 🔴 | [[parser-audit]] |
+| **5** | **`package.env` USE in the resolver** — build-env slice ✅; USE from env files still ignored at plan time | 🟡 | [[package-env]] |
+| **6** | **Blocker Tier-1** — detect/report ✅; auto-unmerge **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
+
+### Verified closed / demoted (2026-07-18)
+
+| Item | Result |
+|------|--------|
+| **#36 inherit / `E_IUSE`** | ✅ **Already fixed.** `inherit` accumulates into `E_*`; `source_ebuild` merges ebuild + eclass values (PMS 10.2). Unit tests in `portage-repo/tests/brush_compat.rs` (`inherit_*`) all green. Host md5-cache for `app-alternatives/gpg` shows full IUSE. |
+| **task #17 BROOT / riscv systemd-utils resolve** | ✅ core fix live-verified 2026-07-17. **Full** `--emptytree sys-apps/systemd-utils` still blocked by **Gentoo-side** gaps (`acl` undeclared `attr` dep; `pam.eclass` `dopamd -r`), not em BROOT. Track under shakeout, not as an open em feature. |
+| **`em quickpkg`** | ✅ implemented 2026-07-18 — GPKG from VDB `CONTENTS` + live files; Portage `gpkg.get_metadata` accepts containers. |
+| **`-f`/`--fetchonly`** | ✅ 2026-07-18 — fetch distfiles / remote binpkgs only; no build or install. |
+
+### Smaller / polish (pick opportunistically)
+
+- Shallow `-p` package-set still ~72 vs emerge ~79 on firefox hosts (pre-existing; not a `-uD` regression) — [[nonemptytree-bdeps-gap]], [[deep-in-slot-upgrades]]
+- Residual provider choice on deep plans (`rust` vs `rust-bin`, tooling set) — polish, not blocking
+- Numeric `--deep=N` (boolean only today); Resolvo `set_prefer_update` still trait default no-op
+- Releng lean stage profile vs default profile (5-package @system delta) — [[stage3-vs-real-comparison]]
+- `ACCEPT_KEYWORDS` `-arch` removal; `ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT` — [[accept-properties-restrict]] (deferred)
+- Privilege: in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test; brush procsub deadlock pin bump — [[fakeroot-privilege-backends]], [[stage-build-shakeout]]
+- Large design (not near-term): full [[root-topology-refactor]]; availability-walk [[dedup-availability-walks]]; M3 sandbox (namespaces)
+- Upstream-ish: brush `PIPESTATUS`/`declare -a` on Dynamic — [[brush-pipestatus-not-reset]] (em workaround in place)
+
+### Recently closed (keep for orientation)
+
+| Item | When | Notes |
+|------|------|--------|
+| `-uD` in-slot upgrades | 2026-07-18 | `prefer_update`; keep host-satisfied BDEPEND on deep update |
+| `-N`/`-U` USE-drift rebuilds | 2026-07-18 | Portage-aligned; eager BDEPEND reinstall mode **rejected** |
+| elfscan parallel + mmap/strtab | 2026-07-18 | install-image scan ~scanelf recursive parity |
+| resolve-mode hyperfine matrix | 2026-07-18 | `benchmarks/bench-resolve-modes.sh` |
+| `-c` depclean, `-C` unmerge, world write, `-1` oneshot | earlier | [[cli-flag-parity]] |
+| `-b`/`-B` GPKG, `-k`/`-K`/`-g`/`-G`, binrepos, index cache | earlier | `-K` no-source **enforced** in merge loop |
+| `em quickpkg` | 2026-07-18 | GPKG from installed files; CONFIG_PROTECT skip default |
+| `-f`/`--fetchonly` | 2026-07-18 | distfile / remote-binpkg download only |
+| inherit / `E_IUSE` (#36) | earlier (verified 2026-07-18) | stash/accumulate + post-source merge |
+| native `toolchain --setup` activation + `select pkgconf` | 2026-07-17 | wrappers re-rooted; open = PATH prefer (row 1) |
+| `portage-resolve` extraction (depgraph → library) | 2026-07-16 | stages 1–7 done |
+
+**How to use this file:** start from the table above; jump to the linked
+note for design. Long historical narrative for the 2026-07-05 riscv shakeout
+and the full binhost/migration log remains below (do not delete — it is the
+audit trail).
+
+---
 
 **2026-07-09 (later)**: the global `--cross <tuple>` flag is now
 **`--target <tuple>`/`-T`** (no clash), and `em crossdev` no longer has its
@@ -30,11 +93,15 @@ crate + `main.rs` thinned to 62 lines, inline tests extracted to sibling
 (commits through `27de5af`) — pure code-health work, no behaviour change,
 verified clean (`fmt`/clippy/full test suite) independently of this arc.
 
-## RESUME HERE (2026-07-05) — flagged for independent review
+## RESUME HERE (2026-07-05) — historical; independent-review checklist
+
+> **Superseded for prioritization** by the 2026-07-18 next-pending queue at
+> the top of this file. Keep this section as the riscv64 task #17 /
+> findings #22–37 audit trail.
 
 **⚠️ Before trusting anything below: read
 [[session-status-2026-07-05-needs-review]] first.** That file lists
-today's claims that rest on indirect evidence (VDB spot-checks, log
+claims that rest on indirect evidence (VDB spot-checks, log
 greps) rather than clean re-runs, plus one confirmed methodology mistake
 (a task-notification "exit code 0" that didn't actually reflect `em`'s
 own exit status, caused by an `echo` masking it — worked around later by
@@ -533,10 +600,18 @@ blocked by the three independent findings above, tracked separately.
     combining core). No `%(VAR)s` interpolation and no `[DEFAULT]`-section
     inheritance — same simplification `ReposConf` already makes for
     `repos.conf`, no configured value observed in practice needs either.
-  - 🔴 **`URI` header BASE_URI override** — portage resolves each entry's URL from
-    the index's own `URI` header (server-controlled via
-    `PORTAGE_BINHOST_HEADER_URI`), not the binhost's `sync-uri`. em uses
-    `sync-uri`; both work when they match.
+  - ✅ **`URI` header BASE_URI override** — DONE 2026-07-18.
+    `RemoteBinpkgIndex::new` prefers the index header `URI` over the configured
+    `sync-uri` (Portage `bintree.py`: `header.get("URI", base_url)`).
+  - ✅ **Auto-reindex after `-b`/`-B`** — DONE 2026-07-18. `write_binpkg` calls
+    `index_pkgdir` after each GPKG so `-k`/`-g` see new containers without a
+    separate `em maint binhost`.
+  - ✅ **`em stages` default `--buildpkg`** — DONE 2026-07-18.
+    `merge_merge_flags_with(..., force_buildpkg: true)` on the stage1 path so
+    each stage run seeds PKGDIR (catalyst/crossdev-stages model).
+  - ✅ **CHOST gate on reuse** — DONE 2026-07-18. `find_reusable` rejects a
+    binpkg whose `CHOST` differs from make.conf/env CHOST (either side empty
+    skips the gate). Not full ABI/PROVIDES matching.
   - ✅ **Remote-index freshness** — DONE. `portage_distfiles::fetch_index` now
     takes an `if_modified_since: Option<&str>` and returns an `IndexFetch`
     enum (`NotModified` | `Fresh { text, last_modified }`), sending
@@ -565,24 +640,18 @@ blocked by the three independent findings above, tracked separately.
   - 🟡 **gpkg GPG signature verify** — `binpkg-request-signature` FEATURE / repo
     `verify-signature=true` (default-on in shipped config) drops remote XPAK and
     GPG-verifies gpkg at unpack. em accepts unsigned. Last (with signing).
-  - 🟡 **`-K`/`--usepkgonly` enforcement** — local-only binpkg mode, no source.
-    The flag exists but isn't enforced (the merge loop falls through to build).
-    Symmetric to the `-G` enforcement now wired.
+  - ✅ **`-K`/`--usepkgonly` enforcement** — local-only binpkg mode, no source
+    (`merge/mod.rs`: `enforce_no_source = usepkgonly || getbinpkgonly`). Symmetric
+    to `-G`.
   - 🔵 **`binpkg-multi-instance` BUILD_ID** — multiple instances per cpv keyed by
     `(cpv, BUILD_ID, …)`. em keys by cpv (one instance). Rare in practice.
-  - 🔴 **Per-package build-env provenance / CFLAGS gating (RVV).** The `Packages`
-    format is `KEY: VALUE` so per-package `CFLAGS`/`CXXFLAGS`/`LDFLAGS`/`CBUILD`/
-    `FEATURES` are syntactically valid, and the data already lives in each GPKG's
-    `metadata.tar` (em writes them during merge). But portage's reader silently
-    drops unknown per-package keys (`SlotDict` filter on `_pkgindex_allowed_pkg_keys`)
-    — so lifting them into em's index is an **em-only extension**, invisible to
-    portage. portage deliberately matches on CHOST+USE+ABI (sonames) only and
-    trusts the operator avoids `-march=native`; that model breaks for
-    **riscv64 RVV variants** — a `-march=...v` binpkg won't run on a core without
-    the V extension, so CHOST+USE match is unsafe. The fix is option 1: write the
-    build-env fields into em's `Packages` and gate `find_reusable` on `-march`
-    (opt-in). Deferred (later) — non-riscv64 CHOST+USE+ABI matching is portage-
-    faithful for now.
+  - 🟡 **Per-package build-env provenance / CFLAGS (RVV-ready).** **RVV** =
+    RISC-V Vector: same CHOST+USE can still differ on `-march=…v`. **Recording
+    done 2026-07-18:** `Packages` entries and `BinpkgEntry` carry
+    `CFLAGS`/`CXXFLAGS`/`LDFLAGS`/`CBUILD` from GPKG metadata;
+    `BinpkgIndex::get` / `RemoteBinpkgIndex::get` expose them. Portage ignores
+    these keys on read. **Gating not wired** — `find_reusable` is still
+    USE+CHOST only; decide later (exact string vs extract `-march`/vector).
 - ✅ **`em maint binpkg` tooling** — DONE. `em maint binpkg {verify,list,prune}`,
   an em-only extension (no real `emaint` module covers this; its own `emaint
   binhost` only regenerates the index). `verify [--fix]` recomputes each

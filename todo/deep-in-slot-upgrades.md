@@ -60,9 +60,11 @@ Default `-p` path is unchanged by `prefer_update` (gated on `update && deep`).
 
 ## Still open (related, separate)
 
-- **`-N` / `-U`** — implemented; see [[newuse]] for residual IUSE over-sensitivity
+- **`-N` / `-U`** — done (Portage-aligned) — [[newuse]]
 - Numeric `--deep=N` — not implemented (boolean only)
 - Resolvo bridge: `set_prefer_update` is a trait default no-op until wired
+- Residual CPN set polish (`rust` vs `rust-bin`, shallow `-p` delta) — see table
+  above; not blocking deep-update correctness
 
 ## Code anchors
 

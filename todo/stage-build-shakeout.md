@@ -2233,6 +2233,12 @@ to confirm the full pipeline closes.
 
 ## 36. `app-alternatives/gpg`'s VDB-recorded IUSE missing its own alternatives flags — real, deferred `em` bug; unblocked via manual VDB patch
 
+> **2026-07-18 re-verify: FIXED in tree.** `portage-repo` `inherit` implements
+> Portage’s stash/`E_*` accumulate; `source_ebuild` appends eclass totals to
+> ebuild values after sourcing. `inherit_*` brush_compat tests pass. Not on the
+> pending queue anymore — demote any remaining manual VDB patches as obsolete
+> once packages are re-merged under current `em`.
+
 `app-crypt/gpgme` failed to resolve because `app-alternatives/gpg-1-r3`'s
 installed VDB `IUSE` file only contained `nls ssl` — missing `reference`,
 `freepg`, `sequoia`, the three flags `app-alternatives.eclass`'s

@@ -1,6 +1,8 @@
 # Parser audit pass
 
-STATUS: 🔴 not started (2026-06-28).
+STATUS: 🔴 not started (2026-06-28). On the 2026-07-18 next-pending queue
+as row 8 ([[PENDING]]); not blocking stages, but debt before more parser
+features.
 
 A burst of parser-touching work landed across the metadata/profile/atom path
 without a unified correctness re-check. Make a deliberate pass to confirm each

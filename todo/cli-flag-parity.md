@@ -1,5 +1,10 @@
 # Short-flag parity with real `emerge`
 
+STATUS: **core short flags landed** (`-C`/`-B`/`-c`/`-1`/`-uD`/`-N`/`-U`);
+remaining: `-P` prune, `-r` resume, `-W` deselect, `-F` fetch-all-uri, plus
+**`-f`/`--fetchonly` behaviour** (flag present, merge path incomplete).
+See [[PENDING]] 2026-07-18 queue rows 5–6.
+
 2026-07-17: quick survey of `man emerge`'s short options against `em`'s own
 `Cli`/`MergeFlags`/`DepgraphFlags` struct source (more reliable than a
 possibly-truncated `--help` dump). Landed the two obvious gaps; the rest are
@@ -61,6 +66,9 @@ first draft missed for `-C`).
 
 ## Remaining gaps (not started)
 
+- **`-f`/`--fetchonly`** — ✅ done 2026-07-18: plan as usual, then download
+  distfiles (or remote binpkgs under `-g`) only — no build/install/env-update/
+  world write. `PhaseGroup::FetchOnly` + `act_on_package` short-circuit.
 - **`-P`/`--prune`** — companion to `--depclean` (remove all but the best
   version of a match, ignoring deps entirely). `depclean.rs`'s machinery
   (`compute_cleanlist`'s protected-set handling, `removal_order`) covers

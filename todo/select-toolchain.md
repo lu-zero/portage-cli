@@ -1,5 +1,12 @@
 # `em select` — toolchain activation (gcc / binutils / linker / clang)
 
+STATUS: **activation mostly done** (cross + native `post_step`, `pkgconf`
+wrapper 2026-07-17). **Still open:** native same-arch `--root`/`--prefix`
+builds should prefer the ROOT’s own `<chost>-gcc` on `PATH` (build shell still
+gates CHOST-prefixed tools on `chost != cbuild`). See “Open: prefer ROOT
+toolchain on native offsets” near the end of the 2026-07-16 notes, and
+[[PENDING]] row 2 (2026-07-18 queue).
+
 Consolidates the former `select-{compiler,binutils,linker,clang}.md`. These are
 the `eselect`/`*-config` workalikes that *activate* a built toolchain (write
 `env.d` state + the `usr/bin/<T>-*` wrappers). The build half is done; this is
@@ -84,12 +91,11 @@ activates into `/`, not the build root. So the merge driver must activate via
 - **cross** — DONE. `crossdev --setup`'s `post_step_cross` calls
   `select::activate_binutils` then `select::activate_compiler` (gcc references the
   binutils tools, so binutils first), plus `link_abi_osdirs` after libc.
-- **native** (`em toolchain --setup`) — **NOT done; the open item.** Its
-  `post_step` is a no-op. Empirically (capstone `/var/tmp/stage1-capstone`): the
-  ebuilds write `etc/env.d/{gcc,binutils}/<chost>-<ver>` into the ROOT, but the
-  `usr/bin/<chost>-{gcc,as,ld,…}` and `gcc`/`cc` wrappers are **missing** — so the
-  ROOT toolchain is reachable only by full `gcc-bin` path. This blocks the stages
-  (they must invoke the ROOT's `<chost>-gcc`, see [[em-stages-and-binhosts]] #5).
+- **native** (`em toolchain --setup`) — **DONE 2026-07-17** (`activate_native_toolchain`
+  as real `post_step`; EPREFIX-aware re-root of wrappers — see [[PENDING]]).
+  Older notes below about a no-op `post_step` / dangling symlink are historical;
+  the remaining gap is **build-shell PATH preference** for native offsets
+  (`shell.rs` still gates the CHOST-prefixed tool block on `chost != cbuild`).
 
 ### Blocker: `env_d` is config-root-keyed, must be merge-root-aware
 

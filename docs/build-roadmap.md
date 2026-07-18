@@ -291,12 +291,15 @@ compile once overnight when configure is clean.)
 
 ## M5 — emerge UX completeness (post-firefox, ordered by value)
 
-- [ ] `-b`/`--buildpkg`: binary package creation on merge (decide xpak
-      vs gpkg first — gpkg is the future, xpak interops with existing hosts)
-- [ ] `quickpkg` from installed files (currently a stub)
-- [ ] `-K`/`--usepkg`: install from binpkg, skipping build phases
-- [ ] `em -C` unmerge (the slot-occupant unmerge logic already exists —
-      expose it standalone)
+- [x] `-b`/`--buildpkg` + `-B`/`--buildpkgonly`: GPKG producer on merge /
+      image-only (`portage-binpkg`, PKGDIR + `Packages` index) — see
+      `todo/em-stages-and-binhosts.md` / `todo/PENDING.md` binhosts section
+- [x] `quickpkg` from installed files (GPKG via VDB `CONTENTS`; CONFIG_PROTECT
+      skip by default — `todo` / `portage-cli/src/quickpkg.rs`)
+- [x] `-k`/`--usepkg` local reuse + `-K`/`--usepkgonly` (no source fallback);
+      also `-g`/`--getbinpkg` / `-G` remote (+ `binrepos.conf`, index cache)
+- [x] `em -C` unmerge + `-c`/`--depclean` + world file write + `-1`/`--oneshot`
+      (`todo/cli-flag-parity.md`)
 - [x] `@world`/`@system` set resolution — `expand_sets` (`90803fb`) resolves
       `@system`/`@profile` from the config-root profile and
       `@world`/`@selected`/user sets from the merge target.
@@ -304,7 +307,10 @@ compile once overnight when configure is clean.)
       USE-drift rebuilds** done 2026-07-18 (`todo/deep-in-slot-upgrades.md`,
       `todo/newuse.md`); `-D`/`-e` drive `prefer_newest_slot`
       (`todo/deep-slot-bump.md`).
-- [ ] `--fetchonly`
+- [x] `--fetchonly` / `-f` — distfile (and remote-binpkg) download only; no
+      build/install (`portage-cli` `PhaseGroup::FetchOnly`, 2026-07-18)
+- [ ] Remaining short flags: `-P` prune, `-r` resume, `-W` deselect
+      (`todo/cli-flag-parity.md`)
 
 ## M6 — Prefix polish
 
