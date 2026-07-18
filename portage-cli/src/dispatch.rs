@@ -106,11 +106,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             eprintln!("sync: repos={:?}", repos);
             bail!("not implemented: sync")
         }
-        Applet::Depclean { atoms } => {
-            let parsed = parse_atoms(atoms);
-            eprintln!("depclean: atoms={:?}", parsed);
-            bail!("not implemented: depclean")
-        }
+        Applet::Depclean { atoms } => crate::depclean::run_with_targets(globals, atoms).await,
         Applet::Regen {
             repos,
             output,
