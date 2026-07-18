@@ -12,15 +12,14 @@
 //! ordinary version-bump replacement funnel through, so both benefit.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 
 use camino::{Utf8Path, Utf8PathBuf};
-use tempfile::NamedTempFile;
 
 use portage_atom::Cpv;
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, Vdb};
 
 use crate::elfscan;
+use crate::util::write_atomic;
 
 /// One parsed `NEEDED.ELF.2` line: `MACHINE;path;SONAME;RPATH;needed,csv;category`
 /// — the exact format `elfscan::scan_image` writes.
@@ -95,29 +94,10 @@ impl PreservedLibsRegistry {
     /// Write the registry back out. Best-effort: a failure here shouldn't
     /// abort an unmerge that already completed on disk.
     pub fn store(&self) {
-        if let Some(parent) = self.path.parent()
-            && let Err(e) = std::fs::create_dir_all(parent)
-        {
-            eprintln!("warning: preserved_libs_registry: {e}");
-            return;
-        }
         match serde_json::to_string_pretty(&self.data) {
             Ok(json) => {
-                let Some(parent) = self.path.parent() else {
-                    eprintln!(
-                        "warning: could not write {}: no parent directory",
-                        self.path
-                    );
-                    return;
-                };
-                let write = (|| -> std::io::Result<()> {
-                    let mut tmp = NamedTempFile::new_in(parent.as_std_path())?;
-                    tmp.write_all(json.as_bytes())?;
-                    tmp.persist(self.path.as_std_path()).map_err(|e| e.error)?;
-                    Ok(())
-                })();
-                if let Err(e) = write {
-                    eprintln!("warning: could not write {}: {e}", self.path);
+                if let Err(e) = write_atomic(&self.path, json) {
+                    eprintln!("warning: could not write {}: {e:#}", self.path);
                 }
             }
             Err(e) => eprintln!("warning: could not serialize preserved_libs_registry: {e}"),

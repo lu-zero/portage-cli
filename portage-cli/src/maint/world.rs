@@ -1,13 +1,11 @@
-use std::io::Write;
-
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
 use portage_vdb::Vdb;
-use tempfile::NamedTempFile;
 
 use super::sets::KnownSets;
 use crate::query::which::dep_matches_cpv;
+use crate::util::write_atomic;
 
 const DEFAULT_WORLD: &str = "/var/lib/portage/world";
 
@@ -186,29 +184,13 @@ pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
         }
     }
 
-    let Some(parent) = path.parent() else {
-        eprintln!("warning: could not update {path}: no parent directory");
-        return;
-    };
-    if let Err(e) = std::fs::create_dir_all(parent) {
-        eprintln!("warning: could not update {path}: {e}");
-        return;
-    }
     let new_content = if lines.is_empty() {
         String::new()
     } else {
         lines.join("\n") + "\n"
     };
-    // Same-directory NamedTempFile + persist: atomic replace on Linux, and the
-    // temp is cleaned up on drop if write/persist fails.
-    let write = (|| -> std::io::Result<()> {
-        let mut tmp = NamedTempFile::new_in(parent.as_std_path())?;
-        tmp.write_all(new_content.as_bytes())?;
-        tmp.persist(path.as_std_path()).map_err(|e| e.error)?;
-        Ok(())
-    })();
-    if let Err(e) = write {
-        eprintln!("warning: could not update {path}: {e}");
+    if let Err(e) = write_atomic(&path, new_content) {
+        eprintln!("warning: could not update {path}: {e:#}");
     }
 }
 
