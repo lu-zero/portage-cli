@@ -80,26 +80,26 @@ fn print_pkg_size(pkg: &portage_vdb::InstalledPackage) -> Result<()> {
     Ok(())
 }
 
+/// Find installed packages matching `pattern`.
+///
+/// Accepts full Portage atoms (`=cat/pkg-1.2`, `>=cat/pkg-1`, `cat/pkg:2`,
+/// …) via [`portage_atom::Dep::matches_cpv`], plus bare package-name / PF
+/// convenience forms (`bash`, `bash-5.2`) that are not valid deps on their
+/// own. Used by `-C`/`--unmerge` and the query applets.
 pub(crate) fn find_packages(vdb: &Vdb, pattern: &str) -> Vec<portage_vdb::InstalledPackage> {
-    if let Some(slash) = pattern.find('/') {
-        let cat_name = &pattern[..slash];
-        let rest = &pattern[slash + 1..];
-        let Some(cat) = vdb.category(cat_name) else {
-            return vec![];
-        };
-        if let Some(pkg) = cat.package(rest) {
-            return vec![pkg];
-        }
-        let rest = rest.to_string();
-        cat.packages()
-            .filter(move |p| p.cpn().package.as_ref() == rest)
-            .collect_vec()
-    } else {
-        vdb.packages()
+    if let Ok(dep) = portage_atom::Dep::parse(pattern) {
+        return vdb
+            .packages()
             .into_iter()
-            .filter(|p| p.cpn().package.as_ref() == pattern || p.pf() == pattern)
-            .collect()
+            .filter(|p| dep.matches_cpv(p.cpv(), p.slot().ok().as_deref()))
+            .collect();
     }
+    // Bare package name or PF (`bash`, `bash-5.2`) — not a valid Dep (needs
+    // category/), but emerge accepts them as a convenience.
+    vdb.packages()
+        .into_iter()
+        .filter(|p| p.cpn().package.as_ref() == pattern || p.pf() == pattern)
+        .collect()
 }
 
 /// Open the VDB for a CLI invocation (explicit `--vdb` or the merge root default).
@@ -123,5 +123,50 @@ fn resolve_path(path_str: &str) -> Utf8PathBuf {
             Utf8PathBuf::from_path_buf(resolved).unwrap_or_else(|_| Utf8PathBuf::from(path_str))
         }
         Err(_) => Utf8PathBuf::from(path_str),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_pkg(vdb_root: &std::path::Path, cat: &str, pf: &str, slot: &str) {
+        let dir = vdb_root.join(cat).join(pf);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SLOT"), slot).unwrap();
+        std::fs::write(dir.join("EAPI"), "8").unwrap();
+    }
+
+    fn open(tmp: &std::path::Path) -> Vdb {
+        let root = Utf8PathBuf::try_from(tmp.to_owned()).unwrap();
+        Vdb::open(root.join("var/db/pkg")).unwrap()
+    }
+
+    #[test]
+    fn find_packages_matches_versioned_and_slotted_atoms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        write_pkg(&vdb_root, "app-misc", "foo-1.0", "0");
+        write_pkg(&vdb_root, "app-misc", "foo-2.0", "0");
+        write_pkg(&vdb_root, "app-misc", "bar-1.0", "2");
+
+        let vdb = open(tmp.path());
+
+        // Old string-heuristic path treated "=app-misc/foo-1.0" as category "=app-misc".
+        let exact = find_packages(&vdb, "=app-misc/foo-1.0");
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].cpv().to_string(), "app-misc/foo-1.0");
+
+        let ge = find_packages(&vdb, ">=app-misc/foo-1.5");
+        assert_eq!(ge.len(), 1);
+        assert_eq!(ge[0].cpv().to_string(), "app-misc/foo-2.0");
+
+        let slotted = find_packages(&vdb, "app-misc/bar:2");
+        assert_eq!(slotted.len(), 1);
+        assert_eq!(slotted[0].cpv().to_string(), "app-misc/bar-1.0");
+
+        // Bare name convenience still works.
+        let bare = find_packages(&vdb, "foo");
+        assert_eq!(bare.len(), 2);
     }
 }

@@ -463,10 +463,12 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     // which would also scramble the natural match order for no reason.
     let mut seen = std::collections::HashSet::new();
     let mut matched: Vec<portage_vdb::InstalledPackage> = Vec::new();
+    let mut unmatched: Vec<&str> = Vec::new();
     for raw in atoms {
         let pkgs = crate::vdb::find_packages(&vdb, raw);
         if pkgs.is_empty() {
             eprintln!("!!! no installed package matches '{raw}'");
+            unmatched.push(raw.as_str());
             continue;
         }
         for pkg in pkgs {
@@ -477,7 +479,10 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     }
 
     if matched.is_empty() {
-        return Ok(());
+        bail!(
+            "-C/--unmerge: no installed package matched ({})",
+            unmatched.join(", ")
+        );
     }
 
     // Every cpv this invocation is committed to removing — not just the one
