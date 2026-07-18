@@ -84,6 +84,10 @@ fn classify_license_token(token: &str) -> Result<GroupEntry<Interned<DefaultInte
 pub struct AcceptLicense {
     /// `*` was present among allow tokens.
     pub allow_all: bool,
+    /// This list encountered `-*` (incremental clear-all). Used by
+    /// [`AcceptLicense::merge`] so a package.license line of `-* @FREE` can
+    /// replace a global `ACCEPT_LICENSE=*`, not OR onto it.
+    pub cleared: bool,
     allowed: HashSet<Interned<DefaultInterner>>,
     denied: HashSet<Interned<DefaultInterner>>,
 }
@@ -105,6 +109,7 @@ impl AcceptLicense {
                     out.allow_all = false;
                     out.allowed.clear();
                     out.denied.clear();
+                    out.cleared = true;
                     continue;
                 }
                 out.allow_all = true;
@@ -129,10 +134,19 @@ impl AcceptLicense {
         }
     }
 
-    /// Layer `other` on top of this list: union the allow/deny sets and OR the
-    /// `allow_all` flag. Used to fold per-package `package.license` over the
-    /// global `ACCEPT_LICENSE` (denials win, matching the existing model).
+    /// Layer `other` on top of this list for a per-package `package.license`
+    /// overlay. When `other` was built from a token list that included `-*`
+    /// ([`AcceptLicense::cleared`]), replace allow_all/allowed with other's
+    /// post-clear state (so `-* @FREE` can restrict a global `*`). Otherwise
+    /// union sets and OR `allow_all` (additive package.license lines).
     pub fn merge(&mut self, other: &AcceptLicense) {
+        if other.cleared {
+            self.allow_all = other.allow_all;
+            self.allowed = other.allowed.clone();
+            self.denied = other.denied.clone();
+            self.cleared = true;
+            return;
+        }
         self.allow_all |= other.allow_all;
         self.allowed.extend(other.allowed.iter().copied());
         self.denied.extend(other.denied.iter().copied());
@@ -261,6 +275,21 @@ OSI Apache-2.0
         let acc = AcceptLicense::from_tokens(&["*".into(), "-MIT".into()], &reg);
         assert!(acc.accepts("GPL-2"));
         assert!(!acc.accepts("MIT"));
+    }
+
+    #[test]
+    fn package_license_clear_replaces_global_allow_all() {
+        let reg = LicenseGroupRegistry::parse(SAMPLE);
+        let mut global = AcceptLicense::from_tokens(&["*".into()], &reg);
+        assert!(global.accepts("all-rights-reserved"));
+        let pkg = AcceptLicense::from_tokens(&["-*".into(), "@FREE-SOFTWARE".into()], &reg);
+        assert!(pkg.cleared);
+        global.merge(&pkg);
+        assert!(global.accepts("MIT"));
+        assert!(
+            !global.accepts("all-rights-reserved"),
+            "package.license '-* @FREE' must clear global '*'"
+        );
     }
 
     #[test]
