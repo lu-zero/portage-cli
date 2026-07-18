@@ -350,8 +350,20 @@ impl Cli {
             let RootSet::Single { root: prefix } = self.root_set() else {
                 unreachable!("--local always resolves to RootSet::Single")
             };
+            // Prefer the prefix's own make.profile when present so a bootstrapped
+            // `--local` tree is self-hosting; fall back to host config until the
+            // first `em --config-root … select profile` (or setup) lands one.
+            // Explicit `--config-root` still wins via with_config_root_explicit.
+            let prefix_profile = prefix.join("etc/portage/make.profile");
+            let config = if self.config_root.is_some() {
+                path(&self.config_root)
+            } else if prefix_profile.exists() {
+                Some(prefix.clone())
+            } else {
+                None
+            };
             return Roots::default()
-                .with_config(None)
+                .with_config(config)
                 .with_base(Some(prefix.clone()))
                 .with_target(Some(prefix.clone()))
                 .with_broot(Some(prefix.clone()))
@@ -572,6 +584,8 @@ mod tests {
             r.target(),
             "--local base == target (full closure)"
         );
+        // No make.profile yet → config stays host-default (None).
+        assert_eq!(r.config(), None);
         // Restore.
         unsafe {
             match &saved {
@@ -579,6 +593,23 @@ mod tests {
                 None => std::env::remove_var("HOME"),
             }
         }
+    }
+
+    #[test]
+    fn local_uses_prefix_config_when_make_profile_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prefix = tmp.path().join("local-prefix");
+        std::fs::create_dir_all(prefix.join("etc/portage")).unwrap();
+        // make.profile can be a symlink or empty dir; existence is enough.
+        std::fs::create_dir_all(prefix.join("etc/portage/make.profile")).unwrap();
+        let prefix_s = prefix.to_str().unwrap();
+        let cli = Cli::parse_from(["em", "--local", prefix_s, "-p", "sys-libs/zlib"]);
+        let r = cli.base_roots();
+        assert_eq!(
+            r.config().map(|p| p.as_str()),
+            Some(prefix_s),
+            "--local with make.profile must use the prefix as config root"
+        );
     }
 
     /// `--prefix` sets EPREFIX: the installed tree is relocatable, so ebuilds
