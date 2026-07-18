@@ -780,7 +780,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         );
     }
 
-    if !emptytree_native {
+    // `-uD` (`prefer_update`): do not post-trim host-satisfied BDEPEND tools.
+    // The trim treats "host has *some* version that matches the atom" as
+    // enough and would drop an in-slot *upgrade* of cmake/bash/etc. that the
+    // solver intentionally selected. Under deep update those upgrades must
+    // stay (emerge `-uD`).
+    let prefer_update = update && deep && !emptytree_native;
+    if !emptytree_native && !prefer_update {
         // Built packages always carry their BDEPEND now (it's required to build
         // them), so always run the within-run trim to drop entries only needed
         // for BDEPEND already satisfied on BROOT or by an earlier kept entry —

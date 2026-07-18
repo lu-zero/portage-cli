@@ -501,9 +501,21 @@ fn broot_filtered(
         .chain(vd.pdepend())
         .map(|(p, vs, _)| (p.clone(), vs.clone()))
         .collect();
-    append_unsatisfied_broot(&mut out, vd.depend(), provider, vd, MergeRoot::Target);
-    append_unsatisfied_broot(&mut out, vd.bdepend(), provider, vd, MergeRoot::Target);
-    append_unsatisfied_broot(&mut out, vd.idepend(), provider, vd, MergeRoot::Target);
+    // `-uD` (`prefer_update`): keep host-satisfied DEPEND/BDEPEND/IDEPEND as
+    // solver constraints so in-slot upgrades can still select a newer version
+    // (emerge deep-update). Without this, a host-present cmake/bash never
+    // enters the graph and `prefer_update` cannot upgrade it. Packages already
+    // at newest resolve to the installed CPV and are filtered from the merge
+    // list later — same display outcome as host-satisfaction drop for no-ops.
+    if provider.prefer_update {
+        for (p, vs, _) in vd.depend().iter().chain(vd.bdepend()).chain(vd.idepend()) {
+            out.push((p.clone(), vs.clone()));
+        }
+    } else {
+        append_unsatisfied_broot(&mut out, vd.depend(), provider, vd, MergeRoot::Target);
+        append_unsatisfied_broot(&mut out, vd.bdepend(), provider, vd, MergeRoot::Target);
+        append_unsatisfied_broot(&mut out, vd.idepend(), provider, vd, MergeRoot::Target);
+    }
     out.into_iter().collect()
 }
 

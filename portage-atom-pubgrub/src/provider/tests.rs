@@ -2197,6 +2197,69 @@ fn host_installed_satisfies_bdepend() {
     );
 }
 
+/// `-uD` / `prefer_update`: host-satisfied BDEPEND still enters the graph so
+/// an in-slot newer version can be selected (emerge deep-update of build tools).
+#[test]
+fn prefer_update_upgrades_host_satisfied_bdepend() {
+    let mut repo = InMemoryRepository::new();
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-build/b-1.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-build/b-2.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/a-1.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            bdepend: (DepEntry::parse("dev-build/b").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    let config = UseConfig::new();
+    let mut provider = {
+        repo.set_use_config(config);
+        let mut p = PortageDependencyProvider::new(repo);
+        p.set_with_bdeps(true);
+        p.set_prefer_update(true);
+        p
+    };
+    let b_pkg = PortagePackage::slotted(Cpn::parse("dev-build/b").unwrap(), Interned::intern("0"));
+    // Host has 1.0; target VDB also has 1.0 as Favor (typical native).
+    provider.add_host_installed(
+        b_pkg.clone(),
+        Version::parse("1.0").unwrap(),
+        vec![],
+        vec![],
+    );
+    provider.add_installed(InstalledPackage {
+        package: b_pkg.clone(),
+        version: Version::parse("1.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+
+    let a = PortagePackage::slotted(Cpn::parse("app-misc/a").unwrap(), Interned::intern("0"));
+    let solution = provider
+        .resolve_targets(vec![(a, PortageVersionSet::any())])
+        .unwrap();
+
+    assert_eq!(
+        solution.get(&b_pkg),
+        Some(&Version::parse("2.0").unwrap()),
+        "prefer_update must upgrade host-satisfied BDEPEND in-slot"
+    );
+}
+
 /// Per-edge BDEPEND filtering: when `b` is *both* a's BDEPEND (host-provided)
 /// and c's RDEPEND, the host satisfies the build edge but c still needs b at
 /// runtime — so b must be built. Confirms filtering is edge-class-scoped.
