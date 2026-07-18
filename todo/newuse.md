@@ -1,8 +1,13 @@
 # `--newuse` / `-N` — reinstall when USE (or IUSE) changed
 
-STATUS: **not started.** `em` has no `--newuse`. emerge's `-N/--newuse`
+STATUS: **not started.** The `-N`/`--newuse` **flag is parsed** (`DepgraphFlags`)
+but **not consumed** by the resolver or merge skip logic. emerge's `-N/--newuse`
 reinstalls an installed package when its effective USE differs from what it was
 built with (also when IUSE gained/lost a flag that changes the enabled set).
+
+**Not the same as `-uD`:** [[deep-in-slot-upgrades]] (done 2026-07-18) upgrades
+*versions* in the deep graph. `--newuse` forces rebuilds of *same CPV* when USE
+drifted — orthogonal, still open.
 
 ## The gap
 

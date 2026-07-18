@@ -300,9 +300,11 @@ compile once overnight when configure is clean.)
 - [x] `@world`/`@system` set resolution — `expand_sets` (`90803fb`) resolves
       `@system`/`@profile` from the config-root profile and
       `@world`/`@selected`/user sets from the merge target.
-- [~] `--update --deep --newuse` semantics — `-u` softens atom ambiguity;
-      `-D` bumps `:*` slots (`prefer_newest_slot`); **`-uD` in-slot upgrades**
-      (`prefer_update` disables Favor for the solve). **`--newuse` still open.**
+- [~] `--update --deep --newuse` — **`-uD` in-slot upgrades done** 2026-07-18
+      (`prefer_update` + host-satisfied BDEPEND retention; see
+      `todo/deep-in-slot-upgrades.md`); `-D`/`-e` still drive `prefer_newest_slot`
+      (`todo/deep-slot-bump.md`). **`--newuse` / `-N` still open**
+      (`todo/newuse.md`).
 - [ ] `--fetchonly`
 
 ## M6 — Prefix polish

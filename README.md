@@ -35,9 +35,9 @@ subcommands corresponding to the traditional tools.
 | `maint` | `emaint` | Partial — see below |
 | `regen` | `emerge --regen` | Working |
 | `search` | `emerge --search` | Working |
-| *(default)* | `emerge` | Working — resolve → build loop, `--prefix` support |
+| *(default)* | `emerge` | Working — resolve → build loop; `-uD` in-slot upgrades; `--prefix` / multi-root |
 | `ebuild` | `ebuild` | Working — fetch, unpack, phases, merge, VDB registration |
-| `depclean` | `emerge --depclean` | Stub |
+| `depclean` | `emerge --depclean` | Working — reverse-dep orphan clean (`-c`); world-aware |
 | `quickpkg` | `quickpkg` | Stub |
 | `mirror` | `emirrordist` | Stub |
 | `clean` | `eclean` | Stub |
@@ -46,12 +46,12 @@ subcommands corresponding to the traditional tools.
 | `glsa` | `glsa-check` | Stub |
 | `log` | `genlop` | Stub |
 | `grep` | `egreplite` | Stub |
-| `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang` |
-| `crossdev` | `crossdev` | Working — cross sysroot/overlay setup + staged toolchain bootstrap |
+| `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, … |
+| `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap (`--target`) |
 | `toolchain` | — | Working — native self-hosting toolchain bootstrap into `--root` |
 | `dispatch` | `dispatch-conf` | Stub |
 | `etc` | `etc-update` | Stub |
-| `env` | `env-update` | Stub |
+| `env` | `env-update` | Working — `profile.env` + `ld.so.conf` from `etc/env.d` |
 
 ---
 
@@ -73,34 +73,36 @@ subcommands corresponding to the traditional tools.
 | `uses` | `u` | Working — IUSE flags with descriptions + installed status |
 | `which` | `w` | Working — path to best matching ebuild |
 
-**`em query depgraph` feature summary:**
+**`em query depgraph` / default resolve feature summary:**
 
-- **VDB awareness** — installed packages are registered with `InstalledPolicy::Favor`; already-installed exact CPVs are filtered from output; build-time deps (DEPEND/BDEPEND) are skipped for installed packages (already built)
-- **Profile USE flags** — `make.defaults` files are sourced through brush with per-layer isolation (each file's USE assignments are its pure delta, merged with portage-style incremental semantics); `make.conf` receives the same treatment so bare `USE="…"` in make.conf correctly *adds* flags rather than replacing the profile's defaults
-- **USE_EXPAND** — `PYTHON_TARGETS`, `CPU_FLAGS_ARM`, `ABI_X86`, etc. are expanded into flag tokens and grouped in output (e.g. `PYTHON_TARGETS="python3_13 python3_14"`)
-- **OR-group branch selection** — selects the branch whose USE dep constraints are already satisfied by the installed state and current USE config (avoids unnecessary rebuilds while respecting profile-mandated targets)
-- **Post-solve reinstall detection** — after solving, installed packages whose USE dep constraints are violated by the resolved set are flagged `R` (rebuild with changed USE), matching portage's basic `-p` output
-- **Action tags** — `N` new, `NS` new slot (alongside existing slots), `U` upgrade (with `[old_ver]`), `D` downgrade, `R` reinstall; slot-aware
-- **Profile + user `package.use`** — full profile stack `package.use` and `/etc/portage/package.use` loaded and applied per-package to the solver; USE dep violations on new packages show the intended (post-install) state rather than the absent current state
-- **Cycle handling** — BDEPEND bootstrap cycles (e.g. `xz-utils` ↔ `elt-patches`) are broken after Kahn's topological sort rather than silently dropping packages
+- **VDB awareness** — installed packages use `InstalledPolicy::Favor` (keep satisfying versions); already-installed exact CPVs are filtered from the merge list; installed-and-kept packages expand runtime deps only
+- **`-uD` / `--update --deep`** — transitive **in-slot upgrades** (`prefer_update`); host-satisfied build tools still enter the graph so they can upgrade (emerge deep-update). `-u` alone does not mass-upgrade deps; `-D` alone still bumps `:*` slots (`prefer_newest_slot`). See `todo/deep-in-slot-upgrades.md`
+- **Profile USE flags** — `make.defaults` / `make.conf` through brush with portage-style incremental USE stacking (see `docs/architecture.md`)
+- **USE_EXPAND** — `PYTHON_TARGETS`, `CPU_FLAGS_*`, `ABI_X86`, etc. expanded and grouped in output
+- **OR-group branch selection** — prefer branches whose USE deps are already satisfied (avoids gratuitous rebuilds)
+- **Post-solve USE-dep rebuilds** — violated USE deps on installed packages force rebuild / `upgrade_to` fixpoint (not full `--newuse`)
+- **Action tags** — `N` new, `NS` new slot, `U` upgrade (`[old_ver]`), `D` downgrade, `R` reinstall
+- **Preserve-libs** — NEEDED.ELF.2–driven orphan library keep/reclaim (parallel install-image ELF scan)
+- **Cycle handling** — soft edges broken after SCC / Kahn order rather than silently dropping packages
 
-**Performance** (arm64, warm file cache):
+**Performance** (AmpereOne aarch64, warm cache, hyperfine 2026-07-18; exit 1 ignored when the plan needs config changes):
 
-| Target | `emerge -p` | `em query depgraph` |
-|--------|------------:|--------------------:|
-| `www-client/firefox` | 3.6 s | **0.88 s** |
-| `app-text/texlive` | 2.3 s | **0.89 s** |
-| `dev-lang/rust` | 1.8 s | **0.90 s** |
-| `sys-devel/gcc` | 1.6 s | **0.91 s** |
+| Target / mode | `emerge` | `em` |
+|---------------|---------:|-----:|
+| `www-client/firefox` `-p` | ~3.65 s | **~1.4 s** |
+| `www-client/firefox` `-uDp` | ~6.3 s | **~1.45 s** (plan size ≈ emerge) |
+| `app-office/libreoffice` `-p` | ~4.0 s | **~1.75 s** |
 
-Metadata cache entries are parsed in parallel (jwalk + chunked `spawn_blocking`). The PubGrub solver itself runs in 5–35 ms depending on solution size.
+Older micro-tables (sub-second depgraph on lighter hosts) live in
+[`benchmarks/BENCHMARKS.md`](./benchmarks/BENCHMARKS.md). Metadata cache regen
+and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`).
 
-**Gaps vs `emerge -p`:**
-- Global USE consistency propagation (portage's `--newuse` full scan) is not implemented; constraint-driven reinstall detection covers the same cases as basic `emerge -p`
-- Wrapper packages for old-slot BDEPEND (`autoconf-wrapper`, `gcc-config`, etc.) are not modelled
-- Flag ordering differs (em is alphabetical; portage groups enabled flags first)
-- Upgrade display shows all flags rather than only the changed ones
-- `(-flag)` parentheses for USE_EXPAND_IMPLICIT / arch-forced-off flags not yet rendered
+**Gaps vs `emerge`:**
+- **`--newuse` / `-N`** — flag parsed, not consumed (`todo/newuse.md`); USE-drift same-CPV rebuilds are incomplete vs emerge
+- Shallow `-p` package-set can still differ slightly from emerge on some hosts (BDEPEND / provider choice); `-uDp` is near-parity on firefox-class targets
+- Wrapper packages for old-slot BDEPEND (`autoconf-wrapper`, `gcc-config`, …) not fully modelled
+- Flag ordering / `(-flag)` USE_EXPAND_IMPLICIT display polish
+- Upgrade display shows full USE rather than only changed flags
 
 **Gaps vs equery:**
 - `uses` descriptions come from `profiles/use.desc` + `profiles/use.local.desc`.
@@ -197,8 +199,12 @@ dependency graph, per-crate API catalog, and design reference.
 | `portage-cli` | The `em` binary | Local only |
 | `portage-bench` | Benchmark harness (`benchmarks/`) | Local only |
 
-Further reading: [`docs/build-roadmap.md`](./docs/build-roadmap.md),
-[`todo/PENDING.md`](./todo/PENDING.md).
+Further reading: [`docs/architecture.md`](./docs/architecture.md),
+[`docs/build-roadmap.md`](./docs/build-roadmap.md),
+[`docs/benchmarks.md`](./docs/benchmarks.md),
+[`todo/PENDING.md`](./todo/PENDING.md) (stage/binhost arc),
+[`todo/deep-in-slot-upgrades.md`](./todo/deep-in-slot-upgrades.md) (`-uD`),
+[`todo/newuse.md`](./todo/newuse.md) (`-N` still open).
 
 ### brush integration
 

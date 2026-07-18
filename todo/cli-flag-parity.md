@@ -49,6 +49,15 @@ first draft missed for `-C`).
   (`9c850f6`): skips adding the merged atom to world, matching real
   emerge exactly (its only effect).
 
+## Landed later (resolver flags)
+
+- **`-u`/`--update` + `-D`/`--deep` in-slot upgrades** — 2026-07-18
+  ([[deep-in-slot-upgrades]]): `prefer_update` on `update && deep`; host-
+  satisfied BDEPEND retained so build tools upgrade. Slot bumps remain
+  `prefer_newest_slot` ([[deep-slot-bump]]). Shallow `-p`/`-up` stay Favor.
+- **`-N`/`--newuse`** — flag still **parsed only**; not consumed. See
+  [[newuse]]. Do not treat `-uD` as a substitute.
+
 ## Remaining gaps (not started)
 
 - **`-P`/`--prune`** — companion to `--depclean` (remove all but the best
@@ -61,8 +70,9 @@ first draft missed for `-C`).
   state exists today.
 - **`-U`/`--changed-use`** — like `-N`/`--newuse` but only rebuilds on a USE
   *change* relative to what's installed, not "profile default changed
-  underneath you". `em` has `-N`; check whether the distinction is worth a
-  separate flag or whether `-N`'s existing logic already covers this case.
+  underneath you". `em` parses `-N` but does not implement USE-drift rebuilds
+  yet ([[newuse]]); wire `-N` before deciding whether `-U` needs a separate
+  path.
 - **`-W`/`--deselect`** — remove atoms from the world file without
   unmerging. `em`'s own `-w` short flag is already taken (`em ebuild`'s
   `--work-dir` override), so this would need a different short form or

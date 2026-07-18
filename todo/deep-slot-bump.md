@@ -14,10 +14,10 @@ Implemented in two parts:
 2. **`prefer_newest_slot` bump**: `choose_version` bypasses the installed-branch
    preference for `SlotChoice` under `--deep`/emptytree → version-ranked max().
 
-Remaining (separate): `em --deep` in *non-emptytree* mode does not expand the
-closure for re-examination like `emerge -uD` (em -uD firefox stays at the shallow
-82 vs emerge 131) — that's the shallow-vs-deep *traversal* gap, distinct from the
-slot bump (the bump only acts on SlotChoices already in the graph).
+**In-slot deep traversal (`-uD`)** — closed separately 2026-07-18 as
+[[deep-in-slot-upgrades]] (`prefer_update` + host-satisfied BDEPEND retention).
+This file remains the record for the **`prefer_newest_slot` / `:*` slot bump**
+only. The older note that “em -uD stays shallow” is obsolete.
 
 ---
 
@@ -46,35 +46,13 @@ Direct-atom sanity (no `||` wrapper): `emerge -p ">=dev-lang/rust-bin-1.74.1:*"`
 already picks newest `1.94.1` (no `--deep` needed) — the OR-group/`SlotChoice`
 wrapper is what makes the installed-slot preference kick in for the firefox case.
 
-## em today
+## em after this work (historical “em today” section)
 
-- `em -pe firefox` = **382** (vs emerge 383): em keeps only `rust-bin-1.93.1`,
-  does not pull the `1.94.1` NS. This is the entire remaining firefox gap.
-- Cause: `choose_version` (`portage-atom-pubgrub/src/provider/solve.rs:110-205`)
-  has a "prefer the already-installed branch" heuristic for OR-group /
-  `SlotChoice` virtuals — it returns the installed slot instead of falling
-  through to the `max()` (newest) pick at line 207. This keeps em minimal in
-  general (no gratuitous new slots) but diverges from emerge under deep/empty.
-- `--deep` / `--newuse` are parsed in `cli.rs` but **not consumed** by the
-  resolver. `--update` only feeds `ResolveMode::PreferInstalled` for *target
-  atom* disambiguation (`query/mod.rs:64`) and never reaches the solver.
+The planned wiring landed: `prefer_newest_slot` on under `--deep` and native
+`--emptytree`; `SlotChoice` only (not all OR-groups). `Choice` USE-dep branch
+selection unchanged.
 
-## Planned wiring
-
-Add a "prefer newest slot" signal to the provider; in `choose_version`, when it
-is set, **bypass the installed-branch preference for `SlotChoice` nodes** (slot
-selection of a `:*` dep) so the dep bumps to the newest slot (`max()`):
-
-- **off** by default and under plain `-u`  → em stays minimal (match `emerge -p`/`-up`)
-- **on** under `--deep`                    → match `emerge -uDp`
-- **on** under native `--emptytree`        → closes the 382 → 383 firefox gap
-
-Keep regardless of the flag:
-- the `Choice`-node **USE-dep-satisfied** branch selection (lines 140-166) —
-  that's correctness (e.g. python:3.13 vs 3.14), not an update preference;
-- scope the bump to `SlotChoice` (slot pick), **not** all OR-groups, so the flag
-  means "prefer newest *slot*", not "re-pick providers".
-
-Delicate code (prior `prefer_or_branch` change regressed the firefox count), so
-re-run the full sandbox matrix after: `em -p`/`-up` minimal, `em -uD` → 131,
-`em -pe` → 383; then benchmark + diff vs emerge.
+- Emptytree slot parity for firefox was the original acceptance bar (383-set).
+- Non-emptytree **in-slot** upgrades under `-uD` are documented in
+  [[deep-in-slot-upgrades]] — not this file’s slot-only scope.
+- `--newuse` remains open ([[newuse]]); do not conflate with `--deep`.

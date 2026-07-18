@@ -4,6 +4,11 @@ Open items from the toolchain → stage → binhost work, grouped. Each links to
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
 here briefly for context). Updated 2026-07-09.
 
+**Also closed outside this arc (2026-07-18):** emerge-style **`-uD` in-slot
+upgrades** — [[deep-in-slot-upgrades]] (`prefer_update` + host-satisfied BDEPEND
+retention). Slot-only `:*` bumps remain [[deep-slot-bump]]. **`-N`/`--newuse`
+still open** — [[newuse]].
+
 **2026-07-09 (later)**: the global `--cross <tuple>` flag is now
 **`--target <tuple>`/`-T`** (no clash), and `em crossdev` no longer has its
 own `-t`/`--target` — one flag drives both "set up a target"

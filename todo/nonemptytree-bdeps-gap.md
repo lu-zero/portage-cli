@@ -5,6 +5,10 @@ STATUS: built-package BDEPEND fixed 2026-06-18 (commit a56690d). `em -p firefox`
 packages always pull BDEPEND (`broot_filtered`); the within-run trim always runs.
 `em -pe` still 383; tests pass.
 
+**2026-07-18 note:** the old “em `--deep` traversal gap” chase that motivated
+this file is closed for **in-slot `-uD`** — see [[deep-in-slot-upgrades]]. This
+doc remains useful as the BDEPEND / with-bdeps history for non-emptytree `-p`.
+
 REMAINING (+1 over-pull, em 126 vs emerge 125):
 - ~~libxcrypt/libcrypt abi_x86_32~~ FIXED 2026-06-18 (commit 74d1643): global
   `use.mask` was not forcing flags off over a `+flag` IUSE default, so
@@ -84,12 +88,12 @@ emerge's `--with-bdeps=n` only drops the *optional* BDEPEND of packages that are
 build-deps of newly-built packages, so `em -p firefox` (82) is missing the build
 toolchain and would not actually build.
 
-So:
-- This is **not** the `--deep` traversal gap. `--deep` only adds the 6 slot bumps
-  (125 → 131); em's `--deep` slot bump already works (it just needs the deps in
-  the graph, which in non-emptytree they aren't because of the BDEPEND drop).
+So (as of 2026-06-18 diagnosis):
+- This was **not** the full `--deep` in-slot upgrade gap; at the time `--deep`
+  mainly meant slot bumps (125 → 131). Slot bump: [[deep-slot-bump]]. Full
+  `-uD` in-slot upgrades: [[deep-in-slot-upgrades]] (2026-07-18).
 - `em -p --with-bdeps` (128) over-pulls by 3 vs emerge's 125 — a second, smaller
-  BDEPEND-set discrepancy to chase once the default is fixed.
+  BDEPEND-set discrepancy (historical; re-verify before treating as open).
 
 ## Likely fix direction
 
