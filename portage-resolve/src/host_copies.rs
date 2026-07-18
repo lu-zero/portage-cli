@@ -37,7 +37,7 @@
 //! no-forward-reference invariant `preflight::check` validates for the rest
 //! of the plan.
 //!
-//! [`compute`] returns the **whole** reordered plan, not just the new
+//! The `compute` function returns the **whole** reordered plan, not just the new
 //! copies: each copy is interleaved directly in front of the first Target
 //! entry that (transitively) needs it, by walking `target_order` in its
 //! existing order and appending each entry's not-yet-emitted dependencies
@@ -150,12 +150,12 @@ pub fn compute(
 /// edges, appending each resolved host copy to `order` only *after* its own
 /// edges have been visited — deps-first, so a copy never lands before
 /// something it needs. Called just before `pkg` itself is pushed to `order`
-/// by the caller (see [`compute`]), so every copy discovered here also ends
+/// by the caller (see the `compute` function), so every copy discovered here also ends
 /// up immediately before `pkg` — its first (and closure-wide, since already-
 /// resolved copies are never revisited) consumer.
 ///
 /// `top_level` is `true` only for the direct per-Target-package calls from
-/// [`compute`], not for edges discovered by recursing into an already-found
+/// the `compute` function, not for edges discovered by recursing into an already-found
 /// copy's own edges. Under `cross.active`, the solver's own dual-root
 /// expansion (`append_unsatisfied_broot` in `portage-atom-pubgrub`) should
 /// already schedule a `MergeRoot::Host` node for every built Target

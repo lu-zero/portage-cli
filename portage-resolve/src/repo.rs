@@ -504,9 +504,9 @@ pub fn repo_name_of<'a>(data: &'a RepoData, cpv: &Cpv) -> &'a str {
 }
 
 /// The resolved keyword/mask/license/USE policy, shared by every version
-/// filter and USE-config computation ([`effective_use_config`],
-/// [`license_ok_for`], [`target_package`], [`find_autounmask_candidates`],
-/// `download_size::compute`) so each takes one reference instead of
+/// filter and USE-config computation (the `effective_use_config` function,
+/// the `license_ok_for` function, `target_package`, `find_autounmask_candidates`,
+/// and `download_size::compute`) so each takes one reference instead of
 /// re-listing the same fields. The solver-specific remainder of [`Adapter`]
 /// (`data`, `installed_cpvs`, `autosolve_use`) isn't part of this — those
 /// three vary by call site in ways this shared policy doesn't. `Copy` so a

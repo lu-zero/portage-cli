@@ -188,7 +188,8 @@ impl Avail {
     }
 
     /// Whether `dep` is already satisfied by this availability set (CPN,
-    /// version, slot, and any USE-dep brackets — see [`use_deps_satisfied`]).
+    /// version, slot, and any USE-dep brackets — see the `use_deps_satisfied`
+    /// function).
     pub fn atom_satisfied(&self, dep: &Dep) -> bool {
         self.0
             .iter()

@@ -791,9 +791,9 @@ impl PortageDependencyProvider {
     }
 
     /// Mark this as a genuine foreign-arch build (`CHOST != CBUILD`), not
-    /// just a same-arch offset (`--root <dir>`) — see
-    /// [`is_cross_arch`](Self::is_cross_arch) field doc for why `solve.rs`
-    /// needs this distinct from [`cross_active`](Self::set_cross_active).
+    /// just a same-arch offset (`--root <dir>`) — see the `is_cross_arch` field
+    /// documentation for why `solve.rs` needs this distinct from
+    /// `cross_active`.
     pub fn set_is_cross_arch(&mut self, is_cross_arch: bool) {
         self.is_cross_arch = is_cross_arch;
     }

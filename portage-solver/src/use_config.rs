@@ -179,7 +179,7 @@ impl UseOverride {
 ///
 /// A `-*` token in **any** of these clears exactly what's accumulated from
 /// the layers before it — that's an ordinary property of the fold itself
-/// (see [`merge_flag_lists_signed`]), not a derived flag anyone needs to
+/// (see the `merge_flag_lists_signed` function), not a derived flag anyone needs to
 /// track or branch on. This is why, empirically, `package.use` survives a
 /// `-*` in `make.conf` (layer 2) but not one in the environment (layer 4),
 /// and why the ebuild's own `+`-defaulted IUSE (layer 1) is wiped by a `-*`

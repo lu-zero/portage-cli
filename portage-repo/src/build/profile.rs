@@ -71,7 +71,8 @@ impl ProfileStack {
     }
 
     /// As [`use_flags`](Self::use_flags), plus a transient conf-layer USE
-    /// override (see [`resolve_use_flags`]'s `extra_use_override`).
+    /// override (see the `resolve_use_flags` function's `extra_use_override`
+    /// parameter).
     pub async fn use_flags_with_override(
         &self,
         shell: &mut EbuildShell,
