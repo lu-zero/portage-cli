@@ -726,7 +726,10 @@ fn print_pretty_with_roots(
                 .iter()
                 .map(|f| f.as_str().to_string())
                 .collect();
-            idx.find_reusable(&cpv.to_string(), &desired_use).is_some()
+            // Empty CHOST: preview skips the CHOST gate (same as "unknown");
+            // the real merge path passes make.conf CHOST.
+            idx.find_reusable(&cpv.to_string(), &desired_use, "")
+                .is_some()
         });
 
         // For upgrades/downgrades, find the installed entry to compare USE flags

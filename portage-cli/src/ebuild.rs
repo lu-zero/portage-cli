@@ -48,6 +48,11 @@ enum PhaseGroup {
     /// install anything, so the ebuild's own DEPEND/BDEPEND closure must
     /// already be satisfied on the build host.
     BuildOnly,
+    /// `-f`/`--fetchonly`: resolve `SRC_URI` under the plan's USE and download
+    /// distfiles into DISTDIR. No unpack/build/install — mirrors emerge's
+    /// `EbuildFetcher` short-circuit (no phase shell beyond what's needed
+    /// for SRC_URI + RESTRICT=fetch / `pkg_nofetch`).
+    FetchOnly,
     /// Debug (`em ebuild`): run the given phases only; no clean/drop/buildpkg.
     Debug(Vec<String>),
 }
@@ -103,6 +108,9 @@ impl PhaseGroup {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+            // `run_fetch` sources the ebuild when needed and reads SRC_URI/USE
+            // from the live shell — no pretend/setup required for download.
+            Self::FetchOnly => vec!["fetch".to_string()],
             Self::Debug(p) => p.clone(),
         }
     }
@@ -137,7 +145,8 @@ impl PhaseGroup {
                 Some(&["work", "image", "temp", "homedir"])
             }
             Self::Install => Some(&["image", "homedir"]),
-            Self::Debug(_) => None,
+            // FetchOnly only needs DISTDIR; no build tree to scrub.
+            Self::FetchOnly | Self::Debug(_) => None,
         }
     }
 
@@ -344,11 +353,36 @@ pub async fn build_and_merge(
     // caller's own `-b`: producing the binpkg is the entire point of `-B`,
     // not a separate opt-in on top of it.
     buildpkgonly: bool,
+    // `-f`/`--fetchonly`: download distfiles only (wins over `-b`/`-B`).
+    fetchonly: bool,
 ) -> Result<()> {
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
     let work_dir = work_base.join(ebuild.category()).join(pf);
     let log = work_dir.join("build.log");
+
+    // Fetch-only short-circuit (emerge `EbuildBuild` when opts.fetchonly): no
+    // privilege worker, no compile, no qmerge. Checked before `-B` so `-fB`
+    // still only fetches.
+    if fetchonly {
+        return run_inner(
+            ebuild_path.as_str(),
+            Some(cpv),
+            &PhaseGroup::FetchOnly,
+            Some(&work_dir),
+            None,
+            root,
+            Some(use_flags),
+            distdir,
+            Some((log.clone(), quiet)),
+            roots,
+            merge_gate,
+            false,
+            None,
+        )
+        .await
+        .with_context(|| format!("fetch log: {log}"));
+    }
 
     if buildpkgonly {
         return run_inner(
@@ -1125,6 +1159,12 @@ fn write_binpkg(
         out.as_std_path(),
     )
     .with_context(|| format!("writing binary package {out}"))?;
+    // Keep `Packages` coherent for `-k`/`-g` without a separate
+    // `em maint binhost` (quickpkg already reindexes; normal `-b`/`-B` did not).
+    let chost = shell.get_var("CHOST").unwrap_or_default();
+    if let Err(e) = portage_binpkg::index_pkgdir(&pkgdir, &chost) {
+        eprintln!("warning: could not refresh Packages index after {out}: {e:#}");
+    }
     Ok(out)
 }
 

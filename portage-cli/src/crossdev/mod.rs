@@ -83,6 +83,13 @@ fn merge_depgraph_flags(globals: &Cli, args: &DepgraphFlags) -> DepgraphFlags {
 /// for the same reason (`em -j 80 stages --stage1` vs `em stages --stage1 -j
 /// 80`, see `todo/stage-build-shakeout.md`).
 fn merge_merge_flags(globals: &Cli, args: &MergeFlags) -> MergeFlags {
+    merge_merge_flags_with(globals, args, false)
+}
+
+/// Like [`merge_merge_flags`], but `force_buildpkg` turns on `-b` even when
+/// neither position passed it — used by `em stages` so each stage run seeds
+/// PKGDIR for the next (catalyst/crossdev-stages model).
+fn merge_merge_flags_with(globals: &Cli, args: &MergeFlags, force_buildpkg: bool) -> MergeFlags {
     let g = &globals.merge_flags;
     MergeFlags {
         ask: args.ask || g.ask,
@@ -90,7 +97,7 @@ fn merge_merge_flags(globals: &Cli, args: &MergeFlags) -> MergeFlags {
         autounmask_write: args.autounmask_write || g.autounmask_write,
         oneshot: args.oneshot || g.oneshot,
         fetchonly: args.fetchonly || g.fetchonly,
-        buildpkg: args.buildpkg || g.buildpkg,
+        buildpkg: force_buildpkg || args.buildpkg || g.buildpkg,
         buildpkgonly: args.buildpkgonly || g.buildpkgonly,
         usepkg: args.usepkg || g.usepkg,
         usepkgonly: args.usepkgonly || g.usepkgonly,
@@ -589,7 +596,9 @@ pub(crate) async fn stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Resu
             refresh_plan,
             globals,
             merge_depgraph_flags(globals, &args.depgraph_flags),
-            merge_merge_flags(globals, &args.merge_flags),
+            // Stages seed PKGDIR for the next re-roll (catalyst/crossdev-stages
+            // always pass `-b`). Explicit CLI `-b` is still honoured the same way.
+            merge_merge_flags_with(globals, &args.merge_flags, true),
             true,
             false,
             post_step,
@@ -607,7 +616,7 @@ pub(crate) async fn stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Resu
         &plan,
         globals,
         merge_depgraph_flags(globals, &args.depgraph_flags),
-        merge_merge_flags(globals, &args.merge_flags),
+        merge_merge_flags_with(globals, &args.merge_flags, true),
         false,
         false,
         |_| Ok(()),

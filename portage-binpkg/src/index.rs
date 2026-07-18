@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::scan::find_gpkg_containers;
 
-/// One `Packages` index entry, parsed into the fields the reuse check needs.
+/// One `Packages` index entry, parsed into the fields the reuse check needs
+/// (and optional build-env provenance for future gates).
 #[derive(Debug, Clone)]
 pub struct BinpkgEntry {
     /// Path relative to `PKGDIR` (e.g. `app-test/foo-1.0-1.gpkg.tar`).
@@ -26,6 +27,17 @@ pub struct BinpkgEntry {
     pub use_set: HashSet<String>,
     /// The package's `IUSE`, prefix-stripped (`+flag`/`-flag` → `flag`).
     pub iuse: HashSet<String>,
+    /// Build `CHOST` from the entry (or empty if the index omitted it).
+    ///
+    /// Reuse rejects a mismatch against the live desired CHOST so an aarch64
+    /// PKGDIR entry is never taken for a riscv64 plan (and vice versa).
+    pub chost: String,
+    /// Build-time `CFLAGS` (empty if absent). **Recorded only** for now —
+    /// not part of [`BinpkgIndex::find_reusable`]; callers can compare later
+    /// (e.g. RVV / `-march` variants under the same CHOST).
+    pub cflags: String,
+    /// Build-time `CXXFLAGS` (empty if absent). Same policy as [`cflags`].
+    pub cxxflags: String,
 }
 
 /// A parsed `Packages` index, keyed by `cpv`, answering reuse queries.
@@ -85,6 +97,9 @@ impl BinpkgIndex {
                     path: rel.clone(),
                     use_set: split_use(meta.get("USE").map(String::as_str).unwrap_or("")),
                     iuse: split_iuse(meta.get("IUSE").map(String::as_str).unwrap_or("")),
+                    chost: meta.get("CHOST").cloned().unwrap_or_default(),
+                    cflags: meta.get("CFLAGS").cloned().unwrap_or_default(),
+                    cxxflags: meta.get("CXXFLAGS").cloned().unwrap_or_default(),
                 },
             );
         }
@@ -104,16 +119,35 @@ impl BinpkgIndex {
         self.entries.is_empty()
     }
 
-    /// Find a reusable binpkg for `cpv` given the desired `USE`, returning the
-    /// absolute container path. `None` if no binpkg exists for the cpv, or if
-    /// its recorded USE does not match (i.e. it must be rebuilt). Version and
-    /// slot match by `cpv` lookup (a binpkg for a cpv is that ebuild's slot).
-    pub fn find_reusable(&self, cpv: &str, desired_use: &[String]) -> Option<PathBuf> {
+    /// Find a reusable binpkg for `cpv` given the desired `USE` and `CHOST`,
+    /// returning the absolute container path. `None` if no binpkg exists for
+    /// the cpv, or if its recorded USE/CHOST does not match (i.e. it must be
+    /// rebuilt). Version and slot match by `cpv` lookup (a binpkg for a cpv is
+    /// that ebuild's slot).
+    ///
+    /// `desired_chost` empty skips the CHOST gate (legacy/test callers); a
+    /// missing CHOST on the binpkg also skips it so sparse indexes still work.
+    ///
+    /// Build-env fields ([`BinpkgEntry::cflags`] / [`BinpkgEntry::cxxflags`])
+    /// are **not** checked yet — use [`Self::get`] if a caller wants to apply
+    /// its own policy.
+    pub fn find_reusable(
+        &self,
+        cpv: &str,
+        desired_use: &[String],
+        desired_chost: &str,
+    ) -> Option<PathBuf> {
         let entry = self.entries.get(cpv)?;
-        if !use_compatible(&entry.use_set, &entry.iuse, desired_use) {
+        if !entry_reusable(entry, desired_use, desired_chost) {
             return None;
         }
         Some(self.pkgdir.join(&entry.path))
+    }
+
+    /// Look up the raw index entry for `cpv` (including CFLAGS/CXXFLAGS
+    /// provenance), if present. Does not apply USE/CHOST reuse rules.
+    pub fn get(&self, cpv: &str) -> Option<&BinpkgEntry> {
+        self.entries.get(cpv)
     }
 }
 
@@ -170,10 +204,29 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, BinpkgEntry> {
                 path: fields.get("PATH").copied().unwrap_or("").to_string(),
                 use_set: split_use(fields.get("USE").copied().unwrap_or("")),
                 iuse: split_iuse(fields.get("IUSE").copied().unwrap_or("")),
+                chost: fields.get("CHOST").copied().unwrap_or("").to_string(),
+                cflags: fields.get("CFLAGS").copied().unwrap_or("").to_string(),
+                cxxflags: fields.get("CXXFLAGS").copied().unwrap_or("").to_string(),
             },
         );
     }
     entries
+}
+
+/// Header fields of a `Packages` index (the first blank-line-separated block
+/// when it has no `CPV:` line). Used for server-controlled `URI` / BASE_URI.
+pub fn parse_index_header(text: &str) -> BTreeMap<String, String> {
+    let first = text.split("\n\n").next().unwrap_or("").trim();
+    if first.is_empty() || first.lines().any(|l| l.starts_with("CPV:")) {
+        return BTreeMap::new();
+    }
+    let mut fields = BTreeMap::new();
+    for line in first.lines() {
+        if let Some((k, v)) = line.split_once(": ") {
+            fields.insert(k.to_string(), v.to_string());
+        }
+    }
+    fields
 }
 
 /// A remote binhost's `Packages` index, parsed from a fetched index text and a
@@ -182,17 +235,34 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, BinpkgEntry> {
 #[derive(Debug, Clone)]
 pub struct RemoteBinpkgIndex {
     entries: BTreeMap<String, BinpkgEntry>,
+    /// Download base: index header `URI` when present, else the configured
+    /// `sync-uri` / `PORTAGE_BINHOST` the index was fetched from (Portage
+    /// `bintree.py`: `remote_base_uri = pkgindex.header.get("URI", base_url)`).
     base_uri: String,
 }
 
 impl RemoteBinpkgIndex {
     /// Build from a fetched index body and the binhost base URI (the `sync-uri`
     /// / `PORTAGE_BINHOST` entry the index was fetched from).
-    pub fn new(index_text: &str, base_uri: &str) -> Self {
+    ///
+    /// If the index header carries `URI:`, that overrides `configured_base_uri`
+    /// for every download path (server-controlled BASE_URI).
+    pub fn new(index_text: &str, configured_base_uri: &str) -> Self {
+        let header = parse_index_header(index_text);
+        let base = header
+            .get("URI")
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(configured_base_uri);
         Self {
             entries: parse_packages_entries(index_text),
-            base_uri: base_uri.trim_end_matches('/').to_string(),
+            base_uri: base.trim_end_matches('/').to_string(),
         }
+    }
+
+    /// The effective download base URI (after header `URI` override).
+    pub fn base_uri(&self) -> &str {
+        &self.base_uri
     }
 
     /// The number of indexed packages (for reporting).
@@ -206,18 +276,44 @@ impl RemoteBinpkgIndex {
     }
 
     /// Find a reusable remote binpkg for `cpv`, returning its download URL.
-    /// `None` if the cpv is absent or its USE does not match the desired set
-    /// (same `use_compatible` rule as the local index).
-    pub fn find_reusable(&self, cpv: &str, desired_use: &[String]) -> Option<String> {
+    /// `None` if the cpv is absent or its USE/CHOST does not match (same rules
+    /// as the local index). URL = `base_uri` + `/` + `PATH`.
+    ///
+    /// CFLAGS/CXXFLAGS are carried on the entry ([`Self::get`]) but not gated.
+    pub fn find_reusable(
+        &self,
+        cpv: &str,
+        desired_use: &[String],
+        desired_chost: &str,
+    ) -> Option<String> {
         let entry = self.entries.get(cpv)?;
-        if !use_compatible(&entry.use_set, &entry.iuse, desired_use) {
+        if !entry_reusable(entry, desired_use, desired_chost) {
             return None;
         }
-        // portage: download URL = BASE_URI + "/" + PATH. PATH is the per-entry
-        // index field; the binhost's own `URI` header (a server-controlled
-        // override) is not yet honoured — tracked in `em`'s PENDING.md.
         Some(format!("{}/{path}", self.base_uri, path = entry.path))
     }
+
+    /// Look up the raw index entry for `cpv` (including CFLAGS/CXXFLAGS), if
+    /// present. Does not apply USE/CHOST reuse rules.
+    pub fn get(&self, cpv: &str) -> Option<&BinpkgEntry> {
+        self.entries.get(cpv)
+    }
+}
+
+fn entry_reusable(entry: &BinpkgEntry, desired_use: &[String], desired_chost: &str) -> bool {
+    if !use_compatible(&entry.use_set, &entry.iuse, desired_use) {
+        return false;
+    }
+    chost_compatible(&entry.chost, desired_chost)
+}
+
+/// CHOST gate: both sides set and unequal → not reusable. Either side empty
+/// skips the check (sparse index / unknown desired CHOST).
+fn chost_compatible(binpkg_chost: &str, desired_chost: &str) -> bool {
+    if binpkg_chost.is_empty() || desired_chost.is_empty() {
+        return true;
+    }
+    binpkg_chost == desired_chost
 }
 
 /// The reuse core: is a binpkg's `USE` (restricted to its `IUSE`) equal to the
@@ -337,26 +433,61 @@ USE: ssl
 
         // foo: nls on matches desired [nls]; debug off in both → reusable.
         let p = idx
-            .find_reusable("app-test/foo-1.0", &desired(&["nls"]))
+            .find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
             .unwrap();
         assert_eq!(p, PathBuf::from("/pkgdir/app-test/foo-1.0-1.gpkg.tar"));
 
         // foo with nls off → stale (nls is in IUSE, differs) → None.
         assert!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&[]))
+            idx.find_reusable("app-test/foo-1.0", &desired(&[]), "")
                 .is_none()
         );
 
         // bar: ssl matches → reusable.
         assert!(
-            idx.find_reusable("app-test/bar-2.0", &desired(&["ssl"]))
+            idx.find_reusable("app-test/bar-2.0", &desired(&["ssl"]), "")
                 .is_some()
         );
 
         // Wrong cpv → None.
         assert!(
-            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]))
+            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]), "")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn chost_mismatch_rejects_reuse() {
+        let text = "\
+VERSION: 0
+
+CPV: app-test/foo-1.0
+CHOST: aarch64-unknown-linux-gnu
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+";
+        let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
+        assert!(
+            idx.find_reusable(
+                "app-test/foo-1.0",
+                &desired(&["nls"]),
+                "aarch64-unknown-linux-gnu"
+            )
+            .is_some()
+        );
+        assert!(
+            idx.find_reusable(
+                "app-test/foo-1.0",
+                &desired(&["nls"]),
+                "riscv64-unknown-linux-gnu"
+            )
+            .is_none()
+        );
+        // Empty desired CHOST: no gate.
+        assert!(
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
+                .is_some()
         );
     }
 
@@ -377,19 +508,68 @@ USE: nls
         assert_eq!(idx.len(), 1);
         // Trailing slash on base_uri is trimmed; URL = base + "/" + PATH.
         assert_eq!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]))
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
                 .unwrap(),
             "https://binhost.example/app-test/foo-1.0-1.gpkg.tar"
         );
-        // Stale USE → None (same use_compatible rule as local).
+        // Stale USE → None (same use_compatible rule as the local index).
         assert!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&["nls", "debug"]))
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls", "debug"]), "")
                 .is_none()
         );
         // Unknown cpv → None.
         assert!(
-            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]))
+            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]), "")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn parse_carries_cflags_cxxflags_without_gating_reuse() {
+        let text = "\
+VERSION: 0
+
+CPV: app-test/foo-1.0
+CHOST: riscv64-unknown-linux-gnu
+CFLAGS: -O2 -pipe -march=rv64gcv
+CXXFLAGS: -O2 -pipe -march=rv64gcv
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+";
+        let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
+        let e = idx.get("app-test/foo-1.0").unwrap();
+        assert_eq!(e.cflags, "-O2 -pipe -march=rv64gcv");
+        assert_eq!(e.cxxflags, "-O2 -pipe -march=rv64gcv");
+        // Still reusable under CHOST+USE only — flags not gated yet.
+        assert!(
+            idx.find_reusable(
+                "app-test/foo-1.0",
+                &desired(&["nls"]),
+                "riscv64-unknown-linux-gnu"
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn remote_index_header_uri_overrides_sync_uri() {
+        // Portage: remote_base_uri = pkgindex.header.get("URI", base_url).
+        let text = "\
+VERSION: 0
+URI: https://cdn.example/gentoo/arm64
+
+CPV: app-test/foo-1.0
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+";
+        let idx = RemoteBinpkgIndex::new(text, "https://binhost.example/unused/");
+        assert_eq!(idx.base_uri(), "https://cdn.example/gentoo/arm64");
+        assert_eq!(
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
+                .unwrap(),
+            "https://cdn.example/gentoo/arm64/app-test/foo-1.0-1.gpkg.tar"
         );
     }
 }

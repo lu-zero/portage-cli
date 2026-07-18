@@ -1271,6 +1271,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// Whether an installed VDB entry must rebuild under `-N`/`-U` for USE/IUSE
 /// drift relative to the planned fold for its CPV (or the newest same-slot
 /// repo version when the exact CPV left the tree).
+#[allow(clippy::too_many_arguments)] // thin fold of USE-reinstall inputs
 fn package_needs_use_reinstall(
     mode: portage_resolve::use_reinstall::UseReinstallMode,
     e: &installed::VdbEntry,

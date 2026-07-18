@@ -110,6 +110,14 @@ fn build_entry(rel: &str, full: &Path) -> Result<(String, BTreeMap<String, Strin
     copy_field(&meta, &mut f, "PDEPEND");
     copy_field(&meta, &mut f, "IDEPEND");
     copy_field(&meta, &mut f, "CHOST");
+    // Build-env provenance (em extension). Portage's binarytree drops unknown
+    // per-package keys on read, but writing them is harmless and lets em gate
+    // reuse later (e.g. RVV / `-march` via CFLAGS). Sourced from the GPKG's
+    // VDB-shaped metadata (`MergeSpec` already records these on merge).
+    copy_field(&meta, &mut f, "CFLAGS");
+    copy_field(&meta, &mut f, "CXXFLAGS");
+    copy_field(&meta, &mut f, "LDFLAGS");
+    copy_field(&meta, &mut f, "CBUILD");
     copy_field(&meta, &mut f, "PROVIDES");
     copy_field(&meta, &mut f, "REQUIRES");
 
@@ -200,6 +208,8 @@ mod tests {
             ("repository", "gentoo"),
             ("BUILD_TIME", "1700000000"),
             ("SIZE", "3"),
+            ("CFLAGS", "-O2 -pipe -mcpu=ampere1a"),
+            ("CXXFLAGS", "-O2 -pipe -mcpu=ampere1a"),
         ] {
             std::fs::write(meta.join(k), format!("{v}\n")).unwrap();
         }
@@ -233,9 +243,17 @@ mod tests {
         assert!(idx.contains("BUILD_ID: 1"));
         assert!(idx.contains("DESC: a test package"));
         assert!(idx.contains("REPO: gentoo"));
+        assert!(idx.contains("CFLAGS: -O2 -pipe -mcpu=ampere1a"));
+        assert!(idx.contains("CXXFLAGS: -O2 -pipe -mcpu=ampere1a"));
         assert!(idx.contains("MD5: "));
         assert!(idx.contains("SHA1: "));
         assert!(idx.contains("SIZE: "));
         assert!(idx.contains("MTIME: "));
+
+        // Parser surface: provenance available without affecting reuse.
+        let parsed = crate::BinpkgIndex::open(pkgdir.as_std_path()).unwrap();
+        let e = parsed.get("app-test/foo-1.0").unwrap();
+        assert_eq!(e.cflags, "-O2 -pipe -mcpu=ampere1a");
+        assert_eq!(e.cxxflags, "-O2 -pipe -mcpu=ampere1a");
     }
 }

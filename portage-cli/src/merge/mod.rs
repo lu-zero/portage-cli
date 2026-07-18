@@ -76,6 +76,9 @@ fn entry_roots<'a>(
 /// there at the planned version is skipped (a previous run merged it), so
 /// re-running after an interruption continues from the first unmerged entry
 /// without a separate state file. `--emptytree` forces every entry to rebuild.
+///
+/// With `-f`/`--fetchonly`, only distfiles (or remote binpkgs under `-g`) are
+/// downloaded — no build, no install, no env-update.
 pub(crate) async fn run_merge_plan(
     plan: &[query::depgraph::PlannedMerge],
     blockers: &[Vec<usize>],
@@ -89,6 +92,7 @@ pub(crate) async fn run_merge_plan(
     let jobs = merge_flags.jobs.map(|j| j as usize).unwrap_or(1).max(1);
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
+    let fetchonly = merge_flags.fetchonly;
     let usepkg = merge_flags.usepkg;
     let getbinpkg = merge_flags.getbinpkg;
     let getbinpkgonly = merge_flags.getbinpkgonly;
@@ -103,7 +107,8 @@ pub(crate) async fn run_merge_plan(
     // hit a permission-denied PKGDIR (fixed separately — resolve_pkgdir is now
     // root-aware), and each failure surfaced as an unexplained, silent worker
     // death rather than the single clear error this check now gives instead.
-    if buildpkg || buildpkgonly {
+    // Fetch-only never writes PKGDIR (remote binpkg cache is under work_base).
+    if !fetchonly && (buildpkg || buildpkgonly) {
         let flag = if buildpkg {
             "--buildpkg"
         } else {
@@ -182,6 +187,12 @@ pub(crate) async fn run_merge_plan(
         Vec::new()
     };
 
+    // Desired CHOST for binpkg reuse gates (empty → skip gate). Prefer the
+    // config-root make.conf; fall back to the process env when unset.
+    let desired_chost = binpkg::read_make_conf_var(globals, "CHOST")
+        .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
+        .unwrap_or_default();
+
     // A `--target` plan can carry `MergeRoot::Host` entries (an unsatisfied
     // BDEPEND scheduled onto the build host — see `cross_target_runtime_deps`
     // in portage-atom-pubgrub). `roots` here is the `--target`-substituted
@@ -207,6 +218,7 @@ pub(crate) async fn run_merge_plan(
             binpkg_index.as_ref(),
             &remote_indices,
             enforce_no_source,
+            &desired_chost,
         )
         .await
     } else {
@@ -223,15 +235,17 @@ pub(crate) async fn run_merge_plan(
             binpkg_index.as_ref(),
             &remote_indices,
             enforce_no_source,
+            &desired_chost,
         )
         .await
     };
 
     // Refresh ${ROOT}/etc/profile.env and the linker cache, as emerge does
     // after merging — only worthwhile if something was actually installed.
-    // `-B` installed nothing (the live root is untouched by contract).
+    // `-B` / `-f` leave the live root untouched by contract.
     if merged > 0
         && !buildpkgonly
+        && !fetchonly
         && let Err(e) = maint::env::env_update(merge_root)
     {
         eprintln!("warning: env-update failed: {e:#}");
@@ -243,7 +257,9 @@ pub(crate) async fn run_merge_plan(
         } else {
             String::new()
         };
-        let done = if buildpkgonly {
+        let done = if fetchonly {
+            format!("{merged} package(s) fetched")
+        } else if buildpkgonly {
             format!("{merged} binary package(s) built")
         } else {
             format!("{merged} package(s) merged into {merge_root}")
@@ -252,7 +268,8 @@ pub(crate) async fn run_merge_plan(
         return Ok(());
     }
 
-    eprintln!("\n>>> {} package(s) failed to merge:", failures.len());
+    let fail_verb = if fetchonly { "fetch" } else { "merge" };
+    eprintln!("\n>>> {} package(s) failed to {fail_verb}:", failures.len());
     for f in &failures {
         eprintln!("  * {}", f.cpv);
         eprintln!("      {}", f.cause);
@@ -262,11 +279,172 @@ pub(crate) async fn run_merge_plan(
     }
     if merged > 0 || skipped > 0 {
         eprintln!(
-            "    ({merged} merged, {skipped} already installed, {} failed of {total})",
+            "    ({merged} ok, {skipped} already installed, {} failed of {total})",
             failures.len()
         );
     }
-    bail!("{} of {total} package(s) failed to merge", failures.len());
+    bail!(
+        "{} of {total} package(s) failed to {fail_verb}",
+        failures.len()
+    );
+}
+
+/// Act on one plan entry: fetch-only, binpkg merge, or source build.
+#[allow(clippy::too_many_arguments)]
+async fn act_on_package(
+    planned: &query::depgraph::PlannedMerge,
+    merge_root: &camino::Utf8Path,
+    host_roots: &portage_resolve::Roots,
+    entry_roots: &portage_resolve::Roots,
+    work_base: &camino::Utf8Path,
+    distdir: Option<&camino::Utf8Path>,
+    quiet: bool,
+    merge_gate: Option<&tokio::sync::Mutex<()>>,
+    self_contained_bootstrap: bool,
+    buildpkg: bool,
+    buildpkgonly: bool,
+    fetchonly: bool,
+    binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
+    remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
+    enforce_no_source: bool,
+    // Desired CHOST for binpkg reuse (empty skips the CHOST gate).
+    desired_chost: &str,
+) -> anyhow::Result<()> {
+    let desired_use: Vec<String> = planned
+        .use_flags
+        .iter()
+        .map(|f| f.as_str().to_string())
+        .collect();
+
+    let reused = binpkg_index
+        .and_then(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost));
+    let remote_url = reused
+        .is_none()
+        .then(|| {
+            remote_indices.iter().find_map(|idx| {
+                idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost)
+            })
+        })
+        .flatten();
+
+    let root_ctx = ebuild::RootContext {
+        config_root: entry_roots.config(),
+        sysroot: entry_roots.build_sysroot(),
+        eprefix: entry_roots.eprefix(),
+        broot: Some(host_roots.merge_root()),
+        self_contained_bootstrap,
+    };
+
+    if fetchonly {
+        // Local binpkg already present → nothing to download.
+        if let Some(binpkg_path) = reused {
+            println!(
+                ">>> binpkg already present (no fetch needed): {}",
+                binpkg_path.display()
+            );
+            return Ok(());
+        }
+        // Remote binpkg: download into the run cache, do not merge.
+        if let Some(url) = remote_url {
+            let path = fetch_remote_binpkg(&url, work_base).await?;
+            println!(">>> Fetched binary package: {url} -> {path}");
+            return Ok(());
+        }
+        if enforce_no_source {
+            bail!("no matching binpkg and source builds disabled (-K/--getbinpkgonly)");
+        }
+        // Source: distfile fetch only.
+        return ebuild::build_and_merge(
+            &planned.ebuild_path,
+            &planned.cpv,
+            &planned.use_flags,
+            work_base,
+            merge_root,
+            distdir,
+            quiet,
+            root_ctx,
+            merge_gate,
+            false,
+            false,
+            true,
+        )
+        .await;
+    }
+
+    if let Some(binpkg_path) = reused {
+        println!(">>> Using binary package: {}", binpkg_path.display());
+        let path = camino::Utf8Path::from_path(binpkg_path.as_path())
+            .unwrap_or_else(|| camino::Utf8Path::new("/invalid-binpkg-path"));
+        return ebuild::merge_binpkg(
+            path,
+            &planned.ebuild_path,
+            &planned.cpv,
+            &planned.use_flags,
+            work_base,
+            merge_root,
+            quiet,
+            root_ctx,
+            merge_gate,
+        )
+        .await;
+    }
+
+    if let Some(url) = remote_url {
+        match fetch_remote_binpkg(&url, work_base).await {
+            Ok(path) => {
+                println!(">>> Fetched binary package: {url}");
+                ebuild::merge_binpkg(
+                    &path,
+                    &planned.ebuild_path,
+                    &planned.cpv,
+                    &planned.use_flags,
+                    work_base,
+                    merge_root,
+                    quiet,
+                    root_ctx,
+                    merge_gate,
+                )
+                .await
+            }
+            Err(e) if enforce_no_source => Err(e),
+            Err(e) => {
+                eprintln!(">>> Failed to fetch binpkg {url} — {e:#}; building from source");
+                ebuild::build_and_merge(
+                    &planned.ebuild_path,
+                    &planned.cpv,
+                    &planned.use_flags,
+                    work_base,
+                    merge_root,
+                    distdir,
+                    quiet,
+                    root_ctx,
+                    merge_gate,
+                    buildpkg,
+                    buildpkgonly,
+                    false,
+                )
+                .await
+            }
+        }
+    } else if enforce_no_source {
+        bail!("no matching binpkg and source builds disabled (-K/--getbinpkgonly)");
+    } else {
+        ebuild::build_and_merge(
+            &planned.ebuild_path,
+            &planned.cpv,
+            &planned.use_flags,
+            work_base,
+            merge_root,
+            distdir,
+            quiet,
+            root_ctx,
+            merge_gate,
+            buildpkg,
+            buildpkgonly,
+            false,
+        )
+        .await
+    }
 }
 
 /// Sequential build+merge in install order (the `--jobs 1` / default path).
@@ -283,11 +461,13 @@ async fn merge_sequential(
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
+    desired_chost: &str,
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
+    let fetchonly = merge_flags.fetchonly;
 
     let total = plan.len();
     let mut merged = 0usize;
@@ -306,6 +486,8 @@ async fn merge_sequential(
         // exact version is already installed in the target root. An intentional
         // reinstall (explicit target / USE rebuild) is built anyway — emerge
         // reinstalls a requested atom by default.
+        // Under `-f`, still skip fully-installed packages that are not being
+        // reinstalled — their distfiles are not needed for this plan step.
         let pkg_vdb = merge_root.join("var/db/pkg").join(planned.cpv.to_string());
         if !emptytree && !planned.reinstall && pkg_vdb.exists() {
             println!(
@@ -317,144 +499,27 @@ async fn merge_sequential(
             continue;
         }
 
-        let desired_use: Vec<String> = planned
-            .use_flags
-            .iter()
-            .map(|f| f.as_str().to_string())
-            .collect();
-
-        // 1. Local binpkg reuse (`-k`, or `-g`/`-G` where local overrides remote).
-        let reused =
-            binpkg_index.and_then(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use));
-
-        // 2. Remote binpkg (`-g`/`-G`): download the first matching binpkg into
-        //    a per-run cache, then merge it. Local already took precedence.
-        let remote_url = reused
-            .is_none()
-            .then(|| {
-                remote_indices
-                    .iter()
-                    .find_map(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use))
-            })
-            .flatten();
-
-        println!("\n>>> Emerging ({} of {total}) {}", i + 1, planned.cpv);
-        let result = if let Some(binpkg_path) = reused {
-            println!(">>> Using binary package: {}", binpkg_path.display());
-            ebuild::merge_binpkg(
-                camino::Utf8Path::from_path(binpkg_path.as_path())
-                    .unwrap_or_else(|| camino::Utf8Path::new("/invalid-binpkg-path")),
-                &planned.ebuild_path,
-                &planned.cpv,
-                &planned.use_flags,
-                work_base,
-                merge_root,
-                quiet,
-                ebuild::RootContext {
-                    config_root: entry_roots.config(),
-                    sysroot: entry_roots.build_sysroot(),
-                    eprefix: entry_roots.eprefix(),
-                    broot: Some(host_roots.merge_root()),
-                    self_contained_bootstrap,
-                },
-                None,
-            )
-            .await
-        } else if let Some(url) = remote_url {
-            match fetch_remote_binpkg(&url, work_base).await {
-                Ok(path) => {
-                    println!(">>> Fetched binary package: {url}");
-                    ebuild::merge_binpkg(
-                        &path,
-                        &planned.ebuild_path,
-                        &planned.cpv,
-                        &planned.use_flags,
-                        work_base,
-                        merge_root,
-                        quiet,
-                        ebuild::RootContext {
-                            config_root: entry_roots.config(),
-                            sysroot: entry_roots.build_sysroot(),
-                            eprefix: entry_roots.eprefix(),
-                            broot: Some(host_roots.merge_root()),
-                            self_contained_bootstrap,
-                        },
-                        None,
-                    )
-                    .await
-                }
-                Err(e) => {
-                    eprintln!(">>> Failed to fetch binpkg {url} — {e:#}");
-                    if enforce_no_source {
-                        failures.push(MergeFailure {
-                            cpv: planned.cpv.to_string(),
-                            log: work_base.join(planned.cpv.to_string()).join("build.log"),
-                            cause: format!("remote binpkg fetch failed: {e:#}"),
-                        });
-                        if !keep_going {
-                            break;
-                        }
-                        continue;
-                    }
-                    // Fall through to a source build.
-                    ebuild::build_and_merge(
-                        &planned.ebuild_path,
-                        &planned.cpv,
-                        &planned.use_flags,
-                        work_base,
-                        merge_root,
-                        distdir,
-                        quiet,
-                        ebuild::RootContext {
-                            config_root: entry_roots.config(),
-                            sysroot: entry_roots.build_sysroot(),
-                            eprefix: entry_roots.eprefix(),
-                            broot: Some(host_roots.merge_root()),
-                            self_contained_bootstrap,
-                        },
-                        None,
-                        buildpkg,
-                        buildpkgonly,
-                    )
-                    .await
-                }
-            }
-        } else if enforce_no_source {
-            eprintln!(
-                ">>> No binary package for {} (local or remote) and -K/--getbinpkgonly is set",
-                planned.cpv
-            );
-            failures.push(MergeFailure {
-                cpv: planned.cpv.to_string(),
-                log: work_base.join(planned.cpv.to_string()).join("build.log"),
-                cause: "no matching binpkg and source builds disabled (-K/--getbinpkgonly)".into(),
-            });
-            if !keep_going {
-                break;
-            }
-            continue;
-        } else {
-            ebuild::build_and_merge(
-                &planned.ebuild_path,
-                &planned.cpv,
-                &planned.use_flags,
-                work_base,
-                merge_root,
-                distdir,
-                quiet,
-                ebuild::RootContext {
-                    config_root: entry_roots.config(),
-                    sysroot: entry_roots.build_sysroot(),
-                    eprefix: entry_roots.eprefix(),
-                    broot: Some(host_roots.merge_root()),
-                    self_contained_bootstrap,
-                },
-                None,
-                buildpkg,
-                buildpkgonly,
-            )
-            .await
-        };
+        let action = if fetchonly { "Fetching" } else { "Emerging" };
+        println!("\n>>> {action} ({} of {total}) {}", i + 1, planned.cpv);
+        let result = act_on_package(
+            planned,
+            merge_root,
+            host_roots,
+            entry_roots,
+            work_base,
+            distdir,
+            quiet,
+            None,
+            self_contained_bootstrap,
+            buildpkg,
+            buildpkgonly,
+            fetchonly,
+            binpkg_index,
+            remote_indices,
+            enforce_no_source,
+            desired_chost,
+        )
+        .await;
         match result {
             Ok(()) => {
                 merged += 1;
@@ -468,13 +533,17 @@ async fn merge_sequential(
                 // installed `libpkgconf.so`, even though both the package and
                 // the cache entry were correct by the time the whole run
                 // finished — the cache just wasn't refreshed yet at the
-                // moment it was needed). `-B` installed nothing to refresh for.
-                if !buildpkgonly && let Err(e) = maint::env::env_update(merge_root) {
+                // moment it was needed). `-B`/`-f` installed nothing to refresh.
+                if !buildpkgonly
+                    && !fetchonly
+                    && let Err(e) = maint::env::env_update(merge_root)
+                {
                     eprintln!("warning: env-update failed: {e:#}");
                 }
             }
             Err(e) => {
-                eprintln!(">>> Failed to emerge {} — {e:#}", planned.cpv);
+                let fail_verb = if fetchonly { "fetch" } else { "emerge" };
+                eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
                 failures.push(MergeFailure {
                     cpv: planned.cpv.to_string(),
                     log: work_base.join(planned.cpv.to_string()).join("build.log"),
@@ -584,11 +653,13 @@ async fn merge_parallel(
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
+    desired_chost: &str,
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
+    let fetchonly = merge_flags.fetchonly;
 
     let total = plan.len();
     let merge_gate = tokio::sync::Mutex::new(());
@@ -622,141 +693,33 @@ async fn merge_parallel(
                 continue;
             }
             started += 1;
-            let desired_use: Vec<String> = planned
-                .use_flags
-                .iter()
-                .map(|f| f.as_str().to_string())
-                .collect();
-            let reused = binpkg_index
-                .and_then(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use));
-            // Local overrides remote; only look remote when no local match.
-            let remote_url = reused
-                .is_none()
-                .then(|| {
-                    remote_indices
-                        .iter()
-                        .find_map(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use))
-                })
-                .flatten();
-            let tag = if reused.is_some() {
-                " (binary)"
-            } else if remote_url.is_some() {
-                " (binary, remote)"
-            } else if enforce_no_source {
-                " (no binpkg — blocked by -K/--getbinpkgonly)"
-            } else {
-                ""
-            };
+            let action = if fetchonly { "Fetching" } else { "Emerging" };
             println!(
-                ">>> Emerging ({started} of {total}) {} [+{} building]{tag}",
+                ">>> {action} ({started} of {total}) {} [+{} in flight]",
                 planned.cpv,
                 inflight.len()
             );
-            if let Some(p) = reused.as_ref() {
-                println!(">>> Using binary package: {}", p.display());
-            } else if let Some(u) = remote_url.as_ref() {
-                println!(">>> Fetched binary package: {u}");
-            }
             let gate = &merge_gate;
             inflight.push(async move {
-                let res = if let Some(binpkg_path) = reused {
-                    let binpkg_path = camino::Utf8Path::from_path(binpkg_path.as_path())
-                        .unwrap_or_else(|| camino::Utf8Path::new("/invalid-binpkg-path"));
-                    ebuild::merge_binpkg(
-                        binpkg_path,
-                        &planned.ebuild_path,
-                        &planned.cpv,
-                        &planned.use_flags,
-                        work_base,
-                        merge_root,
-                        quiet,
-                        ebuild::RootContext {
-                            config_root: entry_roots.config(),
-                            sysroot: entry_roots.build_sysroot(),
-                            eprefix: entry_roots.eprefix(),
-                            broot: Some(host_roots.merge_root()),
-                            self_contained_bootstrap,
-                        },
-                        Some(gate),
-                    )
-                    .await
-                } else if let Some(url) = remote_url {
-                    match fetch_remote_binpkg(&url, work_base).await {
-                        Ok(path) => {
-                            ebuild::merge_binpkg(
-                                &path,
-                                &planned.ebuild_path,
-                                &planned.cpv,
-                                &planned.use_flags,
-                                work_base,
-                                merge_root,
-                                quiet,
-                                ebuild::RootContext {
-                                    config_root: entry_roots.config(),
-                                    sysroot: entry_roots.build_sysroot(),
-                                    eprefix: entry_roots.eprefix(),
-                                    broot: Some(host_roots.merge_root()),
-                                    self_contained_bootstrap,
-                                },
-                                Some(gate),
-                            )
-                            .await
-                        }
-                        Err(e) if enforce_no_source => Err(e),
-                        // Mirror the sequential path: remote fetch failure
-                        // falls back to a source build unless -K/-G.
-                        Err(e) => {
-                            eprintln!(
-                                ">>> Failed to fetch binpkg {url} — {e:#}; building from source"
-                            );
-                            ebuild::build_and_merge(
-                                &planned.ebuild_path,
-                                &planned.cpv,
-                                &planned.use_flags,
-                                work_base,
-                                merge_root,
-                                distdir,
-                                quiet,
-                                ebuild::RootContext {
-                                    config_root: entry_roots.config(),
-                                    sysroot: entry_roots.build_sysroot(),
-                                    eprefix: entry_roots.eprefix(),
-                                    broot: Some(host_roots.merge_root()),
-                                    self_contained_bootstrap,
-                                },
-                                Some(gate),
-                                buildpkg,
-                                buildpkgonly,
-                            )
-                            .await
-                        }
-                    }
-                } else if enforce_no_source {
-                    Err(anyhow::anyhow!(
-                        "no matching binpkg and source builds disabled (-K/--getbinpkgonly)"
-                    ))
-                } else {
-                    ebuild::build_and_merge(
-                        &planned.ebuild_path,
-                        &planned.cpv,
-                        &planned.use_flags,
-                        work_base,
-                        merge_root,
-                        distdir,
-                        quiet,
-                        ebuild::RootContext {
-                            config_root: entry_roots.config(),
-                            sysroot: entry_roots.build_sysroot(),
-                            eprefix: entry_roots.eprefix(),
-                            broot: Some(host_roots.merge_root()),
-                            self_contained_bootstrap,
-                        },
-                        Some(gate),
-                        buildpkg,
-                        buildpkgonly,
-                    )
-                    .await
-                };
+                let res = act_on_package(
+                    planned,
+                    merge_root,
+                    host_roots,
+                    entry_roots,
+                    work_base,
+                    distdir,
+                    quiet,
+                    Some(gate),
+                    self_contained_bootstrap,
+                    buildpkg,
+                    buildpkgonly,
+                    fetchonly,
+                    binpkg_index,
+                    remote_indices,
+                    enforce_no_source,
+                    desired_chost,
+                )
+                .await;
                 (i, res)
             });
         }
@@ -773,12 +736,16 @@ async fn merge_parallel(
                 // whole batch — a still-running or not-yet-started sibling may
                 // need to dynamically load what this merge just installed.
                 let merge_root = entry_roots(&plan[i], roots, host_roots).merge_root();
-                if !buildpkgonly && let Err(e) = maint::env::env_update(merge_root) {
+                if !buildpkgonly
+                    && !fetchonly
+                    && let Err(e) = maint::env::env_update(merge_root)
+                {
                     eprintln!("warning: env-update failed: {e:#}");
                 }
             }
             Err(e) => {
-                eprintln!(">>> Failed to emerge {} — {e:#}", plan[i].cpv);
+                let fail_verb = if fetchonly { "fetch" } else { "emerge" };
+                eprintln!(">>> Failed to {fail_verb} {} — {e:#}", plan[i].cpv);
                 failures.push(MergeFailure {
                     cpv: plan[i].cpv.to_string(),
                     log: work_base.join(plan[i].cpv.to_string()).join("build.log"),
