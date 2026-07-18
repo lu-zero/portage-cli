@@ -249,6 +249,12 @@ fn resolve_world(config_root: Option<&Utf8Path>, eroot: &Utf8Path) -> Result<Vec
 /// computes its own removal list instead of taking it from the command
 /// line directly.
 pub async fn run(cli: &cli::Cli) -> Result<()> {
+    run_with_targets(cli, &cli.atoms).await
+}
+
+/// Same as [`run`], but takes the target atom list explicitly so the
+/// `em depclean <atoms>` applet path can forward its trailing args.
+pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<()> {
     let vdb = open_cli_vdb(cli)?;
     let roots = cli.roots();
     let root = roots.merge_root().to_owned();
@@ -261,8 +267,8 @@ pub async fn run(cli: &cli::Cli) -> Result<()> {
     // Strict parse: a typo on the command line must not degrade a targeted
     // depclean into a full-system clean (empty target_atoms ⇒ unrestricted).
     let exclude_atoms = parse_atoms_strict(&cli.merge_flags.exclude)?;
-    let target_atoms = parse_atoms_strict(&cli.atoms)?;
-    if !cli.atoms.is_empty() && target_atoms.is_empty() {
+    let target_atoms = parse_atoms_strict(raw_targets)?;
+    if !raw_targets.is_empty() && target_atoms.is_empty() {
         // Unreachable with strict parse (non-empty raw always yields non-empty
         // or Err), kept as a belt-and-braces guard against future refactors.
         bail!("depclean: no valid target atoms");
@@ -350,6 +356,10 @@ pub async fn run(cli: &cli::Cli) -> Result<()> {
         println!(">>> depclean success: {pkg}");
     }
     registry.store();
+
+    if let Err(e) = crate::maint::env::env_update(&root) {
+        eprintln!("warning: env-update after depclean failed: {e:#}");
+    }
 
     if failures > 0 {
         bail!(

@@ -575,6 +575,13 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     }
     registry.store();
 
+    // Refresh ld.so.cache / profile.env after removals — same as merge does
+    // after each package, so libraries just deleted don't linger in the
+    // dynamic linker cache until the next unrelated install.
+    if let Err(e) = maint::env::env_update(&root) {
+        eprintln!("warning: env-update after unmerge failed: {e:#}");
+    }
+
     if failures > 0 {
         bail!(
             "{failures} of {} package(s) failed to unmerge",

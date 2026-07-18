@@ -1556,11 +1556,21 @@ async fn unmerge_package(
         if std::fs::copy(old_ebuild_src.as_std_path(), old_ebuild_path.as_std_path()).is_ok() {
             Some(Ebuild::with_cpv(old_pkg.cpv().clone(), &old_ebuild_path))
         } else {
-            eprintln!(
-                "warning: old ebuild not found at {old_ebuild_src}, skipping pkg_prerm/pkg_postrm"
-            );
             None
         };
+
+    // Stage environment.bz2 *before* unregister deletes the VDB directory, so
+    // pkg_postrm can still run when the ebuild copy is missing.
+    let staged_env = if old_ebuild.is_none() {
+        stage_env_bz2(old_pkg, old_work_root)
+    } else {
+        None
+    };
+    if old_ebuild.is_none() && staged_env.is_none() {
+        eprintln!(
+            "warning: old ebuild not found at {old_ebuild_src} and no environment.bz2 — skipping pkg_prerm/pkg_postrm"
+        );
+    }
 
     let old_sourced = match &old_ebuild {
         Some(e) => {
@@ -1570,7 +1580,12 @@ async fn unmerge_package(
                 .context("pkg_prerm failed")?;
             true
         }
-        None => try_run_phase_from_env_bz2(shell, old_pkg, "prerm", old_work_root, root).await,
+        None => match &staged_env {
+            Some(env_file) => {
+                try_run_phase_from_env_file(shell, "prerm", old_work_root, root, env_file).await
+            }
+            None => false,
+        },
     };
 
     let old_contents = old_pkg.contents().context("reading old CONTENTS")?;
@@ -1581,6 +1596,25 @@ async fn unmerge_package(
     // `preserve_libs` module doc. `graph`/`registry` are built/loaded once
     // per batch by the caller, not per package here.
     let to_preserve = preserve_libs::find_libs_to_preserve(graph, old_pkg, &old_contents);
+    // Slot replace: files the incoming package already owns (or will leave
+    // on disk via remove_old_unique_files) must not enter the preserved-libs
+    // registry — they are not orphaned.
+    let new_paths: HashSet<&Utf8PathBuf> = new_contents.iter().map(|e| &e.path).collect();
+    let to_preserve: Vec<_> = to_preserve
+        .into_iter()
+        .filter_map(|mut e| {
+            if new_paths.contains(&e.path) {
+                return None;
+            }
+            if e.soname_symlink
+                .as_ref()
+                .is_some_and(|s| new_paths.contains(s))
+            {
+                e.soname_symlink = None;
+            }
+            Some(e)
+        })
+        .collect();
     let preserve_paths: HashSet<Utf8PathBuf> = to_preserve
         .iter()
         .flat_map(|e| std::iter::once(e.path.clone()).chain(e.soname_symlink.clone()))
@@ -1609,8 +1643,11 @@ async fn unmerge_package(
                     .context("pkg_postrm failed")?;
             }
             None => {
-                let _ =
-                    try_run_phase_from_env_bz2(shell, old_pkg, "postrm", old_work_root, root).await;
+                if let Some(env_file) = &staged_env {
+                    let _ =
+                        try_run_phase_from_env_file(shell, "postrm", old_work_root, root, env_file)
+                            .await;
+                }
             }
         }
     }
@@ -1698,39 +1735,49 @@ pub async fn unmerge_standalone(
     Ok(())
 }
 
-async fn try_run_phase_from_env_bz2(
-    shell: &mut portage_repo::EbuildShell,
-    pkg: &InstalledPackage,
-    phase: &str,
-    work_root: &Utf8Path,
-    root: &Utf8Path,
-) -> bool {
+/// Decompress `environment.bz2` from the VDB into `work_root/temp/` so
+/// prerm/postrm can both use it after the VDB directory is removed.
+fn stage_env_bz2(pkg: &InstalledPackage, work_root: &Utf8Path) -> Option<Utf8PathBuf> {
     let env_bz2 = pkg.path().join("environment.bz2");
     if !env_bz2.exists() {
-        return false;
+        return None;
     }
-
-    let temp_env = work_root.join("temp/environment.old");
+    let temp_dir = work_root.join("temp");
+    if let Err(e) = std::fs::create_dir_all(temp_dir.as_std_path()) {
+        eprintln!("warning: could not create {temp_dir}: {e}");
+        return None;
+    }
+    let temp_env = temp_dir.join("environment.old");
     let compressed = match std::fs::read(env_bz2.as_std_path()) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("warning: could not read environment.bz2: {e}");
-            return false;
+            return None;
         }
     };
     let decompressed = match decompress_bzip2(&compressed) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("warning: could not decompress environment.bz2: {e}");
-            return false;
+            return None;
         }
     };
     if let Err(e) = std::fs::write(temp_env.as_std_path(), &decompressed) {
         eprintln!("warning: could not write temp environment: {e}");
-        return false;
+        return None;
     }
+    Some(temp_env)
+}
 
-    let source_cmd = format!(". '{}'", temp_env.as_str().replace('\'', "'\\''"));
+/// Run `pkg_prerm` / `pkg_postrm` from a previously staged environment dump.
+async fn try_run_phase_from_env_file(
+    shell: &mut portage_repo::EbuildShell,
+    phase: &str,
+    _work_root: &Utf8Path,
+    root: &Utf8Path,
+    env_file: &Utf8Path,
+) -> bool {
+    let source_cmd = format!(". '{}'", env_file.as_str().replace('\'', "'\\''"));
     if shell.run_string(&source_cmd).await.is_err() {
         eprintln!("warning: could not source saved environment");
         return false;
