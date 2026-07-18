@@ -1219,6 +1219,15 @@ fn register_virtual_choices(
                 vd.use_deps = udeps;
             }
         }
+        // Attach per-branch blockers so check_blockers only fires those of the
+        // selected OR / UseDecision alternative.
+        for (ver, blockers) in vc.branch_blockers {
+            if !blockers.is_empty()
+                && let Some(vd) = entry.versions.get_mut(&ver)
+            {
+                vd.blockers.extend(blockers);
+            }
+        }
     }
 }
 

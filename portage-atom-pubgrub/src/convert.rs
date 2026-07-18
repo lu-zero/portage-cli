@@ -38,6 +38,12 @@ pub(crate) struct VirtualChoice {
     /// Stored separately so `choose_version` can check USE dep satisfiability
     /// per branch without those constraints leaking into the parent's dep list.
     pub branch_use_deps: Vec<(Version, Vec<UseDepConstraint>)>,
+    /// Per-branch blockers, parallel to `versions`.
+    ///
+    /// Attached to the virtual package's chosen version so post-solve
+    /// `check_blockers` only fires blockers from the selected OR/`UseDecision`
+    /// branch — not every alternative.
+    pub branch_blockers: Vec<(Version, Vec<Dep>)>,
 }
 
 /// Result of converting a dependency tree.
@@ -222,8 +228,11 @@ impl ConvertCtx<'_> {
                     UseFlagState::SolverDecided { .. } => {
                         let virtual_pkg = use_decision_package(self.cpn_str, flag);
 
-                        let on_deps = if *negate {
-                            vec![]
+                        // Blockers ride on the UseDecision branch versions, not
+                        // the parent package — so check_blockers only fires them
+                        // when the solver actually picks that flag value.
+                        let (on_deps, on_blockers) = if *negate {
+                            (vec![], vec![])
                         } else {
                             let saved_reqs = std::mem::take(&mut self.requirements);
                             let saved_blockers = std::mem::take(&mut self.blockers);
@@ -234,11 +243,10 @@ impl ConvertCtx<'_> {
                             let on_blockers = std::mem::take(&mut self.blockers);
                             self.requirements = saved_reqs;
                             self.blockers = saved_blockers;
-                            self.blockers.extend(on_blockers);
-                            reqs
+                            (reqs, on_blockers)
                         };
 
-                        let off_deps = if *negate {
+                        let (off_deps, off_blockers) = if *negate {
                             let saved_reqs = std::mem::take(&mut self.requirements);
                             let saved_blockers = std::mem::take(&mut self.blockers);
                             for child in children {
@@ -248,19 +256,18 @@ impl ConvertCtx<'_> {
                             let off_blockers = std::mem::take(&mut self.blockers);
                             self.requirements = saved_reqs;
                             self.blockers = saved_blockers;
-                            self.blockers.extend(off_blockers);
-                            reqs
+                            (reqs, off_blockers)
                         } else {
-                            vec![]
+                            (vec![], vec![])
                         };
 
+                        let v0 = Version::new(&[0]);
+                        let v1 = Version::new(&[1]);
                         self.virtual_choices.push(VirtualChoice {
                             package: virtual_pkg.clone(),
-                            versions: vec![
-                                (Version::parse("0").unwrap(), off_deps),
-                                (Version::parse("1").unwrap(), on_deps),
-                            ],
+                            versions: vec![(v0.clone(), off_deps), (v1.clone(), on_deps)],
                             branch_use_deps: vec![],
+                            branch_blockers: vec![(v0, off_blockers), (v1, on_blockers)],
                         });
                         self.requirements.push((
                             virtual_pkg,
@@ -346,11 +353,23 @@ impl ConvertCtx<'_> {
     }
 
     fn collect_post_solve_unslotted(&mut self, cpn: &Cpn, vs: &PortageVersionSet, dep: &Dep) {
-        if let Some([(_, sole_pkg)]) = self.slot_map.get(cpn).map(|v| v.as_slice()) {
-            self.collect_post_solve(sole_pkg, vs, dep);
-        } else {
-            let pkg = PortagePackage::unslotted(*cpn);
-            self.collect_post_solve(&pkg, vs, dep);
+        match self.slot_map.get(cpn).map(|v| v.as_slice()) {
+            // Single accepted slot: attach to that exact PortagePackage key.
+            Some([(_, sole_pkg)]) => self.collect_post_solve(sole_pkg, vs, dep),
+            // Multi-slot: the provider only ever selects slotted packages, so
+            // an unslotted key never hits installed/solution lookups. Attach
+            // the constraint to every slotted candidate for this CPN.
+            Some(slots) if !slots.is_empty() => {
+                for (_, pkg) in slots {
+                    self.collect_post_solve(pkg, vs, dep);
+                }
+            }
+            // No slot info yet: fall back to unslotted (single-slot packages
+            // that haven't been slot-mapped, or synthetic tests).
+            _ => {
+                let pkg = PortagePackage::unslotted(*cpn);
+                self.collect_post_solve(&pkg, vs, dep);
+            }
         }
     }
 
@@ -431,6 +450,7 @@ impl ConvertCtx<'_> {
                     package: choice_pkg.clone(),
                     versions,
                     branch_use_deps: vec![],
+                    branch_blockers: vec![],
                 });
                 // The slot-choice virtual itself is gated by the same flag.
                 self.requirements
@@ -446,10 +466,12 @@ impl ConvertCtx<'_> {
         let n = children.len();
         let mut versions = Vec::new();
         let mut branch_use_deps: Vec<(Version, Vec<UseDepConstraint>)> = Vec::new();
+        let mut branch_blockers: Vec<(Version, Vec<Dep>)> = Vec::new();
 
         if allow_none {
             versions.push((Version::new(&[0]), vec![])); // empty: no deps for "none" branch
             branch_use_deps.push((Version::new(&[0]), vec![]));
+            branch_blockers.push((Version::new(&[0]), vec![]));
         }
 
         for (i, child) in children.iter().enumerate() {
@@ -470,17 +492,20 @@ impl ConvertCtx<'_> {
             self.requirements = saved_reqs;
             self.blockers = saved_blockers;
             self.use_deps = saved_use_deps;
-            self.blockers.extend(choice_blockers);
+            // Blockers stay on the branch (attached via branch_blockers), not
+            // promoted to the parent package.
 
             let ver = Version::new(&[ver_num as u64]);
             versions.push((ver.clone(), deps));
-            branch_use_deps.push((ver, this_branch_use_deps));
+            branch_use_deps.push((ver.clone(), this_branch_use_deps));
+            branch_blockers.push((ver, choice_blockers));
         }
 
         self.virtual_choices.push(VirtualChoice {
             package: pkg.clone(),
             versions,
             branch_use_deps,
+            branch_blockers,
         });
         // The choice virtual itself carries the current gating flag.
         self.requirements
@@ -660,6 +685,7 @@ impl RuBuilder<'_> {
             package: pkg.clone(),
             versions,
             branch_use_deps: Vec::new(),
+            branch_blockers: Vec::new(),
         });
         self.requirements
             .push((pkg, PortageVersionSet::any(), None));
@@ -956,6 +982,7 @@ impl RuBuilder<'_> {
             package: pkg.clone(),
             versions,
             branch_use_deps: Vec::new(),
+            branch_blockers: Vec::new(),
         });
         // Pull the choice when the guard is active (and only then).
         self.touched.insert(guard.clone());
@@ -978,6 +1005,7 @@ impl RuBuilder<'_> {
                 package: node.clone(),
                 versions: vec![(Self::ver(Self::OFF), off), (Self::ver(Self::ON), on)],
                 branch_use_deps: Vec::new(),
+                branch_blockers: Vec::new(),
             });
             self.requirements
                 .push((node, PortageVersionSet::any(), None));
@@ -1296,30 +1324,57 @@ mod tests {
     }
 
     #[test]
-    fn convert_blocker_in_or_group_preserved() {
+    fn convert_blocker_in_or_group_stays_on_branch() {
         let config = UseConfig::new();
         let entries = DepEntry::parse("|| ( dev-libs/a !dev-libs/b )").unwrap();
         let result = convert_deps(&entries, "test/pkg", &config, &empty_slots());
-        assert_eq!(
-            result.blockers.len(),
-            1,
-            "blocker inside || () should be preserved"
+        assert!(
+            result.blockers.is_empty(),
+            "blocker inside || () must not promote to the parent package"
         );
-        assert_eq!(result.blockers[0].cpn.package.as_str(), "b");
+        let vc = result
+            .virtual_choices
+            .iter()
+            .find(|v| !v.branch_blockers.is_empty())
+            .expect("choice virtual with branch blockers");
+        let all: Vec<_> = vc
+            .branch_blockers
+            .iter()
+            .flat_map(|(_, bs)| bs.iter())
+            .collect();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].cpn.package.as_str(), "b");
     }
 
     #[test]
-    fn convert_blocker_in_solver_decided_use_preserved() {
+    fn convert_blocker_in_solver_decided_use_stays_on_branch() {
         let mut config = UseConfig::new();
         config.solver_decide(Interned::intern("ssl"), false);
         let entries = DepEntry::parse("ssl? ( !dev-libs/openssl-compat )").unwrap();
         let result = convert_deps(&entries, "test/pkg", &config, &empty_slots());
-        assert_eq!(
-            result.blockers.len(),
-            1,
-            "blocker inside solver-decided USE conditional should be preserved"
+        assert!(
+            result.blockers.is_empty(),
+            "blocker inside solver-decided USE must not promote to the parent"
         );
-        assert_eq!(result.blockers[0].cpn.package.as_str(), "openssl-compat");
+        let vc = result
+            .virtual_choices
+            .iter()
+            .find(|v| v.branch_blockers.iter().any(|(_, bs)| !bs.is_empty()))
+            .expect("UseDecision virtual with branch blockers");
+        // Flag ON (version 1) carries the blocker; OFF does not.
+        let on = vc
+            .branch_blockers
+            .iter()
+            .find(|(v, _)| v == &Version::new(&[1]))
+            .expect("ON branch");
+        assert_eq!(on.1.len(), 1);
+        assert_eq!(on.1[0].cpn.package.as_str(), "openssl-compat");
+        let off = vc
+            .branch_blockers
+            .iter()
+            .find(|(v, _)| v == &Version::new(&[0]))
+            .expect("OFF branch");
+        assert!(off.1.is_empty());
     }
 
     // IUSE defaults are folded into the desired config by the caller (in
