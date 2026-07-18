@@ -75,61 +75,74 @@ impl ContentsEntry {
 
     /// Parse a single line from a CONTENTS file.
     ///
-    /// Returns `None` for blank lines.
+    /// Paths may contain spaces. Portage's format (see `dblink._contents_re`)
+    /// is field-oriented from the right for `obj`/`sym`:
+    /// - `obj <path…> <md5> <mtime>` — md5 is one non-space token, mtime digits
+    /// - `sym <path…> -> <target…> <mtime>` — last space-separated token is mtime;
+    ///   path/target split on the last ` -> ` (matches Portage's greedy path)
+    /// - `dir`/`fif`/`dev` `<path…>` — everything after the kind is the path
+    ///
+    /// Returns `None` for blank or unrecognised lines.
     pub fn parse_line(line: &str) -> Option<Self> {
         let line = line.trim();
         if line.is_empty() {
             return None;
         }
 
-        let mut parts = line.splitn(5, ' ');
-        let kind_str = parts.next()?;
-
-        let kind = match kind_str {
-            "obj" => ContentsKind::Obj,
-            "dir" => ContentsKind::Dir,
-            "sym" => ContentsKind::Sym,
-            "fif" => ContentsKind::Fifo,
-            "dev" => ContentsKind::Dev,
-            _ => return None,
-        };
-
-        let path_str = parts.next()?;
-        let path = Utf8PathBuf::from(path_str);
-
-        match kind {
-            ContentsKind::Obj => {
-                let md5 = parts.next().map(|s| s.to_string());
-                let mtime = parts.next().and_then(|s| s.parse().ok());
-                Some(ContentsEntry {
-                    kind,
-                    path,
-                    md5,
-                    mtime,
-                    target: None,
-                })
+        if let Some(rest) = line.strip_prefix("obj ") {
+            // obj PATH MD5 MTIME — path may contain spaces.
+            let (path_and_md5, mtime_str) = rest.rsplit_once(' ')?;
+            let (path_str, md5) = path_and_md5.rsplit_once(' ')?;
+            if path_str.is_empty() || md5.chars().any(char::is_whitespace) {
+                return None;
             }
-            ContentsKind::Sym => {
-                // sym /link/path -> /target mtime
-                let rest = line.strip_prefix("sym ")?;
-                let (path_and_target, mtime_str) = rest.rsplit_once(' ')?;
-                let (path_str, target_str) = path_and_target.split_once(" -> ")?;
-                Some(ContentsEntry {
+            return Some(ContentsEntry {
+                kind: ContentsKind::Obj,
+                path: Utf8PathBuf::from(path_str),
+                md5: Some(md5.to_string()),
+                mtime: mtime_str.parse().ok(),
+                target: None,
+            });
+        }
+
+        if let Some(rest) = line.strip_prefix("sym ") {
+            // sym PATH -> TARGET MTIME — path and target may contain spaces;
+            // use the last " -> " so a path that itself contains " -> " still
+            // parses like Portage's greedy first group.
+            let (path_and_target, mtime_str) = rest.rsplit_once(' ')?;
+            let (path_str, target_str) = path_and_target.rsplit_once(" -> ")?;
+            if path_str.is_empty() {
+                return None;
+            }
+            return Some(ContentsEntry {
+                kind: ContentsKind::Sym,
+                path: Utf8PathBuf::from(path_str),
+                md5: None,
+                mtime: mtime_str.parse().ok(),
+                target: Some(Utf8PathBuf::from(target_str)),
+            });
+        }
+
+        for (prefix, kind) in [
+            ("dir ", ContentsKind::Dir),
+            ("fif ", ContentsKind::Fifo),
+            ("dev ", ContentsKind::Dev),
+        ] {
+            if let Some(path_str) = line.strip_prefix(prefix) {
+                if path_str.is_empty() {
+                    return None;
+                }
+                return Some(ContentsEntry {
                     kind,
                     path: Utf8PathBuf::from(path_str),
                     md5: None,
-                    mtime: mtime_str.parse().ok(),
-                    target: Some(Utf8PathBuf::from(target_str)),
-                })
+                    mtime: None,
+                    target: None,
+                });
             }
-            ContentsKind::Dir | ContentsKind::Fifo | ContentsKind::Dev => Some(ContentsEntry {
-                kind,
-                path,
-                md5: None,
-                mtime: None,
-                target: None,
-            }),
         }
+
+        None
     }
 
     /// Parse a full CONTENTS file into entries.
@@ -232,6 +245,45 @@ mod tests {
             let parsed = ContentsEntry::parse_line(line).unwrap();
             assert_eq!(parsed.format_line(), line);
         }
+    }
+
+    /// Real Portage CONTENTS includes paths with spaces (cmake docs, etc.).
+    #[test]
+    fn parse_obj_path_with_spaces() {
+        let line = "obj /usr/share/cmake/Help/generator/Visual Studio 9 2008.rst d5a7badc3622ea283eeb1f1668288e1d 1774616911";
+        let entry = ContentsEntry::parse_line(line).unwrap();
+        assert_eq!(entry.kind, ContentsKind::Obj);
+        assert_eq!(
+            entry.path.as_str(),
+            "/usr/share/cmake/Help/generator/Visual Studio 9 2008.rst"
+        );
+        assert_eq!(
+            entry.md5.as_deref(),
+            Some("d5a7badc3622ea283eeb1f1668288e1d")
+        );
+        assert_eq!(entry.mtime, Some(1774616911));
+        assert_eq!(entry.format_line(), line);
+    }
+
+    #[test]
+    fn parse_dir_path_with_spaces() {
+        let line = "dir /usr/share/foo bar";
+        let entry = ContentsEntry::parse_line(line).unwrap();
+        assert_eq!(entry.path.as_str(), "/usr/share/foo bar");
+        assert_eq!(entry.format_line(), line);
+    }
+
+    #[test]
+    fn parse_sym_path_and_target_with_spaces() {
+        let line = "sym /usr/lib/foo bar.so -> /lib/foo bar.so.1 1234567890";
+        let entry = ContentsEntry::parse_line(line).unwrap();
+        assert_eq!(entry.path.as_str(), "/usr/lib/foo bar.so");
+        assert_eq!(
+            entry.target.as_deref().map(|p| p.as_str()),
+            Some("/lib/foo bar.so.1")
+        );
+        assert_eq!(entry.mtime, Some(1234567890));
+        assert_eq!(entry.format_line(), line);
     }
 
     #[test]
