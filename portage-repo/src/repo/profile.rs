@@ -351,7 +351,15 @@ impl ProfileStack {
     }
 
     /// The active (leaf) profile — last in the stack.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the profile stack is empty. In practice this should never occur
+    /// because [`ProfileStack::build`] validates non-emptiness and `profiles` is a
+    /// private field with no other public constructors.
     pub fn leaf(&self) -> &Profile {
+        // SAFETY: ProfileStack::build() rejects empty stacks (line 326-328) and
+        // profiles is private with no other constructors, so it is never empty.
         self.profiles.last().expect("stack is never empty")
     }
 
