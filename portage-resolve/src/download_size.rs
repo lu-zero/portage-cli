@@ -58,7 +58,15 @@ pub fn compute(
             .accept_keywords
             .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
         let iuse = iuse_set(cache);
-        apply_force_mask(&mut effective, policy.force_mask, &cpv, stable, &iuse);
+        let slot_key = pkg.slot();
+        apply_force_mask(
+            &mut effective,
+            policy.force_mask,
+            &cpv,
+            slot_key.as_ref().map(|s| s.as_str()),
+            stable,
+            &iuse,
+        );
         apply_ceded(&mut effective, *pkg.cpn(), ceded);
         let enabled = |flag: &str| -> bool {
             matches!(effective.get(Interned::intern(flag)), UseFlagState::Enabled)

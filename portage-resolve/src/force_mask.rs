@@ -26,8 +26,6 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_atom_pubgrub::UseConfig;
 
-use crate::repo::mask_matches;
-
 /// An interned USE flag.
 type Flag = Interned<DefaultInterner>;
 
@@ -85,14 +83,17 @@ pub fn index_by_cpn(entries: Vec<(Dep, Vec<String>)>) -> PkgRules {
     map
 }
 
-/// Accumulate per-atom tokens matching `cpv` into `set`, honouring `-flag`
-/// removal (incremental, in list order).
-fn accumulate(rules: &PkgRules, cpv: &Cpv, set: &mut BTreeSet<Flag>) {
+/// Accumulate per-atom tokens matching `cpv` (+ optional slot) into `set`,
+/// honouring `-flag` removal (incremental, in list order). Uses
+/// [`Dep::matches_cpv`] so version **and** `:slot` constraints on
+/// `package.use.force`/`package.use.mask` atoms are honoured (mask_matches
+/// alone is slot-blind).
+fn accumulate(rules: &PkgRules, cpv: &Cpv, slot: Option<&str>, set: &mut BTreeSet<Flag>) {
     let Some(entries) = rules.get(&cpv.cpn) else {
         return;
     };
     for (dep, toks) in entries {
-        if !mask_matches(dep, cpv) {
+        if !dep.matches_cpv(cpv, slot) {
             continue;
         }
         for &(flag, remove) in toks {
@@ -127,6 +128,7 @@ impl ForceMask {
     pub fn effective(
         &self,
         cpv: &Cpv,
+        slot: Option<&str>,
         stable: bool,
         iuse: &HashSet<Flag>,
     ) -> (BTreeSet<Flag>, BTreeSet<Flag>) {
@@ -144,13 +146,13 @@ impl ForceMask {
         // -flag` can unmask it.
         forced.extend(self.use_force.iter().copied().filter(|f| iuse.contains(f)));
         masked.extend(self.use_mask.iter().copied().filter(|f| iuse.contains(f)));
-        accumulate(&self.pkg_force, cpv, &mut forced);
-        accumulate(&self.pkg_mask, cpv, &mut masked);
+        accumulate(&self.pkg_force, cpv, slot, &mut forced);
+        accumulate(&self.pkg_mask, cpv, slot, &mut masked);
         if stable {
             forced.extend(self.use_stable_force.iter().copied());
-            accumulate(&self.pkg_stable_force, cpv, &mut forced);
+            accumulate(&self.pkg_stable_force, cpv, slot, &mut forced);
             masked.extend(self.use_stable_mask.iter().copied());
-            accumulate(&self.pkg_stable_mask, cpv, &mut masked);
+            accumulate(&self.pkg_stable_mask, cpv, slot, &mut masked);
         }
         forced.retain(|f| !masked.contains(f));
         (forced, masked)
@@ -161,8 +163,16 @@ impl ForceMask {
     /// configured value, matching Portage. Flags are already interned.
     ///
     /// `iuse` is the package's own declared `IUSE` flags — see [`Self::effective`].
-    pub fn apply(&self, cfg: &mut UseConfig, cpv: &Cpv, stable: bool, iuse: &HashSet<Flag>) {
-        let (forced, masked) = self.effective(cpv, stable, iuse);
+    /// `slot` is the package's main slot (for `:slot`-scoped force/mask atoms).
+    pub fn apply(
+        &self,
+        cfg: &mut UseConfig,
+        cpv: &Cpv,
+        slot: Option<&str>,
+        stable: bool,
+        iuse: &HashSet<Flag>,
+    ) {
+        let (forced, masked) = self.effective(cpv, slot, stable, iuse);
         for &f in &forced {
             cfg.enable(f);
         }
@@ -180,8 +190,14 @@ impl ForceMask {
     /// `cede_required_use` already skips any flag not in `IUSE`), so the
     /// `iuse` restriction on [`Self::effective`]'s internal call here is a
     /// no-op for the final result, just cheaper to compute.
-    pub fn pins(&self, cpv: &Cpv, stable: bool, iuse: &HashSet<Flag>) -> BTreeSet<Flag> {
-        let (mut pins, masked) = self.effective(cpv, stable, iuse);
+    pub fn pins(
+        &self,
+        cpv: &Cpv,
+        slot: Option<&str>,
+        stable: bool,
+        iuse: &HashSet<Flag>,
+    ) -> BTreeSet<Flag> {
+        let (mut pins, masked) = self.effective(cpv, slot, stable, iuse);
         pins.extend(masked);
         pins.extend(self.use_force.iter().copied());
         pins.extend(self.use_mask.iter().copied());
@@ -243,7 +259,7 @@ mod tests {
         };
         let c = cpv("cross-foo/gcc-13.2");
         let iuse = iuse_of(&["multilib", "shared", "cet"]);
-        let (forced, masked) = fm.effective(&c, false, &iuse);
+        let (forced, masked) = fm.effective(&c, None, false, &iuse);
         assert!(forced.contains(&flag("multilib")));
         assert!(
             !forced.contains(&flag("shared")),
@@ -254,7 +270,7 @@ mod tests {
 
         let mut cfg = UseConfig::new();
         cfg.enable(Interned::intern("cet")); // user tried to enable a masked flag
-        fm.apply(&mut cfg, &c, false, &iuse);
+        fm.apply(&mut cfg, &c, None, false, &iuse);
         assert_eq!(cfg.get(Interned::intern("multilib")), UseFlagState::Enabled);
         assert_eq!(cfg.get(Interned::intern("cet")), UseFlagState::Disabled);
         assert_eq!(cfg.get(Interned::intern("shared")), UseFlagState::Disabled);
@@ -270,7 +286,7 @@ mod tests {
             ]),
             ..Default::default()
         };
-        let (forced, _) = fm.effective(&cpv("cross-foo/gcc-13.2"), false, &HashSet::new());
+        let (forced, _) = fm.effective(&cpv("cross-foo/gcc-13.2"), None, false, &HashSet::new());
         assert!(!forced.contains(&flag("multilib")), "-multilib unforced it");
     }
 
@@ -282,16 +298,33 @@ mod tests {
         };
         let c = cpv("dev-libs/foo-1");
         assert!(
-            !fm.effective(&c, false, &HashSet::new())
+            !fm.effective(&c, None, false, &HashSet::new())
                 .1
                 .contains(&flag("risky")),
             "ignored when unstable"
         );
         assert!(
-            fm.effective(&c, true, &HashSet::new())
+            fm.effective(&c, None, true, &HashSet::new())
                 .1
                 .contains(&flag("risky")),
             "applied when stable"
+        );
+    }
+
+    #[test]
+    fn package_force_respects_slot_constraint() {
+        let fm = ForceMask {
+            pkg_force: index_by_cpn(vec![(dep("sys-devel/gcc:13"), vec!["openmp".into()])]),
+            ..Default::default()
+        };
+        let c = cpv("sys-devel/gcc-13.2.0");
+        let iuse = iuse_of(&["openmp"]);
+        let (forced_match, _) = fm.effective(&c, Some("13"), false, &iuse);
+        assert!(forced_match.contains(&flag("openmp")));
+        let (forced_other, _) = fm.effective(&c, Some("14"), false, &iuse);
+        assert!(
+            !forced_other.contains(&flag("openmp")),
+            "slot-scoped force must not apply to a different slot"
         );
     }
 
@@ -307,7 +340,7 @@ mod tests {
         };
         let c = cpv("dev-libs/foo-1");
         let iuse = iuse_of(&["abi_x86_32"]);
-        let (_, masked) = fm.effective(&c, false, &iuse);
+        let (_, masked) = fm.effective(&c, None, false, &iuse);
         assert!(
             masked.contains(&flag("abi_x86_32")),
             "flag in the package's IUSE stays masked"
@@ -320,7 +353,7 @@ mod tests {
         // pins() must still protect the *full* global set regardless — a
         // flag outside IUSE can't be ceded in the first place, so this is
         // just cheaper to compute, not narrower in its final result.
-        let pins = fm.pins(&c, false, &iuse);
+        let pins = fm.pins(&c, None, false, &iuse);
         assert!(pins.contains(&flag("abi_x86_32")));
         assert!(pins.contains(&flag("unrelated_flag")));
     }
@@ -339,7 +372,7 @@ mod tests {
         };
         let c = cpv("dev-libs/foo-1");
         let iuse = iuse_of(&["abi_x86_32"]);
-        let (forced, _) = fm.effective(&c, false, &iuse);
+        let (forced, _) = fm.effective(&c, None, false, &iuse);
         assert!(
             forced.contains(&flag("abi_x86_32")),
             "flag in the package's IUSE is forced on"
@@ -351,7 +384,7 @@ mod tests {
 
         let mut cfg = UseConfig::new();
         cfg.disable(Interned::intern("abi_x86_32")); // user tried to disable a forced flag
-        fm.apply(&mut cfg, &c, false, &iuse);
+        fm.apply(&mut cfg, &c, None, false, &iuse);
         assert_eq!(
             cfg.get(Interned::intern("abi_x86_32")),
             UseFlagState::Enabled,

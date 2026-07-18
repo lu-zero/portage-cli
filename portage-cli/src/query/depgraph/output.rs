@@ -704,10 +704,12 @@ fn print_pretty_with_roots(
         if let Some(c) = cache {
             let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
             let iuse = super::effective_use::iuse_set(c);
+            let slot_key = pkg.slot();
             super::effective_use::apply_force_mask(
                 &mut effective_use,
                 force_mask,
                 &cpv,
+                slot_key.as_ref().map(|s| s.as_str()),
                 stable,
                 &iuse,
             );

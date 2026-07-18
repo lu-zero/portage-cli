@@ -1121,10 +1121,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // No cache ⇒ no IUSE/keywords; still apply global force/mask
                 // and ceded so build USE stays consistent with the solver.
                 let empty_iuse = HashSet::new();
+                let slot_key = pkg.slot();
                 effective_use::apply_force_mask(
                     &mut effective,
                     &force_mask,
                     &cpv,
+                    slot_key.as_ref().map(|s| s.as_str()),
                     false,
                     &empty_iuse,
                 );

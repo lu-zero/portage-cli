@@ -239,8 +239,10 @@ impl AcceptKeywords {
         d.accepts(keywords, self.arch) && !d.testing
     }
 
-    /// The `~arch` token an autounmask would need: the version is not accepted
-    /// but carries a testing keyword for the host arch.
+    /// The keyword token an autounmask would need: the version is not accepted.
+    /// Returns `~arch` when a testing keyword for the host arch is present,
+    /// otherwise `**` for fully unkeyworded / foreign-arch-only versions so
+    /// autounmask always has a concrete suggestion for a dropped hard dep.
     pub fn keyword_needed(
         &self,
         keywords: &[Keyword],
@@ -250,10 +252,14 @@ impl AcceptKeywords {
         if self.accepts(keywords, cpv, slot) {
             return None;
         }
-        keywords
+        if keywords
             .iter()
             .any(|kw| kw.arch == self.arch && kw.stability == Stability::Testing)
-            .then(|| format!("~{}", self.arch.as_str()))
+        {
+            Some(format!("~{}", self.arch.as_str()))
+        } else {
+            Some("**".to_string())
+        }
     }
 }
 
@@ -385,7 +391,13 @@ fn effective_use_config(
         let stable = policy.accept_keywords.is_stable(&meta.keywords, cpv, slot);
         let iuse: std::collections::HashSet<Interned<DefaultInterner>> =
             meta.iuse.iter().map(Interned::from).collect();
-        policy.force_mask.apply(&mut cfg, cpv, stable, &iuse);
+        policy.force_mask.apply(
+            &mut cfg,
+            cpv,
+            slot.as_ref().map(|s| s.as_str()),
+            stable,
+            &iuse,
+        );
     }
     cfg
 }
@@ -649,7 +661,9 @@ impl Adapter<'_> {
             m.iuse.iter().map(Interned::from).collect();
         // Flags pinned by use.force/use.mask (global, package-level and the stable
         // variants): hard profile decisions, never ceded.
-        let forced_masked = self.force_mask.pins(cpv, stable, &iuse_flags);
+        let forced_masked =
+            self.force_mask
+                .pins(cpv, slot.as_ref().map(|s| s.as_str()), stable, &iuse_flags);
         // Only flags mentioned in the *violated* clause(s), not the whole
         // REQUIRED_USE tree: a package can have several independent top-level
         // clauses (e.g. util-linux's `python? ( ... ) su? ( pam )`), and one
@@ -760,7 +774,13 @@ impl PackageRepository for Adapter<'_> {
             let iuse: std::collections::HashSet<Interned<DefaultInterner>> = meta
                 .map(|m| m.iuse.iter().map(Interned::from).collect())
                 .unwrap_or_default();
-            self.force_mask.apply(&mut cfg, cpv, stable, &iuse);
+            self.force_mask.apply(
+                &mut cfg,
+                cpv,
+                slot.as_ref().map(|s| s.as_str()),
+                stable,
+                &iuse,
+            );
         }
 
         // Level-C: cede this package's REQUIRED_USE flags to the solver.

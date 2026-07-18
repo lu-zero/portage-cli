@@ -49,7 +49,15 @@ pub fn find_violations(
             resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
         let stable = accept_keywords.is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
         let iuse = iuse_set(cache);
-        apply_force_mask(&mut effective, force_mask, &cpv, stable, &iuse);
+        let slot_key = pkg.slot();
+        apply_force_mask(
+            &mut effective,
+            force_mask,
+            &cpv,
+            slot_key.as_ref().map(|s| s.as_str()),
+            stable,
+            &iuse,
+        );
         apply_ceded(&mut effective, *pkg.cpn(), ceded);
 
         // `effective` already has this package's IUSE defaults folded in, so

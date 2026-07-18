@@ -63,11 +63,12 @@ pub fn apply_force_mask(
     cfg: &mut UseConfig,
     force_mask: &ForceMask,
     cpv: &Cpv,
+    slot: Option<&str>,
     stable: bool,
     iuse: &HashSet<Interned<DefaultInterner>>,
 ) {
     if !force_mask.is_empty() {
-        force_mask.apply(cfg, cpv, stable, iuse);
+        force_mask.apply(cfg, cpv, slot, stable, iuse);
     }
 }
 
@@ -105,7 +106,15 @@ pub fn effective_use(
         env_use,
     );
     let iuse = iuse_set(cache);
-    apply_force_mask(&mut cfg, force_mask, &cpv, stable, &iuse);
+    let slot_key = pkg.slot();
+    apply_force_mask(
+        &mut cfg,
+        force_mask,
+        &cpv,
+        slot_key.as_ref().map(|s| s.as_str()),
+        stable,
+        &iuse,
+    );
     apply_ceded(&mut cfg, *pkg.cpn(), ceded);
     cfg
 }
@@ -262,7 +271,7 @@ mod tests {
         let mut fm = ForceMask::default();
         fm.use_force = vec![Interned::intern("multilib")];
         let iuse: HashSet<_> = [Interned::intern("multilib")].into_iter().collect();
-        apply_force_mask(&mut cfg, &fm, &cpv, false, &iuse);
+        apply_force_mask(&mut cfg, &fm, &cpv, None, false, &iuse);
 
         assert!(matches!(
             cfg.get(Interned::intern("multilib")),
