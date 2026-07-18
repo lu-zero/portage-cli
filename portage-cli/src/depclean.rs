@@ -34,7 +34,7 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, Dep, DepEntry};
 use portage_vdb::InstalledPackage;
 
-use crate::emerge::parse_atoms;
+use crate::emerge::parse_atoms_strict;
 use crate::merge::confirm_action;
 use crate::preserve_libs;
 use crate::vdb::open_cli_vdb;
@@ -258,8 +258,15 @@ pub async fn run(cli: &cli::Cli) -> Result<()> {
     if world_atoms.is_empty() {
         bail!("@world is empty — refusing to depclean (see `man emerge`'s --depclean safety note)");
     }
-    let exclude_atoms = parse_atoms(&cli.merge_flags.exclude);
-    let target_atoms = parse_atoms(&cli.atoms);
+    // Strict parse: a typo on the command line must not degrade a targeted
+    // depclean into a full-system clean (empty target_atoms ⇒ unrestricted).
+    let exclude_atoms = parse_atoms_strict(&cli.merge_flags.exclude)?;
+    let target_atoms = parse_atoms_strict(&cli.atoms)?;
+    if !cli.atoms.is_empty() && target_atoms.is_empty() {
+        // Unreachable with strict parse (non-empty raw always yields non-empty
+        // or Err), kept as a belt-and-braces guard against future refactors.
+        bail!("depclean: no valid target atoms");
+    }
     let with_bdeps = cli.merge_flags.with_bdeps;
 
     let installed: Vec<InstalledPackage> = vdb.packages().into_iter().collect();
@@ -439,6 +446,21 @@ mod tests {
         let exclude = vec![Dep::parse("dev-libs/orphan").unwrap()];
         let cleanlist = compute_cleanlist(&installed, &[], &exclude, &[], false);
         assert!(cleanlist.is_empty());
+    }
+
+    #[test]
+    fn parse_atoms_strict_rejects_invalid_tokens() {
+        // Guard the critical safety property: invalid CLI atoms must not be
+        // silently dropped (which would empty target_atoms and open full-system
+        // depclean). parse_atoms_strict is what `run` uses.
+        use crate::emerge::parse_atoms_strict;
+        let bad = vec!["not a valid atom!!!".to_string()];
+        assert!(parse_atoms_strict(&bad).is_err());
+        let mixed = vec!["dev-libs/foo".to_string(), ">=broken".to_string()];
+        assert!(parse_atoms_strict(&mixed).is_err());
+        let good = vec!["dev-libs/foo".to_string(), ">=sys-apps/bar-1".to_string()];
+        let parsed = parse_atoms_strict(&good).unwrap();
+        assert_eq!(parsed.len(), 2);
     }
 
     #[test]

@@ -24,6 +24,16 @@ pub(crate) fn parse_atoms(raw: &[String]) -> Vec<portage_atom::Dep> {
         .collect()
 }
 
+/// Parse every token as a [`portage_atom::Dep`], failing the whole list on the
+/// first invalid atom. Use this for destructive operations (`-c`/`--depclean`)
+/// where dropping a typo would change the meaning of the command (e.g. a
+/// targeted depclean silently becoming a full-system clean).
+pub(crate) fn parse_atoms_strict(raw: &[String]) -> Result<Vec<portage_atom::Dep>> {
+    raw.iter()
+        .map(|s| portage_atom::Dep::from_str(s).with_context(|| format!("invalid atom '{s}'")))
+        .collect()
+}
+
 /// Expand `@set` references in `raw` to concrete atoms, leaving plain atoms
 /// untouched. Sets are a portage-config concept (not PMS); resolution lives in
 /// `portage_repo::SetResolver`. The profile stack comes from
