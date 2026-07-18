@@ -1463,7 +1463,7 @@ async fn run_merge(
     // preserved-libs registry from a prior unmerge — reclaim those keys.
     {
         let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
-        registry.reclaim_provided(&vdb);
+        registry.reclaim(&vdb, root);
         registry.store();
     }
 

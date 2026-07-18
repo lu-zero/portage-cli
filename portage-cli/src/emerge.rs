@@ -573,6 +573,7 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
         }
         println!(">>> unmerge success: {pkg}");
     }
+    registry.reclaim(&vdb, &root);
     registry.store();
 
     // Refresh ld.so.cache / profile.env after removals — same as merge does

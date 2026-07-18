@@ -123,10 +123,24 @@ impl PreservedLibsRegistry {
         }
     }
 
+    /// Reclaim preserved-libs after a merge or unmerge batch:
+    ///
+    /// 1. Drop registry paths that a live package's CONTENTS now owns (do not
+    ///    delete — the live package owns them).
+    /// 2. Delete remaining preserved files whose soname is no longer needed by
+    ///    any live package's `NEEDED.ELF.2`, and drop them from the registry.
+    ///
+    /// Best-effort: deletion failures are logged and the path stays registered.
+    pub fn reclaim(&mut self, vdb: &Vdb, root: &Utf8Path) {
+        if self.data.is_empty() {
+            return;
+        }
+        self.reclaim_provided(vdb);
+        self.prune_unneeded(vdb, root);
+    }
+
     /// Drop registry paths that a currently installed package's CONTENTS now
-    /// owns. Call after a successful merge so installing a library provider
-    /// reclaims files left by an earlier preserve-libs run (without deleting
-    /// them — the live package owns them).
+    /// owns (without deleting — the live package owns them).
     pub fn reclaim_provided(&mut self, vdb: &Vdb) {
         if self.data.is_empty() {
             return;
@@ -155,6 +169,77 @@ impl PreservedLibsRegistry {
             }
             let reclaimed = entry.paths.len() - remaining.len();
             println!(">>> preserved-libs: reclaimed {reclaimed} path(s) from {key}");
+            if remaining.is_empty() {
+                remove_keys.push(key.clone());
+            } else {
+                updates.push((key.clone(), remaining));
+            }
+        }
+        for key in remove_keys {
+            self.data.remove(&key);
+        }
+        for (key, remaining) in updates {
+            if let Some(entry) = self.data.get_mut(&key) {
+                entry.paths = remaining;
+            }
+        }
+    }
+
+    /// Delete preserved files no live package still needs via `DT_NEEDED`.
+    fn prune_unneeded(&mut self, vdb: &Vdb, root: &Utf8Path) {
+        if self.data.is_empty() {
+            return;
+        }
+        // (multilib category, soname) still required by something installed.
+        let mut needed: HashSet<(String, String)> = HashSet::new();
+        for pkg in vdb.packages() {
+            for rec in package_needed(&pkg) {
+                for n in rec.needed {
+                    needed.insert((rec.category.clone(), n));
+                }
+            }
+        }
+
+        let mut remove_keys = Vec::new();
+        let mut updates: Vec<(String, Vec<String>)> = Vec::new();
+        for (key, entry) in &self.data {
+            let mut remaining = Vec::new();
+            for path_s in &entry.paths {
+                let path = Utf8Path::new(path_s);
+                let rel = path_s.trim_start_matches('/');
+                let abs = root.join(rel);
+                if !abs.exists() {
+                    println!(">>> preserved-libs: dropped missing {path}");
+                    continue;
+                }
+                let still_needed = elfscan::scan_file(abs.as_std_path())
+                    .and_then(|info| {
+                        let soname = info.soname?;
+                        Some(needed.contains(&(info.category, soname)))
+                    })
+                    // Unreadable / non-ELF: keep (safe direction).
+                    .unwrap_or(true);
+                if still_needed {
+                    remaining.push(path_s.clone());
+                    continue;
+                }
+                // Orphan preserved file — remove from disk.
+                match std::fs::remove_file(abs.as_std_path()) {
+                    Ok(()) => {
+                        println!(">>> preserved-libs: removed unused {path}");
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        println!(">>> preserved-libs: dropped missing {path}");
+                    }
+                    Err(e) => {
+                        eprintln!("warning: preserved-libs: could not remove {path}: {e}");
+                        remaining.push(path_s.clone());
+                    }
+                }
+            }
+            if remaining.len() == entry.paths.len() {
+                continue;
+            }
             if remaining.is_empty() {
                 remove_keys.push(key.clone());
             } else {
@@ -418,11 +503,32 @@ mod tests {
             ],
         );
         let vdb = Vdb::open(&vdb_root).unwrap();
-        reg.reclaim_provided(&vdb);
-        // libfoo path reclaimed; orphan remains registered.
+        reg.reclaim(&vdb, &root);
+        // libfoo path reclaimed (live-owned); orphan has no on-disk ELF so
+        // prune_unneeded keeps it (safe direction) unless missing entirely.
         let paths: HashSet<_> = reg.all_paths().collect();
         assert!(!paths.contains(&Utf8PathBuf::from("/usr/lib64/libfoo.so.1")));
-        assert!(paths.contains(&Utf8PathBuf::from("/usr/lib64/liborphan.so.1")));
+        // Missing file is dropped by prune_unneeded's NotFound branch.
+        assert!(!paths.contains(&Utf8PathBuf::from("/usr/lib64/liborphan.so.1")));
+    }
+
+    #[test]
+    fn reclaim_drops_missing_orphan_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let mut reg = PreservedLibsRegistry::load(&root);
+        reg.register(
+            &Cpv::parse("sys-libs/old-1.0").unwrap(),
+            "0",
+            1,
+            vec![Utf8PathBuf::from("/usr/lib64/gone.so.1")],
+        );
+        // Empty VDB — nothing needs the path, and the file is missing.
+        let vdb_root = root.join("var/db/pkg");
+        std::fs::create_dir_all(&vdb_root).unwrap();
+        let vdb = Vdb::open(&vdb_root).unwrap();
+        reg.reclaim(&vdb, &root);
+        assert_eq!(reg.all_paths().count(), 0);
     }
 
     #[test]

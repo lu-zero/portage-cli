@@ -355,6 +355,7 @@ pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<
         }
         println!(">>> depclean success: {pkg}");
     }
+    registry.reclaim(&vdb, &root);
     registry.store();
 
     if let Err(e) = crate::maint::env::env_update(&root) {
