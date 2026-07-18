@@ -101,7 +101,14 @@ impl PreservedLibsRegistry {
         }
         match serde_json::to_string_pretty(&self.data) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&self.path, json) {
+                let tmp = self.path.with_file_name(format!(
+                    "{}.tmp",
+                    self.path.file_name().unwrap_or("preserved_libs_registry")
+                ));
+                if let Err(e) =
+                    std::fs::write(&tmp, &json).and_then(|_| std::fs::rename(&tmp, &self.path))
+                {
+                    let _ = std::fs::remove_file(tmp.as_std_path());
                     eprintln!("warning: could not write {}: {e}", self.path);
                 }
             }

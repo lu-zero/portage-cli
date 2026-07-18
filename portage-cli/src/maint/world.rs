@@ -191,7 +191,11 @@ pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
     } else {
         lines.join("\n") + "\n"
     };
-    if let Err(e) = std::fs::write(&path, new_content) {
+    // Atomic replace: write to a sibling tempfile then rename so a crash
+    // mid-write cannot truncate world.
+    let tmp = path.with_file_name(format!("{}.tmp", path.file_name().unwrap_or("world")));
+    if let Err(e) = std::fs::write(&tmp, &new_content).and_then(|_| std::fs::rename(&tmp, &path)) {
+        let _ = std::fs::remove_file(tmp.as_std_path());
         eprintln!("warning: could not update {path}: {e}");
     }
 }
