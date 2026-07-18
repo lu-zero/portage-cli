@@ -114,11 +114,15 @@ pub(crate) async fn run_merge_plan(
             .with_context(|| format!("{flag}: PKGDIR {pkgdir} is not writable"))?;
     }
 
+    let usepkgonly = merge_flags.usepkgonly;
+
     // Implication chain (portage actions.py): -g ⇒ --usepkg, -G ⇒ --getbinpkg +
-    // binpkg-only (no source). So both enable local reuse; local overrides remote.
-    let want_local = usepkg || getbinpkg || getbinpkgonly;
+    // binpkg-only (no source). -K is its own local-only binpkg-only flag. So
+    // all of -k/-K/-g/-G enable local reuse; local overrides remote; -K/-G
+    // both refuse to fall back to a source build.
+    let want_local = usepkg || usepkgonly || getbinpkg || getbinpkgonly;
     let want_remote = getbinpkg || getbinpkgonly;
-    let enforce_no_source = getbinpkgonly;
+    let enforce_no_source = usepkgonly || getbinpkgonly;
 
     // Open the local binpkg index once if any binpkg reuse is in effect.
     let binpkg_index = if want_local {
@@ -417,13 +421,13 @@ async fn merge_sequential(
             }
         } else if enforce_no_source {
             eprintln!(
-                ">>> No binary package for {} (local or remote) and --getbinpkgonly is set",
+                ">>> No binary package for {} (local or remote) and -K/--getbinpkgonly is set",
                 planned.cpv
             );
             failures.push(MergeFailure {
                 cpv: planned.cpv.to_string(),
                 log: work_base.join(planned.cpv.to_string()).join("build.log"),
-                cause: "no matching binpkg and source builds disabled (--getbinpkgonly)".into(),
+                cause: "no matching binpkg and source builds disabled (-K/--getbinpkgonly)".into(),
             });
             if !keep_going {
                 break;
@@ -639,7 +643,7 @@ async fn merge_parallel(
             } else if remote_url.is_some() {
                 " (binary, remote)"
             } else if enforce_no_source {
-                " (no binpkg — blocked by --getbinpkgonly)"
+                " (no binpkg — blocked by -K/--getbinpkgonly)"
             } else {
                 ""
             };
@@ -702,7 +706,7 @@ async fn merge_parallel(
                     }
                 } else if enforce_no_source {
                     Err(anyhow::anyhow!(
-                        "no matching binpkg and source builds disabled (--getbinpkgonly)"
+                        "no matching binpkg and source builds disabled (-K/--getbinpkgonly)"
                     ))
                 } else {
                     ebuild::build_and_merge(
