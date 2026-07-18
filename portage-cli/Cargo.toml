@@ -77,6 +77,8 @@ humansize = { workspace = true }
 humantime = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
+flume = { workspace = true }
+tempfile = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 fakeroost = { workspace = true, optional = true }
@@ -86,4 +88,12 @@ hakoniwa = { workspace = true, optional = true }
 pseudoroot = { workspace = true, optional = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+criterion = { workspace = true, features = ["html_reports"] }
+
+[[bench]]
+name = "elfscan"
+harness = false
+
+[[example]]
+name = "elfscan_bench"
+path = "examples/elfscan_bench.rs"
