@@ -1,6 +1,6 @@
 //! Effective per-package USE after profile/env overrides and IUSE defaults.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, DepEntry, Version};
@@ -9,6 +9,7 @@ use portage_atom_pubgrub::{
 };
 use portage_metadata::{CacheEntry, IUseDefault as MetaIUseDefault};
 
+use crate::force_mask::ForceMask;
 use crate::repo::{self, RepoData};
 
 /// Re-apply the solver's ceded (`--autosolve-use`) flag decisions on top of an
@@ -54,8 +55,34 @@ pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, I
         .collect()
 }
 
+/// Apply profile force/mask as the unconditional post-fold step (Portage's
+/// `use.force`/`use.mask` outside the USE_ORDER stack). Must run **after**
+/// `resolve_effective_use` and **before** [`apply_ceded`] so env-level `-*`
+/// cannot wipe forced flags (and ceded decisions still win last).
+pub fn apply_force_mask(
+    cfg: &mut UseConfig,
+    force_mask: &ForceMask,
+    cpv: &Cpv,
+    stable: bool,
+    iuse: &HashSet<Interned<DefaultInterner>>,
+) {
+    if !force_mask.is_empty() {
+        force_mask.apply(cfg, cpv, stable, iuse);
+    }
+}
+
+/// IUSE set as interned flags for force/mask filtering.
+pub fn iuse_set(cache: &CacheEntry) -> HashSet<Interned<DefaultInterner>> {
+    cache.metadata.iuse.iter().map(Interned::from).collect()
+}
+
 /// The full effective USE fold for one `(pkg, ver)`: IUSE defaults, `pre_env`,
-/// `package_use`, `env_use`, then any `--autosolve-use` ceded flags on top.
+/// `package_use`, `env_use`, then profile force/mask, then any
+/// `--autosolve-use` ceded flags on top.
+///
+/// Force/mask is applied post-fold (not as synthetic `package.use`) so a
+/// process-env `USE="-* …"` cannot clear forced flags — matching
+/// [`crate::repo::Adapter::desired_use`] and real Portage.
 pub fn effective_use(
     pre_env: &str,
     env_use: &str,
@@ -63,6 +90,8 @@ pub fn effective_use(
     pkg: &PortagePackage,
     ver: &Version,
     cache: &CacheEntry,
+    force_mask: &ForceMask,
+    stable: bool,
     ceded: &[CededFlag],
 ) -> UseConfig {
     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
@@ -75,6 +104,8 @@ pub fn effective_use(
         package_use,
         env_use,
     );
+    let iuse = iuse_set(cache);
+    apply_force_mask(&mut cfg, force_mask, &cpv, stable, &iuse);
     apply_ceded(&mut cfg, *pkg.cpn(), ceded);
     cfg
 }
@@ -129,12 +160,24 @@ pub fn evaluated_deps<'a>(
     package_use: &[(Dep, Vec<UseOverride>)],
     pkg: &PortagePackage,
     ver: &Version,
+    force_mask: &ForceMask,
+    stable: bool,
 ) -> Option<EvaluatedDeps<'a>> {
     let cache = repo::find_cache(data, pkg, ver)?;
     // Pre-/mid-solve utility (feeds the solver's own dependency-graph
     // construction) — the solver's ceded (`--autosolve-use`) decisions don't
     // exist yet at this point, so there is nothing to apply here.
-    let effective = effective_use(pre_env, env_use, package_use, pkg, ver, cache, &[]);
+    let effective = effective_use(
+        pre_env,
+        env_use,
+        package_use,
+        pkg,
+        ver,
+        cache,
+        force_mask,
+        stable,
+        &[],
+    );
     Some(EvaluatedDeps { cache, effective })
 }
 
@@ -201,6 +244,29 @@ mod tests {
         assert!(matches!(
             cfg.get(Interned::intern("gawk")),
             UseFlagState::Disabled
+        ));
+    }
+
+    /// Critical: force must survive env-level `-*`, same shape as the ceded fix.
+    #[test]
+    fn apply_force_mask_survives_an_env_level_wildcard_reset() {
+        use crate::force_mask::ForceMask;
+
+        let cpv = Cpv::new(Cpn::new("sys-devel", "gcc"), "14.2.0".parse().unwrap());
+        let mut cfg = resolve_effective_use(&HashMap::new(), "", &cpv, None, &[], "-*");
+        assert!(matches!(
+            cfg.get(Interned::intern("multilib")),
+            UseFlagState::Disabled
+        ));
+
+        let mut fm = ForceMask::default();
+        fm.use_force = vec![Interned::intern("multilib")];
+        let iuse: HashSet<_> = [Interned::intern("multilib")].into_iter().collect();
+        apply_force_mask(&mut cfg, &fm, &cpv, false, &iuse);
+
+        assert!(matches!(
+            cfg.get(Interned::intern("multilib")),
+            UseFlagState::Enabled
         ));
     }
 }

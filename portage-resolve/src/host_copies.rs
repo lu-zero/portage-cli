@@ -181,6 +181,8 @@ fn visit_unsatisfied(
         ctx.adapter.package_use,
         pkg,
         ver,
+        ctx.adapter.force_mask,
+        false,
     ) else {
         return;
     };

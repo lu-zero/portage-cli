@@ -101,6 +101,8 @@ fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
             cand.ctx.package_use,
             consumer,
             consumer_ver,
+            cand.ctx.force_mask,
+            false,
         ) else {
             continue;
         };
@@ -172,12 +174,14 @@ mod tests {
         let root_cpns = HashSet::new();
         let reinstall = HashSet::new();
         let roots = empty_roots();
+        let fm = crate::force_mask::ForceMask::default();
         let ctx = TrimCtx {
             roots: &roots,
             data: &data,
             pre_env: "",
             env_use: "",
             package_use: &[],
+            force_mask: &fm,
             root_cpns: &root_cpns,
             reinstall_cpns: &reinstall,
         };

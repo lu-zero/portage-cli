@@ -6,7 +6,7 @@ use portage_atom::{Cpn, Cpv, Version};
 use portage_atom_pubgrub::{CededFlag, PortagePackage, UseFlagState, resolve_effective_use};
 use portage_repo::{Manifest, ManifestEntry};
 
-use crate::effective_use::{apply_ceded, iuse_defaults};
+use crate::effective_use::{apply_ceded, apply_force_mask, iuse_defaults, iuse_set};
 use crate::repo::{RepoData, ResolvePolicy, find_cache};
 
 /// Per-package download size, in **bytes**, of the distfiles that are not
@@ -54,6 +54,11 @@ pub fn compute(
             policy.package_use,
             policy.env_use,
         );
+        let stable = policy
+            .accept_keywords
+            .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
+        let iuse = iuse_set(cache);
+        apply_force_mask(&mut effective, policy.force_mask, &cpv, stable, &iuse);
         apply_ceded(&mut effective, *pkg.cpn(), ceded);
         let enabled = |flag: &str| -> bool {
             matches!(effective.get(Interned::intern(flag)), UseFlagState::Enabled)

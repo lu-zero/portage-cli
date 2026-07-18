@@ -608,6 +608,10 @@ pub(super) struct PrettyCtx<'a> {
     pub slot_op_cpns: &'a std::collections::HashSet<Cpn>,
     pub verbose: u8,
     pub ceded: &'a [CededFlag],
+    /// Profile force/mask applied post-fold (not via package.use).
+    pub force_mask: &'a portage_resolve::force_mask::ForceMask,
+    /// For deciding whether `*.stable.*` force/mask applies to a version.
+    pub accept_keywords: &'a portage_resolve::repo::AcceptKeywords,
     /// Local binpkg index, when `-k`/`-K` (usepkg/usepkgonly) is active —
     /// used to show `[binary ...]` instead of `[ebuild ...]` for an entry
     /// whose USE matches an available binpkg, matching real emerge's `-p`.
@@ -665,6 +669,8 @@ fn print_pretty_with_roots(
         slot_op_cpns,
         verbose,
         ceded,
+        force_mask,
+        accept_keywords,
         binpkg_index,
     } = ctx;
     let mut out = anstream::stdout();
@@ -695,6 +701,17 @@ fn print_pretty_with_roots(
             .unwrap_or_default();
         let mut effective_use =
             resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
+        if let Some(c) = cache {
+            let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
+            let iuse = super::effective_use::iuse_set(c);
+            super::effective_use::apply_force_mask(
+                &mut effective_use,
+                force_mask,
+                &cpv,
+                stable,
+                &iuse,
+            );
+        }
         super::effective_use::apply_ceded(&mut effective_use, *cpn, ceded);
 
         // Would `-k`/`-K` reuse a local binpkg for this exact (cpv, USE)?

@@ -27,6 +27,8 @@ pub struct TrimCtx<'a> {
     pub env_use: &'a str,
     /// Per-version `package.use` overrides.
     pub package_use: &'a [(portage_atom::Dep, Vec<UseOverride>)],
+    /// Profile force/mask (post-fold; not smuggled via package.use).
+    pub force_mask: &'a crate::force_mask::ForceMask,
     /// CPNs explicitly requested on the command line — never trimmed.
     pub root_cpns: &'a HashSet<Cpn>,
     /// CPNs the solver kept for a same-version USE rebuild — never trimmed.
@@ -100,6 +102,8 @@ fn runtime_required_cpns(order: &[(PortagePackage, Version)], ctx: &TrimCtx<'_>)
             ctx.package_use,
             pkg,
             ver,
+            ctx.force_mask,
+            false,
         ) else {
             continue;
         };
@@ -159,6 +163,8 @@ fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
             cand.ctx.package_use,
             consumer,
             consumer_ver,
+            cand.ctx.force_mask,
+            false,
         ) else {
             continue;
         };
@@ -264,12 +270,14 @@ mod tests {
         let root_cpns: HashSet<Cpn> = [*consumer.0.cpn()].into_iter().collect();
         let reinstall = HashSet::new();
         let roots = empty_roots();
+        let fm = crate::force_mask::ForceMask::default();
         let ctx = TrimCtx {
             roots: &roots,
             data: &data,
             pre_env: "",
             env_use: "",
             package_use: &[],
+            force_mask: &fm,
             root_cpns: &root_cpns,
             reinstall_cpns: &reinstall,
         };
@@ -306,12 +314,14 @@ mod tests {
         let root_cpns = HashSet::new();
         let reinstall = HashSet::new();
         let roots = empty_roots();
+        let fm = crate::force_mask::ForceMask::default();
         let ctx = TrimCtx {
             roots: &roots,
             data: &data,
             pre_env: "",
             env_use: "",
             package_use: &[],
+            force_mask: &fm,
             root_cpns: &root_cpns,
             reinstall_cpns: &reinstall,
         };

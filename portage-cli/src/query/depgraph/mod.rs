@@ -583,16 +583,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         }
     };
 
-    // Fold per-package profile force/mask and the Level-C ceded flag values back
-    // into the effective USE used for display, the REQUIRED_USE check, and
-    // autounmask, by appending synthetic `=cpv flag`/`-flag` package.use entries.
-    // The force/mask entries surface package.use.force/mask (+ stable variants)
-    // in the plan — e.g. crossdev's multilib/cet on cross-* packages — mirroring
-    // what `desired_use` already applied for the solver. With no force/mask policy
-    // and --autosolve-use off this is a no-op and `package_use` is unchanged
-    // (parity preserved).
+    // Fold Level-C ceded flag values into package.use for report/autounmask
+    // consumers that still walk that list. Force/mask is **not** smuggled here
+    // anymore — it is applied as a true post-fold step (like Portage) via
+    // `effective_use::apply_force_mask` / `Adapter::desired_use`, so env-level
+    // `USE="-* …"` cannot wipe forced flags on the display/build path.
     let ceded = provider.solved_use_decisions();
-    let package_use: Vec<(Dep, Vec<UseOverride>)> = if ceded.is_empty() && force_mask.is_empty() {
+    let package_use: Vec<(Dep, Vec<UseOverride>)> = if ceded.is_empty() {
         package_use
     } else {
         let mut by_cpn: HashMap<Cpn, Vec<&portage_atom_pubgrub::CededFlag>> = HashMap::new();
@@ -604,46 +601,19 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             if pkg.is_virtual() {
                 continue;
             }
+            let Some(flags) = by_cpn.get(pkg.cpn()) else {
+                continue;
+            };
             let atom = format!("={}/{}-{}", pkg.cpn().category, pkg.cpn().package, ver);
             let Ok(dep) = Dep::parse(&atom) else { continue };
-
-            // Profile force/mask for this resolved version (mask rendered as
-            // `-flag`; force as `flag`). Stable variants apply only when the
-            // version is merged due to a stable keyword.
-            if !force_mask.is_empty() {
-                let cpv = Cpv::new(*pkg.cpn(), ver.clone());
-                let cache = repo::find_cache(&data, pkg, ver);
-                let keywords = cache.map(|c| c.metadata.keywords.as_slice()).unwrap_or(&[]);
-                let slot = cache.map(|c| c.metadata.slot.slot);
-                let stable = accept_keywords.is_stable(keywords, &cpv, slot);
-                let iuse: HashSet<Interned<DefaultInterner>> = cache
-                    .map(|c| c.metadata.iuse.iter().map(Interned::from).collect())
-                    .unwrap_or_default();
-                let (forced, masked) = force_mask.effective(&cpv, stable, &iuse);
-                if !forced.is_empty() || !masked.is_empty() {
-                    let mut overrides: Vec<UseOverride> = forced
-                        .iter()
-                        .map(|&flag| UseOverride { flag, enable: true })
-                        .collect();
-                    overrides.extend(masked.iter().map(|&flag| UseOverride {
-                        flag,
-                        enable: false,
-                    }));
-                    combined.push((dep.clone(), overrides));
-                }
-            }
-
-            // Level-C: the solver's chosen ceded-flag values (already interned).
-            if let Some(flags) = by_cpn.get(pkg.cpn()) {
-                let overrides = flags
-                    .iter()
-                    .map(|c| UseOverride {
-                        flag: c.flag,
-                        enable: c.value,
-                    })
-                    .collect();
-                combined.push((dep, overrides));
-            }
+            let overrides = flags
+                .iter()
+                .map(|c| UseOverride {
+                    flag: c.flag,
+                    enable: c.value,
+                })
+                .collect();
+            combined.push((dep, overrides));
         }
         combined
     };
@@ -782,6 +752,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
+        force_mask: &force_mask,
         root_cpns: &root_cpns,
         reinstall_cpns: &reinstall_cpns,
     };
@@ -999,6 +970,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     slot_op_cpns: &slot_op_cpns,
                     verbose,
                     ceded: &ceded,
+                    force_mask: &force_mask,
+                    accept_keywords: &accept_keywords,
                     binpkg_index,
                 },
                 &plan_entries,
@@ -1060,8 +1033,16 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             output::report_solver_violations(&violations);
         }
 
-        let ru_violations =
-            required_use::find_violations(&data, &order, &pre_env, &env_use, &package_use, &ceded);
+        let ru_violations = required_use::find_violations(
+            &data,
+            &order,
+            &pre_env,
+            &env_use,
+            &package_use,
+            &force_mask,
+            &accept_keywords,
+            &ceded,
+        );
         if !ru_violations.is_empty() {
             output::report_required_use(&ru_violations);
         }
@@ -1108,34 +1089,48 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             let ver = &entry.version;
             let cpn = pkg.cpn();
             let cpv = Cpv::new(*cpn, ver.clone());
-            let (depend, bdepend, mut flags) =
-                if let Some(cache) = repo::find_cache(&data, pkg, ver) {
-                    let effective = effective_use::effective_use(
-                        &pre_env,
-                        &env_use,
-                        &package_use,
-                        pkg,
-                        ver,
-                        cache,
-                        &ceded,
-                    );
-                    (
-                        cache.metadata.depend.to_vec(),
-                        cache.metadata.bdepend.to_vec(),
-                        effective.enabled_flags(),
-                    )
-                } else {
-                    let mut effective = portage_atom_pubgrub::resolve_effective_use(
-                        &HashMap::new(),
-                        &pre_env,
-                        &cpv,
-                        pkg.slot(),
-                        &package_use,
-                        &env_use,
-                    );
-                    effective_use::apply_ceded(&mut effective, *cpn, &ceded);
-                    (Vec::new(), Vec::new(), effective.enabled_flags())
-                };
+            let (depend, bdepend, mut flags) = if let Some(cache) =
+                repo::find_cache(&data, pkg, ver)
+            {
+                let stable = accept_keywords.is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
+                let effective = effective_use::effective_use(
+                    &pre_env,
+                    &env_use,
+                    &package_use,
+                    pkg,
+                    ver,
+                    cache,
+                    &force_mask,
+                    stable,
+                    &ceded,
+                );
+                (
+                    cache.metadata.depend.to_vec(),
+                    cache.metadata.bdepend.to_vec(),
+                    effective.enabled_flags(),
+                )
+            } else {
+                let mut effective = portage_atom_pubgrub::resolve_effective_use(
+                    &HashMap::new(),
+                    &pre_env,
+                    &cpv,
+                    pkg.slot(),
+                    &package_use,
+                    &env_use,
+                );
+                // No cache ⇒ no IUSE/keywords; still apply global force/mask
+                // and ceded so build USE stays consistent with the solver.
+                let empty_iuse = HashSet::new();
+                effective_use::apply_force_mask(
+                    &mut effective,
+                    &force_mask,
+                    &cpv,
+                    false,
+                    &empty_iuse,
+                );
+                effective_use::apply_ceded(&mut effective, *cpn, &ceded);
+                (Vec::new(), Vec::new(), effective.enabled_flags())
+            };
             flags.sort();
             flags.dedup();
             // A cross-derived cpn (`cross-<tuple>/gcc`) has no on-disk tree of

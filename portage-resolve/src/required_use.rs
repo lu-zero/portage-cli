@@ -1,8 +1,9 @@
 use portage_atom::{Cpv, Dep, Version};
 use portage_atom_pubgrub::{CededFlag, PortagePackage, UseOverride, resolve_effective_use};
 
-use crate::effective_use::{apply_ceded, iuse_defaults};
-use crate::repo::{RepoData, find_cache};
+use crate::effective_use::{apply_ceded, apply_force_mask, iuse_defaults, iuse_set};
+use crate::force_mask::ForceMask;
+use crate::repo::{AcceptKeywords, RepoData, find_cache};
 
 /// A `REQUIRED_USE` constraint left unsatisfied by a planned package's
 /// effective USE.
@@ -26,6 +27,8 @@ pub fn find_violations(
     pre_env: &str,
     env_use: &str,
     package_use: &[(Dep, Vec<UseOverride>)],
+    force_mask: &ForceMask,
+    accept_keywords: &AcceptKeywords,
     ceded: &[CededFlag],
 ) -> Vec<RequiredUseViolation> {
     let mut out = Vec::new();
@@ -44,6 +47,9 @@ pub fn find_violations(
         let defaults = iuse_defaults(cache);
         let mut effective =
             resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
+        let stable = accept_keywords.is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
+        let iuse = iuse_set(cache);
+        apply_force_mask(&mut effective, force_mask, &cpv, stable, &iuse);
         apply_ceded(&mut effective, *pkg.cpn(), ceded);
 
         // `effective` already has this package's IUSE defaults folded in, so
