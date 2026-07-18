@@ -129,9 +129,20 @@ fn will_build(cli: &Cli) -> bool {
     if cli.pretend {
         return false;
     }
+    // Removals and staged builds mutate the root even with no atoms /
+    // without going through the default emerge path.
+    if cli.unmerge || cli.depclean {
+        return true;
+    }
     match &cli.applet {
         None => !cli.atoms.is_empty() && !cli.search && !cli.searchdesc,
-        Some(Applet::Ebuild { .. } | Applet::Crossdev(_) | Applet::Toolchain(_)) => true,
+        Some(
+            Applet::Ebuild { .. }
+            | Applet::Crossdev(_)
+            | Applet::Toolchain(_)
+            | Applet::Stages(_)
+            | Applet::Depclean { .. },
+        ) => true,
         Some(_) => false,
     }
 }
@@ -419,9 +430,11 @@ mod hakoniwa {
         {
             return false;
         }
+        // Both helpers are required for a complete id-map; having only one
+        // is not enough to spawn a working userns container.
         ["newuidmap", "newgidmap"]
             .iter()
-            .any(|name| which_in_path(name))
+            .all(|name| which_in_path(name))
     }
 
     fn which_in_path(name: &str) -> bool {
