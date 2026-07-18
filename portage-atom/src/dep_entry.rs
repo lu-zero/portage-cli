@@ -410,7 +410,7 @@ mod tests {
     use super::*;
     use crate::dep::Blocker;
     use crate::use_dep::{UseDefault, UseDepKind};
-    use crate::version::{Operator, Revision, Version};
+    use crate::version::{Operator, Version};
 
     #[test]
     fn empty_string() {
@@ -912,37 +912,10 @@ mod tests {
     #[test]
     fn test_glob_version_matching() {
         // PMS: =1.2* should match 1.2.3, 1.2.4, etc.
-        let v1_2_star = Version {
-            numbers: vec![1, 2].into(),
-            letter: None,
-            suffixes: vec![],
-            revision: Revision(0),
-            raw: None,
-        };
-
-        let v1_2_3 = Version {
-            numbers: vec![1, 2, 3].into(),
-            letter: None,
-            suffixes: vec![],
-            revision: Revision(0),
-            raw: None,
-        };
-
-        let v1_2_4 = Version {
-            numbers: vec![1, 2, 4].into(),
-            letter: None,
-            suffixes: vec![],
-            revision: Revision(0),
-            raw: None,
-        };
-
-        let v1_3 = Version {
-            numbers: vec![1, 3].into(),
-            letter: None,
-            suffixes: vec![],
-            revision: Revision(0),
-            raw: None,
-        };
+        let v1_2_star = Version::new(&[1, 2]);
+        let v1_2_3 = Version::new(&[1, 2, 3]);
+        let v1_2_4 = Version::new(&[1, 2, 4]);
+        let v1_3 = Version::new(&[1, 3]);
 
         // PMS glob matching: 1.2* should match 1.2.3 and 1.2.4
         assert!(v1_2_3.glob_matches(&v1_2_star));

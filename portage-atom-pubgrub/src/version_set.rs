@@ -147,13 +147,8 @@ fn next_after_glob(v: &Version) -> Version {
         next_numbers[n - 1] += 1;
     }
 
-    Version {
-        numbers: next_numbers,
-        letter: None,
-        suffixes: Vec::new(),
-        revision: Revision::default(),
-        raw: None,
-    }
+    // Rebuild digits from the bumped integers so PMS compare stays consistent.
+    Version::new(&next_numbers)
 }
 
 #[cfg(test)]
