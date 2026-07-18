@@ -1459,6 +1459,14 @@ async fn run_merge(
     );
     let installed = vdb.register(&spec)?;
 
+    // A newly registered package may own paths still listed in the
+    // preserved-libs registry from a prior unmerge — reclaim those keys.
+    {
+        let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
+        registry.reclaim_provided(&vdb);
+        registry.store();
+    }
+
     // Copy the ebuild into the VDB entry as `<PF>.ebuild`, as portage does.
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
     let ebuild_dest = installed.path().join(format!("{pf}.ebuild"));

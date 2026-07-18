@@ -123,6 +123,54 @@ impl PreservedLibsRegistry {
         }
     }
 
+    /// Drop registry paths that a currently installed package's CONTENTS now
+    /// owns. Call after a successful merge so installing a library provider
+    /// reclaims files left by an earlier preserve-libs run (without deleting
+    /// them — the live package owns them).
+    pub fn reclaim_provided(&mut self, vdb: &Vdb) {
+        if self.data.is_empty() {
+            return;
+        }
+        let mut live_paths: HashSet<Utf8PathBuf> = HashSet::new();
+        for pkg in vdb.packages() {
+            if let Ok(contents) = pkg.contents() {
+                for e in contents {
+                    if matches!(e.kind, ContentsKind::Obj | ContentsKind::Sym) {
+                        live_paths.insert(e.path);
+                    }
+                }
+            }
+        }
+        let mut remove_keys = Vec::new();
+        let mut updates: Vec<(String, Vec<String>)> = Vec::new();
+        for (key, entry) in &self.data {
+            let remaining: Vec<String> = entry
+                .paths
+                .iter()
+                .filter(|p| !live_paths.contains(Utf8Path::new(p.as_str())))
+                .cloned()
+                .collect();
+            if remaining.len() == entry.paths.len() {
+                continue;
+            }
+            let reclaimed = entry.paths.len() - remaining.len();
+            println!(">>> preserved-libs: reclaimed {reclaimed} path(s) from {key}");
+            if remaining.is_empty() {
+                remove_keys.push(key.clone());
+            } else {
+                updates.push((key.clone(), remaining));
+            }
+        }
+        for key in remove_keys {
+            self.data.remove(&key);
+        }
+        for (key, remaining) in updates {
+            if let Some(entry) = self.data.get_mut(&key) {
+                entry.paths = remaining;
+            }
+        }
+    }
+
     /// Every path currently tracked as preserved, across all packages —
     /// these no longer appear in any live package's CONTENTS, so callers
     /// needing their link metadata must re-scan them directly
@@ -344,6 +392,37 @@ mod tests {
         reg2.store();
         let reloaded2 = PreservedLibsRegistry::load(&root);
         assert_eq!(reloaded2.all_paths().count(), 0);
+    }
+
+    #[test]
+    fn reclaim_provided_drops_paths_owned_by_live_packages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let vdb_root = root.join("var/db/pkg");
+        // Live package that "provides" the previously preserved path.
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "sys-libs",
+            "libfoo-2.0",
+            "obj /usr/lib64/libfoo.so.1 aaaa 0\n",
+            "X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64\n",
+        );
+        let mut reg = PreservedLibsRegistry::load(&root);
+        reg.register(
+            &Cpv::parse("sys-libs/libfoo-1.0").unwrap(),
+            "0",
+            1,
+            vec![
+                Utf8PathBuf::from("/usr/lib64/libfoo.so.1"),
+                Utf8PathBuf::from("/usr/lib64/liborphan.so.1"),
+            ],
+        );
+        let vdb = Vdb::open(&vdb_root).unwrap();
+        reg.reclaim_provided(&vdb);
+        // libfoo path reclaimed; orphan remains registered.
+        let paths: HashSet<_> = reg.all_paths().collect();
+        assert!(!paths.contains(&Utf8PathBuf::from("/usr/lib64/libfoo.so.1")));
+        assert!(paths.contains(&Utf8PathBuf::from("/usr/lib64/liborphan.so.1")));
     }
 
     #[test]
