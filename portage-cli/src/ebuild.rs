@@ -1768,6 +1768,21 @@ async fn try_run_phase_from_env_bz2(
     true
 }
 
+/// Resolve a CONTENTS/image path under `root`, rejecting absolute segments and
+/// `..` components that would escape the intended merge root.
+fn safe_dest_under(root: &Utf8Path, path: &Utf8Path) -> Result<Utf8PathBuf> {
+    let rel = path.strip_prefix("/").unwrap_or(path);
+    for c in rel.components() {
+        match c {
+            camino::Utf8Component::Normal(_) | camino::Utf8Component::CurDir => {}
+            _ => {
+                bail!("unsafe path escapes root {root}: {path}");
+            }
+        }
+    }
+    Ok(root.join(rel))
+}
+
 fn remove_old_unique_files(
     old_contents: &[ContentsEntry],
     new_contents: &[ContentsEntry],
@@ -1780,8 +1795,13 @@ fn remove_old_unique_files(
         if new_paths.contains(&entry.path) || preserve.contains(&entry.path) {
             continue;
         }
-        let rel = entry.path.strip_prefix("/").unwrap_or(&entry.path);
-        let dest = root.join(rel);
+        let dest = match safe_dest_under(root, &entry.path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("warning: skipping unsafe CONTENTS path: {e:#}");
+                continue;
+            }
+        };
 
         match entry.kind {
             ContentsKind::Obj | ContentsKind::Sym => {
@@ -1968,8 +1988,10 @@ fn walk_image(
             let rel = src_path
                 .strip_prefix(image_dir)
                 .map_err(|_| anyhow::anyhow!("path escape: {src_path}"))?;
+            // Reject `..` / absolute components in the relative image path so a
+            // hostile image cannot write outside dest_root.
+            let dest_path = safe_dest_under(dest_root, &Utf8PathBuf::from("/").join(rel))?;
             let installed = Utf8PathBuf::from("/").join(rel);
-            let dest_path = dest_root.join(rel);
 
             let meta = std::fs::symlink_metadata(src_path.as_std_path())
                 .with_context(|| format!("stat {src_path}"))?;
@@ -2415,6 +2437,18 @@ mod tests {
         // image (${D}) still must be wiped: a stale install destination from
         // an earlier attempt must never leak into the current merge.
         assert!(install_subs.contains(&"image"));
+    }
+
+    #[test]
+    fn safe_dest_under_rejects_parent_and_absolute_escapes() {
+        let root = Utf8Path::new("/var/tmp/root");
+        assert_eq!(
+            safe_dest_under(root, Utf8Path::new("/usr/bin/foo")).unwrap(),
+            Utf8PathBuf::from("/var/tmp/root/usr/bin/foo")
+        );
+        assert!(safe_dest_under(root, Utf8Path::new("/../../etc/passwd")).is_err());
+        assert!(safe_dest_under(root, Utf8Path::new("../etc/passwd")).is_err());
+        assert!(safe_dest_under(root, Utf8Path::new("/usr/../etc/passwd")).is_err());
     }
 
     /// Full/Compile/BinpkgMerge start genuinely fresh, so they wipe

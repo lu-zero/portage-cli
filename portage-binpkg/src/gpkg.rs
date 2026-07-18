@@ -205,6 +205,29 @@ pub fn extract_image(container: &Path, dest: &Path) -> Result<()> {
     };
     std::fs::write(&image_tar, bytes)?;
 
+    // Reject absolute members and `..` path components (classic tar slip)
+    // before writing anything under `dest`.
+    let image_listing = String::from_utf8_lossy(&capture(
+        "tar",
+        Command::new("tar").arg("-tf").arg(&image_tar),
+    )?)
+    .into_owned();
+    for member in image_listing.lines() {
+        let m = member.trim();
+        if m.is_empty() {
+            continue;
+        }
+        let p = Path::new(m);
+        if p.is_absolute() || m.starts_with('/') {
+            return Err(Error::Corrupt(format!("absolute path in GPKG image: {m}")));
+        }
+        if p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(Error::Corrupt(format!("path traversal in GPKG image: {m}")));
+        }
+    }
+
     // Extract with the `image/` prefix stripped, preserving owners/mode/xattrs.
     std::fs::create_dir_all(dest)?;
     run(
@@ -218,7 +241,59 @@ pub fn extract_image(container: &Path, dest: &Path) -> Result<()> {
             .arg(&image_tar)
             .arg("-C")
             .arg(dest),
-    )
+    )?;
+
+    // Belt-and-braces: refuse to leave extracted trees that escaped dest
+    // (e.g. via symlink races). Walk the result and check every path.
+    validate_tree_under(dest)?;
+    Ok(())
+}
+
+/// Ensure every path under `root` stays within it (no symlink-escape after extract).
+fn validate_tree_under(root: &Path) -> Result<()> {
+    let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let read = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            // Use the path as-is (no follow) for the containment check of the
+            // directory entry itself; canonicalize only non-symlinks so a
+            // symlink pointing outside is still allowed *as a symlink* (Portage
+            // images contain absolute target symlinks) but its *location* must
+            // stay under root.
+            let meta = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.file_type().is_symlink() {
+                // Symlink *path* must live under root; target may be absolute.
+                if !path.starts_with(root) && !path.starts_with(&root_canon) {
+                    return Err(Error::Corrupt(format!(
+                        "extracted symlink escaped {}: {}",
+                        root.display(),
+                        path.display()
+                    )));
+                }
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(path);
+            } else if let Ok(canon) = std::fs::canonicalize(&path)
+                && !canon.starts_with(&root_canon)
+            {
+                return Err(Error::Corrupt(format!(
+                    "extracted file escaped {}: {}",
+                    root.display(),
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run(tool: &'static str, cmd: &mut Command) -> Result<()> {
