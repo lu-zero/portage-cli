@@ -18,6 +18,7 @@ pub(crate) mod preflight;
 pub(crate) mod preserve_libs;
 pub mod privilege;
 pub(crate) mod query;
+pub(crate) mod quickpkg;
 pub(crate) mod regen;
 pub(crate) mod search;
 pub(crate) mod select;

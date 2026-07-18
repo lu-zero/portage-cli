@@ -9,7 +9,7 @@ use crate::cli::{
 };
 use crate::crossdev;
 use crate::ebuild;
-use crate::emerge::{self, parse_atoms};
+use crate::emerge;
 use crate::error::Result;
 use crate::vdb::open_cli_vdb;
 use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, vdb};
@@ -124,10 +124,29 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Quickpkg { atoms } => {
-            let parsed = parse_atoms(atoms);
-            eprintln!("quickpkg: atoms={:?}", parsed);
-            bail!("not implemented: quickpkg")
+        Applet::Quickpkg {
+            atoms,
+            include_config,
+            include_unmodified_config,
+        } => {
+            let yn = |s: &str, flag: &str| -> Result<bool> {
+                match s.trim().to_ascii_lowercase().as_str() {
+                    "y" | "yes" | "true" | "1" => Ok(true),
+                    "n" | "no" | "false" | "0" => Ok(false),
+                    _ => bail!("{flag}: expected y|n, got {s:?}"),
+                }
+            };
+            crate::quickpkg::run(
+                globals,
+                &crate::quickpkg::QuickpkgOpts {
+                    atoms: atoms.clone(),
+                    include_config: yn(include_config, "--include-config")?,
+                    include_unmodified_config: yn(
+                        include_unmodified_config,
+                        "--include-unmodified-config",
+                    )?,
+                },
+            )
         }
         Applet::Mirror { args } => {
             eprintln!("mirror: args={:?}", args);

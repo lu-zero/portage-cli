@@ -12,18 +12,6 @@ use crate::merge::run_merge_plan;
 use crate::vdb::open_cli_vdb;
 use crate::{binpkg, ebuild, maint, preflight, preserve_libs, query, search};
 
-pub(crate) fn parse_atoms(raw: &[String]) -> Vec<portage_atom::Dep> {
-    raw.iter()
-        .filter_map(|s| match portage_atom::Dep::from_str(s) {
-            Ok(dep) => Some(dep),
-            Err(e) => {
-                eprintln!("warning: skipping invalid atom '{}': {}", s, e);
-                None
-            }
-        })
-        .collect()
-}
-
 /// Parse every token as a [`portage_atom::Dep`], failing the whole list on the
 /// first invalid atom. Use this for destructive operations (`-c`/`--depclean`)
 /// where dropping a typo would change the meaning of the command (e.g. a
@@ -44,7 +32,12 @@ pub(crate) fn parse_atoms_strict(raw: &[String]) -> Result<Vec<portage_atom::Dep
 /// token dropped, matching `parse_atoms`' tolerance of bad atoms — a typo
 /// shouldn't abort the whole run, and `@system` against a host with no profile
 /// is a configuration error, not a crash.
-fn expand_sets(raw: &[String], config_root: Option<&Utf8Path>, eroot: &Utf8Path) -> Vec<String> {
+/// Expand `@set` references; used by emerge and quickpkg.
+pub(crate) fn expand_sets(
+    raw: &[String],
+    config_root: Option<&Utf8Path>,
+    eroot: &Utf8Path,
+) -> Vec<String> {
     // Build the resolver lazily, only when a set ref is actually present, so a
     // plain `em foo` (no sets) pays no profile-build cost.
     let mut out = Vec::with_capacity(raw.len());
@@ -390,8 +383,10 @@ async fn emerge_atoms_inner(
     let distdir = relocate.map(|p| p.join("var/cache/distfiles"));
     let work_base = ebuild::default_work_base(relocate);
 
-    // `-B` builds without merging — ask about what will actually happen.
-    let verb = if merge_flags.buildpkgonly {
+    // Ask about what will actually happen (`-f`/`-B` don't install).
+    let verb = if merge_flags.fetchonly {
+        "fetch"
+    } else if merge_flags.buildpkgonly {
         "build"
     } else {
         "merge"

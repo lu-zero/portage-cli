@@ -824,8 +824,15 @@ pub enum Applet {
 
     #[command(about = "Create binary packages from installed files")]
     Quickpkg {
+        /// Atoms, package sets (`@system`), or VDB paths (`/var/db/pkg/cat/pf`)
         #[arg(required = true)]
         atoms: Vec<String>,
+        /// Include CONFIG_PROTECT files (`y`/`n`, default `n`)
+        #[arg(long, value_name = "y|n", default_value = "n")]
+        include_config: String,
+        /// Include unmodified CONFIG_PROTECT files (`y`/`n`, default `n`)
+        #[arg(long, value_name = "y|n", default_value = "n")]
+        include_unmodified_config: String,
     },
 
     #[command(about = "Fetch/mirror distfiles")]

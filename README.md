@@ -38,7 +38,7 @@ subcommands corresponding to the traditional tools.
 | *(default)* | `emerge` | Working — resolve → build loop; `-uD` in-slot upgrades; `--prefix` / multi-root |
 | `ebuild` | `ebuild` | Working — fetch, unpack, phases, merge, VDB registration |
 | `depclean` | `emerge --depclean` | Working — reverse-dep orphan clean (`-c`); world-aware |
-| `quickpkg` | `quickpkg` | Stub |
+| `quickpkg` | `quickpkg` | Working — GPKG from installed files / VDB `CONTENTS`; skips `CONFIG_PROTECT` by default |
 | `mirror` | `emirrordist` | Stub |
 | `clean` | `eclean` | Stub |
 | `revdep` | `revdep-rebuild` | Stub |
