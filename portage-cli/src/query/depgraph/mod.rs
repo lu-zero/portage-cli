@@ -133,6 +133,12 @@ pub struct DepgraphOpts<'a> {
     /// for transitive in-slot upgrades; alone only affects atom disambiguation
     /// at the CLI and root-target selection (roots already take best in-slot).
     pub update: bool,
+    /// `--newuse` / `-N`: rebuild installed packages in the graph when planned
+    /// USE or IUSE differs from the VDB.
+    pub newuse: bool,
+    /// `--changed-use` / `-U`: like `newuse` but only for enabled-flag flips
+    /// among shared IUSE (ignore pure IUSE add/drop).
+    pub changed_use: bool,
     /// `--nodeps` (emerge `-O`): merge only the named atoms, no dependency
     /// expansion. Used by the staged toolchain bootstrap.
     pub nodeps: bool,
@@ -167,6 +173,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         root_deps_rdeps,
         deep,
         update,
+        newuse,
+        changed_use,
         nodeps,
         host_merge_root,
         extra_use_override,
@@ -343,10 +351,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     } else {
         &target_installed_cpvs
     };
-    let installed_policy = if emptytree_native {
-        InstalledPolicy::Rebuild
+    // `-N`/`-U` reinstall mode (orthogonal to emptytree Rebuild).
+    let use_reinstall_mode = if newuse {
+        Some(portage_resolve::use_reinstall::UseReinstallMode::Newuse)
+    } else if changed_use {
+        Some(portage_resolve::use_reinstall::UseReinstallMode::ChangedUse)
     } else {
-        InstalledPolicy::Favor
+        None
     };
 
     let mut installed: HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>> = HashMap::new();
@@ -487,6 +498,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         provider.set_prefer_newest_slot(deep || emptytree_native);
         // `-uD`: in-slot upgrades for the whole solve (not emptytree Rebuild).
         provider.set_prefer_update(update && deep && !emptytree_native);
+        // `-N`/`-U`: retain host-satisfied build edges for USE-drift rebuilds.
+        provider.set_prefer_newuse(use_reinstall_mode.is_some() && !emptytree_native);
         for (pkg, version) in &sysroot_installed {
             provider.add_sysroot_installed(pkg.clone(), version.clone());
         }
@@ -496,10 +509,32 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 None => PortagePackage::unslotted(e.cpn),
             };
             provider.add_installed_blockers(&pkg, blockers);
+            let policy = if emptytree_native {
+                InstalledPolicy::Rebuild
+            } else if let Some(mode) = use_reinstall_mode {
+                // Compare VDB USE/IUSE to the planned fold for this CPV.
+                // Rebuild ⇒ no Favor + full build-dep expansion when selected.
+                if package_needs_use_reinstall(
+                    mode,
+                    e,
+                    &pkg,
+                    &data,
+                    &pre_env,
+                    &env_use,
+                    pkg_use,
+                    &force_mask,
+                ) {
+                    InstalledPolicy::Rebuild
+                } else {
+                    InstalledPolicy::Favor
+                }
+            } else {
+                InstalledPolicy::Favor
+            };
             provider.add_installed(SolverInstalledPackage {
                 package: pkg,
                 version: e.version.clone(),
-                policy: installed_policy,
+                policy,
                 active_use: e.active_use.clone(),
                 iuse: e.iuse.clone(),
             });
@@ -711,8 +746,16 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 MergeRoot::Host => host_installed_cpvs.contains(&cpv),
                 MergeRoot::Target => target_installed_cpvs.contains(&cpv),
             };
+            // `-N`/`-U` registers USE-drift packages as `InstalledPolicy::Rebuild`
+            // and still selects the installed CPV for a same-version rebuild —
+            // those must stay in the plan ([R]), not be dropped as "already
+            // installed".
+            let use_rebuild = provider
+                .installed_policy(pkg)
+                .is_some_and(|p| matches!(p, InstalledPolicy::Rebuild));
             !already_installed
                 || reinstall_cpns.contains(pkg.cpn())
+                || use_rebuild
                 // Explicit target: reinstalled even at best version ([R]). Match
                 // the resolved target *slot*, not the bare CPN — a sibling slot
                 // merely pulled as a satisfied dep (e.g. python:3.13 under a
@@ -780,13 +823,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         );
     }
 
-    // `-uD` (`prefer_update`): do not post-trim host-satisfied BDEPEND tools.
+    // `-uD` / `-N` / `-U`: do not post-trim host-satisfied BDEPEND tools.
     // The trim treats "host has *some* version that matches the atom" as
-    // enough and would drop an in-slot *upgrade* of cmake/bash/etc. that the
-    // solver intentionally selected. Under deep update those upgrades must
-    // stay (emerge `-uD`).
-    let prefer_update = update && deep && !emptytree_native;
-    if !emptytree_native && !prefer_update {
+    // enough and would drop an intentional upgrade or USE-drift rebuild.
+    let skip_bdepend_trim = (update && deep && !emptytree_native)
+        || (use_reinstall_mode.is_some() && !emptytree_native);
+    if !emptytree_native && !skip_bdepend_trim {
         // Built packages always carry their BDEPEND now (it's required to build
         // them), so always run the within-run trim to drop entries only needed
         // for BDEPEND already satisfied on BROOT or by an earlier kept entry —
@@ -1225,6 +1267,75 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         build_blockers,
         provided: provided_avail,
     })
+}
+
+/// Whether an installed VDB entry must rebuild under `-N`/`-U` for USE/IUSE
+/// drift relative to the planned fold for its CPV (or the newest same-slot
+/// repo version when the exact CPV left the tree).
+fn package_needs_use_reinstall(
+    mode: portage_resolve::use_reinstall::UseReinstallMode,
+    e: &installed::VdbEntry,
+    pkg: &PortagePackage,
+    data: &repo::RepoData,
+    pre_env: &str,
+    env_use: &str,
+    package_use: &[(Dep, Vec<UseOverride>)],
+    force_mask: &portage_resolve::force_mask::ForceMask,
+) -> bool {
+    use portage_atom_pubgrub::UseFlagState;
+    use portage_resolve::use_reinstall::needs_use_reinstall;
+    use std::collections::HashSet;
+
+    // Prefer the installed CPV's cache entry; fall back to newest same-slot
+    // version when the exact CPV left the tree.
+    let (plan_ver, cache) = if let Some(c) = repo::find_cache(data, pkg, &e.version) {
+        (e.version.clone(), c)
+    } else {
+        let Some((cpv, c)) = data.versions.get(&e.cpn).and_then(|vers| {
+            vers.iter().rev().find(|(_, entry)| {
+                let got = entry.metadata.slot.slot.as_str();
+                match e.slot.as_ref().map(|s| s.as_str()) {
+                    Some(want) => got == want || got.split('/').next() == Some(want),
+                    None => true,
+                }
+            })
+        }) else {
+            return false;
+        };
+        (cpv.version.clone(), c)
+    };
+    // Stable-keyword decision is approximate here (any stable token); force
+    // mask's stable sets rarely change reinstall detection vs the main USE fold.
+    let stable = true;
+    let cfg = effective_use::effective_use(
+        pre_env,
+        env_use,
+        package_use,
+        pkg,
+        &plan_ver,
+        cache,
+        force_mask,
+        stable,
+        &[],
+    );
+    let cur_iuse = effective_use::iuse_set(cache);
+    let cur_enabled: HashSet<_> = cur_iuse
+        .iter()
+        .copied()
+        .filter(|f| matches!(cfg.get(*f), UseFlagState::Enabled))
+        .collect();
+    let cpv = Cpv::new(e.cpn, plan_ver);
+    let slot = e.slot.as_ref().map(|s| s.as_str());
+    let (forced, masked) = force_mask.effective(&cpv, slot, stable, &cur_iuse);
+    let forced: HashSet<_> = forced.into_iter().chain(masked).collect();
+    needs_use_reinstall(
+        mode,
+        &forced,
+        &e.active_use,
+        &e.iuse,
+        &cur_enabled,
+        &cur_iuse,
+    )
 }
 
 /// Whether two versions plausibly belong to the same slot, used to map a

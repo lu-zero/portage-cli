@@ -312,8 +312,12 @@ async fn emerge_atoms_inner(
     };
     let depgraph_flags = depgraph_flags_override
         .as_ref()
-        .map(|f| (f.deep, f.newuse))
-        .unwrap_or((cli.depgraph_flags.deep, cli.depgraph_flags.newuse));
+        .map(|f| (f.deep, f.newuse, f.changed_use))
+        .unwrap_or((
+            cli.depgraph_flags.deep,
+            cli.depgraph_flags.newuse,
+            cli.depgraph_flags.changed_use,
+        ));
     let binpkg_index = binpkg::open_local_index_for_preview(cli, merge_flags);
     let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
         repo_path,
@@ -332,6 +336,8 @@ async fn emerge_atoms_inner(
         root_deps_rdeps: merge_flags.root_deps,
         deep: depgraph_flags.0,
         update: merge_flags.update,
+        newuse: depgraph_flags.1,
+        changed_use: depgraph_flags.2,
         nodeps,
         extra_use_override,
         binpkg_index: binpkg_index.as_ref(),

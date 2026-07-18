@@ -55,8 +55,9 @@ first draft missed for `-C`).
   ([[deep-in-slot-upgrades]]): `prefer_update` on `update && deep`; host-
   satisfied BDEPEND retained so build tools upgrade. Slot bumps remain
   `prefer_newest_slot` ([[deep-slot-bump]]). Shallow `-p`/`-up` stay Favor.
-- **`-N`/`--newuse`** — flag still **parsed only**; not consumed. See
-  [[newuse]]. Do not treat `-uD` as a substitute.
+- **`-N`/`--newuse` and `-U`/`--changed-use`** — 2026-07-18 ([[newuse]]):
+  USE/IUSE drift → `InstalledPolicy::Rebuild`, same-CPV `[R]` (or upgrade
+  with `-uD`). `-U` ignores pure IUSE add/drop.
 
 ## Remaining gaps (not started)
 
@@ -68,11 +69,6 @@ first draft missed for `-C`).
 - **`-r`/`--resume`** — replay the last aborted/skipped merge list. Needs
   `em` to persist a resumable plan somewhere between invocations; no such
   state exists today.
-- **`-U`/`--changed-use`** — like `-N`/`--newuse` but only rebuilds on a USE
-  *change* relative to what's installed, not "profile default changed
-  underneath you". `em` parses `-N` but does not implement USE-drift rebuilds
-  yet ([[newuse]]); wire `-N` before deciding whether `-U` needs a separate
-  path.
 - **`-W`/`--deselect`** — remove atoms from the world file without
   unmerging. `em`'s own `-w` short flag is already taken (`em ebuild`'s
   `--work-dir` override), so this would need a different short form or

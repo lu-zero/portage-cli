@@ -1,13 +1,28 @@
 # `--newuse` / `-N` — reinstall when USE (or IUSE) changed
 
-STATUS: **not started.** The `-N`/`--newuse` **flag is parsed** (`DepgraphFlags`)
-but **not consumed** by the resolver or merge skip logic. emerge's `-N/--newuse`
-reinstalls an installed package when its effective USE differs from what it was
-built with (also when IUSE gained/lost a flag that changes the enabled set).
+STATUS: **implemented 2026-07-18** (`-N`/`--newuse` and `-U`/`--changed-use`).
 
-**Not the same as `-uD`:** [[deep-in-slot-upgrades]] (done 2026-07-18) upgrades
-*versions* in the deep graph. `--newuse` forces rebuilds of *same CPV* when USE
-drifted — orthogonal, still open.
+**Not the same as `-uD`:** [[deep-in-slot-upgrades]] upgrades *versions* in the
+deep graph. `--newuse` forces rebuilds when USE/IUSE drifted — orthogonal.
+
+## Implementation
+
+- `portage_resolve::use_reinstall` — Portage `_reinstall_for_flags` (newuse vs
+  changed-use modes).
+- At `add_installed`, packages with USE drift get `InstalledPolicy::Rebuild`.
+- `-N` alone: same-CPV rebuild when installed version still available (`[R]`);
+  with `-uD`, fall through to newest (upgrade).
+- Host-satisfied BDEPEND edges are kept only for packages marked Rebuild (not
+  all build tools).
+- Plan filter keeps `Rebuild` same-version selections as `[R]`.
+
+## Residual
+
+- IUSE set comparison can be stricter than emerge on some packages (VDB IUSE
+  vs md5-cache IUSE differ on PYTHON_TARGETS tokens) → `-Np` may list more
+  `[R]` than emerge. Tighten if live diffs are painful.
+- Shallow `-p` without `-N` can still miss some emerge-only U/R python modules
+  (emerge best-visible path for some BDEPEND); separate from USE-drift.
 
 ## The gap
 

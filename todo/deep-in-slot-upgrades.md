@@ -60,8 +60,7 @@ Default `-p` path is unchanged by `prefer_update` (gated on `update && deep`).
 
 ## Still open (related, separate)
 
-- **`-N` / `--newuse`** — [[newuse]]; flag parsed, not consumed for USE-drift rebuilds
-- **`-U` / `--changed-use`** — [[cli-flag-parity]]
+- **`-N` / `-U`** — implemented; see [[newuse]] for residual IUSE over-sensitivity
 - Numeric `--deep=N` — not implemented (boolean only)
 - Resolvo bridge: `set_prefer_update` is a trait default no-op until wired
 

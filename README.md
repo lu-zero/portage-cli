@@ -77,6 +77,7 @@ subcommands corresponding to the traditional tools.
 
 - **VDB awareness** — installed packages use `InstalledPolicy::Favor` (keep satisfying versions); already-installed exact CPVs are filtered from the merge list; installed-and-kept packages expand runtime deps only
 - **`-uD` / `--update --deep`** — transitive **in-slot upgrades** (`prefer_update`); host-satisfied build tools still enter the graph so they can upgrade (emerge deep-update). `-u` alone does not mass-upgrade deps; `-D` alone still bumps `:*` slots (`prefer_newest_slot`). See `todo/deep-in-slot-upgrades.md`
+- **`-N` / `--newuse` and `-U` / `--changed-use`** — same-CPV rebuild when planned USE/IUSE differs from the VDB (`todo/newuse.md`); with `-uD`, prefer newest when USE drift forces a rebuild
 - **Profile USE flags** — `make.defaults` / `make.conf` through brush with portage-style incremental USE stacking (see `docs/architecture.md`)
 - **USE_EXPAND** — `PYTHON_TARGETS`, `CPU_FLAGS_*`, `ABI_X86`, etc. expanded and grouped in output
 - **OR-group branch selection** — prefer branches whose USE deps are already satisfied (avoids gratuitous rebuilds)
@@ -98,8 +99,8 @@ Older micro-tables (sub-second depgraph on lighter hosts) live in
 and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`).
 
 **Gaps vs `emerge`:**
-- **`--newuse` / `-N`** — flag parsed, not consumed (`todo/newuse.md`); USE-drift same-CPV rebuilds are incomplete vs emerge
-- Shallow `-p` package-set can still differ slightly from emerge on some hosts (BDEPEND / provider choice); `-uDp` is near-parity on firefox-class targets
+- Shallow `-p` package-set can still differ slightly from emerge on some hosts (emerge may list extra BDEPEND upgrades without `-u`); `-uDp` is near-parity on firefox-class targets
+- `-Np` may list more `[R]` than emerge when VDB IUSE tokens differ from md5-cache (PYTHON_TARGETS set churn)
 - Wrapper packages for old-slot BDEPEND (`autoconf-wrapper`, `gcc-config`, …) not fully modelled
 - Flag ordering / `(-flag)` USE_EXPAND_IMPLICIT display polish
 - Upgrade display shows full USE rather than only changed flags

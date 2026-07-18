@@ -72,6 +72,7 @@ fn merge_depgraph_flags(globals: &Cli, args: &DepgraphFlags) -> DepgraphFlags {
     DepgraphFlags {
         deep: args.deep || globals.depgraph_flags.deep,
         newuse: args.newuse || globals.depgraph_flags.newuse,
+        changed_use: args.changed_use || globals.depgraph_flags.changed_use,
     }
 }
 
@@ -711,6 +712,8 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         root_deps_rdeps: false,
         deep: false,
         update: false,
+        newuse: false,
+        changed_use: false,
         nodeps: true,
         extra_use_override: None,
         binpkg_index: None,

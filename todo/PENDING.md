@@ -5,9 +5,8 @@ file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ do
 here briefly for context). Updated 2026-07-09.
 
 **Also closed outside this arc (2026-07-18):** emerge-style **`-uD` in-slot
-upgrades** — [[deep-in-slot-upgrades]] (`prefer_update` + host-satisfied BDEPEND
-retention). Slot-only `:*` bumps remain [[deep-slot-bump]]. **`-N`/`--newuse`
-still open** — [[newuse]].
+upgrades** — [[deep-in-slot-upgrades]]; **`-N`/`-U` USE-drift rebuilds** —
+[[newuse]]. Slot-only `:*` bumps remain [[deep-slot-bump]].
 
 **2026-07-09 (later)**: the global `--cross <tuple>` flag is now
 **`--target <tuple>`/`-T`** (no clash), and `em crossdev` no longer has its

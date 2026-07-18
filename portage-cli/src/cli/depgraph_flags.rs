@@ -12,8 +12,15 @@ pub struct DepgraphFlags {
     #[arg(short = 'D', long)]
     pub deep: bool,
 
-    /// Re-evaluate USE flags for all packages. Forces re-examination of USE
-    /// state for installed packages.
+    /// Reinstall installed packages when their planned USE or IUSE differs
+    /// from the VDB (emerge `--newuse`). Applies to packages that appear in
+    /// the depgraph; pairs with `--deep` for a full-tree USE recheck.
     #[arg(short = 'N', long)]
     pub newuse: bool,
+
+    /// Like `--newuse`, but only rebuild when an *enabled* USE flag changed
+    /// among flags present in both installed and current IUSE (ignore pure
+    /// IUSE add/drop). Emerge's `--changed-use` / `-U`.
+    #[arg(short = 'U', long = "changed-use")]
+    pub changed_use: bool,
 }

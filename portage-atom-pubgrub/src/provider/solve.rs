@@ -108,7 +108,15 @@ impl DependencyProvider for PortageDependencyProvider {
                         return Ok(Some(installed_ver.clone()));
                     }
                 }
-                InstalledPolicy::Rebuild => {}
+                InstalledPolicy::Rebuild => {
+                    // Emptytree / `-uD`: fall through to newest in-range.
+                    // `-N`/`-U` alone: same-CPV reinstall when the installed
+                    // version is still available (emerge `[R]`); only pick a
+                    // newer CPV if the installed one left the tree.
+                    if !self.rebuild_tree && !self.prefer_update && range.contains(installed_ver) {
+                        return Ok(Some(installed_ver.clone()));
+                    }
+                }
             }
         }
 
@@ -501,22 +509,44 @@ fn broot_filtered(
         .chain(vd.pdepend())
         .map(|(p, vs, _)| (p.clone(), vs.clone()))
         .collect();
-    // `-uD` (`prefer_update`): keep host-satisfied DEPEND/BDEPEND/IDEPEND as
-    // solver constraints so in-slot upgrades can still select a newer version
-    // (emerge deep-update). Without this, a host-present cmake/bash never
-    // enters the graph and `prefer_update` cannot upgrade it. Packages already
-    // at newest resolve to the installed CPV and are filtered from the merge
-    // list later — same display outcome as host-satisfaction drop for no-ops.
+    // `-uD` (`prefer_update`): keep *all* host-satisfied build edges so in-slot
+    // upgrades can select them.
+    // `-N`/`-U` (`prefer_newuse`): keep an edge only when the host package is
+    // registered as `Rebuild` for USE drift — otherwise host-satisfied edges
+    // stay dropped (avoids mass-rebuilding every BDEPEND of a new package).
     if provider.prefer_update {
         for (p, vs, _) in vd.depend().iter().chain(vd.bdepend()).chain(vd.idepend()) {
             out.push((p.clone(), vs.clone()));
         }
+    } else if provider.prefer_newuse {
+        append_unsatisfied_or_use_rebuild(provider, vd, &mut out, vd.depend());
+        append_unsatisfied_or_use_rebuild(provider, vd, &mut out, vd.bdepend());
+        append_unsatisfied_or_use_rebuild(provider, vd, &mut out, vd.idepend());
     } else {
         append_unsatisfied_broot(&mut out, vd.depend(), provider, vd, MergeRoot::Target);
         append_unsatisfied_broot(&mut out, vd.bdepend(), provider, vd, MergeRoot::Target);
         append_unsatisfied_broot(&mut out, vd.idepend(), provider, vd, MergeRoot::Target);
     }
     out.into_iter().collect()
+}
+
+/// Like [`append_unsatisfied_broot`], but also keeps edges whose package is
+/// `InstalledPolicy::Rebuild` (USE-drift under `-N`/`-U`).
+fn append_unsatisfied_or_use_rebuild(
+    provider: &PortageDependencyProvider,
+    parent_vd: &VersionData,
+    out: &mut Vec<(PortagePackage, PortageVersionSet)>,
+    edges: &[crate::convert::Req],
+) {
+    for (p, vs, _) in edges {
+        let rebuild = provider
+            .installed
+            .get(p)
+            .is_some_and(|(_, pol)| matches!(pol, InstalledPolicy::Rebuild));
+        if rebuild || !host_satisfied_on_broot(provider, parent_vd, p, vs) {
+            out.push((p.clone(), vs.clone()));
+        }
+    }
 }
 
 /// Whether the host (BROOT) satisfies a dependency edge `(p, vs)`: the host
