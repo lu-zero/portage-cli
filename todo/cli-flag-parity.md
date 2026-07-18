@@ -33,16 +33,21 @@ first draft missed for `-C`).
   made preserve-libs scan the VDB once per batch instead of once per
   removed package, since depclean's cleanlist can be much bigger than
   `-C`'s typical 1-3 packages).
-  - **Found live-verifying this**: ordinary `em <atom>` merges (with or
-    without `-1`/`--oneshot`) never write to `var/lib/portage/world` at
-    all — a real, separate gap. Against a real system (unlike the
-    catalyst-built stage3s used for testing here, whose world file is
-    already empty), this would make depclean dangerously over-eager:
-    every package a user ever explicitly `em`-installed, expecting it to
-    stick around, would look exactly like an orphan. Needs its own pass:
-    add the merged atom to `world` after a successful non-oneshot,
-    non-dependency merge (matching real emerge's default), before `-c`
-    is safe to recommend for real use.
+  - **Found live-verifying this, fixed same session (`9c850f6`)**:
+    ordinary `em <atom>` merges never wrote to `var/lib/portage/world`
+    at all, which would have made depclean dangerously over-eager
+    against a real (non-empty-world) system. Fixed via
+    `maint::world::add_atoms` (replace-in-place by Cpn, matching real
+    emerge's `_world_atom`), called from `emerge_atoms_inner` after a
+    successful non-pretend merge, gated on the same skip-set real
+    portage uses. This is also what made `-1`/`--oneshot` do something
+    for the first time — it was a parsed-but-unread flag before this
+    (same class of bug as the `-K` fix), with nothing to skip until
+    world-writing existed.
+
+- **`-1`/`--oneshot`** — landed alongside the world-write fix above
+  (`9c850f6`): skips adding the merged atom to world, matching real
+  emerge exactly (its only effect).
 
 ## Remaining gaps (not started)
 
