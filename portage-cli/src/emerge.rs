@@ -10,7 +10,7 @@ use crate::error::{self, Result};
 use crate::merge::confirm_action;
 use crate::merge::run_merge_plan;
 use crate::vdb::open_cli_vdb;
-use crate::{binpkg, ebuild, preflight, query, search};
+use crate::{binpkg, ebuild, preflight, preserve_libs, query, search};
 
 pub(crate) fn parse_atoms(raw: &[String]) -> Vec<portage_atom::Dep> {
     raw.iter()
@@ -420,6 +420,24 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
         return Ok(());
     }
 
+    // Every cpv this invocation is committed to removing — not just the one
+    // being processed at a time — so a multi-atom `em -C a b` where `a`
+    // needs a lib only `b` provides doesn't falsely think `b` still
+    // provides it. See `preserve_libs::find_libs_to_preserve`'s doc.
+    let exclude: std::collections::HashSet<portage_atom::Cpv> =
+        matched.iter().map(|p| p.cpv().clone()).collect();
+
+    // Same root/shell setup `dispatch.rs`'s `Applet::Ebuild` arm uses:
+    // `roots()` for config/sysroot/eprefix (this *is* a merge-target
+    // operation, unlike `select`'s config-root-only concerns — see
+    // `select-target-flag-collision-fix` memory for why those differ), and
+    // the separate `broot()` for BDEPEND-class tooling, never `roots()`'s
+    // own value. Computed before the `--pretend` return too, since `-p`
+    // also needs `root` to preview any preserve-libs findings.
+    let roots = cli.roots();
+    let root = roots.merge_root().to_owned();
+    let broot = cli.broot();
+
     println!("\n>>> These are the packages that would be unmerged:\n");
     for pkg in &matched {
         println!(" {pkg}");
@@ -427,6 +445,22 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     println!();
 
     if cli.pretend {
+        // Preview what preserve-libs would keep, without registering or
+        // touching disk (read-only load, no store).
+        let registry = preserve_libs::PreservedLibsRegistry::load(&root);
+        for pkg in &matched {
+            if let Ok(old_contents) = pkg.contents() {
+                let preserved = preserve_libs::find_libs_to_preserve(
+                    &vdb,
+                    &exclude,
+                    pkg,
+                    &old_contents,
+                    &registry,
+                    &root,
+                );
+                preserve_libs::report_preserved(pkg.cpv(), &preserved, &vdb);
+            }
+        }
         return Ok(());
     }
 
@@ -434,16 +468,6 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
         println!(">>> Quitting.");
         return Ok(());
     }
-
-    // Same root/shell setup `dispatch.rs`'s `Applet::Ebuild` arm uses:
-    // `roots()` for config/sysroot/eprefix (this *is* a merge-target
-    // operation, unlike `select`'s config-root-only concerns — see
-    // `select-target-flag-collision-fix` memory for why those differ), and
-    // the separate `broot()` for BDEPEND-class tooling, never `roots()`'s
-    // own value.
-    let roots = cli.roots();
-    let root = roots.merge_root().to_owned();
-    let broot = cli.broot();
     // Scratch trees for pkg_prerm/postrm land where builds would
     // (`emerge_atoms_inner`'s relocation rule).
     let work_base = ebuild::default_work_base(roots.relocate().then(|| roots.merge_root()));
@@ -467,7 +491,9 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     let mut failures = 0usize;
     for pkg in &matched {
         println!(">>> Unmerging {pkg}...");
-        if let Err(e) = ebuild::unmerge_standalone(&mut shell, pkg, &work_base, &root, &vdb).await {
+        if let Err(e) =
+            ebuild::unmerge_standalone(&mut shell, pkg, &work_base, &root, &vdb, &exclude).await
+        {
             eprintln!("!!! failed to unmerge {pkg}: {e:#}");
             failures += 1;
             continue;

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use bzip2::Compression;
 use bzip2::write::BzEncoder;
 use camino::{Utf8Path, Utf8PathBuf};
+use portage_atom::Cpv;
 use portage_distfiles::{DistfileResolver, FetchConfig, FetchStatus, Fetcher};
 use portage_metadata::SrcUriEntry;
 use portage_repo::{
@@ -15,6 +16,7 @@ use portage_repo::{
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, MergeSpec, Vdb};
 
 use crate::postprocess;
+use crate::preserve_libs;
 
 /// Which phases a [`run_inner`] call owns — the single source of truth for the
 /// build-tree epilogues (clean, env-dump/restore, buildpkg, tree-drop).
@@ -1511,6 +1513,7 @@ async fn unmerge_package(
     root: &Utf8Path,
     vdb: &Vdb,
     new_contents: &[ContentsEntry],
+    exclude: &HashSet<Cpv>,
 ) -> Result<()> {
     let old_pn = old_pkg.cpv().cpn.package.as_ref();
     let old_pvr = old_pkg.cpv().version.to_string();
@@ -1563,7 +1566,30 @@ async fn unmerge_package(
     };
 
     let old_contents = old_pkg.contents().context("reading old CONTENTS")?;
-    remove_old_unique_files(&old_contents, new_contents, root)?;
+
+    // preserve-libs (portage's FEATURES=preserve-libs): never physically
+    // delete a shared library some other still-installed object's
+    // NEEDED.ELF.2 genuinely requires and that nothing else provides. See
+    // `preserve_libs` module doc.
+    let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
+    let to_preserve =
+        preserve_libs::find_libs_to_preserve(vdb, exclude, old_pkg, &old_contents, &registry, root);
+    let preserve_paths: HashSet<Utf8PathBuf> = to_preserve
+        .iter()
+        .flat_map(|e| std::iter::once(e.path.clone()).chain(e.soname_symlink.clone()))
+        .collect();
+    if !to_preserve.is_empty() {
+        preserve_libs::report_preserved(old_pkg.cpv(), &to_preserve, vdb);
+    }
+    registry.register(
+        old_pkg.cpv(),
+        &old_pkg.slot().unwrap_or_default(),
+        old_pkg.counter().ok().flatten().unwrap_or(0),
+        preserve_paths.iter().cloned().collect(),
+    );
+    registry.store();
+
+    remove_old_unique_files(&old_contents, new_contents, &preserve_paths, root)?;
 
     vdb.unregister(old_pkg)
         .context("unregistering old package")?;
@@ -1606,7 +1632,20 @@ async fn unmerge_slot_occupant(
         .unwrap_or(work_root)
         .join(format!("{old_pf}.old"));
 
-    unmerge_package(shell, old_pkg, &old_work_root, root, vdb, new_contents).await?;
+    // A single in-place replace only ever removes this one old occupant —
+    // no batching concern like `-C`'s multi-atom case (see
+    // `unmerge_standalone`'s `exclude`).
+    let exclude: HashSet<Cpv> = std::iter::once(old_pkg.cpv().clone()).collect();
+    unmerge_package(
+        shell,
+        old_pkg,
+        &old_work_root,
+        root,
+        vdb,
+        new_contents,
+        &exclude,
+    )
+    .await?;
     let _ = std::fs::remove_dir_all(old_work_root.as_std_path());
     Ok(())
 }
@@ -1615,19 +1654,25 @@ async fn unmerge_slot_occupant(
 /// replacement and no active install to derive a sibling scratch dir from,
 /// so the scratch tree is `<work_base>/<category>/<pf>.unmerge`. Reuses
 /// [`unmerge_package`] with an empty `new_contents`, so every file the
-/// package owns is removed.
+/// package owns is removed (except any preserve-libs finds still in use).
+///
+/// `exclude` is every cpv this same `-C` invocation is committed to
+/// removing (all atoms matched on the command line, not just `old_pkg`) —
+/// see `preserve_libs::find_libs_to_preserve`'s doc for why a multi-atom
+/// batch needs the whole set, not just the package being removed this call.
 pub async fn unmerge_standalone(
     shell: &mut portage_repo::EbuildShell,
     old_pkg: &InstalledPackage,
     work_base: &Utf8Path,
     root: &Utf8Path,
     vdb: &Vdb,
+    exclude: &HashSet<Cpv>,
 ) -> Result<()> {
     let old_work_root = work_base
         .join(old_pkg.category())
         .join(format!("{}.unmerge", old_pkg.pf()));
 
-    unmerge_package(shell, old_pkg, &old_work_root, root, vdb, &[]).await?;
+    unmerge_package(shell, old_pkg, &old_work_root, root, vdb, &[], exclude).await?;
     let _ = std::fs::remove_dir_all(old_work_root.as_std_path());
     Ok(())
 }
@@ -1705,12 +1750,13 @@ async fn try_run_phase_from_env_bz2(
 fn remove_old_unique_files(
     old_contents: &[ContentsEntry],
     new_contents: &[ContentsEntry],
+    preserve: &HashSet<Utf8PathBuf>,
     root: &Utf8Path,
 ) -> Result<()> {
     let new_paths: HashSet<&Utf8PathBuf> = new_contents.iter().map(|e| &e.path).collect();
 
     for entry in old_contents.iter().rev() {
-        if new_paths.contains(&entry.path) {
+        if new_paths.contains(&entry.path) || preserve.contains(&entry.path) {
             continue;
         }
         let rel = entry.path.strip_prefix("/").unwrap_or(&entry.path);
@@ -2691,7 +2737,7 @@ mod tests {
             target: None,
         }];
 
-        remove_old_unique_files(&old_contents, &new_contents, &root).unwrap();
+        remove_old_unique_files(&old_contents, &new_contents, &HashSet::new(), &root).unwrap();
 
         assert!(!root.join("usr/bin/old-only").exists());
         assert!(root.join("usr/bin/shared").exists());

@@ -26,28 +26,34 @@ pub struct ElfScan {
     pub provides: Vec<String>,
 }
 
-struct ElfInfo {
-    machine: &'static str,
-    category: String,
-    soname: Option<String>,
-    rpath: Option<String>,
-    needed: Vec<String>,
+pub(crate) struct ElfInfo {
+    pub machine: &'static str,
+    pub category: String,
+    pub soname: Option<String>,
+    pub rpath: Option<String>,
+    pub needed: Vec<String>,
+}
+
+/// Parse one on-disk file's ELF dynamic-link metadata, or `None` if it isn't
+/// a file, isn't readable, or isn't a dynamic ELF. Used both by
+/// [`scan_image`] (per entry, while walking a build image) and by
+/// `preserve_libs` (to re-derive the link metadata of a registry-carried
+/// preserved lib, which — having outlived its owning VDB entry — is no
+/// longer listed in any package's `NEEDED.ELF.2`).
+pub(crate) fn scan_file(path: &std::path::Path) -> Option<ElfInfo> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    let data = std::fs::read(path).ok()?;
+    parse_elf(&data)
 }
 
 /// Walk `image_dir` and collect ELF link metadata for every dynamic ELF object.
 pub fn scan_image(image_dir: &Utf8Path) -> ElfScan {
     let mut entries: Vec<(String, ElfInfo)> = Vec::new();
     for entry in walkdir(image_dir.as_std_path()) {
-        let Ok(meta) = std::fs::symlink_metadata(&entry) else {
-            continue;
-        };
-        if !meta.is_file() {
-            continue;
-        }
-        let Ok(data) = std::fs::read(&entry) else {
-            continue;
-        };
-        let Some(info) = parse_elf(&data) else {
+        let Some(info) = scan_file(&entry) else {
             continue;
         };
         // Install path = path under the image, with a leading `/`.

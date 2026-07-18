@@ -13,6 +13,7 @@ pub(crate) mod merge;
 pub(crate) mod pkg;
 pub(crate) mod postprocess;
 pub(crate) mod preflight;
+pub(crate) mod preserve_libs;
 pub mod privilege;
 pub(crate) mod query;
 pub(crate) mod regen;
