@@ -103,7 +103,7 @@ fn check_world_file(
 
     if fix && (!orphaned.is_empty() || !invalid.is_empty()) {
         let new_content = kept.join("\n") + "\n";
-        std::fs::write(path, new_content).with_context(|| format!("writing {path}"))?;
+        write_atomic(path, new_content).with_context(|| format!("writing {path}"))?;
         println!("Fixed {path}.");
     }
 
@@ -145,7 +145,7 @@ fn check_world_sets_file(
 
     if fix && !orphaned.is_empty() {
         let new_content = kept.join("\n") + "\n";
-        std::fs::write(path, new_content).with_context(|| format!("writing {path}"))?;
+        write_atomic(path, new_content).with_context(|| format!("writing {path}"))?;
         println!("Fixed {path}.");
     }
 

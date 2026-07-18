@@ -129,7 +129,7 @@ fn collect_violations(
                 // Treat ^^/?? like AllOf for reverse-dep advisory: any
                 // unsatisfied branch that names a touched package is reported.
                 // Coarser than full group semantics, but previously these
-                // groups were ignored entirely (`_ => {}`).
+                // groups were ignored entirely.
                 collect_violations(children, owner, touched, present, out);
             }
             // AnyOf: a conflict only exists if ALL alternatives are violated.
@@ -156,7 +156,8 @@ fn collect_violations(
                     out.extend(first);
                 }
             }
-            DepEntry::Atom(_) | DepEntry::UseConditional { .. } => {}
+            // Atom handled above; UseConditional already stripped by evaluate_use.
+            DepEntry::UseConditional { .. } => {}
         }
     }
 }
