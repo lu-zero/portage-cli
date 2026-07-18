@@ -10,7 +10,7 @@ use crate::error::{self, Result};
 use crate::merge::confirm_action;
 use crate::merge::run_merge_plan;
 use crate::vdb::open_cli_vdb;
-use crate::{binpkg, ebuild, preflight, preserve_libs, query, search};
+use crate::{binpkg, ebuild, maint, preflight, preserve_libs, query, search};
 
 pub(crate) fn parse_atoms(raw: &[String]) -> Vec<portage_atom::Dep> {
     raw.iter()
@@ -127,6 +127,13 @@ pub(crate) struct EmergeOpts<'a> {
     /// `virtual/os-headers`/etc. stand in for a copy actually merged into
     /// the target.
     pub target_only_installed_view: bool,
+    /// Add explicitly-named atoms to the world file on a successful,
+    /// non-oneshot/non-buildpkgonly/non-fetchonly/non-onlydeps real run —
+    /// matching real emerge's `_world_atom`. Only the genuine top-level
+    /// `em <atoms>` invocation sets this; internal staged-build steps
+    /// (crossdev/stages) are not a user package selection and must not
+    /// pollute the world file.
+    pub update_world: bool,
 }
 
 /// Resolve and (unless `--pretend`) merge `raw_atoms` with the global config in
@@ -144,6 +151,7 @@ struct ResolvedEmergeOpts {
     bypass_cross_root: bool,
     target_only_installed_view: bool,
     extra_use_override: Option<String>,
+    update_world: bool,
 }
 
 pub(crate) async fn emerge_atoms(
@@ -167,6 +175,7 @@ pub(crate) async fn emerge_atoms(
             bypass_cross_root: opts.bypass_cross_root,
             target_only_installed_view: opts.target_only_installed_view,
             extra_use_override,
+            update_world: opts.update_world,
         },
     )
     .await
@@ -184,6 +193,7 @@ async fn emerge_atoms_inner(
         bypass_cross_root,
         target_only_installed_view,
         extra_use_override,
+        update_world,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
     let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
@@ -256,6 +266,33 @@ async fn emerge_atoms_inner(
     if atoms.is_empty() {
         bail!("em: no valid atoms");
     }
+
+    // World selection (real emerge's `_world_atom`): only the genuine
+    // top-level invocation (`update_world`), and only the literal,
+    // explicitly-named atoms (not `@set` refs — world_sets tracking isn't
+    // implemented yet, see todo/cli-flag-parity.md), skipped entirely for
+    // the same flag set real portage skips it for.
+    let should_update_world = update_world
+        && !cli.pretend
+        && !merge_flags.oneshot
+        && !merge_flags.buildpkgonly
+        && !merge_flags.fetchonly
+        && !merge_flags.onlydeps;
+    let world_atoms: Vec<portage_atom::Dep> = if should_update_world {
+        raw_atoms
+            .iter()
+            .filter(|s| !s.starts_with('@'))
+            .filter_map(|s| match portage_atom::Dep::parse(s) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    eprintln!("warning: skipping invalid world atom '{s}': {e}");
+                    None
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let format = if merge_flags.json {
         cli::DepgraphFormat::Json
     } else if merge_flags.tree {
@@ -301,6 +338,10 @@ async fn emerge_atoms_inner(
     }
 
     if outcome.plan.is_empty() {
+        // Nothing needed building (already installed/up to date), but the
+        // explicit atoms are still a real selection — matches real emerge
+        // adding an already-satisfied `emerge foo` to world.
+        maint::world::add_atoms(Some(roots.merge_root()), &world_atoms);
         return Ok(());
     }
 
@@ -352,7 +393,10 @@ async fn emerge_atoms_inner(
         merge_flags,
         cli,
     )
-    .await
+    .await?;
+
+    maint::world::add_atoms(Some(roots.merge_root()), &world_atoms);
+    Ok(())
 }
 
 /// Run the default emerge path for a parsed CLI invocation.
@@ -382,6 +426,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             merge_flags: None,
             bypass_cross_root: false,
             target_only_installed_view: false,
+            update_world: true,
         },
     )
     .await

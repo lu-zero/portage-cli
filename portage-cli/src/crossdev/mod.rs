@@ -347,6 +347,9 @@ async fn run_staged(
                 merge_flags: Some(merge_flags.clone()),
                 bypass_cross_root,
                 target_only_installed_view,
+                // Internal staged-build step, not a user package
+                // selection — must not pollute the world file.
+                update_world: false,
             },
         )
         .await?;

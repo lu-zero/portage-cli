@@ -151,6 +151,51 @@ fn check_world_sets_file(
     Ok(())
 }
 
+/// Add `atoms` to the world file, matching real emerge's `_world_atom`
+/// world-selection behaviour after a successful merge of explicitly-named
+/// atoms (skipped entirely under `--oneshot`/`--buildpkgonly`/
+/// `--fetchonly`/`--onlydeps`/`--pretend` — see the caller). An atom whose
+/// `Cpn` already has an entry (in any version-qualified form) is replaced
+/// in place rather than duplicated; a genuinely new one is appended.
+/// Best-effort: a failure here is reported but never unwinds a merge that
+/// already completed on disk.
+pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
+    if atoms.is_empty() {
+        return;
+    }
+    let path = world_path(root);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
+
+    for atom in atoms {
+        let rendered = atom.to_string();
+        let already = lines.iter().position(|l| {
+            let t = l.trim();
+            !t.is_empty()
+                && !t.starts_with('#')
+                && !t.starts_with('@')
+                && Dep::parse(t).is_ok_and(|d| d.cpn == atom.cpn)
+        });
+        match already {
+            Some(idx) if lines[idx].trim() == rendered => {}
+            Some(idx) => lines[idx] = rendered,
+            None => lines.push(rendered),
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let new_content = if lines.is_empty() {
+        String::new()
+    } else {
+        lines.join("\n") + "\n"
+    };
+    if let Err(e) = std::fs::write(&path, new_content) {
+        eprintln!("warning: could not update {path}: {e}");
+    }
+}
+
 fn world_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     match root {
         Some(r) => r.join("var/lib/portage/world"),
@@ -162,5 +207,67 @@ fn world_sets_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     match root {
         Some(r) => r.join("var/lib/portage/world_sets"),
         None => Utf8PathBuf::from("/var/lib/portage/world_sets"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_world(root: &Utf8Path) -> String {
+        std::fs::read_to_string(world_path(Some(root))).unwrap_or_default()
+    }
+
+    #[test]
+    fn appends_a_new_atom_to_an_empty_world() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+
+        add_atoms(Some(&root), &[Dep::parse("app-editors/nano").unwrap()]);
+
+        assert_eq!(read_world(&root), "app-editors/nano\n");
+    }
+
+    #[test]
+    fn replaces_an_existing_entry_for_the_same_cpn_instead_of_duplicating() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), "=app-editors/nano-8.0\n").unwrap();
+
+        add_atoms(Some(&root), &[Dep::parse("app-editors/nano").unwrap()]);
+
+        assert_eq!(read_world(&root), "app-editors/nano\n");
+    }
+
+    #[test]
+    fn leaves_comments_and_set_refs_and_other_atoms_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(
+            world_path(Some(&root)),
+            "# a comment\n@some-set\napp-shells/bash\n",
+        )
+        .unwrap();
+
+        add_atoms(Some(&root), &[Dep::parse("app-editors/nano").unwrap()]);
+
+        assert_eq!(
+            read_world(&root),
+            "# a comment\n@some-set\napp-shells/bash\napp-editors/nano\n"
+        );
+    }
+
+    #[test]
+    fn is_a_no_op_when_the_exact_atom_is_already_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), "app-editors/nano\n").unwrap();
+
+        add_atoms(Some(&root), &[Dep::parse("app-editors/nano").unwrap()]);
+
+        assert_eq!(read_world(&root), "app-editors/nano\n");
     }
 }
