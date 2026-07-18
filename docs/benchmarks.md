@@ -22,6 +22,7 @@ Each crate with a hot path worth isolating owns its own `benches/`:
 | `portage-atom` | `parsing` | atom/dep-string parsing, vs pkgcraft |
 | `portage-atom-resolvo` | `parsing` | same, resolvo-side types |
 | `portage-vdb` | `vdb` | VDB open/iterate/category-scan against a real `/var/db/pkg` |
+| `portage-cli` | `elfscan` | install-image ELF scan serial vs parallel (merge-time `NEEDED.ELF.2`) |
 
 Run one directly with `cargo bench -p <crate> --bench <name>`, e.g.:
 
@@ -29,6 +30,9 @@ Run one directly with `cargo bench -p <crate> --bench <name>`, e.g.:
 cargo bench -p gentoo-interner --bench interner
 cargo bench -p portage-atom --bench parsing
 cargo bench -p portage-vdb --bench vdb
+cargo bench -p portage-cli --bench elfscan
+# optional tree (default: /usr/lib64)
+ELFSCAN_BENCH_DIR=/path/to/image cargo bench -p portage-cli --bench elfscan
 ```
 
 Some support alternative interner/allocator features (see each crate's
@@ -38,10 +42,10 @@ Some support alternative interner/allocator features (see each crate's
 cargo bench -p gentoo-interner --bench interner --no-default-features --features symbol-table
 ```
 
-No benches in `portage-cli` (binary), `portage-repo`, `portage-metadata`,
-`gentoo-core`, `gentoo-stages`, `portage-distfiles`, `portage-solver`,
-`portage-binpkg` — they're exercised via the central harness below or via
-end-to-end CLI comparisons instead.
+No benches in `portage-repo`, `portage-metadata`, `gentoo-core`,
+`gentoo-stages`, `portage-distfiles`, `portage-solver`, `portage-binpkg` —
+they're exercised via the central harness below or via end-to-end CLI
+comparisons instead.
 
 ### 2. Central harness (`benchmarks/`, workspace member `portage-bench`)
 
@@ -88,6 +92,11 @@ SKIP_TIMING=1 ./benchmarks/bench-em-vs-emerge.sh    # parity only, fast — use 
 # BDEPEND-trim-specific and crossdev-specific comparisons
 ./benchmarks/bench-bdepend-trim.sh
 ./benchmarks/bench-cross-emerge.sh
+
+# Install-image ELF scan: em serial/parallel vs Portage scanelf (pax-utils)
+./benchmarks/bench-elfscan.sh                  # default /usr/lib64
+./benchmarks/bench-elfscan.sh /path/to/image
+SKIP_SCANELF=1 ./benchmarks/bench-elfscan.sh   # em only
 ```
 
 `SKIP_TIMING=1` is the day-to-day check after touching resolver/USE code: it

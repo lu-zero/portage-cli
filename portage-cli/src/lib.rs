@@ -6,7 +6,8 @@ pub(crate) mod crossdev;
 pub(crate) mod depclean;
 pub(crate) mod dispatch;
 pub(crate) mod ebuild;
-pub(crate) mod elfscan;
+/// Install-image ELF scan (`NEEDED` / `NEEDED.ELF.2` generation).
+pub mod elfscan;
 pub(crate) mod emerge;
 pub(crate) mod error;
 pub(crate) mod maint;

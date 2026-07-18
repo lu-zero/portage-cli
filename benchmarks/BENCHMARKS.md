@@ -192,6 +192,7 @@ Repro: `cargo build --release -p portage-cli`, then the two-binary
   - `src/main.rs`: custom solver comparison tool (used for profiling)
   - `scripts/`: bench-sweep.sh, bench-eval.sh, compare-*.sh, maint.sh
   - `bench-em-vs-emerge.sh`: parity + timing vs real emerge (for roadmap parity checks)
+  - `bench-elfscan.sh`: wall-clock install-image ELF scan (`em` serial/parallel vs Portage `scanelf`)
   - Data: `MEMORY.md`, `PROFILES.md`, `results.md`, `README.md`
 
 ### Per-crate microbenchmarks
@@ -199,8 +200,9 @@ Repro: `cargo build --release -p portage-cli`, then the two-binary
 - `portage-atom/benches/parsing.rs` (compares to pkgcraft baseline)
 - `portage-atom-resolvo/benches/parsing.rs`
 - `portage-vdb/benches/vdb.rs`
+- `portage-cli/benches/elfscan.rs` — criterion serial vs parallel `scan_image` (merge-time NEEDED.ELF.2 path)
 
-**No benches** in: portage-cli (binary), portage-repo, portage-metadata, gentoo-core, gentoo-stages, portage-distfiles (they are exercised via the central ones or examples).
+**No benches** in: portage-repo, portage-metadata, gentoo-core, gentoo-stages, portage-distfiles (they are exercised via the central ones or examples).
 
 See also:
 - `docs/benchmarks.md` — quick-start map of what to run and where (this file is the historical record/data)
@@ -222,6 +224,25 @@ cargo bench -p portage-bench --no-default-features --features lasso
 # For gentoo-interner specifically
 cargo bench -p gentoo-interner --bench interner
 cargo bench -p gentoo-interner --bench interner --no-default-features --features symbol-table
+```
+
+### ELF image scan (merge-time NEEDED / vs Portage scanelf)
+
+Portage builds `NEEDED.ELF.2` with pax-utils `scanelf` on the install image.
+`em` uses `portage_cli::elfscan::scan_image` (object crate + flume workers).
+
+```sh
+# Criterion: serial (jobs=1) vs parallel (available_parallelism)
+cargo bench -p portage-cli --bench elfscan
+ELFSCAN_BENCH_DIR=/path/to/image cargo bench -p portage-cli --bench elfscan
+
+# Wall-clock vs scanelf (needs hyperfine; pax-utils for Portage side)
+./benchmarks/bench-elfscan.sh                 # default /usr/lib64
+./benchmarks/bench-elfscan.sh /path/to/image
+SKIP_SCANELF=1 RUNS=10 ./benchmarks/bench-elfscan.sh
+
+# One-shot harness (used by the script)
+cargo run -p portage-cli --release --example elfscan_bench -- --jobs 8 /usr/lib64
 ```
 
 ### Full wall-clock + comparison sweeps (needs Gentoo tree + hyperfine)

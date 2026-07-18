@@ -5,8 +5,14 @@
 //! `DT_NEEDED` (the comma list), `DT_SONAME` (what a library provides) and
 //! `DT_RPATH`/`DT_RUNPATH`. `REQUIRES` is the needed sonames minus the ones the
 //! package itself provides, grouped by portage's multilib category.
+//!
+//! [`scan_image`] walks the image once, then parses candidate files in parallel
+//! (flume worker pool sized to `available_parallelism`), matching the pattern
+//! used for ebuild sourcing / cache regen.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use camino::Utf8Path;
 use object::elf;
@@ -14,7 +20,7 @@ use object::read::elf::{Dyn, FileHeader, ProgramHeader, SectionHeader};
 use object::{Endianness, FileKind};
 
 /// The four ELF metadata fields, ready to write into the VDB.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ElfScan {
     /// Legacy `NEEDED`: `<path> <needed,comma>` per ELF.
     pub needed: Vec<String>,
@@ -26,11 +32,18 @@ pub struct ElfScan {
     pub provides: Vec<String>,
 }
 
-pub(crate) struct ElfInfo {
+/// Per-file dynamic-link metadata (internal + benches).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElfInfo {
+    /// ELF machine name for `NEEDED.ELF.2` (e.g. `X86_64`).
     pub machine: &'static str,
+    /// Portage multilib category (e.g. `x86_64`).
     pub category: String,
+    /// `DT_SONAME`, if any.
     pub soname: Option<String>,
+    /// `DT_RPATH` / `DT_RUNPATH`, if any.
     pub rpath: Option<String>,
+    /// `DT_NEEDED` sonames.
     pub needed: Vec<String>,
 }
 
@@ -40,34 +53,122 @@ pub(crate) struct ElfInfo {
 /// `preserve_libs` (to re-derive the link metadata of a registry-carried
 /// preserved lib, which — having outlived its owning VDB entry — is no
 /// longer listed in any package's `NEEDED.ELF.2`).
-pub(crate) fn scan_file(path: &std::path::Path) -> Option<ElfInfo> {
+pub(crate) fn scan_file(path: &Path) -> Option<ElfInfo> {
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.is_file() {
         return None;
+    }
+    // Cheap reject before a full read: ELF magic only.
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path).ok()?;
+        let mut magic = [0u8; 4];
+        f.read_exact(&mut magic).ok()?;
+        if magic != *b"\x7fELF" {
+            return None;
+        }
     }
     let data = std::fs::read(path).ok()?;
     parse_elf(&data)
 }
 
 /// Walk `image_dir` and collect ELF link metadata for every dynamic ELF object.
+///
+/// Worker count defaults to [`std::thread::available_parallelism`]. Use
+/// [`scan_image_with_jobs`] for serial (`Some(1)`) microbenchmarks.
 pub fn scan_image(image_dir: &Utf8Path) -> ElfScan {
+    scan_image_with_jobs(image_dir, None)
+}
+
+/// Like [`scan_image`], but with an explicit worker count (`None` = available
+/// parallelism, `Some(1)` = fully serial — useful for A/B benches).
+pub fn scan_image_with_jobs(image_dir: &Utf8Path, jobs: Option<usize>) -> ElfScan {
+    let image_root = image_dir.as_std_path();
+    let paths = collect_regular_files(image_root);
+    let entries = scan_paths_parallel(image_root, paths, jobs);
+    assemble_scan(entries)
+}
+
+/// Scan an arbitrary list of absolute paths under `image_root` (for benches).
+pub fn scan_paths_parallel(
+    image_root: &Path,
+    paths: Vec<PathBuf>,
+    jobs: Option<usize>,
+) -> Vec<(String, ElfInfo)> {
+    let jobs = jobs
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        })
+        .max(1);
+
+    if jobs == 1 || paths.len() < 32 {
+        return scan_paths_serial(image_root, paths);
+    }
+
+    let image_root = Arc::new(image_root.to_path_buf());
+    // Bounded work queue; each worker accumulates locally so a full result
+    // channel cannot stall producers (classic bounded in+out deadlock).
+    let (tx, rx) = flume::bounded::<PathBuf>(jobs * 4);
+
+    let mut handles = Vec::with_capacity(jobs);
+    for _ in 0..jobs {
+        let rx = rx.clone();
+        let root = Arc::clone(&image_root);
+        handles.push(std::thread::spawn(move || {
+            let mut local = Vec::new();
+            while let Ok(entry) = rx.recv() {
+                let Some(info) = scan_file(&entry) else {
+                    continue;
+                };
+                let rel = entry
+                    .strip_prefix(root.as_path())
+                    .unwrap_or(&entry)
+                    .to_string_lossy();
+                let install = format!("/{}", rel.trim_start_matches('/'));
+                local.push((install, info));
+            }
+            local
+        }));
+    }
+    drop(rx);
+
+    for p in paths {
+        let _ = tx.send(p);
+    }
+    drop(tx);
+
     let mut entries: Vec<(String, ElfInfo)> = Vec::new();
-    for entry in walkdir(image_dir.as_std_path()) {
+    for h in handles {
+        if let Ok(local) = h.join() {
+            entries.extend(local);
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
+
+fn scan_paths_serial(image_root: &Path, paths: Vec<PathBuf>) -> Vec<(String, ElfInfo)> {
+    let mut entries = Vec::new();
+    for entry in paths {
         let Some(info) = scan_file(&entry) else {
             continue;
         };
-        // Install path = path under the image, with a leading `/`.
         let rel = entry
-            .strip_prefix(image_dir.as_std_path())
+            .strip_prefix(image_root)
             .unwrap_or(&entry)
             .to_string_lossy();
         let install = format!("/{}", rel.trim_start_matches('/'));
         entries.push((install, info));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries
+}
 
+/// Build the four VDB field lists from sorted `(install_path, info)` pairs.
+pub fn assemble_scan(entries: Vec<(String, ElfInfo)>) -> ElfScan {
     let mut scan = ElfScan::default();
-    // provided sonames per category (for the REQUIRES subtraction).
     let mut provides: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut requires: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
@@ -92,7 +193,6 @@ pub fn scan_image(image_dir: &Utf8Path) -> ElfScan {
             r.insert(n.clone());
         }
     }
-    // REQUIRES = needed − provided, per category.
     for (cat, mut req) in requires {
         if let Some(prov) = provides.get(&cat) {
             for p in prov {
@@ -132,7 +232,6 @@ fn extract<Elf: FileHeader<Endian = Endianness>>(data: &[u8]) -> Option<ElfInfo>
     let is_64 = header.is_type_64();
     let (machine_name, category) = arch(machine, is_64);
 
-    // The dynamic string table backs the DT_NEEDED/SONAME/RPATH name offsets.
     let sections = header.sections(endian, data).ok()?;
     let (dynamic, dynamic_index) = header
         .program_headers(endian, data)
@@ -195,8 +294,9 @@ fn arch(e_machine: u16, is_64: bool) -> (&'static str, String) {
     (name, cat.to_string())
 }
 
-/// Iterative directory walk yielding every entry path under `root`.
-fn walkdir(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+/// Collect regular files under `root` (skips dirs and unreadable entries;
+/// follows the same non-symlink-dir recursion as the old serial walk).
+pub fn collect_regular_files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -207,10 +307,65 @@ fn walkdir(root: &std::path::Path) -> Vec<std::path::PathBuf> {
             let p = e.path();
             match std::fs::symlink_metadata(&p) {
                 Ok(m) if m.is_dir() => stack.push(p),
-                Ok(_) => out.push(p),
-                Err(_) => {}
+                Ok(m) if m.is_file() => out.push(p),
+                _ => {}
             }
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn scan_image_parallel_matches_serial_on_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(tmp.path()).unwrap();
+        let a = scan_image_with_jobs(root, Some(1));
+        let b = scan_image_with_jobs(root, Some(4));
+        assert_eq!(a, b);
+        assert!(a.needed_elf2.is_empty());
+    }
+
+    #[test]
+    fn scan_image_skips_non_elf() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("readme.txt"), b"hello").unwrap();
+        let root = Utf8Path::from_path(tmp.path()).unwrap();
+        let scan = scan_image(root);
+        assert!(scan.needed_elf2.is_empty());
+    }
+
+    #[test]
+    fn parallel_and_serial_agree_on_shared_objects() {
+        // Use a real system lib dir if present; otherwise skip.
+        let lib = Path::new("/usr/lib64");
+        if !lib.is_dir() {
+            return;
+        }
+        // Cap work: only a handful of files for unit test speed.
+        let mut paths = collect_regular_files(lib);
+        paths.truncate(64);
+        if paths.is_empty() {
+            return;
+        }
+        let serial = scan_paths_serial(lib, paths.clone());
+        let parallel = scan_paths_parallel(lib, paths, Some(4));
+        assert_eq!(serial, parallel);
+    }
+
+    #[test]
+    fn magic_reject_does_not_require_full_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("not-elf.bin");
+        // Large non-ELF — would be expensive to fully parse as ELF.
+        let mut data = vec![0u8; 1 << 20];
+        data[0] = b'N';
+        std::fs::write(&p, &data).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(scan_file(&p).is_none());
+    }
 }
