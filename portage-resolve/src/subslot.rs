@@ -50,10 +50,13 @@ fn collect_bound_atoms<'a>(entries: &'a [DepEntry], out: &mut Vec<&'a portage_at
             {
                 out.push(dep);
             }
-            DepEntry::AllOf(children) | DepEntry::AnyOf(children) => {
+            DepEntry::AllOf(children)
+            | DepEntry::AnyOf(children)
+            | DepEntry::ExactlyOneOf(children)
+            | DepEntry::AtMostOneOf(children) => {
                 collect_bound_atoms(children, out);
             }
-            _ => {}
+            DepEntry::Atom(_) | DepEntry::UseConditional { .. } => {}
         }
     }
 }
