@@ -40,7 +40,9 @@ pick_dir() {
 DIR=$(pick_dir "${1:-}")
 RUNS=${RUNS:-5}
 WARMUP=${WARMUP:-1}
-JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+# Match elfscan::default_jobs (cap 16); override with JOBS= for scaling runs.
+NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+JOBS=${JOBS:-$(( NPROC < 16 ? NPROC : 16 ))}
 
 echo "== elfscan bench tree: $DIR"
 echo "== building release elfscan_bench example"
@@ -48,7 +50,7 @@ cargo build -p portage-cli --release --example elfscan_bench -q
 EM_SCAN=(./target/release/examples/elfscan_bench)
 
 # Smoke once so we print counts.
-echo "== smoke (parallel)"
+echo "== smoke (parallel jobs=$JOBS)"
 "${EM_SCAN[@]}" --jobs "$JOBS" "$DIR"
 echo "== smoke (serial)"
 "${EM_SCAN[@]}" --jobs 1 "$DIR"
@@ -73,17 +75,17 @@ cmds=(
 )
 
 if [[ "${SKIP_SCANELF:-0}" != 1 ]] && command -v scanelf >/dev/null 2>&1; then
-    # Portage LinkageMapELF invokes scanelf roughly as:
-    #   scanelf -yBF '%a;%F;%S;%r;%n' <tree>
-    # (see portage/util/_dyn_libs/LinkageMapELF.py). -y: recursive; -B: format.
-    # We use a format close to NEEDED.ELF.2 fields for comparable work.
-    SCANELF_FMT='%a;%F;%S;%r;%n'
+    # Portage install-time NEEDED generation (misc-functions.sh):
+    #   scanelf -yRBF '%a;%p;%S;%r;%n' "${D%/}/"
+    # -y: do not scan symlinks; -R: recursive; -B: format; -F: custom format.
+    # Without -R, scanelf only looks at the top of DIR (not comparable).
+    SCANELF_FMT='%a;%p;%S;%r;%n'
     # Write to /dev/null so we measure scan, not terminal I/O.
     cmds+=(
-        -n "scanelf (portage pax-utils)"
-        "scanelf -yBF '$SCANELF_FMT' '$DIR' >/dev/null"
+        -n "scanelf -yRBF (portage install)"
+        "scanelf -yRBF '$SCANELF_FMT' '$DIR' >/dev/null"
     )
-    echo "== scanelf format: scanelf -yBF '$SCANELF_FMT' (Portage-like)"
+    echo "== scanelf: scanelf -yRBF '$SCANELF_FMT' (Portage install-time NEEDED)"
 else
     echo "== scanelf skipped (missing or SKIP_SCANELF=1)"
 fi

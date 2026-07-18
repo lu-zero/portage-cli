@@ -54,11 +54,7 @@ fn main() {
     let t0 = Instant::now();
     let scan = scan_image_with_jobs(utf, jobs);
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
-    let j = jobs.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-    });
+    let j = jobs.unwrap_or_else(portage_cli::elfscan::default_jobs);
     println!(
         "elfs={} needed_lines={} elapsed_ms={:.2} jobs={}",
         scan.needed_elf2.len(),

@@ -61,9 +61,7 @@ fn elfscan_benches(c: &mut Criterion) {
         b.iter(|| scan_image_with_jobs(utf, Some(1)))
     });
 
-    let jobs = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let jobs = portage_cli::elfscan::default_jobs();
     group.bench_function(format!("parallel_jobs{jobs}"), |b| {
         b.iter(|| scan_image_with_jobs(utf, Some(jobs)))
     });

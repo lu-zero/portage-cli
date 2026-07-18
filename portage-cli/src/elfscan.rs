@@ -6,18 +6,33 @@
 //! `DT_RPATH`/`DT_RUNPATH`. `REQUIRES` is the needed sonames minus the ones the
 //! package itself provides, grouped by portage's multilib category.
 //!
-//! [`scan_image`] walks the image once, then parses candidate files in parallel
-//! (flume worker pool sized to `available_parallelism`), matching the pattern
-//! used for ebuild sourcing / cache regen.
+//! Performance notes (vs Portage's `scanelf -yRBF` on the install image):
+//! - directory walk uses `DirEntry::file_type` (no extra `lstat` when `d_type`
+//!   is available);
+//! - each candidate is **mmap**'d (fault only the header / PT_DYNAMIC /
+//!   dynstr pages — not a full `read` of multi‑MB shared objects);
+//! - dynamic strings come from `DT_STRTAB` via `PT_LOAD` (no section-header
+//!   table walk);
+//! - files are parsed on a flume worker pool (default capped below raw core
+//!   count so a 128‑way host does not thrash on I/O).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use camino::Utf8Path;
+use memmap2::Mmap;
 use object::elf;
-use object::read::elf::{Dyn, FileHeader, ProgramHeader, SectionHeader};
-use object::{Endianness, FileKind};
+use object::read::elf::{Dyn, FileHeader, ProgramHeader};
+use object::{Endianness, FileKind, StringTable};
+
+/// Cap default worker count: beyond this, parallel open/mmap on a cold tree
+/// mostly increases system time without reducing wall clock (measured vs
+/// scanelf on AmpereOne / large `/usr/lib64` trees).
+const DEFAULT_JOBS_CAP: usize = 16;
+
+/// Below this many paths, skip thread-pool overhead.
+const PARALLEL_PATH_FLOOR: usize = 32;
 
 /// The four ELF metadata fields, ready to write into the VDB.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -54,34 +69,39 @@ pub struct ElfInfo {
 /// preserved lib, which — having outlived its owning VDB entry — is no
 /// longer listed in any package's `NEEDED.ELF.2`).
 pub(crate) fn scan_file(path: &Path) -> Option<ElfInfo> {
-    let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.is_file() {
+    let file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() < 4 {
         return None;
     }
-    // Cheap reject before a full read: ELF magic only.
-    {
-        use std::io::Read;
-        let mut f = std::fs::File::open(path).ok()?;
-        let mut magic = [0u8; 4];
-        f.read_exact(&mut magic).ok()?;
-        if magic != *b"\x7fELF" {
-            return None;
-        }
+    // SAFETY: we hold `file` open for the lifetime of the map; we only read.
+    // Concurrent truncation is possible in theory (same as scanelf); we treat
+    // parse errors as "not a dynamic ELF".
+    let mmap = unsafe { Mmap::map(&file) }.ok()?;
+    if mmap.len() < 4 || &mmap[..4] != b"\x7fELF" {
+        return None;
     }
-    let data = std::fs::read(path).ok()?;
-    parse_elf(&data)
+    parse_elf(&mmap)
 }
 
 /// Walk `image_dir` and collect ELF link metadata for every dynamic ELF object.
 ///
-/// Worker count defaults to [`std::thread::available_parallelism`]. Use
-/// [`scan_image_with_jobs`] for serial (`Some(1)`) microbenchmarks.
+/// Worker count defaults to [`default_jobs`]. Use [`scan_image_with_jobs`] for
+/// serial (`Some(1)`) microbenchmarks.
 pub fn scan_image(image_dir: &Utf8Path) -> ElfScan {
     scan_image_with_jobs(image_dir, None)
 }
 
-/// Like [`scan_image`], but with an explicit worker count (`None` = available
-/// parallelism, `Some(1)` = fully serial — useful for A/B benches).
+/// Default worker count: `available_parallelism` capped at [`DEFAULT_JOBS_CAP`].
+pub fn default_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, DEFAULT_JOBS_CAP)
+}
+
+/// Like [`scan_image`], but with an explicit worker count (`None` = [`default_jobs`],
+/// `Some(1)` = fully serial — useful for A/B benches).
 pub fn scan_image_with_jobs(image_dir: &Utf8Path, jobs: Option<usize>) -> ElfScan {
     let image_root = image_dir.as_std_path();
     let paths = collect_regular_files(image_root);
@@ -95,22 +115,16 @@ pub fn scan_paths_parallel(
     paths: Vec<PathBuf>,
     jobs: Option<usize>,
 ) -> Vec<(String, ElfInfo)> {
-    let jobs = jobs
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-        })
-        .max(1);
+    let jobs = jobs.unwrap_or_else(default_jobs).max(1);
 
-    if jobs == 1 || paths.len() < 32 {
+    if jobs == 1 || paths.len() < PARALLEL_PATH_FLOOR {
         return scan_paths_serial(image_root, paths);
     }
 
     let image_root = Arc::new(image_root.to_path_buf());
     // Bounded work queue; each worker accumulates locally so a full result
     // channel cannot stall producers (classic bounded in+out deadlock).
-    let (tx, rx) = flume::bounded::<PathBuf>(jobs * 4);
+    let (tx, rx) = flume::bounded::<PathBuf>(jobs * 8);
 
     let mut handles = Vec::with_capacity(jobs);
     for _ in 0..jobs {
@@ -232,23 +246,39 @@ fn extract<Elf: FileHeader<Endian = Endianness>>(data: &[u8]) -> Option<ElfInfo>
     let is_64 = header.is_type_64();
     let (machine_name, category) = arch(machine, is_64);
 
-    let sections = header.sections(endian, data).ok()?;
-    let (dynamic, dynamic_index) = header
-        .program_headers(endian, data)
-        .ok()?
+    let segments = header.program_headers(endian, data).ok()?;
+    let dynamic = segments
         .iter()
-        .find_map(|ph| ph.dynamic(endian, data).ok().flatten().map(|d| (d, ph)))?;
-    let _ = dynamic_index;
-    let strings = sections
-        .section_by_name(endian, b".dynstr")
-        .and_then(|(_, s)| s.data(endian, data).ok())
-        .map(|d| object::StringTable::new(d, 0, d.len() as u64))?;
+        .find_map(|ph| ph.dynamic(endian, data).ok().flatten())?;
+
+    // Resolve DT_STRTAB / DT_STRSZ from the dynamic segment (loader-style),
+    // without touching the section header table — matches scanelf and avoids
+    // faulting shdr/shstrtab pages on stripped binaries.
+    let mut strtab_addr: Option<u64> = None;
+    let mut strsz: Option<u64> = None;
+    for d in dynamic {
+        match d.tag32(endian) {
+            Some(elf::DT_STRTAB) => strtab_addr = Some(d.d_val(endian).into()),
+            Some(elf::DT_STRSZ) => strsz = Some(d.d_val(endian).into()),
+            _ => {}
+        }
+    }
+    let strtab_addr = strtab_addr?;
+    let strsz = strsz.unwrap_or(0);
+    let strings_bytes = dynstr_bytes::<Elf>(segments, endian, data, strtab_addr, strsz)?;
+    let strings = StringTable::new(strings_bytes, 0, strings_bytes.len() as u64);
 
     let mut needed = Vec::new();
     let mut soname = None;
     let mut rpath = None;
     for d in dynamic {
         let Some(tag) = d.tag32(endian) else { continue };
+        // Only string-valued tags we care about — skip address tags so we
+        // don't spuriously fail on DT_STRTAB etc. when looking up strings.
+        match tag {
+            elf::DT_NEEDED | elf::DT_SONAME | elf::DT_RPATH | elf::DT_RUNPATH => {}
+            _ => continue,
+        }
         let val = match d.string(endian, strings) {
             Ok(s) => String::from_utf8_lossy(s).into_owned(),
             Err(_) => continue,
@@ -267,6 +297,48 @@ fn extract<Elf: FileHeader<Endian = Endianness>>(data: &[u8]) -> Option<ElfInfo>
         rpath,
         needed,
     })
+}
+
+/// Map `DT_STRTAB` virtual address (+ `DT_STRSZ`) into a file-backed slice via
+/// `PT_LOAD` segments.
+fn dynstr_bytes<'data, Elf: FileHeader<Endian = Endianness>>(
+    segments: &'data [Elf::ProgramHeader],
+    endian: Endianness,
+    data: &'data [u8],
+    strtab_addr: u64,
+    strsz: u64,
+) -> Option<&'data [u8]> {
+    if strsz > 0 {
+        for ph in segments {
+            if ph.p_type(endian) != elf::PT_LOAD {
+                continue;
+            }
+            if let Ok(Some(slice)) = ph.data_range(endian, data, strtab_addr, strsz) {
+                return Some(slice);
+            }
+        }
+        return None;
+    }
+    // Missing DT_STRSZ: take the rest of the containing LOAD segment.
+    for ph in segments {
+        if ph.p_type(endian) != elf::PT_LOAD {
+            continue;
+        }
+        let vaddr: u64 = ph.p_vaddr(endian).into();
+        let memsz: u64 = ph.p_memsz(endian).into();
+        if strtab_addr < vaddr {
+            continue;
+        }
+        let off = strtab_addr - vaddr;
+        if off >= memsz {
+            continue;
+        }
+        let remain = memsz - off;
+        if let Ok(Some(slice)) = ph.data_range(endian, data, strtab_addr, remain) {
+            return Some(slice);
+        }
+    }
+    None
 }
 
 /// `(MACHINE name, portage multilib category)` for an ELF machine + class,
@@ -295,7 +367,8 @@ fn arch(e_machine: u16, is_64: bool) -> (&'static str, String) {
 }
 
 /// Collect regular files under `root` (skips dirs and unreadable entries;
-/// follows the same non-symlink-dir recursion as the old serial walk).
+/// does not follow directory symlinks — `file_type` reports the symlink
+/// itself, matching the old `symlink_metadata` walk).
 pub fn collect_regular_files(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -304,11 +377,15 @@ pub fn collect_regular_files(root: &Path) -> Vec<PathBuf> {
             continue;
         };
         for e in rd.flatten() {
+            // Prefer readdir d_type (no stat) when the platform provides it.
+            let Ok(ft) = e.file_type() else {
+                continue;
+            };
             let p = e.path();
-            match std::fs::symlink_metadata(&p) {
-                Ok(m) if m.is_dir() => stack.push(p),
-                Ok(m) if m.is_file() => out.push(p),
-                _ => {}
+            if ft.is_dir() {
+                stack.push(p);
+            } else if ft.is_file() {
+                out.push(p);
             }
         }
     }
@@ -367,5 +444,11 @@ mod tests {
         std::fs::write(&p, &data).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(scan_file(&p).is_none());
+    }
+
+    #[test]
+    fn default_jobs_is_capped() {
+        assert!(default_jobs() >= 1);
+        assert!(default_jobs() <= DEFAULT_JOBS_CAP);
     }
 }

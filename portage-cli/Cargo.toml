@@ -71,6 +71,7 @@ url = { workspace = true }
 sha1 = { workspace = true }
 hex = { workspace = true }
 object = { workspace = true }
+memmap2 = { workspace = true }
 bzip2 = { workspace = true }
 rustix = { workspace = true }
 humansize = { workspace = true }
