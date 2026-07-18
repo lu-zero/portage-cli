@@ -49,6 +49,10 @@ impl Solver for PortageDependencyProvider {
         PortageDependencyProvider::set_prefer_newest_slot(self, on);
     }
 
+    fn set_prefer_update(&mut self, on: bool) {
+        PortageDependencyProvider::set_prefer_update(self, on);
+    }
+
     fn set_rebuild_tree(&mut self, on: bool) {
         PortageDependencyProvider::set_rebuild_tree(self, on);
     }

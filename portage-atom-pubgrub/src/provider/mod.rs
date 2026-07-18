@@ -273,6 +273,12 @@ pub struct PortageDependencyProvider {
     /// version, see `rank_slots_by_version`). Off by default so plain `-p`/`-up`
     /// stays minimal.
     pub(crate) prefer_newest_slot: bool,
+    /// `--update --deep` (not emptytree): do not Favour installed versions for
+    /// packages that appear in the solve — pick the newest accepted in-slot
+    /// version in range (emerge `-uD` in-slot upgrades). Distinct from
+    /// [`Self::prefer_newest_slot`] (cross-slot `:*` bumps) and from
+    /// [`InstalledPolicy::Rebuild`] (emptytree full build-closure expansion).
+    pub(crate) prefer_update: bool,
     /// `--root-deps=rdeps` (crossdev cross builds): discard a target package's
     /// `DEPEND` from the target-root graph. Only `RDEPEND`/`PDEPEND` install into
     /// the sysroot; build-time deps resolve against the build host (`/`), where
@@ -654,6 +660,7 @@ impl PortageDependencyProvider {
             with_bdeps,
             rebuild_tree: false,
             prefer_newest_slot: false,
+            prefer_update: false,
             root_deps_rdeps: false,
             nodeps: false,
             use_decision_prefer,
@@ -808,6 +815,12 @@ impl PortageDependencyProvider {
     /// to the newest slot rather than keeping a satisfying installed slot.
     pub fn set_prefer_newest_slot(&mut self, active: bool) {
         self.prefer_newest_slot = active;
+    }
+
+    /// `--update --deep`: prefer newest in-slot versions for every package in
+    /// the solve (disable the Favor early-return for non-root packages).
+    pub fn set_prefer_update(&mut self, active: bool) {
+        self.prefer_update = active;
     }
 
     /// `--root-deps=rdeps`: drop a target package's `DEPEND` from the sysroot

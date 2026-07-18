@@ -95,9 +95,16 @@ impl DependencyProvider for PortageDependencyProvider {
                     // Favor (non-update) emerge keeps such an installed dep
                     // rather than pulling the newer build; the empty-deps
                     // installed stub is fine since the package is satisfying a
-                    // dep, not being rebuilt. Update/rebuild modes (`Rebuild`,
-                    // `--deep`) take the newest via the fall-through instead.
-                    if !self.root_targets.contains(package) && range.contains(installed_ver) {
+                    // dep, not being rebuilt.
+                    //
+                    // `prefer_update` (`-uD`): fall through to newest in-range
+                    // for the whole solve (transitive in-slot upgrades).
+                    // `Rebuild` / root targets likewise take the newest via
+                    // fall-through.
+                    if !self.prefer_update
+                        && !self.root_targets.contains(package)
+                        && range.contains(installed_ver)
+                    {
                         return Ok(Some(installed_ver.clone()));
                     }
                 }

@@ -278,6 +278,161 @@ fn installed_favored_picks_installed_version() {
     );
 }
 
+/// `-uD` / `prefer_update`: transitive deps upgrade in-slot even when the
+/// installed version still satisfies the atom (emerge deep update).
+#[test]
+fn prefer_update_upgrades_transitive_in_slot() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-libs/openssl-3.0.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-libs/openssl-3.1.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/myapp-1.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse(">=dev-libs/openssl-3.0.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    provider.set_prefer_update(true);
+    let openssl = PortagePackage::unslotted(Cpn::parse("dev-libs/openssl").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: openssl,
+        version: Version::parse("3.0.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+
+    let myapp = PortagePackage::unslotted(Cpn::parse("app-misc/myapp").unwrap());
+    let solution = provider
+        .resolve_targets(vec![(myapp, PortageVersionSet::any())])
+        .unwrap();
+    assert_eq!(
+        solution.get(&PortagePackage::unslotted(
+            Cpn::parse("dev-libs/openssl").unwrap()
+        )),
+        Some(&Version::parse("3.1.0").unwrap()),
+        "prefer_update should pick newest in-slot over satisfying installed"
+    );
+}
+
+/// Flag off: same graph keeps the installed transitive dep (Favor contract).
+#[test]
+fn prefer_update_off_keeps_transitive() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-libs/openssl-3.0.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-libs/openssl-3.1.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/myapp-1.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse(">=dev-libs/openssl-3.0.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    // prefer_update left false
+    let openssl = PortagePackage::unslotted(Cpn::parse("dev-libs/openssl").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: openssl,
+        version: Version::parse("3.0.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+
+    let myapp = PortagePackage::unslotted(Cpn::parse("app-misc/myapp").unwrap());
+    let solution = provider
+        .resolve_targets(vec![(myapp, PortageVersionSet::any())])
+        .unwrap();
+    assert_eq!(
+        solution.get(&PortagePackage::unslotted(
+            Cpn::parse("dev-libs/openssl").unwrap()
+        )),
+        Some(&Version::parse("3.0.0").unwrap()),
+        "without prefer_update, Favor keeps the installed transitive dep"
+    );
+}
+
+/// Installed version pruned from the tree: under prefer_update the transitive
+/// dep upgrades (without the flag, Favor keeps the stub — see
+/// `installed_version_removed_from_repo_kept_when_satisfying`).
+#[test]
+fn prefer_update_revbump_transitive() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("app-misc/a-1.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("dev-python/b").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("dev-python/b-2.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    provider.set_prefer_update(true);
+    provider.add_installed(InstalledPackage {
+        package: PortagePackage::slotted(
+            Cpn::parse("dev-python/b").unwrap(),
+            Interned::intern("0"),
+        ),
+        version: Version::parse("1.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+
+    let a = PortagePackage::slotted(Cpn::parse("app-misc/a").unwrap(), Interned::intern("0"));
+    let solution = provider
+        .resolve_targets(vec![(a, PortageVersionSet::any())])
+        .unwrap();
+
+    let b_ver = solution
+        .iter()
+        .find(|(p, _)| p.cpn().package.as_str() == "b")
+        .map(|(_, v)| v.clone());
+    assert_eq!(
+        b_ver,
+        Some(Version::parse("2.0").unwrap()),
+        "prefer_update upgrades a transitive dep whose installed cpv left the tree"
+    );
+}
+
 #[test]
 fn installed_favored_upgrades_when_required() {
     let mut repo = InMemoryRepository::new();

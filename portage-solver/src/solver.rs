@@ -41,6 +41,12 @@ pub trait Solver {
     /// `--emptytree`). Default no-op.
     fn set_prefer_newest_slot(&mut self, _on: bool) {}
 
+    /// Prefer newest accepted in-slot versions for packages in the solve
+    /// (emerge `-uD`: typically `update && deep`, not emptytree). When off,
+    /// installed packages that satisfy a constraint stay installed (`Favor`).
+    /// Default no-op.
+    fn set_prefer_update(&mut self, _on: bool) {}
+
     /// Whether to expand the full deep closure (native `--emptytree`).
     /// Default no-op.
     fn set_rebuild_tree(&mut self, _on: bool) {}
