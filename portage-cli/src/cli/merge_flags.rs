@@ -1,37 +1,31 @@
 //! Merge-behavior flags: everything `emerge_atoms`/`emerge_atoms_inner`/
 //! `run_merge_plan` read to decide *how* to resolve and build a set of atoms,
 //! as opposed to root-model flags (`--root`, `--local`, `--privilege`, …,
-//! already `global = true` on [`super::Cli`] since they're meaningful to
-//! every applet) or depgraph-shape flags ([`super::DepgraphFlags`]: `--deep`/
-//! `--newuse`).
+//! already `global = true` on [`super::Cli`]) or depgraph-shape flags
+//! ([`super::DepgraphFlags`]: `--deep`/`--newuse`).
 //!
 //! Flattened both into the top-level [`super::Cli`] (for the bare `em
 //! <atoms>` path) and into [`super::ToolchainArgs`]/[`super::CrossdevArgs`]/
 //! [`super::StagesArgs`] (whose staged driver, `crossdev::run_staged`, calls
-//! the very same `emerge_atoms`/`emerge_atoms_inner` chain per step) —
-//! mirroring exactly how [`super::DepgraphFlags`] is already flattened in
-//! both places. This lets these flags be written either before or after the
-//! subcommand name (`em -j 80 stages --stage1` or `em stages --stage1 -j
-//! 80`), each populating its own instance; the driver merges the two with
-//! the same precedence (subcommand value wins when set, falling back to the
-//! global one — the same precedence
-//! `merge_depgraph_flags` already uses).
+//! the same `emerge_atoms`/`emerge_atoms_inner` chain per step) — mirroring
+//! [`super::DepgraphFlags`]'s own flattening. This lets these flags be
+//! written either before or after the subcommand name; the driver merges
+//! the two with the same subcommand-wins-when-set precedence
+//! `merge_depgraph_flags` already uses.
 //!
 //! `--search`/`--searchdesc` are deliberately NOT here: they select an
 //! entirely different mode in the bare path (`run_emerge` branches to
 //! `search::run_emerge_style` before ever calling `emerge_atoms`), so they
 //! have no meaning for a subcommand's staged build. `--nodeps` is also NOT
-//! here: it is already threaded explicitly per call
-//! ([`crate::EmergeOpts::nodeps`]) because each [`crate::crossdev::stages::StageStep`] needs
-//! its own value (the two-stage cross bootstrap's `--nodeps` libc-headers
-//! step), not a single global/per-invocation one — folding it into this
-//! mixin would lose that per-step distinction.
+//! here: it's already threaded per call ([`crate::EmergeOpts::nodeps`])
+//! because each [`crate::crossdev::stages::StageStep`] needs its own value
+//! (the two-stage cross bootstrap's `--nodeps` libc-headers step) — folding
+//! it into this mixin would lose that per-step distinction.
 //!
 //! Found 2026-07-03 running `em stages --stage1 -j 80 --keep-going`: `-j`/
 //! `--keep-going`/`--autosolve-use`/`--autounmask-write` all parsed only
-//! when placed *before* the subcommand (clap rejects non-global args placed
-//! after one), and `run_staged`'s driver read them straight off the
-//! top-level `Cli` regardless of where `stages`/`crossdev`/`toolchain`'s own
+//! when placed *before* the subcommand, and `run_staged`'s driver read them
+//! straight off the top-level `Cli` regardless of where the subcommand's own
 //! flattened copy might set them — so a flag given *after* the subcommand
 //! silently had no effect even where clap did accept it. See
 //! `todo/stage-build-shakeout.md`.
@@ -39,19 +33,15 @@
 pub struct MergeFlags {
     /// Ask for confirmation before performing actions.
     ///
-    /// Lives here (not `global = true` on `Cli`) rather than in the wider
-    /// "meaningful to every applet" set alongside `--root`/`--privilege`:
-    /// unlike those, `--ask` only means anything to a merge-shaped command
-    /// (a bare atom build, or `crossdev`/`toolchain`/`stages`' own
-    /// config-write confirmation) — a config-only command like `em use`/
-    /// `em pkg use add` never reads it. Making it `global` inherited that
-    /// meaninglessness into every subcommand's argument set, which is also
-    /// what caused `-a` (already taken by `--ask`) to collide with `use`'s
-    /// own `-a`/`--add` — a real crash (`em use --help` panicked in debug
-    /// builds; release builds only skip the check, they don't fix the
-    /// semantic mismatch). See `merge_merge_flags` for how this still works
-    /// whether given before or after the subcommand name, the same as every
-    /// other field here.
+    /// Lives here (not `global = true` on `Cli`): unlike `--root`/
+    /// `--privilege`, `--ask` only means anything to a merge-shaped command
+    /// — a config-only command like `em use`/`em pkg use add` never reads
+    /// it. Making it global inherited that meaninglessness into every
+    /// subcommand's args, which is also what caused `-a` to collide with
+    /// `use`'s own `-a`/`--add` — a real crash (`em use --help` panicked in
+    /// debug builds; release only skips the check). See `merge_merge_flags`
+    /// for how this still works before or after the subcommand name, same
+    /// as every other field here.
     #[arg(short = 'a', long)]
     pub ask: bool,
 
