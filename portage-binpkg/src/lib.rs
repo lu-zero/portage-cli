@@ -26,8 +26,8 @@ pub mod scan;
 pub use error::{Error, Result};
 pub use gpkg::{GpkgInput, extract_image, read_metadata, write_gpkg};
 pub use index::{
-    BinpkgEntry, BinpkgIndex, RemoteBinpkgIndex, parse_index_blocks, parse_index_header,
-    parse_packages_entries, use_compatible,
+    BinpkgEntry, BinpkgIndex, RemoteBinpkgIndex, build_env_key, parse_index_blocks,
+    parse_index_header, parse_packages_entries, use_compatible,
 };
 pub use regen::index_pkgdir;
 pub use scan::{checksum, find_gpkg_containers, parse_build_id_from_name};

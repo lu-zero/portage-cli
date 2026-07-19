@@ -14,11 +14,12 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use sokgi::{Dialect, FlagSet, Warning};
+
 use crate::error::Result;
 use crate::scan::find_gpkg_containers;
 
-/// One `Packages` index entry, parsed into the fields the reuse check needs
-/// (and optional build-env provenance for future gates).
+/// One `Packages` index entry, parsed into the fields the reuse check needs.
 #[derive(Debug, Clone)]
 pub struct BinpkgEntry {
     /// Path relative to `PKGDIR` (e.g. `app-test/foo-1.0-1.gpkg.tar`).
@@ -32,18 +33,24 @@ pub struct BinpkgEntry {
     /// Reuse rejects a mismatch against the live desired CHOST so an aarch64
     /// PKGDIR entry is never taken for a riscv64 plan (and vice versa).
     pub chost: String,
-    /// Build-time `CFLAGS` (empty if absent). **Recorded only** for now —
-    /// not part of [`BinpkgIndex::find_reusable`]; callers can compare later
-    /// (e.g. RVV / `-march` variants under the same CHOST).
+    /// Build-time `CFLAGS` (empty if absent).
     pub cflags: String,
-    /// Build-time `CXXFLAGS` (empty if absent). Same policy as [`cflags`].
+    /// Build-time `CXXFLAGS` (empty if absent).
     pub cxxflags: String,
+    /// Build-time `LDFLAGS` (empty if absent).
+    pub ldflags: String,
+    /// Build-time `RUSTFLAGS` (empty if absent).
+    pub rustflags: String,
+    /// Build environment key derived from cflags, cxxflags, ldflags, rustflags
+    /// via sokgi. Empty if all flag sets are empty (skip gate).
+    /// "__native__" if any flag set contains machine-dependent flags.
+    pub build_env_key: String,
 }
 
 /// A parsed `Packages` index, keyed by `cpv`, answering reuse queries.
 #[derive(Debug, Default)]
 pub struct BinpkgIndex {
-    entries: BTreeMap<String, BinpkgEntry>,
+    entries: BTreeMap<String, Vec<BinpkgEntry>>,
     /// Absolute `PKGDIR`, used to resolve each entry's relative `path`.
     pkgdir: PathBuf,
 }
@@ -74,7 +81,7 @@ impl BinpkgIndex {
     /// Slow path: no usable index — scan `pkgdir` and read each container's
     /// metadata via [`crate::read_metadata`].
     fn scan(pkgdir: &Path) -> Result<Self> {
-        let mut entries = BTreeMap::new();
+        let mut entries: BTreeMap<String, Vec<BinpkgEntry>> = BTreeMap::new();
         let mut files = Vec::new();
         find_gpkg_containers(pkgdir, pkgdir, &mut files)?;
         for (rel, full) in &files {
@@ -91,17 +98,24 @@ impl BinpkgIndex {
                 continue;
             }
             let cpv = format!("{cat}/{pf}");
-            entries.insert(
-                cpv.clone(),
-                BinpkgEntry {
-                    path: rel.clone(),
-                    use_set: split_use(meta.get("USE").map(String::as_str).unwrap_or("")),
-                    iuse: split_iuse(meta.get("IUSE").map(String::as_str).unwrap_or("")),
-                    chost: meta.get("CHOST").cloned().unwrap_or_default(),
-                    cflags: meta.get("CFLAGS").cloned().unwrap_or_default(),
-                    cxxflags: meta.get("CXXFLAGS").cloned().unwrap_or_default(),
-                },
-            );
+            let cflags = meta.get("CFLAGS").cloned().unwrap_or_default();
+            let cxxflags = meta.get("CXXFLAGS").cloned().unwrap_or_default();
+            let ldflags = meta.get("LDFLAGS").cloned().unwrap_or_default();
+            let rustflags = meta.get("RUSTFLAGS").cloned().unwrap_or_default();
+            let build_env_key = build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
+            
+            let entry = BinpkgEntry {
+                path: rel.clone(),
+                use_set: split_use(meta.get("USE").map(String::as_str).unwrap_or("")),
+                iuse: split_iuse(meta.get("IUSE").map(String::as_str).unwrap_or("")),
+                chost: meta.get("CHOST").cloned().unwrap_or_default(),
+                cflags,
+                cxxflags,
+                ldflags,
+                rustflags,
+                build_env_key,
+            };
+            entries.entry(cpv).or_default().push(entry);
         }
         Ok(Self {
             entries,
@@ -111,7 +125,7 @@ impl BinpkgIndex {
 
     /// The number of indexed packages (for reporting).
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.values().map(|v| v.len()).sum()
     }
 
     /// Whether the index has no entries.
@@ -119,35 +133,46 @@ impl BinpkgIndex {
         self.entries.is_empty()
     }
 
-    /// Find a reusable binpkg for `cpv` given the desired `USE` and `CHOST`,
-    /// returning the absolute container path. `None` if no binpkg exists for
-    /// the cpv, or if its recorded USE/CHOST does not match (i.e. it must be
-    /// rebuilt). Version and slot match by `cpv` lookup (a binpkg for a cpv is
-    /// that ebuild's slot).
+    /// Find a reusable binpkg for `cpv` given the desired `USE`, `CHOST`, and
+    /// `build_env_key`, returning the absolute container path. `None` if no
+    /// binpkg exists for the cpv, or if its recorded USE/CHOST/build_env_key
+    /// does not match (i.e. it must be rebuilt). Version and slot match by
+    /// `cpv` lookup (a binpkg for a cpv is that ebuild's slot).
     ///
     /// `desired_chost` empty skips the CHOST gate (legacy/test callers); a
     /// missing CHOST on the binpkg also skips it so sparse indexes still work.
     ///
-    /// Build-env fields ([`BinpkgEntry::cflags`] / [`BinpkgEntry::cxxflags`])
-    /// are **not** checked yet — use [`Self::get`] if a caller wants to apply
-    /// its own policy.
+    /// `desired_build_env_key` empty skips the build_env_key gate (backward compat);
+    /// a missing/empty build_env_key on the binpkg also skips it.
+    ///
+    /// Build-env fields ([`BinpkgEntry::cflags`] / [`BinpkgEntry::cxxflags`] /
+    /// [`BinpkgEntry::ldflags`]) are checked via the computed build_env_key.
     pub fn find_reusable(
         &self,
         cpv: &str,
         desired_use: &[String],
         desired_chost: &str,
+        desired_build_env_key: &str,
     ) -> Option<PathBuf> {
-        let entry = self.entries.get(cpv)?;
-        if !entry_reusable(entry, desired_use, desired_chost) {
-            return None;
+        let entries = self.entries.get(cpv)?;
+        // Find the first entry that matches all criteria
+        for entry in entries {
+            if !entry_reusable(entry, desired_use, desired_chost) {
+                continue;
+            }
+            if !build_env_key_compatible(&entry.build_env_key, desired_build_env_key) {
+                continue;
+            }
+            return Some(self.pkgdir.join(&entry.path));
         }
-        Some(self.pkgdir.join(&entry.path))
+        None
     }
 
-    /// Look up the raw index entry for `cpv` (including CFLAGS/CXXFLAGS
-    /// provenance), if present. Does not apply USE/CHOST reuse rules.
-    pub fn get(&self, cpv: &str) -> Option<&BinpkgEntry> {
-        self.entries.get(cpv)
+    /// Look up the raw index entries for `cpv` (including CFLAGS/CXXFLAGS/
+    /// LDFLAGS provenance), if present. Does not apply USE/CHOST reuse rules.
+    /// Returns all entries for the CPV (there may be multiple variants).
+    pub fn get(&self, cpv: &str) -> Option<&[BinpkgEntry]> {
+        self.entries.get(cpv).map(|v| v.as_slice())
     }
 }
 
@@ -192,23 +217,30 @@ pub fn parse_index_blocks(text: &str) -> Vec<BTreeMap<&str, &str>> {
 /// Parse a `Packages` index into `cpv → entry`. Shared by the local and remote
 /// consumers (the only difference is how `path` is resolved: a local `PKGDIR`
 /// join vs a remote `base_uri` join).
-pub fn parse_packages_entries(text: &str) -> BTreeMap<String, BinpkgEntry> {
-    let mut entries = BTreeMap::new();
+pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> {
+    let mut entries: BTreeMap<String, Vec<BinpkgEntry>> = BTreeMap::new();
     for fields in parse_index_blocks(text) {
         let Some(&cpv) = fields.get("CPV") else {
             continue;
         };
-        entries.insert(
-            cpv.to_string(),
-            BinpkgEntry {
-                path: fields.get("PATH").copied().unwrap_or("").to_string(),
-                use_set: split_use(fields.get("USE").copied().unwrap_or("")),
-                iuse: split_iuse(fields.get("IUSE").copied().unwrap_or("")),
-                chost: fields.get("CHOST").copied().unwrap_or("").to_string(),
-                cflags: fields.get("CFLAGS").copied().unwrap_or("").to_string(),
-                cxxflags: fields.get("CXXFLAGS").copied().unwrap_or("").to_string(),
-            },
-        );
+        let cflags = fields.get("CFLAGS").copied().unwrap_or("").to_string();
+        let cxxflags = fields.get("CXXFLAGS").copied().unwrap_or("").to_string();
+        let ldflags = fields.get("LDFLAGS").copied().unwrap_or("").to_string();
+        let rustflags = fields.get("RUSTFLAGS").copied().unwrap_or("").to_string();
+        let build_env_key = build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
+        
+        let entry = BinpkgEntry {
+            path: fields.get("PATH").copied().unwrap_or("").to_string(),
+            use_set: split_use(fields.get("USE").copied().unwrap_or("")),
+            iuse: split_iuse(fields.get("IUSE").copied().unwrap_or("")),
+            chost: fields.get("CHOST").copied().unwrap_or("").to_string(),
+            cflags,
+            cxxflags,
+            ldflags,
+            rustflags,
+            build_env_key,
+        };
+        entries.entry(cpv.to_string()).or_default().push(entry);
     }
     entries
 }
@@ -234,7 +266,7 @@ pub fn parse_index_header(text: &str) -> BTreeMap<String, String> {
 /// download URL instead of a local file — used by `-g`/`--getbinpkg`.
 #[derive(Debug, Clone)]
 pub struct RemoteBinpkgIndex {
-    entries: BTreeMap<String, BinpkgEntry>,
+    entries: BTreeMap<String, Vec<BinpkgEntry>>,
     /// Download base: index header `URI` when present, else the configured
     /// `sync-uri` / `PORTAGE_BINHOST` the index was fetched from (Portage
     /// `bintree.py`: `remote_base_uri = pkgindex.header.get("URI", base_url)`).
@@ -267,7 +299,7 @@ impl RemoteBinpkgIndex {
 
     /// The number of indexed packages (for reporting).
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.values().map(|v| v.len()).sum()
     }
 
     /// Whether the index has no entries.
@@ -276,27 +308,37 @@ impl RemoteBinpkgIndex {
     }
 
     /// Find a reusable remote binpkg for `cpv`, returning its download URL.
-    /// `None` if the cpv is absent or its USE/CHOST does not match (same rules
-    /// as the local index). URL = `base_uri` + `/` + `PATH`.
+    /// `None` if the cpv is absent or its USE/CHOST/build_env_key does not match
+    /// (same rules as the local index). URL = `base_uri` + `/` + `PATH`.
     ///
-    /// CFLAGS/CXXFLAGS are carried on the entry ([`Self::get`]) but not gated.
+    /// CFLAGS/CXXFLAGS/LDFLAGS are carried on the entry ([`Self::get`]) and
+    /// checked via the computed build_env_key.
     pub fn find_reusable(
         &self,
         cpv: &str,
         desired_use: &[String],
         desired_chost: &str,
+        desired_build_env_key: &str,
     ) -> Option<String> {
-        let entry = self.entries.get(cpv)?;
-        if !entry_reusable(entry, desired_use, desired_chost) {
-            return None;
+        let entries = self.entries.get(cpv)?;
+        // Find the first entry that matches all criteria
+        for entry in entries {
+            if !entry_reusable(entry, desired_use, desired_chost) {
+                continue;
+            }
+            if !build_env_key_compatible(&entry.build_env_key, desired_build_env_key) {
+                continue;
+            }
+            return Some(format!("{}/{path}", self.base_uri, path = entry.path));
         }
-        Some(format!("{}/{path}", self.base_uri, path = entry.path))
+        None
     }
 
-    /// Look up the raw index entry for `cpv` (including CFLAGS/CXXFLAGS), if
-    /// present. Does not apply USE/CHOST reuse rules.
-    pub fn get(&self, cpv: &str) -> Option<&BinpkgEntry> {
-        self.entries.get(cpv)
+    /// Look up the raw index entries for `cpv` (including CFLAGS/CXXFLAGS/
+    /// LDFLAGS), if present. Does not apply USE/CHOST reuse rules.
+    /// Returns all entries for the CPV (there may be multiple variants).
+    pub fn get(&self, cpv: &str) -> Option<&[BinpkgEntry]> {
+        self.entries.get(cpv).map(|v| v.as_slice())
     }
 }
 
@@ -316,6 +358,16 @@ fn chost_compatible(binpkg_chost: &str, desired_chost: &str) -> bool {
     binpkg_chost == desired_chost
 }
 
+/// Build-env key gate: both sides set and unequal → not reusable. Either side
+/// empty skips the check (sparse index / unknown desired build_env_key /
+/// backward compatibility).
+fn build_env_key_compatible(binpkg_key: &str, desired_key: &str) -> bool {
+    if binpkg_key.is_empty() || desired_key.is_empty() {
+        return true;
+    }
+    binpkg_key == desired_key
+}
+
 /// The reuse core: is a binpkg's `USE` (restricted to its `IUSE`) equal to the
 /// desired `USE` (restricted to `IUSE`)? Flags outside `IUSE` (USE_EXPAND
 /// defaults, profile-implicit flags) don't affect the package and are ignored.
@@ -333,6 +385,84 @@ pub fn use_compatible(
         }
     }
     true
+}
+
+/// Compute build environment key using sokgi for canonical flag hashing.
+/// Returns empty string if all flag sets are empty or unparseable (skip gate).
+/// Returns "__native__" if any flag set contains machine-dependent flags.
+///
+/// A binpkg is reusable iff ALL match:
+/// 1. CPV (exact)
+/// 2. USE ∩ IUSE (equal)
+/// 3. CHOST (equal, either empty → skip gate)
+/// 4. **Build-env key (equal, either empty → skip gate)**
+///
+/// Algorithm:
+/// 1. Parse each flag set with sokgi's appropriate dialect
+/// 2. Check for `Warning::MachineDependent` (e.g., `-march=native`)
+/// 3. If ANY flag set has machine-dependent flags → return `__native__`
+/// 4. Collect stable_hash_hex() for each non-empty flag set
+/// 5. If all empty → return empty string (skip gate)
+/// 6. Otherwise → sort hashes and join with spaces (order-independent)
+///
+/// Supported flag sets:
+/// - CFLAGS → `Dialect::C`
+/// - CXXFLAGS → `Dialect::Cxx`
+/// - LDFLAGS → `Dialect::Ld`
+/// - RUSTFLAGS → `Dialect::Rust`
+pub fn build_env_key(cflags: &str, cxxflags: &str, ldflags: &str, rustflags: &str) -> String {
+    let mut all_hashes: Vec<String> = Vec::new();
+    let mut has_machine_dependent = false;
+
+    // Process each flag set with its appropriate dialect
+    let flag_sets = [
+        (cflags, Dialect::C),
+        (cxxflags, Dialect::Cxx),
+        (ldflags, Dialect::Ld),
+        (rustflags, Dialect::Rust),
+    ];
+
+    for (flags, dialect) in flag_sets {
+        if flags.trim().is_empty() {
+            continue;
+        }
+
+        match FlagSet::parse(flags, dialect) {
+            Ok((set, warnings)) => {
+                // Check for machine-dependent flags
+                if warnings.iter().any(|w| matches!(w, Warning::MachineDependent(_))) {
+                    has_machine_dependent = true;
+                    // Don't break early - we need to check all for consistency
+                }
+
+                // Collect hash for non-empty flag sets
+                let hash = set.stable_hash_hex();
+                // Only add non-empty hashes (empty string means no flags after canonicalization)
+                if !hash.is_empty() {
+                    all_hashes.push(hash);
+                }
+            }
+            Err(_) => {
+                // Unparseable flags - skip this flag set
+                // This is intentionally lenient to avoid breaking on malformed input
+                continue;
+            }
+        }
+    }
+
+    // If any flag set had machine-dependent flags, return __native__
+    if has_machine_dependent {
+        return "__native__".to_string();
+    }
+
+    // If all flag sets were empty or produced empty hashes, return empty string (skip gate)
+    if all_hashes.is_empty() {
+        return String::new();
+    }
+
+    // Sort hashes for order-independent comparison
+    all_hashes.sort();
+    all_hashes.join(" ")
 }
 
 #[cfg(test)]
@@ -433,25 +563,25 @@ USE: ssl
 
         // foo: nls on matches desired [nls]; debug off in both → reusable.
         let p = idx
-            .find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
+            .find_reusable("app-test/foo-1.0", &desired(&["nls"]), "", "")
             .unwrap();
         assert_eq!(p, PathBuf::from("/pkgdir/app-test/foo-1.0-1.gpkg.tar"));
 
         // foo with nls off → stale (nls is in IUSE, differs) → None.
         assert!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&[]), "")
+            idx.find_reusable("app-test/foo-1.0", &desired(&[]), "", "")
                 .is_none()
         );
 
         // bar: ssl matches → reusable.
         assert!(
-            idx.find_reusable("app-test/bar-2.0", &desired(&["ssl"]), "")
+            idx.find_reusable("app-test/bar-2.0", &desired(&["ssl"]), "", "")
                 .is_some()
         );
 
         // Wrong cpv → None.
         assert!(
-            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]), "")
+            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]), "", "")
                 .is_none()
         );
     }
@@ -472,7 +602,8 @@ USE: nls
             idx.find_reusable(
                 "app-test/foo-1.0",
                 &desired(&["nls"]),
-                "aarch64-unknown-linux-gnu"
+                "aarch64-unknown-linux-gnu",
+                ""
             )
             .is_some()
         );
@@ -480,13 +611,14 @@ USE: nls
             idx.find_reusable(
                 "app-test/foo-1.0",
                 &desired(&["nls"]),
-                "riscv64-unknown-linux-gnu"
+                "riscv64-unknown-linux-gnu",
+                ""
             )
             .is_none()
         );
         // Empty desired CHOST: no gate.
         assert!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "", "")
                 .is_some()
         );
     }
@@ -508,18 +640,18 @@ USE: nls
         assert_eq!(idx.len(), 1);
         // Trailing slash on base_uri is trimmed; URL = base + "/" + PATH.
         assert_eq!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "", "",)
                 .unwrap(),
             "https://binhost.example/app-test/foo-1.0-1.gpkg.tar"
         );
         // Stale USE → None (same use_compatible rule as the local index).
         assert!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&["nls", "debug"]), "")
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls", "debug"]), "", "",)
                 .is_none()
         );
         // Unknown cpv → None.
         assert!(
-            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]), "")
+            idx.find_reusable("app-test/missing-9.9", &desired(&["nls"]), "", "",)
                 .is_none()
         );
     }
@@ -539,17 +671,80 @@ USE: nls
 ";
         let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
         let e = idx.get("app-test/foo-1.0").unwrap();
-        assert_eq!(e.cflags, "-O2 -pipe -march=rv64gcv");
-        assert_eq!(e.cxxflags, "-O2 -pipe -march=rv64gcv");
-        // Still reusable under CHOST+USE only — flags not gated yet.
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].cflags, "-O2 -pipe -march=rv64gcv");
+        assert_eq!(e[0].cxxflags, "-O2 -pipe -march=rv64gcv");
+        // Still reusable under CHOST+USE only — flags not gated yet (empty build_env_key).
         assert!(
             idx.find_reusable(
                 "app-test/foo-1.0",
                 &desired(&["nls"]),
-                "riscv64-unknown-linux-gnu"
+                "riscv64-unknown-linux-gnu",
+                ""
             )
             .is_some()
         );
+    }
+
+    #[test]
+    fn build_env_key_empty_for_empty_flags() {
+        assert_eq!(build_env_key("", "", "", ""), "");
+    }
+
+    #[test]
+    fn build_env_key_returns_native_for_march_native() {
+        let key = build_env_key("-O2 -pipe -march=native", "", "", "");
+        assert_eq!(key, "__native__");
+    }
+
+    #[test]
+    fn build_env_key_returns_native_for_mcpu_native() {
+        let key = build_env_key("", "-O2 -mcpu=native", "", "");
+        assert_eq!(key, "__native__");
+    }
+
+    #[test]
+    fn build_env_key_returns_native_for_mtune_native_in_cflags() {
+        // -mtune=native in CFLAGS should trigger __native__
+        let key = build_env_key("-O2 -mtune=native", "", "", "");
+        assert_eq!(key, "__native__");
+    }
+
+    #[test]
+    fn build_env_key_different_for_different_march() {
+        let key1 = build_env_key("-O2 -pipe -march=rv64gcv", "-O2 -pipe -march=rv64gcv", "", "");
+        let key2 = build_env_key("-O2 -pipe -march=rva23u64", "-O2 -pipe -march=rva23u64", "", "");
+        // Both should be non-empty and different from each other
+        assert!(!key1.is_empty());
+        assert!(!key2.is_empty());
+        assert_ne!(key1, key2);
+        // Neither should be __native__
+        assert_ne!(key1, "__native__");
+        assert_ne!(key2, "__native__");
+    }
+
+    #[test]
+    fn build_env_key_same_for_equivalent_flags() {
+        // Same flags in different order should produce same key
+        let key1 = build_env_key("-O2 -march=rv64gcv", "-g", "", "");
+        let key2 = build_env_key("-march=rv64gcv -O2", "-g", "", "");
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn build_env_key_includes_ldflags() {
+        let key1 = build_env_key("-O2", "-O2", "", "");
+        let key2 = build_env_key("-O2", "-O2", "-Wl,--as-needed", "");
+        // Including LDFLAGS should produce a different key
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn build_env_key_includes_rustflags() {
+        let key1 = build_env_key("", "", "", "");
+        let key2 = build_env_key("", "", "", "-C opt-level=2");
+        // Including RUSTFLAGS should produce a different key
+        assert_ne!(key1, key2);
     }
 
     #[test]
@@ -567,7 +762,7 @@ USE: nls
         let idx = RemoteBinpkgIndex::new(text, "https://binhost.example/unused/");
         assert_eq!(idx.base_uri(), "https://cdn.example/gentoo/arm64");
         assert_eq!(
-            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "")
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "", "",)
                 .unwrap(),
             "https://cdn.example/gentoo/arm64/app-test/foo-1.0-1.gpkg.tar"
         );
