@@ -22,7 +22,7 @@
 //! itself — formatting/printing is the CLI's job.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -238,7 +238,8 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
 
     // Group container files by (cpv, chost, build_env_key), each carrying its resolved build-id.
     // This allows multiple variants with different CHOST or build_env_key to coexist.
-    let mut by_identity: BTreeMap<(String, String, String), Vec<(u32, String, PathBuf)>> = BTreeMap::new();
+    let mut by_identity: BTreeMap<(String, String, String), Vec<(u32, String, PathBuf)>> =
+        BTreeMap::new();
     for (rel, full) in &files {
         let meta = match crate::read_metadata(full) {
             Ok(m) => m,
@@ -253,8 +254,8 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
         let ldflags = meta.get("LDFLAGS").cloned().unwrap_or_default();
         let rustflags = meta.get("RUSTFLAGS").cloned().unwrap_or_default();
         let build_env_key = crate::index::build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
-        let build_id = container_build_id(full, rel);
-        
+        let build_id = container_build_id(&meta, rel);
+
         by_identity
             .entry((cpv, chost_val, build_env_key))
             .or_default()
@@ -309,20 +310,22 @@ fn container_cpv_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {
     Some(format!("{cat}/{pf}"))
 }
 
-/// A container's `BUILD_ID`: prefer the metadata's own field, else parse it
-/// from the `<PF>-<BUILD_ID>.gpkg.tar` filename, else `0` (the implicit
-/// single-instance case — sorts below any explicit build id, so it's always
-/// pruned in favor of a numbered one sharing the same cpv).
-fn container_build_id(full: &Path, rel: &str) -> u32 {
-    crate::read_metadata(full)
-        .ok()
-        .and_then(|meta| meta.get("BUILD_ID")?.parse().ok())
+/// A container's `BUILD_ID` from its already-read metadata: prefer the
+/// metadata's own field, else parse it from the `<PF>-<BUILD_ID>.gpkg.tar`
+/// filename, else `0` (the implicit single-instance case — sorts below any
+/// explicit build id, so it's always pruned in favor of a numbered one
+/// sharing the same cpv).
+fn container_build_id(meta: &BTreeMap<String, String>, rel: &str) -> u32 {
+    meta.get("BUILD_ID")
+        .and_then(|s| s.parse().ok())
         .or_else(|| parse_build_id_from_name(rel))
         .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::{GpkgInput, write_gpkg};
 

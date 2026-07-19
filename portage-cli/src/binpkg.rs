@@ -89,25 +89,13 @@ pub(crate) fn open_local_index_for_preview(
 
 /// Read a variable from `make.conf` under the resolved config root.
 pub(crate) fn read_make_conf_var(globals: &Cli, var: &str) -> Option<String> {
-    let cfg_root = globals
-        .roots()
-        .config()
-        .map(|c| c.to_path_buf())
-        .unwrap_or_else(|| Utf8PathBuf::from("/"));
-    for rel in ["etc/portage/make.conf", "etc/make.conf"] {
-        let p = cfg_root.join(rel);
-        if p.exists()
-            && let Ok(mc) = MakeConf::load(&p)
-            && let Some(v) = mc.get(var).filter(|s| !s.is_empty())
-        {
-            return Some(v.to_owned());
-        }
-    }
-    None
+    read_make_conf_var_for_roots(&globals.roots(), var)
 }
 
-/// Read a variable from make.conf under specific roots.
-/// This is used to get per-entry CHOST, CFLAGS, etc. for cross-compilation scenarios.
+/// Read a variable from make.conf under specific roots — used to get
+/// per-entry CHOST/CFLAGS/etc. for cross-compilation scenarios, where the
+/// desired config root isn't `globals`'s own (e.g. a `MergeRoot::Host` entry
+/// under `--target`).
 pub(crate) fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Option<String> {
     let cfg_root = roots
         .config()
@@ -124,8 +112,6 @@ pub(crate) fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Option<S
     }
     None
 }
-
-
 
 /// One `binrepos.conf` section — real portage's `BinRepoConfig`, restricted
 /// to the fields em's remote binpkg fetch path uses. `frozen`/
