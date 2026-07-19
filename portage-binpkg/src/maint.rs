@@ -225,9 +225,9 @@ pub struct PruneReport {
     pub reindexed: Option<usize>,
 }
 
-/// Keep only the newest `BUILD_ID` container per cpv, delete the rest, and
-/// regenerate the index. `dry_run`: report what would be deleted without
-/// touching anything.
+/// Keep only the newest `BUILD_ID` container per (cpv, chost, build_env_key),
+/// delete the rest, and regenerate the index. `dry_run`: report what would
+/// be deleted without touching anything.
 pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneReport> {
     if !pkgdir.exists() {
         return Err(Error::NoPkgdir(pkgdir.as_std_path().to_path_buf()));
@@ -236,22 +236,34 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     find_gpkg_containers(pkgdir.as_std_path(), pkgdir.as_std_path(), &mut files)?;
 
-    // Group container files by cpv, each carrying its resolved build-id.
-    let mut by_cpv: BTreeMap<String, Vec<(u32, String, PathBuf)>> = BTreeMap::new();
+    // Group container files by (cpv, chost, build_env_key), each carrying its resolved build-id.
+    // This allows multiple variants with different CHOST or build_env_key to coexist.
+    let mut by_identity: BTreeMap<(String, String, String), Vec<(u32, String, PathBuf)>> = BTreeMap::new();
     for (rel, full) in &files {
-        let Some(cpv) = container_cpv(full) else {
+        let meta = match crate::read_metadata(full) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let Some(cpv) = container_cpv_from_meta(&meta) else {
             continue;
         };
+        let chost_val = meta.get("CHOST").cloned().unwrap_or_default();
+        let cflags = meta.get("CFLAGS").cloned().unwrap_or_default();
+        let cxxflags = meta.get("CXXFLAGS").cloned().unwrap_or_default();
+        let ldflags = meta.get("LDFLAGS").cloned().unwrap_or_default();
+        let rustflags = meta.get("RUSTFLAGS").cloned().unwrap_or_default();
+        let build_env_key = crate::index::build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
         let build_id = container_build_id(full, rel);
-        by_cpv
-            .entry(cpv)
+        
+        by_identity
+            .entry((cpv, chost_val, build_env_key))
             .or_default()
             .push((build_id, rel.clone(), full.clone()));
     }
 
     let mut kept = Vec::new();
     let mut removed = Vec::new();
-    for (cpv, mut variants) in by_cpv {
+    for ((cpv, _chost_val, _build_env_key), mut variants) in by_identity {
         if variants.len() < 2 {
             continue;
         }
@@ -287,9 +299,8 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
     })
 }
 
-/// `category/PF` for a container, read from its own metadata.
-fn container_cpv(full: &Path) -> Option<String> {
-    let meta = crate::read_metadata(full).ok()?;
+/// Extract CPV from metadata (same as container_cpv but from already-read metadata).
+fn container_cpv_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {
     let cat = meta.get("CATEGORY")?;
     let pf = meta.get("PF")?;
     if cat.is_empty() || pf.is_empty() {
