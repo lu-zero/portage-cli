@@ -309,6 +309,8 @@ async fn act_on_package(
     enforce_no_source: bool,
     // Desired CHOST for binpkg reuse (empty skips the CHOST gate).
     desired_chost: &str,
+    // Desired build_env_key for binpkg reuse (empty skips the build_env_key gate).
+    desired_build_env_key: &str,
 ) -> anyhow::Result<()> {
     let desired_use: Vec<String> = planned
         .use_flags
@@ -317,12 +319,12 @@ async fn act_on_package(
         .collect();
 
     let reused = binpkg_index
-        .and_then(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost));
+        .and_then(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost, desired_build_env_key));
     let remote_url = reused
         .is_none()
         .then(|| {
             remote_indices.iter().find_map(|idx| {
-                idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost)
+                idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost, desired_build_env_key)
             })
         })
         .flatten();
@@ -461,7 +463,7 @@ async fn merge_sequential(
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
-    desired_chost: &str,
+    _desired_chost: &str,
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
@@ -482,6 +484,29 @@ async fn merge_sequential(
     for (i, planned) in plan.iter().enumerate() {
         let entry_roots = entry_roots(planned, roots, host_roots);
         let merge_root = entry_roots.merge_root();
+        
+        // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
+        // This allows proper binpkg reuse across cross-compilation and multi-arch scenarios
+        let desired_cflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CFLAGS")
+            .unwrap_or_default();
+        let desired_cxxflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CXXFLAGS")
+            .unwrap_or_default();
+        let desired_ldflags = binpkg::read_make_conf_var_for_roots(entry_roots, "LDFLAGS")
+            .unwrap_or_default();
+        let desired_rustflags = binpkg::read_make_conf_var_for_roots(entry_roots, "RUSTFLAGS")
+            .unwrap_or_default();
+        let desired_build_env_key = portage_binpkg::build_env_key(
+            &desired_cflags,
+            &desired_cxxflags,
+            &desired_ldflags,
+            &desired_rustflags,
+        );
+        
+        // Also compute per-entry desired CHOST (may differ from global for cross builds)
+        let desired_chost_entry = binpkg::read_make_conf_var_for_roots(entry_roots, "CHOST")
+            .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
+            .unwrap_or_default();
+
         // The VDB is the resume state: `var/db/pkg/<cat>/<pf>` exists iff this
         // exact version is already installed in the target root. An intentional
         // reinstall (explicit target / USE rebuild) is built anyway — emerge
@@ -517,7 +542,8 @@ async fn merge_sequential(
             binpkg_index,
             remote_indices,
             enforce_no_source,
-            desired_chost,
+            &desired_chost_entry,
+            &desired_build_env_key,
         )
         .await;
         match result {
@@ -653,7 +679,7 @@ async fn merge_parallel(
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
-    desired_chost: &str,
+    _desired_chost: &str,
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
@@ -680,6 +706,28 @@ async fn merge_parallel(
             let planned = &plan[i];
             let entry_roots = entry_roots(planned, roots, host_roots);
             let merge_root = entry_roots.merge_root();
+            
+            // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
+            let desired_cflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "CFLAGS")
+                .unwrap_or_default();
+            let desired_cxxflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "CXXFLAGS")
+                .unwrap_or_default();
+            let desired_ldflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "LDFLAGS")
+                .unwrap_or_default();
+            let desired_rustflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "RUSTFLAGS")
+                .unwrap_or_default();
+            let desired_build_env_key = portage_binpkg::build_env_key(
+                &desired_cflags,
+                &desired_cxxflags,
+                &desired_ldflags,
+                &desired_rustflags,
+            );
+            
+            // Also compute per-entry desired CHOST
+            let desired_chost_entry = binpkg::read_make_conf_var_for_roots(&entry_roots, "CHOST")
+                .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
+                .unwrap_or_default();
+            
             if !emptytree
                 && !planned.reinstall
                 && merge_root
@@ -700,12 +748,15 @@ async fn merge_parallel(
                 inflight.len()
             );
             let gate = &merge_gate;
+            let entry_roots_clone = entry_roots.clone();
+            let desired_chost_entry_clone = desired_chost_entry.clone();
+            let desired_build_env_key_clone = desired_build_env_key.clone();
             inflight.push(async move {
                 let res = act_on_package(
                     planned,
-                    merge_root,
+                    &merge_root,
                     host_roots,
-                    entry_roots,
+                    &entry_roots_clone,
                     work_base,
                     distdir,
                     quiet,
@@ -717,7 +768,8 @@ async fn merge_parallel(
                     binpkg_index,
                     remote_indices,
                     enforce_no_source,
-                    desired_chost,
+                    &desired_chost_entry_clone,
+                    &desired_build_env_key_clone,
                 )
                 .await;
                 (i, res)
