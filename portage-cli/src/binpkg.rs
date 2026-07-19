@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use portage_repo::MakeConf;
+use portage_resolve::Roots;
 
 use crate::cli::Cli;
 
@@ -104,6 +105,27 @@ pub(crate) fn read_make_conf_var(globals: &Cli, var: &str) -> Option<String> {
     }
     None
 }
+
+/// Read a variable from make.conf under specific roots.
+/// This is used to get per-entry CHOST, CFLAGS, etc. for cross-compilation scenarios.
+pub(crate) fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Option<String> {
+    let cfg_root = roots
+        .config()
+        .map(|c| c.to_path_buf())
+        .unwrap_or_else(|| Utf8PathBuf::from("/"));
+    for rel in ["etc/portage/make.conf", "etc/make.conf"] {
+        let p = cfg_root.join(rel);
+        if p.exists()
+            && let Ok(mc) = MakeConf::load(&p)
+            && let Some(v) = mc.get(var).filter(|s| !s.is_empty())
+        {
+            return Some(v.to_owned());
+        }
+    }
+    None
+}
+
+
 
 /// One `binrepos.conf` section — real portage's `BinRepoConfig`, restricted
 /// to the fields em's remote binpkg fetch path uses. `frozen`/
