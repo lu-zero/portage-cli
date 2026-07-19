@@ -247,6 +247,34 @@ pub fn parse_index_blocks(text: &str) -> Vec<BTreeMap<&str, &str>> {
     blocks
 }
 
+/// Derive the build-env key from a parsed `Packages` block's flag fields
+/// (`CFLAGS`/`CXXFLAGS`/`LDFLAGS`/`RUSTFLAGS`, any subset absent) — the same
+/// computation [`parse_packages_entries`] does per entry, extracted so
+/// `em maint binpkg list`/`fingerprint`-style consumers can derive it from a
+/// block without re-parsing the four fields by hand.
+pub fn build_env_key_from_fields(fields: &BTreeMap<&str, &str>) -> String {
+    build_env_key(
+        fields.get("CFLAGS").copied().unwrap_or(""),
+        fields.get("CXXFLAGS").copied().unwrap_or(""),
+        fields.get("LDFLAGS").copied().unwrap_or(""),
+        fields.get("RUSTFLAGS").copied().unwrap_or(""),
+    )
+}
+
+/// Short, path-safe display/slug form of a build-env key: `"generic"` for the
+/// empty key (unkeyed/no ISA-relevant flags), `"native"` for `"__native__"`,
+/// else the first 12 hex chars of the MD5 of the full key. Shared by
+/// `em maint binpkg list`'s KEY column and `em maint binpkg fingerprint`, so
+/// the two correlate and the slug is usable as a PKGDIR path component
+/// (`todo/binpkg-subtargets.md` recipe 1).
+pub fn short_build_env_key(key: &str) -> String {
+    match key {
+        "" => "generic".to_string(),
+        "__native__" => "native".to_string(),
+        _ => hex::encode(md5::compute(key).0)[..12].to_string(),
+    }
+}
+
 /// Parse a `Packages` index into `cpv → entry`. Shared by the local and remote
 /// consumers (the only difference is how `path` is resolved: a local `PKGDIR`
 /// join vs a remote `base_uri` join).
@@ -260,7 +288,7 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> 
         let cxxflags = fields.get("CXXFLAGS").copied().unwrap_or("").to_string();
         let ldflags = fields.get("LDFLAGS").copied().unwrap_or("").to_string();
         let rustflags = fields.get("RUSTFLAGS").copied().unwrap_or("").to_string();
-        let build_env_key = build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
+        let build_env_key = build_env_key_from_fields(&fields);
         let build_id = fields
             .get("BUILD_ID")
             .and_then(|s| s.parse().ok())
@@ -1011,6 +1039,20 @@ BUILD_ID: 2
         if key2 != "__native__" {
             assert_ne!(key1, key2);
         }
+    }
+
+    #[test]
+    fn short_build_env_key_generic_native_and_hash() {
+        assert_eq!(short_build_env_key(""), "generic");
+        assert_eq!(short_build_env_key("__native__"), "native");
+
+        let key = build_env_key("-march=rv64gcv", "", "", "");
+        let slug = short_build_env_key(&key);
+        assert_ne!(slug, "generic");
+        assert_ne!(slug, "native");
+        assert_eq!(slug.len(), 12);
+        // Stable: same input -> same slug.
+        assert_eq!(slug, short_build_env_key(&key));
     }
 
     #[test]

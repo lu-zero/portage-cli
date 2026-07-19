@@ -33,6 +33,10 @@ use crate::scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
 
 /// One `Packages` index entry, with the digest/size fields [`verify`]/
 /// [`list_index`] need that [`crate::index::BinpkgEntry`] doesn't carry.
+/// Kept separate from `BinpkgEntry` rather than unified: `BinpkgEntry` is on
+/// the reuse hot path and deliberately doesn't carry these display-only
+/// digest/size fields, and this type doesn't need `BinpkgEntry`'s parsed
+/// `USE`/`IUSE` sets.
 #[derive(Debug, Clone)]
 pub struct IndexRow {
     /// `category/PF`.
@@ -47,6 +51,13 @@ pub struct IndexRow {
     pub size: Option<u64>,
     /// Recorded `BUILD_ID`, if the index has one.
     pub build_id: Option<u32>,
+    /// Recorded `CHOST` ("" if the index omitted it).
+    pub chost: String,
+    /// Recorded `CFLAGS` ("" if absent) — display only.
+    pub cflags: String,
+    /// Derived build-env key (see [`crate::index::build_env_key`]); "" means
+    /// unkeyed (no ISA-relevant flags recorded).
+    pub build_env_key: String,
 }
 
 fn parse_index_rows(text: &str) -> Vec<IndexRow> {
@@ -59,6 +70,9 @@ fn parse_index_rows(text: &str) -> Vec<IndexRow> {
             sha1: fields.get("SHA1").map(|s| s.to_string()),
             size: fields.get("SIZE").and_then(|s| s.parse().ok()),
             build_id: fields.get("BUILD_ID").and_then(|s| s.parse().ok()),
+            chost: fields.get("CHOST").copied().unwrap_or("").to_string(),
+            cflags: fields.get("CFLAGS").copied().unwrap_or("").to_string(),
+            build_env_key: crate::index::build_env_key_from_fields(&fields),
         })
         .collect()
 }
@@ -72,7 +86,8 @@ fn read_index(pkgdir: &Utf8Path) -> Result<Vec<IndexRow>> {
     Ok(parse_index_rows(&text))
 }
 
-/// Read the local `Packages` index (cpv, build-id, size, path per entry).
+/// Read the local `Packages` index (cpv, build-id, size, CHOST, build-env
+/// key, CFLAGS, path per entry).
 pub fn list_index(pkgdir: &Utf8Path) -> Result<Vec<IndexRow>> {
     read_index(pkgdir)
 }
@@ -331,7 +346,7 @@ mod tests {
 
     #[test]
     fn parse_index_rows_reads_digest_and_size_fields() {
-        let text = "VERSION: 0\n\nCPV: app-test/foo-1.0\nPATH: app-test/foo-1.0-1.gpkg.tar\nMD5: abc\nSHA1: def\nSIZE: 42\nBUILD_ID: 1\n\n";
+        let text = "VERSION: 0\n\nCPV: app-test/foo-1.0\nPATH: app-test/foo-1.0-1.gpkg.tar\nMD5: abc\nSHA1: def\nSIZE: 42\nBUILD_ID: 1\nCHOST: aarch64-unknown-linux-gnu\nCFLAGS: -O2 -march=armv8-a\n\n";
         let rows = parse_index_rows(text);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].cpv, "app-test/foo-1.0");
@@ -340,6 +355,18 @@ mod tests {
         assert_eq!(rows[0].sha1.as_deref(), Some("def"));
         assert_eq!(rows[0].size, Some(42));
         assert_eq!(rows[0].build_id, Some(1));
+        assert_eq!(rows[0].chost, "aarch64-unknown-linux-gnu");
+        assert_eq!(rows[0].cflags, "-O2 -march=armv8-a");
+        assert!(!rows[0].build_env_key.is_empty());
+    }
+
+    #[test]
+    fn parse_index_rows_empty_build_env_key_for_generic_flags() {
+        let text =
+            "CPV: app-test/foo-1.0\nPATH: app-test/foo-1.0-1.gpkg.tar\nCFLAGS: -O2 -pipe\n\n";
+        let rows = parse_index_rows(text);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].build_env_key, "");
     }
 
     #[test]
@@ -368,6 +395,8 @@ mod tests {
             ("EAPI", "8"),
             ("repository", "gentoo"),
             ("BUILD_ID", &build_id.to_string()),
+            ("CHOST", "x86_64-pc-linux-gnu"),
+            ("CFLAGS", "-O2 -march=x86-64-v3"),
         ] {
             std::fs::write(meta.join(k), format!("{v}\n")).unwrap();
         }
@@ -497,5 +526,10 @@ mod tests {
         let rows = list_index(pkgdir).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].cpv, "app-test/foo-1.0");
+        assert_eq!(rows[0].chost, "x86_64-pc-linux-gnu");
+        assert!(
+            !rows[0].build_env_key.is_empty(),
+            "seed_container's -march=x86-64-v3 must round-trip through index_pkgdir into a keyed entry"
+        );
     }
 }

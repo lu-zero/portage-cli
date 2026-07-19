@@ -78,6 +78,17 @@ fn verify(pkgdir: &camino::Utf8Path, chost: &str, fix: bool) -> Result<()> {
     Ok(())
 }
 
+/// Truncate `s` to at most `max` chars, marking the cut with a trailing `…`
+/// (counted within `max`, so the result is never longer than `max` chars).
+fn truncate(s: &str, max: usize) -> std::borrow::Cow<'_, str> {
+    if s.chars().count() <= max {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    std::borrow::Cow::Owned(out)
+}
+
 fn list(pkgdir: &camino::Utf8Path) -> Result<()> {
     let rows = portage_binpkg::maint::list_index(pkgdir)?;
     for row in &rows {
@@ -86,7 +97,17 @@ fn list(pkgdir: &camino::Utf8Path) -> Result<()> {
             .map(|s| format_size(s, BINARY))
             .unwrap_or_else(|| "?".to_string());
         let build_id = row.build_id.map(|b| b.to_string()).unwrap_or_default();
-        println!("{:<45} {build_id:>4}  {size:>10}  {}", row.cpv, row.path);
+        let chost = if row.chost.is_empty() {
+            "-"
+        } else {
+            &row.chost
+        };
+        let key = portage_binpkg::index::short_build_env_key(&row.build_env_key);
+        let cflags = truncate(&row.cflags, 32);
+        println!(
+            "{:<45} {build_id:>4}  {size:>10}  {chost:<26}  {key:<12}  {cflags:<32}  {}",
+            row.cpv, row.path
+        );
     }
     println!("{} package(s) in {pkgdir}", rows.len());
     Ok(())
