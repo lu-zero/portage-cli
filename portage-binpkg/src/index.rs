@@ -45,6 +45,10 @@ pub struct BinpkgEntry {
     /// via sokgi. Empty if all flag sets are empty (skip gate).
     /// "__native__" if any flag set contains machine-dependent flags.
     pub build_env_key: String,
+    /// Recorded `BUILD_ID` (`0` for the implicit single-instance case). Used
+    /// to prefer the newest matching instance in [`BinpkgIndex::find_reusable`]
+    /// / [`RemoteBinpkgIndex::find_reusable`] instead of the first one listed.
+    pub build_id: u32,
 }
 
 /// A parsed `Packages` index, keyed by `cpv`, answering reuse queries.
@@ -103,7 +107,11 @@ impl BinpkgIndex {
             let ldflags = meta.get("LDFLAGS").cloned().unwrap_or_default();
             let rustflags = meta.get("RUSTFLAGS").cloned().unwrap_or_default();
             let build_env_key = build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
-            
+            let build_id = meta
+                .get("BUILD_ID")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+
             let entry = BinpkgEntry {
                 path: rel.clone(),
                 use_set: split_use(meta.get("USE").map(String::as_str).unwrap_or("")),
@@ -113,6 +121,7 @@ impl BinpkgIndex {
                 cxxflags,
                 ldflags,
                 rustflags,
+                build_id,
                 build_env_key,
             };
             entries.entry(cpv).or_default().push(entry);
@@ -155,17 +164,14 @@ impl BinpkgIndex {
         desired_build_env_key: &str,
     ) -> Option<PathBuf> {
         let entries = self.entries.get(cpv)?;
-        // Find the first entry that matches all criteria
-        for entry in entries {
-            if !entry_reusable(entry, desired_use, desired_chost) {
-                continue;
-            }
-            if !build_env_key_compatible(&entry.build_env_key, desired_build_env_key) {
-                continue;
-            }
-            return Some(self.pkgdir.join(&entry.path));
-        }
-        None
+        // Among all matching entries, prefer the newest BUILD_ID — not just
+        // the first one listed (scan/parse order is not BUILD_ID order).
+        let best = entries
+            .iter()
+            .filter(|entry| entry_reusable(entry, desired_use, desired_chost))
+            .filter(|entry| build_env_key_compatible(&entry.build_env_key, desired_build_env_key))
+            .max_by_key(|entry| entry.build_id)?;
+        Some(self.pkgdir.join(&best.path))
     }
 
     /// Look up the raw index entries for `cpv` (including CFLAGS/CXXFLAGS/
@@ -228,7 +234,11 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> 
         let ldflags = fields.get("LDFLAGS").copied().unwrap_or("").to_string();
         let rustflags = fields.get("RUSTFLAGS").copied().unwrap_or("").to_string();
         let build_env_key = build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
-        
+        let build_id = fields
+            .get("BUILD_ID")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
         let entry = BinpkgEntry {
             path: fields.get("PATH").copied().unwrap_or("").to_string(),
             use_set: split_use(fields.get("USE").copied().unwrap_or("")),
@@ -238,6 +248,7 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> 
             cxxflags,
             ldflags,
             rustflags,
+            build_id,
             build_env_key,
         };
         entries.entry(cpv.to_string()).or_default().push(entry);
@@ -321,17 +332,14 @@ impl RemoteBinpkgIndex {
         desired_build_env_key: &str,
     ) -> Option<String> {
         let entries = self.entries.get(cpv)?;
-        // Find the first entry that matches all criteria
-        for entry in entries {
-            if !entry_reusable(entry, desired_use, desired_chost) {
-                continue;
-            }
-            if !build_env_key_compatible(&entry.build_env_key, desired_build_env_key) {
-                continue;
-            }
-            return Some(format!("{}/{path}", self.base_uri, path = entry.path));
-        }
-        None
+        // Among all matching entries, prefer the newest BUILD_ID — not just
+        // the first one listed (scan/parse order is not BUILD_ID order).
+        let best = entries
+            .iter()
+            .filter(|entry| entry_reusable(entry, desired_use, desired_chost))
+            .filter(|entry| build_env_key_compatible(&entry.build_env_key, desired_build_env_key))
+            .max_by_key(|entry| entry.build_id)?;
+        Some(format!("{}/{path}", self.base_uri, path = best.path))
     }
 
     /// Look up the raw index entries for `cpv` (including CFLAGS/CXXFLAGS/
@@ -358,12 +366,18 @@ fn chost_compatible(binpkg_chost: &str, desired_chost: &str) -> bool {
     binpkg_chost == desired_chost
 }
 
-/// Build-env key gate: both sides set and unequal → not reusable. Either side
-/// empty skips the check (sparse index / unknown desired build_env_key /
-/// backward compatibility).
+/// Build-env key gate. Asymmetric: an unkeyed binpkg (`binpkg_key` empty —
+/// sparse index / old GPKG predating this field) is permissive, matching
+/// anything (backward compatibility). But once a binpkg *is* keyed (built
+/// with recorded ISA/ABI flags), an empty *desired* key (a generic/unknown
+/// build) must not silently match it — that would reuse a march-specific
+/// binpkg on a generic board. Both non-empty: exact match only.
 fn build_env_key_compatible(binpkg_key: &str, desired_key: &str) -> bool {
-    if binpkg_key.is_empty() || desired_key.is_empty() {
+    if binpkg_key.is_empty() {
         return true;
+    }
+    if desired_key.is_empty() {
+        return false;
     }
     binpkg_key == desired_key
 }
@@ -467,34 +481,15 @@ fn filter_c_family_abi_flags(flags: &str) -> String {
         .join(" ")
 }
 
+/// GCC/Clang document every `-m*` option as a "machine dependent option"
+/// (target/ISA/ABI selector) — `-march=`/`-mcpu=`/`-mabi=`/`-mrvv-vector-bits=`/
+/// `-mno-outline-atomics`/`-mavx2`/… An allowlist of specific flag names is
+/// perpetually incomplete (a missed selector means silent wrong-arch binpkg
+/// reuse); treat the whole `-m` namespace as ABI-relevant instead. Over-keying
+/// only costs an extra rebuild (the safe direction) — see the design doc's
+/// explicit "Policy B: stricter, more rebuilds" tradeoff.
 fn is_c_family_abi_token(tok: &str) -> bool {
-    // Primary micro-arch / ABI selectors (sokgi has first-class Flag variants).
-    const PREFIXES: &[&str] = &[
-        "-march=",
-        "-mcpu=",
-        "-mtune=",
-        "-mabi=",
-        "-mfpu=",
-        "-mfloat-abi=",
-        "-misa-spec=",
-        "-misa=",
-    ];
-    if PREFIXES.iter().any(|p| tok.starts_with(p)) {
-        return true;
-    }
-    // Bare ISA mode toggles that affect ABI/codegen selection (not -mgeneral).
-    matches!(
-        tok,
-        "-mthumb"
-            | "-mno-thumb"
-            | "-msoft-float"
-            | "-mhard-float"
-            | "-mfloat-abi"
-            | "-m64"
-            | "-m32"
-            | "-mx32"
-            | "-mabi"
-    )
+    tok.starts_with("-m") && tok != "-m"
 }
 
 /// Keep Rust target-cpu / target-feature settings; drop opt-level and noise.
@@ -727,7 +722,7 @@ USE: nls
     }
 
     #[test]
-    fn parse_carries_cflags_cxxflags_without_gating_reuse() {
+    fn parse_carries_cflags_cxxflags_and_gates_reuse_on_them() {
         let text = "\
 VERSION: 0
 
@@ -744,7 +739,24 @@ USE: nls
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].cflags, "-O2 -pipe -march=rv64gcv");
         assert_eq!(e[0].cxxflags, "-O2 -pipe -march=rv64gcv");
-        // Still reusable under CHOST+USE only — flags not gated yet (empty build_env_key).
+        // Matching desired key → reusable.
+        assert!(
+            idx.find_reusable(
+                "app-test/foo-1.0",
+                &desired(&["nls"]),
+                "riscv64-unknown-linux-gnu",
+                &build_env_key(
+                    "-O2 -pipe -march=rv64gcv",
+                    "-O2 -pipe -march=rv64gcv",
+                    "",
+                    ""
+                )
+            )
+            .is_some()
+        );
+        // This binpkg IS keyed (built with a specific -march). A generic/empty
+        // desired key (a board with no ISA-specific CFLAGS) must not silently
+        // reuse it — that would be wrong-arch reuse.
         assert!(
             idx.find_reusable(
                 "app-test/foo-1.0",
@@ -752,7 +764,93 @@ USE: nls
                 "riscv64-unknown-linux-gnu",
                 ""
             )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn empty_desired_key_does_not_match_keyed_binpkg() {
+        let text = "\
+VERSION: 0
+
+CPV: app-test/foo-1.0
+CFLAGS: -march=rv64gcv
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+";
+        let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
+        assert!(
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "", "")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn empty_binpkg_key_is_legacy_permissive() {
+        // A binpkg with no CFLAGS metadata at all (pre-dates this field, or a
+        // generic board) has an empty build_env_key — must still match any
+        // desired key, keyed or not (backward compat with old GPKGs).
+        let text = "\
+VERSION: 0
+
+CPV: app-test/foo-1.0
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+";
+        let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
+        assert!(
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "", "")
+                .is_some()
+        );
+        assert!(
+            idx.find_reusable(
+                "app-test/foo-1.0",
+                &desired(&["nls"]),
+                "",
+                &build_env_key("-march=rv64gcv", "", "", "")
+            )
             .is_some()
+        );
+    }
+
+    #[test]
+    fn find_reusable_prefers_newest_build_id_among_matches() {
+        let text = "\
+VERSION: 0
+
+CPV: app-test/foo-1.0
+CHOST: riscv64-unknown-linux-gnu
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+BUILD_ID: 1
+
+CPV: app-test/foo-1.0
+CHOST: riscv64-unknown-linux-gnu
+IUSE: nls
+PATH: app-test/foo-1.0-3.gpkg.tar
+USE: nls
+BUILD_ID: 3
+
+CPV: app-test/foo-1.0
+CHOST: riscv64-unknown-linux-gnu
+IUSE: nls
+PATH: app-test/foo-1.0-2.gpkg.tar
+USE: nls
+BUILD_ID: 2
+";
+        let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
+        // Listed out of BUILD_ID order (1, 3, 2) — must still pick BUILD_ID 3.
+        assert_eq!(
+            idx.find_reusable(
+                "app-test/foo-1.0",
+                &desired(&["nls"]),
+                "riscv64-unknown-linux-gnu",
+                ""
+            ),
+            Some(PathBuf::from("/pkgdir/app-test/foo-1.0-3.gpkg.tar"))
         );
     }
 
@@ -764,7 +862,10 @@ USE: nls
     #[test]
     fn build_env_key_empty_when_only_noise_flags() {
         // Optimisation / debug / pipe must not create a sub-target key.
-        assert_eq!(build_env_key("-O3 -pipe -g", "-O2 -Wall", "-Wl,--as-needed", ""), "");
+        assert_eq!(
+            build_env_key("-O3 -pipe -g", "-O2 -Wall", "-Wl,--as-needed", ""),
+            ""
+        );
     }
 
     #[test]
@@ -787,13 +888,55 @@ USE: nls
 
     #[test]
     fn build_env_key_different_for_different_march() {
-        let key1 = build_env_key("-O2 -pipe -march=rv64gcv", "-O2 -pipe -march=rv64gcv", "", "");
-        let key2 = build_env_key("-O2 -pipe -march=rva23u64", "-O2 -pipe -march=rva23u64", "", "");
+        let key1 = build_env_key(
+            "-O2 -pipe -march=rv64gcv",
+            "-O2 -pipe -march=rv64gcv",
+            "",
+            "",
+        );
+        let key2 = build_env_key(
+            "-O2 -pipe -march=rva23u64",
+            "-O2 -pipe -march=rva23u64",
+            "",
+            "",
+        );
         assert!(!key1.is_empty());
         assert!(!key2.is_empty());
         assert_ne!(key1, key2);
         assert_ne!(key1, "__native__");
         assert_ne!(key2, "__native__");
+    }
+
+    #[test]
+    fn build_env_key_different_for_different_rvv_vector_bits() {
+        // Not on the old explicit allowlist — same march, differing vector
+        // width must still split the cache (riscv64 zvl boards).
+        let key1 = build_env_key("-march=rv64gcv -mrvv-vector-bits=256", "", "", "");
+        let key2 = build_env_key("-march=rv64gcv -mrvv-vector-bits=zvl", "", "", "");
+        assert!(!key1.is_empty());
+        assert!(!key2.is_empty());
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn build_env_key_different_for_outline_atomics() {
+        // aarch64: named explicitly in the design doc as a real ISA selector.
+        let key1 = build_env_key("-march=armv8-a -mno-outline-atomics", "", "", "");
+        let key2 = build_env_key("-march=armv8-a", "", "", "");
+        assert!(!key1.is_empty());
+        assert!(!key2.is_empty());
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn build_env_key_different_for_x86_feature_toggle() {
+        // x86 target-attribute-style flags aren't -march/-mcpu/-mtune but are
+        // still ISA-affecting (avx2 vs no-avx2 code is not binary compatible).
+        let key1 = build_env_key("-march=x86-64-v3 -mavx2", "", "", "");
+        let key2 = build_env_key("-march=x86-64-v3 -mno-avx2", "", "", "");
+        assert!(!key1.is_empty());
+        assert!(!key2.is_empty());
+        assert_ne!(key1, key2);
     }
 
     #[test]
