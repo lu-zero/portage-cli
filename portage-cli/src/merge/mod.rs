@@ -318,13 +318,24 @@ async fn act_on_package(
         .map(|f| f.as_str().to_string())
         .collect();
 
-    let reused = binpkg_index
-        .and_then(|idx| idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost, desired_build_env_key));
+    let reused = binpkg_index.and_then(|idx| {
+        idx.find_reusable(
+            &planned.cpv.to_string(),
+            &desired_use,
+            desired_chost,
+            desired_build_env_key,
+        )
+    });
     let remote_url = reused
         .is_none()
         .then(|| {
             remote_indices.iter().find_map(|idx| {
-                idx.find_reusable(&planned.cpv.to_string(), &desired_use, desired_chost, desired_build_env_key)
+                idx.find_reusable(
+                    &planned.cpv.to_string(),
+                    &desired_use,
+                    desired_chost,
+                    desired_build_env_key,
+                )
             })
         })
         .flatten();
@@ -484,24 +495,24 @@ async fn merge_sequential(
     for (i, planned) in plan.iter().enumerate() {
         let entry_roots = entry_roots(planned, roots, host_roots);
         let merge_root = entry_roots.merge_root();
-        
+
         // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
         // This allows proper binpkg reuse across cross-compilation and multi-arch scenarios
-        let desired_cflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CFLAGS")
-            .unwrap_or_default();
-        let desired_cxxflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CXXFLAGS")
-            .unwrap_or_default();
-        let desired_ldflags = binpkg::read_make_conf_var_for_roots(entry_roots, "LDFLAGS")
-            .unwrap_or_default();
-        let desired_rustflags = binpkg::read_make_conf_var_for_roots(entry_roots, "RUSTFLAGS")
-            .unwrap_or_default();
+        let desired_cflags =
+            binpkg::read_make_conf_var_for_roots(entry_roots, "CFLAGS").unwrap_or_default();
+        let desired_cxxflags =
+            binpkg::read_make_conf_var_for_roots(entry_roots, "CXXFLAGS").unwrap_or_default();
+        let desired_ldflags =
+            binpkg::read_make_conf_var_for_roots(entry_roots, "LDFLAGS").unwrap_or_default();
+        let desired_rustflags =
+            binpkg::read_make_conf_var_for_roots(entry_roots, "RUSTFLAGS").unwrap_or_default();
         let desired_build_env_key = portage_binpkg::build_env_key(
             &desired_cflags,
             &desired_cxxflags,
             &desired_ldflags,
             &desired_rustflags,
         );
-        
+
         // Also compute per-entry desired CHOST (may differ from global for cross builds)
         let desired_chost_entry = binpkg::read_make_conf_var_for_roots(entry_roots, "CHOST")
             .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
@@ -706,28 +717,28 @@ async fn merge_parallel(
             let planned = &plan[i];
             let entry_roots = entry_roots(planned, roots, host_roots);
             let merge_root = entry_roots.merge_root();
-            
+
             // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
-            let desired_cflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "CFLAGS")
-                .unwrap_or_default();
-            let desired_cxxflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "CXXFLAGS")
-                .unwrap_or_default();
-            let desired_ldflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "LDFLAGS")
-                .unwrap_or_default();
-            let desired_rustflags = binpkg::read_make_conf_var_for_roots(&entry_roots, "RUSTFLAGS")
-                .unwrap_or_default();
+            let desired_cflags =
+                binpkg::read_make_conf_var_for_roots(&entry_roots, "CFLAGS").unwrap_or_default();
+            let desired_cxxflags =
+                binpkg::read_make_conf_var_for_roots(&entry_roots, "CXXFLAGS").unwrap_or_default();
+            let desired_ldflags =
+                binpkg::read_make_conf_var_for_roots(&entry_roots, "LDFLAGS").unwrap_or_default();
+            let desired_rustflags =
+                binpkg::read_make_conf_var_for_roots(&entry_roots, "RUSTFLAGS").unwrap_or_default();
             let desired_build_env_key = portage_binpkg::build_env_key(
                 &desired_cflags,
                 &desired_cxxflags,
                 &desired_ldflags,
                 &desired_rustflags,
             );
-            
+
             // Also compute per-entry desired CHOST
             let desired_chost_entry = binpkg::read_make_conf_var_for_roots(&entry_roots, "CHOST")
                 .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
                 .unwrap_or_default();
-            
+
             if !emptytree
                 && !planned.reinstall
                 && merge_root
