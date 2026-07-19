@@ -391,7 +391,6 @@ split the cache; different `-march` still does; `-march=native` → `__native__`
 | Gap | Scenario | Severity |
 |-----|----------|----------|
 | **Per-entry PKGDIR** — still one `resolve_pkgdir(globals)` (target under `--target`) | S1, S4 | **High** for crossdev-stages-like host vs target caches |
-| **Prefer highest BUILD_ID** among matches — `find_reusable` takes first vec order | S3 | Medium |
 | **`parse_index_header`** still `\n\n` first block only | S5 edge | Low |
 | **RUSTFLAGS** not in VDB/GPKG write path | key consistency | Medium if RUSTFLAGS used |
 | **package.env** CFLAGS not in desired key | S6 | Medium for workarounds |
@@ -399,6 +398,56 @@ split the cache; different `-march` still does; `-march=native` → `__native__`
 | **Stages PKGDIR recipe / fingerprint helper** | automation | Phase 2 |
 | **maint list** shows key/CHOST | UX | Phase 2 |
 | Dead global `desired_chost` still computed in `run_merge_plan` and passed as `_desired_chost` | cleanup | Low |
+
+---
+
+## Phase 1a — correctness fixes found in review (landed, 2026-07-19)
+
+Before starting Phase 1b, an independent review (Fable/Claude, verified by
+hand against the actual code) found two bugs in the just-landed gate itself
+that are **worse** than the "safe miss" gaps Phase 1b was about to prioritize
+— both are **wrong-binary reuse**, not just a missed-cache-hit:
+
+1. **Empty desired key over-matched a keyed binpkg.**
+   `build_env_key_compatible` was `binpkg_key.is_empty() || desired_key.is_empty()
+   → skip`. A generic-CFLAGS board (no `-m*` flags → computed key `""`) has
+   an empty *desired* key, which alone satisfied the OR — so it would reuse
+   a binpkg keyed to a specific `-march=...` from another board (SIGILL risk,
+   exactly what this feature exists to prevent). Fixed to an **asymmetric**
+   rule: permissive only when the **binpkg's own** key is empty (legacy/sparse
+   — unknown build-env, backward compat with old GPKGs); a keyed binpkg
+   against an empty *desired* key is now rejected.
+2. **First-listed match won, not the newest.** `find_reusable` returned the
+   first `Vec` entry passing the gates; `BinpkgEntry` had no `build_id` field
+   at all, so "first" was scan/parse order, not BUILD_ID order — this was
+   promoted above Phase 1b's original "Medium" rating once traced through:
+   a legacy flagless entry (passes every gate per bug 1) could sit earlier in
+   the list than a newer exact match and win every time. Fixed: `build_id`
+   added to `BinpkgEntry` (parsed from the `BUILD_ID` field, both parsers),
+   both `find_reusable` methods now take the max-`build_id` match among all
+   passing entries.
+3. **ISA/ABI allowlist was incomplete.** `is_c_family_abi_token` missed
+   `-mrvv-vector-bits=` (the riscv64 zvl boards this feature targets),
+   `-mno-outline-atomics`, `-mcmodel=`, `-mbranch-protection=`, `-mfpmath=`,
+   and the whole x86 feature-toggle family (`-mavx2`/`-mno-avx2`/…) — any of
+   these differing between boards was invisible to the key, same failure
+   class as bug 1. Rather than keep growing an allowlist, switched to GCC's
+   own convention (`-m*` = "machine dependent options"): `is_c_family_abi_token`
+   is now `tok.starts_with("-m") && tok != "-m"`. Over-keying only costs an
+   extra rebuild (Policy B's accepted tradeoff); under-keying risks silent
+   wrong-arch reuse, so the broad side is the safe one.
+
+Also fixed as low-risk hygiene: `cargo fmt` (vibe's commits didn't pass
+`fmt --check`); `read_make_conf_var` now delegates to
+`read_make_conf_var_for_roots` instead of duplicating it
+(`portage-cli/src/binpkg.rs`); `maint.rs::container_build_id` takes the
+already-read metadata map instead of re-reading the container from disk.
+
+All in `portage-binpkg/src/index.rs` / `maint.rs` and
+`portage-cli/src/binpkg.rs`; 41 `portage-binpkg` tests green (6 new), full
+`portage-cli` suite green under `--test-threads=1` (two tests are
+pre-existing parallel-run flakes, unrelated to this area, confirmed passing
+serially both before and after this change).
 
 ---
 
