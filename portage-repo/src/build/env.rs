@@ -60,6 +60,8 @@ pub struct EbuildEnv {
     pub cxxflags: Option<String>,
     /// Linker flags (LDFLAGS), or `None`.
     pub ldflags: Option<String>,
+    /// Rust compiler flags (RUSTFLAGS), or `None`.
+    pub rustflags: Option<String>,
 }
 
 impl EbuildEnv {

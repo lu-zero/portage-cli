@@ -1122,6 +1122,7 @@ impl EbuildShell {
             "CXXFLAGS",
             "CPPFLAGS",
             "LDFLAGS",
+            "RUSTFLAGS",
             "CC",
             "CXX",
             "AR",
@@ -2101,6 +2102,7 @@ impl EbuildShell {
             cflags: get_opt("CFLAGS"),
             cxxflags: get_opt("CXXFLAGS"),
             ldflags: get_opt("LDFLAGS"),
+            rustflags: get_opt("RUSTFLAGS"),
         }
     }
 

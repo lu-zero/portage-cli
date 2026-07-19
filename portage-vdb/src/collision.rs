@@ -142,6 +142,7 @@ mod tests {
             cflags: None,
             cxxflags: None,
             ldflags: None,
+            rustflags: None,
             needed: vec![],
             needed_elf2: vec![],
             requires: vec![],

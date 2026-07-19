@@ -2442,6 +2442,7 @@ fn merge_spec_from_env(
         cflags: env.cflags,
         cxxflags: env.cxxflags,
         ldflags: env.ldflags,
+        rustflags: env.rustflags,
         needed: elf.needed,
         needed_elf2: elf.needed_elf2,
         requires: elf.requires,

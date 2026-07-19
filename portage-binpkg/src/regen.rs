@@ -117,6 +117,7 @@ fn build_entry(rel: &str, full: &Path) -> Result<(String, BTreeMap<String, Strin
     copy_field(&meta, &mut f, "CFLAGS");
     copy_field(&meta, &mut f, "CXXFLAGS");
     copy_field(&meta, &mut f, "LDFLAGS");
+    copy_field(&meta, &mut f, "RUSTFLAGS");
     copy_field(&meta, &mut f, "CBUILD");
     copy_field(&meta, &mut f, "PROVIDES");
     copy_field(&meta, &mut f, "REQUIRES");
@@ -210,6 +211,7 @@ mod tests {
             ("SIZE", "3"),
             ("CFLAGS", "-O2 -pipe -mcpu=ampere1a"),
             ("CXXFLAGS", "-O2 -pipe -mcpu=ampere1a"),
+            ("RUSTFLAGS", "-C target-cpu=neoverse-n1"),
         ] {
             std::fs::write(meta.join(k), format!("{v}\n")).unwrap();
         }
@@ -245,6 +247,7 @@ mod tests {
         assert!(idx.contains("REPO: gentoo"));
         assert!(idx.contains("CFLAGS: -O2 -pipe -mcpu=ampere1a"));
         assert!(idx.contains("CXXFLAGS: -O2 -pipe -mcpu=ampere1a"));
+        assert!(idx.contains("RUSTFLAGS: -C target-cpu=neoverse-n1"));
         assert!(idx.contains("MD5: "));
         assert!(idx.contains("SHA1: "));
         assert!(idx.contains("SIZE: "));
@@ -256,5 +259,19 @@ mod tests {
         assert_eq!(e.len(), 1);
         assert_eq!(e[0].cflags, "-O2 -pipe -mcpu=ampere1a");
         assert_eq!(e[0].cxxflags, "-O2 -pipe -mcpu=ampere1a");
+        assert_eq!(e[0].rustflags, "-C target-cpu=neoverse-n1");
+        // Proves the key now differs from a no-RUSTFLAGS build of the same
+        // CFLAGS/CXXFLAGS (the consumer-side hash math itself is already
+        // covered by `build_env_key_*` in index.rs).
+        assert!(!e[0].build_env_key.is_empty());
+        assert_ne!(
+            e[0].build_env_key,
+            crate::index::build_env_key(
+                "-O2 -pipe -mcpu=ampere1a",
+                "-O2 -pipe -mcpu=ampere1a",
+                "",
+                ""
+            )
+        );
     }
 }

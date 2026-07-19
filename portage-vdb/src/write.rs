@@ -51,6 +51,8 @@ pub struct MergeSpec {
     pub cxxflags: Option<String>,
     /// Linker flags (LDFLAGS).
     pub ldflags: Option<String>,
+    /// Rust compiler flags (RUSTFLAGS).
+    pub rustflags: Option<String>,
     /// Legacy `NEEDED` lines (`<path> <needed,comma>`).
     pub needed: Vec<String>,
     /// `NEEDED.ELF.2` lines.
@@ -148,6 +150,7 @@ impl Vdb {
         write_opt!("CFLAGS", spec.cflags);
         write_opt!("CXXFLAGS", spec.cxxflags);
         write_opt!("LDFLAGS", spec.ldflags);
+        write_opt!("RUSTFLAGS", spec.rustflags);
 
         // PF is the package's full name-version (the VDB dir basename); portage
         // always records it.
@@ -306,6 +309,7 @@ mod tests {
             cflags: None,
             cxxflags: None,
             ldflags: None,
+            rustflags: None,
             needed: vec![],
             needed_elf2: vec![],
             requires: vec![],
@@ -339,11 +343,20 @@ mod tests {
         let vdb = Vdb::open(root).unwrap();
 
         let cpv = Cpv::parse("app-shells/testsh-1.0").unwrap();
-        let spec = make_spec(cpv.clone());
+        let mut spec = make_spec(cpv.clone());
+        spec.rustflags = Some("-C target-cpu=neoverse-n1".into());
 
         let pkg = vdb.register(&spec).unwrap();
         assert_eq!(pkg.category(), "app-shells");
         assert_eq!(pkg.pf(), "testsh-1.0");
+
+        // No dedicated accessor (build-env fields are read as a flat map by
+        // the binpkg producer, not queried individually) — read the flat
+        // file directly.
+        assert_eq!(
+            std::fs::read_to_string(pkg.path().join("RUSTFLAGS")).unwrap(),
+            "-C target-cpu=neoverse-n1\n"
+        );
 
         // Read back metadata.
         assert_eq!(pkg.eapi().unwrap().to_string(), "8");
