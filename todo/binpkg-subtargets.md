@@ -459,7 +459,8 @@ serially both before and after this change).
    - `resolve_pkgdir_for_roots(&entry_roots)` (or host vs target open once).
    - Host plan rows: host PKGDIR index; target rows: target PKGDIR.
    - Remote: optional later (usually one binhost per board).
-2. **`find_reusable` max BUILD_ID** among matching instances (not first).
+2. ~~**`find_reusable` max BUILD_ID** among matching instances (not first).~~
+   **Done in Phase 1a** — see above.
 3. **Drop dead global CHOST** arg from merge_sequential/parallel signatures.
 4. **VDB/GPKG RUSTFLAGS** (and ensure LDFLAGS already written — yes) so
    producer key == consumer desired key.
