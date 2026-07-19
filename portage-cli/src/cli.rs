@@ -1117,6 +1117,17 @@ pub enum BinpkgAction {
         #[arg(long)]
         dry_run: bool,
     },
+    #[command(about = "Print the build-env key for the current roots' make.conf flags")]
+    Fingerprint {
+        /// Print the full key (space-joined sokgi hashes) instead of the
+        /// short path-safe slug.
+        #[arg(long)]
+        full: bool,
+        /// Fingerprint the host (BROOT) config instead of the target roots
+        /// (only differs under --target).
+        #[arg(long)]
+        host: bool,
+    },
 }
 
 /// `em select <module>` — native, eselect-like config selectors.

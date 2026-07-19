@@ -11,7 +11,7 @@ use anyhow::{Result, bail};
 use humansize::{BINARY, format_size};
 use portage_binpkg::maint::{PruneReport, VerifyReport};
 
-use crate::binpkg::{read_make_conf_var, resolve_pkgdir};
+use crate::binpkg::{DesiredBuildEnv, read_make_conf_var, resolve_pkgdir};
 use crate::cli::{BinpkgAction, Cli};
 
 /// Dispatch `em maint binpkg <action>`.
@@ -31,6 +31,7 @@ pub async fn run(action: &BinpkgAction, globals: &Cli) -> Result<()> {
                 .unwrap_or_default();
             prune(&pkgdir, &chost, *dry_run)
         }
+        BinpkgAction::Fingerprint { full, host } => fingerprint(globals, *full, *host).await,
     }
 }
 
@@ -110,6 +111,39 @@ fn list(pkgdir: &camino::Utf8Path) -> Result<()> {
         );
     }
     println!("{} package(s) in {pkgdir}", rows.len());
+    Ok(())
+}
+
+/// `em maint binpkg fingerprint [--full] [--host]` — print the build-env key
+/// for the current roots' make.conf flags. Default output is exactly one
+/// line, the short slug, so it's directly usable in a PKGDIR path:
+/// `PKGDIR=/var/cache/em-binpkgs/${CHOST}/$(em maint binpkg fingerprint)`.
+async fn fingerprint(globals: &Cli, full: bool, host: bool) -> Result<()> {
+    let roots = if host {
+        globals.broot()
+    } else {
+        globals.roots()
+    };
+    let env = DesiredBuildEnv::for_roots(&roots).await;
+    let key = env.key();
+
+    if full {
+        println!("CHOST:      {}", env.chost);
+        println!("CFLAGS:     {}", env.cflags);
+        println!("CXXFLAGS:   {}", env.cxxflags);
+        println!("LDFLAGS:    {}", env.ldflags);
+        println!("RUSTFLAGS:  {}", env.rustflags);
+        println!(
+            "key:        {}",
+            if key.is_empty() { "(none)" } else { &key }
+        );
+        println!(
+            "short key:  {}",
+            portage_binpkg::index::short_build_env_key(&key)
+        );
+    } else {
+        println!("{}", portage_binpkg::index::short_build_env_key(&key));
+    }
     Ok(())
 }
 

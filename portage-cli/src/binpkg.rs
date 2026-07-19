@@ -147,6 +147,53 @@ pub(crate) async fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Op
     None
 }
 
+/// The desired build environment resolved from one config root's make.conf:
+/// the four build-env flag vars (expanded — see
+/// [`read_make_conf_var_for_roots`]) plus `CHOST`. Shared by `em maint
+/// binpkg fingerprint` and the merge path's per-entry desired build_env_key
+/// computation.
+pub(crate) struct DesiredBuildEnv {
+    pub cflags: String,
+    pub cxxflags: String,
+    pub ldflags: String,
+    pub rustflags: String,
+    pub chost: String,
+}
+
+impl DesiredBuildEnv {
+    /// Read the desired build env for `roots` — one make.conf evaluation per
+    /// flag var (matches `read_make_conf_var_for_roots`'s existing
+    /// two-path-fallback rule). `chost` falls back to the process `CHOST` env
+    /// var when make.conf doesn't set it, the same rule `merge_sequential`/
+    /// `merge_parallel` already apply for their own per-entry desired CHOST.
+    pub(crate) async fn for_roots(roots: &Roots) -> Self {
+        Self {
+            cflags: read_make_conf_var_for_roots(roots, "CFLAGS")
+                .await
+                .unwrap_or_default(),
+            cxxflags: read_make_conf_var_for_roots(roots, "CXXFLAGS")
+                .await
+                .unwrap_or_default(),
+            ldflags: read_make_conf_var_for_roots(roots, "LDFLAGS")
+                .await
+                .unwrap_or_default(),
+            rustflags: read_make_conf_var_for_roots(roots, "RUSTFLAGS")
+                .await
+                .unwrap_or_default(),
+            chost: read_make_conf_var_for_roots(roots, "CHOST")
+                .await
+                .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
+                .unwrap_or_default(),
+        }
+    }
+
+    /// The build-env key derived from this environment's flags (see
+    /// [`portage_binpkg::build_env_key`]).
+    pub(crate) fn key(&self) -> String {
+        portage_binpkg::build_env_key(&self.cflags, &self.cxxflags, &self.ldflags, &self.rustflags)
+    }
+}
+
 /// One `binrepos.conf` section — real portage's `BinRepoConfig`, restricted
 /// to the fields em's remote binpkg fetch path uses. `frozen`/
 /// `verify_signature` are parsed and carried but not yet *enforced*: `frozen`
@@ -453,6 +500,69 @@ mod tests {
                 .as_deref(),
             Some("-O2 -march=x86-64-v3")
         );
+    }
+
+    #[tokio::test]
+    async fn desired_build_env_for_roots_reads_expanded_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let conf_dir = dir.path().join("etc/portage");
+        std::fs::create_dir_all(&conf_dir).unwrap();
+        std::fs::write(
+            conf_dir.join("make.conf"),
+            "COMMON_FLAGS=\"-O2 -march=x86-64-v3\"\nCFLAGS=\"${COMMON_FLAGS}\"\n",
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
+        let env = DesiredBuildEnv::for_roots(&cli.roots()).await;
+        assert_eq!(env.cflags, "-O2 -march=x86-64-v3");
+        let key = env.key();
+        assert!(!key.is_empty());
+        assert_eq!(
+            key,
+            portage_binpkg::build_env_key("-O2 -march=x86-64-v3", "", "", "")
+        );
+    }
+
+    /// Under `--target`, the sysroot's own config (`roots()`) and the host's
+    /// (`broot()`) can have genuinely different make.conf CFLAGS — the
+    /// fingerprint command's `--host` flag exists exactly for this split.
+    #[tokio::test]
+    async fn desired_build_env_host_vs_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        std::fs::create_dir_all(dir.path().join("etc/portage")).unwrap();
+        std::fs::write(
+            dir.path().join("etc/portage/make.conf"),
+            "CFLAGS=\"-O2 -march=armv8-a\"\n",
+        )
+        .unwrap();
+        let sysroot_conf = dir.path().join("usr/riscv64-unknown-linux-gnu/etc/portage");
+        std::fs::create_dir_all(&sysroot_conf).unwrap();
+        std::fs::write(
+            sysroot_conf.join("make.conf"),
+            "CFLAGS=\"-O2 -march=rv64gcv\"\n",
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from([
+            "em",
+            "--root",
+            root,
+            "--config-root",
+            root,
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+
+        let target_env = DesiredBuildEnv::for_roots(&cli.roots()).await;
+        let host_env = DesiredBuildEnv::for_roots(&cli.broot()).await;
+        assert_eq!(target_env.cflags, "-O2 -march=rv64gcv");
+        assert_eq!(host_env.cflags, "-O2 -march=armv8-a");
+        assert_ne!(target_env.key(), host_env.key());
     }
 
     fn parse_sections(
