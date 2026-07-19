@@ -1,15 +1,19 @@
 # Binpkg identity: cross roots + ISA sub-targets
 
-STATUS: **partial — Phase 1 mostly landed** (vibe, 2026-07-19). Scenario design
-still authoritative; implementation progress and residual work are in
-[What landed](#what-landed-vibe-2026-07-19) and [Refined residual plan](#refined-residual-plan).
+STATUS: **Phases 1/1a/1b landed** (Phase 1: vibe, 2026-07-19; Phase 1a
+correctness fixes + Phase 1b: Claude/Sonnet + Fable, same day). Scenario
+design still authoritative. Open: live S1 sandbox verification, package.env
+CFLAGS in the desired key (S6), Phase 2 automation UX — see
+[Refined residual plan](#refined-residual-plan).
 
 Related: [[PENDING]] binhosts section; `portage-binpkg` index; crossdev-stages
 `lib/sysroot.sh` (PKGDIR per CFLAGS-named sysroot).
 
 Commits (representative): `0f2d77f` sokgi dep · `6b2f3be` `build_env_key` ·
 `c94ed73` prune by identity · `58802cb` `read_make_conf_var_for_roots` ·
-`306fdec` merge per-entry CHOST/key · `73d5bfb` preview signature.
+`306fdec` merge per-entry CHOST/key · `73d5bfb` preview signature ·
+`b8831df` ISA/ABI token pre-filter · `a163ba0` asymmetric gate + max-BUILD_ID ·
+`5209462` header/entry parse boundary · `3187b80` per-entry PKGDIR dual index.
 
 ## Why this exists
 
@@ -390,14 +394,14 @@ split the cache; different `-march` still does; `-march=native` → `__native__`
 
 | Gap | Scenario | Severity |
 |-----|----------|----------|
-| **Per-entry PKGDIR** — still one `resolve_pkgdir(globals)` (target under `--target`) | S1, S4 | **High** for crossdev-stages-like host vs target caches |
-| **`parse_index_header`** still `\n\n` first block only | S5 edge | Low |
-| **RUSTFLAGS** not in VDB/GPKG write path | key consistency | Medium if RUSTFLAGS used |
+| ~~**Per-entry PKGDIR** — still one `resolve_pkgdir(globals)`~~ | S1, S4 | **Done in Phase 1b** |
+| ~~**`parse_index_header`** still `\n\n` first block only~~ | S5 edge | **Done in Phase 1b** |
+| ~~**RUSTFLAGS** not in VDB/GPKG write path~~ | key consistency | **Done in Phase 1b** |
 | **package.env** CFLAGS not in desired key | S6 | Medium for workarounds |
-| **S1 live test** host BDEPEND reuse | S1 | Need integration test / live check |
+| **S1 live test** host BDEPEND reuse | S1 | Code done; **live sandbox verification still open** |
 | **Stages PKGDIR recipe / fingerprint helper** | automation | Phase 2 |
 | **maint list** shows key/CHOST | UX | Phase 2 |
-| Dead global `desired_chost` still computed in `run_merge_plan` and passed as `_desired_chost` | cleanup | Low |
+| ~~Dead global `desired_chost`~~ | cleanup | **Done in Phase 1b** |
 
 ---
 
@@ -453,27 +457,59 @@ serially both before and after this change).
 
 ## Refined residual plan
 
-### Phase 1b — finish cross correctness (do next)
+### Phase 1b — finish cross correctness (landed, 2026-07-19)
 
-1. **Per-entry PKGDIR + dual index**
-   - `resolve_pkgdir_for_roots(&entry_roots)` (or host vs target open once).
-   - Host plan rows: host PKGDIR index; target rows: target PKGDIR.
-   - Remote: optional later (usually one binhost per board).
-2. ~~**`find_reusable` max BUILD_ID** among matching instances (not first).~~
-   **Done in Phase 1a** — see above.
-3. **Drop dead global CHOST** arg from merge_sequential/parallel signatures.
-4. **VDB/GPKG RUSTFLAGS** (and ensure LDFLAGS already written — yes) so
-   producer key == consumer desired key.
-5. **Harden `parse_index_header`**: accumulate `KEY: VALUE` lines until first
-   `CPV:` (ignore blank-line requirement).
-6. **Tests:** multi-instance two march + prune keeps both; Host entry CHOST
-   from broot make.conf; optional PKGDIR dual-open unit test.
+Planned by Fable (independent plan, verified against the actual source before
+implementing) and implemented by Claude/Sonnet, one commit per item:
+
+1. **VDB/GPKG RUSTFLAGS.** Producer never recorded it despite the consumer
+   already reading it — `EbuildEnv`/`MergeSpec`/`vdb::register`/`portage-binpkg`
+   regen all gained the field. Promoted first in the plan: a binpkg whose only
+   ISA-relevant flags lived in RUSTFLAGS had an *empty* build_env_key, so the
+   Phase 1a asymmetric gate treated it as legacy-permissive — same wrong-reuse
+   class as Phase 1a's bugs, just a different flag source.
+2. **Hardened the `Packages` header/entry parsing boundary.** A single shared
+   `split_header_body` helper (stop at the first blank line or the first
+   `CPV:` line) replaces two independent `"\n\n"`-splits that could disagree:
+   `parse_index_header` used to lose a glued header's `URI` entirely, and
+   `parse_index_blocks` used to merge a glued header's fields into the first
+   entry's own (a real header field could leak into an entry that legitimately
+   omitted it).
+3. **Dropped the dead global `desired_chost`** from
+   `merge_sequential`/`merge_parallel` (per-entry `desired_chost_entry` had
+   already superseded it; the global arrived as an unused `_desired_chost`
+   parameter). Also fixed 6 pre-existing `needless_borrow` clippy warnings in
+   `merge_parallel` while there.
+4. **Per-entry PKGDIR + dual index (S1/S4).** `resolve_pkgdir_for_roots(&Roots)`
+   added alongside `resolve_pkgdir(&Cli)` (now a thin delegate). `run_merge_plan`
+   resolves both `target_pkgdir`/`host_pkgdir`, opens a second `BinpkgIndex` for
+   the host side only when the plan has `MergeRoot::Host` entries *and* the two
+   paths genuinely differ (`dual_pkgdir` — a no-op outside `--target`), and a
+   new `entry_binpkg_index()` helper (mirrors `entry_roots()`) picks the right
+   index per entry. **No fallback** to the target index when the host index is
+   unavailable — a Host entry with no host index just misses and builds,
+   rather than reintroducing cross-PKGDIR confusion. `--buildpkg`'s
+   writable-PKGDIR preflight now also checks the host PKGDIR when dual.
+5. **Tests:** 4 new in `portage-binpkg` (header/glue-leak cases), 2 new in
+   `portage-cli/src/binpkg.rs` (`resolve_pkgdir_for_roots` target-vs-host,
+   config-root override), 2 new in `merge/mod.rs` (`entry_binpkg_index`
+   host-vs-target selection, no-fallback-when-missing).
+
+**Still open from the original list:** a **live sandbox check** that a real
+`--target` build's Host BDEPEND actually reuses from the host PKGDIR (code
+path is done and unit-tested; not yet run against a real riscv64 crossdev
+sandbox — do this before ticking the matching Success-criteria box below).
+`em maint binpkg list` UX and the stages PKGDIR recipe doc are Phase 2,
+untouched.
 
 ### Phase 1c — key policy
 
-**Chosen:** ISA/ABI token filter → sokgi hash (not full CFLAGS). Extend the
-allowlist in `is_c_family_abi_token` / `filter_rust_abi_flags` if a real board
-needs another selector (e.g. `-mno-outline-atomics`).
+**Chosen:** ISA/ABI token filter → sokgi hash (not full CFLAGS). Broadened in
+Phase 1a from an explicit prefix allowlist to "any `-m*` token" (GCC/Clang's
+own "machine dependent options" convention) specifically so a missed selector
+(the allowlist had missed `-mrvv-vector-bits=`/`-mno-outline-atomics`/x86
+feature toggles) can't silently under-key again — nothing left to extend here
+short of a genuinely new non-`-m` ISA flag family.
 
 ### Phase 2 — automation UX
 
@@ -505,9 +541,9 @@ needs another selector (e.g. `-mno-outline-atomics`).
 
 | Finding | Scenario | Disposition |
 |---------|----------|-------------|
-| Global CHOST over-conservative for Host entries | S1 | **Partial:** per-entry CHOST done; **PKGDIR dual still open** |
-| parse_index_header needs blank line | S5 edge | **Still open** (Phase 1b.5) |
-| RVV / multi-march | S2, S3 | **Core done** (key + multi-instance + prune); key policy refine |
+| Global CHOST over-conservative for Host entries | S1 | **Done:** per-entry CHOST + per-entry PKGDIR dual index (Phase 1b) |
+| parse_index_header needs blank line | S5 edge | **Done** (Phase 1b, `split_header_body`) |
+| RVV / multi-march | S2, S3 | **Done** (key + multi-instance + prune + broadened `-m*` filter) |
 | prune collapses multi-BUILD_ID | S3 | **Done** (`c94ed73`) |
 
 ---
@@ -519,9 +555,9 @@ needs another selector (e.g. `-mno-outline-atomics`).
    **Lean:** multi-instance in whatever PKGDIR is configured; document
    subpath as best practice for isolation. *(unchanged)*
 2. ~~**Key strictness**~~ — ISA filter before sokgi (**done**).
-3. **Host PKGDIR when `--target` and no host make.conf PKGDIR:**  
-   **Lean:** `/var/cache/binpkgs` host default (current host behaviour).
-   **Implement** dual open in Phase 1b.1.
+3. ~~**Host PKGDIR when `--target` and no host make.conf PKGDIR**~~ —
+   **done**: `resolve_pkgdir_for_roots` under host roots falls to
+   `/var/cache/binpkgs` exactly as leaned; dual open implemented in Phase 1b.
 
 ---
 
@@ -529,10 +565,16 @@ needs another selector (e.g. `-mno-outline-atomics`).
 
 - [x] Multi-instance index + build_env_key gate + prune by identity
 - [x] Per-entry desired CHOST / CFLAGS from entry make.conf
-- [ ] Cross plan: host BDEPEND reuses host binpkg **from host PKGDIR** when USE+CHOST match
+- [ ] Cross plan: host BDEPEND reuses host binpkg **from host PKGDIR** when
+      USE+CHOST match — code done + unit-tested (`entry_binpkg_index`
+      host-vs-target selection), **live sandbox run still open**
 - [ ] Same PKGDIR: two glibc GPKGs with different `-march` both retained after
-      prune; `-k` selects the one matching current make.conf CFLAGS
-- [ ] Separate PKGDIR recipe still works without multi-instance (key gate
-      no-ops when only one instance / empty keys)
-- [ ] Remote multi-block same-CPV Packages works (parser yes; prefer max BUILD_ID)
-- [ ] No wrong-arch or wrong-march reuse (unit coverage partial; live S1 open)
+      prune; `-k` selects the one matching current make.conf CFLAGS — logic
+      covers this (prune groups by `(cpv, chost, build_env_key)`), no
+      dedicated multi-march prune test yet
+- [x] Separate PKGDIR recipe still works without multi-instance (key gate
+      no-ops when only one instance / empty keys) — `empty_binpkg_key_is_legacy_permissive`
+- [x] Remote multi-block same-CPV Packages works (parser yes; prefer max BUILD_ID)
+- [ ] No wrong-arch or wrong-march reuse — unit coverage now comprehensive
+      (empty-key asymmetry, broadened `-m*` filter, max-BUILD_ID selection all
+      tested); **live S1 sandbox check still open**
