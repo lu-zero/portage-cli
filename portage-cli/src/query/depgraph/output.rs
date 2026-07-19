@@ -726,9 +726,9 @@ fn print_pretty_with_roots(
                 .iter()
                 .map(|f| f.as_str().to_string())
                 .collect();
-            // Empty CHOST: preview skips the CHOST gate (same as "unknown");
-            // the real merge path passes make.conf CHOST.
-            idx.find_reusable(&cpv.to_string(), &desired_use, "")
+            // Empty CHOST and build_env_key: preview skips both gates (same as "unknown");
+            // the real merge path passes make.conf CHOST and build_env_key.
+            idx.find_reusable(&cpv.to_string(), &desired_use, "", "")
                 .is_some()
         });
 
