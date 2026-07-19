@@ -20,6 +20,7 @@ hex = { workspace = true }
 camino = { workspace = true }
 thiserror = { workspace = true }
 tempfile = { workspace = true }
+sokgi = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
