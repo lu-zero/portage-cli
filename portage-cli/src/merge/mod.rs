@@ -70,6 +70,23 @@ fn entry_roots<'a>(
     }
 }
 
+/// Which local binpkg index a plan entry's reuse lookup consults: the host's
+/// own (built with host CHOST/CFLAGS) for a `MergeRoot::Host` entry, the
+/// target's otherwise. Mirrors [`entry_roots`]'s selection — see
+/// `run_merge_plan`'s `dual_pkgdir` for why these can genuinely differ under
+/// `--target` (S1/S4 in `todo/binpkg-subtargets.md`).
+fn entry_binpkg_index<'a>(
+    planned: &query::depgraph::PlannedMerge,
+    target: Option<&'a portage_binpkg::BinpkgIndex>,
+    host: Option<&'a portage_binpkg::BinpkgIndex>,
+) -> Option<&'a portage_binpkg::BinpkgIndex> {
+    if planned.merge_root == query::depgraph::MergeRoot::Host {
+        host
+    } else {
+        target
+    }
+}
+
 /// Build and merge a resolved plan in install order.
 ///
 /// Resume comes for free from the target VDB: a package already recorded
@@ -100,6 +117,37 @@ pub(crate) async fn run_merge_plan(
     let merge_root = roots.merge_root();
     let total = plan.len();
 
+    // A `--target` plan can carry `MergeRoot::Host` entries (an unsatisfied
+    // BDEPEND scheduled onto the build host — see `cross_target_runtime_deps`
+    // in portage-atom-pubgrub). `roots` here is the `--target`-substituted
+    // sysroot; `broot()` is where a Host entry actually belongs — the real
+    // host `/` for plain `--root` (portage `ROOT=` parity: BDEPEND resolves
+    // and installs on the host, full stop), matching `base_roots()` for
+    // `--prefix`/`--local`. NOT `base_roots()` directly: that's "the outer
+    // EROOT" (where crossdev's own `cross-*` toolchain *bootstrap* packages
+    // land via the separate `bypass_cross_root` mechanism in `emerge.rs`) —
+    // a different, unprivileged-writable-location concern from "where does
+    // an ordinary package's BDEPEND resolve". Equal to `roots` when `--target`
+    // isn't active, so this is a no-op outside cross builds.
+    let host_roots = globals.broot();
+
+    // Per-entry PKGDIR (S1/S4 in todo/binpkg-subtargets.md): a Host entry's
+    // binpkgs live in the *host*'s PKGDIR (built with host CHOST/CFLAGS), a
+    // Target entry's in the target's own — distinct whenever the two roots'
+    // own PKGDIR resolution disagrees (config-root make.conf, or simply a
+    // different merge_root falling to the root-relative default). Outside
+    // `--target` (and for `--root`/`--prefix`/`--local` with no distinct host
+    // config), `host_roots` resolves to the same PKGDIR as `roots`, so this
+    // is a no-op there — deliberately compared by resolved path, not gated on
+    // "is --target active", so a plain `--root` whose config-root make.conf
+    // sets a different PKGDIR is still handled correctly.
+    let target_pkgdir = binpkg::resolve_pkgdir_for_roots(roots);
+    let host_pkgdir = binpkg::resolve_pkgdir_for_roots(&host_roots);
+    let plan_has_host_entries = plan
+        .iter()
+        .any(|p| p.merge_root == query::depgraph::MergeRoot::Host);
+    let dual_pkgdir = plan_has_host_entries && host_pkgdir != target_pkgdir;
+
     // Fail fast: verify PKGDIR is actually writable *before* starting a
     // potentially multi-hour build, rather than discovering it deep into a
     // `--keep-going` run once dozens of packages have already silently died.
@@ -108,15 +156,21 @@ pub(crate) async fn run_merge_plan(
     // root-aware), and each failure surfaced as an unexplained, silent worker
     // death rather than the single clear error this check now gives instead.
     // Fetch-only never writes PKGDIR (remote binpkg cache is under work_base).
+    // When `dual_pkgdir`, a Host entry's producer path (`write_binpkg`,
+    // already per-entry) writes into `host_pkgdir` too — check it up front
+    // for the same reason.
     if !fetchonly && (buildpkg || buildpkgonly) {
         let flag = if buildpkg {
             "--buildpkg"
         } else {
             "--buildpkgonly"
         };
-        let pkgdir = binpkg::resolve_pkgdir(globals);
-        check_pkgdir_writable(&pkgdir)
-            .with_context(|| format!("{flag}: PKGDIR {pkgdir} is not writable"))?;
+        check_pkgdir_writable(&target_pkgdir)
+            .with_context(|| format!("{flag}: PKGDIR {target_pkgdir} is not writable"))?;
+        if dual_pkgdir {
+            check_pkgdir_writable(&host_pkgdir)
+                .with_context(|| format!("{flag}: host PKGDIR {host_pkgdir} is not writable"))?;
+        }
     }
 
     let usepkgonly = merge_flags.usepkgonly;
@@ -131,24 +185,58 @@ pub(crate) async fn run_merge_plan(
 
     // Open the local binpkg index once if any binpkg reuse is in effect.
     let binpkg_index = if want_local {
-        let pkgdir = binpkg::resolve_pkgdir(globals);
-        match portage_binpkg::BinpkgIndex::open(pkgdir.as_std_path()) {
+        match portage_binpkg::BinpkgIndex::open(target_pkgdir.as_std_path()) {
             Ok(idx) => {
                 if !idx.is_empty() {
                     println!(
-                        ">>> --usepkg: {} local binary package(s) in {pkgdir}",
+                        ">>> --usepkg: {} local binary package(s) in {target_pkgdir}",
                         idx.len()
                     );
                 }
                 Some(idx)
             }
             Err(e) => {
-                eprintln!("warning: --usepkg index unavailable ({pkgdir}): {e:#}");
+                eprintln!("warning: --usepkg index unavailable ({target_pkgdir}): {e:#}");
                 None
             }
         }
     } else {
         None
+    };
+
+    // A second, host-rooted index for Host plan entries when their PKGDIR
+    // genuinely differs from the target's. No fallback to the target index
+    // when this fails to open or `want_local` is false: falling back would
+    // reintroduce exactly the cross-PKGDIR confusion this separates out (the
+    // CHOST/build_env_key gates would usually save us, but Phase 1a was
+    // about not relying on "usually") — a Host entry with no host index
+    // simply misses and builds/uses the normal source or remote path.
+    let host_binpkg_index_owned = if want_local && dual_pkgdir {
+        match portage_binpkg::BinpkgIndex::open(host_pkgdir.as_std_path()) {
+            Ok(idx) => {
+                if !idx.is_empty() {
+                    println!(
+                        ">>> --usepkg: {} host binary package(s) in {host_pkgdir}",
+                        idx.len()
+                    );
+                }
+                Some(idx)
+            }
+            Err(e) => {
+                eprintln!("warning: --usepkg host index unavailable ({host_pkgdir}): {e:#}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    // A Host entry consults its own PKGDIR's index when distinct, else the
+    // shared one already opened above (dual_pkgdir false: same PKGDIR, no
+    // point opening it twice).
+    let host_binpkg_index = if dual_pkgdir {
+        host_binpkg_index_owned.as_ref()
+    } else {
+        binpkg_index.as_ref()
     };
 
     // Fetch each configured remote binhost's Packages index. `-g`/`-G` only.
@@ -187,19 +275,6 @@ pub(crate) async fn run_merge_plan(
         Vec::new()
     };
 
-    // A `--target` plan can carry `MergeRoot::Host` entries (an unsatisfied
-    // BDEPEND scheduled onto the build host — see `cross_target_runtime_deps`
-    // in portage-atom-pubgrub). `roots` here is the `--target`-substituted
-    // sysroot; `broot()` is where a Host entry actually belongs — the real
-    // host `/` for plain `--root` (portage `ROOT=` parity: BDEPEND resolves
-    // and installs on the host, full stop), matching `base_roots()` for
-    // `--prefix`/`--local`. NOT `base_roots()` directly: that's "the outer
-    // EROOT" (where crossdev's own `cross-*` toolchain *bootstrap* packages
-    // land via the separate `bypass_cross_root` mechanism in `emerge.rs`) —
-    // a different, unprivileged-writable-location concern from "where does
-    // an ordinary package's BDEPEND resolve". Equal to `roots` when `--target`
-    // isn't active, so this is a no-op outside cross builds.
-    let host_roots = globals.broot();
     let (merged, skipped, failures) = if jobs <= 1 {
         merge_sequential(
             plan,
@@ -210,6 +285,7 @@ pub(crate) async fn run_merge_plan(
             quiet,
             merge_flags,
             binpkg_index.as_ref(),
+            host_binpkg_index,
             &remote_indices,
             enforce_no_source,
         )
@@ -226,6 +302,7 @@ pub(crate) async fn run_merge_plan(
             jobs,
             merge_flags,
             binpkg_index.as_ref(),
+            host_binpkg_index,
             &remote_indices,
             enforce_no_source,
         )
@@ -296,6 +373,9 @@ async fn act_on_package(
     buildpkg: bool,
     buildpkgonly: bool,
     fetchonly: bool,
+    // The local index for *this entry's* PKGDIR — host or target, already
+    // chosen by the caller (`entry_binpkg_index`) — not necessarily the
+    // plan-wide target index.
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
@@ -464,6 +544,7 @@ async fn merge_sequential(
     quiet: bool,
     merge_flags: &cli::MergeFlags,
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
+    host_binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
 ) -> (usize, usize, Vec<MergeFailure>) {
@@ -486,6 +567,7 @@ async fn merge_sequential(
     for (i, planned) in plan.iter().enumerate() {
         let entry_roots = entry_roots(planned, roots, host_roots);
         let merge_root = entry_roots.merge_root();
+        let entry_index = entry_binpkg_index(planned, binpkg_index, host_binpkg_index);
 
         // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
         // This allows proper binpkg reuse across cross-compilation and multi-arch scenarios
@@ -541,7 +623,7 @@ async fn merge_sequential(
             buildpkg,
             buildpkgonly,
             fetchonly,
-            binpkg_index,
+            entry_index,
             remote_indices,
             enforce_no_source,
             &desired_chost_entry,
@@ -679,6 +761,7 @@ async fn merge_parallel(
     jobs: usize,
     merge_flags: &cli::MergeFlags,
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
+    host_binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
 ) -> (usize, usize, Vec<MergeFailure>) {
@@ -707,6 +790,7 @@ async fn merge_parallel(
             let planned = &plan[i];
             let entry_roots = entry_roots(planned, roots, host_roots);
             let merge_root = entry_roots.merge_root();
+            let entry_index = entry_binpkg_index(planned, binpkg_index, host_binpkg_index);
 
             // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
             let desired_cflags =
@@ -766,7 +850,7 @@ async fn merge_parallel(
                     buildpkg,
                     buildpkgonly,
                     fetchonly,
-                    binpkg_index,
+                    entry_index,
                     remote_indices,
                     enforce_no_source,
                     &desired_chost_entry_clone,
@@ -875,6 +959,63 @@ mod entry_roots_tests {
             "/opt/p",
             "an unsatisfied Host-routed entry must merge into the prefix, not the real host"
         );
+        Ok(())
+    }
+
+    /// Seed `dir/Packages` with a single-entry index so `BinpkgIndex::open`
+    /// (the only public constructor) can load it in tests.
+    fn seed_index(dir: &std::path::Path) {
+        std::fs::write(
+            dir.join("Packages"),
+            "CPV: dev-python/jinja2-3.1.6\nIUSE:\nPATH: dev-python/jinja2-3.1.6-1.gpkg.tar\nUSE:\n",
+        )
+        .unwrap();
+    }
+
+    /// A Host entry's reuse lookup must hit the *host* PKGDIR's index, a
+    /// Target entry's the target's — even when both indices contain the same
+    /// cpv (S1/S4: distinct boards/roots, not distinct package sets).
+    #[test]
+    fn host_entry_uses_host_index_target_entry_uses_target_index() -> Result<()> {
+        let host_dir = tempfile::tempdir().unwrap();
+        let target_dir = tempfile::tempdir().unwrap();
+        seed_index(host_dir.path());
+        seed_index(target_dir.path());
+        let host_idx = portage_binpkg::BinpkgIndex::open(host_dir.path()).unwrap();
+        let target_idx = portage_binpkg::BinpkgIndex::open(target_dir.path()).unwrap();
+
+        let host_entry = planned(MergeRoot::Host)?;
+        let target_entry = planned(MergeRoot::Target)?;
+
+        let picked = entry_binpkg_index(&host_entry, Some(&target_idx), Some(&host_idx)).unwrap();
+        assert_eq!(
+            picked
+                .find_reusable("dev-python/jinja2-3.1.6", &[], "", "")
+                .unwrap(),
+            host_dir.path().join("dev-python/jinja2-3.1.6-1.gpkg.tar")
+        );
+
+        let picked = entry_binpkg_index(&target_entry, Some(&target_idx), Some(&host_idx)).unwrap();
+        assert_eq!(
+            picked
+                .find_reusable("dev-python/jinja2-3.1.6", &[], "", "")
+                .unwrap(),
+            target_dir.path().join("dev-python/jinja2-3.1.6-1.gpkg.tar")
+        );
+        Ok(())
+    }
+
+    /// When the host index is unavailable (`dual_pkgdir` but it failed to
+    /// open, or `want_local` off), a Host entry must get `None` — never
+    /// silently fall back to the target index. Falling back would
+    /// reintroduce exactly the cross-PKGDIR confusion Phase 1b removes.
+    #[test]
+    fn host_entry_gets_none_not_target_fallback_when_host_index_missing() -> Result<()> {
+        let target_dir = tempfile::tempdir().unwrap();
+        seed_index(target_dir.path());
+        let target_idx = portage_binpkg::BinpkgIndex::open(target_dir.path()).unwrap();
+        let host_entry = planned(MergeRoot::Host)?;
+        assert!(entry_binpkg_index(&host_entry, Some(&target_idx), None).is_none());
         Ok(())
     }
 }

@@ -23,15 +23,27 @@ use crate::cli::Cli;
 const DEFAULT_PKGDIR: &str = "/var/cache/binpkgs";
 const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
 
-/// Resolve `PKGDIR`: `$PKGDIR` env → `make.conf` (config root) → `make.globals`
-/// → `/var/cache/binpkgs`. Shared by `em maint binhost`/`em maint binpkg` and
-/// the `-k` consumer.
+/// Resolve `PKGDIR` under `globals`'s own (`--target`-substituted) roots —
+/// see [`resolve_pkgdir_for_roots`] for the algorithm. Shared by `em maint
+/// binhost`/`em maint binpkg` and the `-k` consumer, all single-root
+/// commands where "globals's own roots" is unambiguous.
+pub(crate) fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
+    resolve_pkgdir_for_roots(&globals.roots())
+}
+
+/// Resolve `PKGDIR` under specific `roots`: `$PKGDIR` env → `make.conf`
+/// (`roots.config()`) → `make.globals` (host builds only) →
+/// `roots.merge_root().join("var/cache/binpkgs")`.
+///
+/// The per-roots twin of [`resolve_pkgdir`] — used by the merge path to open
+/// the **host** PKGDIR for `MergeRoot::Host` plan entries under `--target`,
+/// separately from the target's own PKGDIR that `resolve_pkgdir` resolves.
 ///
 /// The `make.globals`/hardcoded-default steps are **host** defaults — real
 /// portage's own system-wide install convention, unconditionally
 /// `/var/cache/binpkgs` (confirmed: this repo's own `make.globals` hardcodes
-/// exactly that). For a `--root`/`--target`/`--local`/`--prefix` build (any
-/// merge root other than `/`), consulting that host default is wrong: it's a
+/// exactly that). For a `--root`/`--target`/`--local`/`--prefix` merge root
+/// (anything other than `/`), consulting that host default is wrong: it's a
 /// real, root-owned system path the build has no business writing to, and
 /// unprivileged builds can't anyway. Caught live: a stage3 `--buildpkg` run
 /// tried to write there, got `EACCES`, and appears to have destabilized the
@@ -39,18 +51,18 @@ const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
 /// `todo/stage-build-shakeout.md`. Skip straight to a root-relative default
 /// in that case; `$PKGDIR`/config-root `make.conf` (explicit user choices)
 /// still apply regardless of root.
-pub(crate) fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
+pub(crate) fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
     if let Ok(v) = std::env::var("PKGDIR")
         && !v.trim().is_empty()
     {
         return Utf8PathBuf::from(v);
     }
-    if let Some(v) = read_make_conf_var(globals, "PKGDIR")
+    if let Some(v) = read_make_conf_var_for_roots(roots, "PKGDIR")
         && !v.is_empty()
     {
         return Utf8PathBuf::from(v);
     }
-    let merge_root = globals.roots().merge_root().to_owned();
+    let merge_root = roots.merge_root().to_owned();
     // make.globals is a host-level default; only consult it for a real host
     // build. A non-host root falls through to the join below unconditionally
     // — no separate "is this the host?" branch needed there, since
@@ -77,6 +89,11 @@ pub(crate) fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
 /// merge may reuse a remote binpkg. Silent on error (unlike
 /// `run_merge_plan`'s own open, which warns) — this is a best-effort
 /// preview hint, not the path that actually performs the reuse.
+///
+/// Also single-index only, unlike the real merge path's per-entry host/target
+/// `dual_pkgdir` split (`run_merge_plan`): under `--target -k`, a `MergeRoot::Host`
+/// row may print `[ebuild ...]` here while the real merge reuses a host-PKGDIR
+/// binpkg — same display-only divergence class as the `-g`/`-G` one above.
 pub(crate) fn open_local_index_for_preview(
     globals: &Cli,
     merge_flags: &crate::cli::MergeFlags,
@@ -311,6 +328,84 @@ mod tests {
             }
         };
         assert_eq!(resolve_pkgdir(&cli), expected);
+    }
+
+    /// A `--target` plan's own roots (`resolve_pkgdir`) resolve under the
+    /// target sysroot, while `broot()` (host roots, what a `MergeRoot::Host`
+    /// entry actually wants) resolve as a plain host build — the two must
+    /// disagree here, or a Host BDEPEND entry would look up binpkgs in the
+    /// wrong PKGDIR (S1/S4 in `todo/binpkg-subtargets.md`).
+    #[test]
+    fn resolve_pkgdir_for_roots_target_vs_host() {
+        assert!(
+            std::env::var("PKGDIR").is_err(),
+            "test assumes no ambient PKGDIR override"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let cli = Cli::parse_from([
+            "em",
+            "--root",
+            root,
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+
+        let target_roots = cli.roots();
+        assert_eq!(
+            target_roots.merge_root().as_str(),
+            format!("{root}/usr/riscv64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            resolve_pkgdir_for_roots(&target_roots),
+            camino::Utf8Path::new(root)
+                .join("usr/riscv64-unknown-linux-gnu")
+                .join("var/cache/binpkgs")
+        );
+
+        let host_roots = cli.broot();
+        assert_eq!(
+            host_roots.merge_root().as_str(),
+            "/",
+            "--root's BROOT is the real host, not the sysroot (task #17 fix)"
+        );
+        let expected_host = {
+            let mg = Utf8Path::new(MAKE_GLOBALS);
+            if mg.exists()
+                && let Ok(mc) = MakeConf::load(mg)
+                && let Some(v) = mc.get("PKGDIR").filter(|s| !s.is_empty())
+            {
+                Utf8PathBuf::from(v)
+            } else {
+                Utf8PathBuf::from(DEFAULT_PKGDIR)
+            }
+        };
+        assert_eq!(resolve_pkgdir_for_roots(&host_roots), expected_host);
+    }
+
+    /// Config-root make.conf `PKGDIR=` wins for whichever roots see that
+    /// config root — proven independently for target and host roots.
+    #[test]
+    fn resolve_pkgdir_for_roots_honours_config_root_make_conf() {
+        assert!(
+            std::env::var("PKGDIR").is_err(),
+            "test assumes no ambient PKGDIR override"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let conf_dir = dir.path().join("etc/portage");
+        std::fs::create_dir_all(&conf_dir).unwrap();
+        std::fs::write(conf_dir.join("make.conf"), "PKGDIR=\"/custom/pkgdir\"\n").unwrap();
+
+        // `--config-root` required (see `portage_binhosts`'s own tests below):
+        // a bare `--root` leaves `config()` at the real host `/`.
+        let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
+        assert_eq!(
+            resolve_pkgdir_for_roots(&cli.roots()),
+            camino::Utf8Path::new("/custom/pkgdir")
+        );
     }
 
     fn parse_sections(
