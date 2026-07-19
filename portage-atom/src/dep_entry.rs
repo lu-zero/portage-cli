@@ -20,6 +20,9 @@ use crate::parsers::parse_ident_with_at;
 /// and any-of / exactly-one-of / at-most-one-of groups.
 ///
 /// See [PMS 8.2](https://projects.gentoo.org/pms/9/pms.html#dependency-specification-format).
+// `Atom` is the dominant variant, so boxing it would add a per-atom
+// allocation on parse and on every `evaluate_use` clone for no memory win.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DepEntry {
     /// A single dependency atom.

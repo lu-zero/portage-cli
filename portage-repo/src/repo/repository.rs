@@ -192,7 +192,8 @@ pub enum ProfileUpdate {
     /// `slotmove <dep> <old_slot> <new_slot>` — slot renamed.
     SlotMove {
         /// Atom (possibly versioned) identifying affected packages.
-        dep: Dep,
+        /// Boxed to keep the enum near [`ProfileUpdate::Move`]'s size.
+        dep: Box<Dep>,
         /// Old slot value.
         old_slot: String,
         /// New slot value.
@@ -611,7 +612,7 @@ impl Repository {
                         };
                         let Ok(dep) = Dep::parse(dep_s) else { continue };
                         updates.push(ProfileUpdate::SlotMove {
-                            dep,
+                            dep: Box::new(dep),
                             old_slot: old_s.to_string(),
                             new_slot: new_s.to_string(),
                         });
