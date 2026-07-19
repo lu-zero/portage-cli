@@ -187,12 +187,6 @@ pub(crate) async fn run_merge_plan(
         Vec::new()
     };
 
-    // Desired CHOST for binpkg reuse gates (empty → skip gate). Prefer the
-    // config-root make.conf; fall back to the process env when unset.
-    let desired_chost = binpkg::read_make_conf_var(globals, "CHOST")
-        .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
-        .unwrap_or_default();
-
     // A `--target` plan can carry `MergeRoot::Host` entries (an unsatisfied
     // BDEPEND scheduled onto the build host — see `cross_target_runtime_deps`
     // in portage-atom-pubgrub). `roots` here is the `--target`-substituted
@@ -218,7 +212,6 @@ pub(crate) async fn run_merge_plan(
             binpkg_index.as_ref(),
             &remote_indices,
             enforce_no_source,
-            &desired_chost,
         )
         .await
     } else {
@@ -235,7 +228,6 @@ pub(crate) async fn run_merge_plan(
             binpkg_index.as_ref(),
             &remote_indices,
             enforce_no_source,
-            &desired_chost,
         )
         .await
     };
@@ -474,7 +466,6 @@ async fn merge_sequential(
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
-    _desired_chost: &str,
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
@@ -690,7 +681,6 @@ async fn merge_parallel(
     binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
-    _desired_chost: &str,
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
@@ -720,13 +710,13 @@ async fn merge_parallel(
 
             // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
             let desired_cflags =
-                binpkg::read_make_conf_var_for_roots(&entry_roots, "CFLAGS").unwrap_or_default();
+                binpkg::read_make_conf_var_for_roots(entry_roots, "CFLAGS").unwrap_or_default();
             let desired_cxxflags =
-                binpkg::read_make_conf_var_for_roots(&entry_roots, "CXXFLAGS").unwrap_or_default();
+                binpkg::read_make_conf_var_for_roots(entry_roots, "CXXFLAGS").unwrap_or_default();
             let desired_ldflags =
-                binpkg::read_make_conf_var_for_roots(&entry_roots, "LDFLAGS").unwrap_or_default();
+                binpkg::read_make_conf_var_for_roots(entry_roots, "LDFLAGS").unwrap_or_default();
             let desired_rustflags =
-                binpkg::read_make_conf_var_for_roots(&entry_roots, "RUSTFLAGS").unwrap_or_default();
+                binpkg::read_make_conf_var_for_roots(entry_roots, "RUSTFLAGS").unwrap_or_default();
             let desired_build_env_key = portage_binpkg::build_env_key(
                 &desired_cflags,
                 &desired_cxxflags,
@@ -735,7 +725,7 @@ async fn merge_parallel(
             );
 
             // Also compute per-entry desired CHOST
-            let desired_chost_entry = binpkg::read_make_conf_var_for_roots(&entry_roots, "CHOST")
+            let desired_chost_entry = binpkg::read_make_conf_var_for_roots(entry_roots, "CHOST")
                 .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
                 .unwrap_or_default();
 
@@ -765,7 +755,7 @@ async fn merge_parallel(
             inflight.push(async move {
                 let res = act_on_package(
                     planned,
-                    &merge_root,
+                    merge_root,
                     host_roots,
                     &entry_roots_clone,
                     work_base,
