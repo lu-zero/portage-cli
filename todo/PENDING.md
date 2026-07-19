@@ -651,7 +651,9 @@ blocked by the three independent findings above, tracked separately.
     `CFLAGS`/`CXXFLAGS`/`LDFLAGS`/`CBUILD` from GPKG metadata;
     `BinpkgIndex::get` / `RemoteBinpkgIndex::get` expose them. Portage ignores
     these keys on read. **Gating not wired** — `find_reusable` is still
-    USE+CHOST only; decide later (exact string vs extract `-march`/vector).
+    USE+CHOST only. **Full scenario design:** [[binpkg-subtargets]] (cross Host
+    BDEPEND CHOST, multi-instance, prune key, separate PKGDIR vs shared cache,
+    crossdev-stages recipes). Implement when ready — Phase 1 there.
 - ✅ **`em maint binpkg` tooling** — DONE. `em maint binpkg {verify,list,prune}`,
   an em-only extension (no real `emaint` module covers this; its own `emaint
   binhost` only regenerates the index). `verify [--fix]` recomputes each
