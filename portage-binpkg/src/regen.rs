@@ -253,7 +253,8 @@ mod tests {
         // Parser surface: provenance available without affecting reuse.
         let parsed = crate::BinpkgIndex::open(pkgdir.as_std_path()).unwrap();
         let e = parsed.get("app-test/foo-1.0").unwrap();
-        assert_eq!(e.cflags, "-O2 -pipe -mcpu=ampere1a");
-        assert_eq!(e.cxxflags, "-O2 -pipe -mcpu=ampere1a");
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].cflags, "-O2 -pipe -mcpu=ampere1a");
+        assert_eq!(e[0].cxxflags, "-O2 -pipe -mcpu=ampere1a");
     }
 }
