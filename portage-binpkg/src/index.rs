@@ -195,14 +195,41 @@ pub(crate) fn split_iuse(s: &str) -> HashSet<String> {
         .collect()
 }
 
+/// Split a `Packages` text into `(header, body)` at the first blank line or
+/// the first `CPV:` line, whichever comes first. Real portage always writes
+/// a blank line after the header, but its own reader tolerates the header
+/// glued directly onto the first entry (no blank line) — so must we: without
+/// this shared boundary, a naive `split("\n\n")` over the whole text either
+/// drops a glued header's fields entirely (`parse_index_header`) or merges
+/// them into the first entry's own fields (`parse_index_blocks`), leaking
+/// e.g. a header `CHOST:` into an entry that legitimately omitted one.
+fn split_header_body(text: &str) -> (&str, &str) {
+    let mut pos = 0usize;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let line_end = rest.find('\n').map(|i| i + 1).unwrap_or(rest.len());
+        let trimmed = rest[..line_end].trim_end_matches('\n');
+        if trimmed.starts_with("CPV:") {
+            return (&text[..pos], &text[pos..]);
+        }
+        if trimmed.is_empty() {
+            return (&text[..pos], &text[pos + line_end..]);
+        }
+        pos += line_end;
+        rest = &rest[line_end..];
+    }
+    (text, "")
+}
+
 /// Split a `Packages` index into its per-package `KEY: VALUE` blocks (the
-/// header block, which has no `CPV:` line, is skipped). Shared by every
+/// header block is excluded — see [`split_header_body`]). Shared by every
 /// consumer that needs a different subset of fields than [`BinpkgEntry`]
 /// carries — e.g. `em maint binpkg`'s verify/list/prune, which also need
 /// `MD5`/`SHA1`/`SIZE`/`BUILD_ID`.
 pub fn parse_index_blocks(text: &str) -> Vec<BTreeMap<&str, &str>> {
+    let (_, body) = split_header_body(text);
     let mut blocks = Vec::new();
-    for block in text.split("\n\n") {
+    for block in body.split("\n\n") {
         let block = block.trim();
         if block.is_empty() || !block.lines().any(|l| l.starts_with("CPV:")) {
             continue;
@@ -256,15 +283,16 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> 
     entries
 }
 
-/// Header fields of a `Packages` index (the first blank-line-separated block
-/// when it has no `CPV:` line). Used for server-controlled `URI` / BASE_URI.
+/// Header fields of a `Packages` index (see [`split_header_body`] for where
+/// the header ends). Used for server-controlled `URI` / BASE_URI.
 pub fn parse_index_header(text: &str) -> BTreeMap<String, String> {
-    let first = text.split("\n\n").next().unwrap_or("").trim();
-    if first.is_empty() || first.lines().any(|l| l.starts_with("CPV:")) {
+    let (header, _) = split_header_body(text);
+    let header = header.trim();
+    if header.is_empty() {
         return BTreeMap::new();
     }
     let mut fields = BTreeMap::new();
-    for line in first.lines() {
+    for line in header.lines() {
         if let Some((k, v)) = line.split_once(": ") {
             fields.insert(k.to_string(), v.to_string());
         }
@@ -1004,5 +1032,69 @@ USE: nls
                 .unwrap(),
             "https://cdn.example/gentoo/arm64/app-test/foo-1.0-1.gpkg.tar"
         );
+    }
+
+    #[test]
+    fn header_uri_survives_without_a_trailing_blank_line() {
+        // Same as remote_index_header_uri_overrides_sync_uri but the header
+        // is glued directly onto the first entry (no blank line) — a shape
+        // real portage's own reader tolerates.
+        let text = "\
+VERSION: 0
+URI: https://cdn.example/gentoo/arm64
+CPV: app-test/foo-1.0
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+";
+        let idx = RemoteBinpkgIndex::new(text, "https://binhost.example/unused/");
+        assert_eq!(idx.base_uri(), "https://cdn.example/gentoo/arm64");
+        assert_eq!(
+            idx.find_reusable("app-test/foo-1.0", &desired(&["nls"]), "", "",)
+                .unwrap(),
+            "https://cdn.example/gentoo/arm64/app-test/foo-1.0-1.gpkg.tar"
+        );
+    }
+
+    #[test]
+    fn glued_header_field_does_not_leak_into_first_entry() {
+        // The header carries a CHOST-shaped line; the entry itself has none.
+        // Before the shared header/body boundary, this would have merged
+        // into the first entry's fields (BTreeMap built from every line in
+        // the glued block) and made an unrelated binpkg falsely CHOST-gated.
+        let text = "\
+VERSION: 0
+CHOST: this-is-a-header-value-not-an-entrys
+CPV: app-test/foo-1.0
+IUSE: nls
+PATH: app-test/foo-1.0-1.gpkg.tar
+USE: nls
+";
+        let idx = BinpkgIndex::parse(text, PathBuf::from("/pkgdir"));
+        let e = idx.get("app-test/foo-1.0").unwrap();
+        assert_eq!(e.len(), 1);
+        assert_eq!(
+            e[0].chost, "",
+            "the header's CHOST must not leak into the entry"
+        );
+    }
+
+    #[test]
+    fn parse_index_header_empty_when_file_starts_with_cpv() {
+        let text = "\
+CPV: app-test/foo-1.0
+PATH: app-test/foo-1.0-1.gpkg.tar
+";
+        assert!(parse_index_header(text).is_empty());
+        assert_eq!(parse_index_blocks(text).len(), 1);
+    }
+
+    #[test]
+    fn parse_index_header_of_header_only_file() {
+        // No entries at all, no trailing blank line, straight to EOF.
+        let text = "VERSION: 0\nPACKAGES: 0\n";
+        let header = parse_index_header(text);
+        assert_eq!(header.get("VERSION").map(String::as_str), Some("0"));
+        assert!(parse_index_blocks(text).is_empty());
     }
 }
