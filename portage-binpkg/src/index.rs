@@ -524,7 +524,14 @@ pub fn build_env_key(cflags: &str, cxxflags: &str, ldflags: &str, rustflags: &st
         return String::new();
     }
 
+    // CFLAGS and CXXFLAGS commonly share the same -march/-mcpu selector (or
+    // even the same value outright, e.g. CXXFLAGS="${CFLAGS}") -- dedupe so
+    // that doesn't double the same hash in the key for no reason. Safe to
+    // change: build_env_key is always recomputed from the raw CFLAGS/etc
+    // fields (never itself persisted), so producer and consumer stay
+    // self-consistent across this change.
     all_hashes.sort();
+    all_hashes.dedup();
     all_hashes.join(" ")
 }
 
@@ -1021,6 +1028,16 @@ BUILD_ID: 2
         let key1 = build_env_key("-march=x86-64-v3", "", "", "");
         let key2 = build_env_key("-march=x86-64-v3", "", "-Wl,--as-needed -O1", "");
         assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn build_env_key_dedupes_identical_cflags_cxxflags() {
+        // CXXFLAGS mirroring CFLAGS (or sharing the same -march) is the
+        // common case (e.g. CXXFLAGS="${CFLAGS}") -- must not double the
+        // same hash in the key for no reason.
+        let key = build_env_key("-march=x86-64-v3", "-march=x86-64-v3", "", "");
+        assert!(!key.contains(' '), "expected one hash, got {key:?}");
+        assert_eq!(key, build_env_key("-march=x86-64-v3", "", "", ""));
     }
 
     #[test]
