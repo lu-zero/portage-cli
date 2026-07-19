@@ -1,11 +1,15 @@
 # Binpkg identity: cross roots + ISA sub-targets
 
-STATUS: **design** (2026-07-18). Not implemented. Driven by Fable review of
-global-CHOST reuse + crossdev-stages’ heavy `-b -k` use across boards that
-share a CHOST but differ in `-march` / CFLAGS.
+STATUS: **partial — Phase 1 mostly landed** (vibe, 2026-07-19). Scenario design
+still authoritative; implementation progress and residual work are in
+[What landed](#what-landed-vibe-2026-07-19) and [Refined residual plan](#refined-residual-plan).
 
 Related: [[PENDING]] binhosts section; `portage-binpkg` index; crossdev-stages
 `lib/sysroot.sh` (PKGDIR per CFLAGS-named sysroot).
+
+Commits (representative): `0f2d77f` sokgi dep · `6b2f3be` `build_env_key` ·
+`c94ed73` prune by identity · `58802cb` `read_make_conf_var_for_roots` ·
+`306fdec` merge per-entry CHOST/key · `73d5bfb` preview signature.
 
 ## Why this exists
 
@@ -355,33 +359,86 @@ Or one URI with multi-instance Packages and client-side key match.
 
 ---
 
-## Phased implementation
+## What landed (vibe, 2026-07-19)
 
-### Phase 0 — document + scenarios (this file)
+### Done well
 
-### Phase 1 — correctness for cross + multi-instance foundation
+| Item | Where | Notes |
+|------|--------|--------|
+| Multi-instance index | `BinpkgIndex` / `RemoteBinpkgIndex`: `cpv → Vec<BinpkgEntry>` | Last-wins gone |
+| `build_env_key` | `portage-binpkg::build_env_key` via **sokgi** | ABI/ISA tokens filtered first, then sokgi hash; `__native__` for machine-dependent |
+| Gate in `find_reusable` | USE + CHOST + build_env_key | Empty either side skips that gate |
+| Prune by identity | `(cpv, chost, build_env_key)` keep newest BUILD_ID | S3 coexistence |
+| Per-entry desired CHOST / CFLAGS | `read_make_conf_var_for_roots(entry_roots, …)` in merge seq/parallel | S1 Host vs Target make.conf |
+| Preview path | `output.rs` updated for 4-arg `find_reusable` | |
+| Unit tests | march differ/same order, native, ldflags, rustflags | 8 `build_env_key_*` tests green |
 
-1. **Per-entry CHOST** from entry config root.
-2. **Per-entry PKGDIR** (open host vs target index as needed).
-3. **Multi-entry index** (`cpv → Vec`); stop last-wins parse.
-4. **`build_env_key` + gate** in `find_reusable` (empty key skips).
-5. **Prune** by `(cpv, chost, build_env_key)`.
-6. **parse_index_header** harden.
-7. Tests: S1 host BDEPEND reuse; two CFLAGS same CPV both kept; prune keeps both keys; wrong march rejected.
+### Design divergences (vs original token-only proposal)
+
+Original lean was **ISA tokens only**. Vibe first shipped full sokgi hashes
+over all flags (too strict). **Refined:** pre-filter to ABI/ISA tokens
+(`-march`/`-mcpu`/`-mtune`/`-mabi`/…, Rust `target-cpu`/`target-feature`),
+then sokgi canonicalize + hash. `-O*`/`-pipe`/`-g`/generic `-Wl,…` no longer
+split the cache; different `-march` still does; `-march=native` → `__native__`.
+
+| Residual | Detail |
+|----------|--------|
+| **RUSTFLAGS in VDB** | Still often empty on recorded GPKGs if not written at merge |
+| **package.env CFLAGS** | Desired key still global make.conf per root |
+
+### Still open / incomplete
+
+| Gap | Scenario | Severity |
+|-----|----------|----------|
+| **Per-entry PKGDIR** — still one `resolve_pkgdir(globals)` (target under `--target`) | S1, S4 | **High** for crossdev-stages-like host vs target caches |
+| **Prefer highest BUILD_ID** among matches — `find_reusable` takes first vec order | S3 | Medium |
+| **`parse_index_header`** still `\n\n` first block only | S5 edge | Low |
+| **RUSTFLAGS** not in VDB/GPKG write path | key consistency | Medium if RUSTFLAGS used |
+| **package.env** CFLAGS not in desired key | S6 | Medium for workarounds |
+| **S1 live test** host BDEPEND reuse | S1 | Need integration test / live check |
+| **Stages PKGDIR recipe / fingerprint helper** | automation | Phase 2 |
+| **maint list** shows key/CHOST | UX | Phase 2 |
+| Dead global `desired_chost` still computed in `run_merge_plan` and passed as `_desired_chost` | cleanup | Low |
+
+---
+
+## Refined residual plan
+
+### Phase 1b — finish cross correctness (do next)
+
+1. **Per-entry PKGDIR + dual index**
+   - `resolve_pkgdir_for_roots(&entry_roots)` (or host vs target open once).
+   - Host plan rows: host PKGDIR index; target rows: target PKGDIR.
+   - Remote: optional later (usually one binhost per board).
+2. **`find_reusable` max BUILD_ID** among matching instances (not first).
+3. **Drop dead global CHOST** arg from merge_sequential/parallel signatures.
+4. **VDB/GPKG RUSTFLAGS** (and ensure LDFLAGS already written — yes) so
+   producer key == consumer desired key.
+5. **Harden `parse_index_header`**: accumulate `KEY: VALUE` lines until first
+   `CPV:` (ignore blank-line requirement).
+6. **Tests:** multi-instance two march + prune keeps both; Host entry CHOST
+   from broot make.conf; optional PKGDIR dual-open unit test.
+
+### Phase 1c — key policy
+
+**Chosen:** ISA/ABI token filter → sokgi hash (not full CFLAGS). Extend the
+allowlist in `is_c_family_abi_token` / `filter_rust_abi_flags` if a real board
+needs another selector (e.g. `-mno-outline-atomics`).
 
 ### Phase 2 — automation UX
 
-1. `em maint binpkg list` shows CHOST + build_env_key (+ CFLAGS truncated).
-2. Helper: `em … env fingerprint` or document make.conf-only fingerprint.
-3. Stages: default PKGDIR layout suggestion under `--target` / board roots.
-4. package.env CFLAGS in desired key.
+1. `em maint binpkg list`: columns CHOST, build_env_key (short), CFLAGS trunc.
+2. Document recipes 1–3 (separate PKGDIR fingerprint vs shared multi-instance).
+3. Optional: `em binpkg fingerprint` printing `build_env_key` for current roots.
+4. package.env CFLAGS in desired key (when build path already applies them).
+5. Stages: document default `PKGDIR=…/${CHOST}/…` pattern; do not force subpath
+   in code unless requested.
 
-### Phase 3 — optional sophistication
+### Phase 3 — later
 
-1. Asymmetric “generic can serve stricter consumer? **no** / “strict can serve
-   generic? **no**” — stay exact match unless someone needs feature-subset.
-2. GPG still independent.
-3. RVV-specific feature decoding only if exact march strings prove painful.
+- Soft compatible-march matrix (probably never).
+- GPG.
+- Portage multi-instance UI parity.
 
 ---
 
@@ -398,10 +455,10 @@ Or one URI with multi-instance Packages and client-side key match.
 
 | Finding | Scenario | Disposition |
 |---------|----------|-------------|
-| Global CHOST over-conservative for Host entries | S1 | Phase 1.1 + 1.2 |
-| parse_index_header needs blank line | S5 edge | Phase 1.6 |
-| RVV / multi-march | S2, S3 | Phase 1.3–1.5 + recipes |
-| prune collapses multi-BUILD_ID | S3 | Phase 1.5 |
+| Global CHOST over-conservative for Host entries | S1 | **Partial:** per-entry CHOST done; **PKGDIR dual still open** |
+| parse_index_header needs blank line | S5 edge | **Still open** (Phase 1b.5) |
+| RVV / multi-march | S2, S3 | **Core done** (key + multi-instance + prune); key policy refine |
+| prune collapses multi-BUILD_ID | S3 | **Done** (`c94ed73`) |
 
 ---
 
@@ -410,20 +467,22 @@ Or one URI with multi-instance Packages and client-side key match.
 1. **Default PKGDIR policy for `em stages`:** keep single root PKGDIR + multi-
    instance, or auto-subpath by `build_env_key`?  
    **Lean:** multi-instance in whatever PKGDIR is configured; document
-   subpath as best practice for isolation.
-2. **Include `-mtune` in key?** Affects performance not ABI.  
-   **Lean:** include only `-march`/`-mcpu`/`-mabi`/`-mfpu`/`-mfloat-abi` first.
+   subpath as best practice for isolation. *(unchanged)*
+2. ~~**Key strictness**~~ — ISA filter before sokgi (**done**).
 3. **Host PKGDIR when `--target` and no host make.conf PKGDIR:**  
    **Lean:** `/var/cache/binpkgs` host default (current host behaviour).
+   **Implement** dual open in Phase 1b.1.
 
 ---
 
 ## Success criteria
 
-- [ ] Cross plan: host BDEPEND reuses host binpkg when USE+CHOST match.
+- [x] Multi-instance index + build_env_key gate + prune by identity
+- [x] Per-entry desired CHOST / CFLAGS from entry make.conf
+- [ ] Cross plan: host BDEPEND reuses host binpkg **from host PKGDIR** when USE+CHOST match
 - [ ] Same PKGDIR: two glibc GPKGs with different `-march` both retained after
-      prune; `-k` selects the one matching current make.conf CFLAGS.
+      prune; `-k` selects the one matching current make.conf CFLAGS
 - [ ] Separate PKGDIR recipe still works without multi-instance (key gate
-      no-ops when only one instance / empty keys).
-- [ ] Remote multi-block same-CPV Packages works.
-- [ ] No wrong-arch or wrong-march reuse (property tests / unit tests).
+      no-ops when only one instance / empty keys)
+- [ ] Remote multi-block same-CPV Packages works (parser yes; prefer max BUILD_ID)
+- [ ] No wrong-arch or wrong-march reuse (unit coverage partial; live S1 open)

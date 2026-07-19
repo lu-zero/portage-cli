@@ -643,17 +643,13 @@ blocked by the three independent findings above, tracked separately.
   - ✅ **`-K`/`--usepkgonly` enforcement** — local-only binpkg mode, no source
     (`merge/mod.rs`: `enforce_no_source = usepkgonly || getbinpkgonly`). Symmetric
     to `-G`.
-  - 🔵 **`binpkg-multi-instance` BUILD_ID** — multiple instances per cpv keyed by
-    `(cpv, BUILD_ID, …)`. em keys by cpv (one instance). Rare in practice.
-  - 🟡 **Per-package build-env provenance / CFLAGS (RVV-ready).** **RVV** =
-    RISC-V Vector: same CHOST+USE can still differ on `-march=…v`. **Recording
-    done 2026-07-18:** `Packages` entries and `BinpkgEntry` carry
-    `CFLAGS`/`CXXFLAGS`/`LDFLAGS`/`CBUILD` from GPKG metadata;
-    `BinpkgIndex::get` / `RemoteBinpkgIndex::get` expose them. Portage ignores
-    these keys on read. **Gating not wired** — `find_reusable` is still
-    USE+CHOST only. **Full scenario design:** [[binpkg-subtargets]] (cross Host
-    BDEPEND CHOST, multi-instance, prune key, separate PKGDIR vs shared cache,
-    crossdev-stages recipes). Implement when ready — Phase 1 there.
+  - 🟡 **Build-env / multi-march binpkg identity.** **Partial (vibe 2026-07-19):**
+    multi-instance index (`cpv → Vec`), sokgi `build_env_key`
+    (CFLAGS/CXX/LD/RUST), gate in `find_reusable`, prune by
+    `(cpv, chost, key)`, per-entry CHOST/CFLAGS from entry make.conf.
+    **Still open:** per-entry/host PKGDIR dual index (S1/S4), max-BUILD_ID
+    among matches, header parse harden, RUSTFLAGS in VDB, key strictness
+    (full hash vs ISA-subset). Design + residual: [[binpkg-subtargets]].
 - ✅ **`em maint binpkg` tooling** — DONE. `em maint binpkg {verify,list,prune}`,
   an em-only extension (no real `emaint` module covers this; its own `emaint
   binhost` only regenerates the index). `verify [--fix]` recomputes each
