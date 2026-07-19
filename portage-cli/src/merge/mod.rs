@@ -87,6 +87,21 @@ fn entry_binpkg_index<'a>(
     }
 }
 
+/// Which precomputed [`binpkg::DesiredBuildEnv`] (and its `portage_dirs`) a
+/// plan entry's desired build_env_key/CHOST reads from — mirrors
+/// [`entry_roots`]'s selection.
+fn entry_desired_env<'a>(
+    planned: &query::depgraph::PlannedMerge,
+    target: (&'a binpkg::DesiredBuildEnv, &'a [std::path::PathBuf]),
+    host: (&'a binpkg::DesiredBuildEnv, &'a [std::path::PathBuf]),
+) -> (&'a binpkg::DesiredBuildEnv, &'a [std::path::PathBuf]) {
+    if planned.merge_root == query::depgraph::MergeRoot::Host {
+        host
+    } else {
+        target
+    }
+}
+
 /// Build and merge a resolved plan in install order.
 ///
 /// Resume comes for free from the target VDB: a package already recorded
@@ -275,6 +290,16 @@ pub(crate) async fn run_merge_plan(
         Vec::new()
     };
 
+    // Per-plan, not per-entry: each Roots value's make.conf/package.env
+    // portage_dirs only depend on `roots`/`host_roots`, both fixed for the
+    // whole plan. Computing once here (instead of the old per-entry 5x
+    // read_make_conf_var_for_roots calls) also fixes the perf cost of
+    // re-parsing the same make.conf file once per plan entry.
+    let target_env = binpkg::DesiredBuildEnv::for_roots(roots).await;
+    let target_dirs = binpkg::DesiredBuildEnv::portage_dirs(roots);
+    let host_env = binpkg::DesiredBuildEnv::for_roots(&host_roots).await;
+    let host_dirs = binpkg::DesiredBuildEnv::portage_dirs(&host_roots);
+
     let (merged, skipped, failures) = if jobs <= 1 {
         merge_sequential(
             plan,
@@ -288,6 +313,10 @@ pub(crate) async fn run_merge_plan(
             host_binpkg_index,
             &remote_indices,
             enforce_no_source,
+            &target_env,
+            &target_dirs,
+            &host_env,
+            &host_dirs,
         )
         .await
     } else {
@@ -305,6 +334,10 @@ pub(crate) async fn run_merge_plan(
             host_binpkg_index,
             &remote_indices,
             enforce_no_source,
+            &target_env,
+            &target_dirs,
+            &host_env,
+            &host_dirs,
         )
         .await
     };
@@ -547,6 +580,10 @@ async fn merge_sequential(
     host_binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
+    target_env: &binpkg::DesiredBuildEnv,
+    target_dirs: &[std::path::PathBuf],
+    host_env: &binpkg::DesiredBuildEnv,
+    host_dirs: &[std::path::PathBuf],
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
@@ -569,32 +606,12 @@ async fn merge_sequential(
         let merge_root = entry_roots.merge_root();
         let entry_index = entry_binpkg_index(planned, binpkg_index, host_binpkg_index);
 
-        // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
-        // This allows proper binpkg reuse across cross-compilation and multi-arch scenarios
-        let desired_cflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CFLAGS")
-            .await
-            .unwrap_or_default();
-        let desired_cxxflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CXXFLAGS")
-            .await
-            .unwrap_or_default();
-        let desired_ldflags = binpkg::read_make_conf_var_for_roots(entry_roots, "LDFLAGS")
-            .await
-            .unwrap_or_default();
-        let desired_rustflags = binpkg::read_make_conf_var_for_roots(entry_roots, "RUSTFLAGS")
-            .await
-            .unwrap_or_default();
-        let desired_build_env_key = portage_binpkg::build_env_key(
-            &desired_cflags,
-            &desired_cxxflags,
-            &desired_ldflags,
-            &desired_rustflags,
-        );
-
-        // Also compute per-entry desired CHOST (may differ from global for cross builds)
-        let desired_chost_entry = binpkg::read_make_conf_var_for_roots(entry_roots, "CHOST")
-            .await
-            .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
-            .unwrap_or_default();
+        // Per-entry desired build_env_key (S6: package.env-aware) and CHOST
+        // — proper binpkg reuse across cross-compilation and multi-arch
+        // scenarios, host vs target selected the same way entry_roots is.
+        let (desired_env, desired_dirs) =
+            entry_desired_env(planned, (target_env, target_dirs), (host_env, host_dirs));
+        let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
 
         // The VDB is the resume state: `var/db/pkg/<cat>/<pf>` exists iff this
         // exact version is already installed in the target root. An intentional
@@ -631,7 +648,7 @@ async fn merge_sequential(
             entry_index,
             remote_indices,
             enforce_no_source,
-            &desired_chost_entry,
+            &desired_env.chost,
             &desired_build_env_key,
         )
         .await;
@@ -769,6 +786,10 @@ async fn merge_parallel(
     host_binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
     remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
     enforce_no_source: bool,
+    target_env: &binpkg::DesiredBuildEnv,
+    target_dirs: &[std::path::PathBuf],
+    host_env: &binpkg::DesiredBuildEnv,
+    host_dirs: &[std::path::PathBuf],
 ) -> (usize, usize, Vec<MergeFailure>) {
     let keep_going = merge_flags.keep_going;
     let emptytree = merge_flags.emptytree;
@@ -797,31 +818,11 @@ async fn merge_parallel(
             let merge_root = entry_roots.merge_root();
             let entry_index = entry_binpkg_index(planned, binpkg_index, host_binpkg_index);
 
-            // Compute per-entry desired build_env_key from CFLAGS, CXXFLAGS, LDFLAGS, RUSTFLAGS
-            let desired_cflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CFLAGS")
-                .await
-                .unwrap_or_default();
-            let desired_cxxflags = binpkg::read_make_conf_var_for_roots(entry_roots, "CXXFLAGS")
-                .await
-                .unwrap_or_default();
-            let desired_ldflags = binpkg::read_make_conf_var_for_roots(entry_roots, "LDFLAGS")
-                .await
-                .unwrap_or_default();
-            let desired_rustflags = binpkg::read_make_conf_var_for_roots(entry_roots, "RUSTFLAGS")
-                .await
-                .unwrap_or_default();
-            let desired_build_env_key = portage_binpkg::build_env_key(
-                &desired_cflags,
-                &desired_cxxflags,
-                &desired_ldflags,
-                &desired_rustflags,
-            );
-
-            // Also compute per-entry desired CHOST
-            let desired_chost_entry = binpkg::read_make_conf_var_for_roots(entry_roots, "CHOST")
-                .await
-                .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
-                .unwrap_or_default();
+            // Per-entry desired build_env_key (S6: package.env-aware) and
+            // CHOST — see the matching comment in `merge_sequential`.
+            let (desired_env, desired_dirs) =
+                entry_desired_env(planned, (target_env, target_dirs), (host_env, host_dirs));
+            let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
 
             if !emptytree
                 && !planned.reinstall
@@ -844,7 +845,7 @@ async fn merge_parallel(
             );
             let gate = &merge_gate;
             let entry_roots_clone = entry_roots.clone();
-            let desired_chost_entry_clone = desired_chost_entry.clone();
+            let desired_chost_entry_clone = desired_env.chost.clone();
             let desired_build_env_key_clone = desired_build_env_key.clone();
             inflight.push(async move {
                 let res = act_on_package(
@@ -1026,6 +1027,25 @@ mod entry_roots_tests {
         let target_idx = portage_binpkg::BinpkgIndex::open(target_dir.path()).unwrap();
         let host_entry = planned(MergeRoot::Host)?;
         assert!(entry_binpkg_index(&host_entry, Some(&target_idx), None).is_none());
+        Ok(())
+    }
+
+    /// `entry_desired_env` picks the same side `entry_roots`/
+    /// `entry_binpkg_index` would for the same entry.
+    #[test]
+    fn entry_desired_env_picks_host_or_target() -> Result<()> {
+        let target_env = binpkg::DesiredBuildEnv::for_test("riscv64-unknown-linux-gnu");
+        let host_env = binpkg::DesiredBuildEnv::for_test("aarch64-unknown-linux-gnu");
+        let dirs: Vec<std::path::PathBuf> = Vec::new();
+
+        let host_entry = planned(MergeRoot::Host)?;
+        let (picked, _) = entry_desired_env(&host_entry, (&target_env, &dirs), (&host_env, &dirs));
+        assert_eq!(picked.chost, "aarch64-unknown-linux-gnu");
+
+        let target_entry = planned(MergeRoot::Target)?;
+        let (picked, _) =
+            entry_desired_env(&target_entry, (&target_env, &dirs), (&host_env, &dirs));
+        assert_eq!(picked.chost, "riscv64-unknown-linux-gnu");
         Ok(())
     }
 }

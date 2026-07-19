@@ -147,50 +147,156 @@ pub(crate) async fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Op
     None
 }
 
+/// Evaluate whichever of `roots`' two candidate make.conf paths exists first
+/// (`etc/portage/make.conf`, then `etc/make.conf` — same fallback rule
+/// [`read_make_conf_var_for_roots`] uses per-variable) into a flat
+/// `NAME -> value` map via [`MakeConf::apply_to`]. Empty map if neither
+/// exists or fails to parse. Unlike `read_make_conf_var_for_roots`, this
+/// picks one file and returns its whole map rather than falling back to the
+/// second path per-variable — a split make.conf across both paths is not a
+/// real configuration this repo needs to support, and evaluating once
+/// instead of once-per-variable is also the point (see [`DesiredBuildEnv`]).
+async fn evaluated_make_conf_env(roots: &Roots) -> std::collections::BTreeMap<String, String> {
+    let cfg_root = roots
+        .config()
+        .map(|c| c.to_path_buf())
+        .unwrap_or_else(|| Utf8PathBuf::from("/"));
+    for rel in ["etc/portage/make.conf", "etc/make.conf"] {
+        let p = cfg_root.join(rel);
+        if p.exists()
+            && let Ok(mc) = MakeConf::load(&p)
+        {
+            let mut env = std::collections::BTreeMap::new();
+            if mc.apply_to(&mut env).await.is_ok() {
+                return env;
+            }
+        }
+    }
+    std::collections::BTreeMap::new()
+}
+
 /// The desired build environment resolved from one config root's make.conf:
-/// the four build-env flag vars (expanded — see
-/// [`read_make_conf_var_for_roots`]) plus `CHOST`. Shared by `em maint
+/// the four build-env flag vars (expanded) plus `CHOST`. Shared by `em maint
 /// binpkg fingerprint` and the merge path's per-entry desired build_env_key
 /// computation.
+#[derive(Default)]
 pub(crate) struct DesiredBuildEnv {
     pub cflags: String,
     pub cxxflags: String,
     pub ldflags: String,
     pub rustflags: String,
     pub chost: String,
+    /// The full evaluated make.conf map this environment was derived from —
+    /// kept so [`Self::key_for`] can seed a package.env overlay with it: an
+    /// env file referencing e.g. `${COMMON_FLAGS}` needs the same baseline
+    /// `for_roots` itself evaluated, not just the four flat flag values.
+    make_conf_env: std::collections::BTreeMap<String, String>,
 }
 
 impl DesiredBuildEnv {
-    /// Read the desired build env for `roots` — one make.conf evaluation per
-    /// flag var (matches `read_make_conf_var_for_roots`'s existing
-    /// two-path-fallback rule). `chost` falls back to the process `CHOST` env
-    /// var when make.conf doesn't set it, the same rule `merge_sequential`/
+    /// Read the desired build env for `roots` — one make.conf evaluation,
+    /// not five. `chost` falls back to the process `CHOST` env var when
+    /// make.conf doesn't set it, the same rule `merge_sequential`/
     /// `merge_parallel` already apply for their own per-entry desired CHOST.
     pub(crate) async fn for_roots(roots: &Roots) -> Self {
+        let make_conf_env = evaluated_make_conf_env(roots).await;
+        let get = |name: &str| make_conf_env.get(name).cloned().unwrap_or_default();
+        let chost = make_conf_env
+            .get("CHOST")
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
+            .unwrap_or_default();
         Self {
-            cflags: read_make_conf_var_for_roots(roots, "CFLAGS")
-                .await
-                .unwrap_or_default(),
-            cxxflags: read_make_conf_var_for_roots(roots, "CXXFLAGS")
-                .await
-                .unwrap_or_default(),
-            ldflags: read_make_conf_var_for_roots(roots, "LDFLAGS")
-                .await
-                .unwrap_or_default(),
-            rustflags: read_make_conf_var_for_roots(roots, "RUSTFLAGS")
-                .await
-                .unwrap_or_default(),
-            chost: read_make_conf_var_for_roots(roots, "CHOST")
-                .await
-                .or_else(|| std::env::var("CHOST").ok().filter(|s| !s.is_empty()))
-                .unwrap_or_default(),
+            cflags: get("CFLAGS"),
+            cxxflags: get("CXXFLAGS"),
+            ldflags: get("LDFLAGS"),
+            rustflags: get("RUSTFLAGS"),
+            chost,
+            make_conf_env,
         }
     }
 
     /// The build-env key derived from this environment's flags (see
-    /// [`portage_binpkg::build_env_key`]).
+    /// [`portage_binpkg::build_env_key`]) — the make.conf-only baseline, no
+    /// per-package package.env overlay. See [`Self::key_for`] for that.
     pub(crate) fn key(&self) -> String {
         portage_binpkg::build_env_key(&self.cflags, &self.cxxflags, &self.ldflags, &self.rustflags)
+    }
+
+    /// A bare `chost`-only environment, no make.conf/filesystem involved —
+    /// for tests that only care about host-vs-target selection, not flag
+    /// evaluation (e.g. `entry_desired_env`'s own tests in `merge/mod.rs`).
+    #[cfg(test)]
+    pub(crate) fn for_test(chost: &str) -> Self {
+        Self {
+            chost: chost.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Per-package build-env key (S6): overlay `cpv`'s `package.env` files
+    /// (`portage_repo::env_files_for`) onto the make.conf baseline and
+    /// re-derive. Falls back to [`Self::key`] when no env file matches this
+    /// package — the common case, zero extra I/O beyond the package.env
+    /// lookup itself.
+    ///
+    /// This overlays each env file onto the make.conf baseline via
+    /// [`MakeConf::apply_to`] again — a real shell sourcing round-trip, so
+    /// `CFLAGS="${CFLAGS} -foo"` appends, `CFLAGS="-bar"` overrides, and
+    /// arbitrary shell logic (conditionals, command substitution) in an env
+    /// file is evaluated for real rather than silently ignored. A wrong
+    /// *desired* key here only risks an extra rebuild or a missed reuse
+    /// (this repo's established safe direction), never wrong-arch reuse —
+    /// the binpkg side's own recorded key is always shell-accurate.
+    ///
+    /// `slot: None` limitation: slot-qualified `package.env` atoms won't
+    /// match here (a plan entry doesn't carry a slot at this point) — the
+    /// real build still applies them; the worst case is a missed reuse for
+    /// that package, not a wrong one.
+    pub(crate) async fn key_for(
+        &self,
+        portage_dirs: &[std::path::PathBuf],
+        cpv: &portage_atom::Cpv,
+    ) -> String {
+        let env_files = portage_repo::env_files_for(portage_dirs, cpv, None);
+        if env_files.is_empty() {
+            return self.key();
+        }
+        let mut env = self.make_conf_env.clone();
+        for f in &env_files {
+            if let Some(p) = Utf8Path::from_path(f)
+                && let Ok(mc) = MakeConf::load(p)
+            {
+                let _ = mc.apply_to(&mut env).await;
+            }
+        }
+        // build_env_key only needs &str, so borrow straight out of `env`
+        // instead of allocating a fresh String per flag just to re-borrow it.
+        let get = |name: &str| env.get(name).map(String::as_str).unwrap_or("");
+        portage_binpkg::build_env_key(
+            get("CFLAGS"),
+            get("CXXFLAGS"),
+            get("LDFLAGS"),
+            get("RUSTFLAGS"),
+        )
+    }
+
+    /// The `/etc/portage` directories [`portage_repo::env_files_for`] should
+    /// search for `roots`' `package.env` — mirrors the real build path's own
+    /// construction (`ebuild.rs`'s per-package build-environment sourcing,
+    /// `config_root.join("etc/portage")` plus the eprefix overlay) so
+    /// plan-time and build-time can't silently drift apart.
+    pub(crate) fn portage_dirs(roots: &Roots) -> Vec<std::path::PathBuf> {
+        let base = roots
+            .config()
+            .map(|c| c.to_path_buf())
+            .unwrap_or_else(|| Utf8PathBuf::from("/"));
+        let mut dirs = vec![base.join("etc/portage").into_std_path_buf()];
+        if let Some(overlay) = roots.config_overlay() {
+            dirs.push(overlay.as_std_path().to_path_buf());
+        }
+        dirs
     }
 }
 
@@ -563,6 +669,99 @@ mod tests {
         assert_eq!(target_env.cflags, "-O2 -march=rv64gcv");
         assert_eq!(host_env.cflags, "-O2 -march=armv8-a");
         assert_ne!(target_env.key(), host_env.key());
+    }
+
+    /// Build a `--root R --config-root R` `Cli` with `R/etc/portage/make.conf`
+    /// (given CFLAGS) plus, optionally, `package.env` and its named env files
+    /// under that same `etc/portage` dir — the layout `env_files_for` (and
+    /// the real build path) actually reads.
+    fn cli_with_make_conf_and_package_env(
+        dir: &std::path::Path,
+        make_conf_cflags: &str,
+        package_env: &str,
+        env_files: &[(&str, &str)],
+    ) -> Cli {
+        let conf_dir = dir.join("etc/portage");
+        std::fs::create_dir_all(&conf_dir).unwrap();
+        std::fs::write(
+            conf_dir.join("make.conf"),
+            format!("CFLAGS=\"{make_conf_cflags}\"\n"),
+        )
+        .unwrap();
+        if !package_env.is_empty() {
+            std::fs::write(conf_dir.join("package.env"), package_env).unwrap();
+            std::fs::create_dir_all(conf_dir.join("env")).unwrap();
+            for (name, body) in env_files {
+                std::fs::write(conf_dir.join("env").join(name), body).unwrap();
+            }
+        }
+        let root = dir.to_str().unwrap();
+        Cli::parse_from(["em", "--root", root, "--config-root", root])
+    }
+
+    #[tokio::test]
+    async fn key_for_override_replaces_march() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = cli_with_make_conf_and_package_env(
+            dir.path(),
+            "-O2 -march=x86-64-v2",
+            "dev-libs/foo  march_b\n",
+            &[("march_b", "CFLAGS=\"-O2 -march=x86-64-v3\"\n")],
+        );
+
+        let roots = cli.roots();
+        let env = DesiredBuildEnv::for_roots(&roots).await;
+        let dirs = DesiredBuildEnv::portage_dirs(&roots);
+
+        let foo = portage_atom::Cpv::parse("dev-libs/foo-1.0").unwrap();
+        let bar = portage_atom::Cpv::parse("dev-libs/bar-1.0").unwrap();
+
+        assert_eq!(
+            env.key_for(&dirs, &foo).await,
+            portage_binpkg::build_env_key("-O2 -march=x86-64-v3", "", "", "")
+        );
+        assert_ne!(env.key_for(&dirs, &foo).await, env.key());
+        assert_eq!(
+            env.key_for(&dirs, &bar).await,
+            env.key(),
+            "an unmatched package falls back to the make.conf-only key"
+        );
+    }
+
+    #[tokio::test]
+    async fn key_for_append_keeps_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = cli_with_make_conf_and_package_env(
+            dir.path(),
+            "-O2 -march=armv8-a",
+            "dev-libs/foo  outline_atomics\n",
+            &[(
+                "outline_atomics",
+                "CFLAGS=\"${CFLAGS} -mno-outline-atomics\"\n",
+            )],
+        );
+
+        let roots = cli.roots();
+        let env = DesiredBuildEnv::for_roots(&roots).await;
+        let dirs = DesiredBuildEnv::portage_dirs(&roots);
+        let foo = portage_atom::Cpv::parse("dev-libs/foo-1.0").unwrap();
+
+        assert_eq!(
+            env.key_for(&dirs, &foo).await,
+            portage_binpkg::build_env_key("-O2 -march=armv8-a -mno-outline-atomics", "", "", "")
+        );
+        assert_ne!(env.key_for(&dirs, &foo).await, env.key());
+    }
+
+    #[tokio::test]
+    async fn key_for_no_matching_env_file_is_baseline_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = cli_with_make_conf_and_package_env(dir.path(), "-O2 -march=x86-64-v3", "", &[]);
+        let roots = cli.roots();
+        let env = DesiredBuildEnv::for_roots(&roots).await;
+        let dirs = DesiredBuildEnv::portage_dirs(&roots);
+        let foo = portage_atom::Cpv::parse("dev-libs/foo-1.0").unwrap();
+        assert_eq!(env.key_for(&dirs, &foo).await, env.key());
     }
 
     fn parse_sections(
