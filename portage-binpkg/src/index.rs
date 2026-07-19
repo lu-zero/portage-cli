@@ -387,82 +387,152 @@ pub fn use_compatible(
     true
 }
 
-/// Compute build environment key using sokgi for canonical flag hashing.
-/// Returns empty string if all flag sets are empty or unparseable (skip gate).
-/// Returns "__native__" if any flag set contains machine-dependent flags.
+/// Compute a **sub-target / ISA identity** key for binpkg reuse.
 ///
-/// A binpkg is reusable iff ALL match:
-/// 1. CPV (exact)
-/// 2. USE ∩ IUSE (equal)
-/// 3. CHOST (equal, either empty → skip gate)
-/// 4. **Build-env key (equal, either empty → skip gate)**
+/// Returns empty string if nothing ABI-relevant remains (skip gate).
+/// Returns `"__native__"` if any retained flag is machine-dependent
+/// (e.g. `-march=native`).
 ///
-/// Algorithm:
-/// 1. Parse each flag set with sokgi's appropriate dialect
-/// 2. Check for `Warning::MachineDependent` (e.g., `-march=native`)
-/// 3. If ANY flag set has machine-dependent flags → return `__native__`
-/// 4. Collect stable_hash_hex() for each non-empty flag set
-/// 5. If all empty → return empty string (skip gate)
-/// 6. Otherwise → sort hashes and join with spaces (order-independent)
+/// A binpkg is reusable iff CPV, USE∩IUSE, CHOST, and this key all match
+/// (empty CHOST/key still skip their gates).
 ///
-/// Supported flag sets:
-/// - CFLAGS → `Dialect::C`
-/// - CXXFLAGS → `Dialect::Cxx`
-/// - LDFLAGS → `Dialect::Ld`
-/// - RUSTFLAGS → `Dialect::Rust`
+/// ## What goes into the key
+///
+/// Only **ABI / micro-arch** flags are kept, then fed to sokgi for
+/// canonicalization + stable hash. Dropped as noise for board caches:
+/// `-O*`, `-g*`, `-pipe`, warnings, defines, include/lib paths, most
+/// `-f*`, generic linker args, Rust opt-level, etc.
+///
+/// Retained (C/CXX/LD):
+/// - `-march=` / `-mcpu=` / `-mtune=` / `-mabi=` / `-mfpu=` / `-mfloat-abi=`
+/// - a few bare ISA mode toggles (`-mthumb`, `-msoft-float`, …)
+///
+/// Retained (Rust):
+/// - `-C target-cpu=…` / `-C target-feature=…` (joined or split forms)
+///
+/// Algorithm per flag set: filter → sokgi parse → MachineDependent check →
+/// `stable_hash_hex`; non-empty hashes sorted and joined.
 pub fn build_env_key(cflags: &str, cxxflags: &str, ldflags: &str, rustflags: &str) -> String {
     let mut all_hashes: Vec<String> = Vec::new();
     let mut has_machine_dependent = false;
 
-    // Process each flag set with its appropriate dialect
     let flag_sets = [
-        (cflags, Dialect::C),
-        (cxxflags, Dialect::Cxx),
-        (ldflags, Dialect::Ld),
-        (rustflags, Dialect::Rust),
+        (filter_c_family_abi_flags(cflags), Dialect::C),
+        (filter_c_family_abi_flags(cxxflags), Dialect::Cxx),
+        (filter_c_family_abi_flags(ldflags), Dialect::Ld),
+        (filter_rust_abi_flags(rustflags), Dialect::Rust),
     ];
 
     for (flags, dialect) in flag_sets {
-        if flags.trim().is_empty() {
+        if flags.is_empty() {
             continue;
         }
 
-        match FlagSet::parse(flags, dialect) {
+        match FlagSet::parse(&flags, dialect) {
             Ok((set, warnings)) => {
-                // Check for machine-dependent flags
-                if warnings.iter().any(|w| matches!(w, Warning::MachineDependent(_))) {
+                if warnings
+                    .iter()
+                    .any(|w| matches!(w, Warning::MachineDependent(_)))
+                {
                     has_machine_dependent = true;
-                    // Don't break early - we need to check all for consistency
                 }
 
-                // Collect hash for non-empty flag sets
                 let hash = set.stable_hash_hex();
-                // Only add non-empty hashes (empty string means no flags after canonicalization)
                 if !hash.is_empty() {
                     all_hashes.push(hash);
                 }
             }
-            Err(_) => {
-                // Unparseable flags - skip this flag set
-                // This is intentionally lenient to avoid breaking on malformed input
-                continue;
-            }
+            Err(_) => continue,
         }
     }
 
-    // If any flag set had machine-dependent flags, return __native__
     if has_machine_dependent {
         return "__native__".to_string();
     }
 
-    // If all flag sets were empty or produced empty hashes, return empty string (skip gate)
     if all_hashes.is_empty() {
         return String::new();
     }
 
-    // Sort hashes for order-independent comparison
     all_hashes.sort();
     all_hashes.join(" ")
+}
+
+/// Keep only ISA/ABI-relevant tokens from a GCC-style flag string.
+fn filter_c_family_abi_flags(flags: &str) -> String {
+    flags
+        .split_whitespace()
+        .filter(|t| is_c_family_abi_token(t))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn is_c_family_abi_token(tok: &str) -> bool {
+    // Primary micro-arch / ABI selectors (sokgi has first-class Flag variants).
+    const PREFIXES: &[&str] = &[
+        "-march=",
+        "-mcpu=",
+        "-mtune=",
+        "-mabi=",
+        "-mfpu=",
+        "-mfloat-abi=",
+        "-misa-spec=",
+        "-misa=",
+    ];
+    if PREFIXES.iter().any(|p| tok.starts_with(p)) {
+        return true;
+    }
+    // Bare ISA mode toggles that affect ABI/codegen selection (not -mgeneral).
+    matches!(
+        tok,
+        "-mthumb"
+            | "-mno-thumb"
+            | "-msoft-float"
+            | "-mhard-float"
+            | "-mfloat-abi"
+            | "-m64"
+            | "-m32"
+            | "-mx32"
+            | "-mabi"
+    )
+}
+
+/// Keep Rust target-cpu / target-feature settings; drop opt-level and noise.
+fn filter_rust_abi_flags(flags: &str) -> String {
+    let toks: Vec<&str> = flags.split_whitespace().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i];
+        // `-C target-cpu=foo` or `-Ctarget-cpu=foo`
+        if let Some(rest) = t.strip_prefix("-C") {
+            let rest = rest.trim_start_matches('=');
+            if rest.is_empty() {
+                // Split form: `-C` `target-cpu=…`
+                if let Some(next) = toks.get(i + 1) {
+                    if is_rust_abi_codegen(next) {
+                        out.push(format!("-C {next}"));
+                        i += 2;
+                        continue;
+                    }
+                }
+                i += 1;
+                continue;
+            }
+            if is_rust_abi_codegen(rest) {
+                out.push(format!("-C {rest}"));
+            }
+            i += 1;
+            continue;
+        }
+        // Unprefixed `target-cpu=…` is unusual; ignore.
+        i += 1;
+    }
+    out.join(" ")
+}
+
+fn is_rust_abi_codegen(s: &str) -> bool {
+    s.starts_with("target-cpu=") || s.starts_with("target-feature=")
 }
 
 #[cfg(test)]
@@ -692,6 +762,12 @@ USE: nls
     }
 
     #[test]
+    fn build_env_key_empty_when_only_noise_flags() {
+        // Optimisation / debug / pipe must not create a sub-target key.
+        assert_eq!(build_env_key("-O3 -pipe -g", "-O2 -Wall", "-Wl,--as-needed", ""), "");
+    }
+
+    #[test]
     fn build_env_key_returns_native_for_march_native() {
         let key = build_env_key("-O2 -pipe -march=native", "", "", "");
         assert_eq!(key, "__native__");
@@ -705,7 +781,6 @@ USE: nls
 
     #[test]
     fn build_env_key_returns_native_for_mtune_native_in_cflags() {
-        // -mtune=native in CFLAGS should trigger __native__
         let key = build_env_key("-O2 -mtune=native", "", "", "");
         assert_eq!(key, "__native__");
     }
@@ -714,37 +789,57 @@ USE: nls
     fn build_env_key_different_for_different_march() {
         let key1 = build_env_key("-O2 -pipe -march=rv64gcv", "-O2 -pipe -march=rv64gcv", "", "");
         let key2 = build_env_key("-O2 -pipe -march=rva23u64", "-O2 -pipe -march=rva23u64", "", "");
-        // Both should be non-empty and different from each other
         assert!(!key1.is_empty());
         assert!(!key2.is_empty());
         assert_ne!(key1, key2);
-        // Neither should be __native__
         assert_ne!(key1, "__native__");
         assert_ne!(key2, "__native__");
     }
 
     #[test]
+    fn build_env_key_ignores_opt_level_and_order() {
+        // Same -march, different -O / order / noise → same key (board identity).
+        let key1 = build_env_key("-O2 -pipe -march=rv64gcv_zvl256b", "-O2 -g", "", "");
+        let key2 = build_env_key(
+            "-march=rv64gcv_zvl256b -O3 -pipe",
+            "-O3 -Wall -pipe",
+            "-Wl,-O1",
+            "",
+        );
+        assert!(!key1.is_empty());
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
     fn build_env_key_same_for_equivalent_flags() {
-        // Same flags in different order should produce same key
         let key1 = build_env_key("-O2 -march=rv64gcv", "-g", "", "");
         let key2 = build_env_key("-march=rv64gcv -O2", "-g", "", "");
         assert_eq!(key1, key2);
     }
 
     #[test]
-    fn build_env_key_includes_ldflags() {
-        let key1 = build_env_key("-O2", "-O2", "", "");
-        let key2 = build_env_key("-O2", "-O2", "-Wl,--as-needed", "");
-        // Including LDFLAGS should produce a different key
-        assert_ne!(key1, key2);
+    fn build_env_key_ignores_generic_ldflags() {
+        let key1 = build_env_key("-march=x86-64-v3", "", "", "");
+        let key2 = build_env_key("-march=x86-64-v3", "", "-Wl,--as-needed -O1", "");
+        assert_eq!(key1, key2);
     }
 
     #[test]
-    fn build_env_key_includes_rustflags() {
-        let key1 = build_env_key("", "", "", "");
-        let key2 = build_env_key("", "", "", "-C opt-level=2");
-        // Including RUSTFLAGS should produce a different key
-        assert_ne!(key1, key2);
+    fn build_env_key_ignores_rust_opt_level() {
+        // opt-level alone is not a sub-target.
+        assert_eq!(build_env_key("", "", "", "-C opt-level=2"), "");
+    }
+
+    #[test]
+    fn build_env_key_keeps_rust_target_cpu() {
+        let key1 = build_env_key("", "", "", "-C target-cpu=generic");
+        let key2 = build_env_key("", "", "", "-C target-cpu=native");
+        assert!(!key1.is_empty());
+        // native path: sokgi may not warn on rust dialect the same way — at
+        // least the two cpus must differ if both parse.
+        if key2 != "__native__" {
+            assert_ne!(key1, key2);
+        }
     }
 
     #[test]
