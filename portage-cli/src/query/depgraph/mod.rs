@@ -468,6 +468,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             installed_cpvs: solver_installed_cpvs,
             autosolve_use,
         };
+        // Outlives `adapter` (it borrows the same run-scoped refs, including
+        // this iteration's `pkg_use`), so it stays usable after the move below.
+        let iteration_policy = adapter.policy();
         // Closure-seeded ingestion: only packages reachable from the targets
         // and the installed set get converted (a few hundred for a typical
         // resolve), instead of the whole tree — this is what makes the
@@ -514,16 +517,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             } else if let Some(mode) = use_reinstall_mode {
                 // Compare VDB USE/IUSE to the planned fold for this CPV.
                 // Rebuild ⇒ no Favor + full build-dep expansion when selected.
-                if package_needs_use_reinstall(
-                    mode,
-                    e,
-                    &pkg,
-                    &data,
-                    &pre_env,
-                    &env_use,
-                    pkg_use,
-                    &force_mask,
-                ) {
+                if package_needs_use_reinstall(mode, e, &pkg, &data, &iteration_policy) {
                     InstalledPolicy::Rebuild
                 } else {
                     InstalledPolicy::Favor
@@ -800,10 +794,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let trim_ctx = bdepend_trim::TrimCtx {
         roots,
         data: &data,
-        pre_env: &pre_env,
-        env_use: &env_use,
-        package_use: &package_use,
-        force_mask: &force_mask,
+        policy: final_policy,
         root_cpns: &root_cpns,
         reinstall_cpns: &reinstall_cpns,
     };
@@ -1088,16 +1079,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             output::report_solver_violations(&violations);
         }
 
-        let ru_violations = required_use::find_violations(
-            &data,
-            &order,
-            &pre_env,
-            &env_use,
-            &package_use,
-            &force_mask,
-            &accept_keywords,
-            &ceded,
-        );
+        let ru_violations = required_use::find_violations(&data, &order, &final_policy, &ceded);
         if !ru_violations.is_empty() {
             output::report_required_use(&ru_violations);
         }
@@ -1148,17 +1130,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 repo::find_cache(&data, pkg, ver)
             {
                 let stable = accept_keywords.is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
-                let effective = effective_use::effective_use(
-                    &pre_env,
-                    &env_use,
-                    &package_use,
-                    pkg,
-                    ver,
-                    cache,
-                    &force_mask,
-                    stable,
-                    &ceded,
-                );
+                let effective =
+                    effective_use::effective_use(&final_policy, pkg, ver, cache, stable, &ceded);
                 (
                     cache.metadata.depend.to_vec(),
                     cache.metadata.bdepend.to_vec(),
@@ -1271,16 +1244,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// Whether an installed VDB entry must rebuild under `-N`/`-U` for USE/IUSE
 /// drift relative to the planned fold for its CPV (or the newest same-slot
 /// repo version when the exact CPV left the tree).
-#[allow(clippy::too_many_arguments)] // thin fold of USE-reinstall inputs
 fn package_needs_use_reinstall(
     mode: portage_resolve::use_reinstall::UseReinstallMode,
     e: &installed::VdbEntry,
     pkg: &PortagePackage,
     data: &repo::RepoData,
-    pre_env: &str,
-    env_use: &str,
-    package_use: &[(Dep, Vec<UseOverride>)],
-    force_mask: &portage_resolve::force_mask::ForceMask,
+    policy: &repo::ResolvePolicy,
 ) -> bool {
     use portage_atom_pubgrub::UseFlagState;
     use portage_resolve::use_reinstall::needs_use_reinstall;
@@ -1307,17 +1276,7 @@ fn package_needs_use_reinstall(
     // Stable-keyword decision is approximate here (any stable token); force
     // mask's stable sets rarely change reinstall detection vs the main USE fold.
     let stable = true;
-    let cfg = effective_use::effective_use(
-        pre_env,
-        env_use,
-        package_use,
-        pkg,
-        &plan_ver,
-        cache,
-        force_mask,
-        stable,
-        &[],
-    );
+    let cfg = effective_use::effective_use(policy, pkg, &plan_ver, cache, stable, &[]);
     let cur_iuse = effective_use::iuse_set(cache);
     let cur_enabled: HashSet<_> = cur_iuse
         .iter()
@@ -1326,7 +1285,7 @@ fn package_needs_use_reinstall(
         .collect();
     let cpv = Cpv::new(e.cpn, plan_ver);
     let slot = e.slot.as_ref().map(|s| s.as_str());
-    let (forced, masked) = force_mask.effective(&cpv, slot, stable, &cur_iuse);
+    let (forced, masked) = policy.force_mask.effective(&cpv, slot, stable, &cur_iuse);
     let forced: HashSet<_> = forced.into_iter().chain(masked).collect();
     needs_use_reinstall(
         mode,

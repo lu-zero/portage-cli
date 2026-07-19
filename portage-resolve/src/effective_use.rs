@@ -3,14 +3,12 @@
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Cpv, Dep, DepEntry, Version};
-use portage_atom_pubgrub::{
-    CededFlag, IUseDefault, PortagePackage, UseConfig, UseFlagState, UseOverride,
-};
+use portage_atom::{Cpn, Cpv, DepEntry, Version};
+use portage_atom_pubgrub::{CededFlag, IUseDefault, PortagePackage, UseConfig, UseFlagState};
 use portage_metadata::{CacheEntry, IUseDefault as MetaIUseDefault};
 
 use crate::force_mask::ForceMask;
-use crate::repo::{self, RepoData};
+use crate::repo::{self, RepoData, ResolvePolicy};
 
 /// Re-apply the solver's ceded (`--autosolve-use`) flag decisions on top of an
 /// already-resolved `UseConfig`, unconditionally — like `use.force`/
@@ -85,13 +83,10 @@ pub fn iuse_set(cache: &CacheEntry) -> HashSet<Interned<DefaultInterner>> {
 /// process-env `USE="-* …"` cannot clear forced flags — matching
 /// [`crate::repo::Adapter::desired_use`] and real Portage.
 pub fn effective_use(
-    pre_env: &str,
-    env_use: &str,
-    package_use: &[(Dep, Vec<UseOverride>)],
+    policy: &ResolvePolicy,
     pkg: &PortagePackage,
     ver: &Version,
     cache: &CacheEntry,
-    force_mask: &ForceMask,
     stable: bool,
     ceded: &[CededFlag],
 ) -> UseConfig {
@@ -99,17 +94,17 @@ pub fn effective_use(
     let defaults = iuse_defaults(cache);
     let mut cfg = portage_atom_pubgrub::resolve_effective_use(
         &defaults,
-        pre_env,
+        policy.pre_env,
         &cpv,
         pkg.slot(),
-        package_use,
-        env_use,
+        policy.package_use,
+        policy.env_use,
     );
     let iuse = iuse_set(cache);
     let slot_key = pkg.slot();
     apply_force_mask(
         &mut cfg,
-        force_mask,
+        policy.force_mask,
         &cpv,
         slot_key.as_ref().map(|s| s.as_str()),
         stable,
@@ -164,29 +159,16 @@ impl EvaluatedDeps<'_> {
 /// comment).
 pub fn evaluated_deps<'a>(
     data: &'a RepoData,
-    pre_env: &str,
-    env_use: &str,
-    package_use: &[(Dep, Vec<UseOverride>)],
+    policy: &ResolvePolicy,
     pkg: &PortagePackage,
     ver: &Version,
-    force_mask: &ForceMask,
     stable: bool,
 ) -> Option<EvaluatedDeps<'a>> {
     let cache = repo::find_cache(data, pkg, ver)?;
     // Pre-/mid-solve utility (feeds the solver's own dependency-graph
     // construction) — the solver's ceded (`--autosolve-use`) decisions don't
     // exist yet at this point, so there is nothing to apply here.
-    let effective = effective_use(
-        pre_env,
-        env_use,
-        package_use,
-        pkg,
-        ver,
-        cache,
-        force_mask,
-        stable,
-        &[],
-    );
+    let effective = effective_use(policy, pkg, ver, cache, stable, &[]);
     Some(EvaluatedDeps { cache, effective })
 }
 

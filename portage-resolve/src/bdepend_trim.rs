@@ -4,13 +4,13 @@
 use std::collections::HashSet;
 
 use portage_atom::{Cpn, Cpv, DepEntry, Version};
-use portage_atom_pubgrub::{PortagePackage, UseOverride};
+use portage_atom_pubgrub::PortagePackage;
 
 use crate::Avail;
 use crate::Roots;
 
 use crate::effective_use;
-use crate::repo::RepoData;
+use crate::repo::{RepoData, ResolvePolicy};
 
 /// Context for [`trim_within_run_bdepend`].
 pub struct TrimCtx<'a> {
@@ -21,14 +21,9 @@ pub struct TrimCtx<'a> {
     pub roots: &'a Roots,
     /// The loaded repository facts.
     pub data: &'a RepoData,
-    /// USE folded up through `make.conf`.
-    pub pre_env: &'a str,
-    /// The raw process-environment `USE` value.
-    pub env_use: &'a str,
-    /// Per-version `package.use` overrides.
-    pub package_use: &'a [(portage_atom::Dep, Vec<UseOverride>)],
-    /// Profile force/mask (post-fold; not smuggled via package.use).
-    pub force_mask: &'a crate::force_mask::ForceMask,
+    /// The run's keyword/mask/license/USE policy (the trim only reads its
+    /// USE-fold fields, via [`effective_use::evaluated_deps`]).
+    pub policy: ResolvePolicy<'a>,
     /// CPNs explicitly requested on the command line — never trimmed.
     pub root_cpns: &'a HashSet<Cpn>,
     /// CPNs the solver kept for a same-version USE rebuild — never trimmed.
@@ -95,16 +90,8 @@ pub fn trim_within_run_bdepend(
 fn runtime_required_cpns(order: &[(PortagePackage, Version)], ctx: &TrimCtx<'_>) -> HashSet<Cpn> {
     let mut out = HashSet::new();
     for (pkg, ver) in order {
-        let Some(deps) = effective_use::evaluated_deps(
-            ctx.data,
-            ctx.pre_env,
-            ctx.env_use,
-            ctx.package_use,
-            pkg,
-            ver,
-            ctx.force_mask,
-            false,
-        ) else {
+        let Some(deps) = effective_use::evaluated_deps(ctx.data, &ctx.policy, pkg, ver, false)
+        else {
             continue;
         };
         for entries in [
@@ -158,12 +145,9 @@ fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
         let avail = avail_for_consumer(j, cand.kept, cand.kept_indices, cand.base_avail);
         let Some(deps) = effective_use::evaluated_deps(
             cand.ctx.data,
-            cand.ctx.pre_env,
-            cand.ctx.env_use,
-            cand.ctx.package_use,
+            &cand.ctx.policy,
             consumer,
             consumer_ver,
-            cand.ctx.force_mask,
             false,
         ) else {
             continue;
@@ -197,12 +181,45 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use portage_metadata::CacheEntry;
+    use portage_repo::{AcceptLicense, LicenseGroupRegistry};
 
     use super::*;
     use crate::Roots;
+    use crate::force_mask::ForceMask;
+    use crate::repo::{AcceptKeywords, AcceptLicenses};
 
     fn empty_roots() -> Roots {
         Roots::default()
+    }
+
+    /// The permissive keyword/license policy the trim tests fold USE under.
+    fn test_policy<'a>(
+        accept_keywords: &'a AcceptKeywords,
+        accept_licenses: &'a AcceptLicenses,
+        force_mask: &'a ForceMask,
+    ) -> ResolvePolicy<'a> {
+        ResolvePolicy {
+            accept_keywords,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses,
+            pre_env: "",
+            env_use: "",
+            package_use: &[],
+            force_mask,
+        }
+    }
+
+    fn accept_all_licenses() -> AcceptLicenses {
+        AcceptLicenses::new(
+            AcceptLicense::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
+            Vec::new(),
+        )
+    }
+
+    fn accept_amd64() -> AcceptKeywords {
+        let arch = gentoo_core::Arch::intern("amd64");
+        AcceptKeywords::from_global(&arch, &["amd64"])
     }
 
     /// Build a `RepoData` from `(cpv, md5-cache-text)` pairs, one version per CPN.
@@ -270,14 +287,12 @@ mod tests {
         let root_cpns: HashSet<Cpn> = [*consumer.0.cpn()].into_iter().collect();
         let reinstall = HashSet::new();
         let roots = empty_roots();
-        let fm = crate::force_mask::ForceMask::default();
+        let fm = ForceMask::default();
+        let (ak, al) = (accept_amd64(), accept_all_licenses());
         let ctx = TrimCtx {
             roots: &roots,
             data: &data,
-            pre_env: "",
-            env_use: "",
-            package_use: &[],
-            force_mask: &fm,
+            policy: test_policy(&ak, &al, &fm),
             root_cpns: &root_cpns,
             reinstall_cpns: &reinstall,
         };
@@ -314,14 +329,12 @@ mod tests {
         let root_cpns = HashSet::new();
         let reinstall = HashSet::new();
         let roots = empty_roots();
-        let fm = crate::force_mask::ForceMask::default();
+        let fm = ForceMask::default();
+        let (ak, al) = (accept_amd64(), accept_all_licenses());
         let ctx = TrimCtx {
             roots: &roots,
             data: &data,
-            pre_env: "",
-            env_use: "",
-            package_use: &[],
-            force_mask: &fm,
+            policy: test_policy(&ak, &al, &fm),
             root_cpns: &root_cpns,
             reinstall_cpns: &reinstall,
         };

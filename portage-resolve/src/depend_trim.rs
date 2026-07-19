@@ -96,12 +96,9 @@ fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
         }
         let Some(deps) = effective_use::evaluated_deps(
             cand.ctx.data,
-            cand.ctx.pre_env,
-            cand.ctx.env_use,
-            cand.ctx.package_use,
+            &cand.ctx.policy,
             consumer,
             consumer_ver,
-            cand.ctx.force_mask,
             false,
         ) else {
             continue;
@@ -143,9 +140,11 @@ fn target_avail_for_consumer(
 mod tests {
     use std::collections::{HashMap, HashSet};
 
+    use portage_repo::{AcceptLicense, LicenseGroupRegistry};
+
     use super::*;
     use crate::Roots;
-    use crate::repo::RepoData;
+    use crate::repo::{AcceptKeywords, AcceptLicenses, RepoData, ResolvePolicy};
 
     fn empty_roots() -> Roots {
         Roots::default()
@@ -175,13 +174,25 @@ mod tests {
         let reinstall = HashSet::new();
         let roots = empty_roots();
         let fm = crate::force_mask::ForceMask::default();
+        let arch = gentoo_core::Arch::intern("amd64");
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let al = AcceptLicenses::new(
+            AcceptLicense::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
+            Vec::new(),
+        );
         let ctx = TrimCtx {
             roots: &roots,
             data: &data,
-            pre_env: "",
-            env_use: "",
-            package_use: &[],
-            force_mask: &fm,
+            policy: ResolvePolicy {
+                accept_keywords: &ak,
+                package_mask: &[],
+                package_unmask: &[],
+                accept_licenses: &al,
+                pre_env: "",
+                env_use: "",
+                package_use: &[],
+                force_mask: &fm,
+            },
             root_cpns: &root_cpns,
             reinstall_cpns: &reinstall,
         };

@@ -174,16 +174,9 @@ fn visit_unsatisfied(
     order: &mut Vec<(PortagePackage, Version)>,
     top_level: bool,
 ) {
-    let Some(deps) = effective_use::evaluated_deps(
-        ctx.adapter.data,
-        ctx.adapter.pre_env,
-        ctx.adapter.env_use,
-        ctx.adapter.package_use,
-        pkg,
-        ver,
-        ctx.adapter.force_mask,
-        false,
-    ) else {
+    let Some(deps) =
+        effective_use::evaluated_deps(ctx.adapter.data, &ctx.adapter.policy(), pkg, ver, false)
+    else {
         return;
     };
     for (class, entries) in [

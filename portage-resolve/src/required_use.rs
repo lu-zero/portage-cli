@@ -1,9 +1,8 @@
-use portage_atom::{Cpv, Dep, Version};
-use portage_atom_pubgrub::{CededFlag, PortagePackage, UseOverride, resolve_effective_use};
+use portage_atom::{Cpv, Version};
+use portage_atom_pubgrub::{CededFlag, PortagePackage, resolve_effective_use};
 
 use crate::effective_use::{apply_ceded, apply_force_mask, iuse_defaults, iuse_set};
-use crate::force_mask::ForceMask;
-use crate::repo::{AcceptKeywords, RepoData, find_cache};
+use crate::repo::{RepoData, ResolvePolicy, find_cache};
 
 /// A `REQUIRED_USE` constraint left unsatisfied by a planned package's
 /// effective USE.
@@ -24,11 +23,7 @@ pub struct RequiredUseViolation {
 pub fn find_violations(
     data: &RepoData,
     order: &[(PortagePackage, Version)],
-    pre_env: &str,
-    env_use: &str,
-    package_use: &[(Dep, Vec<UseOverride>)],
-    force_mask: &ForceMask,
-    accept_keywords: &AcceptKeywords,
+    policy: &ResolvePolicy,
     ceded: &[CededFlag],
 ) -> Vec<RequiredUseViolation> {
     let mut out = Vec::new();
@@ -45,14 +40,22 @@ pub fn find_violations(
 
         let cpv = Cpv::new(*pkg.cpn(), ver.clone());
         let defaults = iuse_defaults(cache);
-        let mut effective =
-            resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
-        let stable = accept_keywords.is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
+        let mut effective = resolve_effective_use(
+            &defaults,
+            policy.pre_env,
+            &cpv,
+            pkg.slot(),
+            policy.package_use,
+            policy.env_use,
+        );
+        let stable = policy
+            .accept_keywords
+            .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
         let iuse = iuse_set(cache);
         let slot_key = pkg.slot();
         apply_force_mask(
             &mut effective,
-            force_mask,
+            policy.force_mask,
             &cpv,
             slot_key.as_ref().map(|s| s.as_str()),
             stable,

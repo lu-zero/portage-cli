@@ -697,7 +697,7 @@ impl Adapter<'_> {
 impl<'a> Adapter<'a> {
     /// Borrow out the policy fields, for the free functions that don't need
     /// the rest of `Adapter` (`data`/`installed_cpvs`/`autosolve_use`).
-    fn policy(&self) -> ResolvePolicy<'a> {
+    pub fn policy(&self) -> ResolvePolicy<'a> {
         ResolvePolicy {
             accept_keywords: self.accept_keywords,
             package_mask: self.package_mask,
