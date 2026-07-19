@@ -1,10 +1,11 @@
 # Binpkg identity: cross roots + ISA sub-targets
 
-STATUS: **Phases 1/1a/1b landed** (Phase 1: vibe, 2026-07-19; Phase 1a
-correctness fixes + Phase 1b: Claude/Sonnet + Fable, same day). Scenario
-design still authoritative. Open: live S1 sandbox verification, package.env
-CFLAGS in the desired key (S6), Phase 2 automation UX — see
-[Refined residual plan](#refined-residual-plan).
+STATUS: **Phases 1/1a/1b/2 landed** (Phase 1: vibe, 2026-07-19; 1a/1b/2:
+Claude/Sonnet + Fable, same day). Scenario design still authoritative. Open:
+live S1 sandbox verification (see Success criteria). Operator-facing docs
+(recipes, `fingerprint`, identity model) now live in
+[`docs/binhost.md`](../docs/binhost.md) — this file stays the design/progress
+record.
 
 Related: [[PENDING]] binhosts section; `portage-binpkg` index; crossdev-stages
 `lib/sysroot.sh` (PKGDIR per CFLAGS-named sysroot).
@@ -13,7 +14,9 @@ Commits (representative): `0f2d77f` sokgi dep · `6b2f3be` `build_env_key` ·
 `c94ed73` prune by identity · `58802cb` `read_make_conf_var_for_roots` ·
 `306fdec` merge per-entry CHOST/key · `73d5bfb` preview signature ·
 `b8831df` ISA/ABI token pre-filter · `a163ba0` asymmetric gate + max-BUILD_ID ·
-`5209462` header/entry parse boundary · `3187b80` per-entry PKGDIR dual index.
+`5209462` header/entry parse boundary · `3187b80` per-entry PKGDIR dual index ·
+`023c7da` make.conf `${VAR}` expansion · `09ae887` `list` columns ·
+`5329262` `fingerprint` · `744848f` package.env key.
 
 ## Why this exists
 
@@ -315,6 +318,11 @@ Needs:
 
 ## Automation recipes (what “easy” means)
 
+> Polished, up-to-date operator version (with the real `fingerprint`
+> command and sample output) lives in
+> [`docs/binhost.md`](../docs/binhost.md). Kept here too for the design
+> rationale each recipe was derived from.
+
 ### Recipe 1 — Separate PKGDIR (stages default, zero risk)
 
 ```bash
@@ -511,14 +519,44 @@ own "machine dependent options" convention) specifically so a missed selector
 feature toggles) can't silently under-key again — nothing left to extend here
 short of a genuinely new non-`-m` ISA flag family.
 
-### Phase 2 — automation UX
+### Phase 2 — automation UX (landed, 2026-07-19)
 
-1. `em maint binpkg list`: columns CHOST, build_env_key (short), CFLAGS trunc.
-2. Document recipes 1–3 (separate PKGDIR fingerprint vs shared multi-instance).
-3. Optional: `em binpkg fingerprint` printing `build_env_key` for current roots.
-4. package.env CFLAGS in desired key (when build path already applies them).
-5. Stages: document default `PKGDIR=…/${CHOST}/…` pattern; do not force subpath
-   in code unless requested.
+Planned by Fable, implemented by Claude/Sonnet. Found and fixed a
+prerequisite bug during planning (see "Phase 2a" below) before the 4 UX
+items themselves.
+
+1. ✅ `em maint binpkg list`: CHOST/KEY(short build_env_key)/CFLAGS(trunc)
+   columns added (`IndexRow` extended; `build_env_key_from_fields`/
+   `short_build_env_key` helpers in `portage-binpkg::index`).
+2. ✅ Documented — [`docs/binhost.md`](../docs/binhost.md), recipes 1–4
+   (separate PKGDIR, shared multi-instance, cross host tools, remote
+   binrepos.conf sections).
+3. ✅ `em maint binpkg fingerprint [--full] [--host]` — done, under the
+   existing `maint binpkg` nesting rather than a new top-level applet.
+4. ✅ package.env CFLAGS folded into the per-package desired key
+   (`DesiredBuildEnv::key_for`, a real brush shell round-trip via
+   `MakeConf::apply_to` — see Phase 2a) — S6/WORKAROUND_CFLAGS-style
+   overrides now get a binpkg key their own build can actually reproduce.
+5. ✅ Documented as the recommended default (not code-enforced) —
+   `docs/binhost.md`'s Stages section.
+
+### Phase 2a — prerequisite fix found during Phase 2 planning
+
+`MakeConf::get` returns `${VAR}` references unexpanded. The stock Gentoo
+stage3 pattern `COMMON_FLAGS="-O2 -march=…"` + `CFLAGS="${COMMON_FLAGS}"`
+therefore made every desired-key read see a literal, `-m*`-token-free
+`${COMMON_FLAGS}` string — on such a host the desired key computed empty
+while the binpkg producer recorded the real, shell-expanded flags, and the
+Phase 1a asymmetric gate then **rejected** that keyed binpkg against the
+empty desired key: a permanent rebuild loop on stock configs, worse than
+any of the Phase 2 UX gaps. Fixed first: `MakeConf::apply_to` sources the
+raw file through a minimal, non-interactive `brush_core::Shell` (bash's
+standard builtin set only — no ebuild-specific builtins, no `Repository`
+dependency) rather than hand-rolling a `${VAR}`-only scanner — brush (a
+real bash interpreter) is already a project dependency, so this gets full
+bash semantics (`${VAR:-default}`, command substitution, …) for free
+instead of a second bash subset to maintain. `read_make_conf_var_for_roots`
+now evaluates through it.
 
 ### Phase 3 — later
 

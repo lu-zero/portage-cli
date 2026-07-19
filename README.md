@@ -123,8 +123,10 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
 
 **Gaps vs euse:**
 - No `-p pkg` for package-specific USE flags (`/etc/portage/package.use`).
-- `get()` returns the raw unexpanded value; `${COMMON_FLAGS}` references are
-  not evaluated (brush-backed expansion is possible but not wired yet).
+- `MakeConf::get()` itself still returns the raw unexpanded value (e.g.
+  `${COMMON_FLAGS}` stays literal); `em use`'s own display doesn't call the
+  newer `MakeConf::apply_to()` evaluator (used by the binpkg build-env-key
+  path — see [`docs/binhost.md`](./docs/binhost.md)) to expand it yet.
 
 ---
 
@@ -175,6 +177,18 @@ cycle is broken. Stage *production* (stage1 `packages.build`, stage3
 
 ---
 
+## Binary packages & binhosts
+
+`-b`/`-B` build GLEP 78 binary packages, `-k`/`-K` reuse them locally, `-g`/`-G`
+fetch them from a configured binhost. Binpkgs are keyed by CPV + USE∩IUSE +
+CHOST + an ISA/ABI-derived build-env key, so cross-compilation host tools and
+same-CHOST, different-`-march` board variants never get mixed up. `em maint
+binpkg {verify,list,prune,fingerprint}` covers maintenance (no real `emaint`
+equivalent exists for this). See [`docs/binhost.md`](./docs/binhost.md) for
+the identity model and PKGDIR/automation recipes.
+
+---
+
 ## Architecture
 
 See [`docs/architecture.md`](./docs/architecture.md) for the full crate
@@ -202,6 +216,7 @@ dependency graph, per-crate API catalog, and design reference.
 Further reading: [`docs/architecture.md`](./docs/architecture.md),
 [`docs/build-roadmap.md`](./docs/build-roadmap.md),
 [`docs/benchmarks.md`](./docs/benchmarks.md),
+[`docs/binhost.md`](./docs/binhost.md) (binary packages, identity model, recipes),
 [`todo/PENDING.md`](./todo/PENDING.md) (stage/binhost arc),
 [`todo/deep-in-slot-upgrades.md`](./todo/deep-in-slot-upgrades.md) (`-uD`),
 [`todo/newuse.md`](./todo/newuse.md) (`-N` still open).
