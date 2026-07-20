@@ -427,43 +427,38 @@ mod tests {
     /// above) can't catch this: the dead guard's body still contained the
     /// string. This test actually *sources* the recipe with the real
     /// runtime env (`ROOT="/"`, `EPREFIX=<dir>`) and checks what comes out.
-    #[test]
-    fn overlay_bashrc_actually_exports_search_paths_at_runtime() {
+    ///
+    /// Sources it through `MakeConf::apply_to`'s embedded `brush_core::Shell`
+    /// rather than spawning a real `bash` binary: that's the same mechanism
+    /// `run_phase` actually uses to source bashrc hooks
+    /// (`portage-repo/src/build/shell.rs`'s `bashrc_files` handling) — `em`
+    /// never shells out to a subprocess for this, so testing against a
+    /// spawned `bash` was exercising a different interpreter than
+    /// production. It also depended on a `bash` binary being resolvable on
+    /// `PATH`, which raced against other tests that temporarily mutate the
+    /// process-wide `PATH` (see `test_support::path_lock`'s doc comment).
+    #[tokio::test]
+    async fn overlay_bashrc_actually_exports_search_paths_at_runtime() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().to_str().unwrap();
         let body = bashrc_body("--prefix", prefix);
 
-        let script = format!(
-            "{body}\nprintf '%s\\n' \"$PATH\" \"$PKG_CONFIG_PATH\" \"$PKG_CONFIG_LIBDIR\" \
-             \"$CPPFLAGS\" \"$LDFLAGS\" \"$CMAKE_PREFIX_PATH\""
-        );
-        let output = std::process::Command::new("bash")
-            .arg("-c")
-            .arg(&script)
-            .env("ROOT", "/")
-            .env("EPREFIX", prefix)
-            .env_remove("PKG_CONFIG_PATH")
-            .env_remove("PKG_CONFIG_LIBDIR")
-            .env_remove("CPPFLAGS")
-            .env_remove("LDFLAGS")
-            .env_remove("CMAKE_PREFIX_PATH")
-            .output()
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("ROOT".to_string(), "/".to_string());
+        env.insert("EPREFIX".to_string(), prefix.to_string());
+        portage_repo::MakeConf::parse(body)
+            .unwrap()
+            .apply_to(&mut env)
+            .await
             .unwrap();
-        assert!(
-            output.status.success(),
-            "bashrc script failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let mut lines = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(String::from)
-            .collect::<Vec<_>>();
-        let path = lines.remove(0);
-        let pkg_config_path = lines.remove(0);
-        let pkg_config_libdir = lines.remove(0);
-        let cppflags = lines.remove(0);
-        let ldflags = lines.remove(0);
-        let cmake_prefix_path = lines.remove(0);
+
+        let get = |name: &str| env.get(name).cloned().unwrap_or_default();
+        let path = get("PATH");
+        let pkg_config_path = get("PKG_CONFIG_PATH");
+        let pkg_config_libdir = get("PKG_CONFIG_LIBDIR");
+        let cppflags = get("CPPFLAGS");
+        let ldflags = get("LDFLAGS");
+        let cmake_prefix_path = get("CMAKE_PREFIX_PATH");
 
         assert!(path.contains(&format!("{prefix}/usr/bin")), "PATH: {path}");
         assert!(

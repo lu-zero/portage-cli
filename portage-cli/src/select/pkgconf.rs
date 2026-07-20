@@ -354,14 +354,6 @@ mod tests {
     use crate::cli::Cli;
     use clap::Parser;
 
-    /// `PATH` is process-global and read by every test in this binary
-    /// (unlike `HOME`, which `cli.rs`'s tests save/restore without a lock —
-    /// `PATH` is used far more pervasively, so a plain save/restore raced
-    /// against other `pkgconf` tests running concurrently in the same
-    /// process). A process-wide mutex serializes the whole
-    /// set-run-restore critical section instead.
-    static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     struct PathGuard {
         saved: Option<std::ffi::OsString>,
         _guard: std::sync::MutexGuard<'static, ()>,
@@ -369,9 +361,15 @@ mod tests {
 
     impl PathGuard {
         fn set(dirs: &[&std::path::Path]) -> Self {
-            let guard = PATH_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // `PATH` is process-global and read by every test in this
+            // *binary*, not just this module (unlike `HOME`, which
+            // `cli.rs`'s tests save/restore without a lock — `PATH` is used
+            // far more pervasively, up to and including tests in other
+            // modules that spawn an external tool). The shared
+            // `crate::test_support::path_lock` serializes the whole
+            // set-run-restore critical section against those too, not just
+            // other `pkgconf` tests.
+            let guard = crate::test_support::path_lock();
             let saved = std::env::var_os("PATH");
             let joined = std::env::join_paths(dirs).unwrap();
             // SAFETY: serialized by `PATH_LOCK`, held until this guard drops.

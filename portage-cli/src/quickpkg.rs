@@ -474,6 +474,12 @@ mod tests {
 
     #[test]
     fn package_one_builds_gpkg_from_vdb_and_root() {
+        // Spawns `tar`/`zstd` (via `portage_binpkg::write_gpkg`), which
+        // resolve themselves off the process-wide `PATH` — see
+        // `crate::test_support::path_lock`'s doc comment for the real,
+        // consistently-reproducing CI failure this fixes.
+        let _path_lock = crate::test_support::path_lock();
+
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
         let vdb_root = root.join("var/db/pkg");

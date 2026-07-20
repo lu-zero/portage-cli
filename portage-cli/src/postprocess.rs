@@ -327,6 +327,10 @@ mod tests {
 
     #[test]
     fn compresses_man_pages_and_retargets_symlinks() {
+        // `post_process_image` spawns `compress_cmd`/`strip_cmd` (`bzip2`/
+        // `strip`), which resolve off the process-wide `PATH` — see
+        // `crate::test_support::path_lock`'s doc comment.
+        let _path_lock = crate::test_support::path_lock();
         let tmp = tempfile::tempdir().unwrap();
         let image = Utf8PathBuf::try_from(tmp.path().join("image")).unwrap();
         let man = image.join("usr/share/man/man1");
@@ -357,6 +361,7 @@ mod tests {
 
     #[test]
     fn docompress_exclude_is_honored() {
+        let _path_lock = crate::test_support::path_lock();
         let tmp = tempfile::tempdir().unwrap();
         let image = Utf8PathBuf::try_from(tmp.path().join("image")).unwrap();
         write(
@@ -377,6 +382,7 @@ mod tests {
 
     #[test]
     fn strips_only_in_dostrip_scope() {
+        let _path_lock = crate::test_support::path_lock();
         let tmp = tempfile::tempdir().unwrap();
         let image = Utf8PathBuf::try_from(tmp.path().join("image")).unwrap();
         // Not ELF: never touched, even in scope.

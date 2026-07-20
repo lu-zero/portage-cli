@@ -24,6 +24,8 @@ pub(crate) mod search;
 pub(crate) mod select;
 pub(crate) mod setup;
 pub(crate) mod style;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod use_flags;
 pub(crate) mod util;
 pub(crate) mod vdb;
