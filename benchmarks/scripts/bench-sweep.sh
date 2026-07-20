@@ -225,10 +225,20 @@ run_regen() {
     local out_dir
     out_dir=$(mktemp -d)
 
-    echo "  regen ($config): $em --repo $REPO regen -o <tmp> -j $REGEN_JOBS"
+    echo "  regen ($config): $em regen $REPO -o <tmp> -j $REGEN_JOBS"
     if [[ "$DRY_RUN" -ne 1 ]]; then
+        # regen's repo argument is positional (`regen [REPOS]...`), not the
+        # global --repo flag (that flag only pins search/query commands).
+        # Passing it as --repo left regen's own [REPOS] empty, so it fell
+        # back to auto-discovering every repo in the host's
+        # /etc/portage/repos.conf (3 on this machine: gentoo, crossdev,
+        # exp-llvm-libc) instead of just $REPO — -o then immediately errors
+        # ("--output only makes sense with a single repository"), so every
+        # config's regen.time was actually timing a near-instant failure,
+        # not a real regen. Found 2026-07-21 comparing an obviously-bogus
+        # sub-100ms sweep result against a real ~9.9s manual run.
         time_cmd "$config" "$OUTPUT/$config/regen.time" \
-            "$em" --repo "$REPO" regen -o "$out_dir" -j "$REGEN_JOBS"
+            "$em" regen "$REPO" -o "$out_dir" -j "$REGEN_JOBS"
         rm -rf "$out_dir"
     fi
 }
