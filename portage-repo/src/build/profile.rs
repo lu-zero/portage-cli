@@ -87,8 +87,10 @@ impl ProfileStack {
     ///
     /// Each file is sourced in the **same** shell (preserving cross-file
     /// variable visibility for non-incremental vars like `EAPI`, computed
-    /// paths, etc.).  Before each file the incremental variables (`USE`,
-    /// `USE_EXPAND`, and every key listed in `USE_EXPAND`) are reset to
+    /// paths, etc.).  Before each file the incremental variables — `USE`,
+    /// `USE_EXPAND` and every key it lists, `FEATURES`, `ACCEPT_KEYWORDS`,
+    /// `ACCEPT_LICENSE`, `CONFIG_PROTECT`, `CONFIG_PROTECT_MASK`,
+    /// `IUSE_IMPLICIT` (make.conf(5)'s "Incremental Variables") — are reset to
     /// empty so the file's own assignments are captured as a clean delta.
     /// After sourcing, the accumulated values are restored into the shell
     /// for the next file to reference via `${USE}`, `${PYTHON_TARGETS}`, etc.
@@ -123,6 +125,12 @@ impl ProfileStack {
                 "USE_EXPAND_HIDDEN".into(),
                 "USE_EXPAND_IMPLICIT".into(),
                 "USE_EXPAND_UNPREFIXED".into(),
+                "FEATURES".into(),
+                "ACCEPT_KEYWORDS".into(),
+                "ACCEPT_LICENSE".into(),
+                "CONFIG_PROTECT".into(),
+                "CONFIG_PROTECT_MASK".into(),
+                "IUSE_IMPLICIT".into(),
             ];
             for key in expand_keys.iter().chain(&unprefixed_keys) {
                 if !incr.contains(key) {
@@ -483,10 +491,12 @@ async fn apply_env_layer(shell: &mut EbuildShell) -> Result<()> {
 
 /// Source a single config file (e.g. `make.conf`) with incremental USE semantics.
 ///
-/// Before sourcing, the incremental vars (`USE` and all known `USE_EXPAND`
-/// keys) are reset to empty so the file's own assignments represent its pure
-/// contribution.  After sourcing, those contributions are merged back into
-/// the accumulated shell state using [`merge_flag_lists`].
+/// Before sourcing, the incremental vars (`USE`, all known `USE_EXPAND` keys,
+/// `FEATURES`, `ACCEPT_KEYWORDS`, `ACCEPT_LICENSE`, `CONFIG_PROTECT`,
+/// `CONFIG_PROTECT_MASK`, `IUSE_IMPLICIT` — make.conf(5)'s "Incremental
+/// Variables") are reset to empty so the file's own assignments represent its
+/// pure contribution.  After sourcing, those contributions are merged back
+/// into the accumulated shell state using [`merge_flag_lists`].
 /// Where one `source_incremental` layer's content comes from: a real conf
 /// file (`/etc/portage/make.conf`), or a raw string — e.g. a transient
 /// `USE="-* build ${BOOTSTRAP_USE}"` override synthesized in-process (`em
@@ -505,6 +515,12 @@ async fn source_incremental(shell: &mut EbuildShell, source: ConfSource<'_>) -> 
         "USE_EXPAND_HIDDEN".into(),
         "USE_EXPAND_IMPLICIT".into(),
         "USE_EXPAND_UNPREFIXED".into(),
+        "FEATURES".into(),
+        "ACCEPT_KEYWORDS".into(),
+        "ACCEPT_LICENSE".into(),
+        "CONFIG_PROTECT".into(),
+        "CONFIG_PROTECT_MASK".into(),
+        "IUSE_IMPLICIT".into(),
     ];
     let expand = shell.get_var("USE_EXPAND").unwrap_or_default();
     for key in expand.split_whitespace() {
@@ -684,6 +700,49 @@ mod tests {
         std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
         std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
         Repository::open(dir.path()).unwrap()
+    }
+
+    /// The gap the parser audit flagged as the most significant finding:
+    /// `source_env_file_composes_features_and_overrides_flags` (below) only
+    /// demonstrates composition when the *later* file explicitly writes
+    /// `${FEATURES} ccache`. Virtually every real `make.conf` instead does a
+    /// plain `FEATURES="candy ccache"` with no interpolation, relying on
+    /// portage itself (`config.py`, outside the shell) to merge it with the
+    /// profile's own `FEATURES` — make.conf(5)'s "Incremental Variables".
+    /// Before this fix, `FEATURES`/`ACCEPT_KEYWORDS`/`ACCEPT_LICENSE`/
+    /// `CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/`IUSE_IMPLICIT` weren't in the
+    /// `incr` list either `profile_env` or `source_incremental` isolate, so a
+    /// plain make.conf assignment silently overwrote the profile's value
+    /// instead of merging with it.
+    #[tokio::test]
+    async fn make_conf_merges_features_without_interpolation() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let profile = make_profile(&dir, "test", &[]);
+        std::fs::write(
+            profile.join("make.defaults"),
+            "FEATURES=\"test-fail-continue\"\n",
+        )
+        .unwrap();
+        let stack = ProfileStack::build(profile).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+
+        // Plain assignment, no ${FEATURES} interpolation — the real-world
+        // make.conf idiom that relies on portage's own incremental merge.
+        let make_conf = dir.path().join("make.conf");
+        std::fs::write(&make_conf, "FEATURES=\"candy ccache\"\n").unwrap();
+        configure_shell(&mut shell, &stack, &[&make_conf])
+            .await
+            .unwrap();
+
+        let features_var = shell.get_var("FEATURES").unwrap_or_default();
+        let features: HashSet<&str> = features_var.split_whitespace().collect();
+        assert!(
+            features.contains("test-fail-continue"),
+            "profile's FEATURES must survive make.conf's plain assignment: {features:?}"
+        );
+        assert!(features.contains("candy"), "{features:?}");
+        assert!(features.contains("ccache"), "{features:?}");
     }
 
     #[tokio::test]

@@ -1,16 +1,20 @@
 # Parser audit pass
 
-STATUS: 🟡 **audit pass done (Fable, 2026-07-20) — fixes not yet applied.**
-Was row 4/8 on the 2026-07-18 next-pending queue ([[PENDING]]). Top finding
-(item 7 below) is spot-check-verified against the real source and is a
-genuine, high-severity, silently-wrong-behavior bug: **`FEATURES`/
+STATUS: 🟢 **item 7 (top finding) fixed 2026-07-20.** `FEATURES`/
 `ACCEPT_KEYWORDS`/`ACCEPT_LICENSE`/`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/
-`IUSE_IMPLICIT` are not treated as incremental across the profile→make.conf
-chain** — only `USE`/`USE_EXPAND*` are, in both `profile_env` and
-`source_incremental` (`portage-repo/src/build/profile.rs`). Prioritized fix
-list is at the bottom of the report. Full report below, verbatim from the
-audit agent (one path citation corrected: `repo/profile.rs` → the actual
-`build/profile.rs`).
+`IUSE_IMPLICIT` are now in the `incr` list in both `ProfileStack::profile_env`
+and `source_incremental` (`portage-repo/src/build/profile.rs`), merged with
+the existing unsigned `merge_flag_lists` — same mechanical fix Fable's report
+sketched. New regression test
+`make_conf_merges_features_without_interpolation` covers the actual
+real-world gap (a plain `FEATURES="candy ccache"` in make.conf, no `${FEATURES}`
+interpolation): confirmed it fails without the fix (profile's
+`test-fail-continue` silently dropped) and passes with it. Remaining items
+(1-6, 8) are lower-severity/not yet triaged — see the report below.
+
+Was row 4/8 on the 2026-07-18 next-pending queue ([[PENDING]]). Full report
+below, verbatim from the audit agent (one path citation corrected:
+`repo/profile.rs` → the actual `build/profile.rs`).
 
 A burst of parser-touching work landed across the metadata/profile/atom path
 without a unified correctness re-check. Make a deliberate pass to confirm each
