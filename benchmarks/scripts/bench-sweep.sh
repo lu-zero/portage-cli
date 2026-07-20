@@ -171,7 +171,14 @@ build_em() {
     echo "  building em ($config): cargo build --release $flags"
     if [[ "$DRY_RUN" -ne 1 ]]; then
         cargo build --release $flags --manifest-path "$CLI_ROOT/Cargo.toml" 2>&1
-        cp "$CLI_ROOT/target/release/em" "$out_dir/em"
+        # CLI_ROOT/target/release/em is correct when portage-cli is its own
+        # standalone workspace (the README's separate-clone setup). When
+        # benchmarks/ instead lives *inside* the portage-cli monorepo as a
+        # workspace member (this repo's current layout), cargo shares one
+        # target/ at the enclosing workspace root instead, one level up.
+        local em_bin="$CLI_ROOT/target/release/em"
+        [[ -x "$em_bin" ]] || em_bin="$PROJ_ROOT/../target/release/em"
+        cp "$em_bin" "$out_dir/em"
     fi
 }
 
