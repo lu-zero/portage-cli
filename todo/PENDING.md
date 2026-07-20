@@ -21,11 +21,11 @@ this table is the triage index.
 
 | Pri | Item | Status | Detail |
 |-----|------|--------|--------|
-| **1** | **Native `--root`/`--prefix` builds prefer the ROOT’s own `<chost>-gcc`** — likely already solved (user will re-verify); build shell PATH prefer if still open | 🟡 verify | [[select-toolchain]] |
+| **1** | **`--prefix` should let `em select` choose host vs. prefix's own toolchain** — verified 2026-07-20 still open (both `--root`/`--prefix` silently default to host `gcc` on `PATH`, since `CBUILD` defaults to `CHOST` for any native build, unconditionally skipping the only PATH-prepend/CC-set code that exists). **`--root` defaulting to host is correct as-is** (matches catalyst's seed-compiler model, not a bug); the open piece is scoped to `--prefix` only: no choice is exposed anywhere today, needs a design for how `em select` persists "prefer this prefix's own toolchain" per-prefix and how `init_build_env` consults it | 🔴 design needed | [[select-toolchain]] |
 | **2** | **CLI short-flag remnants** — `-P`/`--prune`, `-r`/`--resume`, `-W`/`--deselect`, `-F`/`--fetch-all-uri` | 🔴 | [[cli-flag-parity]] |
 | **3** | **Binhost polish** — GPG verify/sign still open; **URI BASE_URI, auto-reindex, stages default `-b`, CHOST reuse gate** done 2026-07-18 | 🟡 | [[em-stages-and-binhosts]]; binhosts section below |
 | **4** | **Parser audit** — incremental `-*`, package.*, sets, USE-deps, md5-cache faithfulness | 🔴 | [[parser-audit]] |
-| **5** | **`package.env` USE in the resolver** — build-env slice ✅; USE from env files still ignored at plan time | 🟡 | [[package-env]] |
+| **5** | **`package.env` USE in the resolver** — build-env slice ✅; USE from env files now folded at plan time too | ✅ 2026-07-20 | [[package-env]] |
 | **6** | **Blocker Tier-1** — detect/report ✅; auto-unmerge **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
 
 ### Verified closed / demoted (2026-07-18)

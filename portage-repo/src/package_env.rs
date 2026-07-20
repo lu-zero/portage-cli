@@ -45,7 +45,13 @@ pub fn env_files_for(portage_dirs: &[PathBuf], cpv: &Cpv, slot: Option<&str>) ->
 /// One entry per line: `atom file1 file2 …`; `#` comments and blank lines are
 /// skipped, as are lines with no env-file names or an unparseable atom. A
 /// directory is read as its regular files, sorted by name (PMS 5.2.4 form).
-fn load_package_env(path: &Path) -> Vec<(Dep, Vec<String>)> {
+///
+/// Public (unlike the rest of this module's helpers) because
+/// `portage-resolve`'s `use_env` needs the raw atom-keyed entries directly —
+/// unlike [`env_files_for`], it has no single CPV to filter against yet at
+/// the point it runs (it builds one flat, atom-keyed override list up front,
+/// matched per candidate later, the same shape `package.use` already uses).
+pub fn load_package_env(path: &Path) -> Vec<(Dep, Vec<String>)> {
     if !path.exists() {
         return Vec::new();
     }

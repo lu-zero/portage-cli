@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use camino::Utf8Path;
 use portage_atom::Dep;
 use portage_atom::interner::Interned;
 use portage_atom_pubgrub::UseOverride;
-use portage_repo::{AcceptLicense, LicenseGroupRegistry, ProfileStack, Repository};
+use portage_repo::{AcceptLicense, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
 
 use crate::force_mask::{ForceMask, index_by_cpn};
 use crate::repo::AcceptToken;
@@ -214,7 +216,7 @@ async fn compute_use_env(
     if let Some(overlay) = config_overlay {
         raw_package_use.extend(load_package_use(overlay.join("package.use").as_str()));
     }
-    let package_use: Vec<(Dep, Vec<UseOverride>)> = raw_package_use
+    let mut package_use: Vec<(Dep, Vec<UseOverride>)> = raw_package_use
         .into_iter()
         .map(|(dep, flags)| {
             (
@@ -223,6 +225,22 @@ async fn compute_use_env(
             )
         })
         .collect();
+
+    // `/etc/portage/package.env`'s own USE contribution, folded in as more
+    // package_use-style overrides (same `Dep`-keyed shape, matched the same
+    // way by `resolve_effective_use`'s `pkg_use_tokens` fold) rather than a
+    // new tier — package.env is portage's own per-package mechanism for
+    // exactly this kind of override, so its USE naturally sits at the same
+    // precedence as plain `package.use`, just applied after it (grouped by
+    // config directory: host package.use, host package.env, then overlay
+    // package.use, overlay package.env — real portage doesn't interleave
+    // config layers either). Previously this was build-time only (the
+    // resolved plan's USE won, so `-p` could show flags the actual build
+    // didn't use); see `todo/package-env.md`.
+    package_use.extend(load_package_env_use(&portage_dir).await);
+    if let Some(overlay) = config_overlay {
+        package_use.extend(load_package_env_use(overlay).await);
+    }
 
     // Mask sources, in portage's order: the repo-global `profiles/package.mask`
     // (applies regardless of profile), the profile chain (with `-atom` removals
@@ -341,6 +359,50 @@ fn load_package_use(path: &str) -> Vec<(Dep, Vec<String>)> {
         }
     }
     result
+}
+
+/// `/etc/portage/package.env`'s own USE contribution, as `package_use`-shaped
+/// overrides: for each matched atom, source its env files (in line order,
+/// each on top of the last, seeded with an empty `USE`) via [`MakeConf::apply_to`]
+/// — a real shell, so `USE="${USE} -flag"`'s self-reference and any other
+/// bash construct in the file evaluate correctly, not just plain assignment —
+/// and take the resulting `USE` string's whitespace tokens as this atom's
+/// override list, [`UseOverride::parse`]d exactly like a `package.use` line.
+///
+/// Seeded empty (not from `pre_env`/the profile's USE) because this collects
+/// *this atom's own* package.env contribution, independent of any candidate
+/// package's baseline — same reasoning `package.use`'s raw-token collection
+/// already relies on; the baseline gets folded in later, per candidate, by
+/// `resolve_effective_use`. A package.env file mentioning some *other*,
+/// unrelated variable that happens to be unset here expands to empty rather
+/// than whatever the real build environment would have had — same
+/// documented approximation `binpkg::DesiredBuildEnv::key_for` already
+/// makes for the build-env-key slice of package.env, and the same safe
+/// direction: a wrong desired USE here costs a resolve/build mismatch this
+/// mechanism exists to close, never a worse outcome than today's "resolver
+/// ignores package.env USE entirely".
+async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseOverride>)> {
+    let entries =
+        portage_repo::package_env::load_package_env(portage_dir.join("package.env").as_std_path());
+    let env_dir = portage_dir.join("env");
+    let mut out = Vec::new();
+    for (dep, names) in entries {
+        let mut env: BTreeMap<String, String> = BTreeMap::new();
+        env.insert("USE".to_string(), String::new());
+        for name in &names {
+            if let Ok(mc) = MakeConf::load(&env_dir.join(name)) {
+                let _ = mc.apply_to(&mut env).await;
+            }
+        }
+        let tokens: Vec<UseOverride> = env
+            .get("USE")
+            .map(|use_str| use_str.split_whitespace().map(UseOverride::parse).collect())
+            .unwrap_or_default();
+        if !tokens.is_empty() {
+            out.push((dep, tokens));
+        }
+    }
+    out
 }
 
 /// Expand the `USE_EXPAND:` colon form in `package.use` tokens to interned
@@ -528,12 +590,66 @@ fn load_dep_list(path: &str) -> Vec<Dep> {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_use_expand_colon;
+    use super::{expand_use_expand_colon, load_package_env_use};
+    use portage_atom::Dep;
     use portage_atom_pubgrub::UseOverride;
 
     /// Expected override shorthand.
     fn ov(s: &str) -> UseOverride {
         UseOverride::parse(s)
+    }
+
+    /// Build an `etc/portage` dir with a `package.env` and named env files,
+    /// matching `portage_repo::package_env`'s own test fixture shape.
+    fn portage_dir(package_env: &str, env_files: &[(&str, &str)]) -> tempfile::TempDir {
+        let td = tempfile::TempDir::new().unwrap();
+        let pd = td.path();
+        std::fs::write(pd.join("package.env"), package_env).unwrap();
+        std::fs::create_dir_all(pd.join("env")).unwrap();
+        for (name, body) in env_files {
+            std::fs::write(pd.join("env").join(name), body).unwrap();
+        }
+        td
+    }
+
+    #[tokio::test]
+    async fn package_env_use_becomes_package_use_shaped_overrides() {
+        let td = portage_dir(
+            "dev-libs/foo  ccache-workaround\n",
+            &[("ccache-workaround", "USE=\"${USE} -jit ccache\"\n")],
+        );
+        let dir = camino::Utf8Path::from_path(td.path()).unwrap();
+        let out = load_package_env_use(dir).await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, Dep::parse("dev-libs/foo").unwrap());
+        assert_eq!(out[0].1, vec![ov("-jit"), ov("ccache")]);
+    }
+
+    #[tokio::test]
+    async fn package_env_use_chains_multiple_files_in_line_order() {
+        let td = portage_dir(
+            "dev-libs/foo  first second\n",
+            &[
+                ("first", "USE=\"${USE} a\"\n"),
+                ("second", "USE=\"${USE} b\"\n"),
+            ],
+        );
+        let dir = camino::Utf8Path::from_path(td.path()).unwrap();
+        let out = load_package_env_use(dir).await;
+        assert_eq!(out[0].1, vec![ov("a"), ov("b")]);
+    }
+
+    #[tokio::test]
+    async fn package_env_without_use_assignment_yields_no_override() {
+        // An env file that only touches build vars (CFLAGS/FEATURES/etc, the
+        // already-landed build-env slice) shouldn't manufacture a USE entry.
+        let td = portage_dir(
+            "dev-libs/foo  flags-only\n",
+            &[("flags-only", "CFLAGS=\"-O3\"\n")],
+        );
+        let dir = camino::Utf8Path::from_path(td.path()).unwrap();
+        let out = load_package_env_use(dir).await;
+        assert!(out.is_empty());
     }
 
     #[test]

@@ -1,7 +1,8 @@
-# package.env — per-package build environment (RESOLVER-FREE slice)
+# package.env — per-package build environment
 
-STATUS: **build-env slice DONE (commit 7ce7c5b); USE part remains, resolver-side.**
-On the 2026-07-18 next-pending queue as row 9 ([[PENDING]]).
+STATUS: **DONE, both slices.** Was row 5/9 on the 2026-07-18 next-pending
+queue ([[PENDING]]).
+
 The non-USE build environment is applied: `build_and_merge` (ebuild.rs) sources
 matching `/etc/portage/env/<file>` entries on top of make.conf via the new
 `EbuildShell::source_env_file` and the new `portage-cli/src/package_env.rs`
@@ -15,12 +16,28 @@ re-benchmark vs baseline 8ce7a01 shows **no regression** — `em -pe` still
 **1.23×** faster on firefox/gcc/multi (identical 619-line firefox plan), i.e. the
 interning gains survived the fold+rebase+solver integration intact.
 
-REMAINING (resolver-side, do NOT bundle with the above): `USE` set by a
-package.env env file is not reflected in resolution — the resolved plan's USE
-currently wins at build time. To honour it the resolver must read package.env
-USE at resolution time (`query/depgraph/use_env.rs`) so the displayed plan and
-the build agree. That is the only open piece; everything below was the original
-brief for the now-completed build-env slice.
+**2026-07-20, resolver-side USE landed:** `portage-resolve/src/use_env.rs`
+gained `load_package_env_use`, a new `package_use`-shaped reader for
+`/etc/portage/package.env`'s own `USE` contribution — for each matched atom,
+its env files are sourced in line order (each on top of the last, seeded
+empty) via `MakeConf::apply_to` (the real-brush evaluator, not a hand-rolled
+one — see the `make_conf.rs` history), and the resulting `USE` string's
+tokens become `UseOverride`s, appended onto `UseEnv.package_use` right after
+plain `package.use` (same Dep-keyed shape, matched by the existing
+`resolve_effective_use` fold — no changes needed there or anywhere
+downstream). Grouped by config directory (host package.use, host
+package.env, then overlay package.use, overlay package.env), matching real
+portage's non-interleaved layer model.
+
+Live-verified: `sys-libs/zlib` (`IUSE` default `-minizip`) with
+`/etc/portage/package.env` → `sys-libs/zlib enable-minizip` and
+`/etc/portage/env/enable-minizip` → `USE="${USE} minizip"` now shows
+`USE="minizip -static-libs -verify-sig"` in `em -p`'s plan (was
+`-minizip ...` before this change, and reverts to `-minizip` with the
+package.env file removed — confirmed both directions). The resolved plan
+and the actual build now agree, closing the gap this file originally
+tracked. 3 new unit tests (`portage-resolve/src/use_env.rs`), full
+workspace check/clippy/fmt clean.
 
 ## What it is
 
