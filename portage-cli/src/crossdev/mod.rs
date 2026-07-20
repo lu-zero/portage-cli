@@ -213,6 +213,23 @@ async fn setup(
     args: &CrossdevArgs,
     extras: &[Cpn],
 ) -> Result<()> {
+    // A cross target tuple identical to the host's own CHOST can't actually
+    // work: `cross-<tuple>/linux-headers` (and every other cross-* package)
+    // is the *real* upstream ebuild, symlinked into the cross-* category —
+    // it decides where to install purely by comparing CTARGET != CHOST
+    // inside the ebuild itself (the same check real crossdev's own ebuilds
+    // use to redirect into a target-specific path instead of the plain
+    // host `/usr/include`). When the tuple textually equals the host's
+    // CHOST, that check reads as "not cross-compiling" and the ebuild
+    // installs straight into `/usr/include` — colliding with the native
+    // `sys-kernel/linux-headers` already there. Real crossdev has the
+    // identical limitation (it is not an em-specific gap) — found live
+    // 2026-07-20 running `test-scripts/test-crossdev-flavours.sh` for an
+    // aarch64 target on an aarch64 host: 980 file collisions merging
+    // `cross-aarch64-unknown-linux-gnu/linux-headers`. Reject early with a
+    // clear message instead of failing deep inside a confusing collision
+    // dump.
+    reject_same_arch_target(&target.tuple, &host_chost())?;
     // `init_target` is itself `-p`/`-a`-aware now (see `config_plan`), so
     // this no longer needs its own `!globals.pretend` gate — under `-p` it
     // previews the config-plan changes instead of skipping them silently.
@@ -1516,6 +1533,48 @@ fn link_abi_osdirs(target: &CrossTarget, globals: &Cli) -> Result<()> {
     Ok(())
 }
 
+/// Reject a cross target tuple identical to the host's own CHOST:
+/// `cross-<tuple>/linux-headers` (and every other cross-* package) is the
+/// *real* upstream ebuild, symlinked into the cross-* category — it decides
+/// where to install purely by comparing `CTARGET != CHOST` inside the
+/// ebuild itself (the same check real crossdev's own ebuilds use to
+/// redirect into a target-specific path instead of the plain host
+/// `/usr/include`). When the tuple textually equals the host's CHOST, that
+/// check reads as "not cross-compiling" and the ebuild installs straight
+/// into `/usr/include` — colliding with the native `sys-kernel/
+/// linux-headers` already there. Real crossdev has the identical
+/// limitation (not an em-specific gap): every cross-* package keys its own
+/// install/config logic off that same string comparison, so there is no
+/// signal anywhere in the ebuild ecosystem for "a second, separately
+/// configured toolchain instance for my own arch" versus "the native
+/// one" — this isn't a fixable gap, it's a structurally invalid target.
+/// Found live 2026-07-20 running `test-scripts/test-crossdev-flavours.sh`
+/// for an aarch64 target on an aarch64 host: 980 file collisions merging
+/// `cross-aarch64-unknown-linux-gnu/linux-headers`. Reject early with a
+/// clear message instead of failing deep inside a confusing collision
+/// dump — and point at the tool that actually covers "a separate sysroot,
+/// same arch, different settings": `--root`/`--local` (self-contained
+/// mode) builds with the plain native toolchain (`CHOST == CBUILD`, no
+/// `CTARGET` involved at all, so nothing shorts) under its own independent
+/// make.conf — see this module's own doc comment on `run_staged`/`setup`
+/// for why that reuses crossdev's staged-bootstrap machinery safely where
+/// crossdev itself can't.
+fn reject_same_arch_target(tuple: &str, host: &str) -> Result<()> {
+    if tuple == host {
+        bail!(
+            "em crossdev --setup {tuple}: target tuple is identical to the host's \
+             own CHOST ({host}) — cross-* packages install by checking \
+             CTARGET != CHOST inside the ebuild itself, so a same-arch target \
+             collides with the native packages already on the host instead of \
+             installing anywhere separate. For a separate sysroot of the same \
+             architecture with its own settings, use `--root`/`--local` instead \
+             of `crossdev --setup` — otherwise pick a genuinely different \
+             target tuple."
+        );
+    }
+    Ok(())
+}
+
 /// The host `CHOST` (= the target's `CBUILD`), read from the host `make.conf`.
 fn host_chost() -> String {
     MakeConf::load_default()
@@ -1566,6 +1625,21 @@ mod tests {
     ) -> Result<()> {
         let entry = alias_repo_conf_entry(globals, gentoo, target, category, &[])?;
         config_plan::apply_now(std::slice::from_ref(&entry))
+    }
+
+    #[test]
+    fn reject_same_arch_target_rejects_when_tuple_matches_host() {
+        let err = reject_same_arch_target("aarch64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("identical to the host's own CHOST")
+        );
+    }
+
+    #[test]
+    fn reject_same_arch_target_allows_a_genuinely_different_tuple() {
+        reject_same_arch_target("riscv64-unknown-linux-gnu", "aarch64-unknown-linux-gnu").unwrap();
     }
 
     /// `--target` is global: `em --target T crossdev --show-target-cfg`
