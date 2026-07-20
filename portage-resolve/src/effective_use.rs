@@ -81,7 +81,7 @@ pub fn iuse_set(cache: &CacheEntry) -> HashSet<Interned<DefaultInterner>> {
 ///
 /// Force/mask is applied post-fold (not as synthetic `package.use`) so a
 /// process-env `USE="-* …"` cannot clear forced flags — matching
-/// [`crate::repo::Adapter::desired_use`] and real Portage.
+/// `Adapter::desired_use` and real Portage.
 pub fn effective_use(
     policy: &ResolvePolicy,
     pkg: &PortagePackage,

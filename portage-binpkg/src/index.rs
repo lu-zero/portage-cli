@@ -222,7 +222,7 @@ fn split_header_body(text: &str) -> (&str, &str) {
 }
 
 /// Split a `Packages` index into its per-package `KEY: VALUE` blocks (the
-/// header block is excluded — see [`split_header_body`]). Shared by every
+/// header block is excluded — see `split_header_body`). Shared by every
 /// consumer that needs a different subset of fields than [`BinpkgEntry`]
 /// carries — e.g. `em maint binpkg`'s verify/list/prune, which also need
 /// `MD5`/`SHA1`/`SIZE`/`BUILD_ID`.
@@ -311,7 +311,7 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> 
     entries
 }
 
-/// Header fields of a `Packages` index (see [`split_header_body`] for where
+/// Header fields of a `Packages` index (see `split_header_body` for where
 /// the header ends). Used for server-controlled `URI` / BASE_URI.
 pub fn parse_index_header(text: &str) -> BTreeMap<String, String> {
     let (header, _) = split_header_body(text);

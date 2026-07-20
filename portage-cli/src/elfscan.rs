@@ -92,7 +92,7 @@ pub fn scan_image(image_dir: &Utf8Path) -> ElfScan {
     scan_image_with_jobs(image_dir, None)
 }
 
-/// Default worker count: `available_parallelism` capped at [`DEFAULT_JOBS_CAP`].
+/// Default worker count: `available_parallelism` capped at `DEFAULT_JOBS_CAP`.
 pub fn default_jobs() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
