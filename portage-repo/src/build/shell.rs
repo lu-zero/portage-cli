@@ -506,6 +506,19 @@ impl EbuildShell {
             .profile(ProfileLoadBehavior::Skip)
             .rc(RcLoadBehavior::Skip)
             .parser(ParserImpl::Winnow)
+            // Pinned rather than left to default to the process's ambient
+            // cwd (brush falls back to `std::env::current_dir()` when this
+            // is unset): `run_phase` later anchors the process cwd to the
+            // real build's `work_root` via `std::env::set_current_dir`
+            // (below), which is itself process-global — a concurrently
+            // running test/shell in the same process can observe a stale or
+            // just-deleted cwd between one test's build finishing (its
+            // tempdir dropped) and another's shell construction, surfacing
+            // as a bare `Shell("... No such file or directory")` from
+            // `getcwd()`. The repo root always exists and is a more
+            // meaningful starting point than whatever the caller's process
+            // cwd happened to be anyway.
+            .working_dir(repo.path().as_std_path().to_path_buf())
             .build()
             .await
             .map_err(|e| Error::Shell(e.to_string()))?;
