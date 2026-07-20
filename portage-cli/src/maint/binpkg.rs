@@ -15,13 +15,22 @@ use crate::binpkg::{read_make_conf_var, resolve_pkgdir};
 use crate::cli::{BinpkgAction, Cli};
 
 /// Dispatch `em maint binpkg <action>`.
-pub fn run(action: &BinpkgAction, globals: &Cli) -> Result<()> {
-    let pkgdir = resolve_pkgdir(globals);
-    let chost = || read_make_conf_var(globals, "CHOST").unwrap_or_default();
+pub async fn run(action: &BinpkgAction, globals: &Cli) -> Result<()> {
+    let pkgdir = resolve_pkgdir(globals).await;
     match action {
-        BinpkgAction::Verify { fix } => verify(&pkgdir, &chost(), *fix),
+        BinpkgAction::Verify { fix } => {
+            let chost = read_make_conf_var(globals, "CHOST")
+                .await
+                .unwrap_or_default();
+            verify(&pkgdir, &chost, *fix)
+        }
         BinpkgAction::List => list(&pkgdir),
-        BinpkgAction::Prune { dry_run } => prune(&pkgdir, &chost(), *dry_run),
+        BinpkgAction::Prune { dry_run } => {
+            let chost = read_make_conf_var(globals, "CHOST")
+                .await
+                .unwrap_or_default();
+            prune(&pkgdir, &chost, *dry_run)
+        }
     }
 }
 

@@ -31,24 +31,24 @@ pub(crate) struct QuickpkgOpts {
 }
 
 /// Run `em quickpkg`.
-pub(crate) fn run(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
+pub(crate) async fn run(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
     // Match real quickpkg's default umask (0077) so packages aren't world-readable.
     let prev = rustix::process::umask(rustix::fs::Mode::from_bits_truncate(0o077));
-    let result = run_inner(globals, opts);
+    let result = run_inner(globals, opts).await;
     rustix::process::umask(prev);
     result
 }
 
-fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
+async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
     let roots = globals.roots();
     let merge_root = roots.merge_root();
     let vdb = open_cli_vdb(globals)?;
-    let pkgdir = resolve_pkgdir(globals);
+    let pkgdir = resolve_pkgdir(globals).await;
     std::fs::create_dir_all(pkgdir.as_std_path())
         .with_context(|| format!("creating PKGDIR {pkgdir}"))?;
 
     let expanded = expand_sets(&opts.atoms, roots.config(), merge_root);
-    let protect = ConfigProtectLists::load(globals);
+    let protect = ConfigProtectLists::load(globals).await;
 
     let mut successes: Vec<(String, u64)> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
@@ -98,7 +98,9 @@ fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
 
     // Refresh the Packages index so `-k`/`-g` consumers see new containers.
     if !successes.is_empty() {
-        let chost = read_make_conf_var(globals, "CHOST").unwrap_or_default();
+        let chost = read_make_conf_var(globals, "CHOST")
+            .await
+            .unwrap_or_default();
         match portage_binpkg::index_pkgdir(&pkgdir, &chost) {
             Ok((n, skipped)) => {
                 if skipped > 0 {
@@ -411,14 +413,14 @@ struct ConfigProtectLists {
 }
 
 impl ConfigProtectLists {
-    fn load(globals: &Cli) -> Self {
-        let mut protect = read_list(globals, "CONFIG_PROTECT");
+    async fn load(globals: &Cli) -> Self {
+        let mut protect = read_list(globals, "CONFIG_PROTECT").await;
         if !protect.iter().any(|p| p == "/etc") {
             protect.push("/etc".to_string());
         }
         Self {
             protect,
-            mask: read_list(globals, "CONFIG_PROTECT_MASK"),
+            mask: read_list(globals, "CONFIG_PROTECT_MASK").await,
         }
     }
 
@@ -428,8 +430,9 @@ impl ConfigProtectLists {
     }
 }
 
-fn read_list(globals: &Cli, var: &str) -> Vec<String> {
+async fn read_list(globals: &Cli, var: &str) -> Vec<String> {
     read_make_conf_var(globals, var)
+        .await
         .unwrap_or_default()
         .split_whitespace()
         .map(|s| s.trim_end_matches('/').to_string())

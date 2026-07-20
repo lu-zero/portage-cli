@@ -27,8 +27,8 @@ const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
 /// see [`resolve_pkgdir_for_roots`] for the algorithm. Shared by `em maint
 /// binhost`/`em maint binpkg` and the `-k` consumer, all single-root
 /// commands where "globals's own roots" is unambiguous.
-pub(crate) fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
-    resolve_pkgdir_for_roots(&globals.roots())
+pub(crate) async fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
+    resolve_pkgdir_for_roots(&globals.roots()).await
 }
 
 /// Resolve `PKGDIR` under specific `roots`: `$PKGDIR` env → `make.conf`
@@ -51,13 +51,13 @@ pub(crate) fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
 /// `todo/stage-build-shakeout.md`. Skip straight to a root-relative default
 /// in that case; `$PKGDIR`/config-root `make.conf` (explicit user choices)
 /// still apply regardless of root.
-pub(crate) fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
+pub(crate) async fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
     if let Ok(v) = std::env::var("PKGDIR")
         && !v.trim().is_empty()
     {
         return Utf8PathBuf::from(v);
     }
-    if let Some(v) = read_make_conf_var_for_roots(roots, "PKGDIR")
+    if let Some(v) = read_make_conf_var_for_roots(roots, "PKGDIR").await
         && !v.is_empty()
     {
         return Utf8PathBuf::from(v);
@@ -94,26 +94,40 @@ pub(crate) fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
 /// `dual_pkgdir` split (`run_merge_plan`): under `--target -k`, a `MergeRoot::Host`
 /// row may print `[ebuild ...]` here while the real merge reuses a host-PKGDIR
 /// binpkg — same display-only divergence class as the `-g`/`-G` one above.
-pub(crate) fn open_local_index_for_preview(
+pub(crate) async fn open_local_index_for_preview(
     globals: &Cli,
     merge_flags: &crate::cli::MergeFlags,
 ) -> Option<portage_binpkg::BinpkgIndex> {
     if !(merge_flags.usepkg || merge_flags.usepkgonly) {
         return None;
     }
-    portage_binpkg::BinpkgIndex::open(resolve_pkgdir(globals).as_std_path()).ok()
+    portage_binpkg::BinpkgIndex::open(resolve_pkgdir(globals).await.as_std_path()).ok()
 }
 
 /// Read a variable from `make.conf` under the resolved config root.
-pub(crate) fn read_make_conf_var(globals: &Cli, var: &str) -> Option<String> {
-    read_make_conf_var_for_roots(&globals.roots(), var)
+pub(crate) async fn read_make_conf_var(globals: &Cli, var: &str) -> Option<String> {
+    read_make_conf_var_for_roots(&globals.roots(), var).await
 }
 
 /// Read a variable from make.conf under specific roots — used to get
 /// per-entry CHOST/CFLAGS/etc. for cross-compilation scenarios, where the
 /// desired config root isn't `globals`'s own (e.g. a `MergeRoot::Host` entry
 /// under `--target`).
-pub(crate) fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Option<String> {
+///
+/// Evaluates the file via [`MakeConf::apply_to`] (a real, minimal
+/// `brush_core::Shell` sourcing the file) rather than a plain
+/// [`MakeConf::get`], so `${VAR}` self-references expand — the stock Gentoo
+/// stage3 pattern `COMMON_FLAGS="-O2 -march=…"` + `CFLAGS="${COMMON_FLAGS}"`
+/// used to make every reader of this function see a literal, `-m*`-token-free
+/// `${COMMON_FLAGS}` string instead of the real flags. That silently starved
+/// the binpkg `build_env_key` gate (every desired key came out empty on such
+/// a host, which the asymmetric gate then rejects against any binpkg that
+/// *does* have a recorded key — a permanent rebuild loop on stock configs).
+/// References to a name this file never assigns (e.g. an ambient `${EPREFIX}`
+/// some other subsystem sets) now expand to empty rather than staying
+/// literal — also more correct than before, since that literal string was
+/// never a usable value either.
+pub(crate) async fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Option<String> {
     let cfg_root = roots
         .config()
         .map(|c| c.to_path_buf())
@@ -122,9 +136,12 @@ pub(crate) fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Option<S
         let p = cfg_root.join(rel);
         if p.exists()
             && let Ok(mc) = MakeConf::load(&p)
-            && let Some(v) = mc.get(var).filter(|s| !s.is_empty())
         {
-            return Some(v.to_owned());
+            let mut env = std::collections::BTreeMap::new();
+            mc.apply_to(&mut env).await.ok()?;
+            if let Some(v) = env.get(var).filter(|s| !s.is_empty()) {
+                return Some(v.clone());
+            }
         }
     }
     None
@@ -174,7 +191,7 @@ pub struct BinRepoEntry {
 /// other sections (same simplification `ReposConf` already makes for
 /// `repos.conf`'s own `[DEFAULT]`/`main-repo`) — no configured value
 /// observed in practice needs either.
-pub(crate) fn portage_binhosts(globals: &Cli) -> Vec<BinRepoEntry> {
+pub(crate) async fn portage_binhosts(globals: &Cli) -> Vec<BinRepoEntry> {
     let config_root = globals
         .roots()
         .config()
@@ -198,8 +215,13 @@ pub(crate) fn portage_binhosts(globals: &Cli) -> Vec<BinRepoEntry> {
 
     let binhost_var = std::env::var("PORTAGE_BINHOST")
         .ok()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(|| read_make_conf_var(globals, "PORTAGE_BINHOST").filter(|v| !v.is_empty()));
+        .filter(|v| !v.trim().is_empty());
+    let binhost_var = match binhost_var {
+        Some(v) => Some(v),
+        None => read_make_conf_var(globals, "PORTAGE_BINHOST")
+            .await
+            .filter(|v| !v.is_empty()),
+    };
 
     combine_binhosts(&sections, &order, binhost_var.as_deref())
 }
@@ -286,8 +308,8 @@ mod tests {
     /// must never default PKGDIR to the real system's `/var/cache/binpkgs`
     /// (root-owned, not writable, and not even meaningful for a different
     /// root's package cache) — see `resolve_pkgdir`'s doc comment.
-    #[test]
-    fn non_host_root_gets_root_relative_pkgdir_default() {
+    #[tokio::test]
+    async fn non_host_root_gets_root_relative_pkgdir_default() {
         assert!(
             std::env::var("PKGDIR").is_err(),
             "test assumes no ambient PKGDIR override"
@@ -295,7 +317,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
         let cli = Cli::parse_from(["em", "--root", root]);
-        let pkgdir = resolve_pkgdir(&cli);
+        let pkgdir = resolve_pkgdir(&cli).await;
         assert_eq!(
             pkgdir,
             camino::Utf8Path::new(root).join("var/cache/binpkgs")
@@ -306,8 +328,8 @@ mod tests {
     /// unaffected by the root-aware branch — it still falls through to the
     /// pre-existing make.globals/hardcoded-default lookup, exactly as before
     /// this change.
-    #[test]
-    fn host_root_skips_the_root_relative_branch() {
+    #[tokio::test]
+    async fn host_root_skips_the_root_relative_branch() {
         assert!(
             std::env::var("PKGDIR").is_err(),
             "test assumes no ambient PKGDIR override"
@@ -327,7 +349,7 @@ mod tests {
                 Utf8PathBuf::from(DEFAULT_PKGDIR)
             }
         };
-        assert_eq!(resolve_pkgdir(&cli), expected);
+        assert_eq!(resolve_pkgdir(&cli).await, expected);
     }
 
     /// A `--target` plan's own roots (`resolve_pkgdir`) resolve under the
@@ -335,8 +357,8 @@ mod tests {
     /// entry actually wants) resolve as a plain host build — the two must
     /// disagree here, or a Host BDEPEND entry would look up binpkgs in the
     /// wrong PKGDIR (S1/S4 in `todo/binpkg-subtargets.md`).
-    #[test]
-    fn resolve_pkgdir_for_roots_target_vs_host() {
+    #[tokio::test]
+    async fn resolve_pkgdir_for_roots_target_vs_host() {
         assert!(
             std::env::var("PKGDIR").is_err(),
             "test assumes no ambient PKGDIR override"
@@ -359,7 +381,7 @@ mod tests {
             format!("{root}/usr/riscv64-unknown-linux-gnu")
         );
         assert_eq!(
-            resolve_pkgdir_for_roots(&target_roots),
+            resolve_pkgdir_for_roots(&target_roots).await,
             camino::Utf8Path::new(root)
                 .join("usr/riscv64-unknown-linux-gnu")
                 .join("var/cache/binpkgs")
@@ -382,13 +404,13 @@ mod tests {
                 Utf8PathBuf::from(DEFAULT_PKGDIR)
             }
         };
-        assert_eq!(resolve_pkgdir_for_roots(&host_roots), expected_host);
+        assert_eq!(resolve_pkgdir_for_roots(&host_roots).await, expected_host);
     }
 
     /// Config-root make.conf `PKGDIR=` wins for whichever roots see that
     /// config root — proven independently for target and host roots.
-    #[test]
-    fn resolve_pkgdir_for_roots_honours_config_root_make_conf() {
+    #[tokio::test]
+    async fn resolve_pkgdir_for_roots_honours_config_root_make_conf() {
         assert!(
             std::env::var("PKGDIR").is_err(),
             "test assumes no ambient PKGDIR override"
@@ -403,8 +425,33 @@ mod tests {
         // a bare `--root` leaves `config()` at the real host `/`.
         let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
         assert_eq!(
-            resolve_pkgdir_for_roots(&cli.roots()),
+            resolve_pkgdir_for_roots(&cli.roots()).await,
             camino::Utf8Path::new("/custom/pkgdir")
+        );
+    }
+
+    /// The stock Gentoo stage3 `COMMON_FLAGS=… CFLAGS="${COMMON_FLAGS}"`
+    /// pattern must resolve to the real flags, not the literal `${…}` text —
+    /// see `read_make_conf_var_for_roots`'s doc comment for why this matters
+    /// (an unexpanded read silently starves the binpkg reuse key).
+    #[tokio::test]
+    async fn read_make_conf_var_expands_common_flags_indirection() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let conf_dir = dir.path().join("etc/portage");
+        std::fs::create_dir_all(&conf_dir).unwrap();
+        std::fs::write(
+            conf_dir.join("make.conf"),
+            "COMMON_FLAGS=\"-O2 -march=x86-64-v3\"\nCFLAGS=\"${COMMON_FLAGS}\"\n",
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
+        assert_eq!(
+            read_make_conf_var_for_roots(&cli.roots(), "CFLAGS")
+                .await
+                .as_deref(),
+            Some("-O2 -march=x86-64-v3")
         );
     }
 
@@ -504,8 +551,8 @@ mod tests {
     /// real file on disk (not just `combine_binhosts`'s pure core): a real
     /// `--root`, a real `etc/portage/binrepos.conf` file, real
     /// `collect_conf_files`/`merge_sections` I/O.
-    #[test]
-    fn portage_binhosts_reads_a_real_binrepos_conf_file() {
+    #[tokio::test]
+    async fn portage_binhosts_reads_a_real_binrepos_conf_file() {
         assert!(
             std::env::var("PORTAGE_BINHOST").is_err(),
             "test assumes no ambient PORTAGE_BINHOST override"
@@ -526,7 +573,7 @@ mod tests {
         // `/etc/portage/binrepos.conf`.
         let root = dir.path().to_str().unwrap();
         let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
-        let result = portage_binhosts(&cli);
+        let result = portage_binhosts(&cli).await;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "myhost");
         assert_eq!(result[0].sync_uri, "https://example.invalid/binhost");

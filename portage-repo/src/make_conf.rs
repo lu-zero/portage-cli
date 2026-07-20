@@ -121,6 +121,71 @@ impl MakeConf {
         None
     }
 
+    /// Apply this file's assignments to `env` the way `bash source` would:
+    /// sources the raw file text through a minimal, non-interactive
+    /// [`brush_core::Shell`] (bash's standard builtin set only — no
+    /// ebuild-specific builtins, no [`crate::Repository`] dependency, since
+    /// make.conf is never ebuild content), then overlays every variable left
+    /// in the shell afterward onto `env`.
+    ///
+    /// `env`'s current contents are seeded into the shell first, so a
+    /// caller-provided value (e.g. an ambient `CHOST`) is visible to
+    /// self-references and `NAME+=VALUE` appends onto it. Because this is a
+    /// real shell, the full range of bash semantics applies: `${NAME}`/`$NAME`
+    /// expansion, `${NAME:-default}`-style parameter expansion, command
+    /// substitution, arithmetic, and so on — not just the `${NAME}` subset a
+    /// hand-rolled scanner would need to special-case one construct at a
+    /// time.
+    pub async fn apply_to(
+        &self,
+        env: &mut std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        let mut shell = brush_core::Shell::builder()
+            .do_not_inherit_env(true)
+            .profile(brush_core::ProfileLoadBehavior::Skip)
+            .rc(brush_core::RcLoadBehavior::Skip)
+            .parser(brush_core::parser::ParserImpl::Winnow)
+            // Pinned rather than left to default to the process's ambient
+            // cwd: a make.conf evaluation has no real notion of "current
+            // directory", and `/` is guaranteed to exist regardless of what
+            // the caller's process cwd happens to be at the moment.
+            .working_dir(std::path::PathBuf::from("/"))
+            .build()
+            .await
+            .map_err(|e| Error::Shell(e.to_string()))?;
+        brush_builtins::register_default_builtins(&mut shell, brush_builtins::BuiltinSet::BashMode);
+
+        for (name, value) in env.iter() {
+            shell
+                .set_env_global(name, brush_core::ShellVariable::new(value.as_str()))
+                .map_err(|e| Error::Shell(e.to_string()))?;
+        }
+
+        let params = shell.default_exec_params();
+        shell
+            .run_string(
+                self.src.as_str(),
+                &brush_core::SourceInfo::from("make.conf"),
+                &params,
+            )
+            .await
+            .map_err(|e| Error::Shell(e.to_string()))?;
+
+        let names: Vec<String> = shell
+            .env()
+            .iter()
+            .map(|(name, _)| name.clone())
+            .filter(|name| !crate::build::shell::is_bash_internal_var(name))
+            .collect();
+        for name in names {
+            if let Some(value) = shell.env().get_str(&name, &shell) {
+                env.insert(name, value.into_owned());
+            }
+        }
+
+        Ok(())
+    }
+
     /// Update `name` to `value`, preserving surrounding quotes and trailing
     /// comments.  Updates the first occurrence and removes any later
     /// duplicates (first occurrence wins after the edit).
@@ -433,6 +498,61 @@ mod tests {
         let mc = parse("CFLAGS=\"${COMMON_FLAGS}\"\n");
         // get() returns the raw unexpanded value
         assert_eq!(mc.get("CFLAGS"), Some("${COMMON_FLAGS}"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_expands_common_flags_pattern() {
+        let mc = parse("COMMON_FLAGS=\"-O2 -march=x\"\nCFLAGS=\"${COMMON_FLAGS}\"\n");
+        let mut env = std::collections::BTreeMap::new();
+        mc.apply_to(&mut env).await.unwrap();
+        assert_eq!(env.get("CFLAGS").map(String::as_str), Some("-O2 -march=x"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_append_concatenates_without_space() {
+        let mc = parse("CFLAGS=\"-O2\"\nCFLAGS+=\" -march=x\"\n");
+        let mut env = std::collections::BTreeMap::new();
+        mc.apply_to(&mut env).await.unwrap();
+        assert_eq!(env.get("CFLAGS").map(String::as_str), Some("-O2 -march=x"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_unknown_var_expands_empty() {
+        let mc = parse("CFLAGS=\"${NOT_SET}-O2\"\n");
+        let mut env = std::collections::BTreeMap::new();
+        mc.apply_to(&mut env).await.unwrap();
+        assert_eq!(env.get("CFLAGS").map(String::as_str), Some("-O2"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_resolves_parameter_expansion_forms() {
+        // A real shell (unlike the old hand-rolled `${VAR}`-only scanner)
+        // understands `${NAME:-default}` too: unset `COMMON_FLAGS` falls
+        // back to "fallback" instead of staying a literal string.
+        let mc = parse("CFLAGS=\"${COMMON_FLAGS:-fallback}\"\n");
+        let mut env = std::collections::BTreeMap::new();
+        mc.apply_to(&mut env).await.unwrap();
+        assert_eq!(env.get("CFLAGS").map(String::as_str), Some("fallback"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_seeded_env_is_visible_to_self_refs() {
+        // A caller-seeded value (e.g. ambient CHOST) is visible to expansion,
+        // and a plain assignment overwrites it (bash semantics).
+        let mc = parse("GREETING=\"hello ${NAME}\"\n");
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("NAME".to_string(), "world".to_string());
+        mc.apply_to(&mut env).await.unwrap();
+        assert_eq!(env.get("GREETING").map(String::as_str), Some("hello world"));
+    }
+
+    #[tokio::test]
+    async fn apply_to_resolves_command_substitution() {
+        // A real shell, unlike the old scanner, evaluates $(...) too.
+        let mc = parse("GREETING=\"hello $(echo world)\"\n");
+        let mut env = std::collections::BTreeMap::new();
+        mc.apply_to(&mut env).await.unwrap();
+        assert_eq!(env.get("GREETING").map(String::as_str), Some("hello world"));
     }
 
     #[test]

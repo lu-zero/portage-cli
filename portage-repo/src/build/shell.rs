@@ -2331,7 +2331,7 @@ fn program_on_path(name: &str) -> bool {
 /// must skip: dynamic/magic variables bash manages itself (exporting them is
 /// either a no-op, nonsensical, or — for the readonly ones — a hard error that
 /// would abort the whole `export` statement).
-fn is_bash_internal_var(name: &str) -> bool {
+pub(crate) fn is_bash_internal_var(name: &str) -> bool {
     matches!(
         name,
         "_" | "PIPESTATUS"

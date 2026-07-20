@@ -9,12 +9,14 @@ use crate::binpkg::{read_make_conf_var, resolve_pkgdir};
 use crate::cli::Cli;
 
 /// Dispatch `em maint binhost`.
-pub fn run(globals: &Cli) -> Result<()> {
-    let pkgdir = resolve_pkgdir(globals);
+pub async fn run(globals: &Cli) -> Result<()> {
+    let pkgdir = resolve_pkgdir(globals).await;
     if !pkgdir.exists() {
         bail!("PKGDIR does not exist: {}", pkgdir);
     }
-    let chost = read_make_conf_var(globals, "CHOST").unwrap_or_default();
+    let chost = read_make_conf_var(globals, "CHOST")
+        .await
+        .unwrap_or_default();
     let (count, skipped) = portage_binpkg::index_pkgdir(&pkgdir, &chost)?;
     println!(
         "emaint binhost: indexed {} package(s){} -> {}/Packages",

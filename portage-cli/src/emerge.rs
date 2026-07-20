@@ -311,7 +311,7 @@ async fn emerge_atoms_inner(
             cli.depgraph_flags.newuse,
             cli.depgraph_flags.changed_use,
         ));
-    let binpkg_index = binpkg::open_local_index_for_preview(cli, merge_flags);
+    let binpkg_index = binpkg::open_local_index_for_preview(cli, merge_flags).await;
     let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
         repo_path,
         atoms: &atoms,

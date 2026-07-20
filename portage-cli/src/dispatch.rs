@@ -97,7 +97,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Maint { command } => run_maint(command, globals),
+        Applet::Maint { command } => run_maint(command, globals).await,
         Applet::Portageq { command, args } => {
             eprintln!("portageq: command={} args={:?}", command, args);
             bail!("not implemented: portageq")
@@ -147,6 +147,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
                     )?,
                 },
             )
+            .await
         }
         Applet::Mirror { args } => {
             eprintln!("mirror: args={:?}", args);
@@ -210,12 +211,12 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
     }
 }
 
-fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result<()> {
+async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result<()> {
     match command {
         None => bail!("not implemented: emaint (no subcommand)"),
         Some(MaintCommand::All) => bail!("not implemented: emaint all"),
-        Some(MaintCommand::Binhost) => maint::binhost::run(globals),
-        Some(MaintCommand::Binpkg { action }) => maint::binpkg::run(action, globals),
+        Some(MaintCommand::Binhost) => maint::binhost::run(globals).await,
+        Some(MaintCommand::Binpkg { action }) => maint::binpkg::run(action, globals).await,
         Some(MaintCommand::Cleanconfmem) => bail!("not implemented: emaint cleanconfmem"),
         Some(MaintCommand::Cleanresume) => bail!("not implemented: emaint cleanresume"),
         Some(MaintCommand::Logs) => bail!("not implemented: emaint logs"),
@@ -293,7 +294,8 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             // See `DepgraphOpts::host_merge_root`: `Cli::broot()` stays
             // overlay-aware under `--target` substitution, unlike `roots`.
             let host_roots = globals.broot();
-            let binpkg_index = binpkg::open_local_index_for_preview(globals, &globals.merge_flags);
+            let binpkg_index =
+                binpkg::open_local_index_for_preview(globals, &globals.merge_flags).await;
             let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
                 repo_path,
                 atoms: &atoms,
