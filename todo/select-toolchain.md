@@ -1,11 +1,18 @@
 # `em select` — toolchain activation (gcc / binutils / linker / clang)
 
 STATUS: **activation mostly done** (cross + native `post_step`, `pkgconf`
-wrapper 2026-07-17). **Still open:** native same-arch `--root`/`--prefix`
-builds should prefer the ROOT’s own `<chost>-gcc` on `PATH` (build shell still
-gates CHOST-prefixed tools on `chost != cbuild`). See “Open: prefer ROOT
-toolchain on native offsets” near the end of the 2026-07-16 notes, and
-[[PENDING]] row 2 (2026-07-18 queue).
+wrapper 2026-07-17). **Still open, re-scoped 2026-07-20:** `--root` silently
+defaulting to the host's `gcc` on `PATH` is **correct as-is** (matches
+catalyst's seed-compiler model — not a bug, confirmed by the user directly).
+`--prefix` currently shares that exact same silent-default behavior (no code
+distinguishes the two flags — both are native, `CBUILD` defaults to `CHOST`,
+which unconditionally skips the only PATH-prepend/CC-set block that exists),
+but for `--prefix` that's the wrong default: the user should be able to tell
+`em select` to prefer the prefix's own built toolchain instead. No design or
+implementation exists yet for that choice — this is now a scoped design task,
+not a bug-hunt. See “Open: prefer ROOT toolchain on native offsets” near the
+end of the 2026-07-16 notes for the mechanism that's missing, and [[PENDING]]
+row 1 (2026-07-18 queue, re-scoped 2026-07-20).
 
 Consolidates the former `select-{compiler,binutils,linker,clang}.md`. These are
 the `eselect`/`*-config` workalikes that *activate* a built toolchain (write
