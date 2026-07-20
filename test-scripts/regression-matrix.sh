@@ -26,6 +26,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CROSSDEV_STAGES_DIR="${CROSSDEV_STAGES_DIR:-$HOME/Sources/crossdev-stages}"
 SANDBOX="${SANDBOX:-em-regression}"
 CROSS_TARGET="${CROSS_TARGET:-riscv64-unknown-linux-gnu}"
@@ -57,8 +58,8 @@ record() {
 }
 
 echo "Building em (release)..."
-cargo build --release --manifest-path "$SCRIPT_DIR/Cargo.toml" || { echo "em build failed"; exit 1; }
-EM_BIN="$SCRIPT_DIR/target/release/em"
+cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" || { echo "em build failed"; exit 1; }
+EM_BIN="$REPO_ROOT/target/release/em"
 
 echo "Ensuring sandbox '$SANDBOX' exists and is prepared..."
 if ! CS sandbox list 2>/dev/null | grep -q "^$SANDBOX "; then

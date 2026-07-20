@@ -1081,7 +1081,7 @@ blocked by the three independent findings above, tracked separately.
   the hard cycle, once the SCC/dual-root fixes made the failure legible
   instead of an opaque wall of unrelated-looking `DEPEND` entries.
 
-  **New**: `regression-matrix.sh` (repo root) automates this whole
+  **New**: `test-scripts/regression-matrix.sh` automates this whole
   cross-topology matrix (native `toolchain --setup`, `stages --stage1
   -p`, `crossdev --setup`) as a live regression check — plain `-p`
   checks alone would **not** have caught either of today's two real bugs

@@ -120,6 +120,11 @@ not as a gate that runs every time.
 
 #### `crossdev-stages` sandbox recipe
 
+See [`test-scripts/`](../test-scripts/README.md) for ready-to-run,
+self-contained scripts that automate this recipe end-to-end (build `em`,
+fresh sandbox, wire mounts, drive scenarios, tear down) — read on for the
+manual step-by-step this recipe follows, or if you're writing a new script.
+
 `../crossdev-stages` (`~/Sources/crossdev-stages`, a sibling Rust project)
 can spin up a clean, disposable stage3 rootfs in seconds — much faster than
 hand-rolling one, and it doesn't carry state from a previous test run the
