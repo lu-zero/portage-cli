@@ -253,8 +253,9 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
 
     // Group container files by (cpv, chost, build_env_key), each carrying its resolved build-id.
     // This allows multiple variants with different CHOST or build_env_key to coexist.
-    let mut by_identity: BTreeMap<(String, String, String), Vec<(u32, String, PathBuf)>> =
-        BTreeMap::new();
+    type Identity = (String, String, String);
+    type IdentityVariant = (u32, String, PathBuf);
+    let mut by_identity: BTreeMap<Identity, Vec<IdentityVariant>> = BTreeMap::new();
     for (rel, full) in &files {
         let meta = match crate::read_metadata(full) {
             Ok(m) => m,

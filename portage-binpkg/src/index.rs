@@ -567,12 +567,12 @@ fn filter_rust_abi_flags(flags: &str) -> String {
             let rest = rest.trim_start_matches('=');
             if rest.is_empty() {
                 // Split form: `-C` `target-cpu=…`
-                if let Some(next) = toks.get(i + 1) {
-                    if is_rust_abi_codegen(next) {
-                        out.push(format!("-C {next}"));
-                        i += 2;
-                        continue;
-                    }
+                if let Some(next) = toks.get(i + 1)
+                    && is_rust_abi_codegen(next)
+                {
+                    out.push(format!("-C {next}"));
+                    i += 2;
+                    continue;
                 }
                 i += 1;
                 continue;
