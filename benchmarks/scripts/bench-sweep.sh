@@ -16,7 +16,7 @@
 # Usage: bench-sweep.sh [options]
 #   -o, --output DIR       output directory (default: ./bench-results/<timestamp>)
 #   -n, --dry-run          print commands without executing
-#   --configs LIST         comma-separated configs (default: papaya-default,papaya-mimalloc,lasso-default,lasso-mimalloc,symbol-table-default,symbol-table-mimalloc)
+#   --configs LIST         comma-separated configs (default: symbol-table-default,symbol-table-mimalloc)
 #   --no-criterion         skip criterion benchmarks
 #   --no-regen             skip regen wall-clock
 #   --no-search            skip search wall-clock
@@ -37,7 +37,7 @@ PKGCRAFT_ROOT=$(cd "$PROJ_ROOT/../pkgcraft" 2>/dev/null && pwd || echo "")
 
 OUTPUT=""
 DRY_RUN=0
-CONFIGS="papaya-default,papaya-mimalloc,lasso-default,lasso-mimalloc,symbol-table-default,symbol-table-mimalloc"
+CONFIGS="symbol-table-default,symbol-table-mimalloc"
 NO_CRITERION=0
 NO_REGEN=0
 NO_SEARCH=0
