@@ -51,8 +51,10 @@ enum PhaseGroup {
     /// `-f`/`--fetchonly`: resolve `SRC_URI` under the plan's USE and download
     /// distfiles into DISTDIR. No unpack/build/install — mirrors emerge's
     /// `EbuildFetcher` short-circuit (no phase shell beyond what's needed
-    /// for SRC_URI + RESTRICT=fetch / `pkg_nofetch`).
-    FetchOnly,
+    /// for SRC_URI + RESTRICT=fetch / `pkg_nofetch`). `all_uri` is
+    /// `-F`/`--fetch-all-uri`: every `SRC_URI` entry regardless of USE,
+    /// instead of just what the plan's own USE selection asks for.
+    FetchOnly { all_uri: bool },
     /// Debug (`em ebuild`): run the given phases only; no clean/drop/buildpkg.
     Debug(Vec<String>),
 }
@@ -110,7 +112,7 @@ impl PhaseGroup {
             .collect(),
             // `run_fetch` sources the ebuild when needed and reads SRC_URI/USE
             // from the live shell — no pretend/setup required for download.
-            Self::FetchOnly => vec!["fetch".to_string()],
+            Self::FetchOnly { .. } => vec!["fetch".to_string()],
             Self::Debug(p) => p.clone(),
         }
     }
@@ -146,7 +148,7 @@ impl PhaseGroup {
             }
             Self::Install => Some(&["image", "homedir"]),
             // FetchOnly only needs DISTDIR; no build tree to scrub.
-            Self::FetchOnly | Self::Debug(_) => None,
+            Self::FetchOnly { .. } | Self::Debug(_) => None,
         }
     }
 
@@ -355,6 +357,9 @@ pub async fn build_and_merge(
     buildpkgonly: bool,
     // `-f`/`--fetchonly`: download distfiles only (wins over `-b`/`-B`).
     fetchonly: bool,
+    // `-F`/`--fetch-all-uri`: like `fetchonly`, but ignores USE conditionals
+    // when resolving SRC_URI (every entry, not just what's USE-selected).
+    fetch_all_uri: bool,
 ) -> Result<()> {
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
@@ -363,12 +368,15 @@ pub async fn build_and_merge(
 
     // Fetch-only short-circuit (emerge `EbuildBuild` when opts.fetchonly): no
     // privilege worker, no compile, no qmerge. Checked before `-B` so `-fB`
-    // still only fetches.
-    if fetchonly {
+    // still only fetches. `-F` implies the same short-circuit, just with a
+    // different SRC_URI resolution mode inside `run_fetch`.
+    if fetchonly || fetch_all_uri {
         return run_inner(
             ebuild_path.as_str(),
             Some(cpv),
-            &PhaseGroup::FetchOnly,
+            &PhaseGroup::FetchOnly {
+                all_uri: fetch_all_uri,
+            },
             Some(&work_dir),
             None,
             root,
@@ -914,6 +922,7 @@ async fn run_inner(
         }
     }
 
+    let fetch_all_uri = matches!(group, PhaseGroup::FetchOnly { all_uri: true });
     let phases = group.phases();
     for phase in &phases {
         // In the merge chain, src_test only runs under FEATURES=test
@@ -937,7 +946,16 @@ async fn run_inner(
             (true, Some(wd), "merge" | "qmerge") => lock_merge_flock(wd).await,
             _ => None,
         };
-        run_one_phase(&mut shell, &ebuild, &repo, phase, &work_root, root).await?;
+        run_one_phase(
+            &mut shell,
+            &ebuild,
+            &repo,
+            phase,
+            &work_root,
+            root,
+            fetch_all_uri,
+        )
+        .await?;
         drop(_merge_flock);
         drop(_merge_guard);
 
@@ -1268,6 +1286,7 @@ fn post_process_after_install(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_one_phase(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
@@ -1275,9 +1294,10 @@ async fn run_one_phase(
     phase: &str,
     work_root: &Utf8Path,
     root: &Utf8Path,
+    fetch_all_uri: bool,
 ) -> Result<()> {
     match phase {
-        "fetch" => run_fetch(shell, ebuild, repo, work_root).await,
+        "fetch" => run_fetch(shell, ebuild, repo, work_root, fetch_all_uri).await,
         "clean" => run_clean(work_root),
         "merge" | "qmerge" => run_merge(shell, ebuild, work_root, root).await,
         _ => shell
@@ -1292,6 +1312,8 @@ async fn run_fetch(
     ebuild: &Ebuild,
     repo: &Repository,
     work_root: &Utf8Path,
+    // `-F`/`--fetch-all-uri`: resolve every SRC_URI entry regardless of USE.
+    fetch_all_uri: bool,
 ) -> Result<()> {
     // Read SRC_URI from the live shell. In a merge run the ebuild is already
     // sourced (the `pretend` phase ran first), so avoid re-sourcing here: doing
@@ -1330,7 +1352,11 @@ async fn run_fetch(
 
     let gentoo_mirrors = gentoo_mirrors_list();
     let resolver = DistfileResolver::from_repo(repo, gentoo_mirrors).context("loading mirrors")?;
-    let distfiles = resolver.resolve(&entries, &use_flags);
+    let distfiles = if fetch_all_uri {
+        resolver.resolve_all(&entries)
+    } else {
+        resolver.resolve(&entries, &use_flags)
+    };
 
     if distfiles.is_empty() {
         println!("fetch: nothing to fetch");

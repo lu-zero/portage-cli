@@ -97,6 +97,7 @@ fn merge_merge_flags_with(globals: &Cli, args: &MergeFlags, force_buildpkg: bool
         autounmask_write: args.autounmask_write || g.autounmask_write,
         oneshot: args.oneshot || g.oneshot,
         fetchonly: args.fetchonly || g.fetchonly,
+        fetch_all_uri: args.fetch_all_uri || g.fetch_all_uri,
         buildpkg: force_buildpkg || args.buildpkg || g.buildpkg,
         buildpkgonly: args.buildpkgonly || g.buildpkgonly,
         usepkg: args.usepkg || g.usepkg,

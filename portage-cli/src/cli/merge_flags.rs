@@ -61,6 +61,11 @@ pub struct MergeFlags {
     #[arg(short = 'f', long)]
     pub fetchonly: bool,
 
+    /// Instead of building, just fetch every SRC_URI file (regardless of
+    /// USE setting) for the resolved packages.
+    #[arg(short = 'F', long)]
+    pub fetch_all_uri: bool,
+
     /// Build binary packages for all merged packages.
     #[arg(short = 'b', long)]
     pub buildpkg: bool,

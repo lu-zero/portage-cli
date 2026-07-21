@@ -124,7 +124,11 @@ pub(crate) async fn run_merge_plan(
     let jobs = merge_flags.jobs.map(|j| j as usize).unwrap_or(1).max(1);
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
-    let fetchonly = merge_flags.fetchonly;
+    // `-F`/`--fetch-all-uri` is fetch-only too (just a different SRC_URI
+    // resolution mode inside the fetch phase — see `merge_flags.fetch_all_uri`'s
+    // own doc comment); every top-level "did anything actually get merged"
+    // gate below treats the two identically.
+    let fetchonly = merge_flags.fetchonly || merge_flags.fetch_all_uri;
     let usepkg = merge_flags.usepkg;
     let getbinpkg = merge_flags.getbinpkg;
     let getbinpkgonly = merge_flags.getbinpkgonly;
@@ -406,6 +410,7 @@ async fn act_on_package(
     buildpkg: bool,
     buildpkgonly: bool,
     fetchonly: bool,
+    fetch_all_uri: bool,
     // The local index for *this entry's* PKGDIR — host or target, already
     // chosen by the caller (`entry_binpkg_index`) — not necessarily the
     // plan-wide target index.
@@ -453,7 +458,7 @@ async fn act_on_package(
         self_contained_bootstrap,
     };
 
-    if fetchonly {
+    if fetchonly || fetch_all_uri {
         // Local binpkg already present → nothing to download.
         if let Some(binpkg_path) = reused {
             println!(
@@ -484,7 +489,8 @@ async fn act_on_package(
             merge_gate,
             false,
             false,
-            true,
+            fetchonly,
+            fetch_all_uri,
         )
         .await;
     }
@@ -540,6 +546,7 @@ async fn act_on_package(
                     buildpkg,
                     buildpkgonly,
                     false,
+                    false,
                 )
                 .await
             }
@@ -559,6 +566,7 @@ async fn act_on_package(
             merge_gate,
             buildpkg,
             buildpkgonly,
+            false,
             false,
         )
         .await
@@ -590,6 +598,7 @@ async fn merge_sequential(
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
     let fetchonly = merge_flags.fetchonly;
+    let fetch_all_uri = merge_flags.fetch_all_uri;
 
     let total = plan.len();
     let mut merged = 0usize;
@@ -630,7 +639,11 @@ async fn merge_sequential(
             continue;
         }
 
-        let action = if fetchonly { "Fetching" } else { "Emerging" };
+        let action = if fetchonly || fetch_all_uri {
+            "Fetching"
+        } else {
+            "Emerging"
+        };
         println!("\n>>> {action} ({} of {total}) {}", i + 1, planned.cpv);
         let result = act_on_package(
             planned,
@@ -645,6 +658,7 @@ async fn merge_sequential(
             buildpkg,
             buildpkgonly,
             fetchonly,
+            fetch_all_uri,
             entry_index,
             remote_indices,
             enforce_no_source,
@@ -668,13 +682,18 @@ async fn merge_sequential(
                 // moment it was needed). `-B`/`-f` installed nothing to refresh.
                 if !buildpkgonly
                     && !fetchonly
+                    && !fetch_all_uri
                     && let Err(e) = maint::env::env_update(merge_root)
                 {
                     eprintln!("warning: env-update failed: {e:#}");
                 }
             }
             Err(e) => {
-                let fail_verb = if fetchonly { "fetch" } else { "emerge" };
+                let fail_verb = if fetchonly || fetch_all_uri {
+                    "fetch"
+                } else {
+                    "emerge"
+                };
                 eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
                 failures.push(MergeFailure {
                     cpv: planned.cpv.to_string(),
@@ -796,6 +815,7 @@ async fn merge_parallel(
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
     let fetchonly = merge_flags.fetchonly;
+    let fetch_all_uri = merge_flags.fetch_all_uri;
 
     let total = plan.len();
     let merge_gate = tokio::sync::Mutex::new(());
@@ -837,7 +857,11 @@ async fn merge_parallel(
                 continue;
             }
             started += 1;
-            let action = if fetchonly { "Fetching" } else { "Emerging" };
+            let action = if fetchonly || fetch_all_uri {
+                "Fetching"
+            } else {
+                "Emerging"
+            };
             println!(
                 ">>> {action} ({started} of {total}) {} [+{} in flight]",
                 planned.cpv,
@@ -861,6 +885,7 @@ async fn merge_parallel(
                     buildpkg,
                     buildpkgonly,
                     fetchonly,
+                    fetch_all_uri,
                     entry_index,
                     remote_indices,
                     enforce_no_source,
@@ -886,13 +911,18 @@ async fn merge_parallel(
                 let merge_root = entry_roots(&plan[i], roots, host_roots).merge_root();
                 if !buildpkgonly
                     && !fetchonly
+                    && !fetch_all_uri
                     && let Err(e) = maint::env::env_update(merge_root)
                 {
                     eprintln!("warning: env-update failed: {e:#}");
                 }
             }
             Err(e) => {
-                let fail_verb = if fetchonly { "fetch" } else { "emerge" };
+                let fail_verb = if fetchonly || fetch_all_uri {
+                    "fetch"
+                } else {
+                    "emerge"
+                };
                 eprintln!(">>> Failed to {fail_verb} {} — {e:#}", plan[i].cpv);
                 failures.push(MergeFailure {
                     cpv: plan[i].cpv.to_string(),

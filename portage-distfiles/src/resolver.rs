@@ -80,7 +80,19 @@ impl DistfileResolver {
     pub fn resolve(&self, entries: &[SrcUriEntry], use_flags: &HashSet<String>) -> Vec<Distfile> {
         let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
         collect_uri_pairs(entries, use_flags, &mut raw);
+        self.build_distfiles(raw)
+    }
 
+    /// Resolve every `SRC_URI` entry regardless of USE conditionals —
+    /// `-F`/`--fetch-all-uri`: fetch everything an ebuild could ever need,
+    /// not just what the current USE selection asks for.
+    pub fn resolve_all(&self, entries: &[SrcUriEntry]) -> Vec<Distfile> {
+        let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
+        collect_uri_pairs_all(entries, &mut raw);
+        self.build_distfiles(raw)
+    }
+
+    fn build_distfiles(&self, raw: Vec<(String, String, Option<String>)>) -> Vec<Distfile> {
         raw.into_iter()
             .map(|(url, filename, restriction)| {
                 // Portage tries GENTOO_MIRRORS *before* the upstream SRC_URI URLs
@@ -224,6 +236,33 @@ fn collect_uri_pairs(
     }
 }
 
+/// Same as [`collect_uri_pairs`], but descends into every `UseConditional`
+/// branch unconditionally instead of gating on `use_flags` — the union of
+/// what every USE setting could ever request.
+fn collect_uri_pairs_all(entries: &[SrcUriEntry], out: &mut Vec<(String, String, Option<String>)>) {
+    for entry in entries {
+        match entry {
+            SrcUriEntry::Uri {
+                url,
+                filename,
+                restriction,
+            } => {
+                out.push((url.clone(), filename.clone(), restriction.clone()));
+            }
+            SrcUriEntry::Renamed {
+                url,
+                target,
+                restriction,
+            } => {
+                out.push((url.clone(), target.clone(), restriction.clone()));
+            }
+            SrcUriEntry::UseConditional { entries, .. } | SrcUriEntry::Group(entries) => {
+                collect_uri_pairs_all(entries, out);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,5 +343,32 @@ mod tests {
             dfs[0].urls,
             ["https://mirrors.kde.org/stable/frameworks/foo.tar.xz"]
         );
+    }
+
+    #[test]
+    fn resolve_skips_a_use_conditional_uri_when_the_flag_is_off() {
+        let r = resolver(&[]);
+        let entries = SrcUriEntry::parse(
+            "https://example.com/base.tar.gz doc? ( https://example.com/doc.tar.gz )",
+        )
+        .unwrap();
+        let dfs = r.resolve(&entries, &HashSet::new());
+        let names: Vec<&str> = dfs.iter().map(|d| d.filename.as_str()).collect();
+        assert_eq!(names, ["base.tar.gz"]);
+    }
+
+    #[test]
+    fn resolve_all_ignores_use_conditionals_entirely() {
+        // -F/--fetch-all-uri: every SRC_URI entry, regardless of USE — neither
+        // an active nor an inactive flag gates it, unlike `resolve`.
+        let r = resolver(&[]);
+        let entries = SrcUriEntry::parse(
+            "https://example.com/base.tar.gz doc? ( https://example.com/doc.tar.gz ) !static? ( https://example.com/dyn.tar.gz )",
+        )
+        .unwrap();
+        let dfs = r.resolve_all(&entries);
+        let mut names: Vec<&str> = dfs.iter().map(|d| d.filename.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["base.tar.gz", "doc.tar.gz", "dyn.tar.gz"]);
     }
 }
