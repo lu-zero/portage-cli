@@ -16,29 +16,33 @@ pub(crate) fn read_to_string(path: impl AsRef<Path>) -> Result<String> {
     std::fs::read_to_string(path).map_err(|e| io_err(path, e))
 }
 
+/// Portage's `_recursive_basename_filter` (`portage/util/__init__.py`): a
+/// config directory's entry is data only if its basename does not start with
+/// `.` (dotfiles) and does not end with `~` (editor backups).
+fn config_basename_included(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| !n.starts_with('.') && !n.ends_with('~'))
+}
+
 /// Read non-blank, non-comment lines from a file.
 ///
 /// Lines starting with `#` (after trimming) are treated as comments.
 /// Returns an empty `Vec` if the file does not exist.
-pub(crate) fn read_lines(path: impl AsRef<Path>) -> Result<Vec<String>> {
+pub fn read_lines(path: impl AsRef<Path>) -> Result<Vec<String>> {
     let path = path.as_ref();
     // PMS 5.2.4: a profile configuration file may instead be a *directory*, in
     // which case the regular files directly within it are concatenated, sorted
-    // by filename, with dotfiles skipped. Portage's `/etc/portage/profile`
-    // commonly uses this form (e.g. `package.use.mask/<name>`).
+    // by filename. Portage additionally skips dotfiles and `~` editor backups
+    // (`_recursive_basename_filter`). Portage's `/etc/portage/profile` commonly
+    // uses this form (e.g. `package.use.mask/<name>`).
     match std::fs::metadata(path) {
         Ok(m) if m.is_dir() => {
             let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(path)
                 .map_err(|e| io_err(path, e))?
                 .filter_map(std::result::Result::ok)
                 .map(|e| e.path())
-                .filter(|p| {
-                    p.is_file()
-                        && !p
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .is_some_and(|n| n.starts_with('.'))
-                })
+                .filter(|p| p.is_file() && config_basename_included(p))
                 .collect();
             entries.sort();
             let mut out = Vec::new();
@@ -119,6 +123,8 @@ mod tests {
         std::fs::write(sub.join("20-b"), "bravo\n# c\ncharlie\n").unwrap();
         std::fs::write(sub.join("10-a"), "alpha\n").unwrap();
         std::fs::write(sub.join(".hidden"), "ignored\n").unwrap();
+        // `~` editor backups are skipped too (portage `_recursive_basename_filter`).
+        std::fs::write(sub.join("30-a~"), "backup\n").unwrap();
         std::fs::create_dir(sub.join("nested")).unwrap();
 
         let lines = read_lines(&sub).unwrap();

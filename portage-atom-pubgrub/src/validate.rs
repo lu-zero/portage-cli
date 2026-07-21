@@ -38,7 +38,7 @@ impl PortageDependencyProvider {
     /// - `[flag]` — target's flag must be enabled
     /// - `[-flag]` — target's flag must be disabled
     /// - `[flag?]` — if parent's flag is ON, target's flag must be ON
-    /// - `[!flag?]` — if parent's flag is OFF, target's flag must be ON
+    /// - `[!flag?]` — if parent's flag is OFF, target's flag must be OFF
     /// - `[flag=]` — target's flag must match parent's flag state
     /// - `[!flag=]` — target's flag must be opposite of parent's flag state
     ///
@@ -98,8 +98,11 @@ impl PortageDependencyProvider {
                             }
                         }
                         UseDepKind::ConditionalInverse => {
+                            // PMS 8.2.6.4: `foo[!bar?]` = `bar? ( foo ) !bar? ( foo[-bar] )`.
+                            // Parent flag OFF ⇒ the `!bar?` branch requires the target's
+                            // flag be *disabled* (`foo[-bar]`), not enabled.
                             if parent_flag_state == UseFlagState::Disabled {
-                                target_flag_state == UseFlagState::Enabled
+                                target_flag_state == UseFlagState::Disabled
                             } else {
                                 true
                             }
@@ -1045,6 +1048,58 @@ mod tests {
         assert!(
             errors.is_empty(),
             "[ssl?] with parent ssl=OFF should be unconstrained"
+        );
+    }
+
+    #[test]
+    fn check_use_deps_conditional_inverse_parent_off_requires_target_off() {
+        // PMS 8.2.6.4: `openssl[!ssl?]` = `ssl? ( openssl ) !ssl? ( openssl[-ssl] )`.
+        // With the parent's `ssl` OFF, the `!ssl?` branch requires the target's
+        // `ssl` be *disabled*. Target `ssl` is off (undeclared ⇒ default off), so
+        // the constraint is satisfied — no error. The pre-fix code inverted this
+        // (demanded target `ssl` ON), so it wrongly reported a conflict here.
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+
+        repo.add_version(
+            portage_atom::Cpv::parse("dev-libs/openssl-3.0.0").unwrap(),
+            None,
+            None,
+            empty(),
+        );
+        repo.add_version(
+            portage_atom::Cpv::parse("app-misc/myapp-1.0").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (DepEntry::parse("dev-libs/openssl[!ssl?]").unwrap()).into(),
+                rdepend: (vec![]).into(),
+                bdepend: (vec![]).into(),
+                pdepend: (vec![]).into(),
+                idepend: (vec![]).into(),
+            },
+        );
+
+        let use_config = UseConfig::new();
+
+        let mut provider = {
+            repo.set_use_config(use_config.clone());
+            PortageDependencyProvider::new(repo)
+        };
+        let myapp = PortagePackage::unslotted(Cpn::parse("app-misc/myapp").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(myapp, PortageVersionSet::any())])
+            .unwrap();
+        let errors = provider.check_use_deps(&solution, &use_config);
+        assert!(
+            errors.is_empty(),
+            "[!ssl?] with parent ssl=OFF and target ssl=OFF should be satisfied (require target -ssl), got {errors:?}"
         );
     }
 

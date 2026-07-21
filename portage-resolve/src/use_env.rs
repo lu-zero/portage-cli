@@ -319,43 +319,18 @@ fn effective_accept_keywords(
 /// a directory (children summed in lexical order). Tokens stay verbatim —
 /// USE_EXPAND `KEY:` groups are expanded later by [`expand_use_expand_colon`].
 fn load_package_use(path: &str) -> Vec<(Dep, Vec<String>)> {
-    let p = std::path::Path::new(path);
-    if !p.exists() {
-        return Vec::new();
-    }
-    let files: Vec<_> = if p.is_dir() {
-        let mut v: Vec<_> = std::fs::read_dir(p)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file())
-            .collect();
-        v.sort();
-        v
-    } else {
-        vec![p.to_path_buf()]
-    };
     let mut result = Vec::new();
-    for file in files {
-        let Ok(content) = std::fs::read_to_string(&file) else {
+    for line in portage_repo::read_config_lines(path).unwrap_or_default() {
+        let mut parts = line.split_whitespace();
+        let Some(atom_str) = parts.next() else {
             continue;
         };
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let mut parts = line.split_whitespace();
-            let Some(atom_str) = parts.next() else {
-                continue;
-            };
-            let Ok(dep) = Dep::parse(atom_str) else {
-                continue;
-            };
-            let flags: Vec<String> = parts.map(str::to_string).collect();
-            if !flags.is_empty() {
-                result.push((dep, flags));
-            }
+        let Ok(dep) = Dep::parse(atom_str) else {
+            continue;
+        };
+        let flags: Vec<String> = parts.map(str::to_string).collect();
+        if !flags.is_empty() {
+            result.push((dep, flags));
         }
     }
     result
@@ -463,42 +438,17 @@ fn expand_use_expand_colon(
 /// tokens) is *kept* with an empty token list — portage reads it as "accept
 /// this package's `~arch`" (expanded once the host arch is known).
 fn load_package_keywords(path: &str) -> Vec<(Dep, Vec<AcceptToken>)> {
-    let p = std::path::Path::new(path);
-    if !p.exists() {
-        return Vec::new();
-    }
-    let files: Vec<_> = if p.is_dir() {
-        let mut v: Vec<_> = std::fs::read_dir(p)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file())
-            .collect();
-        v.sort();
-        v
-    } else {
-        vec![p.to_path_buf()]
-    };
     let mut result = Vec::new();
-    for file in files {
-        let Ok(content) = std::fs::read_to_string(&file) else {
+    for line in portage_repo::read_config_lines(path).unwrap_or_default() {
+        let mut parts = line.split_whitespace();
+        let Some(atom_str) = parts.next() else {
             continue;
         };
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let mut parts = line.split_whitespace();
-            let Some(atom_str) = parts.next() else {
-                continue;
-            };
-            let Ok(dep) = Dep::parse(atom_str) else {
-                continue;
-            };
-            let tokens: Vec<AcceptToken> = parts.filter_map(AcceptToken::parse).collect();
-            result.push((dep, tokens));
-        }
+        let Ok(dep) = Dep::parse(atom_str) else {
+            continue;
+        };
+        let tokens: Vec<AcceptToken> = parts.filter_map(AcceptToken::parse).collect();
+        result.push((dep, tokens));
     }
     result
 }
@@ -508,81 +458,31 @@ fn load_package_keywords(path: &str) -> Vec<(Dep, Vec<AcceptToken>)> {
 /// expanded against `groups` into a per-package [`AcceptLicense`] overlay now,
 /// so resolution never re-parses them.
 fn load_package_license(path: &str, groups: &LicenseGroupRegistry) -> Vec<(Dep, AcceptLicense)> {
-    let p = std::path::Path::new(path);
-    if !p.exists() {
-        return Vec::new();
-    }
-    let files: Vec<_> = if p.is_dir() {
-        let mut v: Vec<_> = std::fs::read_dir(p)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file())
-            .collect();
-        v.sort();
-        v
-    } else {
-        vec![p.to_path_buf()]
-    };
     let mut result = Vec::new();
-    for file in files {
-        let Ok(content) = std::fs::read_to_string(&file) else {
+    for line in portage_repo::read_config_lines(path).unwrap_or_default() {
+        let mut parts = line.split_whitespace();
+        let Some(atom_str) = parts.next() else {
             continue;
         };
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let mut parts = line.split_whitespace();
-            let Some(atom_str) = parts.next() else {
-                continue;
-            };
-            let Ok(dep) = Dep::parse(atom_str) else {
-                continue;
-            };
-            let tokens: Vec<String> = parts.map(String::from).collect();
-            result.push((dep, AcceptLicense::from_tokens(&tokens, groups)));
-        }
+        let Ok(dep) = Dep::parse(atom_str) else {
+            continue;
+        };
+        let tokens: Vec<String> = parts.map(String::from).collect();
+        result.push((dep, AcceptLicense::from_tokens(&tokens, groups)));
     }
     result
 }
 
 /// Load a simple atom list (one dep per line, `#` comments, optionally a directory).
 fn load_dep_list(path: &str) -> Vec<Dep> {
-    let p = std::path::Path::new(path);
-    if !p.exists() {
-        return Vec::new();
-    }
-    let files: Vec<_> = if p.is_dir() {
-        let mut v: Vec<_> = std::fs::read_dir(p)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file())
-            .collect();
-        v.sort();
-        v
-    } else {
-        vec![p.to_path_buf()]
-    };
     let mut result = Vec::new();
-    for file in files {
-        let Ok(content) = std::fs::read_to_string(&file) else {
+    for line in portage_repo::read_config_lines(path).unwrap_or_default() {
+        // Strip leading '-' for incremental removal entries — skip removals here
+        if line.starts_with('-') {
             continue;
-        };
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            // Strip leading '-' for incremental removal entries — skip removals here
-            if line.starts_with('-') {
-                continue;
-            }
-            if let Ok(dep) = Dep::parse(line) {
-                result.push(dep);
-            }
+        }
+        if let Ok(dep) = Dep::parse(&line) {
+            result.push(dep);
         }
     }
     result
@@ -590,7 +490,9 @@ fn load_dep_list(path: &str) -> Vec<Dep> {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_use_expand_colon, load_package_env_use};
+    use super::{
+        expand_use_expand_colon, load_package_env_use, load_package_keywords, load_package_use,
+    };
     use portage_atom::Dep;
     use portage_atom_pubgrub::UseOverride;
 
@@ -733,5 +635,46 @@ mod tests {
         let none = |_: &str| Vec::new();
         let out = expand_use_expand_colon(&["nls".into(), "-debug".into()], &keys, &none);
         assert_eq!(out, vec![ov("nls"), ov("-debug")]);
+    }
+
+    /// PMS 5.2.4 dir-form: a `/etc/portage/package.use` *directory*'s regular
+    /// files are concatenated in filename order — and, matching real portage's
+    /// `_recursive_basename_filter`, dotfiles and `~` editor backups are skipped.
+    /// Before the shared-`read_config_lines` fix these loaders read every regular
+    /// file, so a stray `.swp`/`foo~` that happened to parse as `atom flag` leaked
+    /// in as real data that real portage ignores.
+    #[test]
+    fn package_use_dir_skips_dotfiles_and_backups() {
+        let td = tempfile::TempDir::new().unwrap();
+        let dir = td.path().join("package.use");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("10-a"), "dev-libs/a first\n").unwrap();
+        std::fs::write(dir.join("20-b"), "# c\ndev-libs/b second\n").unwrap();
+        // Both must be ignored the way real portage ignores them.
+        std::fs::write(dir.join(".hidden"), "dev-libs/hidden ghost\n").unwrap();
+        std::fs::write(dir.join("30-b~"), "dev-libs/backup ghost\n").unwrap();
+
+        let out = load_package_use(dir.to_str().unwrap());
+        let atoms: Vec<_> = out.iter().map(|(d, _)| d.to_string()).collect();
+        assert_eq!(atoms, vec!["dev-libs/a", "dev-libs/b"]);
+        // Filename order preserved across the concatenation.
+        assert_eq!(out[0].1, vec!["first".to_string()]);
+        assert_eq!(out[1].1, vec!["second".to_string()]);
+    }
+
+    /// The same dir-form dotfile/backup skip must hold for the keyword reader,
+    /// which shares the reader but keeps bare atoms (empty token list).
+    #[test]
+    fn package_keywords_dir_skips_dotfiles_and_backups() {
+        let td = tempfile::TempDir::new().unwrap();
+        let dir = td.path().join("package.accept_keywords");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("10-a"), "dev-libs/a ~amd64\n").unwrap();
+        std::fs::write(dir.join(".hidden"), "dev-libs/hidden ~amd64\n").unwrap();
+        std::fs::write(dir.join("20-a~"), "dev-libs/backup ~amd64\n").unwrap();
+
+        let out = load_package_keywords(dir.to_str().unwrap());
+        let atoms: Vec<_> = out.iter().map(|(d, _)| d.to_string()).collect();
+        assert_eq!(atoms, vec!["dev-libs/a"]);
     }
 }
