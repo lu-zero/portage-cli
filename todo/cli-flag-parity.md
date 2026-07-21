@@ -1,9 +1,9 @@
 # Short-flag parity with real `emerge`
 
-STATUS: **core short flags landed** (`-C`/`-B`/`-c`/`-1`/`-uD`/`-N`/`-U`);
-remaining: `-P` prune, `-r` resume, `-W` deselect, `-F` fetch-all-uri, plus
-**`-f`/`--fetchonly` behaviour** (flag present, merge path incomplete).
-See [[PENDING]] 2026-07-18 queue rows 5–6.
+STATUS: **core short flags landed** (`-C`/`-B`/`-c`/`-1`/`-uD`/`-N`/`-U`),
+plus **`-P`/`-W`/`-F` landed 2026-07-21**; remaining: `-r`/`--resume` (needs
+new persisted-plan state — see below, not started). See [[PENDING]]
+2026-07-18 queue rows 5–6.
 
 2026-07-17: quick survey of `man emerge`'s short options against `em`'s own
 `Cli`/`MergeFlags`/`DepgraphFlags` struct source (more reliable than a
@@ -69,20 +69,41 @@ first draft missed for `-C`).
 - **`-f`/`--fetchonly`** — ✅ done 2026-07-18: plan as usual, then download
   distfiles (or remote binpkgs under `-g`) only — no build/install/env-update/
   world write. `PhaseGroup::FetchOnly` + `act_on_package` short-circuit.
-- **`-P`/`--prune`** — companion to `--depclean` (remove all but the best
-  version of a match, ignoring deps entirely). `depclean.rs`'s machinery
-  (`compute_cleanlist`'s protected-set handling, `removal_order`) covers
-  most of what this needs now — likely a smaller follow-up than depclean
-  itself was, not investigated further yet.
-- **`-r`/`--resume`** — replay the last aborted/skipped merge list. Needs
-  `em` to persist a resumable plan somewhere between invocations; no such
-  state exists today.
-- **`-W`/`--deselect`** — remove atoms from the world file without
-  unmerging. `em`'s own `-w` short flag is already taken (`em ebuild`'s
-  `--work-dir` override), so this would need a different short form or
-  long-only, same reasoning as `--tree` losing its short form to `--target`.
-- **`-F`/`--fetch-all-uri`** — minor, fetch every SRC_URI including
-  unused-by-current-USE ones. Low priority.
+- **`-P`/`--prune`** — ✅ done 2026-07-21. Companion to `-C`/`--unmerge`
+  (not `--depclean`'s dependency-graph machinery, in the end): matches atoms
+  the same way `-C` does (`match_installed_atoms`, shared by both), then
+  drops each matched `Cpn`'s single highest version
+  (`drop_highest_version_per_cpn`) so only older versions are removal
+  candidates — real emerge's own "removes all but the highest installed
+  version" rule. Shares the whole preview/`--pretend`/`--ask`/preserve-libs/
+  removal/env-update sequence with `-C` via a new `remove_matched_packages`
+  core (`emerge.rs`) instead of duplicating it. No dependency graph, same
+  caveat as `-C`. Requires at least one atom (no bare "prune everything"
+  form, matching `-C`'s own requirement).
+- **`-W`/`--deselect`** — ✅ done 2026-07-21. World-file-only removal, no
+  unmerge, no dependency graph, no shell/build setup at all —
+  `maint::world::remove_atoms` (new, mirrors `add_atoms`'s replace-by-`Cpn`
+  matching) takes plain atoms or `@set` names and drops matching world-file
+  lines; a token matching nothing is a silent no-op (matches real emerge).
+  `-W` was free at the top level (no flag collision, unlike the module's
+  earlier guess about `-w`/`--work-dir` — that's `em ebuild`'s own
+  subcommand-scoped flag, a different clap::Args group, no clash).
+- **`-F`/`--fetch-all-uri`** — ✅ done 2026-07-21. Unlike every other merge
+  flag so far, this one changes behavior *inside* the fetch phase itself
+  (which `SRC_URI` entries count), not just which phases run — so it needed
+  to reach `run_fetch` (`ebuild.rs`), the deepest point in the call chain
+  (`MergeFlags::fetch_all_uri` → `act_on_package` → `build_and_merge` →
+  `PhaseGroup::FetchOnly { all_uri }` → `run_inner` → `run_one_phase` →
+  `run_fetch`). New `DistfileResolver::resolve_all` (`portage-distfiles`)
+  descends every `UseConditional` branch unconditionally instead of gating
+  on live USE. Treated identically to `-f` at every "did we actually
+  install anything" gate (pkgdir-writable preflight, env-update, done/fail
+  messaging) — real `-F` never builds either.
+- **`-r`/`--resume`** — still not started. Replay the last aborted/skipped
+  merge list. Needs `em` to persist a resumable plan somewhere between
+  invocations; no such state exists today — a genuinely bigger design task
+  than the other three turned out to be, not just a smaller depclean-style
+  follow-up.
 
 None of these were asked for beyond the `-C`/`-B` pair; listed here so a
 future "what's next" survey doesn't have to re-derive the man-page diff from
