@@ -3,6 +3,7 @@ pub mod binpkg;
 pub mod env;
 pub mod moveinst;
 pub mod regen_use;
+pub mod resume;
 pub mod revisions;
 pub mod sets;
 pub mod world;

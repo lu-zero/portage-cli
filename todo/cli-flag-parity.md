@@ -1,9 +1,8 @@
 # Short-flag parity with real `emerge`
 
-STATUS: **core short flags landed** (`-C`/`-B`/`-c`/`-1`/`-uD`/`-N`/`-U`),
-plus **`-P`/`-W`/`-F` landed 2026-07-21**; remaining: `-r`/`--resume` (needs
-new persisted-plan state — see below, not started). See [[PENDING]]
-2026-07-18 queue rows 5–6.
+STATUS: **all short-flag-parity items landed** — `-C`/`-B`/`-c`/`-1`/`-uD`/
+`-N`/`-U`/`-P`/`-W`/`-F` (all 2026-07-21 or earlier), plus **`-r`/`--resume`
+landed 2026-07-22**. See [[PENDING]] 2026-07-18 queue rows 5–6.
 
 2026-07-17: quick survey of `man emerge`'s short options against `em`'s own
 `Cli`/`MergeFlags`/`DepgraphFlags` struct source (more reliable than a
@@ -99,11 +98,63 @@ first draft missed for `-C`).
   on live USE. Treated identically to `-f` at every "did we actually
   install anything" gate (pkgdir-writable preflight, env-update, done/fail
   messaging) — real `-F` never builds either.
-- **`-r`/`--resume`** — still not started. Replay the last aborted/skipped
-  merge list. Needs `em` to persist a resumable plan somewhere between
-  invocations; no such state exists today — a genuinely bigger design task
-  than the other three turned out to be, not just a smaller depclean-style
-  follow-up.
+- **`-r`/`--resume`** — ✅ done 2026-07-22. Studied real portage's own
+  mechanism (`portage/util/mtimedb.py`, `_emerge/actions.py`,
+  `_emerge/Scheduler.py`) rather than guessing, then deliberately
+  simplified: portage persists a fully-resolved, pinned `mergelist`
+  (`[pkg_type, pkg_root, cpv, action]`), pruned entry-by-entry as packages
+  complete. `em` instead persists just enough to **replay the invocation**
+  — the raw atoms (pre-`@set`-expansion) and the effective merge/depgraph
+  flags (`maint::resume::ResumeState`, `<root>/var/cache/edb/em-resume.json`
+  — same directory real portage's own `mtimedb` lives in, distinct
+  filename/shape, never touches portage's actual file) — and re-resolves
+  fresh on `-r`. Already-merged packages are skipped for free by the
+  existing VDB-presence check in `merge::merge_sequential`/`merge_parallel`,
+  so there's no pinned-list staleness to manage, and a changed repo between
+  runs self-heals instead of needing portage's own `resume_depgraph`
+  re-validation machinery.
+
+  One level of backup, matching portage's `resume`/`resume_backup` pair:
+  starting a *new* (non-`-r`) top-level merge while a `resume` entry is
+  still pending backs it up first (`maint::resume::save`'s `is_resume`
+  flag), so running an unrelated command doesn't silently discard an
+  interrupted job; `-r` consults `resume` first, falling back to (and
+  promoting) `resume_backup` otherwise. `em maint cleanresume` — a CLI stub
+  that already existed (`MaintCommand::Cleanresume`,
+  `dispatch.rs`) waiting for exactly this — reports occupied slots and,
+  with `--fix`, clears both (real portage's own `emaint cleanresume`
+  equivalent).
+
+  **Scope decision: no `--skipfirst`.** Real emerge's `--skipfirst` needs
+  the first-failed cpv reported back structurally from `run_merge_plan`
+  (currently a formatted `bail!`, no caller-visible failure list) —
+  deferred as a separate, smaller follow-up if ever needed. A stuck package
+  can already be skipped manually via `-X`/`--exclude` on the resumed
+  invocation (`em -r -X stuck/atom`), which covers the practical use case.
+
+  **Found and fixed live-testing this**: `-X`/`--exclude` was itself a
+  dead flag — parsed and merged between flag sources
+  (`crossdev::merge_merge_flags_fields`) but never actually read anywhere
+  in resolution (same class of bug as the earlier `-K` fix). Fixed by
+  adding `exclude: &'a [String]` to `DepgraphOpts` and filtering `order`
+  (`query/depgraph/mod.rs`) against the parsed exclude atoms right after
+  it's finalized — before *any* consumer (the `-p`/`--tree`/`--json`
+  preview, and the final `PlannedMerge` merge-loop plan) is built from it,
+  so every display and the actual merge agree, not just the merge itself.
+  Deliberately a post-solve filter, not integrated into the pubgrub solve:
+  if an excluded package is a genuine hard dependency of something else
+  still in the plan, that other package's own preflight/build fails with a
+  clear missing-dependency error instead of the solver reporting the
+  conflict up front the way real portage's own backtracking can. Live
+  sandbox-verified: `-p -X` no longer shows the excluded package, `-r -X`
+  correctly merges only the non-excluded remainder and clears resume.
+
+  The current invocation's own merge/depgraph flags win over the persisted
+  ones where set (`em -r --keep-going`), reusing the exact same
+  "args-over-base" precedence `crossdev::merge_merge_flags_with` already
+  used for subcommand-vs-global flags — factored into pure
+  `merge_merge_flags_fields`/`merge_depgraph_flags_fields` helpers so both
+  call sites share one implementation.
 
 None of these were asked for beyond the `-C`/`-B` pair; listed here so a
 future "what's next" survey doesn't have to re-derive the man-page diff from

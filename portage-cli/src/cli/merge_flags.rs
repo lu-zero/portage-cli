@@ -29,7 +29,8 @@
 //! flattened copy might set them — so a flag given *after* the subcommand
 //! silently had no effect even where clap did accept it. See
 //! `todo/stage-build-shakeout.md`.
-#[derive(clap::Args, Debug, Clone, Default)]
+#[derive(clap::Args, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MergeFlags {
     /// Ask for confirmation before performing actions.
     ///

@@ -115,6 +115,14 @@ pub struct Cli {
     #[arg(short = 'W', long)]
     pub deselect: bool,
 
+    /// Resume the last saved merge (see `em maint cleanresume` to discard
+    /// it instead). Atoms are not accepted together with this flag — the
+    /// package list comes from the saved state. Combine with other flags
+    /// (e.g. `-r --keep-going`, `-r -X stuck/atom`) to adjust the resumed
+    /// run.
+    #[arg(short = 'r', long)]
+    pub resume: bool,
+
     #[command(flatten)]
     pub merge_flags: MergeFlags,
 
@@ -1076,7 +1084,12 @@ pub enum MaintCommand {
     #[command(about = "Discard stale config tracker entries")]
     Cleanconfmem,
     #[command(about = "Discard saved resume lists")]
-    Cleanresume,
+    Cleanresume {
+        /// Actually delete the saved resume/resume-backup lists (default:
+        /// just report what's there).
+        #[arg(short, long)]
+        fix: bool,
+    },
     #[command(about = "Clean old Portage build logs")]
     Logs,
     #[command(about = "Scan for and fix failed merges")]

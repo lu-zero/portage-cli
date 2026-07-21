@@ -3,7 +3,8 @@
 use clap::Args;
 
 /// Flags related to dependency graph resolution that can be used by multiple commands.
-#[derive(Args, Debug, Clone, Default)]
+#[derive(Args, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DepgraphFlags {
     /// Re-examine transitive dependencies. With `--update` (`-uD`), upgrades
     /// installed packages in the depgraph to the newest accepted in-slot

@@ -20,9 +20,12 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
         Some(applet) => run_applet(applet, cli).await,
         None => {
             // `-c`/`--depclean` with no atoms is its primary mode ("clean
-            // everything unreachable from @world"), unlike every other bare
-            // invocation, which needs at least one atom to act on.
-            if cli.atoms.is_empty() && !cli.depclean {
+            // everything unreachable from @world"); `-r`/`--resume` takes
+            // its package list from the saved state, never the command
+            // line — both are legitimate bare (no-atom) invocations, unlike
+            // every other bare invocation, which needs at least one atom to
+            // act on.
+            if cli.atoms.is_empty() && !cli.depclean && !cli.resume {
                 eprintln!("em: no atoms or applet specified. Use --help for usage.");
                 std::process::exit(1);
             }
@@ -218,7 +221,23 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
         Some(MaintCommand::Binhost) => maint::binhost::run(globals).await,
         Some(MaintCommand::Binpkg { action }) => maint::binpkg::run(action, globals).await,
         Some(MaintCommand::Cleanconfmem) => bail!("not implemented: emaint cleanconfmem"),
-        Some(MaintCommand::Cleanresume) => bail!("not implemented: emaint cleanresume"),
+        Some(MaintCommand::Cleanresume { fix }) => {
+            let roots = globals.roots();
+            let report = maint::resume::cleanresume(roots.merge_root(), *fix)?;
+            if report.is_empty() {
+                println!("No saved resume lists.");
+            } else {
+                for msg in &report {
+                    println!("{msg}");
+                }
+                if *fix {
+                    println!("Cleared saved resume list(s).");
+                } else {
+                    println!("Run with --fix to discard them.");
+                }
+            }
+            Ok(())
+        }
         Some(MaintCommand::Logs) => bail!("not implemented: emaint logs"),
         Some(MaintCommand::Merges) => bail!("not implemented: emaint merges"),
         Some(MaintCommand::Movebin) => bail!("not implemented: emaint movebin"),
@@ -321,6 +340,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 nodeps: globals.nodeps,
                 extra_use_override: None,
                 binpkg_index: binpkg_index.as_ref(),
+                exclude: &globals.merge_flags.exclude,
             })
             .await?;
             if outcome.exit_code != 0 {

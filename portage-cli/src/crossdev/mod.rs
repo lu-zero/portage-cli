@@ -69,10 +69,21 @@ use target::CrossTarget;
 /// args taking precedence — so `--deep`/`--newuse` work whether given before
 /// or after the subcommand name.
 fn merge_depgraph_flags(globals: &Cli, args: &DepgraphFlags) -> DepgraphFlags {
+    merge_depgraph_flags_fields(&globals.depgraph_flags, args)
+}
+
+/// Pure field-merge core of [`merge_depgraph_flags`], `over` taking
+/// precedence over `base` — factored out so `-r`/`--resume` (`emerge.rs`)
+/// can merge a *persisted* set of flags with the current invocation's own,
+/// not just a subcommand's with the top-level `Cli`.
+pub(crate) fn merge_depgraph_flags_fields(
+    base: &DepgraphFlags,
+    over: &DepgraphFlags,
+) -> DepgraphFlags {
     DepgraphFlags {
-        deep: args.deep || globals.depgraph_flags.deep,
-        newuse: args.newuse || globals.depgraph_flags.newuse,
-        changed_use: args.changed_use || globals.depgraph_flags.changed_use,
+        deep: over.deep || base.deep,
+        newuse: over.newuse || base.newuse,
+        changed_use: over.changed_use || base.changed_use,
     }
 }
 
@@ -90,38 +101,48 @@ fn merge_merge_flags(globals: &Cli, args: &MergeFlags) -> MergeFlags {
 /// neither position passed it — used by `em stages` so each stage run seeds
 /// PKGDIR for the next (catalyst/crossdev-stages model).
 fn merge_merge_flags_with(globals: &Cli, args: &MergeFlags, force_buildpkg: bool) -> MergeFlags {
-    let g = &globals.merge_flags;
+    let mut merged = merge_merge_flags_fields(&globals.merge_flags, args);
+    if force_buildpkg {
+        merged.buildpkg = true;
+    }
+    merged
+}
+
+/// Pure field-merge core of [`merge_merge_flags_with`], `over` taking
+/// precedence over `base` — see [`merge_depgraph_flags_fields`]'s doc for
+/// why this is factored out separately from the `&Cli`-shaped wrapper.
+pub(crate) fn merge_merge_flags_fields(base: &MergeFlags, over: &MergeFlags) -> MergeFlags {
     MergeFlags {
-        ask: args.ask || g.ask,
-        update: args.update || g.update,
-        autounmask_write: args.autounmask_write || g.autounmask_write,
-        oneshot: args.oneshot || g.oneshot,
-        fetchonly: args.fetchonly || g.fetchonly,
-        fetch_all_uri: args.fetch_all_uri || g.fetch_all_uri,
-        buildpkg: force_buildpkg || args.buildpkg || g.buildpkg,
-        buildpkgonly: args.buildpkgonly || g.buildpkgonly,
-        usepkg: args.usepkg || g.usepkg,
-        usepkgonly: args.usepkgonly || g.usepkgonly,
-        getbinpkg: args.getbinpkg || g.getbinpkg,
-        getbinpkgonly: args.getbinpkgonly || g.getbinpkgonly,
-        emptytree: args.emptytree || g.emptytree,
-        tree: args.tree || g.tree,
-        json: args.json || g.json,
-        onlydeps: args.onlydeps || g.onlydeps,
-        noreplace: args.noreplace || g.noreplace,
-        jobs: args.jobs.or(g.jobs),
-        load_average: args.load_average.or(g.load_average),
-        keep_going: args.keep_going || g.keep_going,
-        autounmask: args.autounmask || g.autounmask,
-        autosolve_use: args.autosolve_use || g.autosolve_use,
-        complete_graph: args.complete_graph || g.complete_graph,
-        with_bdeps: args.with_bdeps || g.with_bdeps,
-        exclude: if args.exclude.is_empty() {
-            g.exclude.clone()
+        ask: over.ask || base.ask,
+        update: over.update || base.update,
+        autounmask_write: over.autounmask_write || base.autounmask_write,
+        oneshot: over.oneshot || base.oneshot,
+        fetchonly: over.fetchonly || base.fetchonly,
+        fetch_all_uri: over.fetch_all_uri || base.fetch_all_uri,
+        buildpkg: over.buildpkg || base.buildpkg,
+        buildpkgonly: over.buildpkgonly || base.buildpkgonly,
+        usepkg: over.usepkg || base.usepkg,
+        usepkgonly: over.usepkgonly || base.usepkgonly,
+        getbinpkg: over.getbinpkg || base.getbinpkg,
+        getbinpkgonly: over.getbinpkgonly || base.getbinpkgonly,
+        emptytree: over.emptytree || base.emptytree,
+        tree: over.tree || base.tree,
+        json: over.json || base.json,
+        onlydeps: over.onlydeps || base.onlydeps,
+        noreplace: over.noreplace || base.noreplace,
+        jobs: over.jobs.or(base.jobs),
+        load_average: over.load_average.or(base.load_average),
+        keep_going: over.keep_going || base.keep_going,
+        autounmask: over.autounmask || base.autounmask,
+        autosolve_use: over.autosolve_use || base.autosolve_use,
+        complete_graph: over.complete_graph || base.complete_graph,
+        with_bdeps: over.with_bdeps || base.with_bdeps,
+        exclude: if over.exclude.is_empty() {
+            base.exclude.clone()
         } else {
-            args.exclude.clone()
+            over.exclude.clone()
         },
-        root_deps: args.root_deps || g.root_deps,
+        root_deps: over.root_deps || base.root_deps,
     }
 }
 
@@ -376,6 +397,7 @@ async fn run_staged(
                 // Internal staged-build step, not a user package
                 // selection — must not pollute the world file.
                 update_world: false,
+                is_resume: false,
             },
         )
         .await?;
@@ -744,6 +766,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         nodeps: true,
         extra_use_override: None,
         binpkg_index: None,
+        exclude: &[],
     })
     .await
     .ok()?;

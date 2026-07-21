@@ -154,6 +154,19 @@ pub struct DepgraphOpts<'a> {
     /// See `output::PrettyCtx::binpkg_index`'s doc — passed straight through
     /// to the `Pretty` printer so `-p` can show `[binary ...]`.
     pub binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
+    /// `-X`/`--exclude`: package atoms to never install (emerge's own
+    /// wording — "won't install any ebuild or binary package that matches
+    /// any of the given atoms"). Applied as a post-solve filter on `order`
+    /// (see the filter site below), before *any* consumer — the `-p`/
+    /// `--tree`/`--json` preview and the final `PlannedMerge` merge-loop
+    /// plan alike — is built from it, so every display and the actual merge
+    /// agree. Not integrated into the pubgrub solve itself: a deliberate,
+    /// documented simplification — if an excluded package is a genuine hard
+    /// dependency of something else still in the plan, that other
+    /// package's own preflight/build will fail with a clear
+    /// missing-dependency error rather than the solver reporting the
+    /// conflict up front the way real portage's backtracking search can.
+    pub exclude: &'a [String],
 }
 
 pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome> {
@@ -179,7 +192,18 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         host_merge_root,
         extra_use_override,
         binpkg_index,
+        exclude,
     } = opts;
+    let exclude_atoms: Vec<Dep> = exclude
+        .iter()
+        .filter_map(|s| match Dep::parse(s) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("warning: skipping invalid --exclude atom '{s}': {e}");
+                None
+            }
+        })
+        .collect();
     let cross = root_aware::detect(roots, host_merge_root);
     let config_root = roots.config();
     let host_config_stage = cross.active && cross.sysroot.as_str() != cross.target.as_str();
@@ -784,6 +808,19 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         order.extend(to_reinstall);
     }
 
+    // `-X`/`--exclude` (see `DepgraphOpts::exclude`'s doc): drop matching
+    // packages from `order` itself, before any display path (Pretty/JSON/
+    // Tree) or the final `PlannedMerge` list is built from it — so every
+    // consumer agrees on what will actually happen, not just the merge loop.
+    if !exclude_atoms.is_empty() {
+        order.retain(|(pkg, ver)| {
+            let cpv = Cpv::new(*pkg.cpn(), ver.clone());
+            let slot = pkg.slot();
+            let slot = slot.as_ref().map(|s| s.as_str());
+            !exclude_atoms.iter().any(|d| d.matches_cpv(&cpv, slot))
+        });
+    }
+
     // Cross-arch host-config stage: pretend output lists target ROOT merges only
     // (emerge -p). A native offset instead keeps the Host build-dep merges (the
     // host-side installs needed to build the target packages), matching emerge.
@@ -990,6 +1027,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         installed_cpvs: solver_installed_cpvs,
         autosolve_use: false,
     };
+    // `order` is already exclude-filtered above, so `plan_entries` (and the
+    // Pretty/JSON/Tree preview built from it) inherit the exclusion for free.
     let plan_entries = root_aware::build_plan(order.clone());
 
     match format {

@@ -137,6 +137,12 @@ pub(crate) struct EmergeOpts<'a> {
     /// (crossdev/stages) are not a user package selection and must not
     /// pollute the world file.
     pub update_world: bool,
+    /// This call is itself replaying a previous `-r`/`--resume` — see
+    /// `maint::resume::save`'s doc: a resumed run's own resume-state save
+    /// must not supersede-with-backup (same logical job, not a new one).
+    /// Only ever `true` from [`resume_atoms`]; every other call site is a
+    /// fresh invocation.
+    pub is_resume: bool,
 }
 
 /// Resolve and (unless `--pretend`) merge `raw_atoms` with the global config in
@@ -155,6 +161,7 @@ struct ResolvedEmergeOpts {
     target_only_installed_view: bool,
     extra_use_override: Option<String>,
     update_world: bool,
+    is_resume: bool,
 }
 
 pub(crate) async fn emerge_atoms(
@@ -179,6 +186,7 @@ pub(crate) async fn emerge_atoms(
             target_only_installed_view: opts.target_only_installed_view,
             extra_use_override,
             update_world: opts.update_world,
+            is_resume: opts.is_resume,
         },
     )
     .await
@@ -197,6 +205,7 @@ async fn emerge_atoms_inner(
         target_only_installed_view,
         extra_use_override,
         update_world,
+        is_resume,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
     let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
@@ -334,6 +343,7 @@ async fn emerge_atoms_inner(
         nodeps,
         extra_use_override,
         binpkg_index: binpkg_index.as_ref(),
+        exclude: &merge_flags.exclude,
     })
     .await?;
 
@@ -396,6 +406,31 @@ async fn emerge_atoms_inner(
         return Ok(());
     }
 
+    // Persist enough to replay this invocation via `-r`/`--resume` if it
+    // gets interrupted or fails — only for the genuine top-level user
+    // selection (`update_world`, same gate the world-file write below
+    // uses), never for an internal staged-build step. Saved *after* the
+    // pretend/ask early-returns above, so a declined or previewed run
+    // never touches this. See `maint::resume`'s module doc for why this
+    // persists the invocation (atoms + flags) rather than a pinned package
+    // list the way real portage's own `mtimedb["resume"]` does.
+    if update_world {
+        maint::resume::save(
+            roots.merge_root(),
+            maint::resume::ResumeState {
+                atoms: raw_atoms.to_vec(),
+                merge_flags: merge_flags.clone(),
+                depgraph_flags: cli::DepgraphFlags {
+                    deep: depgraph_flags.0,
+                    newuse: depgraph_flags.1,
+                    changed_use: depgraph_flags.2,
+                },
+                nodeps,
+            },
+            is_resume,
+        )?;
+    }
+
     run_merge_plan(
         &outcome.plan,
         &outcome.build_blockers,
@@ -407,12 +442,20 @@ async fn emerge_atoms_inner(
     )
     .await?;
 
+    if update_world {
+        maint::resume::clear(roots.merge_root());
+    }
     maint::world::add_atoms(Some(roots.merge_root()), &world_atoms);
     Ok(())
 }
 
 /// Run the default emerge path for a parsed CLI invocation.
 pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
+    // emerge -r/--resume: replaces the whole action, same precedence real
+    // emerge gives it (checked first, ahead of every other action flag).
+    if cli.resume {
+        return resume_atoms(cli).await;
+    }
     // emerge -C: remove the matching installed packages directly, no
     // dependency graph at all. Checked first: -C together with -s/-S makes
     // no sense, and real emerge treats -C as its own action too.
@@ -447,6 +490,48 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             bypass_cross_root: false,
             target_only_installed_view: false,
             update_world: true,
+            is_resume: false,
+        },
+    )
+    .await
+}
+
+/// `-r`/`--resume`: replay the last saved merge (`maint::resume`). Atoms are
+/// not accepted alongside this flag — the package list comes from the saved
+/// state, matching real emerge (`--resume`'s favorites/mergelist come only
+/// from `mtimedb`, never the command line). The *current* invocation's own
+/// `--merge`/`--depgraph` flags (e.g. `-r --keep-going`, `-r -X stuck/atom`)
+/// win over the persisted ones where set, via the same "args over base"
+/// precedence `crossdev::merge_merge_flags_with` already uses for
+/// subcommand-vs-global flags.
+async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
+    if !cli.atoms.is_empty() {
+        bail!("-r/--resume replays the last saved merge; atoms are not accepted together with it");
+    }
+
+    let roots = cli.roots();
+    let Some(state) = maint::resume::take_for_resume(roots.merge_root())? else {
+        bail!("-r/--resume: nothing to resume");
+    };
+
+    let merge_flags =
+        crate::crossdev::merge_merge_flags_fields(&state.merge_flags, &cli.merge_flags);
+    let depgraph_flags =
+        crate::crossdev::merge_depgraph_flags_fields(&state.depgraph_flags, &cli.depgraph_flags);
+    let nodeps = state.nodeps || cli.nodeps;
+
+    emerge_atoms(
+        cli,
+        &state.atoms,
+        EmergeOpts {
+            use_override: &[],
+            nodeps,
+            depgraph_flags: Some(depgraph_flags),
+            merge_flags: Some(merge_flags),
+            bypass_cross_root: false,
+            target_only_installed_view: false,
+            update_world: true,
+            is_resume: true,
         },
     )
     .await
