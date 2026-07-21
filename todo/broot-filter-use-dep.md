@@ -6,6 +6,16 @@ STATUS: FIXED 2026-06-18. `broot_filter` is now atom-USE-dep-aware: a
 edge is kept (rebuild). `em -p app-office/libreoffice` went from **3 under-pulls
 → 0 diffs** vs emerge; the full parity basket is `RESULT: parity OK`.
 
+**Cross-reference (2026-07-22):** this fix's `host_satisfied_on_broot` reuses
+`eval_violated_use_dep` (see the Fix section below), which had a real inverted
+`[!flag?]`-semantics bug fixed only on 2026-07-21 ([[parser-audit]] item 5).
+Between 2026-06-18 and 2026-07-21, a BDEPEND/IDEPEND edge using the `[!flag?]`
+conditional-inverse form specifically (not the plain `[flag]`/`[flag(+)]` forms
+this file's own regression tests exercise) could have gotten the wrong
+host-satisfied verdict. No specific incident traced to this — noted here only
+so a future investigation into a stale-verdict bug in this area knows the
+shared function's history.
+
 ## Bug
 
 `em -p app-office/libreoffice` under-pulled 3 packages vs emerge:

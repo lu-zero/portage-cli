@@ -24,7 +24,7 @@ this table is the triage index.
 | **1** | **`--prefix` should let `em select` choose host vs. prefix's own toolchain** — verified 2026-07-20 still open (both `--root`/`--prefix` silently default to host `gcc` on `PATH`, since `CBUILD` defaults to `CHOST` for any native build, unconditionally skipping the only PATH-prepend/CC-set code that exists). **`--root` defaulting to host is correct as-is** (matches catalyst's seed-compiler model, not a bug); the open piece is scoped to `--prefix` only: no choice is exposed anywhere today, needs a design for how `em select` persists "prefer this prefix's own toolchain" per-prefix and how `init_build_env` consults it | 🔴 design needed | [[select-toolchain]] |
 | **2** | **CLI short-flag remnants** — all landed: `-P`/`-W`/`-F` 2026-07-21, `-r`/`--resume` + `em maint cleanresume` 2026-07-22 | ✅ | [[cli-flag-parity]] |
 | **3** | **Binhost polish** — GPG verify/sign still open; **URI BASE_URI, auto-reindex, stages default `-b`, CHOST reuse gate** done 2026-07-18 | 🟡 | [[em-stages-and-binhosts]]; binhosts section below |
-| **4** | **Parser audit** — incremental `-*`, package.*, sets, USE-deps, md5-cache faithfulness | 🔴 | [[parser-audit]] |
+| **4** | **Parser audit** — full pass complete 2026-07-21; 2 real bugs found+fixed (inverted `!flag?` USE-dep, package.* dir dotfile leak), rest confirmed correct/documented | ✅ 2026-07-21 | [[parser-audit]] |
 | **5** | **`package.env` USE in the resolver** — build-env slice ✅; USE from env files now folded at plan time too | ✅ 2026-07-20 | [[package-env]] |
 | **6** | **Blocker Tier-1** — detect/report ✅; auto-unmerge **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
 
@@ -1090,10 +1090,13 @@ blocked by the three independent findings above, tracked separately.
   against its specific expected signature (gdbm still orders after
   elt-patches; only known cycle members remain unsatisfied), not treated
   as a plain pass/fail.
-- 🔴 **Parser audit pass** — review the recent burst of parser work (incremental
-  `-*`, package.use/license/accept_keywords, @set expansion, USE-dep eval, IUSE
-  defaults, make.conf sourcing, md5-cache) for PMS/portage faithfulness.
-  [[parser-audit]]
+- ✅ **Parser audit pass — full pass complete 2026-07-21.** All 8 items
+  (incremental `-*`, package.use/license/accept_keywords, @set expansion,
+  USE-dep eval, IUSE defaults, make.conf sourcing, md5-cache) checked
+  against the real Portage reference source. 2 real bugs found+fixed
+  (inverted `!flag?` USE-dep semantics, package.* dir dotfile/backup
+  leak); the rest confirmed correct or documented as known low-severity
+  divergences. [[parser-audit]]
 - 🔴 clang linker config (Option B, `gentoo-linker.cfg`). [[select-toolchain]]
 - See also [[nonemptytree-bdeps-gap]], [[em-emptytree]], [[build-clean-env]],
   [[crossdev-target]], [[cross-support-self-review]] for older open threads.
