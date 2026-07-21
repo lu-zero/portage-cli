@@ -1,16 +1,36 @@
 # Parser audit pass
 
-STATUS: 🟢 **item 7 (top finding) fixed 2026-07-20.** `FEATURES`/
-`ACCEPT_KEYWORDS`/`ACCEPT_LICENSE`/`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/
-`IUSE_IMPLICIT` are now in the `incr` list in both `ProfileStack::profile_env`
-and `source_incremental` (`portage-repo/src/build/profile.rs`), merged with
-the existing unsigned `merge_flag_lists` — same mechanical fix Fable's report
-sketched. New regression test
-`make_conf_merges_features_without_interpolation` covers the actual
-real-world gap (a plain `FEATURES="candy ccache"` in make.conf, no `${FEATURES}`
-interpolation): confirmed it fails without the fix (profile's
-`test-fail-continue` silently dropped) and passes with it. Remaining items
-(1-6, 8) are lower-severity/not yet triaged — see the report below.
+STATUS: 🟢 **FULL PASS COMPLETE 2026-07-21.** All 8 items audited against the
+real Portage reference source (`/usr/lib/python3.13/site-packages/portage/`),
+not memory. Three real bugs found and fixed with fail-first regression tests;
+the rest confirmed correct or documented as known low-severity divergences.
+
+Fix summary (each its own commit):
+- **Item 7** (top finding, 2026-07-20, `78550ca`): `FEATURES`/`ACCEPT_*`/
+  `CONFIG_PROTECT*`/`IUSE_IMPLICIT` added to the `incr` list in both
+  `ProfileStack::profile_env` and `source_incremental`
+  (`portage-repo/src/build/profile.rs`). Test
+  `make_conf_merges_features_without_interpolation`.
+- **Item 5** (`ee6fc15`): **inverted `!flag?` USE-dep semantics** — a genuine
+  correctness bug Fable's earlier read had marked "correct". PMS 8.2.6.4:
+  `foo[!bar?]` = `bar? ( foo ) !bar? ( foo[-bar] )`, so parent-flag-OFF requires
+  the *target* flag **disabled**, not enabled. Both evaluators had it inverted
+  (`check_use_deps` in `validate.rs` and `eval_violated_use_dep` in
+  `post_solve.rs`). Verified against portage's own
+  `_use_dep.evaluate_conditionals` `!?` branch. Tests
+  `check_use_deps_conditional_inverse_parent_off_requires_target_off` and
+  `eval_violated_use_dep_matches_pms_table` (full six-form table).
+- **Item 2** (`0bcdafa`): the four `/etc/portage/package.*` dir readers in
+  `portage-resolve/src/use_env.rs` skipped only `is_file()`, leaking dotfiles
+  and `~` editor backups that real portage's `_recursive_basename_filter`
+  ignores. Exposed the profile stack's directory reader as
+  `portage_repo::read_config_lines` (extended to also skip `~`), reused it in
+  all four loaders (removing the third duplicate walk). Tests
+  `package_use_dir_skips_dotfiles_and_backups`,
+  `package_keywords_dir_skips_dotfiles_and_backups`.
+
+Clean / documented (no fix needed): items 1, 3, 4, 6, 8 — see per-item notes
+below. Full test/clippy/fmt suite green after the pass.
 
 Was row 4/8 on the 2026-07-18 next-pending queue ([[PENDING]]). Full report
 below, verbatim from the audit agent (one path citation corrected:
@@ -106,7 +126,13 @@ Scope covered: the 8 numbered items plus the 3 brush shell parser/printer notes 
 
 ### 1. Incremental `-*` clear-all (USE / ACCEPT_LICENSE / ACCEPT_KEYWORDS / USE_EXPAND colon form)
 
-**Confirmed correct**, and unusually thoroughly tested. The core fold lives in two intentionally-duplicated (documented, reviewed) copies of `merge_flag_lists_signed`: `portage-solver/src/use_config.rs:265` and `portage-repo/src/repo/profile.rs:727`. Both correctly implement "`-*` clears everything accumulated so far in this call's own group order," preserve explicit `-flag` disables so they can later override a `+flag` IUSE default, and thread a leading `-*` marker forward when the result feeds a further fold (`ResolvedUse::pre_env`/`env_use` in `portage-repo/src/build/profile.rs:273`).
+> **UPDATE 2026-07-21 (full-pass): re-verified, confirmed correct — existing tests green.**
+> Re-read both `merge_flag_lists_signed` copies and `expand_use_expand_colon`;
+> the "`-*` clears everything accumulated so far in group order, then rebuild"
+> rule and the `pkginternal < defaults/conf < pkg < env` precedence hold. All the
+> cited `-*`/USE_EXPAND unit tests pass in the full-workspace run.
+
+**[Fable's original assessment]** Confirmed correct, and unusually thoroughly tested. The core fold lives in two intentionally-duplicated (documented, reviewed) copies of `merge_flag_lists_signed`: `portage-solver/src/use_config.rs:265` and `portage-repo/src/repo/profile.rs:727`. Both correctly implement "`-*` clears everything accumulated so far in this call's own group order," preserve explicit `-flag` disables so they can later override a `+flag` IUSE default, and thread a leading `-*` marker forward when the result feeds a further fold (`ResolvedUse::pre_env`/`env_use` in `portage-repo/src/build/profile.rs:273`).
 
 The `pkginternal < defaults/conf < pkg < env` layer order (`resolve_effective_use` in `portage-solver/src/use_config.rs:190`) is live-verified against real `emerge` per its own doc comment (`package.use` survives a `make.conf`-level `-*` but not an env-level one; a `+`-defaulted IUSE flag is wiped by either). `expand_use_expand_colon` (`portage-resolve/src/use_env.rs:357`) correctly implements the `L10N: -* en` clear-then-rebuild rule, gated on the token actually being a known `USE_EXPAND` key.
 
@@ -114,7 +140,18 @@ The `pkginternal < defaults/conf < pkg < env` layer order (`resolve_effective_us
 
 ### 2. `package.use` / `package.license` / `package.accept_keywords` — profile stack + `/etc/portage`
 
-**Confirmed divergent** (concrete, narrow-impact). There are two independent directory-reading implementations in this codebase:
+> **UPDATE 2026-07-21 (full-pass): FIXED in `0bcdafa`.** Exposed the profile
+> stack's directory reader as `portage_repo::read_config_lines` (extended to
+> also skip `~` backups, fully matching portage's `_recursive_basename_filter`
+> which skips both `.`-prefixed and `~`-suffixed) and reused it in all four
+> `use_env.rs` loaders — closing the dotfile gap and eliminating the third
+> hand-rolled directory walk in the process. Fail-first regression tests added.
+> Not changed: em (like the pre-existing profile reader) does **not** recurse
+> into subdirectories the way portage's `_recursive_file_list` does — PMS 5.2.4
+> mandates only the directory's files, so the non-recursive behavior is
+> PMS-faithful and shared by both readers; left as-is.
+
+**[Fable's original finding]** Confirmed divergent (concrete, narrow-impact). There are two independent directory-reading implementations in this codebase:
 
 - The profile stack's canonical `read_lines` (`portage-repo/src/repo/util.rs:23`, used via `read_profile_file` in `profile.rs:786`) correctly implements PMS 5.2.4: sorts entries, **skips dotfiles**, tested explicitly (`read_lines_directory_concatenates_sorted_skipping_dotfiles`).
 - The `/etc/portage/package.*` readers — `load_package_use`, `load_package_keywords`, `load_package_license`, `load_dep_list`, all in `portage-resolve/src/use_env.rs` (lines 303, 403, 448, 490) — are hand-rolled duplicates that sort but **do not filter dotfiles** (`filter(|p| p.is_file())` only). This is a real function-name/no-reuse gap, not just style: `portage-repo`'s `read_lines` is `pub(crate)`, so `portage-resolve` literally cannot call it without it being exposed.
@@ -127,19 +164,58 @@ Per-package atom matching itself is otherwise **identical and correct** across a
 
 ### 3. `ACCEPT_LICENSE` `@GROUP` expansion (`license_groups`)
 
-**Confirmed correct.** `LicenseGroupRegistry::expand` (`portage-repo/src/repo/license_groups.rs:59`) is cycle-safe via the shared `expand_group` helper. `AcceptLicense::from_tokens` correctly implements `*` (allow-all), `-name`/`-@group` (deny), `-*` (clear-all, tested), and `@GROUP` expansion recursively through nested groups. `AcceptLicense::merge` correctly distinguishes an *additive* `package.license` overlay from one that itself contained `-*` (replaces rather than unions) — this exact case is tested (`package_license_clear_replaces_global_allow_all`) and matches the real-world need (`-* @FREE` restricting a global `*`). USE-conditional `LICENSE` expressions are evaluated against the package's actual effective USE, not walked blindly (`conditional_license_respects_use` test, guards against a real regression class: ffmpeg's `fdk? ( all-rights-reserved )` under a disabled `fdk`).
+> **UPDATE 2026-07-21 (full-pass): re-verified against `LicenseManager._expandLicenseToken`, confirmed correct.**
+> em's `AcceptLicense::from_tokens` matches portage's `_expandLicenseToken`
+> (`package/ebuild/_config/LicenseManager.py`): `@group` allows each member,
+> `-@group` negates (denies) each member, nested groups recurse, cycles are
+> broken via the shared `expand_group` visited-set. One benign edge difference:
+> portage warns-and-skips a `-`-prefixed member *inside* a group definition
+> (invalid data), whereas em would intern it as a never-matching literal license
+> — functionally identical (no real license is named `-foo`), fires only on
+> malformed `profiles/license_groups`. Not worth a fix.
+
+**[Fable's original assessment]** Confirmed correct. `LicenseGroupRegistry::expand` (`portage-repo/src/repo/license_groups.rs:59`) is cycle-safe via the shared `expand_group` helper. `AcceptLicense::from_tokens` correctly implements `*` (allow-all), `-name`/`-@group` (deny), `-*` (clear-all, tested), and `@GROUP` expansion recursively through nested groups. `AcceptLicense::merge` correctly distinguishes an *additive* `package.license` overlay from one that itself contained `-*` (replaces rather than unions) — this exact case is tested (`package_license_clear_replaces_global_allow_all`) and matches the real-world need (`-* @FREE` restricting a global `*`). USE-conditional `LICENSE` expressions are evaluated against the package's actual effective USE, not walked blindly (`conditional_license_respects_use` test, guards against a real regression class: ffmpeg's `fdk? ( all-rights-reserved )` under a disabled `fdk`).
 
 **Already covered by existing tests** — no further audit attention needed.
 
 ### 4. `@set` expansion (`@system`/`@world`/`@profile`/`@selected` + user sets)
 
-**Confirmed correct.** `SetResolver` (`portage-repo/src/repo/sets.rs`) correctly implements: `@system` = `*`-marked `packages` entries only (`ProfileStack::system_set`, `profile.rs:486`), `@profile` = every `packages` line, `@world` = `@selected ∪ @system`, `@selected` = `var/lib/portage/world` + `world_sets`. The `packages` accumulator (`profile.rs:461`) correctly folds `*cat/pkg` (system add), `-cat/pkg` (removal, matching regardless of whether the removed entry was system-marked — this exact form was found and fixed for the riscv profile's `-*sys-apps/busybox` case per the doc comment), and `-*` (full clear), ancestors-first. `sets.conf`'s `StaticFileSet` ini form is parsed correctly (`lookup_sets_conf`/`finish_static_file`). Nested `@set` references are cycle-safe (tested: `set_cycle_is_broken_not_errored`).
+> **UPDATE 2026-07-21 (full-pass): two low-severity divergences found, documented not fixed.**
+> Checked em's `SetResolver` against portage's shipped default
+> `/usr/share/portage/config/sets/portage.conf` and `_sets/ProfilePackageSet.py`
+> / `_sets/profiles.py`. Portage's real default `@world` is
+> `@profile @selected @system`, and its `@profile` (`ProfilePackageSet`) reads
+> only the *non-`*`* `packages` entries and *only* from profiles that opt into
+> the `profile-set` format (`profile_formats` in `layout.conf`). em's `@profile`
+> is every `packages` line and its `@world` is `@selected ∪ @system` (omitting
+> `@profile`). For every standard Gentoo profile these coincide exactly — no
+> shipped profile declares `profile-set`, so portage's `@profile` is empty and
+> `@world` collapses to `@selected ∪ @system` on both sides. The gap is only
+> observable under the niche `profile-set` format, which em does not model.
+> Recorded in `docs/architecture.md` § "Known divergences from emerge" rather
+> than fixed. Everything else below (system/selected/world folding, `*`/`-`/`-*`
+> accumulator, `sets.conf` ini, nested-ref cycle safety) confirmed correct.
+
+**[Fable's original assessment]** Confirmed correct. `SetResolver` (`portage-repo/src/repo/sets.rs`) correctly implements: `@system` = `*`-marked `packages` entries only (`ProfileStack::system_set`, `profile.rs:486`), `@profile` = every `packages` line, `@world` = `@selected ∪ @system`, `@selected` = `var/lib/portage/world` + `world_sets`. The `packages` accumulator (`profile.rs:461`) correctly folds `*cat/pkg` (system add), `-cat/pkg` (removal, matching regardless of whether the removed entry was system-marked — this exact form was found and fixed for the riscv profile's `-*sys-apps/busybox` case per the doc comment), and `-*` (full clear), ancestors-first. `sets.conf`'s `StaticFileSet` ini form is parsed correctly (`lookup_sets_conf`/`finish_static_file`). Nested `@set` references are cycle-safe (tested: `set_cycle_is_broken_not_errored`).
 
 **Already covered by existing tests** — no further audit needed.
 
 ### 5. USE-dep evaluation (`[flag?]`/`[flag=]`/`[flag]`)
 
-**Confirmed correct against PMS 8.2.6.4**, precisely matching the six-form table (`enabled`, `disabled`, `flag?`, `!flag?`, `flag=`, `!flag=`) in `portage-atom-pubgrub/src/validate.rs:47-109`. Cross-checked the exact semantics that are easy to invert: `Conditional` (`flag?`) only imposes a requirement when the **parent's** flag is enabled — checked, correct (not the target's). `ConditionalInverse` (`!flag?`) only imposes when the parent's flag is disabled — checked, correct. `Equal`/`EqualInverse` compare target-vs-parent state directly — correct. Undeclared-flag defaults (`flag(+)`/`flag(-)`) are resolved in `resolve_flag_state` (`validate.rs:413`) per PMS: fall back to the declared default, or `Disabled` if none given.
+> **UPDATE 2026-07-21 (full-pass): REAL BUG FOUND — `!flag?` was inverted, fixed in `ee6fc15`.**
+> Fable's original read below said "confirmed correct"; it was not. `foo[!bar?]`
+> per PMS 8.2.6.4 expands to `bar? ( foo ) !bar? ( foo[-bar] )` — when the
+> *parent's* `bar` is OFF, the *target's* `bar` must be **disabled**. Both
+> `check_use_deps` (`validate.rs`) and `eval_violated_use_dep`
+> (`provider/post_solve.rs`) required the target flag *enabled* instead
+> (parent-off/dep-off was wrongly reported as a conflict). Cross-checked against
+> portage's `_use_dep.evaluate_conditionals` (`dep/__init__.py`) `!?` branch,
+> which appends `-flag` when the flag is absent from the parent's USE. The other
+> five forms (`flag`, `-flag`, `flag?`, `flag=`, `!flag=`) were correct.
+> Regression tests added in both files (fail-first verified). The blocker
+> `Conditional`/`Equal` always-satisfied simplification noted below stands.
+
+**[Fable's original assessment, now superseded for `!flag?`]** Confirmed correct against PMS 8.2.6.4, precisely matching the six-form table (`enabled`, `disabled`, `flag?`, `!flag?`, `flag=`, `!flag=`) in `portage-atom-pubgrub/src/validate.rs:47-109`. Cross-checked the exact semantics that are easy to invert: `Conditional` (`flag?`) only imposes a requirement when the **parent's** flag is enabled — checked, correct (not the target's). `ConditionalInverse` (`!flag?`) only imposes when the parent's flag is disabled — checked, correct. `Equal`/`EqualInverse` compare target-vs-parent state directly — correct. Undeclared-flag defaults (`flag(+)`/`flag(-)`) are resolved in `resolve_flag_state` (`validate.rs:413`) per PMS: fall back to the declared default, or `Disabled` if none given.
 
 One narrow, already-documented simplification: `blocker_satisfied_by` (`validate.rs:296-298`) treats `Conditional`/`Equal` USE-deps on **blockers** as always-satisfied ("don't occur on blockers in practice"). This is a known, low-severity gap — worth a one-line note if anyone ever sees a real `!pkg[flag=]` blocker, but not worth prioritizing.
 
@@ -147,7 +223,19 @@ One narrow, already-documented simplification: `blocker_satisfied_by` (`validate
 
 ### 6. IUSE defaults (`+flag`/`-flag`) — merge path vs. depgraph display path
 
-**Confirmed in sync today, but structurally fragile.** The canonical fold is `effective_use::effective_use` (`portage-resolve/src/effective_use.rs:85`): `resolve_effective_use` → `apply_force_mask` → `apply_ceded`, in that order (documented as load-bearing: force/mask must survive an env-level `-*`, and ceded flags must survive both). This exact three-step sequence is **independently re-implemented** in two other places:
+> **UPDATE 2026-07-21 (full-pass): re-verified, still in sync — no live divergence, not refactored.**
+> Re-read all three copies: `effective_use::effective_use`
+> (`portage-resolve/src/effective_use.rs:85`), the `-p` display path
+> (`portage-cli/src/query/depgraph/output.rs:702`), and the no-cache merge-plan
+> branch (`portage-cli/src/query/depgraph/mod.rs:1141`). All three perform the
+> identical `resolve_effective_use → apply_force_mask → apply_ceded` sequence and
+> agree step-for-step; IUSE defaults fold identically on the merge path and the
+> depgraph path. No live bug. The recommended collapse-into-one-call refactor is
+> a maintenance-hygiene change with no behavioral anchor, deliberately **not**
+> bundled into this correctness audit to avoid destabilizing the display/merge
+> paths; left as a tracked follow-up.
+
+**[Fable's original assessment]** Confirmed in sync today, but structurally fragile. The canonical fold is `effective_use::effective_use` (`portage-resolve/src/effective_use.rs:85`): `resolve_effective_use` → `apply_force_mask` → `apply_ceded`, in that order (documented as load-bearing: force/mask must survive an env-level `-*`, and ceded flags must survive both). This exact three-step sequence is **independently re-implemented** in two other places:
 
 - `portage-cli/src/query/depgraph/output.rs:702-717` (the `-p` display path) — re-derives `defaults`, calls `resolve_effective_use`, then `apply_force_mask` (when a cache entry exists), then `apply_ceded`. Currently matches step-for-step.
 - `portage-cli/src/query/depgraph/mod.rs:1140-1162` (the merge-plan path, "no cache" branch for cross-derived/virtual packages with no metadata) — same three steps, `stable` hardcoded to `false` (unavoidable: no cache means no keywords to judge stability from).
@@ -170,7 +258,16 @@ The one existing test in this area, `source_env_file_composes_features_and_overr
 
 ### 8. `md5-cache`/metadata parsing (`portage-metadata`)
 
-**Confirmed correct — cache field set is complete.** Spot-checked `ParseState::feed` (`portage-metadata/src/cache.rs:156`) against the actual field set present in the vendored real Gentoo tree (`portage-repo/gentoo/metadata/md5-cache/`, sampled ~4000 files): every observed key (`EAPI`, `DESCRIPTION`, `SLOT`, `HOMEPAGE`, `SRC_URI`, `LICENSE`, `KEYWORDS`, `IUSE`, `REQUIRED_USE`, `RESTRICT`, `PROPERTIES`, `DEPEND`, `RDEPEND`, `BDEPEND`, `PDEPEND`, `IDEPEND`, `INHERIT`, `DEFINED_PHASES`, `_md5_`, `_eclasses_`) is handled. Verified `INHERITED` (a runtime-only concept, distinct from `INHERIT`) is correctly and deliberately excluded from md5-cache parsing (`cache.rs:272`'s own comment cites PMS 14.3; confirmed zero of the ~32,000 vendored cache files contain an `INHERITED=` line — it's derived at ebuild-eval time, not persisted).
+> **UPDATE 2026-07-21 (full-pass): re-verified against portage's `auxdbkeys`, confirmed complete.**
+> Diffed `ParseState::feed` (`portage-metadata/src/cache.rs`) against the real
+> `auxdbkeys` tuple (`portage/__init__.py:576`): all 18 non-`INHERITED` keys plus
+> `_md5_`/`_eclasses_` are handled; `INHERITED` is correctly excluded (PMS 14.3,
+> md5-dict carries the eclass list via `_eclasses_`). Unknown keys are silently
+> tolerated (`_ => {}`), the correct forward-compatible behavior. The
+> EAPI-conditional field-presence question (generation-time enforcement) still
+> needs a live-portage comparison — unchanged, low priority.
+
+**[Fable's original assessment]** Confirmed correct — cache field set is complete. Spot-checked `ParseState::feed` (`portage-metadata/src/cache.rs:156`) against the actual field set present in the vendored real Gentoo tree (`portage-repo/gentoo/metadata/md5-cache/`, sampled ~4000 files): every observed key (`EAPI`, `DESCRIPTION`, `SLOT`, `HOMEPAGE`, `SRC_URI`, `LICENSE`, `KEYWORDS`, `IUSE`, `REQUIRED_USE`, `RESTRICT`, `PROPERTIES`, `DEPEND`, `RDEPEND`, `BDEPEND`, `PDEPEND`, `IDEPEND`, `INHERIT`, `DEFINED_PHASES`, `_md5_`, `_eclasses_`) is handled. Verified `INHERITED` (a runtime-only concept, distinct from `INHERIT`) is correctly and deliberately excluded from md5-cache parsing (`cache.rs:272`'s own comment cites PMS 14.3; confirmed zero of the ~32,000 vendored cache files contain an `INHERITED=` line — it's derived at ebuild-eval time, not persisted).
 
 `RequiredUseExpr::is_satisfied` (`required_use.rs:83`) matches PMS 7.3.4 exactly for all four operators, including the easy-to-invert edge cases (`|| ( )` vacuously true, `^^` exactly-one via count, `??` at-most-one via count). `SrcUriEntry` (`src_uri.rs`) correctly models plain/renamed/USE-conditional/group forms per PMS 7.3.2, with EAPI 8's `fetch+`/`mirror+` restriction prefixes represented.
 

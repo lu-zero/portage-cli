@@ -483,6 +483,18 @@ PubGrub core" in *some* way:
   with no warning:
   - old-slot wrapper/shim packages (`autoconf-wrapper`, `gcc-config`).
 
+**`@profile` / `profile-set` (package-set semantics).** Real portage's `@profile`
+set (`ProfilePackageSet`) reads only the *non-`*`* `packages` entries, and only
+from profiles that opt into the `profile-set` format via `profile_formats` in
+`layout.conf`; its default `@world` is `@profile @selected @system`. em's
+`@profile` is every `packages` line and its `@world` is `@selected ∪ @system`
+(omitting `@profile`). For every standard Gentoo profile these coincide exactly —
+no shipped profile declares `profile-set`, so portage's `@profile` is empty and
+`@world` collapses to `@selected ∪ @system` on both sides. The gap is only
+observable under the niche `profile-set` profile format, which em does not yet
+model; documented here as a known low-severity divergence rather than fixed
+(parser-audit item 4).
+
 Plus two **intentional** cosmetic divergences: install-*order* positions (valid
 topological order, different scheduler — emerge: target-driven DFS; here: SCC
 condensation + lexicographic Kahn) and the `:slot` suffix on autounmask
