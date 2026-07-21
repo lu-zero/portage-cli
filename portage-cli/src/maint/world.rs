@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
@@ -194,6 +196,58 @@ pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
     }
 }
 
+/// Remove `tokens` (plain atoms or `@set` names) from the world file —
+/// `-W`/`--deselect`. An atom removes any existing world line whose `Cpn`
+/// matches (any version-qualified form, same granularity `add_atoms` uses
+/// for replacement); a `@name` token removes the matching `@name` set
+/// entry. Tokens matching nothing are silently no-ops (matches real
+/// emerge: deselecting something not in world isn't an error). Returns the
+/// number of world-file lines actually removed.
+pub fn remove_atoms(root: Option<&Utf8Path>, tokens: &[String]) -> Result<usize> {
+    let mut set_names: HashSet<&str> = HashSet::new();
+    let mut cpns: HashSet<portage_atom::Cpn> = HashSet::new();
+    for tok in tokens {
+        match tok.strip_prefix('@') {
+            Some(name) => {
+                set_names.insert(name);
+            }
+            None => {
+                let dep = Dep::parse(tok).with_context(|| format!("invalid atom '{tok}'"))?;
+                cpns.insert(dep.cpn);
+            }
+        }
+    }
+
+    let path = world_path(root);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut removed = 0usize;
+    let kept: Vec<&str> = existing
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                return true;
+            }
+            let drop = match t.strip_prefix('@') {
+                Some(name) => set_names.contains(name),
+                None => Dep::parse(t).is_ok_and(|d| cpns.contains(&d.cpn)),
+            };
+            if drop {
+                removed += 1;
+            }
+            !drop
+        })
+        .collect();
+
+    let new_content = if kept.is_empty() {
+        String::new()
+    } else {
+        kept.join("\n") + "\n"
+    };
+    write_atomic(&path, new_content).with_context(|| format!("writing {path}"))?;
+    Ok(removed)
+}
+
 fn world_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     match root {
         Some(r) => r.join("var/lib/portage/world"),
@@ -267,5 +321,68 @@ mod tests {
         add_atoms(Some(&root), &[Dep::parse("app-editors/nano").unwrap()]);
 
         assert_eq!(read_world(&root), "app-editors/nano\n");
+    }
+
+    #[test]
+    fn deselect_removes_a_versioned_or_bare_atom_by_cpn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(
+            world_path(Some(&root)),
+            "=app-editors/nano-8.0\napp-shells/bash\n",
+        )
+        .unwrap();
+
+        let removed = remove_atoms(Some(&root), &["app-editors/nano".to_owned()]).unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(read_world(&root), "app-shells/bash\n");
+    }
+
+    #[test]
+    fn deselect_removes_a_set_ref() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), "@some-set\napp-shells/bash\n").unwrap();
+
+        let removed = remove_atoms(Some(&root), &["@some-set".to_owned()]).unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(read_world(&root), "app-shells/bash\n");
+    }
+
+    #[test]
+    fn deselect_is_a_no_op_for_an_atom_not_in_world() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), "app-shells/bash\n").unwrap();
+
+        let removed = remove_atoms(Some(&root), &["app-editors/nano".to_owned()]).unwrap();
+
+        assert_eq!(removed, 0);
+        assert_eq!(read_world(&root), "app-shells/bash\n");
+    }
+
+    #[test]
+    fn deselect_leaves_comments_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), "# a comment\napp-editors/nano\n").unwrap();
+
+        remove_atoms(Some(&root), &["app-editors/nano".to_owned()]).unwrap();
+
+        assert_eq!(read_world(&root), "# a comment\n");
+    }
+
+    #[test]
+    fn deselect_rejects_an_invalid_atom() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+
+        assert!(remove_atoms(Some(&root), &["not a valid atom!!!".to_owned()]).is_err());
     }
 }

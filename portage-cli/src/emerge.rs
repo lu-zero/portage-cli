@@ -424,6 +424,14 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     if cli.depclean {
         return crate::depclean::run(cli).await;
     }
+    // emerge -P/--prune: like -C, but only the non-highest-version matches.
+    if cli.prune {
+        return prune_atoms(cli, &cli.atoms).await;
+    }
+    // emerge -W/--deselect: world-file-only, no removal at all.
+    if cli.deselect {
+        return deselect_atoms(cli, &cli.atoms);
+    }
     // emerge -s / -S: the arguments are search patterns, not atoms.
     if cli.search || cli.searchdesc {
         return search::run_emerge_style(&cli.search_repos(), &cli.atoms, cli.searchdesc).await;
@@ -444,30 +452,29 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     .await
 }
 
-/// `-C`/`--unmerge`: remove the installed packages matching `atoms`
-/// directly, without any dependency graph at all — matches real emerge's
-/// `-C` semantics (a dangerous removal with zero dependency checking;
-/// `depclean` is the safe "and clean up what's no longer needed"
-/// alternative). Every installed slot/version matching any given atom is
-/// removed; there is no plan to preview beyond the match list itself, so
-/// `--pretend` just prints what would be removed and `--ask` confirms
-/// against that same list.
-async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
+/// Match `atoms` against `vdb`, deduping by Cpv identity (the same installed
+/// package can match two atoms given on the command line, e.g. "foo" and
+/// "cat/foo" — Hash + Eq already, no need to stringify, and this preserves
+/// the natural match order a sort+dedup by Display would scramble for no
+/// reason). `label` prefixes the "no atom matched anything" error (e.g.
+/// "-C/--unmerge", "-P/--prune"). Shared by both: their own match set differs
+/// downstream (`-C` keeps every match, `-P` drops each Cpn's highest), but
+/// "find installed packages for these atoms, report unmatched ones, bail if
+/// nothing matched at all" is identical.
+fn match_installed_atoms(
+    vdb: &portage_vdb::Vdb,
+    atoms: &[String],
+    label: &str,
+) -> Result<Vec<portage_vdb::InstalledPackage>> {
     if atoms.is_empty() {
-        bail!("-C/--unmerge needs at least one atom");
+        bail!("{label} needs at least one atom");
     }
 
-    let vdb = open_cli_vdb(cli)?;
-
-    // The same installed package can match two atoms given on the command
-    // line (e.g. "foo" and "cat/foo") -- dedup on Cpv identity (Hash + Eq
-    // already, no need to stringify) rather than sort+dedup by Display,
-    // which would also scramble the natural match order for no reason.
     let mut seen = std::collections::HashSet::new();
     let mut matched: Vec<portage_vdb::InstalledPackage> = Vec::new();
     let mut unmatched: Vec<&str> = Vec::new();
     for raw in atoms {
-        let pkgs = crate::vdb::find_packages(&vdb, raw);
+        let pkgs = crate::vdb::find_packages(vdb, raw);
         if pkgs.is_empty() {
             eprintln!("!!! no installed package matches '{raw}'");
             unmatched.push(raw.as_str());
@@ -482,11 +489,103 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
 
     if matched.is_empty() {
         bail!(
-            "-C/--unmerge: no installed package matched ({})",
+            "{label}: no installed package matched ({})",
             unmatched.join(", ")
         );
     }
+    Ok(matched)
+}
 
+/// `-C`/`--unmerge`: remove the installed packages matching `atoms`
+/// directly, without any dependency graph at all — matches real emerge's
+/// `-C` semantics (a dangerous removal with zero dependency checking;
+/// `depclean` is the safe "and clean up what's no longer needed"
+/// alternative). Every installed slot/version matching any given atom is
+/// removed; there is no plan to preview beyond the match list itself, so
+/// `--pretend` just prints what would be removed and `--ask` confirms
+/// against that same list.
+async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
+    let vdb = open_cli_vdb(cli)?;
+    let matched = match_installed_atoms(&vdb, atoms, "-C/--unmerge")?;
+    remove_matched_packages(cli, vdb, matched, "unmerge", "unmerged").await
+}
+
+/// `-P`/`--prune`: like `-C`, except each matched package's *highest*
+/// installed version is always kept — only the older versions among the
+/// matched set are removal candidates. No dependency graph at all, same
+/// caveat as `-C` (real emerge recommends `--depclean` for a
+/// dependency-aware clean instead). Requires at least one atom, same as
+/// `-C` — there is no "prune everything" bare form.
+async fn prune_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
+    let vdb = open_cli_vdb(cli)?;
+    let candidates = match_installed_atoms(&vdb, atoms, "-P/--prune")?;
+    let matched = drop_highest_version_per_cpn(candidates);
+
+    if matched.is_empty() {
+        println!(">>> Nothing to prune (only one installed version per matched package).");
+        return Ok(());
+    }
+
+    remove_matched_packages(cli, vdb, matched, "prune", "pruned").await
+}
+
+/// From `candidates` (already matched installed packages, possibly several
+/// versions per `Cpn`), drop each `Cpn`'s single highest version — real
+/// emerge's `--prune` rule ("removes all but the highest installed version
+/// of a package"). Relative order of the survivors is otherwise unchanged.
+fn drop_highest_version_per_cpn(
+    candidates: Vec<portage_vdb::InstalledPackage>,
+) -> Vec<portage_vdb::InstalledPackage> {
+    let mut highest: std::collections::HashMap<portage_atom::Cpn, portage_atom::Cpv> =
+        std::collections::HashMap::new();
+    for pkg in &candidates {
+        highest
+            .entry(pkg.cpv().cpn)
+            .and_modify(|best| {
+                if pkg.cpv() > best {
+                    *best = pkg.cpv().clone();
+                }
+            })
+            .or_insert_with(|| pkg.cpv().clone());
+    }
+    candidates
+        .into_iter()
+        .filter(|pkg| highest.get(&pkg.cpv().cpn) != Some(pkg.cpv()))
+        .collect()
+}
+
+/// `-W`/`--deselect`: remove `atoms` (or `@set` names) from the world file
+/// only — no removal, no dependency graph, no VDB access at all beyond the
+/// world file itself. Matches real emerge's own `--deselect` action.
+fn deselect_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
+    if atoms.is_empty() {
+        bail!("-W/--deselect needs at least one atom or @set");
+    }
+    let roots = cli.roots();
+    let removed = maint::world::remove_atoms(Some(roots.merge_root()), atoms)?;
+    println!(
+        ">>> Removed {removed} entr{} from the world file",
+        if removed == 1 { "y" } else { "ies" }
+    );
+    Ok(())
+}
+
+/// Shared removal core for `-C`/`--unmerge` and `-P`/`--prune`: given an
+/// already-computed, non-empty set of installed packages to remove, run the
+/// identical preview / `--pretend` / `--ask` / preserve-libs / removal /
+/// env-update sequence. `verb`/`past` name the action in user-facing output
+/// (`confirm_action`, error/progress messages) — the only thing that differs
+/// between the two callers. Both verbs end in "e" ("unmerge"/"prune"), so the
+/// gerund is derived rather than passed separately.
+async fn remove_matched_packages(
+    cli: &cli::Cli,
+    vdb: portage_vdb::Vdb,
+    matched: Vec<portage_vdb::InstalledPackage>,
+    verb: &str,
+    past: &str,
+) -> Result<()> {
+    let stem = verb.strip_suffix('e').unwrap_or(verb);
+    let gerund = format!("{stem}ing");
     // Every cpv this invocation is committed to removing — not just the one
     // being processed at a time — so a multi-atom `em -C a b` where `a`
     // needs a lib only `b` provides doesn't falsely think `b` still
@@ -505,7 +604,7 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     let root = roots.merge_root().to_owned();
     let broot = cli.broot();
 
-    println!("\n>>> These are the packages that would be unmerged:\n");
+    println!("\n>>> These are the packages that would be {past}:\n");
     for pkg in &matched {
         println!(" {pkg}");
     }
@@ -526,7 +625,7 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    if cli.merge_flags.ask && !confirm_action("unmerge", matched.len())? {
+    if cli.merge_flags.ask && !confirm_action(verb, matched.len())? {
         println!(">>> Quitting.");
         return Ok(());
     }
@@ -545,7 +644,7 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     let config_overlay = roots.eprefix().map(|e| e.join("etc/portage"));
     if !ebuild::apply_profile_env(&mut shell, roots.config(), config_overlay.as_deref()).await? {
         eprintln!(
-            "warning: no usable profile at {}/etc/portage/make.profile — unmerging without profile defaults",
+            "warning: no usable profile at {}/etc/portage/make.profile — {gerund} without profile defaults",
             roots.config().unwrap_or(Utf8Path::new("/"))
         );
     }
@@ -557,7 +656,7 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
 
     let mut failures = 0usize;
     for pkg in &matched {
-        println!(">>> Unmerging {pkg}...");
+        println!(">>> {gerund} {pkg}...");
         if let Err(e) = ebuild::unmerge_standalone(
             &mut shell,
             pkg,
@@ -569,11 +668,11 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
         )
         .await
         {
-            eprintln!("!!! failed to unmerge {pkg}: {e:#}");
+            eprintln!("!!! failed to {verb} {pkg}: {e:#}");
             failures += 1;
             continue;
         }
-        println!(">>> unmerge success: {pkg}");
+        println!(">>> {verb} success: {pkg}");
     }
     registry.reclaim(&vdb, &root);
     registry.store();
@@ -582,14 +681,98 @@ async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     // after each package, so libraries just deleted don't linger in the
     // dynamic linker cache until the next unrelated install.
     if let Err(e) = maint::env::env_update(&root) {
-        eprintln!("warning: env-update after unmerge failed: {e:#}");
+        eprintln!("warning: env-update after {verb} failed: {e:#}");
     }
 
     if failures > 0 {
         bail!(
-            "{failures} of {} package(s) failed to unmerge",
+            "{failures} of {} package(s) failed to {verb}",
             matched.len()
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_pkg(vdb_root: &std::path::Path, cat: &str, pf: &str) {
+        let dir = vdb_root.join(cat).join(pf);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SLOT"), "0").unwrap();
+        std::fs::write(dir.join("EAPI"), "8").unwrap();
+    }
+
+    fn open_vdb(dir: &std::path::Path) -> portage_vdb::Vdb {
+        let root = camino::Utf8PathBuf::try_from(dir.to_owned()).unwrap();
+        portage_vdb::Vdb::open(root.join("var/db/pkg")).unwrap()
+    }
+
+    #[test]
+    fn drop_highest_version_per_cpn_keeps_only_the_newest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        write_pkg(&vdb_root, "app-misc", "foo-1.0");
+        write_pkg(&vdb_root, "app-misc", "foo-2.0");
+        write_pkg(&vdb_root, "app-misc", "foo-1.5");
+
+        let vdb = open_vdb(tmp.path());
+        let installed: Vec<_> = vdb.packages().into_iter().collect();
+
+        let removable = drop_highest_version_per_cpn(installed);
+
+        let versions: Vec<String> = removable.iter().map(|p| p.cpv().to_string()).collect();
+        assert_eq!(versions.len(), 2);
+        assert!(versions.contains(&"app-misc/foo-1.0".to_string()));
+        assert!(versions.contains(&"app-misc/foo-1.5".to_string()));
+        assert!(!versions.contains(&"app-misc/foo-2.0".to_string()));
+    }
+
+    #[test]
+    fn drop_highest_version_per_cpn_is_a_noop_with_a_single_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        write_pkg(&vdb_root, "app-misc", "foo-1.0");
+
+        let vdb = open_vdb(tmp.path());
+        let installed: Vec<_> = vdb.packages().into_iter().collect();
+
+        assert!(drop_highest_version_per_cpn(installed).is_empty());
+    }
+
+    #[test]
+    fn drop_highest_version_per_cpn_treats_each_cpn_independently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        write_pkg(&vdb_root, "app-misc", "foo-1.0");
+        write_pkg(&vdb_root, "app-misc", "foo-2.0");
+        write_pkg(&vdb_root, "app-misc", "bar-1.0");
+
+        let vdb = open_vdb(tmp.path());
+        let installed: Vec<_> = vdb.packages().into_iter().collect();
+
+        let removable = drop_highest_version_per_cpn(installed);
+
+        let versions: Vec<String> = removable.iter().map(|p| p.cpv().to_string()).collect();
+        assert_eq!(versions, vec!["app-misc/foo-1.0".to_string()]);
+    }
+
+    #[test]
+    fn match_installed_atoms_bails_on_empty_input() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("var/db/pkg")).unwrap();
+        let vdb = open_vdb(tmp.path());
+        assert!(match_installed_atoms(&vdb, &[], "-P/--prune").is_err());
+    }
+
+    #[test]
+    fn match_installed_atoms_bails_when_nothing_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("var/db/pkg")).unwrap();
+        let vdb = open_vdb(tmp.path());
+        let err =
+            match_installed_atoms(&vdb, &["app-misc/foo".to_string()], "-P/--prune").unwrap_err();
+        assert!(err.to_string().contains("-P/--prune"));
+    }
 }

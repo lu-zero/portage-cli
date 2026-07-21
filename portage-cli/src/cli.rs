@@ -104,6 +104,17 @@ pub struct Cli {
     #[arg(short = 'c', long)]
     pub depclean: bool,
 
+    /// Remove all but the highest installed version of each atom given,
+    /// ignoring dependencies (real emerge's own historical caveat applies —
+    /// prefer `--depclean` for a dependency-aware clean).
+    #[arg(short = 'P', long)]
+    pub prune: bool,
+
+    /// Remove atoms and/or `@set`s from the world file, without unmerging
+    /// anything.
+    #[arg(short = 'W', long)]
+    pub deselect: bool,
+
     #[command(flatten)]
     pub merge_flags: MergeFlags,
 
