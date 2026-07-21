@@ -33,9 +33,10 @@ pub(crate) fn eval_violated_use_dep(
         UseDepKind::Disabled => dep_effective_enabled.then_some(false),
         // [flag?]: if parent has flag → dep must have flag
         UseDepKind::Conditional => (parent_flag_enabled && !dep_effective_enabled).then_some(true),
-        // [!flag?]: if parent lacks flag → dep must have flag
+        // [!flag?] = `!flag? ( dep[-flag] )` (PMS 8.2.6.4): if parent lacks the
+        // flag, the dep must have it *disabled*; violated when it's enabled.
         UseDepKind::ConditionalInverse => {
-            (!parent_flag_enabled && !dep_effective_enabled).then_some(true)
+            (!parent_flag_enabled && dep_effective_enabled).then_some(false)
         }
         // [flag=]: dep must match parent
         UseDepKind::Equal => {
@@ -382,5 +383,52 @@ impl PortageDependencyProvider {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::eval_violated_use_dep;
+    use portage_atom::UseDepKind;
+
+    /// PMS 8.2.6.4 six-form table, evaluated directly. `Some(true)` = violated,
+    /// flag must be enabled; `Some(false)` = violated, flag must be disabled;
+    /// `None` = satisfied. Both conditional-inverse rows are the pre-fix trap:
+    /// `!flag?` with parent OFF requires the dep flag *disabled*
+    /// (`!flag? ( dep[-flag] )`), so parent-off/dep-off is satisfied and
+    /// parent-off/dep-on is the violation (must disable), not the reverse.
+    #[test]
+    fn eval_violated_use_dep_matches_pms_table() {
+        use UseDepKind::*;
+        // (kind, dep_enabled, parent_enabled) -> expected
+        let cases = [
+            (Enabled, true, false, None),
+            (Enabled, false, false, Some(true)),
+            (Disabled, false, false, None),
+            (Disabled, true, false, Some(false)),
+            // [flag?]: parent on -> dep must be on
+            (Conditional, true, true, None),
+            (Conditional, false, true, Some(true)),
+            (Conditional, false, false, None),
+            // [!flag?]: parent off -> dep must be OFF
+            (ConditionalInverse, false, false, None),
+            (ConditionalInverse, true, false, Some(false)),
+            (ConditionalInverse, true, true, None),
+            // [flag=]: dep must match parent
+            (Equal, true, true, None),
+            (Equal, false, true, Some(true)),
+            (Equal, true, false, Some(false)),
+            // [!flag=]: dep must be opposite of parent
+            (EqualInverse, false, true, None),
+            (EqualInverse, true, true, Some(false)),
+            (EqualInverse, false, false, Some(true)),
+        ];
+        for (kind, dep, parent, expected) in cases {
+            assert_eq!(
+                eval_violated_use_dep(kind, dep, parent),
+                expected,
+                "kind={kind:?} dep_enabled={dep} parent_enabled={parent}"
+            );
+        }
     }
 }
