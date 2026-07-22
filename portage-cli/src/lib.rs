@@ -8,6 +8,7 @@ pub(crate) mod binpkg;
 pub mod cli;
 pub(crate) mod crossdev;
 pub(crate) mod depclean;
+pub mod diag;
 pub(crate) mod dispatch;
 pub(crate) mod ebuild;
 /// Install-image ELF scan (`NEEDED` / `NEEDED.ELF.2` generation).

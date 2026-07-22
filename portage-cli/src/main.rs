@@ -35,6 +35,14 @@ fn main() {
 
     let cli = cli::Cli::parse();
     cli.color.write_global();
+    // Tracing subscriber: libraries emit, this decides where (stderr now, the
+    // activity bus once the bus layer is stacked on). `parallel` drops info
+    // noise so `-j>1` doesn't interleave per-package status.
+    portage_cli::diag::init(
+        cli.quiet,
+        cli.verbose,
+        cli.merge_flags.jobs.unwrap_or(1) > 1,
+    );
 
     // An unprivileged build re-execs once under a fake root so chown/setuid
     // succeed; the wrapped child returns here with `EM_PRIVILEGE_ACTIVE` set and
