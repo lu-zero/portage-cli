@@ -72,13 +72,53 @@ fn db_lookup(path: &Path, name: &str, fields: &[usize]) -> Option<Vec<String>> {
     None
 }
 
+/// True when `path` exists and has at least one non-empty, non-comment line.
+/// Used to distinguish "no passwd yet (bootstrap)" from "passwd present but
+/// name missing (hard error, like portage)".
+fn db_file_populated(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    content.lines().any(|l| {
+        let t = l.trim();
+        !t.is_empty() && !t.starts_with('#')
+    })
+}
+
+/// Look up `name` in the target passwd/group first; if that **file is missing
+/// or empty** (pre-baselayout ROOT), fall back to the host `/etc` database so
+/// stage/bootstrap builds can still `fowners root:portage` under a fake-root
+/// backend. Once the target has a passwd, absent names are hard errors —
+/// matching portage's `__helpers_die` (wrong host ids would silently corrupt
+/// the image).
+fn db_lookup_target_or_host(
+    pwdb_etc: &Path,
+    file: &str,
+    name: &str,
+    fields: &[usize],
+) -> Option<Vec<String>> {
+    let target = pwdb_etc.join(file);
+    if let Some(v) = db_lookup(&target, name, fields) {
+        return Some(v);
+    }
+    if db_file_populated(&target) {
+        // Target has a db and the name is simply not there — do not invent
+        // host ids (portage hard-dies in this case).
+        return None;
+    }
+    db_lookup(Path::new("/etc").join(file).as_path(), name, fields)
+}
+
 /// Resolve an `fowners` owner spec (`user[:group]`) to numeric `uid[:gid]`
 /// against the *target* `pwdb_etc` (`<ESYSROOT|EROOT>/etc`), mirroring portage's
 /// `__resolve_owner`. Numeric components pass through; a name is looked up in
 /// `passwd` (uid + primary gid) or `group` (gid). A trailing `:` uses the user's
-/// primary group. A name absent from the target db is a hard error (portage
-/// `__helpers_die`) — better than chowning to a different host id or failing
-/// cryptically.
+/// primary group.
+///
+/// When the target has no passwd/group yet (empty stage, pre-baselayout), names
+/// fall back to the host `/etc` so `fowners root:portage` can still resolve
+/// under `--privilege pseudoroot|fakeroost`. Once the target db exists, a
+/// missing name is a hard error (same as portage).
 fn resolve_owner(owner: &str, pwdb_etc: &Path) -> Result<String, String> {
     let (user, group) = match owner.split_once(':') {
         Some((u, g)) => (u, Some(g)),
@@ -91,7 +131,7 @@ fn resolve_owner(owner: &str, pwdb_etc: &Path) -> Result<String, String> {
         if is_numeric(user) {
             uid = user.to_string();
         } else {
-            let got = db_lookup(&pwdb_etc.join("passwd"), user, &[2, 3]).and_then(|v| {
+            let got = db_lookup_target_or_host(pwdb_etc, "passwd", user, &[2, 3]).and_then(|v| {
                 match (v.first().cloned(), v.get(1).cloned()) {
                     (Some(u), Some(g)) if is_numeric(&u) => Some((u, g)),
                     _ => None,
@@ -122,7 +162,7 @@ fn resolve_owner(owner: &str, pwdb_etc: &Path) -> Result<String, String> {
         }
         Some(g) if is_numeric(g) => format!(":{g}"),
         Some(g) => {
-            let gid = db_lookup(&pwdb_etc.join("group"), g, &[2])
+            let gid = db_lookup_target_or_host(pwdb_etc, "group", g, &[2])
                 .and_then(|v| v.into_iter().next())
                 .filter(|s| is_numeric(s))
                 .ok_or_else(|| {
@@ -1565,6 +1605,41 @@ mod tests {
         let etc = dir.path().join("etc");
         assert!(resolve_owner("nobody:nogroup", &etc).is_err());
         assert!(resolve_owner("root:nogroup", &etc).is_err());
+    }
+
+    #[test]
+    fn resolve_owner_empty_target_falls_back_to_host() {
+        // Pre-baselayout ROOT: no passwd/group files → host /etc.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("etc")).unwrap();
+        let etc = dir.path().join("etc");
+        // Host always has root:0; portage is standard on Gentoo (this CI box).
+        let got = resolve_owner("root:root", &etc).unwrap();
+        assert_eq!(got, "0:0");
+        // Name present only on host, not in empty target.
+        if db_lookup(Path::new("/etc/passwd"), "portage", &[2]).is_some() {
+            let got = resolve_owner("root:portage", &etc).unwrap();
+            assert!(
+                got.starts_with("0:"),
+                "expected host-resolved root:portage, got {got}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_owner_populated_target_does_not_use_host() {
+        // Target has a passwd but no "portage" — must not silently take host's.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("etc")).unwrap();
+        std::fs::write(
+            dir.path().join("etc/passwd"),
+            "root:x:0:0:root:/root:/bin/bash\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("etc/group"), "root:x:0:\n").unwrap();
+        let etc = dir.path().join("etc");
+        assert!(resolve_owner("root:portage", &etc).is_err());
+        assert_eq!(resolve_owner("root:root", &etc).unwrap(), "0:0");
     }
 
     #[test]
