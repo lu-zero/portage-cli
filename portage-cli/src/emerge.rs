@@ -419,7 +419,15 @@ async fn emerge_atoms_inner(
                 })
                 .collect();
             let jobs = merge_flags.jobs.unwrap_or(1);
-            let eta = crate::activity::estimate_remaining(&store, &pkgs, jobs, 15);
+            // Prefer critical-path list-schedule when the depgraph gave us
+            // build_blockers (same graph as --jobs parallel merge).
+            let eta = crate::activity::estimate_remaining_with_blockers(
+                &store,
+                &pkgs,
+                &outcome.build_blockers,
+                jobs,
+                15,
+            );
             print!("{}", crate::activity::format_eta(&eta));
         }
         return Ok(());
@@ -483,9 +491,13 @@ async fn emerge_atoms_inner(
         cli.activity_fd,
         cli.activity_jsonl.as_deref(),
     )?;
+    if cli.emergelog {
+        crate::activity::attach_emergelog(&activity, roots.merge_root());
+    }
     // Prefer resume job_id so markers and activity share one correlation key.
     let job_id = crate::activity::resolve_job_id(&activity_session, resume_job_id.as_deref());
     let parent_job_id = activity_session.parent_job_id.clone();
+    let live_root = roots.merge_root().to_owned();
     let session_started = crate::activity::ActivityEvent::now();
     let mode = if merge_flags.fetchonly || merge_flags.fetch_all_uri {
         crate::activity::ActivityMode::FetchOnly
@@ -505,7 +517,7 @@ async fn emerge_atoms_inner(
         pid: std::process::id(),
         started_at: session_started,
         argv,
-        merge_root: roots.merge_root().to_string(),
+        merge_root: live_root.to_string(),
         host_root: cli.broot().merge_root().to_string(),
         mode,
         plan_total: outcome.plan.len() as u32,
@@ -536,6 +548,7 @@ async fn emerge_atoms_inner(
             bus: activity.clone(),
             job_id: job_id.clone(),
             parent_job_id: parent_job_id.clone(),
+            live_root: live_root.clone(),
         }),
     })
     .await;

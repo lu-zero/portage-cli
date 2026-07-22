@@ -55,6 +55,10 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             binpkg,
             buildpkg,
             quiet,
+            activity_job_id,
+            activity_parent_job_id,
+            activity_live_root,
+            activity_side,
         } => {
             ebuild::run_install_worker(ebuild::InstallWorker {
                 ebuild_path: ebuild,
@@ -73,6 +77,10 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
                 binpkg: binpkg.as_deref(),
                 buildpkg: *buildpkg,
                 quiet: *quiet,
+                activity_job_id: activity_job_id.as_deref(),
+                activity_parent_job_id: activity_parent_job_id.as_deref(),
+                activity_live_root: activity_live_root.as_deref(),
+                activity_side: activity_side.as_deref(),
             })
             .await
         }

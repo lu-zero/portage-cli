@@ -4,6 +4,7 @@
 //! subscribe or read the live FS sink. emerge.log is not the control plane.
 
 mod bus;
+mod emergelog;
 mod event;
 mod history;
 mod jsonl_fd;
@@ -11,13 +12,14 @@ mod live_fs;
 mod projection;
 
 pub use bus::{ActivityBus, ActivitySink, RecordingSink};
+pub use emergelog::EmergeLogSink;
 pub use event::{
     ACTIVITY_EVENT_VERSION, ActivityEvent, ActivityMergeRoot, ActivityMode, ActivitySessionOpts,
     PhaseTiming, PkgKind, SessionFlags,
 };
 pub use history::{
-    DurationStore, Eta, EtaPkg, HistoryRecord, HistorySink, estimate_remaining, format_eta,
-    format_list, format_seconds, format_time,
+    DurationStore, Eta, EtaPkg, HistoryRecord, HistorySink, estimate_remaining,
+    estimate_remaining_with_blockers, format_eta, format_list, format_seconds, format_time,
 };
 pub use jsonl_fd::JsonlFdSink;
 pub use live_fs::{LiveFsSink, load_live_from_disk, pid_alive};
@@ -33,6 +35,11 @@ use camino::Utf8Path;
 /// [`ActivityEvent::PhaseLeave`] without the phase loop knowing about the
 /// full session. `phases` accumulates leave timings for a richer
 /// [`ActivityEvent::PkgEnd`] if the caller wants them.
+///
+/// `live_root` is the filesystem root of the session's live FS sink (where
+/// `var/cache/edb/em-activity/live/` lives). Install workers re-open that
+/// tree with a LiveFs-only bus so phase updates continue across the process
+/// boundary; Session/PkgStart/PkgEnd stay on the parent.
 #[derive(Clone)]
 pub struct ActivityPkgCtx {
     pub bus: ActivityBus,
@@ -40,6 +47,8 @@ pub struct ActivityPkgCtx {
     pub parent_job_id: Option<String>,
     pub cpv: String,
     pub merge_root: ActivityMergeRoot,
+    /// Session live-FS root (`None` when activity is in-process only / tests).
+    pub live_root: Option<camino::Utf8PathBuf>,
     phases: Arc<Mutex<Vec<PhaseTiming>>>,
 }
 
@@ -57,8 +66,15 @@ impl ActivityPkgCtx {
             parent_job_id,
             cpv,
             merge_root,
+            live_root: None,
             phases: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Set the session live-FS root so an install worker can mirror phases.
+    pub fn with_live_root(mut self, root: impl Into<camino::Utf8PathBuf>) -> Self {
+        self.live_root = Some(root.into());
+        self
     }
 
     pub fn phase_enter(&self, phase: &str) -> f64 {
@@ -114,6 +130,15 @@ pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     bus
 }
 
+/// Install-worker bus: **LiveFs only**. Parent owns Session/PkgStart/PkgEnd
+/// and history/emergelog/JSONL; the child only refreshes phase on the shared
+/// live tree so `em log current` does not go dark across the privilege split.
+pub fn worker_live_bus(live_root: &Utf8Path) -> ActivityBus {
+    let bus = ActivityBus::new();
+    bus.add_sink(Arc::new(LiveFsSink::new(live_root.to_owned())));
+    bus
+}
+
 /// Attach optional JSONL FD / path sinks to an existing bus.
 pub fn attach_jsonl_outputs(
     bus: &ActivityBus,
@@ -131,6 +156,11 @@ pub fn attach_jsonl_outputs(
         bus.add_sink(Arc::new(sink));
     }
     Ok(())
+}
+
+/// Opt-in Portage-compatible emerge.log dual-write under `merge_root`.
+pub fn attach_emergelog(bus: &ActivityBus, merge_root: &Utf8Path) {
+    bus.add_sink(Arc::new(EmergeLogSink::for_merge_root(merge_root)));
 }
 
 /// Resolve the job id for this merge: explicit opt, else new id (or resume's).

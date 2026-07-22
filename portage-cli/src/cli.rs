@@ -43,7 +43,8 @@ pub struct Cli {
     pub pretend: bool,
 
     /// With `-p`/`--pretend`, print an ETA for the plan from activity history
-    /// (median of recent successful merges per package; wall ≈ serial / jobs).
+    /// (median of recent successful merges per package; wall uses the build
+    /// graph + `--jobs` when blockers are available).
     #[arg(long = "eta", global = true)]
     pub eta: bool,
 
@@ -55,6 +56,11 @@ pub struct Cli {
     /// Append activity events as JSONL to PATH (not `-`; use `--activity-fd`).
     #[arg(long = "activity-jsonl", value_name = "PATH", global = true)]
     pub activity_jsonl: Option<String>,
+
+    /// Dual-write Portage-compatible emerge.log lines (opt-in; qlop/genlop).
+    /// Path defaults to `<merge-root>/var/log/emerge.log` (or `/var/log/emerge.log`).
+    #[arg(long = "emergelog", global = true, env = "EM_EMERGELOG")]
+    pub emergelog: bool,
 
     /// Increase verbosity (can be repeated for more detail).
     #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
@@ -751,6 +757,7 @@ mod tests {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // __worker carries many CLI strings
 pub enum Applet {
     /// Run one do*/new* install helper standalone against the exported build
     /// env. Internal: backs the PATH shims dropped during a build so
@@ -802,6 +809,17 @@ pub enum Applet {
         buildpkg: bool,
         #[arg(long)]
         quiet: bool,
+        /// Parent activity session id — live FS phase updates only.
+        #[arg(long)]
+        activity_job_id: Option<String>,
+        #[arg(long)]
+        activity_parent_job_id: Option<String>,
+        /// Filesystem root of the parent's live activity sink.
+        #[arg(long)]
+        activity_live_root: Option<String>,
+        /// `host` or `target` package side for inflight paths.
+        #[arg(long)]
+        activity_side: Option<String>,
     },
 
     #[command(about = "Execute ebuild phases")]

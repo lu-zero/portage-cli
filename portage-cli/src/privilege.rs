@@ -232,6 +232,15 @@ pub struct WorkerArgs<'a> {
     pub binpkg: Option<&'a str>,
     pub buildpkg: bool,
     pub quiet: bool,
+    /// Activity session id (same as parent `SessionStart.job_id`). When set
+    /// with [`Self::activity_live_root`], the worker emits install-phase
+    /// events into the shared live FS tree.
+    pub activity_job_id: Option<&'a str>,
+    pub activity_parent_job_id: Option<&'a str>,
+    /// Filesystem root of the parent's live activity sink.
+    pub activity_live_root: Option<&'a str>,
+    /// `host` or `target` — must match the parent's package side.
+    pub activity_side: Option<&'a str>,
 }
 
 /// Spawn a wrapped `em __worker` child for the install group and await it.
@@ -285,6 +294,18 @@ pub async fn spawn_install_worker(backend: Backend, args: &WorkerArgs<'_>) -> st
     }
     if let Some(b) = args.binpkg {
         cmd.arg("--binpkg").arg(b);
+    }
+    if let Some(id) = args.activity_job_id {
+        cmd.arg("--activity-job-id").arg(id);
+    }
+    if let Some(id) = args.activity_parent_job_id {
+        cmd.arg("--activity-parent-job-id").arg(id);
+    }
+    if let Some(r) = args.activity_live_root {
+        cmd.arg("--activity-live-root").arg(r);
+    }
+    if let Some(s) = args.activity_side {
+        cmd.arg("--activity-side").arg(s);
     }
     let mut cmd = match backend {
         #[cfg(all(feature = "fakeroost", target_os = "linux"))]

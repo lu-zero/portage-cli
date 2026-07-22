@@ -1,5 +1,6 @@
 //! Append-only JSONL duration history + ETA estimates.
 
+use std::collections::{BinaryHeap, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -230,28 +231,32 @@ pub struct EtaPkg {
     pub cpv: String,
 }
 
-/// Result of [`estimate_remaining`].
+/// Result of [`estimate_remaining`] / [`estimate_remaining_with_blockers`].
 #[derive(Clone, Debug)]
 pub struct Eta {
-    /// Estimated wall seconds (after / jobs).
+    /// Estimated wall-clock seconds (parallel schedule).
     pub wall_seconds: f64,
     /// Sum of per-package serial estimates.
     pub serial_seconds: f64,
     pub jobs: u32,
     pub known: u32,
     pub unknown: u32,
+    /// True when wall used the build-graph critical-path scheduler.
+    pub critical_path: bool,
     /// Per-package serial estimates (same order as input).
     pub per_pkg: Vec<(String, Option<f64>)>,
 }
 
-/// Median of last `k` successes per cpn; unknown use global median if any.
-/// Wall time ≈ serial / max(jobs, 1).
-pub fn estimate_remaining(store: &DurationStore, pkgs: &[EtaPkg], jobs: u32, k: usize) -> Eta {
+/// `(durations, known, unknown, per_pkg, serial_sum)`.
+type PackageEstimates = (Vec<f64>, u32, u32, Vec<(String, Option<f64>)>, f64);
+
+fn package_estimates(store: &DurationStore, pkgs: &[EtaPkg], k: usize) -> PackageEstimates {
     let global = store.global_median_seconds(k.max(20));
     let mut serial = 0.0;
     let mut known = 0u32;
     let mut unknown = 0u32;
     let mut per_pkg = Vec::with_capacity(pkgs.len());
+    let mut durations = Vec::with_capacity(pkgs.len());
     for p in pkgs {
         let est = store.median_seconds(&p.cpn, k).or(global);
         match est {
@@ -259,21 +264,134 @@ pub fn estimate_remaining(store: &DurationStore, pkgs: &[EtaPkg], jobs: u32, k: 
                 serial += s;
                 known += 1;
                 per_pkg.push((p.cpv.clone(), Some(s)));
+                durations.push(s);
             }
             None => {
                 unknown += 1;
                 per_pkg.push((p.cpv.clone(), None));
+                // Unknown packages contribute 0 to wall (same as serial pad);
+                // critical-path still places them so dependents wait.
+                durations.push(0.0);
             }
         }
     }
+    (durations, known, unknown, per_pkg, serial)
+}
+
+/// Median of last `k` successes per cpn; unknown use global median if any.
+/// Wall time ≈ serial / max(jobs, 1) (no build-order constraints).
+pub fn estimate_remaining(store: &DurationStore, pkgs: &[EtaPkg], jobs: u32, k: usize) -> Eta {
+    let (durations, known, unknown, per_pkg, serial) = package_estimates(store, pkgs, k);
     let j = jobs.max(1) as f64;
+    let _ = durations;
     Eta {
         wall_seconds: serial / j,
         serial_seconds: serial,
         jobs: jobs.max(1),
         known,
         unknown,
+        critical_path: false,
         per_pkg,
+    }
+}
+
+/// Like [`estimate_remaining`], but wall time is a **list-schedule simulation**
+/// of `jobs` workers over the build-order graph.
+///
+/// `blockers[i]` lists earlier plan indices that must finish before `i` can
+/// start — the same shape `run_merge_plan` uses for `--jobs`.
+pub fn estimate_remaining_with_blockers(
+    store: &DurationStore,
+    pkgs: &[EtaPkg],
+    blockers: &[Vec<usize>],
+    jobs: u32,
+    k: usize,
+) -> Eta {
+    let (durations, known, unknown, per_pkg, serial) = package_estimates(store, pkgs, k);
+    let n = pkgs.len();
+    let wall = if n == 0 {
+        0.0
+    } else if blockers.len() != n {
+        // Graph missing/mismatched — fall back to naive.
+        serial / jobs.max(1) as f64
+    } else {
+        critical_path_wall(&durations, blockers, jobs.max(1) as usize)
+    };
+    Eta {
+        wall_seconds: wall,
+        serial_seconds: serial,
+        jobs: jobs.max(1),
+        known,
+        unknown,
+        critical_path: blockers.len() == n && n > 0,
+        per_pkg,
+    }
+}
+
+/// Discrete-event simulation: up to `jobs` concurrent builds; a node starts
+/// only after all `blockers[i]` predecessors have finished.
+fn critical_path_wall(durations: &[f64], blockers: &[Vec<usize>], jobs: usize) -> f64 {
+    let n = durations.len();
+    if n == 0 {
+        return 0.0;
+    }
+    let mut remaining_preds: Vec<usize> = blockers.iter().map(Vec::len).collect();
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, preds) in blockers.iter().enumerate() {
+        for &p in preds {
+            if p < n {
+                dependents[p].push(i);
+            }
+        }
+    }
+    let mut ready: VecDeque<usize> = (0..n).filter(|&i| remaining_preds[i] == 0).collect();
+    // (finish_time, node)
+    let mut running: BinaryHeap<std::cmp::Reverse<(OrderedF64, usize)>> = BinaryHeap::new();
+    let mut done = 0usize;
+    let mut time = 0.0_f64;
+
+    while done < n {
+        while running.len() < jobs {
+            let Some(i) = ready.pop_front() else {
+                break;
+            };
+            let finish = time + durations[i].max(0.0);
+            running.push(std::cmp::Reverse((OrderedF64(finish), i)));
+        }
+        let Some(std::cmp::Reverse((OrderedF64(finish), i))) = running.pop() else {
+            // Deadlock (cycle) — should not happen with merge blockers; bail serial.
+            return durations.iter().sum();
+        };
+        time = finish;
+        done += 1;
+        for &d in &dependents[i] {
+            remaining_preds[d] = remaining_preds[d].saturating_sub(1);
+            if remaining_preds[d] == 0 {
+                ready.push_back(d);
+            }
+        }
+    }
+    time
+}
+
+/// Total-order wrapper so finish times can sit in a heap.
+#[derive(Clone, Copy, Debug)]
+struct OrderedF64(f64);
+
+impl PartialEq for OrderedF64 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.total_cmp(&other.0) == std::cmp::Ordering::Equal
+    }
+}
+impl Eq for OrderedF64 {}
+impl PartialOrd for OrderedF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrderedF64 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
     }
 }
 
@@ -358,8 +476,13 @@ pub fn format_time(store: &DurationStore, atom: Option<&str>) -> String {
 
 /// Format ETA for human output.
 pub fn format_eta(eta: &Eta) -> String {
+    let mode = if eta.critical_path {
+        "critical-path"
+    } else {
+        "naive serial/jobs"
+    };
     let mut out = format!(
-        "ETA ~{} wall ({} serial / {} job{}) — {} known, {} unknown package time(s)\n",
+        "ETA ~{} wall ({mode}; {} serial / {} job{}) — {} known, {} unknown package time(s)\n",
         format_seconds(eta.wall_seconds),
         format_seconds(eta.serial_seconds),
         eta.jobs,
@@ -407,23 +530,31 @@ mod tests {
         assert_eq!(store.len(), 3);
         assert_eq!(store.median_seconds("sys-apps/foo", 10), Some(20.0));
 
-        let eta = estimate_remaining(
-            &store,
-            &[
-                EtaPkg {
-                    cpn: "sys-apps/foo".into(),
-                    cpv: "sys-apps/foo-9".into(),
-                },
-                EtaPkg {
-                    cpn: "sys-apps/foo".into(),
-                    cpv: "sys-apps/foo-10".into(),
-                },
-            ],
-            2,
-            10,
-        );
+        let pkgs = [
+            EtaPkg {
+                cpn: "sys-apps/foo".into(),
+                cpv: "sys-apps/foo-9".into(),
+            },
+            EtaPkg {
+                cpn: "sys-apps/foo".into(),
+                cpv: "sys-apps/foo-10".into(),
+            },
+        ];
+        let eta = estimate_remaining(&store, &pkgs, 2, 10);
         assert_eq!(eta.known, 2);
         assert!((eta.serial_seconds - 40.0).abs() < 0.01);
         assert!((eta.wall_seconds - 20.0).abs() < 0.01);
+        assert!(!eta.critical_path);
+
+        // Chain 0→1 with 2 jobs: still serial wall = 40.
+        let chain = [vec![], vec![0]];
+        let eta_cp = estimate_remaining_with_blockers(&store, &pkgs, &chain, 2, 10);
+        assert!(eta_cp.critical_path);
+        assert!((eta_cp.wall_seconds - 40.0).abs() < 0.01);
+
+        // Independent packages with 2 jobs: wall ≈ 20.
+        let indep = [vec![], vec![]];
+        let eta_par = estimate_remaining_with_blockers(&store, &pkgs, &indep, 2, 10);
+        assert!((eta_par.wall_seconds - 20.0).abs() < 0.01);
     }
 }

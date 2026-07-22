@@ -49,6 +49,8 @@ pub(crate) struct ActivityTrack {
     pub bus: crate::activity::ActivityBus,
     pub job_id: String,
     pub parent_job_id: Option<String>,
+    /// Session live-FS root so install workers can re-open the same tree.
+    pub live_root: camino::Utf8PathBuf,
 }
 
 fn pkg_kind(flags: &ActionFlags) -> crate::activity::PkgKind {
@@ -129,6 +131,7 @@ fn activity_pkg_ctx(
             planned.cpv.to_string(),
             planned.merge_root.into(),
         )
+        .with_live_root(act.live_root.clone())
     })
 }
 

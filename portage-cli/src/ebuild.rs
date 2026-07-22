@@ -441,9 +441,8 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         // Scoped privilege (Q6): compile runs un-wrapped in this process;
         // install+qmerge(+binpkg) delegates to a wrapped __worker child so the
         // ptrace tax / real root stays off the compile's make/gcc tree.
-        // Activity: compile phases emit here; install worker does not yet
-        // carry the bus (process boundary) — install/qmerge show as a gap
-        // until WorkerArgs grows activity fields.
+        // Activity: compile phases emit on the parent bus; install phases
+        // continue via LiveFs in the worker (same job_id / live_root).
         run_inner(RunInner {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
@@ -469,6 +468,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" ");
         let cpv_str = cpv.to_string();
+        let (act_job, act_parent, act_live, act_side) = worker_activity_cli(activity.as_ref());
         let code = crate::privilege::spawn_install_worker(
             backend,
             &crate::privilege::WorkerArgs {
@@ -486,6 +486,10 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
                 buildpkg,
                 quiet,
                 binpkg: None,
+                activity_job_id: act_job.as_deref(),
+                activity_parent_job_id: act_parent.as_deref(),
+                activity_live_root: act_live.as_deref(),
+                activity_side: act_side.as_deref(),
             },
         )
         .await
@@ -563,6 +567,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" ");
         let cpv_str = cpv.to_string();
+        let (act_job, act_parent, act_live, act_side) = worker_activity_cli(activity.as_ref());
         let code = crate::privilege::spawn_install_worker(
             backend,
             &crate::privilege::WorkerArgs {
@@ -580,6 +585,10 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
                 buildpkg: false,
                 quiet,
                 binpkg: Some(binpkg_path.as_str()),
+                activity_job_id: act_job.as_deref(),
+                activity_parent_job_id: act_parent.as_deref(),
+                activity_live_root: act_live.as_deref(),
+                activity_side: act_side.as_deref(),
             },
         )
         .await
@@ -624,6 +633,61 @@ pub struct InstallWorker<'a> {
     pub binpkg: Option<&'a str>,
     pub buildpkg: bool,
     pub quiet: bool,
+    pub activity_job_id: Option<&'a str>,
+    pub activity_parent_job_id: Option<&'a str>,
+    pub activity_live_root: Option<&'a str>,
+    pub activity_side: Option<&'a str>,
+}
+
+/// CLI strings for the install worker's activity identity (owned so they outlive
+/// the `WorkerArgs` borrow of local `String`s).
+fn worker_activity_cli(
+    activity: Option<&crate::activity::ActivityPkgCtx>,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
+    let Some(act) = activity else {
+        return (None, None, None, None);
+    };
+    let Some(live) = act.live_root.as_ref() else {
+        return (None, None, None, None);
+    };
+    (
+        Some(act.job_id.clone()),
+        act.parent_job_id.clone(),
+        Some(live.to_string()),
+        Some(act.merge_root.as_str().to_string()),
+    )
+}
+
+/// Rebuild a LiveFs-only package activity handle inside the install worker.
+fn worker_activity_ctx(
+    job_id: Option<&str>,
+    parent_job_id: Option<&str>,
+    live_root: Option<&str>,
+    side: Option<&str>,
+    cpv: &str,
+) -> Option<crate::activity::ActivityPkgCtx> {
+    let job_id = job_id.filter(|s| !s.is_empty())?;
+    let live_root = live_root.filter(|s| !s.is_empty())?;
+    let side = match side.unwrap_or("target") {
+        "host" => crate::activity::ActivityMergeRoot::Host,
+        _ => crate::activity::ActivityMergeRoot::Target,
+    };
+    let bus = crate::activity::worker_live_bus(Utf8Path::new(live_root));
+    Some(
+        crate::activity::ActivityPkgCtx::new(
+            bus,
+            job_id.to_string(),
+            parent_job_id.filter(|s| !s.is_empty()).map(str::to_string),
+            cpv.to_string(),
+            side,
+        )
+        .with_live_root(Utf8PathBuf::from(live_root)),
+    )
 }
 
 /// The `em __worker` body: run the install group (install+qmerge+binpkg) for one
@@ -642,6 +706,10 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         binpkg,
         buildpkg,
         quiet,
+        activity_job_id,
+        activity_parent_job_id,
+        activity_live_root,
+        activity_side,
     } = opts;
     use portage_atom::interner::{DefaultInterner, Interned};
     let use_flags: Vec<Interned<DefaultInterner>> = use_flags_str
@@ -660,6 +728,15 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         .join(ebuild_obj.category())
         .join(pf);
     let log = work_dir.join("build.log");
+
+    // LiveFs-only bus: parent still owns Session/PkgStart/PkgEnd + history.
+    let activity = worker_activity_ctx(
+        activity_job_id,
+        activity_parent_job_id,
+        activity_live_root,
+        activity_side,
+        cpv_str,
+    );
 
     let group = if binpkg.is_some() {
         PhaseGroup::BinpkgMerge
@@ -680,7 +757,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         merge_gate: None,
         buildpkg,
         binpkg: binpkg.map(Utf8Path::new),
-        activity: None, // process boundary — parent has no bus handle yet
+        activity,
     })
     .await
     .with_context(|| format!("merge log: {log}"))

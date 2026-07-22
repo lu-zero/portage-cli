@@ -1,9 +1,12 @@
 # Activity status & timing (structured; emerge.log optional)
 
-STATUS: 🟡 design locked 2026-07-22; **most of PR1–6 landed** — bus, live FS,
-`em log current|list|time|predict`, history JSONL, phase enter/leave,
-`em -p --eta`, `--activity-fd` / `--activity-jsonl`. Still open: opt-in
-emerge.log sink, install-worker activity passthrough, critical-path ETA.
+STATUS: 🟢 PR1–7 largely landed 2026-07-22 — bus, live FS, history JSONL,
+phases, `em log current|list|time|predict`, `em -p --eta` (critical-path via
+`build_blockers`), `--activity-fd`/`--activity-jsonl`, opt-in `--emergelog`,
+install-worker LiveFs phase passthrough (`--activity-job-id` + live-root).
+Still optional polish: worker JSONL re-emit for parent `--activity-fd` during
+install; richer emerge.log timestamps; `log predict` critical-path once live
+session stores the plan graph.
 
 ## Problem
 
@@ -625,7 +628,7 @@ without an explicit design change.
 3. **emerge.log:** optional compatibility sink only (decision #1).  
 4. **Concurrency:** event emit is fan-out; live FS uses per-package files (no global status lock).  
 5. **job_id:** shared with resume markers.  
-6. **ETA math:** median of last K successful merges per Cpn; v1 `sum/jobs`; v2 critical path later.  
+6. **ETA math:** median of last K successful merges per Cpn; wall uses critical-path list-schedule when `build_blockers` is available (`em -p --eta`); `em log predict` still naive (no plan graph on live session yet).
 7. **Path:** root-scoped under `var/cache/edb/em-activity/`.  
 8. **Front-ends:** prefer in-process `subscribe()` long-term; `--activity-fd` while still spawning `em`.
 
