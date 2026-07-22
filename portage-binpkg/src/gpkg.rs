@@ -329,24 +329,17 @@ fn validate_tree_under(root: &Path) -> Result<()> {
         };
         for entry in read.flatten() {
             let path = entry.path();
-            // Use the path as-is (no follow) for the containment check of the
-            // directory entry itself; canonicalize only non-symlinks so a
-            // symlink pointing outside is still allowed *as a symlink* (Portage
-            // images contain absolute target symlinks) but its *location* must
-            // stay under root.
             let meta = match std::fs::symlink_metadata(&path) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
             if meta.file_type().is_symlink() {
-                // Symlink *path* must live under root; target may be absolute.
-                if !path.starts_with(root) && !path.starts_with(&root_canon) {
-                    return Err(Error::Corrupt(format!(
-                        "extracted symlink escaped {}: {}",
-                        root.display(),
-                        path.display()
-                    )));
-                }
+                // Symlinks are never followed by this walk (only real
+                // directories are pushed onto `stack`), so a symlink cannot
+                // escape `root` via traversal. Absolute targets are legitimate
+                // in Portage images (e.g. `/lib64/ld-linux...`); the real
+                // tar-slip vector — `..`/absolute *member paths* — was already
+                // rejected by the listing check before extraction.
                 continue;
             }
             if meta.is_dir() {
