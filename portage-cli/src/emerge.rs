@@ -500,6 +500,9 @@ async fn emerge_atoms_inner(
     }
     // Prefer resume job_id so markers and activity share one correlation key.
     let job_id = crate::activity::resolve_job_id(&activity_session, resume_job_id.as_deref());
+    // Surface tracing diagnostics (warn/error/info from libraries) onto this
+    // session's bus as ActivityEvent::Diagnostic for the duration of the merge.
+    crate::activity::set_session(activity.clone(), &job_id);
     let parent_job_id = activity_session.parent_job_id.clone();
     let live_root = roots.merge_root().to_owned();
     let session_started = crate::activity::ActivityEvent::now();
@@ -581,6 +584,8 @@ async fn emerge_atoms_inner(
         failed: 0,
         seconds: crate::activity::ActivityEvent::now() - session_started,
     });
+    // Stop mirroring tracing diagnostics onto this (now-ending) session.
+    crate::activity::clear_session();
 
     merge_result?;
 

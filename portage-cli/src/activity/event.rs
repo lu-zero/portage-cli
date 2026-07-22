@@ -88,6 +88,15 @@ pub struct ActivityPlanPkg {
     pub merge_root: ActivityMergeRoot,
 }
 
+/// Severity for a [`ActivityEvent::Diagnostic`] (mirrors `tracing::Level`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiagnosticLevel {
+    Info,
+    Warn,
+    Error,
+}
+
 /// Structured progress event. Serialises with `tag = "event"` + `"v": 1`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -183,6 +192,23 @@ pub enum ActivityEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A free-form diagnostic (from `tracing` events) surfaced onto the bus so
+    /// `--activity-fd` / front-end consumers see warnings/errors/info alongside
+    /// the structured milestones. `cpv`/`phase` are populated from the current
+    /// `pkg`/`phase` tracing spans when present.
+    Diagnostic {
+        v: u32,
+        job_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_job_id: Option<String>,
+        level: DiagnosticLevel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cpv: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
+        msg: String,
+        at: f64,
+    },
 }
 
 impl ActivityEvent {
@@ -203,7 +229,8 @@ impl ActivityEvent {
             | Self::PkgStart { job_id, .. }
             | Self::PhaseEnter { job_id, .. }
             | Self::PhaseLeave { job_id, .. }
-            | Self::PkgEnd { job_id, .. } => job_id,
+            | Self::PkgEnd { job_id, .. }
+            | Self::Diagnostic { job_id, .. } => job_id,
         }
     }
 

@@ -226,6 +226,8 @@ impl ActivitySink for LiveFsSink {
                 self.remove_inflight(job_id, *merge_root, cpv);
                 self.write_session_file(job_id);
             }
+            // Diagnostics are transient; not part of the on-disk snapshot.
+            ActivityEvent::Diagnostic { .. } => {}
         }
     }
 }

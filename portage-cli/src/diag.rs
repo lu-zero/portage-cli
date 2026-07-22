@@ -25,6 +25,10 @@ use tracing_subscriber::filter::LevelFilter;
 /// `parallel` is whether more than one merge job will run concurrently (`-j>1`);
 /// it drops the floor to `WARN` so per-package info does not interleave.
 pub fn init(quiet: bool, verbose: u8, parallel: bool) {
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
     let floor = if verbose >= 2 {
         LevelFilter::TRACE
     } else if verbose >= 1 {
@@ -35,13 +39,20 @@ pub fn init(quiet: bool, verbose: u8, parallel: bool) {
         LevelFilter::INFO
     };
 
-    // `try_init` rather than `init`: a nested invocation (e.g. an install
-    // `__worker` child re-entering `main`) must not panic when the subscriber
-    // is already set.
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(floor)
+    // Two layers on one registry: console (stderr fmt) + the activity-bus
+    // bridge (mirrors info/warn/error onto the current session's bus as
+    // ActivityEvent::Diagnostic). Both honour the same level floor.
+    let fmt = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
         .with_target(false)
         .without_time()
+        .with_filter(floor);
+    let bus = crate::activity::BusLayer::new().with_filter(floor);
+
+    // `try_init`: a nested re-entry (install __worker child) must not panic
+    // when the subscriber is already set.
+    let _ = tracing_subscriber::registry()
+        .with(fmt)
+        .with(bus)
         .try_init();
 }

@@ -4,6 +4,7 @@
 //! subscribe or read the live FS sink. emerge.log is not the control plane.
 
 mod bus;
+mod bus_layer;
 mod emergelog;
 mod event;
 mod history;
@@ -13,10 +14,11 @@ mod live_fs;
 mod projection;
 
 pub use bus::{ActivityBus, ActivitySink, BackgroundSink, RecordingSink};
+pub use bus_layer::{BusLayer, clear_session, set_session};
 pub use emergelog::EmergeLogSink;
 pub use event::{
     ACTIVITY_EVENT_VERSION, ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg,
-    ActivitySessionOpts, PhaseTiming, PkgKind, SessionFlags,
+    ActivitySessionOpts, DiagnosticLevel, PhaseTiming, PkgKind, SessionFlags,
 };
 pub use history::{
     DurationStore, Eta, EtaPkg, HistoryRecord, HistorySink, estimate_remaining,

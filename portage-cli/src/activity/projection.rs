@@ -262,6 +262,8 @@ impl LiveProjection {
                     }
                 }
             }
+            // Diagnostics do not change session/inflight state.
+            ActivityEvent::Diagnostic { .. } => {}
         }
     }
 
