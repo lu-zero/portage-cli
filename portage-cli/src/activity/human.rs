@@ -6,36 +6,45 @@
 //! `println!`s scattered through the merge loop. Verbosity is decided in one
 //! place (here), not at every call site.
 //!
-//! Rendering rules, matched against real emerge's own `_emerge/MergeListItem.py`
-//! / `EbuildBuild.py` / `Binpkg.py` / `JobStatusDisplay.py`:
+//! Rendering rules, matched against a real interactive `--jobs N` emerge run
+//! (real `_emerge/{MergeListItem,PackageMerge,Binpkg,JobStatusDisplay}.py`):
 //! - `quiet`: suppress progress banners. Failures still print — real
 //!   `--quiet` never silences errors, only the per-package info noise.
-//! - default: `>>> {action} (N of M) cpv` on
-//!   [`PkgStart`](super::event::ActivityEvent::PkgStart), plus exactly **one**
-//!   headline `=== (N of M) <Phase> (cpv)` banner per package (compile for a
-//!   source build, qmerge for a binary merge) — real emerge does not print a
-//!   banner for every phase (setup/unpack/prepare/configure/...), only the
-//!   one that matters.
-//! - `verbose >= 1`: also show every other phase's enter banner, plus elapsed
-//!   time on [`PhaseLeave`](super::event::ActivityEvent::PhaseLeave).
+//! - default: `>>> {action} (N of M) cpv[ for/to ROOT/]` on
+//!   [`PkgStart`](super::event::ActivityEvent::PkgStart) (build start) and on
+//!   the `qmerge`/`merge` phase's enter/leave (`Installing`/`Completed` — the
+//!   actual VDB-write step, wrapped by real emerge's `PackageMerge`). Real
+//!   emerge does **not** print a banner for the phases in between
+//!   (setup/unpack/.../compile/install) — that's `EbuildBuild`'s "===
+//!   Compiling/Merging" message, which goes to `emerge.log` only
+//!   (`logger.log`, a different sink than the interactive `statusMessage`
+//!   banners), never to the terminal.
+//! - `verbose >= 1`: additionally show every phase's enter banner plus
+//!   elapsed time on [`PhaseLeave`](super::event::ActivityEvent::PhaseLeave)
+//!   — an `em`-specific extra beyond what real emerge shows interactively,
+//!   for anyone who wants the detail.
 //! - `--jobs N` (N > 1): redraw a persistent `Jobs: N of M complete, R
 //!   running` status line (real emerge's `JobStatusDisplay`), erased before
 //!   and redrawn after each banner so parallel output doesn't just interleave
 //!   silently.
 //!
-//! `index`/`of` live on `PkgStart`; `PhaseEnter` only carries `cpv`, so the
-//! sink remembers the last `PkgStart` per `(job_id, cpv)` to label phases.
+//! `index`/`of` live on `PkgStart`; `PhaseEnter`/`PhaseLeave` only carry
+//! `cpv`, so the sink remembers the last `PkgStart` per `(job_id, cpv)` to
+//! label them. `SessionStart` carries the actual root paths (`merge_root`/
+//! `host_root` strings) so the `for`/`to ROOT/` suffix can be reproduced —
+//! real emerge only appends it when `ROOT != "/"`.
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::sync::Mutex;
 
 use super::bus::ActivitySink;
-use super::event::{ActivityEvent, PkgKind};
+use super::event::{ActivityEvent, ActivityMergeRoot, PkgKind};
 use crate::style::{C_COUNT, C_PKG, C_PKG_BINARY};
 
 /// Emerge-style label for a phase, or `None` to suppress (internal `pkg_*`
-/// helpers the user does not need to see scroll by).
+/// helpers the user does not need to see scroll by). Only consulted under
+/// `verbose >= 1` — real emerge shows none of these interactively.
 fn phase_label(phase: &str) -> Option<&'static str> {
     Some(match phase {
         "setup" => "Setting up",
@@ -54,24 +63,10 @@ fn phase_label(phase: &str) -> Option<&'static str> {
     })
 }
 
-/// The one phase per [`PkgKind`] real emerge banners as `=== (N of M) ...`;
-/// every other phase stays silent unless `verbose >= 1`.
-fn is_headline_phase(kind: PkgKind, phase: &str) -> bool {
-    match kind {
-        PkgKind::Source => phase == "compile",
-        PkgKind::Binpkg => phase == "qmerge" || phase == "merge",
-        PkgKind::FetchOnly => false,
-    }
-}
-
-/// Combined label for the headline banner (`EbuildBuild`'s "Compiling/Merging",
-/// `Binpkg`'s "Merging Binary" — real emerge's exact wording).
-fn headline_label(kind: PkgKind) -> &'static str {
-    match kind {
-        PkgKind::Source => "Compiling/Merging",
-        PkgKind::Binpkg => "Merging Binary",
-        PkgKind::FetchOnly => "",
-    }
+/// The phase real emerge's `PackageMerge` wraps with "Installing"/"Completed"
+/// — the actual VDB-write step, distinct from the build phases before it.
+fn is_merge_phase(phase: &str) -> bool {
+    phase == "qmerge" || phase == "merge"
 }
 
 #[derive(Clone, Copy, Default)]
@@ -93,6 +88,10 @@ struct JobStatus {
     /// A status line is currently on screen (tty only) and needs erasing
     /// before the next banner lands.
     displayed: bool,
+    /// Actual root paths from `SessionStart`, for the `for`/`to ROOT/` message
+    /// suffix (real emerge only adds it when the root isn't `/`).
+    host_root: String,
+    merge_root: String,
 }
 
 /// Terminal renderer for the activity bus. Attached as a **direct** (inline)
@@ -167,6 +166,25 @@ impl HumanStdoutSink {
         }
         let _ = std::io::stdout().flush();
     }
+
+    /// `" {preposition} {root}/"`, or empty when the root is `/` — real
+    /// emerge's `if pkg.root_config.settings["ROOT"] != "/": msg += " for/to
+    /// {root}"`.
+    fn root_suffix(&self, job_id: &str, root: ActivityMergeRoot, preposition: &str) -> String {
+        let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(js) = jobs.get(job_id) else {
+            return String::new();
+        };
+        let path = match root {
+            ActivityMergeRoot::Host => &js.host_root,
+            ActivityMergeRoot::Target => &js.merge_root,
+        };
+        if path.is_empty() || path == "/" {
+            return String::new();
+        }
+        let path = path.strip_suffix('/').unwrap_or(path);
+        format!(" {preposition} {path}/")
+    }
 }
 
 fn action_for(kind: PkgKind) -> &'static str {
@@ -178,6 +196,13 @@ fn action_for(kind: PkgKind) -> &'static str {
     }
 }
 
+fn pkg_style(kind: PkgKind) -> anstyle::Style {
+    match kind {
+        PkgKind::Binpkg => C_PKG_BINARY,
+        _ => C_PKG,
+    }
+}
+
 impl ActivitySink for HumanStdoutSink {
     fn on_event(&self, event: &ActivityEvent) {
         match event {
@@ -185,6 +210,8 @@ impl ActivitySink for HumanStdoutSink {
                 job_id,
                 plan_total,
                 flags,
+                merge_root,
+                host_root,
                 ..
             } => {
                 self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(
@@ -195,6 +222,8 @@ impl ActivitySink for HumanStdoutSink {
                         failed: 0,
                         jobs: flags.jobs.unwrap_or(1).max(1),
                         displayed: false,
+                        host_root: host_root.clone(),
+                        merge_root: merge_root.clone(),
                     },
                 );
                 if !self.quiet {
@@ -212,6 +241,7 @@ impl ActivitySink for HumanStdoutSink {
             ActivityEvent::PkgStart {
                 job_id,
                 cpv,
+                merge_root,
                 index,
                 of,
                 kind,
@@ -229,21 +259,23 @@ impl ActivitySink for HumanStdoutSink {
                     return;
                 }
                 self.erase_status(job_id);
-                let pkg_style = match kind {
-                    PkgKind::Binpkg => C_PKG_BINARY,
-                    _ => C_PKG,
-                };
+                let style = pkg_style(*kind);
+                let suffix = self.root_suffix(job_id, *merge_root, "for");
                 let mut out = anstream::stdout();
                 let _ = writeln!(
                     out,
-                    ">>> {} ({C_COUNT}{index}{C_COUNT:#} of {C_COUNT}{of}{C_COUNT:#}) {pkg_style}{cpv}{pkg_style:#}",
+                    ">>> {} ({C_COUNT}{index}{C_COUNT:#} of {C_COUNT}{of}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
                     action_for(*kind)
                 );
                 let _ = out.flush();
                 self.draw_status(job_id);
             }
             ActivityEvent::PhaseEnter {
-                job_id, cpv, phase, ..
+                job_id,
+                cpv,
+                merge_root,
+                phase,
+                ..
             } => {
                 if self.quiet {
                     return;
@@ -255,17 +287,25 @@ impl ActivitySink for HumanStdoutSink {
                     .get(&(job_id.clone(), cpv.clone()))
                     .copied();
                 let Some(loc) = loc else { return };
-                let headline = is_headline_phase(loc.kind, phase);
-                if !headline && self.verbose == 0 {
+                if is_merge_phase(phase) {
+                    let style = pkg_style(loc.kind);
+                    let suffix = self.root_suffix(job_id, *merge_root, "to");
+                    self.erase_status(job_id);
+                    let mut out = anstream::stdout();
+                    let _ = writeln!(
+                        out,
+                        ">>> Installing ({C_COUNT}{}{C_COUNT:#} of {C_COUNT}{}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
+                        loc.index, loc.of
+                    );
+                    let _ = out.flush();
+                    self.draw_status(job_id);
+                    return;
+                }
+                if self.verbose == 0 {
                     return;
                 }
                 let Some(label) = phase_label(phase) else {
                     return;
-                };
-                let label = if headline {
-                    headline_label(loc.kind)
-                } else {
-                    label
                 };
                 self.erase_status(job_id);
                 println!("=== ({} of {}) {label} ({cpv})", loc.index, loc.of);
@@ -287,11 +327,15 @@ impl ActivitySink for HumanStdoutSink {
             ActivityEvent::PkgEnd {
                 job_id,
                 cpv,
+                cpn: _,
+                merge_root,
+                kind,
                 ok,
                 error,
                 ..
             } => {
-                self.state
+                let had = self
+                    .state
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .remove(&(job_id.clone(), cpv.clone()));
@@ -304,7 +348,22 @@ impl ActivitySink for HumanStdoutSink {
                         }
                     }
                 }
-                if !*ok {
+                if *ok {
+                    if !self.quiet
+                        && let Some(loc) = had
+                    {
+                        self.erase_status(job_id);
+                        let style = pkg_style(*kind);
+                        let suffix = self.root_suffix(job_id, *merge_root, "to");
+                        let mut out = anstream::stdout();
+                        let _ = writeln!(
+                            out,
+                            ">>> Completed ({C_COUNT}{}{C_COUNT:#} of {C_COUNT}{}{C_COUNT:#}) {style}{cpv}{style:#}{suffix}",
+                            loc.index, loc.of
+                        );
+                        let _ = out.flush();
+                    }
+                } else {
                     // Failures always surface, even under `-q` — real emerge
                     // never silences errors on `--quiet`, only progress info.
                     self.erase_status(job_id);
@@ -324,6 +383,32 @@ impl ActivitySink for HumanStdoutSink {
 mod tests {
     use super::*;
     use crate::activity::{ACTIVITY_EVENT_VERSION, ActivityMergeRoot};
+
+    fn session_start(
+        job: &str,
+        plan_total: u32,
+        jobs: Option<u32>,
+        merge_root: &str,
+    ) -> ActivityEvent {
+        ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: job.into(),
+            parent_job_id: None,
+            pid: 1,
+            started_at: 0.0,
+            argv: vec![],
+            merge_root: merge_root.into(),
+            host_root: "/".into(),
+            mode: crate::activity::ActivityMode::Merge,
+            plan_total,
+            flags: crate::activity::SessionFlags {
+                jobs,
+                ..Default::default()
+            },
+            plan: vec![],
+            blockers: vec![],
+        }
+    }
 
     fn pkg_start(job: &str, cpv: &str, index: u32, of: u32) -> ActivityEvent {
         ActivityEvent::PkgStart {
@@ -352,6 +437,26 @@ mod tests {
             merge_root: ActivityMergeRoot::Target,
             phase: phase.into(),
             at: 2.0,
+        }
+    }
+
+    fn pkg_end(job: &str, cpv: &str, ok: bool) -> ActivityEvent {
+        ActivityEvent::PkgEnd {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: job.into(),
+            parent_job_id: None,
+            cpv: cpv.into(),
+            cpn: cpv
+                .split_once('/')
+                .map(|(c, _)| c.to_string())
+                .unwrap_or_default(),
+            merge_root: ActivityMergeRoot::Target,
+            kind: PkgKind::Source,
+            ok,
+            at: 3.0,
+            seconds: 1.0,
+            phases: vec![],
+            error: if ok { None } else { Some("boom".into()) },
         }
     }
 
@@ -391,12 +496,11 @@ mod tests {
     }
 
     #[test]
-    fn only_the_headline_phase_is_a_source_headline() {
-        assert!(is_headline_phase(PkgKind::Source, "compile"));
-        assert!(!is_headline_phase(PkgKind::Source, "unpack"));
-        assert!(!is_headline_phase(PkgKind::Source, "install"));
-        assert!(is_headline_phase(PkgKind::Binpkg, "qmerge"));
-        assert!(!is_headline_phase(PkgKind::FetchOnly, "fetch"));
+    fn only_qmerge_or_merge_is_the_merge_phase() {
+        assert!(is_merge_phase("qmerge"));
+        assert!(is_merge_phase("merge"));
+        assert!(!is_merge_phase("compile"));
+        assert!(!is_merge_phase("install"));
     }
 
     #[test]
@@ -407,41 +511,32 @@ mod tests {
     }
 
     #[test]
+    fn root_suffix_is_empty_for_the_live_root() {
+        let sink = HumanStdoutSink::new(false, 0);
+        sink.on_event(&session_start("j", 1, None, "/"));
+        assert_eq!(sink.root_suffix("j", ActivityMergeRoot::Target, "for"), "");
+    }
+
+    #[test]
+    fn root_suffix_names_a_non_live_root() {
+        let sink = HumanStdoutSink::new(false, 0);
+        sink.on_event(&session_start("j", 1, None, "/tmp/portage-act"));
+        assert_eq!(
+            sink.root_suffix("j", ActivityMergeRoot::Target, "for"),
+            " for /tmp/portage-act/"
+        );
+        assert_eq!(
+            sink.root_suffix("j", ActivityMergeRoot::Target, "to"),
+            " to /tmp/portage-act/"
+        );
+    }
+
+    #[test]
     fn jobs_status_tracks_completion_and_failure_counts() {
         let sink = HumanStdoutSink::new(false, 0);
-        sink.on_event(&ActivityEvent::SessionStart {
-            v: ACTIVITY_EVENT_VERSION,
-            job_id: "j".into(),
-            parent_job_id: None,
-            pid: 1,
-            started_at: 0.0,
-            argv: vec![],
-            merge_root: "/".into(),
-            host_root: "/".into(),
-            mode: crate::activity::ActivityMode::Merge,
-            plan_total: 2,
-            flags: crate::activity::SessionFlags {
-                jobs: Some(4),
-                ..Default::default()
-            },
-            plan: vec![],
-            blockers: vec![],
-        });
+        sink.on_event(&session_start("j", 2, Some(4), "/"));
         sink.on_event(&pkg_start("j", "a/a-1", 1, 2));
-        sink.on_event(&ActivityEvent::PkgEnd {
-            v: ACTIVITY_EVENT_VERSION,
-            job_id: "j".into(),
-            parent_job_id: None,
-            cpv: "a/a-1".into(),
-            cpn: "a/a".into(),
-            merge_root: ActivityMergeRoot::Target,
-            kind: PkgKind::Source,
-            ok: false,
-            at: 1.0,
-            seconds: 1.0,
-            phases: vec![],
-            error: Some("boom".into()),
-        });
+        sink.on_event(&pkg_end("j", "a/a-1", false));
         let jobs = sink.jobs.lock().unwrap_or_else(|e| e.into_inner());
         assert!(matches!(
             jobs.get("j"),
@@ -454,21 +549,7 @@ mod tests {
         // jobs=1 (or unset): `draw_status` must stay a no-op — no line, no
         // panic — same as real emerge's sequential path.
         let sink = HumanStdoutSink::new(false, 0);
-        sink.on_event(&ActivityEvent::SessionStart {
-            v: ACTIVITY_EVENT_VERSION,
-            job_id: "j".into(),
-            parent_job_id: None,
-            pid: 1,
-            started_at: 0.0,
-            argv: vec![],
-            merge_root: "/".into(),
-            host_root: "/".into(),
-            mode: crate::activity::ActivityMode::Merge,
-            plan_total: 1,
-            flags: crate::activity::SessionFlags::default(),
-            plan: vec![],
-            blockers: vec![],
-        });
+        sink.on_event(&session_start("j", 1, None, "/"));
         let jobs = sink.jobs.lock().unwrap_or_else(|e| e.into_inner());
         assert!(matches!(jobs.get("j"), Some(js) if js.jobs == 1));
     }
