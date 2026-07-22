@@ -405,16 +405,16 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let binpkg_index = if want_local {
         match portage_binpkg::BinpkgIndex::open(target_pkgdir.as_std_path()) {
             Ok(idx) => {
-                if !idx.is_empty() && !globals.quiet {
-                    println!(
-                        ">>> --usepkg: {} local binary package(s) in {target_pkgdir}",
+                if !idx.is_empty() {
+                    tracing::info!(
+                        "--usepkg: {} local binary package(s) in {target_pkgdir}",
                         idx.len()
                     );
                 }
                 Some(idx)
             }
             Err(e) => {
-                eprintln!("warning: --usepkg index unavailable ({target_pkgdir}): {e:#}");
+                tracing::warn!("--usepkg index unavailable ({target_pkgdir}): {e:#}");
                 None
             }
         }
@@ -432,16 +432,16 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let host_binpkg_index_owned = if want_local && dual_pkgdir {
         match portage_binpkg::BinpkgIndex::open(host_pkgdir.as_std_path()) {
             Ok(idx) => {
-                if !idx.is_empty() && !globals.quiet {
-                    println!(
-                        ">>> --usepkg: {} host binary package(s) in {host_pkgdir}",
+                if !idx.is_empty() {
+                    tracing::info!(
+                        "--usepkg: {} host binary package(s) in {host_pkgdir}",
                         idx.len()
                     );
                 }
                 Some(idx)
             }
             Err(e) => {
-                eprintln!("warning: --usepkg host index unavailable ({host_pkgdir}): {e:#}");
+                tracing::warn!("--usepkg host index unavailable ({host_pkgdir}): {e:#}");
                 None
             }
         }
@@ -477,16 +477,11 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
             {
                 Ok((text, reason)) => {
                     let idx = portage_binpkg::RemoteBinpkgIndex::new(&text, base);
-                    if !globals.quiet {
-                        println!(
-                            ">>> --getbinpkg: {} package(s) on {base} ({reason})",
-                            idx.len()
-                        );
-                    }
+                    tracing::info!("--getbinpkg: {} package(s) on {base} ({reason})", idx.len());
                     fetched.push(idx);
                 }
                 Err(e) => {
-                    eprintln!("warning: could not fetch binhost index {base}: {e:#}");
+                    tracing::warn!("could not fetch binhost index {base}: {e:#}");
                 }
             }
         }
@@ -555,9 +550,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         } else {
             format!("{merged} package(s) merged into {merge_root}")
         };
-        if !globals.quiet {
-            println!("\n>>> Done — {done}{extra}");
-        }
+        tracing::info!("Done — {done}{extra}");
         return Ok(());
     }
 
@@ -649,20 +642,16 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     if fetchonly || fetch_all_uri {
         // Local binpkg already present → nothing to download.
         if let Some(binpkg_path) = reused {
-            if !quiet {
-                println!(
-                    ">>> binpkg already present (no fetch needed): {}",
-                    binpkg_path.display()
-                );
-            }
+            tracing::info!(
+                "binpkg already present (no fetch needed): {}",
+                binpkg_path.display()
+            );
             return Ok(());
         }
         // Remote binpkg: download into the run cache, do not merge.
         if let Some(url) = remote_url {
             let path = fetch_remote_binpkg(&url, work_base).await?;
-            if !quiet {
-                println!(">>> Fetched binary package: {url} -> {path}");
-            }
+            tracing::info!("Fetched binary package: {url} -> {path}");
             return Ok(());
         }
         if enforce_no_source {
@@ -689,9 +678,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     }
 
     if let Some(binpkg_path) = reused {
-        if !quiet {
-            println!(">>> Using binary package: {}", binpkg_path.display());
-        }
+        tracing::info!("Using binary package: {}", binpkg_path.display());
         let path = camino::Utf8Path::from_path(binpkg_path.as_path())
             .unwrap_or_else(|| camino::Utf8Path::new("/invalid-binpkg-path"));
         return ebuild::merge_binpkg(ebuild::MergeBinpkg {
@@ -712,9 +699,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     if let Some(url) = remote_url {
         match fetch_remote_binpkg(&url, work_base).await {
             Ok(path) => {
-                if !quiet {
-                    println!(">>> Fetched binary package: {url}");
-                }
+                tracing::info!("Fetched binary package: {url}");
                 ebuild::merge_binpkg(ebuild::MergeBinpkg {
                     binpkg_path: &path,
                     ebuild_path: &planned.ebuild_path,

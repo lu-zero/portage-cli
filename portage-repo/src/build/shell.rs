@@ -769,13 +769,6 @@ impl EbuildShell {
         self.phase_log = path;
     }
 
-    /// Whether phase output is being sent to the log only (no console tee).
-    /// Callers that print their own one-line status can use this to stay quiet
-    /// under `-q` / `-j>1` for the same reason phase output is.
-    pub fn quiet(&self) -> bool {
-        self.phase_log.as_ref().is_some_and(|(_, q)| *q)
-    }
-
     /// Use `dir` as the writable distfiles directory for this shell (the
     /// auto-resolved location becomes a read-only fallback).
     pub fn set_distdir(&mut self, dir: Utf8PathBuf) {
