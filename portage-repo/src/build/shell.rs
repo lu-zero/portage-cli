@@ -366,6 +366,10 @@ pub struct EbuildShell {
     /// phase driver checks it after the phase function returns. Shared (Arc)
     /// with every clone of the inner shell, including the baseline.
     die_flag: commands::die::DieFlag,
+    /// Shared "suppress informational output" flag, flipped with `phase_log`'s
+    /// quiet bool so build helpers honour `-q` / `-j>1`. Shared (Arc) like
+    /// `die_flag`.
+    quiet_flag: commands::output::QuietFlag,
     /// Cross-subshell accumulator for the `docompress`/`dostrip` path lists
     /// (PMS 12.3.9/12.3.10), populated during `src_install` and read by the
     /// merge driver's post-install pass. Shared (Arc) like `die_flag`.
@@ -695,6 +699,9 @@ impl EbuildShell {
         let die_flag = commands::die::DieFlag::default();
         shell.set_shared(die_flag.clone());
 
+        let quiet_flag = commands::output::QuietFlag::default();
+        shell.set_shared(quiet_flag.clone());
+
         let install_paths = commands::install_paths::InstallPaths::default();
         shell.set_shared(install_paths.clone());
 
@@ -706,6 +713,7 @@ impl EbuildShell {
             distdir_override: None,
             phase_log: None,
             die_flag,
+            quiet_flag,
             install_paths,
             inst_owner,
             build_config_root: None,
@@ -766,7 +774,16 @@ impl EbuildShell {
     /// Log phase output to `path` (created on first write): tee'd to the
     /// console, or captured silently when `quiet`.
     pub fn set_phase_log(&mut self, path: Option<(Utf8PathBuf, bool)>) {
+        let quiet = path.as_ref().is_some_and(|(_, q)| *q);
+        self.quiet_flag.set(quiet);
         self.phase_log = path;
+    }
+
+    /// Whether phase output is being sent to the log only (no console tee).
+    /// Callers that print their own one-line status can use this to stay quiet
+    /// under `-q` / `-j>1` for the same reason phase output is.
+    pub fn quiet(&self) -> bool {
+        self.phase_log.as_ref().is_some_and(|(_, q)| *q)
     }
 
     /// Use `dir` as the writable distfiles directory for this shell (the
@@ -1933,7 +1950,22 @@ impl EbuildShell {
                 return Err(Error::Shell(format!("{func_name}: die: {msg}")));
             }
         } else {
-            eprintln!("warning: {func_name} not defined, nothing to do");
+            // Route the warning through the phase log (so `build.log` records
+            // it) and mirror to the console only when not quiet — rather than a
+            // raw `eprintln!` that bypasses both verbosity and the log.
+            let warn = format!("warning: {func_name} not defined, nothing to do\n");
+            if let Some((log, quiet)) = &self.phase_log {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log)
+                    .and_then(|mut f| std::io::Write::write_all(&mut f, warn.as_bytes()));
+                if !*quiet {
+                    let _ = std::io::Write::write_all(&mut std::io::stderr(), warn.as_bytes());
+                }
+            } else {
+                let _ = std::io::Write::write_all(&mut std::io::stderr(), warn.as_bytes());
+            }
         }
 
         Ok(())

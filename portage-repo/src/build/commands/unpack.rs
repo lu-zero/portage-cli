@@ -31,6 +31,10 @@ impl builtins::Command for UnpackCommand {
         // as fatal. The per-archive "die:" diagnostics are printed in the
         // blocking task below; this only raises the shared flag.
         let die_flag = context.shared::<super::die::DieFlag>().ok().cloned();
+        let quiet = context
+            .shared::<super::output::QuietFlag>()
+            .map(|q| q.get())
+            .unwrap_or(false);
         let shell = context.shell;
 
         let get = |var: &str| {
@@ -70,7 +74,9 @@ impl builtins::Command for UnpackCommand {
                     return 1;
                 }
 
-                eprintln!(">>> Unpacking {} to {}", archive, cwd.display());
+                if !quiet {
+                    eprintln!(">>> Unpacking {} to {}", archive, cwd.display());
+                }
 
                 match unpack_archive(&src_path, &cwd, eapi) {
                     Ok(0) => {}

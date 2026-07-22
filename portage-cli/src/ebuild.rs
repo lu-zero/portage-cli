@@ -1163,7 +1163,11 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             build_binpkg(&shell, &ebuild, &work_root, root)
         };
         match result {
-            Ok(path) => println!(">>> Created binary package: {path}"),
+            Ok(path) => {
+                if !shell.quiet() {
+                    println!(">>> Created binary package: {path}");
+                }
+            }
             Err(e) if is_buildonly => {
                 return Err(e.context("--buildpkgonly: creating binary package"));
             }
@@ -1448,7 +1452,7 @@ fn post_process_after_install(
     };
 
     let stats = postprocess::post_process_image(&image_dir, &cfg)?;
-    if stats.compressed + stats.relinked + stats.stripped > 0 {
+    if !shell.quiet() && stats.compressed + stats.relinked + stats.stripped > 0 {
         println!(
             ">>> post-install: {} file(s) compressed, {} symlink(s) retargeted, {} object(s) stripped",
             stats.compressed, stats.relinked, stats.stripped
@@ -1507,7 +1511,9 @@ async fn run_fetch(
     );
 
     if src_uri_str.trim().is_empty() {
-        println!("fetch: nothing to fetch (SRC_URI is empty)");
+        if !shell.quiet() {
+            println!("fetch: nothing to fetch (SRC_URI is empty)");
+        }
         return Ok(());
     }
 
@@ -1529,7 +1535,9 @@ async fn run_fetch(
     };
 
     if distfiles.is_empty() {
-        println!("fetch: nothing to fetch");
+        if !shell.quiet() {
+            println!("fetch: nothing to fetch");
+        }
         return Ok(());
     }
 
@@ -1565,8 +1573,16 @@ async fn run_fetch(
     let mut any_restricted = false;
     for (df, result) in results {
         match result {
-            Ok(FetchStatus::AlreadyPresent) => println!("fetch: {} (already present)", df.filename),
-            Ok(FetchStatus::Downloaded) => println!("fetch: {} ok", df.filename),
+            Ok(FetchStatus::AlreadyPresent) => {
+                if !shell.quiet() {
+                    println!("fetch: {} (already present)", df.filename);
+                }
+            }
+            Ok(FetchStatus::Downloaded) => {
+                if !shell.quiet() {
+                    println!("fetch: {} ok", df.filename);
+                }
+            }
             Ok(FetchStatus::FetchRestricted) => {
                 eprintln!(
                     "fetch: {} is fetch-restricted (RESTRICT=fetch)",
@@ -1716,12 +1732,14 @@ async fn run_merge(
         eprintln!("warning: could not write environment.bz2: {e}");
     }
 
-    println!(
-        "merge: {}/{}-{} registered (counter={counter})",
-        ebuild.category(),
-        ebuild.name(),
-        ebuild.version()
-    );
+    if !shell.quiet() {
+        println!(
+            "merge: {}/{}-{} registered (counter={counter})",
+            ebuild.category(),
+            ebuild.name(),
+            ebuild.version()
+        );
+    }
 
     if !protected.is_empty() {
         println!(

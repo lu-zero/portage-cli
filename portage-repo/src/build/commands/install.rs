@@ -1170,6 +1170,10 @@ impl builtins::Command for FownersCommand {
             !r.trim_end_matches('/').is_empty()
         };
         let pwdb_etc = PathBuf::from(pwdb_root.trim_end_matches('/')).join("etc");
+        let quiet = context
+            .shared::<super::output::QuietFlag>()
+            .map(|q| q.get())
+            .unwrap_or(false);
         Ok(run_blocking(&context, move || {
             // Leading `-*` are options; the first non-option is the owner
             // (unprefixed, resolved to numeric uid:gid against the target db),
@@ -1205,10 +1209,12 @@ impl builtins::Command for FownersCommand {
                 // `--owner`). A privileged (root) build must still die — there a
                 // chown failure is a genuine error.
                 _ if !rustix::process::getuid().is_root() => {
-                    eprintln!(
-                        "fowners: cannot set ownership '{}' (unprivileged build) — leaving as-is",
-                        raw.first().map(String::as_str).unwrap_or("")
-                    );
+                    if !quiet {
+                        eprintln!(
+                            "fowners: cannot set ownership '{}' (unprivileged build) — leaving as-is",
+                            raw.first().map(String::as_str).unwrap_or("")
+                        );
+                    }
                     Ok(())
                 }
                 _ => Err("fowners failed".to_string()),
