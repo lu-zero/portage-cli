@@ -14,6 +14,7 @@ use portage_repo::{
     Repository,
 };
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, MergeSpec, Vdb};
+use tracing::Instrument;
 
 use crate::postprocess;
 use crate::preserve_libs;
@@ -1112,15 +1113,19 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             _ => None,
         };
         let phase_started = activity.as_ref().map(|a| a.phase_enter(phase));
-        let phase_result = run_one_phase(
-            &mut shell,
-            &ebuild,
-            &repo,
-            phase,
-            &work_root,
-            root,
-            fetch_all_uri,
-        )
+        let phase_result = async {
+            run_one_phase(
+                &mut shell,
+                &ebuild,
+                &repo,
+                phase,
+                &work_root,
+                root,
+                fetch_all_uri,
+            )
+            .await
+        }
+        .instrument(tracing::info_span!("phase", phase))
         .await;
         if let (Some(act), Some(started)) = (activity.as_ref(), phase_started) {
             // Emit leave even on failure so dashboards do not stick mid-phase.

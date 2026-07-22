@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 
 use anyhow::{Context, bail};
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use tracing::Instrument;
 
 use crate::binpkg;
 use crate::cli;
@@ -820,6 +821,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             desired_build_env_key: &desired_build_env_key,
             activity_pkg: activity_pkg.clone(),
         })
+        .instrument(tracing::info_span!("pkg", cpv = %planned.cpv))
         .await;
         match result {
             Ok(()) => {
@@ -1043,29 +1045,33 @@ async fn merge_parallel(
             let desired_build_env_key_clone = desired_build_env_key.clone();
             let flags_ref = &flags;
             let activity_pkg = activity_pkg_ctx(&run.activity, planned);
-            inflight.push(async move {
-                let res = act_on_package(PackageAction {
-                    planned,
-                    merge_root,
-                    host_roots: run.host_roots,
-                    entry_roots: &entry_roots_clone,
-                    work_base: run.work_base,
-                    distdir: run.distdir,
-                    flags: flags_ref,
-                    merge_gate: Some(gate),
-                    binpkg_index: entry_index,
-                    remote_indices: run.remote_indices,
-                    desired_chost: &desired_chost_entry_clone,
-                    desired_build_env_key: &desired_build_env_key_clone,
-                    activity_pkg: activity_pkg.clone(),
-                })
-                .await;
-                let phases = activity_pkg
-                    .as_ref()
-                    .map(|a| a.phases_done())
-                    .unwrap_or_default();
-                (i, res, pkg_started, kind, phases)
-            });
+            let pkg_span = tracing::info_span!("pkg", cpv = %planned.cpv);
+            inflight.push(
+                async move {
+                    let res = act_on_package(PackageAction {
+                        planned,
+                        merge_root,
+                        host_roots: run.host_roots,
+                        entry_roots: &entry_roots_clone,
+                        work_base: run.work_base,
+                        distdir: run.distdir,
+                        flags: flags_ref,
+                        merge_gate: Some(gate),
+                        binpkg_index: entry_index,
+                        remote_indices: run.remote_indices,
+                        desired_chost: &desired_chost_entry_clone,
+                        desired_build_env_key: &desired_build_env_key_clone,
+                        activity_pkg: activity_pkg.clone(),
+                    })
+                    .await;
+                    let phases = activity_pkg
+                        .as_ref()
+                        .map(|a| a.phases_done())
+                        .unwrap_or_default();
+                    (i, res, pkg_started, kind, phases)
+                }
+                .instrument(pkg_span),
+            );
         }
 
         let Some((i, res, pkg_started, kind, phases)) = inflight.next().await else {
