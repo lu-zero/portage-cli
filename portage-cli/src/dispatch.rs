@@ -448,21 +448,69 @@ fn run_glsa(command: &Option<GlsaCommand>) -> Result<()> {
 }
 
 fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
+    let roots = globals.roots();
     match command {
         None | Some(LogCommand::Current) => {
-            let roots = globals.roots();
             let proj = crate::activity::load_live_from_disk(roots.merge_root());
             let now = crate::activity::ActivityEvent::now();
             print!("{}", crate::activity::format_current(&proj, now));
             Ok(())
         }
         Some(LogCommand::List { limit }) => {
-            eprintln!("log: list limit={:?}", limit);
-            bail!("not implemented: log list (history JSONL — see todo/activity-status.md)")
+            let store = crate::activity::DurationStore::load(roots.merge_root());
+            print!(
+                "{}",
+                crate::activity::format_list(&store, limit.map(|n| n as usize))
+            );
+            Ok(())
         }
         Some(LogCommand::Time { atom }) => {
-            eprintln!("log: time atom={:?}", atom);
-            bail!("not implemented: log time (history JSONL — see todo/activity-status.md)")
+            let store = crate::activity::DurationStore::load(roots.merge_root());
+            print!("{}", crate::activity::format_time(&store, atom.as_deref()));
+            Ok(())
+        }
+        Some(LogCommand::Predict) => {
+            let proj = crate::activity::load_live_from_disk(roots.merge_root());
+            let active = proj.active();
+            if active.is_empty() {
+                bail!("log predict: no ongoing activity session");
+            }
+            let store = crate::activity::DurationStore::load(roots.merge_root());
+            for s in active {
+                let remaining: Vec<_> = s
+                    .inflight_sorted()
+                    .into_iter()
+                    .map(|p| crate::activity::EtaPkg {
+                        cpn: p.cpn.clone(),
+                        cpv: p.cpv.clone(),
+                    })
+                    .collect();
+                // Also count plan remainder we don't know about: plan_total - completed - failed - inflight
+                let accounted = s.completed + s.failed + s.inflight.len() as u32;
+                let unknown_slots = s.plan_total.saturating_sub(accounted);
+                println!(
+                    "session {}  root={}  done {}/{}  inflight {}",
+                    s.job_id,
+                    s.merge_root,
+                    s.completed,
+                    s.plan_total,
+                    s.inflight.len()
+                );
+                let jobs = s.flags.jobs.unwrap_or(1);
+                let mut eta = crate::activity::estimate_remaining(&store, &remaining, jobs, 15);
+                // Pad serial estimate with global median × unknown plan slots
+                if unknown_slots > 0 {
+                    if let Some(g) = store.global_median_seconds(30) {
+                        eta.serial_seconds += g * unknown_slots as f64;
+                        eta.wall_seconds = eta.serial_seconds / jobs.max(1) as f64;
+                        eta.unknown += unknown_slots;
+                    } else {
+                        eta.unknown += unknown_slots;
+                    }
+                }
+                print!("{}", crate::activity::format_eta(&eta));
+            }
+            Ok(())
         }
     }
 }

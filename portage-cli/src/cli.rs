@@ -42,6 +42,20 @@ pub struct Cli {
     #[arg(short = 'p', long, global = true)]
     pub pretend: bool,
 
+    /// With `-p`/`--pretend`, print an ETA for the plan from activity history
+    /// (median of recent successful merges per package; wall ≈ serial / jobs).
+    #[arg(long = "eta", global = true)]
+    pub eta: bool,
+
+    /// Write activity events as JSONL to file descriptor N (subprocess
+    /// front-ends). Takes ownership of the FD. See `todo/activity-status.md`.
+    #[arg(long = "activity-fd", value_name = "N", global = true)]
+    pub activity_fd: Option<i32>,
+
+    /// Append activity events as JSONL to PATH (not `-`; use `--activity-fd`).
+    #[arg(long = "activity-jsonl", value_name = "PATH", global = true)]
+    pub activity_jsonl: Option<String>,
+
     /// Increase verbosity (can be repeated for more detail).
     #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
@@ -1581,10 +1595,18 @@ pub enum GlsaCommand {
 pub enum LogCommand {
     #[command(about = "Show currently running merges")]
     Current,
-    #[command(about = "Show merge history")]
-    List { limit: Option<u32> },
-    #[command(about = "Show merge times for a package")]
-    Time { atom: Option<String> },
+    #[command(about = "Show recent merge history from activity JSONL")]
+    List {
+        /// Max rows (default 20)
+        limit: Option<u32>,
+    },
+    #[command(about = "Show merge times for a package (or global median)")]
+    Time {
+        /// Package atom / Cpn / Cpv substring; omit for global median
+        atom: Option<String>,
+    },
+    #[command(about = "ETA for remainder of a live activity session")]
+    Predict,
 }
 
 /// How an unprivileged build gets root for `chown`/setuid (see `--privilege`).

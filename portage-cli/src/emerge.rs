@@ -408,6 +408,20 @@ async fn emerge_atoms_inner(
     }
 
     if cli.pretend {
+        if cli.eta {
+            let store = crate::activity::DurationStore::load(roots.merge_root());
+            let pkgs: Vec<_> = outcome
+                .plan
+                .iter()
+                .map(|p| crate::activity::EtaPkg {
+                    cpn: p.cpv.cpn.to_string(),
+                    cpv: p.cpv.to_string(),
+                })
+                .collect();
+            let jobs = merge_flags.jobs.unwrap_or(1);
+            let eta = crate::activity::estimate_remaining(&store, &pkgs, jobs, 15);
+            print!("{}", crate::activity::format_eta(&eta));
+        }
         return Ok(());
     }
 
@@ -461,9 +475,14 @@ async fn emerge_atoms_inner(
         None
     };
 
-    // Activity bus: caller-supplied or default live-FS sink under this merge root.
+    // Activity bus: caller-supplied or default live-FS + history under this root.
     let activity =
         activity_override.unwrap_or_else(|| crate::activity::default_cli_bus(roots.merge_root()));
+    crate::activity::attach_jsonl_outputs(
+        &activity,
+        cli.activity_fd,
+        cli.activity_jsonl.as_deref(),
+    )?;
     // Prefer resume job_id so markers and activity share one correlation key.
     let job_id = crate::activity::resolve_job_id(&activity_session, resume_job_id.as_deref());
     let parent_job_id = activity_session.parent_job_id.clone();

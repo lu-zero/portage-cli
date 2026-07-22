@@ -5,6 +5,8 @@
 
 mod bus;
 mod event;
+mod history;
+mod jsonl_fd;
 mod live_fs;
 mod projection;
 
@@ -13,6 +15,11 @@ pub use event::{
     ACTIVITY_EVENT_VERSION, ActivityEvent, ActivityMergeRoot, ActivityMode, ActivitySessionOpts,
     PhaseTiming, PkgKind, SessionFlags,
 };
+pub use history::{
+    DurationStore, Eta, EtaPkg, HistoryRecord, HistorySink, estimate_remaining, format_eta,
+    format_list, format_seconds, format_time,
+};
+pub use jsonl_fd::JsonlFdSink;
 pub use live_fs::{LiveFsSink, load_live_from_disk, pid_alive};
 pub use projection::{InflightPkg, LiveProjection, LiveSession};
 
@@ -98,11 +105,32 @@ impl ActivityPkgCtx {
     }
 }
 
-/// Build the default CLI bus: live FS under `merge_root` (no emerge.log).
+/// Build the default CLI bus: live FS + history JSONL under `merge_root`
+/// (no emerge.log — opt-in only).
 pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     let bus = ActivityBus::new();
     bus.add_sink(Arc::new(LiveFsSink::new(merge_root.to_owned())));
+    bus.add_sink(Arc::new(HistorySink::new(merge_root.to_owned())));
     bus
+}
+
+/// Attach optional JSONL FD / path sinks to an existing bus.
+pub fn attach_jsonl_outputs(
+    bus: &ActivityBus,
+    activity_fd: Option<i32>,
+    activity_jsonl: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(fd) = activity_fd {
+        let sink =
+            JsonlFdSink::from_raw_fd(fd).map_err(|e| anyhow::anyhow!("--activity-fd={fd}: {e}"))?;
+        bus.add_sink(Arc::new(sink));
+    }
+    if let Some(path) = activity_jsonl {
+        let sink = JsonlFdSink::from_path(path)
+            .map_err(|e| anyhow::anyhow!("--activity-jsonl={path}: {e}"))?;
+        bus.add_sink(Arc::new(sink));
+    }
+    Ok(())
 }
 
 /// Resolve the job id for this merge: explicit opt, else new id (or resume's).

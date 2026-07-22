@@ -1,9 +1,9 @@
 # Activity status & timing (structured; emerge.log optional)
 
-STATUS: 🟡 design locked 2026-07-22; **partial impl** — bus + live FS +
-`em log current` + Session/PkgStart/PkgEnd + **phase enter/leave** (in-process
-`run_inner`; install worker gap noted). Still open: history JSONL, ETA,
-`--activity-fd`, emerge.log sink, worker activity passthrough.
+STATUS: 🟡 design locked 2026-07-22; **most of PR1–6 landed** — bus, live FS,
+`em log current|list|time|predict`, history JSONL, phase enter/leave,
+`em -p --eta`, `--activity-fd` / `--activity-jsonl`. Still open: opt-in
+emerge.log sink, install-worker activity passthrough, critical-path ETA.
 
 ## Problem
 

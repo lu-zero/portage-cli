@@ -35,7 +35,8 @@ pub(crate) mod util;
 pub(crate) mod vdb;
 
 pub use activity::{
-    ActivityBus, ActivityEvent, ActivitySessionOpts, LiveProjection, RecordingSink,
+    ActivityBus, ActivityEvent, ActivitySessionOpts, DurationStore, LiveProjection, RecordingSink,
+    estimate_remaining,
 };
 pub(crate) use emerge::{EmergeOpts, emerge_atoms};
 pub use error::ConfigChangesNeeded;
