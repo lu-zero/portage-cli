@@ -44,7 +44,7 @@ subcommands corresponding to the traditional tools.
 | `revdep` | `revdep-rebuild` | Stub |
 | `news` | `eselect news` | Stub |
 | `glsa` | `glsa-check` | Stub |
-| `log` | `genlop` | Stub |
+| `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/activity.md) |
 | `grep` | `egreplite` | Stub |
 | `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, … |
 | `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap (`--target`) |
