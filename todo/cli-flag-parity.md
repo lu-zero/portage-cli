@@ -98,8 +98,9 @@ first draft missed for `-C`).
   on live USE. Treated identically to `-f` at every "did we actually
   install anything" gate (pkgdir-writable preflight, env-update, done/fail
   messaging) — real `-F` never builds either.
-- **`-r`/`--resume`** — ✅ done 2026-07-22. Studied real portage's own
-  mechanism (`portage/util/mtimedb.py`, `_emerge/actions.py`,
+- **`-r`/`--resume`** — ✅ done 2026-07-22; **completion tracking + flag
+  overlay hardened 2026-07-22 (review follow-up)**. Studied real portage's
+  own mechanism (`portage/util/mtimedb.py`, `_emerge/actions.py`,
   `_emerge/Scheduler.py`) rather than guessing, then deliberately
   simplified: portage persists a fully-resolved, pinned `mergelist`
   (`[pkg_type, pkg_root, cpv, action]`), pruned entry-by-entry as packages
@@ -108,21 +109,30 @@ first draft missed for `-C`).
   flags (`maint::resume::ResumeState`, `<root>/var/cache/edb/em-resume.json`
   — same directory real portage's own `mtimedb` lives in, distinct
   filename/shape, never touches portage's actual file) — and re-resolves
-  fresh on `-r`. Already-merged packages are skipped for free by the
-  existing VDB-presence check in `merge::merge_sequential`/`merge_parallel`,
-  so there's no pinned-list staleness to manage, and a changed repo between
-  runs self-heals instead of needing portage's own `resume_depgraph`
-  re-validation machinery.
+  fresh on `-r`.
+
+  **Completion progress** uses independent marker files under
+  `var/cache/edb/em-resume.done/<job_id>/{host,target}/<cat>/<pf>` —
+  one `create_new` per finished package, no shared JSON rewrite and no
+  global lock under `--jobs N`. The JSON only holds job *shape* (atoms,
+  flags, `job_id`). On `-r`, marker keys are dropped from the re-resolved
+  plan (preview and merge agree) — the portage-equivalent of pruning the
+  pinned list. This is **required** for correct `--emptytree` resume: VDB
+  presence alone cannot mean "done for this job" because an emptytree
+  rebuild starts with those CPVs already installed. Ordinary
+  (non-emptytree) installs/upgrades still also VDB-skip already-present
+  non-reinstall entries in the merge loop as a second line of defence. A
+  changed repo between runs self-heals via the re-resolve; marker keys that
+  no longer appear simply no-op.
 
   One level of backup, matching portage's `resume`/`resume_backup` pair:
   starting a *new* (non-`-r`) top-level merge while a `resume` entry is
   still pending backs it up first (`maint::resume::save`'s `is_resume`
   flag), so running an unrelated command doesn't silently discard an
   interrupted job; `-r` consults `resume` first, falling back to (and
-  promoting) `resume_backup` otherwise. `em maint cleanresume` — a CLI stub
-  that already existed (`MaintCommand::Cleanresume`,
-  `dispatch.rs`) waiting for exactly this — reports occupied slots and,
-  with `--fix`, clears both (real portage's own `emaint cleanresume`
+  promoting) `resume_backup` otherwise. `em maint cleanresume` reports
+  occupied slots with atom preview, key flags, and completion count; with
+  `--fix`, clears both (real portage's own `emaint cleanresume`
   equivalent).
 
   **Scope decision: no `--skipfirst`.** Real emerge's `--skipfirst` needs
@@ -145,16 +155,21 @@ first draft missed for `-C`).
   if an excluded package is a genuine hard dependency of something else
   still in the plan, that other package's own preflight/build fails with a
   clear missing-dependency error instead of the solver reporting the
-  conflict up front the way real portage's own backtracking can. Live
-  sandbox-verified: `-p -X` no longer shows the excluded package, `-r -X`
-  correctly merges only the non-excluded remainder and clears resume.
+  conflict up front the way real portage's own backtracking can. `-p`
+  prints `>>> --exclude: omitted N package(s) from the plan` when any
+  drop happens.
 
-  The current invocation's own merge/depgraph flags win over the persisted
-  ones where set (`em -r --keep-going`), reusing the exact same
-  "args-over-base" precedence `crossdev::merge_merge_flags_with` already
-  used for subcommand-vs-global flags — factored into pure
-  `merge_merge_flags_fields`/`merge_depgraph_flags_fields` helpers so both
-  call sites share one implementation.
+  **Flag overlay on `-r`** (`maint::resume::merge_resume_flags`, not the
+  subcommand-vs-global OR helper):
+  - Job-shape bools start from the **saved** job; a `true` on the current
+    CLI turns them on (clap cannot express "explicitly false", so `-r` can
+    only *add* shape flags — e.g. `-r --keep-going`). To change the job
+    shape in a way that needs a flag *off*, `em maint cleanresume --fix`
+    and re-invoke.
+  - Ephemeral UI (`ask` / `tree` / `json`) comes only from the current
+    invocation — never restored from the saved job (and stripped on save).
+  - `jobs` / `load_average`: current `Some` wins, else saved.
+  - `-X`: current excludes are **unioned** into the saved list.
 
 None of these were asked for beyond the `-C`/`-B` pair; listed here so a
 future "what's next" survey doesn't have to re-derive the man-page diff from

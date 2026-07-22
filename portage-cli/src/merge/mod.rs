@@ -19,6 +19,95 @@ struct MergeFailure {
     cause: String,
 }
 
+/// Caller-facing inputs to [`run_merge_plan`] — keeps the public surface a
+/// single struct instead of an ever-growing positional arg list.
+pub(crate) struct MergePlanRequest<'a> {
+    pub plan: &'a [query::depgraph::PlannedMerge],
+    pub blockers: &'a [Vec<usize>],
+    pub roots: &'a portage_resolve::Roots,
+    pub work_base: &'a camino::Utf8Path,
+    pub distdir: Option<&'a camino::Utf8Path>,
+    pub merge_flags: &'a cli::MergeFlags,
+    pub globals: &'a cli::Cli,
+    /// When set, each successful package gets a completion marker under this
+    /// job id (see `maint::resume`) so `-r` can skip finished work.
+    pub resume_job: Option<ResumeJob<'a>>,
+}
+
+/// Where to record per-package completion for a live resume job.
+#[derive(Clone, Copy)]
+pub(crate) struct ResumeJob<'a> {
+    pub root: &'a camino::Utf8Path,
+    pub job_id: &'a str,
+}
+
+/// Plan-wide state shared by the sequential and parallel merge loops.
+struct MergeRun<'a> {
+    plan: &'a [query::depgraph::PlannedMerge],
+    roots: &'a portage_resolve::Roots,
+    host_roots: &'a portage_resolve::Roots,
+    work_base: &'a camino::Utf8Path,
+    distdir: Option<&'a camino::Utf8Path>,
+    quiet: bool,
+    merge_flags: &'a cli::MergeFlags,
+    binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
+    host_binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
+    remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
+    enforce_no_source: bool,
+    target_env: &'a binpkg::DesiredBuildEnv,
+    target_dirs: &'a [std::path::PathBuf],
+    host_env: &'a binpkg::DesiredBuildEnv,
+    host_dirs: &'a [std::path::PathBuf],
+    resume_job: Option<ResumeJob<'a>>,
+}
+
+/// Per-run mode bits derived once from [`MergeRun`] / [`cli::MergeFlags`].
+struct ActionFlags {
+    keep_going: bool,
+    emptytree: bool,
+    buildpkg: bool,
+    buildpkgonly: bool,
+    fetchonly: bool,
+    fetch_all_uri: bool,
+    enforce_no_source: bool,
+    quiet: bool,
+    self_contained_bootstrap: bool,
+}
+
+impl MergeRun<'_> {
+    fn action_flags(&self) -> ActionFlags {
+        ActionFlags {
+            keep_going: self.merge_flags.keep_going,
+            emptytree: self.merge_flags.emptytree,
+            buildpkg: self.merge_flags.buildpkg,
+            buildpkgonly: self.merge_flags.buildpkgonly,
+            fetchonly: self.merge_flags.fetchonly,
+            fetch_all_uri: self.merge_flags.fetch_all_uri,
+            enforce_no_source: self.enforce_no_source,
+            quiet: self.quiet,
+            // See `ebuild::RootContext::self_contained_bootstrap` — native
+            // toolchain bootstrap sets this on `roots`.
+            self_contained_bootstrap: self.roots.installed_view_target_only(),
+        }
+    }
+}
+
+/// Everything needed to act on one plan entry (fetch / binpkg / source).
+struct PackageAction<'a> {
+    planned: &'a query::depgraph::PlannedMerge,
+    merge_root: &'a camino::Utf8Path,
+    host_roots: &'a portage_resolve::Roots,
+    entry_roots: &'a portage_resolve::Roots,
+    work_base: &'a camino::Utf8Path,
+    distdir: Option<&'a camino::Utf8Path>,
+    flags: &'a ActionFlags,
+    merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
+    remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
+    desired_chost: &'a str,
+    desired_build_env_key: &'a str,
+}
+
 /// Verify `pkgdir` can actually be written to (creating it if missing) — the
 /// `--buildpkg` preflight in [`run_merge_plan`]. A probe file is written and
 /// removed rather than just checking metadata, since permission bits alone
@@ -104,22 +193,29 @@ fn entry_desired_env<'a>(
 
 /// Build and merge a resolved plan in install order.
 ///
-/// Resume comes for free from the target VDB: a package already recorded
-/// there at the planned version is skipped (a previous run merged it), so
-/// re-running after an interruption continues from the first unmerged entry
-/// without a separate state file. `--emptytree` forces every entry to rebuild.
+/// **Resume progress:** when [`MergePlanRequest::resume_job`] is `Some`,
+/// each successful package creates a marker file under that job id (see
+/// `maint::resume`) so a later `-r` can drop completed work from the
+/// re-resolved plan. That is required under `--emptytree` (VDB presence
+/// alone is not a completion marker — the tree starts installed). Markers
+/// are independent files, so `--jobs N` never contends on a shared JSON
+/// rewrite. Non-emptytree installs/upgrades also still VDB-skip
+/// already-present non-reinstall entries in the merge loop.
 ///
 /// With `-f`/`--fetchonly`, only distfiles (or remote binpkgs under `-g`) are
 /// downloaded — no build, no install, no env-update.
-pub(crate) async fn run_merge_plan(
-    plan: &[query::depgraph::PlannedMerge],
-    blockers: &[Vec<usize>],
-    roots: &portage_resolve::Roots,
-    work_base: &camino::Utf8Path,
-    distdir: Option<&camino::Utf8Path>,
-    merge_flags: &cli::MergeFlags,
-    globals: &cli::Cli,
-) -> Result<()> {
+pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
+    let MergePlanRequest {
+        plan,
+        blockers,
+        roots,
+        work_base,
+        distdir,
+        merge_flags,
+        globals,
+        resume_job,
+    } = req;
+
     let quiet = globals.quiet;
     let jobs = merge_flags.jobs.map(|j| j as usize).unwrap_or(1).max(1);
     let buildpkg = merge_flags.buildpkg;
@@ -304,46 +400,29 @@ pub(crate) async fn run_merge_plan(
     let host_env = binpkg::DesiredBuildEnv::for_roots(&host_roots).await;
     let host_dirs = binpkg::DesiredBuildEnv::portage_dirs(&host_roots);
 
+    let run = MergeRun {
+        plan,
+        roots,
+        host_roots: &host_roots,
+        work_base,
+        distdir,
+        quiet,
+        merge_flags,
+        binpkg_index: binpkg_index.as_ref(),
+        host_binpkg_index,
+        remote_indices: &remote_indices,
+        enforce_no_source,
+        target_env: &target_env,
+        target_dirs: &target_dirs,
+        host_env: &host_env,
+        host_dirs: &host_dirs,
+        resume_job,
+    };
+
     let (merged, skipped, failures) = if jobs <= 1 {
-        merge_sequential(
-            plan,
-            roots,
-            &host_roots,
-            work_base,
-            distdir,
-            quiet,
-            merge_flags,
-            binpkg_index.as_ref(),
-            host_binpkg_index,
-            &remote_indices,
-            enforce_no_source,
-            &target_env,
-            &target_dirs,
-            &host_env,
-            &host_dirs,
-        )
-        .await
+        merge_sequential(&run).await
     } else {
-        merge_parallel(
-            plan,
-            blockers,
-            roots,
-            &host_roots,
-            work_base,
-            distdir,
-            quiet,
-            jobs,
-            merge_flags,
-            binpkg_index.as_ref(),
-            host_binpkg_index,
-            &remote_indices,
-            enforce_no_source,
-            &target_env,
-            &target_dirs,
-            &host_env,
-            &host_dirs,
-        )
-        .await
+        merge_parallel(&run, blockers, jobs).await
     };
 
     // Refresh ${ROOT}/etc/profile.env and the linker cache, as emerge does
@@ -396,32 +475,32 @@ pub(crate) async fn run_merge_plan(
 }
 
 /// Act on one plan entry: fetch-only, binpkg merge, or source build.
-#[allow(clippy::too_many_arguments)]
-async fn act_on_package(
-    planned: &query::depgraph::PlannedMerge,
-    merge_root: &camino::Utf8Path,
-    host_roots: &portage_resolve::Roots,
-    entry_roots: &portage_resolve::Roots,
-    work_base: &camino::Utf8Path,
-    distdir: Option<&camino::Utf8Path>,
-    quiet: bool,
-    merge_gate: Option<&tokio::sync::Mutex<()>>,
-    self_contained_bootstrap: bool,
-    buildpkg: bool,
-    buildpkgonly: bool,
-    fetchonly: bool,
-    fetch_all_uri: bool,
-    // The local index for *this entry's* PKGDIR — host or target, already
-    // chosen by the caller (`entry_binpkg_index`) — not necessarily the
-    // plan-wide target index.
-    binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
-    remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
-    enforce_no_source: bool,
-    // Desired CHOST for binpkg reuse (empty skips the CHOST gate).
-    desired_chost: &str,
-    // Desired build_env_key for binpkg reuse (empty skips the build_env_key gate).
-    desired_build_env_key: &str,
-) -> anyhow::Result<()> {
+async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
+    let PackageAction {
+        planned,
+        merge_root,
+        host_roots,
+        entry_roots,
+        work_base,
+        distdir,
+        flags,
+        merge_gate,
+        binpkg_index,
+        remote_indices,
+        desired_chost,
+        desired_build_env_key,
+    } = a;
+    let ActionFlags {
+        buildpkg,
+        buildpkgonly,
+        fetchonly,
+        fetch_all_uri,
+        enforce_no_source,
+        quiet,
+        self_contained_bootstrap,
+        ..
+    } = *flags;
+
     let desired_use: Vec<String> = planned
         .use_flags
         .iter()
@@ -477,21 +556,21 @@ async fn act_on_package(
             bail!("no matching binpkg and source builds disabled (-K/--getbinpkgonly)");
         }
         // Source: distfile fetch only.
-        return ebuild::build_and_merge(
-            &planned.ebuild_path,
-            &planned.cpv,
-            &planned.use_flags,
+        return ebuild::build_and_merge(ebuild::BuildAndMerge {
+            ebuild_path: &planned.ebuild_path,
+            cpv: &planned.cpv,
+            use_flags: &planned.use_flags,
             work_base,
-            merge_root,
+            root: merge_root,
             distdir,
             quiet,
-            root_ctx,
+            roots: root_ctx,
             merge_gate,
-            false,
-            false,
+            buildpkg: false,
+            buildpkgonly: false,
             fetchonly,
             fetch_all_uri,
-        )
+        })
         .await;
     }
 
@@ -499,17 +578,17 @@ async fn act_on_package(
         println!(">>> Using binary package: {}", binpkg_path.display());
         let path = camino::Utf8Path::from_path(binpkg_path.as_path())
             .unwrap_or_else(|| camino::Utf8Path::new("/invalid-binpkg-path"));
-        return ebuild::merge_binpkg(
-            path,
-            &planned.ebuild_path,
-            &planned.cpv,
-            &planned.use_flags,
+        return ebuild::merge_binpkg(ebuild::MergeBinpkg {
+            binpkg_path: path,
+            ebuild_path: &planned.ebuild_path,
+            cpv: &planned.cpv,
+            use_flags: &planned.use_flags,
             work_base,
-            merge_root,
+            root: merge_root,
             quiet,
-            root_ctx,
+            roots: root_ctx,
             merge_gate,
-        )
+        })
         .await;
     }
 
@@ -517,119 +596,96 @@ async fn act_on_package(
         match fetch_remote_binpkg(&url, work_base).await {
             Ok(path) => {
                 println!(">>> Fetched binary package: {url}");
-                ebuild::merge_binpkg(
-                    &path,
-                    &planned.ebuild_path,
-                    &planned.cpv,
-                    &planned.use_flags,
+                ebuild::merge_binpkg(ebuild::MergeBinpkg {
+                    binpkg_path: &path,
+                    ebuild_path: &planned.ebuild_path,
+                    cpv: &planned.cpv,
+                    use_flags: &planned.use_flags,
                     work_base,
-                    merge_root,
+                    root: merge_root,
                     quiet,
-                    root_ctx,
+                    roots: root_ctx,
                     merge_gate,
-                )
+                })
                 .await
             }
             Err(e) if enforce_no_source => Err(e),
             Err(e) => {
                 eprintln!(">>> Failed to fetch binpkg {url} — {e:#}; building from source");
-                ebuild::build_and_merge(
-                    &planned.ebuild_path,
-                    &planned.cpv,
-                    &planned.use_flags,
+                ebuild::build_and_merge(ebuild::BuildAndMerge {
+                    ebuild_path: &planned.ebuild_path,
+                    cpv: &planned.cpv,
+                    use_flags: &planned.use_flags,
                     work_base,
-                    merge_root,
+                    root: merge_root,
                     distdir,
                     quiet,
-                    root_ctx,
+                    roots: root_ctx,
                     merge_gate,
                     buildpkg,
                     buildpkgonly,
-                    false,
-                    false,
-                )
+                    fetchonly: false,
+                    fetch_all_uri: false,
+                })
                 .await
             }
         }
     } else if enforce_no_source {
         bail!("no matching binpkg and source builds disabled (-K/--getbinpkgonly)");
     } else {
-        ebuild::build_and_merge(
-            &planned.ebuild_path,
-            &planned.cpv,
-            &planned.use_flags,
+        ebuild::build_and_merge(ebuild::BuildAndMerge {
+            ebuild_path: &planned.ebuild_path,
+            cpv: &planned.cpv,
+            use_flags: &planned.use_flags,
             work_base,
-            merge_root,
+            root: merge_root,
             distdir,
             quiet,
-            root_ctx,
+            roots: root_ctx,
             merge_gate,
             buildpkg,
             buildpkgonly,
-            false,
-            false,
-        )
+            fetchonly: false,
+            fetch_all_uri: false,
+        })
         .await
     }
 }
 
 /// Sequential build+merge in install order (the `--jobs 1` / default path).
 /// Returns `(merged, skipped, failures)`.
-#[allow(clippy::too_many_arguments)]
-async fn merge_sequential(
-    plan: &[query::depgraph::PlannedMerge],
-    roots: &portage_resolve::Roots,
-    host_roots: &portage_resolve::Roots,
-    work_base: &camino::Utf8Path,
-    distdir: Option<&camino::Utf8Path>,
-    quiet: bool,
-    merge_flags: &cli::MergeFlags,
-    binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
-    host_binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
-    remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
-    enforce_no_source: bool,
-    target_env: &binpkg::DesiredBuildEnv,
-    target_dirs: &[std::path::PathBuf],
-    host_env: &binpkg::DesiredBuildEnv,
-    host_dirs: &[std::path::PathBuf],
-) -> (usize, usize, Vec<MergeFailure>) {
-    let keep_going = merge_flags.keep_going;
-    let emptytree = merge_flags.emptytree;
-    let buildpkg = merge_flags.buildpkg;
-    let buildpkgonly = merge_flags.buildpkgonly;
-    let fetchonly = merge_flags.fetchonly;
-    let fetch_all_uri = merge_flags.fetch_all_uri;
-
-    let total = plan.len();
+async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure>) {
+    let flags = run.action_flags();
+    let total = run.plan.len();
     let mut merged = 0usize;
     let mut skipped = 0usize;
     let mut failures: Vec<MergeFailure> = Vec::new();
-    // See `ebuild::RootContext::self_contained_bootstrap` — the native
-    // toolchain bootstrap sets this on `roots` (`with_target_only_installed_view`)
-    // and every plan entry built under this invocation must see it, not just
-    // the ones whose `entry_roots` happens to preserve it.
-    let self_contained_bootstrap = roots.installed_view_target_only();
 
-    for (i, planned) in plan.iter().enumerate() {
-        let entry_roots = entry_roots(planned, roots, host_roots);
+    for (i, planned) in run.plan.iter().enumerate() {
+        let entry_roots = entry_roots(planned, run.roots, run.host_roots);
         let merge_root = entry_roots.merge_root();
-        let entry_index = entry_binpkg_index(planned, binpkg_index, host_binpkg_index);
+        let entry_index = entry_binpkg_index(planned, run.binpkg_index, run.host_binpkg_index);
 
         // Per-entry desired build_env_key (S6: package.env-aware) and CHOST
         // — proper binpkg reuse across cross-compilation and multi-arch
         // scenarios, host vs target selected the same way entry_roots is.
-        let (desired_env, desired_dirs) =
-            entry_desired_env(planned, (target_env, target_dirs), (host_env, host_dirs));
+        let (desired_env, desired_dirs) = entry_desired_env(
+            planned,
+            (run.target_env, run.target_dirs),
+            (run.host_env, run.host_dirs),
+        );
         let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
 
-        // The VDB is the resume state: `var/db/pkg/<cat>/<pf>` exists iff this
-        // exact version is already installed in the target root. An intentional
-        // reinstall (explicit target / USE rebuild) is built anyway — emerge
-        // reinstalls a requested atom by default.
+        // VDB-presence skip for non-emptytree non-reinstall entries (an
+        // interrupted ordinary install/upgrade). `--emptytree` must not use
+        // this path — the tree starts installed — resume completion is
+        // tracked via `maint::resume` and filtered out of the plan before
+        // we get here. Intentional reinstalls (explicit target / USE rebuild)
+        // always build.
         // Under `-f`, still skip fully-installed packages that are not being
         // reinstalled — their distfiles are not needed for this plan step.
         let pkg_vdb = merge_root.join("var/db/pkg").join(planned.cpv.to_string());
-        if !emptytree && !planned.reinstall && pkg_vdb.exists() {
+        if !flags.emptytree && !planned.reinstall && pkg_vdb.exists() {
             println!(
                 ">>> [{}/{total}] {} is already installed — skipping",
                 i + 1,
@@ -639,36 +695,40 @@ async fn merge_sequential(
             continue;
         }
 
-        let action = if fetchonly || fetch_all_uri {
+        let action = if flags.fetchonly || flags.fetch_all_uri {
             "Fetching"
         } else {
             "Emerging"
         };
         println!("\n>>> {action} ({} of {total}) {}", i + 1, planned.cpv);
-        let result = act_on_package(
+        let result = act_on_package(PackageAction {
             planned,
             merge_root,
-            host_roots,
+            host_roots: run.host_roots,
             entry_roots,
-            work_base,
-            distdir,
-            quiet,
-            None,
-            self_contained_bootstrap,
-            buildpkg,
-            buildpkgonly,
-            fetchonly,
-            fetch_all_uri,
-            entry_index,
-            remote_indices,
-            enforce_no_source,
-            &desired_env.chost,
-            &desired_build_env_key,
-        )
+            work_base: run.work_base,
+            distdir: run.distdir,
+            flags: &flags,
+            merge_gate: None,
+            binpkg_index: entry_index,
+            remote_indices: run.remote_indices,
+            desired_chost: &desired_env.chost,
+            desired_build_env_key: &desired_build_env_key,
+        })
         .await;
         match result {
             Ok(()) => {
                 merged += 1;
+                if let Some(job) = run.resume_job
+                    && let Err(e) = crate::maint::resume::mark_completed(
+                        job.root,
+                        job.job_id,
+                        planned.merge_root,
+                        &planned.cpv.to_string(),
+                    )
+                {
+                    eprintln!("warning: could not update resume progress: {e:#}");
+                }
                 // Refresh this root's `ld.so.cache` immediately, not just once
                 // at the very end of the whole batch (the caller's own
                 // `env_update` after `merge_sequential` returns) — a later
@@ -680,16 +740,16 @@ async fn merge_sequential(
                 // the cache entry were correct by the time the whole run
                 // finished — the cache just wasn't refreshed yet at the
                 // moment it was needed). `-B`/`-f` installed nothing to refresh.
-                if !buildpkgonly
-                    && !fetchonly
-                    && !fetch_all_uri
+                if !flags.buildpkgonly
+                    && !flags.fetchonly
+                    && !flags.fetch_all_uri
                     && let Err(e) = maint::env::env_update(merge_root)
                 {
                     eprintln!("warning: env-update failed: {e:#}");
                 }
             }
             Err(e) => {
-                let fail_verb = if fetchonly || fetch_all_uri {
+                let fail_verb = if flags.fetchonly || flags.fetch_all_uri {
                     "fetch"
                 } else {
                     "emerge"
@@ -697,10 +757,13 @@ async fn merge_sequential(
                 eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
                 failures.push(MergeFailure {
                     cpv: planned.cpv.to_string(),
-                    log: work_base.join(planned.cpv.to_string()).join("build.log"),
+                    log: run
+                        .work_base
+                        .join(planned.cpv.to_string())
+                        .join("build.log"),
                     cause: format!("{e:#}"),
                 });
-                if !keep_going {
+                if !flags.keep_going {
                     eprintln!(">>> Stopping (pass --keep-going to continue past failures).");
                     break;
                 }
@@ -790,37 +853,14 @@ impl Scheduler {
 /// Concurrency is single-threaded (`FuturesUnordered`, not spawned tasks): the
 /// `EbuildShell` need not be `Send`, and parallelism still comes from the
 /// concurrently-running build subprocesses.
-#[allow(clippy::too_many_arguments)]
 async fn merge_parallel(
-    plan: &[query::depgraph::PlannedMerge],
+    run: &MergeRun<'_>,
     blockers: &[Vec<usize>],
-    roots: &portage_resolve::Roots,
-    host_roots: &portage_resolve::Roots,
-    work_base: &camino::Utf8Path,
-    distdir: Option<&camino::Utf8Path>,
-    quiet: bool,
     jobs: usize,
-    merge_flags: &cli::MergeFlags,
-    binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
-    host_binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
-    remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
-    enforce_no_source: bool,
-    target_env: &binpkg::DesiredBuildEnv,
-    target_dirs: &[std::path::PathBuf],
-    host_env: &binpkg::DesiredBuildEnv,
-    host_dirs: &[std::path::PathBuf],
 ) -> (usize, usize, Vec<MergeFailure>) {
-    let keep_going = merge_flags.keep_going;
-    let emptytree = merge_flags.emptytree;
-    let buildpkg = merge_flags.buildpkg;
-    let buildpkgonly = merge_flags.buildpkgonly;
-    let fetchonly = merge_flags.fetchonly;
-    let fetch_all_uri = merge_flags.fetch_all_uri;
-
-    let total = plan.len();
+    let flags = run.action_flags();
+    let total = run.plan.len();
     let merge_gate = tokio::sync::Mutex::new(());
-    // See `merge_sequential`'s matching comment.
-    let self_contained_bootstrap = roots.installed_view_target_only();
 
     let mut sched = Scheduler::new(blockers);
     let mut merged = 0usize;
@@ -833,18 +873,21 @@ async fn merge_parallel(
     loop {
         while !stop_new && inflight.len() < jobs {
             let Some(i) = sched.next_ready() else { break };
-            let planned = &plan[i];
-            let entry_roots = entry_roots(planned, roots, host_roots);
+            let planned = &run.plan[i];
+            let entry_roots = entry_roots(planned, run.roots, run.host_roots);
             let merge_root = entry_roots.merge_root();
-            let entry_index = entry_binpkg_index(planned, binpkg_index, host_binpkg_index);
+            let entry_index = entry_binpkg_index(planned, run.binpkg_index, run.host_binpkg_index);
 
             // Per-entry desired build_env_key (S6: package.env-aware) and
             // CHOST — see the matching comment in `merge_sequential`.
-            let (desired_env, desired_dirs) =
-                entry_desired_env(planned, (target_env, target_dirs), (host_env, host_dirs));
+            let (desired_env, desired_dirs) = entry_desired_env(
+                planned,
+                (run.target_env, run.target_dirs),
+                (run.host_env, run.host_dirs),
+            );
             let desired_build_env_key = desired_env.key_for(desired_dirs, &planned.cpv).await;
 
-            if !emptytree
+            if !flags.emptytree
                 && !planned.reinstall
                 && merge_root
                     .join("var/db/pkg")
@@ -857,7 +900,7 @@ async fn merge_parallel(
                 continue;
             }
             started += 1;
-            let action = if fetchonly || fetch_all_uri {
+            let action = if flags.fetchonly || flags.fetch_all_uri {
                 "Fetching"
             } else {
                 "Emerging"
@@ -871,27 +914,22 @@ async fn merge_parallel(
             let entry_roots_clone = entry_roots.clone();
             let desired_chost_entry_clone = desired_env.chost.clone();
             let desired_build_env_key_clone = desired_build_env_key.clone();
+            let flags_ref = &flags;
             inflight.push(async move {
-                let res = act_on_package(
+                let res = act_on_package(PackageAction {
                     planned,
                     merge_root,
-                    host_roots,
-                    &entry_roots_clone,
-                    work_base,
-                    distdir,
-                    quiet,
-                    Some(gate),
-                    self_contained_bootstrap,
-                    buildpkg,
-                    buildpkgonly,
-                    fetchonly,
-                    fetch_all_uri,
-                    entry_index,
-                    remote_indices,
-                    enforce_no_source,
-                    &desired_chost_entry_clone,
-                    &desired_build_env_key_clone,
-                )
+                    host_roots: run.host_roots,
+                    entry_roots: &entry_roots_clone,
+                    work_base: run.work_base,
+                    distdir: run.distdir,
+                    flags: flags_ref,
+                    merge_gate: Some(gate),
+                    binpkg_index: entry_index,
+                    remote_indices: run.remote_indices,
+                    desired_chost: &desired_chost_entry_clone,
+                    desired_build_env_key: &desired_build_env_key_clone,
+                })
                 .await;
                 (i, res)
             });
@@ -904,34 +942,47 @@ async fn merge_parallel(
             Ok(()) => {
                 merged += 1;
                 sched.complete(i);
+                if let Some(job) = run.resume_job
+                    && let Err(e) = crate::maint::resume::mark_completed(
+                        job.root,
+                        job.job_id,
+                        run.plan[i].merge_root,
+                        &run.plan[i].cpv.to_string(),
+                    )
+                {
+                    eprintln!("warning: could not update resume progress: {e:#}");
+                }
                 // See the matching comment in `merge_sequential`: refresh this
                 // entry's root `ld.so.cache` right away, not just once for the
                 // whole batch — a still-running or not-yet-started sibling may
                 // need to dynamically load what this merge just installed.
-                let merge_root = entry_roots(&plan[i], roots, host_roots).merge_root();
-                if !buildpkgonly
-                    && !fetchonly
-                    && !fetch_all_uri
+                let merge_root = entry_roots(&run.plan[i], run.roots, run.host_roots).merge_root();
+                if !flags.buildpkgonly
+                    && !flags.fetchonly
+                    && !flags.fetch_all_uri
                     && let Err(e) = maint::env::env_update(merge_root)
                 {
                     eprintln!("warning: env-update failed: {e:#}");
                 }
             }
             Err(e) => {
-                let fail_verb = if fetchonly || fetch_all_uri {
+                let fail_verb = if flags.fetchonly || flags.fetch_all_uri {
                     "fetch"
                 } else {
                     "emerge"
                 };
-                eprintln!(">>> Failed to {fail_verb} {} — {e:#}", plan[i].cpv);
+                eprintln!(">>> Failed to {fail_verb} {} — {e:#}", run.plan[i].cpv);
                 failures.push(MergeFailure {
-                    cpv: plan[i].cpv.to_string(),
-                    log: work_base.join(plan[i].cpv.to_string()).join("build.log"),
+                    cpv: run.plan[i].cpv.to_string(),
+                    log: run
+                        .work_base
+                        .join(run.plan[i].cpv.to_string())
+                        .join("build.log"),
                     cause: format!("{e:#}"),
                 });
                 // Dependents stay blocked (their count never reaches 0), so a
                 // package whose build dep failed is never started.
-                if !keep_going {
+                if !flags.keep_going {
                     stop_new = true;
                     eprintln!(
                         ">>> Stopping new builds (pass --keep-going to continue past failures)."

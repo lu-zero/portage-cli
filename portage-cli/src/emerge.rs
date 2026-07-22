@@ -344,6 +344,14 @@ async fn emerge_atoms_inner(
         extra_use_override,
         binpkg_index: binpkg_index.as_ref(),
         exclude: &merge_flags.exclude,
+        // On `-r`, drop packages already finished in a prior attempt so the
+        // `-p` preview and the merge plan agree (critical under `--emptytree`,
+        // where VDB presence alone is not a completion marker).
+        resume_completed: if is_resume {
+            maint::resume::completed_keys(roots.merge_root())
+        } else {
+            std::collections::HashSet::new()
+        },
     })
     .await?;
 
@@ -360,7 +368,12 @@ async fn emerge_atoms_inner(
     if outcome.plan.is_empty() {
         // Nothing needed building (already installed/up to date), but the
         // explicit atoms are still a real selection — matches real emerge
-        // adding an already-satisfied `emerge foo` to world.
+        // adding an already-satisfied `emerge foo` to world. A resume whose
+        // remaining work is empty (everything completed last time) must also
+        // clear the saved job so the next `-r` doesn't loop on an empty plan.
+        if is_resume && update_world {
+            maint::resume::clear(roots.merge_root());
+        }
         maint::world::add_atoms(Some(roots.merge_root()), &world_atoms);
         return Ok(());
     }
@@ -414,32 +427,44 @@ async fn emerge_atoms_inner(
     // never touches this. See `maint::resume`'s module doc for why this
     // persists the invocation (atoms + flags) rather than a pinned package
     // list the way real portage's own `mtimedb["resume"]` does.
-    if update_world {
-        maint::resume::save(
+    //
+    // `job_id` names the on-disk marker tree for per-package completion
+    // (independent files under `em-resume.done/<job_id>/…` — not a locked
+    // JSON rewrite on every package).
+    let resume_job_id = if update_world {
+        Some(maint::resume::save(
             roots.merge_root(),
-            maint::resume::ResumeState {
-                atoms: raw_atoms.to_vec(),
-                merge_flags: merge_flags.clone(),
-                depgraph_flags: cli::DepgraphFlags {
+            maint::resume::ResumeState::new(
+                raw_atoms.to_vec(),
+                merge_flags.clone(),
+                cli::DepgraphFlags {
                     deep: depgraph_flags.0,
                     newuse: depgraph_flags.1,
                     changed_use: depgraph_flags.2,
                 },
                 nodeps,
-            },
+            ),
             is_resume,
-        )?;
-    }
+        )?)
+    } else {
+        None
+    };
 
-    run_merge_plan(
-        &outcome.plan,
-        &outcome.build_blockers,
-        &roots,
-        &work_base,
-        distdir.as_deref(),
+    run_merge_plan(crate::merge::MergePlanRequest {
+        plan: &outcome.plan,
+        blockers: &outcome.build_blockers,
+        roots: &roots,
+        work_base: &work_base,
+        distdir: distdir.as_deref(),
         merge_flags,
-        cli,
-    )
+        globals: cli,
+        resume_job: resume_job_id
+            .as_deref()
+            .map(|job_id| crate::merge::ResumeJob {
+                root: roots.merge_root(),
+                job_id,
+            }),
+    })
     .await?;
 
     if update_world {
@@ -499,11 +524,14 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
 /// `-r`/`--resume`: replay the last saved merge (`maint::resume`). Atoms are
 /// not accepted alongside this flag — the package list comes from the saved
 /// state, matching real emerge (`--resume`'s favorites/mergelist come only
-/// from `mtimedb`, never the command line). The *current* invocation's own
-/// `--merge`/`--depgraph` flags (e.g. `-r --keep-going`, `-r -X stuck/atom`)
-/// win over the persisted ones where set, via the same "args over base"
-/// precedence `crossdev::merge_merge_flags_with` already uses for
-/// subcommand-vs-global flags.
+/// from `mtimedb`, never the command line).
+///
+/// Flag overlay is [`maint::resume::merge_resume_flags`] (not the
+/// subcommand-vs-global OR helper): job-shape flags start from the saved
+/// job and the current CLI can only *add* bools (e.g. `-r --keep-going`);
+/// ephemeral UI (`-a`/`--tree`/`--json`) comes only from this invocation;
+/// `-X` unions into the saved exclude list. See that function's doc for
+/// why clap cannot express "turn a saved flag off" on `-r`.
 async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
     if !cli.atoms.is_empty() {
         bail!("-r/--resume replays the last saved merge; atoms are not accepted together with it");
@@ -514,8 +542,7 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
         bail!("-r/--resume: nothing to resume");
     };
 
-    let merge_flags =
-        crate::crossdev::merge_merge_flags_fields(&state.merge_flags, &cli.merge_flags);
+    let merge_flags = maint::resume::merge_resume_flags(&state.merge_flags, &cli.merge_flags);
     let depgraph_flags =
         crate::crossdev::merge_depgraph_flags_fields(&state.depgraph_flags, &cli.depgraph_flags);
     let nodeps = state.nodeps || cli.nodeps;

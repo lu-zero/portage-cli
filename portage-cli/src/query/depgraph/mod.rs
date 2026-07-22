@@ -167,6 +167,12 @@ pub struct DepgraphOpts<'a> {
     /// missing-dependency error rather than the solver reporting the
     /// conflict up front the way real portage's backtracking search can.
     pub exclude: &'a [String],
+    /// Packages already finished in a prior attempt of a `-r`/`--resume`
+    /// job (`maint::resume::completed_keys`). Dropped from `order` the same
+    /// way `--exclude` is — so `-p` and the merge plan omit completed work,
+    /// which is required for correct `--emptytree` resume (VDB presence is
+    /// not a completion marker there). Empty for every non-resume call.
+    pub resume_completed: HashSet<(MergeRoot, String)>,
 }
 
 pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome> {
@@ -193,6 +199,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         extra_use_override,
         binpkg_index,
         exclude,
+        resume_completed,
     } = opts;
     let exclude_atoms: Vec<Dep> = exclude
         .iter()
@@ -813,12 +820,37 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // Tree) or the final `PlannedMerge` list is built from it — so every
     // consumer agrees on what will actually happen, not just the merge loop.
     if !exclude_atoms.is_empty() {
+        let before = order.len();
         order.retain(|(pkg, ver)| {
             let cpv = Cpv::new(*pkg.cpn(), ver.clone());
             let slot = pkg.slot();
             let slot = slot.as_ref().map(|s| s.as_str());
             !exclude_atoms.iter().any(|d| d.matches_cpv(&cpv, slot))
         });
+        let omitted = before.saturating_sub(order.len());
+        if omitted > 0 {
+            println!(
+                ">>> --exclude: omitted {omitted} package{} from the plan",
+                if omitted == 1 { "" } else { "s" }
+            );
+        }
+    }
+
+    // `-r` completion progress: same post-solve drop as `--exclude`, so the
+    // preview and merge omit work already finished in a prior attempt.
+    if !resume_completed.is_empty() {
+        let before = order.len();
+        order.retain(|(pkg, ver)| {
+            let cpv = Cpv::new(*pkg.cpn(), ver.clone()).to_string();
+            !resume_completed.contains(&(pkg.merge_root(), cpv))
+        });
+        let omitted = before.saturating_sub(order.len());
+        if omitted > 0 {
+            println!(
+                ">>> resume: {omitted} package{} already completed — omitted from plan",
+                if omitted == 1 { "" } else { "s" }
+            );
+        }
     }
 
     // Cross-arch host-config stage: pretend output lists target ROOT merges only

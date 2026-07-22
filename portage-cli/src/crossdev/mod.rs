@@ -767,6 +767,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         extra_use_override: None,
         binpkg_index: None,
         exclude: &[],
+        resume_completed: std::collections::HashSet::new(),
     })
     .await
     .ok()?;

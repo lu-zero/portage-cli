@@ -310,22 +310,53 @@ pub async fn run(
     // there's no authoritative Cpv to pass — `run_inner` falls back to
     // deriving one from `ebuild_path` (fine here: this debug entry point only
     // ever targets a real on-disk ebuild, never a cross-derived virtual one).
-    run_inner(
+    run_inner(RunInner {
         ebuild_path,
-        None,
-        &PhaseGroup::Debug(phases.to_vec()),
+        cpv: None,
+        group: &PhaseGroup::Debug(phases.to_vec()),
         work_dir,
         repo_override,
         root,
-        None,
-        None,
-        None,
+        use_flags: None,
+        distdir: None,
+        phase_log: None,
         roots,
-        None,
-        false,
-        None,
-    )
+        merge_gate: None,
+        buildpkg: false,
+        binpkg: None,
+    })
     .await
+}
+
+/// Inputs for [`build_and_merge`] — one resolved plan entry through the full
+/// phase chain into `root`.
+pub struct BuildAndMerge<'a> {
+    pub ebuild_path: &'a Utf8Path,
+    pub cpv: &'a portage_atom::Cpv,
+    pub use_flags:
+        &'a [portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
+    pub work_base: &'a Utf8Path,
+    pub root: &'a Utf8Path,
+    pub distdir: Option<&'a Utf8Path>,
+    pub quiet: bool,
+    pub roots: RootContext<'a>,
+    pub merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    pub buildpkg: bool,
+    /// `-B`/`--buildpkgonly`: package the image, never qmerge it. Checked
+    /// first and unconditionally single-process — there's no install into
+    /// the live ROOT/VDB to delegate to a privilege-wrapped worker, so the
+    /// Q6 compile/install split this function otherwise does has nothing to
+    /// scope around (an unprivileged run is instead wrapped whole by
+    /// `maybe_supervise`, see `needs_whole_process_wrap`). `buildpkg` is
+    /// forced `true` for the `run_inner` call below regardless of the
+    /// caller's own `-b`: producing the binpkg is the entire point of `-B`,
+    /// not a separate opt-in on top of it.
+    pub buildpkgonly: bool,
+    /// `-f`/`--fetchonly`: download distfiles only (wins over `-b`/`-B`).
+    pub fetchonly: bool,
+    /// `-F`/`--fetch-all-uri`: like `fetchonly`, but ignores USE conditionals
+    /// when resolving SRC_URI (every entry, not just what's USE-selected).
+    pub fetch_all_uri: bool,
 }
 
 /// Build one resolved plan entry through the full phase chain and merge it
@@ -333,34 +364,22 @@ pub async fn run(
 /// work tree lives under `work_base/<category>/<pf>`, and `distdir` (when
 /// set, e.g. `<prefix>/var/cache/distfiles`) overrides the writable distfiles
 /// location.
-#[allow(clippy::too_many_arguments)]
-pub async fn build_and_merge(
-    ebuild_path: &Utf8Path,
-    cpv: &portage_atom::Cpv,
-    use_flags: &[portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
-    work_base: &Utf8Path,
-    root: &Utf8Path,
-    distdir: Option<&Utf8Path>,
-    quiet: bool,
-    roots: RootContext<'_>,
-    merge_gate: Option<&tokio::sync::Mutex<()>>,
-    buildpkg: bool,
-    // `-B`/`--buildpkgonly`: package the image, never qmerge it. Checked
-    // first and unconditionally single-process -- there's no install into
-    // the live ROOT/VDB to delegate to a privilege-wrapped worker, so the
-    // Q6 compile/install split this function otherwise does has nothing to
-    // scope around (an unprivileged run is instead wrapped whole by
-    // `maybe_supervise`, see `needs_whole_process_wrap`). `buildpkg` is
-    // forced `true` for the `run_inner` call below regardless of the
-    // caller's own `-b`: producing the binpkg is the entire point of `-B`,
-    // not a separate opt-in on top of it.
-    buildpkgonly: bool,
-    // `-f`/`--fetchonly`: download distfiles only (wins over `-b`/`-B`).
-    fetchonly: bool,
-    // `-F`/`--fetch-all-uri`: like `fetchonly`, but ignores USE conditionals
-    // when resolving SRC_URI (every entry, not just what's USE-selected).
-    fetch_all_uri: bool,
-) -> Result<()> {
+pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
+    let BuildAndMerge {
+        ebuild_path,
+        cpv,
+        use_flags,
+        work_base,
+        root,
+        distdir,
+        quiet,
+        roots,
+        merge_gate,
+        buildpkg,
+        buildpkgonly,
+        fetchonly,
+        fetch_all_uri,
+    } = opts;
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
     let work_dir = work_base.join(ebuild.category()).join(pf);
@@ -371,43 +390,43 @@ pub async fn build_and_merge(
     // still only fetches. `-F` implies the same short-circuit, just with a
     // different SRC_URI resolution mode inside `run_fetch`.
     if fetchonly || fetch_all_uri {
-        return run_inner(
-            ebuild_path.as_str(),
-            Some(cpv),
-            &PhaseGroup::FetchOnly {
+        return run_inner(RunInner {
+            ebuild_path: ebuild_path.as_str(),
+            cpv: Some(cpv),
+            group: &PhaseGroup::FetchOnly {
                 all_uri: fetch_all_uri,
             },
-            Some(&work_dir),
-            None,
+            work_dir: Some(&work_dir),
+            repo_override: None,
             root,
-            Some(use_flags),
+            use_flags: Some(use_flags),
             distdir,
-            Some((log.clone(), quiet)),
+            phase_log: Some((log.clone(), quiet)),
             roots,
             merge_gate,
-            false,
-            None,
-        )
+            buildpkg: false,
+            binpkg: None,
+        })
         .await
         .with_context(|| format!("fetch log: {log}"));
     }
 
     if buildpkgonly {
-        return run_inner(
-            ebuild_path.as_str(),
-            Some(cpv),
-            &PhaseGroup::BuildOnly,
-            Some(&work_dir),
-            None,
+        return run_inner(RunInner {
+            ebuild_path: ebuild_path.as_str(),
+            cpv: Some(cpv),
+            group: &PhaseGroup::BuildOnly,
+            work_dir: Some(&work_dir),
+            repo_override: None,
             root,
-            Some(use_flags),
+            use_flags: Some(use_flags),
             distdir,
-            Some((log.clone(), quiet)),
+            phase_log: Some((log.clone(), quiet)),
             roots,
             merge_gate,
-            true,
-            None,
-        )
+            buildpkg: true,
+            binpkg: None,
+        })
         .await
         .with_context(|| format!("build log: {log}"));
     }
@@ -416,21 +435,21 @@ pub async fn build_and_merge(
         // Scoped privilege (Q6): compile runs un-wrapped in this process;
         // install+qmerge(+binpkg) delegates to a wrapped __worker child so the
         // ptrace tax / real root stays off the compile's make/gcc tree.
-        run_inner(
-            ebuild_path.as_str(),
-            Some(cpv),
-            &PhaseGroup::Compile,
-            Some(&work_dir),
-            None,
+        run_inner(RunInner {
+            ebuild_path: ebuild_path.as_str(),
+            cpv: Some(cpv),
+            group: &PhaseGroup::Compile,
+            work_dir: Some(&work_dir),
+            repo_override: None,
             root,
-            Some(use_flags),
+            use_flags: Some(use_flags),
             distdir,
-            Some((log.clone(), quiet)),
+            phase_log: Some((log.clone(), quiet)),
             roots,
-            None,
-            false,
-            None,
-        )
+            merge_gate: None,
+            buildpkg: false,
+            binpkg: None,
+        })
         .await
         .with_context(|| format!("build log: {log}"))?;
 
@@ -466,24 +485,38 @@ pub async fn build_and_merge(
         }
         Ok(())
     } else {
-        run_inner(
-            ebuild_path.as_str(),
-            Some(cpv),
-            &PhaseGroup::Full,
-            Some(&work_dir),
-            None,
+        run_inner(RunInner {
+            ebuild_path: ebuild_path.as_str(),
+            cpv: Some(cpv),
+            group: &PhaseGroup::Full,
+            work_dir: Some(&work_dir),
+            repo_override: None,
             root,
-            Some(use_flags),
+            use_flags: Some(use_flags),
             distdir,
-            Some((log.clone(), quiet)),
+            phase_log: Some((log.clone(), quiet)),
             roots,
             merge_gate,
             buildpkg,
-            None,
-        )
+            binpkg: None,
+        })
         .await
         .with_context(|| format!("build log: {log}"))
     }
+}
+
+/// Inputs for [`merge_binpkg`] — reuse a pre-built GPKG without compiling.
+pub struct MergeBinpkg<'a> {
+    pub binpkg_path: &'a Utf8Path,
+    pub ebuild_path: &'a Utf8Path,
+    pub cpv: &'a portage_atom::Cpv,
+    pub use_flags:
+        &'a [portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
+    pub work_base: &'a Utf8Path,
+    pub root: &'a Utf8Path,
+    pub quiet: bool,
+    pub roots: RootContext<'a>,
+    pub merge_gate: Option<&'a tokio::sync::Mutex<()>>,
 }
 
 /// Merge a pre-built binary package (`-k`/`--usepkg`): extract the GPKG's image
@@ -491,18 +524,18 @@ pub async fn build_and_merge(
 /// ebuild for env/hooks and merges from `work_root/image`). Skips fetch →
 /// compile entirely. The caller has already validated the binpkg is reusable
 /// (version + USE + slot match) via [`portage_binpkg::BinpkgIndex`].
-#[allow(clippy::too_many_arguments)]
-pub async fn merge_binpkg(
-    binpkg_path: &Utf8Path,
-    ebuild_path: &Utf8Path,
-    cpv: &portage_atom::Cpv,
-    use_flags: &[portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
-    work_base: &Utf8Path,
-    root: &Utf8Path,
-    quiet: bool,
-    roots: RootContext<'_>,
-    merge_gate: Option<&tokio::sync::Mutex<()>>,
-) -> Result<()> {
+pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
+    let MergeBinpkg {
+        binpkg_path,
+        ebuild_path,
+        cpv,
+        use_flags,
+        work_base,
+        root,
+        quiet,
+        roots,
+        merge_gate,
+    } = opts;
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
     let work_dir = work_base.join(ebuild.category()).join(pf);
@@ -545,43 +578,57 @@ pub async fn merge_binpkg(
     } else {
         // The image is extracted inside run_inner (after its clean step) from
         // the binpkg, then the qmerge phase merges from work_root/image.
-        run_inner(
-            ebuild_path.as_str(),
-            Some(cpv),
-            &PhaseGroup::BinpkgMerge,
-            Some(&work_dir),
-            None,
+        run_inner(RunInner {
+            ebuild_path: ebuild_path.as_str(),
+            cpv: Some(cpv),
+            group: &PhaseGroup::BinpkgMerge,
+            work_dir: Some(&work_dir),
+            repo_override: None,
             root,
-            Some(use_flags),
-            None,
-            Some((log.clone(), quiet)),
+            use_flags: Some(use_flags),
+            distdir: None,
+            phase_log: Some((log.clone(), quiet)),
             roots,
             merge_gate,
-            false,
-            Some(binpkg_path),
-        )
+            buildpkg: false,
+            binpkg: Some(binpkg_path),
+        })
         .await
         .with_context(|| format!("merge log: {log}"))
     }
+}
+
+/// Inputs for [`run_install_worker`] (the privilege-wrapped `__worker` child).
+pub struct InstallWorker<'a> {
+    pub ebuild_path: &'a str,
+    pub cpv_str: &'a str,
+    pub use_flags_str: &'a str,
+    pub work_base: &'a str,
+    pub root: &'a str,
+    pub distdir: Option<&'a str>,
+    pub roots: RootContext<'a>,
+    pub binpkg: Option<&'a str>,
+    pub buildpkg: bool,
+    pub quiet: bool,
 }
 
 /// The `em __worker` body: run the install group (install+qmerge+binpkg) for one
 /// package inside the privilege session the parent spawned us into. The ebuild
 /// is re-sourced (portage spawns each phase in its own process); the parent's
 /// captured env is restored so cross-phase state (BUILD_DIR, …) survives.
-#[allow(clippy::too_many_arguments)]
-pub async fn run_install_worker(
-    ebuild_path: &str,
-    cpv_str: &str,
-    use_flags_str: &str,
-    work_base: &str,
-    root: &str,
-    distdir: Option<&str>,
-    roots: RootContext<'_>,
-    binpkg: Option<&str>,
-    buildpkg: bool,
-    quiet: bool,
-) -> Result<()> {
+pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
+    let InstallWorker {
+        ebuild_path,
+        cpv_str,
+        use_flags_str,
+        work_base,
+        root,
+        distdir,
+        roots,
+        binpkg,
+        buildpkg,
+        quiet,
+    } = opts;
     use portage_atom::interner::{DefaultInterner, Interned};
     let use_flags: Vec<Interned<DefaultInterner>> = use_flags_str
         .split_whitespace()
@@ -605,21 +652,21 @@ pub async fn run_install_worker(
     } else {
         PhaseGroup::Install
     };
-    run_inner(
+    run_inner(RunInner {
         ebuild_path,
-        Some(&cpv),
-        &group,
-        Some(&work_dir),
-        None,
-        Utf8Path::new(root),
-        Some(&use_flags),
-        distdir.map(Utf8Path::new),
-        Some((log.clone(), quiet)),
+        cpv: Some(&cpv),
+        group: &group,
+        work_dir: Some(&work_dir),
+        repo_override: None,
+        root: Utf8Path::new(root),
+        use_flags: Some(&use_flags),
+        distdir: distdir.map(Utf8Path::new),
+        phase_log: Some((log.clone(), quiet)),
         roots,
-        None,
+        merge_gate: None,
         buildpkg,
-        binpkg.map(Utf8Path::new),
-    )
+        binpkg: binpkg.map(Utf8Path::new),
+    })
     .await
     .with_context(|| format!("merge log: {log}"))
 }
@@ -667,30 +714,43 @@ fn resolve_masters(
     out
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_inner(
-    ebuild_path: &str,
-    // The resolved plan entry's authoritative identity, when there is one —
-    // `None` only for the standalone `em ebuild` debug path, which has no
-    // plan to draw it from. `Some` always wins over deriving one from
-    // `ebuild_path`'s on-disk directory name, which is wrong for a
-    // cross-derived package (see `Ebuild::with_cpv`).
-    cpv: Option<&portage_atom::Cpv>,
-    group: &PhaseGroup,
-    work_dir: Option<&Utf8Path>,
-    repo_override: Option<&str>,
-    root: &Utf8Path,
-    use_flags: Option<&[portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>]>,
-    distdir: Option<&Utf8Path>,
+/// Core phase-runner inputs (shared by build, binpkg merge, worker, debug).
+struct RunInner<'a> {
+    ebuild_path: &'a str,
+    /// Authoritative Cpv from the plan when present; `None` for standalone
+    /// `em ebuild` (derived from the on-disk path — fine for real ebuilds).
+    cpv: Option<&'a portage_atom::Cpv>,
+    group: &'a PhaseGroup,
+    work_dir: Option<&'a Utf8Path>,
+    repo_override: Option<&'a str>,
+    root: &'a Utf8Path,
+    use_flags:
+        Option<&'a [portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>]>,
+    distdir: Option<&'a Utf8Path>,
     phase_log: Option<(Utf8PathBuf, bool)>,
-    roots: RootContext<'_>,
-    merge_gate: Option<&tokio::sync::Mutex<()>>,
+    roots: RootContext<'a>,
+    merge_gate: Option<&'a tokio::sync::Mutex<()>>,
     buildpkg: bool,
-    // A pre-built GPKG to merge (`-k`/`-g`): its image is extracted into
-    // work_dir/image *after* the clean step. Only meaningful with
-    // [`PhaseGroup::Install`]. None for a normal source build.
-    binpkg: Option<&Utf8Path>,
-) -> Result<()> {
+    /// Pre-built GPKG to extract after clean (`-k`/`-g`); Install group only.
+    binpkg: Option<&'a Utf8Path>,
+}
+
+async fn run_inner(opts: RunInner<'_>) -> Result<()> {
+    let RunInner {
+        ebuild_path,
+        cpv,
+        group,
+        work_dir,
+        repo_override,
+        root,
+        use_flags,
+        distdir,
+        phase_log,
+        roots,
+        merge_gate,
+        buildpkg,
+        binpkg,
+    } = opts;
     let RootContext {
         config_root,
         sysroot,
@@ -1286,7 +1346,6 @@ fn post_process_after_install(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_one_phase(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
@@ -1492,17 +1551,17 @@ async fn run_merge(
         let exclude: HashSet<Cpv> = std::iter::once(old.cpv().clone()).collect();
         let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
         let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, root);
-        unmerge_slot_occupant(
+        unmerge_slot_occupant(UnmergeSlotOccupant {
             shell,
-            old,
+            old_pkg: old,
             work_root,
             root,
-            &vdb,
-            &contents,
-            &ebuild.cpv().version,
-            &graph,
-            &mut registry,
-        )
+            vdb: &vdb,
+            new_contents: &contents,
+            new_version: &ebuild.cpv().version,
+            graph: &graph,
+            registry: &mut registry,
+        })
         .await?;
         registry.store();
         shell.preset_var("REPLACED_BY_VERSION", "");
@@ -1584,19 +1643,31 @@ async fn run_merge(
 ///
 /// Shared by [`unmerge_slot_occupant`] (an in-place replace during a normal
 /// merge, which also presets `REPLACED_BY_VERSION` before calling this) and
+/// Shared inputs for removing an installed package (in-place replace or `-C`).
+struct UnmergePackage<'a> {
+    shell: &'a mut portage_repo::EbuildShell,
+    old_pkg: &'a InstalledPackage,
+    old_work_root: &'a Utf8Path,
+    root: &'a Utf8Path,
+    vdb: &'a Vdb,
+    new_contents: &'a [ContentsEntry],
+    graph: &'a preserve_libs::LinkGraph,
+    registry: &'a mut preserve_libs::PreservedLibsRegistry,
+}
+
 /// [`unmerge_standalone`] (the standalone `-C`/`--unmerge` command — no
 /// replacement, so no `REPLACED_BY_VERSION`).
-#[allow(clippy::too_many_arguments)]
-async fn unmerge_package(
-    shell: &mut portage_repo::EbuildShell,
-    old_pkg: &InstalledPackage,
-    old_work_root: &Utf8Path,
-    root: &Utf8Path,
-    vdb: &Vdb,
-    new_contents: &[ContentsEntry],
-    graph: &preserve_libs::LinkGraph,
-    registry: &mut preserve_libs::PreservedLibsRegistry,
-) -> Result<()> {
+async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
+    let UnmergePackage {
+        shell,
+        old_pkg,
+        old_work_root,
+        root,
+        vdb,
+        new_contents,
+        graph,
+        registry,
+    } = u;
     let old_pn = old_pkg.cpv().cpn.package.as_ref();
     let old_pvr = old_pkg.cpv().version.to_string();
     let old_pf = format!("{old_pn}-{old_pvr}");
@@ -1733,18 +1804,30 @@ async fn unmerge_package(
 /// replace only ever removes this one old occupant, so "once per batch"
 /// and "once per call" coincide here — no batching concern like `-C`'s
 /// multi-atom case).
-#[allow(clippy::too_many_arguments)]
-async fn unmerge_slot_occupant(
-    shell: &mut portage_repo::EbuildShell,
-    old_pkg: &InstalledPackage,
-    work_root: &Utf8Path,
-    root: &Utf8Path,
-    vdb: &Vdb,
-    new_contents: &[ContentsEntry],
-    new_version: &portage_atom::Version,
-    graph: &preserve_libs::LinkGraph,
-    registry: &mut preserve_libs::PreservedLibsRegistry,
-) -> Result<()> {
+struct UnmergeSlotOccupant<'a> {
+    shell: &'a mut portage_repo::EbuildShell,
+    old_pkg: &'a InstalledPackage,
+    work_root: &'a Utf8Path,
+    root: &'a Utf8Path,
+    vdb: &'a Vdb,
+    new_contents: &'a [ContentsEntry],
+    new_version: &'a portage_atom::Version,
+    graph: &'a preserve_libs::LinkGraph,
+    registry: &'a mut preserve_libs::PreservedLibsRegistry,
+}
+
+async fn unmerge_slot_occupant(u: UnmergeSlotOccupant<'_>) -> Result<()> {
+    let UnmergeSlotOccupant {
+        shell,
+        old_pkg,
+        work_root,
+        root,
+        vdb,
+        new_contents,
+        new_version,
+        graph,
+        registry,
+    } = u;
     // PMS 11.1: the old package's pkg_prerm/pkg_postrm see the version
     // replacing it.
     shell.preset_var("REPLACED_BY_VERSION", &new_version.to_string());
@@ -1756,16 +1839,16 @@ async fn unmerge_slot_occupant(
         .unwrap_or(work_root)
         .join(format!("{old_pf}.old"));
 
-    unmerge_package(
+    unmerge_package(UnmergePackage {
         shell,
         old_pkg,
-        &old_work_root,
+        old_work_root: &old_work_root,
         root,
         vdb,
         new_contents,
         graph,
         registry,
-    )
+    })
     .await?;
     let _ = std::fs::remove_dir_all(old_work_root.as_std_path());
     Ok(())
@@ -1794,16 +1877,16 @@ pub async fn unmerge_standalone(
         .join(old_pkg.category())
         .join(format!("{}.unmerge", old_pkg.pf()));
 
-    unmerge_package(
+    unmerge_package(UnmergePackage {
         shell,
         old_pkg,
-        &old_work_root,
+        old_work_root: &old_work_root,
         root,
         vdb,
-        &[],
+        new_contents: &[],
         graph,
         registry,
-    )
+    })
     .await?;
     let _ = std::fs::remove_dir_all(old_work_root.as_std_path());
     Ok(())

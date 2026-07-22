@@ -39,6 +39,9 @@ this table is the triage index.
 
 ### Smaller / polish (pick opportunistically)
 
+- **Activity status / event bus** (design locked 2026-07-22) — structured
+  `ActivityEvent` stream for crossdev-stages and library callers; live FS +
+  history JSONL sinks; emerge.log opt-in only; `em log` + `-p --eta` — [[activity-status]]
 - Shallow `-p` package-set still ~72 vs emerge ~79 on firefox hosts (pre-existing; not a `-uD` regression) — [[nonemptytree-bdeps-gap]], [[deep-in-slot-upgrades]]
 - Residual provider choice on deep plans (`rust` vs `rust-bin`, tooling set) — polish, not blocking
 - Numeric `--deep=N` (boolean only today); Resolvo `set_prefer_update` still trait default no-op

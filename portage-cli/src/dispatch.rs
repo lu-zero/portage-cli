@@ -56,24 +56,24 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             buildpkg,
             quiet,
         } => {
-            ebuild::run_install_worker(
-                ebuild,
-                cpv,
-                use_flags,
+            ebuild::run_install_worker(ebuild::InstallWorker {
+                ebuild_path: ebuild,
+                cpv_str: cpv,
+                use_flags_str: use_flags,
                 work_base,
                 root,
-                distdir.as_deref(),
-                ebuild::RootContext {
+                distdir: distdir.as_deref(),
+                roots: ebuild::RootContext {
                     config_root: config_root.as_deref().map(camino::Utf8Path::new),
                     sysroot: sysroot.as_deref().map(camino::Utf8Path::new),
                     eprefix: eprefix.as_deref().map(camino::Utf8Path::new),
                     broot: broot.as_deref().map(camino::Utf8Path::new),
                     self_contained_bootstrap: *self_contained_bootstrap,
                 },
-                binpkg.as_deref(),
-                *buildpkg,
-                *quiet,
-            )
+                binpkg: binpkg.as_deref(),
+                buildpkg: *buildpkg,
+                quiet: *quiet,
+            })
             .await
         }
         Applet::Ebuild {
@@ -230,9 +230,9 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
                 for msg in &report {
                     println!("{msg}");
                 }
-                if *fix {
-                    println!("Cleared saved resume list(s).");
-                } else {
+                // `cleanresume` already appends a "Cleared …" line when
+                // `--fix` actually wrote; only nudge the check-only path.
+                if !*fix {
                     println!("Run with --fix to discard them.");
                 }
             }
@@ -341,6 +341,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 extra_use_override: None,
                 binpkg_index: binpkg_index.as_ref(),
                 exclude: &globals.merge_flags.exclude,
+                resume_completed: std::collections::HashSet::new(),
             })
             .await?;
             if outcome.exit_code != 0 {
