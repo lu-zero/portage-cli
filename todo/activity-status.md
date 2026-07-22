@@ -4,8 +4,20 @@ STATUS: 🟢 PR1–7 + follow-ups landed 2026-07-22 — bus, live FS, history JS
 phases, `em log current|list|time|predict` (critical-path when session has
 plan/blockers), `em -p --eta`, `--activity-fd`/`--activity-jsonl`, opt-in
 `--emergelog`, install-worker LiveFs + Unix-socket re-emit to parent bus.
+`HumanStdoutSink` (sink `[5]`) then re-matched against real emerge's own
+`_emerge/{MergeListItem,EbuildBuild,Binpkg,JobStatusDisplay}.py` (2026-07-22,
+ffa27f5): one headline banner per package instead of one per phase, real
+emerge's exact wording (`Emerging`/`Emerging binary`/`Fetching`), its colour
+palette (`C_COUNT`/`C_PKG`/`C_PKG_BINARY` in `style.rs`), a redrawn
+`Jobs: N of M complete, R running` line for `--jobs > 1`, and `-q` no longer
+swallowing `PkgEnd` failures (real `--quiet` never silences errors).
 **Open polish (take if you want):** richer emerge.log timestamps (`chrono_like`
-is still `unix {secs}` — Portage uses ctime-style local time).
+is still `unix {secs}` — Portage uses ctime-style local time); `PkgKind::Binpkg`
+is still never actually emitted at `PkgStart` (`merge/mod.rs::pkg_kind` only
+distinguishes `FetchOnly`/`Source` — the binpkg-reuse decision happens later,
+inside `act_on_package`) so the binary-merge wording/colour path above is
+correct but currently unreachable; fixing it means hoisting that reuse
+decision earlier or re-classifying at `PkgEnd`.
 
 ## Problem
 
