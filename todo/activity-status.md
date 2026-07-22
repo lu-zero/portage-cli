@@ -48,6 +48,30 @@ each new `FuturesUnordered` slot in `merge_parallel`); `em` currently
 ignores the flag entirely and always starts up to `--jobs N` regardless of
 system load. Fixing both the display and the throttle at the same time
 makes sense — they need the same underlying load-average read.
+
+**Open gap: `--eta` only fires under `-p`/`--pretend`, not `-a`/`--ask`.**
+`emerge.rs`'s `--eta` handling is nested entirely inside `if cli.pretend {
+… }` (around line 410-434) and `return Ok(())`s right after printing — an
+`-a`-confirmed real run (`merge_flags.ask`, checked separately at line 450
+via `confirm_action`) never sees the estimate at all today, only a preview
+run does. Want the same `format_eta` output printed right before the
+`confirm_action(...)` call on the `-a` path too, so "am I about to start a
+25-minute build" is visible at the point where the user is actually about
+to say yes, not just under `-p`. Needs the eta-computation block (currently
+inline under the `pretend` branch) pulled into a small shared helper so
+both call sites use it without duplicating the `DurationStore::load` /
+`estimate_remaining_with_blockers` sequence.
+
+**Open polish: prettier `--eta` output.** Current `format_eta` (in
+`activity/history.rs`) is one plain sentence: `ETA ~25s wall
+(critical-path; 31s serial / 16 jobs) — 2 known, 0 unknown package
+time(s)`. Candidates for a pass here (not scoped/decided yet): colour the
+wall-time headline (reuse the `style.rs` palette convention already used by
+`HumanStdoutSink`/`query/depgraph/output.rs`), drop the "0 unknown package
+time(s)" clause when it's zero instead of always spelling it out, maybe
+break the known/unknown/serial detail onto its own indented line so the
+headline reads cleanly on narrow terminals.
+
 **Open polish (take if you want):** richer emerge.log timestamps (`chrono_like`
 is still `unix {secs}` — Portage uses ctime-style local time); `PkgKind::Binpkg`
 is still never actually emitted at `PkgStart` (`merge/mod.rs::pkg_kind` only
