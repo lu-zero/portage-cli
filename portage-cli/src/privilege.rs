@@ -282,18 +282,20 @@ async fn spawn_install_worker_with_reemit(
 ) -> std::io::Result<i32> {
     use std::io::{BufRead, BufReader};
     use std::os::unix::net::UnixListener;
-    use std::path::PathBuf;
 
-    let sock_dir = PathBuf::from(args.work_base).join(".em-activity-reemit");
-    std::fs::create_dir_all(&sock_dir)?;
-    let sock_path = sock_dir.join(format!(
-        "{}-{}-{}.sock",
+    // Unix-domain socket paths are capped at SUN_LEN (~108 bytes on Linux),
+    // so a socket under the (frequently very long) per-package work_base
+    // overflows and `bind` fails. Use a short unique path in the system temp
+    // dir instead; the worker reaches it via `--activity-reemit-path`
+    // regardless of privilege backend (sudo runs as root, which can reach
+    // `/tmp`; the others share the invoking user's filesystem view).
+    let sock_path = std::env::temp_dir().join(format!(
+        "em-activity-reemit-{}-{}.sock",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0),
-        args.cpv.replace('/', "_")
     ));
     let _ = std::fs::remove_file(&sock_path);
     let listener = UnixListener::bind(&sock_path)?;
