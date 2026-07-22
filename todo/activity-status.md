@@ -6,11 +6,23 @@ plan/blockers), `em -p --eta`, `--activity-fd`/`--activity-jsonl`, opt-in
 `--emergelog`, install-worker LiveFs + Unix-socket re-emit to parent bus.
 `HumanStdoutSink` (sink `[5]`) then re-matched against real emerge's own
 `_emerge/{MergeListItem,EbuildBuild,Binpkg,JobStatusDisplay}.py` (2026-07-22,
-ffa27f5): one headline banner per package instead of one per phase, real
-emerge's exact wording (`Emerging`/`Emerging binary`/`Fetching`), its colour
-palette (`C_COUNT`/`C_PKG`/`C_PKG_BINARY` in `style.rs`), a redrawn
-`Jobs: N of M complete, R running` line for `--jobs > 1`, and `-q` no longer
-swallowing `PkgEnd` failures (real `--quiet` never silences errors).
+ffa27f5): real emerge's exact wording (`Emerging`/`Emerging binary`/
+`Fetching`), its colour palette (`C_COUNT`/`C_PKG`/`C_PKG_BINARY` in
+`style.rs`), a redrawn `Jobs: N of M complete, R running` line for
+`--jobs > 1`, and `-q` no longer swallowing `PkgEnd` failures (real
+`--quiet` never silences errors). **Corrected again same day (1892f21)**
+against a real `--jobs N` trace the user supplied: ffa27f5's "one headline
+`=== ...` banner per package" was still wrong — that message
+(`EbuildBuild`'s `logger.log`) only ever reaches `emerge.log`
+(`_emerge/Scheduler.py`'s `_emerge_log_class`), never the terminal. Real
+emerge's terminal instead shows `_emerge/PackageMerge.py`'s
+`>>> Installing (N of M) cpv[ to ROOT/]` / `>>> Completed (...)` around the
+qmerge/merge phase, plus a `for`/`to ROOT/` suffix on all three banners
+(`Emerging`/`Installing`/`Completed`) whenever `ROOT != "/"` — now
+reproduced using `SessionStart`'s real `merge_root`/`host_root` strings.
+Default output shows nothing between `Emerging` and `Installing` again;
+`verbose >= 1` keeps the old every-phase view as an intentional `em`-only
+extra (never real emerge behavior, so nothing lost keeping it opt-in).
 **Open polish (take if you want):** richer emerge.log timestamps (`chrono_like`
 is still `unix {secs}` — Portage uses ctime-style local time); `PkgKind::Binpkg`
 is still never actually emitted at `PkgStart` (`merge/mod.rs::pkg_kind` only
