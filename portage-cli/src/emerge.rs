@@ -143,6 +143,11 @@ pub(crate) struct EmergeOpts<'a> {
     /// Only ever `true` from [`resume_atoms`]; every other call site is a
     /// fresh invocation.
     pub is_resume: bool,
+    /// Optional activity bus (crossdev-stages / library). When `None`, a
+    /// default bus with a live-FS sink is used for real merges.
+    pub activity: Option<crate::activity::ActivityBus>,
+    /// Session correlation (outer job_id / parent_job_id for staged plans).
+    pub activity_session: crate::activity::ActivitySessionOpts,
 }
 
 /// Resolve and (unless `--pretend`) merge `raw_atoms` with the global config in
@@ -162,6 +167,8 @@ struct ResolvedEmergeOpts {
     extra_use_override: Option<String>,
     update_world: bool,
     is_resume: bool,
+    activity: Option<crate::activity::ActivityBus>,
+    activity_session: crate::activity::ActivitySessionOpts,
 }
 
 pub(crate) async fn emerge_atoms(
@@ -187,6 +194,8 @@ pub(crate) async fn emerge_atoms(
             extra_use_override,
             update_world: opts.update_world,
             is_resume: opts.is_resume,
+            activity: opts.activity,
+            activity_session: opts.activity_session,
         },
     )
     .await
@@ -206,6 +215,8 @@ async fn emerge_atoms_inner(
         extra_use_override,
         update_world,
         is_resume,
+        activity: activity_override,
+        activity_session,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
     let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
@@ -450,7 +461,47 @@ async fn emerge_atoms_inner(
         None
     };
 
-    run_merge_plan(crate::merge::MergePlanRequest {
+    // Activity bus: caller-supplied or default live-FS sink under this merge root.
+    let activity =
+        activity_override.unwrap_or_else(|| crate::activity::default_cli_bus(roots.merge_root()));
+    // Prefer resume job_id so markers and activity share one correlation key.
+    let job_id = crate::activity::resolve_job_id(&activity_session, resume_job_id.as_deref());
+    let parent_job_id = activity_session.parent_job_id.clone();
+    let session_started = crate::activity::ActivityEvent::now();
+    let mode = if merge_flags.fetchonly || merge_flags.fetch_all_uri {
+        crate::activity::ActivityMode::FetchOnly
+    } else if merge_flags.buildpkgonly {
+        crate::activity::ActivityMode::BuildpkgOnly
+    } else {
+        crate::activity::ActivityMode::Merge
+    };
+    let mut argv: Vec<String> = std::env::args().collect();
+    if argv.is_empty() {
+        argv.push("em".into());
+    }
+    activity.emit(crate::activity::ActivityEvent::SessionStart {
+        v: crate::activity::ACTIVITY_EVENT_VERSION,
+        job_id: job_id.clone(),
+        parent_job_id: parent_job_id.clone(),
+        pid: std::process::id(),
+        started_at: session_started,
+        argv,
+        merge_root: roots.merge_root().to_string(),
+        host_root: cli.broot().merge_root().to_string(),
+        mode,
+        plan_total: outcome.plan.len() as u32,
+        flags: crate::activity::SessionFlags {
+            jobs: merge_flags.jobs,
+            emptytree: merge_flags.emptytree,
+            update: merge_flags.update,
+            deep: depgraph_flags.0,
+            keep_going: merge_flags.keep_going,
+            fetchonly: merge_flags.fetchonly || merge_flags.fetch_all_uri,
+            buildpkgonly: merge_flags.buildpkgonly,
+        },
+    });
+
+    let merge_result = run_merge_plan(crate::merge::MergePlanRequest {
         plan: &outcome.plan,
         blockers: &outcome.build_blockers,
         roots: &roots,
@@ -458,14 +509,33 @@ async fn emerge_atoms_inner(
         distdir: distdir.as_deref(),
         merge_flags,
         globals: cli,
-        resume_job: resume_job_id
-            .as_deref()
-            .map(|job_id| crate::merge::ResumeJob {
-                root: roots.merge_root(),
-                job_id,
-            }),
+        resume_job: resume_job_id.as_deref().map(|id| crate::merge::ResumeJob {
+            root: roots.merge_root(),
+            job_id: id,
+        }),
+        activity: Some(crate::merge::ActivityTrack {
+            bus: activity.clone(),
+            job_id: job_id.clone(),
+            parent_job_id: parent_job_id.clone(),
+        }),
     })
-    .await?;
+    .await;
+
+    let ok = merge_result.is_ok();
+    // SessionEnd counters: best-effort zeros here; merge loop emits per-pkg.
+    // Live projection/disk already tracked completed/failed via PkgEnd.
+    activity.emit(crate::activity::ActivityEvent::SessionEnd {
+        v: crate::activity::ACTIVITY_EVENT_VERSION,
+        job_id,
+        parent_job_id,
+        at: crate::activity::ActivityEvent::now(),
+        ok,
+        completed: 0,
+        failed: 0,
+        seconds: crate::activity::ActivityEvent::now() - session_started,
+    });
+
+    merge_result?;
 
     if update_world {
         maint::resume::clear(roots.merge_root());
@@ -516,6 +586,8 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             target_only_installed_view: false,
             update_world: true,
             is_resume: false,
+            activity: None,
+            activity_session: Default::default(),
         },
     )
     .await
@@ -559,6 +631,11 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
             target_only_installed_view: false,
             update_world: true,
             is_resume: true,
+            activity: None,
+            activity_session: crate::activity::ActivitySessionOpts {
+                job_id: Some(state.job_id.clone()).filter(|s| !s.is_empty()),
+                parent_job_id: None,
+            },
         },
     )
     .await

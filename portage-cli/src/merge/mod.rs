@@ -32,6 +32,8 @@ pub(crate) struct MergePlanRequest<'a> {
     /// When set, each successful package gets a completion marker under this
     /// job id (see `maint::resume`) so `-r` can skip finished work.
     pub resume_job: Option<ResumeJob<'a>>,
+    /// Structured activity bus (session already started by caller).
+    pub activity: Option<ActivityTrack>,
 }
 
 /// Where to record per-package completion for a live resume job.
@@ -39,6 +41,79 @@ pub(crate) struct MergePlanRequest<'a> {
 pub(crate) struct ResumeJob<'a> {
     pub root: &'a camino::Utf8Path,
     pub job_id: &'a str,
+}
+
+/// Activity correlation for package-level emit during the merge loop.
+#[derive(Clone)]
+pub(crate) struct ActivityTrack {
+    pub bus: crate::activity::ActivityBus,
+    pub job_id: String,
+    pub parent_job_id: Option<String>,
+}
+
+fn pkg_kind(flags: &ActionFlags) -> crate::activity::PkgKind {
+    if flags.fetchonly || flags.fetch_all_uri {
+        crate::activity::PkgKind::FetchOnly
+    } else {
+        // Binpkg vs source decided inside act_on_package; Source is the
+        // conservative default for start events (refined later with phases).
+        crate::activity::PkgKind::Source
+    }
+}
+
+fn emit_pkg_start(
+    activity: &Option<ActivityTrack>,
+    planned: &query::depgraph::PlannedMerge,
+    index: u32,
+    of: u32,
+    kind: crate::activity::PkgKind,
+) -> f64 {
+    let at = crate::activity::ActivityEvent::now();
+    let Some(act) = activity else {
+        return at;
+    };
+    let cpn = planned.cpv.cpn.to_string();
+    act.bus.emit(crate::activity::ActivityEvent::PkgStart {
+        v: crate::activity::ACTIVITY_EVENT_VERSION,
+        job_id: act.job_id.clone(),
+        parent_job_id: act.parent_job_id.clone(),
+        cpv: planned.cpv.to_string(),
+        cpn,
+        merge_root: planned.merge_root.into(),
+        index,
+        of,
+        kind,
+        at,
+    });
+    at
+}
+
+fn emit_pkg_end(
+    activity: &Option<ActivityTrack>,
+    planned: &query::depgraph::PlannedMerge,
+    kind: crate::activity::PkgKind,
+    started: f64,
+    ok: bool,
+    error: Option<String>,
+) {
+    let Some(act) = activity else {
+        return;
+    };
+    let at = crate::activity::ActivityEvent::now();
+    act.bus.emit(crate::activity::ActivityEvent::PkgEnd {
+        v: crate::activity::ACTIVITY_EVENT_VERSION,
+        job_id: act.job_id.clone(),
+        parent_job_id: act.parent_job_id.clone(),
+        cpv: planned.cpv.to_string(),
+        cpn: planned.cpv.cpn.to_string(),
+        merge_root: planned.merge_root.into(),
+        kind,
+        ok,
+        at,
+        seconds: (at - started).max(0.0),
+        phases: vec![],
+        error,
+    });
 }
 
 /// Plan-wide state shared by the sequential and parallel merge loops.
@@ -59,6 +134,7 @@ struct MergeRun<'a> {
     host_env: &'a binpkg::DesiredBuildEnv,
     host_dirs: &'a [std::path::PathBuf],
     resume_job: Option<ResumeJob<'a>>,
+    activity: Option<ActivityTrack>,
 }
 
 /// Per-run mode bits derived once from [`MergeRun`] / [`cli::MergeFlags`].
@@ -214,6 +290,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         merge_flags,
         globals,
         resume_job,
+        activity,
     } = req;
 
     let quiet = globals.quiet;
@@ -417,6 +494,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         host_env: &host_env,
         host_dirs: &host_dirs,
         resume_job,
+        activity,
     };
 
     let (merged, skipped, failures) = if jobs <= 1 {
@@ -701,6 +779,9 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             "Emerging"
         };
         println!("\n>>> {action} ({} of {total}) {}", i + 1, planned.cpv);
+        let kind = pkg_kind(&flags);
+        let pkg_started =
+            emit_pkg_start(&run.activity, planned, (i + 1) as u32, total as u32, kind);
         let result = act_on_package(PackageAction {
             planned,
             merge_root,
@@ -719,6 +800,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         match result {
             Ok(()) => {
                 merged += 1;
+                emit_pkg_end(&run.activity, planned, kind, pkg_started, true, None);
                 if let Some(job) = run.resume_job
                     && let Err(e) = crate::maint::resume::mark_completed(
                         job.root,
@@ -755,6 +837,14 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
                     "emerge"
                 };
                 eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
+                emit_pkg_end(
+                    &run.activity,
+                    planned,
+                    kind,
+                    pkg_started,
+                    false,
+                    Some(format!("{e:#}")),
+                );
                 failures.push(MergeFailure {
                     cpv: planned.cpv.to_string(),
                     log: run
@@ -910,6 +1000,9 @@ async fn merge_parallel(
                 planned.cpv,
                 inflight.len()
             );
+            let kind = pkg_kind(&flags);
+            let pkg_started =
+                emit_pkg_start(&run.activity, planned, started as u32, total as u32, kind);
             let gate = &merge_gate;
             let entry_roots_clone = entry_roots.clone();
             let desired_chost_entry_clone = desired_env.chost.clone();
@@ -931,17 +1024,18 @@ async fn merge_parallel(
                     desired_build_env_key: &desired_build_env_key_clone,
                 })
                 .await;
-                (i, res)
+                (i, res, pkg_started, kind)
             });
         }
 
-        let Some((i, res)) = inflight.next().await else {
+        let Some((i, res, pkg_started, kind)) = inflight.next().await else {
             break;
         };
         match res {
             Ok(()) => {
                 merged += 1;
                 sched.complete(i);
+                emit_pkg_end(&run.activity, &run.plan[i], kind, pkg_started, true, None);
                 if let Some(job) = run.resume_job
                     && let Err(e) = crate::maint::resume::mark_completed(
                         job.root,
@@ -972,6 +1066,14 @@ async fn merge_parallel(
                     "emerge"
                 };
                 eprintln!(">>> Failed to {fail_verb} {} — {e:#}", run.plan[i].cpv);
+                emit_pkg_end(
+                    &run.activity,
+                    &run.plan[i],
+                    kind,
+                    pkg_started,
+                    false,
+                    Some(format!("{e:#}")),
+                );
                 failures.push(MergeFailure {
                     cpv: run.plan[i].cpv.to_string(),
                     log: run

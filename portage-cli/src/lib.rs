@@ -1,5 +1,9 @@
 //! Gentoo Portage command-line library backing the `em` binary.
 
+/// Structured merge activity events (library channel + on-disk sinks).
+///
+/// See `todo/activity-status.md`.
+pub mod activity;
 pub(crate) mod binpkg;
 pub mod cli;
 pub(crate) mod crossdev;
@@ -30,6 +34,9 @@ pub(crate) mod use_flags;
 pub(crate) mod util;
 pub(crate) mod vdb;
 
+pub use activity::{
+    ActivityBus, ActivityEvent, ActivitySessionOpts, LiveProjection, RecordingSink,
+};
 pub(crate) use emerge::{EmergeOpts, emerge_atoms};
 pub use error::ConfigChangesNeeded;
 

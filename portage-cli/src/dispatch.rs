@@ -174,7 +174,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         }
         Applet::News { command } => run_news(command),
         Applet::Glsa { command } => run_glsa(command),
-        Applet::Log { command } => run_log(command),
+        Applet::Log { command } => run_log(command, globals),
         Applet::Grep { pattern, paths } => {
             eprintln!("grep: pattern={} paths={:?}", pattern, paths);
             bail!("not implemented: grep")
@@ -447,17 +447,22 @@ fn run_glsa(command: &Option<GlsaCommand>) -> Result<()> {
     }
 }
 
-fn run_log(command: &Option<LogCommand>) -> Result<()> {
+fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
     match command {
-        None => bail!("not implemented: log (no subcommand)"),
-        Some(LogCommand::Current) => bail!("not implemented: log current"),
+        None | Some(LogCommand::Current) => {
+            let roots = globals.roots();
+            let proj = crate::activity::load_live_from_disk(roots.merge_root());
+            let now = crate::activity::ActivityEvent::now();
+            print!("{}", crate::activity::format_current(&proj, now));
+            Ok(())
+        }
         Some(LogCommand::List { limit }) => {
             eprintln!("log: list limit={:?}", limit);
-            bail!("not implemented: log list")
+            bail!("not implemented: log list (history JSONL — see todo/activity-status.md)")
         }
         Some(LogCommand::Time { atom }) => {
             eprintln!("log: time atom={:?}", atom);
-            bail!("not implemented: log time")
+            bail!("not implemented: log time (history JSONL — see todo/activity-status.md)")
         }
     }
 }

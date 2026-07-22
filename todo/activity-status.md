@@ -1,9 +1,8 @@
 # Activity status & timing (structured; emerge.log optional)
 
-STATUS: 🟡 design — product choices **locked 2026-07-22** (see Decisions).
-Not implemented yet. Structured event stream is the primary interface for
-front-ends (crossdev-stages, TUI, library callers), not a log-scrape
-afterthought.
+STATUS: 🟡 design locked 2026-07-22; **partial impl** — bus + live FS +
+`em log current` + merge Session/PkgStart/PkgEnd hooks landed. Still open:
+phase enter/leave, history JSONL, ETA, `--activity-fd`, emerge.log sink.
 
 ## Problem
 

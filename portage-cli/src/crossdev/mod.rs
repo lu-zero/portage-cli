@@ -398,6 +398,8 @@ async fn run_staged(
                 // selection — must not pollute the world file.
                 update_world: false,
                 is_resume: false,
+                activity: None,
+                activity_session: Default::default(),
             },
         )
         .await?;
