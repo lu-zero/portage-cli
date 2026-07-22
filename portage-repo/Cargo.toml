@@ -33,6 +33,7 @@ clap = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 regex = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 jwalk = { workspace = true }
 flume = { workspace = true }
 blake2 = { workspace = true }

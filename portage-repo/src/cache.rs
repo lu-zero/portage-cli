@@ -85,14 +85,14 @@ pub async fn regen_cache(
             on_progress(n, total);
             match result {
                 Err(e) => {
-                    eprintln!("\nERROR {}: {e}", ebuild.cpv());
+                    tracing::error!("{}: source failed: {e}", ebuild.cpv());
                     errors.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok(sourced) => {
                     if let Some(ref dir) = out_dir
                         && let Err(e) = write_entry(&ebuild, sourced, dir, &checksum_cache)
                     {
-                        eprintln!("\nWRITE ERROR {}: {e}", ebuild.cpv());
+                        tracing::error!("{}: cache write failed: {e}", ebuild.cpv());
                         errors.fetch_add(1, Ordering::Relaxed);
                     }
                 }

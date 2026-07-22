@@ -31,10 +31,6 @@ impl builtins::Command for UnpackCommand {
         // as fatal. The per-archive "die:" diagnostics are printed in the
         // blocking task below; this only raises the shared flag.
         let die_flag = context.shared::<super::die::DieFlag>().ok().cloned();
-        let quiet = context
-            .shared::<super::output::QuietFlag>()
-            .map(|q| q.get())
-            .unwrap_or(false);
         let shell = context.shell;
 
         let get = |var: &str| {
@@ -64,28 +60,26 @@ impl builtins::Command for UnpackCommand {
                 let src_path = match resolve_src_path(archive, &cwd, &distdir, &ro_distdirs, eapi) {
                     Ok(p) => p,
                     Err(e) => {
-                        eprintln!("die: unpack: {e}");
+                        tracing::error!("die: unpack: {e}");
                         return 1;
                     }
                 };
 
                 if !src_path.exists() {
-                    eprintln!("die: unpack: {} not found", src_path.display());
+                    tracing::error!("die: unpack: {} not found", src_path.display());
                     return 1;
                 }
 
-                if !quiet {
-                    eprintln!(">>> Unpacking {} to {}", archive, cwd.display());
-                }
+                tracing::info!(">>> Unpacking {} to {}", archive, cwd.display());
 
                 match unpack_archive(&src_path, &cwd, eapi) {
                     Ok(0) => {}
                     Ok(code) => {
-                        eprintln!("die: unpack: {} failed with exit code {}", archive, code);
+                        tracing::error!("die: unpack: {} failed with exit code {}", archive, code);
                         return 1;
                     }
                     Err(e) => {
-                        eprintln!("die: unpack: {}", e);
+                        tracing::error!("die: unpack: {e}");
                         return 1;
                     }
                 }

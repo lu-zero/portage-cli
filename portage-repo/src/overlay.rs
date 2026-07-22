@@ -105,8 +105,8 @@ pub async fn overlay_entries(repo: &Repository, masters: &[Repository]) -> Vec<(
                 match repo.shell_with_masters(&master_refs).await {
                     Ok(s) => shell.insert(s),
                     Err(e) => {
-                        eprintln!(
-                            "!!! repo '{}': cannot start ebuild shell for metadata: {e}",
+                        tracing::error!(
+                            "repo '{}': cannot start ebuild shell for metadata: {e}",
                             repo.name()
                         );
                         break;
@@ -138,7 +138,7 @@ pub async fn overlay_entries(repo: &Repository, masters: &[Repository]) -> Vec<(
                 out.push((cpv, entry));
             }
             Err(e) => {
-                eprintln!("!!! repo '{}': failed to source {cpv}: {e}", repo.name());
+                tracing::error!("repo '{}': failed to source {cpv}: {e}", repo.name());
                 if let Some(parent) = fail_path.parent()
                     && std::fs::create_dir_all(parent).is_ok()
                 {

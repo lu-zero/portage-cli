@@ -1,32 +1,9 @@
 use std::io::Write;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use brush_core::builtins;
 use clap::Parser;
 
 // ── P1 output helpers ─────────────────────────────────────────────────────────
-
-/// Shared "suppress informational output" flag.
-///
-/// Mirrors the phase-log `quiet` bool (`EbuildShell::set_phase_log`) so build
-/// helpers — `unpack`, the `e*` family — can honour `-q` / `-j>1` without each
-/// threading the flag separately. `EbuildShell` flips it whenever it configures
-/// phase logging; helpers read it via `context.shared`. Shared (Arc) across
-/// every clone of the inner shell, like [`super::die::DieFlag`].
-#[derive(Clone, Default)]
-pub(crate) struct QuietFlag(pub(crate) Arc<AtomicBool>);
-
-impl QuietFlag {
-    pub(crate) fn set(&self, v: bool) {
-        self.0.store(v, Ordering::Relaxed);
-    }
-    /// True when phase output is log-only (no console tee). Helpers that print
-    /// one-line status use this to stay off the terminal under `-q` / `-j>1`.
-    pub(crate) fn get(&self) -> bool {
-        self.0.load(Ordering::Relaxed)
-    }
-}
 
 /// `einfo/elog/ewarn/eerror/eqawarn/einfon <message>`
 ///
