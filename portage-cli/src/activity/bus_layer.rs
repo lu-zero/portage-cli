@@ -189,6 +189,10 @@ mod tests {
     use crate::activity::{ActivityBus, RecordingSink};
     use std::sync::Arc;
 
+    // Both tests mutate the process-global SESSION; serialize them so they
+    // don't clobber each other's session when cargo runs tests in parallel.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn diagnostic_event_round_trips() {
         let ev = ActivityEvent::Diagnostic {
@@ -213,6 +217,7 @@ mod tests {
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::util::SubscriberInitExt;
 
+        let _lock = TEST_LOCK.lock().unwrap();
         // Install a fresh bus as the session target.
         let bus = ActivityBus::new();
         let rec = Arc::new(RecordingSink::new());
@@ -243,5 +248,52 @@ mod tests {
         } else {
             panic!("expected Diagnostic");
         }
+    }
+
+    #[test]
+    fn parallel_packages_do_not_mix_their_diagnostics() {
+        use tracing::Instrument;
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let _lock = TEST_LOCK.lock().unwrap();
+        let bus = ActivityBus::new();
+        let rec = Arc::new(RecordingSink::new());
+        bus.add_sink(rec.clone());
+        set_session(bus, "job-mix");
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let _sub = tracing_subscriber::registry()
+                .with(BusLayer::new())
+                .set_default();
+            // Two "packages" run concurrently; each emits a diagnostic inside
+            // its own instrumented pkg span. Their events must not cross-wire.
+            let task_a = async {
+                tracing::warn!(target: "mix", "from-a");
+            }
+            .instrument(tracing::info_span!("pkg", cpv = %"pkg-a"));
+            let task_b = async {
+                tracing::warn!(target: "mix", "from-b");
+            }
+            .instrument(tracing::info_span!("pkg", cpv = %"pkg-b"));
+            futures_util::join!(task_a, task_b);
+        });
+
+        clear_session();
+        let events = rec.events();
+        let by_cpv: std::collections::HashMap<&str, &str> = events
+            .iter()
+            .filter_map(|e| match e {
+                ActivityEvent::Diagnostic { cpv, msg, .. } => Some((cpv.as_deref()?, msg.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(by_cpv.get("pkg-a").copied(), Some("from-a"));
+        assert_eq!(by_cpv.get("pkg-b").copied(), Some("from-b"));
+        assert_eq!(by_cpv.len(), 2, "exactly one event per package, no mixing");
     }
 }

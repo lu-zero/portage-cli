@@ -202,9 +202,16 @@ where
     SE: brush_core::ShellExtensions,
     F: FnOnce() -> Result<(), String> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(f)
-        .await
-        .unwrap_or_else(|e| Err(format!("task failed: {e}")))
+    // Re-enter the current span on the blocking thread so install-helper
+    // diagnostics (fowners, …) stay attributed to this package/phase under
+    // -j N — spawn_blocking otherwise runs on a thread with an empty span stack.
+    let span = tracing::Span::current();
+    match tokio::task::spawn_blocking(move || {
+        let _span = span.enter();
+        f()
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("task failed: {e}")))
     {
         Ok(()) => brush_core::ExecutionResult::success(),
         Err(msg) => raise_die(context, &msg),

@@ -54,8 +54,13 @@ impl builtins::Command for UnpackCommand {
         let eapi: u32 = get("EAPI").parse().unwrap_or(0);
         let cwd = shell.working_dir().to_path_buf();
         let archives = self.archives.clone();
+        // Re-enter the current span on the blocking thread so the Unpacking /
+        // die diagnostics stay attributed to this package/phase under -j N
+        // (spawn_blocking otherwise runs on a thread with an empty span stack).
+        let span = tracing::Span::current();
 
         let exit = tokio::task::spawn_blocking(move || -> u8 {
+            let _span = span.enter();
             for archive in &archives {
                 let src_path = match resolve_src_path(archive, &cwd, &distdir, &ro_distdirs, eapi) {
                     Ok(p) => p,
