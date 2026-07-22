@@ -510,6 +510,15 @@ async fn emerge_atoms_inner(
     if argv.is_empty() {
         argv.push("em".into());
     }
+    let activity_plan: Vec<crate::activity::ActivityPlanPkg> = outcome
+        .plan
+        .iter()
+        .map(|p| crate::activity::ActivityPlanPkg {
+            cpn: p.cpv.cpn.to_string(),
+            cpv: p.cpv.to_string(),
+            merge_root: p.merge_root.into(),
+        })
+        .collect();
     activity.emit(crate::activity::ActivityEvent::SessionStart {
         v: crate::activity::ACTIVITY_EVENT_VERSION,
         job_id: job_id.clone(),
@@ -530,6 +539,8 @@ async fn emerge_atoms_inner(
             fetchonly: merge_flags.fetchonly || merge_flags.fetch_all_uri,
             buildpkgonly: merge_flags.buildpkgonly,
         },
+        plan: activity_plan,
+        blockers: outcome.build_blockers.clone(),
     });
 
     let merge_result = run_merge_plan(crate::merge::MergePlanRequest {

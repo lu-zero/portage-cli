@@ -59,6 +59,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             activity_parent_job_id,
             activity_live_root,
             activity_side,
+            activity_reemit_path,
         } => {
             ebuild::run_install_worker(ebuild::InstallWorker {
                 ebuild_path: ebuild,
@@ -81,6 +82,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
                 activity_parent_job_id: activity_parent_job_id.as_deref(),
                 activity_live_root: activity_live_root.as_deref(),
                 activity_side: activity_side.as_deref(),
+                activity_reemit_path: activity_reemit_path.as_deref(),
             })
             .await
         }
@@ -485,17 +487,6 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
             }
             let store = crate::activity::DurationStore::load(roots.merge_root());
             for s in active {
-                let remaining: Vec<_> = s
-                    .inflight_sorted()
-                    .into_iter()
-                    .map(|p| crate::activity::EtaPkg {
-                        cpn: p.cpn.clone(),
-                        cpv: p.cpv.clone(),
-                    })
-                    .collect();
-                // Also count plan remainder we don't know about: plan_total - completed - failed - inflight
-                let accounted = s.completed + s.failed + s.inflight.len() as u32;
-                let unknown_slots = s.plan_total.saturating_sub(accounted);
                 println!(
                     "session {}  root={}  done {}/{}  inflight {}",
                     s.job_id,
@@ -505,17 +496,27 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
                     s.inflight.len()
                 );
                 let jobs = s.flags.jobs.unwrap_or(1);
-                let mut eta = crate::activity::estimate_remaining(&store, &remaining, jobs, 15);
-                // Pad serial estimate with global median × unknown plan slots
-                if unknown_slots > 0 {
-                    if let Some(g) = store.global_median_seconds(30) {
-                        eta.serial_seconds += g * unknown_slots as f64;
-                        eta.wall_seconds = eta.serial_seconds / jobs.max(1) as f64;
-                        eta.unknown += unknown_slots;
-                    } else {
-                        eta.unknown += unknown_slots;
+                let (remaining, blockers) = s.remaining_for_eta();
+                let eta = if !s.plan.is_empty() && blockers.len() == remaining.len() {
+                    crate::activity::estimate_remaining_with_blockers(
+                        &store, &remaining, &blockers, jobs, 15,
+                    )
+                } else {
+                    // Legacy sessions without a stored plan: inflight + unknown pad.
+                    let mut eta = crate::activity::estimate_remaining(&store, &remaining, jobs, 15);
+                    let accounted = s.completed + s.failed + s.inflight.len() as u32;
+                    let unknown_slots = s.plan_total.saturating_sub(accounted);
+                    if unknown_slots > 0 {
+                        if let Some(g) = store.global_median_seconds(30) {
+                            eta.serial_seconds += g * unknown_slots as f64;
+                            eta.wall_seconds = eta.serial_seconds / jobs.max(1) as f64;
+                            eta.unknown += unknown_slots;
+                        } else {
+                            eta.unknown += unknown_slots;
+                        }
                     }
-                }
+                    eta
+                };
                 print!("{}", crate::activity::format_eta(&eta));
             }
             Ok(())

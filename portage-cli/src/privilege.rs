@@ -241,12 +241,109 @@ pub struct WorkerArgs<'a> {
     pub activity_live_root: Option<&'a str>,
     /// `host` or `target` — must match the parent's package side.
     pub activity_side: Option<&'a str>,
+    /// Unix socket path for streaming phase events back to the parent bus
+    /// (set by [`spawn_install_worker`] when `reemit` is provided).
+    pub activity_reemit_path: Option<&'a str>,
 }
 
 /// Spawn a wrapped `em __worker` child for the install group and await it.
 /// The compile ran un-wrapped in the parent; this wraps only the
 /// install/qmerge/binpkg tail where ownership/device-node metadata is produced.
-pub async fn spawn_install_worker(backend: Backend, args: &WorkerArgs<'_>) -> std::io::Result<i32> {
+///
+/// When `reemit` is `Some`, the parent binds a Unix socket under `work_base`,
+/// the worker writes JSONL phase events there, and the parent re-emits them on
+/// the given bus (so `--activity-fd` / emergelog / subscribers see install
+/// phases). Path-based (not FD inheritance) so sudo/fakeroost wraps work.
+pub async fn spawn_install_worker(
+    backend: Backend,
+    args: &WorkerArgs<'_>,
+    reemit: Option<crate::activity::ActivityBus>,
+) -> std::io::Result<i32> {
+    #[cfg(unix)]
+    if let Some(bus) = reemit {
+        return spawn_install_worker_with_reemit(backend, args, bus).await;
+    }
+    #[cfg(not(unix))]
+    let _ = reemit;
+
+    let mut cmd = build_worker_command(backend, args, None)?;
+    // The worker runs a full install+qmerge — off the executor thread, so
+    // parallel builds in other tasks keep making progress while we wait.
+    tokio::task::spawn_blocking(move || cmd.status().map(|s| s.code().unwrap_or(1)))
+        .await
+        .map_err(std::io::Error::other)?
+}
+
+#[cfg(unix)]
+async fn spawn_install_worker_with_reemit(
+    backend: Backend,
+    args: &WorkerArgs<'_>,
+    bus: crate::activity::ActivityBus,
+) -> std::io::Result<i32> {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+
+    let sock_dir = PathBuf::from(args.work_base).join(".em-activity-reemit");
+    std::fs::create_dir_all(&sock_dir)?;
+    let sock_path = sock_dir.join(format!(
+        "{}-{}-{}.sock",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+        args.cpv.replace('/', "_")
+    ));
+    let _ = std::fs::remove_file(&sock_path);
+    let listener = UnixListener::bind(&sock_path)?;
+    let sock_path_str = sock_path.to_string_lossy().into_owned();
+
+    let reader = std::thread::spawn({
+        let bus = bus.clone();
+        move || {
+            // Blocks until the worker connects (or the listener is dropped).
+            let (stream, _) = match listener.accept() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("warning: activity re-emit accept: {e}");
+                    return;
+                }
+            };
+            let reader = BufReader::new(stream);
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break;
+                };
+                if line.trim().is_empty() {
+                    continue;
+                }
+                match crate::activity::ActivityEvent::from_jsonl_line(&line) {
+                    Ok(ev) => bus.emit(ev),
+                    Err(e) => eprintln!("warning: activity re-emit parse: {e}"),
+                }
+            }
+        }
+    });
+
+    let mut cmd = build_worker_command(backend, args, Some(sock_path_str.as_str()))?;
+    let status = tokio::task::spawn_blocking(move || cmd.status().map(|s| s.code().unwrap_or(1)))
+        .await
+        .map_err(std::io::Error::other)??;
+
+    // If the worker never connected (crash before open), unblock accept.
+    let _ = std::os::unix::net::UnixStream::connect(&sock_path);
+    // Worker exit closes its end of the socket → reader gets EOF.
+    let _ = reader.join();
+    let _ = std::fs::remove_file(&sock_path);
+    Ok(status)
+}
+
+fn build_worker_command(
+    backend: Backend,
+    args: &WorkerArgs<'_>,
+    reemit_path: Option<&str>,
+) -> std::io::Result<std::process::Command> {
     let exe = std::env::current_exe()?;
     let mut cmd = match backend {
         Backend::Sudo => {
@@ -307,7 +404,10 @@ pub async fn spawn_install_worker(backend: Backend, args: &WorkerArgs<'_>) -> st
     if let Some(s) = args.activity_side {
         cmd.arg("--activity-side").arg(s);
     }
-    let mut cmd = match backend {
+    if let Some(p) = reemit_path.or(args.activity_reemit_path) {
+        cmd.arg("--activity-reemit-path").arg(p);
+    }
+    Ok(match backend {
         #[cfg(all(feature = "fakeroost", target_os = "linux"))]
         Backend::Fakeroost => {
             cmd.env(ACTIVE_ENV, "fakeroost");
@@ -322,12 +422,7 @@ pub async fn spawn_install_worker(backend: Backend, args: &WorkerArgs<'_>) -> st
             cmd.env(ACTIVE_ENV, "sudo");
             cmd
         }
-    };
-    // The worker runs a full install+qmerge — off the executor thread, so
-    // parallel builds in other tasks keep making progress while we wait.
-    tokio::task::spawn_blocking(move || cmd.status().map(|s| s.code().unwrap_or(1)))
-        .await
-        .map_err(std::io::Error::other)?
+    })
 }
 
 /// `(own binary, forwarded args)` for a self re-exec, or `None` if the binary

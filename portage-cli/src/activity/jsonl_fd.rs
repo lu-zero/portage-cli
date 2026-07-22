@@ -1,4 +1,4 @@
-//! Subprocess JSONL sink (`--activity-fd`).
+//! Subprocess JSONL sink (`--activity-fd`) and worker re-emit path.
 
 use std::fs::File;
 use std::io::Write;
@@ -26,6 +26,12 @@ impl JsonlFdSink {
         })
     }
 
+    pub fn from_owned_fd(fd: OwnedFd) -> Self {
+        Self {
+            file: Mutex::new(File::from(fd)),
+        }
+    }
+
     pub fn from_path(path: &str) -> std::io::Result<Self> {
         let file = if path == "-" {
             // stdout is wrong for activity (conflicts with human output).
@@ -39,6 +45,25 @@ impl JsonlFdSink {
         Ok(Self {
             file: Mutex::new(file),
         })
+    }
+
+    /// Connect to a parent-created Unix domain socket (install-worker re-emit).
+    #[cfg(unix)]
+    pub fn connect_reemit(path: &str) -> std::io::Result<Self> {
+        use std::os::fd::IntoRawFd;
+        use std::os::unix::net::UnixStream;
+        let stream = UnixStream::connect(path)?;
+        // SAFETY: into_raw_fd transfers ownership; from_raw_fd takes it back.
+        let fd = unsafe { OwnedFd::from_raw_fd(stream.into_raw_fd()) };
+        Ok(Self::from_owned_fd(fd))
+    }
+
+    #[cfg(not(unix))]
+    pub fn connect_reemit(_path: &str) -> std::io::Result<Self> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "activity re-emit requires Unix domain sockets",
+        ))
     }
 }
 

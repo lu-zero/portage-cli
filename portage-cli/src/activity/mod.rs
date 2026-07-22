@@ -14,8 +14,8 @@ mod projection;
 pub use bus::{ActivityBus, ActivitySink, RecordingSink};
 pub use emergelog::EmergeLogSink;
 pub use event::{
-    ACTIVITY_EVENT_VERSION, ActivityEvent, ActivityMergeRoot, ActivityMode, ActivitySessionOpts,
-    PhaseTiming, PkgKind, SessionFlags,
+    ACTIVITY_EVENT_VERSION, ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg,
+    ActivitySessionOpts, PhaseTiming, PkgKind, SessionFlags,
 };
 pub use history::{
     DurationStore, Eta, EtaPkg, HistoryRecord, HistorySink, estimate_remaining,
@@ -130,13 +130,25 @@ pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     bus
 }
 
-/// Install-worker bus: **LiveFs only**. Parent owns Session/PkgStart/PkgEnd
-/// and history/emergelog/JSONL; the child only refreshes phase on the shared
-/// live tree so `em log current` does not go dark across the privilege split.
-pub fn worker_live_bus(live_root: &Utf8Path) -> ActivityBus {
+/// Install-worker bus: LiveFs + optional JSONL re-emit path (Unix socket or
+/// pipe write end). Parent owns Session/PkgStart/PkgEnd and history; the child
+/// refreshes phase on the shared live tree and streams the same events back so
+/// parent `--activity-fd` / subscribers see install/qmerge phases.
+pub fn worker_activity_bus(live_root: &Utf8Path, reemit_path: Option<&str>) -> ActivityBus {
     let bus = ActivityBus::new();
     bus.add_sink(Arc::new(LiveFsSink::new(live_root.to_owned())));
+    if let Some(path) = reemit_path.filter(|p| !p.is_empty()) {
+        match JsonlFdSink::connect_reemit(path) {
+            Ok(sink) => bus.add_sink(Arc::new(sink)),
+            Err(e) => eprintln!("warning: activity re-emit connect {path}: {e}"),
+        }
+    }
     bus
+}
+
+/// Back-compat alias: LiveFs only (no re-emit).
+pub fn worker_live_bus(live_root: &Utf8Path) -> ActivityBus {
+    worker_activity_bus(live_root, None)
 }
 
 /// Attach optional JSONL FD / path sinks to an existing bus.
@@ -287,6 +299,8 @@ mod tests {
             mode: ActivityMode::Merge,
             plan_total: 2,
             flags: SessionFlags::default(),
+            plan: vec![],
+            blockers: vec![],
         };
         bus.emit(ev.clone());
 
@@ -343,6 +357,8 @@ mod tests {
                 jobs: Some(4),
                 ..Default::default()
             },
+            plan: vec![],
+            blockers: vec![],
         });
         p.apply(&ActivityEvent::PkgStart {
             v: ACTIVITY_EVENT_VERSION,
@@ -387,6 +403,113 @@ mod tests {
         assert_eq!(p.active()[0].completed, 1);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn worker_reemit_socket_round_trip() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::Duration;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("reemit.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let accept = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut lines = BufReader::new(stream).lines();
+            let line = lines.next().unwrap().unwrap();
+            tx.send(line).unwrap();
+        });
+
+        let live = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let bus = worker_activity_bus(&live, Some(sock.to_str().unwrap()));
+        let pkg = ActivityPkgCtx::new(
+            bus,
+            "j".into(),
+            None,
+            "sys-apps/foo-1".into(),
+            ActivityMergeRoot::Target,
+        );
+        let t0 = pkg.phase_enter("install");
+        pkg.phase_leave("install", t0);
+
+        let line = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("re-emit line");
+        let ev = ActivityEvent::from_jsonl_line(&line).unwrap();
+        assert!(matches!(
+            ev,
+            ActivityEvent::PhaseEnter {
+                phase,
+                ..
+            } if phase == "install"
+        ));
+        accept.join().unwrap();
+    }
+
+    #[test]
+    fn remaining_for_eta_remaps_blockers() {
+        let mut p = LiveProjection::new();
+        p.apply(&ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: "j".into(),
+            parent_job_id: None,
+            pid: 1,
+            started_at: 1.0,
+            argv: vec![],
+            merge_root: "/".into(),
+            host_root: "/".into(),
+            mode: ActivityMode::Merge,
+            plan_total: 3,
+            flags: SessionFlags {
+                jobs: Some(2),
+                ..Default::default()
+            },
+            plan: vec![
+                ActivityPlanPkg {
+                    cpn: "a/a".into(),
+                    cpv: "a/a-1".into(),
+                    merge_root: ActivityMergeRoot::Target,
+                },
+                ActivityPlanPkg {
+                    cpn: "b/b".into(),
+                    cpv: "b/b-1".into(),
+                    merge_root: ActivityMergeRoot::Target,
+                },
+                ActivityPlanPkg {
+                    cpn: "c/c".into(),
+                    cpv: "c/c-1".into(),
+                    merge_root: ActivityMergeRoot::Target,
+                },
+            ],
+            // 1 depends on 0; 2 depends on 1
+            blockers: vec![vec![], vec![0], vec![1]],
+        });
+        p.apply(&ActivityEvent::PkgEnd {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: "j".into(),
+            parent_job_id: None,
+            cpv: "a/a-1".into(),
+            cpn: "a/a".into(),
+            merge_root: ActivityMergeRoot::Target,
+            kind: PkgKind::Source,
+            ok: true,
+            at: 2.0,
+            seconds: 1.0,
+            phases: vec![],
+            error: None,
+        });
+        let s = p.get("j").unwrap();
+        let (pkgs, blockers) = s.remaining_for_eta();
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].cpv, "b/b-1");
+        assert_eq!(pkgs[1].cpv, "c/c-1");
+        // old 1→0 had blocker 0 (finished) → empty; old 2→1 had blocker 1 → new 0
+        assert_eq!(blockers, vec![vec![], vec![0]]);
+    }
+
     #[test]
     fn live_fs_round_trip() {
         use camino::Utf8PathBuf;
@@ -408,6 +531,12 @@ mod tests {
             mode: ActivityMode::Merge,
             plan_total: 1,
             flags: SessionFlags::default(),
+            plan: vec![ActivityPlanPkg {
+                cpn: "app-misc/bar".into(),
+                cpv: "app-misc/bar-2".into(),
+                merge_root: ActivityMergeRoot::Target,
+            }],
+            blockers: vec![vec![]],
         });
         bus.emit(ActivityEvent::PkgStart {
             v: ACTIVITY_EVENT_VERSION,
@@ -435,6 +564,8 @@ mod tests {
         assert_eq!(loaded.active().len(), 1);
         let s = loaded.active()[0];
         assert_eq!(s.plan_total, 1);
+        assert_eq!(s.plan.len(), 1);
+        assert_eq!(s.blockers.len(), 1);
         assert_eq!(s.inflight.len(), 1);
         assert_eq!(s.inflight_sorted()[0].phase, "compile");
 

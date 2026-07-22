@@ -469,6 +469,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             .join(" ");
         let cpv_str = cpv.to_string();
         let (act_job, act_parent, act_live, act_side) = worker_activity_cli(activity.as_ref());
+        let reemit = activity.as_ref().map(|a| a.bus.clone());
         let code = crate::privilege::spawn_install_worker(
             backend,
             &crate::privilege::WorkerArgs {
@@ -490,7 +491,9 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
                 activity_parent_job_id: act_parent.as_deref(),
                 activity_live_root: act_live.as_deref(),
                 activity_side: act_side.as_deref(),
+                activity_reemit_path: None,
             },
+            reemit,
         )
         .await
         .context("starting the install worker")?;
@@ -568,6 +571,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
             .join(" ");
         let cpv_str = cpv.to_string();
         let (act_job, act_parent, act_live, act_side) = worker_activity_cli(activity.as_ref());
+        let reemit = activity.as_ref().map(|a| a.bus.clone());
         let code = crate::privilege::spawn_install_worker(
             backend,
             &crate::privilege::WorkerArgs {
@@ -589,7 +593,9 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
                 activity_parent_job_id: act_parent.as_deref(),
                 activity_live_root: act_live.as_deref(),
                 activity_side: act_side.as_deref(),
+                activity_reemit_path: None,
             },
+            reemit,
         )
         .await
         .context("starting the install worker")?;
@@ -637,6 +643,8 @@ pub struct InstallWorker<'a> {
     pub activity_parent_job_id: Option<&'a str>,
     pub activity_live_root: Option<&'a str>,
     pub activity_side: Option<&'a str>,
+    /// Parent-bound Unix socket for phase JSONL re-emit onto the parent bus.
+    pub activity_reemit_path: Option<&'a str>,
 }
 
 /// CLI strings for the install worker's activity identity (owned so they outlive
@@ -663,12 +671,13 @@ fn worker_activity_cli(
     )
 }
 
-/// Rebuild a LiveFs-only package activity handle inside the install worker.
+/// Rebuild a package activity handle inside the install worker (LiveFs + optional re-emit).
 fn worker_activity_ctx(
     job_id: Option<&str>,
     parent_job_id: Option<&str>,
     live_root: Option<&str>,
     side: Option<&str>,
+    reemit_path: Option<&str>,
     cpv: &str,
 ) -> Option<crate::activity::ActivityPkgCtx> {
     let job_id = job_id.filter(|s| !s.is_empty())?;
@@ -677,7 +686,7 @@ fn worker_activity_ctx(
         "host" => crate::activity::ActivityMergeRoot::Host,
         _ => crate::activity::ActivityMergeRoot::Target,
     };
-    let bus = crate::activity::worker_live_bus(Utf8Path::new(live_root));
+    let bus = crate::activity::worker_activity_bus(Utf8Path::new(live_root), reemit_path);
     Some(
         crate::activity::ActivityPkgCtx::new(
             bus,
@@ -710,6 +719,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         activity_parent_job_id,
         activity_live_root,
         activity_side,
+        activity_reemit_path,
     } = opts;
     use portage_atom::interner::{DefaultInterner, Interned};
     let use_flags: Vec<Interned<DefaultInterner>> = use_flags_str
@@ -729,12 +739,13 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         .join(pf);
     let log = work_dir.join("build.log");
 
-    // LiveFs-only bus: parent still owns Session/PkgStart/PkgEnd + history.
+    // LiveFs + optional JSONL re-emit to parent bus; parent owns Session/Pkg*/history.
     let activity = worker_activity_ctx(
         activity_job_id,
         activity_parent_job_id,
         activity_live_root,
         activity_side,
+        activity_reemit_path,
         cpv_str,
     );
 

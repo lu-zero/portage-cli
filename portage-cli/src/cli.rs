@@ -820,6 +820,9 @@ pub enum Applet {
         /// `host` or `target` package side for inflight paths.
         #[arg(long)]
         activity_side: Option<String>,
+        /// Unix socket path: stream phase JSONL back to the parent activity bus.
+        #[arg(long)]
+        activity_reemit_path: Option<String>,
     },
 
     #[command(about = "Execute ebuild phases")]

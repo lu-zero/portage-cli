@@ -7,7 +7,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
 
 use super::bus::ActivitySink;
-use super::event::{ActivityEvent, ActivityMergeRoot, ActivityMode, PkgKind, SessionFlags};
+use super::event::{
+    ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg, PkgKind, SessionFlags,
+};
 use super::projection::LiveProjection;
 use crate::util::write_atomic;
 
@@ -67,6 +69,11 @@ impl LiveFsSink {
             return;
         };
         #[derive(Serialize)]
+        struct FinishedPkg<'a> {
+            merge_root: ActivityMergeRoot,
+            cpv: &'a str,
+        }
+        #[derive(Serialize)]
         struct SessionFile<'a> {
             job_id: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,7 +89,21 @@ impl LiveFsSink {
             completed: u32,
             failed: u32,
             heartbeat_at: f64,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            plan: &'a Vec<ActivityPlanPkg>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            blockers: &'a Vec<Vec<usize>>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            finished: Vec<FinishedPkg<'a>>,
         }
+        let finished: Vec<FinishedPkg<'_>> = s
+            .finished
+            .iter()
+            .map(|(side, cpv)| FinishedPkg {
+                merge_root: *side,
+                cpv: cpv.as_str(),
+            })
+            .collect();
         let path = self.session_path(job_id);
         Self::write_json(
             &path,
@@ -100,6 +121,9 @@ impl LiveFsSink {
                 completed: s.completed,
                 failed: s.failed,
                 heartbeat_at: ActivityEvent::now(),
+                plan: &s.plan,
+                blockers: &s.blockers,
+                finished,
             },
         );
     }
@@ -242,6 +266,8 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
             mode: meta.mode,
             plan_total: meta.plan_total,
             flags: meta.flags.clone(),
+            plan: meta.plan,
+            blockers: meta.blockers,
         });
         // Patch completed/failed by re-applying heartbeat
         proj.apply(&ActivityEvent::SessionHeartbeat {
@@ -252,6 +278,12 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
             completed: meta.completed.unwrap_or(0),
             failed: meta.failed.unwrap_or(0),
         });
+        // Restore finished set for remaining-plan ETA (heartbeat alone only has counts).
+        if let Some(s) = proj.get_mut(&meta.job_id) {
+            for f in &meta.finished {
+                s.finished.insert((f.merge_root, f.cpv.clone()));
+            }
+        }
 
         let inflight_root = ent.path().join("inflight");
         load_inflight_dir(
@@ -268,6 +300,12 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
         );
     }
     proj
+}
+
+#[derive(serde::Deserialize)]
+struct FinishedDisk {
+    merge_root: ActivityMergeRoot,
+    cpv: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -289,6 +327,12 @@ struct SessionDisk {
     failed: Option<u32>,
     #[serde(default)]
     heartbeat_at: Option<f64>,
+    #[serde(default)]
+    plan: Vec<ActivityPlanPkg>,
+    #[serde(default)]
+    blockers: Vec<Vec<usize>>,
+    #[serde(default)]
+    finished: Vec<FinishedDisk>,
 }
 
 #[derive(serde::Deserialize)]

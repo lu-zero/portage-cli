@@ -80,6 +80,14 @@ pub struct PhaseTiming {
     pub seconds: f64,
 }
 
+/// One plan entry for live-session ETA (`SessionStart.plan` / session.json).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityPlanPkg {
+    pub cpn: String,
+    pub cpv: String,
+    pub merge_root: ActivityMergeRoot,
+}
+
 /// Structured progress event. Serialises with `tag = "event"` + `"v": 1`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -97,6 +105,12 @@ pub enum ActivityEvent {
         mode: ActivityMode,
         plan_total: u32,
         flags: SessionFlags,
+        /// Full merge plan (install order) for critical-path ETA / dashboards.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        plan: Vec<ActivityPlanPkg>,
+        /// Build-order blockers, same shape as `DepgraphOutcome::build_blockers`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blockers: Vec<Vec<usize>>,
     },
     SessionHeartbeat {
         v: u32,

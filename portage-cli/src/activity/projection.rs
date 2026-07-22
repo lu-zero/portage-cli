@@ -1,8 +1,11 @@
 //! Fold [`ActivityEvent`]s into a live dashboard snapshot.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::event::{ActivityEvent, ActivityMergeRoot, ActivityMode, PkgKind, SessionFlags};
+use super::event::{
+    ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg, PkgKind, SessionFlags,
+};
+use super::history::EtaPkg;
 
 /// One package currently being acted on.
 #[derive(Clone, Debug)]
@@ -35,6 +38,12 @@ pub struct LiveSession {
     pub completed: u32,
     pub failed: u32,
     pub inflight: HashMap<(ActivityMergeRoot, String), InflightPkg>,
+    /// Full plan (install order) when the session recorded it.
+    pub plan: Vec<ActivityPlanPkg>,
+    /// Build-order blockers for [`Self::plan`] (same indices as merge scheduler).
+    pub blockers: Vec<Vec<usize>>,
+    /// Successfully or failed packages removed from the remaining ETA set.
+    pub finished: HashSet<(ActivityMergeRoot, String)>,
     pub ended: bool,
     pub ok: Option<bool>,
 }
@@ -44,6 +53,59 @@ impl LiveSession {
         let mut v: Vec<_> = self.inflight.values().collect();
         v.sort_by_key(|p| p.index);
         v
+    }
+
+    /// Remaining plan packages + remapped blockers for critical-path ETA.
+    ///
+    /// Falls back to inflight-only (no blockers) when the session has no plan.
+    pub fn remaining_for_eta(&self) -> (Vec<EtaPkg>, Vec<Vec<usize>>) {
+        if self.plan.is_empty() {
+            let pkgs: Vec<EtaPkg> = self
+                .inflight_sorted()
+                .into_iter()
+                .map(|p| EtaPkg {
+                    cpn: p.cpn.clone(),
+                    cpv: p.cpv.clone(),
+                })
+                .collect();
+            let blockers = vec![Vec::new(); pkgs.len()];
+            return (pkgs, blockers);
+        }
+
+        let mut keep_old: Vec<usize> = Vec::new();
+        let mut old_to_new: Vec<Option<usize>> = vec![None; self.plan.len()];
+        for (i, p) in self.plan.iter().enumerate() {
+            if self.finished.contains(&(p.merge_root, p.cpv.clone())) {
+                continue;
+            }
+            old_to_new[i] = Some(keep_old.len());
+            keep_old.push(i);
+        }
+        let pkgs: Vec<EtaPkg> = keep_old
+            .iter()
+            .map(|&i| {
+                let p = &self.plan[i];
+                EtaPkg {
+                    cpn: p.cpn.clone(),
+                    cpv: p.cpv.clone(),
+                }
+            })
+            .collect();
+
+        let blockers = if self.blockers.len() == self.plan.len() {
+            keep_old
+                .iter()
+                .map(|&old_i| {
+                    self.blockers[old_i]
+                        .iter()
+                        .filter_map(|&pred| old_to_new.get(pred).and_then(|x| *x))
+                        .collect()
+                })
+                .collect()
+        } else {
+            vec![Vec::new(); pkgs.len()]
+        };
+        (pkgs, blockers)
     }
 }
 
@@ -71,6 +133,8 @@ impl LiveProjection {
                 mode,
                 plan_total,
                 flags,
+                plan,
+                blockers,
                 ..
             } => {
                 self.sessions.insert(
@@ -89,6 +153,9 @@ impl LiveProjection {
                         completed: 0,
                         failed: 0,
                         inflight: HashMap::new(),
+                        plan: plan.clone(),
+                        blockers: blockers.clone(),
+                        finished: HashSet::new(),
                         ended: false,
                         ok: None,
                     },
@@ -187,6 +254,7 @@ impl LiveProjection {
             } => {
                 if let Some(s) = self.sessions.get_mut(job_id) {
                     s.inflight.remove(&(*merge_root, cpv.clone()));
+                    s.finished.insert((*merge_root, cpv.clone()));
                     if *ok {
                         s.completed += 1;
                     } else {
@@ -210,5 +278,10 @@ impl LiveProjection {
 
     pub fn get(&self, job_id: &str) -> Option<&LiveSession> {
         self.sessions.get(job_id)
+    }
+
+    /// Mutable access for disk-load patches (finished set, etc.).
+    pub fn get_mut(&mut self, job_id: &str) -> Option<&mut LiveSession> {
+        self.sessions.get_mut(job_id)
     }
 }
