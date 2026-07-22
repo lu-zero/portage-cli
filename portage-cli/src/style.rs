@@ -33,6 +33,12 @@ pub const C_VERSION: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::G
 pub const C_PREFIX: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
 /// Host profile source label.
 pub const C_HOST: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
+/// Binary-package cpv in merge banners (real emerge's `PKG_BINARY_MERGE`).
+pub const C_PKG_BINARY: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Magenta)));
+/// `(N of M)` progress counters in merge banners (real emerge's
+/// `MERGE_LIST_PROGRESS`, which is yellow — not to be confused with the
+/// testing-keyword yellow below, same colour, different meaning).
+pub const C_COUNT: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 
 // ── Stability / status palette (stable=green, testing/dev=yellow, …=red) ────
 /// Stable keyword / stable profile.
