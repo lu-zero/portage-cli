@@ -16,9 +16,87 @@ pub use event::{
 pub use live_fs::{LiveFsSink, load_live_from_disk, pid_alive};
 pub use projection::{InflightPkg, LiveProjection, LiveSession};
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use camino::Utf8Path;
+
+/// Per-package activity handle passed into the ebuild phase runner.
+///
+/// Holds enough identity to emit [`ActivityEvent::PhaseEnter`] /
+/// [`ActivityEvent::PhaseLeave`] without the phase loop knowing about the
+/// full session. `phases` accumulates leave timings for a richer
+/// [`ActivityEvent::PkgEnd`] if the caller wants them.
+#[derive(Clone)]
+pub struct ActivityPkgCtx {
+    pub bus: ActivityBus,
+    pub job_id: String,
+    pub parent_job_id: Option<String>,
+    pub cpv: String,
+    pub merge_root: ActivityMergeRoot,
+    phases: Arc<Mutex<Vec<PhaseTiming>>>,
+}
+
+impl ActivityPkgCtx {
+    pub fn new(
+        bus: ActivityBus,
+        job_id: String,
+        parent_job_id: Option<String>,
+        cpv: String,
+        merge_root: ActivityMergeRoot,
+    ) -> Self {
+        Self {
+            bus,
+            job_id,
+            parent_job_id,
+            cpv,
+            merge_root,
+            phases: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    pub fn phase_enter(&self, phase: &str) -> f64 {
+        let at = ActivityEvent::now();
+        self.bus.emit(ActivityEvent::PhaseEnter {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: self.job_id.clone(),
+            parent_job_id: self.parent_job_id.clone(),
+            cpv: self.cpv.clone(),
+            merge_root: self.merge_root,
+            phase: phase.to_string(),
+            at,
+        });
+        at
+    }
+
+    pub fn phase_leave(&self, phase: &str, started: f64) {
+        let at = ActivityEvent::now();
+        let seconds = (at - started).max(0.0);
+        self.phases
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(PhaseTiming {
+                phase: phase.to_string(),
+                seconds,
+            });
+        self.bus.emit(ActivityEvent::PhaseLeave {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: self.job_id.clone(),
+            parent_job_id: self.parent_job_id.clone(),
+            cpv: self.cpv.clone(),
+            merge_root: self.merge_root,
+            phase: phase.to_string(),
+            at,
+            seconds,
+        });
+    }
+
+    pub fn phases_done(&self) -> Vec<PhaseTiming> {
+        self.phases
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
 
 /// Build the default CLI bus: live FS under `merge_root` (no emerge.log).
 pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
@@ -157,6 +235,35 @@ mod tests {
         assert_eq!(rec.events().len(), 1);
         let got = rx.try_recv().unwrap();
         assert_eq!(got.job_id(), "j1");
+    }
+
+    #[test]
+    fn activity_pkg_ctx_emits_phase_enter_leave() {
+        let bus = ActivityBus::new();
+        let rec = Arc::new(RecordingSink::new());
+        bus.add_sink(rec.clone());
+        let pkg = ActivityPkgCtx::new(
+            bus,
+            "j".into(),
+            None,
+            "sys-apps/foo-1".into(),
+            ActivityMergeRoot::Target,
+        );
+        let t0 = pkg.phase_enter("compile");
+        pkg.phase_leave("compile", t0 - 1.0); // force positive seconds
+        let evs = rec.events();
+        assert!(
+            evs.iter().any(
+                |e| matches!(e, ActivityEvent::PhaseEnter { phase, .. } if phase == "compile")
+            )
+        );
+        assert!(
+            evs.iter().any(
+                |e| matches!(e, ActivityEvent::PhaseLeave { phase, .. } if phase == "compile")
+            )
+        );
+        assert_eq!(pkg.phases_done().len(), 1);
+        assert_eq!(pkg.phases_done()[0].phase, "compile");
     }
 
     #[test]

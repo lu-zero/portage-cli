@@ -324,6 +324,7 @@ pub async fn run(
         merge_gate: None,
         buildpkg: false,
         binpkg: None,
+        activity: None,
     })
     .await
 }
@@ -357,6 +358,8 @@ pub struct BuildAndMerge<'a> {
     /// `-F`/`--fetch-all-uri`: like `fetchonly`, but ignores USE conditionals
     /// when resolving SRC_URI (every entry, not just what's USE-selected).
     pub fetch_all_uri: bool,
+    /// When set, emit phase enter/leave on the activity bus.
+    pub activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
 /// Build one resolved plan entry through the full phase chain and merge it
@@ -379,6 +382,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         buildpkgonly,
         fetchonly,
         fetch_all_uri,
+        activity,
     } = opts;
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
@@ -406,6 +410,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate,
             buildpkg: false,
             binpkg: None,
+            activity,
         })
         .await
         .with_context(|| format!("fetch log: {log}"));
@@ -426,6 +431,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate,
             buildpkg: true,
             binpkg: None,
+            activity,
         })
         .await
         .with_context(|| format!("build log: {log}"));
@@ -435,6 +441,9 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         // Scoped privilege (Q6): compile runs un-wrapped in this process;
         // install+qmerge(+binpkg) delegates to a wrapped __worker child so the
         // ptrace tax / real root stays off the compile's make/gcc tree.
+        // Activity: compile phases emit here; install worker does not yet
+        // carry the bus (process boundary) — install/qmerge show as a gap
+        // until WorkerArgs grows activity fields.
         run_inner(RunInner {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
@@ -449,6 +458,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate: None,
             buildpkg: false,
             binpkg: None,
+            activity: activity.clone(),
         })
         .await
         .with_context(|| format!("build log: {log}"))?;
@@ -499,6 +509,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate,
             buildpkg,
             binpkg: None,
+            activity,
         })
         .await
         .with_context(|| format!("build log: {log}"))
@@ -517,6 +528,7 @@ pub struct MergeBinpkg<'a> {
     pub quiet: bool,
     pub roots: RootContext<'a>,
     pub merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    pub activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
 /// Merge a pre-built binary package (`-k`/`--usepkg`): extract the GPKG's image
@@ -535,6 +547,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
         quiet,
         roots,
         merge_gate,
+        activity,
     } = opts;
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
@@ -592,6 +605,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
             merge_gate,
             buildpkg: false,
             binpkg: Some(binpkg_path),
+            activity,
         })
         .await
         .with_context(|| format!("merge log: {log}"))
@@ -666,6 +680,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         merge_gate: None,
         buildpkg,
         binpkg: binpkg.map(Utf8Path::new),
+        activity: None, // process boundary — parent has no bus handle yet
     })
     .await
     .with_context(|| format!("merge log: {log}"))
@@ -733,6 +748,7 @@ struct RunInner<'a> {
     buildpkg: bool,
     /// Pre-built GPKG to extract after clean (`-k`/`-g`); Install group only.
     binpkg: Option<&'a Utf8Path>,
+    activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
 async fn run_inner(opts: RunInner<'_>) -> Result<()> {
@@ -750,6 +766,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         merge_gate,
         buildpkg,
         binpkg,
+        activity,
     } = opts;
     let RootContext {
         config_root,
@@ -1006,7 +1023,8 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             (true, Some(wd), "merge" | "qmerge") => lock_merge_flock(wd).await,
             _ => None,
         };
-        run_one_phase(
+        let phase_started = activity.as_ref().map(|a| a.phase_enter(phase));
+        let phase_result = run_one_phase(
             &mut shell,
             &ebuild,
             &repo,
@@ -1015,7 +1033,12 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             root,
             fetch_all_uri,
         )
-        .await?;
+        .await;
+        if let (Some(act), Some(started)) = (activity.as_ref(), phase_started) {
+            // Emit leave even on failure so dashboards do not stick mid-phase.
+            act.phase_leave(phase, started);
+        }
+        phase_result?;
         drop(_merge_flock);
         drop(_merge_guard);
 

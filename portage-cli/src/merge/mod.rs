@@ -95,6 +95,7 @@ fn emit_pkg_end(
     started: f64,
     ok: bool,
     error: Option<String>,
+    phases: Vec<crate::activity::PhaseTiming>,
 ) {
     let Some(act) = activity else {
         return;
@@ -111,9 +112,24 @@ fn emit_pkg_end(
         ok,
         at,
         seconds: (at - started).max(0.0),
-        phases: vec![],
+        phases,
         error,
     });
+}
+
+fn activity_pkg_ctx(
+    activity: &Option<ActivityTrack>,
+    planned: &query::depgraph::PlannedMerge,
+) -> Option<crate::activity::ActivityPkgCtx> {
+    activity.as_ref().map(|act| {
+        crate::activity::ActivityPkgCtx::new(
+            act.bus.clone(),
+            act.job_id.clone(),
+            act.parent_job_id.clone(),
+            planned.cpv.to_string(),
+            planned.merge_root.into(),
+        )
+    })
 }
 
 /// Plan-wide state shared by the sequential and parallel merge loops.
@@ -182,6 +198,8 @@ struct PackageAction<'a> {
     remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
     desired_chost: &'a str,
     desired_build_env_key: &'a str,
+    /// Phase enter/leave emitter for this package (if activity is enabled).
+    activity_pkg: Option<crate::activity::ActivityPkgCtx>,
 }
 
 /// Verify `pkgdir` can actually be written to (creating it if missing) — the
@@ -567,6 +585,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         remote_indices,
         desired_chost,
         desired_build_env_key,
+        activity_pkg,
     } = a;
     let ActionFlags {
         buildpkg,
@@ -648,6 +667,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             buildpkgonly: false,
             fetchonly,
             fetch_all_uri,
+            activity: activity_pkg.clone(),
         })
         .await;
     }
@@ -666,6 +686,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             quiet,
             roots: root_ctx,
             merge_gate,
+            activity: activity_pkg.clone(),
         })
         .await;
     }
@@ -684,6 +705,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
                     quiet,
                     roots: root_ctx,
                     merge_gate,
+                    activity: activity_pkg.clone(),
                 })
                 .await
             }
@@ -704,6 +726,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
                     buildpkgonly,
                     fetchonly: false,
                     fetch_all_uri: false,
+                    activity: activity_pkg.clone(),
                 })
                 .await
             }
@@ -725,6 +748,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             buildpkgonly,
             fetchonly: false,
             fetch_all_uri: false,
+            activity: activity_pkg.clone(),
         })
         .await
     }
@@ -782,6 +806,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         let kind = pkg_kind(&flags);
         let pkg_started =
             emit_pkg_start(&run.activity, planned, (i + 1) as u32, total as u32, kind);
+        let activity_pkg = activity_pkg_ctx(&run.activity, planned);
         let result = act_on_package(PackageAction {
             planned,
             merge_root,
@@ -795,12 +820,25 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             remote_indices: run.remote_indices,
             desired_chost: &desired_env.chost,
             desired_build_env_key: &desired_build_env_key,
+            activity_pkg: activity_pkg.clone(),
         })
         .await;
         match result {
             Ok(()) => {
                 merged += 1;
-                emit_pkg_end(&run.activity, planned, kind, pkg_started, true, None);
+                let phases = activity_pkg
+                    .as_ref()
+                    .map(|a| a.phases_done())
+                    .unwrap_or_default();
+                emit_pkg_end(
+                    &run.activity,
+                    planned,
+                    kind,
+                    pkg_started,
+                    true,
+                    None,
+                    phases,
+                );
                 if let Some(job) = run.resume_job
                     && let Err(e) = crate::maint::resume::mark_completed(
                         job.root,
@@ -837,6 +875,10 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
                     "emerge"
                 };
                 eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
+                let phases = activity_pkg
+                    .as_ref()
+                    .map(|a| a.phases_done())
+                    .unwrap_or_default();
                 emit_pkg_end(
                     &run.activity,
                     planned,
@@ -844,6 +886,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
                     pkg_started,
                     false,
                     Some(format!("{e:#}")),
+                    phases,
                 );
                 failures.push(MergeFailure {
                     cpv: planned.cpv.to_string(),
@@ -1008,6 +1051,7 @@ async fn merge_parallel(
             let desired_chost_entry_clone = desired_env.chost.clone();
             let desired_build_env_key_clone = desired_build_env_key.clone();
             let flags_ref = &flags;
+            let activity_pkg = activity_pkg_ctx(&run.activity, planned);
             inflight.push(async move {
                 let res = act_on_package(PackageAction {
                     planned,
@@ -1022,20 +1066,33 @@ async fn merge_parallel(
                     remote_indices: run.remote_indices,
                     desired_chost: &desired_chost_entry_clone,
                     desired_build_env_key: &desired_build_env_key_clone,
+                    activity_pkg: activity_pkg.clone(),
                 })
                 .await;
-                (i, res, pkg_started, kind)
+                let phases = activity_pkg
+                    .as_ref()
+                    .map(|a| a.phases_done())
+                    .unwrap_or_default();
+                (i, res, pkg_started, kind, phases)
             });
         }
 
-        let Some((i, res, pkg_started, kind)) = inflight.next().await else {
+        let Some((i, res, pkg_started, kind, phases)) = inflight.next().await else {
             break;
         };
         match res {
             Ok(()) => {
                 merged += 1;
                 sched.complete(i);
-                emit_pkg_end(&run.activity, &run.plan[i], kind, pkg_started, true, None);
+                emit_pkg_end(
+                    &run.activity,
+                    &run.plan[i],
+                    kind,
+                    pkg_started,
+                    true,
+                    None,
+                    phases,
+                );
                 if let Some(job) = run.resume_job
                     && let Err(e) = crate::maint::resume::mark_completed(
                         job.root,
@@ -1073,6 +1130,7 @@ async fn merge_parallel(
                     pkg_started,
                     false,
                     Some(format!("{e:#}")),
+                    phases,
                 );
                 failures.push(MergeFailure {
                     cpv: run.plan[i].cpv.to_string(),
