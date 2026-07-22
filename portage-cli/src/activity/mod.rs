@@ -7,11 +7,12 @@ mod bus;
 mod emergelog;
 mod event;
 mod history;
+mod human;
 mod jsonl_fd;
 mod live_fs;
 mod projection;
 
-pub use bus::{ActivityBus, ActivitySink, RecordingSink};
+pub use bus::{ActivityBus, ActivitySink, BackgroundSink, RecordingSink};
 pub use emergelog::EmergeLogSink;
 pub use event::{
     ACTIVITY_EVENT_VERSION, ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg,
@@ -21,6 +22,7 @@ pub use history::{
     DurationStore, Eta, EtaPkg, HistoryRecord, HistorySink, estimate_remaining,
     estimate_remaining_with_blockers, format_eta, format_list, format_seconds, format_time,
 };
+pub use human::HumanStdoutSink;
 pub use jsonl_fd::JsonlFdSink;
 pub use live_fs::{LiveFsSink, load_live_from_disk, pid_alive};
 pub use projection::{InflightPkg, LiveProjection, LiveSession};
@@ -122,11 +124,19 @@ impl ActivityPkgCtx {
 }
 
 /// Build the default CLI bus: live FS + history JSONL under `merge_root`
-/// (no emerge.log — opt-in only).
+/// (no emerge.log — opt-in only). Both disk sinks are offloaded to background
+/// threads so [`ActivityBus::emit`] never blocks the async merge scheduler on
+/// phase-transition I/O.
 pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     let bus = ActivityBus::new();
-    bus.add_sink(Arc::new(LiveFsSink::new(merge_root.to_owned())));
-    bus.add_sink(Arc::new(HistorySink::new(merge_root.to_owned())));
+    bus.add_sink(Arc::new(BackgroundSink::new(
+        Arc::new(LiveFsSink::new(merge_root.to_owned())),
+        "em-activity-live",
+    )));
+    bus.add_sink(Arc::new(BackgroundSink::new(
+        Arc::new(HistorySink::new(merge_root.to_owned())),
+        "em-activity-history",
+    )));
     bus
 }
 
@@ -134,9 +144,17 @@ pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
 /// pipe write end). Parent owns Session/PkgStart/PkgEnd and history; the child
 /// refreshes phase on the shared live tree and streams the same events back so
 /// parent `--activity-fd` / subscribers see install/qmerge phases.
+///
+/// The live-FS sink is offloaded (phase writes can be frequent); the re-emit
+/// FD sink stays inline so its writes complete in `emit` order and a slow
+/// consumer cannot stall the worker's shutdown (background-join would risk
+/// hanging on a full pipe).
 pub fn worker_activity_bus(live_root: &Utf8Path, reemit_path: Option<&str>) -> ActivityBus {
     let bus = ActivityBus::new();
-    bus.add_sink(Arc::new(LiveFsSink::new(live_root.to_owned())));
+    bus.add_sink(Arc::new(BackgroundSink::new(
+        Arc::new(LiveFsSink::new(live_root.to_owned())),
+        "em-activity-worker-live",
+    )));
     if let Some(path) = reemit_path.filter(|p| !p.is_empty()) {
         match JsonlFdSink::connect_reemit(path) {
             Ok(sink) => bus.add_sink(Arc::new(sink)),
@@ -149,6 +167,13 @@ pub fn worker_activity_bus(live_root: &Utf8Path, reemit_path: Option<&str>) -> A
 /// Back-compat alias: LiveFs only (no re-emit).
 pub fn worker_live_bus(live_root: &Utf8Path) -> ActivityBus {
     worker_activity_bus(live_root, None)
+}
+
+/// Attach the emerge-style terminal renderer. Renders `PkgStart`/`PhaseEnter`
+/// banners from the bus (a direct, inline sink so output is immediate). `quiet`
+/// suppresses everything; `verbose` adds per-phase timings.
+pub fn attach_human_stdout(bus: &ActivityBus, quiet: bool, verbose: u8) {
+    bus.add_sink(Arc::new(HumanStdoutSink::new(quiet, verbose)));
 }
 
 /// Attach optional JSONL FD / path sinks to an existing bus.
@@ -172,7 +197,10 @@ pub fn attach_jsonl_outputs(
 
 /// Opt-in Portage-compatible emerge.log dual-write under `merge_root`.
 pub fn attach_emergelog(bus: &ActivityBus, merge_root: &Utf8Path) {
-    bus.add_sink(Arc::new(EmergeLogSink::for_merge_root(merge_root)));
+    bus.add_sink(Arc::new(BackgroundSink::new(
+        Arc::new(EmergeLogSink::for_merge_root(merge_root)),
+        "em-activity-emergelog",
+    )));
 }
 
 /// Resolve the job id for this merge: explicit opt, else new id (or resume's).
@@ -606,5 +634,81 @@ mod tests {
         assert!(line.contains("\"event\":\"pkg_end\""));
         let back = ActivityEvent::from_jsonl_line(&line).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn background_sink_flushes_events_in_order() {
+        let inner = Arc::new(RecordingSink::new());
+        let bg = BackgroundSink::new(inner.clone(), "test-bg");
+        // Emit many events from this thread; they must arrive in FIFO order.
+        for i in 0u32..2000 {
+            bg.on_event(&ActivityEvent::SessionHeartbeat {
+                v: ACTIVITY_EVENT_VERSION,
+                job_id: "j".into(),
+                parent_job_id: None,
+                at: i as f64,
+                completed: i,
+                failed: 0,
+            });
+        }
+        bg.flush();
+        let evs = inner.events();
+        assert_eq!(evs.len(), 2000, "no events lost across the channel");
+        let ats: Vec<f64> = evs
+            .iter()
+            .map(|e| match e {
+                ActivityEvent::SessionHeartbeat { at, .. } => *at,
+                _ => unreachable!("only heartbeats emitted"),
+            })
+            .collect();
+        assert!(
+            ats.windows(2).all(|w| w[0] <= w[1]),
+            "FIFO order preserved by the background thread"
+        );
+    }
+
+    #[test]
+    fn background_sink_drop_drains_pending() {
+        let inner = Arc::new(RecordingSink::new());
+        {
+            let bg = BackgroundSink::new(inner.clone(), "test-bg-drop");
+            for i in 0..50 {
+                bg.on_event(&ActivityEvent::SessionHeartbeat {
+                    v: ACTIVITY_EVENT_VERSION,
+                    job_id: "j".into(),
+                    parent_job_id: None,
+                    at: i as f64,
+                    completed: i,
+                    failed: 0,
+                });
+            }
+            // No explicit flush — Drop must join and drain.
+        }
+        assert_eq!(
+            inner.events().len(),
+            50,
+            "Drop joined the worker and drained"
+        );
+    }
+
+    #[test]
+    fn default_cli_bus_emits_non_blocking() {
+        // A bus with backgrounded disk sinks must not lose events recorded by
+        // an inline recording sink added on top, and must deliver them.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let bus = default_cli_bus(&root);
+        let rec = Arc::new(RecordingSink::new());
+        bus.add_sink(rec.clone());
+        bus.emit(ActivityEvent::SessionHeartbeat {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: "j".into(),
+            parent_job_id: None,
+            at: 1.0,
+            completed: 0,
+            failed: 0,
+        });
+        // Inline sink is synchronous; backgrounded sinks also see the event.
+        assert_eq!(rec.events().len(), 1);
     }
 }

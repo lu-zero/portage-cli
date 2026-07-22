@@ -314,8 +314,13 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         activity,
     } = req;
 
-    let quiet = globals.quiet;
     let jobs = merge_flags.jobs.map(|j| j as usize).unwrap_or(1).max(1);
+    // With more than one job the interleaved per-phase console output is
+    // unreadable, so send it to build.log only (real emerge does the same
+    // under `--jobs`: the tee comes off, the one-line banners stay — those are
+    // now rendered from the activity bus by `HumanStdoutSink`). `-q` silences
+    // the sink too. So this `quiet` (phase-log only) is `-q || -j>1`.
+    let quiet = globals.quiet || jobs > 1;
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
     // `-F`/`--fetch-all-uri` is fetch-only too (just a different SRC_URI
@@ -400,7 +405,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let binpkg_index = if want_local {
         match portage_binpkg::BinpkgIndex::open(target_pkgdir.as_std_path()) {
             Ok(idx) => {
-                if !idx.is_empty() {
+                if !idx.is_empty() && !globals.quiet {
                     println!(
                         ">>> --usepkg: {} local binary package(s) in {target_pkgdir}",
                         idx.len()
@@ -427,7 +432,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let host_binpkg_index_owned = if want_local && dual_pkgdir {
         match portage_binpkg::BinpkgIndex::open(host_pkgdir.as_std_path()) {
             Ok(idx) => {
-                if !idx.is_empty() {
+                if !idx.is_empty() && !globals.quiet {
                     println!(
                         ">>> --usepkg: {} host binary package(s) in {host_pkgdir}",
                         idx.len()
@@ -472,10 +477,12 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
             {
                 Ok((text, reason)) => {
                     let idx = portage_binpkg::RemoteBinpkgIndex::new(&text, base);
-                    println!(
-                        ">>> --getbinpkg: {} package(s) on {base} ({reason})",
-                        idx.len()
-                    );
+                    if !globals.quiet {
+                        println!(
+                            ">>> --getbinpkg: {} package(s) on {base} ({reason})",
+                            idx.len()
+                        );
+                    }
                     fetched.push(idx);
                 }
                 Err(e) => {
@@ -548,7 +555,9 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         } else {
             format!("{merged} package(s) merged into {merge_root}")
         };
-        println!("\n>>> Done — {done}{extra}");
+        if !globals.quiet {
+            println!("\n>>> Done — {done}{extra}");
+        }
         return Ok(());
     }
 
@@ -640,16 +649,20 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     if fetchonly || fetch_all_uri {
         // Local binpkg already present → nothing to download.
         if let Some(binpkg_path) = reused {
-            println!(
-                ">>> binpkg already present (no fetch needed): {}",
-                binpkg_path.display()
-            );
+            if !quiet {
+                println!(
+                    ">>> binpkg already present (no fetch needed): {}",
+                    binpkg_path.display()
+                );
+            }
             return Ok(());
         }
         // Remote binpkg: download into the run cache, do not merge.
         if let Some(url) = remote_url {
             let path = fetch_remote_binpkg(&url, work_base).await?;
-            println!(">>> Fetched binary package: {url} -> {path}");
+            if !quiet {
+                println!(">>> Fetched binary package: {url} -> {path}");
+            }
             return Ok(());
         }
         if enforce_no_source {
@@ -676,7 +689,9 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     }
 
     if let Some(binpkg_path) = reused {
-        println!(">>> Using binary package: {}", binpkg_path.display());
+        if !quiet {
+            println!(">>> Using binary package: {}", binpkg_path.display());
+        }
         let path = camino::Utf8Path::from_path(binpkg_path.as_path())
             .unwrap_or_else(|| camino::Utf8Path::new("/invalid-binpkg-path"));
         return ebuild::merge_binpkg(ebuild::MergeBinpkg {
@@ -697,7 +712,9 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     if let Some(url) = remote_url {
         match fetch_remote_binpkg(&url, work_base).await {
             Ok(path) => {
-                println!(">>> Fetched binary package: {url}");
+                if !quiet {
+                    println!(">>> Fetched binary package: {url}");
+                }
                 ebuild::merge_binpkg(ebuild::MergeBinpkg {
                     binpkg_path: &path,
                     ebuild_path: &planned.ebuild_path,
@@ -791,21 +808,14 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         // reinstalled — their distfiles are not needed for this plan step.
         let pkg_vdb = merge_root.join("var/db/pkg").join(planned.cpv.to_string());
         if !flags.emptytree && !planned.reinstall && pkg_vdb.exists() {
-            println!(
-                ">>> [{}/{total}] {} is already installed — skipping",
-                i + 1,
-                planned.cpv
-            );
+            // Skips are silent during the merge (counted in the end summary);
+            // the `HumanStdoutSink` only renders packages that actually start.
             skipped += 1;
             continue;
         }
 
-        let action = if flags.fetchonly || flags.fetch_all_uri {
-            "Fetching"
-        } else {
-            "Emerging"
-        };
-        println!("\n>>> {action} ({} of {total}) {}", i + 1, planned.cpv);
+        // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
+        // `PkgStart` event emitted below — no ad-hoc print here.
         let kind = pkg_kind(&flags);
         let pkg_started =
             emit_pkg_start(&run.activity, planned, (i + 1) as u32, total as u32, kind);
@@ -1030,22 +1040,15 @@ async fn merge_parallel(
                     .join(planned.cpv.to_string())
                     .exists()
             {
-                println!(">>> {} is already installed — skipping", planned.cpv);
+                // Skips are silent (counted in the end summary); the
+                // `HumanStdoutSink` renders only packages that actually start.
                 skipped += 1;
                 sched.complete(i);
                 continue;
             }
             started += 1;
-            let action = if flags.fetchonly || flags.fetch_all_uri {
-                "Fetching"
-            } else {
-                "Emerging"
-            };
-            println!(
-                ">>> {action} ({started} of {total}) {} [+{} in flight]",
-                planned.cpv,
-                inflight.len()
-            );
+            // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
+            // `PkgStart` event emitted below — no ad-hoc print here.
             let kind = pkg_kind(&flags);
             let pkg_started =
                 emit_pkg_start(&run.activity, planned, started as u32, total as u32, kind);

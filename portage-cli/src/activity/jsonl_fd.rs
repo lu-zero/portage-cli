@@ -50,12 +50,10 @@ impl JsonlFdSink {
     /// Connect to a parent-created Unix domain socket (install-worker re-emit).
     #[cfg(unix)]
     pub fn connect_reemit(path: &str) -> std::io::Result<Self> {
-        use std::os::fd::IntoRawFd;
         use std::os::unix::net::UnixStream;
+        // UnixStream → OwnedFd → File, all via the I/O-safety From impls.
         let stream = UnixStream::connect(path)?;
-        // SAFETY: into_raw_fd transfers ownership; from_raw_fd takes it back.
-        let fd = unsafe { OwnedFd::from_raw_fd(stream.into_raw_fd()) };
-        Ok(Self::from_owned_fd(fd))
+        Ok(Self::from_owned_fd(stream.into()))
     }
 
     #[cfg(not(unix))]

@@ -486,6 +486,10 @@ async fn emerge_atoms_inner(
     // Activity bus: caller-supplied or default live-FS + history under this root.
     let activity =
         activity_override.unwrap_or_else(|| crate::activity::default_cli_bus(roots.merge_root()));
+    // Terminal banners render from the bus (one verbosity decision point); the
+    // `quiet` here is the user's `-q`, NOT the jobs-derived phase-log quiet —
+    // `-j>1` keeps banners while still sending build output to build.log.
+    crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
     crate::activity::attach_jsonl_outputs(
         &activity,
         cli.activity_fd,
