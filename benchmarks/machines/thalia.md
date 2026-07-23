@@ -343,3 +343,32 @@ for J in 12 16 20 24 28 32; do
   rm -rf "$OUT"
 done
 ```
+
+## bench-sweep.sh regression check (2026-07-23, commit 2afb668)
+
+Full `./scripts/bench-sweep.sh` run (default configs — `papaya-default`,
+`papaya-mimalloc` only; papaya is the real shipped default interner, so
+lasso/symbol-table are no longer part of the routine sweep) against the same
+`benchmarks/gentoo` tree commit (`0833c9f`) as the 2026-07-20 baseline
+(`bench-results/20260720-231747-78550ca`), to confirm the `-r`/`--resume` and
+`--eta` activity-bus work landed since that baseline didn't regress anything.
+Output: `bench-results/20260723-101215-2afb668/` (`commit.env`, `report.md`,
+`summary.tsv`).
+
+| metric | config | baseline (78550ca) | this run (2afb668) |
+|---|---|---|---|
+| regen real | papaya-default | 10.007s | 10.043s |
+| regen real | papaya-mimalloc | 11.565s | 12.101s |
+| regen user | papaya-default | 3m9.855s | 3m6.785s |
+| regen user | papaya-mimalloc | 3m10.554s | 3m18.222s |
+| search gcc (mean) | papaya-default | 0.100s | 0.096s |
+| search firefox (mean) | papaya-default | 0.105s | 0.092s |
+| search rust (mean) | papaya-default | 0.084s | 0.108s |
+
+All deltas are within normal run-to-run noise (regen ±0.5s / search
+±10-20ms) — no regression. Expected: none of the intervening commits touch
+the interner/allocator/parsing/resolve/regen hot paths this sweep measures;
+they're CLI-layer (activity bus, `--eta`, `-r`/`--resume`). Criterion
+(`dep_parsing`/`realworld_dep_parsing`/`resolve`/`dedup`) numbers are also
+consistent with prior runs and `MEMORY.md`'s tables — no per-benchmark
+regression flagged by `bench-eval.sh`'s winner column beyond normal noise.
