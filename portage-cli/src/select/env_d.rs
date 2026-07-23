@@ -170,29 +170,15 @@ fn collect_profiles<T: EnvDProfile>(
             continue;
         }
 
-        // Read the profile to get the target variable
-        let target: Option<String> = {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let mut found = None;
-                for line in content.lines() {
-                    let line = line.trim();
-                    if line.starts_with(T::target_var_name()) {
-                        let target_var = T::target_var_name();
-                        let mut target = line.trim_start_matches(target_var).trim().to_string();
-                        let needs_strip = (target.starts_with('"') && target.ends_with('"'))
-                            || (target.starts_with("'") && target.ends_with("'"));
-                        if needs_strip {
-                            target = target[1..target.len() - 1].to_string();
-                        }
-                        found = Some(target);
-                        break;
-                    }
-                }
-                found
-            } else {
-                None
-            }
-        };
+        // Read the profile to get the target variable, via the same
+        // quote-aware parser `set_profile` already uses — the previous
+        // hand-rolled `starts_with('"') && ends_with('"')` check here
+        // panicked (`begin > end` slice) on a 1-byte value that was just a
+        // bare stray `"`.
+        let target: Option<String> = std::fs::read_to_string(&path).ok().and_then(|content| {
+            let key = T::target_var_name().trim_end_matches('=');
+            parse_env_vars(&content).remove(key)
+        });
 
         // If no target found, try to extract from profile name
         let profile_target = target.unwrap_or_else(|| {
@@ -220,15 +206,8 @@ fn collect_profiles<T: EnvDProfile>(
 /// Get the current profile for a target.
 pub(super) fn get_current_profile<T: EnvDProfile>(roots: &Roots, target: &str) -> Option<String> {
     let config_path = current_config_path::<T>(roots, target);
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        for line in content.lines() {
-            let line = line.trim();
-            if line.starts_with("CURRENT=") {
-                return Some(line.trim_start_matches("CURRENT=").trim().to_string());
-            }
-        }
-    }
-    None
+    let content = std::fs::read_to_string(&config_path).ok()?;
+    parse_env_vars(&content).remove("CURRENT")
 }
 
 /// Set the profile for a target.
@@ -479,4 +458,34 @@ pub(super) fn activate_latest<T: EnvDProfile>(roots: &Roots, target: &str) -> Re
 /// Get the default target from CHOST or architecture.
 pub fn get_default_target(globals: &Cli) -> String {
     get_chost(globals).unwrap_or_else(|_| globals.arch.as_str().to_string() + "-unknown-linux-gnu")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::select::linker::LinkerProfileType;
+
+    /// A profile file whose target line's value is a single stray quote
+    /// character used to panic (`target[1..target.len() - 1]` sliced
+    /// `1..0`) in the old hand-rolled quote-stripping loop here, before it
+    /// was rewritten to go through `parse_env_vars` like `set_profile`
+    /// already did.
+    #[test]
+    fn collect_profiles_does_not_panic_on_a_bare_quote_value() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("aarch64-unknown-linux-gnu-13"),
+            "CTARGET=\"\n",
+        )
+        .unwrap();
+        let base_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let mut profiles_by_target = BTreeMap::new();
+        collect_profiles::<LinkerProfileType>(&base_dir, &mut profiles_by_target, false).unwrap();
+
+        // The point of this test is that the malformed CTARGET value
+        // doesn't panic while being parsed -- the profile still gets
+        // collected under whatever (malformed) target string comes out.
+        assert_eq!(profiles_by_target.values().map(Vec::len).sum::<usize>(), 1);
+    }
 }

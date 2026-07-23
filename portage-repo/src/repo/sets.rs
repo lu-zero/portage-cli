@@ -17,7 +17,7 @@
 //!
 //! Recursive expansion uses [`super::named_groups::expand_group`] (cycle-safe).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -25,6 +25,7 @@ use portage_atom::Dep;
 
 use crate::error::{Error, Result};
 use crate::repo::ProfileStack;
+use crate::repo::ini;
 use crate::repo::named_groups::{self, GroupEntry, classify_token, expand_group};
 
 /// The `@` prefix that marks a set reference (portage `SETPREFIX`).
@@ -184,40 +185,19 @@ fn lookup_sets_conf(path: &Utf8Path, name: &str) -> Result<Option<PathBuf>> {
     let Ok(content) = std::fs::read_to_string(path.as_std_path()) else {
         return Ok(None);
     };
-    let mut in_section = false;
-    let mut class = String::new();
-    let mut filename: Option<String> = None;
-    for raw in content.lines() {
-        let line = raw.trim();
-        if let Some(inner) = line
-            .strip_prefix('[')
-            .and_then(|l| l.strip_suffix(']'))
-            .map(str::trim)
-        {
-            if in_section {
-                return finish_static_file(&class, filename.as_deref(), path);
-            }
-            in_section = inner == name;
-            class.clear();
-            filename = None;
-            continue;
-        }
-        if !in_section {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            let (k, v) = (k.trim(), v.trim());
-            if k.eq_ignore_ascii_case("class") {
-                class = v.to_string();
-            } else if k.eq_ignore_ascii_case("filename") {
-                filename = Some(v.to_string());
-            }
-        }
-    }
-    if in_section {
-        return finish_static_file(&class, filename.as_deref(), path);
-    }
-    Ok(None)
+    let mut sections = HashMap::new();
+    let mut order = Vec::new();
+    ini::merge_sections(&mut sections, &mut order, &content);
+    let Some(section) = sections.get(name) else {
+        return Ok(None);
+    };
+    let find = |key: &str| {
+        section
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
+    finish_static_file(find("class").unwrap_or_default(), find("filename"), path)
 }
 
 fn finish_static_file(
