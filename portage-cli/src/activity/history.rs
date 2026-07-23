@@ -474,22 +474,32 @@ pub fn format_time(store: &DurationStore, atom: Option<&str>) -> String {
     }
 }
 
-/// Format ETA for human output.
+/// Format ETA for human output. Callers writing to a terminal should print
+/// this through `anstream` (not plain `print!`/`println!`) so the embedded
+/// style codes are stripped on non-tty output, matching the convention in
+/// `activity/human.rs`.
 pub fn format_eta(eta: &Eta) -> String {
+    use crate::style::C_BOLD;
     let mode = if eta.critical_path {
         "critical-path"
     } else {
         "naive serial/jobs"
     };
     let mut out = format!(
-        "ETA ~{} wall ({mode}; {} serial / {} job{}) — {} known, {} unknown package time(s)\n",
+        "ETA ~{C_BOLD}{}{C_BOLD:#} wall ({mode}, {} job{})\n",
         format_seconds(eta.wall_seconds),
-        format_seconds(eta.serial_seconds),
         eta.jobs,
         if eta.jobs == 1 { "" } else { "s" },
-        eta.known,
-        eta.unknown,
     );
+    out.push_str(&format!(
+        "  {} serial, {} known",
+        format_seconds(eta.serial_seconds),
+        eta.known,
+    ));
+    if eta.unknown > 0 {
+        out.push_str(&format!(", {} unknown package time(s)", eta.unknown));
+    }
+    out.push('\n');
     if eta.unknown > 0 && eta.known == 0 {
         out.push_str("(no history yet — estimates unavailable)\n");
     }

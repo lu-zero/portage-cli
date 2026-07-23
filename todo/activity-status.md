@@ -49,28 +49,23 @@ ignores the flag entirely and always starts up to `--jobs N` regardless of
 system load. Fixing both the display and the throttle at the same time
 makes sense — they need the same underlying load-average read.
 
-**Open gap: `--eta` only fires under `-p`/`--pretend`, not `-a`/`--ask`.**
-`emerge.rs`'s `--eta` handling is nested entirely inside `if cli.pretend {
-… }` (around line 410-434) and `return Ok(())`s right after printing — an
-`-a`-confirmed real run (`merge_flags.ask`, checked separately at line 450
-via `confirm_action`) never sees the estimate at all today, only a preview
-run does. Want the same `format_eta` output printed right before the
-`confirm_action(...)` call on the `-a` path too, so "am I about to start a
-25-minute build" is visible at the point where the user is actually about
-to say yes, not just under `-p`. Needs the eta-computation block (currently
-inline under the `pretend` branch) pulled into a small shared helper so
-both call sites use it without duplicating the `DurationStore::load` /
-`estimate_remaining_with_blockers` sequence.
-
-**Open polish: prettier `--eta` output.** Current `format_eta` (in
-`activity/history.rs`) is one plain sentence: `ETA ~25s wall
-(critical-path; 31s serial / 16 jobs) — 2 known, 0 unknown package
-time(s)`. Candidates for a pass here (not scoped/decided yet): colour the
-wall-time headline (reuse the `style.rs` palette convention already used by
-`HumanStdoutSink`/`query/depgraph/output.rs`), drop the "0 unknown package
-time(s)" clause when it's zero instead of always spelling it out, maybe
-break the known/unknown/serial detail onto its own indented line so the
-headline reads cleanly on narrow terminals.
+**`--eta` on `-a`/`--ask`, and prettier output — DONE (2026-07-23).** The
+eta-computation block (`DurationStore::load` / `EtaPkg` collection /
+`estimate_remaining_with_blockers`) is now a shared `eta_message(roots,
+merge_flags, outcome)` helper in `emerge.rs`, called from both the
+`-p`/`--pretend` branch and right before the `confirm_action(...)` call on
+the `-a`/`--ask` path — an `-a`-confirmed real run now sees the same
+estimate a `-p` preview does, right where the user is actually asked to
+say yes. `format_eta` (`activity/history.rs`) is also reworked: the
+wall-time headline is bold (`style::C_BOLD`, `"ETA ~{C_BOLD}0s{C_BOLD:#}
+wall (critical-path, 1 job)"`), the known/unknown/serial detail moved to
+its own indented line, and the "N unknown package time(s)" clause is
+dropped entirely when `unknown == 0`. Since the string now carries
+embedded style codes, both call sites (`emerge.rs` and `dispatch.rs`'s
+`em log predict`) switched from plain `print!` to `write!(anstream::stdout(),
+…)` so the codes are stripped on non-tty output — live-verified both ways
+(`script(1)` pty capture shows the escape codes; piping to a file shows
+none).
 
 **Open polish (take if you want):** richer emerge.log timestamps (`chrono_like`
 is still `unix {secs}` — Portage uses ctime-style local time); `PkgKind::Binpkg`

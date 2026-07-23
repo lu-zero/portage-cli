@@ -1,5 +1,6 @@
 //! CLI dispatch: applet routing and shared helpers.
 
+use std::io::Write;
 use std::str::FromStr;
 
 use anyhow::bail;
@@ -517,7 +518,7 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
                     }
                     eta
                 };
-                print!("{}", crate::activity::format_eta(&eta));
+                let _ = write!(anstream::stdout(), "{}", crate::activity::format_eta(&eta));
             }
             Ok(())
         }

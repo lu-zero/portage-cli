@@ -1,5 +1,6 @@
 //! Emerge resolve-and-merge orchestration.
 
+use std::io::Write;
 use std::str::FromStr;
 
 use anyhow::{Context, bail};
@@ -199,6 +200,38 @@ pub(crate) async fn emerge_atoms(
         },
     )
     .await
+}
+
+/// `--eta` estimate for `outcome.plan`, formatted for terminal display.
+/// Shared by the `-p`/`--pretend` preview and the `-a`/`--ask` confirmation
+/// prompt, so "am I about to start a 25-minute build" is visible at the
+/// point the user is actually asked to confirm, not only under a dry-run
+/// preview.
+fn eta_message(
+    roots: &portage_resolve::Roots,
+    merge_flags: &cli::MergeFlags,
+    outcome: &query::depgraph::DepgraphOutcome,
+) -> String {
+    let store = crate::activity::DurationStore::load(roots.merge_root());
+    let pkgs: Vec<_> = outcome
+        .plan
+        .iter()
+        .map(|p| crate::activity::EtaPkg {
+            cpn: p.cpv.cpn.to_string(),
+            cpv: p.cpv.to_string(),
+        })
+        .collect();
+    let jobs = merge_flags.jobs.unwrap_or(1);
+    // Prefer critical-path list-schedule when the depgraph gave us
+    // build_blockers (same graph as --jobs parallel merge).
+    let eta = crate::activity::estimate_remaining_with_blockers(
+        &store,
+        &pkgs,
+        &outcome.build_blockers,
+        jobs,
+        15,
+    );
+    crate::activity::format_eta(&eta)
 }
 
 async fn emerge_atoms_inner(
@@ -409,26 +442,11 @@ async fn emerge_atoms_inner(
 
     if cli.pretend {
         if cli.eta {
-            let store = crate::activity::DurationStore::load(roots.merge_root());
-            let pkgs: Vec<_> = outcome
-                .plan
-                .iter()
-                .map(|p| crate::activity::EtaPkg {
-                    cpn: p.cpv.cpn.to_string(),
-                    cpv: p.cpv.to_string(),
-                })
-                .collect();
-            let jobs = merge_flags.jobs.unwrap_or(1);
-            // Prefer critical-path list-schedule when the depgraph gave us
-            // build_blockers (same graph as --jobs parallel merge).
-            let eta = crate::activity::estimate_remaining_with_blockers(
-                &store,
-                &pkgs,
-                &outcome.build_blockers,
-                jobs,
-                15,
+            let _ = write!(
+                anstream::stdout(),
+                "{}",
+                eta_message(&roots, merge_flags, &outcome)
             );
-            print!("{}", crate::activity::format_eta(&eta));
         }
         return Ok(());
     }
@@ -447,9 +465,18 @@ async fn emerge_atoms_inner(
     } else {
         "merge"
     };
-    if merge_flags.ask && !confirm_action(verb, outcome.plan.len())? {
-        println!(">>> Quitting.");
-        return Ok(());
+    if merge_flags.ask {
+        if cli.eta {
+            let _ = write!(
+                anstream::stdout(),
+                "{}",
+                eta_message(&roots, merge_flags, &outcome)
+            );
+        }
+        if !confirm_action(verb, outcome.plan.len())? {
+            println!(">>> Quitting.");
+            return Ok(());
+        }
     }
 
     // Persist enough to replay this invocation via `-r`/`--resume` if it
