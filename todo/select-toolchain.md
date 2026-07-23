@@ -80,14 +80,25 @@ doesn't exist. Same bug, same fix, for `binutils`/`linker` (all three share
 `get_chost` via the identical `run()` pattern in each module).
 
 **Fix**: when `is_prefix_context(globals)` is true, add the host's real
-`/etc/portage/make.conf` (not the legacy `/etc/make.conf`) to the fallback
-chain, ahead of the legacy path. Two new tests in `select/mod.rs`
-(`get_chost_under_prefix_falls_back_to_host_make_conf`,
+`/etc/portage/make.conf` to the fallback chain. Two new tests in
+`select/mod.rs` (`get_chost_under_prefix_falls_back_to_host_make_conf`,
 `get_chost_host_context_is_unaffected`) — both read the real host
 `/etc/portage/make.conf` directly for their expected value (matching the
 existing environment-honest test convention already used by
 `binpkg.rs::host_root_skips_the_root_relative_branch`), skip gracefully on
 a host with no `CHOST=` set at all.
+
+**Also dropped, same commit**: the legacy `/etc/make.conf` (pre-2006
+flat-file layout) fallback that used to sit alongside this. Traced its
+origin — added in `0f5784e` (2026-06-23, "feat(select): add gcc and
+binutils subcommands...", AI-generated/"Mistral Vibe") as a generic
+"check some system make.conf" guess, without the modern
+`/etc/portage/make.conf` convention or `--prefix`'s "host provides base
+config" model in mind. Confirmed safe to remove: essentially never
+populated on any system relevant today, and it was a real footgun, not
+just dead weight — any stray file some other tool left at that exact path
+with an unrelated `CHOST=` line would have silently outranked the correct
+value.
 
 Live-verified after the fix: `show`/`set` (no `--target`) both correctly
 resolve `aarch64-unknown-linux-gnu-16`, and `set` still successfully

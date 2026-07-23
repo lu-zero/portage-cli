@@ -152,19 +152,19 @@ pub fn get_chost(globals: &Cli) -> Result<String, anyhow::Error> {
     // and the generated prefix make.conf's own header, "Profile and base
     // make.conf come from the host"). Without this fallback, a prefix's own
     // (CHOST-less) make.conf overlay left `get_chost` with nothing to find,
-    // and the legacy `/etc/make.conf` check below never fires on a modern
-    // system (that flat-file layout predates 2006) — so `select compiler
-    // show`/`set` with no explicit `--target` silently derived a bogus
-    // target (`arm64-unknown-linux-gnu` from `Cli::arch`'s Gentoo arch name,
-    // not the real `aarch64-unknown-linux-gnu` CHOST tuple). Found live in a
-    // real `--prefix` sandbox after a full `em toolchain --setup` run.
+    // so `select compiler show`/`set` with no explicit `--target` silently
+    // derived a bogus target (`arm64-unknown-linux-gnu` from `Cli::arch`'s
+    // Gentoo arch name, not the real `aarch64-unknown-linux-gnu` CHOST
+    // tuple). Found live in a real `--prefix` sandbox after a full
+    // `em toolchain --setup` run.
+    //
+    // (This used to also fall back to a legacy `/etc/make.conf` flat-file
+    // path — pre-2006 layout, dropped 2026-07-23: essentially never
+    // populated on a modern system, and a real footgun — any stray file
+    // left over at that exact path with an unrelated `CHOST=` line would
+    // have silently outranked the correct value.)
     if is_prefix_context(globals) {
         paths_to_check.push(Utf8PathBuf::from("/etc/portage/make.conf"));
-    }
-    // Legacy pre-2006 flat make.conf path, kept for any install still using it.
-    let system_make_conf = Utf8PathBuf::from("/etc/make.conf");
-    if system_make_conf.is_file() {
-        paths_to_check.push(system_make_conf);
     }
 
     for path in paths_to_check {
