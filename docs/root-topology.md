@@ -413,8 +413,14 @@ itself cost significant detour time — just run the plain command twice
 (`-p` will fail cleanly the first time on a fresh root; the real, non-`-p`
 run is what matters and self-bootstraps correctly).
 
-**Known gap — a truly from-scratch bootstrap needs build-tool DEPEND/RDEPEND
-satisfied at BROOT, not just BDEPEND.** Confirmed live 2026-07-11: a clean
+**DONE (was: "known gap") — a truly from-scratch bootstrap needs build-tool
+DEPEND/RDEPEND satisfied at BROOT, not just BDEPEND.** Closed 2026-07-11
+(`b9d4fbb`, same commit as the `--root` config-resolution revert above):
+`broot_filtered` (`portage-atom-pubgrub/src/provider/solve.rs`) now runs
+`append_unsatisfied_broot` for DEPEND/BDEPEND/IDEPEND alike, via
+`host_satisfied_on_broot`/`virtual_satisfied_on_broot` for Choice/SlotChoice
+edges — closing exactly the gcc→perl→rsync/gnupg explosion described below.
+Left for historical context: a clean
 `--root` with nothing installed hits a real dependency explosion once the
 "libc"/"gcc" steps resolve past the toolchain itself — `sys-libs/glibc`'s
 `COMMON_DEPEND` (shared by DEPEND *and* RDEPEND) reaches `sys-devel/gcc`,
@@ -432,10 +438,8 @@ minimal USE (`-*`) does **not** fix this — `perl`'s `minimal` IUSE flag
 defaults off and nothing forces it on, `-*` only disables, it doesn't
 enable. `--root-deps=rdeps` (forced on for this path, mirroring
 `crossdev --setup`) only relaxes the DEPEND-only half of edges like glibc's,
-not the RDEPEND half sharing the same `COMMON_DEPEND`. The real fix would
-extend the existing BDEPEND-satisfied-at-BROOT machinery
-(`provider/solve.rs`) to cover this self-contained-bootstrap case too — not
-yet implemented; tracked in `todo/root-topology-refactor.md`. Historical
+not the RDEPEND half sharing the same `COMMON_DEPEND` — this is the exact
+scenario the BROOT-satisfaction fix above now covers. Historical
 "stage1 complete" claims (`todo/session-status-2026-07-05-needs-review.md`,
 `todo/PENDING.md`) never actually hit this because every prior run reused a
 sysroot that had already accumulated `perl`/`portage`/etc. from earlier,

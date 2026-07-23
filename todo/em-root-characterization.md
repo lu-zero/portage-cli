@@ -125,13 +125,23 @@ previous. This doc is **Tier 1** (the active focus).
      cover a general native BDEPEND-capable environment (Python + its own
      build tools), not just enough to bootstrap the cross-compiler.
 3. **Tier 2 — crossdev on top of Tier 1** (`{target}-emerge`, `CBUILD ≠ CHOST`).
-   Same `(cpn, slot, root)` routing as item 2 with a foreign `CHOST`; cross
-   already matches `riscv64-emerge -p gcc` (18 pkgs). Reuses Tier 1's
-   Host-merge scheduling; not started beyond the `-p` match.
-4. **Tier 3 — `--local` / `--prefix` (non-Gentoo host).** `BROOT` becomes a
-   stage1 build-tool subset installed *into* the prefix (sharing host libc);
-   `--setup` bootstraps it (today it borrows host tools via symlinks). Reuses
-   Tier 1/2 routing. Most work, least general, deliberately last.
+   **DONE, far beyond "not started beyond the `-p` match" (stale as of
+   2026-07-23):** see `todo/crossdev-target.md` for the full story — a real
+   GCC+LLVM cross toolchain bootstrap works end-to-end (native + cross staged
+   bootstrap, `Location::Alias` derivation, ESYSROOT/osdir fixes, `--target`
+   entry point), live-verified including a real (non-pretend) riscv64
+   cross build through much of `sys-apps/systemd-utils`'s closure
+   (`todo/PENDING.md`'s 2026-07-17 task #17 entry). Two narrower gaps remain
+   there: true dual-root `PackageData` (Stage D) and a blanket `USE="-*"`
+   clear-all wildcard for cross packages specifically.
+4. **Tier 3 — `--local` / `--prefix` (non-Gentoo host).** Framing as
+   "least done / deliberately last" is now stale — substantial work has
+   landed here too (the `--local`/`--prefix` `broot_differs` root-aware fix,
+   `dedup-availability-walks.md`'s 2026-07-16 fixes, the SCC/`install_order`
+   tie-break fix `97e5f1b`). The remaining gap is narrower than this bullet
+   states: a real from-scratch bootstrap-cycle limitation, tracked as
+   understood/expected rather than an open bug (see
+   `gcc-bootstrap-compiler-version-mismatch` class of findings).
 
 ## Proven earlier (context, not this session)
 

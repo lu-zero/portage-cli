@@ -435,6 +435,9 @@ from emptytree). See also [[autounmask-convergence]].
 
 - Host VDB version for same-slot `R` lines (not always newest repo)
 - Toolchain upgrade parity (gcc/binutils/rust/llvm paths)
-- `--exclude` under emptytree (portage allows excluded installed pkgs as
-  providers; `em` parses `-X` but does not wire it)
+- `--exclude`/`-X` is wired generally now (`query/depgraph/mod.rs`, drops
+  matching CPVs post-solve — a documented simplification, not a no-op like
+  this bullet used to claim); whether it specifically composes correctly
+  with `--emptytree`'s "excluded installed pkgs can still be providers"
+  semantics is unverified — needs a targeted test, not a blanket rewrite
 - `--emptytree` on cross / host-config-stage combinations

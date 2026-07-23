@@ -45,7 +45,14 @@ this table is the triage index.
 - Shallow `-p` package-set still ~72 vs emerge ~79 on firefox hosts (pre-existing; not a `-uD` regression) — [[nonemptytree-bdeps-gap]], [[deep-in-slot-upgrades]]
 - Residual provider choice on deep plans (`rust` vs `rust-bin`, tooling set) — polish, not blocking
 - Numeric `--deep=N` (boolean only today); Resolvo `set_prefer_update` still trait default no-op
-- Releng lean stage profile vs default profile (5-package @system delta) — [[stage3-vs-real-comparison]]
+- ~~Releng lean stage profile vs default profile (5-package @system delta)~~ —
+  understood, not pursuing (private catalyst stage-spec USE overrides, not a
+  resolvable em bug); see `todo/done/stage3-vs-real-comparison.md`. Two real
+  items carried forward from that investigation: the riscv64 **cross**
+  stage3 (`--cross sys-apps/systemd-utils`, "task #17") has never been run
+  through this same comparison (native only so far); no file-tree/version
+  diff against the real stage3 tarball has been done (only a VDB
+  package-set comparison).
 - `ACCEPT_KEYWORDS` `-arch` removal; `ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT` — [[accept-properties-restrict]] (deferred)
 - Privilege: in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test; brush procsub deadlock pin bump — [[fakeroot-privilege-backends]], [[stage-build-shakeout]]
 - Large design (not near-term): full [[root-topology-refactor]]; availability-walk [[dedup-availability-walks]]; M3 sandbox (namespaces)
@@ -71,6 +78,24 @@ this table is the triage index.
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
 and the full binhost/migration log remains below (do not delete — it is the
 audit trail).
+
+**2026-07-23 prune pass:** a full audit found 15 `todo/*.md` files fully
+closed with no remaining open claims (self-confirmed DONE, verified against
+current code) — moved to `todo/done/` to declutter the active directory
+without losing the audit trail: `autounmask-convergence`, `broad-basket-gaps`,
+`broot-filter-use-dep`, `cli-flag-parity`, `cross-derive-on-the-fly`,
+`deep-slot-bump`, `installed-revbump-update-on-prune`,
+`license-use-conditional-bug`, `newuse`, `nonemptytree-bdeps-gap`,
+`package-env`, `session-status-2026-07-05-needs-review`,
+`stage-build-shakeout`, `stage3-vs-real-comparison`, `unslop_plan`,
+`useconfig-clone-elimination`. `[[name]]` links below to any of these still
+resolve by filename — just look under `todo/done/` instead of `todo/`.
+Several still-active files had stale claims corrected in the same pass
+(`accept-properties-restrict`, `distfile-fetch-reliability`, `em-emptytree`,
+`em-root-characterization`, `em-stages-and-binhosts`,
+`fakeroot-privilege-backends`, `root-topology-refactor`, plus
+`docs/root-topology.md`) — see each file's own diff/annotations for what
+changed.
 
 ---
 
@@ -491,10 +516,12 @@ blocked by the three independent findings above, tracked separately.
   correct, real (non-pretend) `em stages --stage1 --cross riscv64...` now
   passes `preflight::check` clean and starts building (gcc underway).
   [[stage-build-shakeout]] finding #15.
-- 🔴 **Profile/USE vs the releng stage profile.** em `@system` matches 175/180 of
-  the real arm64 stage3; the 5 em-only (nghttp2/3, ngtcp2, libusb) are the default
-  profile enabling curl `http2/http3/quic` + libusb vs the lean releng profile.
-  Resolve against the same profile for apples-to-apples. [[stage3-vs-real-comparison]]
+- ✅ **Profile/USE vs the releng stage profile — understood, not pursuing.**
+  Root-caused: the 5 em-only packages come from an ephemeral,
+  catalyst-internal USE override in releng's own private stage spec, not
+  from anything in the publicly shipped `::gentoo` profile tree — no profile
+  em could point at reproduces it. Not a resolvable em bug. See
+  `todo/done/stage3-vs-real-comparison.md`.
 - 🔵 cosmetic: glibc post-install `failed to redirect to <root>/etc/hosts` (no
   /etc/hosts in a fresh ROOT). [[em-root-characterization]]
 

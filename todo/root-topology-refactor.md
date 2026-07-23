@@ -3,6 +3,22 @@
 Design doc: [`docs/root-topology.md`](../docs/root-topology.md). This file
 tracks the implementation work it implies. Status: 🔴 not started · 🟡 partial · ✅ done.
 
+**Correction (2026-07-23), two points the body below doesn't yet know about:**
+- The "`--root` config resolution" entry right below says the 2026-07-09
+  landed fix made `Roots::config()` default to `config_root.or(root)` (own
+  everything, self-contained). **That was itself reverted 2026-07-11
+  (`b9d4fbb`)**, back to true `ROOT=` parity (`--config-root`, else host
+  `/`, never derived from `--root`) — see `portage-cli/src/cli.rs`'s
+  `roots()`, which now comments on exactly this history. The rest of that
+  entry (the `select/mod.rs` explicit-config-root fix, `--local` staying
+  standalone, etc.) is unaffected and still accurate.
+- The "Known gap" that self-contained-bootstrap DEPEND/RDEPEND aren't
+  checked against BROOT (also carried into `docs/root-topology.md`) is
+  **DONE** — closed by the same `b9d4fbb` commit's `broot_filtered` +
+  `host_satisfied_on_broot`/`virtual_satisfied_on_broot` checks
+  (`portage-atom-pubgrub/src/provider/solve.rs`). `docs/root-topology.md`
+  itself hasn't been updated to reflect this yet.
+
 ## Why
 
 The cross/stage session exposed structural debt: `Roots` is a flat bag of five

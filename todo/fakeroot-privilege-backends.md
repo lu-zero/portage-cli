@@ -533,15 +533,14 @@ index) — both validated against host portage's `binarytree`. Commits `2f88678`
 `0499edc` `72179e9` `65b2438` `359e65b` (producer), `1b46a62` `413364f`
 (reader + index).
 
-### NEXT — the `-k` consumer (local binpkg reuse)
+### `-k`/`-g` consumers — DONE (see `todo/em-stages-and-binhosts.md`)
 
-The reader + index exist; the remaining piece is the **validity check**: reuse a
-local binpkg only when its version + USE + ABI + (sub)slot match the resolved
-want, reusing the solver's `[flag]`/USE-dep machinery so a stale-USE binpkg is
-rebuilt — matching `emerge -k`. Then `-g`/`--getbinpkg` remote (transport =
-`portage-distfiles`, fetch `Packages.gz`). Last: signing (`BINPKG_GPG_*`) and
-stage3 re-pack (`em stages` extract-from-binpkgs under one umbrella fakeroost
-session — see Q1).
+`-k`/`--usepkg` local reuse (validity check: version + USE + ABI + (sub)slot,
+`_match_use` bug-#453400 rule) and `-g`/`--getbinpkg` remote (`portage-distfiles`
+transport, `Packages.gz`/`binrepos.conf`) both landed and are validated
+end-to-end — this was the last "NEXT" item pointed at from here. What's still
+open: signing (`BINPKG_GPG_*`) and stage3 re-pack (`em stages`
+extract-from-binpkgs under one umbrella fakeroost session — see Q1).
 
 ### GPKG container format (reverse-engineered + validated against a real host gpkg)
 

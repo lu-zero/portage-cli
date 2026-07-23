@@ -1,5 +1,13 @@
 # em @system vs a real Gentoo stage3 (validation datapoint)
 
+ARCHIVED 2026-07-23: this investigation is closed (2026-07-16 native
+end-to-end build, zero real failures — see the dated section below). Two
+open tail items carried forward to `todo/PENDING.md`'s polish list rather
+than left buried here: the riscv64 **cross** stage3 (`--cross`, "task #17")
+was never run through this same comparison (native only so far), and no
+file-tree/version diff against the real tarball has been done (only a VDB
+package-set comparison). Kept here for the full historical detail.
+
 Compared `em -p --root <empty> --config-root / @system` against the official
 **`stage3-arm64-openrc-20260621T224616Z`** (distfiles.gentoo.org), by cat/pkg.
 

@@ -119,23 +119,27 @@ metadata index"). So the pieces are partly there. Work to do:
    invalids. GPKG (GLEP 78), not XPAK. The `read_metadata` reader (needed by the
    consumer + index) also landed. Producer commits `2f88678`…`359e65b`;
    reader+index `1b46a62` `413364f`.
-2. **🟡 Local reuse: `-k`/`--usepkg` — in progress.** The reader + index now exist;
-   the remaining piece is the **validity check** (item 3 below).
-3. **Binpkg validity / rebuild triggers.** A binpkg is reusable only when
-   version + USE + ABI + (sub)slot match the resolved want — reuse the solver's
-   `[flag]`/USE-dep machinery (the same one that drives the build/rebuild
-   decision) so a stale-USE binpkg is rebuilt, matching `emerge -k`.
-4. **Consumer: `--getbinpkg` over a remote `PORTAGE_BINHOST`.** Wire
-   `-g/-G` to fetch the remote `Packages` index + binpkgs over http(s), honour
-   `BINHOST`/`PORTAGE_BINHOST`. Today `-k` is local PKGDIR; remote fetch needs the
-   HTTP path (transport = `portage-distfiles`, fetch `Packages.gz`).
-5. **Per-arch binhost for stage assembly.** A cross or native stage3 build
-   `emerge -e @world` with `-k` against an arch-matched binhost = near-instant
-   re-rolls. crossdev-stages does exactly this (`-b -k`). `em stages` should
-   default to `--buildpkg` so each run populates the binhost for the next.
-6. **Signing / trust.** Portage supports binpkg GPG signing
-   (`BINPKG_GPG_SIGNING_*`); a real binhost needs sign + verify. Lower priority
-   than getting fetch/produce working, but note it.
+2. **✅ Local reuse: `-k`/`--usepkg` — DONE & validated e2e.** The validity check
+   (item 3) shipped alongside it — reuse only when version + USE (restricted
+   to the package's own IUSE, `_match_use` bug-#453400 rule) + ABI + (sub)slot
+   match, rebuilding a stale-USE binpkg like `emerge -k`.
+3. **✅ Binpkg validity / rebuild triggers — DONE**, see item 2.
+4. **✅ Consumer: `--getbinpkg` over a remote `PORTAGE_BINHOST` — DONE &
+   validated e2e.** `-g`/`-G` fetch the remote `Packages` index (`.gz` then
+   plain, `portage-distfiles::fetch_index`) + binpkgs over http(s), honour
+   both legacy `PORTAGE_BINHOST` and modern `binrepos.conf` (combined in
+   real portage's own priority order), with `URI`-header BASE_URI override,
+   conditional-GET freshness caching (`If-Modified-Since`/304), and
+   CHOST-gate on reuse. `-g` implies `-k` (local overrides remote); `-G` is
+   binpkg-only (no source fallback).
+5. **Per-arch binhost for stage assembly.** Still open — blocked on `em
+   stages` itself gaining stage3/stage4 subcommands (today only stage1
+   exists); `em stages --stage1` already defaults to `--buildpkg` so each
+   run populates PKGDIR for reuse, but there's no stage3/stage4 driver yet
+   to actually consume a binhost for near-instant re-rolls.
+6. **Signing / trust.** Still open — no `BINPKG_GPG_*` signing/verify code
+   anywhere. Lowest priority.
 
-Sequence: ✅ producer (1) done; finish local reuse (2/3, in progress), then
-remote consumer (4), then make `em stages` lean on it (5). Signing (6) last.
+Sequence: ✅ producer (1), local reuse + validity (2/3), and remote consumer
+(4) are all done. What's left: `em stages`' stage3/stage4 shape to actually
+lean on a binhost (5), then signing (6) last.

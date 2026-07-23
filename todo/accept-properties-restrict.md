@@ -1,4 +1,4 @@
-# `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` visibility gates (+ `package.env`)
+# `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` visibility gates
 
 STATUS: **deferred — lowest priority; prerequisites now DONE.** The rest of the
 `package.*` and interning work this note waited on has landed (commits 26fa1d7 →
@@ -14,7 +14,6 @@ the last visibility gate left after keywords/license/mask.
 
 - `package.properties` / `ACCEPT_PROPERTIES`
 - `package.accept_restrict` / `ACCEPT_RESTRICT`
-- `package.env` (per-package env files — a different kind of work; see bottom)
 
 `PROPERTIES` and `RESTRICT` are already parsed into metadata
 (`portage-repo/src/build/env.rs` — `restrict`, `properties` fields), but nothing
@@ -64,9 +63,8 @@ A third visibility gate parallel to `AcceptLicenses`
 
 Cheap once the accept-list/overlay pattern from keywords/license is reused.
 
-## `package.env` (separate, larger)
+## `package.env`
 
-`em` can *edit* `package.env` (`portage-cli/src/pkg.rs`) but resolution never
-*applies* the per-package env files (they can set `USE`, `FEATURES`, `CFLAGS`,
-…). This is not a simple visibility gate — it layers environment that can change
-USE resolution — so treat it as its own feature, not part of this note.
+DONE — see `todo/done/package-env.md`: both the non-USE build-environment
+slice and the resolver-side USE-from-`package.env` slice landed 2026-07-20
+(`load_package_env_use` in `portage-resolve/src/use_env.rs`).
