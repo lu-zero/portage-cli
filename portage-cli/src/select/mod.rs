@@ -23,6 +23,7 @@ mod repos;
 
 use anyhow::Result;
 use camino::Utf8PathBuf;
+use portage_repo::MakeConf;
 
 use crate::cli::{Cli, SelectCommand};
 use crate::style::{C_HOST, C_PREFIX};
@@ -167,20 +168,17 @@ pub fn get_chost(globals: &Cli) -> Result<String, anyhow::Error> {
         paths_to_check.push(Utf8PathBuf::from("/etc/portage/make.conf"));
     }
 
-    for path in paths_to_check {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            for line in content.lines() {
-                let line = line.trim();
-                if line.starts_with("CHOST=") {
-                    let mut chost = line.trim_start_matches("CHOST=").trim().to_string();
-                    let needs_strip = (chost.starts_with('"') && chost.ends_with('"'))
-                        || (chost.starts_with("'") && chost.ends_with("'"));
-                    if needs_strip {
-                        chost = chost[1..chost.len() - 1].to_string();
-                    }
-                    return Ok(chost);
-                }
-            }
+    // `MakeConf` (real brush-parser-based winnow parse, `portage-repo`) over
+    // a hand-rolled `line.starts_with("CHOST=")` scan: handles quoting,
+    // trailing comments, and later-assignment-wins the same way the rest of
+    // this codebase's make.conf reads already do (see e.g.
+    // `binpkg.rs::resolve_pkgdir_for_roots`) — a naive line scan would get
+    // any of those wrong.
+    for path in &paths_to_check {
+        if let Ok(mc) = MakeConf::load(path)
+            && let Some(chost) = mc.get("CHOST")
+        {
+            return Ok(chost.to_string());
         }
     }
     let arch = globals.arch.as_str();

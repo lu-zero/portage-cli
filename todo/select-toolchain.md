@@ -100,7 +100,17 @@ just dead weight — any stray file some other tool left at that exact path
 with an unrelated `CHOST=` line would have silently outranked the correct
 value.
 
-Live-verified after the fix: `show`/`set` (no `--target`) both correctly
+**Follow-up in the same pass**: `get_chost` was also hand-rolling its own
+`line.starts_with("CHOST=")` scan with manual quote-stripping instead of
+using this project's own centralized make.conf parser,
+`portage_repo::MakeConf` (real `brush-parser` winnow AST parse — handles
+quoting/trailing comments/later-assignment-wins correctly, already used
+elsewhere for exactly this, e.g. `binpkg.rs::resolve_pkgdir_for_roots`).
+Rewrote `get_chost` to use `MakeConf::load(path).get("CHOST")` instead —
+same file-path resolution, more robust parsing, no behavior change for the
+common case (re-verified live in the sandbox).
+
+Live-verified after both fixes: `show`/`set` (no `--target`) both correctly
 resolve `aarch64-unknown-linux-gnu-16`, and `set` still successfully
 re-activates and reports the right target.
 
