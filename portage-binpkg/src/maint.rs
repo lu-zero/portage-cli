@@ -27,6 +27,8 @@ use std::path::PathBuf;
 use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::error::{Error, Result};
+use crate::gpg::Keyring;
+use crate::gpkg::VerifyPolicy;
 use crate::index::parse_index_blocks;
 use crate::regen::index_pkgdir;
 use crate::scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
@@ -92,8 +94,26 @@ pub fn list_index(pkgdir: &Utf8Path) -> Result<Vec<IndexRow>> {
     read_index(pkgdir)
 }
 
+/// Signature status of a container, checked independently of its
+/// index-recorded digest/size — "does the file match the index" and "is
+/// its internal Manifest validly signed" are genuinely separate axes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureStatus {
+    /// No OpenPGP signature at all, and one was required
+    /// (`--require-signature`).
+    Unsigned,
+    /// Signed, but no verify keyring was given — presence-only, not
+    /// cryptographically checked.
+    Unverified,
+    /// Signed and cryptographically verified against the given keyring.
+    Valid,
+    /// Signed, but the signature does not verify against the given keyring.
+    Invalid,
+}
+
 /// One container whose recorded digest/size didn't match the file on disk,
-/// or whose container file is missing entirely.
+/// whose container file is missing entirely, or whose signature failed a
+/// required check.
 #[derive(Debug, Clone)]
 pub struct VerifyProblem {
     /// `category/PF`.
@@ -111,6 +131,10 @@ pub struct VerifyProblem {
     /// Where the corrupt container was renamed to, if `verify` was run with
     /// `fix: true`.
     pub quarantined_to: Option<Utf8PathBuf>,
+    /// Signature status, when a signature check was requested at all
+    /// (`require_signature` or a keyring was given). `None` means no
+    /// signature check was requested for this run.
+    pub signature: Option<SignatureStatus>,
 }
 
 /// Outcome of [`verify`].
@@ -140,15 +164,52 @@ impl VerifyReport {
 
     /// Count of entries present on disk but with a digest/size mismatch.
     pub fn corrupt_count(&self) -> usize {
-        self.problems.iter().filter(|p| !p.missing).count()
+        self.problems
+            .iter()
+            .filter(|p| {
+                !p.missing
+                    && (p.size_mismatch.is_some()
+                        || p.md5_mismatch.is_some()
+                        || p.sha1_mismatch.is_some())
+            })
+            .count()
+    }
+
+    /// Count of entries with a signature problem (missing when required, or
+    /// failing cryptographic verification).
+    pub fn signature_problems(&self) -> usize {
+        self.problems
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.signature,
+                    Some(SignatureStatus::Unsigned) | Some(SignatureStatus::Invalid)
+                )
+            })
+            .count()
     }
 }
 
-/// Check each indexed container's size/MD5/SHA1 against the file on disk.
-/// `fix`: quarantine corrupt containers (rename to `.corrupt`) and
-/// regenerate the index afterward, so missing/corrupt entries are dropped.
-pub fn verify(pkgdir: &Utf8Path, chost: &str, fix: bool) -> Result<VerifyReport> {
+/// Check each indexed container's size/MD5/SHA1 against the file on disk,
+/// and (when `require_signature` or `keyring` is given) its OpenPGP
+/// signature. `fix`: quarantine corrupt containers (rename to `.corrupt`)
+/// and regenerate the index afterward, so missing/corrupt entries are
+/// dropped. Signature problems are reported but never trigger
+/// quarantine/`fix` on their own — a validly-built, correctly-indexed
+/// container with a bad signature is a trust problem, not a corrupt one.
+pub fn verify(
+    pkgdir: &Utf8Path,
+    chost: &str,
+    fix: bool,
+    require_signature: bool,
+    keyring: Option<&Keyring>,
+) -> Result<VerifyReport> {
     let rows = read_index(pkgdir)?;
+    let check_signature = require_signature || keyring.is_some();
+    let policy = VerifyPolicy {
+        require_signature,
+        keyring,
+    };
 
     let mut ok = 0usize;
     let mut problems = Vec::new();
@@ -167,6 +228,7 @@ pub fn verify(pkgdir: &Utf8Path, chost: &str, fix: bool) -> Result<VerifyReport>
                 md5_mismatch: None,
                 sha1_mismatch: None,
                 quarantined_to: None,
+                signature: None,
             });
             continue;
         }
@@ -176,13 +238,39 @@ pub fn verify(pkgdir: &Utf8Path, chost: &str, fix: bool) -> Result<VerifyReport>
         let size_ok = row.size.is_none_or(|s| s == actual_size);
         let md5_ok = row.md5.as_deref().is_none_or(|m| m == actual_md5);
         let sha1_ok = row.sha1.as_deref().is_none_or(|s| s == actual_sha1);
+        let digest_ok = size_ok && md5_ok && sha1_ok;
 
-        if size_ok && md5_ok && sha1_ok {
+        let signature = if check_signature {
+            match crate::gpkg::verify_container_signature(full.as_std_path(), &policy) {
+                Ok(report) if !report.signed => Some(SignatureStatus::Unsigned),
+                Ok(report) => Some(match report.signature_valid {
+                    Some(true) => SignatureStatus::Valid,
+                    Some(false) => SignatureStatus::Invalid,
+                    None => SignatureStatus::Unverified,
+                }),
+                Err(Error::SignatureRequired(_)) => Some(SignatureStatus::Unsigned),
+                Err(_) => Some(SignatureStatus::Invalid),
+            }
+        } else {
+            None
+        };
+        // `Unsigned` is only a real problem when a signature was actually
+        // *required* — a keyring alone (no `require_signature`) means
+        // "verify it if present," not "every container must be signed."
+        // `Invalid` is always a problem regardless: a container that
+        // claims to be signed but doesn't verify is never fine to reuse.
+        let signature_ok = match signature {
+            Some(SignatureStatus::Unsigned) => !require_signature,
+            Some(SignatureStatus::Invalid) => false,
+            _ => true,
+        };
+
+        if digest_ok && signature_ok {
             ok += 1;
             continue;
         }
 
-        let quarantined_to = if fix {
+        let quarantined_to = if fix && !digest_ok {
             let quarantined = Utf8PathBuf::from(format!("{full}.corrupt"));
             std::fs::rename(full.as_std_path(), quarantined.as_std_path())?;
             Some(quarantined)
@@ -198,10 +286,11 @@ pub fn verify(pkgdir: &Utf8Path, chost: &str, fix: bool) -> Result<VerifyReport>
             md5_mismatch: (!md5_ok).then(|| (actual_md5.clone(), row.md5.clone().unwrap())),
             sha1_mismatch: (!sha1_ok).then(|| (actual_sha1.clone(), row.sha1.clone().unwrap())),
             quarantined_to,
+            signature,
         });
     }
 
-    let reindexed = if fix && !problems.is_empty() {
+    let reindexed = if fix && problems.iter().any(|p| p.quarantined_to.is_some()) {
         Some(index_pkgdir(pkgdir, chost)?.0)
     } else {
         None
@@ -409,6 +498,7 @@ mod tests {
                 image_dir: &image,
                 metadata_dir: &meta,
                 basename: pf,
+                signing: None,
             },
             container.as_std_path(),
         )
@@ -422,7 +512,7 @@ mod tests {
         seed_container(tmp.path(), pkgdir, "app-test", "foo-1.0", 1);
         index_pkgdir(pkgdir, "x86_64-pc-linux-gnu").unwrap();
 
-        let report = verify(pkgdir, "x86_64-pc-linux-gnu", false).unwrap();
+        let report = verify(pkgdir, "x86_64-pc-linux-gnu", false, false, None).unwrap();
         assert!(report.is_clean());
         assert_eq!(report.ok, 1);
         assert_eq!(report.total, 1);
@@ -440,7 +530,7 @@ mod tests {
         bytes.push(0xff);
         std::fs::write(&container, bytes).unwrap();
 
-        let report = verify(pkgdir, "x86_64-pc-linux-gnu", false).unwrap();
+        let report = verify(pkgdir, "x86_64-pc-linux-gnu", false, false, None).unwrap();
         assert!(!report.is_clean());
         assert_eq!(report.corrupt_count(), 1);
         assert_eq!(report.missing_count(), 0);
@@ -460,7 +550,7 @@ mod tests {
         bytes.push(0xff);
         std::fs::write(&container, bytes).unwrap();
 
-        let report = verify(pkgdir, "x86_64-pc-linux-gnu", true).unwrap();
+        let report = verify(pkgdir, "x86_64-pc-linux-gnu", true, false, None).unwrap();
 
         assert!(!container.exists());
         assert!(pkgdir.join("app-test/foo-1.0-1.gpkg.tar.corrupt").exists());
@@ -477,7 +567,7 @@ mod tests {
         index_pkgdir(pkgdir, "x86_64-pc-linux-gnu").unwrap();
         std::fs::remove_file(pkgdir.join("app-test/foo-1.0-1.gpkg.tar")).unwrap();
 
-        let report = verify(pkgdir, "x86_64-pc-linux-gnu", false).unwrap();
+        let report = verify(pkgdir, "x86_64-pc-linux-gnu", false, false, None).unwrap();
         assert_eq!(report.missing_count(), 1);
         assert_eq!(report.corrupt_count(), 0);
     }

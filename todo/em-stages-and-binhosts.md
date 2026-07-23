@@ -137,9 +137,11 @@ metadata index"). So the pieces are partly there. Work to do:
    exists); `em stages --stage1` already defaults to `--buildpkg` so each
    run populates PKGDIR for reuse, but there's no stage3/stage4 driver yet
    to actually consume a binhost for near-instant re-rolls.
-6. **Signing / trust.** Still open — no `BINPKG_GPG_*` signing/verify code
-   anywhere. Lowest priority.
+6. **✅ Signing / trust — DONE (2026-07-23).** `BINPKG_GPG_*` signing and
+   verification, using the `pgp`/rpgp crate (native Rust OpenPGP, no
+   `gpg`/`gpg-agent` subprocess) — full detail in
+   `todo/fakeroot-privilege-backends.md`'s "GPKG container format" section.
 
-Sequence: ✅ producer (1), local reuse + validity (2/3), and remote consumer
-(4) are all done. What's left: `em stages`' stage3/stage4 shape to actually
-lean on a binhost (5), then signing (6) last.
+Sequence: ✅ producer (1), local reuse + validity (2/3), remote consumer (4),
+and signing/trust (6) are all done. What's left: `em stages`' stage3/stage4
+shape to actually lean on a binhost (5).

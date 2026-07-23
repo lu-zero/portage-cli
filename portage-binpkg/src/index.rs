@@ -338,6 +338,11 @@ pub struct RemoteBinpkgIndex {
     /// `sync-uri` / `PORTAGE_BINHOST` the index was fetched from (Portage
     /// `bintree.py`: `remote_base_uri = pkgindex.header.get("URI", base_url)`).
     base_uri: String,
+    /// This binhost's `binrepos.conf` `verify-signature` setting — carried
+    /// alongside the index (not enforced here; the CLI reads it back via
+    /// [`Self::verify_signature`] to build a `VerifyPolicy` for whatever it
+    /// fetches from this index).
+    verify_signature: bool,
 }
 
 impl RemoteBinpkgIndex {
@@ -356,7 +361,20 @@ impl RemoteBinpkgIndex {
         Self {
             entries: parse_packages_entries(index_text),
             base_uri: base.trim_end_matches('/').to_string(),
+            verify_signature: false,
         }
+    }
+
+    /// Set this binhost's `binrepos.conf` `verify-signature` setting
+    /// (default `false` from [`Self::new`]).
+    pub fn with_verify_signature(mut self, v: bool) -> Self {
+        self.verify_signature = v;
+        self
+    }
+
+    /// This binhost's `verify-signature` setting (see [`Self::with_verify_signature`]).
+    pub fn verify_signature(&self) -> bool {
+        self.verify_signature
     }
 
     /// The effective download base URI (after header `URI` override).

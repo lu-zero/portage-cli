@@ -17,6 +17,7 @@
 #![warn(missing_docs)]
 
 pub mod error;
+pub mod gpg;
 pub mod gpkg;
 pub mod index;
 pub mod maint;
@@ -24,7 +25,11 @@ pub mod regen;
 pub mod scan;
 
 pub use error::{Error, Result};
-pub use gpkg::{GpkgInput, extract_image, read_metadata, write_gpkg};
+pub use gpg::{Keyring, SigningKey};
+pub use gpkg::{
+    GpkgInput, SignatureReport, VerifyPolicy, extract_image, read_metadata,
+    verify_container_signature, write_gpkg,
+};
 pub use index::{
     BinpkgEntry, BinpkgIndex, RemoteBinpkgIndex, build_env_key, parse_index_blocks,
     parse_index_header, parse_packages_entries, use_compatible,

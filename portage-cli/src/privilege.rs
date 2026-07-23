@@ -230,6 +230,11 @@ pub struct WorkerArgs<'a> {
     /// See `ebuild::RootContext::self_contained_bootstrap`.
     pub self_contained_bootstrap: bool,
     pub binpkg: Option<&'a str>,
+    /// `binpkg`'s origin forces cryptographic signature verification
+    /// (a `binrepos.conf` entry with `verify-signature = yes`), independent
+    /// of `FEATURES=binpkg-request-signature`. See `ebuild::RunInner`'s
+    /// field of the same name.
+    pub force_verify_signature: bool,
     pub buildpkg: bool,
     pub quiet: bool,
     /// Activity session id (same as parent `SessionStart.job_id`). When set
@@ -393,6 +398,9 @@ fn build_worker_command(
     }
     if let Some(b) = args.binpkg {
         cmd.arg("--binpkg").arg(b);
+    }
+    if args.force_verify_signature {
+        cmd.arg("--force-verify-signature");
     }
     if let Some(id) = args.activity_job_id {
         cmd.arg("--activity-job-id").arg(id);

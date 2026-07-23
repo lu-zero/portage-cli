@@ -20,6 +20,7 @@ fn main() {
             image_dir: Path::new(&a[1]),
             metadata_dir: Path::new(&a[2]),
             basename: &a[3],
+            signing: None,
         },
         Path::new(&a[4]),
     )

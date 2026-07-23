@@ -667,9 +667,9 @@ blocked by the three independent findings above, tracked separately.
     path derivation) plus a hand-rolled TCP mock-server integration test
     (`portage-distfiles/tests/conditional_fetch.rs`) proving a real
     `If-Modified-Since` round trip surfaces as `NotModified`.
-  - 🟡 **gpkg GPG signature verify** — `binpkg-request-signature` FEATURE / repo
-    `verify-signature=true` (default-on in shipped config) drops remote XPAK and
-    GPG-verifies gpkg at unpack. em accepts unsigned. Last (with signing).
+  - ✅ **gpkg GPG signature verify — DONE 2026-07-23.** `FEATURES=binpkg-request-signature`
+    / `binrepos.conf`'s `verify-signature=yes` now actually enforced (native
+    `pgp`-crate OpenPGP, no gpg subprocess) — see `todo/fakeroot-privilege-backends.md`.
   - ✅ **`-K`/`--usepkgonly` enforcement** — local-only binpkg mode, no source
     (`merge/mod.rs`: `enforce_no_source = usepkgonly || getbinpkgonly`). Symmetric
     to `-G`.
@@ -1010,7 +1010,17 @@ blocked by the three independent findings above, tracked separately.
   — the optional `mod.rs` compute/render split is deferred until a
   non-CLI consumer of the resolve layer actually appears.
 - 🔴 `em stages` defaults to `--buildpkg` so each run feeds the next; per-arch.
-- 🔴 Signing/verify (`BINPKG_GPG_*`) — last (lives in `portage-binpkg`).
+- ✅ **Signing/verify (`BINPKG_GPG_*`) — DONE 2026-07-23.** `pgp`/rpgp crate
+  (native Rust OpenPGP, no gpg-agent); clearsigned Manifest + detached
+  per-member `.sig`, matching real portage's own gpkg scheme exactly;
+  round-trip interop verified live against the real `gpg` binary in both
+  directions. `em maint binpkg gpg-import` + `verify --require-signature`;
+  `binrepos.conf`'s `verify-signature=yes` now actually enforced (was parsed,
+  never enforced — see the "🟡 Build-env / multi-march binpkg identity" note
+  above for that prior gap). Full detail, deliberate simplifications
+  (secret-key-as-file-path, flat keyring directory, primary-key-only
+  signing), and the gemato-compatibility rationale in
+  `todo/fakeroot-privilege-backends.md`'s "GPG signing/verification" section.
 
 ## Other open (pre-existing, related)
 

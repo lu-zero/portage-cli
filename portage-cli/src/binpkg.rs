@@ -79,6 +79,30 @@ pub(crate) async fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
     merge_root.join("var/cache/binpkgs")
 }
 
+/// Resolve the GPG verify keyring directory (`BINPKG_GPG_VERIFY_GPG_HOME`):
+/// `$BINPKG_GPG_VERIFY_GPG_HOME` env → make.conf → `<config root>/etc/portage/gnupg`.
+/// Root-aware via `roots.config()` (never the real host's `/etc/portage/gnupg`
+/// for a non-host `--root`/`--target`/`--prefix` — the same class of bug this
+/// project already fixed once for `PKGDIR`, see `resolve_pkgdir_for_roots`'s
+/// doc comment) — a flat directory of armored public-key files, not a real
+/// gpg keybox (see `portage_binpkg::gpg`'s module doc for why).
+pub(crate) async fn resolve_gpg_verify_home_for_roots(roots: &Roots) -> Utf8PathBuf {
+    if let Ok(v) = std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
+        && !v.trim().is_empty()
+    {
+        return Utf8PathBuf::from(v);
+    }
+    if let Some(v) = read_make_conf_var_for_roots(roots, "BINPKG_GPG_VERIFY_GPG_HOME").await
+        && !v.is_empty()
+    {
+        return Utf8PathBuf::from(v);
+    }
+    roots
+        .config()
+        .unwrap_or_else(|| Utf8Path::new("/"))
+        .join("etc/portage/gnupg")
+}
+
 /// Open the local `PKGDIR` binpkg index if `-k`/`--usepkg` or
 /// `-K`/`--usepkgonly` is active, for the `-p` display to check binary
 /// reuse against (see `query::depgraph::output::PrettyCtx::binpkg_index`).

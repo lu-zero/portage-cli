@@ -477,7 +477,8 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
             .await
             {
                 Ok((text, reason)) => {
-                    let idx = portage_binpkg::RemoteBinpkgIndex::new(&text, base);
+                    let idx = portage_binpkg::RemoteBinpkgIndex::new(&text, base)
+                        .with_verify_signature(repo.verify_signature);
                     tracing::info!("--getbinpkg: {} package(s) on {base} ({reason})", idx.len());
                     fetched.push(idx);
                 }
@@ -618,7 +619,12 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             desired_build_env_key,
         )
     });
-    let remote_url = reused
+    // `(url, verify_signature)` — the per-repo `verify-signature` flag rides
+    // along with the match so the merge call below knows whether this
+    // specific binpkg's origin forces cryptographic signature verification
+    // (`binrepos.conf`'s per-repo knob, independent of the global
+    // `FEATURES=binpkg-request-signature`).
+    let remote_match: Option<(String, bool)> = reused
         .is_none()
         .then(|| {
             remote_indices.iter().find_map(|idx| {
@@ -628,9 +634,11 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
                     desired_chost,
                     desired_build_env_key,
                 )
+                .map(|url| (url, idx.verify_signature()))
             })
         })
         .flatten();
+    let remote_url = remote_match.as_ref().map(|(url, _)| url.clone());
 
     let root_ctx = ebuild::RootContext {
         config_root: entry_roots.config(),
@@ -692,12 +700,13 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             quiet,
             roots: root_ctx,
             merge_gate,
+            force_verify_signature: false,
             activity: activity_pkg.clone(),
         })
         .await;
     }
 
-    if let Some(url) = remote_url {
+    if let Some((url, verify_signature)) = remote_match {
         match fetch_remote_binpkg(&url, work_base).await {
             Ok(path) => {
                 tracing::info!("Fetched binary package: {url}");
@@ -711,6 +720,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
                     quiet,
                     roots: root_ctx,
                     merge_gate,
+                    force_verify_signature: verify_signature,
                     activity: activity_pkg.clone(),
                 })
                 .await

@@ -35,6 +35,7 @@ fn writes_a_valid_gpkg_container() {
             image_dir: &image,
             metadata_dir: &meta,
             basename: "hello-1.0",
+            signing: None,
         },
         &out,
     )

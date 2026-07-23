@@ -247,6 +247,7 @@ fn package_one(
             image_dir: &image_dir,
             metadata_dir: pkg.path().as_std_path(),
             basename: &pf,
+            signing: None,
         },
         out.as_std_path(),
     )

@@ -36,4 +36,17 @@ pub enum Error {
     /// `PKGDIR` itself does not exist.
     #[error("PKGDIR does not exist: {}", .0.display())]
     NoPkgdir(PathBuf),
+
+    /// FEATURES=binpkg-request-signature but the container carries no
+    /// signature at all.
+    #[error("no OpenPGP signature on {} (FEATURES=binpkg-request-signature)", .0.display())]
+    SignatureRequired(PathBuf),
+
+    /// A signature was present but failed to verify, or a key/signing
+    /// operation failed. String-wrapped rather than `#[from]`-wrapping the
+    /// `pgp` crate's own error type directly, so this crate's public error
+    /// surface doesn't hard-couple to `pgp`'s exact error shape across
+    /// versions.
+    #[error("OpenPGP signature error: {0}")]
+    Signature(String),
 }

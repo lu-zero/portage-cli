@@ -805,6 +805,12 @@ pub enum Applet {
         /// A pre-built GPKG to merge (`-k`/`-g`).
         #[arg(long)]
         binpkg: Option<String>,
+        /// `binpkg`'s origin forces cryptographic GPG signature
+        /// verification (a `binrepos.conf` entry with
+        /// `verify-signature = yes`), independent of
+        /// `FEATURES=binpkg-request-signature`.
+        #[arg(long)]
+        force_verify_signature: bool,
         #[arg(long)]
         buildpkg: bool,
         #[arg(long)]
@@ -1167,6 +1173,12 @@ pub enum BinpkgAction {
         /// missing/corrupt entries from the index by regenerating it.
         #[arg(long)]
         fix: bool,
+        /// Reject a container with no OpenPGP signature at all (matches
+        /// FEATURES=binpkg-request-signature); with a verify keyring
+        /// present (`em maint binpkg gpg-import`), signatures are always
+        /// cryptographically checked regardless of this flag.
+        #[arg(long)]
+        require_signature: bool,
     },
     #[command(about = "List indexed binary packages (cpv, build-id, size, path)")]
     List,
@@ -1186,6 +1198,12 @@ pub enum BinpkgAction {
         /// (only differs under --target).
         #[arg(long)]
         host: bool,
+    },
+    #[command(about = "Import an armored OpenPGP public key into the GPG verify keyring")]
+    GpgImport {
+        /// Path to an armored public-key file (e.g. exported via
+        /// `gpg --armor --export <key-id>`).
+        keyfile: camino::Utf8PathBuf,
     },
 }
 

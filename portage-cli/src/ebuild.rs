@@ -325,6 +325,7 @@ pub async fn run(
         merge_gate: None,
         buildpkg: false,
         binpkg: None,
+        force_verify_signature: false,
         activity: None,
     })
     .await
@@ -411,6 +412,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate,
             buildpkg: false,
             binpkg: None,
+            force_verify_signature: false,
             activity,
         })
         .await
@@ -432,6 +434,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate,
             buildpkg: true,
             binpkg: None,
+            force_verify_signature: false,
             activity,
         })
         .await
@@ -458,6 +461,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate: None,
             buildpkg: false,
             binpkg: None,
+            force_verify_signature: false,
             activity: activity.clone(),
         })
         .await
@@ -488,6 +492,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
                 buildpkg,
                 quiet,
                 binpkg: None,
+                force_verify_signature: false,
                 activity_job_id: act_job.as_deref(),
                 activity_parent_job_id: act_parent.as_deref(),
                 activity_live_root: act_live.as_deref(),
@@ -517,6 +522,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             merge_gate,
             buildpkg,
             binpkg: None,
+            force_verify_signature: false,
             activity,
         })
         .await
@@ -536,6 +542,11 @@ pub struct MergeBinpkg<'a> {
     pub quiet: bool,
     pub roots: RootContext<'a>,
     pub merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    /// This binpkg's origin (a `binrepos.conf` entry with
+    /// `verify-signature = yes`) forces cryptographic signature
+    /// verification, independent of `FEATURES=binpkg-request-signature`.
+    /// `false` for a local `-k` reuse.
+    pub force_verify_signature: bool,
     pub activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
@@ -554,6 +565,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
         root,
         quiet,
         roots,
+        force_verify_signature,
         merge_gate,
         activity,
     } = opts;
@@ -590,6 +602,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
                 buildpkg: false,
                 quiet,
                 binpkg: Some(binpkg_path.as_str()),
+                force_verify_signature,
                 activity_job_id: act_job.as_deref(),
                 activity_parent_job_id: act_parent.as_deref(),
                 activity_live_root: act_live.as_deref(),
@@ -621,6 +634,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
             merge_gate,
             buildpkg: false,
             binpkg: Some(binpkg_path),
+            force_verify_signature,
             activity,
         })
         .await
@@ -638,6 +652,13 @@ pub struct InstallWorker<'a> {
     pub distdir: Option<&'a str>,
     pub roots: RootContext<'a>,
     pub binpkg: Option<&'a str>,
+    /// See `RunInner`'s field of the same name; relayed across the
+    /// `__worker` process boundary as a bare flag (`--force-verify-signature`)
+    /// rather than the keyring/config itself — the worker re-sources
+    /// `make.conf`/profile via the normal `EbuildShell` sweep and re-reads
+    /// `FEATURES`/`BINPKG_GPG_VERIFY_GPG_HOME` itself, same as everything
+    /// else it re-derives.
+    pub force_verify_signature: bool,
     pub buildpkg: bool,
     pub quiet: bool,
     pub activity_job_id: Option<&'a str>,
@@ -714,6 +735,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         distdir,
         roots,
         binpkg,
+        force_verify_signature,
         buildpkg,
         quiet,
         activity_job_id,
@@ -769,6 +791,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         merge_gate: None,
         buildpkg,
         binpkg: binpkg.map(Utf8Path::new),
+        force_verify_signature,
         activity,
     })
     .await
@@ -837,6 +860,12 @@ struct RunInner<'a> {
     buildpkg: bool,
     /// Pre-built GPKG to extract after clean (`-k`/`-g`); Install group only.
     binpkg: Option<&'a Utf8Path>,
+    /// This binpkg's origin (a `binrepos.conf` entry with
+    /// `verify-signature = yes`) forces cryptographic signature
+    /// verification for `binpkg`, independent of whether
+    /// `FEATURES=binpkg-request-signature` is set. `false` for a local
+    /// `-k` reuse or when the remote repo didn't request it.
+    force_verify_signature: bool,
     activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
@@ -855,6 +884,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         merge_gate,
         buildpkg,
         binpkg,
+        force_verify_signature,
         activity,
     } = opts;
     let RootContext {
@@ -1060,7 +1090,36 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         let image_dir = wd.join("image");
         std::fs::create_dir_all(image_dir.as_std_path())
             .with_context(|| format!("creating {image_dir}"))?;
-        portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path())
+
+        // GPG verify policy: FEATURES=binpkg-request-signature (or this
+        // binpkg's own binrepos.conf verify-signature=yes, relayed as
+        // `force_verify_signature`) requires a signature to be present;
+        // BINPKG_GPG_VERIFY_GPG_HOME supplies the keyring when configured.
+        // Root-aware default (config_root/etc/portage/gnupg) — never the
+        // real host path for a non-host --root/--target/--prefix, same
+        // class of bug this project already fixed once for PKGDIR.
+        let require_signature =
+            features.contains("binpkg-request-signature") || force_verify_signature;
+        let verify_home = shell
+            .get_var("BINPKG_GPG_VERIFY_GPG_HOME")
+            .map(Utf8PathBuf::from)
+            .unwrap_or_else(|| {
+                config_root
+                    .unwrap_or(Utf8Path::new("/"))
+                    .join("etc/portage/gnupg")
+            });
+        let keyring = portage_binpkg::gpg::load_keyring_dir(verify_home.as_std_path())
+            .with_context(|| format!("loading GPG verify keyring at {verify_home}"))?;
+        if require_signature && keyring.is_none() {
+            bail!(
+                "FEATURES=binpkg-request-signature (or this binpkg's binrepos.conf verify-signature=yes) requires a GPG verify keyring at {verify_home} — run `em maint binpkg gpg-import <keyfile>` first"
+            );
+        }
+        let policy = portage_binpkg::VerifyPolicy {
+            require_signature,
+            keyring: keyring.as_ref(),
+        };
+        portage_binpkg::extract_image(bp.as_std_path(), image_dir.as_std_path(), policy)
             .with_context(|| format!("extracting image from {bp}"))?;
     }
 
@@ -1344,11 +1403,28 @@ fn write_binpkg(
         .unwrap_or_else(|| root.join("var/cache/binpkgs"));
     let build_id = next_build_id(&pkgdir, cat, &pf);
     let out = pkgdir.join(cat).join(format!("{pf}-{build_id}.gpkg.tar"));
+
+    // FEATURES=binpkg-signing: sign the Manifest (clearsign) + a detached
+    // .sig per metadata/image member, matching real portage's own gpkg
+    // signing scheme (see `portage_binpkg::gpg`'s module doc for the
+    // deliberate secret-key-as-file-path simplification vs real gpg-agent).
+    let features: std::collections::HashSet<String> = shell
+        .get_var("FEATURES")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let signing_key = if features.contains("binpkg-signing") {
+        Some(resolve_binpkg_signing_key(shell, root)?)
+    } else {
+        None
+    };
     portage_binpkg::write_gpkg(
         &portage_binpkg::GpkgInput {
             image_dir: image_dir.as_std_path(),
             metadata_dir: metadata_dir.as_std_path(),
             basename: &pf,
+            signing: signing_key.as_ref(),
         },
         out.as_std_path(),
     )
@@ -1360,6 +1436,57 @@ fn write_binpkg(
         eprintln!("warning: could not refresh Packages index after {out}: {e:#}");
     }
     Ok(out)
+}
+
+/// Resolve `BINPKG_GPG_SIGNING_KEY` (+ `_GPG_HOME`/`_DIGEST`/passphrase
+/// vars) into a loaded [`portage_binpkg::gpg::SigningKey`] for
+/// `FEATURES=binpkg-signing`. `BINPKG_GPG_SIGNING_KEY` is **redefined**
+/// here vs real portage: a path to an armored secret-key file, not a gpg
+/// keyring key-ID — this project has no gpg-agent/pinentry to resolve a
+/// keyring ID against (see `portage_binpkg::gpg`'s module doc). A relative
+/// path resolves against `BINPKG_GPG_SIGNING_GPG_HOME`, defaulting to
+/// `<root>/etc/portage/gnupg`.
+fn resolve_binpkg_signing_key(
+    shell: &portage_repo::EbuildShell,
+    root: &Utf8Path,
+) -> Result<portage_binpkg::gpg::SigningKey> {
+    let digest = shell
+        .get_var("BINPKG_GPG_SIGNING_DIGEST")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(portage_binpkg::gpg::HashAlgorithm::Sha512);
+    let key_var = shell
+        .get_var("BINPKG_GPG_SIGNING_KEY")
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "FEATURES=binpkg-signing requires BINPKG_GPG_SIGNING_KEY (path to an armored OpenPGP secret key)"
+            )
+        })?;
+    let mut key_path = Utf8PathBuf::from(key_var.trim());
+    if key_path.is_relative() {
+        let home = shell
+            .get_var("BINPKG_GPG_SIGNING_GPG_HOME")
+            .map(Utf8PathBuf::from)
+            .unwrap_or_else(|| root.join("etc/portage/gnupg"));
+        key_path = home.join(key_path);
+    }
+    // No pinentry/gpg-agent here — the passphrase (if any) comes from the
+    // environment. `_PASSPHRASE_FILE` (an em-only addition, documented as
+    // such) wins over the bare env var: it avoids leaving the passphrase
+    // readable via `/proc/<pid>/environ`.
+    let passphrase = std::env::var("BINPKG_GPG_SIGNING_KEY_PASSPHRASE_FILE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(|f| {
+            std::fs::read_to_string(&f)
+                .with_context(|| format!("reading {f}"))
+                .map(|s| s.trim_end().to_string())
+        })
+        .transpose()?
+        .or_else(|| std::env::var("BINPKG_GPG_SIGNING_KEY_PASSPHRASE").ok())
+        .unwrap_or_default();
+    portage_binpkg::gpg::SigningKey::load(key_path.as_std_path(), &passphrase, digest)
+        .with_context(|| format!("loading GPG signing key {key_path}"))
 }
 
 /// The next free GPKG build-id for `<cat>/<pf>` in `pkgdir` (portage numbers

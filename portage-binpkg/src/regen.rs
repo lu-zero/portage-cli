@@ -223,6 +223,7 @@ mod tests {
                 image_dir: &image,
                 metadata_dir: &meta,
                 basename: "foo-1.0",
+                signing: None,
             },
             container.as_std_path(),
         )

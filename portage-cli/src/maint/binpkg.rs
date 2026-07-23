@@ -7,22 +7,28 @@
 //! this module resolves `PKGDIR`/`CHOST` from `&Cli` and formats the
 //! structured reports for the terminal.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use humansize::{BINARY, format_size};
-use portage_binpkg::maint::{PruneReport, VerifyReport};
+use portage_binpkg::gpg;
+use portage_binpkg::maint::{PruneReport, SignatureStatus, VerifyReport};
 
-use crate::binpkg::{DesiredBuildEnv, read_make_conf_var, resolve_pkgdir};
+use crate::binpkg::{
+    DesiredBuildEnv, read_make_conf_var, resolve_gpg_verify_home_for_roots, resolve_pkgdir,
+};
 use crate::cli::{BinpkgAction, Cli};
 
 /// Dispatch `em maint binpkg <action>`.
 pub async fn run(action: &BinpkgAction, globals: &Cli) -> Result<()> {
     let pkgdir = resolve_pkgdir(globals).await;
     match action {
-        BinpkgAction::Verify { fix } => {
+        BinpkgAction::Verify {
+            fix,
+            require_signature,
+        } => {
             let chost = read_make_conf_var(globals, "CHOST")
                 .await
                 .unwrap_or_default();
-            verify(&pkgdir, &chost, *fix)
+            verify(globals, &pkgdir, &chost, *fix, *require_signature).await
         }
         BinpkgAction::List => list(&pkgdir),
         BinpkgAction::Prune { dry_run } => {
@@ -32,18 +38,40 @@ pub async fn run(action: &BinpkgAction, globals: &Cli) -> Result<()> {
             prune(&pkgdir, &chost, *dry_run)
         }
         BinpkgAction::Fingerprint { full, host } => fingerprint(globals, *full, *host).await,
+        BinpkgAction::GpgImport { keyfile } => gpg_import(globals, keyfile).await,
     }
 }
 
-fn verify(pkgdir: &camino::Utf8Path, chost: &str, fix: bool) -> Result<()> {
-    let report: VerifyReport = portage_binpkg::maint::verify(pkgdir, chost, fix)?;
+async fn verify(
+    globals: &Cli,
+    pkgdir: &camino::Utf8Path,
+    chost: &str,
+    fix: bool,
+    require_signature: bool,
+) -> Result<()> {
+    let verify_home = resolve_gpg_verify_home_for_roots(&globals.roots()).await;
+    let keyring = gpg::load_keyring_dir(verify_home.as_std_path())
+        .with_context(|| format!("loading GPG verify keyring at {verify_home}"))?;
+    if require_signature && keyring.is_none() {
+        bail!(
+            "--require-signature needs a GPG verify keyring at {verify_home} — run `em maint binpkg gpg-import <keyfile>` first"
+        );
+    }
+
+    let report: VerifyReport =
+        portage_binpkg::maint::verify(pkgdir, chost, fix, require_signature, keyring.as_ref())?;
 
     for problem in &report.problems {
         if problem.missing {
             println!("!!! missing: {} ({})", problem.cpv, problem.path);
             continue;
         }
-        println!("!!! digest mismatch: {} ({})", problem.cpv, problem.path);
+        if problem.size_mismatch.is_some()
+            || problem.md5_mismatch.is_some()
+            || problem.sha1_mismatch.is_some()
+        {
+            println!("!!! digest mismatch: {} ({})", problem.cpv, problem.path);
+        }
         if let Some((got, expected)) = problem.size_mismatch {
             println!("    size: got {got}, expected {expected}");
         }
@@ -56,6 +84,15 @@ fn verify(pkgdir: &camino::Utf8Path, chost: &str, fix: bool) -> Result<()> {
         if let Some(q) = &problem.quarantined_to {
             println!("    quarantined to {q}");
         }
+        match problem.signature {
+            Some(SignatureStatus::Unsigned) => {
+                println!("    signature: unsigned (required)");
+            }
+            Some(SignatureStatus::Invalid) => {
+                println!("    signature: INVALID (does not verify against the keyring)");
+            }
+            _ => {}
+        }
     }
 
     println!(
@@ -65,17 +102,47 @@ fn verify(pkgdir: &camino::Utf8Path, chost: &str, fix: bool) -> Result<()> {
         report.missing_count(),
         report.total
     );
+    if keyring.is_some() || require_signature {
+        println!(
+            "emaint binpkg verify: {} signature problem(s)",
+            report.signature_problems()
+        );
+    }
     if let Some(count) = report.reindexed {
         println!("emaint binpkg verify: reindexed -> {count} package(s)");
     }
 
     if !fix && !report.is_clean() {
         bail!(
-            "{} corrupt, {} missing binpkg(s) found (rerun with --fix)",
+            "{} corrupt, {} missing, {} signature problem(s) found (rerun with --fix for the corrupt/missing ones)",
             report.corrupt_count(),
-            report.missing_count()
+            report.missing_count(),
+            report.signature_problems()
         );
     }
+    Ok(())
+}
+
+/// `em maint binpkg gpg-import <keyfile>` — import an armored public key
+/// into the GPG verify keyring directory (`BINPKG_GPG_VERIFY_GPG_HOME`,
+/// a flat directory of `*.asc` files, not a real gpg keybox — see
+/// `portage_binpkg::gpg`'s module doc).
+async fn gpg_import(globals: &Cli, keyfile: &camino::Utf8Path) -> Result<()> {
+    let dir = resolve_gpg_verify_home_for_roots(&globals.roots()).await;
+    std::fs::create_dir_all(dir.as_std_path()).with_context(|| format!("creating {dir}"))?;
+    let bytes = std::fs::read(keyfile).with_context(|| format!("reading {keyfile}"))?;
+    let (key, info) = gpg::parse_public_key(&bytes)
+        .with_context(|| format!("parsing OpenPGP public key from {keyfile}"))?;
+    let armored = gpg::export_public_key(&key).context("re-armoring imported key")?;
+    let dest = dir.join(format!("{}.asc", info.fingerprint));
+    std::fs::write(dest.as_std_path(), armored).with_context(|| format!("writing {dest}"))?;
+
+    println!("imported OpenPGP key into {dir}");
+    println!("  fingerprint: {}", info.fingerprint);
+    if let Some(uid) = &info.primary_uid {
+        println!("  user ID:     {uid}");
+    }
+    println!("  subkeys:     {}", info.subkeys);
     Ok(())
 }
 

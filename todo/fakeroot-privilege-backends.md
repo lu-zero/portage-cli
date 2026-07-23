@@ -539,8 +539,87 @@ index) — both validated against host portage's `binarytree`. Commits `2f88678`
 `_match_use` bug-#453400 rule) and `-g`/`--getbinpkg` remote (`portage-distfiles`
 transport, `Packages.gz`/`binrepos.conf`) both landed and are validated
 end-to-end — this was the last "NEXT" item pointed at from here. What's still
-open: signing (`BINPKG_GPG_*`) and stage3 re-pack (`em stages`
-extract-from-binpkgs under one umbrella fakeroost session — see Q1).
+open: stage3 re-pack (`em stages` extract-from-binpkgs under one umbrella
+fakeroost session — see Q1). Signing (below) is now done too.
+
+### GPG signing/verification — DONE (2026-07-23)
+
+Uses the `pgp` crate (crates.io, aka rpgp, `github.com/rpgp/rpgp`) — a native
+Rust OpenPGP implementation, no `gpg`/`gpg-agent` subprocess. New
+`portage-binpkg/src/gpg.rs` module (sign/verify primitives, keyring loading)
+plus `gpkg.rs`'s `GpkgInput.signing`/`VerifyPolicy`/`verify_container_signature`,
+threaded through `portage-cli`'s `write_binpkg` (sign) and the `extract_image`
+choke point (verify, reached by both `-k` local and `-g` remote consumers) —
+including across the `__worker` privilege-boundary process fork
+(`force_verify_signature`, a bare bool; the worker re-reads
+`FEATURES`/`BINPKG_GPG_VERIFY_GPG_HOME` itself from its own re-sourced
+`make.conf`, same as everything else it re-derives).
+
+**Container scheme** (matches real portage's own `gpkg.py` exactly):
+`metadata.tar.<c>`/`image.tar.<c>` each get a sibling detached, armored
+`.sig` when signing; the `Manifest` member is wrapped whole in an OpenPGP
+cleartext-signature block (RFC 9580 "Cleartext Signature Framework" —
+`gpg --clear-sign`, the same format Gentoo repo-tree `Manifest` files use).
+
+**"gemato compatible" — what that actually means.** gemato itself supports
+two interchangeable OpenPGP backends: `SystemGPGEnvironment` (shells to real
+`gpg`) and `PGPyEnvironment` (`pgpy`, a pure-Python from-scratch OpenPGP
+implementation — the Python analog of `pgp`/rpgp). So using a native Rust
+OpenPGP crate instead of shelling to `gpg` is already a precedented,
+accepted pattern in the Gentoo signing ecosystem — "compatible" here means
+producing/consuming standard RFC 9580 armor, not anything gemato-specific
+in the wire format. **Verified directly**, not just asserted: a real
+`gpg`-generated key signed via our code was accepted by real `gpg --verify`
+(both the clearsigned Manifest and a detached signature), and a real
+`gpg --clearsign`'d message was correctly parsed/verified by our code
+against an imported real-gpg public key — full round-trip interop in both
+directions, confirmed live against the actual `gpg` binary on this host,
+not just our own unit tests.
+
+**Deliberate simplifications vs. real portage** (documented, not silent —
+this project has no gpg-agent/pinentry, so some `BINPKG_GPG_*` semantics
+had to be redefined):
+- `BINPKG_GPG_SIGNING_KEY` = a path to an **armored secret-key file** (not
+  a gpg keyring key-ID/fingerprint — there's no gpg-agent to resolve one
+  against). A relative path resolves against `BINPKG_GPG_SIGNING_GPG_HOME`
+  (default `<root>/etc/portage/gnupg`).
+- Passphrase comes from the environment only (no pinentry):
+  `BINPKG_GPG_SIGNING_KEY_PASSPHRASE`, or the em-only
+  `BINPKG_GPG_SIGNING_KEY_PASSPHRASE_FILE` (wins if both set — avoids
+  `/proc/<pid>/environ` exposure).
+- `BINPKG_GPG_VERIFY_GPG_HOME` is a **flat directory of armored public-key
+  files** (`*.asc`), not a real gpg keybox — populated via the new
+  `em maint binpkg gpg-import <keyfile>` command. Root-aware default
+  (`<config_root>/etc/portage/gnupg`) — same class of fix this project
+  already made once for `PKGDIR`, never falls back to the real host path
+  for a non-host `--root`/`--target`/`--prefix`.
+- Signing always uses the secret key's **primary key**, never a dedicated
+  signing subkey (matches the `pgp` crate's own README example; a
+  known, scoped-out v1 limitation).
+- Key/signature expiry and revocation are not walked at verify time
+  (structural self-signature/subkey-binding validation does happen on
+  import, via `SignedPublicKey::verify_bindings`) — a reasonable follow-up,
+  not required for the core signing/verification round trip to be correct.
+
+**CLI surface:** `FEATURES=binpkg-signing` (sign on `-b`/`-B`),
+`FEATURES=binpkg-request-signature` / `em maint binpkg verify
+--require-signature` (reject unsigned), `binrepos.conf`'s per-repo
+`verify-signature=yes` (now actually enforced — previously parsed but
+never enforced), `em maint binpkg gpg-import <keyfile>` (populate the
+verify keyring), `em maint binpkg verify` (reports signature status
+alongside the existing digest/size check — a separate axis: "does the file
+match the index" vs. "is its internal Manifest validly signed").
+
+Live-verified end-to-end on this host: `em -b sys-apps/gentoo-functions`
+with `FEATURES=binpkg-signing` + a real gpg-generated
+`BINPKG_GPG_SIGNING_KEY` produced a signed gpkg (clearsigned Manifest +
+two detached `.sig` members, all independently confirmed by real
+`gpg --verify`); `em maint binpkg gpg-import` + `verify --require-signature`
+correctly flagged older unsigned builds and passed the signed one; a fresh
+`--root`'s `-k` reuse with `FEATURES=binpkg-request-signature` correctly
+failed fast with no keyring configured, then succeeded once
+`gpg-import`'d — including through the `__worker` privilege-backend
+process boundary.
 
 ### GPKG container format (reverse-engineered + validated against a real host gpkg)
 

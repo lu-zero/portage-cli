@@ -21,6 +21,8 @@ camino = { workspace = true }
 thiserror = { workspace = true }
 tempfile = { workspace = true }
 sokgi = "0.2"
+pgp = "0.20.0"
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = { workspace = true }
