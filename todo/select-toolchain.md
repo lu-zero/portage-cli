@@ -12,9 +12,10 @@ prefer their own built toolchain once one exists — split by the user
    real bug (`get_chost`'s host-fallback path), confirmed the rest of the
    mechanism (`em toolchain --setup`'s real-ebuild-postinst-triggered
    `gcc-config` activation) already worked correctly end-to-end.
-2. **🔴 Awareness** — the build path (`shell.rs`'s `init_build_env`) should
-   prefer a `--prefix`/`--local`'s own activated toolchain over the host's
-   once one exists, via broadening the `chost != cbuild` gate. Not started.
+2. **✅ Awareness — DONE 2026-07-23.** See "Phase 2" section below — the
+   build path (`shell.rs`'s `init_build_env`) now also prefers a
+   `--prefix`/`--local`'s own activated toolchain once one exists, not just
+   for cross builds.
 3. **🔴 `em active --prefix/--local <path>`** — a new command, persistent
    state under `~/.local/state/em/` (XDG state dir — also flagged: evaluate
    full XDG Base Directory compliance more broadly at some point, not just
@@ -119,6 +120,44 @@ the `eselect`/`*-config` workalikes that *activate* a built toolchain (write
 `env.d` state + the `usr/bin/<T>-*` wrappers). The build half is done; this is
 the activation half — the seam where `em select` meets the toolchain/stages work
 ([[em-stages-and-binhosts]], [[em-root-characterization]], [[crossdev-target]]).
+
+## Phase 2 — build-path awareness (2026-07-23)
+
+`portage-repo/src/build/shell.rs`'s `init_build_env` toolchain-selection
+block only ever fired for **cross** builds (`chost != cbuild`) — a native
+build (`chost == cbuild`) under `--prefix`/`--local` never entered it at
+all, so even after `em toolchain --setup --prefix DIR` built and activated
+a real native compiler inside the prefix (Phase 1), an ordinary `em
+--prefix DIR sys-libs/zlib` still silently fell through to the host's
+`gcc` on `$PATH`.
+
+Traced the whole path (not assumed): `EbuildShell::build_broot` is fed from
+`Cli::broot()` (`portage-cli/src/cli.rs`), both at the standalone `em
+ebuild` entry (`dispatch.rs`'s `Applet::Ebuild`) and the real merge path
+(`merge/mod.rs`'s `let host_roots = globals.broot();`). `Cli::broot()` is
+**already topology-correct** for this purpose: for a `--prefix` overlay
+(`is_overlay()` true) it returns `outer_roots()`, whose `merge_root()` is
+the *promoted prefix*, not the host (confirmed via `outer_roots()`'s own
+reconstruction and the pre-existing test
+`cross_toolchain_selection_uses_broot_not_config_root`'s own doc comment);
+for `--local` broot already equals eprefix equals the prefix; only for
+`--root`/bare does it stay the real host, and `build_eprefix` stays `None`
+there too. So no new field/plumbing was needed — the only defect was the
+gate condition itself.
+
+**Fix**: broadened the gate from `chost != cbuild` to `chost != cbuild ||
+self.build_eprefix.is_some()`. Everything else in the block (the
+`build_broot`-sourced bin-dir lookup, the PATH-prepend, the 12-tool-var
+per-tool existence check, the `PKG_CONFIG`-skip-if-missing behavior) is
+unchanged — it already did the right thing once entered, for either a
+cross or a native prefix/local toolchain. `--root` is unaffected
+(`build_eprefix` is `None` there), preserving the confirmed-correct
+catalyst seed-compiler default.
+
+New tests in `portage-repo/src/build/shell/tests.rs`:
+`native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set`,
+`native_toolchain_selection_is_a_no_op_without_eprefix` (regression guard
+for the `--root` default), `native_toolchain_selection_skips_pkg_config_when_wrapper_missing`.
 
 ## Implemented (2026-06-24), all in `portage-cli/src/select/`
 

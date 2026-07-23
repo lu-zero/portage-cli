@@ -613,3 +613,83 @@ async fn cross_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
         "PKG_CONFIG must stay unset when the wrapper doesn't exist, not point at a dead path"
     );
 }
+
+/// Phase 2 of the `--prefix`/`--local` toolchain-awareness work
+/// (`todo/select-toolchain.md`): a **native** build (CHOST == CBUILD) under
+/// `--prefix`/`--local` used to never enter the toolchain-selection block at
+/// all (it was gated on `chost != cbuild`), so it silently fell through to
+/// the host's `gcc` on `$PATH` even after the prefix had built and activated
+/// its own compiler. `build_eprefix.is_some()` now also opens the gate;
+/// `build_broot` (already topology-correct — see the gate's own doc comment)
+/// is still the bin-dir source, unchanged from the cross case.
+#[tokio::test]
+async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+
+    let prefix = dir.path().join("prefix");
+    let bin = prefix.join("usr/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gcc = bin.join("aarch64-unknown-linux-gnu-gcc");
+    std::fs::write(&gcc, "#!/bin/sh\n:\n").unwrap();
+
+    let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
+    // `--prefix`/`--local`: broot and eprefix both resolve to the prefix
+    // itself (see the gate's own doc comment on `Cli::broot()`).
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+
+    shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
+    shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
+    shell.init_build_env().await.unwrap();
+
+    let expected_cc = gcc.to_str().unwrap().to_string();
+    assert_eq!(shell.get_var("CC").as_deref(), Some(expected_cc.as_str()));
+    let path = shell.get_var("PATH").unwrap_or_default();
+    assert!(
+        path.split(':').any(|p| p == bin.to_str().unwrap()),
+        "prefix's usr/bin must be on PATH: {path}"
+    );
+}
+
+/// A plain `--root`/bare build (no `--prefix`/`--local`, so `build_eprefix`
+/// stays `None`) must NOT be affected by the Phase 2 gate change — real
+/// `--root` defaulting to the host's `gcc` on `PATH` is correct as-is
+/// (catalyst seed-compiler model, confirmed not a bug).
+#[tokio::test]
+async fn native_toolchain_selection_is_a_no_op_without_eprefix() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+
+    shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
+    shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
+    shell.init_build_env().await.unwrap();
+
+    assert!(shell.get_var("CC").unwrap_or_default().is_empty());
+}
+
+/// Same `PKG_CONFIG`-must-not-point-at-a-dead-wrapper guard as
+/// `cross_toolchain_selection_skips_pkg_config_when_wrapper_missing`, for the
+/// native-prefix path opened by Phase 2.
+#[tokio::test]
+async fn native_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+
+    let prefix = dir.path().join("prefix");
+    let bin = prefix.join("usr/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("aarch64-unknown-linux-gnu-gcc"), "#!/bin/sh\n:\n").unwrap();
+
+    let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+
+    shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
+    shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
+    shell.init_build_env().await.unwrap();
+
+    assert!(shell.get_var("CC").unwrap_or_default().ends_with("-gcc"));
+    assert!(
+        shell.get_var("PKG_CONFIG").unwrap_or_default().is_empty(),
+        "PKG_CONFIG must stay unset when the wrapper doesn't exist, not point at a dead path"
+    );
+}

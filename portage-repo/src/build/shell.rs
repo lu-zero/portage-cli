@@ -1199,15 +1199,25 @@ impl EbuildShell {
             self.set_var("CBUILD", &chost);
         }
 
-        // Cross toolchain selection. When building for a foreign CHOST (cross:
-        // CHOST and CBUILD both set and differing) and the prefixed compiler is
-        // reachable, export the toolchain vars as `${CHOST}-<tool>` unless the
-        // ebuild env already set them. This mirrors `tc-getCC`/`tc-getPROG`
-        // (toolchain-funcs.eclass), but proactively: em sets it up front so even
-        // ebuilds that build with a raw `./configure` (not `$(tc-getCC)`) — e.g.
-        // sys-libs/zlib — pick up the cross compiler instead of the host `gcc`,
-        // which otherwise silently yields a host-arch artifact. Native builds
-        // (CBUILD unset, or CHOST == CBUILD) are untouched.
+        // Cross/prefix toolchain selection. When building for a foreign CHOST
+        // (cross: CHOST and CBUILD both set and differing) and the prefixed
+        // compiler is reachable, export the toolchain vars as `${CHOST}-<tool>`
+        // unless the ebuild env already set them. This mirrors `tc-getCC`/
+        // `tc-getPROG` (toolchain-funcs.eclass), but proactively: em sets it up
+        // front so even ebuilds that build with a raw `./configure` (not
+        // `$(tc-getCC)`) — e.g. sys-libs/zlib — pick up the cross compiler
+        // instead of the host `gcc`, which otherwise silently yields a
+        // host-arch artifact.
+        //
+        // Also fires for a **native** `--prefix`/`--local` build
+        // (`self.build_eprefix.is_some()`, even though CHOST == CBUILD) once
+        // that prefix has built and activated its own compiler (`em toolchain
+        // --setup`/`em select compiler set`) — otherwise the build silently
+        // falls through to the host's `gcc` on `$PATH` forever, even though a
+        // real native `${CHOST}-gcc` now exists inside the prefix. A plain
+        // `--root` offset stays untouched (`build_eprefix` is `None` there,
+        // matching the confirmed catalyst seed-compiler default of using the
+        // host's compiler). See `todo/select-toolchain.md`'s Phase 2.
         //
         // For `--cross` into a `--local` prefix the `<chost>-*` wrappers
         // (`crossdev --setup`) live in `<broot>/usr/bin`, which is under $HOME
@@ -1218,11 +1228,16 @@ impl EbuildShell {
         // so `<build_broot>/usr/bin` is exactly that toolchain bin dir; expose
         // it on PATH so the whole toolchain (gcc/g++/ld/as/…) resolves. Host
         // crossdev (toolchain in `/usr/bin`, `build_broot` == the real host
-        // `/`) is already on PATH, so this is a no-op there.
+        // `/`) is already on PATH, so this is a no-op there. The same
+        // `build_broot` also already resolves correctly for the native-prefix
+        // case above: `Cli::broot()` returns the promoted prefix itself for a
+        // `--prefix` overlay (`is_overlay()` → `outer_roots()`), and for
+        // `--local` broot == eprefix == the prefix already — no separate
+        // eprefix-sourced bin dir is needed.
         if let (Some(chost), Some(cbuild)) = (
             self.get_var("CHOST").filter(|s| !s.is_empty()),
             self.get_var("CBUILD").filter(|s| !s.is_empty()),
-        ) && chost != cbuild
+        ) && (chost != cbuild || self.build_eprefix.is_some())
         {
             let prefix_bin = self
                 .build_broot
