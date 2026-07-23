@@ -145,13 +145,27 @@ pub fn source_label(is_host: bool) -> String {
 /// Get CHOST from make.conf.
 pub fn get_chost(globals: &Cli) -> Result<String, anyhow::Error> {
     let make_conf_path = config_portage_dir(globals).join("make.conf");
-    let system_make_conf = Utf8PathBuf::from("/etc/make.conf");
 
-    let paths_to_check = if system_make_conf.is_file() {
-        vec![system_make_conf, make_conf_path]
-    } else {
-        vec![make_conf_path]
-    };
+    let mut paths_to_check = vec![make_conf_path];
+    // `--prefix`/`--local` deliberately don't carry their own CHOST — base
+    // profile/make.conf come from the host (see `setup.rs`'s bashrc comment
+    // and the generated prefix make.conf's own header, "Profile and base
+    // make.conf come from the host"). Without this fallback, a prefix's own
+    // (CHOST-less) make.conf overlay left `get_chost` with nothing to find,
+    // and the legacy `/etc/make.conf` check below never fires on a modern
+    // system (that flat-file layout predates 2006) — so `select compiler
+    // show`/`set` with no explicit `--target` silently derived a bogus
+    // target (`arm64-unknown-linux-gnu` from `Cli::arch`'s Gentoo arch name,
+    // not the real `aarch64-unknown-linux-gnu` CHOST tuple). Found live in a
+    // real `--prefix` sandbox after a full `em toolchain --setup` run.
+    if is_prefix_context(globals) {
+        paths_to_check.push(Utf8PathBuf::from("/etc/portage/make.conf"));
+    }
+    // Legacy pre-2006 flat make.conf path, kept for any install still using it.
+    let system_make_conf = Utf8PathBuf::from("/etc/make.conf");
+    if system_make_conf.is_file() {
+        paths_to_check.push(system_make_conf);
+    }
 
     for path in paths_to_check {
         if let Ok(content) = std::fs::read_to_string(&path) {
@@ -171,4 +185,78 @@ pub fn get_chost(globals: &Cli) -> Result<String, anyhow::Error> {
     }
     let arch = globals.arch.as_str();
     Ok(format!("{arch}-unknown-linux-gnu"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// A CHOST= line, however it's quoted, read the same way `get_chost`
+    /// itself parses one — used to compute this test's expected value from
+    /// the real host config rather than hardcoding it.
+    fn read_chost(path: &std::path::Path) -> Option<String> {
+        let content = std::fs::read_to_string(path).ok()?;
+        content.lines().find_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix("CHOST=")?;
+            Some(rest.trim().trim_matches(['"', '\'']).to_string())
+        })
+    }
+
+    /// Under `--prefix`, the prefix's own make.conf overlay never sets
+    /// CHOST by design (`setup.rs`'s generated template: "Profile and base
+    /// make.conf come from the host") — `get_chost` must fall back to the
+    /// host's real `/etc/portage/make.conf`, not silently derive a bogus
+    /// `<arch>-unknown-linux-gnu` guess. Found live in a real `--prefix`
+    /// sandbox after a full `em toolchain --setup`: without this fallback,
+    /// `select compiler show`/`set` (no explicit `--target`) resolved
+    /// "arm64-unknown-linux-gnu" instead of the real
+    /// "aarch64-unknown-linux-gnu", so neither could find the profile
+    /// `list` correctly showed existed.
+    #[test]
+    fn get_chost_under_prefix_falls_back_to_host_make_conf() {
+        let Some(expected) = read_chost(std::path::Path::new("/etc/portage/make.conf")) else {
+            eprintln!(
+                "skipping: host /etc/portage/make.conf has no CHOST= line \
+                 (unusual host, not testable here)"
+            );
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().to_str().unwrap();
+        std::fs::create_dir_all(dir.path().join("etc/portage")).unwrap();
+        // Deliberately no CHOST= line -- matches the real generated prefix
+        // make.conf template, which never sets one.
+        std::fs::write(
+            dir.path().join("etc/portage/make.conf"),
+            "# no CHOST here, matches a real `em --prefix ... setup` template\n",
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["em", "--prefix", prefix]);
+        assert_eq!(get_chost(&cli).unwrap(), expected);
+    }
+
+    /// A plain host build (no `--prefix`/`--local`) is unaffected by the
+    /// new fallback -- `config_portage_dir` already points straight at the
+    /// host's own make.conf for that topology, so `get_chost` must still
+    /// read the same real CHOST it always did.
+    #[test]
+    fn get_chost_host_context_is_unaffected() {
+        let Some(expected) = read_chost(std::path::Path::new("/etc/portage/make.conf")) else {
+            eprintln!(
+                "skipping: host /etc/portage/make.conf has no CHOST= line \
+                 (unusual host, not testable here)"
+            );
+            return;
+        };
+        // `["em"]` alone (zero args) trips clap's `arg_required_else_help`
+        // (prints help and exits the process) — pass `--root /` explicitly,
+        // matching `binpkg.rs`'s own tests for the same reason.
+        let cli = Cli::parse_from(["em", "--root", "/"]);
+        assert!(!is_prefix_context(&cli));
+        assert_eq!(get_chost(&cli).unwrap(), expected);
+    }
 }

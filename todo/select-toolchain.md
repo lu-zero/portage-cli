@@ -1,18 +1,97 @@
 # `em select` — toolchain activation (gcc / binutils / linker / clang)
 
 STATUS: **activation mostly done** (cross + native `post_step`, `pkgconf`
-wrapper 2026-07-17). **Still open, re-scoped 2026-07-20:** `--root` silently
-defaulting to the host's `gcc` on `PATH` is **correct as-is** (matches
-catalyst's seed-compiler model — not a bug, confirmed by the user directly).
-`--prefix` currently shares that exact same silent-default behavior (no code
-distinguishes the two flags — both are native, `CBUILD` defaults to `CHOST`,
-which unconditionally skips the only PATH-prepend/CC-set block that exists),
-but for `--prefix` that's the wrong default: the user should be able to tell
-`em select` to prefer the prefix's own built toolchain instead. No design or
-implementation exists yet for that choice — this is now a scoped design task,
-not a bug-hunt. See “Open: prefer ROOT toolchain on native offsets” near the
-end of the 2026-07-16 notes for the mechanism that's missing, and [[PENDING]]
-row 1 (2026-07-18 queue, re-scoped 2026-07-20).
+wrapper 2026-07-17). **`--root` silently defaulting to the host's `gcc` on
+`PATH` is correct as-is** (matches catalyst's seed-compiler model — not a
+bug, confirmed by the user directly). `--prefix`/`--local` should instead
+prefer their own built toolchain once one exists — split by the user
+(2026-07-23) into three separately-landed phases:
+
+1. **✅ `em select` correctly populates the confdir under `--prefix`/`--local`
+   — DONE 2026-07-23.** See "Phase 1" section below — found and fixed a
+   real bug (`get_chost`'s host-fallback path), confirmed the rest of the
+   mechanism (`em toolchain --setup`'s real-ebuild-postinst-triggered
+   `gcc-config` activation) already worked correctly end-to-end.
+2. **🔴 Awareness** — the build path (`shell.rs`'s `init_build_env`) should
+   prefer a `--prefix`/`--local`'s own activated toolchain over the host's
+   once one exists, via broadening the `chost != cbuild` gate. Not started.
+3. **🔴 `em active --prefix/--local <path>`** — a new command, persistent
+   state under `~/.local/state/em/` (XDG state dir — also flagged: evaluate
+   full XDG Base Directory compliance more broadly at some point, not just
+   for this) + a shell-eval export mode. Not started; needs its own design
+   pass (state format, interaction with an explicit `--prefix` flag, whether
+   a bare `em <pkg>` should pick up a registered "current" prefix).
+
+See [[PENDING]] row 1.
+
+## Phase 1 — `em select` confdir population under `--prefix`/`--local` (2026-07-23)
+
+Live-tested end-to-end in a fresh crossdev-stages sandbox
+(`em-prefix-select-0723`, unprivileged `builder` user, real
+`--prefix /home/builder/prefix`), since static code-reading alone couldn't
+resolve the open question of *how* the very first `env.d` profile entry for
+a freshly-merged `sys-devel/gcc` gets created (`select::env_d::activate_latest`
+only ever *picks the newest among already-listed* profiles — it never
+synthesizes one from nothing, and `list_all_profiles`/`collect_profiles`
+only *read* existing `env.d` files, never scan installed packages/`gcc-bin`
+dirs directly).
+
+**Answer, confirmed live**: real `sys-devel/gcc`'s own ebuild
+`pkg_postinst` (via `toolchain.eclass`) calls the real `gcc-config` binary
+itself — `em` faithfully executes real ebuild/eclass shell code, and
+`gcc-config`'s own script is `EPREFIX`/`EROOT`-aware, so it correctly wrote
+the profile entry into the **prefix's own** `etc/env.d/gcc/`, not the
+host's. `em toolchain --setup --prefix /home/builder/prefix` completed 8/8
+packages and the log showed the real `gcc-config` message verbatim
+(`* Switching native-compiler to aarch64-unknown-linux-gnu-16 ...`).
+`em select compiler list` then correctly showed **both** profiles, labeled
+`(host)`/`(prefix)`, with the prefix's own marked active (`*`):
+```
+[1] aarch64-unknown-linux-gnu-15 (host)
+[2] aarch64-unknown-linux-gnu-16 * (prefix)
+```
+and the installed wrapper directory (`<prefix>/usr/bin`) contained not just
+`<chost>-gcc` but also bare `gcc`/`cc`/`g++`/`c++` symlinks (mirrors real
+`gcc-config`'s own `gcc-bin/<ver>/` layout exactly — resolves an earlier,
+mistaken worry that `em`'s own wrapper installer only creates
+CHOST-prefixed names). So the confdir-population mechanism itself needed
+**no code change at all** — `em toolchain --setup --prefix DIR` (already
+wired to the general `toolchain` applet, not just the internal stage flow,
+`crossdev/mod.rs:588`) was already complete and correct.
+
+**The one real bug found and fixed**: `select::get_chost` (`select/mod.rs`)
+derives the default `--target` for `select compiler/binutils/linker
+{show,set}` when none is given explicitly, by grepping for a `CHOST=` line
+in `config_portage_dir(globals).join("make.conf")`, falling back to a
+legacy `/etc/make.conf` (pre-2006 flat-file layout, essentially never
+populated on a modern system) if that literal path happens to exist. Under
+`--prefix`, `config_portage_dir` correctly resolves to the **prefix's own**
+`etc/portage/make.conf` — but that file **never has a `CHOST=` line by
+design** (the generated template's own header says "Profile and base
+make.conf come from the host"). With no working fallback, `get_chost`
+silently fell through to its own last-resort guess,
+`format!("{}-unknown-linux-gnu", globals.arch)` — using `Cli::arch`'s
+Gentoo arch name ("arm64"), not the real CHOST tuple ("aarch64"). Result:
+`em --prefix DIR select compiler show` (no explicit `--target`) reported
+`(no compiler profile set for target 'arm64-unknown-linux-gnu')` even
+though `list` correctly showed a real, active `aarch64-unknown-linux-gnu-16`
+profile one line above it — `show`/`set` were looking for a target that
+doesn't exist. Same bug, same fix, for `binutils`/`linker` (all three share
+`get_chost` via the identical `run()` pattern in each module).
+
+**Fix**: when `is_prefix_context(globals)` is true, add the host's real
+`/etc/portage/make.conf` (not the legacy `/etc/make.conf`) to the fallback
+chain, ahead of the legacy path. Two new tests in `select/mod.rs`
+(`get_chost_under_prefix_falls_back_to_host_make_conf`,
+`get_chost_host_context_is_unaffected`) — both read the real host
+`/etc/portage/make.conf` directly for their expected value (matching the
+existing environment-honest test convention already used by
+`binpkg.rs::host_root_skips_the_root_relative_branch`), skip gracefully on
+a host with no `CHOST=` set at all.
+
+Live-verified after the fix: `show`/`set` (no `--target`) both correctly
+resolve `aarch64-unknown-linux-gnu-16`, and `set` still successfully
+re-activates and reports the right target.
 
 Consolidates the former `select-{compiler,binutils,linker,clang}.md`. These are
 the `eselect`/`*-config` workalikes that *activate* a built toolchain (write
