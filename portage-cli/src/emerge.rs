@@ -440,13 +440,19 @@ async fn emerge_atoms_inner(
         preflight::check(&outcome.plan, &roots, &outcome.provided)?;
     }
 
+    // Shared by the `-p` preview below and the `-a` confirm prompt further
+    // down — same "bind, write, flush" shape `activity/human.rs` uses for
+    // every styled stdout write, so ANSI codes still strip cleanly on
+    // non-tty output.
+    let print_eta = || {
+        let mut out = anstream::stdout();
+        let _ = write!(out, "{}", eta_message(&roots, merge_flags, &outcome));
+        let _ = out.flush();
+    };
+
     if cli.pretend {
         if cli.eta {
-            let _ = write!(
-                anstream::stdout(),
-                "{}",
-                eta_message(&roots, merge_flags, &outcome)
-            );
+            print_eta();
         }
         return Ok(());
     }
@@ -467,11 +473,7 @@ async fn emerge_atoms_inner(
     };
     if merge_flags.ask {
         if cli.eta {
-            let _ = write!(
-                anstream::stdout(),
-                "{}",
-                eta_message(&roots, merge_flags, &outcome)
-            );
+            print_eta();
         }
         if !confirm_action(verb, outcome.plan.len())? {
             println!(">>> Quitting.");

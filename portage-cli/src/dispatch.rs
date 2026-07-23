@@ -518,7 +518,9 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
                     }
                     eta
                 };
-                let _ = write!(anstream::stdout(), "{}", crate::activity::format_eta(&eta));
+                let mut out = anstream::stdout();
+                let _ = write!(out, "{}", crate::activity::format_eta(&eta));
+                let _ = out.flush();
             }
             Ok(())
         }

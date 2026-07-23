@@ -733,16 +733,20 @@ mod tests {
 
     #[test]
     fn merge_resume_flags_ui_from_cli_shape_additive() {
-        let mut saved = MergeFlags::default();
-        saved.emptytree = true;
-        saved.jobs = Some(4);
-        saved.exclude = vec!["cat/a".into()];
+        let saved = MergeFlags {
+            emptytree: true,
+            jobs: Some(4),
+            exclude: vec!["cat/a".into()],
+            ..Default::default()
+        };
 
-        let mut cli = MergeFlags::default();
-        cli.ask = true;
-        cli.keep_going = true;
-        cli.jobs = Some(16);
-        cli.exclude = vec!["cat/b".into()];
+        let cli = MergeFlags {
+            ask: true,
+            keep_going: true,
+            jobs: Some(16),
+            exclude: vec!["cat/b".into()],
+            ..Default::default()
+        };
 
         let m = merge_resume_flags(&saved, &cli);
         assert!(m.ask); // current UI

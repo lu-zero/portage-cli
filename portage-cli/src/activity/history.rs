@@ -480,24 +480,24 @@ pub fn format_time(store: &DurationStore, atom: Option<&str>) -> String {
 /// `activity/human.rs`.
 pub fn format_eta(eta: &Eta) -> String {
     use crate::style::C_BOLD;
+    use std::fmt::Write as _;
     let mode = if eta.critical_path {
         "critical-path"
     } else {
         "naive serial/jobs"
     };
-    let mut out = format!(
-        "ETA ~{C_BOLD}{}{C_BOLD:#} wall ({mode}, {} job{})\n",
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "ETA ~{C_BOLD}{}{C_BOLD:#} wall ({mode}, {} job{})\n  {} serial, {} known",
         format_seconds(eta.wall_seconds),
         eta.jobs,
         if eta.jobs == 1 { "" } else { "s" },
-    );
-    out.push_str(&format!(
-        "  {} serial, {} known",
         format_seconds(eta.serial_seconds),
         eta.known,
-    ));
+    );
     if eta.unknown > 0 {
-        out.push_str(&format!(", {} unknown package time(s)", eta.unknown));
+        let _ = write!(out, ", {} unknown package time(s)", eta.unknown);
     }
     out.push('\n');
     if eta.unknown > 0 && eta.known == 0 {
