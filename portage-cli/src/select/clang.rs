@@ -12,6 +12,7 @@ use camino::Utf8PathBuf;
 use super::{config_portage_dir, is_prefix_context, source_label};
 use crate::cli::{ClangAction, Cli};
 use crate::style::C_STAR;
+use portage_atom::Version;
 
 /// Base directory for LLVM installations.
 fn llvm_base_dir(globals: &Cli) -> Utf8PathBuf {
@@ -67,8 +68,14 @@ fn list_all_clang_slots(globals: &Cli) -> Result<Vec<ClangSlot>> {
         }
     }
 
-    // Sort by slot name (version)
-    slots.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sort by slot name as a real Gentoo version, not lexicographically --
+    // plain `str::cmp` would put "17.0" ahead of "9" (byte-wise, '1' < '9').
+    slots.sort_by(
+        |a, b| match (Version::parse(&a.name), Version::parse(&b.name)) {
+            (Ok(va), Ok(vb)) => va.cmp(&vb),
+            _ => a.name.cmp(&b.name),
+        },
+    );
 
     Ok(slots)
 }

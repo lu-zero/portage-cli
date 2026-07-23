@@ -12,6 +12,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use super::{config_portage_dir_for, get_chost, is_prefix_context_for, source_label};
 use crate::cli::Cli;
 use crate::style::C_STAR;
+use portage_atom::Version;
 use portage_resolve::Roots;
 
 /// Trait for env.d-based profile selection modules.
@@ -141,7 +142,7 @@ fn list_all_profiles<T: EnvDProfile>(roots: &Roots) -> Result<BTreeMap<String, V
     }
 
     for profiles in profiles_by_target.values_mut() {
-        profiles.sort_by(|a, b| a.name.cmp(&b.name));
+        profiles.sort_by(|a, b| compare_profile_names(&a.name, &b.name));
     }
 
     Ok(profiles_by_target)
@@ -297,6 +298,31 @@ pub(super) fn parse_env_vars(content: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// The trailing version-like component of an env.d profile filename (e.g.
+/// `aarch64-unknown-linux-gnu-13` -> `13`, `2.41` on its own -> `2.41`), or
+/// `None` if `name` doesn't end in one. Mirrors the suffix `collect_profiles`
+/// already recognizes as a version when it strips it to derive a target.
+fn version_suffix(name: &str) -> Option<&str> {
+    let suffix = match name.rfind('-') {
+        Some(pos) => &name[pos + 1..],
+        None => name,
+    };
+    (!suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || c == '.')).then_some(suffix)
+}
+
+/// Order two profile names by their trailing version, not lexicographically
+/// — plain `str::cmp` picks `"...-9"` over `"...-13"` (byte-wise, `'9' >
+/// '1'`), which would activate a stale single-digit-major GCC profile over a
+/// newer double-digit one. Falls back to a plain string compare if either
+/// side doesn't parse as a version (e.g. neither has a recognizable suffix).
+fn compare_profile_names(a: &str, b: &str) -> std::cmp::Ordering {
+    let parsed = |name: &str| version_suffix(name).and_then(|v| Version::parse(v).ok());
+    match (parsed(a), parsed(b)) {
+        (Some(va), Some(vb)) => va.cmp(&vb),
+        _ => a.cmp(b),
+    }
+}
+
 /// Replace `link` with a symlink pointing at `content` (mkdir parent, force-replace).
 pub(super) fn symlink_force(content: &Utf8Path, link: &Utf8Path) -> Result<()> {
     if let Some(parent) = link.parent() {
@@ -411,7 +437,7 @@ pub fn run_set<T: EnvDProfile>(
             .values()
             .flat_map(|profiles| profiles.iter())
             .collect();
-        all_profiles.sort_by(|a, b| a.name.cmp(&b.name));
+        all_profiles.sort_by(|a, b| compare_profile_names(&a.name, &b.name));
 
         let idx = n.checked_sub(1).context("profile numbers start at 1")?;
         all_profiles
@@ -446,7 +472,7 @@ pub(super) fn activate_latest<T: EnvDProfile>(roots: &Roots, target: &str) -> Re
     let Some(profile) = profiles_by_target.get(target).and_then(|list| {
         list.iter()
             .filter(|p| !p.is_host)
-            .max_by(|a, b| a.name.cmp(&b.name))
+            .max_by(|a, b| compare_profile_names(&a.name, &b.name))
     }) else {
         return Ok(false);
     };
@@ -487,5 +513,52 @@ mod tests {
         // doesn't panic while being parsed -- the profile still gets
         // collected under whatever (malformed) target string comes out.
         assert_eq!(profiles_by_target.values().map(Vec::len).sum::<usize>(), 1);
+    }
+
+    /// `activate_latest`/the list-display sorts used to pick "newest" by
+    /// plain `str::cmp`, which prefers `"...-9"` over `"...-13"` byte-wise
+    /// (`'9' > '1'`) -- a real bug for GCC once a build spans a single- to
+    /// double-digit major version bump (a documented bootstrap scenario in
+    /// this codebase: an older bootstrap compiler and the final one can
+    /// coexist in the same root). Fixed by comparing the trailing version
+    /// with `portage_atom::Version` instead.
+    #[test]
+    fn compare_profile_names_is_version_aware_across_a_digit_boundary() {
+        use std::cmp::Ordering;
+        let a = "aarch64-unknown-linux-gnu-9";
+        let b = "aarch64-unknown-linux-gnu-13";
+        assert_eq!(compare_profile_names(a, b), Ordering::Less);
+        assert_eq!(compare_profile_names(b, a), Ordering::Greater);
+        // A naive string compare would have gotten this backwards.
+        assert_eq!(a.cmp(b), Ordering::Greater);
+    }
+
+    #[test]
+    fn activate_latest_picks_the_higher_major_not_the_lexicographic_max() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "aarch64-unknown-linux-gnu-9",
+            "aarch64-unknown-linux-gnu-13",
+        ] {
+            std::fs::write(
+                dir.path().join(name),
+                "CTARGET=\"aarch64-unknown-linux-gnu\"\n",
+            )
+            .unwrap();
+        }
+        let base_dir = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+
+        let mut profiles_by_target = BTreeMap::new();
+        collect_profiles::<LinkerProfileType>(&base_dir, &mut profiles_by_target, false).unwrap();
+
+        let profile = profiles_by_target
+            .get("aarch64-unknown-linux-gnu")
+            .and_then(|list| {
+                list.iter()
+                    .filter(|p| !p.is_host)
+                    .max_by(|a, b| compare_profile_names(&a.name, &b.name))
+            })
+            .unwrap();
+        assert_eq!(profile.name, "aarch64-unknown-linux-gnu-13");
     }
 }

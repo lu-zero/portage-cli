@@ -75,7 +75,7 @@ pub fn checksum(path: &Path) -> Result<(String, String, u64, u64)> {
 /// `<PF>-<BUILD_ID>.gpkg.tar` layout. `None` for the single-instance
 /// `<PF>.gpkg.tar` form.
 pub fn parse_build_id_from_name(rel: &str) -> Option<u32> {
-    let base = rel.rsplit('/').next()?;
+    let base = std::path::Path::new(rel).file_name()?.to_str()?;
     let stem = base.strip_suffix(".gpkg.tar")?;
     let (rest, id) = stem.rsplit_once('-')?;
     if rest.is_empty() {

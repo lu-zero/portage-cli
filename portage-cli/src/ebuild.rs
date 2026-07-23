@@ -9,10 +9,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Cpv;
 use portage_distfiles::{DistfileResolver, FetchConfig, FetchStatus, Fetcher};
 use portage_metadata::SrcUriEntry;
-use portage_repo::{
-    DEFAULT_MAKE_CONF, Ebuild, EbuildEnv, LEGACY_MAKE_CONF, MakeConf, Manifest, ReposConf,
-    Repository,
-};
+use portage_repo::{Ebuild, EbuildEnv, MakeConf, Manifest, ReposConf, Repository};
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, MergeSpec, Vdb};
 use tracing::Instrument;
 
@@ -926,7 +923,9 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         Some(p) => p.to_owned(),
         None => {
             let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-            Utf8PathBuf::from(format!("/var/tmp/portage/{}/{pf}", ebuild.category()))
+            Utf8Path::new("/var/tmp/portage")
+                .join(ebuild.category())
+                .join(pf)
         }
     };
 
@@ -1535,7 +1534,7 @@ fn post_process_after_install(
     compress_include.extend(to_paths(paths.compress));
     let mut compress_exclude = to_paths(paths.compress_exclude);
     if let Some(pf) = shell.get_var("PF") {
-        compress_exclude.push(Utf8PathBuf::from(format!("/usr/share/doc/{pf}/html")));
+        compress_exclude.push(Utf8Path::new("/usr/share/doc").join(pf).join("html"));
     }
 
     let compress_cmd = shell
@@ -1654,7 +1653,7 @@ async fn run_fetch(
         .map(str::to_owned)
         .collect();
 
-    let gentoo_mirrors = gentoo_mirrors_list();
+    let gentoo_mirrors = gentoo_mirrors_list(shell);
     let resolver = DistfileResolver::from_repo(repo, gentoo_mirrors).context("loading mirrors")?;
     let distfiles = if fetch_all_uri {
         resolver.resolve_all(&entries)
@@ -1680,7 +1679,7 @@ async fn run_fetch(
         None => Manifest { entries: vec![] },
     };
 
-    let (fetch_cmd, resume_cmd) = read_fetch_commands();
+    let (fetch_cmd, resume_cmd) = read_fetch_commands(shell);
     let config = FetchConfig::from_make_conf(fetch_cmd, resume_cmd);
     let ro_distdirs: Vec<Utf8PathBuf> = shell
         .get_var("PORTAGE_RO_DISTDIRS")
@@ -2828,24 +2827,33 @@ fn open_or_create_vdb(path: &Utf8Path) -> Result<Vdb> {
     Vdb::open(path).with_context(|| format!("opening VDB at {path}"))
 }
 
-fn gentoo_mirrors_list() -> Vec<String> {
+/// `GENTOO_MIRRORS`: process env → the live ebuild shell (root-aware —
+/// `shell` already sourced whichever make.conf is correct for the active
+/// `--root`/`--config-root`/`--prefix`, unlike a hardcoded host path) →
+/// `make.globals` (never sourced into the shell itself, so still consulted
+/// directly here, same convention as `binpkg.rs::resolve_pkgdir_for_roots`).
+///
+/// Without the `make.globals` fallback the mirror list is empty and a
+/// distfile whose upstream URL fails has no fallback (the popt/tar fetch
+/// failures in the @system stage build) — `make.globals` is where the real
+/// `http://distfiles.gentoo.org` default lives.
+fn gentoo_mirrors_list(shell: &portage_repo::EbuildShell) -> Vec<String> {
     if let Ok(val) = std::env::var("GENTOO_MIRRORS")
         && !val.trim().is_empty()
     {
         return val.split_whitespace().map(str::to_owned).collect();
     }
-    // make.conf rarely sets GENTOO_MIRRORS — the default
-    // (`http://distfiles.gentoo.org`) lives in make.globals, so include it last.
-    // Without it the mirror list is empty and a distfile whose upstream URL fails
-    // has no fallback (the popt/tar fetch failures in the @system stage build).
-    for candidate in [DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF, MAKE_GLOBALS] {
-        let p = Utf8Path::new(candidate);
-        if p.exists()
-            && let Ok(mc) = MakeConf::load(p)
-            && let Some(val) = mc.get("GENTOO_MIRRORS")
-        {
-            return val.split_whitespace().map(str::to_owned).collect();
-        }
+    if let Some(val) = shell.get_var("GENTOO_MIRRORS")
+        && !val.trim().is_empty()
+    {
+        return val.split_whitespace().map(str::to_owned).collect();
+    }
+    let mg = Utf8Path::new(MAKE_GLOBALS);
+    if mg.exists()
+        && let Ok(mc) = MakeConf::load(mg)
+        && let Some(val) = mc.get("GENTOO_MIRRORS")
+    {
+        return val.split_whitespace().map(str::to_owned).collect();
     }
     vec![]
 }
@@ -2854,20 +2862,16 @@ fn gentoo_mirrors_list() -> Vec<String> {
 /// environment nor make.conf overrides it.
 const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
 
-fn read_fetch_commands() -> (Option<String>, Option<String>) {
-    for candidate in [DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF] {
-        let p = Utf8Path::new(candidate);
-        if p.exists()
-            && let Ok(mc) = MakeConf::load(p)
-        {
-            let fetch = mc.get("FETCHCOMMAND").map(str::to_owned);
-            let resume = mc.get("RESUMECOMMAND").map(str::to_owned);
-            if fetch.is_some() || resume.is_some() {
-                return (fetch, resume);
-            }
-        }
-    }
-    (None, None)
+/// `FETCHCOMMAND`/`RESUMECOMMAND` from the live ebuild shell — root-aware for
+/// the same reason as [`gentoo_mirrors_list`]. Previously read via a
+/// hardcoded `[DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF]` scan of the *host's*
+/// make.conf regardless of the active root, and via a plain `MakeConf::get`
+/// that wouldn't expand a `${VAR}` self-reference the way `shell`'s real
+/// sourcing does.
+fn read_fetch_commands(shell: &portage_repo::EbuildShell) -> (Option<String>, Option<String>) {
+    let fetch = shell.get_var("FETCHCOMMAND").filter(|s| !s.is_empty());
+    let resume = shell.get_var("RESUMECOMMAND").filter(|s| !s.is_empty());
+    (fetch, resume)
 }
 
 #[cfg(test)]

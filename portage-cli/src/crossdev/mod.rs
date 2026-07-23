@@ -56,7 +56,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
-use portage_atom::{Cpn, Pf, Version};
+use portage_atom::{Cpn, Dep, Pf, Version};
 use portage_atom_pubgrub::DepClass;
 use portage_repo::{MakeConf, ProfileStack, ReposConf, Repository};
 use portage_vdb::Vdb;
@@ -419,16 +419,7 @@ async fn run_staged(
 /// freshly-built compiler, leaving the *old* slot active for the very build
 /// this refresh existed to fix.
 fn atom_is_package(atom: &str, pkg: &str) -> bool {
-    match atom.rsplit_once('/') {
-        Some((_, rest)) => {
-            rest == pkg
-                || rest
-                    .strip_prefix(pkg)
-                    .and_then(|v| v.strip_prefix('-'))
-                    .is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()))
-        }
-        None => false,
-    }
+    Dep::parse(atom).is_ok_and(|dep| dep.cpn.package == pkg)
 }
 
 /// Run the prefix-side `binutils-config`/`gcc-config` after the step that built
