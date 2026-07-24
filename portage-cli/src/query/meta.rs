@@ -10,8 +10,6 @@ use portage_repo::Repository;
 use portage_vdb::Vdb;
 
 use super::ResolveMode;
-use super::resolve_atom;
-use super::which::dep_matches_cpv;
 use crate::style::{C_LABEL, C_PKG};
 use crate::vdb::find_packages;
 
@@ -21,23 +19,12 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
 
     for raw in atoms {
-        let dep = resolve_atom(&repo, vdb, mode, raw)?;
+        let matches = super::matching_ebuilds(&repo, vdb, mode, &ebuilds, raw)?;
 
-        let mut matches: Vec<_> = ebuilds
-            .iter()
-            .filter(|e| dep_matches_cpv(&dep, e.cpv()))
-            .collect();
-
-        if matches.is_empty() {
+        let Some(best) = matches.last() else {
             eprintln!("em: no ebuild found for '{raw}'");
             continue;
-        }
-
-        matches.sort_by(|a, b| a.cpv().version.cmp(&b.cpv().version));
-        // SAFETY: We just checked is_empty() is false, so matches is non-empty and last() returns Some.
-        let best = matches
-            .last()
-            .expect("non-empty sorted vec has a last element");
+        };
         let cpv = best.cpv();
 
         let entry = repo

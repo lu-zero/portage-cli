@@ -9,8 +9,6 @@ use portage_repo::Repository;
 use portage_vdb::Vdb;
 
 use super::ResolveMode;
-use super::resolve_atom;
-use super::which::dep_matches_cpv;
 
 use crate::style::{C_DISABLED, C_PKG, C_STABLE, C_TESTING};
 
@@ -20,19 +18,12 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
 
     for raw in atoms {
-        let dep = resolve_atom(&repo, vdb, mode, raw)?;
-
-        let mut matches: Vec<_> = ebuilds
-            .iter()
-            .filter(|e| dep_matches_cpv(&dep, e.cpv()))
-            .collect();
+        let matches = super::matching_ebuilds(&repo, vdb, mode, &ebuilds, raw)?;
 
         if matches.is_empty() {
             eprintln!("em: no ebuilds found for '{raw}'");
             continue;
         }
-
-        matches.sort_by(|a, b| a.cpv().version.cmp(&b.cpv().version));
 
         let mut all_arches: std::collections::BTreeSet<String> = Default::default();
         let mut version_keywords: Vec<(String, BTreeMap<String, Stability>)> = Vec::new();

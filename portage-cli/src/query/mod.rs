@@ -127,6 +127,26 @@ pub fn resolve_atoms(
     out
 }
 
+/// Resolve `raw` to an atom, then return every ebuild in `ebuilds` it matches,
+/// sorted oldest-to-newest by version. Shared by the per-package `query`
+/// commands (`keywords`/`meta`/`uses`); each caller reports its own message on
+/// an empty result.
+pub fn matching_ebuilds<'a>(
+    repo: &Repository,
+    vdb: Option<&Vdb>,
+    mode: ResolveMode,
+    ebuilds: &'a [portage_repo::Ebuild],
+    raw: &str,
+) -> anyhow::Result<Vec<&'a portage_repo::Ebuild>> {
+    let dep = resolve_atom(repo, vdb, mode, raw)?;
+    let mut matches: Vec<_> = ebuilds
+        .iter()
+        .filter(|e| which::dep_matches_cpv(&dep, e.cpv()))
+        .collect();
+    matches.sort_by(|a, b| a.cpv().version.cmp(&b.cpv().version));
+    Ok(matches)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
