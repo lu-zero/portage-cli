@@ -3,9 +3,12 @@ use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
 use portage_repo::PackageConf;
 
-use crate::cli::PkgCommand;
+use crate::cli::{Cli, PkgCommand};
 
-pub fn run(command: &PkgCommand) -> Result<()> {
+pub fn run(command: &PkgCommand, globals: &Cli) -> Result<()> {
+    // Topology-aware: --config-root, then --prefix/--local overlay, then the
+    // host's /etc/portage — same resolution `em select` uses.
+    let confdir = crate::select::config_portage_dir(globals);
     match command {
         PkgCommand::Use {
             atom,
@@ -13,7 +16,15 @@ pub fn run(command: &PkgCommand) -> Result<()> {
             subtract,
             drop,
             path,
-        } => edit_valued(atom, add, subtract, drop, path.as_deref(), "package.use"),
+        } => edit_valued(
+            &confdir,
+            atom,
+            add,
+            subtract,
+            drop,
+            path.as_deref(),
+            "package.use",
+        ),
         PkgCommand::Keyword {
             atom,
             add,
@@ -21,6 +32,7 @@ pub fn run(command: &PkgCommand) -> Result<()> {
             drop,
             path,
         } => edit_valued(
+            &confdir,
             atom,
             add,
             subtract,
@@ -33,17 +45,26 @@ pub fn run(command: &PkgCommand) -> Result<()> {
             add,
             drop,
             path,
-        } => edit_mask(atom, *add, *drop, path.as_deref()),
+        } => edit_mask(&confdir, atom, *add, *drop, path.as_deref()),
         PkgCommand::Env {
             atom,
             add,
             drop,
             path,
-        } => edit_valued(atom, add, &[], drop, path.as_deref(), "package.env"),
+        } => edit_valued(
+            &confdir,
+            atom,
+            add,
+            &[],
+            drop,
+            path.as_deref(),
+            "package.env",
+        ),
     }
 }
 
 fn edit_valued(
+    confdir: &Utf8Path,
     atom_str: &str,
     add: &[String],
     subtract: &[String],
@@ -53,7 +74,7 @@ fn edit_valued(
 ) -> Result<()> {
     let atom = Dep::parse(atom_str).with_context(|| format!("invalid atom {atom_str:?}"))?;
 
-    let base = Utf8Path::new("/etc/portage").join(conf_name);
+    let base = confdir.join(conf_name);
     let no_edit = add.is_empty() && subtract.is_empty() && drop.is_empty();
 
     if base.is_dir() {
@@ -221,6 +242,7 @@ fn show_valued_single(pc: &PackageConf, atom: &Dep, file: &Utf8Path, conf_name: 
 }
 
 fn edit_mask(
+    confdir: &Utf8Path,
     atom_str: &str,
     add: bool,
     drop: bool,
@@ -228,10 +250,10 @@ fn edit_mask(
 ) -> Result<()> {
     let atom = Dep::parse(atom_str).with_context(|| format!("invalid atom {atom_str:?}"))?;
 
-    let base = Utf8Path::new("/etc/portage/package.mask");
+    let base = confdir.join("package.mask");
 
     if base.is_dir() {
-        let mut all = PackageConf::load_dir(base).with_context(|| format!("reading {base}"))?;
+        let mut all = PackageConf::load_dir(&base).with_context(|| format!("reading {base}"))?;
 
         let matches: Vec<usize> = all
             .iter()
@@ -271,7 +293,7 @@ fn edit_mask(
                 }
             }
         } else {
-            let target = resolve_new_path(base, &atom, path_override);
+            let target = resolve_new_path(&base, &atom, path_override);
             let mut pc = if target.exists() {
                 PackageConf::load_file(&target).with_context(|| format!("reading {target}"))?
             } else {
@@ -291,7 +313,7 @@ fn edit_mask(
         }
     } else {
         let mut pc = if base.exists() {
-            PackageConf::load_file(base).with_context(|| format!("reading {base}"))?
+            PackageConf::load_file(&base).with_context(|| format!("reading {base}"))?
         } else {
             PackageConf::parse(String::new())?
         };
@@ -307,14 +329,14 @@ fn edit_mask(
 
         if drop {
             if pc.remove(&atom) {
-                pc.save(base).with_context(|| format!("writing {base}"))?;
+                pc.save(&base).with_context(|| format!("writing {base}"))?;
                 println!("removed {atom} from package.mask");
             } else {
                 println!("package.mask: {atom} not found");
             }
         } else {
             pc.set(&atom, &[]);
-            pc.save(base).with_context(|| format!("writing {base}"))?;
+            pc.save(&base).with_context(|| format!("writing {base}"))?;
             println!("masked {atom}");
         }
     }
@@ -359,4 +381,70 @@ fn resolve_new_path(
     }
     let stem = format!("{}-{}", atom.cpn.category, atom.cpn.package);
     base_dir.join(stem)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn confdir(tmp: &tempfile::TempDir) -> Utf8PathBuf {
+        Utf8Path::from_path(tmp.path())
+            .expect("utf8 tempdir")
+            .to_owned()
+    }
+
+    /// The regression this module was root-blind for: edits must land under
+    /// the passed config dir, never the host's /etc/portage.
+    #[test]
+    fn edit_valued_writes_under_the_given_confdir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf = confdir(&tmp);
+
+        edit_valued(
+            &conf,
+            "sys-libs/zlib",
+            &["static-libs".into()],
+            &[],
+            &[],
+            None,
+            "package.use",
+        )
+        .expect("edit");
+
+        let written = std::fs::read_to_string(conf.join("package.use")).expect("file written");
+        assert!(written.contains("sys-libs/zlib static-libs"), "{written}");
+    }
+
+    #[test]
+    fn edit_valued_dir_mode_creates_a_per_package_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf = confdir(&tmp);
+        std::fs::create_dir(conf.join("package.use")).expect("mkdir");
+
+        edit_valued(
+            &conf,
+            "sys-libs/zlib",
+            &["static-libs".into()],
+            &[],
+            &[],
+            None,
+            "package.use",
+        )
+        .expect("edit");
+
+        let written = std::fs::read_to_string(conf.join("package.use/sys-libs-zlib"))
+            .expect("per-package file written");
+        assert!(written.contains("sys-libs/zlib static-libs"), "{written}");
+    }
+
+    #[test]
+    fn edit_mask_writes_under_the_given_confdir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf = confdir(&tmp);
+
+        edit_mask(&conf, "sys-libs/zlib", true, false, None).expect("mask");
+
+        let written = std::fs::read_to_string(conf.join("package.mask")).expect("file written");
+        assert!(written.contains("sys-libs/zlib"), "{written}");
+    }
 }

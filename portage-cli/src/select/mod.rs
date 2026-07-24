@@ -88,7 +88,7 @@ pub async fn run(command: &SelectCommand, globals: &Cli) -> Result<()> {
 /// state", never "merge into this sysroot". `outer_roots()` doesn't consult
 /// `Cli::target` at all, so it's immune regardless of whether the
 /// underlying flag collision itself gets fixed.
-fn config_portage_dir(globals: &Cli) -> Utf8PathBuf {
+pub(crate) fn config_portage_dir(globals: &Cli) -> Utf8PathBuf {
     config_portage_dir_for(&globals.outer_roots())
 }
 

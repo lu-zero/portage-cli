@@ -169,7 +169,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             eprintln!("mirror: args={:?}", args);
             bail!("not implemented: mirror")
         }
-        Applet::Pkg { command } => pkg::run(command),
+        Applet::Pkg { command } => pkg::run(command, globals),
         Applet::Query { command } => run_query(command, globals).await,
         Applet::Clean { target } => run_clean(target),
         Applet::Use {
