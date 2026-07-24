@@ -282,9 +282,27 @@ pub fn verify(
             cpv: row.cpv.clone(),
             path: row.path.clone(),
             missing: false,
-            size_mismatch: (!size_ok).then_some((actual_size, row.size.unwrap())),
-            md5_mismatch: (!md5_ok).then(|| (actual_md5.clone(), row.md5.clone().unwrap())),
-            sha1_mismatch: (!sha1_ok).then(|| (actual_sha1.clone(), row.sha1.clone().unwrap())),
+            // `.then(|| ..)`, not `.then_some(..)`: the recorded value only
+            // exists when the corresponding `*_ok` is false — eager evaluation
+            // would unwrap a None on rows the index recorded without that field.
+            size_mismatch: (!size_ok).then(|| {
+                (
+                    actual_size,
+                    row.size.expect("recorded size exists on mismatch"),
+                )
+            }),
+            md5_mismatch: (!md5_ok).then(|| {
+                (
+                    actual_md5.clone(),
+                    row.md5.clone().expect("recorded md5 exists on mismatch"),
+                )
+            }),
+            sha1_mismatch: (!sha1_ok).then(|| {
+                (
+                    actual_sha1.clone(),
+                    row.sha1.clone().expect("recorded sha1 exists on mismatch"),
+                )
+            }),
             quarantined_to,
             signature,
         });
@@ -536,6 +554,37 @@ mod tests {
         assert_eq!(report.missing_count(), 0);
         assert!(container.exists(), "not quarantined without fix");
         assert!(report.problems[0].quarantined_to.is_none());
+    }
+
+    /// A row the index recorded without SIZE must not panic when another
+    /// field flags the container as a problem (the eager-`then_some`
+    /// regression): the report carries the md5 mismatch, size stays `None`.
+    #[test]
+    fn verify_handles_a_size_less_index_row_with_an_md5_mismatch() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pkgdir = camino::Utf8Path::from_path(tmp.path()).expect("utf8 tempdir");
+        seed_container(tmp.path(), pkgdir, "app-test", "foo-1.0", 1);
+        index_pkgdir(pkgdir, "x86_64-pc-linux-gnu").expect("index");
+
+        let index_path = pkgdir.join("Packages");
+        let stripped: String = std::fs::read_to_string(&index_path)
+            .expect("read index")
+            .lines()
+            .filter(|l| !l.starts_with("SIZE: "))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        std::fs::write(&index_path, stripped).expect("write index");
+
+        let container = pkgdir.join("app-test/foo-1.0-1.gpkg.tar");
+        let mut bytes = std::fs::read(&container).expect("read container");
+        bytes.push(0xff);
+        std::fs::write(&container, bytes).expect("corrupt container");
+
+        let report = verify(pkgdir, "x86_64-pc-linux-gnu", false, false, None).expect("verify");
+        assert!(!report.is_clean());
+        assert_eq!(report.corrupt_count(), 1);
+        assert!(report.problems[0].size_mismatch.is_none());
+        assert!(report.problems[0].md5_mismatch.is_some());
     }
 
     #[test]
