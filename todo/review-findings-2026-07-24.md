@@ -28,14 +28,14 @@ hold — nothing below re-opens those areas.
    `--path` override. Same class as the `gentoo_mirrors_list` host-make.conf
    bug fixed in 94fef48.
 
-3. **`portage-cli/src/ebuild.rs:1207-1211` — worker-env handoff swallows
+3. ✅ FIXED (7cf1d91) **`portage-cli/src/ebuild.rs:1207-1211` — worker-env handoff swallows
    errors twice.** 🟡 `if let Ok(env_data) = capture_variables(...)` then
    `let _ = std::fs::write(...)`. If either fails, the Install worker later
    sources a missing/stale `worker-env` and fails (or half-behaves) far from
    the cause. Should at least `eprintln!` a warning; arguably propagate, since
    `should_dump_env()` means the worker *depends* on this file.
 
-4. **`portage-vdb/src/field_cache.rs:40,46,57` — raw `lock().unwrap()`.** 🟡
+4. ✅ FIXED (7cf1d91) **`portage-vdb/src/field_cache.rs:40,46,57` — raw `lock().unwrap()`.** 🟡
    A panic while holding the lock poisons it and turns every later VDB field
    read into a panic cascade. The cache is a plain map with no invariants to
    protect — `.unwrap_or_else(std::sync::PoisonError::into_inner)` (the
@@ -44,6 +44,9 @@ hold — nothing below re-opens those areas.
    support; portage-vdb needs its own copy or a shared home.
 
 ## Sloppy / dubious (small, local)
+
+Items 5-9 all fixed 2026-07-24: 5/6/8 in 584f2dc, 7 in 4ef8a21 (entry API,
+no expect), 9 in afc1640 + 1028c1b + c7a1f2f.
 
 5. `portage-binpkg/src/gpkg.rs:407-410` — `base.is_none_or(...)` guard
    followed by `base.unwrap()` three lines later; `let Some(name) = base else
