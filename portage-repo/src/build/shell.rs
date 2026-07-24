@@ -345,6 +345,12 @@ einstalldocs() {
 
 /// An embedded bash shell for sourcing ebuilds, eclasses, and `make.defaults`.
 ///
+/// The PMS name/version strings a caller reuses after the vars are set.
+struct PmsNames {
+    p: String,
+    pf: String,
+}
+
 /// Wraps [`brush_core::Shell`] configured for Gentoo ebuild evaluation.
 /// The shell has standard bash builtins registered and eclass directories
 /// set up for the repository.
@@ -850,26 +856,11 @@ impl EbuildShell {
         self.set_var("__PORTAGE_ECLASS_DIRS", &value);
     }
 
-    /// Source an ebuild file and extract its metadata.
-    ///
-    /// This performs the following steps:
-    /// 1. Set PM-provided variables (`CATEGORY`, `PN`, `PV`, `PVR`, `PF`, `P`,
-    ///    `FILESDIR`, `WORKDIR`, etc.)
-    /// 2. Source the ebuild — the `inherit` shell function handles eclass
-    ///    sourcing, line continuations, and nesting automatically
-    /// 3. Extract metadata variables from the shell environment
+    /// Set the PMS mandatory name/version variables (`CATEGORY`, `PN`, `PV`,
+    /// `PR`, `PVR`, `P`, `PF`) from an ebuild and return the derived strings.
     ///
     /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
-    pub async fn source_ebuild(&mut self, ebuild: &Ebuild) -> Result<crate::source::SourcedEbuild> {
-        // Hermetic sourcing: start from the configured baseline so nothing
-        // from a previously sourced ebuild survives into this one.
-        self.restore_baseline();
-        // This re-sources from a clean baseline, so any phase-run sourcing of an
-        // ebuild into the live shell is no longer valid; force the next phase to
-        // re-source. (See `phase_sourced_ebuild`.)
-        self.phase_sourced_ebuild = None;
-
-        // Set PM-provided variables
+    fn set_pms_name_vars(&mut self, ebuild: &Ebuild) -> PmsNames {
         let category = ebuild.category();
         let pn = ebuild.name();
         let version = ebuild.version();
@@ -894,6 +885,33 @@ impl EbuildShell {
         self.set_var("PVR", &pvr);
         self.set_var("P", &p);
         self.set_var("PF", &pf);
+
+        PmsNames { p, pf }
+    }
+
+    /// Source an ebuild file and extract its metadata.
+    ///
+    /// This performs the following steps:
+    /// 1. Set PM-provided variables (`CATEGORY`, `PN`, `PV`, `PVR`, `PF`, `P`,
+    ///    `FILESDIR`, `WORKDIR`, etc.)
+    /// 2. Source the ebuild — the `inherit` shell function handles eclass
+    ///    sourcing, line continuations, and nesting automatically
+    /// 3. Extract metadata variables from the shell environment
+    ///
+    /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
+    pub async fn source_ebuild(&mut self, ebuild: &Ebuild) -> Result<crate::source::SourcedEbuild> {
+        // Hermetic sourcing: start from the configured baseline so nothing
+        // from a previously sourced ebuild survives into this one.
+        self.restore_baseline();
+        // This re-sources from a clean baseline, so any phase-run sourcing of an
+        // ebuild into the live shell is no longer valid; force the next phase to
+        // re-source. (See `phase_sourced_ebuild`.)
+        self.phase_sourced_ebuild = None;
+
+        // Set PM-provided variables
+        let PmsNames { p, pf, .. } = self.set_pms_name_vars(ebuild);
+        let category = ebuild.category();
+        let pn = ebuild.name();
 
         // FILESDIR is the ebuild's own dir + `files` (PMS), not repo+cat+pn —
         // they differ only for a `cross-*` symlink, whose real files live with
@@ -1416,28 +1434,9 @@ impl EbuildShell {
         // `DISTUTILS_USE_PEP517=flit` → `flit-core`). See `phase_sourced_ebuild`.
         let need_source = self.phase_sourced_ebuild.as_deref() != Some(ebuild.path());
 
+        let PmsNames { p, .. } = self.set_pms_name_vars(ebuild);
         let category = ebuild.category();
         let pn = ebuild.name();
-        let version = ebuild.version();
-        let pvr = version.to_string();
-        let pr = format!("r{}", version.revision.0);
-        let pv = if version.revision.0 > 0 {
-            pvr.strip_suffix(&format!("-{pr}"))
-                .unwrap_or(&pvr)
-                .to_owned()
-        } else {
-            pvr.clone()
-        };
-        let p = format!("{pn}-{pv}");
-        let pf = format!("{pn}-{pvr}");
-
-        self.set_var("CATEGORY", category);
-        self.set_var("PN", pn);
-        self.set_var("PV", &pv);
-        self.set_var("PR", &pr);
-        self.set_var("PVR", &pvr);
-        self.set_var("P", &p);
-        self.set_var("PF", &pf);
 
         // Whether this package is one of the *host-side* cross toolchain tools
         // (built to run on CBUILD, targeting CTARGET — lives under the `cross-*`
