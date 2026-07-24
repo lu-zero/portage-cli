@@ -1403,7 +1403,7 @@ fn write_binpkg(
         })
         .map(Utf8PathBuf::from)
         .unwrap_or_else(|| root.join("var/cache/binpkgs"));
-    let build_id = next_build_id(&pkgdir, cat, &pf);
+    let build_id = crate::binpkg::next_build_id(&pkgdir, cat, &pf);
     let out = pkgdir.join(cat).join(format!("{pf}-{build_id}.gpkg.tar"));
 
     // FEATURES=binpkg-signing: sign the Manifest (clearsign) + a detached
@@ -1493,23 +1493,6 @@ fn resolve_binpkg_signing_key(
 
 /// The next free GPKG build-id for `<cat>/<pf>` in `pkgdir` (portage numbers
 /// rebuilds `<pf>-1`, `<pf>-2`, …); 1 when none exist.
-fn next_build_id(pkgdir: &Utf8Path, cat: &str, pf: &str) -> u32 {
-    let dir = pkgdir.join(cat);
-    let prefix = format!("{pf}-");
-    let mut max = 0u32;
-    if let Ok(rd) = std::fs::read_dir(dir.as_std_path()) {
-        for e in rd.flatten() {
-            if let Some(rest) = e.file_name().to_string_lossy().strip_prefix(&prefix)
-                && let Some(id) = rest.strip_suffix(".gpkg.tar")
-                && let Ok(n) = id.parse::<u32>()
-            {
-                max = max.max(n);
-            }
-        }
-    }
-    max + 1
-}
-
 fn post_process_after_install(
     shell: &portage_repo::EbuildShell,
     work_root: &Utf8Path,

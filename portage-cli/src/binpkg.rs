@@ -476,6 +476,23 @@ fn parse_binrepo_bool(v: Option<&String>) -> bool {
     matches!(v.map(|s| s.to_lowercase()), Some(s) if s == "true" || s == "yes")
 }
 
+pub(crate) fn next_build_id(pkgdir: &Utf8Path, cat: &str, pf: &str) -> u32 {
+    let dir = pkgdir.join(cat);
+    let prefix = format!("{pf}-");
+    let mut max = 0u32;
+    if let Ok(rd) = std::fs::read_dir(dir.as_std_path()) {
+        for e in rd.flatten() {
+            if let Some(rest) = e.file_name().to_string_lossy().strip_prefix(&prefix)
+                && let Some(id) = rest.strip_suffix(".gpkg.tar")
+                && let Ok(n) = id.parse::<u32>()
+            {
+                max = max.max(n);
+            }
+        }
+    }
+    max + 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

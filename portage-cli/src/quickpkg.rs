@@ -236,7 +236,7 @@ fn package_one(
 
     let cat = pkg.category();
     let pf = pkg.pf().to_string();
-    let build_id = next_build_id(pkgdir, cat, &pf);
+    let build_id = crate::binpkg::next_build_id(pkgdir, cat, &pf);
     let out = pkgdir.join(cat).join(format!("{pf}-{build_id}.gpkg.tar"));
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent.as_std_path())?;
@@ -363,23 +363,6 @@ fn live_path(merge_root: &Utf8Path, contents_path: &Utf8Path) -> Utf8PathBuf {
 fn strip_root_prefix(path: &Utf8Path) -> Utf8PathBuf {
     let s = path.as_str();
     Utf8PathBuf::from(s.trim_start_matches('/'))
-}
-
-fn next_build_id(pkgdir: &Utf8Path, cat: &str, pf: &str) -> u32 {
-    let dir = pkgdir.join(cat);
-    let prefix = format!("{pf}-");
-    let mut max = 0u32;
-    if let Ok(rd) = std::fs::read_dir(dir.as_std_path()) {
-        for e in rd.flatten() {
-            if let Some(rest) = e.file_name().to_string_lossy().strip_prefix(&prefix)
-                && let Some(id) = rest.strip_suffix(".gpkg.tar")
-                && let Ok(n) = id.parse::<u32>()
-            {
-                max = max.max(n);
-            }
-        }
-    }
-    max + 1
 }
 
 fn warn_bindist(pkg: &InstalledPackage) {
