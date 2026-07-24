@@ -663,12 +663,9 @@ mod hakoniwa {
         let Some((exe, args)) = super::self_invocation() else {
             return 1;
         };
-        let program = match exe.to_str() {
-            Some(s) => s,
-            None => {
-                eprintln!("em: hakoniwa cannot run a non-UTF-8 executable path");
-                return 1;
-            }
+        let Some(program) = exe.to_str() else {
+            eprintln!("em: hakoniwa cannot run a non-UTF-8 executable path");
+            return 1;
         };
 
         let mut container = Container::new();

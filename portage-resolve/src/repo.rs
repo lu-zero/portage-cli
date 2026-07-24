@@ -1033,9 +1033,8 @@ pub fn target_package(
     dep: &Dep,
     policy: &ResolvePolicy,
 ) -> portage_atom_pubgrub::PortagePackage {
-    let entries = match data.versions.get(&dep.cpn) {
-        Some(e) => e,
-        None => return portage_atom_pubgrub::PortagePackage::unslotted(dep.cpn),
+    let Some(entries) = data.versions.get(&dep.cpn) else {
+        return portage_atom_pubgrub::PortagePackage::unslotted(dep.cpn);
     };
 
     // The target slot is the slot of the newest accepted version that satisfies

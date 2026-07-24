@@ -623,7 +623,7 @@ impl PortageDependencyProvider {
                 slot: Some(*slot_val),
                 subslot,
                 repo,
-                use_constraints: use_constraints.clone(),
+                use_constraints,
                 inverted: is_blocker,
             };
             let vs_id = ctx.pool.intern_version_set(name_id, constraint);
@@ -652,7 +652,7 @@ impl PortageDependencyProvider {
                         slot: None,
                         subslot: None,
                         repo,
-                        use_constraints: use_constraints.clone(),
+                        use_constraints,
                         inverted: is_blocker,
                     };
                     let vs_id = ctx.pool.intern_version_set(name_id, constraint);
@@ -904,7 +904,7 @@ impl PortageDependencyProvider {
                 slot: Some(*slot_val),
                 subslot,
                 repo: dep.repo,
-                use_constraints: use_constraints.clone(),
+                use_constraints,
                 inverted: false,
             };
             let vs_id = self.pool.intern_version_set(name_id, constraint);
@@ -927,7 +927,7 @@ impl PortageDependencyProvider {
                         slot: None,
                         subslot: None,
                         repo: dep.repo,
-                        use_constraints: use_constraints.clone(),
+                        use_constraints,
                         inverted: false,
                     };
                     let vs_id = self.pool.intern_version_set(name_id, constraint);

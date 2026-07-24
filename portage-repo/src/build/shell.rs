@@ -2271,12 +2271,9 @@ impl EbuildShell {
             self.set_var("A", "");
             return;
         }
-        let entries = match SrcUriEntry::parse(&src_uri) {
-            Ok(e) => e,
-            Err(_) => {
-                self.set_var("A", "");
-                return;
-            }
+        let Ok(entries) = SrcUriEntry::parse(&src_uri) else {
+            self.set_var("A", "");
+            return;
         };
         let use_flags = self.use_flags.clone();
         let mut files: Vec<String> = Vec::new();

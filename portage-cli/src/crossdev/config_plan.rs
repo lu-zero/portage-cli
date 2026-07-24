@@ -248,14 +248,14 @@ impl Outcome {
 /// so it has to be resolved by the caller instead of read straight off
 /// `&Cli`.
 pub(super) fn apply(
-    entries: Vec<ConfigEntry>,
+    entries: &[ConfigEntry],
     pretend: bool,
     ask: bool,
     policy: RefreshPolicy,
 ) -> Result<Outcome> {
     let mut to_apply: Vec<&ConfigEntry> = Vec::new();
     let mut changed: Vec<(Utf8PathBuf, &'static str)> = Vec::new();
-    for e in &entries {
+    for e in entries {
         let verb = match e.change(policy) {
             Change::Create => "create",
             Change::Update => "update",
@@ -312,7 +312,7 @@ mod tests {
             path: path.clone(),
             desired: "CHOST=riscv64-unknown-linux-gnu\n".to_owned(),
         }];
-        let outcome = apply(entries, true, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, true, false, RefreshPolicy::Sync).unwrap();
         assert!(matches!(outcome, Outcome::Previewed));
         assert!(!path.exists(), "pretend must not write {path}");
     }
@@ -327,7 +327,7 @@ mod tests {
             path: path.clone(),
             desired: desired.clone(),
         }];
-        let outcome = apply(entries, false, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
         assert!(matches!(outcome, Outcome::Applied));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), desired);
     }
@@ -342,11 +342,8 @@ mod tests {
         let path = Utf8PathBuf::from_path_buf(dir.path().join("make.conf")).unwrap();
         let desired = "CHOST=riscv64-unknown-linux-gnu\n".to_owned();
         std::fs::write(&path, &desired).unwrap();
-        let entries = vec![ConfigEntry::File {
-            path: path.clone(),
-            desired,
-        }];
-        let outcome = apply(entries, false, false, RefreshPolicy::Sync).unwrap();
+        let entries = vec![ConfigEntry::File { path, desired }];
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
         assert!(matches!(outcome, Outcome::NothingToApply));
         assert!(outcome.applied());
     }
@@ -362,7 +359,7 @@ mod tests {
             path: path.clone(),
             desired: "[gentoo]\nlocation = /var/db/repos/gentoo\n".to_owned(),
         }];
-        apply(entries, false, false, RefreshPolicy::Sync).unwrap();
+        apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "[gentoo]\nlocation = /somewhere/else\n"
@@ -376,7 +373,7 @@ mod tests {
         let path = Utf8PathBuf::from_path_buf(dir.path().join("var/db/pkg")).unwrap();
         assert!(!path.is_dir());
         apply(
-            vec![ConfigEntry::Dir { path: path.clone() }],
+            &[ConfigEntry::Dir { path: path.clone() }],
             false,
             false,
             RefreshPolicy::Sync,
@@ -399,7 +396,7 @@ mod tests {
             category: "cross-riscv64-unknown-linux-gnu".to_owned(),
             packages_line: "sys-devel/binutils".to_owned(),
         }];
-        let outcome = apply(entries, false, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
         assert!(matches!(outcome, Outcome::NothingToApply));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), foreign);
     }
@@ -428,7 +425,7 @@ mod tests {
             category: "cross-riscv64-unknown-linux-gnu".to_owned(),
             packages_line: "sys-devel/binutils".to_owned(),
         }];
-        let outcome = apply(entries, false, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
         assert!(matches!(outcome, Outcome::Applied));
         assert!(
             !std::fs::read_to_string(&path)
@@ -450,7 +447,7 @@ mod tests {
             path: path.clone(),
             desired: "CHOST=riscv64-unknown-linux-gnu\n".to_owned(),
         }];
-        let outcome = apply(entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
         assert!(matches!(outcome, Outcome::NothingToApply));
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
@@ -470,7 +467,7 @@ mod tests {
             path: path.clone(),
             desired: desired.clone(),
         }];
-        let outcome = apply(entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
         assert!(matches!(outcome, Outcome::Applied));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), desired);
     }
@@ -496,7 +493,7 @@ mod tests {
             category: "cross-riscv64-unknown-linux-gnu".to_owned(),
             packages_line: "sys-devel/binutils dev-vcs/git".to_owned(),
         }];
-        let outcome = apply(entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
         assert!(matches!(outcome, Outcome::NothingToApply));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), existing);
     }

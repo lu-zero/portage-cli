@@ -360,9 +360,8 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
     type IdentityVariant = (u32, String, PathBuf);
     let mut by_identity: BTreeMap<Identity, Vec<IdentityVariant>> = BTreeMap::new();
     for (rel, full) in &files {
-        let meta = match crate::read_metadata(full) {
-            Ok(m) => m,
-            Err(_) => continue,
+        let Ok(meta) = crate::read_metadata(full) else {
+            continue;
         };
         let Some(cpv) = container_cpv_from_meta(&meta) else {
             continue;

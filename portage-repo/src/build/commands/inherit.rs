@@ -162,15 +162,12 @@ impl builtins::Command for InheritCommand {
             }
 
             let eclass_file = find_eclass(context.shell, eclass);
-            let eclass_file = match eclass_file {
-                Some(path) => path,
-                None => {
-                    let _ = writeln!(
-                        context.params.stderr(context.shell),
-                        "die: inherit: eclass not found: {eclass}"
-                    );
-                    return Ok(brush_core::ExecutionResult::new(1));
-                }
+            let Some(eclass_file) = eclass_file else {
+                let _ = writeln!(
+                    context.params.stderr(context.shell),
+                    "die: inherit: eclass not found: {eclass}"
+                );
+                return Ok(brush_core::ExecutionResult::new(1));
             };
 
             let saved: Vec<(&'static str, String)> = accum_vars

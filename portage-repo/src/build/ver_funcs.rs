@@ -519,15 +519,12 @@ impl builtins::Command for VerTestCommand {
             return Ok(brush_core::ExecutionResult::new(1));
         }
 
-        let ord = match ver_compare(va, vb) {
-            Some(o) => o,
-            None => {
-                let _ = writeln!(
-                    context.params.stderr(shell),
-                    "die: ver_test: invalid version: {va} or {vb}"
-                );
-                return Ok(brush_core::ExecutionResult::new(1));
-            }
+        let Some(ord) = ver_compare(va, vb) else {
+            let _ = writeln!(
+                context.params.stderr(shell),
+                "die: ver_test: invalid version: {va} or {vb}"
+            );
+            return Ok(brush_core::ExecutionResult::new(1));
         };
 
         let result = match op {

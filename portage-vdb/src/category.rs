@@ -98,14 +98,11 @@ impl IntoIterator for Packages {
     type IntoIter = PackagesIter;
 
     fn into_iter(self) -> PackagesIter {
-        let entries = match std::fs::read_dir(&self.path) {
-            Ok(e) => e,
-            Err(_) => {
-                return PackagesIter {
-                    entries: Vec::new().into_iter(),
-                    filter: self.filter,
-                };
-            }
+        let Ok(entries) = std::fs::read_dir(&self.path) else {
+            return PackagesIter {
+                entries: Vec::new().into_iter(),
+                filter: self.filter,
+            };
         };
 
         let mut packages: Vec<InstalledPackage> = entries

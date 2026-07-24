@@ -322,7 +322,7 @@ impl ProfileStack {
     /// Cycle detection uses canonicalized paths.
     pub fn build(path: PathBuf) -> Result<Self> {
         let mut visited = HashSet::new();
-        let profiles = collect_stack(path, &mut visited)?;
+        let profiles = collect_stack(&path, &mut visited)?;
         if profiles.is_empty() {
             return Err(Error::InvalidProfile("empty profile stack".into()));
         }
@@ -761,9 +761,9 @@ pub(crate) fn merge_flag_lists_signed<'a>(iter: impl Iterator<Item = &'a str>) -
 ///
 /// `visited` is a set of canonicalized paths already added; a profile seen a
 /// second time (diamond inheritance or cycle) is silently skipped.
-fn collect_stack(path: PathBuf, visited: &mut HashSet<PathBuf>) -> Result<Vec<Profile>> {
+fn collect_stack(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Vec<Profile>> {
     let canonical = path.canonicalize().map_err(|e| Error::Io {
-        path: path.clone(),
+        path: path.to_path_buf(),
         source: e,
     })?;
     if !visited.insert(canonical.clone()) {
@@ -772,7 +772,7 @@ fn collect_stack(path: PathBuf, visited: &mut HashSet<PathBuf>) -> Result<Vec<Pr
     let profile = Profile::open(canonical)?;
     let mut result = Vec::new();
     for parent in profile.parents()? {
-        result.extend(collect_stack(parent, visited)?);
+        result.extend(collect_stack(&parent, visited)?);
     }
     result.push(profile);
     Ok(result)

@@ -81,7 +81,7 @@ pub fn write_gpkg(input: &GpkgInput, out_path: &Path) -> Result<()> {
     let mut manifest_members: Vec<(String, PathBuf)> = Vec::new();
     let mut container_members: Vec<String> = Vec::new();
 
-    manifest_members.push((GPKG_VERSION.to_string(), gpkg1.clone()));
+    manifest_members.push((GPKG_VERSION.to_string(), gpkg1));
     container_members.push(format!("{b}/{GPKG_VERSION}"));
 
     manifest_members.push((METADATA_TAR.to_string(), metadata.clone()));
@@ -578,15 +578,13 @@ fn validate_tree_under(root: &Path) -> Result<()> {
     let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let read = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(read) = std::fs::read_dir(&dir) else {
+            continue;
         };
         for entry in read.flatten() {
             let path = entry.path();
-            let meta = match std::fs::symlink_metadata(&path) {
-                Ok(m) => m,
-                Err(_) => continue,
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
             };
             if meta.file_type().is_symlink() {
                 // Symlinks are never followed by this walk (only real

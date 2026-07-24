@@ -20,9 +20,9 @@ pub struct Package {
 }
 
 impl Package {
-    pub(crate) fn new(category: &str, name: String, path: Utf8PathBuf) -> Self {
+    pub(crate) fn new(category: &str, name: &str, path: Utf8PathBuf) -> Self {
         Self {
-            cpn: Cpn::new(category, &name),
+            cpn: Cpn::new(category, name),
             path,
         }
     }
@@ -142,7 +142,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let pkg_dir = tmp.path().join(category).join(name);
         std::fs::create_dir_all(&pkg_dir).unwrap();
-        let pkg = Package::new(category, name.to_string(), pkg_dir.try_into().unwrap());
+        let pkg = Package::new(category, name, pkg_dir.try_into().unwrap());
         (tmp, pkg)
     }
 

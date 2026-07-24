@@ -176,9 +176,8 @@ impl Manifest {
             }
 
             let mut tokens = line.split_ascii_whitespace();
-            let tag = match tokens.next() {
-                Some(t) => t,
-                None => continue,
+            let Some(tag) = tokens.next() else {
+                continue;
             };
 
             let entry = match tag {

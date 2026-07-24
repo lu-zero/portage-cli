@@ -244,22 +244,19 @@ impl Vdb {
             if !pkg_path.is_dir() {
                 continue;
             }
-            let pf_str = match pkg_path.file_name() {
-                Some(n) => n,
-                None => continue,
+            let Some(pf_str) = pkg_path.file_name() else {
+                continue;
             };
-            let pf = match Pf::parse(pf_str) {
-                Ok(p) => p,
-                Err(_) => continue,
+            let Ok(pf) = Pf::parse(pf_str) else {
+                continue;
             };
             if pf.package.as_ref() != package_name {
                 continue;
             }
             let cpv = Cpv::from_parts(category, package_name, pf.version);
             let pkg = InstalledPackage::from_dir(&pkg_path, cpv);
-            let pkg_slot = match pkg.slot() {
-                Ok(s) => s,
-                Err(_) => continue,
+            let Ok(pkg_slot) = pkg.slot() else {
+                continue;
             };
             let pkg_slot_main = pkg_slot
                 .split_once('/')
@@ -343,7 +340,7 @@ mod tests {
         let vdb = Vdb::open(root).unwrap();
 
         let cpv = Cpv::parse("app-shells/testsh-1.0").unwrap();
-        let mut spec = make_spec(cpv.clone());
+        let mut spec = make_spec(cpv);
         spec.rustflags = Some("-C target-cpu=neoverse-n1".into());
 
         let pkg = vdb.register(&spec).unwrap();

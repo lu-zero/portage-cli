@@ -244,9 +244,8 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
         if !ent.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
-        let _dir_name = match ent.file_name().into_string() {
-            Ok(s) => s,
-            Err(_) => continue,
+        let Ok(_dir_name) = ent.file_name().into_string() else {
+            continue;
         };
         let session_path = ent.path().join("session.json");
         let Ok(text) = std::fs::read_to_string(&session_path) else {

@@ -48,7 +48,7 @@ impl Category {
     pub fn package(&self, name: &str) -> Option<Package> {
         let path = self.path.join(name);
         if path.is_dir() {
-            Some(Package::new(&self.name, name.to_string(), path))
+            Some(Package::new(&self.name, name, path))
         } else {
             None
         }
@@ -100,22 +100,18 @@ impl IntoIterator for Packages {
     type IntoIter = PackagesIter;
 
     fn into_iter(self) -> PackagesIter {
-        let entries = match std::fs::read_dir(&self.path) {
-            Ok(e) => e,
-            Err(_) => {
-                return PackagesIter {
-                    entries: Vec::new().into_iter(),
-                    filter: self.filter,
-                };
-            }
+        let Ok(entries) = std::fs::read_dir(&self.path) else {
+            return PackagesIter {
+                entries: Vec::new().into_iter(),
+                filter: self.filter,
+            };
         };
 
         let mut packages = Vec::new();
         for entry in entries {
             let Ok(entry) = entry else { continue };
-            let ft = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
+            let Ok(ft) = entry.file_type() else {
+                continue;
             };
             // Follow symlinks — some overlays (notably crossdev) symlink
             // their package dirs at the gentoo originals.
@@ -139,7 +135,7 @@ impl IntoIterator for Packages {
             let Ok(path) = entry.path().try_into() else {
                 continue;
             };
-            packages.push(Package::new(&self.category, name.into_owned(), path));
+            packages.push(Package::new(&self.category, &name, path));
         }
         packages.sort_by(|a, b| a.name().cmp(b.name()));
         PackagesIter {

@@ -106,7 +106,7 @@ pub fn scan_image_with_jobs(image_dir: &Utf8Path, jobs: Option<usize>) -> ElfSca
     let image_root = image_dir.as_std_path();
     let paths = collect_regular_files(image_root);
     let entries = scan_paths_parallel(image_root, paths, jobs);
-    assemble_scan(entries)
+    assemble_scan(&entries)
 }
 
 /// Scan an arbitrary list of absolute paths under `image_root` (for benches).
@@ -181,12 +181,12 @@ fn scan_paths_serial(image_root: &Path, paths: Vec<PathBuf>) -> Vec<(String, Elf
 }
 
 /// Build the four VDB field lists from sorted `(install_path, info)` pairs.
-pub fn assemble_scan(entries: Vec<(String, ElfInfo)>) -> ElfScan {
+pub fn assemble_scan(entries: &[(String, ElfInfo)]) -> ElfScan {
     let mut scan = ElfScan::default();
     let mut provides: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut requires: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
-    for (path, info) in &entries {
+    for (path, info) in entries {
         let needed = info.needed.join(",");
         scan.needed.push(format!("{path} {needed}"));
         scan.needed_elf2.push(format!(
