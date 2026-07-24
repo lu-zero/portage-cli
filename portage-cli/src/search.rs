@@ -8,14 +8,9 @@ use portage_repo::{CacheReadOpts, Repository, cache_entries_parallel};
 
 use crate::style::{C_BOLD, C_LABEL, C_MASKED, C_PKG, C_STAR};
 
-pub async fn run(
-    repo_paths: &[std::path::PathBuf],
-    pattern: Option<&str>,
-    all: bool,
-    search_desc: bool,
-    name_only: bool,
-    homepage: bool,
-) -> Result<()> {
+/// Open every configured repo path, skipping (with a warning) any that fail.
+/// Errors only when no path is configured, or none opened.
+fn open_repos(repo_paths: &[std::path::PathBuf]) -> Result<Vec<Repository>> {
     if repo_paths.is_empty() {
         bail!("no repositories configured");
     }
@@ -29,6 +24,18 @@ pub async fn run(
     if repos.is_empty() {
         bail!("no usable repositories");
     }
+    Ok(repos)
+}
+
+pub async fn run(
+    repo_paths: &[std::path::PathBuf],
+    pattern: Option<&str>,
+    all: bool,
+    search_desc: bool,
+    name_only: bool,
+    homepage: bool,
+) -> Result<()> {
+    let repos = open_repos(repo_paths)?;
     let pat = pattern.unwrap_or("");
 
     if search_desc {
@@ -176,19 +183,7 @@ pub async fn run_emerge_style(
     patterns: &[String],
     search_desc: bool,
 ) -> Result<()> {
-    if repo_paths.is_empty() {
-        bail!("no repositories configured");
-    }
-    let mut repos: Vec<Repository> = Vec::with_capacity(repo_paths.len());
-    for p in repo_paths {
-        match Repository::open(p) {
-            Ok(r) => repos.push(r),
-            Err(e) => eprintln!("em: skipping {}: {e}", p.display()),
-        }
-    }
-    if repos.is_empty() {
-        bail!("no usable repositories");
-    }
+    let repos = open_repos(repo_paths)?;
 
     // Installed versions (best per cpn) from the VDB.
     let mut installed: BTreeMap<Cpn, portage_atom::Version> = BTreeMap::new();
