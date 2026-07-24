@@ -205,7 +205,10 @@ fn set_clang_slot(globals: &Cli, slot: &str) -> Result<()> {
 pub fn run(action: &ClangAction, globals: &Cli) -> Result<()> {
     match action {
         ClangAction::List => list(globals),
-        ClangAction::Show => show(globals),
+        ClangAction::Show => {
+            show(globals);
+            Ok(())
+        }
         ClangAction::Set { slot } => set(globals, slot),
     }
 }
@@ -259,12 +262,11 @@ fn list(globals: &Cli) -> Result<()> {
     Ok(())
 }
 
-fn show(globals: &Cli) -> Result<()> {
+fn show(globals: &Cli) {
     match get_current_clang_slot(globals) {
         Some(slot) => println!("{}", slot),
         None => println!("(no LLVM/clang slot set)"),
     }
-    Ok(())
 }
 
 fn set(globals: &Cli, slot: &str) -> Result<()> {

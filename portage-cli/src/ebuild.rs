@@ -2025,7 +2025,7 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
         preserve_paths.iter().cloned().collect(),
     );
 
-    remove_old_unique_files(&old_contents, new_contents, &preserve_paths, root)?;
+    remove_old_unique_files(&old_contents, new_contents, &preserve_paths, root);
 
     vdb.unregister(old_pkg)
         .context("unregistering old package")?;
@@ -2243,7 +2243,7 @@ fn remove_old_unique_files(
     new_contents: &[ContentsEntry],
     preserve: &HashSet<Utf8PathBuf>,
     root: &Utf8Path,
-) -> Result<()> {
+) {
     let new_paths: HashSet<&Utf8PathBuf> = new_contents.iter().map(|e| &e.path).collect();
 
     for entry in old_contents.iter().rev() {
@@ -2272,7 +2272,6 @@ fn remove_old_unique_files(
             _ => {}
         }
     }
-    Ok(())
 }
 
 fn run_clean(work_root: &Utf8Path) -> Result<()> {
@@ -3253,7 +3252,7 @@ mod tests {
             target: None,
         }];
 
-        remove_old_unique_files(&old_contents, &new_contents, &HashSet::new(), &root).unwrap();
+        remove_old_unique_files(&old_contents, &new_contents, &HashSet::new(), &root);
 
         assert!(!root.join("usr/bin/old-only").exists());
         assert!(root.join("usr/bin/shared").exists());

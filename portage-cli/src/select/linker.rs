@@ -51,7 +51,10 @@ pub fn run(action: &LinkerAction, globals: &Cli) -> Result<()> {
 
     match action {
         LinkerAction::List { .. } => env_d::run_list::<LinkerProfileType>(globals),
-        LinkerAction::Show { .. } => env_d::run_show::<LinkerProfileType>(globals, &target),
+        LinkerAction::Show { .. } => {
+            env_d::run_show::<LinkerProfileType>(globals, &target);
+            Ok(())
+        }
         LinkerAction::Set { profile, .. } => {
             env_d::run_set::<LinkerProfileType>(globals, &target, profile, &base_dir)
         }

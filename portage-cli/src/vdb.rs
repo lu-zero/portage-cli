@@ -5,7 +5,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use humansize::{BINARY, format_size};
 use portage_vdb::Vdb;
 
-pub fn query_belongs(vdb: &Vdb, files: &[String]) -> Result<()> {
+pub fn query_belongs(vdb: &Vdb, files: &[String]) {
     for file_str in files {
         let path = Utf8Path::new(file_str);
         if let Some(pkg) = vdb.owner(path) {
@@ -21,10 +21,9 @@ pub fn query_belongs(vdb: &Vdb, files: &[String]) -> Result<()> {
         }
         eprintln!("no package owns '{}'", file_str);
     }
-    Ok(())
 }
 
-pub fn query_files(vdb: &Vdb, atoms: &[String]) -> Result<()> {
+pub fn query_files(vdb: &Vdb, atoms: &[String]) {
     for raw in atoms {
         let matched = find_packages(vdb, raw);
         if matched.is_empty() {
@@ -44,7 +43,6 @@ pub fn query_files(vdb: &Vdb, atoms: &[String]) -> Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 pub fn query_size(vdb: &Vdb, atoms: &[String]) -> Result<()> {

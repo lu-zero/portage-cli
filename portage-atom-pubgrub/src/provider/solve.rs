@@ -263,7 +263,7 @@ impl DependencyProvider for PortageDependencyProvider {
         package: &Self::P,
         version: &Self::V,
     ) -> std::result::Result<Dependencies<Self::P, Self::VS, Self::M>, Self::Err> {
-        let deps = self.compute_dependencies(package, version)?;
+        let deps = self.compute_dependencies(package, version);
         // Drop edges the system provides externally (`package.provided`) so the
         // provided package is neither built nor reported as a dropped dep. No-op
         // (and no allocation) when nothing is provided.
@@ -289,25 +289,22 @@ impl PortageDependencyProvider {
         &self,
         package: &PortagePackage,
         version: &Version,
-    ) -> std::result::Result<Dependencies<PortagePackage, PortageVersionSet, String>, Error> {
+    ) -> Dependencies<PortagePackage, PortageVersionSet, String> {
         let Some(data) = self.package_data(package) else {
-            return Ok(Dependencies::Unavailable(format!(
-                "package not found: {}",
-                package
-            )));
+            return Dependencies::Unavailable(format!("package not found: {}", package));
         };
         let Some(vd) = data.versions.get(version) else {
-            return Ok(Dependencies::Unavailable(format!(
+            return Dependencies::Unavailable(format!(
                 "version not found: {}@{}",
                 package, version
-            )));
+            ));
         };
 
         // `--nodeps`: a real package reports no dependencies, so only the
         // explicitly named targets (the synthetic root's deps) enter the plan.
         // The root is virtual, so its target list is untouched.
         if self.nodeps && !package.is_virtual() {
-            return Ok(Dependencies::Available(DependencyConstraints::default()));
+            return Dependencies::Available(DependencyConstraints::default());
         }
 
         // For installed packages at their installed version, skip build-time
@@ -325,13 +322,13 @@ impl PortageDependencyProvider {
                 // equivalent below (`runtime`), which likewise omits BDEPEND
                 // for this case — only RDEPEND/PDEPEND/IDEPEND matter once a
                 // package is already built and staying that way.
-                return Ok(Dependencies::Available(cross_target_runtime_deps(
+                return Dependencies::Available(cross_target_runtime_deps(
                     self,
                     vd,
                     &self.sysroot_installed,
                     target_drops_depend(self.root_deps_rdeps, package),
                     false,
-                )));
+                ));
             }
             let runtime: DependencyConstraints<PortagePackage, PortageVersionSet> = vd
                 .rdepend()
@@ -340,7 +337,7 @@ impl PortageDependencyProvider {
                 .chain(vd.idepend())
                 .map(|(p, vs, _)| (p.clone(), vs.clone()))
                 .collect();
-            return Ok(Dependencies::Available(runtime));
+            return Dependencies::Available(runtime);
         }
 
         // Native `--emptytree` (`rebuild_tree`): list the **full deep closure** with
@@ -349,7 +346,7 @@ impl PortageDependencyProvider {
         // and action tags, never for membership. `emptytree_native` is `!cross.active`,
         // so this precedes the cross paths. See todo/em-emptytree.md "AGREED REDESIGN".
         if self.rebuild_tree {
-            return Ok(vd.merged.clone());
+            return vd.merged.clone();
         }
 
         // A package being *built* (not at its installed version):
@@ -373,16 +370,16 @@ impl PortageDependencyProvider {
             // above does. Cross `-p` never expands BDEPEND *onto* ROOT (the
             // edge always stamps a Host-root node, never merges into the
             // target sysroot); unsatisfied BDEPEND schedules there instead.
-            return Ok(Dependencies::Available(cross_target_runtime_deps(
+            return Dependencies::Available(cross_target_runtime_deps(
                 self,
                 vd,
                 &self.sysroot_installed,
                 target_drops_depend(self.root_deps_rdeps, package),
                 true,
-            )));
+            ));
         }
         if self.cross_active && package.merge_root() == MergeRoot::Host && self.with_bdeps {
-            return Ok(Dependencies::Available(host_native_deps(self, vd)));
+            return Dependencies::Available(host_native_deps(self, vd));
         }
 
         // A package being *built* always pulls its BDEPEND/IDEPEND, minus the
@@ -405,9 +402,9 @@ impl PortageDependencyProvider {
         // gcc) — collapsing the plan to 0 packages instead of adding gcc to
         // the target. Found 2026-07-11, see `todo/root-topology-refactor.md`.
         if !package.is_virtual() && !self.host_installed.is_empty() {
-            return Ok(Dependencies::Available(broot_filtered(self, vd)));
+            return Dependencies::Available(broot_filtered(self, vd));
         }
-        Ok(vd.merged.clone())
+        vd.merged.clone()
     }
 }
 

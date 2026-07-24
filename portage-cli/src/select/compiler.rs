@@ -120,7 +120,10 @@ pub fn run(action: &CompilerAction, globals: &Cli) -> Result<()> {
 
     match action {
         CompilerAction::List { .. } => env_d::run_list::<GccProfileType>(globals),
-        CompilerAction::Show { .. } => env_d::run_show::<GccProfileType>(globals, &target),
+        CompilerAction::Show { .. } => {
+            env_d::run_show::<GccProfileType>(globals, &target);
+            Ok(())
+        }
         CompilerAction::Set { profile, .. } => {
             env_d::run_set::<GccProfileType>(globals, &target, profile, &base_dir)
         }

@@ -197,24 +197,26 @@ fn lookup_sets_conf(path: &Utf8Path, name: &str) -> Result<Option<PathBuf>> {
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, v)| v.as_str())
     };
-    finish_static_file(find("class").unwrap_or_default(), find("filename"), path)
+    Ok(finish_static_file(
+        find("class").unwrap_or_default(),
+        find("filename"),
+        path,
+    ))
 }
 
 fn finish_static_file(
     class: &str,
     filename: Option<&str>,
     conf_path: &Utf8Path,
-) -> Result<Option<PathBuf>> {
+) -> Option<PathBuf> {
     let is_static = class
         .rsplit('.')
         .next()
         .is_some_and(|c| c.eq_ignore_ascii_case("StaticFileSet"));
     if !is_static {
-        return Ok(None);
+        return None;
     }
-    let Some(f) = filename else {
-        return Ok(None);
-    };
+    let f = filename?;
     let p = Utf8PathBuf::from(f);
     let resolved = if p.is_absolute() {
         p.into_std_path_buf()
@@ -225,7 +227,7 @@ fn finish_static_file(
             .join(&p)
             .into_std_path_buf()
     };
-    Ok(Some(resolved))
+    Some(resolved)
 }
 
 #[cfg(test)]

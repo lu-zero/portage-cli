@@ -31,7 +31,7 @@ pub fn run(repo_path: &Path, patterns: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub fn run_installed(vdb: &Vdb, patterns: &[String]) -> Result<()> {
+pub fn run_installed(vdb: &Vdb, patterns: &[String]) {
     let mut cpvs: Vec<Cpv> = vdb
         .packages()
         .into_iter()
@@ -54,7 +54,6 @@ pub fn run_installed(vdb: &Vdb, patterns: &[String]) -> Result<()> {
         )
         .ok();
     }
-    Ok(())
 }
 
 fn matches_pattern(s: &str, pattern: &str) -> bool {

@@ -409,7 +409,7 @@ pub fn run_list<T: EnvDProfile>(globals: &Cli) -> Result<()> {
 
 /// Run a show action. `outer_roots()`, not `roots()` — see [`run_list`]'s
 /// doc comment.
-pub fn run_show<T: EnvDProfile>(globals: &Cli, target: &str) -> Result<()> {
+pub fn run_show<T: EnvDProfile>(globals: &Cli, target: &str) {
     match get_current_profile::<T>(&globals.outer_roots(), target) {
         Some(profile) => println!("{}", profile),
         None => println!(
@@ -418,7 +418,6 @@ pub fn run_show<T: EnvDProfile>(globals: &Cli, target: &str) -> Result<()> {
             target
         ),
     }
-    Ok(())
 }
 
 /// Run a set action. `outer_roots()`, not `roots()` — see [`run_list`]'s
@@ -483,7 +482,7 @@ pub(super) fn activate_latest<T: EnvDProfile>(roots: &Roots, target: &str) -> Re
 
 /// Get the default target from CHOST or architecture.
 pub fn get_default_target(globals: &Cli) -> String {
-    get_chost(globals).unwrap_or_else(|_| globals.arch.as_str().to_string() + "-unknown-linux-gnu")
+    get_chost(globals)
 }
 
 #[cfg(test)]

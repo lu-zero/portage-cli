@@ -119,7 +119,10 @@ pub fn run(action: &BinutilsAction, globals: &Cli) -> Result<()> {
 
     match action {
         BinutilsAction::List { .. } => env_d::run_list::<BinutilsProfileType>(globals),
-        BinutilsAction::Show { .. } => env_d::run_show::<BinutilsProfileType>(globals, &target),
+        BinutilsAction::Show { .. } => {
+            env_d::run_show::<BinutilsProfileType>(globals, &target);
+            Ok(())
+        }
         BinutilsAction::Set { profile, .. } => {
             env_d::run_set::<BinutilsProfileType>(globals, &target, profile, &base_dir)
         }

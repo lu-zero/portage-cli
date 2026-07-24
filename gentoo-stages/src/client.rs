@@ -54,7 +54,7 @@ impl Client {
     pub async fn list(&self) -> Result<Vec<Stage3>, Error> {
         let mut stage3_list = self.fetch_all_stage3_flavors().await?;
 
-        let cached_stage3s = self.scan_cached_stage3_files()?;
+        let cached_stage3s = self.scan_cached_stage3_files();
 
         for cached in cached_stage3s {
             if !stage3_list.iter().any(|s| s.name == cached.name) {
@@ -95,7 +95,7 @@ impl Client {
     }
 
     /// Scan the cache directory for locally cached stage3 files
-    fn scan_cached_stage3_files(&self) -> Result<Vec<Stage3>, Error> {
+    fn scan_cached_stage3_files(&self) -> Vec<Stage3> {
         let arch_cache_dir = self
             .cache_dir
             .path()
@@ -134,7 +134,7 @@ impl Client {
             }
         }
 
-        Ok(cached_files)
+        cached_files
     }
 
     /// Fetch the list of all available stage3 images for the architecture

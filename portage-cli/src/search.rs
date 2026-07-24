@@ -34,7 +34,8 @@ pub async fn run(
     if search_desc {
         run_desc(&repos, pat, all, name_only, homepage).await
     } else {
-        run_name(&repos, pat, all, name_only, homepage)
+        run_name(&repos, pat, all, name_only, homepage);
+        Ok(())
     }
 }
 
@@ -50,13 +51,7 @@ fn contains_ci(haystack: &str, needle: &str) -> bool {
     hb.windows(nb.len()).any(|w| w.eq_ignore_ascii_case(nb))
 }
 
-fn run_name(
-    repos: &[Repository],
-    pat: &str,
-    all: bool,
-    name_only: bool,
-    homepage: bool,
-) -> Result<()> {
+fn run_name(repos: &[Repository], pat: &str, all: bool, name_only: bool, homepage: bool) {
     let pat_has_slash = pat.contains('/');
     let mut matched: BTreeMap<String, (Cpn, usize)> = BTreeMap::new();
     for (idx, repo) in repos.iter().enumerate() {
@@ -84,7 +79,7 @@ fn run_name(
         for key in matched.keys() {
             writeln!(out, "{C_PKG}{key}{C_PKG:#}").ok();
         }
-        return Ok(());
+        return;
     }
 
     for (key, (cpn, idx)) in &matched {
@@ -95,7 +90,6 @@ fn run_name(
             writeln!(out, "{C_PKG}{key}{C_PKG:#}: {info}").ok();
         }
     }
-    Ok(())
 }
 
 fn latest_entry_info(repo: &Repository, cpn: &Cpn, homepage: bool) -> String {

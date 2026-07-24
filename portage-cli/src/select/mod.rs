@@ -144,7 +144,7 @@ pub fn source_label(is_host: bool) -> String {
 }
 
 /// Get CHOST from make.conf.
-pub fn get_chost(globals: &Cli) -> Result<String, anyhow::Error> {
+pub fn get_chost(globals: &Cli) -> String {
     let make_conf_path = config_portage_dir(globals).join("make.conf");
 
     let mut paths_to_check = vec![make_conf_path];
@@ -178,11 +178,11 @@ pub fn get_chost(globals: &Cli) -> Result<String, anyhow::Error> {
         if let Ok(mc) = MakeConf::load(path)
             && let Some(chost) = mc.get("CHOST")
         {
-            return Ok(chost.to_string());
+            return chost.to_string();
         }
     }
     let arch = globals.arch.as_str();
-    Ok(format!("{arch}-unknown-linux-gnu"))
+    format!("{arch}-unknown-linux-gnu")
 }
 
 #[cfg(test)]
@@ -234,7 +234,7 @@ mod tests {
         .unwrap();
 
         let cli = Cli::parse_from(["em", "--prefix", prefix]);
-        assert_eq!(get_chost(&cli).unwrap(), expected);
+        assert_eq!(get_chost(&cli), expected);
     }
 
     /// A plain host build (no `--prefix`/`--local`) is unaffected by the
@@ -255,6 +255,6 @@ mod tests {
         // matching `binpkg.rs`'s own tests for the same reason.
         let cli = Cli::parse_from(["em", "--root", "/"]);
         assert!(!is_prefix_context(&cli));
-        assert_eq!(get_chost(&cli).unwrap(), expected);
+        assert_eq!(get_chost(&cli), expected);
     }
 }

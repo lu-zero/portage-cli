@@ -209,7 +209,10 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Atom { atoms } => run_atom(atoms),
+        Applet::Atom { atoms } => {
+            run_atom(atoms);
+            Ok(())
+        }
         Applet::Select { command } => select::run(command, globals).await,
         Applet::Setup => setup::bootstrap(&globals.roots()),
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
@@ -285,7 +288,8 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
     match command {
         QueryCommand::Belongs { file } => {
             let vdb = open_cli_vdb(globals)?;
-            vdb::query_belongs(&vdb, file)
+            vdb::query_belongs(&vdb, file);
+            Ok(())
         }
         QueryCommand::Check { atom } => {
             let vdb = open_cli_vdb(globals)?;
@@ -364,7 +368,8 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
         }
         QueryCommand::Files { atom } => {
             let vdb = open_cli_vdb(globals)?;
-            vdb::query_files(&vdb, atom)
+            vdb::query_files(&vdb, atom);
+            Ok(())
         }
         QueryCommand::Has { atom } => {
             let vdb = open_cli_vdb(globals)?;
@@ -385,7 +390,8 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
         QueryCommand::List { installed, pattern } => {
             if *installed {
                 let vdb = open_cli_vdb(globals)?;
-                query::list::run_installed(&vdb, pattern)
+                query::list::run_installed(&vdb, pattern);
+                Ok(())
             } else {
                 query::list::run(&std::path::PathBuf::from(globals.repo_path()), pattern)
             }
@@ -528,12 +534,11 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
         }
     }
 }
-fn run_atom(atoms: &[String]) -> Result<()> {
+fn run_atom(atoms: &[String]) {
     for raw in atoms {
         match portage_atom::Dep::from_str(raw) {
             Ok(dep) => println!("{dep}"),
             Err(e) => eprintln!("error: '{}': {}", raw, e),
         }
     }
-    Ok(())
 }

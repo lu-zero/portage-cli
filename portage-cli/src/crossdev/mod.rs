@@ -175,7 +175,8 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
     let extras = ex_pkg_atoms(args)?;
 
     if args.show_target_cfg {
-        return show_target_cfg(&target, globals, &extras);
+        show_target_cfg(&target, globals, &extras);
+        return Ok(());
     }
     if args.init_target {
         return init_target(
@@ -482,7 +483,7 @@ fn activate_native_toolchain(globals: &Cli, step: &stages::StageStep) -> Result<
     let Some(atom) = step.atoms.first() else {
         return Ok(());
     };
-    let tuple = crate::select::get_chost(globals)?;
+    let tuple = crate::select::get_chost(globals);
     let roots = globals
         .outer_roots()
         .with_own_config_root_if_self_contained();
@@ -880,7 +881,7 @@ pub(crate) fn main_repo(globals: &Cli) -> Result<Repository> {
     }
 }
 
-fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) -> Result<()> {
+fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
     let mut out = anstream::stdout();
     let row = |out: &mut dyn Write, k: &str, v: &str| {
         writeln!(out, "  {C_LABEL}{k:<9}{C_LABEL:#} {v}").ok();
@@ -905,7 +906,6 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) -> Resul
             writeln!(out, "    {C_PKG}{category}/{pkg}{C_PKG:#} → {cpn}").ok();
         }
     }
-    Ok(())
 }
 
 /// Lay down the overlay + sysroot config for `target`. Collects every file
@@ -975,7 +975,7 @@ fn init_target(
         extras,
     ));
 
-    if !config_plan::apply(entries, globals.pretend, ask, policy)?.applied() {
+    if !config_plan::apply(&entries, globals.pretend, ask, policy)?.applied() {
         return Ok(());
     }
 
@@ -2066,7 +2066,7 @@ mod tests {
         }
         let globals = test_cli_at_root(root);
 
-        let conf_dir = conf.clone();
+        let conf_dir = conf;
         std::fs::create_dir_all(&conf_dir).unwrap();
         let name = overlay_name(&target);
         let file = conf_dir.join(format!("{name}.conf"));

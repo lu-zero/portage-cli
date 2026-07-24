@@ -181,7 +181,7 @@ fn rm_all_markers(root: &Utf8Path) {
 
 /// Ensure `state.job_id` is set; migrate any legacy JSON `completed` list
 /// into marker files for that id.
-fn ensure_job_id(root: &Utf8Path, state: &mut ResumeState) -> Result<()> {
+fn ensure_job_id(root: &Utf8Path, state: &mut ResumeState) {
     if state.job_id.is_empty() {
         state.job_id = new_job_id();
     }
@@ -195,7 +195,6 @@ fn ensure_job_id(root: &Utf8Path, state: &mut ResumeState) -> Result<()> {
             let _ = mark_completed(root, &state.job_id, mr, &c.cpv);
         }
     }
-    Ok(())
 }
 
 /// Strip UI-only flags that must never be restored from a saved job.
@@ -236,7 +235,7 @@ pub fn save(root: &Utf8Path, mut state: ResumeState, is_resume: bool) -> Result<
                 state.completed = prev.completed.clone();
             }
         }
-        ensure_job_id(root, &mut state)?;
+        ensure_job_id(root, &mut state);
     } else {
         if let Some(prev) = file.resume.take() {
             file.resume_backup = Some(prev);

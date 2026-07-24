@@ -819,8 +819,8 @@ mod tests {
     // slot+use-dep atoms.  These are the exact forms causing missing transitive
     // deps in the real depgraph (all three parse-level hypotheses were falsified).
 
-    fn slot(s: &str) -> Option<Interned<DefaultInterner>> {
-        Some(Interned::intern(s))
+    fn slot(s: &str) -> Interned<DefaultInterner> {
+        Interned::intern(s)
     }
 
     fn rdepend(atoms: &[&str]) -> PackageDeps {
@@ -846,13 +846,13 @@ mod tests {
 
         repo.add_version(
             Cpv::parse("app-text/texlive-core-2024").unwrap(),
-            slot("0"),
+            Some(slot("0")),
             None,
             rdepend(&[">=dev-libs/kpathsea-6.4.0:="]),
         );
         repo.add_version(
             Cpv::parse("dev-libs/kpathsea-6.4.0_p20240311-r1").unwrap(),
-            slot("0"),
+            Some(slot("0")),
             Some(Interned::intern("6.4.0")),
             rdepend(&[]),
         );
@@ -893,13 +893,13 @@ mod tests {
 
         repo.add_version(
             Cpv::parse("app-text/texlive-core-2024").unwrap(),
-            slot("0"),
+            Some(slot("0")),
             None,
             rdepend(&[">=media-libs/harfbuzz-1.4.5:=[icu,graphite]"]),
         );
         repo.add_version(
             Cpv::parse("media-libs/harfbuzz-12.3.2").unwrap(),
-            slot("0"),
+            Some(slot("0")),
             Some(Interned::intern("6.0.0")),
             rdepend(&[]),
         );
