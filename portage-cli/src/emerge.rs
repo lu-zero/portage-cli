@@ -863,6 +863,29 @@ async fn remove_matched_packages(
     let exclude: std::collections::HashSet<portage_atom::Cpv> =
         matched.iter().map(|p| p.cpv().clone()).collect();
 
+    println!("\n>>> These are the packages that would be {past}:\n");
+    for pkg in &matched {
+        println!(" {pkg}");
+    }
+    println!();
+
+    run_unmerge_batch(cli, &vdb, &matched, &exclude, verb, &gerund).await
+}
+
+/// The removal core shared by `-C`/`-P` ([`remove_matched_packages`]) and
+/// `-c`/`--depclean` (`depclean::run_with_targets`): `--pretend` preview,
+/// `--ask`, the profile-env'd shell, the one-graph-per-batch preserve-libs
+/// registry, the per-package removal loop, and the final `env-update`.
+/// `verb`/`gerund` name the action in user-facing output — `gerund` verbatim
+/// in the per-package progress line, lower-cased in the no-profile warning.
+pub(crate) async fn run_unmerge_batch(
+    cli: &cli::Cli,
+    vdb: &portage_vdb::Vdb,
+    packages: &[portage_vdb::InstalledPackage],
+    exclude: &std::collections::HashSet<portage_atom::Cpv>,
+    verb: &str,
+    gerund: &str,
+) -> Result<()> {
     // Same root/shell setup `dispatch.rs`'s `Applet::Ebuild` arm uses:
     // `roots()` for config/sysroot/eprefix (this *is* a merge-target
     // operation, unlike `select`'s config-root-only concerns — see
@@ -874,28 +897,22 @@ async fn remove_matched_packages(
     let root = roots.merge_root().to_owned();
     let broot = cli.broot();
 
-    println!("\n>>> These are the packages that would be {past}:\n");
-    for pkg in &matched {
-        println!(" {pkg}");
-    }
-    println!();
-
     if cli.pretend {
         // Preview what preserve-libs would keep, without registering or
         // touching disk (read-only load, no store). One shared graph for
         // the whole batch — see `preserve_libs::build_link_graph`'s doc.
         let registry = preserve_libs::PreservedLibsRegistry::load(&root);
-        let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, &root);
-        for pkg in &matched {
+        let graph = preserve_libs::build_link_graph(vdb, exclude, &registry, &root);
+        for pkg in packages {
             if let Ok(old_contents) = pkg.contents() {
                 let preserved = preserve_libs::find_libs_to_preserve(&graph, pkg, &old_contents);
-                preserve_libs::report_preserved(pkg.cpv(), &preserved, &vdb);
+                preserve_libs::report_preserved(pkg.cpv(), &preserved, vdb);
             }
         }
         return Ok(());
     }
 
-    if cli.merge_flags.ask && !confirm_action(verb, matched.len())? {
+    if cli.merge_flags.ask && !confirm_action(verb, packages.len())? {
         println!(">>> Quitting.");
         return Ok(());
     }
@@ -914,25 +931,26 @@ async fn remove_matched_packages(
     let config_overlay = roots.eprefix().map(|e| e.join("etc/portage"));
     if !ebuild::apply_profile_env(&mut shell, roots.config(), config_overlay.as_deref()).await? {
         eprintln!(
-            "warning: no usable profile at {}/etc/portage/make.profile — {gerund} without profile defaults",
-            roots.config().unwrap_or(Utf8Path::new("/"))
+            "warning: no usable profile at {}/etc/portage/make.profile — {} without profile defaults",
+            roots.config().unwrap_or(Utf8Path::new("/")),
+            gerund.to_lowercase()
         );
     }
 
     // One shared graph + registry for the whole batch, not rebuilt per
     // package — see `preserve_libs::build_link_graph`'s doc.
     let mut registry = preserve_libs::PreservedLibsRegistry::load(&root);
-    let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, &root);
+    let graph = preserve_libs::build_link_graph(vdb, exclude, &registry, &root);
 
     let mut failures = 0usize;
-    for pkg in &matched {
+    for pkg in packages {
         println!(">>> {gerund} {pkg}...");
         if let Err(e) = ebuild::unmerge_standalone(
             &mut shell,
             pkg,
             &work_base,
             &root,
-            &vdb,
+            vdb,
             &graph,
             &mut registry,
         )
@@ -944,7 +962,7 @@ async fn remove_matched_packages(
         }
         println!(">>> {verb} success: {pkg}");
     }
-    registry.reclaim(&vdb, &root);
+    registry.reclaim(vdb, &root);
     registry.store();
 
     // Refresh ld.so.cache / profile.env after removals — same as merge does
@@ -957,7 +975,7 @@ async fn remove_matched_packages(
     if failures > 0 {
         bail!(
             "{failures} of {} package(s) failed to {verb}",
-            matched.len()
+            packages.len()
         );
     }
     Ok(())

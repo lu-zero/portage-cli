@@ -34,11 +34,9 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, Dep, DepEntry};
 use portage_vdb::InstalledPackage;
 
+use crate::cli;
 use crate::emerge::parse_atoms_strict;
-use crate::merge::confirm_action;
-use crate::preserve_libs;
 use crate::vdb::open_cli_vdb;
-use crate::{cli, ebuild};
 
 /// Evaluate `pkg`'s own `RDEPEND`/`PDEPEND` (+ `DEPEND`/`BDEPEND` under
 /// `with_bdeps`) against its own recorded `USE`, returning concrete,
@@ -258,7 +256,6 @@ pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<
     let vdb = open_cli_vdb(cli)?;
     let roots = cli.roots();
     let root = roots.merge_root().to_owned();
-    let broot = cli.broot();
 
     let world_atoms = resolve_world(roots.config(), &root)?;
     if world_atoms.is_empty() {
@@ -298,77 +295,8 @@ pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<
 
     let exclude: HashSet<Cpv> = cleanlist.iter().map(|p| p.cpv().clone()).collect();
 
-    if cli.pretend {
-        let registry = preserve_libs::PreservedLibsRegistry::load(&root);
-        let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, &root);
-        for pkg in &cleanlist {
-            if let Ok(old_contents) = pkg.contents() {
-                let preserved = preserve_libs::find_libs_to_preserve(&graph, pkg, &old_contents);
-                preserve_libs::report_preserved(pkg.cpv(), &preserved, &vdb);
-            }
-        }
-        return Ok(());
-    }
-
-    if cli.merge_flags.ask && !confirm_action("depclean", cleanlist.len())? {
-        println!(">>> Quitting.");
-        return Ok(());
-    }
-
-    let work_base = ebuild::default_work_base(roots.relocate_root());
-    let repo = crate::crossdev::main_repo(cli)?;
-    let mut shell = repo.shell().await.context("creating shell")?;
-    shell.set_build_roots(
-        roots.config(),
-        roots.build_sysroot(),
-        roots.eprefix(),
-        Some(broot.merge_root()),
-    );
-    let config_overlay = roots.eprefix().map(|e| e.join("etc/portage"));
-    if !ebuild::apply_profile_env(&mut shell, roots.config(), config_overlay.as_deref()).await? {
-        eprintln!(
-            "warning: no usable profile at {}/etc/portage/make.profile — depcleaning without profile defaults",
-            roots.config().unwrap_or(Utf8Path::new("/"))
-        );
-    }
-
-    let mut registry = preserve_libs::PreservedLibsRegistry::load(&root);
-    let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, &root);
-
-    let mut failures = 0usize;
-    for pkg in &cleanlist {
-        println!(">>> Depcleaning {pkg}...");
-        if let Err(e) = ebuild::unmerge_standalone(
-            &mut shell,
-            pkg,
-            &work_base,
-            &root,
-            &vdb,
-            &graph,
-            &mut registry,
-        )
+    crate::emerge::run_unmerge_batch(cli, &vdb, &cleanlist, &exclude, "depclean", "Depcleaning")
         .await
-        {
-            eprintln!("!!! failed to depclean {pkg}: {e:#}");
-            failures += 1;
-            continue;
-        }
-        println!(">>> depclean success: {pkg}");
-    }
-    registry.reclaim(&vdb, &root);
-    registry.store();
-
-    if let Err(e) = crate::maint::env::env_update(&root) {
-        eprintln!("warning: env-update after depclean failed: {e:#}");
-    }
-
-    if failures > 0 {
-        bail!(
-            "{failures} of {} package(s) failed to depclean",
-            cleanlist.len()
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]
