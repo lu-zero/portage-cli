@@ -163,14 +163,13 @@ impl BinpkgIndex {
         desired_chost: &str,
         desired_build_env_key: &str,
     ) -> Option<PathBuf> {
-        let entries = self.entries.get(cpv)?;
-        // Among all matching entries, prefer the newest BUILD_ID — not just
-        // the first one listed (scan/parse order is not BUILD_ID order).
-        let best = entries
-            .iter()
-            .filter(|entry| entry_reusable(entry, desired_use, desired_chost))
-            .filter(|entry| build_env_key_compatible(&entry.build_env_key, desired_build_env_key))
-            .max_by_key(|entry| entry.build_id)?;
+        let best = best_reusable_entry(
+            &self.entries,
+            cpv,
+            desired_use,
+            desired_chost,
+            desired_build_env_key,
+        )?;
         Some(self.pkgdir.join(&best.path))
     }
 
@@ -405,14 +404,13 @@ impl RemoteBinpkgIndex {
         desired_chost: &str,
         desired_build_env_key: &str,
     ) -> Option<String> {
-        let entries = self.entries.get(cpv)?;
-        // Among all matching entries, prefer the newest BUILD_ID — not just
-        // the first one listed (scan/parse order is not BUILD_ID order).
-        let best = entries
-            .iter()
-            .filter(|entry| entry_reusable(entry, desired_use, desired_chost))
-            .filter(|entry| build_env_key_compatible(&entry.build_env_key, desired_build_env_key))
-            .max_by_key(|entry| entry.build_id)?;
+        let best = best_reusable_entry(
+            &self.entries,
+            cpv,
+            desired_use,
+            desired_chost,
+            desired_build_env_key,
+        )?;
         Some(format!("{}/{path}", self.base_uri, path = best.path))
     }
 
@@ -422,6 +420,26 @@ impl RemoteBinpkgIndex {
     pub fn get(&self, cpv: &str) -> Option<&[BinpkgEntry]> {
         self.entries.get(cpv).map(|v| v.as_slice())
     }
+}
+
+/// The single reuse-gate the local and remote indexes share: among the
+/// entries recorded for `cpv`, the newest-`BUILD_ID` one whose USE/CHOST and
+/// build-env key are compatible with the desired build. The callers differ
+/// only in how they render the winning entry's `path` (a local container path
+/// vs a remote download URL).
+fn best_reusable_entry<'a>(
+    entries: &'a BTreeMap<String, Vec<BinpkgEntry>>,
+    cpv: &str,
+    desired_use: &[String],
+    desired_chost: &str,
+    desired_build_env_key: &str,
+) -> Option<&'a BinpkgEntry> {
+    entries
+        .get(cpv)?
+        .iter()
+        .filter(|entry| entry_reusable(entry, desired_use, desired_chost))
+        .filter(|entry| build_env_key_compatible(&entry.build_env_key, desired_build_env_key))
+        .max_by_key(|entry| entry.build_id)
 }
 
 fn entry_reusable(entry: &BinpkgEntry, desired_use: &[String], desired_chost: &str) -> bool {
