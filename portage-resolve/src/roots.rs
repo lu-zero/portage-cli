@@ -236,8 +236,10 @@ impl Roots {
             DepClass::Idepend if self.is_cross_arch => self.satisfaction_root(DepClass::Bdepend),
             DepClass::Idepend | DepClass::Rdepend | DepClass::Pdepend => self.merge_root(),
             DepClass::Depend => {
-                if self.base.as_deref().is_some_and(|b| b != self.merge_root()) {
-                    self.base.as_deref().unwrap()
+                if let Some(base) = self.base.as_deref()
+                    && base != self.merge_root()
+                {
+                    base
                 } else if self.is_cross_arch {
                     self.merge_root()
                 } else {

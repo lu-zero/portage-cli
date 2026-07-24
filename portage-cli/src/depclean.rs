@@ -169,7 +169,7 @@ fn compute_cleanlist(
 /// leftover from a genuine dependency cycle within `cleanlist` (rare) is
 /// appended in original order — safe either way, since preserve-libs
 /// still protects any file still physically needed regardless of order.
-fn removal_order(cleanlist: Vec<InstalledPackage>, with_bdeps: bool) -> Vec<InstalledPackage> {
+fn removal_order(cleanlist: &[InstalledPackage], with_bdeps: bool) -> Vec<InstalledPackage> {
     let by_cpv: HashMap<Cpv, InstalledPackage> = cleanlist
         .iter()
         .map(|p| (p.cpv().clone(), p.clone()))
@@ -178,10 +178,10 @@ fn removal_order(cleanlist: Vec<InstalledPackage>, with_bdeps: bool) -> Vec<Inst
     let mut in_degree: HashMap<Cpv, usize> =
         cleanlist.iter().map(|p| (p.cpv().clone(), 0)).collect();
 
-    for pkg in &cleanlist {
+    for pkg in cleanlist {
         let mut targets = HashSet::new();
         for dep in own_atoms(pkg, with_bdeps) {
-            for other in &cleanlist {
+            for other in cleanlist {
                 if other.cpv() != pkg.cpv()
                     && dep.matches_cpv(other.cpv(), other.slot().ok().as_deref())
                 {
@@ -190,7 +190,7 @@ fn removal_order(cleanlist: Vec<InstalledPackage>, with_bdeps: bool) -> Vec<Inst
             }
         }
         for t in &targets {
-            *in_degree.get_mut(t).unwrap() += 1;
+            *in_degree.get_mut(t).expect("targets come from cleanlist") += 1;
         }
         out_edges.insert(pkg.cpv().clone(), targets.into_iter().collect());
     }
@@ -215,7 +215,7 @@ fn removal_order(cleanlist: Vec<InstalledPackage>, with_bdeps: bool) -> Vec<Inst
         order.push(cpv);
     }
     let ordered: HashSet<Cpv> = order.iter().cloned().collect();
-    for pkg in &cleanlist {
+    for pkg in cleanlist {
         if !ordered.contains(pkg.cpv()) {
             order.push(pkg.cpv().clone());
         }
@@ -283,7 +283,7 @@ pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<
         &target_atoms,
         with_bdeps,
     );
-    let cleanlist = removal_order(cleanlist, with_bdeps);
+    let cleanlist = removal_order(&cleanlist, with_bdeps);
 
     if cleanlist.is_empty() {
         println!(">>> Nothing to depclean.");
@@ -485,7 +485,7 @@ mod tests {
 
         let vdb = open_vdb(tmp.path());
         let installed: Vec<InstalledPackage> = vdb.packages().into_iter().collect();
-        let ordered = removal_order(installed, false);
+        let ordered = removal_order(&installed, false);
         let names: Vec<String> = ordered.iter().map(|p| p.cpv().cpn.to_string()).collect();
 
         let pos_a = names.iter().position(|n| n == "dev-libs/a").unwrap();

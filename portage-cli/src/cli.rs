@@ -604,8 +604,9 @@ mod tests {
     /// semantics".
     #[test]
     fn local_is_standalone_not_overlay() {
-        // HOME is process-global; save/restore to avoid interfering with
-        // parallel tests. (Edition 2024 makes set_var unsafe.)
+        // HOME is process-global; lock against other tests reading/writing
+        // it, and save/restore its value. (Edition 2024 makes set_var unsafe.)
+        let _home_lock = crate::test_support::home_lock();
         let saved = std::env::var("HOME").ok();
         // SAFETY: no other thread in this test process touches HOME.
         unsafe {

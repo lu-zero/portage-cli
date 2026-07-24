@@ -404,10 +404,10 @@ pub fn verify_container_signature(
     let entries = parse_manifest_entries(&plain);
     for member in &members {
         let base = Path::new(member).file_name().and_then(|n| n.to_str());
-        if base == Some("Manifest") || base.is_none_or(|b| b.ends_with(".sig")) {
+        let Some(name) = base else { continue };
+        if name == "Manifest" || name.ends_with(".sig") {
             continue;
         }
-        let name = base.unwrap();
         if let Some(entry) = entries.iter().find(|e| e.name == name) {
             let path = extract_member(container, member, root)?;
             let data = std::fs::read(&path)?;

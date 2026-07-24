@@ -35,3 +35,15 @@ pub(crate) fn path_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+/// Same rationale as [`PATH_LOCK`], for tests that mutate the process-wide
+/// `HOME` env var (e.g. `--local`'s `~/.gentoo` derivation).
+static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+/// Acquire [`HOME_LOCK`] for the duration of a test that mutates `HOME` —
+/// hold the returned guard for the whole test body.
+pub(crate) fn home_lock() -> std::sync::MutexGuard<'static, ()> {
+    HOME_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
