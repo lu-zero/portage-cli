@@ -447,6 +447,32 @@ pub fn verify_container_signature(
     })
 }
 
+/// `tar -tf` the container, returning its member listing (one path per line).
+fn container_member_listing(container: &Path) -> Result<String> {
+    Ok(String::from_utf8_lossy(&capture(
+        "tar",
+        Command::new("tar").arg("-tf").arg(container),
+    )?)
+    .into_owned())
+}
+
+/// The first container member whose basename starts with `prefix`
+/// (e.g. `image.tar` / `metadata.tar`), as GNU tar lists it (trailing slash
+/// trimmed). `Corrupt` if none is present.
+fn find_container_member<'a>(listing: &'a str, prefix: &str, container: &Path) -> Result<&'a str> {
+    listing
+        .lines()
+        .map(|l| l.trim_end_matches('/'))
+        .find(|m| {
+            Path::new(m)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .starts_with(prefix)
+        })
+        .ok_or_else(|| Error::Corrupt(format!("no {prefix}.* member in {}", container.display())))
+}
+
 /// Extract the GPKG container's installed image into `dest` (e.g. `${D}` or a
 /// merge `work_root/image`), stripping the inner `image/` prefix so members land
 /// at `dest/<path>` (e.g. `dest/usr/bin/foo`). Used by the `-k`/`--usepkg`
@@ -478,24 +504,8 @@ pub fn extract_image(container: &Path, dest: &Path, policy: VerifyPolicy) -> Res
     let root = staging.path().to_path_buf();
 
     // Locate the inner `image.tar.<c>` member.
-    let listing = String::from_utf8_lossy(&capture(
-        "tar",
-        Command::new("tar").arg("-tf").arg(container),
-    )?)
-    .into_owned();
-    let member = listing
-        .lines()
-        .map(|l| l.trim_end_matches('/'))
-        .find(|m| {
-            let b = Path::new(m)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            b.starts_with("image.tar")
-        })
-        .ok_or_else(|| {
-            Error::Corrupt(format!("no image.tar.* member in {}", container.display()))
-        })?;
+    let listing = container_member_listing(container)?;
+    let member = find_container_member(&listing, "image.tar", container)?;
     let compressed = root.join(member);
     // Also pull Manifest so we can verify the image member before trust.
     let manifest_member = listing
@@ -650,27 +660,8 @@ pub fn read_metadata(container: &Path) -> Result<BTreeMap<String, String>> {
 
     // 1. Locate the inner `metadata.tar.<c>` member in the container. GNU tar
     //    lists members relative to the archive root (`<basename>/metadata.tar.zst`).
-    let listing = String::from_utf8_lossy(&capture(
-        "tar",
-        Command::new("tar").arg("-tf").arg(container),
-    )?)
-    .into_owned();
-    let member = listing
-        .lines()
-        .map(|l| l.trim_end_matches('/'))
-        .find(|m| {
-            let b = Path::new(m)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            b.starts_with("metadata.tar")
-        })
-        .ok_or_else(|| {
-            Error::Corrupt(format!(
-                "no metadata.tar.* member in {}",
-                container.display()
-            ))
-        })?;
+    let listing = container_member_listing(container)?;
+    let member = find_container_member(&listing, "metadata.tar", container)?;
     let compressed = root.join(member);
 
     // 2. Extract just that one member.
