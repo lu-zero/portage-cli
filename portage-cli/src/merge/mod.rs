@@ -770,6 +770,103 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     }
 }
 
+/// What befell one plan entry once `act_on_package` returned — the inputs the
+/// shared post-package bookkeeping needs.
+struct PackageOutcome {
+    kind: crate::activity::PkgKind,
+    pkg_started: f64,
+    phases: Vec<crate::activity::PhaseTiming>,
+    result: Result<()>,
+}
+
+/// Post-package bookkeeping shared by the sequential and parallel loops:
+/// emit the `PkgEnd` event, and on success bump `merged`, record resume
+/// progress, and refresh the root's `ld.so.cache`; on failure log it and push
+/// a [`MergeFailure`]. Returns `false` when the caller should stop starting new
+/// work (a failure without `--keep-going`) — the caller owns its own
+/// stop message and loop-exit mechanics.
+fn record_package_outcome(
+    run: &MergeRun<'_>,
+    flags: &ActionFlags,
+    planned: &query::depgraph::PlannedMerge,
+    merge_root: &camino::Utf8Path,
+    outcome: PackageOutcome,
+    merged: &mut usize,
+    failures: &mut Vec<MergeFailure>,
+) -> bool {
+    let PackageOutcome {
+        kind,
+        pkg_started,
+        phases,
+        result,
+    } = outcome;
+    match result {
+        Ok(()) => {
+            *merged += 1;
+            emit_pkg_end(
+                &run.activity,
+                planned,
+                kind,
+                pkg_started,
+                true,
+                None,
+                phases,
+            );
+            if let Some(job) = run.resume_job
+                && let Err(e) = crate::maint::resume::mark_completed(
+                    job.root,
+                    job.job_id,
+                    planned.merge_root,
+                    &planned.cpv.to_string(),
+                )
+            {
+                eprintln!("warning: could not update resume progress: {e:#}");
+            }
+            // Refresh this root's `ld.so.cache` immediately, not just once at
+            // the very end of the whole batch (the caller's own `env_update`
+            // after the loop returns) — a later package in this same batch may
+            // need to dynamically load a library this one just installed (found
+            // live: `pkgconf` merging mid-`stages --stage1` left a stale cache,
+            // so the very next package's `configure` couldn't load the freshly
+            // installed `libpkgconf.so`). `-B`/`-f` installed nothing to refresh.
+            if !flags.buildpkgonly
+                && !flags.fetchonly
+                && !flags.fetch_all_uri
+                && let Err(e) = maint::env::env_update(merge_root)
+            {
+                eprintln!("warning: env-update failed: {e:#}");
+            }
+            true
+        }
+        Err(e) => {
+            let fail_verb = if flags.fetchonly || flags.fetch_all_uri {
+                "fetch"
+            } else {
+                "emerge"
+            };
+            eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
+            emit_pkg_end(
+                &run.activity,
+                planned,
+                kind,
+                pkg_started,
+                false,
+                Some(format!("{e:#}")),
+                phases,
+            );
+            failures.push(MergeFailure {
+                cpv: planned.cpv.to_string(),
+                log: run
+                    .work_base
+                    .join(planned.cpv.to_string())
+                    .join("build.log"),
+                cause: format!("{e:#}"),
+            });
+            flags.keep_going
+        }
+    }
+}
+
 /// Sequential build+merge in install order (the `--jobs 1` / default path).
 /// Returns `(merged, skipped, failures)`.
 async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure>) {
@@ -833,84 +930,27 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         })
         .instrument(tracing::info_span!("pkg", cpv = %planned.cpv))
         .await;
-        match result {
-            Ok(()) => {
-                merged += 1;
-                let phases = activity_pkg
-                    .as_ref()
-                    .map(|a| a.phases_done())
-                    .unwrap_or_default();
-                emit_pkg_end(
-                    &run.activity,
-                    planned,
-                    kind,
-                    pkg_started,
-                    true,
-                    None,
-                    phases,
-                );
-                if let Some(job) = run.resume_job
-                    && let Err(e) = crate::maint::resume::mark_completed(
-                        job.root,
-                        job.job_id,
-                        planned.merge_root,
-                        &planned.cpv.to_string(),
-                    )
-                {
-                    eprintln!("warning: could not update resume progress: {e:#}");
-                }
-                // Refresh this root's `ld.so.cache` immediately, not just once
-                // at the very end of the whole batch (the caller's own
-                // `env_update` after `merge_sequential` returns) — a later
-                // package in this same batch may need to dynamically load a
-                // library this one just installed (found live: `pkgconf`
-                // merging mid-`stages --stage1` left a stale cache, so the
-                // very next package's `configure` couldn't load the freshly
-                // installed `libpkgconf.so`, even though both the package and
-                // the cache entry were correct by the time the whole run
-                // finished — the cache just wasn't refreshed yet at the
-                // moment it was needed). `-B`/`-f` installed nothing to refresh.
-                if !flags.buildpkgonly
-                    && !flags.fetchonly
-                    && !flags.fetch_all_uri
-                    && let Err(e) = maint::env::env_update(merge_root)
-                {
-                    eprintln!("warning: env-update failed: {e:#}");
-                }
-            }
-            Err(e) => {
-                let fail_verb = if flags.fetchonly || flags.fetch_all_uri {
-                    "fetch"
-                } else {
-                    "emerge"
-                };
-                eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
-                let phases = activity_pkg
-                    .as_ref()
-                    .map(|a| a.phases_done())
-                    .unwrap_or_default();
-                emit_pkg_end(
-                    &run.activity,
-                    planned,
-                    kind,
-                    pkg_started,
-                    false,
-                    Some(format!("{e:#}")),
-                    phases,
-                );
-                failures.push(MergeFailure {
-                    cpv: planned.cpv.to_string(),
-                    log: run
-                        .work_base
-                        .join(planned.cpv.to_string())
-                        .join("build.log"),
-                    cause: format!("{e:#}"),
-                });
-                if !flags.keep_going {
-                    eprintln!(">>> Stopping (pass --keep-going to continue past failures).");
-                    break;
-                }
-            }
+        let phases = activity_pkg
+            .as_ref()
+            .map(|a| a.phases_done())
+            .unwrap_or_default();
+        let keep_going = record_package_outcome(
+            run,
+            &flags,
+            planned,
+            merge_root,
+            PackageOutcome {
+                kind,
+                pkg_started,
+                phases,
+                result,
+            },
+            &mut merged,
+            &mut failures,
+        );
+        if !keep_going {
+            eprintln!(">>> Stopping (pass --keep-going to continue past failures).");
+            break;
         }
     }
     (merged, skipped, failures)
@@ -1087,75 +1127,31 @@ async fn merge_parallel(
         let Some((i, res, pkg_started, kind, phases)) = inflight.next().await else {
             break;
         };
-        match res {
-            Ok(()) => {
-                merged += 1;
-                sched.complete(i);
-                emit_pkg_end(
-                    &run.activity,
-                    &run.plan[i],
-                    kind,
-                    pkg_started,
-                    true,
-                    None,
-                    phases,
-                );
-                if let Some(job) = run.resume_job
-                    && let Err(e) = crate::maint::resume::mark_completed(
-                        job.root,
-                        job.job_id,
-                        run.plan[i].merge_root,
-                        &run.plan[i].cpv.to_string(),
-                    )
-                {
-                    eprintln!("warning: could not update resume progress: {e:#}");
-                }
-                // See the matching comment in `merge_sequential`: refresh this
-                // entry's root `ld.so.cache` right away, not just once for the
-                // whole batch — a still-running or not-yet-started sibling may
-                // need to dynamically load what this merge just installed.
-                let merge_root = entry_roots(&run.plan[i], run.roots, run.host_roots).merge_root();
-                if !flags.buildpkgonly
-                    && !flags.fetchonly
-                    && !flags.fetch_all_uri
-                    && let Err(e) = maint::env::env_update(merge_root)
-                {
-                    eprintln!("warning: env-update failed: {e:#}");
-                }
-            }
-            Err(e) => {
-                let fail_verb = if flags.fetchonly || flags.fetch_all_uri {
-                    "fetch"
-                } else {
-                    "emerge"
-                };
-                eprintln!(">>> Failed to {fail_verb} {} — {e:#}", run.plan[i].cpv);
-                emit_pkg_end(
-                    &run.activity,
-                    &run.plan[i],
-                    kind,
-                    pkg_started,
-                    false,
-                    Some(format!("{e:#}")),
-                    phases,
-                );
-                failures.push(MergeFailure {
-                    cpv: run.plan[i].cpv.to_string(),
-                    log: run
-                        .work_base
-                        .join(run.plan[i].cpv.to_string())
-                        .join("build.log"),
-                    cause: format!("{e:#}"),
-                });
-                // Dependents stay blocked (their count never reaches 0), so a
-                // package whose build dep failed is never started.
-                if !flags.keep_going {
-                    stop_new = true;
-                    eprintln!(
-                        ">>> Stopping new builds (pass --keep-going to continue past failures)."
-                    );
-                }
-            }
+        // On success the entry's dependents are unblocked; on failure they stay
+        // blocked (their count never reaches 0), so a package whose build dep
+        // failed is never started.
+        if res.is_ok() {
+            sched.complete(i);
+        }
+        let planned = &run.plan[i];
+        let merge_root = entry_roots(planned, run.roots, run.host_roots).merge_root();
+        let keep_going = record_package_outcome(
+            run,
+            &flags,
+            planned,
+            merge_root,
+            PackageOutcome {
+                kind,
+                pkg_started,
+                phases,
+                result: res,
+            },
+            &mut merged,
+            &mut failures,
+        );
+        if !keep_going {
+            stop_new = true;
+            eprintln!(">>> Stopping new builds (pass --keep-going to continue past failures).");
         }
     }
     (merged, skipped, failures)
