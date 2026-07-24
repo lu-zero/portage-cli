@@ -464,46 +464,26 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         .await
         .with_context(|| format!("build log: {log}"))?;
 
-        let use_str = use_flags
-            .iter()
-            .map(|f| f.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let cpv_str = cpv.to_string();
-        let (act_job, act_parent, act_live, act_side) = worker_activity_cli(activity.as_ref());
-        let reemit = activity.as_ref().map(|a| a.bus.clone());
-        let code = crate::privilege::spawn_install_worker(
+        spawn_install_worker_step(
             backend,
-            &crate::privilege::WorkerArgs {
-                ebuild_path: ebuild_path.as_str(),
-                cpv: &cpv_str,
-                use_flags: &use_str,
-                work_base: work_base.as_str(),
-                root: root.as_str(),
-                distdir: distdir.map(|d| d.as_str()),
-                config_root: roots.config_root.map(|c| c.as_str()),
-                sysroot: roots.sysroot.map(|s| s.as_str()),
-                eprefix: roots.eprefix.map(|e| e.as_str()),
-                broot: roots.broot.map(|b| b.as_str()),
-                self_contained_bootstrap: roots.self_contained_bootstrap,
-                buildpkg,
+            WorkerStep {
+                ebuild_path,
+                cpv,
+                use_flags,
+                work_base,
+                root,
+                roots,
                 quiet,
+                distdir,
+                buildpkg,
                 binpkg: None,
                 force_verify_signature: false,
-                activity_job_id: act_job.as_deref(),
-                activity_parent_job_id: act_parent.as_deref(),
-                activity_live_root: act_live.as_deref(),
-                activity_side: act_side.as_deref(),
-                activity_reemit_path: None,
+                activity: activity.as_ref(),
+                log_label: "build",
+                log: &log,
             },
-            reemit,
         )
         .await
-        .context("starting the install worker")?;
-        if code != 0 {
-            anyhow::bail!("install worker exited with status {code} (build log: {log})");
-        }
-        Ok(())
     } else {
         run_inner(RunInner {
             ebuild_path: ebuild_path.as_str(),
@@ -574,46 +554,26 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
     if let Some(backend) = crate::privilege::install_wrap_backend() {
         // The qmerge chowns must run under (fake) root. Delegate to the
         // wrapped __worker (BinpkgMerge group, binpkg set).
-        let use_str = use_flags
-            .iter()
-            .map(|f| f.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let cpv_str = cpv.to_string();
-        let (act_job, act_parent, act_live, act_side) = worker_activity_cli(activity.as_ref());
-        let reemit = activity.as_ref().map(|a| a.bus.clone());
-        let code = crate::privilege::spawn_install_worker(
+        spawn_install_worker_step(
             backend,
-            &crate::privilege::WorkerArgs {
-                ebuild_path: ebuild_path.as_str(),
-                cpv: &cpv_str,
-                use_flags: &use_str,
-                work_base: work_base.as_str(),
-                root: root.as_str(),
-                distdir: None,
-                config_root: roots.config_root.map(|c| c.as_str()),
-                sysroot: roots.sysroot.map(|s| s.as_str()),
-                eprefix: roots.eprefix.map(|e| e.as_str()),
-                broot: roots.broot.map(|b| b.as_str()),
-                self_contained_bootstrap: roots.self_contained_bootstrap,
-                buildpkg: false,
+            WorkerStep {
+                ebuild_path,
+                cpv,
+                use_flags,
+                work_base,
+                root,
+                roots,
                 quiet,
-                binpkg: Some(binpkg_path.as_str()),
+                distdir: None,
+                buildpkg: false,
+                binpkg: Some(binpkg_path),
                 force_verify_signature,
-                activity_job_id: act_job.as_deref(),
-                activity_parent_job_id: act_parent.as_deref(),
-                activity_live_root: act_live.as_deref(),
-                activity_side: act_side.as_deref(),
-                activity_reemit_path: None,
+                activity: activity.as_ref(),
+                log_label: "merge",
+                log: &log,
             },
-            reemit,
         )
         .await
-        .context("starting the install worker")?;
-        if code != 0 {
-            anyhow::bail!("install worker exited with status {code} (merge log: {log})");
-        }
-        Ok(())
     } else {
         // The image is extracted inside run_inner (after its clean step) from
         // the binpkg, then the qmerge phase merges from work_root/image.
@@ -688,6 +648,81 @@ fn worker_activity_cli(
         Some(live.to_string()),
         Some(act.merge_root.as_str().to_string()),
     )
+}
+
+/// The fields that differ between the two [`spawn_install_worker_step`] call
+/// sites (`build_and_merge`'s scoped-install path vs `merge_binpkg`); the rest
+/// of the `WorkerArgs` is assembled from the shared context.
+struct WorkerStep<'a> {
+    ebuild_path: &'a Utf8Path,
+    cpv: &'a portage_atom::Cpv,
+    use_flags: &'a [portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>],
+    work_base: &'a Utf8Path,
+    root: &'a Utf8Path,
+    roots: RootContext<'a>,
+    quiet: bool,
+    distdir: Option<&'a Utf8Path>,
+    buildpkg: bool,
+    binpkg: Option<&'a Utf8Path>,
+    force_verify_signature: bool,
+    activity: Option<&'a crate::activity::ActivityPkgCtx>,
+    /// `build`/`merge` — names the log in the non-zero-exit error only.
+    log_label: &'a str,
+    log: &'a Utf8Path,
+}
+
+/// Assemble the `WorkerArgs` and run one privilege-wrapped `__worker` install,
+/// bailing on a non-zero exit. Shared by the two spawn sites so a new
+/// `WorkerArgs` field lands in one place, not three.
+async fn spawn_install_worker_step(
+    backend: crate::privilege::Backend,
+    step: WorkerStep<'_>,
+) -> Result<()> {
+    let use_str = step
+        .use_flags
+        .iter()
+        .map(|f| f.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let cpv_str = step.cpv.to_string();
+    let (act_job, act_parent, act_live, act_side) = worker_activity_cli(step.activity);
+    let reemit = step.activity.map(|a| a.bus.clone());
+    let code = crate::privilege::spawn_install_worker(
+        backend,
+        &crate::privilege::WorkerArgs {
+            ebuild_path: step.ebuild_path.as_str(),
+            cpv: &cpv_str,
+            use_flags: &use_str,
+            work_base: step.work_base.as_str(),
+            root: step.root.as_str(),
+            distdir: step.distdir.map(|d| d.as_str()),
+            config_root: step.roots.config_root.map(|c| c.as_str()),
+            sysroot: step.roots.sysroot.map(|s| s.as_str()),
+            eprefix: step.roots.eprefix.map(|e| e.as_str()),
+            broot: step.roots.broot.map(|b| b.as_str()),
+            self_contained_bootstrap: step.roots.self_contained_bootstrap,
+            buildpkg: step.buildpkg,
+            quiet: step.quiet,
+            binpkg: step.binpkg.map(|b| b.as_str()),
+            force_verify_signature: step.force_verify_signature,
+            activity_job_id: act_job.as_deref(),
+            activity_parent_job_id: act_parent.as_deref(),
+            activity_live_root: act_live.as_deref(),
+            activity_side: act_side.as_deref(),
+            activity_reemit_path: None,
+        },
+        reemit,
+    )
+    .await
+    .context("starting the install worker")?;
+    if code != 0 {
+        anyhow::bail!(
+            "install worker exited with status {code} ({} log: {})",
+            step.log_label,
+            step.log
+        );
+    }
+    Ok(())
 }
 
 /// Rebuild a package activity handle inside the install worker (LiveFs + optional re-emit).
