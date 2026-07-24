@@ -235,10 +235,24 @@ pub fn verify(
 
         let (actual_md5, actual_sha1, actual_size, _mtime) = checksum(full.as_std_path())?;
 
-        let size_ok = row.size.is_none_or(|s| s == actual_size);
-        let md5_ok = row.md5.as_deref().is_none_or(|m| m == actual_md5);
-        let sha1_ok = row.sha1.as_deref().is_none_or(|s| s == actual_sha1);
-        let digest_ok = size_ok && md5_ok && sha1_ok;
+        // Each mismatch is derived straight from the recorded Option: a row
+        // the index recorded without a field can't mismatch on it.
+        let size_mismatch = row
+            .size
+            .filter(|&recorded| recorded != actual_size)
+            .map(|recorded| (actual_size, recorded));
+        let md5_mismatch = row
+            .md5
+            .as_deref()
+            .filter(|&recorded| recorded != actual_md5)
+            .map(|recorded| (actual_md5.clone(), recorded.to_owned()));
+        let sha1_mismatch = row
+            .sha1
+            .as_deref()
+            .filter(|&recorded| recorded != actual_sha1)
+            .map(|recorded| (actual_sha1.clone(), recorded.to_owned()));
+        let digest_ok =
+            size_mismatch.is_none() && md5_mismatch.is_none() && sha1_mismatch.is_none();
 
         let signature = if check_signature {
             match crate::gpkg::verify_container_signature(full.as_std_path(), &policy) {
@@ -282,27 +296,9 @@ pub fn verify(
             cpv: row.cpv.clone(),
             path: row.path.clone(),
             missing: false,
-            // `.then(|| ..)`, not `.then_some(..)`: the recorded value only
-            // exists when the corresponding `*_ok` is false — eager evaluation
-            // would unwrap a None on rows the index recorded without that field.
-            size_mismatch: (!size_ok).then(|| {
-                (
-                    actual_size,
-                    row.size.expect("recorded size exists on mismatch"),
-                )
-            }),
-            md5_mismatch: (!md5_ok).then(|| {
-                (
-                    actual_md5.clone(),
-                    row.md5.clone().expect("recorded md5 exists on mismatch"),
-                )
-            }),
-            sha1_mismatch: (!sha1_ok).then(|| {
-                (
-                    actual_sha1.clone(),
-                    row.sha1.clone().expect("recorded sha1 exists on mismatch"),
-                )
-            }),
+            size_mismatch,
+            md5_mismatch,
+            sha1_mismatch,
             quarantined_to,
             signature,
         });
