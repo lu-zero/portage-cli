@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use bzip2::Compression;
 use bzip2::write::BzEncoder;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -1204,10 +1204,13 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
 
     // Compile parent: dump the live variables for the Install worker to
     // source. Lives at work_dir top-level — the Install clean doesn't touch it.
-    if group.should_dump_env()
-        && let Ok(env_data) = capture_variables(&mut shell, &work_root).await
-    {
-        let _ = std::fs::write(work_root.join("worker-env").as_std_path(), &env_data);
+    if group.should_dump_env() {
+        let env_data = capture_variables(&mut shell, &work_root)
+            .await
+            .map_err(|e| anyhow!("capturing environment for worker-env handoff: {e}"))?;
+        let env_path = work_root.join("worker-env");
+        std::fs::write(env_path.as_std_path(), &env_data)
+            .with_context(|| format!("writing {env_path}"))?;
     }
 
     // Build a binary package from the freshly-merged image + VDB entry, if asked.

@@ -19,7 +19,7 @@
 //! each re-reading the same file from disk.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -30,6 +30,10 @@ fn cache() -> &'static Cache {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn lock_cache() -> MutexGuard<'static, HashMap<Utf8PathBuf, Option<String>>> {
+    cache().lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Return the cached value for `path`, or call `fetch` on a miss and cache
 /// its result. `Ok(None)` means "confirmed absent" and is cached too, so a
 /// missing optional field isn't restated on every call.
@@ -37,14 +41,11 @@ pub(crate) fn get_or_fetch(
     path: &Utf8Path,
     fetch: impl FnOnce() -> std::io::Result<Option<String>>,
 ) -> std::io::Result<Option<String>> {
-    if let Some(cached) = cache().lock().unwrap().get(path) {
+    if let Some(cached) = lock_cache().get(path) {
         return Ok(cached.clone());
     }
     let value = fetch()?;
-    cache()
-        .lock()
-        .unwrap()
-        .insert(path.to_owned(), value.clone());
+    lock_cache().insert(path.to_owned(), value.clone());
     Ok(value)
 }
 
@@ -52,8 +53,5 @@ pub(crate) fn get_or_fetch(
 /// entry's fields — so a write there is visible on the next read.
 /// Entry-granularity: every other package's cached fields are untouched.
 pub(crate) fn invalidate_entry(pkg_dir: &Utf8Path) {
-    cache()
-        .lock()
-        .unwrap()
-        .retain(|p, _| !p.starts_with(pkg_dir));
+    lock_cache().retain(|p, _| !p.starts_with(pkg_dir));
 }
