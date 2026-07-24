@@ -303,33 +303,41 @@ fn confirm_config_write(count: usize) -> Result<bool> {
 mod tests {
     use super::*;
 
+    fn utf8_join(dir: &tempfile::TempDir, rel: &str) -> Result<Utf8PathBuf> {
+        Ok(Utf8Path::from_path(dir.path())
+            .context("non-UTF-8 tempdir")?
+            .join(rel))
+    }
+
     /// `-p`: nothing is written, even though there's a real change to make.
     #[test]
-    fn pretend_writes_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("make.conf")).unwrap();
+    fn pretend_writes_nothing() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "make.conf")?;
         let entries = vec![ConfigEntry::File {
             path: path.clone(),
             desired: "CHOST=riscv64-unknown-linux-gnu\n".to_owned(),
         }];
-        let outcome = apply(&entries, true, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, true, false, RefreshPolicy::Sync)?;
         assert!(matches!(outcome, Outcome::Previewed));
         assert!(!path.exists(), "pretend must not write {path}");
+        Ok(())
     }
 
     /// Neither `-p` nor `-a`: applies directly, no prompt needed.
     #[test]
-    fn plain_run_applies_directly() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("nested/make.conf")).unwrap();
+    fn plain_run_applies_directly() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "nested/make.conf")?;
         let desired = "CHOST=riscv64-unknown-linux-gnu\n".to_owned();
         let entries = vec![ConfigEntry::File {
             path: path.clone(),
             desired: desired.clone(),
         }];
-        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync)?;
         assert!(matches!(outcome, Outcome::Applied));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), desired);
+        assert_eq!(std::fs::read_to_string(&path)?, desired);
+        Ok(())
     }
 
     /// Nothing changed (content already matches): reported as
@@ -337,68 +345,71 @@ mod tests {
     /// caller's own 'ready' summary may print" (it's already in the desired
     /// state either way).
     #[test]
-    fn no_change_is_reported_as_nothing_to_apply() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("make.conf")).unwrap();
+    fn no_change_is_reported_as_nothing_to_apply() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "make.conf")?;
         let desired = "CHOST=riscv64-unknown-linux-gnu\n".to_owned();
-        std::fs::write(&path, &desired).unwrap();
+        std::fs::write(&path, &desired)?;
         let entries = vec![ConfigEntry::File { path, desired }];
-        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync)?;
         assert!(matches!(outcome, Outcome::NothingToApply));
         assert!(outcome.applied());
+        Ok(())
     }
 
     /// `CreateOnly` never overwrites an existing file's content, no matter
     /// how it differs from `desired`.
     #[test]
-    fn create_only_never_overwrites_existing_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("gentoo.conf")).unwrap();
-        std::fs::write(&path, "[gentoo]\nlocation = /somewhere/else\n").unwrap();
+    fn create_only_never_overwrites_existing_content() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "gentoo.conf")?;
+        std::fs::write(&path, "[gentoo]\nlocation = /somewhere/else\n")?;
         let entries = vec![ConfigEntry::CreateOnly {
             path: path.clone(),
             desired: "[gentoo]\nlocation = /var/db/repos/gentoo\n".to_owned(),
         }];
-        apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
+        apply(&entries, false, false, RefreshPolicy::Sync)?;
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            std::fs::read_to_string(&path)?,
             "[gentoo]\nlocation = /somewhere/else\n"
         );
+        Ok(())
     }
 
     /// `Dir` creates a missing directory and is a no-op once it exists.
     #[test]
-    fn dir_entry_creates_a_missing_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("var/db/pkg")).unwrap();
+    fn dir_entry_creates_a_missing_directory() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "var/db/pkg")?;
         assert!(!path.is_dir());
         apply(
             &[ConfigEntry::Dir { path: path.clone() }],
             false,
             false,
             RefreshPolicy::Sync,
-        )
-        .unwrap();
+        )?;
         assert!(path.is_dir());
+        Ok(())
     }
 
     /// A foreign `Alias` entry (no `alias-target =` key) is reported
     /// unchanged and never overwritten.
     #[test]
-    fn alias_entry_never_touches_a_foreign_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("crossdev.conf")).unwrap();
+    fn alias_entry_never_touches_a_foreign_file() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "crossdev.conf")?;
         let foreign = "[crossdev]\nlocation = /var/db/repos/crossdev\n".to_owned();
-        std::fs::write(&path, &foreign).unwrap();
+        std::fs::write(&path, &foreign)?;
         let entries = vec![ConfigEntry::Alias {
             path: path.clone(),
             name: "crossdev.riscv64-unknown-linux-gnu".to_owned(),
             category: "cross-riscv64-unknown-linux-gnu".to_owned(),
             packages_line: "sys-devel/binutils".to_owned(),
         }];
-        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync)?;
         assert!(matches!(outcome, Outcome::NothingToApply));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), foreign);
+        assert_eq!(std::fs::read_to_string(&path)?, foreign);
+        Ok(())
     }
 
     /// A hand-edited `alias-packages` line that happens to *contain* the
@@ -410,28 +421,24 @@ mod tests {
     /// on where in the line the edit landed, inconsistently doing the
     /// opposite). Exact-body comparison fixes both.
     #[test]
-    fn alias_entry_treats_a_hand_extended_line_as_drift() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("crossdev.conf")).unwrap();
+    fn alias_entry_treats_a_hand_extended_line_as_drift() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "crossdev.conf")?;
         std::fs::write(
             &path,
             "[crossdev]\nalias-source = gentoo\nalias-target = cross-riscv64-unknown-linux-gnu\n\
              alias-packages = sys-devel/binutils dev-vcs/git\n",
-        )
-        .unwrap();
+        )?;
         let entries = vec![ConfigEntry::Alias {
             path: path.clone(),
             name: "crossdev.riscv64-unknown-linux-gnu".to_owned(),
             category: "cross-riscv64-unknown-linux-gnu".to_owned(),
             packages_line: "sys-devel/binutils".to_owned(),
         }];
-        let outcome = apply(&entries, false, false, RefreshPolicy::Sync).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::Sync)?;
         assert!(matches!(outcome, Outcome::Applied));
-        assert!(
-            !std::fs::read_to_string(&path)
-                .unwrap()
-                .contains("dev-vcs/git")
-        );
+        assert!(!std::fs::read_to_string(&path)?.contains("dev-vcs/git"));
+        Ok(())
     }
 
     /// `FillGapsOnly` (`--setup`'s own implied config-laydown step): an
@@ -439,37 +446,36 @@ mod tests {
     /// content has drifted from `desired` — a hand edit made between an
     /// earlier `--init-target` and this `--setup` must survive.
     #[test]
-    fn fill_gaps_only_never_touches_an_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("make.conf")).unwrap();
-        std::fs::write(&path, "CHOST=hand-edited\n").unwrap();
+    fn fill_gaps_only_never_touches_an_existing_file() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "make.conf")?;
+        std::fs::write(&path, "CHOST=hand-edited\n")?;
         let entries = vec![ConfigEntry::File {
             path: path.clone(),
             desired: "CHOST=riscv64-unknown-linux-gnu\n".to_owned(),
         }];
-        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly)?;
         assert!(matches!(outcome, Outcome::NothingToApply));
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "CHOST=hand-edited\n"
-        );
+        assert_eq!(std::fs::read_to_string(&path)?, "CHOST=hand-edited\n");
+        Ok(())
     }
 
     /// `FillGapsOnly` still creates a file that's genuinely missing — a
     /// fresh target being `--setup` directly (no prior `--init-target`)
     /// still gets fully written.
     #[test]
-    fn fill_gaps_only_still_creates_missing_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("make.conf")).unwrap();
+    fn fill_gaps_only_still_creates_missing_files() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "make.conf")?;
         let desired = "CHOST=riscv64-unknown-linux-gnu\n".to_owned();
         let entries = vec![ConfigEntry::File {
             path: path.clone(),
             desired: desired.clone(),
         }];
-        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly)?;
         assert!(matches!(outcome, Outcome::Applied));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), desired);
+        assert_eq!(std::fs::read_to_string(&path)?, desired);
+        Ok(())
     }
 
     /// `FillGapsOnly` also leaves an existing `Alias` entry alone even when
@@ -478,23 +484,25 @@ mod tests {
     /// `--init-target` used) — the accepted trade-off for hand edits
     /// surviving `--setup`.
     #[test]
-    fn fill_gaps_only_never_touches_an_existing_alias_even_with_a_different_packages_line() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = Utf8PathBuf::from_path_buf(dir.path().join("crossdev.conf")).unwrap();
+    fn fill_gaps_only_never_touches_an_existing_alias_even_with_a_different_packages_line()
+    -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = utf8_join(&dir, "crossdev.conf")?;
         let existing = alias_body(
             "crossdev.riscv64-unknown-linux-gnu",
             "cross-riscv64-unknown-linux-gnu",
             "sys-devel/binutils",
         );
-        std::fs::write(&path, &existing).unwrap();
+        std::fs::write(&path, &existing)?;
         let entries = vec![ConfigEntry::Alias {
             path: path.clone(),
             name: "crossdev.riscv64-unknown-linux-gnu".to_owned(),
             category: "cross-riscv64-unknown-linux-gnu".to_owned(),
             packages_line: "sys-devel/binutils dev-vcs/git".to_owned(),
         }];
-        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly).unwrap();
+        let outcome = apply(&entries, false, false, RefreshPolicy::FillGapsOnly)?;
         assert!(matches!(outcome, Outcome::NothingToApply));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), existing);
+        assert_eq!(std::fs::read_to_string(&path)?, existing);
+        Ok(())
     }
 }
