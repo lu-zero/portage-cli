@@ -175,14 +175,7 @@ impl PreservedLibsRegistry {
                 updates.push((key.clone(), remaining));
             }
         }
-        for key in remove_keys {
-            self.data.remove(&key);
-        }
-        for (key, remaining) in updates {
-            if let Some(entry) = self.data.get_mut(&key) {
-                entry.paths = remaining;
-            }
-        }
+        self.apply_prune(remove_keys, updates);
     }
 
     /// Delete preserved files no live package still needs via `DT_NEEDED`.
@@ -246,6 +239,12 @@ impl PreservedLibsRegistry {
                 updates.push((key.clone(), remaining));
             }
         }
+        self.apply_prune(remove_keys, updates);
+    }
+
+    /// Apply a prune pass's decisions: drop the fully-emptied keys, then
+    /// shrink the partially-pruned ones to their surviving paths.
+    fn apply_prune(&mut self, remove_keys: Vec<String>, updates: Vec<(String, Vec<String>)>) {
         for key in remove_keys {
             self.data.remove(&key);
         }
