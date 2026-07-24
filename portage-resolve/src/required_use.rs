@@ -1,7 +1,7 @@
 use portage_atom::{Cpv, Version};
-use portage_atom_pubgrub::{CededFlag, PortagePackage, resolve_effective_use};
+use portage_atom_pubgrub::{CededFlag, PortagePackage};
 
-use crate::effective_use::{apply_ceded, apply_force_mask, iuse_defaults, iuse_set};
+use crate::effective_use::effective_use;
 use crate::repo::{RepoData, ResolvePolicy, find_cache};
 
 /// A `REQUIRED_USE` constraint left unsatisfied by a planned package's
@@ -39,29 +39,10 @@ pub fn find_violations(
         };
 
         let cpv = Cpv::new(*pkg.cpn(), ver.clone());
-        let defaults = iuse_defaults(cache);
-        let mut effective = resolve_effective_use(
-            &defaults,
-            policy.pre_env,
-            &cpv,
-            pkg.slot(),
-            policy.package_use,
-            policy.env_use,
-        );
         let stable = policy
             .accept_keywords
             .is_stable(&cache.metadata.keywords, &cpv, pkg.slot());
-        let iuse = iuse_set(cache);
-        let slot_key = pkg.slot();
-        apply_force_mask(
-            &mut effective,
-            policy.force_mask,
-            &cpv,
-            slot_key.as_ref().map(|s| s.as_str()),
-            stable,
-            &iuse,
-        );
-        apply_ceded(&mut effective, *pkg.cpn(), ceded);
+        let effective = effective_use(policy, pkg, ver, cache, stable, ceded);
 
         // `effective` already has this package's IUSE defaults folded in, so
         // an unset flag is simply Disabled — no fallback needed.
