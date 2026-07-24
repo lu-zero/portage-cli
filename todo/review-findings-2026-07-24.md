@@ -85,6 +85,18 @@ no expect), 9 in afc1640 + 1028c1b + c7a1f2f.
 
 Ordered by value; the detector found 75 clusters, these are the real ones.
 
+STATUS 2026-07-24: consolidated on master — A (2447ac4→ new home
+`portage-cli/src/binpkg.rs`), B-pubgrub (re-export of solver's RequiredUse),
+D (`set_pms_name_vars`), E (`run_unmerge_batch`), F
+(`record_package_outcome`), G (`spawn_install_worker_step`; only 2 sites
+existed, not 3), H (`best_reusable_entry`), I-plan-walk, K (query
+`matching_ebuilds` + search `open_repos`; depgraph's 2 sites intentionally
+differ), L (`apply_prune`), M-gpkg (`container_member_listing`).
+Deliberately left: B-resolvo (published-crate API decision — no new solver
+dep), C (different domain types per crate, generics not worth ~90 lines),
+I-`should_keep` (genuinely divergent bodies), J (documented fork, reciprocal
+cross-refs added in bbe6610), M remainder (structural).
+
 - **A. `next_build_id` verbatim ×2** — `ebuild.rs:1493` and `quickpkg.rs:368`,
   byte-identical 15-line fn. One home (portage-binpkg, next to the index it
   scans, or a cli-internal module).
