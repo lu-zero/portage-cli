@@ -724,6 +724,10 @@ pub(crate) fn merge_flag_lists<'a>(iter: impl Iterator<Item = &'a str>) -> Vec<S
 /// the same clear (a no-op on the already-reduced list) and keeps propagating
 /// the signal forward through every subsequent layer. The top-level consumer
 /// (`build::profile::collect_use_flags`) strips it.
+///
+/// Twinned with `portage_solver::use_config`'s identically-named function
+/// (deliberately duplicated, not shared — see its doc for why); a PMS fix here
+/// must land there too.
 pub(crate) fn merge_flag_lists_signed<'a>(iter: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut order: Vec<String> = Vec::new();
     let mut state: HashMap<String, bool> = HashMap::new();
