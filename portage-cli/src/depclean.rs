@@ -190,7 +190,7 @@ fn removal_order(cleanlist: &[InstalledPackage], with_bdeps: bool) -> Vec<Instal
             }
         }
         for t in &targets {
-            *in_degree.get_mut(t).expect("targets come from cleanlist") += 1;
+            *in_degree.entry(t.clone()).or_insert(0) += 1;
         }
         out_edges.insert(pkg.cpv().clone(), targets.into_iter().collect());
     }
