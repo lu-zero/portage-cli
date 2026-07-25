@@ -11,10 +11,10 @@
 //! This is computed as a **post-solve closure walk** over the finalized Target
 //! plan, NOT inside the solver: the dual `(package, merge_root)` solver nodes
 //! share `PackageData` via `host_aliases`, and introducing `pkg@Host` into a
-//! single solve balloons the Target closure (the Tier 1 aliasing blocker, see
-//! `todo/nonemptytree-bdeps-gap.md`). Keeping the Target solve single-rooted
-//! preserves its parity (12 packages for curl); the host copies are derived
-//! against the host VDB afterwards.
+//! single solve balloons the Target closure (the Tier 1 aliasing blocker).
+//! Keeping the Target solve single-rooted preserves its parity (12 packages
+//! for curl); the host copies are derived against the host VDB afterwards.
+// Nonemptytree BDEPEND gap design is in todo/nonemptytree-bdeps-gap.md.
 //!
 //! `cross.active` (any offset/dual-root context — plain `--root`/`--prefix`
 //! included, not just cross-arch) can, for some invocations (e.g. crossdev's
@@ -22,9 +22,9 @@
 //! nodes directly into `target_order` — the invariant above doesn't hold
 //! universally. This walk must never re-derive or duplicate those: it seeds
 //! its availability and seen-set from whatever `MergeRoot::Host` entries are
-//! already present, and only fills genuine remaining gaps
-//! (`todo/root-topology-refactor.md`, the `dev-perl/Digest-HMAC` duplicate
-//! finding).
+//! already present, and only fills genuine remaining gaps (the
+//! `dev-perl/Digest-HMAC` duplicate finding).
+// Root topology design is in todo/root-topology-refactor.md.
 //!
 //! Host copies reuse the Target solve's version for a CPN (same arch, same
 //! repo), falling back to the newest *accepted* (keyword/mask/license) repo

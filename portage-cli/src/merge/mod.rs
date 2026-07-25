@@ -240,11 +240,12 @@ pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
 /// `roots` outside `--target`, so this is a no-op there.
 ///
 /// Found live: the merge loop used a single, plan-wide root for every entry
-/// regardless of `PlannedMerge.merge_root`, so a Host BDEPEND (e.g.
-/// `dev-python/jinja2`, rebuilt for a python target the real host lacked)
-/// silently built into the sysroot instead — the package "succeeded" but
-/// never became available where the later build that needed it actually
-/// looked. See `todo/stage-build-shakeout.md`.
+// regardless of `PlannedMerge.merge_root`, so a Host BDEPEND (e.g.
+// `dev-python/jinja2`, rebuilt for a python target the real host lacked)
+// silently built into the sysroot instead — the package "succeeded" but
+// never became available where the later build that needed it actually
+// looked.
+// Design details are in todo/stage-build-shakeout.md.
 fn entry_roots<'a>(
     planned: &query::depgraph::PlannedMerge,
     roots: &'a portage_resolve::Roots,
@@ -257,11 +258,12 @@ fn entry_roots<'a>(
     }
 }
 
-/// Which local binpkg index a plan entry's reuse lookup consults: the host's
-/// own (built with host CHOST/CFLAGS) for a `MergeRoot::Host` entry, the
-/// target's otherwise. Mirrors [`entry_roots`]'s selection — see
-/// `run_merge_plan`'s `dual_pkgdir` for why these can genuinely differ under
-/// `--target` (S1/S4 in `todo/binpkg-subtargets.md`).
+// Which local binpkg index a plan entry's reuse lookup consults: the host's
+// own (built with host CHOST/CFLAGS) for a `MergeRoot::Host` entry, the
+// target's otherwise. Mirrors [`entry_roots`]'s selection — see
+// `run_merge_plan`'s `dual_pkgdir` for why these can genuinely differ under
+// `--target`.
+// Binpkg subtargets design is in todo/binpkg-subtargets.md S1/S4.
 fn entry_binpkg_index<'a>(
     planned: &query::depgraph::PlannedMerge,
     target: Option<&'a portage_binpkg::BinpkgIndex>,
@@ -350,15 +352,16 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // isn't active, so this is a no-op outside cross builds.
     let host_roots = globals.broot();
 
-    // Per-entry PKGDIR (S1/S4 in todo/binpkg-subtargets.md): a Host entry's
-    // binpkgs live in the *host*'s PKGDIR (built with host CHOST/CFLAGS), a
-    // Target entry's in the target's own — distinct whenever the two roots'
-    // own PKGDIR resolution disagrees (config-root make.conf, or simply a
-    // different merge_root falling to the root-relative default). Outside
-    // `--target` (and for `--root`/`--prefix`/`--local` with no distinct host
-    // config), `host_roots` resolves to the same PKGDIR as `roots`, so this
-    // is a no-op there — deliberately compared by resolved path, not gated on
-    // "is --target active", so a plain `--root` whose config-root make.conf
+    // Per-entry PKGDIR: a Host entry's binpkgs live in the *host*'s PKGDIR
+    // (built with host CHOST/CFLAGS), a Target entry's in the target's own —
+    // distinct whenever the two roots' own PKGDIR resolution disagrees
+    // (config-root make.conf, or simply a different merge_root falling to the
+    // root-relative default). Outside `--target` (and for `--root`/`--prefix`/
+    // `--local` with no distinct host config), `host_roots` resolves to the
+    // same PKGDIR as `roots`, so this is a no-op there — deliberately compared
+    // by resolved path, not gated on "is --target active", so a plain `--root`
+    // whose config-root make.conf
+    // Binpkg subtargets design (S1/S4) is in todo/binpkg-subtargets.md.
     // sets a different PKGDIR is still handled correctly.
     let target_pkgdir = binpkg::resolve_pkgdir_for_roots(roots).await;
     let host_pkgdir = binpkg::resolve_pkgdir_for_roots(&host_roots).await;
@@ -370,8 +373,9 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // Fail fast: verify PKGDIR is actually writable *before* starting a
     // potentially multi-hour build, rather than discovering it deep into a
     // `--keep-going` run once dozens of packages have already silently died.
-    // Found live (todo/stage-build-shakeout.md): a stage3 --buildpkg attempt
+    // Found live during stage build shakeout: a stage3 --buildpkg attempt
     // hit a permission-denied PKGDIR (fixed separately — resolve_pkgdir is now
+    // Design details are in todo/stage-build-shakeout.md.
     // root-aware), and each failure surfaced as an unexplained, silent worker
     // death rather than the single clear error this check now gives instead.
     // Fetch-only never writes PKGDIR (remote binpkg cache is under work_base).

@@ -156,9 +156,9 @@ impl CrossTarget {
     /// unset, `/usr/bin/crossdev` — `ex_gdb && doemerge $DPKG`), same as any
     /// other `--ex-pkg`; it's an opt-in extra, not part of the base
     /// binutils/headers/gcc/libc toolchain. `em` has no `--ex-gdb`/`--ex-pkg`
-    /// equivalent yet (see `todo/crossdev-target.md`'s "Extra" section), so
-    /// there's nothing to wire it to — it was previously here unconditionally
-    /// by mistake.
+    /// equivalent yet, so there's nothing to wire it to — it was previously here
+    /// unconditionally by mistake.
+    // Extra packages support is tracked in todo/crossdev-target.md "Extra" section.
     pub fn packages(&self) -> Vec<(&'static str, &'static str, PackageArch)> {
         use PackageArch::{Host, Target};
         let mut pkgs: Vec<(&'static str, &'static str, PackageArch)> = Vec::new();

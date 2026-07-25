@@ -16,8 +16,8 @@
 //!   baselayout → binutils → os-headers → glibc → gcc. The two-stage split is
 //!   cross-only —
 //!   `toolchain.eclass` gates every stage1 affordance on `is_crosscompile`, so a
-//!   native gcc is always `--enable-shared` and *requires* a full in-ROOT libc
-//!   (see `todo/em-root-characterization.md`).
+//!   native gcc is always `--enable-shared` and *requires* a full in-ROOT libc.
+// Root characterization details are documented in todo/em-root-characterization.md.
 //!
 //! Each step is one `em`-equivalent merge with a per-step USE override and the
 //! `--nodeps` / `headers-only` bootstrap flags crossdev uses (`/usr/bin/crossdev`
@@ -88,7 +88,8 @@ impl Libc {
 /// `cross-<tuple>`, native keeps the real `::gentoo` category. This is the
 /// single typed decision point for "build a toolchain into a fresh root": the
 /// cross-vs-native split that the driver previously re-derived at each call
-/// site (see `todo/cross-support-self-review.md`).
+/// site.
+// Cross-support self-review details are in todo/cross-support-self-review.md.
 #[derive(Debug, Clone)]
 pub enum BootstrapKind {
     /// Cross-compilation into a `<CTARGET>` sysroot (`CBUILD ≠ CHOST`): atoms

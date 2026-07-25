@@ -49,7 +49,8 @@ pub struct Cli {
     pub eta: bool,
 
     /// Write activity events as JSONL to file descriptor N (subprocess
-    /// front-ends). Takes ownership of the FD. See `todo/activity-status.md`.
+    /// front-ends). Takes ownership of the FD.
+    // Activity status design is documented in todo/activity-status.md.
     #[arg(long = "activity-fd", value_name = "N", global = true)]
     pub activity_fd: Option<i32>,
 
@@ -187,11 +188,11 @@ fn home_dir() -> camino::Utf8PathBuf {
         .unwrap_or_else(|| camino::Utf8PathBuf::from("/root"))
 }
 
-/// The four filesystem roles (docs/root-topology.md § "The four roles"),
-/// collapsed by how many coincide. `Cli::base_roots()` (BROOT view) and
-/// `Cli::roots()` (install-target view) both derive from the same
-/// `Cli::root_set()`, so they can't drift independently — see
-/// `todo/root-topology-refactor.md`.
+// The four filesystem roles (docs/root-topology.md § "The four roles"),
+// collapsed by how many coincide. `Cli::base_roots()` (BROOT view) and
+// `Cli::roots()` (install-target view) both derive from the same
+// `Cli::root_set()`, so they can't drift independently.
+// Root topology refactoring is tracked in todo/root-topology-refactor.md.
 enum RootSet {
     /// All four roles collapse to one path: the bare invocation, or
     /// `--local` (a standalone Gentoo-Prefix owns its own BROOT too).
@@ -203,8 +204,8 @@ enum RootSet {
     #[allow(dead_code)] // target isn't read yet: base_roots()/roots() keep their
     // own, separate "outer EROOT" derivation (see broot()'s doc comment on
     // why that's a different question from BROOT). Kept here to match
-    // docs/root-topology.md's proposed shape for the fuller migration this
-    // enum is a first step of (todo/root-topology-refactor.md).
+    // docs/root-topology.md's proposed shape for the fuller migration.
+    // Root topology refactoring is tracked in todo/root-topology-refactor.md.
     Dual {
         broot: camino::Utf8PathBuf,
         target: camino::Utf8PathBuf,
@@ -334,8 +335,8 @@ impl Cli {
     /// `--target T` happens to also be set on the same invocation as
     /// `crossdev -t T --init-target`, `roots()` is *already* the sysroot,
     /// so appending `usr/T` again doubly-nested it
-    /// (`<EROOT>/usr/T/usr/T` instead of `<EROOT>/usr/T`) — reproduced live,
-    /// see `todo/root-topology-refactor.md`.
+    /// (`<EROOT>/usr/T/usr/T` instead of `<EROOT>/usr/T`) — reproduced live.
+    // Root topology refactoring details are in todo/root-topology-refactor.md.
     ///
     /// `stage1()`/`profile_stack()`/`resolve_gcc_version` deliberately keep
     /// using plain `roots()` — those genuinely want `--target`'s sysroot
@@ -436,7 +437,8 @@ impl Cli {
             // diverged from real `ROOT=` semantics for no benefit `--root
             // --config-root <same dir>` didn't already give explicitly, and
             // made a bare `--root DIR` behave unlike anything a real emerge
-            // user would expect — see todo/root-topology-refactor.md.
+            // user would expect.
+            // Root topology refactoring details are in todo/root-topology-refactor.md.
             .with_config(path(&self.config_root))
             // base: --root; host otherwise.
             .with_base(path(&self.root))
@@ -723,7 +725,8 @@ mod tests {
     /// the (usually near-empty) offset VDB instead of the host's —
     /// `roots().satisfaction_root(DepClass::BDepend)` is the dedicated
     /// accessor now; `base_roots()` keeps its own, different "outer EROOT"
-    /// meaning (see both their doc comments). See todo/root-topology-refactor.md.
+    /// meaning (see both their doc comments).
+    // Root topology refactoring is tracked in todo/root-topology-refactor.md.
     #[test]
     fn root_broot_is_host_not_offset() {
         let cli = Cli::parse_from(["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
@@ -1093,9 +1096,9 @@ pub struct ToolchainArgs {
     pub merge_flags: MergeFlags,
 }
 
-/// `em stages` — assemble stage-build artifacts (stage1/stage3/stage4) *using*
-/// a toolchain already built by `em toolchain --setup`. See
-/// `todo/em-stages-and-binhosts.md`.
+// `em stages` — assemble stage-build artifacts (stage1/stage3/stage4) *using*
+// a toolchain already built by `em toolchain --setup`.
+// Stages and binhosts design is documented in todo/em-stages-and-binhosts.md.
 #[derive(clap::Args, Debug, Clone)]
 pub struct StagesArgs {
     /// Emerge the profile's `packages.build` bootstrap set into `--root`:

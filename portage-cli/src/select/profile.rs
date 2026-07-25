@@ -3,9 +3,12 @@
 //! `list` / `show` / `set`. The cross-aware difference: `set` accepts **any**
 //! profile path (or a list number) and links it *without* validating it against
 //! the host architecture — `eselect profile` refuses a foreign-arch profile,
-//! which is exactly what a cross sysroot needs (see `todo/crossdev-target.md`,
-//! the profile-linking item). Target the sysroot with the global `--config-root`
+//! which is exactly what a cross sysroot needs.
+//!
+//! Target the sysroot with the global `--config-root`
 //! (e.g. `em --config-root /usr/<CTARGET> select profile set <path>`).
+// Design note: profile-linking for cross targets is documented in
+// todo/crossdev-target.md.
 
 use std::io::Write as _;
 

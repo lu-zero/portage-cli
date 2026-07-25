@@ -44,13 +44,13 @@ pub(crate) async fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
 /// `/var/cache/binpkgs` (confirmed: this repo's own `make.globals` hardcodes
 /// exactly that). For a `--root`/`--target`/`--local`/`--prefix` merge root
 /// (anything other than `/`), consulting that host default is wrong: it's a
-/// real, root-owned system path the build has no business writing to, and
-/// unprivileged builds can't anyway. Caught live: a stage3 `--buildpkg` run
-/// tried to write there, got `EACCES`, and appears to have destabilized the
-/// fakeroost ptrace session for several packages — see
-/// `todo/stage-build-shakeout.md`. Skip straight to a root-relative default
-/// in that case; `$PKGDIR`/config-root `make.conf` (explicit user choices)
-/// still apply regardless of root.
+// real, root-owned system path the build has no business writing to, and
+// unprivileged builds can't anyway. Caught live: a stage3 `--buildpkg` run
+// tried to write there, got `EACCES`, and appears to have destabilized the
+// fakeroost ptrace session for several packages.
+// Stage build shakeout findings are in todo/stage-build-shakeout.md.
+// Skip straight to a root-relative default in that case; `$PKGDIR`/
+// config-root `make.conf` (explicit user choices) still apply regardless of root.
 pub(crate) async fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
     if let Ok(v) = std::env::var("PKGDIR")
         && !v.trim().is_empty()
@@ -326,11 +326,11 @@ impl DesiredBuildEnv {
 
 /// One `binrepos.conf` section — real portage's `BinRepoConfig`, restricted
 /// to the fields em's remote binpkg fetch path uses. `frozen`/
-/// `verify_signature` are parsed and carried but not yet *enforced*: `frozen`
-/// ("prefer a locally cached index over fetching fresh") needs the
-/// not-yet-built local index cache to have any effect, and
-/// `verify_signature` needs the not-yet-built GPG verify step — both already
-/// tracked in `todo/PENDING.md`.
+// `verify_signature` are parsed and carried but not yet *enforced*: `frozen`
+// ("prefer a locally cached index over fetching fresh") needs the
+// not-yet-built local index cache to have any effect, and
+// `verify_signature` needs the not-yet-built GPG verify step — both are
+// tracked in todo/PENDING.md.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinRepoEntry {
     /// Section name, or an md5 hex digest of the `sync-uri` for a
@@ -546,11 +546,12 @@ mod tests {
         assert_eq!(resolve_pkgdir(&cli).await, expected);
     }
 
-    /// A `--target` plan's own roots (`resolve_pkgdir`) resolve under the
-    /// target sysroot, while `broot()` (host roots, what a `MergeRoot::Host`
-    /// entry actually wants) resolve as a plain host build — the two must
-    /// disagree here, or a Host BDEPEND entry would look up binpkgs in the
-    /// wrong PKGDIR (S1/S4 in `todo/binpkg-subtargets.md`).
+    // A `--target` plan's own roots (`resolve_pkgdir`) resolve under the
+    // target sysroot, while `broot()` (host roots, what a `MergeRoot::Host`
+    // entry actually wants) resolve as a plain host build — the two must
+    // disagree here, or a Host BDEPEND entry would look up binpkgs in the
+    // wrong PKGDIR.
+    // Binpkg subtargets design (S1/S4) is in todo/binpkg-subtargets.md.
     #[tokio::test]
     async fn resolve_pkgdir_for_roots_target_vs_host() {
         assert!(

@@ -17,7 +17,8 @@
 //!   both resolved against the build host's own `BROOT` (`roots.satisfaction_root(DepClass::BDepend)`),
 //!   *not* unconditionally bare `/` (a `--root`/`--prefix`/`--local`
 //!   invocation's Host merges land at that BROOT, so that's what must be
-//!   checked — see `todo/stage-build-shakeout.md` #28/#30/#31).
+//!   checked).
+// Stage build shakeout findings #28/#30/#31 are in todo/stage-build-shakeout.md.
 //!
 //! Both sets grow with each earlier plan entry: a package merged earlier in the
 //! run is visible to everything after it (root-model.md "within-run
@@ -114,7 +115,8 @@ mod tests {
 
     /// Build a plan entry from an already-parsed [`Cpv`] — never re-derives
     /// identity from a string internally, matching the rest of the merge
-    /// path (`todo/cross-derive-on-the-fly.md`, "The merge-path decoupling").
+    /// path.
+    // The merge-path decoupling is documented in todo/cross-derive-on-the-fly.md.
     fn planned(merge_root: MergeRoot, cpv: Cpv, depend: &str) -> Result<PlannedMerge> {
         Ok(PlannedMerge {
             merge_root,

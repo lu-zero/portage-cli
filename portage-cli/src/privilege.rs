@@ -2,8 +2,8 @@
 //! `chown`/setuid succeed and ownership is recorded, instead of swallowing the
 //! EPERM and losing it.
 //!
-//! Fakeroost, pseudoroot and sudo are *scoped*, not umbrellas (`todo/
-//! fakeroot-privilege-backends.md` Q6: the ptrace tax / real root must stay off
+//! Fakeroost, pseudoroot and sudo are *scoped*, not umbrellas (Q6 in
+//! fakeroot-privilege-backends.md: the ptrace tax / real root must stay off
 //! the compile): the un-wrapped parent runs `pretend..compile`, then
 //! `build_and_merge` delegates install+qmerge(+binpkg) to a wrapped
 //! `em __worker` child per package ([`install_wrap_backend`] /
@@ -12,6 +12,7 @@
 //! binds must cover the whole run), as does `em ebuild … install/qmerge`
 //! (the debug applet runs phases in-process, with no worker seam). qmerge is
 //! serialised across worker processes by an flock in `ebuild.rs`.
+// Privilege backend design is in todo/fakeroot-privilege-backends.md.
 //!
 //! Each fake-root backend is a default-on cargo feature compiled only where
 //! it works — fakeroost and hakoniwa are Linux kernel interfaces, pseudoroot
@@ -28,8 +29,10 @@
 //!   default: a real stage3 `--buildpkg` run under fakeroost hit a rare,
 //!   non-reproducible-in-isolation ptrace race (`fakeroost: syscall failed:
 //!   ENOENT`) that silently killed ~1/3 of packages' install workers *after*
-//!   qmerge had already succeeded (see `todo/stage-build-shakeout.md`);
-//!   pseudoroot doesn't share that failure mode.
+//!   qmerge had already succeeded.
+//!
+//! Stage build shakeout findings are in todo/stage-build-shakeout.md.
+//! pseudoroot doesn't share that failure mode.
 //! - `fakeroost` — pure-Rust ptrace+seccomp fake root (no privilege):
 //!   ownership is faked in-session, on-disk stays the build user. Covers every
 //!   caller (no libc-interposition gap), at a higher per-syscall cost and the
@@ -214,8 +217,8 @@ pub struct WorkerArgs<'a> {
     /// `cross-riscv64-unknown-linux-gnu/gcc-16.1.1`) — carried across the
     /// process boundary explicitly so the worker never re-derives it from
     /// `ebuild_path`'s on-disk directory name, which is wrong for a
-    /// cross-derived package (`todo/cross-derive-on-the-fly.md`, "The
-    /// merge-path decoupling").
+    /// cross-derived package.
+    // The merge-path decoupling is documented in todo/cross-derive-on-the-fly.md.
     pub cpv: &'a str,
     pub use_flags: &'a str,
     pub work_base: &'a str,

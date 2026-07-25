@@ -22,16 +22,27 @@ pub struct MergeSpec {
     pub use_flags: Vec<String>,
     /// IUSE as declared by the ebuild (may include `+`/`-` defaults).
     pub iuse: Vec<String>,
+    /// `DEPEND` line from the ebuild (build-time dependencies).
     pub depend: Option<String>,
+    /// `RDEPEND` line from the ebuild (run-time dependencies).
     pub rdepend: Option<String>,
+    /// `BDEPEND` line from the ebuild (build-host dependencies).
     pub bdepend: Option<String>,
+    /// `PDEPEND` line from the ebuild (post-install dependencies).
     pub pdepend: Option<String>,
+    /// `IDEPEND` line from the ebuild (install-time dependencies).
     pub idepend: Option<String>,
+    /// Keywords for this package (e.g., `"amd64"`, `"~arm64"`).
     pub keywords: Vec<String>,
+    /// License expression for this package.
     pub license: Option<String>,
+    /// Short description of this package.
     pub description: String,
+    /// Homepage URL for this package.
     pub homepage: Option<String>,
+    /// `RESTRICT` line from the ebuild.
     pub restrict: Option<String>,
+    /// `PROPERTIES` line from the ebuild.
     pub properties: Option<String>,
     /// Phase functions defined by the ebuild (e.g. `["configure", "install"]`).
     pub defined_phases: Vec<String>,

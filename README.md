@@ -76,8 +76,8 @@ subcommands corresponding to the traditional tools.
 **`em query depgraph` / default resolve feature summary:**
 
 - **VDB awareness** — installed packages use `InstalledPolicy::Favor` (keep satisfying versions); already-installed exact CPVs are filtered from the merge list; installed-and-kept packages expand runtime deps only
-- **`-uD` / `--update --deep`** — transitive **in-slot upgrades** (`prefer_update`); host-satisfied build tools still enter the graph so they can upgrade (emerge deep-update). `-u` alone does not mass-upgrade deps; `-D` alone still bumps `:*` slots (`prefer_newest_slot`). See `todo/deep-in-slot-upgrades.md`
-- **`-N` / `--newuse` and `-U` / `--changed-use`** — same-CPV rebuild when planned USE/IUSE differs from the VDB (`todo/newuse.md`); with `-uD`, prefer newest when USE drift forces a rebuild
+- **`-uD` / `--update --deep`** — transitive **in-slot upgrades** (`prefer_update`); host-satisfied build tools still enter the graph so they can upgrade (emerge deep-update). `-u` alone does not mass-upgrade deps; `-D` alone still bumps `:*` slots (`prefer_newest_slot`)
+- **`-N` / `--newuse` and `-U` / `--changed-use`** — same-CPV rebuild when planned USE/IUSE differs from the VDB; with `-uD`, prefer newest when USE drift forces a rebuild
 - **Profile USE flags** — `make.defaults` / `make.conf` through brush with portage-style incremental USE stacking (see `docs/architecture.md`)
 - **USE_EXPAND** — `PYTHON_TARGETS`, `CPU_FLAGS_*`, `ABI_X86`, etc. expanded and grouped in output
 - **OR-group branch selection** — prefer branches whose USE deps are already satisfied (avoids gratuitous rebuilds)
@@ -173,7 +173,7 @@ bootstrap toolchains and assemble stages.
 The native toolchain and the cross bootstrap share one staged driver
 (`crossdev::stages`), differing only in atom naming and how the `glibc ↔ gcc`
 cycle is broken. Stage *production* (stage1 `packages.build`, stage3
-`--emptytree @system`) is the next layer — see `todo/em-stages-and-binhosts.md`.
+`--emptytree @system`) is the next layer.
 
 ---
 
@@ -216,10 +216,7 @@ dependency graph, per-crate API catalog, and design reference.
 Further reading: [`docs/architecture.md`](./docs/architecture.md),
 [`docs/build-roadmap.md`](./docs/build-roadmap.md),
 [`docs/benchmarks.md`](./docs/benchmarks.md),
-[`docs/binhost.md`](./docs/binhost.md) (binary packages, identity model, recipes),
-[`todo/PENDING.md`](./todo/PENDING.md) (stage/binhost arc),
-[`todo/deep-in-slot-upgrades.md`](./todo/deep-in-slot-upgrades.md) (`-uD`),
-[`todo/newuse.md`](./todo/newuse.md) (`-N` still open).
+[`docs/binhost.md`](./docs/binhost.md) (binary packages, identity model, recipes).
 
 ### brush integration
 

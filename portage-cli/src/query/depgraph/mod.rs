@@ -40,8 +40,9 @@ pub struct PlannedMerge {
     /// cpv (`cross-<tuple>/gcc-...`), which may differ from the real cpn
     /// `ebuild_path` was resolved through. Kept as a real `Cpv`, not a
     /// formatted string, so nothing downstream has to re-derive it by
-    /// parsing a path or string — see `todo/cross-derive-on-the-fly.md`,
-    /// "The merge-path decoupling".
+    /// parsing a path or string.
+    // Design note: this decoupling is documented in todo/cross-derive-on-the-fly.md,
+    // "The merge-path decoupling".
     pub cpv: Cpv,
     /// Absolute path to the ebuild.
     pub ebuild_path: camino::Utf8PathBuf,
@@ -122,7 +123,8 @@ pub struct DepgraphOpts<'a> {
     /// operation* is running (`em crossdev --setup` bootstrapping a still-empty
     /// target always needs it; `em stages --stage1` building ordinary packages
     /// against an already-working toolchain should not), not of the sysroot's
-    /// CHOST/CBUILD alone. See `todo/stage-build-shakeout.md`.
+    /// CHOST/CBUILD alone.
+    // See todo/stage-build-shakeout.md for design rationale.
     pub root_deps_rdeps: bool,
     /// `--deep`: re-examine transitive deps. With [`Self::update`], enables
     /// in-slot upgrades for packages in the graph (emerge `-uD`). Alone, bumps

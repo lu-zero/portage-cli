@@ -31,9 +31,9 @@
 //! - sanitizes `PKG_CONFIG_PATH` (unlike `_LIBDIR`, it *adds* to the search
 //!   list, so an inherited host value would leak host `.pc` files in);
 //! - sanity-checks the output for `-I`/`-L` flags outside the sysroot and
-//!   refuses to emit them — the exact bug class `todo/stage-build-
-//!   shakeout.md` documents (`net-libs/libtirpc` leaking via bare
-//!   pkg-config into a cross build).
+//!   refuses to emit them — this prevents cross-build leakage similar to
+//!   net-libs/libtirpc.
+// Design details are in todo/stage-build-shakeout.md.
 //!
 //! [`SCRIPT_TEMPLATE`] below is a close adaptation of that real script
 //! (same derivation order, same safety net); the only piece genuinely

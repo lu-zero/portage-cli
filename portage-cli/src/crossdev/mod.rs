@@ -11,8 +11,8 @@
 //! The staged-bootstrap driver ([`run_staged`]) and the [`stages::BootstrapKind`]
 //! plan are shared with the **native toolchain** ([`toolchain`], `em toolchain
 //! --setup`): a self-hosting toolchain into `--root` (`CHOST == CBUILD`) is the
-//! same `glibc ↔ gcc` cycle as a cross toolchain, broken the same staged way —
-//! see `todo/em-root-characterization.md`.
+//! same `glibc ↔ gcc` cycle as a cross toolchain, broken the same staged way.
+// Design note: root characterization is documented in todo/em-root-characterization.md.
 //!
 //! The install location follows em's root model: the sysroot is
 //! `<EROOT>/usr/<CTARGET>`, so `em crossdev <t>` targets `/usr/<CTARGET>` (like
@@ -22,8 +22,8 @@
 //! ## `cross-<CTARGET>/gcc` vs `sys-devel/gcc` — two different packages
 //!
 //! Easy to conflate, and doing so caused real confusion chasing a stage1
-//! failure (`todo/stage-build-shakeout.md` finding #19): they are **not** the
-//! same compiler at any point.
+//! failure: they are **not** the same compiler at any point.
+// See todo/stage-build-shakeout.md finding #19 for details.
 //!
 //! - **`cross-<CTARGET>/gcc`** (this module's overlay category, built by
 //!   [`stages::toolchain_plan`]) is the **host-side cross-compiler**: it runs
@@ -44,8 +44,9 @@
 //! actually used to *build* it — and GCC cannot reliably self-bootstrap a
 //! newer major version using an older one as `CC_FOR_TARGET` (a real GCC
 //! limitation, not an em bug). Keeping the two in sync is a `--update`/rebuild
-//! concern — see `todo/stage-build-shakeout.md` finding #19 for the pending
-//! `crossdev --update` support and version-mismatch warning.
+//! concern.
+// Pending work for crossdev update and version-mismatch warnings is tracked
+// in todo/stage-build-shakeout.md finding #19.
 
 mod config_plan;
 mod multilib;
@@ -91,8 +92,8 @@ pub(crate) fn merge_depgraph_flags_fields(
 /// subcommand's own flattened [`MergeFlags`] with the top-level one, args
 /// taking precedence — the same "either position works" merge
 /// [`merge_depgraph_flags`] already does for `--deep`/`--newuse`, needed here
-/// for the same reason (`em -j 80 stages --stage1` vs `em stages --stage1 -j
-/// 80`, see `todo/stage-build-shakeout.md`).
+/// for the same reason (`em -j 80 stages --stage1` vs `em stages --stage1 -j 80`).
+// See todo/stage-build-shakeout.md for the design rationale.
 fn merge_merge_flags(globals: &Cli, args: &MergeFlags) -> MergeFlags {
     merge_merge_flags_with(globals, args, false)
 }

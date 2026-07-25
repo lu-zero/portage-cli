@@ -10,8 +10,8 @@
 //!
 //! Scheme (matches real portage's `BINPKG_GPG_*`/gpkg.py, redefined only
 //! where it assumed a gpg-agent/keybox we don't have — see the module docs
-//! in `crate::gpkg` and `todo/fakeroot-privilege-backends.md` for the
-//! config-var mapping):
+//! in `crate::gpkg` for the config-var mapping):
+// Privilege backend design is in todo/fakeroot-privilege-backends.md.
 //! - Signing key: an armored **secret key file** (not a gpg keyring
 //!   key-ID — there is no gpg-agent/pinentry here).
 //! - Verify keyring: a flat directory of armored **public key files**

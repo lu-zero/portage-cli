@@ -326,8 +326,9 @@ async fn emerge_atoms_inner(
     // World selection (real emerge's `_world_atom`): only the genuine
     // top-level invocation (`update_world`), and only the literal,
     // explicitly-named atoms (not `@set` refs — world_sets tracking isn't
-    // implemented yet, see todo/cli-flag-parity.md), skipped entirely for
-    // the same flag set real portage skips it for.
+    // implemented yet).
+    // CLI flag parity work is tracked in todo/cli-flag-parity.md.
+    // Skipped entirely for the same flag set real portage skips it for.
     let should_update_world = update_world
         && !cli.pretend
         && !merge_flags.oneshot

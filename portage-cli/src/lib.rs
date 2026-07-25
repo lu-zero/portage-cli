@@ -1,8 +1,7 @@
 //! Gentoo Portage command-line library backing the `em` binary.
 
-/// Structured merge activity events (library channel + on-disk sinks).
-///
-/// See `todo/activity-status.md`.
+// Structured merge activity events (library channel + on-disk sinks).
+// Activity status design is documented in todo/activity-status.md.
 pub mod activity;
 pub(crate) mod binpkg;
 pub mod cli;

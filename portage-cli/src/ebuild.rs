@@ -134,11 +134,12 @@ impl PhaseGroup {
     /// stage a file there for `src_install` to pick up later (e.g.
     /// `app-crypt/gnupg`'s systemd unit templates, copied into `${T}` in
     /// `src_prepare` and `doins`'d from there in `src_install_all`). Since
-    /// `Install`'s own phase list is just `["install", "qmerge"]` (no
-    /// `prepare` to redo the copy), wiping `temp` here silently destroyed
-    /// that staged file between the two processes and `doins` failed on a
-    /// file that existed moments earlier in the same build. Caught live
-    /// chasing a stage1 gnupg failure — see `todo/stage-build-shakeout.md`.
+    // `Install`'s own phase list is just `["install", "qmerge"]` (no
+    // `prepare` to redo the copy), wiping `temp` here silently destroyed
+    // that staged file between the two processes and `doins` failed on a
+    // file that existed moments earlier in the same build. Caught live
+    // chasing a stage1 gnupg failure.
+    // Stage build shakeout findings are in todo/stage-build-shakeout.md.
     fn clean_subs(&self) -> Option<&'static [&'static str]> {
         match self {
             Self::Full | Self::Compile | Self::BinpkgMerge | Self::BuildOnly => {
@@ -995,8 +996,8 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     // to env files under `/etc/portage/env/`, sourced on top of `make.conf` so
     // FEATURES, *FLAGS, MAKEOPTS, … take effect per package. Sourced before the
     // resolved USE is applied (below) so the plan's USE wins — USE set by an env
-    // file is intentionally not reflected here (a resolver-side follow-up; see
-    // todo/package-env.md).
+    // file is intentionally not reflected here (a resolver-side follow-up).
+    // Package env design is in todo/package-env.md.
     {
         let base = config_root.unwrap_or_else(|| Utf8Path::new("/"));
         let mut portage_dirs = vec![base.join("etc/portage").into_std_path_buf()];
@@ -2681,15 +2682,16 @@ async fn capture_environment(
 /// re-`declare`ing them in the worker pins a stale snapshot in place of the
 /// shell's live tracking. Confirmed concretely for `PIPESTATUS`: real bash
 /// unconditionally replaces the whole array on every new pipeline regardless
-/// of a prior explicit `declare`, but brush does not — once user code (here,
-/// our own restore) has declared it, brush never resizes it again, so a
-/// later 2-stage pipe in the Install worker still reports the compile
-/// parent's stale 1-element snapshot. That silently broke `distutils-r1`'s
-/// `pipestatus || die` check (`dev-python/jinja2`, the `install//usr/bin`
-/// listing failure — see `todo/brush-pipestatus-not-reset.md` for the
-/// brush-side bug and repro). Filtering the dump is the correct fix
-/// independent of that brush bug: these variables are bash-maintained state,
-/// not build environment, and were never meant to cross a process boundary.
+// of a prior explicit `declare`, but brush does not — once user code (here,
+// our own restore) has declared it, brush never resizes it again, so a
+// later 2-stage pipe in the Install worker still reports the compile
+// parent's stale 1-element snapshot. That silently broke `distutils-r1`'s
+// `pipestatus || die` check (`dev-python/jinja2`, the `install//usr/bin`
+// listing failure).
+// Brush pipestatus design is in todo/brush-pipestatus-not-reset.md.
+// Filtering the dump is the correct fix independent of that brush bug: these
+// variables are bash-maintained state, not build environment, and were never
+// meant to cross a process boundary.
 /// Bash's own dynamic/special variables: never worth restoring across the
 /// Compile→Install process boundary (see `capture_variables`'s doc comment).
 const DYNAMIC_VAR_DENYLIST: &[&str] = &[
@@ -2945,11 +2947,11 @@ mod tests {
         }
     }
 
-    /// Regression test for the jinja2 stage3 failure: restoring `PIPESTATUS`
-    /// (or the other bash dynamic vars) into the Install worker pins a stale
-    /// snapshot that brush never resizes on later pipelines — see
-    /// `todo/brush-pipestatus-not-reset.md`. The fix is simply never
-    /// dumping them in the first place.
+    // Regression test for the jinja2 stage3 failure: restoring `PIPESTATUS`
+    // (or the other bash dynamic vars) into the Install worker pins a stale
+    // snapshot that brush never resizes on later pipelines.
+    // Brush pipestatus design is in todo/brush-pipestatus-not-reset.md.
+    // The fix is simply never dumping them in the first place.
     #[test]
     fn filter_declare_dump_drops_readonly_and_dynamic_vars() {
         let dump = concat!(
