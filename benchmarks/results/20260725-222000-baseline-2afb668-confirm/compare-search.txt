@@ -1,0 +1,20 @@
+Repository: /home/lu_zero/Sources/portage-cli/benchmarks/gentoo
+Patterns:   gcc python firefox rust
+Iterations: 5  (warmup: 1)
+em:         /tmp/portage-cli-bench-2afb668/target/release/em
+emerge:     /usr/bin/emerge
+qsearch:    /usr/bin/qsearch
+
+tool        pattern          timing
+em          gcc              mean=0.072 s   min=0.06 s
+emerge      gcc              mean=5.824 s   min=5.82 s
+qsearch     gcc              mean=0.136 s   min=0.13 s
+em          python           mean=0.098 s   min=0.08 s
+emerge      python           mean=1.150 s   min=1.14 s
+qsearch     python           mean=0.132 s   min=0.13 s
+em          firefox          mean=0.088 s   min=0.07 s
+emerge      firefox          mean=0.628 s   min=0.62 s
+qsearch     firefox          mean=0.134 s   min=0.13 s
+em          rust             mean=0.086 s   min=0.07 s
+emerge      rust             mean=0.830 s   min=0.83 s
+qsearch     rust             mean=0.138 s   min=0.13 s

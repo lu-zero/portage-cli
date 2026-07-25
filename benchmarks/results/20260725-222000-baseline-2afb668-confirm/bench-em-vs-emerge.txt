@@ -1,0 +1,56 @@
+== package-set parity (em -p vs emerge -p)
+| package | emerge | em | diffs |
+|---------|--------|----|-------|
+| dev-qt/qtbase                            |   42 |   42 |     0 |
+| app-text/texlive-core                    |   66 |  155 |    89 |
+| www-client/firefox                       |   82 |   75 |     7 |
+| dev-qt/qtwebengine                       |   82 |   82 |     0 |
+| mail-client/thunderbird                  |   85 |   78 |     7 |
+| app-office/libreoffice                   |  141 |  134 |     7 |
+| app-emulation/qemu                       |    2 |    2 |     0 |
+| cross-riscv64-unknown-elf/gcc            |    1 |    1 |     0 |
+== multi-target set (informational: cascade-tail divergence expected)
+   emerge=187 em=183
+
+```
+   > dev-libs/wayland-1.26.0
+   > dev-libs/wayland-protocols-1.49
+   < dev-python/docutils-0.23
+   < dev-python/olefile-0.47
+   < dev-python/pillow-12.3.0
+   < dev-python/pybind11-3.0.4
+   < dev-python/pygments-2.19.2
+   < dev-python/pyproject-metadata-0.12.1
+   < dev-python/scikit-build-core-1.0.3
+   > dev-util/wayland-scanner-1.26.0
+```
+== timing (hyperfine, 5 runs)
+Benchmark 1: /tmp/portage-cli-bench-2afb668/target/release/em -p www-client/firefox
+  Time (mean ± σ):      1.312 s ±  0.048 s    [User: 2.388 s, System: 8.367 s]
+Benchmark 2: emerge -p www-client/firefox
+  Time (mean ± σ):      4.111 s ±  0.035 s    [User: 4.038 s, System: 0.059 s]
+    3.13 ± 0.12 times faster than emerge -p www-client/firefox
+Benchmark 1: /tmp/portage-cli-bench-2afb668/target/release/em -p app-office/libreoffice
+  Time (mean ± σ):      1.851 s ±  0.241 s    [User: 2.776 s, System: 15.879 s]
+Benchmark 2: emerge -p app-office/libreoffice
+  Time (mean ± σ):      4.056 s ±  0.024 s    [User: 3.986 s, System: 0.058 s]
+    2.19 ± 0.29 times faster than emerge -p app-office/libreoffice
+Benchmark 1: /tmp/portage-cli-bench-2afb668/target/release/em -p app-office/libreoffice dev-qt/qtwebengine mail-client/thunderbird app-emulation/qemu www-client/firefox
+  Time (mean ± σ):      1.783 s ±  0.083 s    [User: 2.894 s, System: 5.854 s]
+Benchmark 2: emerge -p app-office/libreoffice dev-qt/qtwebengine mail-client/thunderbird app-emulation/qemu www-client/firefox
+  Time (mean ± σ):      5.269 s ±  0.029 s    [User: 5.178 s, System: 0.075 s]
+    2.96 ± 0.14 times faster than emerge -p app-office/libreoffice dev-qt/qtwebengine mail-client/thunderbird app-emulation/qemu www-client/firefox
+Benchmark 1: /tmp/portage-cli-bench-2afb668/target/release/em -s gcc
+  Time (mean ± σ):     101.5 ms ±  13.8 ms    [User: 43.1 ms, System: 47.1 ms]
+Benchmark 2: emerge -s gcc
+  Time (mean ± σ):      5.807 s ±  0.014 s    [User: 5.012 s, System: 1.077 s]
+   57.24 ± 7.79 times faster than emerge -s gcc
+
+### Timing summary (markdown table, parsed from last hyperfine runs above)
+| Benchmark | em (mean ± σ) | emerge (mean ± σ) | speedup (em vs emerge) |
+|-----------|-----------------|-------------------|------------------------|
+| firefox -p | 1.402 s ± 0.153 s | 4.089 s ± 0.041 s | 2.92× |
+| libreoffice -p | 1.760 s ± 0.199 s | 4.094 s ± 0.036 s | 2.33× |
+| multi (5 pkgs) -p | 1.842 s ± 0.100 s | 5.261 s ± 0.036 s | 2.86× |
+| gcc -s | 0.139 s ± 0.016 s | 5.769 s ± 0.060 s | 41.63× |
+RESULT: parity FAILED
