@@ -258,7 +258,7 @@ async fn emerge_atoms_inner(
     if !repo_path.is_dir() {
         bail!("repo not found at {resolved}");
     }
-    let repo = portage_repo::Repository::open(repo_path.as_std_path())?;
+    let repo = crate::repo_open::open(repo_path.as_std_path())?;
     let vdb = open_cli_vdb(cli).ok();
     let mode = if merge_flags.update {
         query::ResolveMode::PreferInstalled

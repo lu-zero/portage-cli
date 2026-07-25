@@ -2,6 +2,8 @@
 
 // Structured merge activity events (library channel + on-disk sinks).
 // Activity status design is documented in todo/activity-status.md.
+/// Persistent active `--prefix`/`--local` registration (`em active`).
+pub(crate) mod active;
 pub mod activity;
 pub(crate) mod binpkg;
 pub mod cli;
@@ -24,6 +26,8 @@ pub mod privilege;
 pub(crate) mod query;
 pub(crate) mod quickpkg;
 pub(crate) mod regen;
+/// Open repos with em's durable user md5-cache root.
+pub(crate) mod repo_open;
 pub(crate) mod search;
 pub(crate) mod select;
 pub(crate) mod setup;
@@ -33,6 +37,8 @@ pub(crate) mod test_support;
 pub(crate) mod use_flags;
 pub(crate) mod util;
 pub(crate) mod vdb;
+/// Minimal XDG Base Directory helpers (`$XDG_CACHE_HOME` / `$XDG_STATE_HOME`).
+pub(crate) mod xdg;
 
 pub use activity::{
     ActivityBus, ActivityEvent, ActivitySessionOpts, DurationStore, LiveProjection, RecordingSink,

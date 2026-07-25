@@ -220,7 +220,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // satisfies BDEPEND (emerge sets `bdeps=auto` unless overridden).
     let emptytree_native = empty && !host_config_stage && !cross.active;
     let solve_with_bdeps = with_bdeps || emptytree_native;
-    let repo = Repository::open(repo_path)
+    let repo = crate::repo_open::open(repo_path)
         .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
 
     // Overlays from repos.conf (the main repo is loaded above). Masters are
@@ -247,7 +247,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         Some(p) => p.to_path_buf(),
                         None => return None, // virtual/alias repo — no path to open
                     };
-                    match Repository::open_with_masters(path, &repos_dir) {
+                    match crate::repo_open::open_with_masters(path, &repos_dir) {
                         Ok(pair) => Some(pair),
                         Err(err) => {
                             eprintln!(

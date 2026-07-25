@@ -169,7 +169,10 @@ mod tests {
         )
         .unwrap();
 
-        let repo = Repository::open(dir.path()).unwrap();
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open(dir.path())
+            .unwrap();
         (dir, repo)
     }
 

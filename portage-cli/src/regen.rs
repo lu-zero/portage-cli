@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use portage_repo::{RegenOpts, ReposConf, Repository, SourceOpts, regen_cache};
+use portage_repo::{RegenOpts, RegenWriteTarget, ReposConf, SourceOpts, regen_cache};
 
 /// Regenerate metadata caches.
 ///
@@ -11,9 +11,9 @@ use portage_repo::{RegenOpts, ReposConf, Repository, SourceOpts, regen_cache};
 /// explicitly to regenerate it anyway). Each argument may be a repos.conf
 /// name or a path.
 ///
-/// Output goes to the repo's own `metadata/md5-cache` when writable,
-/// otherwise to the user-side cache (`~/.cache/em/md5-cache/<repo>`) that
-/// `em` consults for overlay metadata.
+/// Default write path: in-tree primary if writable, else the repo's user
+/// secondary (`$XDG_CACHE_HOME/em/md5-cache/<name>`), configured at open.
+/// `--output DIR` forces a single directory instead.
 pub async fn run(
     repos_args: &[String],
     main_repo_path: &str,
@@ -76,7 +76,7 @@ pub async fn run(
     let mut total_errors = 0usize;
     for target in &targets {
         let (repo, masters) =
-            Repository::open_with_masters(target.clone(), &repos_dir).context("open repo")?;
+            crate::repo_open::open_with_masters(target.clone(), &repos_dir).context("open repo")?;
 
         let ebuilds: Vec<_> = repo
             .ebuilds_with_masters(&masters)
@@ -84,28 +84,16 @@ pub async fn run(
             .into_iter()
             .collect();
 
-        let out = match &output {
-            Some(o) => o.clone(),
-            None => {
-                let own = repo.path().join("metadata/md5-cache");
-                if std::fs::create_dir_all(&own).is_ok() {
-                    own.into_std_path_buf()
-                } else {
-                    let user = user_cache_dir(repo.name());
-                    eprintln!(
-                        "em regen: {} is not writable, writing to {}",
-                        repo.path(),
-                        user.display()
-                    );
-                    user
-                }
-            }
+        let write = match &output {
+            Some(o) => RegenWriteTarget::Dir(o.clone()),
+            // Prefer primary, else secondary already attached at open.
+            None => RegenWriteTarget::Repository,
         };
 
         eprintln!("regen ::{} ({} ebuilds)", repo.name(), ebuilds.len());
         let opts = RegenOpts {
             source: SourceOpts { jobs, dedup },
-            output_dir: Some(out),
+            write,
         };
         let stats = regen_cache(&repo, &masters, ebuilds, &opts, |done, total| {
             eprint!("\r[{done}/{total}]");
@@ -123,21 +111,4 @@ pub async fn run(
         bail!("{total_errors} sourcing errors");
     }
     Ok(())
-}
-
-/// `$XDG_CACHE_HOME/em/md5-cache/<repo>` (or `~/.cache/...`) — the cache
-/// `em`'s overlay metadata loading reads.
-fn user_cache_dir(repo_name: &str) -> PathBuf {
-    std::env::var("XDG_CACHE_HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".cache"))
-        })
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("em/md5-cache")
-        .join(repo_name)
 }

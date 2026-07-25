@@ -856,7 +856,7 @@ fn resolve_masters(
                 .and_then(|e| e.location.as_path().map(std::path::PathBuf::from))
                 .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
                 .unwrap_or_else(|| repo_root.parent().unwrap_or(repo_root).join(name));
-            match Repository::open(location.as_std_path()) {
+            match crate::repo_open::open(location.as_std_path()) {
                 Ok(master) => {
                     recurse(&master, &location, conf, out, seen);
                     out.push(master);
@@ -941,7 +941,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             .to_owned(),
     };
 
-    let repo = Repository::open(repo_root.as_std_path())
+    let repo = crate::repo_open::open(repo_root.as_std_path())
         .with_context(|| format!("opening repo at {repo_root}"))?;
 
     // Cross-* packages sidestep masters (they symlink into gentoo, so

@@ -875,9 +875,9 @@ pub(crate) fn main_repo(globals: &Cli) -> Result<Repository> {
                 .and_then(|c| c.main_repo().or_else(|| c.find("gentoo")))
         });
     match entry {
-        Some(e) => Repository::open(e.location.as_path().unwrap_or(std::path::Path::new(".")))
+        Some(e) => crate::repo_open::open(e.location.as_path().unwrap_or(std::path::Path::new(".")))
             .with_context(|| format!("opening main repo at {}", e.location.as_path().map(|p| p.display().to_string()).unwrap_or_else(|| "(virtual)".to_string()))),
-        None => Repository::open("/var/db/repos/gentoo")
+        None => crate::repo_open::open("/var/db/repos/gentoo")
             .context("no main repo configured in repos.conf (target or host) and the default /var/db/repos/gentoo is not a repo either"),
     }
 }

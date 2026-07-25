@@ -16,7 +16,7 @@ fn open_repos(repo_paths: &[std::path::PathBuf]) -> Result<Vec<Repository>> {
     }
     let mut repos: Vec<Repository> = Vec::with_capacity(repo_paths.len());
     for p in repo_paths {
-        match Repository::open(p) {
+        match crate::repo_open::open(p) {
             Ok(r) => repos.push(r),
             Err(e) => eprintln!("em: skipping {}: {e}", p.display()),
         }
@@ -218,7 +218,7 @@ pub async fn run_emerge_style(
         // too — the parallel cache pass below cannot see them.
         let mut matched: BTreeMap<String, (Cpn, usize)> = BTreeMap::new();
         for (idx, repo) in repos.iter().enumerate() {
-            let has_cache = repo.path().join("metadata/md5-cache").is_dir();
+            let has_cache = repo.has_primary_cache();
             for cat in repo.categories() {
                 for pkg in cat.packages() {
                     let mut hit = if pat.contains('/') {
@@ -316,27 +316,8 @@ fn entry_for(
 ) -> Option<portage_metadata::CacheEntry> {
     let repo = &repos[idx];
     let cpv = ebuild.cpv();
+    // Primary then secondary (configured at open via builder).
     if let Ok(Some(entry)) = repo.cache_entry(cpv) {
-        return Some(entry);
-    }
-    // User-side cache written by overlay metadata sourcing.
-    let base = std::env::var("XDG_CACHE_HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| std::path::PathBuf::from(h).join(".cache"))
-        })?;
-    let user = base
-        .join("em/md5-cache")
-        .join(repo.name())
-        .join(cpv.cpn.category.as_str())
-        .join(format!("{}-{}", cpv.cpn.package, cpv.version));
-    if let Ok(text) = std::fs::read_to_string(&user)
-        && let Ok(entry) = portage_metadata::CacheEntry::parse(&text)
-    {
         return Some(entry);
     }
     // Symlinked ebuild: the target repo's cache entry is byte-exact.

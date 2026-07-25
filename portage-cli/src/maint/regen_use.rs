@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use camino::Utf8Path;
 
 pub fn run(repo_path: &Utf8Path, output: Option<&str>) -> Result<()> {
-    let repo = portage_repo::Repository::open(repo_path)
+    let repo = crate::repo_open::open(repo_path)
         .with_context(|| format!("opening repo at {repo_path}"))?;
     let use_db =
         portage_repo::UseDb::build_local_from_repo(&repo).context("building use.local.desc")?;

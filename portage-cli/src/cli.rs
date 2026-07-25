@@ -181,11 +181,19 @@ pub struct Cli {
 /// The user's home directory from `$HOME`, falling back to `/root` only if
 /// unset (matching how unprivileged tools resolve `~`).
 fn home_dir() -> camino::Utf8PathBuf {
-    std::env::var("HOME")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(camino::Utf8PathBuf::from)
-        .unwrap_or_else(|| camino::Utf8PathBuf::from("/root"))
+    crate::xdg::home()
+}
+
+/// Topology after resolving CLI flags + optional `em active` registration.
+///
+/// Explicit `--local` / `--prefix` / `--root` always win. When none are set,
+/// a previously registered active context (see [`crate::active`]) supplies
+/// prefix/local so bare `em <pkg>` dogfooding needs no per-invocation flags.
+enum TopologySource {
+    Local(camino::Utf8PathBuf),
+    Prefix(camino::Utf8PathBuf),
+    Root(camino::Utf8PathBuf),
+    Host,
 }
 
 // The four filesystem roles (docs/root-topology.md § "The four roles"),
@@ -237,33 +245,53 @@ fn opt_path(s: &Option<String>) -> Option<camino::Utf8PathBuf> {
 }
 
 impl Cli {
-    /// The root model (docs/root-topology.md) from `--local`/`--prefix`/
-    /// `--root`, before config/overlay concerns. `--local` > `--prefix` >
-    /// `--root` > bare, matching `base_roots()`'s existing precedence.
-    fn root_set(&self) -> RootSet {
-        let host = camino::Utf8PathBuf::from("/");
+    /// Resolve topology from explicit flags, else the `em active` registration.
+    ///
+    /// Precedence: `--local` > `--prefix` > `--root` > active state > bare host.
+    /// Active state is only consulted when no root-topology flag is present, so
+    /// `em --root R …` never accidentally inherits a registered prefix.
+    fn topology_source(&self) -> TopologySource {
         if let Some(local) = &self.local {
             let root = if local.is_empty() {
                 home_dir().join(".gentoo")
             } else {
                 camino::Utf8PathBuf::from(local)
             };
-            return RootSet::Single { root };
+            return TopologySource::Local(root);
         }
         if let Some(prefix) = opt_path(&self.prefix) {
-            return RootSet::Overlayed {
-                broot: host.clone(),
-                base: host,
-                target: prefix,
-            };
+            return TopologySource::Prefix(prefix);
         }
         if let Some(root) = opt_path(&self.root) {
-            return RootSet::Dual {
-                broot: host,
-                target: root,
-            };
+            return TopologySource::Root(root);
         }
-        RootSet::Single { root: host }
+        match crate::active::load() {
+            Ok(Some(ctx)) => match ctx.kind {
+                crate::active::ActiveKind::Local => TopologySource::Local(ctx.path),
+                crate::active::ActiveKind::Prefix => TopologySource::Prefix(ctx.path),
+            },
+            // Missing or unreadable state → bare host (same as no registration).
+            _ => TopologySource::Host,
+        }
+    }
+
+    /// The root model (docs/root-topology.md) from `--local`/`--prefix`/
+    /// `--root` (or the active registration), before config/overlay concerns.
+    fn root_set(&self) -> RootSet {
+        let host = camino::Utf8PathBuf::from("/");
+        match self.topology_source() {
+            TopologySource::Local(root) => RootSet::Single { root },
+            TopologySource::Prefix(target) => RootSet::Overlayed {
+                broot: host.clone(),
+                base: host,
+                target,
+            },
+            TopologySource::Root(target) => RootSet::Dual {
+                broot: host,
+                target,
+            },
+            TopologySource::Host => RootSet::Single { root: host },
+        }
     }
 }
 
@@ -379,46 +407,43 @@ impl Cli {
     /// for BDEPEND checks too. Use [`broot`](Self::broot) for that.
     pub(crate) fn base_roots(&self) -> Roots {
         let path = opt_path;
-        // `--local`: standalone Gentoo-Prefix, own BROOT. Full closure (base
-        // == target == the prefix), self-contained VDB. EPREFIX makes installed
-        // scripts relocatable (shebangs reference ${EPREFIX}/usr/bin/...). The
-        // prefix builds its own python via `toolchain --setup`; during bootstrap
-        // the host compiler is reached via PATH, never via a symlink masquerading
-        // as a prefix-owned file (that's the overlay's job — see --prefix below).
-        // See docs/root-topology.md § "Override semantics".
-        if self.local.is_some() {
-            let RootSet::Single { root: prefix } = self.root_set() else {
-                unreachable!("--local always resolves to RootSet::Single")
-            };
-            // Prefer the prefix's own make.profile when present so a bootstrapped
-            // `--local` tree is self-hosting; fall back to host config until the
-            // first `em --config-root … select profile` (or setup) lands one.
-            // Explicit `--config-root` still wins via with_config_root_explicit.
-            let prefix_profile = prefix.join("etc/portage/make.profile");
-            let config = if self.config_root.is_some() {
-                path(&self.config_root)
-            } else if prefix_profile.exists() {
-                Some(prefix.clone())
-            } else {
-                None
-            };
-            return Roots::default()
-                .with_config(config)
-                .with_base(Some(prefix.clone()))
-                .with_target(Some(prefix.clone()))
-                .with_broot(Some(prefix.clone()))
-                .with_cross_arch(false)
-                .with_eprefix(Some(prefix.clone()))
-                .with_config_overlay(Some(prefix.join("etc/portage")))
-                .with_relocate(true)
-                .with_config_root_explicit(path(&self.config_root));
-        }
-        // `--prefix` overlay: BROOT is the host `/`. The prefix is the install
-        // destination (target), but base_roots()'s merge_root() must be the host
-        // because that's what preflight/bdepend_avail check BDEPEND against.
-        // roots() reconstructs the prefix-target view on top of this.
-        if let Some(prefix) = path(&self.prefix) {
-            return Roots::default()
+        match self.topology_source() {
+            // `--local` (or active local): standalone Gentoo-Prefix, own BROOT.
+            // Full closure (base == target == the prefix), self-contained VDB.
+            // EPREFIX makes installed scripts relocatable (shebangs reference
+            // ${EPREFIX}/usr/bin/...). See docs/root-topology.md § "Override
+            // semantics".
+            TopologySource::Local(prefix) => {
+                // Prefer the prefix's own make.profile when present so a
+                // bootstrapped `--local` tree is self-hosting; fall back to
+                // host config until the first `em --config-root … select
+                // profile` (or setup) lands one. Explicit `--config-root`
+                // still wins via with_config_root_explicit.
+                let prefix_profile = prefix.join("etc/portage/make.profile");
+                let config = if self.config_root.is_some() {
+                    path(&self.config_root)
+                } else if prefix_profile.exists() {
+                    Some(prefix.clone())
+                } else {
+                    None
+                };
+                Roots::default()
+                    .with_config(config)
+                    .with_base(Some(prefix.clone()))
+                    .with_target(Some(prefix.clone()))
+                    .with_broot(Some(prefix.clone()))
+                    .with_cross_arch(false)
+                    .with_eprefix(Some(prefix.clone()))
+                    .with_config_overlay(Some(prefix.join("etc/portage")))
+                    .with_relocate(true)
+                    .with_config_root_explicit(path(&self.config_root))
+            }
+            // `--prefix` overlay (or active prefix): BROOT is the host `/`.
+            // The prefix is the install destination (target), but
+            // base_roots()'s merge_root() must be the host because that's
+            // what preflight/bdepend_avail check BDEPEND against. roots()
+            // reconstructs the prefix-target view on top of this.
+            TopologySource::Prefix(prefix) => Roots::default()
                 .with_config(path(&self.config_root))
                 .with_base(None)
                 .with_target(None) // BROOT = host `/`, NOT the prefix
@@ -427,32 +452,34 @@ impl Cli {
                 .with_eprefix(Some(prefix.clone()))
                 .with_config_overlay(Some(prefix.join("etc/portage")))
                 .with_relocate(true)
-                .with_config_root_explicit(path(&self.config_root));
+                .with_config_root_explicit(path(&self.config_root)),
+            // Bare host or `--root` offset.
+            TopologySource::Root(_) | TopologySource::Host => Roots::default()
+                // config: --config-root, else host `/` — true portage `ROOT=`
+                // parity (`PORTAGE_CONFIGROOT` defaults to `/` regardless of
+                // `ROOT`). The 2026-07-09 "own everything" self-contained
+                // default (config following `--root` itself) was reverted
+                // 2026-07-11: it diverged from real `ROOT=` semantics for no
+                // benefit `--root --config-root <same dir>` didn't already
+                // give explicitly, and made a bare `--root DIR` behave unlike
+                // anything a real emerge user would expect.
+                // Root topology details: todo/root-topology-refactor.md.
+                .with_config(path(&self.config_root))
+                // base: --root; host otherwise.
+                .with_base(path(&self.root))
+                // target: --root (install destination). This is "the outer
+                // EROOT" (bypass_cross_root, write_cross_env/
+                // write_sysroot_config in crossdev/mod.rs all rely on this
+                // staying the offset for --root) — a DIFFERENT thing from
+                // BROOT, see satisfaction_root's doc comment.
+                .with_target(path(&self.root))
+                .with_broot(Some(self.root_set().broot().to_owned()))
+                .with_cross_arch(false)
+                .with_eprefix(None)
+                .with_config_overlay(None)
+                .with_relocate(false)
+                .with_config_root_explicit(path(&self.config_root)),
         }
-        Roots::default()
-            // config: --config-root, else host `/` — true portage `ROOT=`
-            // parity (`PORTAGE_CONFIGROOT` defaults to `/` regardless of
-            // `ROOT`). The 2026-07-09 "own everything" self-contained default
-            // (config following `--root` itself) was reverted 2026-07-11: it
-            // diverged from real `ROOT=` semantics for no benefit `--root
-            // --config-root <same dir>` didn't already give explicitly, and
-            // made a bare `--root DIR` behave unlike anything a real emerge
-            // user would expect.
-            // Root topology refactoring details are in todo/root-topology-refactor.md.
-            .with_config(path(&self.config_root))
-            // base: --root; host otherwise.
-            .with_base(path(&self.root))
-            // target: --root (install destination). This is "the outer EROOT"
-            // (bypass_cross_root, write_cross_env/write_sysroot_config in
-            // crossdev/mod.rs all rely on this staying the offset for --root)
-            // — a DIFFERENT thing from BROOT, see satisfaction_root's doc comment.
-            .with_target(path(&self.root))
-            .with_broot(Some(self.root_set().broot().to_owned()))
-            .with_cross_arch(false)
-            .with_eprefix(None)
-            .with_config_overlay(None)
-            .with_relocate(false)
-            .with_config_root_explicit(path(&self.config_root))
     }
 
     /// The full `Roots` a `MergeRoot::Host`-stamped plan entry actually
@@ -554,6 +581,9 @@ mod tests {
 
     #[test]
     fn cross_defaults_to_root_eroot() {
+        // Isolate active state so a developer-registered prefix cannot
+        // rewrite bare-host topology under us.
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
         // No `--root`: EROOT is `/`, so the sysroot is `/usr/<tuple>`.
         let cli = Cli::parse_from(["em", "--target", "riscv64-unknown-linux-gnu", "-p", "zlib"]);
         assert_eq!(
@@ -593,10 +623,66 @@ mod tests {
 
     #[test]
     fn no_cross_keeps_base_roots() {
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
         let cli = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
         let r = cli.roots();
         assert_eq!(r.config(), None);
         assert_eq!(r.merge_root().as_str(), "/");
+    }
+
+    /// A registered active `--prefix` is applied when no explicit topology
+    /// flag is given (dogfooding path for `em active set`).
+    #[test]
+    fn active_prefix_applies_when_no_explicit_flag() {
+        let (tmp, _g) = crate::test_support::isolate_active_state();
+        let prefix = tmp.path().join("pfx");
+        std::fs::create_dir_all(&prefix).unwrap();
+        let prefix_s = prefix.to_str().unwrap();
+        let cli_set = Cli::parse_from(["em", "--prefix", prefix_s, "active", "set"]);
+        crate::active::run(
+            cli_set.applet.as_ref().and_then(|a| match a {
+                Applet::Active { command } => command.as_ref(),
+                _ => None,
+            }),
+            &cli_set,
+        )
+        .unwrap();
+
+        let bare = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        let r = bare.roots();
+        let canon = prefix.canonicalize().unwrap();
+        let canon_s = canon.to_str().unwrap();
+        assert_eq!(r.eprefix().map(|p| p.as_str()), Some(canon_s));
+        assert_eq!(r.merge_root().as_str(), canon_s);
+        // Overlay: BROOT satisfaction stays the host.
+        assert_eq!(bare.base_roots().merge_root().as_str(), "/");
+    }
+
+    /// Explicit `--root` wins over a registered active prefix.
+    #[test]
+    fn explicit_root_overrides_active_prefix() {
+        let (tmp, _g) = crate::test_support::isolate_active_state();
+        let prefix = tmp.path().join("pfx");
+        std::fs::create_dir_all(&prefix).unwrap();
+        let prefix_s = prefix.to_str().unwrap();
+        let cli_set = Cli::parse_from(["em", "--prefix", prefix_s, "active", "set"]);
+        crate::active::run(
+            cli_set.applet.as_ref().and_then(|a| match a {
+                Applet::Active { command } => command.as_ref(),
+                _ => None,
+            }),
+            &cli_set,
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
+        let r = cli.roots();
+        assert_eq!(r.merge_root().as_str(), "/srv/x");
+        assert_eq!(
+            r.eprefix(),
+            None,
+            "active prefix must not leak under --root"
+        );
     }
 
     /// `--local` is a standalone prefix: base == target == ~/.gentoo (full
@@ -1003,6 +1089,15 @@ pub enum Applet {
     Select {
         #[command(subcommand)]
         command: SelectCommand,
+    },
+
+    /// Register a default `--prefix` / `--local` so bare `em <pkg>` picks it
+    /// up (dogfooding). Explicit `--prefix`/`--local`/`--root` still win.
+    /// State: `$XDG_STATE_HOME/em/active`. See `em active --help`.
+    #[command(about = "Register a default --prefix/--local for bare em invocations")]
+    Active {
+        #[command(subcommand)]
+        command: Option<ActiveCommand>,
     },
 
     #[command(about = "Bootstrap a prefix layout (use with --local or --prefix)")]
@@ -1632,6 +1727,35 @@ pub enum GlsaCommand {
     Check { ids: Vec<String> },
     #[command(about = "Apply a GLSA fix")]
     Fix { ids: Vec<String> },
+}
+
+/// `em active <subcommand>` — persistent default `--prefix` / `--local`.
+///
+/// `set` reads the global `--prefix` / `--local` flags (same shape as
+/// `em --prefix DIR setup`), so there is no second set of flag names to
+/// collide with the globals.
+#[derive(Subcommand)]
+pub enum ActiveCommand {
+    /// Show the registered active context (default when no subcommand).
+    #[command(about = "Show the registered active prefix/local")]
+    Show,
+    /// Register the invocation's `--prefix` or `--local` as the active context.
+    ///
+    /// Examples:
+    ///   `em --prefix /home/me/prefix active set`
+    ///   `em --local= active set`           (default `~/.gentoo`)
+    ///   `em --local /other active set`
+    ///
+    /// Note: `em --local active set` is wrong — clap takes `active` as the
+    /// `--local` path. Use `em --local=` or pass an explicit directory.
+    #[command(about = "Register --prefix/--local as the active context")]
+    Set,
+    /// Clear the registered active context.
+    #[command(about = "Clear the registered active context")]
+    Clear,
+    /// Print shell exports for `eval "$(em active env)"` (PATH + markers).
+    #[command(about = "Print shell exports for the active context")]
+    Env,
 }
 
 #[derive(Subcommand)]

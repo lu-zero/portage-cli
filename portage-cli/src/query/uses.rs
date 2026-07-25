@@ -3,14 +3,13 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use portage_metadata::IUseDefault;
-use portage_repo::Repository;
 use portage_vdb::Vdb;
 
 use super::ResolveMode;
 use crate::vdb::find_packages;
 
 pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[String]) -> Result<()> {
-    let repo = Repository::open(repo_path)?;
+    let repo = crate::repo_open::open(repo_path)?;
     let use_db = repo
         .use_db()
         .unwrap_or_else(|_| portage_repo::UseDb::default());

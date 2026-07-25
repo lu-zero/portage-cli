@@ -214,6 +214,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             Ok(())
         }
         Applet::Select { command } => select::run(command, globals).await,
+        Applet::Active { command } => crate::active::run(command.as_ref(), globals),
         Applet::Setup => setup::bootstrap(&globals.roots()),
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
         Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
@@ -319,7 +320,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             if !repo_path.is_dir() {
                 bail!("repo not found at {resolved}");
             }
-            let repo = portage_repo::Repository::open(repo_path.as_std_path())?;
+            let repo = crate::repo_open::open(repo_path.as_std_path())?;
             let vdb = open_cli_vdb(globals).ok();
             let parsed = query::resolve_atoms(atom, &repo, vdb.as_ref(), query::ResolveMode::Error);
             let atoms: Vec<String> = parsed.iter().map(|d| d.to_string()).collect();

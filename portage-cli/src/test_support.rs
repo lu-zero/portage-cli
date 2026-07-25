@@ -47,3 +47,44 @@ pub(crate) fn home_lock() -> std::sync::MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
+
+/// Pin `XDG_STATE_HOME` to a fresh temp dir so [`crate::active`] cannot see
+/// the developer's real `~/.local/state/em/active` registration (which would
+/// make bare-host topology tests flake). Holds [`HOME_LOCK`] because active
+/// state resolution also reads `HOME` as a fallback.
+///
+/// Drop the returned guard (and keep the `TempDir` alive) for the whole test.
+pub(crate) fn isolate_active_state() -> (tempfile::TempDir, ActiveStateGuard) {
+    let tmp = tempfile::tempdir().expect("tempdir for XDG_STATE_HOME");
+    let guard = ActiveStateGuard::new(tmp.path());
+    (tmp, guard)
+}
+
+/// Restores `XDG_STATE_HOME` on drop. See [`isolate_active_state`].
+pub(crate) struct ActiveStateGuard {
+    _home: std::sync::MutexGuard<'static, ()>,
+    saved: Option<String>,
+}
+
+impl ActiveStateGuard {
+    fn new(state_parent: &std::path::Path) -> Self {
+        let _home = home_lock();
+        let saved = std::env::var("XDG_STATE_HOME").ok();
+        // SAFETY: held under home_lock; no other test mutates XDG_STATE_HOME.
+        unsafe {
+            std::env::set_var("XDG_STATE_HOME", state_parent);
+        }
+        Self { _home, saved }
+    }
+}
+
+impl Drop for ActiveStateGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.saved {
+                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+                None => std::env::remove_var("XDG_STATE_HOME"),
+            }
+        }
+    }
+}

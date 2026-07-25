@@ -6,7 +6,6 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use humansize::{BINARY, format_size};
-use portage_repo::Repository;
 use portage_vdb::Vdb;
 
 use super::ResolveMode;
@@ -14,7 +13,7 @@ use crate::style::{C_LABEL, C_PKG};
 use crate::vdb::find_packages;
 
 pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[String]) -> Result<()> {
-    let repo = Repository::open(repo_path)?;
+    let repo = crate::repo_open::open(repo_path)?;
 
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
 

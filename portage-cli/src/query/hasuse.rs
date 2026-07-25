@@ -2,10 +2,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::Result;
-use portage_repo::Repository;
 
 pub fn run(repo_path: &Path, flags: &[String]) -> Result<()> {
-    let repo = Repository::open(repo_path)?;
+    let repo = crate::repo_open::open(repo_path)?;
 
     for flag in flags {
         let mut seen: BTreeSet<String> = BTreeSet::new();

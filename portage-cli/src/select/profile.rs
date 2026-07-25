@@ -59,7 +59,7 @@ fn main_repo() -> Result<Repository> {
         .main_repo()
         .or_else(|| conf.find("gentoo"))
         .context("no main repo configured in repos.conf")?;
-    Repository::open(
+    crate::repo_open::open(
         entry
             .location
             .as_path()

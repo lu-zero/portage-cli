@@ -3,13 +3,12 @@ use std::path::Path;
 
 use anyhow::Result;
 use portage_atom::Cpv;
-use portage_repo::Repository;
 use portage_vdb::Vdb;
 
 use crate::style::{C_CAT, C_PKGNAME, C_VERSION};
 
 pub fn run(repo_path: &Path, patterns: &[String]) -> Result<()> {
-    let repo = Repository::open(repo_path)?;
+    let repo = crate::repo_open::open(repo_path)?;
 
     let mut cpns: std::collections::BTreeSet<portage_atom::Cpn> = Default::default();
     for ebuild in repo.ebuilds()? {

@@ -3,7 +3,6 @@ use std::path::Path;
 
 use anyhow::Result;
 use portage_atom::{Cpv, Dep, Operator};
-use portage_repo::Repository;
 use portage_vdb::Vdb;
 
 pub fn run(
@@ -12,7 +11,7 @@ pub fn run(
     mode: super::ResolveMode,
     atoms: &[String],
 ) -> Result<()> {
-    let repo = Repository::open(repo_path)?;
+    let repo = crate::repo_open::open(repo_path)?;
 
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
 

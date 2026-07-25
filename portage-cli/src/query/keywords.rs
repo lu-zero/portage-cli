@@ -5,7 +5,6 @@ use std::path::Path;
 use anstyle::Style;
 use anyhow::Result;
 use portage_metadata::Stability;
-use portage_repo::Repository;
 use portage_vdb::Vdb;
 
 use super::ResolveMode;
@@ -13,7 +12,7 @@ use super::ResolveMode;
 use crate::style::{C_DISABLED, C_PKG, C_STABLE, C_TESTING};
 
 pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[String]) -> Result<()> {
-    let repo = Repository::open(repo_path)?;
+    let repo = crate::repo_open::open(repo_path)?;
 
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
 
