@@ -156,7 +156,7 @@ feature-flagged alternatives for workload-specific tuning.
 
 ```toml
 [dependencies]
-gentoo-interner = "0.3"
+gentoo-interner = "0.4"
 ```
 
 ## Usage

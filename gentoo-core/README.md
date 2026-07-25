@@ -35,7 +35,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gentoo-core = "0.3"
+gentoo-core = "0.6"
 ```
 
 ## Usage

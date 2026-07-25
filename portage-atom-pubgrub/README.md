@@ -39,7 +39,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-portage-atom-pubgrub = "0.6"
+portage-atom-pubgrub = "0.7"
 ```
 
 ## Usage

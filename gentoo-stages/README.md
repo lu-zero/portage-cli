@@ -32,7 +32,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gentoo-stages = "0.5"
+gentoo-stages = "0.6"
 tokio = { version = "1.0", features = ["full"] }  # Required for async runtime
 ```
 

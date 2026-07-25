@@ -8,8 +8,9 @@
 //! lookup. This is the `_match_use`-style check portage applies to built
 //! packages (`use = USE ∩ IUSE`), so a stale-USE binpkg is correctly
 //! rejected and rebuilt — matching `emerge -k`
-//! (<https://github.com/gentoo/portage/blob/ac461a29/lib/portage/dbapi/__init__.py>,
-//! bug #453400).
+//! (<https://github.com/gentoo/portage/blob/ac461a29/lib/portage/dbapi/__init__.py>).
+//
+// See bug #453400.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -477,7 +478,9 @@ fn build_env_key_compatible(binpkg_key: &str, desired_key: &str) -> bool {
 /// The reuse core: is a binpkg's `USE` (restricted to its `IUSE`) equal to the
 /// desired `USE` (restricted to `IUSE`)? Flags outside `IUSE` (USE_EXPAND
 /// defaults, profile-implicit flags) don't affect the package and are ignored.
-/// This is portage's built-package USE check (bug #453400).
+/// This is portage's built-package USE check.
+//
+// See bug #453400.
 pub fn use_compatible(
     binpkg_use: &HashSet<String>,
     iuse: &HashSet<String>,

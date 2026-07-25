@@ -14,6 +14,15 @@ Bridge between [portage-atom](https://crates.io/crates/portage-atom) and the
 > yet been thoroughly audited. It may contain bugs, incomplete PMS coverage, or
 > surprising edge-case behaviour. Use at your own risk and please report issues.
 
+## Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+portage-atom-resolvo = "0.8"
+```
+
 ## Quick start
 
 ```bash

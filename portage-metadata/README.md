@@ -34,7 +34,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-portage-metadata = "0.5"
+portage-metadata = "0.9"
 ```
 
 ## Usage

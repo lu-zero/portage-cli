@@ -517,9 +517,11 @@ mod tests {
         );
     }
 
-    /// Regression test for the riscv64 stage3 shakeout (#33): `dependency_graph`
+    /// Regression test for the riscv64 stage3 shakeout: `dependency_graph`
     /// did a raw `self.packages.get(pkg)` lookup instead of the alias-resolving
     /// `self.package_data(pkg)` — so a `Host`-flavored solved package (whose
+    //
+    // See issue #33.
     /// data lives under its `Target`-flavored alias, see `ensure_host_instances`)
     /// always missed, silently producing zero outgoing edges for it. A `Host`
     /// package's own BDEPEND on *another* `Host` package (e.g. one Host-routed

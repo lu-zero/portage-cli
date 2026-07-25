@@ -1117,8 +1117,10 @@ fn reinstall_deps_empty_when_use_dep_satisfied() {
 
 #[test]
 fn upgrade_to_resolves_new_versions_deps() {
-    // Regression for the "post-solve remap does not re-solve" gap (#4):
+    // Regression for the "post-solve remap does not re-solve" gap:
     // when a forced rebuild of an installed package is favoured up to a
+    //
+    // See issue #4.
     // newer repo version, that newer version's dependency closure must be
     // part of the plan.
     //
@@ -2747,8 +2749,10 @@ fn cross_target_build_pulls_unsatisfied_bdepend() {
     );
 }
 
-/// Regression test for the riscv64 stage3 shakeout (#33): same scenario as
+/// Regression test for the riscv64 stage3 shakeout: same scenario as
 /// `cross_target_build_pulls_unsatisfied_bdepend`, but `b` is *also*
+//
+// See issue #33.
 /// already installed at the **Target** (the `--cross` sysroot) — standing
 /// in for `dev-lang/perl` being genuinely present in a real, already-built
 /// target `@system` while `base_roots()` (BROOT) still lacks it. A

@@ -1,10 +1,23 @@
 # portage-vdb
 
+[![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/portage-vdb.svg)](https://crates.io/crates/portage-vdb)
+[![docs.rs](https://docs.rs/portage-vdb/badge.svg)](https://docs.rs/portage-vdb)
+
 Reader for the Gentoo Portage installed-package database (VDB).
 
 The VDB lives at `/var/db/pkg` and contains one subdirectory per category,
 each holding one subdirectory per installed package version. This crate
 provides a typed, lazy-reading API over that on-disk structure.
+
+## Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+portage-vdb = "0.2"
+```
 
 ## Quick start
 

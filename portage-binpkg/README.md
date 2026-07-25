@@ -1,10 +1,23 @@
 # portage-binpkg
 
+[![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Crates.io](https://img.shields.io/crates/v/portage-binpkg.svg)](https://crates.io/crates/portage-binpkg)
+[![docs.rs](https://docs.rs/portage-binpkg/badge.svg)](https://docs.rs/portage-binpkg)
+
 Gentoo binary package (GPKG) reading and writing per
 [GLEP 78](https://www.gentoo.org/glep/glep-0078.html).
 
 Used by the [`em`](https://github.com/lu-zero/portage-cli) Portage CLI for
 `-b`/`--buildpkg`, `-k`/`--usepkg`, and `-g`/`--getbinpkg`.
+
+## Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+portage-binpkg = "0.2"
+```
 
 ## Features
 
