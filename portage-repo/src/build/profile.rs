@@ -699,7 +699,10 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
         std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
         std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
-        Repository::open(dir.path()).unwrap()
+        Repository::builder()
+            .in_memory_cache()
+            .open(dir.path())
+            .unwrap()
     }
 
     /// The gap the parser audit flagged as the most significant finding:

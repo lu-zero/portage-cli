@@ -52,6 +52,10 @@ pub enum Error {
     /// Invalid or unparsable `metadata.xml` file.
     #[error("invalid metadata.xml: {0}")]
     InvalidMetadataXml(String),
+
+    /// [`crate::RepositoryBuilder`] was opened without configuring a secondary cache.
+    #[error("repository builder: secondary metadata cache not configured")]
+    BuilderMissingSecondary,
 }
 
 impl From<portage_metadata::Error> for Error {

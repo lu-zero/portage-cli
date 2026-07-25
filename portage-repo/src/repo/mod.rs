@@ -27,6 +27,7 @@ pub use profile::{
 pub use repos_conf::{Location, RepoEntry, ReposConf};
 pub use repository::{
     CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository,
+    RepositoryBuilder,
 };
 pub use use_expand::UseExpand;
 pub use usedb::UseDb;

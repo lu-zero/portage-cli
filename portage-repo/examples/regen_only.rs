@@ -66,7 +66,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    let repo = match Repository::open(&args.repo) {
+    let repo = match Repository::builder().in_memory_cache().open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error opening repo: {e}");
@@ -117,7 +117,10 @@ async fn main() {
             jobs: Some(jobs),
             dedup: args.dedup,
         },
-        output_dir: args.output,
+        write: args
+            .output
+            .map(portage_repo::RegenWriteTarget::Dir)
+            .unwrap_or(portage_repo::RegenWriteTarget::None),
     };
 
     let stats = match regen_cache(&repo, &[], ebuilds, &opts, |done, total| {

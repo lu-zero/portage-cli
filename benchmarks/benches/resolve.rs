@@ -61,7 +61,10 @@ impl SystemConfig {
     }
 
     async fn load_async(repo_path: &str) -> Self {
-        let repo = Repository::open(repo_path).expect("failed to open repo");
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open(repo_path)
+            .expect("failed to open repo");
 
         let profile_path = resolve_profile_symlink(DEFAULT_PROFILE);
 
@@ -273,7 +276,10 @@ fn dep_matches_cpv(dep: &Dep, cpv: &Cpv, pkg_slot: &Slot) -> bool {
 // ---------------------------------------------------------------------------
 
 fn load_repo(repo_path: &str, sys: &SystemConfig) -> InMemoryRepository {
-    let repo = Repository::open(repo_path).expect("failed to open repo");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(repo_path)
+        .expect("failed to open repo");
     let repo_name = Interned::intern(repo.name());
     let mut out = InMemoryRepository::new();
 

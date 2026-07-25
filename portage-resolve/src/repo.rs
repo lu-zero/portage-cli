@@ -927,6 +927,9 @@ fn collect_required_use_flags(
 /// Load the main repo's md5-cache plus every overlay's metadata (sourcing
 /// cache-less ebuilds — see `overlay::overlay_entries`). A cpv provided by
 /// the main repo wins over an overlay copy; among overlays, earlier wins.
+///
+/// Overlay secondary caches must already be configured on each
+/// [`Repository`] (via [`Repository::builder`]).
 pub async fn load_repos(
     repo: &Repository,
     overlays: &[(Repository, Vec<Repository>)],
@@ -1384,7 +1387,10 @@ mod tests {
         )
         .unwrap();
 
-        let repo = Repository::open(dir.path()).unwrap();
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open(dir.path())
+            .unwrap();
         (dir, repo)
     }
 

@@ -145,7 +145,10 @@ async fn main() {
     });
 
     let (repo, masters) = if let Some(ref dir) = args.repos_dir {
-        match Repository::open_with_masters(&args.repo, dir) {
+        match Repository::builder()
+            .in_memory_cache()
+            .open_with_masters(&args.repo, dir)
+        {
             Ok((r, m)) => {
                 if !m.is_empty() {
                     let names: Vec<&str> = m.iter().map(|r| r.name()).collect();
@@ -159,7 +162,7 @@ async fn main() {
             }
         }
     } else {
-        match Repository::open(&args.repo) {
+        match Repository::builder().in_memory_cache().open(&args.repo) {
             Ok(r) => (r, Vec::new()),
             Err(e) => {
                 eprintln!("Error opening repository: {e}");

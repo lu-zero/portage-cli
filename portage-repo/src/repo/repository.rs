@@ -11,6 +11,7 @@ use portage_metadata::{CacheEntry, Eapi};
 
 use super::category::Categories;
 use super::ebuild::Ebuild;
+use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 
@@ -214,20 +215,121 @@ use crate::error::{Error, Result};
 /// and the repository name, while category/package enumeration is lazy.
 ///
 /// See [PMS 4 — Tree Layout](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
-#[derive(Debug, Clone)]
+///
+/// Construct with [`Repository::builder`]: secondary metadata cache is required
+/// (in-memory for tests, directory under XDG for production).
+#[derive(Clone)]
 pub struct Repository {
     path: Utf8PathBuf,
     layout: LayoutConf,
     name: String,
     arch_cache: Vec<Arch>,
+    /// In-tree `metadata/md5-cache` (usually a [`DirMetadataCache`]).
+    primary: Arc<dyn MetadataCache>,
+    /// Always-present writable store for lazy overlay metadata / unprivileged writes.
+    secondary: Arc<dyn MetadataCache>,
+}
+
+impl std::fmt::Debug for Repository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Repository")
+            .field("path", &self.path)
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How the builder materialises the writable secondary metadata cache.
+#[derive(Clone)]
+enum SecondarySpec {
+    /// Ephemeral (tests).
+    Memory,
+    /// Durable disk: `root.join(repo.name())` after the tree name is known.
+    UserRoot(Utf8PathBuf),
+    /// Pre-built store.
+    Custom(Arc<dyn MetadataCache>),
+}
+
+/// Builder for [`Repository`]: requires a secondary metadata cache before open.
+///
+/// ```no_run
+/// use portage_repo::Repository;
+/// let repo = Repository::builder()
+///     .in_memory_cache()
+///     .open("/var/db/repos/gentoo")
+///     .unwrap();
+/// ```
+///
+/// Production: `builder().user_cache_root(app_md5_cache_root).open(tree)`.
+#[derive(Clone, Default)]
+pub struct RepositoryBuilder {
+    secondary: Option<SecondarySpec>,
+}
+
+impl RepositoryBuilder {
+    /// In-memory secondary (tests / ephemeral). Always writable, not durable.
+    pub fn in_memory_cache(mut self) -> Self {
+        self.secondary = Some(SecondarySpec::Memory);
+        self
+    }
+
+    /// Durable secondary at `root/<repo-name>/` (name from the tree).
+    ///
+    /// Pass only the app-level root (e.g. `$XDG_CACHE_HOME/em/md5-cache`).
+    /// [`Repository::write_cache_entry`] prefers in-tree primary, then this
+    /// secondary — the same policy `em regen` uses without re-deriving paths.
+    pub fn user_cache_root(mut self, root: impl Into<Utf8PathBuf>) -> Self {
+        self.secondary = Some(SecondarySpec::UserRoot(root.into()));
+        self
+    }
+
+    /// Pre-built secondary (exact dir via [`DirMetadataCache`], custom, …).
+    pub fn cache(mut self, cache: impl MetadataCache + 'static) -> Self {
+        self.secondary = Some(SecondarySpec::Custom(Arc::new(cache)));
+        self
+    }
+
+    /// Open an ebuild repository at `path`.
+    pub fn open(self, path: impl Into<PathBuf>) -> Result<Repository> {
+        let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
+        Repository::open_with_secondary(path, spec)
+    }
+
+    /// Open a repository and resolve masters from `repos_dir`.
+    ///
+    /// Masters share `UserRoot` (same root, per-name dirs) or get a fresh
+    /// in-memory secondary for `Memory` / `Custom`.
+    pub fn open_with_masters(
+        self,
+        path: impl Into<PathBuf>,
+        repos_dir: impl AsRef<Path>,
+    ) -> Result<(Repository, Vec<Repository>)> {
+        let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
+        let repo = Repository::open_with_secondary(path, spec.clone())?;
+        let mut masters: Vec<Repository> = Vec::new();
+        let mut seen = HashSet::new();
+        seen.insert(repo.name().to_string());
+        Repository::resolve_masters_with_spec(
+            &repo,
+            repos_dir.as_ref(),
+            &mut masters,
+            &mut seen,
+            &spec,
+        )?;
+        Ok((repo, masters))
+    }
 }
 
 impl Repository {
-    /// Open an ebuild repository at the given path.
-    ///
-    /// Reads `metadata/layout.conf` and `profiles/repo_name` eagerly.
-    /// Returns an error if the directory lacks a valid `layout.conf`.
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+    /// Start a builder (secondary cache is required before [`RepositoryBuilder::open`]).
+    pub fn builder() -> RepositoryBuilder {
+        RepositoryBuilder::default()
+    }
+
+    fn open_with_secondary(
+        path: impl Into<PathBuf>,
+        secondary_spec: SecondarySpec,
+    ) -> Result<Self> {
         let std_path = path.into();
         let path = Utf8PathBuf::from_path_buf(std_path).map_err(Error::InvalidRepository)?;
         if !path.is_dir() {
@@ -245,12 +347,42 @@ impl Repository {
             .map(|s| Arch::intern(&s))
             .collect();
 
+        let primary: Arc<dyn MetadataCache> = Arc::new(DirMetadataCache::new(
+            path.join("metadata").join("md5-cache"),
+        ));
+        let secondary = materialise_secondary(&name, secondary_spec);
+
         Ok(Repository {
             path,
             layout,
             name,
             arch_cache,
+            primary,
+            secondary,
         })
+    }
+
+    fn resolve_masters_with_spec(
+        repo: &Repository,
+        repos_dir: &Path,
+        out: &mut Vec<Repository>,
+        seen: &mut HashSet<String>,
+        spec: &SecondarySpec,
+    ) -> Result<()> {
+        for master_name in &repo.layout().masters {
+            if !seen.insert(master_name.clone()) {
+                continue;
+            }
+            let master_path = repos_dir.join(master_name);
+            let master_spec = match spec {
+                SecondarySpec::UserRoot(root) => SecondarySpec::UserRoot(root.clone()),
+                SecondarySpec::Memory | SecondarySpec::Custom(_) => SecondarySpec::Memory,
+            };
+            let master = Self::open_with_secondary(master_path, master_spec)?;
+            Self::resolve_masters_with_spec(&master, repos_dir, out, seen, spec)?;
+            out.push(master);
+        }
+        Ok(())
     }
 
     /// Absolute path to the repository root.
@@ -380,24 +512,47 @@ impl Repository {
 
     /// Read a metadata cache entry for the given `Cpv`.
     ///
-    /// Reads from `metadata/md5-cache/{category}/{package-version}`.
-    /// Returns `Ok(None)` when no cache file exists for this cpv (the typical
-    /// cache-miss case); other I/O or parse failures still produce `Err`.
+    /// Looks up the **primary** (in-tree) store first, then the **secondary**
+    /// (always-present writable store). Returns `Ok(None)` when neither has
+    /// the entry. Freshness checks are the caller's responsibility.
     ///
     /// See [PMS 14 — Metadata Cache](https://projects.gentoo.org/pms/9/pms.html#metadata-cache).
     pub fn cache_entry(&self, cpv: &Cpv) -> Result<Option<CacheEntry>> {
-        let cache_path = self
-            .cache_dir()
-            .join(cpv.cpn.category.as_str())
-            .join(format!("{}-{}", cpv.cpn.package, cpv.version));
-        match std::fs::read_to_string(&cache_path) {
-            Ok(contents) => Ok(Some(CacheEntry::parse(&contents)?)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(util::io_err(&cache_path, e)),
+        if let Some(entry) = self.primary.get(cpv)? {
+            return Ok(Some(entry));
+        }
+        // Skip secondary when empty (common: in-memory test secondary, or
+        // unused user-cache dir). Avoids a HashMap lock / dir probe per miss
+        // when loading tens of thousands of ebuilds.
+        if !self.secondary.is_populated() {
+            return Ok(None);
+        }
+        self.secondary.get(cpv)
+    }
+
+    /// Persist `entry` to the secondary (always-writable) store.
+    pub fn put_secondary(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
+        self.secondary.put(cpv, entry)
+    }
+
+    /// Prefer primary if it accepts a write; otherwise write secondary.
+    ///
+    /// Used by `em regen` when the in-tree cache may be unwritable.
+    pub fn write_cache_entry(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
+        match self.primary.put(cpv, entry) {
+            Ok(()) => Ok(()),
+            Err(_) => self.secondary.put(cpv, entry),
         }
     }
 
+    /// Whether the primary (in-tree) cache directory exists.
+    pub fn has_primary_cache(&self) -> bool {
+        self.primary.is_populated()
+    }
+
     /// `{repo}/metadata/md5-cache/` — the directory PMS 14 places the cache in.
+    ///
+    /// Prefer [`Self::cache_entry`] / [`Self::write_cache_entry`] for entry I/O.
     pub(crate) fn cache_dir(&self) -> Utf8PathBuf {
         self.path.join("metadata").join("md5-cache")
     }
@@ -742,43 +897,13 @@ impl Repository {
         }
         Ok(result)
     }
+}
 
-    /// Open a repository, resolving its master repositories from `repos_dir`.
-    ///
-    /// Each master listed in `layout.conf` is opened from
-    /// `repos_dir/<master_name>`, and its own masters are resolved
-    /// recursively (depth-first). Returns the opened repository and
-    /// the flattened list of master repositories in search order.
-    pub fn open_with_masters(
-        path: impl Into<PathBuf>,
-        repos_dir: impl AsRef<Path>,
-    ) -> Result<(Self, Vec<Repository>)> {
-        let repo = Self::open(path)?;
-        let mut masters: Vec<Repository> = Vec::new();
-        let mut seen = HashSet::new();
-        seen.insert(repo.name().to_string());
-        Self::resolve_masters(&repo, repos_dir.as_ref(), &mut masters, &mut seen)?;
-        Ok((repo, masters))
-    }
-
-    /// Recursively resolve master repositories (depth-first).
-    fn resolve_masters(
-        repo: &Repository,
-        repos_dir: &Path,
-        out: &mut Vec<Repository>,
-        seen: &mut HashSet<String>,
-    ) -> Result<()> {
-        for master_name in &repo.layout().masters {
-            if !seen.insert(master_name.clone()) {
-                continue; // already resolved or cycle
-            }
-            let master_path = repos_dir.join(master_name);
-            let master = Self::open(master_path)?;
-            // Resolve the master's own masters first (depth-first).
-            Self::resolve_masters(&master, repos_dir, out, seen)?;
-            out.push(master);
-        }
-        Ok(())
+fn materialise_secondary(repo_name: &str, spec: SecondarySpec) -> Arc<dyn MetadataCache> {
+    match spec {
+        SecondarySpec::Memory => Arc::new(MemoryMetadataCache::new()),
+        SecondarySpec::UserRoot(root) => Arc::new(DirMetadataCache::new(root.join(repo_name))),
+        SecondarySpec::Custom(c) => c,
     }
 }
 
@@ -832,12 +957,15 @@ fn parse_desc_file(path: impl AsRef<Path>) -> Result<Vec<(String, String)>> {
 mod tests {
     use super::*;
 
-    /// Create the minimal directory structure required by `Repository::open`.
+    /// Create the minimal directory structure required by `Repository::builder().open`.
     fn make_test_repo(dir: &tempfile::TempDir) -> Repository {
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
         std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
         std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
-        Repository::open(dir.path()).unwrap()
+        Repository::builder()
+            .in_memory_cache()
+            .open(dir.path())
+            .unwrap()
     }
 
     #[test]

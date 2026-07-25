@@ -11,7 +11,10 @@
 //! ```no_run
 //! use portage_repo::Repository;
 //!
-//! let repo = Repository::open("/var/db/repos/gentoo").unwrap();
+//! let repo = Repository::builder()
+//!     .in_memory_cache()
+//!     .open("/var/db/repos/gentoo")
+//!     .unwrap();
 //! println!("repo: {} (masters: {:?})", repo.name(), repo.layout().masters);
 //!
 //! for cat in repo.categories() {
@@ -38,6 +41,8 @@ pub(crate) mod build;
 pub mod cache;
 mod error;
 pub mod make_conf;
+/// Abstract md5-cache storage (dir / memory) for [`Repository`].
+pub mod metadata_cache;
 pub mod overlay;
 pub mod package_conf;
 pub mod package_env;
@@ -52,11 +57,13 @@ pub use error::{Error, Result};
 // Re-export the most-used types at crate root for backwards compat
 pub use build::{EbuildShell, run_helper};
 pub use cache::{
-    CacheReadOpts, RegenOpts, RegenStats, cache_cpvs, cache_entries_parallel, regen_cache,
+    CacheReadOpts, RegenOpts, RegenStats, RegenWriteTarget, cache_cpvs, cache_entries_parallel,
+    regen_cache,
 };
 pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};
 pub use make_conf::{DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF, MakeConf};
+pub use metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
 pub use overlay::overlay_entries;
 pub use package_conf::{PackageConf, Token as PackageToken};
 pub use package_env::env_files_for;
@@ -77,7 +84,10 @@ pub use repo::sets::{SetResolver, is_set_ref, set_name};
 /// filename order, dotfiles and `~` backups skipped). Shared with `/etc/portage`
 /// `package.*` consumers so they match the profile stack exactly.
 pub use repo::util::read_lines as read_config_lines;
-pub use repo::{CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository};
+pub use repo::{
+    CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository,
+    RepositoryBuilder,
+};
 pub use repo::{Categories, CategoriesIter, Category, Packages, PackagesIter};
 pub use repo::{Location, RepoEntry, ReposConf};
 pub use repo::{Maintainer, MaintainerKind, PkgMetadata};

@@ -2162,7 +2162,7 @@ impl EbuildShell {
     /// use portage_repo::Repository;
     ///
     /// # async fn example() {
-    /// let repo = Repository::open("/var/db/repos/gentoo").unwrap();
+    /// let repo = Repository::builder().in_memory_cache().open("/var/db/repos/gentoo").unwrap();
     /// let mut shell = repo.shell().await.unwrap();
     /// shell.set_use_flags(&["ssl", "gtk", "-doc"]).unwrap();
     /// # }

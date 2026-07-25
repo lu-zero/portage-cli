@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use camino::Utf8Path;
 use portage_metadata::CacheEntry;
 
+use crate::metadata_cache::{DirMetadataCache, MetadataCache};
 use crate::source::{SourceContext, SourceOpts, SourcedEbuild, source_parallel};
 use crate::{Ebuild, Repository, Result};
 
@@ -25,13 +26,26 @@ use crate::{Ebuild, Repository, Result};
 /// `insert` is atomic and the digests are identical.
 type ChecksumCache = Arc<papaya::HashMap<PathBuf, md5::Digest>>;
 
+/// Where [`regen_cache`] writes sourced metadata.
+#[derive(Debug, Clone, Default)]
+pub enum RegenWriteTarget {
+    /// Source only; do not write cache files.
+    #[default]
+    None,
+    /// Prefer the repository's primary (in-tree) store, else its secondary
+    /// (user cache). Same policy as [`Repository::write_cache_entry`].
+    Repository,
+    /// Force writes into this directory (PMS entry layout).
+    Dir(PathBuf),
+}
+
 /// Options for [`regen_cache`].
 #[derive(Debug, Clone, Default)]
 pub struct RegenOpts {
     /// Ebuild sourcing options passed to [`source_parallel`].
     pub source: SourceOpts,
-    /// Directory to write `md5-cache` files into. `None` = dry-run (source, don't write).
-    pub output_dir: Option<PathBuf>,
+    /// Where to persist sourced metadata.
+    pub write: RegenWriteTarget,
 }
 
 /// Result counters returned by [`regen_cache`].
@@ -54,12 +68,11 @@ pub async fn regen_cache(
     on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
 ) -> Result<RegenStats> {
     let total = ebuilds.len();
-    let out_dir = opts.output_dir.clone();
+    let write = opts.write.clone();
 
-    // Pre-create one directory per category. Doing this upfront turns ~30k
-    // per-ebuild create_dir_all calls into ~200 (one per category) and lets
-    // the worker loop write without coordinating on directory state.
-    if let Some(ref dir) = out_dir {
+    // Pre-create category dirs only for an explicit Dir target. Repository
+    // / Memory stores create paths on put; primary Dir does the same.
+    if let RegenWriteTarget::Dir(ref dir) = write {
         let mut cats: HashSet<&str> = HashSet::new();
         for e in &ebuilds {
             cats.insert(e.category());
@@ -76,10 +89,13 @@ pub async fn regen_cache(
     let done = Arc::new(AtomicUsize::new(0));
     let on_progress = Arc::new(on_progress);
 
+    // Clone repo into the 'static worker callback (cheap: Arc caches).
+    let repo_for_write = repo.clone();
     source_parallel(repo, masters, ebuilds, &opts.source, &ctx, {
         let checksum_cache = Arc::clone(&checksum_cache);
         let errors = Arc::clone(&errors);
         let done = Arc::clone(&done);
+        let write = write.clone();
         move |ebuild, result| {
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             on_progress(n, total);
@@ -89,9 +105,22 @@ pub async fn regen_cache(
                     errors.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok(sourced) => {
-                    if let Some(ref dir) = out_dir
-                        && let Err(e) = write_entry(&ebuild, sourced, dir, &checksum_cache)
-                    {
+                    let write_err = match &write {
+                        RegenWriteTarget::None => None,
+                        RegenWriteTarget::Dir(dir) => {
+                            write_entry_to_dir(&ebuild, sourced, dir, &checksum_cache).err()
+                        }
+                        RegenWriteTarget::Repository => {
+                            build_entry(&ebuild, sourced, &checksum_cache)
+                                .and_then(|entry| {
+                                    repo_for_write
+                                        .write_cache_entry(ebuild.cpv(), &entry)
+                                        .map_err(|e| e.to_string())
+                                })
+                                .err()
+                        }
+                    };
+                    if let Some(e) = write_err {
                         tracing::error!("{}: cache write failed: {e}", ebuild.cpv());
                         errors.fetch_add(1, Ordering::Relaxed);
                     }
@@ -118,12 +147,11 @@ fn eclass_md5(path: &Utf8Path, cache: &ChecksumCache) -> std::result::Result<md5
     Ok(digest)
 }
 
-fn write_entry(
+fn build_entry(
     ebuild: &Ebuild,
     sourced: SourcedEbuild,
-    out_dir: &Path,
     checksum_cache: &ChecksumCache,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<CacheEntry, String> {
     let ebuild_bytes = fs::read(ebuild.path()).map_err(|e| format!("read ebuild: {e}"))?;
     let ebuild_md5 = format!("{:x}", md5::compute(&ebuild_bytes));
 
@@ -140,21 +168,25 @@ fn write_entry(
         })
         .collect::<std::result::Result<_, String>>()?;
 
-    let entry = CacheEntry {
+    Ok(CacheEntry {
         metadata,
         md5: Some(ebuild_md5),
         eclasses,
-    };
+    })
+}
 
-    // Write to `{name}.tmp` then rename — POSIX rename is atomic on the same
-    // filesystem, so a crash mid-write can never leave a truncated cache file.
-    // The category directory already exists (created up front in regen_cache).
-    let cat_dir = out_dir.join(ebuild.category());
-    let file_name = format!("{}-{}", ebuild.name(), ebuild.version());
-    let final_path = cat_dir.join(&file_name);
-    let tmp_path = cat_dir.join(format!("{file_name}.tmp"));
-    fs::write(&tmp_path, entry.serialize()).map_err(|e| format!("write tmp: {e}"))?;
-    fs::rename(&tmp_path, &final_path).map_err(|e| format!("rename: {e}"))?;
+fn write_entry_to_dir(
+    ebuild: &Ebuild,
+    sourced: SourcedEbuild,
+    out_dir: &Path,
+    checksum_cache: &ChecksumCache,
+) -> std::result::Result<(), String> {
+    let entry = build_entry(ebuild, sourced, checksum_cache)?;
+    let root = Utf8Path::from_path(out_dir)
+        .ok_or_else(|| format!("output dir is not valid UTF-8: {}", out_dir.display()))?;
+    DirMetadataCache::new(root.to_owned())
+        .put(ebuild.cpv(), &entry)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

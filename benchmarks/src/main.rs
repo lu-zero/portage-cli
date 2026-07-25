@@ -40,7 +40,10 @@ fn keyword_accepts(keywords: &[Keyword], arch: &str) -> bool {
 fn load_repo(path: &PathBuf, keyword: &str) -> RepoData {
     eprintln!("Loading repository from {}...", path.display());
     let start = Instant::now();
-    let repo = Repository::open(path).expect("failed to open repo");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(path)
+        .expect("failed to open repo");
     let repo_name = repo.name().to_string();
 
     let ebuilds = repo

@@ -41,10 +41,13 @@ async fn main() {
     std::fs::write(tmp.path().join("metadata").join("layout.conf"), "").unwrap();
     std::fs::create_dir_all(tmp.path().join("profiles")).unwrap();
 
-    let repo = Repository::open(tmp.path()).unwrap_or_else(|e| {
-        eprintln!("repo: {e}");
-        process::exit(1);
-    });
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(tmp.path())
+        .unwrap_or_else(|e| {
+            eprintln!("repo: {e}");
+            process::exit(1);
+        });
     let mut sh = repo.shell().await.unwrap_or_else(|e| {
         eprintln!("shell: {e}");
         process::exit(1);

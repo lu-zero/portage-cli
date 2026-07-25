@@ -21,7 +21,10 @@ async fn test_use_flags() {
     // Write repo_name
     std::fs::write(repo_path.join("profiles").join("repo_name"), "test-repo\n").unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
 
     // Test setting USE flags
@@ -56,9 +59,9 @@ async fn eclass_search_path_prefers_own_repo_over_masters() {
     let m2 = mk_repo(base, "m2");
     let own = mk_repo(base, "own");
 
-    let m1_repo = Repository::open(&m1).unwrap();
-    let m2_repo = Repository::open(&m2).unwrap();
-    let own_repo = Repository::open(&own).unwrap();
+    let m1_repo = Repository::builder().in_memory_cache().open(&m1).unwrap();
+    let m2_repo = Repository::builder().in_memory_cache().open(&m2).unwrap();
+    let own_repo = Repository::builder().in_memory_cache().open(&own).unwrap();
 
     let shell = own_repo
         .shell_with_masters(&[&m1_repo, &m2_repo])
@@ -119,7 +122,10 @@ cache-formats = md5-dict
     )
     .unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
 
     let release = Ebuild::from_path(
@@ -159,7 +165,10 @@ async fn version_query_builtins_query_the_flagged_root() {
     std::fs::create_dir_all(&pkgdir).unwrap();
     std::fs::write(pkgdir.join("SLOT"), "2.73\n").unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
     shell
         .run_string(&format!(
@@ -199,7 +208,10 @@ async fn bashrc_files_are_sourced_during_a_phase() {
     let bashrc = dir.path().join("bashrc");
     std::fs::write(&bashrc, "export EM_BASHRC_MARKER=\"hit:${EBUILD_PHASE}\"\n").unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
     shell.set_bashrc_files(vec![Utf8PathBuf::from_path_buf(bashrc).unwrap()]);
 
@@ -241,7 +253,10 @@ async fn phase_aborts_on_die_not_on_trailing_exit() {
     )
     .unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
 
     let ebuild =
@@ -294,7 +309,10 @@ async fn einstall_enforces_eapi_ban_and_requires_a_makefile() {
     let empty = dir.path().join("empty");
     std::fs::create_dir_all(&empty).unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
     shell
         .run_string(&format!(
@@ -328,7 +346,10 @@ async fn use_with_and_use_enable_treat_empty_feature_arg_as_omitted() {
     std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
     std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
     shell.set_use_flags(&["-brotli", "cxx"]).unwrap();
 
@@ -361,7 +382,10 @@ async fn export_sourced_env_reaches_a_real_subprocess() {
     std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
     std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
 
     // Plain (non-exported) assignment — exactly what `source`ing a
@@ -404,7 +428,10 @@ async fn install_helpers_are_self_contained() {
     std::fs::write(src.join("foo.conf"), "X=1\n").unwrap();
     std::fs::write(src.join("foo.envd"), "PATH=/opt/foo/bin\n").unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
     // init_build_env no longer prepends portage's ebuild-helpers to PATH,
     // so these helpers must resolve entirely from INSTALL_HELPERS (they
@@ -455,7 +482,10 @@ async fn new_helpers_read_stdin_for_dash_source() {
     std::fs::create_dir_all(&d).unwrap();
     std::fs::create_dir_all(&t).unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
     shell
         .run_string(&format!(
@@ -491,7 +521,10 @@ async fn docompress_dostrip_builtins_accumulate_shared_lists() {
     std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
     std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
 
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     let mut shell = repo.shell().await.unwrap();
     // The metadata stubs shadow the Rust builtins until init_build_env
     // unsets them; do the same here so the builtins run.
@@ -519,7 +552,10 @@ async fn minimal_shell(dir: &std::path::Path) -> EbuildShell {
     std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
     std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
     std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
-    let repo = Repository::open(&repo_path).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
     repo.shell().await.unwrap()
 }
 

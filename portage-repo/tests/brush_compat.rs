@@ -18,7 +18,7 @@ async fn test_shell() -> (TempDir, EbuildShell) {
     std::fs::create_dir_all(root.join("profiles")).unwrap();
     std::fs::write(root.join("profiles/repo_name"), "test-repo\n").unwrap();
 
-    let repo = Repository::open(root).unwrap();
+    let repo = Repository::builder().in_memory_cache().open(root).unwrap();
     let shell = repo.shell().await.unwrap();
     (tmp, shell)
 }
@@ -780,7 +780,7 @@ async fn inherit_shell() -> (TempDir, EbuildShell) {
     std::fs::write(root.join("profiles/repo_name"), "test-repo\n").unwrap();
     std::fs::create_dir_all(root.join("eclass")).unwrap();
 
-    let repo = Repository::open(root).unwrap();
+    let repo = Repository::builder().in_memory_cache().open(root).unwrap();
     let shell = repo.shell().await.unwrap();
     (tmp, shell)
 }

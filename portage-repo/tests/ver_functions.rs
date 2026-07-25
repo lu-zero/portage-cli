@@ -45,7 +45,10 @@ fn test_repo_dir() -> &'static std::path::Path {
 
 /// Create a shell for testing ver_* functions.
 async fn test_shell() -> EbuildShell {
-    let repo = Repository::open(test_repo_dir()).unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(test_repo_dir())
+        .unwrap();
     repo.shell().await.unwrap()
 }
 

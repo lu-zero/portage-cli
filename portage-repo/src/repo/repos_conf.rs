@@ -178,12 +178,14 @@ impl ReposConf {
 
     /// Open every configured **on-disk** repository (skipping virtual/alias
     /// repos, which have no path to open). Main repo first; rest in
-    /// configuration order. Fails on the first `Repository::open` error.
+    /// configuration order. Uses an in-memory secondary metadata cache per
+    /// repo (callers that need a durable user cache should open individually
+    /// via [`Repository::builder`]).
     pub fn open_all(&self) -> Result<Vec<Repository>> {
         self.repos
             .iter()
             .filter_map(|e| e.location.as_path())
-            .map(Repository::open)
+            .map(|p| Repository::builder().in_memory_cache().open(p))
             .collect()
     }
 }

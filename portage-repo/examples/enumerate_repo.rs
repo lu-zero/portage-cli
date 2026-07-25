@@ -15,7 +15,7 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let repo = match Repository::open(&args.repo) {
+    let repo = match Repository::builder().in_memory_cache().open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error opening repository at {}: {e}", args.repo);
