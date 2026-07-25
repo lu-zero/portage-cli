@@ -40,7 +40,7 @@ flag names).
 
 ### Help wanted: testing and review
 
-This backend was new in 0.2 and the multi-threaded soundness deserves
+This backend was new in 0.3 and the multi-threaded soundness deserves
 extra scrutiny. The relevant invariants are:
 
 1. A `u32` id observed via the forward map must always resolve in the

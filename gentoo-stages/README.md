@@ -32,7 +32,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-gentoo-stages = "0.3"
+gentoo-stages = "0.5"
 tokio = { version = "1.0", features = ["full"] }  # Required for async runtime
 ```
 
@@ -89,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Async API
 
-As of version 0.2.0, `gentoo-stages` uses a fully asynchronous API for better performance during I/O-bound operations.
+As of version 0.5.0, `gentoo-stages` uses a fully asynchronous API for better performance during I/O-bound operations.
 
 ### Benefits of Async
 

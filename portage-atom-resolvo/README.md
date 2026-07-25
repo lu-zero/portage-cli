@@ -25,8 +25,8 @@ See [`examples/resolve.rs`](examples/resolve.rs) for a complete walkthrough
 that builds an in-memory repository, declares transitive / any-of / slotted /
 USE-conditional dependencies, and prints the solved package set.
 
-See [`examples/resolve_conflicts.rs`](examples/resolve_conflicts.rs) for a
-the initial error reporting layout.
+See [`examples/resolve_conflicts.rs`](examples/resolve_conflicts.rs) for the
+initial error reporting layout.
 
 ## Feature checklist
 
