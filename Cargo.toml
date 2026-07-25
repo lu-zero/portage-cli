@@ -24,21 +24,21 @@ repository = "https://github.com/lu-zero/portage-cli"
 
 [workspace.dependencies]
 # Workspace members (path + version for publishable crates)
-gentoo-interner = { version = "0.3.1", path = "gentoo-interner" }
-gentoo-core = { version = "0.5.1", path = "gentoo-core" }
-gentoo-stages = { version = "0.5", path = "gentoo-stages" }
-portage-atom = { version = "0.10", path = "portage-atom" }
-portage-metadata = { version = "0.8", path = "portage-metadata" }
-portage-solver = { version = "0.1", path = "portage-solver" }
-portage-atom-pubgrub = { version = "0.6", path = "portage-atom-pubgrub" }
-portage-atom-resolvo = { version = "0.7.1", path = "portage-atom-resolvo" }
+gentoo-interner = { version = "0.4.0", path = "gentoo-interner" }
+gentoo-core = { version = "0.6.0", path = "gentoo-core" }
+gentoo-stages = { version = "0.6.0", path = "gentoo-stages" }
+portage-atom = { version = "0.11.0", path = "portage-atom" }
+portage-metadata = { version = "0.9.0", path = "portage-metadata" }
+portage-solver = { version = "0.2.0", path = "portage-solver" }
+portage-atom-pubgrub = { version = "0.7.0", path = "portage-atom-pubgrub" }
+portage-atom-resolvo = { version = "0.8.0", path = "portage-atom-resolvo" }
 portage-repo = { path = "portage-repo" }
 portage-distfiles = { path = "portage-distfiles" }
-portage-vdb = { path = "portage-vdb" }
+portage-vdb = { version = "0.2.0", path = "portage-vdb" }
 # portage-resolve: published once as an empty v0.0.1 placeholder to reserve
 # the name; unpublishable from here on (depends on portage-repo, below).
 portage-resolve = { path = "portage-resolve" }
-portage-binpkg = { path = "portage-binpkg" }
+portage-binpkg = { version = "0.2.0", path = "portage-binpkg" }
 
 # Shared external dependencies
 anyhow = "1"
