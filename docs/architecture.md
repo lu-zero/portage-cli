@@ -164,11 +164,22 @@ PubGrub-based dependency solver bridge — the solver `em` uses by default.
 
 ### `portage-repo` (v0.1.0)
 
-Repository layout reader — reads a Gentoo repository from disk. The most
-complex library crate. Depends on `brush-*` (embedded bash shell) via local
-paths for ebuild sourcing and `make.conf` parsing.
+Repository layout reader — reads a Gentoo **ebuild tree** from disk (PMS §4).
+The most complex library crate. Depends on `brush-*` (embedded bash shell)
+via local paths for ebuild sourcing and `make.conf` parsing.
 
-- `struct Repository` — Main entry point: `open()`, `name()`, `layout()`, `categories()`, `ebuilds()`, `cache_entry()`, `profiles()`, `arch()`
+**Tree vs metadata cache:** the tree stays file-backed (`path()` is the root
+escape hatch for shell/profiles). **md5-cache storage is abstract**
+(`MetadataCache`): primary is usually in-tree `metadata/md5-cache`, secondary
+is always present and writable (directory under the CLI's XDG cache root, or
+in-memory in tests). Entry layout `<cat>/<PN>-<PVR>` lives only in
+`DirMetadataCache`. XDG path policy is **CLI-only**
+(`portage-cli::xdg`); open via `Repository::builder().secondary_under_root(...)`
+or `.secondary_memory()`.
+
+- `struct Repository` / `RepositoryBuilder` — `builder().user_cache_root(…)` or `.in_memory_cache()` then `.open()`; `cache_entry()` (primary then secondary), `put_secondary()`, `write_cache_entry()`, `has_primary_cache()`
+- `trait MetadataCache`, `DirMetadataCache`, `MemoryMetadataCache`
+- CLI opens via `portage-cli::repo_open` (XDG user-cache root); regen writes with `RegenWriteTarget::Repository` (no hand-built secondary paths)
 - `struct Category`, `struct Package`, `struct Ebuild` — Directory hierarchy
 - `struct Ebuilds` / `EbuildsIter` — Lazy ebuild discovery with filtering
 - `struct LayoutConf` — `metadata/layout.conf` parser

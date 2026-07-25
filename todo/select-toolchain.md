@@ -1,11 +1,11 @@
 # `em select` — toolchain activation (gcc / binutils / linker / clang)
 
-STATUS: **activation mostly done** (cross + native `post_step`, `pkgconf`
-wrapper 2026-07-17). **`--root` silently defaulting to the host's `gcc` on
-`PATH` is correct as-is** (matches catalyst's seed-compiler model — not a
-bug, confirmed by the user directly). `--prefix`/`--local` should instead
-prefer their own built toolchain once one exists — split by the user
-(2026-07-23) into three separately-landed phases:
+STATUS: **all three phases done** (cross + native `post_step`, `pkgconf`
+wrapper 2026-07-17; phase 1 confdir 2026-07-23; phase 2 build-path awareness
+2026-07-23; phase 3 `em active` 2026-07-25). **`--root` silently defaulting
+to the host's `gcc` on `PATH` is correct as-is** (matches catalyst's
+seed-compiler model — not a bug, confirmed by the user directly).
+`--prefix`/`--local` prefer their own built toolchain once one exists.
 
 1. **✅ `em select` correctly populates the confdir under `--prefix`/`--local`
    — DONE 2026-07-23.** See "Phase 1" section below — found and fixed a
@@ -16,12 +16,10 @@ prefer their own built toolchain once one exists — split by the user
    build path (`shell.rs`'s `init_build_env`) now also prefers a
    `--prefix`/`--local`'s own activated toolchain once one exists, not just
    for cross builds.
-3. **🔴 `em active --prefix/--local <path>`** — a new command, persistent
-   state under `~/.local/state/em/` (XDG state dir — also flagged: evaluate
-   full XDG Base Directory compliance more broadly at some point, not just
-   for this) + a shell-eval export mode. Not started; needs its own design
-   pass (state format, interaction with an explicit `--prefix` flag, whether
-   a bare `em <pkg>` should pick up a registered "current" prefix).
+3. **✅ `em active` — DONE 2026-07-25.** See "Phase 3" section below —
+   persistent registration under `$XDG_STATE_HOME/em/active`, shell
+   `eval "$(em active env)"` export, bare `em <pkg>` picks up the
+   registered prefix/local (explicit `--prefix`/`--local`/`--root` win).
 
 See [[PENDING]] row 1.
 
@@ -120,6 +118,56 @@ the `eselect`/`*-config` workalikes that *activate* a built toolchain (write
 `env.d` state + the `usr/bin/<T>-*` wrappers). The build half is done; this is
 the activation half — the seam where `em select` meets the toolchain/stages work
 ([[em-stages-and-binhosts]], [[em-root-characterization]], [[crossdev-target]]).
+
+## Phase 3 — `em active` (2026-07-25)
+
+Dogfooding helper: register a default `--prefix` / `--local` so every bare
+`em <pkg>` uses that topology without repeating flags.
+
+### Commands
+
+```bash
+em --prefix /home/me/prefix active set   # register overlay prefix
+em --local= active set                   # register default ~/.gentoo
+em --local /other active set             # register a specific local
+em active show                           # print "prefix /path" (or none)
+em active clear                          # drop the registration
+eval "$(em active env)"                  # PATH + EM_ACTIVE_* markers
+```
+
+**Clap footgun:** `em --local active set` steals `active` as the `--local`
+DIR (`num_args = 0..=1`). Use `em --local=` or pass an explicit path.
+
+### State
+
+`$XDG_STATE_HOME/em/active` (default `~/.local/state/em/active`):
+
+```
+# em active state — written by `em active set`
+kind=prefix   # or local
+path=/absolute/path
+```
+
+### Application rules
+
+- Explicit `--local` > `--prefix` > `--root` always win over the registration.
+- Active is consulted only when none of those flags are set.
+- `--root` is **not** registerable (active is for unprivileged prefix/local
+  dogfooding only).
+- `em active env` prepends `<path>/usr/bin:<path>/bin` to `PATH` and exports
+  `EM_ACTIVE_KIND` / `EM_ACTIVE_PATH`. It does **not** set `EPREFIX` in the
+  shell (that would confuse host tools); `em` itself reads the state file.
+
+### Code
+
+- `portage-cli/src/active.rs` — load/save/clear/env + `run`
+- `Cli::topology_source()` — single injection point for `root_set` /
+  `base_roots`
+- Tests isolate `XDG_STATE_HOME` via `test_support::isolate_active_state`
+  so a developer registration cannot flake bare-host topology tests.
+
+Broader XDG Base Directory compliance (config/cache already partially
+used) remains a future cleanup, not blocking this phase.
 
 ## Phase 2 — build-path awareness (2026-07-23)
 
