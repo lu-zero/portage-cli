@@ -47,6 +47,13 @@ consume, not parallel ad-hoc prints. Verbosity is decided in one place:
 | `-q` | nothing (failures still print) | `build.log` only |
 | `-v` | banners + per-phase elapsed time | tee'd |
 
+`-v` stops there: it is a display flag, so it does not raise the tracing floor.
+`em`'s own debug/trace logs need `-vv`/`-vvv`, and those still leave dependency
+targets at `WARN` — brush-core traces every word it expands (`expansion`,
+`commands`, `parse`, … targets), which buries a build log. `RUST_LOG` replaces
+the filter outright when that detail is what you want
+(`RUST_LOG=expansion=debug em …`); see `portage-cli/src/diag.rs`.
+
 Build-helper status (`>>> Unpacking …`) and ebuild-layer lines (`fetch:` …,
 `Created binary package`) honour the same quiet state via the shared
 `QuietFlag` / `EbuildShell::quiet()`, so nothing escapes verbosity. Library

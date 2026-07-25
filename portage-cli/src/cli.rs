@@ -63,7 +63,8 @@ pub struct Cli {
     #[arg(long = "emergelog", global = true, env = "EM_EMERGELOG")]
     pub emergelog: bool,
 
-    /// Increase verbosity (can be repeated for more detail).
+    /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
+    /// `em`'s own debug/trace logs (see also `RUST_LOG`).
     #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
 
