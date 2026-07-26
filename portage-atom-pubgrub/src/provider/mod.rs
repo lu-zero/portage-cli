@@ -279,6 +279,13 @@ pub struct PortageDependencyProvider {
     /// [`Self::prefer_newest_slot`] (cross-slot `:*` bumps) and from
     /// [`InstalledPolicy::Rebuild`] (emptytree full build-closure expansion).
     pub(crate) prefer_update: bool,
+    /// Selective resolution without `--update`: an installed version that
+    /// satisfies a root target is kept rather than replaced by the newest
+    /// accepted one. `--noreplace`/`--newuse`/`--changed-use` mean "leave a
+    /// satisfied target alone"; `--update` means the opposite, so the caller
+    /// clears this when it is set. Off by default, which keeps the plain
+    /// `em <atom>` reinstall.
+    pub(crate) selective_no_update: bool,
 
     /// `--root-deps=rdeps` (crossdev cross builds): discard a target package's
     /// `DEPEND` from the target-root graph. Only `RDEPEND`/`PDEPEND` install into
@@ -662,6 +669,7 @@ impl PortageDependencyProvider {
             rebuild_tree: false,
             prefer_newest_slot: false,
             prefer_update: false,
+            selective_no_update: false,
             root_deps_rdeps: false,
             nodeps: false,
             use_decision_prefer,
@@ -822,6 +830,13 @@ impl PortageDependencyProvider {
     /// the solve (disable the Favor early-return for non-root packages).
     pub fn set_prefer_update(&mut self, active: bool) {
         self.prefer_update = active;
+    }
+
+    /// Selective resolution without `--update`: keep an installed version that
+    /// already satisfies a root target instead of pulling the newest accepted
+    /// one.
+    pub fn set_selective_no_update(&mut self, active: bool) {
+        self.selective_no_update = active;
     }
 
     /// Policy registered for an installed package, if any (`-N`/`-U` mark USE

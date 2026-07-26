@@ -146,6 +146,9 @@ pub struct DepgraphOpts<'a> {
     /// `--changed-use` / `-U`: like `newuse` but only for enabled-flag flips
     /// among shared IUSE (ignore pure IUSE add/drop).
     pub changed_use: bool,
+    /// `--noreplace` / `-n`: leave a named target alone when an installed
+    /// version already satisfies it, rather than reinstalling it.
+    pub noreplace: bool,
     /// `--nodeps` (emerge `-O`): merge only the named atoms, no dependency
     /// expansion. Used by the staged toolchain bootstrap.
     pub nodeps: bool,
@@ -201,6 +204,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         update,
         newuse,
         changed_use,
+        noreplace,
         nodeps,
         host_merge_root,
         extra_use_override,
@@ -218,6 +222,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             }
         })
         .collect();
+    // `create_depgraph_params`' `selective`, restricted to the flags em has: an
+    // installed instance may satisfy a named target, so the target is left alone
+    // instead of being reinstalled. `--emptytree` is the explicit opposite.
+    let selective = (update || noreplace || newuse || changed_use) && !empty;
     let cross = root_aware::detect(roots, host_merge_root);
     let config_root = roots.config();
     let host_config_stage = cross.active && cross.sysroot.as_str() != cross.target.as_str();
@@ -460,11 +468,15 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 problem,
                 reasons,
             };
-            match targets::classify_root_target(&target.origin) {
+            // `--emptytree` deliberately ignores what is installed, so a
+            // satisfying VDB entry must not silence the atom there.
+            let satisfied = !empty && targets::installed_satisfies(&dep, &installed);
+            match targets::classify_root_target(&target.origin, satisfied, selective) {
                 targets::RootTargetDecision::DropWithWarning => {
                     unsatisfiable.push(unsat);
                     continue;
                 }
+                targets::RootTargetDecision::DropSilently => continue,
                 targets::RootTargetDecision::Fatal => {
                     anyhow::bail!(output::unsatisfiable_target_message(
                         &unsat, &data, multi_repo
@@ -574,6 +586,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // Also the path that re-opens host-satisfied build edges so deep tools
         // can upgrade/rebuild; `-N` alone must not do that (Portage parity).
         provider.set_prefer_update(update && deep && !emptytree_native);
+        // `-n`/`-N`/`-U` without `-u`: a root target an installed version
+        // already satisfies keeps that version instead of taking the newest.
+        provider.set_selective_no_update(selective && !update);
         for (pkg, version) in &sysroot_installed {
             provider.add_sysroot_installed(pkg.clone(), version.clone());
         }
@@ -802,7 +817,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // Drop packages already installed at this version, except:
             //  - same-version USE rebuilds (reinstall_cpns), and
             //  - explicitly-requested targets, which emerge reinstalls by
-            //    default ([ebuild R]) even when already at the best version.
+            //    default ([ebuild R]) even when already at the best version —
+            //    unless the resolve is selective, where an up-to-date target is
+            //    left alone.
             // "Already installed" is root-specific: a `Host` requirement
             // (built into `base_roots()`) must only be dropped if it's
             // installed *there*, never because the unrelated Target sysroot
@@ -824,10 +841,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // Explicit target: reinstalled even at best version ([R]). Match
                 // the resolved target *slot*, not the bare CPN — a sibling slot
                 // merely pulled as a satisfied dep (e.g. python:3.13 under a
-                // `python` target) must not be re-listed.
-                || root_pkgs
-                    .iter()
-                    .any(|r| r.cpn() == pkg.cpn() && r.slot() == pkg.slot())
+                // `python` target) must not be re-listed. Set provenance plays
+                // no part: `emerge @world` reinstalls its members exactly as it
+                // reinstalls a named atom (measured, see
+                // todo/selective-resolution.md).
+                || (!selective
+                    && root_pkgs
+                        .iter()
+                        .any(|r| r.cpn() == pkg.cpn() && r.slot() == pkg.slot()))
                 || emptytree_native
         })
         .cloned()
@@ -1217,7 +1238,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // World-family targets nothing acceptable satisfies. Advisory: emerge
         // keeps going and exits 0 for these, so they stay out of `exit_code`.
         if !unsatisfiable.is_empty() {
-            output::report_unsatisfiable_targets(&unsatisfiable, &data);
+            output::report_unsatisfiable_targets(&unsatisfiable, &data, selective);
         }
     }
 

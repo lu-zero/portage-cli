@@ -100,9 +100,10 @@ impl DependencyProvider for PortageDependencyProvider {
                     // `prefer_update` (`-uD`): fall through to newest in-range
                     // for the whole solve (transitive in-slot upgrades).
                     // `Rebuild` / root targets likewise take the newest via
-                    // fall-through.
+                    // fall-through — unless the resolve is selective without
+                    // `--update`, where a satisfied target keeps what it has.
                     if !self.prefer_update
-                        && !self.root_targets.contains(package)
+                        && (self.selective_no_update || !self.root_targets.contains(package))
                         && range.contains(installed_ver)
                     {
                         return Ok(Some(installed_ver.clone()));

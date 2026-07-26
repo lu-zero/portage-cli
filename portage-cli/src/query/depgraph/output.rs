@@ -214,7 +214,15 @@ pub(super) fn unsatisfiable_target_message(
 /// Report the world-family root targets dropped from the solve because nothing
 /// acceptable satisfies them. Advisory only — the plan still stands and the run
 /// still exits 0, matching emerge.
-pub(super) fn report_unsatisfiable_targets(targets: &[UnsatisfiableTarget], data: &RepoData) {
+///
+/// A selective resolve prints the summary alone: an installed instance already
+/// satisfies the atom, so the per-candidate detail is noise (emerge's
+/// `_show_unsatisfied_dep` is reached only on the non-selective path).
+pub(super) fn report_unsatisfiable_targets(
+    targets: &[UnsatisfiableTarget],
+    data: &RepoData,
+    selective: bool,
+) {
     use super::targets::TargetProblem;
     let mut out = anstream::stderr();
     let atoms: Vec<&str> = targets.iter().map(|t| t.atom.as_str()).collect();
@@ -225,6 +233,9 @@ pub(super) fn report_unsatisfiable_targets(targets: &[UnsatisfiableTarget], data
         atoms.join(" ")
     )
     .ok();
+    if selective {
+        return;
+    }
     for t in targets {
         match t.problem {
             TargetProblem::NoEbuilds => {

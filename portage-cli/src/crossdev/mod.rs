@@ -760,6 +760,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         update: false,
         newuse: false,
         changed_use: false,
+        noreplace: false,
         nodeps: true,
         extra_use_override: None,
         binpkg_index: None,

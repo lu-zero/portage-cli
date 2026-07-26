@@ -7,6 +7,11 @@
 //! friendly "carry on and warn" treatment. A user-defined set member takes the
 //! same fatal path as an atom typed on the command line.
 
+use std::collections::HashMap;
+
+use portage_atom::interner::{DefaultInterner, Interned};
+use portage_atom::{Cpn, Cpv, Dep, Version};
+
 /// Where a root-target atom came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetOrigin {
@@ -63,18 +68,44 @@ pub enum TargetProblem {
 pub enum RootTargetDecision {
     /// Drop the atom, report it, and keep resolving (exit 0).
     DropWithWarning,
+    /// Drop the atom without a word: an installed instance satisfies it and the
+    /// resolve is selective, so there is nothing to do and nothing wrong.
+    DropSilently,
     /// Abort the resolve.
     Fatal,
 }
 
 /// Mirror of `depgraph._resolve`'s fatal-vs-soft decision for an argument with
 /// no acceptable candidate.
-pub fn classify_root_target(origin: &TargetOrigin) -> RootTargetDecision {
+///
+/// `installed_satisfies` must already account for `--emptytree`, which makes
+/// portage ignore installed instances (`depgraph.py:7691`).
+pub fn classify_root_target(
+    origin: &TargetOrigin,
+    installed_satisfies: bool,
+    selective: bool,
+) -> RootTargetDecision {
     if origin.is_world_family() {
         RootTargetDecision::DropWithWarning
+    } else if selective && installed_satisfies {
+        RootTargetDecision::DropSilently
     } else {
         RootTargetDecision::Fatal
     }
+}
+
+/// Whether an installed instance satisfies `dep`, including its slot and
+/// version qualifiers.
+pub fn installed_satisfies(
+    dep: &Dep,
+    installed: &HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
+) -> bool {
+    installed.get(&dep.cpn).is_some_and(|slots| {
+        slots.iter().any(|(slot, version)| {
+            let slot = Some(slot.as_str()).filter(|s| !s.is_empty());
+            dep.matches_cpv(&Cpv::new(dep.cpn, version.clone()), slot)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -85,23 +116,31 @@ mod tests {
         TargetOrigin::Set(name.to_string())
     }
 
+    /// The behaviour table this mirrors lives in `todo/selective-resolution.md`;
+    /// every row was measured against emerge 3.13.
     #[test]
-    fn world_family_is_soft_everything_else_fatal() {
+    fn fatal_vs_soft_matches_portage() {
+        use RootTargetDecision::*;
+        // A world-family member is soft however the run was invoked.
         for name in ["world", "selected", "system"] {
-            assert_eq!(
-                classify_root_target(&set(name)),
-                RootTargetDecision::DropWithWarning,
-                "@{name} must not abort the resolve"
-            );
+            for installed in [false, true] {
+                for selective in [false, true] {
+                    assert_eq!(
+                        classify_root_target(&set(name), installed, selective),
+                        DropWithWarning,
+                        "@{name} must not abort the resolve"
+                    );
+                }
+            }
         }
-        assert_eq!(
-            classify_root_target(&set("mytest")),
-            RootTargetDecision::Fatal
-        );
-        assert_eq!(
-            classify_root_target(&TargetOrigin::Explicit),
-            RootTargetDecision::Fatal
-        );
+        // An explicit atom, and a user-defined set's member, are spared only
+        // when an installed instance satisfies them and the run is selective.
+        for origin in [TargetOrigin::Explicit, set("mytest")] {
+            assert_eq!(classify_root_target(&origin, true, true), DropSilently);
+            assert_eq!(classify_root_target(&origin, true, false), Fatal);
+            assert_eq!(classify_root_target(&origin, false, true), Fatal);
+            assert_eq!(classify_root_target(&origin, false, false), Fatal);
+        }
     }
 
     #[test]
@@ -109,5 +148,30 @@ mod tests {
         assert!(set("world").is_world_family());
         assert!(!set("profile").is_world_family());
         assert!(!TargetOrigin::Explicit.is_world_family());
+    }
+
+    fn installed_map(
+        entries: &[(&str, &str, &str)],
+    ) -> HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>> {
+        let mut map: HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>> = HashMap::new();
+        for (cpn, slot, version) in entries {
+            let cpn = Cpn::try_new(cpn).expect("test cpn parses");
+            let version: Version = version.parse().expect("test version parses");
+            map.entry(cpn)
+                .or_default()
+                .insert(Interned::intern(slot), version);
+        }
+        map
+    }
+
+    #[test]
+    fn installed_satisfaction_honours_slot_and_version() {
+        let map = installed_map(&[("app-misc/asciinema", "0", "3.2.0")]);
+        let dep = |s: &str| Dep::parse(s).expect("test atom parses");
+        assert!(installed_satisfies(&dep("app-misc/asciinema"), &map));
+        assert!(installed_satisfies(&dep("app-misc/asciinema:0"), &map));
+        assert!(!installed_satisfies(&dep("app-misc/asciinema:1"), &map));
+        assert!(!installed_satisfies(&dep(">=app-misc/asciinema-4"), &map));
+        assert!(!installed_satisfies(&dep("app-misc/other"), &map));
     }
 }

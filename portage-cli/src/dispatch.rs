@@ -358,6 +358,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 update: globals.merge_flags.update,
                 newuse: depgraph_flags.newuse || globals.depgraph_flags.newuse,
                 changed_use: depgraph_flags.changed_use || globals.depgraph_flags.changed_use,
+                noreplace: globals.merge_flags.noreplace,
                 nodeps: globals.nodeps,
                 extra_use_override: None,
                 binpkg_index: binpkg_index.as_ref(),

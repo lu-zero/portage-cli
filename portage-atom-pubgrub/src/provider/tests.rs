@@ -381,6 +381,40 @@ fn prefer_update_off_keeps_transitive() {
     );
 }
 
+/// `--noreplace`/`-N`/`-U` without `-u`: a *root target* whose installed
+/// version still satisfies the atom keeps that version. Without the flag the
+/// same target takes the newest accepted one (emerge's reinstall default).
+#[test]
+fn selective_no_update_keeps_an_installed_root_target() {
+    let build = |selective: bool| {
+        let mut repo = InMemoryRepository::new();
+        for v in ["3.0.0", "3.1.0"] {
+            repo.add_version(
+                portage_atom::Cpv::parse(&format!("dev-libs/openssl-{v}")).unwrap(),
+                None,
+                None,
+                empty_deps(),
+            );
+        }
+        let mut provider = PortageDependencyProvider::new(repo);
+        provider.set_selective_no_update(selective);
+        let openssl = PortagePackage::unslotted(Cpn::parse("dev-libs/openssl").unwrap());
+        provider.add_installed(InstalledPackage {
+            package: openssl.clone(),
+            version: Version::parse("3.0.0").unwrap(),
+            policy: InstalledPolicy::Favor,
+            active_use: vec![],
+            iuse: vec![],
+        });
+        let solution = provider
+            .resolve_targets(vec![(openssl.clone(), PortageVersionSet::any())])
+            .expect("solvable");
+        solution.get(&openssl).cloned().expect("target is solved")
+    };
+    assert_eq!(build(true), Version::parse("3.0.0").unwrap());
+    assert_eq!(build(false), Version::parse("3.1.0").unwrap());
+}
+
 /// Installed version pruned from the tree: under prefer_update the transitive
 /// dep upgrades (without the flag, Favor keeps the stub — see
 /// `installed_version_removed_from_repo_kept_when_satisfying`).
