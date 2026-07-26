@@ -142,6 +142,8 @@ pub(super) fn report_solver_violations(violations: &[portage_atom_pubgrub::Error
 pub(super) struct UnsatisfiableTarget {
     /// The atom as written.
     pub atom: String,
+    /// Where the atom came from, for the `(dependency required by …)` trailer.
+    pub origin: super::TargetOrigin,
     /// Whether the tree has matching-but-filtered versions, or none at all.
     pub problem: super::targets::TargetProblem,
     /// The matching versions and why each was filtered out. Empty for
@@ -191,7 +193,7 @@ pub(super) fn unsatisfiable_target_message(
 ) -> String {
     use super::targets::TargetProblem;
     let atom = &target.atom;
-    match target.problem {
+    let mut msg = match target.problem {
         TargetProblem::NoEbuilds => format!(
             "no ebuilds found for '{atom}' (searched ::{}{})",
             data.repo_name,
@@ -208,7 +210,12 @@ pub(super) fn unsatisfiable_target_message(
             }
             msg
         }
+    };
+    if let Some(trailer) = target.origin.trailer() {
+        msg.push('\n');
+        msg.push_str(&trailer);
     }
+    msg
 }
 
 /// Report the world-family root targets dropped from the solve because nothing
@@ -260,6 +267,9 @@ pub(super) fn report_unsatisfiable_targets(
                     writeln!(out, "{line}").ok();
                 }
             }
+        }
+        if let Some(trailer) = t.origin.trailer() {
+            writeln!(out, "{trailer}").ok();
         }
     }
 }

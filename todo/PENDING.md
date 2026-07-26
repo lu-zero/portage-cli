@@ -27,6 +27,7 @@ this table is the triage index.
 | **4** | **Parser audit** — full pass complete 2026-07-21; 2 real bugs found+fixed (inverted `!flag?` USE-dep, package.* dir dotfile leak), rest confirmed correct/documented | ✅ 2026-07-21 | [[parser-audit]] |
 | **5** | **`package.env` USE in the resolver** — build-env slice ✅; USE from env files now folded at plan time too | ✅ 2026-07-20 | [[package-env]] |
 | **6** | **Blocker Tier-1** — detect/report ✅; auto-unmerge **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
+| **7** | **Selective resolution** — all 3 commits landed 2026-07-26: root targets carry set provenance and unsatisfiable ones are classified pre-solve (`em -p @world` prints its plan + emerge's masked warning instead of aborting on `app-misc/asciinema`); `selective` implemented, so `--noreplace` is live and `-u` stops reinstalling up-to-date targets; `__internal__/root` and the `(dependency required by …)` trailer cleaned up. Left open: em detects none of emerge's slot-operator `r` rebuilds, so `@world` runs list ~110 fewer rows — a separate, pre-existing gap | ✅ 2026-07-26 | [[selective-resolution]] |
 
 ### Verified closed / demoted (2026-07-18)
 

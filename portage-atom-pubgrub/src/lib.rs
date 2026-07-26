@@ -90,7 +90,18 @@ pub fn format_no_solution(
 ) -> String {
     use pubgrub::Reporter;
     tree.collapse_no_versions();
-    pubgrub::DefaultStringReporter::report(&tree)
+    humanize_root(pubgrub::DefaultStringReporter::report(&tree))
+}
+
+/// Replace the synthetic root package's identity in a rendered derivation tree
+/// with what it stands for. `PortagePackage::Root`'s own `Display` is left
+/// alone — debug and tracing output name it by its real identity on purpose.
+fn humanize_root(report: String) -> String {
+    // The root is a single synthetic version, so the reporter always prints it
+    // with the version suffix; strip that too rather than leaving a stray `0`.
+    report
+        .replace("__internal__/root 0", "the requested targets")
+        .replace("__internal__/root", "the requested targets")
 }
 
 /// Render any [`pubgrub::PubGrubError`] from a resolve into a human-readable
@@ -101,5 +112,27 @@ pub fn format_solve_error(err: pubgrub::PubGrubError<PortageDependencyProvider>)
     match err {
         pubgrub::PubGrubError::NoSolution(tree) => format_no_solution(tree),
         other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::humanize_root;
+
+    #[test]
+    fn root_package_is_named_by_what_it_stands_for() {
+        assert_eq!(
+            humanize_root("__internal__/root 0 depends on app-misc/asciinema".into()),
+            "the requested targets depends on app-misc/asciinema"
+        );
+        assert_eq!(
+            humanize_root("__internal__/root is forbidden".into()),
+            "the requested targets is forbidden"
+        );
+        // Other synthetic nodes keep their own names.
+        assert_eq!(
+            humanize_root("__internal__/choice_2 0 is unavailable".into()),
+            "__internal__/choice_2 0 is unavailable"
+        );
     }
 }

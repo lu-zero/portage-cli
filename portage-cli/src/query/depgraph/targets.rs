@@ -32,6 +32,21 @@ impl TargetOrigin {
     pub fn is_world_family(&self) -> bool {
         matches!(self, Self::Set(name) if matches!(name.as_str(), "selected" | "system" | "world"))
     }
+
+    /// Portage's `(dependency required by …)` trailer under an unsatisfied
+    /// argument. An atom typed on the command line is its own argument and
+    /// gets none; a set names itself, so the user can tell where the atom they
+    /// never typed came from.
+    ///
+    /// Portage prints one line per level of set nesting (`"@selected" [set]`
+    /// then `"@world" [argument]`); `expand_sets` keeps only the name the user
+    /// actually asked for, so there is exactly one line.
+    pub fn trailer(&self) -> Option<String> {
+        match self {
+            Self::Explicit => None,
+            Self::Set(name) => Some(format!("(dependency required by \"@{name}\" [argument])")),
+        }
+    }
 }
 
 /// One resolved root target plus its provenance.
@@ -148,6 +163,15 @@ mod tests {
         assert!(set("world").is_world_family());
         assert!(!set("profile").is_world_family());
         assert!(!TargetOrigin::Explicit.is_world_family());
+    }
+
+    #[test]
+    fn only_a_set_gets_a_trailer() {
+        assert_eq!(
+            set("world").trailer().as_deref(),
+            Some("(dependency required by \"@world\" [argument])")
+        );
+        assert_eq!(TargetOrigin::Explicit.trailer(), None);
     }
 
     fn installed_map(

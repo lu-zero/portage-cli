@@ -465,6 +465,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             };
             let unsat = output::UnsatisfiableTarget {
                 atom: atom.clone(),
+                origin: target.origin.clone(),
                 problem,
                 reasons,
             };

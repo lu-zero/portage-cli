@@ -1,9 +1,13 @@
 # Selective resolution — installed-satisfies-atom, set provenance, `em -p @world`
 
-STATUS: **investigated 2026-07-26, nothing implemented; plan settled, no open
-questions.** From two Fable investigation rounds plus live differential testing
-against emerge 3.13 on the arm64 host, including an instrumented `_emerge` shim.
-Read the **measurement trap** below before re-measuring anything here.
+STATUS: **implemented 2026-07-26 — all three commits landed on master**
+(`855106f` classification + provenance + reasons, `c2ac337` the `selective`
+concept, and the diagnostic polish this note ships with). Plan text below is
+kept as written; the "what landed" section at the end records the deviations.
+From two Fable
+investigation rounds plus live differential testing against emerge 3.13 on the
+arm64 host, including an instrumented `_emerge` shim. Read the **measurement
+trap** below before re-measuring anything here.
 
 ## Symptom
 
@@ -338,3 +342,53 @@ already handles the USE-change flavour via cosolve + `exit_code=1`
   `update`/`newuse` consistently.
 - **USE_EXPAND is off-limits** (another agent is fixing it). Nothing here touches
   it; the only shared surface is read-only `ResolvePolicy` construction.
+
+## What landed (2026-07-26)
+
+Three commits, in plan order.
+
+`855106f` — **classification + provenance + reasons.** `expand_sets` returns
+`TargetAtom { atom, origin }` (`TargetOrigin::Explicit | Set(name)`);
+`DepgraphOpts::atoms` takes those instead of `Vec<String>`. New
+`query/depgraph/targets.rs` holds the pure `classify_root_target`. The root-deps
+loop keys on `pkg.slot().is_none()` (target_package's no-match signal, left
+untouched) and reports via `filter_reasons_for`, factored out of
+`find_autounmask_candidates`. No provider change was needed, as predicted.
+
+`c2ac337` — **`selective`.** `DepgraphOpts::noreplace`; `selective = (update ||
+noreplace || newuse || changed_use) && !empty`; consumed at all three sites
+(classification, the `root_pkgs` `[R]` clause, `set_selective_no_update` in the
+provider). Warnings stay out of `exit_code`.
+
+This commit — **polish.** `format_no_solution` rewrites `__internal__/root 0` to
+`the requested targets` (a post-render substitution — `PortagePackage::Root`'s
+`Display` is unchanged, per the plan's warning), and unsatisfiable targets carry
+a `(dependency required by "@world" [argument])` trailer.
+
+### Deviations from the plan
+
+- **Set-name collapse, as recommended.** `is_world_family()` is
+  `selected|system|world`; `@system`'s two portage-specific carve-outs are not
+  reproduced. `@profile` takes the fatal path.
+- **One trailer line, not portage's nesting.** `expand_sets` flattens nested
+  refs, so only the name the user typed survives; portage prints
+  `"@selected" [set]` *and* `"@world" [argument]`, em prints the latter alone.
+- **`TargetProblem` is derived from the reason list**, not from
+  `data.versions.contains_key`: an atom whose slot/version qualifier matches no
+  ebuild (`sys-kernel/gentoo-sources:6.18.12`) reports `NoEbuilds`, which is what
+  emerge says for it. The reason list is re-filtered through `dep.matches_cpv`
+  because `filter_reasons_for` applies the version range only.
+- **The `!!! All ebuilds …` detail block is gated on `!selective`** — measured:
+  `emerge -pu … @world` prints the batched summary alone.
+
+### Left open
+
+`em -p @world` lists 180 rows against emerge's 202, and `-pu` 72 against 182.
+The whole difference is emerge's slot-operator forced rebuilds (`r` marker: 54
+`rR` + 33 `r U` rows in the `-pu` run); em's `subslot::find_rebuilds` fires on
+none of them. Pre-existing and unrelated to this work — it was simply invisible
+while `-p @world` aborted. Worth its own investigation.
+
+The `# required by …` header `package_use::build_entries` prints for a USE
+change lists every world atom on one line under `@world`; emerge names only the
+relevant parent. Also pre-existing, also newly visible.
