@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use camino::Utf8Path;
 use portage_atom::{Cpv, Dep, Version};
 use portage_atom_pubgrub::{
-    DepEdge, UseFlagRequirement, UseFlagState, UseOverride, resolve_effective_use,
+    DepEdge, UseFlagRequirement, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
 };
 
 /// Entries to write into `/etc/portage/package.use`.
@@ -34,8 +34,8 @@ pub fn build_entries(
     flag_reqs: &[UseFlagRequirement],
     root_atoms: &[String],
     edges: &[DepEdge],
-    pre_env: &str,
-    env_use: &str,
+    pre_env: &UseLayer,
+    env_use: &UseLayer,
     package_use: &[(Dep, Vec<UseOverride>)],
 ) -> Vec<PackageUseEntry> {
     // Pre-compute once for all requirements.

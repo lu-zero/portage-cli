@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use camino::Utf8Path;
 use portage_atom::Dep;
 use portage_atom::interner::Interned;
-use portage_atom_pubgrub::UseOverride;
+use portage_atom_pubgrub::{UseLayer, UseOverride};
 use portage_repo::{AcceptLicense, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
 
 use crate::force_mask::{ForceMask, index_by_cpn};
@@ -14,16 +14,18 @@ type Result<T> = anyhow::Result<T>;
 /// Resolved USE environment for the solver and display.
 pub struct UseEnv {
     /// The fold of profile `make.defaults` + `make.conf` (`extra_confs`) —
-    /// portage's `defaults`/`conf` layers, from `ResolvedUse::pre_env`. Feed
-    /// this into `portage_solver::resolve_effective_use` *before*
-    /// `package_use` and *before* `env_use`, per package.
-    pub pre_env: String,
-    /// The raw process-environment `USE` value, unmerged
-    /// (`ResolvedUse::env_use`) — portage's `env` layer, folded in *after*
-    /// `package_use`. See `resolve_effective_use`'s doc for why this can't be
-    /// pre-merged into `pre_env`: whether a `-*` here wipes `package_use`
-    /// depends on it staying a separate, later layer.
-    pub env_use: String,
+    /// portage's `defaults`/`conf` layers, from `ResolvedUse::pre_env`,
+    /// **parsed once** into a [`UseLayer`]. Feed this into
+    /// `portage_solver::resolve_effective_use` *before* `package_use` and
+    /// *before* `env_use`, per package — do not re-tokenize the profile string
+    /// on every CPV.
+    pub pre_env: UseLayer,
+    /// Process-environment USE layer (`ResolvedUse::env_use`), **parsed once**.
+    /// Portage's `env` layer, folded in *after* `package_use`. See
+    /// `resolve_effective_use`'s doc for why this can't be pre-merged into
+    /// `pre_env`: whether a `-*` here wipes `package_use` depends on it
+    /// staying a separate, later layer.
+    pub env_use: UseLayer,
     /// Keys from `USE_EXPAND` — used to group expanded flags in display.
     pub expand: Vec<String>,
     /// Keys from `USE_EXPAND_HIDDEN` — groups to suppress in display.
@@ -198,13 +200,13 @@ async fn compute_use_env(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/var/cache/distfiles".to_string());
 
-    // `resolved.pre_env`/`resolved.env_use` carry the profile/make.conf fold
-    // and the raw environment value straight through to the per-package
-    // resolver (`portage_solver::resolve_effective_use`) — see `UseEnv`'s
-    // doc for why these stay two separate strings instead of being merged
-    // into one `UseConfig` here.
-    let pre_env = resolved.pre_env;
-    let env_use = resolved.env_use;
+    // Profile/make.conf fold and process-env USE, tokenized once here so
+    // every per-package `resolve_effective_use` reuses interned layer tokens
+    // (USE_EXPAND can put 100+ flags into pre_env — re-splitting that string
+    // per CPV is pure waste). Kept as two layers: a `-*` in env must still
+    // wipe package.use while a conf-level `-*` must not.
+    let pre_env = UseLayer::parse(&resolved.pre_env);
+    let env_use = UseLayer::parse(&resolved.env_use);
 
     // Per-package USE from the profile, then `/etc/portage`, then the config
     // overlay. Collected as raw tokens so the USE_EXPAND colon form is expanded

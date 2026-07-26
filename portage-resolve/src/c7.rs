@@ -28,6 +28,13 @@ use std::collections::HashMap;
 use portage_repo::{AcceptLicense, LicenseGroupRegistry};
 
 use crate::force_mask::ForceMask;
+
+fn empty_layer() -> &'static portage_atom_pubgrub::UseLayer {
+    use std::sync::OnceLock;
+    static E: OnceLock<portage_atom_pubgrub::UseLayer> = OnceLock::new();
+    E.get_or_init(portage_atom_pubgrub::UseLayer::default)
+}
+
 use crate::repo::{
     AcceptKeywords, AcceptLicenses, Adapter, RepoData, ResolvePolicy, target_package,
 };
@@ -100,8 +107,8 @@ fn solve_with(
         package_unmask: &[],
         installed_cpvs: &std::collections::HashSet::new(),
         accept_licenses: &lic,
-        pre_env: "",
-        env_use: "",
+        pre_env: empty_layer(),
+        env_use: empty_layer(),
         package_use: pu,
         force_mask: &fm,
         autosolve_use: true,
@@ -111,8 +118,8 @@ fn solve_with(
         package_mask: &[],
         package_unmask: &[],
         accept_licenses: &lic,
-        pre_env: "",
-        env_use: "",
+        pre_env: empty_layer(),
+        env_use: empty_layer(),
         package_use: pu,
         force_mask: &fm,
     };

@@ -7,4 +7,4 @@
 //! already implements `portage_atom::UseFlagLookup`, so the solver's dependency
 //! conversion sees flag state through the same trait.
 
-pub use portage_solver::{UseConfig, UseFlagState, UseOverride, resolve_effective_use};
+pub use portage_solver::{UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use};

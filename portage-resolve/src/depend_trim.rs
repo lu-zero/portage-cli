@@ -138,6 +138,12 @@ fn target_avail_for_consumer(
 
 #[cfg(test)]
 mod tests {
+    fn empty_layer() -> &'static portage_atom_pubgrub::UseLayer {
+        use std::sync::OnceLock;
+        static E: OnceLock<portage_atom_pubgrub::UseLayer> = OnceLock::new();
+        E.get_or_init(portage_atom_pubgrub::UseLayer::default)
+    }
+
     use std::collections::{HashMap, HashSet};
 
     use portage_repo::{AcceptLicense, LicenseGroupRegistry};
@@ -188,8 +194,8 @@ mod tests {
                 package_mask: &[],
                 package_unmask: &[],
                 accept_licenses: &al,
-                pre_env: "",
-                env_use: "",
+                pre_env: empty_layer(),
+                env_use: empty_layer(),
                 package_use: &[],
                 force_mask: &fm,
             },

@@ -99,7 +99,7 @@ pub fn effective_use(
         pkg.slot(),
         policy.package_use,
         policy.env_use,
-    );
+    ); // pre_env/env_use are already UseLayer
     let iuse = iuse_set(cache);
     let slot_key = pkg.slot();
     apply_force_mask(
@@ -175,7 +175,7 @@ pub fn evaluated_deps<'a>(
 #[cfg(test)]
 mod tests {
     use portage_atom::Cpn;
-    use portage_atom_pubgrub::resolve_effective_use;
+    use portage_atom_pubgrub::{UseLayer, resolve_effective_use};
 
     use super::*;
 
@@ -187,7 +187,14 @@ mod tests {
     #[test]
     fn apply_ceded_survives_an_env_level_wildcard_reset() {
         let cpv = Cpv::new(Cpn::new("app-alternatives", "lex"), "0-r1".parse().unwrap());
-        let mut cfg = resolve_effective_use(&HashMap::new(), "", &cpv, None, &[], "-* build");
+        let mut cfg = resolve_effective_use(
+            &HashMap::new(),
+            &UseLayer::default(),
+            &cpv,
+            None,
+            &[],
+            &UseLayer::parse("-* build"),
+        );
         assert!(
             matches!(cfg.get(Interned::intern("reflex")), UseFlagState::Disabled),
             "env-level -* must leave reflex off before ceding"
@@ -222,7 +229,14 @@ mod tests {
     #[test]
     fn apply_ceded_ignores_flags_for_a_different_package() {
         let cpv = Cpv::new(Cpn::new("app-alternatives", "lex"), "0-r1".parse().unwrap());
-        let mut cfg = resolve_effective_use(&HashMap::new(), "", &cpv, None, &[], "-* build");
+        let mut cfg = resolve_effective_use(
+            &HashMap::new(),
+            &UseLayer::default(),
+            &cpv,
+            None,
+            &[],
+            &UseLayer::parse("-* build"),
+        );
 
         let ceded = vec![CededFlag {
             cpn: Cpn::new("app-alternatives", "awk"),
@@ -244,7 +258,14 @@ mod tests {
         use crate::force_mask::ForceMask;
 
         let cpv = Cpv::new(Cpn::new("sys-devel", "gcc"), "14.2.0".parse().unwrap());
-        let mut cfg = resolve_effective_use(&HashMap::new(), "", &cpv, None, &[], "-*");
+        let mut cfg = resolve_effective_use(
+            &HashMap::new(),
+            &UseLayer::default(),
+            &cpv,
+            None,
+            &[],
+            &UseLayer::parse("-*"),
+        );
         assert!(matches!(
             cfg.get(Interned::intern("multilib")),
             UseFlagState::Disabled

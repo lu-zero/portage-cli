@@ -537,9 +537,9 @@ pub struct ResolvePolicy<'a> {
     /// Resolved `ACCEPT_LICENSE`/`package.license` decision.
     pub accept_licenses: &'a AcceptLicenses,
     /// USE folded up through `make.conf` — see [`Adapter::pre_env`].
-    pub pre_env: &'a str,
-    /// The raw process-environment `USE` value — see [`Adapter::env_use`].
-    pub env_use: &'a str,
+    pub pre_env: &'a portage_atom_pubgrub::UseLayer,
+    /// Process-environment USE layer — see [`Adapter::env_use`].
+    pub env_use: &'a portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides.
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
     /// Profile USE force/mask policy — see [`Adapter::force_mask`].
@@ -562,12 +562,12 @@ pub struct Adapter<'a> {
     pub accept_licenses: &'a AcceptLicenses,
     /// USE folded up through `make.conf` (profile make.defaults + extra
     /// confs) — everything below the `package.use`/`env` layers in portage's
-    /// real fold order. Combined with `env_use` and per-version
-    /// `package.use` + IUSE defaults by `desired_use`.
-    pub pre_env: &'a str,
-    /// The raw process-environment `USE` value — the highest-priority layer,
-    /// applied after `package.use` (see `resolve_effective_use`).
-    pub env_use: &'a str,
+    /// real fold order. Pre-parsed [`UseLayer`]; combined with `env_use` and
+    /// per-version `package.use` + IUSE defaults by `desired_use`.
+    pub pre_env: &'a portage_atom_pubgrub::UseLayer,
+    /// Process-environment USE layer — highest priority, applied after
+    /// `package.use` (see `resolve_effective_use`). Pre-parsed once.
+    pub env_use: &'a portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides.
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
     /// Profile USE force/mask policy: applied to each version's effective USE and
@@ -655,7 +655,9 @@ impl Adapter<'_> {
         // Flags the user pinned via package.use: folding it against an empty
         // base (no IUSE defaults, no pre_env, no env_use) leaves exactly
         // those flags set.
-        let pins = resolve_effective_use(&HashMap::new(), "", cpv, slot, self.package_use, "");
+        let empty = portage_atom_pubgrub::UseLayer::default();
+        let pins =
+            resolve_effective_use(&HashMap::new(), &empty, cpv, slot, self.package_use, &empty);
         let iuse: std::collections::HashSet<&str> = m.iuse.iter().map(|iu| iu.name()).collect();
         let iuse_flags: std::collections::HashSet<Interned<DefaultInterner>> =
             m.iuse.iter().map(Interned::from).collect();
@@ -1460,6 +1462,13 @@ mod tests {
     // newest slot, but `:slot` and `=…-ver*` pin the matching slot rather than
     // collapsing to the newest. Regression for the python:3.13 / =python-3.13*
     // gap (todo/target-derivation.md).
+
+    fn empty_layer() -> &'static portage_atom_pubgrub::UseLayer {
+        use std::sync::OnceLock;
+        static E: OnceLock<portage_atom_pubgrub::UseLayer> = OnceLock::new();
+        E.get_or_init(portage_atom_pubgrub::UseLayer::default)
+    }
+
     #[test]
     fn target_package_honours_slot_and_version_qualifiers() {
         let cache = |slot: &str| format!("EAPI=8\nSLOT={slot}\nKEYWORDS=amd64\nDESCRIPTION=t\n");
@@ -1480,8 +1489,8 @@ mod tests {
                     package_mask: &[],
                     package_unmask: &[],
                     accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-                    pre_env: "",
-                    env_use: "",
+                    pre_env: empty_layer(),
+                    env_use: empty_layer(),
                     package_use: &[],
                     force_mask: &ForceMask::default(),
                 },
@@ -1511,7 +1520,7 @@ mod tests {
             "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
         );
         let arch = Arch::intern("amd64");
-        let pre_env = "a b"; // both on ⇒ ?? ( a b ) violated
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("a b"); // both on ⇒ ?? ( a b ) violated
 
         let fm = ForceMask {
             use_force: vec![Interned::intern("a")],
@@ -1525,8 +1534,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env,
-            env_use: "",
+            pre_env: &pre_env,
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &fm, // a is use.force'd
             autosolve_use: true,
@@ -1554,7 +1563,7 @@ mod tests {
             "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
         );
         let arch = Arch::intern("amd64");
-        let pre_env = "a b";
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("a b");
 
         let fm = ForceMask::default();
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
@@ -1565,8 +1574,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env,
-            env_use: "",
+            pre_env: &pre_env,
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
@@ -1592,7 +1601,7 @@ mod tests {
             "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
         );
         let arch = Arch::intern("amd64");
-        let pre_env = "a"; // only a on ⇒ ?? satisfied
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("a"); // only a on ⇒ ?? satisfied
 
         let fm = ForceMask::default();
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
@@ -1603,8 +1612,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env,
-            env_use: "",
+            pre_env: &pre_env,
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
@@ -1639,7 +1648,7 @@ mod tests {
              REQUIRED_USE=python? ( foo ) su? ( pam )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
         );
         let arch = Arch::intern("amd64");
-        let pre_env = "su"; // su on, pam off ⇒ su?(pam) violated
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("su"); // su on, pam off ⇒ su?(pam) violated
         // python left unset ⇒ Disabled ⇒ python?(foo) vacuously satisfied
 
         let fm = ForceMask::default();
@@ -1651,8 +1660,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env,
-            env_use: "",
+            pre_env: &pre_env,
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
@@ -1689,7 +1698,7 @@ mod tests {
             "EAPI=8\nSLOT=0\nIUSE=multilib cet\nKEYWORDS=~amd64\nDESCRIPTION=t\n",
         );
         let arch = Arch::intern("amd64");
-        let pre_env = "cet"; // user enabled a flag the profile masks
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("cet"); // user enabled a flag the profile masks
 
         let fm = ForceMask {
             pkg_force: index_by_cpn(vec![(dep("cross-foo/gcc"), vec!["multilib".to_string()])]),
@@ -1704,8 +1713,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env,
-            env_use: "",
+            pre_env: &pre_env,
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &fm,
             autosolve_use: false,

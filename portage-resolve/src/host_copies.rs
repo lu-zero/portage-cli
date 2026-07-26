@@ -226,6 +226,12 @@ fn resolve(cpn: Cpn, ctx: &Ctx<'_>) -> Option<(Version, PortagePackage)> {
 
 #[cfg(test)]
 mod tests {
+    fn empty_layer() -> &'static portage_atom_pubgrub::UseLayer {
+        use std::sync::OnceLock;
+        static E: OnceLock<portage_atom_pubgrub::UseLayer> = OnceLock::new();
+        E.get_or_init(portage_atom_pubgrub::UseLayer::default)
+    }
+
     use portage_metadata::CacheEntry;
     use portage_repo::{AcceptLicense, LicenseGroupRegistry};
 
@@ -310,8 +316,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env: "",
-            env_use: "",
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &force_mask,
             installed_cpvs: &installed_cpvs,
@@ -391,8 +397,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env: "",
-            env_use: "",
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &force_mask,
             installed_cpvs: &installed_cpvs,
@@ -473,8 +479,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
-            pre_env: "",
-            env_use: "",
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
             package_use: &[],
             force_mask: &force_mask,
             installed_cpvs: &installed_cpvs,

@@ -44,7 +44,7 @@ pub use solution::{
 };
 pub use solver::Solver;
 pub use use_config::{
-    UseConfig, UseFlagState, UseOverride, atom_matches_cpv, resolve_effective_use,
+    UseConfig, UseFlagState, UseLayer, UseOverride, atom_matches_cpv, resolve_effective_use,
 };
 
 // Re-export the shared atom vocabulary so consumers can `use portage_solver::`

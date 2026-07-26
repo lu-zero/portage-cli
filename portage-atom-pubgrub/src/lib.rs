@@ -67,7 +67,7 @@ pub use repository::{
     rank_slots_by_version,
 };
 pub use required_use::RequiredUse;
-pub use use_config::{UseConfig, UseFlagState, UseOverride, resolve_effective_use};
+pub use use_config::{UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use};
 pub use validate::SlotOperatorBinding;
 pub use version_set::PortageVersionSet;
 

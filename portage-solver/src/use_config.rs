@@ -157,6 +157,72 @@ impl UseOverride {
     }
 }
 
+/// One token inside a [`UseLayer`]: clear-all or a signed flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerTok {
+    /// `-*` — discard everything accumulated from lower layers so far.
+    ClearAll,
+    /// `flag` / `+flag` / `-flag` with the name already interned.
+    Flag {
+        flag: Interned<DefaultInterner>,
+        enable: bool,
+    },
+}
+
+/// A pre-tokenized USE layer (profile `pre_env` or process `env_use`).
+///
+/// Profile USE_EXPAND folding can put a hundred-plus flags into `pre_env`.
+/// Parse that string **once** at config load ([`UseLayer::parse`]) and reuse
+/// the interned tokens on every per-package [`resolve_effective_use`] call —
+/// re-splitting and re-interning the same layer for every CPV is pure waste.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UseLayer {
+    tokens: Vec<LayerTok>,
+}
+
+impl UseLayer {
+    /// Empty layer (no tokens).
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Split and intern a whitespace-separated USE string once.
+    ///
+    /// Accepts the same tokens as a profile/`make.conf`/`USE=` fold:
+    /// `flag`, `+flag`, `-flag`, and `-*`.
+    pub fn parse(s: &str) -> Self {
+        let mut tokens = Vec::new();
+        for tok in s.split_whitespace() {
+            if tok == "-*" {
+                tokens.push(LayerTok::ClearAll);
+                continue;
+            }
+            let name = tok.strip_prefix('+').unwrap_or(tok);
+            match name.strip_prefix('-') {
+                Some(rest) => tokens.push(LayerTok::Flag {
+                    flag: Interned::intern(rest),
+                    enable: false,
+                }),
+                None => tokens.push(LayerTok::Flag {
+                    flag: Interned::intern(name),
+                    enable: true,
+                }),
+            }
+        }
+        Self { tokens }
+    }
+
+    /// Whether this layer contributes no tokens.
+    pub fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
+
+    /// Number of tokens (including `-*`).
+    pub fn len(&self) -> usize {
+        self.tokens.len()
+    }
+}
+
 /// Resolve a single package's effective USE.
 ///
 /// This is the **only** place "is flag F on for package P" gets decided —
@@ -173,125 +239,97 @@ impl UseOverride {
 ///
 /// 1. `iuse_defaults` — the ebuild's own `+`/`-` IUSE defaults (`pkginternal`).
 /// 2. `pre_env` — the profile/`make.conf` fold, already computed by
-///    `portage_repo`'s `ResolvedUse::pre_env` (`defaults` + `conf`).
+///    `portage_repo`'s `ResolvedUse::pre_env` (`defaults` + `conf`), parsed
+///    once into a [`UseLayer`].
 /// 3. This package's matching `package_use` entries (`pkg`).
-/// 4. `env_use` — the raw process-environment `USE` value, unmerged (`env`).
+/// 4. `env_use` — the process-environment USE layer ([`UseLayer`]), unmerged.
 ///
 /// A `-*` token in **any** of these clears exactly what's accumulated from
-/// the layers before it — that's an ordinary property of the fold itself
-/// (see the `merge_flag_lists_signed` function), not a derived flag anyone needs to
-/// track or branch on. This is why, empirically, `package.use` survives a
-/// `-*` in `make.conf` (layer 2) but not one in the environment (layer 4),
-/// and why the ebuild's own `+`-defaulted IUSE (layer 1) is wiped by a `-*`
-/// in *either* — confirmed against real `emerge` (`em stages --stage1`
-/// live-testing, 2026-07-12): `package.use`'s `sys-devel/m4 nls` survives a
-/// `make.conf`-level `USE="-* build"` but not an environment-level one;
-/// `app-alternatives/awk`'s `+gawk` IUSE default is wiped by either.
+/// the layers before it — that's an ordinary property of the fold itself,
+/// not a derived flag anyone needs to track or branch on. This is why,
+/// empirically, `package.use` survives a `-*` in `make.conf` (layer 2) but
+/// not one in the environment (layer 4), and why the ebuild's own
+/// `+`-defaulted IUSE (layer 1) is wiped by a `-*` in *either* — confirmed
+/// against real `emerge` (`em stages --stage1` live-testing, 2026-07-12).
 pub fn resolve_effective_use(
     iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
-    pre_env: &str,
+    pre_env: &UseLayer,
     cpv: &Cpv,
     slot: Option<Interned<DefaultInterner>>,
     package_use: &[(Dep, Vec<UseOverride>)],
-    env_use: &str,
+    env_use: &UseLayer,
 ) -> UseConfig {
-    fn token(name: &str, enable: bool) -> String {
-        if enable {
-            name.to_string()
-        } else {
-            format!("-{name}")
-        }
+    // Interned fold state — no intermediate whitespace strings, no re-split
+    // of the (often large) profile pre_env layer on each call.
+    let mut order: Vec<Interned<DefaultInterner>> = Vec::new();
+    let mut state: HashMap<Interned<DefaultInterner>, bool> = HashMap::new();
+
+    // 1. pkginternal (IUSE defaults)
+    for (flag, def) in iuse_defaults {
+        fold_flag(
+            &mut order,
+            &mut state,
+            *flag,
+            matches!(def, IUseDefault::Enabled),
+        );
     }
-
-    let iuse_tokens: String = iuse_defaults
-        .iter()
-        .map(|(flag, def)| token(flag.as_str(), matches!(def, IUseDefault::Enabled)))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let pkg_use_tokens: String = package_use
-        .iter()
-        .filter(|(dep, _)| atom_matches_cpv(dep, cpv, slot))
-        .flat_map(|(_, overrides)| overrides.iter())
-        .map(|ov| token(ov.flag.as_str(), ov.enable))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let folded = merge_flag_lists_signed(
-        [
-            iuse_tokens.as_str(),
-            pre_env,
-            pkg_use_tokens.as_str(),
-            env_use,
-        ]
-        .into_iter(),
-    );
-
-    let mut cfg = UseConfig::new();
-    for tok in folded {
-        // The fold marks a `-*` it saw with a leading literal token in its
-        // output — meaningful when the caller threads the result into a
-        // *further* fold, moot here since this is the terminal resolution.
-        if tok == "-*" {
+    // 2. defaults/conf
+    fold_layer(&mut order, &mut state, pre_env);
+    // 3. package.use / package.env for this CPV
+    for (dep, overrides) in package_use {
+        if !atom_matches_cpv(dep, cpv, slot) {
             continue;
         }
-        match tok.strip_prefix('-') {
-            Some(name) => cfg.disable(Interned::intern(name)),
-            None => cfg.enable(Interned::intern(tok.as_str())),
+        for ov in overrides {
+            fold_flag(&mut order, &mut state, ov.flag, ov.enable);
+        }
+    }
+    // 4. process env
+    fold_layer(&mut order, &mut state, env_use);
+
+    let mut cfg = UseConfig::new();
+    for flag in order {
+        if state.get(&flag).copied().unwrap_or(false) {
+            cfg.enable(flag);
+        } else {
+            cfg.disable(flag);
         }
     }
     cfg
 }
 
-/// Merge ordered token-group strings with incremental USE semantics: `-flag`
-/// removes a previously-accumulated `flag`, and the special token `-*` is the
-/// clear-all (make.conf(5): "Clearing these variables requires a clear-all as
-/// in: `export USE=-*`") — it discards every flag accumulated *from the
-/// groups before it*, in this call's own group order, so later groups rebuild
-/// from empty. Preserves explicit disables (`-flag` is emitted rather than
-/// dropped, even for a flag never enabled) and, if any group contained `-*`,
-/// prepends a leading `-*` marker to the output — meaningful only when the
-/// result is threaded into a further fold; [`resolve_effective_use`], the
-/// only caller in this crate, is always the terminal fold and skips it.
-///
-/// Intentionally duplicated from `portage_repo::repo::profile`'s
-/// identically-named, identically-behaved function rather than imported:
-/// `portage-solver` is meant to stay a lightweight, foundational vocabulary
-/// crate (see the module doc), and `portage-repo` is a heavier, higher-level
-/// crate (embedded ebuild shell, brush) with no existing dependency edge to
-/// this one. This function is ~15 lines of pure string processing with no
-/// external dependencies of its own — cheaper to keep in sync by inspection
-/// than to justify a new cross-crate dependency for.
-fn merge_flag_lists_signed<'a>(iter: impl Iterator<Item = &'a str>) -> Vec<String> {
-    let mut order: Vec<String> = Vec::new();
-    let mut state: HashMap<String, bool> = HashMap::new();
-    let mut saw_wildcard = false;
-    for val in iter {
-        for tok in val.split_whitespace() {
-            if tok == "-*" {
-                order.clear();
-                state.clear();
-                saw_wildcard = true;
-                continue;
-            }
-            let (name, enabled) = match tok.strip_prefix('-') {
-                Some(n) => (n.to_string(), false),
-                None => (tok.to_string(), true),
-            };
-            if !state.contains_key(&name) {
-                order.push(name.clone());
-            }
-            state.insert(name, enabled);
+fn fold_flag(
+    order: &mut Vec<Interned<DefaultInterner>>,
+    state: &mut HashMap<Interned<DefaultInterner>, bool>,
+    flag: Interned<DefaultInterner>,
+    enable: bool,
+) {
+    use std::collections::hash_map::Entry;
+    match state.entry(flag) {
+        Entry::Vacant(e) => {
+            order.push(flag);
+            e.insert(enable);
+        }
+        Entry::Occupied(mut e) => {
+            *e.get_mut() = enable;
         }
     }
-    let mut out: Vec<String> = order
-        .into_iter()
-        .map(|n| if state[&n] { n } else { format!("-{n}") })
-        .collect();
-    if saw_wildcard {
-        out.insert(0, "-*".to_string());
+}
+
+fn fold_layer(
+    order: &mut Vec<Interned<DefaultInterner>>,
+    state: &mut HashMap<Interned<DefaultInterner>, bool>,
+    layer: &UseLayer,
+) {
+    for tok in &layer.tokens {
+        match *tok {
+            LayerTok::ClearAll => {
+                order.clear();
+                state.clear();
+            }
+            LayerTok::Flag { flag, enable } => fold_flag(order, state, flag, enable),
+        }
     }
-    out
 }
 
 /// Whether a dependency atom matches a given `cpv` (+ optional slot).
@@ -413,17 +451,21 @@ mod tests {
         )]
     }
 
+    fn layer(s: &str) -> UseLayer {
+        UseLayer::parse(s)
+    }
+
     #[test]
     fn resolve_effective_use_baseline_no_wildcard() {
         // No -* anywhere: package.use applies normally, matching real emerge's
         // baseline behaviour (m4 nls with no override).
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            "",
+            &layer(""),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
-            "",
+            &layer(""),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
     }
@@ -436,11 +478,11 @@ mod tests {
         // nls` apply.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            "-* build",
+            &layer("-* build"),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
-            "",
+            &layer(""),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -453,11 +495,11 @@ mod tests {
         // invocation left `package.use: sys-devel/m4 nls` with zero effect.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            "",
+            &layer(""),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
-            "-* build",
+            &layer("-* build"),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -469,11 +511,11 @@ mod tests {
         // confirmed against real emerge.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            "",
+            &layer(""),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
-            "build",
+            &layer("build"),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -486,11 +528,11 @@ mod tests {
         // emerge's app-alternatives/awk `+gawk` default.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("quic", IUseDefault::Enabled)]),
-            "-* build",
+            &layer("-* build"),
             &cpv(),
             None,
             &[],
-            "",
+            &layer(""),
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Disabled);
     }
@@ -499,11 +541,11 @@ mod tests {
     fn resolve_effective_use_iuse_default_suppressed_by_env_level_wildcard() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("quic", IUseDefault::Enabled)]),
-            "",
+            &layer(""),
             &cpv(),
             None,
             &[],
-            "-* build",
+            &layer("-* build"),
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Disabled);
     }
@@ -512,11 +554,11 @@ mod tests {
     fn resolve_effective_use_iuse_default_kept_without_any_wildcard() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("quic", IUseDefault::Enabled)]),
-            "",
+            &layer(""),
             &cpv(),
             None,
             &[],
-            "",
+            &layer(""),
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Enabled);
     }
@@ -529,11 +571,11 @@ mod tests {
         // -flag in pre_env/pkg/env always overrides it.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("ssl", IUseDefault::Enabled)]),
-            "-ssl",
+            &layer("-ssl"),
             &cpv(),
             None,
             &[],
-            "",
+            &layer(""),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
@@ -542,11 +584,11 @@ mod tests {
     fn resolve_effective_use_package_use_only_applies_to_matching_atom() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            "",
+            &layer(""),
             &cpv(),
             None,
             &pkg_use("dev-libs/other", &["ssl"]),
-            "",
+            &layer(""),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
@@ -555,11 +597,11 @@ mod tests {
     fn resolve_effective_use_package_use_disable_overrides_pre_env_enable() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            "ssl",
+            &layer("ssl"),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["-ssl"]),
-            "",
+            &layer(""),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
