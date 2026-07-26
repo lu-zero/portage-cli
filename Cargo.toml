@@ -77,9 +77,9 @@ anstream = "1"
 anstyle = "1"
 blake2 = "0.11.0-rc.5"
 boxcar = "0.2"
-brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "92ebb646" }
-brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "92ebb646" }
-brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "92ebb646" }
+brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "940bec39" }
+brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "940bec39" }
+brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "940bec39" }
 dhat = "0.3.3"
 # Fork: bad-path mknod/chown/chmod pass through to the kernel instead of aborting
 # the supervised tree (autoconf probes hit this). PR pending upstream koca-build.
