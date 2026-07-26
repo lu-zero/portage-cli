@@ -29,7 +29,6 @@ use portage_atom_pubgrub::{
     PortageDependencyProvider, PortagePackage, PortageVersionSet, UseFlagRequirement, UseOverride,
     build_slot_map,
 };
-use portage_repo::Repository;
 
 use crate::cli::DepgraphFormat;
 
@@ -236,68 +235,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let repo = crate::repo_open::open(repo_path)
         .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
 
-    // Overlays from repos.conf (the main repo is loaded above). Masters are
-    // resolved relative to the main repo's parent directory (e.g. the
-    // crossdev overlay's `masters = gentoo` → /var/db/repos/gentoo).
-    let overlays: Vec<(Repository, Vec<Repository>)> = if multi_repo {
-        let repos_dir = repo
-            .path()
-            .parent()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
-        match roots.repos_conf() {
-            Ok(rc) => rc
-                .repos()
-                .iter()
-                .filter(|e| {
-                    e.location
-                        .as_path()
-                        .map(|p| p != repo.path().as_std_path())
-                        .unwrap_or(true)
-                })
-                .filter_map(|e| {
-                    let path = match e.location.as_path() {
-                        Some(p) => p.to_path_buf(),
-                        None => return None, // virtual/alias repo — no path to open
-                    };
-                    match crate::repo_open::open_with_masters(path, &repos_dir) {
-                        Ok(pair) => Some(pair),
-                        Err(err) => {
-                            eprintln!(
-                                "!!! skipping repo '{}' at {}: {err}",
-                                e.name,
-                                e.location
-                                    .as_path()
-                                    .unwrap_or(std::path::Path::new(""))
-                                    .display()
-                            );
-                            None
-                        }
-                    }
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        }
-    } else {
-        Vec::new()
-    };
-
-    // Alias repos (virtual, no on-disk tree) from repos.conf — consumed by
-    // load_repos to inject derived cross-<tuple> packages into RepoData.
-    // See Location::Alias / todo/cross-derive-on-the-fly.md.
-    let alias_repos: Vec<portage_repo::RepoEntry> = if multi_repo {
-        match roots.repos_conf() {
-            Ok(rc) => rc
-                .repos()
-                .iter()
-                .filter(|e| matches!(e.location, portage_repo::Location::Alias { .. }))
-                .cloned()
-                .collect(),
-            Err(_) => Vec::new(),
-        }
-    } else {
-        Vec::new()
-    };
+    let (overlays, alias_repos) = crate::repo_open::overlays_from_conf(&repo, roots, multi_repo);
 
     let (data, (target_installed, installed_blockers), host_installed, use_env_result) = tokio::join!(
         repo::load_repos(&repo, &overlays, &alias_repos),
@@ -448,16 +386,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // opaque solver failure. Classify it here instead, the way portage does
         // in argument processing.
         if pkg.slot().is_none() {
-            // `filter_reasons_for` applies the version range only, so the atom's
-            // slot qualifier is re-applied here — `cat/pkg:6.18.12` must not
-            // report the unrelated slots' versions as its masked candidates.
-            let reasons: Vec<_> = repo::filter_reasons_for(&data, &dep.cpn, &vs, &target_policy)
-                .into_iter()
-                .filter(|c| {
-                    let slot = c.slot;
-                    dep.matches_cpv(&c.cpv, slot.as_ref().map(|s| s.as_str()))
-                })
-                .collect();
+            let reasons = repo::filter_reasons_for_atom(&data, &dep, &vs, &target_policy);
             let problem = if reasons.is_empty() {
                 targets::TargetProblem::NoEbuilds
             } else {

@@ -7,61 +7,199 @@ use portage_vdb::Vdb;
 
 use super::sets::KnownSets;
 use crate::query::which::dep_matches_cpv;
+use crate::style::C_PKG;
 use crate::util::write_atomic;
 
 const DEFAULT_WORLD: &str = "/var/lib/portage/world";
 
-pub fn run(vdb: &Vdb, fix: bool, root: Option<&Utf8Path>) -> Result<()> {
+/// The repository plus every resolved policy input, owned, so each world atom
+/// can be asked the two questions the VDB alone cannot answer: does any ebuild
+/// still match it, and is any of them visible here?
+///
+/// `emaint --check world` reports both (`has no available ebuilds` /
+/// `has no visible ebuilds`); checking only the VDB silently passes a world
+/// full of entries that can never be rebuilt.
+pub struct TreeView {
+    data: portage_resolve::repo::RepoData,
+    accept_keywords: portage_resolve::repo::AcceptKeywords,
+    accept_licenses: portage_resolve::repo::AcceptLicenses,
+    package_mask: Vec<Dep>,
+    package_unmask: Vec<Dep>,
+    pre_env: portage_atom_pubgrub::UseLayer,
+    env_use: portage_atom_pubgrub::UseLayer,
+    package_use: Vec<(Dep, Vec<portage_atom_pubgrub::UseOverride>)>,
+    force_mask: portage_resolve::force_mask::ForceMask,
+    multi_repo: bool,
+}
+
+impl TreeView {
+    /// Load the main repo (plus overlays when `multi_repo`) and the config that
+    /// decides visibility.
+    pub async fn load(
+        repo_path: &Utf8Path,
+        roots: &portage_resolve::Roots,
+        arch: &gentoo_core::Arch,
+        multi_repo: bool,
+    ) -> Result<Self> {
+        let repo = crate::repo_open::open(repo_path.as_std_path())
+            .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
+        let (overlays, aliases) = crate::repo_open::overlays_from_conf(&repo, roots, multi_repo);
+        let (data, env) = tokio::join!(
+            portage_resolve::repo::load_repos(&repo, &overlays, &aliases),
+            portage_resolve::use_env::build_use_env(&repo, roots.config(), None, None),
+        );
+        let env = env?;
+        Ok(Self {
+            data,
+            accept_keywords: portage_resolve::repo::AcceptKeywords::new(
+                arch,
+                &env.accept_keywords,
+                env.package_accept_keywords,
+            ),
+            accept_licenses: portage_resolve::repo::AcceptLicenses::new(
+                env.accept_license,
+                env.package_license,
+            ),
+            package_mask: env.package_mask,
+            package_unmask: env.package_unmask,
+            pre_env: env.pre_env,
+            env_use: env.env_use,
+            package_use: env.package_use,
+            force_mask: env.force_mask,
+            multi_repo,
+        })
+    }
+
+    fn policy(&self) -> portage_resolve::repo::ResolvePolicy<'_> {
+        portage_resolve::repo::ResolvePolicy {
+            accept_keywords: &self.accept_keywords,
+            package_mask: &self.package_mask,
+            package_unmask: &self.package_unmask,
+            accept_licenses: &self.accept_licenses,
+            pre_env: &self.pre_env,
+            env_use: &self.env_use,
+            package_use: &self.package_use,
+            force_mask: &self.force_mask,
+        }
+    }
+
+    /// `None` when the atom has an acceptable candidate; otherwise the problem,
+    /// worded as the depgraph words it for an unsatisfiable root target.
+    fn problem(&self, dep: &Dep) -> Option<String> {
+        let vs = match &dep.version {
+            Some(v) => portage_atom_pubgrub::PortageVersionSet::from_operator(
+                dep.op.unwrap_or(portage_atom::Operator::GreaterOrEqual),
+                dep.glob,
+                v.clone(),
+            ),
+            None => portage_atom_pubgrub::PortageVersionSet::any(),
+        };
+        let policy = self.policy();
+        if portage_resolve::repo::target_package(&self.data, dep, &policy)
+            .slot()
+            .is_some()
+        {
+            return None;
+        }
+        let reasons = portage_resolve::repo::filter_reasons_for_atom(&self.data, dep, &vs, &policy);
+        if reasons.is_empty() {
+            return Some(format!(
+                "no ebuilds in ::{}{}",
+                self.data.repo_name,
+                if self.multi_repo { " or overlays" } else { "" }
+            ));
+        }
+        Some(format!(
+            "all ebuilds masked ({})",
+            reasons
+                .iter()
+                .map(|c| format!(
+                    "{}-{} {}",
+                    c.cpv.cpn,
+                    c.cpv.version,
+                    portage_resolve::repo::filter_reason_text(&c.reasons)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
+pub fn run(vdb: &Vdb, fix: bool, root: Option<&Utf8Path>, tree: Option<&TreeView>) -> Result<()> {
     let known_sets = KnownSets::load(root);
     let installed: Vec<_> = vdb.packages().into_iter().collect();
 
-    let mut total_orphaned = 0usize;
-    let mut total_invalid = 0usize;
-
+    let mut counts = Counts::default();
     check_world_file(
         &world_path(root),
         &installed,
         &known_sets,
+        tree,
         fix,
-        &mut total_orphaned,
-        &mut total_invalid,
+        &mut counts,
     )?;
     check_world_sets_file(
         &world_sets_path(root),
         &known_sets,
         fix,
-        &mut total_orphaned,
+        &mut counts.orphaned,
     )?;
 
-    if total_orphaned == 0 && total_invalid == 0 {
-        println!("World files are consistent.");
-    } else if !fix {
+    let removable = counts.orphaned + counts.invalid;
+    if removable == 0 && counts.unbuildable == 0 {
+        anstream::println!("World files are consistent.");
+        return Ok(());
+    }
+    if counts.unbuildable > 0 {
         eprintln!(
-            "\n{} issue{} found. Run with --fix to remove them.",
-            total_orphaned + total_invalid,
-            if total_orphaned + total_invalid == 1 {
-                ""
+            "\n{} installed entr{} kept: still usable, but nothing in the tree can rebuild {}.",
+            counts.unbuildable,
+            if counts.unbuildable == 1 { "y" } else { "ies" },
+            if counts.unbuildable == 1 {
+                "it"
             } else {
-                "s"
-            }
+                "them"
+            },
+        );
+    }
+    if removable > 0 && !fix {
+        eprintln!(
+            "{removable} entr{} can be removed. Run with --fix.",
+            if removable == 1 { "y" } else { "ies" },
         );
     }
 
     Ok(())
 }
 
+/// World-file problems, split by what `--fix` may do about each.
+#[derive(Default)]
+struct Counts {
+    /// Not installed, or naming a set that no longer exists — removable.
+    orphaned: usize,
+    /// Unparseable as an atom — removable.
+    invalid: usize,
+    /// Installed and usable, but unbuildable from the current tree — kept.
+    unbuildable: usize,
+}
+
 fn check_world_file(
     path: &Utf8Path,
     installed: &[portage_vdb::InstalledPackage],
     known_sets: &KnownSets,
+    tree: Option<&TreeView>,
     fix: bool,
-    orphaned_count: &mut usize,
-    invalid_count: &mut usize,
+    counts: &mut Counts,
 ) -> Result<()> {
     let content = std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?;
 
     let mut orphaned: Vec<String> = Vec::new();
     let mut invalid: Vec<String> = Vec::new();
+    // Entries that are installed and so still usable, but whose ebuilds are
+    // gone or no longer visible: reported, never removed. Dropping one from
+    // world would leave an installed package nothing selects, i.e. depclean
+    // bait — `emaint --fix world` does remove them, this deliberately does not.
+    let mut unbuildable: Vec<(String, String)> = Vec::new();
     let mut kept: Vec<&str> = Vec::new();
 
     for line in content.lines() {
@@ -88,20 +226,30 @@ fn check_world_file(
         };
         if installed.iter().any(|pkg| dep_matches_cpv(&dep, pkg.cpv())) {
             kept.push(line);
+            if let Some(problem) = tree.and_then(|t| t.problem(&dep)) {
+                unbuildable.push((trimmed.to_owned(), problem));
+            }
         } else {
             orphaned.push(trimmed.to_owned());
         }
     }
 
+    if !invalid.is_empty() || !orphaned.is_empty() || !unbuildable.is_empty() {
+        anstream::println!("{path}:");
+    }
     for atom in &invalid {
-        println!("!!! {path}: '{atom}': invalid atom");
+        anstream::println!("  {C_PKG}{atom}{C_PKG:#}: invalid atom");
     }
     for atom in &orphaned {
-        println!("!!! {path}: '{atom}': not installed / unknown set");
+        anstream::println!("  {C_PKG}{atom}{C_PKG:#}: not installed / unknown set");
+    }
+    for (atom, problem) in &unbuildable {
+        anstream::println!("  {C_PKG}{atom}{C_PKG:#}: {problem}");
     }
 
-    *orphaned_count += orphaned.len();
-    *invalid_count += invalid.len();
+    counts.orphaned += orphaned.len();
+    counts.invalid += invalid.len();
+    counts.unbuildable += unbuildable.len();
 
     if fix && (!orphaned.is_empty() || !invalid.is_empty()) {
         let new_content = kept.join("\n") + "\n";

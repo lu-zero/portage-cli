@@ -280,7 +280,21 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
         Some(MaintCommand::World { fix }) => {
             let vdb = open_cli_vdb(globals)?;
             let roots = globals.roots();
-            maint::world::run(&vdb, *fix, roots.target())
+            let resolved = globals.repo_path();
+            // Without the tree the check can only see the VDB, so an entry
+            // whose ebuild is gone or masked here passes silently.
+            let tree = maint::world::TreeView::load(
+                camino::Utf8Path::new(&resolved),
+                &roots,
+                &globals.arch,
+                globals.repo.is_none(),
+            )
+            .await
+            .map_err(|e| {
+                eprintln!("warning: ebuild availability not checked: {e:#}");
+            })
+            .ok();
+            maint::world::run(&vdb, *fix, roots.target(), tree.as_ref())
         }
     }
 }

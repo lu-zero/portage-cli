@@ -1132,6 +1132,40 @@ pub fn find_cache<'a>(
         .map(|(_, e)| e)
 }
 
+/// Why a version was filtered, as displayed text — one phrase per reason.
+pub fn filter_reason_text(reasons: &[FilterReason]) -> String {
+    reasons
+        .iter()
+        .map(|r| match r {
+            // `keyword_needed` reports `**` when the arch has no keyword at all.
+            FilterReason::Keyword(kw) if kw == "**" => "missing keyword".to_string(),
+            FilterReason::Keyword(kw) => format!("{kw} keyword"),
+            FilterReason::Masked => "package.mask".to_string(),
+            FilterReason::License(l) => format!("{} license(s)", l.join(" ")),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// [`filter_reasons_for`] narrowed to the versions `dep` itself matches.
+///
+/// `filter_reasons_for` applies the version range only, so a slot-qualified
+/// atom like `cat/pkg:6.18.12` would otherwise report unrelated slots' versions
+/// as its own rejected candidates. An empty result means nothing the atom
+/// matches exists at all — the caller's "no ebuilds" case, as against "every
+/// candidate was filtered".
+pub fn filter_reasons_for_atom(
+    data: &RepoData,
+    dep: &Dep,
+    version_set: &portage_atom_pubgrub::PortageVersionSet,
+    policy: &ResolvePolicy,
+) -> Vec<AutounmaskCandidate> {
+    filter_reasons_for(data, &dep.cpn, version_set, policy)
+        .into_iter()
+        .filter(|c| dep.matches_cpv(&c.cpv, c.slot.as_ref().map(|s| s.as_str())))
+        .collect()
+}
+
 /// Every version of `cpn` within `version_set` that the policy excludes, with
 /// the reasons (keyword / mask / license). Versions that pass every filter are
 /// absent, so an empty result means the atom is satisfiable.
