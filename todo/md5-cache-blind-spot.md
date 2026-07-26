@@ -1,8 +1,8 @@
 # em is blind to ebuilds with no md5-cache entry
 
-STATUS: **found 2026-07-26, independently confirmed; nothing implemented.**
-Highest value/effort item currently open — it silently removes real versions
-from every resolve, including world members with available upgrades.
+STATUS: **fixed 2026-07-26 on branch `md5-cache-fallback`** (`d6a7b82`
+visibility, `4489e8d` memoisation + staleness), not yet merged. Two follow-ups
+below are still open.
 
 ## Symptom
 
@@ -60,30 +60,64 @@ concludes "no ebuilds". The classification is right; its input is wrong.
 - Any `em -p @world`/row-count comparison against emerge is measuring this too.
   Re-baseline the numbers in [[selective-resolution]] after fixing.
 
-## Shape of the fix
+## What landed
 
-Portage's rule: the cache is an *optimisation*, not the source of truth. When
-an ebuild has no valid cache entry (missing, or `_eclasses_`/mtime stale), it
-sources the ebuild to regenerate metadata.
+Portage's rule is that the cache is an *optimisation*, not the source of truth:
+an ebuild with no valid entry gets sourced. em now does the same, narrowed so
+the cost stays off the hot path.
 
-Open questions before implementing:
+`overlay.rs` already had the whole chain (layered lookup → master symlink →
+source → `put_secondary`); it was declared main-repo-exempt on the premise that
+rsync always ships a complete cache. The per-ebuild body is now shared, and
+`primary_entries` runs it over *suspects* only:
 
-- **Where.** `load_repos` is on the hot path (the co-solve fixpoint rebuilds the
-  provider up to ~8×), and sourcing ebuilds is orders of magnitude slower than
-  reading cache. Sourcing *only* the uncached minority (44-63 of ~40k) is
-  probably affordable, but it must happen once, outside the fixpoint.
-- **Or refuse to guess.** A cheaper first step: keep the version out of the
-  solve but *report* it — "N versions skipped, no metadata cache" — so the
-  blindness stops being silent. Strictly worse than sourcing, but a large
-  improvement over today and much cheaper. Could ship first.
-- **Staleness, not just absence.** This note only measured *missing* entries.
-  A *stale* entry (ebuild newer than its cache) is the same class of bug and
-  probably more common; check whether `CacheEntry` validation compares mtimes
-  or `_eclasses_` at all today.
-- `em regen` exists (see [[regen-jobs-guidance]]) — establish whether running
-  it fixes these locally, which would tell us whether this is "the user's cache
-  is stale" or "em cannot handle a legitimately cacheless ebuild". Both need
-  handling, but the priority differs.
+- no cache entry (the original bug — 63 CPVs here), or
+- newer than the last sync, which catches a **present-but-stale** entry that the
+  bulk read would otherwise trust blindly (142 of 32,615 ebuilds here).
+
+Validation is by md5 of file contents (`_md5_` + `_eclasses_` digests), never
+mtime; mtime only decides *which* files to digest.
+
+Finding suspects costs a tree walk, so it runs concurrently with the bulk read
+and its outcome is memoised in a sidecar keyed on a sync stamp (`timestamp.chk`
+plus the repo dir's own mtime, so rsync and git trees both invalidate). The
+sidecar lists only what the in-tree cache genuinely cannot serve — 64, not every
+suspect at 165. Any inconsistency (stamp mismatch, unparseable line, secondary
+missing a listed entry) falls through to a full rescan: it costs time, never
+correctness.
+
+Measured, `em -p @world` median of 12: **0.98s before, 1.01s after**, inside the
+baseline's own 0.97-1.03 spread. First resolve after a sync pays 1.14s.
+
+## Open follow-up: regenerate on sync
+
+Better still, do the reindex **at sync time** rather than on the next resolve,
+so only *locally modified* ebuilds are ever suspect afterwards and no ordinary
+command pays the 1.14s cold hit. `em regen` already exists
+([[regen-jobs-guidance]]), and the sync stamp this fix added is the natural
+trigger.
+
+Note `em maint sync` is currently `bail!("not implemented: emaint sync")`
+(`portage-cli/src/dispatch.rs`), so there is no in-em sync to hook yet — this
+either waits for that, or hangs off stamp-change detection (regenerate eagerly
+when the stamp moves, instead of lazily on first use).
+
+## Open follow-up: lazy validation (option D) — and the memory angle
+
+The deeper asymmetry: **portage validates lazily, per-cpv, only for packages it
+actually considers; em loads the whole tree eagerly into `RepoData`.** So any
+per-ebuild work in em is a 32,615× operation where portage's is a few hundred.
+
+Going lazy would cut more than time. `RepoData` currently holds a parsed
+`CacheEntry` for **every** version in the tree for the whole resolve, when a
+typical closure touches a few hundred CPNs. Loading (or retaining) only what the
+solver reaches should cut resident memory substantially — worth measuring before
+committing to it, since the closure is discovered incrementally and a lazy
+provider changes the ingestion model that `new_for_targets_with_bdeps_and_slot_map`
+(closure-seeded, see `portage-cli/src/query/depgraph/mod.rs`) is built around.
+
+This is a redesign of the eager load, not a tweak — file it separately if it
+gets picked up.
 
 ## Verification
 
