@@ -1150,7 +1150,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             .collect();
         let dep_conflicts = conflicts::find_conflicts(&target_installed, &proposed);
         if !dep_conflicts.is_empty() {
-            output::report_conflicts(&dep_conflicts);
+            output::report_conflicts(&dep_conflicts, &use_expand);
         }
 
         let mut violations = provider.check_blockers(&solution);

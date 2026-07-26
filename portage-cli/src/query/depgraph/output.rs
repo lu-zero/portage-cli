@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 
 use anstyle::{AnsiColor, Effects, Style};
@@ -10,7 +10,7 @@ use portage_atom_pubgrub::{
 };
 use portage_metadata::CacheEntry;
 
-pub(super) use crate::style::C_PKG;
+pub(super) use crate::style::{C_OLDVERSION, C_PKG};
 
 // emerge color scheme: bold green for keywords/atoms/tags, bold red/blue for flags
 // Package names use plain green (not bold) to match portage's PKG_MERGE style
@@ -67,7 +67,63 @@ use super::repo::{FilterReason, RepoData, find_cache};
 /// Grouped target → proposed version → requirer → version constraint, so each
 /// is stated once and the USE deps collapse into one flat list beneath the
 /// constraint they all qualify.
-pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
+/// One USE-flag group produced by [`group_use_flags`]: either the base
+/// (non-`USE_EXPAND`) flags (`var == None`, rendered as `USE="…"`) or a single
+/// `USE_EXPAND` variable (`var == Some("LLVM_TARGETS")`). Returned structured
+/// so the caller can wrap each variable's value list under its own opening
+/// quote.
+struct GroupedUse {
+    /// `None` = base flags (the `USE=` group).
+    var: Option<String>,
+    values: Vec<String>,
+}
+
+/// Collapse a flat list of USE flag tokens into portage-style groups: non-
+/// `USE_EXPAND` flags collect as the base (`USE=`) group, and
+/// `use_expand`-prefixed flags (`llvm_targets_AArch64`) fold into their
+/// variable (`LLVM_TARGETS` → `AArch64`). Mirrors the grouping `format_flags`
+/// emits for `-p`, so the conflict report reads the same way a merge row does.
+/// A leading `-` (negated use-dep) is preserved on the short form.
+fn group_use_flags(flags: &[String], use_expand: &[String]) -> Vec<GroupedUse> {
+    use std::collections::BTreeMap;
+    let mut base: Vec<String> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for tok in flags {
+        let (neg, name) = tok
+            .strip_prefix('-')
+            .map_or((false, tok.as_str()), |rest| (true, rest));
+        let expand = use_expand
+            .iter()
+            .find(|key| name.starts_with(&format!("{}_", key.to_lowercase())));
+        match expand {
+            Some(key) => {
+                let short = &name[key.len() + 1..];
+                groups.entry(key.clone()).or_default().push(if neg {
+                    format!("-{short}")
+                } else {
+                    short.to_string()
+                });
+            }
+            None => base.push(tok.clone()),
+        }
+    }
+    let mut out = Vec::with_capacity(base.len() + groups.len());
+    if !base.is_empty() {
+        out.push(GroupedUse {
+            var: None,
+            values: base,
+        });
+    }
+    for (key, vals) in groups {
+        out.push(GroupedUse {
+            var: Some(key),
+            values: vals,
+        });
+    }
+    out
+}
+
+pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_expand: &[String]) {
     use std::collections::{BTreeMap, BTreeSet};
     // A constraint carried by a package the plan itself replaces is stale, not
     // broken — the build that carries it does not survive the run. Reported
@@ -145,13 +201,57 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
             for (requirer, by_constraint) in by_requirer {
                 writeln!(out, "    {C_PKG}{requirer}{C_PKG:#} (installed) requires").ok();
                 for (constraint, flags) in by_constraint {
-                    writeln!(out, "      {C_OFF}{constraint}{C_OFF:#}").ok();
-                    // `[` opens the list, so continuations line up one past it.
-                    let lines = crate::style::wrap_items(flags, 9, crate::style::term_width());
-                    for (i, line) in lines.iter().enumerate() {
-                        let open = if i == 0 { "[" } else { " " };
-                        let close = if i + 1 == lines.len() { "]" } else { "" };
-                        writeln!(out, "        {open}{line}{close}").ok();
+                    // Group USE_EXPAND flags (`llvm_targets_AArch64` →
+                    // `LLVM_TARGETS="AArch64"`) so a long llvm/rust use-dep
+                    // list reads like the `-p` USE column instead of a wall of
+                    // `llvm_targets_*` tokens.
+                    let groups = group_use_flags(flags, use_expand);
+                    let atom = format!("{C_OFF}{constraint}{C_OFF:#}");
+
+                    // One-line form of each group, joined for the inline case.
+                    let inline = groups
+                        .iter()
+                        .map(|g| {
+                            let varname = g.var.clone().unwrap_or_else(|| "USE".to_string());
+                            format!("{}=\"{}\"", varname, g.values.join(" "))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+
+                    // Empty use-deps, or the whole list fits on the atom's line:
+                    // keep `[…]` inline — `cat/pkg-ver []` / `cat/pkg-ver […]`.
+                    // Otherwise open `[` on the atom line and give each variable
+                    // its own indented line, values wrapped under the quote.
+                    let base = 6;
+                    let col_var = base + 2;
+                    let width = crate::style::term_width();
+                    let fits =
+                        !inline.is_empty() && base + constraint.len() + inline.len() + 3 <= width;
+                    if inline.is_empty() {
+                        writeln!(out, "      {atom} []").ok();
+                    } else if fits {
+                        writeln!(out, "      {atom} [{inline}]").ok();
+                    } else {
+                        writeln!(out, "      {atom} [").ok();
+                        for g in &groups {
+                            let varname = g.var.clone().unwrap_or_else(|| "USE".to_string());
+                            let prefix = format!("{varname}=\"");
+                            let value_col = col_var + prefix.len();
+                            let chunks = crate::style::wrap_items(&g.values, value_col, width);
+                            let n = chunks.len();
+                            for (i, chunk) in chunks.iter().enumerate() {
+                                if i == 0 {
+                                    write!(out, "{:>col_var$}{prefix}{chunk}", "").ok();
+                                } else {
+                                    write!(out, "\n{:>value_col$}{chunk}", "").ok();
+                                }
+                                if i + 1 == n {
+                                    write!(out, "\"").ok();
+                                }
+                            }
+                            writeln!(out).ok();
+                        }
+                        writeln!(out, "      ]").ok();
                     }
                 }
             }
@@ -577,6 +677,28 @@ fn previous_entry<'a>(
         .or_else(|| same_cpn().max_by(|a, b| a.version.cmp(&b.version)))
 }
 
+/// The comma-joined installed version(s) of `cpn` (across every slot) for the
+/// `[oldversion]` column of an `NS` (new-slot) row, ascending — `None` when no
+/// version is installed. Mirrors portage's `_get_installed_best` (`myoldbest =
+/// installed_versions` for NS); the caller wraps it in `[…]` and paints it.
+fn installed_versions_col(
+    cpn: &Cpn,
+    installed: &HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
+) -> Option<String> {
+    let by_slot = installed.get(cpn)?;
+    let mut vers: Vec<&Version> = by_slot.values().collect();
+    vers.sort();
+    if vers.is_empty() {
+        return None;
+    }
+    Some(
+        vers.iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
 /// How one flag renders, relative to the installed build it is compared against.
 ///
 /// Ports portage's `_create_use_string`
@@ -596,17 +718,35 @@ fn previous_entry<'a>(
 /// Anything not listed is omitted, which is why a plain `em -p` on an installed
 /// package shows only what actually changes. When nothing comparable is
 /// installed every flag is shown, unmarked.
-fn flag_token(
-    name: &str,
-    enabled: bool,
+/// Per-flag comparison inputs for [`flag_token`]: the slice of "old build"
+/// state (current/old IUSE membership, old USE membership, newness) plus
+/// whether the flag is force/masked, which together decide the token's marker
+/// and whether portage wraps it in parens.
+#[derive(Clone, Copy)]
+struct FlagState {
     in_cur_iuse: bool,
     in_old_iuse: bool,
     in_old_use: bool,
     is_new: bool,
+    forced: bool,
+}
+
+fn flag_token(
+    name: &str,
+    enabled: bool,
+    st: &FlagState,
     show_unchanged: bool,
 ) -> Option<(String, bool)> {
+    let &FlagState {
+        in_cur_iuse,
+        in_old_iuse,
+        in_old_use,
+        is_new,
+        forced,
+    } = st;
     // Dropped from IUSE: reported as disabled, parenthesised, never as a plain
-    // absence — the flag is gone, not turned off.
+    // absence — the flag is gone, not turned off. Portage `continue`s these
+    // before the forced-paren check, so the forced parens never stack here.
     if !in_cur_iuse {
         if !show_unchanged {
             return None;
@@ -633,7 +773,21 @@ fn flag_token(
     } else {
         return None;
     };
+    // Portage wraps `use.force`/`use.mask` flags in parens
+    // (`_create_use_string:325`, `iuse_forced = use.force ∪ use.mask`).
+    let token = if forced { format!("({token})") } else { token };
     Some((token, enabled))
+}
+
+/// Comparison/policy inputs to [`format_flags`] that vary per invocation but
+/// not per flag: the solver-required flag pin, the installed build to diff
+/// against, the force/mask set (for parenthesisation), and the `-v` "show all"
+/// gate. Bundled to keep [`format_flags`] under clippy's argument limit.
+struct FlagCmp<'a> {
+    req: Option<&'a UseFlagRequirement>,
+    previous: Option<&'a super::installed::VdbEntry>,
+    forced: &'a HashSet<Interned<DefaultInterner>>,
+    all_flags: bool,
 }
 
 /// Format USE flags for display, diffed against `previous` — the installed
@@ -644,11 +798,14 @@ fn format_flags(
     effective_use: &UseConfig,
     use_expand: &[String],
     use_expand_hidden: &[String],
-    req: Option<&UseFlagRequirement>,
-    previous: Option<&super::installed::VdbEntry>,
-    all_flags: bool,
+    cmp: &FlagCmp<'_>,
 ) -> String {
-    use std::collections::HashSet;
+    let &FlagCmp {
+        req,
+        previous,
+        forced,
+        all_flags,
+    } = cmp;
 
     // Each entry: (enabled_tokens, disabled_tokens).  BTreeMap keeps groups sorted.
     let mut base_flags: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
@@ -708,10 +865,13 @@ fn format_flags(
         let Some((token, is_enabled)) = flag_token(
             name,
             enabled,
-            in_cur_iuse,
-            old_iuse.contains(&interned),
-            old_use.contains(&interned),
-            is_new,
+            &FlagState {
+                in_cur_iuse,
+                in_old_iuse: old_iuse.contains(&interned),
+                in_old_use: old_use.contains(&interned),
+                is_new,
+                forced: forced.contains(&interned),
+            },
             all_flags || required,
         ) else {
             continue;
@@ -1012,18 +1172,31 @@ fn print_pretty_with_roots(
             .unwrap_or_default();
         let mut effective_use =
             resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
+        // `use.force`/`use.mask` (global + package + `*.stable.*`): applied to
+        // effective USE (forced on, then masked off — mask wins, matching
+        // portage), and their union is also the parenthesised-flag set portage
+        // shows in the USE string (`_create_use_string:325` sets
+        // `iuse_forced = use.force ∪ use.mask`).
+        let mut forced_display: HashSet<Interned<DefaultInterner>> = HashSet::new();
         if let Some(c) = cache {
             let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
             let iuse = super::effective_use::iuse_set(c);
             let slot_key = pkg.slot();
-            super::effective_use::apply_force_mask(
-                &mut effective_use,
-                force_mask,
-                &cpv,
-                slot_key.as_ref().map(|s| s.as_str()),
-                stable,
-                &iuse,
-            );
+            if !force_mask.is_empty() {
+                let (forced, masked) = force_mask.effective(
+                    &cpv,
+                    slot_key.as_ref().map(|s| s.as_str()),
+                    stable,
+                    &iuse,
+                );
+                for &f in &forced {
+                    effective_use.enable(f);
+                }
+                for &f in &masked {
+                    effective_use.disable(f);
+                }
+                forced_display = forced.union(&masked).copied().collect();
+            }
         }
         super::effective_use::apply_ceded(&mut effective_use, *cpn, ceded);
 
@@ -1052,9 +1225,12 @@ fn print_pretty_with_roots(
                     &effective_use,
                     use_expand,
                     use_expand_hidden,
-                    req,
-                    previous,
-                    verbose >= 1,
+                    &FlagCmp {
+                        req,
+                        previous,
+                        forced: &forced_display,
+                        all_flags: verbose >= 1,
+                    },
                 )
             })
             .unwrap_or_default();
@@ -1067,12 +1243,20 @@ fn print_pretty_with_roots(
             String::new()
         };
 
-        // emerge shows the previously-installed version only for upgrades and
-        // downgrades, not for same-version reinstalls or new installs.
+        // emerge shows the previously-installed version(s): the same-slot
+        // version for an in-slot upgrade/downgrade, and *every* installed
+        // version of the package (across all slots) for a new-slot install.
+        // Mirrors portage's `_get_installed_best` (`myoldbest =
+        // installed_versions` for NS) and `convert_myoldbest`'s `[v1, v2, ...]`
+        // join, painted bold blue. Reinstalls (R) and first installs (N) get no
+        // column.
         let old = match tag {
-            "U" | "D" => old_ver.map(|v| format!(" [{}]", v)).unwrap_or_default(),
-            _ => String::new(),
-        };
+            "U" | "D" => old_ver.map(|v| v.to_string()),
+            "NS" => installed_versions_col(cpn, installed),
+            _ => None,
+        }
+        .map(|content| format!(" {C_OLDVERSION}[{content}]{C_OLDVERSION:#}"))
+        .unwrap_or_default();
         // Verbose mode appends the download size (distfiles not in DISTDIR).
         let size_str = if verbose >= 1 {
             format!(" {}", format_kib(sizes.get(&cpv).copied().unwrap_or(0)))
@@ -1314,26 +1498,11 @@ impl<W: std::io::Write> Tree<'_, W> {
 mod tests {
     use super::*;
 
-    /// Strip ANSI so the marker matrix is asserted on text, not colour codes.
-    fn plain(
-        name: &str,
-        enabled: bool,
-        in_cur: bool,
-        in_old_iuse: bool,
-        in_old_use: bool,
-        is_new: bool,
-        show_unchanged: bool,
-    ) -> Option<String> {
-        flag_token(
-            name,
-            enabled,
-            in_cur,
-            in_old_iuse,
-            in_old_use,
-            is_new,
-            show_unchanged,
-        )
-        .map(|(tok, _)| {
+    /// Call [`flag_token`] with the given comparison state, returning the
+    /// rendered token with ANSI escapes stripped so the marker matrix is
+    /// asserted on plain text.
+    fn render(name: &str, enabled: bool, st: &FlagState, show_unchanged: bool) -> Option<String> {
+        flag_token(name, enabled, st, show_unchanged).map(|(tok, _)| {
             let mut out = String::new();
             let mut chars = tok.chars();
             while let Some(c) = chars.next() {
@@ -1349,6 +1518,98 @@ mod tests {
             }
             out
         })
+    }
+
+    #[test]
+    fn group_use_flags_collapses_expand_prefixes() {
+        let expand = ["LLVM_TARGETS".to_string(), "LLVM_SLOT".to_string()];
+        let flags = [
+            "-debuginfod".to_string(),
+            "llvm_targets_AArch64".to_string(),
+            "llvm_targets_AMDGPU".to_string(),
+            "llvm_targets_X86".to_string(),
+            "doc".to_string(),
+        ];
+        let got = group_use_flags(&flags, &expand);
+        assert_eq!(got.len(), 2);
+        // Base flags form the implicit `USE=` group (var == None).
+        assert_eq!(got[0].var, None);
+        assert_eq!(got[0].values, ["-debuginfod", "doc"]);
+        // Expand flags collapse into their variable.
+        assert_eq!(got[1].var.as_deref(), Some("LLVM_TARGETS"));
+        assert_eq!(got[1].values, ["AArch64", "AMDGPU", "X86"]);
+    }
+
+    #[test]
+    fn group_use_flags_preserves_negated_expand() {
+        let expand = ["LLVM_TARGETS".to_string()];
+        let flags = [
+            "llvm_targets_AArch64".to_string(),
+            "-llvm_targets_X86".to_string(),
+        ];
+        let got = group_use_flags(&flags, &expand);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].var.as_deref(), Some("LLVM_TARGETS"));
+        assert_eq!(got[0].values, ["AArch64", "-X86"]);
+    }
+
+    #[test]
+    fn group_use_flags_emits_use_only_when_present() {
+        // No expand flags at all → a single base (USE=) group.
+        let got = group_use_flags(&["doc".to_string(), "-test".to_string()], &[]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].var, None);
+        assert_eq!(got[0].values, ["doc", "-test"]);
+        // No flags → no groups.
+        assert!(group_use_flags(&[], &["LLVM_TARGETS".to_string()]).is_empty());
+    }
+
+    /// `flag_token` with `forced = false` (the common case).
+    fn plain(
+        name: &str,
+        enabled: bool,
+        in_cur: bool,
+        in_old_iuse: bool,
+        in_old_use: bool,
+        is_new: bool,
+        show_unchanged: bool,
+    ) -> Option<String> {
+        render(
+            name,
+            enabled,
+            &FlagState {
+                in_cur_iuse: in_cur,
+                in_old_iuse,
+                in_old_use,
+                is_new,
+                forced: false,
+            },
+            show_unchanged,
+        )
+    }
+
+    /// `flag_token` with `forced = true` (a `use.force`/`use.mask` flag).
+    fn plain_forced(
+        name: &str,
+        enabled: bool,
+        in_cur: bool,
+        in_old_iuse: bool,
+        in_old_use: bool,
+        is_new: bool,
+        show_unchanged: bool,
+    ) -> Option<String> {
+        render(
+            name,
+            enabled,
+            &FlagState {
+                in_cur_iuse: in_cur,
+                in_old_iuse,
+                in_old_use,
+                is_new,
+                forced: true,
+            },
+            show_unchanged,
+        )
     }
 
     // The whole point of the markers: a flag that flips relative to the
@@ -1418,6 +1679,28 @@ mod tests {
         assert_eq!(
             plain("doc", false, true, false, false, true, false).as_deref(),
             Some("-doc")
+        );
+    }
+
+    // `use.force`/`use.mask` flags are parenthesised (portage
+    // `_create_use_string:325`). Mirrors the `(22%*)` emerge emits for a
+    // force/masked USE-expand value.
+    #[test]
+    fn a_forced_flag_is_parenthesised() {
+        // an unchanged-but-forced flag needs `show_unchanged` to emit at all.
+        assert_eq!(
+            plain_forced("doc", true, true, true, true, false, true).as_deref(),
+            Some("(doc)")
+        );
+        // newly-introduced + forced keeps the `%*` marker inside the parens.
+        assert_eq!(
+            plain_forced("llvm_slot_22", true, true, false, false, false, false).as_deref(),
+            Some("(llvm_slot_22%*)")
+        );
+        // forced + disabled.
+        assert_eq!(
+            plain_forced("doc", false, true, true, false, false, true).as_deref(),
+            Some("(-doc)")
         );
     }
 

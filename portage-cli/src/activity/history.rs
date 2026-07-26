@@ -479,30 +479,48 @@ pub fn format_time(store: &DurationStore, atom: Option<&str>) -> String {
 /// style codes are stripped on non-tty output, matching the convention in
 /// `activity/human.rs`.
 pub fn format_eta(eta: &Eta) -> String {
-    use crate::style::C_BOLD;
+    use crate::style::{C_BOLD, C_DIM, C_TESTING};
     use std::fmt::Write as _;
+
+    // No build history for any planned package: a soft warning, not a fake
+    // ~0s estimate. `em -p --eta` on a never-built package must not read as
+    // "instant".
+    if eta.known == 0 && eta.unknown > 0 {
+        let mut out = String::new();
+        let _ = writeln!(
+            out,
+            "{C_TESTING}ETA unknown{C_TESTING:#} — no build history for {} package{} yet",
+            eta.unknown,
+            if eta.unknown == 1 { "" } else { "s" },
+        );
+        return out;
+    }
+
     let mode = if eta.critical_path {
         "critical-path"
     } else {
         "naive serial/jobs"
     };
     let mut out = String::new();
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "ETA ~{C_BOLD}{}{C_BOLD:#} wall ({mode}, {} job{})\n  {} serial, {} known",
+        "{C_BOLD}ETA{C_BOLD:#} ~{C_BOLD}{}{C_BOLD:#} wall ({mode}, {} job{})",
         format_seconds(eta.wall_seconds),
         eta.jobs,
         if eta.jobs == 1 { "" } else { "s" },
+    );
+    // Detail line is dimmed so the headline wall time above stands out.
+    let unknown_suffix = if eta.unknown > 0 {
+        format!(", {} unknown package time(s)", eta.unknown)
+    } else {
+        String::new()
+    };
+    let _ = writeln!(
+        out,
+        "{C_DIM}  {} serial, {} known{unknown_suffix}{C_DIM:#}",
         format_seconds(eta.serial_seconds),
         eta.known,
     );
-    if eta.unknown > 0 {
-        let _ = write!(out, ", {} unknown package time(s)", eta.unknown);
-    }
-    out.push('\n');
-    if eta.unknown > 0 && eta.known == 0 {
-        out.push_str("(no history yet — estimates unavailable)\n");
-    }
     out
 }
 
@@ -566,5 +584,41 @@ mod tests {
         let indep = [vec![], vec![]];
         let eta_par = estimate_remaining_with_blockers(&store, &pkgs, &indep, 2, 10);
         assert!((eta_par.wall_seconds - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn format_eta_says_unknown_when_no_history() {
+        // A plan with no recorded build times must not claim a ~0s wall.
+        let eta = Eta {
+            wall_seconds: 0.0,
+            serial_seconds: 0.0,
+            jobs: 1,
+            known: 0,
+            unknown: 2,
+            critical_path: true,
+            per_pkg: vec![],
+        };
+        let s = format_eta(&eta);
+        assert!(s.contains("unknown"), "got: {s}");
+        assert!(
+            !s.contains('~'),
+            "no-history ETA must not show a numeric wall estimate: {s}"
+        );
+    }
+
+    #[test]
+    fn format_eta_shows_estimate_when_some_known() {
+        let eta = Eta {
+            wall_seconds: 40.0,
+            serial_seconds: 40.0,
+            jobs: 1,
+            known: 2,
+            unknown: 0,
+            critical_path: true,
+            per_pkg: vec![],
+        };
+        let s = format_eta(&eta);
+        assert!(s.contains('~'), "got: {s}");
+        assert!(s.contains("critical-path"));
     }
 }

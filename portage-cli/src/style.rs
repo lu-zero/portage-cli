@@ -39,6 +39,8 @@ pub const C_PKG: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green
 pub const C_LABEL: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
 /// Emphasis without colour.
 pub const C_BOLD: Style = Style::new().effects(Effects::BOLD);
+/// Secondary/detail text (subdued, e.g. the ETA breakdown line).
+pub const C_DIM: Style = Style::new().effects(Effects::DIMMED);
 /// "Current selection" marker (`*`).
 pub const C_STAR: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Green)))
@@ -53,6 +55,11 @@ pub const C_CAT: Style = Style::new().effects(Effects::DIMMED);
 pub const C_PKGNAME: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightGreen)));
 /// Version strings.
 pub const C_VERSION: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+/// The `[oldversion]` column in `-p` output — the version(s) being replaced
+/// (real emerge's `convert_myoldbest`, which paints it bold blue: `\x1b[34;01m`).
+pub const C_OLDVERSION: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Blue)))
+    .effects(Effects::BOLD);
 /// Prefix profile source label.
 pub const C_PREFIX: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
 /// Host profile source label.
