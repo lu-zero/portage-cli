@@ -228,6 +228,10 @@ pub struct Repository {
     primary: Arc<dyn MetadataCache>,
     /// Always-present writable store for lazy overlay metadata / unprivileged writes.
     secondary: Arc<dyn MetadataCache>,
+    /// Directory backing `secondary`, when it is a durable on-disk store.
+    /// `None` for in-memory/custom stores, which have nowhere to keep a
+    /// sidecar index.
+    secondary_dir: Option<Utf8PathBuf>,
 }
 
 impl std::fmt::Debug for Repository {
@@ -350,6 +354,10 @@ impl Repository {
         let primary: Arc<dyn MetadataCache> = Arc::new(DirMetadataCache::new(
             path.join("metadata").join("md5-cache"),
         ));
+        let secondary_dir = match &secondary_spec {
+            SecondarySpec::UserRoot(root) => Some(root.join(&name)),
+            SecondarySpec::Memory | SecondarySpec::Custom(_) => None,
+        };
         let secondary = materialise_secondary(&name, secondary_spec);
 
         Ok(Repository {
@@ -359,6 +367,7 @@ impl Repository {
             arch_cache,
             primary,
             secondary,
+            secondary_dir,
         })
     }
 
@@ -388,6 +397,54 @@ impl Repository {
     /// Absolute path to the repository root.
     pub fn path(&self) -> &Utf8Path {
         &self.path
+    }
+
+    /// Where a sidecar index for this repo lives, when the secondary store is
+    /// durable. `None` for in-memory stores (tests), which must recompute.
+    pub fn sidecar_path(&self, name: &str) -> Option<Utf8PathBuf> {
+        self.secondary_dir.as_ref().map(|d| d.join(name))
+    }
+
+    /// A cheap stamp that changes when the tree is synced.
+    ///
+    /// `metadata/timestamp.chk` is what rsync rewrites on every sync, and a git
+    /// checkout moves the repo directory's own mtime. Both are consulted, so a
+    /// tree maintained either way invalidates. Content is deliberately not
+    /// hashed: this decides whether a cached *derived* index may be reused, and
+    /// the fallback on a miss is to recompute, not to be wrong.
+    ///
+    /// `None` when neither can be read — treat that as "always recompute".
+    pub fn sync_stamp(&self) -> Option<String> {
+        let stamp_of = |p: Utf8PathBuf| -> Option<String> {
+            let m = std::fs::metadata(p.as_std_path()).ok()?;
+            let secs = m
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            Some(format!("{secs}:{}", m.len()))
+        };
+        let chk = stamp_of(self.path.join("metadata").join("timestamp.chk"));
+        let root = stamp_of(self.path.clone());
+        match (chk, root) {
+            (None, None) => None,
+            (a, b) => Some(format!(
+                "{}|{}",
+                a.unwrap_or_default(),
+                b.unwrap_or_default()
+            )),
+        }
+    }
+
+    /// When the tree was last synced, for deciding which ebuilds are newer than
+    /// their cache entries. `None` when no marker can be read.
+    pub fn sync_time(&self) -> Option<std::time::SystemTime> {
+        let chk = self.path.join("metadata").join("timestamp.chk");
+        std::fs::metadata(chk.as_std_path())
+            .or_else(|_| std::fs::metadata(self.path.as_std_path()))
+            .and_then(|m| m.modified())
+            .ok()
     }
 
     /// Repository name (from `profiles/repo_name`).

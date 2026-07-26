@@ -77,3 +77,27 @@ async fn an_uncovered_ebuild_is_sourced() {
     assert_eq!(got[0].0.to_string(), "sys-libs/zlib-1.0");
     assert_eq!(got[0].1.metadata.slot.slot.as_str(), "0");
 }
+
+/// The sidecar is keyed on a sync stamp so an unchanged tree can skip the walk.
+/// An in-memory secondary has nowhere to keep it, which must not panic —
+/// tests and ephemeral repos simply recompute.
+#[test]
+fn an_in_memory_secondary_has_no_sidecar() {
+    let (_tmp, repo) = repo_with_one_ebuild();
+    assert!(repo.sidecar_path("gap-index").is_none());
+}
+
+/// The stamp must move when the tree is synced, or a stale index would keep
+/// hiding packages. Touching the repo directory stands in for a sync.
+#[test]
+fn the_sync_stamp_follows_the_tree() {
+    let (tmp, repo) = repo_with_one_ebuild();
+    let before = repo.sync_stamp().expect("a readable tree has a stamp");
+
+    // Second-resolution mtime: force a distinct value rather than sleeping.
+    let marker = tmp.path().join("metadata/timestamp.chk");
+    std::fs::write(&marker, "1\n").expect("write marker");
+    let after = repo.sync_stamp().expect("stamp after sync");
+
+    assert_ne!(before, after, "a synced tree must invalidate the index");
+}
