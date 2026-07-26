@@ -104,6 +104,34 @@ loop (≤3):
   repair_targets += new;  re-solve;  on Err → discard round, keep last good
 ```
 
+### Gated behind `--complete-graph` (decided 2026-07-26)
+
+`--complete-graph` is declared at `portage-cli/src/cli/merge_flags.rs:143`,
+copied through `maint/resume.rs:416` and `crossdev/mod.rs:139`, and **never
+read** — a dead flag. This feature gets it.
+
+Why an explicit opt-in rather than on-by-default:
+
+- There is **no parity oracle** (see "new policy" above), so this cannot be
+  validated against emerge the way the rest of the resolver is. A flag keeps an
+  unvalidatable policy out of everyone's default plans.
+- The policy is "the chain moves whole or not at all", so it can **revert an
+  upgrade the user would otherwise have got** when a dependent has no satisfying
+  version. That is a surprising default; it is a reasonable opt-in.
+- It gives the loop a natural kill switch while the bounding behaviour is still
+  being characterised on real closures.
+
+Deviation to note: portage **auto-enables** its `_complete_graph` whenever any
+merge node differs from its installed instance (`depgraph.py:8428-8481`), so
+gating only on the flag is deliberately more conservative than portage. Given
+portage's complete-graph does not actually complete `~`-chains anyway
+(`:8607-8614`), the name is being reused for a related-but-different job —
+document that in the flag's help, and describe it on its own terms rather than
+as "emerge's `--complete-graph`" (see [[no-emerge-equivalents-in-help]]).
+
+Revisit auto-enabling once the loop has proven itself; the flag then becomes the
+override rather than the switch.
+
 Repair targets go into `resolve_targets`' target vector (so
 `root_targets.contains()` at `solve.rs:106` gives newest-in-range) but **not**
 into `root_cpns`/`root_pkgs` — otherwise they are labelled `(argument)` in
@@ -199,19 +227,19 @@ tickets.
 0. **[[md5-cache-blind-spot]] first** — it removes the docutils/sphinx case from
    this ticket entirely and is higher value for less work.
 1. Add `slot` to `Conflict` + a `retained_owners()` accessor. Pure unit test.
-2. The repair loop, gated `update && !empty`, cap 3, discard-on-failure, targets
-   kept out of `root_cpns`/`root_pkgs`/`Fatal`. Target derivation is
-   unit-testable; convergence is live-only. Regression gate: `em -pu @world`
-   stays 73, `em -p @world` stays 181.
+2. The repair loop, gated `complete_graph && update && !empty`, cap 3,
+   discard-on-failure, targets kept out of `root_cpns`/`root_pkgs`/`Fatal`.
+   Target derivation is unit-testable; convergence is live-only. Regression
+   gate: with the flag off, `em -pu @world` stays 73 and `em -p @world` stays
+   181 — the flag makes this trivially provable, since every existing
+   invocation takes the old path unchanged.
 3. Report both directions: "pulled in to complete the update chain" **and**
    "chain could not complete, upgrade reverted".
 4. Unify `find_conflicts` with `subslot::find_rebuilds` so USE-dep and subslot
    breakage feed one loop. Only then is `sphinx-rtd-theme`-class parity reachable.
 
-Incidental: **`--complete-graph` is a dead flag** — declared
-`portage-cli/src/cli/merge_flags.rs:143`, copied in `maint/resume.rs:416` and
-`crossdev/mod.rs:139`, never read. Either the natural explicit override for this
-feature, or delete it.
+`--complete-graph` stops being a dead flag as of step 2 — see the gating
+section above.
 
 ## Verification
 
