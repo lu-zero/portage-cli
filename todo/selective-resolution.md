@@ -383,12 +383,23 @@ a `(dependency required by "@world" [argument])` trailer.
 
 ### Left open
 
-`em -p @world` lists 180 rows against emerge's 202, and `-pu` 72 against 182.
-The whole difference is emerge's slot-operator forced rebuilds (`r` marker: 54
-`rR` + 33 `r U` rows in the `-pu` run); em's `subslot::find_rebuilds` fires on
-none of them. Pre-existing and unrelated to this work — it was simply invisible
-while `-p @world` aborted. Worth its own investigation.
+**Row counts re-baselined 2026-07-26** after [[md5-cache-blind-spot]] landed —
+the earlier figures were measured while 63 tree versions were invisible, so
+they understated em throughout:
 
-The `# required by …` header `package_use::build_entries` prints for a USE
-change lists every world atom on one line under `@world`; emerge names only the
-relevant parent. Also pre-existing, also newly visible.
+| | em | emerge (`--exclude app-containers/incus`) | gap |
+|---|---|---|---|
+| `-p @world` | 181 | — | — |
+| `-pu @world` | **74** (was 73) | 182 | 108 |
+| `-puD @world` | **301** (was 288) | 304 | **3** |
+
+So the cache fix closed nearly all of the `-puD` gap but none of `-pu`'s. That
+is consistent with the diagnosis: the `-pu` difference is emerge's
+slot-operator forced rebuilds (`r` marker — 87 in emerge's `-pu` run, **0** in
+em's; em emits 66 only under `-puD`). Root cause is that em's `-pu` plan
+contains no `dev-lang/perl` at all, so `subslot::find_rebuilds`' `planned_slots`
+has no trigger and the ~60-package `dev-perl/*` cascade never starts.
+Pre-existing, unrelated to this work, and worth its own investigation.
+
+The `# required by …` header was fixed 2026-07-26 (`b2854da`) — it now names
+the set (`@world`) rather than every atom it expanded to.

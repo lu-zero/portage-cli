@@ -40,13 +40,16 @@ An earlier draft claimed both were one problem rooted in `add_installed`
 dependency constraints. **Both halves of that were wrong** (investigated
 2026-07-26, key facts independently re-confirmed):
 
-- **docutils/sphinx is not a resolver defect at all.** It is
-  [[md5-cache-blind-spot]]: `sys-fs/btrfs-progs-7.1` has BDEPEND
-  `|| ( ( python:3.14 sphinx[…] sphinx-rtd-theme[…] ) … )`, but that ebuild has
-  no md5-cache entry, so em cannot see the version, never walks the BDEPEND,
-  and sphinx is never a graph node. Verified: `em -p '=sys-fs/btrfs-progs-7.1'`
-  → "no ebuilds"; `emerge -p` the same atom → rc=0. Fix the cache blindness and
-  this case vanishes with no chain machinery.
+- **docutils/sphinx was not a resolver defect at all — and is now fixed.** It
+  was [[md5-cache-blind-spot]]: `sys-fs/btrfs-progs-7.1` has BDEPEND
+  `|| ( ( python:3.14 sphinx[…] sphinx-rtd-theme[…] ) … )`, but that ebuild had
+  no md5-cache entry, so em could not see the version, never walked the BDEPEND,
+  and sphinx was never a graph node.
+
+  **Confirmed resolved by the cache fix, with no chain machinery**: `em -puD
+  @world` now plans `[ebuild U] dev-python/sphinx-9.1.0-r1 [9.0.4-r1]` alongside
+  `docutils-0.23`, and reports no conflict at all. Row count went 288 → **301**
+  against emerge's 304. **Drop this case from the ticket.**
 - **`add_installed` is not the blocker even for llvm/lldb.** PubGrub assigns no
   version to a package with no *incoming edge*; lldb is absent because nothing
   requires it, not because its constraints are missing — recording them without
@@ -149,6 +152,12 @@ Validated by spike (extra explicit target ≈ what the loop injects):
 
 Cost: `em -puD @world` 1.02 s → 1.04 s. (`emerge -puD`: 50 s.)
 
+The `@world` rows above predate [[md5-cache-blind-spot]]; that run is now 301
+rows with the docutils/sphinx conflict already gone, so only the `rust` rows
+still describe an open case. The spike's *conclusion* — that injecting the
+retained owner as a target resolves the conflict at negligible cost — is
+unaffected.
+
 ## Bounding
 
 - **Do not reuse `MAX_RESOLVE_ITERS = 4`** — it bounds a different fixpoint, and
@@ -195,10 +204,14 @@ fires on none of. Re-measured 2026-07-26:
 
 | | rows | `r`-marked |
 |---|---|---|
-| `em -pu @world` | 73 | **0** |
+| `em -pu @world` | **74** | **0** |
 | `emerge -pu --exclude app-containers/incus @world` | 182 (rc=0) | **87** |
-| `em -puD @world` | 288 | 66 |
-| `emerge -puD --exclude … @world` | 305 (rc=0) | — |
+| `em -puD @world` | **301** | 66 |
+| `emerge -puD --exclude … @world` | 304 (rc=0) | — |
+
+(Re-measured after [[md5-cache-blind-spot]] landed; the `-puD` gap is now 3
+rows, the `-pu` gap still 108 — the cache fix closed the former and none of the
+latter, exactly as the diagnosis below predicts.)
 
 Root cause: ~60 of the 109 missing CPNs are `dev-perl/*` bound to
 `dev-lang/perl:0/5.42=`, and em's `-pu` plan contains no `dev-lang/perl` at all,
@@ -224,8 +237,9 @@ tickets.
 
 ## Landing sequence
 
-0. **[[md5-cache-blind-spot]] first** — it removes the docutils/sphinx case from
-   this ticket entirely and is higher value for less work.
+0. ✅ **[[md5-cache-blind-spot]]** — landed 2026-07-26; removed the
+   docutils/sphinx case from this ticket entirely, as predicted. Only the
+   llvm/lldb case remains.
 1. Add `slot` to `Conflict` + a `retained_owners()` accessor. Pure unit test.
 2. The repair loop, gated `complete_graph && update && !empty`, cap 3,
    discard-on-failure, targets kept out of `root_cpns`/`root_pkgs`/`Fatal`.

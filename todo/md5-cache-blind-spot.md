@@ -120,10 +120,19 @@ gets picked up.
 
 ## Verification
 
-- `em -p '=sys-fs/btrfs-progs-7.1'` resolves instead of erroring.
-- `em -puD @world` gains `dev-python/sphinx` and drops the docutils conflict
-  without any repair-loop work.
-- Row counts vs `emerge -pu --exclude app-containers/incus @world` (182, rc=0)
-  and `-puD` (305, rc=0) — read the measurement trap in
-  [[selective-resolution]] first.
-- Resolve timing must not regress materially; `em -p @world` is ~1 s today.
+All confirmed on master 2026-07-26:
+
+- ✅ `em -p '=sys-fs/btrfs-progs-7.1'` resolves; `em -p @world` shows
+  `[ebuild U] sys-fs/btrfs-progs-7.1 [7.0]` where it previously reinstalled 7.0.
+- ✅ `em -puD @world` gained `[ebuild U] dev-python/sphinx-9.1.0-r1 [9.0.4-r1]`
+  and reports **no** conflict, with no repair-loop work — 288 → 301 rows against
+  emerge's 304, closing all but 3 of that gap. The `-pu` gap is untouched
+  (74 vs 182), which is the separate `r`-cascade issue.
+- ✅ Timing: `em -p @world` warm median 1.00 s against a 0.98 s baseline, inside
+  the baseline's own 0.97–1.03 spread. First resolve after a sync pays 1.14 s.
+- ✅ fmt, clippy, full workspace suite; five tests in
+  `portage-repo/tests/gap_entries.rs`.
+
+Re-baselined figures now live in [[selective-resolution]]. Read the measurement
+trap there before re-running any `emerge -p @world` comparison — a failing run
+prints the circular-dep subgraph, not the plan.
