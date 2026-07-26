@@ -9,7 +9,7 @@ use portage_atom_pubgrub::{
     UseOverride,
 };
 use portage_metadata::{CacheEntry, Keyword, LicenseExpr, RequiredUseExpr, Stability};
-use portage_repo::{CacheReadOpts, Repository, cache_entries_parallel};
+use portage_repo::Repository;
 
 /// A reason a package version was excluded from the solver.
 #[derive(Debug, Clone)]
@@ -944,20 +944,13 @@ pub async fn load_repos(
     let mut seen: HashSet<Cpv> = HashSet::new();
     let mut real_cpn_of: HashMap<Cpn, Cpn> = HashMap::new();
 
-    let entries = cache_entries_parallel(
-        std::slice::from_ref(repo),
-        &CacheReadOpts::default(),
-        |text| CacheEntry::parse(text).map_err(portage_repo::Error::from),
-    )
-    .await;
+    let entries = portage_repo::primary_entries(repo).await;
 
     for (cpv, entry) in entries {
-        if let Ok(entry) = entry {
-            let cpn = cpv.cpn;
-            cpns_set.insert(cpn);
-            seen.insert(cpv.clone());
-            versions.entry(cpn).or_default().push((cpv, entry));
-        }
+        let cpn = cpv.cpn;
+        cpns_set.insert(cpn);
+        seen.insert(cpv.clone());
+        versions.entry(cpn).or_default().push((cpv, entry));
     }
 
     for (overlay, masters) in overlays {

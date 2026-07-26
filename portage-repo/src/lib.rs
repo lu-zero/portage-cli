@@ -64,7 +64,7 @@ pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};
 pub use make_conf::{DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF, MakeConf};
 pub use metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
-pub use overlay::overlay_entries;
+pub use overlay::{gap_entries, overlay_entries, primary_entries};
 pub use package_conf::{PackageConf, Token as PackageToken};
 pub use package_env::env_files_for;
 pub use portage_metadata::EbuildMetadata;
