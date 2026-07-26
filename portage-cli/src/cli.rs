@@ -559,6 +559,30 @@ impl Cli {
 mod tests {
     use super::*;
 
+    // Clap only validates a subcommand's args when that subcommand is actually
+    // built, and only under debug_assertions — so a short-flag collision
+    // introduced by a flattened mixin stays invisible in release builds until
+    // someone runs the one subcommand that has it (this is how `-a` vs `em
+    // use`'s `--add` shipped). `debug_assert()` walks the whole tree at once.
+    #[test]
+    fn every_subcommand_has_unique_flags() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn tree_and_target_have_distinct_short_flags() {
+        let cli = Cli::parse_from([
+            "em",
+            "-t",
+            "-T",
+            "riscv64-unknown-linux-gnu",
+            "sys-libs/zlib",
+        ]);
+        assert!(cli.merge_flags.tree);
+        assert_eq!(cli.target.as_deref(), Some("riscv64-unknown-linux-gnu"));
+    }
+
     #[test]
     fn cross_targets_sysroot_under_eroot() {
         // `--target` sits under the `--root` EROOT and pins config == base ==

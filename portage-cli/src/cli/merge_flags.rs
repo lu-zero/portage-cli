@@ -93,15 +93,14 @@ pub struct MergeFlags {
     #[arg(short = 'G', long)]
     pub getbinpkgonly: bool,
 
+    /// Treat every atom as not-yet-installed, rebuilding the whole dependency
+    /// tree from scratch rather than only what is missing or outdated.
     #[arg(short = 'e', long)]
     pub emptytree: bool,
 
-    /// Show dependency tree before merging.
-    // No short alias: `-t` collides with `em crossdev`'s `--target` once
-    // MergeFlags is flattened into CrossdevArgs (clap's debug_assertions catch
-    // this in dev builds; release builds skip the check, so it was silently
-    // latent). Real emerge has no short form for --tree either.
-    #[arg(long)]
+    /// Show the dependency tree, indenting each package under the one that
+    /// pulled it in, before merging.
+    #[arg(short = 't', long)]
     pub tree: bool,
 
     /// Emit the depgraph as machine-parsable JSON instead of pretend text.
