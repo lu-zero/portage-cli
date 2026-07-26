@@ -21,6 +21,16 @@ pub(super) const C_ON: Style = Style::new()
 pub(super) const C_OFF: Style = Style::new()
     .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Blue)))
     .effects(Effects::BOLD);
+// A flag whose state flips relative to what is installed (suffix `*`), and one
+// the installed build never had in IUSE at all (suffix `%`). Portage gives
+// these their own colours precisely so a changed flag is findable in a wall of
+// unchanged ones.
+pub(super) const C_FLIPPED: Style = Style::new()
+    .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Green)))
+    .effects(Effects::BOLD);
+pub(super) const C_NEW_FLAG: Style = Style::new()
+    .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Yellow)))
+    .effects(Effects::BOLD);
 // Portage-style colors for emerge -p output:
 // - BRACKET: blue for [ and ] in [ebuild STATUS]
 // - STATUS_N/S: green for new/new-slot
@@ -337,70 +347,165 @@ pub(super) fn report_dropped_deps(dropped: &[DroppedDep], data: &RepoData, arch:
     }
 }
 
-/// Format USE flags for display.
+/// The installed build a candidate's USE flags are diffed against.
 ///
-/// For upgrades/downgrades, if `installed_active_use` is Some, only show flags that differ
-/// from the installed version's active USE (emerge -p behavior).
+/// Portage's three-tier fallback (`_emerge/resolver/output.py:683-694`): the
+/// exact CPV if it is installed (catches a SLOT change of the same version),
+/// else the same slot, else the **highest** instance in any other slot. That
+/// last tier is what lets a new-slot install still report what changed —
+/// without it an `NS` row has nothing to compare to and dumps every flag.
+fn previous_entry<'a>(
+    pkg: &PortagePackage,
+    ver: &Version,
+    installed: &'a [super::installed::VdbEntry],
+) -> Option<&'a super::installed::VdbEntry> {
+    let same_cpn = || installed.iter().filter(|e| e.cpn == *pkg.cpn());
+    same_cpn()
+        .find(|e| e.version == *ver)
+        .or_else(|| same_cpn().find(|e| e.slot == pkg.slot()))
+        .or_else(|| same_cpn().max_by(|a, b| a.version.cmp(&b.version)))
+}
+
+/// How one flag renders, relative to the installed build it is compared against.
+///
+/// Ports portage's `_create_use_string`
+/// (`_emerge/resolver/output_helpers.py:262`), which decides both *which* flags
+/// appear and how each is marked:
+///
+/// | Flag | Rendered |
+/// |---|---|
+/// | on, unchanged | `flag` (red) — only when `all_flags` or required |
+/// | on, absent from the old IUSE | `flag%*` (yellow) |
+/// | on, previously off | `flag*` (green) |
+/// | off, unchanged | `-flag` (blue) — only when `all_flags` or required |
+/// | off, absent from the old IUSE | `-flag%` (yellow) |
+/// | off, previously on | `-flag*` (green) |
+/// | dropped from IUSE entirely | `(-flag%)`/`(-flag%*)` (yellow), only when `all_flags` or required |
+///
+/// Anything not listed is omitted, which is why a plain `em -p` on an installed
+/// package shows only what actually changes. When nothing comparable is
+/// installed every flag is shown, unmarked.
+fn flag_token(
+    name: &str,
+    enabled: bool,
+    in_cur_iuse: bool,
+    in_old_iuse: bool,
+    in_old_use: bool,
+    is_new: bool,
+    show_unchanged: bool,
+) -> Option<(String, bool)> {
+    // Dropped from IUSE: reported as disabled, parenthesised, never as a plain
+    // absence — the flag is gone, not turned off.
+    if !in_cur_iuse {
+        if !show_unchanged {
+            return None;
+        }
+        let star = if in_old_use { "*" } else { "" };
+        return Some((format!("({C_NEW_FLAG}-{name}%{star}{C_NEW_FLAG:#})"), false));
+    }
+    let token = if enabled {
+        if is_new || (in_old_use && show_unchanged) {
+            format!("{C_ON}{name}{C_ON:#}")
+        } else if !in_old_iuse {
+            format!("{C_NEW_FLAG}{name}%*{C_NEW_FLAG:#}")
+        } else if !in_old_use {
+            format!("{C_FLIPPED}{name}*{C_FLIPPED:#}")
+        } else {
+            return None;
+        }
+    } else if is_new || (in_old_iuse && !in_old_use && show_unchanged) {
+        format!("{C_OFF}-{name}{C_OFF:#}")
+    } else if !in_old_iuse {
+        format!("{C_NEW_FLAG}-{name}%{C_NEW_FLAG:#}")
+    } else if in_old_use {
+        format!("{C_FLIPPED}-{name}*{C_FLIPPED:#}")
+    } else {
+        return None;
+    };
+    Some((token, enabled))
+}
+
+/// Format USE flags for display, diffed against `previous` — the installed
+/// build portage would compare to (see [`previous_entry`]). `all_flags` (`-v`)
+/// additionally shows flags that did not change.
 fn format_flags(
     cache: &CacheEntry,
     effective_use: &UseConfig,
     use_expand: &[String],
     use_expand_hidden: &[String],
-    is_reinstall: bool,
     req: Option<&UseFlagRequirement>,
-    installed_active_use: Option<&[Interned<DefaultInterner>]>,
+    previous: Option<&super::installed::VdbEntry>,
+    all_flags: bool,
 ) -> String {
+    use std::collections::HashSet;
+
     // Each entry: (enabled_tokens, disabled_tokens).  BTreeMap keeps groups sorted.
     let mut base_flags: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     let mut expand_groups: std::collections::BTreeMap<&str, (Vec<String>, Vec<String>)> =
         std::collections::BTreeMap::new();
 
-    let mut flags: Vec<_> = cache.metadata.iuse.iter().collect();
-    flags.sort_by_key(|f| f.name());
-    flags.dedup_by_key(|f| f.name());
+    let cur_iuse: HashSet<Interned<DefaultInterner>> = cache
+        .metadata
+        .iuse
+        .iter()
+        .map(|f| Interned::intern(f.name()))
+        .collect();
+    let old_iuse: HashSet<Interned<DefaultInterner>> = previous
+        .map(|p| p.iuse.iter().copied().collect())
+        .unwrap_or_default();
+    // Portage restricts old_use to old_iuse (output.py:212): a recorded USE
+    // flag the old build didn't declare can't have been a real choice.
+    let old_use: HashSet<Interned<DefaultInterner>> = previous
+        .map(|p| {
+            p.active_use
+                .iter()
+                .copied()
+                .filter(|f| old_iuse.contains(f))
+                .collect()
+        })
+        .unwrap_or_default();
+    let is_new = previous.is_none();
 
-    for f in flags {
-        let name = f.name();
-        let interned = Interned::intern(name);
+    // Sort by flag name *before* rendering: the tokens carry colour escapes
+    // now, so sorting rendered strings would order by escape sequence.
+    let mut any_iuse: Vec<_> = cur_iuse.union(&old_iuse).copied().collect();
+    any_iuse.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+
+    for interned in any_iuse {
+        let name = interned.as_str();
+        let in_cur_iuse = cur_iuse.contains(&interned);
         // `effective_use` already folded this package's IUSE defaults in (via
         // `resolve_effective_use`), so every mentioned-or-defaulted flag is
         // resolved; nothing left unset needs a fallback here.
-        let mut enabled = matches!(effective_use.get(interned), UseFlagState::Enabled);
+        let mut enabled =
+            in_cur_iuse && matches!(effective_use.get(interned), UseFlagState::Enabled);
 
-        // In diff mode (upgrade/downgrade), skip flags that haven't changed
-        if let Some(installed_use) = installed_active_use {
-            let installed_enabled = installed_use.contains(&interned);
-            // Skip if the enabled state is the same
-            if enabled == installed_enabled {
-                continue;
+        // A flag the solver requires is one the user needs to see whether or
+        // not it changed — portage's `reinst_flags`. Apply the required state
+        // too: it is enforced at build time, so this is the post-install state.
+        let required = req.is_some_and(|r| {
+            r.required_enabled.contains(&interned) || r.required_disabled.contains(&interned)
+        });
+        if let Some(r) = req {
+            if r.required_enabled.contains(&interned) {
+                enabled = true;
+            } else if r.required_disabled.contains(&interned) {
+                enabled = false;
             }
         }
 
-        // For reinstall packages: show current state with a change marker.
-        // For new/upgrade packages: apply required state directly (it will be
-        // enforced at build time, so show the intended post-install state).
-        let suffix = if is_reinstall {
-            if let Some(r) = req {
-                if r.required_enabled.contains(&interned) {
-                    "*"
-                } else if r.required_disabled.contains(&interned) {
-                    "%"
-                } else {
-                    ""
-                }
-            } else {
-                ""
-            }
-        } else {
-            if let Some(r) = req {
-                if r.required_enabled.contains(&interned) {
-                    enabled = true;
-                } else if r.required_disabled.contains(&interned) {
-                    enabled = false;
-                }
-            }
-            ""
+        let Some((token, is_enabled)) = flag_token(
+            name,
+            enabled,
+            in_cur_iuse,
+            old_iuse.contains(&interned),
+            old_use.contains(&interned),
+            is_new,
+            all_flags || required,
+        ) else {
+            continue;
         };
+
         let expand_match = use_expand.iter().find(|key| {
             let prefix = format!("{}_", key.to_lowercase());
             name.starts_with(prefix.as_str())
@@ -409,33 +514,29 @@ fn format_flags(
         if let Some(key) = expand_match {
             let prefix = format!("{}_", key.to_lowercase());
             let short = &name[prefix.len()..];
+            // Re-render inside the group with the prefix stripped.
+            let token = token.replacen(name, short, 1);
             let bucket = expand_groups.entry(key.as_str()).or_default();
-            if enabled {
-                bucket.0.push(format!("{C_ON}{short}{suffix}{C_ON:#}"));
+            if is_enabled {
+                bucket.0.push(token);
             } else {
                 // Wrap disabled USE_EXPAND flags in parentheses
-                bucket.1.push(format!("{C_OFF}(-{short}{suffix}){C_OFF:#}"));
+                bucket.1.push(if token.starts_with('(') {
+                    token
+                } else {
+                    format!("({token})")
+                });
             }
-        } else if enabled {
-            base_flags.0.push(format!("{C_ON}{name}{suffix}{C_ON:#}"));
+        } else if is_enabled {
+            base_flags.0.push(token);
         } else {
-            base_flags
-                .1
-                .push(format!("{C_OFF}-{name}{suffix}{C_OFF:#}"));
+            base_flags.1.push(token);
         }
     }
 
     let join_bucket = |(on, off): &(Vec<String>, Vec<String>)| -> String {
-        // Sort enabled and disabled flags separately for portage-compatible ordering
-        let mut on_sorted = on.clone();
-        let mut off_sorted = off.clone();
-        on_sorted.sort();
-        off_sorted.sort();
-        on_sorted
-            .into_iter()
-            .chain(off_sorted)
-            .collect::<Vec<_>>()
-            .join(" ")
+        // Already in flag-name order; enabled before disabled, as portage does.
+        on.iter().chain(off).cloned().collect::<Vec<_>>().join(" ")
     };
 
     let mut parts = Vec::new();
@@ -690,7 +791,6 @@ fn print_pretty_with_roots(
         let cpn = pkg.cpn();
         let (tag, old_ver) = action_tag(pkg, ver, installed);
         let req = flag_reqs.get(pkg).copied();
-        let is_reinstall = tag == "R";
         let cache = find_cache(data, pkg, ver);
 
         // emerge -p always shows USE flags; -v additionally shows the
@@ -732,19 +832,7 @@ fn print_pretty_with_roots(
                 .is_some()
         });
 
-        // For upgrades/downgrades, find the installed entry to compare USE flags
-        let installed_active_use = if tag == "U" || tag == "D" {
-            let slot_key = pkg
-                .slot()
-                .map(|s| s.as_str().to_string())
-                .unwrap_or_default();
-            installed_entries
-                .iter()
-                .find(|e| e.cpn == *cpn && e.slot.as_deref() == Some(slot_key.as_str()))
-                .map(|e| e.active_use.as_slice())
-        } else {
-            None
-        };
+        let previous = previous_entry(pkg, ver, installed_entries);
 
         let flag_str = cache
             .map(|c| {
@@ -753,9 +841,9 @@ fn print_pretty_with_roots(
                     &effective_use,
                     use_expand,
                     use_expand_hidden,
-                    is_reinstall,
                     req,
-                    installed_active_use,
+                    previous,
+                    verbose >= 1,
                 )
             })
             .unwrap_or_default();
@@ -1014,6 +1102,113 @@ impl<W: std::io::Write> Tree<'_, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Strip ANSI so the marker matrix is asserted on text, not colour codes.
+    fn plain(
+        name: &str,
+        enabled: bool,
+        in_cur: bool,
+        in_old_iuse: bool,
+        in_old_use: bool,
+        is_new: bool,
+        show_unchanged: bool,
+    ) -> Option<String> {
+        flag_token(
+            name,
+            enabled,
+            in_cur,
+            in_old_iuse,
+            in_old_use,
+            is_new,
+            show_unchanged,
+        )
+        .map(|(tok, _)| {
+            let mut out = String::new();
+            let mut chars = tok.chars();
+            while let Some(c) = chars.next() {
+                if c == '\u{1b}' {
+                    for c in chars.by_ref() {
+                        if c == 'm' {
+                            break;
+                        }
+                    }
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        })
+    }
+
+    // The whole point of the markers: a flag that flips relative to the
+    // installed build is the one thing a plain `em -p` must not bury.
+    #[test]
+    fn a_flipped_flag_is_starred_even_without_verbose() {
+        // off -> on, and on -> off
+        assert_eq!(
+            plain("doc", true, true, true, false, false, false).as_deref(),
+            Some("doc*")
+        );
+        assert_eq!(
+            plain("doc", false, true, true, true, false, false).as_deref(),
+            Some("-doc*")
+        );
+    }
+
+    #[test]
+    fn an_unchanged_flag_is_hidden_until_verbose() {
+        assert_eq!(plain("doc", true, true, true, true, false, false), None);
+        assert_eq!(plain("doc", false, true, true, false, false, false), None);
+        assert_eq!(
+            plain("doc", true, true, true, true, false, true).as_deref(),
+            Some("doc")
+        );
+        assert_eq!(
+            plain("doc", false, true, true, false, false, true).as_deref(),
+            Some("-doc")
+        );
+    }
+
+    // A flag the old build never declared is `%` — distinct from one that
+    // merely flipped, since there was no previous choice to flip.
+    #[test]
+    fn a_flag_absent_from_the_old_iuse_is_percent_marked() {
+        assert_eq!(
+            plain("lto", true, true, false, false, false, false).as_deref(),
+            Some("lto%*")
+        );
+        assert_eq!(
+            plain("lto", false, true, false, false, false, false).as_deref(),
+            Some("-lto%")
+        );
+    }
+
+    #[test]
+    fn a_flag_dropped_from_iuse_shows_parenthesised_and_only_when_verbose() {
+        assert_eq!(plain("gone", false, false, true, false, false, false), None);
+        assert_eq!(
+            plain("gone", false, false, true, false, false, true).as_deref(),
+            Some("(-gone%)")
+        );
+        // ...and keeps the star when it had been enabled.
+        assert_eq!(
+            plain("gone", false, false, true, true, false, true).as_deref(),
+            Some("(-gone%*)")
+        );
+    }
+
+    // Nothing installed to compare against: every flag shows, none marked.
+    #[test]
+    fn a_new_package_shows_every_flag_unmarked() {
+        assert_eq!(
+            plain("doc", true, true, false, false, true, false).as_deref(),
+            Some("doc")
+        );
+        assert_eq!(
+            plain("doc", false, true, false, false, true, false).as_deref(),
+            Some("-doc")
+        );
+    }
 
     fn ceded(cpn: &str, flag: &str) -> CededFlag {
         CededFlag {
