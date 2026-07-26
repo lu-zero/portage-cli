@@ -1,8 +1,7 @@
 # em is blind to ebuilds with no md5-cache entry
 
-STATUS: **fixed 2026-07-26 on branch `md5-cache-fallback`** (`d6a7b82`
-visibility, `4489e8d` memoisation + staleness), not yet merged. Two follow-ups
-below are still open.
+STATUS: **fixed 2026-07-26, on master** — `d6a7b82` visibility, `4489e8d`
+memoisation + staleness. Two follow-ups below are still open.
 
 ## Symptom
 
