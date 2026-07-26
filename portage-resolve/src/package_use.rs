@@ -380,7 +380,7 @@ pub fn write(entries: &[PackageUseEntry], package_use_dir: &Utf8Path) -> anyhow:
         // aren't already present, update atoms whose flags have changed.
         let new_content = merge_content(&existing, &entry.lines);
         std::fs::write(&path, &new_content).with_context(|| format!("failed to write {path}"))?;
-        eprintln!("Written: {path}");
+        tracing::info!("Written: {path}");
     }
     Ok(())
 }

@@ -188,12 +188,11 @@ fn visit_unsatisfied(
             if !walk.seen.insert(cpn) {
                 continue;
             }
+            // Developer signal, not user-facing: the solver should already
+            // cover this under cross.active, so a hit here means that path
+            // missed one (todo/dedup-availability-walks.md Step 4).
             if top_level && class != "DEPEND" {
-                eprintln!(
-                    "!!! host_copies: top-level {class} gap for {cpn} (from {pkg}) — \
-                     the solver should already cover this under cross.active; \
-                     see todo/dedup-availability-walks.md Step 4"
-                );
+                tracing::debug!("host_copies: top-level {class} gap for {cpn} (from {pkg})");
             }
             let Some((cver, cpkg)) = resolve(cpn, ctx) else {
                 continue;

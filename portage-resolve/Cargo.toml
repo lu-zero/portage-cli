@@ -24,6 +24,7 @@ portage-atom-pubgrub = { workspace = true }
 portage-metadata = { workspace = true }
 portage-repo = { workspace = true }
 portage-vdb = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
