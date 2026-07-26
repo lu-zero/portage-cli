@@ -58,36 +58,65 @@ pub(super) const C_STATUS_R: Style = Style::new()
 use super::installed::action_tag;
 use super::repo::{FilterReason, RepoData, find_cache};
 
+/// Report the installed packages whose dependencies the plan would violate.
+///
+/// Aggregated rather than listed one row per violated atom. `dep_satisfied`
+/// only ever tests name, slot and version, so the USE deps are dropped: a
+/// requirer contributing 23 atoms that differ solely in `[llvm_targets_*]` is
+/// making one version demand, and printing all 23 buries it. Grouped
+/// target → proposed version → requirer, each stated once.
 pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
     use std::collections::BTreeMap;
-    // Group by the package whose version is in conflict.
-    let mut by_target: BTreeMap<String, Vec<&super::conflicts::Conflict>> = BTreeMap::new();
+    // target cpn → proposed version → requirer cpv → its unsatisfied atoms.
+    type ByRequirer = BTreeMap<String, Vec<String>>;
+    let mut grouped: BTreeMap<String, BTreeMap<String, ByRequirer>> = BTreeMap::new();
     for c in conflicts {
-        by_target.entry(c.dep.cpn.to_string()).or_default().push(c);
+        let atoms = grouped
+            .entry(c.dep.cpn.to_string())
+            .or_default()
+            .entry(c.proposed_ver.to_string())
+            .or_default()
+            .entry(format!("{}-{}", c.installed_cpn, c.installed_ver))
+            .or_default();
+        let mut bare = c.dep.clone();
+        bare.use_deps = None;
+        let atom = bare.to_string();
+        if !atoms.contains(&atom) {
+            atoms.push(atom);
+        }
     }
+
     let mut out = anstream::stderr();
     writeln!(
         out,
         "\n{C_OFF}!!!{C_OFF:#} Dependency constraint conflict(s) detected:\n"
     )
     .ok();
-    for (target, cs) in &by_target {
-        writeln!(out, "  {C_PKG}{target}{C_PKG:#}").ok();
-        for c in cs {
+    for (target, by_version) in &grouped {
+        for (proposed, by_requirer) in by_version {
             writeln!(
                 out,
-                "    ({C_PKG}{}-{}{C_PKG:#}, installed) requires {C_OFF}{}{C_OFF:#}",
-                c.installed_cpn, c.installed_ver, c.dep,
+                "  {C_PKG}{target}{C_PKG:#}: plan proposes {C_PKG}{proposed}{C_PKG:#}"
             )
             .ok();
-            writeln!(
-                out,
-                "    proposed: {C_PKG}{target}-{}{C_PKG:#}",
-                c.proposed_ver,
-            )
-            .ok();
+            for (requirer, atoms) in by_requirer {
+                match atoms.as_slice() {
+                    [only] => writeln!(
+                        out,
+                        "    {C_PKG}{requirer}{C_PKG:#} (installed) requires {C_OFF}{only}{C_OFF:#}"
+                    )
+                    .ok(),
+                    many => {
+                        writeln!(out, "    {C_PKG}{requirer}{C_PKG:#} (installed) requires").ok();
+                        for atom in many {
+                            writeln!(out, "      {C_OFF}{atom}{C_OFF:#}").ok();
+                        }
+                        Some(())
+                    }
+                };
+            }
+            writeln!(out).ok();
         }
-        writeln!(out).ok();
     }
 }
 
