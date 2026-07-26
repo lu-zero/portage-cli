@@ -166,21 +166,35 @@ fn masked_by(reasons: &[FilterReason]) -> String {
     parts.join(", ")
 }
 
-/// The candidate lines under an "all ebuilds … have been masked" header.
-fn masked_candidates(target: &UnsatisfiableTarget, data: &RepoData) -> Vec<String> {
-    target
-        .reasons
-        .iter()
-        .map(|c| {
-            format!(
-                "- {}-{}::{} (masked by: {})",
-                c.cpv.cpn,
-                c.cpv.version,
-                super::repo::repo_name_of(data, &c.cpv),
-                masked_by(&c.reasons)
-            )
-        })
-        .collect()
+/// One unsatisfiable target as `atom: problem`, followed by an indented line per
+/// rejected candidate naming the version and why it was rejected.
+///
+/// Shared by the fatal path and the world-family warning so an atom nothing can
+/// satisfy reads the same either way. Emerge describes the two problems in
+/// unrelated shapes — a two-line `!!! All ebuilds that could satisfy …` block
+/// against a bare `there are no ebuilds to satisfy …` — behind a batched list
+/// that says only that each atom is one or the other.
+fn target_lines(target: &UnsatisfiableTarget, data: &RepoData, multi_repo: bool) -> Vec<String> {
+    use super::targets::TargetProblem;
+    let mut lines = vec![match target.problem {
+        TargetProblem::NoEbuilds => format!(
+            "{}: no ebuilds in ::{}{}",
+            target.atom,
+            data.repo_name,
+            if multi_repo { " or overlays" } else { "" },
+        ),
+        TargetProblem::AllFiltered => format!("{}: all ebuilds masked", target.atom),
+    }];
+    lines.extend(target.reasons.iter().map(|c| {
+        format!(
+            "  {}-{}::{} ({})",
+            c.cpv.cpn,
+            c.cpv.version,
+            super::repo::repo_name_of(data, &c.cpv),
+            masked_by(&c.reasons)
+        )
+    }));
+    lines
 }
 
 /// The fatal message for a root target that cannot be satisfied — an explicit
@@ -191,26 +205,7 @@ pub(super) fn unsatisfiable_target_message(
     data: &RepoData,
     multi_repo: bool,
 ) -> String {
-    use super::targets::TargetProblem;
-    let atom = &target.atom;
-    let mut msg = match target.problem {
-        TargetProblem::NoEbuilds => format!(
-            "no ebuilds found for '{atom}' (searched ::{}{})",
-            data.repo_name,
-            if multi_repo { " and overlays" } else { "" },
-        ),
-        TargetProblem::AllFiltered => {
-            let mut msg = format!(
-                "all ebuilds that could satisfy '{atom}' have been masked.\n\
-                 one of the following masked packages is required to complete your request:"
-            );
-            for line in masked_candidates(target, data) {
-                msg.push_str("\n  ");
-                msg.push_str(&line);
-            }
-            msg
-        }
-    };
+    let mut msg = target_lines(target, data, multi_repo).join("\n");
     if let Some(trailer) = target.origin.trailer() {
         msg.push('\n');
         msg.push_str(&trailer);
@@ -222,54 +217,38 @@ pub(super) fn unsatisfiable_target_message(
 /// acceptable satisfies them. Advisory only — the plan still stands and the run
 /// still exits 0, matching emerge.
 ///
-/// A selective resolve prints the summary alone: an installed instance already
-/// satisfies the atom, so the per-candidate detail is noise (emerge's
-/// `_show_unsatisfied_dep` is reached only on the non-selective path).
+/// Grouped by the set each atom came from, so the provenance is stated once
+/// instead of trailing every entry.
 pub(super) fn report_unsatisfiable_targets(
     targets: &[UnsatisfiableTarget],
     data: &RepoData,
-    selective: bool,
+    multi_repo: bool,
 ) {
-    use super::targets::TargetProblem;
     let mut out = anstream::stderr();
-    let atoms: Vec<&str> = targets.iter().map(|t| t.atom.as_str()).collect();
-    writeln!(
-        out,
-        "\n{C_OFF}!!!{C_OFF:#} Ebuilds for the following packages are either all\n\
-         {C_OFF}!!!{C_OFF:#} masked or don't exist:\n{C_PKG}{}{C_PKG:#}",
-        atoms.join(" ")
-    )
-    .ok();
-    if selective {
-        return;
-    }
+    let mut by_origin: Vec<(&super::targets::TargetOrigin, Vec<&UnsatisfiableTarget>)> = Vec::new();
     for t in targets {
-        match t.problem {
-            TargetProblem::NoEbuilds => {
-                writeln!(
-                    out,
-                    "\nem: there are no ebuilds to satisfy \"{C_PKG}{}{C_PKG:#}\".",
-                    t.atom
-                )
-                .ok();
-            }
-            TargetProblem::AllFiltered => {
-                writeln!(
-                    out,
-                    "\n{C_OFF}!!!{C_OFF:#} All ebuilds that could satisfy \
-                     \"{C_PKG}{}{C_PKG:#}\" have been masked.\n\
-                     {C_OFF}!!!{C_OFF:#} One of the following masked packages is required \
-                     to complete your request:",
-                    t.atom
-                )
-                .ok();
-                for line in masked_candidates(t, data) {
-                    writeln!(out, "{line}").ok();
-                }
-            }
+        match by_origin.iter_mut().find(|(o, _)| **o == t.origin) {
+            Some((_, group)) => group.push(t),
+            None => by_origin.push((&t.origin, vec![t])),
         }
-        if let Some(trailer) = t.origin.trailer() {
-            writeln!(out, "{trailer}").ok();
+    }
+    for (origin, group) in by_origin {
+        writeln!(
+            out,
+            "\n{C_OFF}!!!{C_OFF:#} {}: {} skipped, nothing acceptable satisfies {}:\n",
+            origin.label(),
+            if group.len() == 1 {
+                "1 package".to_string()
+            } else {
+                format!("{} packages", group.len())
+            },
+            if group.len() == 1 { "it" } else { "them" },
+        )
+        .ok();
+        for t in group {
+            for line in target_lines(t, data, multi_repo) {
+                writeln!(out, "  {C_PKG}{line}{C_PKG:#}").ok();
+            }
         }
     }
 }

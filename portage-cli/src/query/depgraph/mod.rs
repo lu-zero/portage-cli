@@ -1239,7 +1239,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // World-family targets nothing acceptable satisfies. Advisory: emerge
         // keeps going and exits 0 for these, so they stay out of `exit_code`.
         if !unsatisfiable.is_empty() {
-            output::report_unsatisfiable_targets(&unsatisfiable, &data, selective);
+            output::report_unsatisfiable_targets(&unsatisfiable, &data, multi_repo);
         }
     }
 

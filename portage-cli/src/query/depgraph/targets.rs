@@ -33,6 +33,14 @@ impl TargetOrigin {
         matches!(self, Self::Set(name) if matches!(name.as_str(), "selected" | "system" | "world"))
     }
 
+    /// How to name this origin when heading a group of targets that share it.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Explicit => "requested".to_string(),
+            Self::Set(name) => format!("@{name}"),
+        }
+    }
+
     /// Portage's `(dependency required by …)` trailer under an unsatisfied
     /// argument. An atom typed on the command line is its own argument and
     /// gets none; a set names itself, so the user can tell where the atom they
