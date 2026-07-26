@@ -11,6 +11,7 @@
 //! cannot drift.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, Dep, Operator, Revision, UseFlagLookup};
@@ -51,9 +52,18 @@ pub enum UseFlagState {
 /// position in portage's real USE-resolution order. See that function's doc
 /// for why a config built any other way (e.g. a bare [`UseConfig::new`] plus
 /// ad hoc overrides) must not be treated as authoritative for a real package.
+///
+/// Internally this is a **shared profile base** ([`UseLayer`] fold, `Arc`) plus
+/// a **small per-package overlay** (IUSE-only flags, `package.use`, env,
+/// force/mask, ceded). Lookups check the overlay first, then the base — so a
+/// hundred profile USE_EXPAND flags are not re-inserted into a fresh map on
+/// every CPV.
 #[derive(Debug, Clone, Default)]
 pub struct UseConfig {
-    flags: HashMap<Interned<DefaultInterner>, UseFlagState>,
+    /// Profile/`make.conf` fold shared across packages (`true` = enabled).
+    base: Option<Arc<HashMap<Interned<DefaultInterner>, bool>>>,
+    /// Package-local and higher-priority decisions (win over [`Self::base`]).
+    overlay: HashMap<Interned<DefaultInterner>, UseFlagState>,
 }
 
 impl UseConfig {
@@ -62,48 +72,75 @@ impl UseConfig {
         Self::default()
     }
 
+    /// Config whose only content is a shared frozen layer (e.g. env after `-*`).
+    fn from_base_map(map: Arc<HashMap<Interned<DefaultInterner>, bool>>) -> Self {
+        if map.is_empty() {
+            Self::default()
+        } else {
+            Self {
+                base: Some(map),
+                overlay: HashMap::new(),
+            }
+        }
+    }
+
     /// Set a flag's state.
     pub fn set(&mut self, flag: Interned<DefaultInterner>, state: UseFlagState) {
-        self.flags.insert(flag, state);
+        self.overlay.insert(flag, state);
     }
 
     /// Enable a flag.
     pub fn enable(&mut self, flag: Interned<DefaultInterner>) {
-        self.flags.insert(flag, UseFlagState::Enabled);
+        self.overlay.insert(flag, UseFlagState::Enabled);
     }
 
     /// Disable a flag.
     pub fn disable(&mut self, flag: Interned<DefaultInterner>) {
-        self.flags.insert(flag, UseFlagState::Disabled);
+        self.overlay.insert(flag, UseFlagState::Disabled);
     }
 
     /// Mark a flag as solver-decided, with the caller's preferred value.
     pub fn solver_decide(&mut self, flag: Interned<DefaultInterner>, prefer: bool) {
-        self.flags
+        self.overlay
             .insert(flag, UseFlagState::SolverDecided { prefer });
     }
 
     /// Get the state of a flag. Unset flags default to `Disabled`.
     pub fn get(&self, flag: Interned<DefaultInterner>) -> UseFlagState {
-        self.flags
-            .get(&flag)
-            .copied()
-            .unwrap_or(UseFlagState::Disabled)
+        self.get_opt(flag).unwrap_or(UseFlagState::Disabled)
     }
 
     /// Return `Some(state)` if the flag is explicitly set, `None` if absent.
     pub fn get_opt(&self, flag: Interned<DefaultInterner>) -> Option<UseFlagState> {
-        self.flags.get(&flag).copied()
+        if let Some(s) = self.overlay.get(&flag) {
+            return Some(*s);
+        }
+        self.base.as_ref().and_then(|b| {
+            b.get(&flag).map(|en| {
+                if *en {
+                    UseFlagState::Enabled
+                } else {
+                    UseFlagState::Disabled
+                }
+            })
+        })
     }
 
     /// Returns all flags explicitly enabled in this config (sorted, for stable output).
     pub fn enabled_flags(&self) -> Vec<Interned<DefaultInterner>> {
-        let mut v: Vec<Interned<DefaultInterner>> = self
-            .flags
-            .iter()
-            .filter(|(_, s)| matches!(s, UseFlagState::Enabled))
-            .map(|(f, _)| *f)
-            .collect();
+        let mut v: Vec<Interned<DefaultInterner>> = Vec::new();
+        if let Some(base) = &self.base {
+            for (&f, &en) in base.iter() {
+                if en && !self.overlay.contains_key(&f) {
+                    v.push(f);
+                }
+            }
+        }
+        for (&f, s) in &self.overlay {
+            if matches!(s, UseFlagState::Enabled) {
+                v.push(f);
+            }
+        }
         v.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         v
     }
@@ -111,7 +148,7 @@ impl UseConfig {
     /// Returns all flags marked `SolverDecided` (the ones ceded to the solver
     /// for Level-C `REQUIRED_USE` handling). Order is not guaranteed.
     pub fn solver_decided_flags(&self) -> Vec<Interned<DefaultInterner>> {
-        self.flags
+        self.overlay
             .iter()
             .filter(|(_, s)| matches!(s, UseFlagState::SolverDecided { .. }))
             .map(|(f, _)| *f)
@@ -172,13 +209,36 @@ enum LayerTok {
 /// A pre-tokenized USE layer (profile `pre_env` or process `env_use`).
 ///
 /// Profile USE_EXPAND folding can put a hundred-plus flags into `pre_env`.
-/// Parse that string **once** at config load ([`UseLayer::parse`]) and reuse
-/// the interned tokens on every per-package [`resolve_effective_use`] call —
-/// re-splitting and re-interning the same layer for every CPV is pure waste.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Parse that string **once** at config load ([`UseLayer::parse`]): intern
+/// tokens and freeze the layer's standalone fold into an [`Arc`] map so every
+/// per-package [`resolve_effective_use`] can share the profile base without
+/// re-applying those flags into a fresh map.
+#[derive(Debug, Clone)]
 pub struct UseLayer {
     tokens: Vec<LayerTok>,
+    /// Whether this layer contains any `-*` (clears lower layers when applied).
+    has_clear_all: bool,
+    /// This layer folded alone from empty — shared via [`Arc`].
+    frozen: Arc<HashMap<Interned<DefaultInterner>, bool>>,
 }
+
+impl Default for UseLayer {
+    fn default() -> Self {
+        Self {
+            tokens: Vec::new(),
+            has_clear_all: false,
+            frozen: Arc::new(HashMap::new()),
+        }
+    }
+}
+
+impl PartialEq for UseLayer {
+    fn eq(&self, other: &Self) -> bool {
+        self.tokens == other.tokens
+    }
+}
+
+impl Eq for UseLayer {}
 
 impl UseLayer {
     /// Empty layer (no tokens).
@@ -209,7 +269,12 @@ impl UseLayer {
                 }),
             }
         }
-        Self { tokens }
+        let (frozen, has_clear_all) = freeze_tokens(&tokens);
+        Self {
+            tokens,
+            has_clear_all,
+            frozen: Arc::new(frozen),
+        }
     }
 
     /// Whether this layer contributes no tokens.
@@ -221,6 +286,29 @@ impl UseLayer {
     pub fn len(&self) -> usize {
         self.tokens.len()
     }
+
+    /// Whether this layer contains `-*` (wipes everything accumulated below it).
+    pub fn has_clear_all(&self) -> bool {
+        self.has_clear_all
+    }
+}
+
+/// Fold tokens from empty into a map; report whether any `-*` appeared.
+fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, bool>, bool) {
+    let mut state = HashMap::new();
+    let mut has_clear = false;
+    for tok in tokens {
+        match *tok {
+            LayerTok::ClearAll => {
+                state.clear();
+                has_clear = true;
+            }
+            LayerTok::Flag { flag, enable } => {
+                state.insert(flag, enable);
+            }
+        }
+    }
+    (state, has_clear)
 }
 
 /// Resolve a single package's effective USE.
@@ -259,77 +347,79 @@ pub fn resolve_effective_use(
     package_use: &[(Dep, Vec<UseOverride>)],
     env_use: &UseLayer,
 ) -> UseConfig {
-    // Interned fold state — no intermediate whitespace strings, no re-split
-    // of the (often large) profile pre_env layer on each call.
-    let mut order: Vec<Interned<DefaultInterner>> = Vec::new();
-    let mut state: HashMap<Interned<DefaultInterner>, bool> = HashMap::new();
+    // Fast path for the common case (and most `-*` cases that only appear in
+    // pre_env/env as whole-layer clears):
+    //
+    // Fold order is iuse < pre_env < package_use < env. When `env` contains
+    // `-*`, everything below is wiped — result is env folded alone (already
+    // frozen on the layer). When `pre_env` contains `-*`, iuse is wiped but
+    // package_use/env still apply on top of the frozen pre_env map.
+    //
+    // Without those clears: share pre_env's Arc map as UseConfig.base; put
+    // only IUSE flags *not* in that map, package_use, and env into a small
+    // overlay. No per-CPV re-insertion of ~100 USE_EXPAND flags.
 
-    // 1. pkginternal (IUSE defaults)
-    for (flag, def) in iuse_defaults {
-        fold_flag(
-            &mut order,
-            &mut state,
-            *flag,
-            matches!(def, IUseDefault::Enabled),
-        );
+    // Env-level `-*` wipes package.use and pre_env — frozen env is the answer.
+    if env_use.has_clear_all {
+        return UseConfig::from_base_map(Arc::clone(&env_use.frozen));
     }
-    // 2. defaults/conf
-    fold_layer(&mut order, &mut state, pre_env);
-    // 3. package.use / package.env for this CPV
+
+    let mut overlay: HashMap<Interned<DefaultInterner>, UseFlagState> = HashMap::new();
+
+    // IUSE (pkginternal) only contributes flags that pre_env does not set.
+    // If pre_env had `-*`, sequential fold wipes iuse entirely — skip.
+    if !pre_env.has_clear_all {
+        for (flag, def) in iuse_defaults {
+            if pre_env.frozen.contains_key(flag) {
+                continue;
+            }
+            overlay.insert(
+                *flag,
+                if matches!(def, IUseDefault::Enabled) {
+                    UseFlagState::Enabled
+                } else {
+                    UseFlagState::Disabled
+                },
+            );
+        }
+    }
+
+    // package.use / package.env for this CPV (above pre_env)
     for (dep, overrides) in package_use {
         if !atom_matches_cpv(dep, cpv, slot) {
             continue;
         }
         for ov in overrides {
-            fold_flag(&mut order, &mut state, ov.flag, ov.enable);
+            overlay.insert(
+                ov.flag,
+                if ov.enable {
+                    UseFlagState::Enabled
+                } else {
+                    UseFlagState::Disabled
+                },
+            );
         }
     }
-    // 4. process env
-    fold_layer(&mut order, &mut state, env_use);
 
-    let mut cfg = UseConfig::new();
-    for flag in order {
-        if state.get(&flag).copied().unwrap_or(false) {
-            cfg.enable(flag);
-        } else {
-            cfg.disable(flag);
-        }
+    // env (no `-*` — that case returned above); overrides package.use
+    for (&flag, &enable) in env_use.frozen.iter() {
+        overlay.insert(
+            flag,
+            if enable {
+                UseFlagState::Enabled
+            } else {
+                UseFlagState::Disabled
+            },
+        );
     }
-    cfg
-}
 
-fn fold_flag(
-    order: &mut Vec<Interned<DefaultInterner>>,
-    state: &mut HashMap<Interned<DefaultInterner>, bool>,
-    flag: Interned<DefaultInterner>,
-    enable: bool,
-) {
-    use std::collections::hash_map::Entry;
-    match state.entry(flag) {
-        Entry::Vacant(e) => {
-            order.push(flag);
-            e.insert(enable);
-        }
-        Entry::Occupied(mut e) => {
-            *e.get_mut() = enable;
-        }
-    }
-}
+    let base = if pre_env.frozen.is_empty() {
+        None
+    } else {
+        Some(Arc::clone(&pre_env.frozen))
+    };
 
-fn fold_layer(
-    order: &mut Vec<Interned<DefaultInterner>>,
-    state: &mut HashMap<Interned<DefaultInterner>, bool>,
-    layer: &UseLayer,
-) {
-    for tok in &layer.tokens {
-        match *tok {
-            LayerTok::ClearAll => {
-                order.clear();
-                state.clear();
-            }
-            LayerTok::Flag { flag, enable } => fold_flag(order, state, flag, enable),
-        }
-    }
+    UseConfig { base, overlay }
 }
 
 /// Whether a dependency atom matches a given `cpv` (+ optional slot).
