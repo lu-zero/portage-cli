@@ -266,7 +266,7 @@ impl Cli {
         if let Some(root) = opt_path(&self.root) {
             return TopologySource::Root(root);
         }
-        match crate::active::load() {
+        match crate::active::load_active_context() {
             Ok(Some(ctx)) => match ctx.kind {
                 crate::active::ActiveKind::Local => TopologySource::Local(ctx.path),
                 crate::active::ActiveKind::Prefix => TopologySource::Prefix(ctx.path),
@@ -1759,6 +1759,8 @@ pub enum GlsaCommand {
 /// `set` reads the global `--prefix` / `--local` flags (same shape as
 /// `em --prefix DIR setup`), so there is no second set of flag names to
 /// collide with the globals.
+///
+/// Entries can be referenced by name, index (0-based), or exact path.
 #[derive(Subcommand)]
 pub enum ActiveCommand {
     /// Show the registered active context (default when no subcommand).
@@ -1766,21 +1768,64 @@ pub enum ActiveCommand {
     Show,
     /// Register the invocation's `--prefix` or `--local` as the active context.
     ///
-    /// Examples:
+    /// Without arguments, reads from `--prefix`/`--local` flags:
     ///   `em --prefix /home/me/prefix active set`
     ///   `em --local= active set`           (default `~/.gentoo`)
     ///   `em --local /other active set`
     ///
+    /// With a reference argument, activates an existing entry:
+    ///   `em active set my-name`     # by name
+    ///   `em active set 0`           # by index
+    ///   `em active set /path/to/dir` # by exact path
+    ///
     /// Note: `em --local active set` is wrong — clap takes `active` as the
     /// `--local` path. Use `em --local=` or pass an explicit directory.
-    #[command(about = "Register --prefix/--local as the active context")]
-    Set,
+    #[command(about = "Register --prefix/--local as active or activate an existing entry")]
+    Set {
+        /// Reference to an existing entry (name, index, or path) to activate.
+        /// If not provided, creates a new entry from --prefix/--local flags.
+        #[arg(value_name = "REF")]
+        reference: Option<String>,
+    },
     /// Clear the registered active context.
-    #[command(about = "Clear the registered active context")]
-    Clear,
+    ///
+    /// Use `--all` to remove all entries, not just the active pointer.
+    #[command(about = "Clear the active context (or all entries with --all)")]
+    Clear {
+        /// Clear all entries, not just the active pointer.
+        #[arg(long)]
+        all: bool,
+    },
     /// Print shell exports for `eval "$(em active env)"` (PATH + markers).
     #[command(about = "Print shell exports for the active context")]
     Env,
+    /// List all registered entries.
+    #[command(about = "List all registered prefix/local entries")]
+    List,
+    /// Add a new entry without activating it.
+    ///
+    /// Examples:
+    ///   `em --prefix /home/me/prefix active add my-prefix`
+    ///   `em --local /home/me/.gentoo active add my-gentoo`
+    ///   `em --local= active add`  # adds ~/.gentoo with auto-generated name
+    #[command(about = "Add a new prefix/local entry")]
+    Add {
+        /// Optional name for the entry. If not provided, uses path basename.
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+    },
+    /// Remove an entry by name, index, or path.
+    ///
+    /// Examples:
+    ///   `em active remove my-name`
+    ///   `em active remove 0`           # by index
+    ///   `em active remove /path/to/dir` # by exact path
+    #[command(about = "Remove a registered entry")]
+    Remove {
+        /// Reference to the entry to remove (name, index, or path).
+        #[arg(value_name = "REF")]
+        reference: String,
+    },
 }
 
 #[derive(Subcommand)]

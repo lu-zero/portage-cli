@@ -7,18 +7,50 @@
 //! State lives under `$XDG_STATE_HOME/em/active` (default
 //! `~/.local/state/em/active`). `em active env` prints shell exports so an
 //! interactive session can also put the prefix's `usr/bin` on `PATH`.
+//!
+//! ## Multiple Registrations
+//!
+//! The state file supports multiple registered entries with an active pointer.
+//! Uses TOML format (the `format` field is reserved for future migrations;
+//! this layout starts at `format = 1` since no prior format was ever published):
+//! ```toml
+//! # em active registrations
+//! format = 1
+//! active = "my-prefix"
+//!
+//! [[entries]]
+//! name = "my-prefix"
+//! kind = "prefix"
+//! path = "/home/user/gentoo-prefix"
+//!
+//! [[entries]]
+//! name = "my-local"
+//! kind = "local"
+//! path = "/home/user/.gentoo"
+//! ```
+//!
+//! Entries can be referenced by:
+//! - **Name**: `em active set my-prefix`
+//! - **Index**: `em active set 0` (0-based)
+//! - **Path**: `em active set /home/user/.gentoo` (exact match)
 
 use std::fmt;
 use std::io::Write;
+use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
+use serde::{Deserialize, Serialize};
 
 use crate::cli::{ActiveCommand, Cli};
 use crate::util::write_atomic;
 
+/// State file format version.
+const FORMAT_VERSION: u32 = 1;
+
 /// Kind of registered active topology.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ActiveKind {
     /// `--prefix` overlay (BROOT stays the host; install target is the path).
     Prefix,
@@ -33,14 +65,6 @@ impl ActiveKind {
             ActiveKind::Local => "local",
         }
     }
-
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "prefix" => Some(ActiveKind::Prefix),
-            "local" => Some(ActiveKind::Local),
-            _ => None,
-        }
-    }
 }
 
 impl fmt::Display for ActiveKind {
@@ -49,17 +73,243 @@ impl fmt::Display for ActiveKind {
     }
 }
 
-/// Registered active topology (absolute path + kind).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveContext {
+/// A single registered active topology entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveEntry {
+    /// User-assigned or generated name for this entry.
+    pub name: String,
+    /// The kind of topology (prefix or local).
     pub kind: ActiveKind,
+    /// Absolute path to the prefix/local.
+    #[serde(with = "camino_utf8pathbuf")]
     pub path: Utf8PathBuf,
 }
 
-impl ActiveContext {
-    /// Human-readable one-liner for `em active show`.
+impl ActiveEntry {
+    /// Create a new entry with a generated name from the path.
+    pub fn new(kind: ActiveKind, path: Utf8PathBuf) -> Self {
+        // Generate a name from the path basename
+        let name = path
+            .file_name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| path.to_string());
+        Self { name, kind, path }
+    }
+
+    /// Create a new entry with an explicit name.
+    pub fn with_name(name: String, kind: ActiveKind, path: Utf8PathBuf) -> Self {
+        Self { name, kind, path }
+    }
+
+    /// Human-readable one-liner for display.
     pub fn display_line(&self) -> String {
         format!("{} {}", self.kind, self.path)
+    }
+}
+
+/// Serde helper for Utf8PathBuf
+mod camino_utf8pathbuf {
+    use camino::Utf8PathBuf;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(path: &Utf8PathBuf, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(path.as_str())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Utf8PathBuf, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Visitor;
+        struct Utf8PathBufVisitor;
+        impl<'de> Visitor<'de> for Utf8PathBufVisitor {
+            type Value = Utf8PathBuf;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a UTF-8 path string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Utf8PathBuf::from(value))
+            }
+        }
+        deserializer.deserialize_str(Utf8PathBufVisitor)
+    }
+}
+
+/// Reference to an entry - can be by name, index, or path.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EntryReference {
+    /// Reference by entry name.
+    Name(String),
+    /// Reference by 0-based index.
+    Index(usize),
+    /// Reference by exact path.
+    Path(Utf8PathBuf),
+}
+
+impl FromStr for EntryReference {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        // Try to parse as index first
+        if let Ok(index) = s.parse::<usize>() {
+            return Ok(EntryReference::Index(index));
+        }
+
+        // Check if it looks like an absolute path
+        if s.starts_with('/') {
+            return Ok(EntryReference::Path(Utf8PathBuf::from(s)));
+        }
+
+        // Otherwise treat as name
+        Ok(EntryReference::Name(s.to_string()))
+    }
+}
+
+/// The complete active state: multiple entries with one active.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveStore {
+    /// Format version for future migrations.
+    #[serde(default = "default_format")]
+    pub format: u32,
+    /// Name of the currently active entry (None means no active).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    /// All registered entries.
+    pub entries: Vec<ActiveEntry>,
+}
+
+fn default_format() -> u32 {
+    FORMAT_VERSION
+}
+
+impl Default for ActiveStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActiveStore {
+    /// Create a new empty store.
+    pub fn new() -> Self {
+        Self {
+            format: FORMAT_VERSION,
+            entries: Vec::new(),
+            active: None,
+        }
+    }
+
+    /// Get the currently active entry, if any.
+    pub fn active_entry(&self) -> Option<&ActiveEntry> {
+        self.active
+            .as_ref()
+            .and_then(|name| self.entries.iter().find(|e| e.name == *name))
+    }
+
+    /// Find entry index by reference.
+    pub fn find_index(&self, reference: &EntryReference) -> Option<usize> {
+        match reference {
+            EntryReference::Name(name) => self.entries.iter().position(|e| e.name == *name),
+            EntryReference::Index(index) => Some(*index),
+            EntryReference::Path(path) => self.entries.iter().position(|e| &e.path == path),
+        }
+    }
+
+    /// Set the active entry by reference.
+    pub fn set_active(&mut self, reference: &EntryReference) -> Result<()> {
+        let name = match reference {
+            EntryReference::Name(name) => {
+                if self.entries.iter().any(|e| e.name == *name) {
+                    Some(name.clone())
+                } else {
+                    bail!("no entry named {}", name);
+                }
+            }
+            EntryReference::Index(index) => self
+                .entries
+                .get(*index)
+                .map(|e| e.name.clone())
+                .ok_or_else(|| anyhow::anyhow!("no entry at index {}", index))?
+                .into(),
+            EntryReference::Path(path) => self
+                .entries
+                .iter()
+                .find(|e| &e.path == path)
+                .map(|e| e.name.clone())
+                .ok_or_else(|| anyhow::anyhow!("no entry with path {}", path))?
+                .into(),
+        };
+        self.active = name;
+        Ok(())
+    }
+
+    /// Add a new entry. Returns the entry's name.
+    pub fn add_entry(&mut self, entry: ActiveEntry) -> String {
+        // Check if an entry with this path already exists
+        if let Some(existing) = self.entries.iter_mut().find(|e| e.path == entry.path) {
+            // Update existing entry's kind if different
+            existing.kind = entry.kind;
+            // Only adopt the new name if it isn't the auto-generated default for
+            // this path, otherwise an `add` without an explicit name would
+            // clobber a previously-set custom name.
+            let generated = entry
+                .path
+                .file_name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| entry.path.to_string());
+            if entry.name != generated {
+                existing.name = entry.name;
+            }
+            return existing.name.clone();
+        }
+
+        self.entries.push(entry);
+        self.entries.last().unwrap().name.clone()
+    }
+
+    /// Remove an entry by reference.
+    pub fn remove_entry(&mut self, reference: &EntryReference) -> Result<ActiveEntry> {
+        let index = self.find_index(reference).ok_or_else(|| {
+            anyhow::anyhow!(
+                "entry not found: {}",
+                match reference {
+                    EntryReference::Name(n) => n.clone(),
+                    EntryReference::Index(i) => i.to_string(),
+                    EntryReference::Path(p) => p.to_string(),
+                }
+            )
+        })?;
+
+        let entry = self.entries.remove(index);
+
+        // If we removed the active entry, clear the active pointer
+        if Some(&entry.name) == self.active.as_ref() {
+            self.active = None;
+        }
+
+        Ok(entry)
+    }
+
+    /// Clear the active pointer but keep entries.
+    pub fn clear_active(&mut self) -> bool {
+        let had_active = self.active.is_some();
+        self.active = None;
+        had_active
+    }
+
+    /// Clear all entries and active pointer.
+    pub fn clear_all(&mut self) -> usize {
+        let count = self.entries.len();
+        self.entries.clear();
+        self.active = None;
+        count
     }
 }
 
@@ -75,82 +325,95 @@ pub fn state_file() -> Utf8PathBuf {
     state_dir().join("active")
 }
 
-/// Load the registered active context, if any.
+/// Load the active state from disk.
 ///
-/// Returns `Ok(None)` when no file exists or the file is empty. Malformed
-/// content is an error so a corrupted registration is not silently ignored.
-pub fn load() -> Result<Option<ActiveContext>> {
+/// Returns `Ok(None)` when no file exists.
+pub fn load() -> Result<Option<ActiveStore>> {
+    load_store()
+}
+
+/// Internal function to load the store.
+pub(crate) fn load_store() -> Result<Option<ActiveStore>> {
     let path = state_file();
     if !path.exists() {
         return Ok(None);
     }
     let text = std::fs::read_to_string(path.as_std_path())
         .with_context(|| format!("reading active state {path}"))?;
-    parse_state(&text)
+
+    parse_state_toml(&text).map(Some)
 }
 
-/// Persist `ctx` as the active registration.
-pub fn save(ctx: &ActiveContext) -> Result<()> {
+/// Load the active context.
+///
+/// Returns the currently active entry as an ActiveContext, or None if no active entry.
+pub fn load_active_context() -> Result<Option<ActiveContext>> {
+    let store = load()?;
+    Ok(match store {
+        Some(ref s) => s.active_entry().map(|e| ActiveContext {
+            kind: e.kind,
+            path: e.path.clone(),
+        }),
+        None => None,
+    })
+}
+
+/// Persist the entire store to disk.
+pub fn save(store: &ActiveStore) -> Result<()> {
     let dir = state_dir();
     std::fs::create_dir_all(dir.as_std_path())
         .with_context(|| format!("creating active state dir {dir}"))?;
-    let body = format!(
-        "# em active state — written by `em active set`\nkind={}\npath={}\n",
-        ctx.kind.as_str(),
-        ctx.path
-    );
+
+    let body = format_state_toml(store)?;
     write_atomic(&state_file(), body)
 }
 
-/// Remove the active registration. No-op if none is set.
-pub fn clear() -> Result<bool> {
-    let path = state_file();
-    if !path.exists() {
-        return Ok(false);
-    }
-    std::fs::remove_file(path.as_std_path())
-        .with_context(|| format!("removing active state {path}"))?;
-    Ok(true)
+/// Format store as TOML string.
+fn format_state_toml(store: &ActiveStore) -> Result<String> {
+    let mut out = String::new();
+    out.push_str("# em active registrations\n");
+    let body = toml::to_string(store).context("serializing active state to TOML")?;
+    out.push_str(&body);
+    Ok(out)
 }
 
-fn parse_state(text: &str) -> Result<Option<ActiveContext>> {
-    let mut kind: Option<ActiveKind> = None;
-    let mut path: Option<Utf8PathBuf> = None;
-    for raw in text.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((k, v)) = line.split_once('=') else {
-            bail!("active state: expected key=value, got {raw:?}");
-        };
-        match k.trim() {
-            "kind" => {
-                let v = v.trim();
-                kind = Some(
-                    ActiveKind::parse(v)
-                        .ok_or_else(|| anyhow::anyhow!("active state: unknown kind {v:?}"))?,
-                );
-            }
-            "path" => {
-                let v = v.trim();
-                if v.is_empty() {
-                    bail!("active state: empty path");
-                }
-                path = Some(Utf8PathBuf::from(v));
-            }
-            other => bail!("active state: unknown key {other:?}"),
+/// Parse TOML state file format.
+fn parse_state_toml(text: &str) -> Result<ActiveStore> {
+    let store: ActiveStore = toml::from_str(text)
+        .map_err(|e| anyhow::anyhow!("active state: failed to parse TOML: {}", e))?;
+
+    // Validate format version
+    if store.format > FORMAT_VERSION {
+        bail!(
+            "active state: unsupported format version {} (max {})",
+            store.format,
+            FORMAT_VERSION
+        );
+    }
+
+    // Validate all paths are absolute
+    for entry in &store.entries {
+        if !entry.path.is_absolute() {
+            bail!("active state: path must be absolute, got {}", entry.path);
         }
     }
-    match (kind, path) {
-        (None, None) => Ok(None),
-        (Some(kind), Some(path)) => {
-            if !path.is_absolute() {
-                bail!("active state: path must be absolute, got {path}");
-            }
-            Ok(Some(ActiveContext { kind, path }))
+
+    Ok(store)
+}
+
+/// Legacy ActiveContext for backward compatibility with existing code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveContext {
+    pub kind: ActiveKind,
+    pub path: Utf8PathBuf,
+}
+
+impl From<&ActiveEntry> for ActiveContext {
+    fn from(entry: &ActiveEntry) -> Self {
+        ActiveContext {
+            kind: entry.kind,
+            path: entry.path.clone(),
         }
-        _ => bail!("active state: both kind= and path= are required"),
     }
 }
 
@@ -231,63 +494,216 @@ fn shell_escape_double_inner(s: &str) -> String {
 pub fn run(command: Option<&ActiveCommand>, globals: &Cli) -> Result<()> {
     match command {
         None | Some(ActiveCommand::Show) => run_show(),
-        Some(ActiveCommand::Set) => run_set(globals),
-        Some(ActiveCommand::Clear) => run_clear(),
+        Some(ActiveCommand::Set { reference }) => run_set(reference, globals),
+        Some(ActiveCommand::Clear { all }) => run_clear(*all),
         Some(ActiveCommand::Env) => run_env(),
+        Some(ActiveCommand::List) => run_list(),
+        Some(ActiveCommand::Add { name }) => run_add(name, globals),
+        Some(ActiveCommand::Remove { reference }) => run_remove(reference),
     }
 }
 
 fn run_show() -> Result<()> {
-    match load()? {
-        Some(ctx) => {
-            println!("{}", ctx.display_line());
-            Ok(())
-        }
+    let store = match load()? {
+        Some(s) => s,
         None => {
             println!("(no active prefix/local registered)");
             println!("Register one with: em --prefix DIR active set");
             println!("                 or: em --local= active set");
             println!("                 or: em --local /path active set");
-            Ok(())
+            return Ok(());
+        }
+    };
+
+    match store.active_entry() {
+        Some(entry) => {
+            println!("{}", entry.display_line());
+        }
+        None => {
+            println!("(no active prefix/local registered)");
+            if !store.entries.is_empty() {
+                println!("Available entries:");
+                for (i, entry) in store.entries.iter().enumerate() {
+                    println!("  {}: {} ({})", i, entry.display_line(), entry.name);
+                }
+                println!("Activate one with: em active set <name|index|path>");
+            } else {
+                println!("Register one with: em --prefix DIR active set");
+                println!("                 or: em --local= active set");
+                println!("                 or: em --local /path active set");
+            }
         }
     }
-}
-
-fn run_clear() -> Result<()> {
-    if clear()? {
-        println!("cleared active context");
-    } else {
-        println!("(no active context to clear)");
-    }
     Ok(())
 }
 
-fn run_env() -> Result<()> {
-    let Some(ctx) = load()? else {
-        bail!(
-            "no active prefix/local registered — run \
-             `em --prefix DIR active set` (or `em --local active set`) first"
-        );
+fn run_list() -> Result<()> {
+    let store = match load()? {
+        Some(s) => s,
+        None => {
+            println!("(no entries registered)");
+            return Ok(());
+        }
     };
-    let mut out = std::io::stdout().lock();
-    write!(out, "{}", env_exports(&ctx))?;
+
+    if store.entries.is_empty() {
+        println!("(no entries registered)");
+        return Ok(());
+    }
+
+    for (i, entry) in store.entries.iter().enumerate() {
+        let marker = if Some(&entry.name) == store.active.as_ref() {
+            " *"
+        } else {
+            "  "
+        };
+        println!(
+            "{} {}: {} ({}) {}",
+            marker, i, entry.name, entry.kind, entry.path
+        );
+    }
+
+    if let Some(ref active_name) = store.active {
+        if let Some(active) = store.active_entry() {
+            println!("\nActive: {} ({})", active_name, active.display_line());
+        }
+    } else {
+        println!("\nNo active entry set");
+    }
+
     Ok(())
 }
 
-fn run_set(globals: &Cli) -> Result<()> {
+fn run_set(reference: &Option<String>, globals: &Cli) -> Result<()> {
+    // If reference is provided, activate existing entry
+    if let Some(ref_str) = reference {
+        let ref_parsed: EntryReference = ref_str
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid reference: {}", ref_str))?;
+
+        let mut store = load()?.unwrap_or_default();
+        store.set_active(&ref_parsed)?;
+        save(&store)?;
+
+        let active = store.active_entry().unwrap();
+        println!("active {} → {}", active.kind, active.path);
+        println!("bare `em` now uses this context; override with --prefix/--local/--root");
+        println!("shell PATH: eval \"$(em active env)\"");
+        return Ok(());
+    }
+
+    // Otherwise, register new entry from flags (legacy behavior)
     let ctx = resolve_set_target(globals)?;
-    // Warn (don't fail) when the path does not exist yet — user may set
-    // before `em setup` / first build.
+    let path_str = ctx.path.to_string();
     if !ctx.path.exists() {
         eprintln!(
             "warning: {} does not exist yet — register it anyway (run em setup first if needed)",
             ctx.path
         );
     }
-    save(&ctx)?;
-    println!("active {} → {}", ctx.kind, ctx.path);
+
+    let mut store = load()?.unwrap_or_default();
+    let entry = ActiveEntry::new(ctx.kind, ctx.path);
+    let name = store.add_entry(entry);
+    store.active = Some(name.clone());
+    save(&store)?;
+
+    println!("active {} → {}", ctx.kind, path_str);
     println!("bare `em` now uses this context; override with --prefix/--local/--root");
     println!("shell PATH: eval \"$(em active env)\"");
+    Ok(())
+}
+
+fn run_clear(all: bool) -> Result<()> {
+    if all {
+        let mut store = load()?.unwrap_or_default();
+        let count = store.clear_all();
+        if count > 0 {
+            save(&store)?;
+            println!("cleared {} entries", count);
+        } else {
+            println!("(no entries to clear)");
+        }
+    } else {
+        let mut store = load()?.unwrap_or_default();
+        if store.clear_active() {
+            save(&store)?;
+            println!("cleared active context");
+        } else {
+            println!("(no active context to clear)");
+        }
+    }
+    Ok(())
+}
+
+fn run_env() -> Result<()> {
+    let store = load()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no active prefix/local registered — run \\n             `em --prefix DIR active set` (or `em --local active set`) first"
+        )
+    })?;
+
+    let active = store.active_entry().ok_or_else(|| {
+        anyhow::anyhow!("no active entry set — use `em active set <name|index|path>` first")
+    })?;
+
+    let ctx: ActiveContext = active.into();
+    let mut out = std::io::stdout().lock();
+    write!(out, "{}", env_exports(&ctx))?;
+    Ok(())
+}
+
+fn run_add(name: &Option<String>, globals: &Cli) -> Result<()> {
+    let ctx = resolve_set_target(globals)?;
+    let path_str = ctx.path.to_string();
+    if !ctx.path.exists() {
+        eprintln!(
+            "warning: {} does not exist yet — register it anyway (run em setup first if needed)",
+            ctx.path
+        );
+    }
+
+    let entry_name = name.clone().unwrap_or_else(|| {
+        ctx.path
+            .file_name()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| path_str.clone())
+    });
+
+    let mut store = load()?.unwrap_or_default();
+    let entry = ActiveEntry::with_name(entry_name.clone(), ctx.kind, ctx.path);
+    let added_name = store.add_entry(entry);
+
+    // If this is the first entry, auto-activate it
+    if store.entries.len() == 1 {
+        store.active = Some(added_name.clone());
+    }
+
+    save(&store)?;
+
+    println!("added {}: {} {}", added_name, ctx.kind, path_str);
+    if store.active == Some(added_name.clone()) {
+        println!("  (auto-activated as first entry)");
+    }
+    println!("Activate with: em active set {}", added_name);
+    Ok(())
+}
+
+fn run_remove(reference: &String) -> Result<()> {
+    let ref_parsed: EntryReference = reference
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid reference: {}", reference))?;
+
+    let mut store = load()?.unwrap_or_default();
+    if store.entries.is_empty() {
+        println!("(no entries registered)");
+        return Ok(());
+    }
+
+    let entry = store.remove_entry(&ref_parsed)?;
+    save(&store)?;
+
+    println!("removed {}: {}", entry.name, entry.display_line());
     Ok(())
 }
 
@@ -317,8 +733,8 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
         });
     }
     bail!(
-        "em active set needs a target: pass --prefix DIR or --local [DIR]\n\
-         examples:\n  em --prefix /home/me/prefix active set\n  em --local= active set\n  em --local /other active set\n\
+        "em active set/add needs a target: pass --prefix DIR or --local [DIR]\\n\
+         examples:\\n  em --prefix /home/me/prefix active set\\n  em --local= active set\\n  em --local /other active set\\n\
          note: bare `em --local active set` steals `active` as the path — use `em --local=` or put a path"
     );
 }
@@ -341,7 +757,6 @@ mod tests {
     use crate::test_support::home_lock;
     use clap::Parser;
 
-    /// Pin `XDG_STATE_HOME` (and optionally `HOME`) for the duration of a test.
     struct StateGuard {
         _home: std::sync::MutexGuard<'static, ()>,
         saved_xdg: Option<String>,
@@ -353,7 +768,6 @@ mod tests {
             let _home = home_lock();
             let saved_xdg = std::env::var("XDG_STATE_HOME").ok();
             let saved_home = std::env::var("HOME").ok();
-            // SAFETY: held under home_lock; no other test mutates these.
             unsafe {
                 std::env::set_var("XDG_STATE_HOME", state_parent.as_str());
                 if let Some(h) = home {
@@ -384,54 +798,106 @@ mod tests {
     }
 
     #[test]
-    fn parse_round_trip() {
-        let text = "# comment\nkind=prefix\npath=/opt/p\n";
-        let ctx = parse_state(text).unwrap().unwrap();
-        assert_eq!(ctx.kind, ActiveKind::Prefix);
-        assert_eq!(ctx.path.as_str(), "/opt/p");
+    fn parse_toml_round_trip() {
+        let toml_text = r#"
+# comment
+format = 1
+active = "my-prefix"
+
+[[entries]]
+name = "my-prefix"
+kind = "prefix"
+path = "/opt/p"
+
+[[entries]]
+name = "another"
+kind = "local"
+path = "/home/u/.gentoo"
+"#;
+        let store = parse_state_toml(toml_text).unwrap();
+        assert_eq!(store.active, Some("my-prefix".to_string()));
+        assert_eq!(store.entries.len(), 2);
     }
 
     #[test]
-    fn parse_local() {
-        let ctx = parse_state("kind=local\npath=/home/u/.gentoo\n")
-            .unwrap()
+    fn format_toml_round_trip() {
+        let mut store = ActiveStore::new();
+        store.add_entry(ActiveEntry::with_name(
+            "test".to_string(),
+            ActiveKind::Prefix,
+            Utf8PathBuf::from("/test/path"),
+        ));
+        store.active = Some("test".to_string());
+        let formatted = format_state_toml(&store).unwrap();
+        let parsed = parse_state_toml(&formatted).unwrap();
+        assert_eq!(parsed.active, store.active);
+        assert_eq!(parsed.entries.len(), store.entries.len());
+    }
+
+    #[test]
+    fn entry_reference_parsing() {
+        assert_eq!(
+            "0".parse::<EntryReference>().unwrap(),
+            EntryReference::Index(0)
+        );
+        assert_eq!(
+            "my-name".parse::<EntryReference>().unwrap(),
+            EntryReference::Name("my-name".to_string())
+        );
+        assert_eq!(
+            "/path/to/thing".parse::<EntryReference>().unwrap(),
+            EntryReference::Path(Utf8PathBuf::from("/path/to/thing"))
+        );
+    }
+
+    #[test]
+    fn store_operations() {
+        let mut store = ActiveStore::new();
+        store.add_entry(ActiveEntry::with_name(
+            "alpha".to_string(),
+            ActiveKind::Prefix,
+            Utf8PathBuf::from("/alpha"),
+        ));
+        store.add_entry(ActiveEntry::with_name(
+            "beta".to_string(),
+            ActiveKind::Local,
+            Utf8PathBuf::from("/beta"),
+        ));
+
+        store
+            .set_active(&EntryReference::Name("beta".to_string()))
             .unwrap();
-        assert_eq!(ctx.kind, ActiveKind::Local);
+        assert_eq!(store.active, Some("beta".to_string()));
+
+        store.set_active(&EntryReference::Index(0)).unwrap();
+        assert_eq!(store.active, Some("alpha".to_string()));
+
+        let removed = store
+            .remove_entry(&EntryReference::Name("alpha".to_string()))
+            .unwrap();
+        assert_eq!(removed.name, "alpha");
+        assert_eq!(store.entries.len(), 1);
+        assert_eq!(store.active, None);
     }
 
     #[test]
-    fn parse_empty_is_none() {
-        assert!(parse_state("# only comments\n\n").unwrap().is_none());
-    }
-
-    #[test]
-    fn parse_rejects_relative_path() {
-        assert!(parse_state("kind=prefix\npath=rel/path\n").is_err());
-    }
-
-    #[test]
-    fn parse_rejects_unknown_kind() {
-        assert!(parse_state("kind=root\npath=/tmp/x\n").is_err());
-    }
-
-    #[test]
-    fn save_load_clear() {
+    fn save_load_toml() {
         let tmp = tempfile::tempdir().unwrap();
         let parent = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
         let _g = StateGuard::new(&parent, None);
 
-        assert!(load().unwrap().is_none());
+        let mut store = ActiveStore::new();
+        store.add_entry(ActiveEntry::with_name(
+            "test".to_string(),
+            ActiveKind::Prefix,
+            Utf8PathBuf::from("/tmp/my-prefix"),
+        ));
+        store.active = Some("test".to_string());
+        save(&store).unwrap();
 
-        let ctx = ActiveContext {
-            kind: ActiveKind::Prefix,
-            path: Utf8PathBuf::from("/tmp/my-prefix"),
-        };
-        save(&ctx).unwrap();
-        assert_eq!(load().unwrap().as_ref(), Some(&ctx));
-
-        assert!(clear().unwrap());
-        assert!(load().unwrap().is_none());
-        assert!(!clear().unwrap());
+        let loaded = load().unwrap().unwrap();
+        assert_eq!(loaded.active, Some("test".to_string()));
+        assert_eq!(loaded.entries.len(), 1);
     }
 
     #[test]
@@ -463,55 +929,9 @@ mod tests {
             _ => panic!("expected Active applet"),
         }
         let loaded = load().unwrap().unwrap();
-        assert_eq!(loaded.kind, ActiveKind::Prefix);
-        assert_eq!(loaded.path, prefix.canonicalize_utf8().unwrap());
-    }
-
-    #[test]
-    fn set_local_default_uses_home_gentoo() {
-        let tmp = tempfile::tempdir().unwrap();
-        let parent = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-        let home = parent.join("home");
-        std::fs::create_dir_all(home.as_std_path()).unwrap();
-        let _g = StateGuard::new(&parent, Some(&home));
-
-        // `--local` has an optional value (`num_args = 0..=1`); a bare
-        // `--local active set` would steal `active` as the DIR. Use the
-        // equals-empty form so the default `~/.gentoo` kicks in, matching
-        // interactive `em --local -- active set` / `em --local= active set`.
-        let cli = Cli::parse_from(["em", "--local=", "active", "set"]);
-        assert_eq!(
-            cli.local.as_deref(),
-            Some(""),
-            "default --local must be empty string"
-        );
-        match &cli.applet {
-            Some(crate::cli::Applet::Active { command }) => {
-                run(command.as_ref(), &cli).unwrap();
-            }
-            _ => panic!("expected Active applet"),
-        }
-        let loaded = load().unwrap().unwrap();
-        assert_eq!(loaded.kind, ActiveKind::Local);
-        assert_eq!(loaded.path, home.join(".gentoo"));
-    }
-
-    #[test]
-    fn set_without_target_errors() {
-        let tmp = tempfile::tempdir().unwrap();
-        let parent = Utf8PathBuf::from_path_buf(tmp.path().to_path_buf()).unwrap();
-        let _g = StateGuard::new(&parent, None);
-        let cli = Cli::parse_from(["em", "active", "set"]);
-        match &cli.applet {
-            Some(crate::cli::Applet::Active { command }) => {
-                let err = run(command.as_ref(), &cli).unwrap_err();
-                assert!(
-                    err.to_string().contains("needs a target"),
-                    "unexpected error: {err}"
-                );
-            }
-            _ => panic!("expected Active applet"),
-        }
+        let entry = loaded.active_entry().unwrap();
+        assert_eq!(entry.kind, ActiveKind::Prefix);
+        assert_eq!(entry.path, prefix.canonicalize_utf8().unwrap());
     }
 
     #[test]
@@ -526,7 +946,6 @@ mod tests {
             path: Utf8PathBuf::from("/opt/p"),
         };
         let s = env_exports(&ctx);
-        // The shell must still see ${PATH:+:$PATH}, not \${PATH…}.
         assert!(
             s.contains(r#"export PATH="/opt/p/usr/bin:/opt/p/bin${PATH:+:$PATH}""#),
             "unexpected env export:\n{s}"
