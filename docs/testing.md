@@ -219,6 +219,75 @@ All run on `stable` and the declared MSRV (currently 1.95):
 can't always resolve the same way local sibling-worktree overrides do) but
 still gets a compile-only smoke check so its benches don't silently rot.
 
+## Bumping brush (routine maintenance)
+
+As common as a formal bench run: the ebuild shell is **brush** from
+`github.com/lu-zero/brush`, branch **`for-portage-repo`**, pinned by **git
+`rev`** on the three workspace deps `brush-core` / `brush-builtins` /
+`brush-parser` in the root `Cargo.toml`. Local day-to-day work uses a
+**gitignored** path patch to a sibling checkout.
+
+Expected layout:
+
+```text
+Sources/
+  portage-cli/     # this workspace
+  brush/           # for-portage-repo branch (mine → lu-zero/brush)
+```
+
+### Local path patch (dev only — never commit)
+
+`.cargo/config.toml` (gitignored; see `AGENTS.md`):
+
+```toml
+[patch."https://github.com/lu-zero/brush.git"]
+brush-core = { path = "../brush/brush-core" }
+brush-builtins = { path = "../brush/brush-builtins" }
+brush-parser = { path = "../brush/brush-parser" }
+```
+
+(Keep any pkgcraft path patch alongside if you use one.)
+
+### Recipe after changing `../brush`
+
+1. **Stay on `for-portage-repo`** in `../brush`; finish rebase/fixups there.
+2. **With the path patch active**, validate portage-repo (nextest, not plain
+   `cargo test` — shell tests race under shared process cwd):
+   ```bash
+   cargo nextest run -p portage-repo
+   cargo nextest run -p portage-repo --test brush_compat   # 39 shell/eclass cases
+   ```
+   Full crate green (hundreds of tests) is the bar before pinning.
+3. **Push the brush branch to `mine`** (rebased history ⇒ force-with-lease is
+   expected):
+   ```bash
+   cd ../brush
+   git push --force-with-lease mine for-portage-repo
+   git rev-parse --short=8 HEAD    # pin this
+   ```
+4. **Bump the pin in portage-cli** root `Cargo.toml` (all three `brush-*`
+   lines, same `rev`). Temporarily remove the brush path patch (leave
+   pkgcraft if needed) and:
+   ```bash
+   cargo check -p portage-repo     # must resolve git+rev from lu-zero/brush
+   cargo nextest run -p portage-repo --test brush_compat
+   ```
+   `Cargo.lock` is gitignored — only commit `Cargo.toml`.
+5. **Commit + push portage-cli**:
+   ```text
+   chore(deps): bump brush fork to <rev> (for-portage-repo)
+   ```
+6. **Restore** the local path patch for continued brush work.
+
+### What not to confuse
+
+| Thing | Role |
+|-------|------|
+| Path patch in `.cargo/config.toml` | Machine-local only; overrides whatever `rev` is in `Cargo.toml` |
+| `Cargo.toml` `rev = "…"` | What CI and other clones use; must exist on `mine/for-portage-repo` |
+| `92ebb646` vs rebased tip | After a rebase the old rev may **not** be an ancestor of HEAD — always re-pin to the new tip |
+| `origin` vs `mine` on brush | Upstream is reubeno/brush; our fork remote is typically `mine` → `lu-zero/brush` |
+
 ## Before opening a PR / finishing a session
 
 The sequence this project actually follows (see `AGENTS.md` for the
@@ -238,3 +307,6 @@ individual commands):
 6. For anything touching performance-sensitive code: the two-binary
    `hyperfine` recipe in `docs/benchmarks.md`, on a target big enough for
    the effect to clear the noise floor.
+7. For anything touching the ebuild shell / `../brush`: the **Bumping
+   brush** recipe above (nextest `portage-repo` + pin + push), not a one-off
+   `cargo check` against an unpushed worktree.

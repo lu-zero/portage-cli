@@ -244,8 +244,11 @@ portage-cli/    # this workspace
 brush/          # brush fork at for-portage-repo branch
 ```
 
-The `.cargo/config.toml` at workspace root patches the brush crates to use the
-local checkout.
+Gitignored `.cargo/config.toml` path-patches the brush (and optionally
+pkgcraft) crates to those checkouts — see `AGENTS.md`. Bumping the published
+pin after brush work is a **routine** flow (test → push `mine/for-portage-repo`
+→ bump `rev` in root `Cargo.toml`); full recipe in
+[`docs/testing.md`](./docs/testing.md) § "Bumping brush".
 
 ```bash
 cargo build

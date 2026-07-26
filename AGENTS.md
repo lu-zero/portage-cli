@@ -49,9 +49,55 @@ CLI/runtime deps: `clap`, `tokio`, `anyhow`, `thiserror`.
 
 ## Local dependency overrides
 
-Machine-specific `[patch.crates-io]` paths in `.cargo/config.toml` (for local
-`brush`/`pkgcraft` worktrees) are expected during development and are gitignored.
-Do not commit them.
+Machine-specific path patches in **gitignored** `.cargo/config.toml` (sibling
+`brush` / `pkgcraft` worktrees) are expected during development. Do not commit
+them. Example shape:
+
+```toml
+[patch."https://github.com/lu-zero/brush.git"]
+brush-core = { path = "../brush/brush-core" }
+brush-builtins = { path = "../brush/brush-builtins" }
+brush-parser = { path = "../brush/brush-parser" }
+
+[patch."https://github.com/pkgcraft/pkgcraft.git"]
+pkgcraft = { path = "../pkgcraft/crates/pkgcraft" }
+```
+
+## Bumping the brush fork (routine, like a bench run)
+
+`portage-repo` depends on the **lu-zero/brush** fork branch **`for-portage-repo`**
+(workspace `Cargo.toml` pins `brush-*` by `rev`). After work on the local
+sibling checkout `../brush` (same branch), land it like this — same cadence as
+running official benchmarks:
+
+1. **Local override** — path-patch as above so builds use `../brush` without a
+   pin bump yet.
+2. **Validate** (prefer nextest; path patch active):
+   ```bash
+   cargo nextest run -p portage-repo
+   # at minimum the shell surface:
+   cargo nextest run -p portage-repo --test brush_compat
+   ```
+3. **Publish brush tip to mine** (rebase-friendly; force-with-lease is normal):
+   ```bash
+   cd ../brush
+   git checkout for-portage-repo
+   git push --force-with-lease mine for-portage-repo
+   git rev-parse --short=8 HEAD   # e.g. 940bec39
+   ```
+4. **Pin in portage-cli** — set all three `brush-*` workspace deps in root
+   `Cargo.toml` to that `rev`, drop the path patch temporarily (or use a
+   pkgcraft-only config) and `cargo check -p portage-repo` so the git source
+   resolves. `Cargo.lock` is gitignored; only `Cargo.toml` is committed.
+5. **Commit + push portage-cli**:
+   ```text
+   chore(deps): bump brush fork to <rev> (for-portage-repo)
+   ```
+6. Restore the local path patch for day-to-day work if you still have a live
+   brush worktree.
+
+Full notes and failure modes: [`docs/testing.md`](./docs/testing.md) § "Bumping
+brush".
 
 ## Coding Style
 
