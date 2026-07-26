@@ -348,19 +348,20 @@ fn license_has_conditional(expr: &LicenseExpr) -> bool {
 /// need from an ebuild's parsed `IUSE` list — shared by every call site that
 /// resolves a package's effective USE, so the `+`/`-` default conversion
 /// lives in exactly one place.
+///
+/// Only **`+flag` / enabled** defaults are collected: disabled defaults match
+/// `UseConfig::get`'s unset→Disabled, and `resolve_effective_use` only
+/// overlays enabled IUSE flags not already set by `pre_env`.
 fn iuse_defaults_map(
     meta: &portage_metadata::EbuildMetadata,
 ) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
     meta.iuse
         .iter()
-        .filter_map(|iu| {
-            iu.default.map(|d| {
-                let val = match d {
-                    portage_metadata::IUseDefault::Enabled => IUseDefault::Enabled,
-                    portage_metadata::IUseDefault::Disabled => IUseDefault::Disabled,
-                };
-                (Interned::from(iu), val)
-            })
+        .filter_map(|iu| match iu.default {
+            Some(portage_metadata::IUseDefault::Enabled) => {
+                Some((Interned::from(iu), IUseDefault::Enabled))
+            }
+            _ => None,
         })
         .collect()
 }

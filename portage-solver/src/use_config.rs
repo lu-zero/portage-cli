@@ -112,18 +112,22 @@ impl UseConfig {
 
     /// Return `Some(state)` if the flag is explicitly set, `None` if absent.
     pub fn get_opt(&self, flag: Interned<DefaultInterner>) -> Option<UseFlagState> {
-        if let Some(s) = self.overlay.get(&flag) {
+        // Prefer overlay when present; skip the HashMap probe when empty.
+        if !self.overlay.is_empty()
+            && let Some(s) = self.overlay.get(&flag)
+        {
             return Some(*s);
         }
-        self.base.as_ref().and_then(|b| {
-            b.get(&flag).map(|en| {
+        match &self.base {
+            Some(b) => b.get(&flag).map(|en| {
                 if *en {
                     UseFlagState::Enabled
                 } else {
                     UseFlagState::Disabled
                 }
-            })
-        })
+            }),
+            None => None,
+        }
     }
 
     /// Returns all flags explicitly enabled in this config (sorted, for stable output).
@@ -366,51 +370,52 @@ pub fn resolve_effective_use(
 
     let mut overlay: HashMap<Interned<DefaultInterner>, UseFlagState> = HashMap::new();
 
-    // IUSE (pkginternal) only contributes flags that pre_env does not set.
-    // If pre_env had `-*`, sequential fold wipes iuse entirely — skip.
+    // IUSE (pkginternal): only **enabled** defaults that pre_env does not already
+    // set. Disabled defaults match `get()`'s unset→Disabled, so inserting them
+    // only bloated the overlay on every CPV. `-*` in pre_env wipes iuse entirely.
     if !pre_env.has_clear_all {
         for (flag, def) in iuse_defaults {
-            if pre_env.frozen.contains_key(flag) {
-                continue;
+            if matches!(def, IUseDefault::Enabled) && !pre_env.frozen.contains_key(flag) {
+                overlay.insert(*flag, UseFlagState::Enabled);
             }
-            overlay.insert(
-                *flag,
-                if matches!(def, IUseDefault::Enabled) {
-                    UseFlagState::Enabled
-                } else {
-                    UseFlagState::Disabled
-                },
-            );
         }
     }
 
-    // package.use / package.env for this CPV (above pre_env)
-    for (dep, overrides) in package_use {
-        if !atom_matches_cpv(dep, cpv, slot) {
-            continue;
-        }
-        for ov in overrides {
-            overlay.insert(
-                ov.flag,
-                if ov.enable {
-                    UseFlagState::Enabled
-                } else {
-                    UseFlagState::Disabled
-                },
-            );
+    // package.use / package.env for this CPV (above pre_env).
+    // Cheap Cpn prefilter before full atom match (version/slot ops).
+    if !package_use.is_empty() {
+        for (dep, overrides) in package_use {
+            if dep.cpn != cpv.cpn {
+                continue;
+            }
+            if !atom_matches_cpv(dep, cpv, slot) {
+                continue;
+            }
+            for ov in overrides {
+                overlay.insert(
+                    ov.flag,
+                    if ov.enable {
+                        UseFlagState::Enabled
+                    } else {
+                        UseFlagState::Disabled
+                    },
+                );
+            }
         }
     }
 
     // env (no `-*` — that case returned above); overrides package.use
-    for (&flag, &enable) in env_use.frozen.iter() {
-        overlay.insert(
-            flag,
-            if enable {
-                UseFlagState::Enabled
-            } else {
-                UseFlagState::Disabled
-            },
-        );
+    if !env_use.frozen.is_empty() {
+        for (&flag, &enable) in env_use.frozen.iter() {
+            overlay.insert(
+                flag,
+                if enable {
+                    UseFlagState::Enabled
+                } else {
+                    UseFlagState::Disabled
+                },
+            );
+        }
     }
 
     let base = if pre_env.frozen.is_empty() {
