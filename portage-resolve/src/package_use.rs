@@ -20,6 +20,7 @@ pub struct PackageUseEntry {
 
 /// One `package.use` line: an atom, the flags it forces, and the explanatory
 /// comments placed above it.
+#[derive(PartialEq, Eq)]
 pub struct PackageUseLine {
     /// Comment lines explaining the requirement, e.g. `# required by firefox`.
     pub comments: Vec<String>,
@@ -33,6 +34,7 @@ pub struct PackageUseLine {
 pub fn build_entries(
     flag_reqs: &[UseFlagRequirement],
     root_atoms: &[String],
+    root_labels: &[String],
     edges: &[DepEdge],
     pre_env: &UseLayer,
     env_use: &UseLayer,
@@ -95,13 +97,19 @@ pub fn build_entries(
             continue;
         }
 
-        let comments = build_comments(req, root_atoms, &root_cpns, &adj);
+        let comments = build_comments(req, root_labels, &root_cpns, &adj);
 
-        by_file.entry(filename).or_default().push(PackageUseLine {
+        // `flag_reqs` merges the co-solve's applied requirements with the
+        // solver's own, so the same requirement can arrive twice.
+        let line = PackageUseLine {
             comments,
             atom,
             flags,
-        });
+        };
+        let lines = by_file.entry(filename).or_default();
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
     }
 
     // by_file is a HashMap; sort by filename so the report/written output is
@@ -298,9 +306,12 @@ fn parse_root_cpns(root_atoms: &[String]) -> HashSet<String> {
         .collect()
 }
 
+/// `root_labels` names what the user actually asked for — an explicit atom by
+/// its own text, a set by `@name` — so a `@world` run attributes the change to
+/// the set rather than reprinting every atom the set expanded to.
 fn build_comments(
     req: &UseFlagRequirement,
-    root_atoms: &[String],
+    root_labels: &[String],
     root_cpns: &HashSet<String>,
     adj: &Adjacency,
 ) -> Vec<String> {
@@ -347,7 +358,7 @@ fn build_comments(
         for hop in path.iter().rev() {
             comments.push(format!("# required by {hop}"));
         }
-        let roots = root_atoms.join(", ");
+        let roots = root_labels.join(", ");
         comments.push(format!("# required by {roots} (argument)"));
     } else if !req.required_by.is_empty() {
         // Fallback: solver-level immediate requirers.
@@ -355,7 +366,7 @@ fn build_comments(
             comments.push(format!("# required by {r}"));
         }
     } else {
-        let list = root_atoms.join(", ");
+        let list = root_labels.join(", ");
         comments.push(format!("# required by {list} (argument)"));
     }
     comments

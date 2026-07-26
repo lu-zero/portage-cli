@@ -166,6 +166,19 @@ fn masked_by(reasons: &[FilterReason]) -> String {
     parts.join(", ")
 }
 
+/// A line as styled runs: atoms and versions green, the `::repo` suffix in the
+/// same bold blue dependency atoms get elsewhere, prose unstyled.
+type Segments = Vec<(Style, String)>;
+
+fn seg(style: Style, text: impl Into<String>) -> (Style, String) {
+    (style, text.into())
+}
+
+/// Flatten styled segments for a context that cannot carry escapes.
+fn plain(line: &Segments) -> String {
+    line.iter().map(|(_, t)| t.as_str()).collect()
+}
+
 /// One unsatisfiable target as `atom: problem`, followed by an indented line per
 /// rejected candidate naming the version and why it was rejected.
 ///
@@ -174,25 +187,31 @@ fn masked_by(reasons: &[FilterReason]) -> String {
 /// unrelated shapes — a two-line `!!! All ebuilds that could satisfy …` block
 /// against a bare `there are no ebuilds to satisfy …` — behind a batched list
 /// that says only that each atom is one or the other.
-fn target_lines(target: &UnsatisfiableTarget, data: &RepoData, multi_repo: bool) -> Vec<String> {
+fn target_lines(target: &UnsatisfiableTarget, data: &RepoData, multi_repo: bool) -> Vec<Segments> {
     use super::targets::TargetProblem;
-    let mut lines = vec![match target.problem {
-        TargetProblem::NoEbuilds => format!(
-            "{}: no ebuilds in ::{}{}",
-            target.atom,
-            data.repo_name,
-            if multi_repo { " or overlays" } else { "" },
-        ),
-        TargetProblem::AllFiltered => format!("{}: all ebuilds masked", target.atom),
-    }];
+    let plain_style = Style::new();
+    let mut head = vec![seg(C_PKG, &target.atom)];
+    match target.problem {
+        TargetProblem::NoEbuilds => {
+            head.push(seg(plain_style, ": no ebuilds in "));
+            head.push(seg(C_OFF, format!("::{}", data.repo_name)));
+            if multi_repo {
+                head.push(seg(plain_style, " or overlays"));
+            }
+        }
+        TargetProblem::AllFiltered => head.push(seg(plain_style, ": all ebuilds masked")),
+    }
+    let mut lines = vec![head];
     lines.extend(target.reasons.iter().map(|c| {
-        format!(
-            "  {}-{}::{} ({})",
-            c.cpv.cpn,
-            c.cpv.version,
-            super::repo::repo_name_of(data, &c.cpv),
-            masked_by(&c.reasons)
-        )
+        vec![
+            seg(plain_style, "  "),
+            seg(C_PKG, format!("{}-{}", c.cpv.cpn, c.cpv.version)),
+            seg(
+                C_OFF,
+                format!("::{}", super::repo::repo_name_of(data, &c.cpv)),
+            ),
+            seg(plain_style, format!(" ({})", masked_by(&c.reasons))),
+        ]
     }));
     lines
 }
@@ -205,7 +224,11 @@ pub(super) fn unsatisfiable_target_message(
     data: &RepoData,
     multi_repo: bool,
 ) -> String {
-    let mut msg = target_lines(target, data, multi_repo).join("\n");
+    let mut msg = target_lines(target, data, multi_repo)
+        .iter()
+        .map(plain)
+        .collect::<Vec<_>>()
+        .join("\n");
     if let Some(trailer) = target.origin.trailer() {
         msg.push('\n');
         msg.push_str(&trailer);
@@ -247,7 +270,11 @@ pub(super) fn report_unsatisfiable_targets(
         .ok();
         for t in group {
             for line in target_lines(t, data, multi_repo) {
-                writeln!(out, "  {C_PKG}{line}{C_PKG:#}").ok();
+                write!(out, "  ").ok();
+                for (style, text) in &line {
+                    write!(out, "{style}{text}{style:#}").ok();
+                }
+                writeln!(out).ok();
             }
         }
     }

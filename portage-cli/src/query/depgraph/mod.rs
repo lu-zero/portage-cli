@@ -1095,9 +1095,22 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         let mut combined: Vec<_> = applied_reqs;
         combined.extend(provider.use_flag_requirements().to_vec());
         let root_atoms: Vec<String> = atoms.iter().map(|t| t.atom.clone()).collect();
+        // What the user asked for, not what it expanded to: `@world` names
+        // itself once instead of listing every atom it pulled in.
+        let mut root_labels: Vec<String> = Vec::new();
+        for t in atoms {
+            let label = match &t.origin {
+                targets::TargetOrigin::Explicit => t.atom.clone(),
+                targets::TargetOrigin::Set(name) => format!("@{name}"),
+            };
+            if !root_labels.contains(&label) {
+                root_labels.push(label);
+            }
+        }
         let entries = package_use::build_entries(
             &combined,
             &root_atoms,
+            &root_labels,
             &edges,
             &pre_env,
             &env_use,
