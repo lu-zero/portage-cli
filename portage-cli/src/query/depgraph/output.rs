@@ -111,8 +111,12 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
                 writeln!(out, "    {C_PKG}{requirer}{C_PKG:#} (installed) requires").ok();
                 for (constraint, flags) in by_constraint {
                     writeln!(out, "      {C_OFF}{constraint}{C_OFF:#}").ok();
-                    if !flags.is_empty() {
-                        writeln!(out, "        [{}]", flags.join(" ")).ok();
+                    // `[` opens the list, so continuations line up one past it.
+                    let lines = crate::style::wrap_items(flags, 9, crate::style::term_width());
+                    for (i, line) in lines.iter().enumerate() {
+                        let open = if i == 0 { "[" } else { " " };
+                        let close = if i + 1 == lines.len() { "]" } else { "" };
+                        writeln!(out, "        {open}{line}{close}").ok();
                     }
                 }
             }
