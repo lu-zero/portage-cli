@@ -60,29 +60,37 @@ use super::repo::{FilterReason, RepoData, find_cache};
 
 /// Report the installed packages whose dependencies the plan would violate.
 ///
-/// Aggregated rather than listed one row per violated atom. `dep_satisfied`
-/// only ever tests name, slot and version, so the USE deps are dropped: a
-/// requirer contributing 23 atoms that differ solely in `[llvm_targets_*]` is
-/// making one version demand, and printing all 23 buries it. Grouped
-/// target → proposed version → requirer, each stated once.
+/// Aggregated rather than listed one row per violated atom. A requirer commonly
+/// contributes many atoms differing solely in one USE dep
+/// (`~llvm-core/llvm-22.1.6[llvm_targets_AArch64]`, `…[llvm_targets_AMDGPU]`,
+/// …), each of which would repeat the requirer and the proposed version.
+/// Grouped target → proposed version → requirer → version constraint, so each
+/// is stated once and the USE deps collapse into one flat list beneath the
+/// constraint they all qualify.
 pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
     use std::collections::BTreeMap;
-    // target cpn → proposed version → requirer cpv → its unsatisfied atoms.
-    type ByRequirer = BTreeMap<String, Vec<String>>;
-    let mut grouped: BTreeMap<String, BTreeMap<String, ByRequirer>> = BTreeMap::new();
+    // The version constraint (USE deps stripped) → the USE deps seen with it.
+    type ByConstraint = BTreeMap<String, Vec<String>>;
+    // target cpn → proposed version → requirer cpv → its constraints.
+    let mut grouped: BTreeMap<String, BTreeMap<String, BTreeMap<String, ByConstraint>>> =
+        BTreeMap::new();
     for c in conflicts {
-        let atoms = grouped
+        let mut bare = c.dep.clone();
+        let use_deps = bare.use_deps.take();
+        let flags = grouped
             .entry(c.dep.cpn.to_string())
             .or_default()
             .entry(c.proposed_ver.to_string())
             .or_default()
             .entry(format!("{}-{}", c.installed_cpn, c.installed_ver))
+            .or_default()
+            .entry(bare.to_string())
             .or_default();
-        let mut bare = c.dep.clone();
-        bare.use_deps = None;
-        let atom = bare.to_string();
-        if !atoms.contains(&atom) {
-            atoms.push(atom);
+        for u in use_deps.into_iter().flatten() {
+            let rendered = u.to_string();
+            if !flags.contains(&rendered) {
+                flags.push(rendered);
+            }
         }
     }
 
@@ -99,21 +107,14 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
                 "  {C_PKG}{target}{C_PKG:#}: plan proposes {C_PKG}{proposed}{C_PKG:#}"
             )
             .ok();
-            for (requirer, atoms) in by_requirer {
-                match atoms.as_slice() {
-                    [only] => writeln!(
-                        out,
-                        "    {C_PKG}{requirer}{C_PKG:#} (installed) requires {C_OFF}{only}{C_OFF:#}"
-                    )
-                    .ok(),
-                    many => {
-                        writeln!(out, "    {C_PKG}{requirer}{C_PKG:#} (installed) requires").ok();
-                        for atom in many {
-                            writeln!(out, "      {C_OFF}{atom}{C_OFF:#}").ok();
-                        }
-                        Some(())
+            for (requirer, by_constraint) in by_requirer {
+                writeln!(out, "    {C_PKG}{requirer}{C_PKG:#} (installed) requires").ok();
+                for (constraint, flags) in by_constraint {
+                    writeln!(out, "      {C_OFF}{constraint}{C_OFF:#}").ok();
+                    if !flags.is_empty() {
+                        writeln!(out, "        [{}]", flags.join(" ")).ok();
                     }
-                };
+                }
             }
             writeln!(out).ok();
         }
