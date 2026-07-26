@@ -68,13 +68,49 @@ use super::repo::{FilterReason, RepoData, find_cache};
 /// is stated once and the USE deps collapse into one flat list beneath the
 /// constraint they all qualify.
 pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+    // A constraint carried by a package the plan itself replaces is stale, not
+    // broken — the build that carries it does not survive the run. Reported
+    // separately so a lockstep `~`-pinned family does not read as breakage.
+    let (stale, broken): (Vec<_>, Vec<_>) = conflicts
+        .iter()
+        .partition(|c| c.owner_replaced_by.is_some());
+
+    let mut out = anstream::stderr();
+    if !stale.is_empty() {
+        let lines: BTreeSet<String> = stale
+            .iter()
+            .map(|c| {
+                let to = c
+                    .owner_replaced_by
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                format!(
+                    "  {C_PKG}{}-{}{C_PKG:#} → {C_PKG}{to}{C_PKG:#} (pins {C_OFF}{}{C_OFF:#})",
+                    c.installed_cpn, c.installed_ver, c.dep.cpn,
+                )
+            })
+            .collect();
+        writeln!(
+            out,
+            "\nConstraint(s) the plan resolves by updating the package that carries them:\n"
+        )
+        .ok();
+        for line in &lines {
+            writeln!(out, "{line}").ok();
+        }
+    }
+    if broken.is_empty() {
+        return;
+    }
+
     // The version constraint (USE deps stripped) → the USE deps seen with it.
     type ByConstraint = BTreeMap<String, Vec<String>>;
     // target cpn → proposed version → requirer cpv → its constraints.
     let mut grouped: BTreeMap<String, BTreeMap<String, BTreeMap<String, ByConstraint>>> =
         BTreeMap::new();
-    for c in conflicts {
+    for c in broken {
         let mut bare = c.dep.clone();
         let use_deps = bare.use_deps.take();
         let flags = grouped
@@ -94,7 +130,6 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
         }
     }
 
-    let mut out = anstream::stderr();
     writeln!(
         out,
         "\n{C_OFF}!!!{C_OFF:#} Dependency constraint conflict(s) detected:\n"

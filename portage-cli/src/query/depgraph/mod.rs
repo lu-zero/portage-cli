@@ -1135,9 +1135,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     //    does not model;
     //  - REQUIRED_USE, evaluated per-package against its effective USE.
     {
+        // Target-routed entries only: `order` also carries BROOT build copies
+        // (`host_copies::compute`, above), and those install into the host, not
+        // the VDB `target_installed` was read from. Counting one as replacing a
+        // target package would hide a real conflict on that name.
         let proposed: Vec<conflicts::ProposedPkg> = order
             .iter()
-            .filter(|(pkg, _)| !pkg.is_virtual())
+            .filter(|(pkg, _)| !pkg.is_virtual() && pkg.merge_root() == MergeRoot::Target)
             .map(|(pkg, ver)| conflicts::ProposedPkg {
                 cpn: *pkg.cpn(),
                 slot: pkg.slot(),
