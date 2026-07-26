@@ -390,7 +390,8 @@ fn selective_no_update_keeps_an_installed_root_target() {
         let mut repo = InMemoryRepository::new();
         for v in ["3.0.0", "3.1.0"] {
             repo.add_version(
-                portage_atom::Cpv::parse(&format!("dev-libs/openssl-{v}")).unwrap(),
+                portage_atom::Cpv::parse(&format!("dev-libs/openssl-{v}"))
+                    .expect("openssl cpv parses"),
                 None,
                 None,
                 empty_deps(),
@@ -398,10 +399,11 @@ fn selective_no_update_keeps_an_installed_root_target() {
         }
         let mut provider = PortageDependencyProvider::new(repo);
         provider.set_selective_no_update(selective);
-        let openssl = PortagePackage::unslotted(Cpn::parse("dev-libs/openssl").unwrap());
+        let openssl =
+            PortagePackage::unslotted(Cpn::parse("dev-libs/openssl").expect("openssl cpn parses"));
         provider.add_installed(InstalledPackage {
             package: openssl.clone(),
-            version: Version::parse("3.0.0").unwrap(),
+            version: Version::parse("3.0.0").expect("version parses"),
             policy: InstalledPolicy::Favor,
             active_use: vec![],
             iuse: vec![],
@@ -411,8 +413,14 @@ fn selective_no_update_keeps_an_installed_root_target() {
             .expect("solvable");
         solution.get(&openssl).cloned().expect("target is solved")
     };
-    assert_eq!(build(true), Version::parse("3.0.0").unwrap());
-    assert_eq!(build(false), Version::parse("3.1.0").unwrap());
+    assert_eq!(
+        build(true),
+        Version::parse("3.0.0").expect("version parses")
+    );
+    assert_eq!(
+        build(false),
+        Version::parse("3.1.0").expect("version parses")
+    );
 }
 
 /// Installed version pruned from the tree: under prefer_update the transitive
