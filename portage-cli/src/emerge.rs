@@ -10,6 +10,7 @@ use crate::cli;
 use crate::error::{self, Result};
 use crate::merge::confirm_action;
 use crate::merge::run_merge_plan;
+use crate::query::depgraph::{TargetAtom, TargetOrigin};
 use crate::vdb::open_cli_vdb;
 use crate::{binpkg, ebuild, maint, preflight, preserve_libs, query, search};
 
@@ -33,12 +34,16 @@ pub(crate) fn parse_atoms_strict(raw: &[String]) -> Result<Vec<portage_atom::Dep
 /// token dropped, matching `parse_atoms`' tolerance of bad atoms — a typo
 /// shouldn't abort the whole run, and `@system` against a host with no profile
 /// is a configuration error, not a crash.
+///
+/// Each expanded atom keeps the name of the set it came from: whether an
+/// unsatisfiable target aborts the run or merely warns depends on it (see
+/// [`TargetOrigin`]).
 /// Expand `@set` references; used by emerge and quickpkg.
 pub(crate) fn expand_sets(
     raw: &[String],
     config_root: Option<&Utf8Path>,
     eroot: &Utf8Path,
-) -> Vec<String> {
+) -> Vec<TargetAtom> {
     // Build the resolver lazily, only when a set ref is actually present, so a
     // plain `em foo` (no sets) pays no profile-build cost.
     let mut out = Vec::with_capacity(raw.len());
@@ -49,7 +54,7 @@ pub(crate) fn expand_sets(
 
     for s in raw {
         let Some(name) = portage_repo::set_name(s) else {
-            out.push(s.clone());
+            out.push(TargetAtom::explicit(s.clone()));
             continue;
         };
 
@@ -73,7 +78,7 @@ pub(crate) fn expand_sets(
                 Err(e) => {
                     eprintln!("warning: cannot expand @{name}: {e}");
                     // Cannot expand any sets if resolver creation failed; push raw string
-                    out.push(s.clone());
+                    out.push(TargetAtom::explicit(s.clone()));
                     continue;
                 }
             }
@@ -82,12 +87,15 @@ pub(crate) fn expand_sets(
         // If we have a resolver, use it; otherwise skip (resolver creation failed earlier)
         if let Some(res) = resolver.as_ref() {
             match res.resolve(name) {
-                Ok(atoms) => out.extend(atoms.iter().map(|d| d.to_string())),
+                Ok(atoms) => out.extend(atoms.iter().map(|d| TargetAtom {
+                    atom: d.to_string(),
+                    origin: TargetOrigin::Set(name.to_string()),
+                })),
                 Err(e) => eprintln!("warning: skipping @{name}: {e}"),
             }
         } else {
             // Resolver creation failed for earlier set; push raw string
-            out.push(s.clone());
+            out.push(TargetAtom::explicit(s.clone()));
         }
     }
     out
@@ -317,8 +325,24 @@ async fn emerge_atoms_inner(
     // resolution. Sets are read from the config root's profile (@system) and
     // the merge target (@world/@selected, user sets).
     let expanded = expand_sets(raw_atoms, roots.config(), roots.merge_root());
-    let parsed = query::resolve_atoms(&expanded, &repo, vdb.as_ref(), mode);
-    let atoms: Vec<String> = parsed.iter().map(|d| d.to_string()).collect();
+    // Resolved one at a time (not via `resolve_atoms`) so each atom keeps the
+    // provenance `expand_sets` gave it; unresolvable ones are warned about and
+    // dropped, exactly as `resolve_atoms` does.
+    let atoms: Vec<TargetAtom> = expanded
+        .iter()
+        .filter_map(
+            |t| match query::resolve_atom(&repo, vdb.as_ref(), mode, &t.atom) {
+                Ok(dep) => Some(TargetAtom {
+                    atom: dep.to_string(),
+                    origin: t.origin.clone(),
+                }),
+                Err(e) => {
+                    eprintln!("warning: {e}");
+                    None
+                }
+            },
+        )
+        .collect();
     if atoms.is_empty() {
         bail!("em: no valid atoms");
     }

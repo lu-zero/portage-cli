@@ -3,6 +3,9 @@ mod autounmask;
 pub use portage_atom_pubgrub::MergeRoot;
 mod output;
 mod package_use;
+mod targets;
+
+pub use targets::{TargetAtom, TargetOrigin};
 
 use portage_resolve::{
     bdepend_trim, conflicts, depend_trim, download_size, effective_use, host_copies, installed,
@@ -87,7 +90,9 @@ pub struct DepgraphOutcome {
 
 pub struct DepgraphOpts<'a> {
     pub repo_path: &'a Utf8Path,
-    pub atoms: &'a [String],
+    /// The root targets, each carrying the provenance that decides whether an
+    /// unsatisfiable one aborts the run or just warns (see [`TargetOrigin`]).
+    pub atoms: &'a [TargetAtom],
     pub arch: &'a Arch,
     pub format: DepgraphFormat,
     pub verbose: u8,
@@ -402,25 +407,26 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             .insert(slot_key, e.version.clone());
     }
 
+    let target_policy = repo::ResolvePolicy {
+        accept_keywords: &accept_keywords,
+        package_mask: &package_mask,
+        package_unmask: &package_unmask,
+        accept_licenses: &accept_licenses,
+        pre_env: &pre_env,
+        env_use: &env_use,
+        package_use: &package_use,
+        force_mask: &force_mask,
+    };
     let mut root_deps = Vec::new();
     let mut root_cpns: std::collections::HashSet<Cpn> = std::collections::HashSet::new();
+    // Root targets with no acceptable candidate, dropped from the solve and
+    // reported after the plan (world-family provenance only — anything else is
+    // fatal below).
+    let mut unsatisfiable: Vec<output::UnsatisfiableTarget> = Vec::new();
     for target in atoms {
-        let dep = Dep::parse(target).map_err(|e| anyhow::anyhow!("bad atom '{target}': {e}"))?;
-        root_cpns.insert(dep.cpn);
-        let pkg = repo::target_package(
-            &data,
-            &dep,
-            &repo::ResolvePolicy {
-                accept_keywords: &accept_keywords,
-                package_mask: &package_mask,
-                package_unmask: &package_unmask,
-                accept_licenses: &accept_licenses,
-                pre_env: &pre_env,
-                env_use: &env_use,
-                package_use: &package_use,
-                force_mask: &force_mask,
-            },
-        );
+        let atom = &target.atom;
+        let dep = Dep::parse(atom).map_err(|e| anyhow::anyhow!("bad atom '{atom}': {e}"))?;
+        let pkg = repo::target_package(&data, &dep, &target_policy);
         let vs = match &dep.version {
             Some(v) => {
                 let op = dep.op.unwrap_or(Operator::GreaterOrEqual);
@@ -428,13 +434,45 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             }
             None => PortageVersionSet::any(),
         };
-        if !data.versions.contains_key(&dep.cpn) {
-            anyhow::bail!(
-                "no ebuilds found for '{target}' (searched ::{}{})",
-                data.repo_name,
-                if multi_repo { " and overlays" } else { "" },
-            );
+        // `target_package` hands back an unslotted package when nothing the atom
+        // matches survives keyword/mask/license filtering — an identity the
+        // provider never registers, so leaving it in `root_deps` turns into an
+        // opaque solver failure. Classify it here instead, the way portage does
+        // in argument processing.
+        if pkg.slot().is_none() {
+            // `filter_reasons_for` applies the version range only, so the atom's
+            // slot qualifier is re-applied here — `cat/pkg:6.18.12` must not
+            // report the unrelated slots' versions as its masked candidates.
+            let reasons: Vec<_> = repo::filter_reasons_for(&data, &dep.cpn, &vs, &target_policy)
+                .into_iter()
+                .filter(|c| {
+                    let slot = c.slot;
+                    dep.matches_cpv(&c.cpv, slot.as_ref().map(|s| s.as_str()))
+                })
+                .collect();
+            let problem = if reasons.is_empty() {
+                targets::TargetProblem::NoEbuilds
+            } else {
+                targets::TargetProblem::AllFiltered
+            };
+            let unsat = output::UnsatisfiableTarget {
+                atom: atom.clone(),
+                problem,
+                reasons,
+            };
+            match targets::classify_root_target(&target.origin) {
+                targets::RootTargetDecision::DropWithWarning => {
+                    unsatisfiable.push(unsat);
+                    continue;
+                }
+                targets::RootTargetDecision::Fatal => {
+                    anyhow::bail!(output::unsatisfiable_target_message(
+                        &unsat, &data, multi_repo
+                    ));
+                }
+            }
         }
+        root_cpns.insert(dep.cpn);
         root_deps.push((pkg, vs));
     }
 
@@ -1034,9 +1072,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let use_change_entries = {
         let mut combined: Vec<_> = applied_reqs;
         combined.extend(provider.use_flag_requirements().to_vec());
+        let root_atoms: Vec<String> = atoms.iter().map(|t| t.atom.clone()).collect();
         let entries = package_use::build_entries(
             &combined,
-            atoms,
+            &root_atoms,
             &edges,
             &pre_env,
             &env_use,
@@ -1174,6 +1213,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         }
 
         package_use::report(&use_change_entries);
+
+        // World-family targets nothing acceptable satisfies. Advisory: emerge
+        // keeps going and exits 0 for these, so they stay out of `exit_code`.
+        if !unsatisfiable.is_empty() {
+            output::report_unsatisfiable_targets(&unsatisfiable, &data);
+        }
     }
 
     // The merge plan for the build loop: ebuild paths come from the package's

@@ -56,7 +56,7 @@ pub(super) const C_STATUS_R: Style = Style::new()
     .effects(Effects::BOLD);
 
 use super::installed::action_tag;
-use super::repo::{RepoData, find_cache};
+use super::repo::{FilterReason, RepoData, find_cache};
 
 pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict]) {
     use std::collections::BTreeMap;
@@ -133,6 +133,121 @@ pub(super) fn report_solver_violations(violations: &[portage_atom_pubgrub::Error
         for e in repos {
             if let Error::RepoConstraintConflict(pkg, msg) = e {
                 writeln!(out, "  {C_PKG}{pkg}{C_PKG:#}: {msg}").ok();
+            }
+        }
+    }
+}
+
+/// A root target no acceptable ebuild satisfies.
+pub(super) struct UnsatisfiableTarget {
+    /// The atom as written.
+    pub atom: String,
+    /// Whether the tree has matching-but-filtered versions, or none at all.
+    pub problem: super::targets::TargetProblem,
+    /// The matching versions and why each was filtered out. Empty for
+    /// [`TargetProblem::NoEbuilds`](super::targets::TargetProblem::NoEbuilds).
+    pub reasons: Vec<super::repo::AutounmaskCandidate>,
+}
+
+/// Portage's `(masked by: …)` parenthetical for one filtered version.
+fn masked_by(reasons: &[FilterReason]) -> String {
+    let parts: Vec<String> = reasons
+        .iter()
+        .map(|r| match r {
+            // `keyword_needed` reports `**` when the arch has no keyword at all.
+            FilterReason::Keyword(kw) if kw == "**" => "missing keyword".to_string(),
+            FilterReason::Keyword(kw) => format!("{kw} keyword"),
+            FilterReason::Masked => "package.mask".to_string(),
+            FilterReason::License(l) => format!("{} license(s)", l.join(" ")),
+        })
+        .collect();
+    parts.join(", ")
+}
+
+/// The candidate lines under an "all ebuilds … have been masked" header.
+fn masked_candidates(target: &UnsatisfiableTarget, data: &RepoData) -> Vec<String> {
+    target
+        .reasons
+        .iter()
+        .map(|c| {
+            format!(
+                "- {}-{}::{} (masked by: {})",
+                c.cpv.cpn,
+                c.cpv.version,
+                super::repo::repo_name_of(data, &c.cpv),
+                masked_by(&c.reasons)
+            )
+        })
+        .collect()
+}
+
+/// The fatal message for a root target that cannot be satisfied — an explicit
+/// atom, or a member of a user-defined set (portage's `_resolve` only spares
+/// the `@selected`/`@system`/`@world` family).
+pub(super) fn unsatisfiable_target_message(
+    target: &UnsatisfiableTarget,
+    data: &RepoData,
+    multi_repo: bool,
+) -> String {
+    use super::targets::TargetProblem;
+    let atom = &target.atom;
+    match target.problem {
+        TargetProblem::NoEbuilds => format!(
+            "no ebuilds found for '{atom}' (searched ::{}{})",
+            data.repo_name,
+            if multi_repo { " and overlays" } else { "" },
+        ),
+        TargetProblem::AllFiltered => {
+            let mut msg = format!(
+                "all ebuilds that could satisfy '{atom}' have been masked.\n\
+                 one of the following masked packages is required to complete your request:"
+            );
+            for line in masked_candidates(target, data) {
+                msg.push_str("\n  ");
+                msg.push_str(&line);
+            }
+            msg
+        }
+    }
+}
+
+/// Report the world-family root targets dropped from the solve because nothing
+/// acceptable satisfies them. Advisory only — the plan still stands and the run
+/// still exits 0, matching emerge.
+pub(super) fn report_unsatisfiable_targets(targets: &[UnsatisfiableTarget], data: &RepoData) {
+    use super::targets::TargetProblem;
+    let mut out = anstream::stderr();
+    let atoms: Vec<&str> = targets.iter().map(|t| t.atom.as_str()).collect();
+    writeln!(
+        out,
+        "\n{C_OFF}!!!{C_OFF:#} Ebuilds for the following packages are either all\n\
+         {C_OFF}!!!{C_OFF:#} masked or don't exist:\n{C_PKG}{}{C_PKG:#}",
+        atoms.join(" ")
+    )
+    .ok();
+    for t in targets {
+        match t.problem {
+            TargetProblem::NoEbuilds => {
+                writeln!(
+                    out,
+                    "\nem: there are no ebuilds to satisfy \"{C_PKG}{}{C_PKG:#}\".",
+                    t.atom
+                )
+                .ok();
+            }
+            TargetProblem::AllFiltered => {
+                writeln!(
+                    out,
+                    "\n{C_OFF}!!!{C_OFF:#} All ebuilds that could satisfy \
+                     \"{C_PKG}{}{C_PKG:#}\" have been masked.\n\
+                     {C_OFF}!!!{C_OFF:#} One of the following masked packages is required \
+                     to complete your request:",
+                    t.atom
+                )
+                .ok();
+                for line in masked_candidates(t, data) {
+                    writeln!(out, "{line}").ok();
+                }
             }
         }
     }

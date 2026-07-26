@@ -741,7 +741,9 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
     let host_roots = globals.broot();
     let outcome = crate::query::depgraph::depgraph(crate::query::depgraph::DepgraphOpts {
         repo_path: Utf8Path::new(&repo_path_str),
-        atoms: &["sys-devel/gcc".to_string()],
+        atoms: &[crate::query::depgraph::TargetAtom::explicit(
+            "sys-devel/gcc",
+        )],
         arch: &globals.arch,
         format: crate::cli::DepgraphFormat::Pretty,
         verbose: 0,

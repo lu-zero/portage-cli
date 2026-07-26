@@ -1132,6 +1132,63 @@ pub fn find_cache<'a>(
         .map(|(_, e)| e)
 }
 
+/// Every version of `cpn` within `version_set` that the policy excludes, with
+/// the reasons (keyword / mask / license). Versions that pass every filter are
+/// absent, so an empty result means the atom is satisfiable.
+pub fn filter_reasons_for(
+    data: &RepoData,
+    cpn: &Cpn,
+    version_set: &portage_atom_pubgrub::PortageVersionSet,
+    policy: &ResolvePolicy,
+) -> Vec<AutounmaskCandidate> {
+    let Some(entries) = data.versions.get(cpn) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for (cpv, cache) in entries {
+        if !version_set.contains(&cpv.version) {
+            continue;
+        }
+        let meta = &cache.metadata;
+        let slot = Some(meta.slot.slot);
+
+        let mut reasons = Vec::new();
+
+        if let Some(kw) = policy
+            .accept_keywords
+            .keyword_needed(&meta.keywords, cpv, slot)
+        {
+            reasons.push(FilterReason::Keyword(kw));
+        }
+        if is_masked(policy.package_mask, policy.package_unmask, cpv, &meta.slot) {
+            reasons.push(FilterReason::Masked);
+        }
+        if let Some(lic) = &meta.license {
+            let accept = policy.accept_licenses.effective_for(cpv, slot);
+            // Evaluate `use? ( … )` branches against the version's effective
+            // USE so a non-FREE license behind a disabled flag is not flagged.
+            let needed = if license_has_conditional(lic) {
+                let cfg = effective_use_config(policy, cpv, meta, slot);
+                licenses_needed(lic, &accept, &use_predicate(&cfg))
+            } else {
+                licenses_needed(lic, &accept, &|_| false)
+            };
+            if !needed.is_empty() {
+                reasons.push(FilterReason::License(needed));
+            }
+        }
+
+        if !reasons.is_empty() {
+            candidates.push(AutounmaskCandidate {
+                cpv: cpv.clone(),
+                slot,
+                reasons,
+            });
+        }
+    }
+    candidates
+}
+
 /// For each dropped dep, find versions in the unfiltered repo that match its
 /// version range and determine why they were excluded.
 pub fn find_autounmask_candidates(
@@ -1150,52 +1207,12 @@ pub fn find_autounmask_candidates(
         if !dep.alternatives.is_empty() {
             continue;
         }
-        let cpn = dep.package.cpn();
-        let Some(entries) = data.versions.get(cpn) else {
-            continue;
-        };
-
-        for (cpv, cache) in entries {
-            if !dep.version_set.contains(&cpv.version) {
-                continue;
-            }
-            let meta = &cache.metadata;
-            let slot = Some(meta.slot.slot);
-
-            let mut reasons = Vec::new();
-
-            if let Some(kw) = policy
-                .accept_keywords
-                .keyword_needed(&meta.keywords, cpv, slot)
-            {
-                reasons.push(FilterReason::Keyword(kw));
-            }
-            if is_masked(policy.package_mask, policy.package_unmask, cpv, &meta.slot) {
-                reasons.push(FilterReason::Masked);
-            }
-            if let Some(lic) = &meta.license {
-                let accept = policy.accept_licenses.effective_for(cpv, slot);
-                // Evaluate `use? ( … )` branches against the version's effective
-                // USE so a non-FREE license behind a disabled flag is not flagged.
-                let needed = if license_has_conditional(lic) {
-                    let cfg = effective_use_config(policy, cpv, meta, slot);
-                    licenses_needed(lic, &accept, &use_predicate(&cfg))
-                } else {
-                    licenses_needed(lic, &accept, &|_| false)
-                };
-                if !needed.is_empty() {
-                    reasons.push(FilterReason::License(needed));
-                }
-            }
-
-            if !reasons.is_empty() {
-                candidates.push(AutounmaskCandidate {
-                    cpv: cpv.clone(),
-                    slot,
-                    reasons,
-                });
-            }
-        }
+        candidates.extend(filter_reasons_for(
+            data,
+            dep.package.cpn(),
+            &dep.version_set,
+            policy,
+        ));
     }
 
     // A CPV may appear from multiple DroppedDep entries; its reasons are
@@ -1509,6 +1526,122 @@ mod tests {
         // version glob picks the matching slot, not the newest
         assert_eq!(slot("=dev-lang/python-3.13*").as_deref(), Some("3.13"));
         assert_eq!(slot("=dev-lang/python-3.14*").as_deref(), Some("3.14"));
+    }
+
+    #[test]
+    fn filter_reasons_report_every_excluded_candidate() {
+        let data = repo_with_many(&[
+            (
+                "app-misc/thing-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+            (
+                "app-misc/thing-2.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=~arm64\nDESCRIPTION=t\n",
+            ),
+            (
+                "app-misc/thing-3.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=arm64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let arch = Arch::intern("arm64");
+        let ak = AcceptKeywords::from_global(&arch, &["arm64"]);
+        let cpn = Cpn::try_new("app-misc/thing").expect("cpn parses");
+        let mask = vec![dep("=app-misc/thing-3.0")];
+        let policy = ResolvePolicy {
+            accept_keywords: &ak,
+            package_mask: &mask,
+            package_unmask: &[],
+            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &ForceMask::default(),
+        };
+        let found = filter_reasons_for(
+            &data,
+            &cpn,
+            &portage_atom_pubgrub::PortageVersionSet::any(),
+            &policy,
+        );
+        let reason_for = |v: &str| {
+            found
+                .iter()
+                .find(|c| c.cpv.version.to_string() == v)
+                .map(|c| c.reasons.clone())
+        };
+        // No arm64 keyword at all ⇒ `**`; testing-only ⇒ `~arm64`.
+        assert!(
+            matches!(reason_for("1.0").as_deref(), Some([FilterReason::Keyword(k)]) if k == "**")
+        );
+        assert!(
+            matches!(reason_for("2.0").as_deref(), Some([FilterReason::Keyword(k)]) if k == "~arm64")
+        );
+        assert!(matches!(
+            reason_for("3.0").as_deref(),
+            Some([FilterReason::Masked])
+        ));
+    }
+
+    #[test]
+    fn filter_reasons_are_empty_when_a_candidate_is_accepted() {
+        let data = repo_with_many(&[(
+            "app-misc/thing-1.0",
+            "EAPI=8\nSLOT=0\nKEYWORDS=arm64\nDESCRIPTION=t\n",
+        )]);
+        let arch = Arch::intern("arm64");
+        let ak = AcceptKeywords::from_global(&arch, &["arm64"]);
+        let policy = ResolvePolicy {
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &ForceMask::default(),
+        };
+        let vs = portage_atom_pubgrub::PortageVersionSet::any();
+        let cpn = Cpn::try_new("app-misc/thing").expect("cpn parses");
+        assert!(filter_reasons_for(&data, &cpn, &vs, &policy).is_empty());
+        // An unknown CPN has nothing to report either.
+        let absent = Cpn::try_new("app-misc/absent").expect("cpn parses");
+        assert!(filter_reasons_for(&data, &absent, &vs, &policy).is_empty());
+    }
+
+    /// `target_package`'s unslotted return is the caller's signal that nothing
+    /// acceptable satisfies the atom — for a filtered-out candidate and for a
+    /// CPN absent from the tree alike.
+    #[test]
+    fn target_package_is_unslotted_when_nothing_is_accepted() {
+        let data = repo_with_many(&[(
+            "app-misc/thing-1.0",
+            "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+        )]);
+        let arch = Arch::intern("arm64");
+        let ak = AcceptKeywords::from_global(&arch, &["arm64"]);
+        let policy = ResolvePolicy {
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &ForceMask::default(),
+        };
+        assert!(
+            target_package(&data, &dep("app-misc/thing"), &policy)
+                .slot()
+                .is_none(),
+            "keyword-filtered candidate"
+        );
+        assert!(
+            target_package(&data, &dep("app-misc/absent"), &policy)
+                .slot()
+                .is_none(),
+            "CPN absent from the tree"
+        );
     }
 
     // A flag forced by use.force must not be ceded to the solver even when it is

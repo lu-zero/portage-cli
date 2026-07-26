@@ -323,7 +323,10 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let repo = crate::repo_open::open(repo_path.as_std_path())?;
             let vdb = open_cli_vdb(globals).ok();
             let parsed = query::resolve_atoms(atom, &repo, vdb.as_ref(), query::ResolveMode::Error);
-            let atoms: Vec<String> = parsed.iter().map(|d| d.to_string()).collect();
+            let atoms: Vec<query::depgraph::TargetAtom> = parsed
+                .iter()
+                .map(|d| query::depgraph::TargetAtom::explicit(d.to_string()))
+                .collect();
             if atoms.is_empty() {
                 bail!("equery depgraph: no valid atoms");
             }

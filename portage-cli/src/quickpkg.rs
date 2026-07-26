@@ -47,7 +47,12 @@ async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
     std::fs::create_dir_all(pkgdir.as_std_path())
         .with_context(|| format!("creating PKGDIR {pkgdir}"))?;
 
-    let expanded = expand_sets(&opts.atoms, roots.config(), merge_root);
+    // quickpkg operates on the installed set only — set provenance carries no
+    // meaning here, so the expansion is flattened straight back to atoms.
+    let expanded: Vec<String> = expand_sets(&opts.atoms, roots.config(), merge_root)
+        .into_iter()
+        .map(|t| t.atom)
+        .collect();
     let protect = ConfigProtectLists::load(globals).await;
 
     let mut successes: Vec<(String, u64)> = Vec::new();
