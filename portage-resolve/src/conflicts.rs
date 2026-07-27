@@ -8,12 +8,16 @@ use crate::installed::VdbEntry;
 
 /// An interned slot name (`None` = unslotted). Interned handles are cheap to
 /// copy and compare, so the whole conflict check stays handle-based.
-type Slot = Option<Interned<DefaultInterner>>;
+pub type Slot = Option<Interned<DefaultInterner>>;
 
 /// A constraint violated by the proposed solution.
 pub struct Conflict {
     /// The installed package whose dep is violated.
     pub installed_cpn: Cpn,
+    /// The installed package's slot — needed to re-target it as a
+    /// [`portage_atom_pubgrub::PortagePackage`] root dep when repairing a
+    /// broken chain (see [`retained_owners`]).
+    pub slot: Slot,
     /// The installed package's version.
     pub installed_ver: Version,
     /// The dep atom that is not satisfied.
@@ -90,6 +94,7 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
         let slot = entry.slot.as_deref().map(Interned::intern);
         let owner_replaced_by = replaced.get(&(entry.cpn, slot)).map(|v| (*v).clone());
         collect_violations(
+            slot,
             &evaluated,
             entry,
             owner_replaced_by.as_ref(),
@@ -99,6 +104,17 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
         );
     }
     conflicts
+}
+
+/// Conflicts whose owner is *retained* — genuine breakage, not a stale
+/// constraint that will disappear because its owner is itself replaced in
+/// this run (see [`Conflict::owner_replaced_by`]). This is the set a
+/// chain-completion repair loop should act on: each one names an installed
+/// package (`installed_cpn`/`slot`) worth pulling into the plan as an
+/// upgrade/rebuild target so its violated dep is satisfied instead of merely
+/// reported.
+pub fn retained_owners(conflicts: &[Conflict]) -> impl Iterator<Item = &Conflict> {
+    conflicts.iter().filter(|c| c.owner_replaced_by.is_none())
 }
 
 /// True if any package present after the plan satisfies `dep` (name, slot and
@@ -113,6 +129,7 @@ fn dep_satisfied(dep: &Dep, present: &HashMap<Cpn, Vec<(Slot, Cpv)>>) -> bool {
 }
 
 fn collect_violations(
+    slot: Slot,
     entries: &[DepEntry],
     owner: &VdbEntry,
     owner_replaced_by: Option<&Version>,
@@ -137,6 +154,7 @@ fn collect_violations(
                     if let Some(proposed_ver) = proposed_ver {
                         out.push(Conflict {
                             installed_cpn: owner.cpn,
+                            slot,
                             installed_ver: owner.version.clone(),
                             dep: dep.clone(),
                             proposed_ver,
@@ -152,7 +170,15 @@ fn collect_violations(
                 // unsatisfied branch that names a touched package is reported.
                 // Coarser than full group semantics, but previously these
                 // groups were ignored entirely.
-                collect_violations(children, owner, owner_replaced_by, touched, present, out);
+                collect_violations(
+                    slot,
+                    children,
+                    owner,
+                    owner_replaced_by,
+                    touched,
+                    present,
+                    out,
+                );
             }
             // AnyOf: a conflict only exists if ALL alternatives are violated.
             DepEntry::AnyOf(children) => {
@@ -161,6 +187,7 @@ fn collect_violations(
                     .map(|child| {
                         let mut v = Vec::new();
                         collect_violations(
+                            slot,
                             std::slice::from_ref(child),
                             owner,
                             owner_replaced_by,
@@ -335,5 +362,39 @@ mod tests {
         ];
         let plan = vec![proposed("llvm-core/llvm", "22", "22.1.8")];
         assert!(find_conflicts(&installed, &plan).is_empty());
+    }
+
+    /// `retained_owners` is the repair-loop trigger: a stale (owner-replaced)
+    /// conflict must not appear, but a genuinely retained owner must, carrying
+    /// its slot so the loop can re-target it.
+    #[test]
+    fn retained_owners_filters_out_stale_conflicts_and_keeps_the_slot() {
+        let installed = vec![
+            entry(
+                "llvm-core/clang",
+                "22",
+                "22.1.6",
+                &["~llvm-core/llvm-22.1.6"],
+            ),
+            entry(
+                "llvm-core/lldb",
+                "22",
+                "22.1.6",
+                &["~llvm-core/llvm-22.1.6"],
+            ),
+        ];
+        let plan = vec![
+            proposed("llvm-core/llvm", "22", "22.1.8"),
+            proposed("llvm-core/clang", "22", "22.1.8"),
+        ];
+        let conflicts = find_conflicts(&installed, &plan);
+        assert_eq!(conflicts.len(), 2);
+        let retained: Vec<_> = retained_owners(&conflicts).collect();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].installed_cpn.package.as_str(), "lldb");
+        assert_eq!(
+            retained[0].slot.map(|s| s.to_string()),
+            Some("22".to_owned())
+        );
     }
 }

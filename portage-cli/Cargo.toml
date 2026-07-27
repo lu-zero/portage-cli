@@ -54,6 +54,7 @@ ldconfig = { workspace = true }
 gentoo-core = { workspace = true }
 portage-atom = { workspace = true }
 portage-atom-pubgrub = { workspace = true }
+pubgrub = { workspace = true }
 portage-metadata = { workspace = true }
 portage-repo = { workspace = true }
 portage-resolve = { workspace = true }

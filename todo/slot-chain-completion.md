@@ -1,7 +1,14 @@
 # Finish the update chain instead of stopping halfway
 
-STATUS: **found 2026-07-26 comparing `em -tpuD rust` vs `emerge -tpuD rust`;
-reframed the same day (see "Direction"); nothing implemented.**
+STATUS: **landed 2026-07-27, behind `--complete-graph` (default off).** Found
+2026-07-26 comparing `em -tpuD rust` vs `emerge -tpuD rust`; reframed the same
+day (see "Direction"). `em -tpuD --complete-graph rust` now pulls
+`llvm-core/lldb-22.1.6 → 22.1.8` into the plan and reports
+`>>> --complete-graph: completed the update chain by also pulling in
+llvm-core/lldb` instead of a bare conflict — live-verified below. The
+"upgrade reverted" half of item 3 in "Landing sequence" and item 4 (unifying
+with `subslot::find_rebuilds`) are deliberately **not** part of this pass —
+see "What shipped" for the reasoning and what's still open.
 
 ## Symptom
 
@@ -240,28 +247,56 @@ tickets.
 0. ✅ **[[md5-cache-blind-spot]]** — landed 2026-07-26; removed the
    docutils/sphinx case from this ticket entirely, as predicted. Only the
    llvm/lldb case remains.
-1. Add `slot` to `Conflict` + a `retained_owners()` accessor. Pure unit test.
-2. The repair loop, gated `complete_graph && update && !empty`, cap 3,
+1. ✅ Add `slot` to `Conflict` + a `retained_owners()` accessor. Unit test
+   `retained_owners_filters_out_stale_conflicts_and_keeps_the_slot`
+   (`portage-resolve/src/conflicts.rs`).
+2. ✅ The repair loop, gated `complete_graph && update && !empty`, cap 3,
    discard-on-failure, targets kept out of `root_cpns`/`root_pkgs`/`Fatal`.
-   Target derivation is unit-testable; convergence is live-only. Regression
-   gate: with the flag off, `em -pu @world` stays 73 and `em -p @world` stays
-   181 — the flag makes this trivially provable, since every existing
-   invocation takes the old path unchanged.
-3. Report both directions: "pulled in to complete the update chain" **and**
-   "chain could not complete, upgrade reverted".
-4. Unify `find_conflicts` with `subslot::find_rebuilds` so USE-dep and subslot
-   breakage feed one loop. Only then is `sphinx-rtd-theme`-class parity reachable.
+   Landed as `depgraph()`'s whole solve→order→conflicts pipeline factored into
+   a `solve_round` closure returning a `RoundOutcome`, called once, then in a
+   loop while `--complete-graph` finds new retained-owner conflicts (capped at
+   3, one round deep for the llvm/lldb case as predicted). Regression gate
+   confirmed live: with the flag off, `em -pu @world` stays 74 and
+   `em -p @world` stays 181 (unchanged from [[selective-resolution]]'s
+   baseline) — the flag makes this trivially provable, since every existing
+   invocation takes the identical single-round path.
+3. 🟡 **Partial.** "Pulled in to complete the update chain" is reported
+   (`>>> --complete-graph: completed the update chain by also pulling in
+   <cpn>`), as is the discard-on-failure case (`>>> --complete-graph: could
+   not extend the chain to include <cpn> — leaving the plan as computed`).
+   **Not implemented**: the specific "upgrade reverted" wording for the case
+   where PubGrub backtracks the mover (e.g. `llvm`) back down to its installed
+   version rather than erroring outright — that path is currently
+   indistinguishable from "nothing needed repair" (both leave
+   `repair_completed`/`repair_incomplete` empty). Detecting it needs comparing
+   a mover's planned version before vs. after adding the repair target, which
+   wasn't attempted this pass — file as a follow-up if it's seen in practice.
+4. 🔴 Not done. Unify `find_conflicts` with `subslot::find_rebuilds` so
+   USE-dep and subslot breakage feed one loop. Still needed for
+   `sphinx-rtd-theme`-class parity (see [[selective-resolution]]'s
+   `dev-python/sphinx-rtd-theme` gap) — orthogonal to the llvm/lldb case this
+   ticket was tracking, which is now closed.
 
-`--complete-graph` stops being a dead flag as of step 2 — see the gating
-section above.
+`--complete-graph` is no longer a dead flag — help text updated
+(`portage-cli/src/cli/merge_flags.rs`) to describe the policy on its own
+terms per [[no-emerge-equivalents-in-help]].
 
 ## Verification
 
-- `em -tpuD rust` pulls `llvm-core/lldb` alongside `llvm`/`clang`, no conflict.
-  **No emerge oracle** for this — see "new policy" above.
-- `em -pu @world` / `-puD @world` row counts must not regress; compare against
-  `emerge -pu --exclude app-containers/incus @world` (182 rows, rc=0). Read the
-  measurement trap in [[selective-resolution]] first — a failing
-  `emerge -p @world` prints the circular-dep subgraph, not the plan.
-- Whole-output diff per [[live-verify-full-pretend-output]], not just the llvm
-  rows.
+- ✅ `em -tpuD rust` without the flag: unchanged, still shows the `lldb` pin as
+  a broken conflict (llvm/clang moved, lldb didn't).
+- ✅ `em -tpuD --complete-graph rust`: plan now includes
+  `llvm-core/lldb-22.1.6 → 22.1.8 (pins llvm-core/clang)` and `(pins
+  llvm-core/llvm)` as resolved-in-plan lines (not conflicts), plus
+  `>>> --complete-graph: completed the update chain by also pulling in
+  llvm-core/lldb`. **No emerge oracle** for this — see "new policy" above.
+- ✅ `em -puD --complete-graph @world`: 301 rows, unchanged from the no-flag
+  run — `lldb` was already a plan member there (world membership already
+  covered it, per the "Bounding" section below), so the loop correctly finds
+  nothing to repair and stays silent.
+- ✅ Row-count regression gate: `em -pu @world` 74, `em -p @world` 181, both
+  flag-off — identical to [[selective-resolution]]'s baseline.
+- ✅ fmt, clippy (workspace, all-targets), full test suite, all green.
+  Timing: `em -p @world` 0.96-0.97s, inside the established 0.97-1.03s spread
+  — the closure/loop restructuring added no measurable overhead on the
+  common (no-repair) path.

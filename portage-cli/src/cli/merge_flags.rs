@@ -138,7 +138,13 @@ pub struct MergeFlags {
     #[arg(long)]
     pub autosolve_use: bool,
 
-    /// Include all dependencies in the graph, not just those needed for the current operation.
+    /// With `-u`/`--update` `-D`/`--deep`: when moving a version-pinned
+    /// family (e.g. upgrading `llvm` pulls `clang` along) would leave a
+    /// retained installed package's pin broken (e.g. `lldb` still pinned to
+    /// the old `llvm`), pull that package into the plan too instead of
+    /// stopping the chain halfway. Off by default: this can revert the
+    /// upgrade instead if the retained package has no version satisfying the
+    /// new pin, which is a policy call worth opting into deliberately.
     #[arg(long)]
     pub complete_graph: bool,
 

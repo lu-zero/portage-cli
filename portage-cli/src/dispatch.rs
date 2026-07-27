@@ -378,6 +378,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 binpkg_index: binpkg_index.as_ref(),
                 exclude: &globals.merge_flags.exclude,
                 resume_completed: std::collections::HashSet::new(),
+                complete_graph: globals.merge_flags.complete_graph,
             })
             .await?;
             if outcome.exit_code != 0 {
