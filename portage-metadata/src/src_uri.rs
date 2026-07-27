@@ -66,7 +66,7 @@ impl SrcUriEntry {
     pub fn parse(input: &str) -> Result<Vec<SrcUriEntry>> {
         parse_src_uri_string
             .parse(input)
-            .map_err(|e| Error::InvalidSrcUri(format!("{e}")))
+            .map_err(|e| Error::InvalidSrcUri(crate::diagnostic::render("SRC_URI", e)))
     }
 
     /// Append the distfile names this entry contributes for a given USE state.
@@ -876,5 +876,41 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn parse_error_is_a_readable_miette_report_not_a_bare_caret_line() {
+        // The actual pentoo dev-util/kaleido-bin-0.2.1 SRC_URI: winnow's own
+        // Display would put the caret under a ~230-char single line, far
+        // enough right it's invisible without horizontal scrolling. The
+        // miette-rendered message must instead show a short code frame with
+        // the caret directly under the offending '{' and a label.
+        let err = SrcUriEntry::parse(
+            "amd64? ( https://github.com/plotly/Kaleido/releases/download/v0.2.1/kaleido_linux_x64.zip -> kaleido-bin-0.2.1.zip ) arm64? ( https://github.com/plotly/Kaleido/releases/download/v{0.2.1}/kaleido_linux_arm64.zip -> kaleido-bin-0.2.1.zip )",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("invalid SRC_URI"));
+        assert!(err.contains('{'));
+        // The message is a short code frame, not the ~230-char raw source.
+        assert!(err.lines().all(|l| l.chars().count() < 200));
+    }
+
+    #[test]
+    fn parse_error_on_a_very_long_source_crops_a_window_around_the_span() {
+        // go-module.eclass's generated SRC_URI can run to a few thousand
+        // characters; without windowing, the "source" miette shows is the
+        // entire value as one unbroken line — the caret ends up thousands
+        // of columns right of anything a terminal shows. Regression for
+        // `diagnostic::windowed`.
+        let mut src = String::new();
+        for i in 0..40 {
+            src.push_str(&format!("https://example.com/mirror{i}/file{i}.tar.gz "));
+        }
+        src.push_str("v{oops}/bad.tar.gz");
+        assert!(src.len() > 500);
+        let err = SrcUriEntry::parse(&src).unwrap_err().to_string();
+        assert!(err.contains('{'));
+        assert!(err.lines().all(|l| l.chars().count() < 200));
     }
 }

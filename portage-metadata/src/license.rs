@@ -51,7 +51,7 @@ impl LicenseExpr {
     pub fn parse(input: &str) -> Result<Self> {
         let entries: Vec<LicenseExpr> = parse_license_string
             .parse(input)
-            .map_err(|e| Error::InvalidLicense(format!("{e}")))?;
+            .map_err(|e| Error::InvalidLicense(crate::diagnostic::render("LICENSE", e)))?;
 
         Ok(match entries.len() {
             0 => LicenseExpr::All(Vec::new()),

@@ -59,7 +59,7 @@ impl RequiredUseExpr {
     pub fn parse(input: &str) -> Result<Self> {
         let entries: Vec<RequiredUseExpr> = parse_required_use_string
             .parse(input)
-            .map_err(|e| Error::InvalidRequiredUse(format!("{e}")))?;
+            .map_err(|e| Error::InvalidRequiredUse(crate::diagnostic::render("REQUIRED_USE", e)))?;
 
         Ok(match entries.len() {
             0 => RequiredUseExpr::All(Vec::new()),

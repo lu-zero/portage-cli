@@ -49,9 +49,9 @@ impl RestrictExpr {
     /// assert_eq!(entries.len(), 1);
     /// ```
     pub fn parse(input: &str) -> Result<Vec<RestrictExpr>> {
-        parse_restrict_string
-            .parse(input)
-            .map_err(|e| Error::InvalidRestrict(format!("{e}")))
+        parse_restrict_string.parse(input).map_err(|e| {
+            Error::InvalidRestrict(crate::diagnostic::render("RESTRICT/PROPERTIES", e))
+        })
     }
 
     /// Collect all plain token values, ignoring USE-conditional structure.

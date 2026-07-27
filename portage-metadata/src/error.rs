@@ -17,20 +17,22 @@ pub enum Error {
     #[error("invalid phase: {0}")]
     InvalidPhase(String),
 
-    /// Invalid SRC_URI expression.
-    #[error("invalid SRC_URI: {0}")]
+    /// Invalid SRC_URI expression. The payload is already a fully-rendered
+    /// miette diagnostic (see `diagnostic::render`), headline included — no
+    /// extra prefix here, or it would be duplicated.
+    #[error("{0}")]
     InvalidSrcUri(String),
 
-    /// Invalid LICENSE expression.
-    #[error("invalid LICENSE: {0}")]
+    /// Invalid LICENSE expression. See [`Error::InvalidSrcUri`]'s doc.
+    #[error("{0}")]
     InvalidLicense(String),
 
-    /// Invalid REQUIRED_USE expression.
-    #[error("invalid REQUIRED_USE: {0}")]
+    /// Invalid REQUIRED_USE expression. See [`Error::InvalidSrcUri`]'s doc.
+    #[error("{0}")]
     InvalidRequiredUse(String),
 
-    /// Invalid RESTRICT or PROPERTIES expression.
-    #[error("invalid RESTRICT/PROPERTIES: {0}")]
+    /// Invalid RESTRICT or PROPERTIES expression. See [`Error::InvalidSrcUri`]'s doc.
+    #[error("{0}")]
     InvalidRestrict(String),
 
     /// Error parsing a metadata cache entry.

@@ -62,6 +62,9 @@ toml = "0.8"
 symbol_table = { version = "0.5", features = ["global"] }
 tempfile = "3"
 thiserror = "2"
+# Matches the version brush-parser (already in this workspace's dependency
+# graph) pins, so this doesn't pull in a second miette version to resolve.
+miette = { version = "7.6.0", default-features = false, features = ["derive", "fancy"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 winnow = { version = "1.0", features = ["ascii"] }
 bzip2 = "0.4"

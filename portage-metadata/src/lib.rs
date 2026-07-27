@@ -33,6 +33,7 @@
 #![warn(missing_docs)]
 
 mod cache;
+mod diagnostic;
 mod eapi;
 mod error;
 mod iuse;
