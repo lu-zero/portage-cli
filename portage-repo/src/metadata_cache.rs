@@ -33,10 +33,11 @@ pub trait MetadataCache: Send + Sync {
 
 /// Directory-backed cache: `<root>/<category>/<PN>-<PVR>`.
 ///
-/// [`is_populated`] is sticky: an empty secondary is probed once (one
-/// `read_dir`), then skipped for the rest of the process so primary-miss
-/// paths do not pay a per-CPV `openat` ENOENT into an unused user cache.
-/// [`put`] marks the store non-empty so later reads hit the new files.
+/// [`MetadataCache::is_populated`] is sticky: an empty secondary is probed
+/// once (one `read_dir`), then skipped for the rest of the process so
+/// primary-miss paths do not pay a per-CPV `openat` ENOENT into an unused
+/// user cache. [`MetadataCache::put`] marks the store non-empty so later
+/// reads hit the new files.
 #[derive(Debug)]
 pub struct DirMetadataCache {
     root: Utf8PathBuf,

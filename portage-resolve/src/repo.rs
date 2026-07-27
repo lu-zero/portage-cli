@@ -563,7 +563,7 @@ pub struct Adapter<'a> {
     pub accept_licenses: &'a AcceptLicenses,
     /// USE folded up through `make.conf` (profile make.defaults + extra
     /// confs) — everything below the `package.use`/`env` layers in portage's
-    /// real fold order. Pre-parsed [`UseLayer`]; combined with `env_use` and
+    /// real fold order. Pre-parsed [`portage_atom_pubgrub::UseLayer`]; combined with `env_use` and
     /// per-version `package.use` + IUSE defaults by `desired_use`.
     pub pre_env: &'a portage_atom_pubgrub::UseLayer,
     /// Process-environment USE layer — highest priority, applied after
