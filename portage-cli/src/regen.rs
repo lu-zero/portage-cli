@@ -95,14 +95,37 @@ pub async fn run(
             source: SourceOpts { jobs, dedup },
             write,
         };
-        let stats = regen_cache(&repo, &masters, ebuilds, &opts, |done, total| {
-            eprint!("\r[{done}/{total}]");
-        })
+        let stats = regen_cache(
+            &repo,
+            &masters,
+            ebuilds,
+            &opts,
+            |done, total| {
+                eprint!("\r[{done}/{total}]");
+            },
+            // `regen_cache` only ever emits a short `tracing::error!` itself
+            // (the structured "something happened" signal); rendering a
+            // rich miette code frame — including the color decision — is
+            // ours to make here, not the library's.
+            |_ebuild, e| {
+                if let Some(diag) = e.parse_diagnostic() {
+                    eprintln!("{}", diag.render());
+                }
+            },
+        )
         .await
         .context("regen")?;
         eprintln!();
         if stats.errors > 0 {
-            eprintln!("::{}: {} sourcing errors", repo.name(), stats.errors);
+            // Each error already printed its own rich diagnostic above (see
+            // the `on_error` callback just above) — this per-repo count
+            // only adds information when there's more than one target to
+            // attribute it to. With a single target it would just restate
+            // the same count a second time before the final bail restates
+            // it a third.
+            if targets.len() > 1 {
+                eprintln!("::{}: {} sourcing errors", repo.name(), stats.errors);
+            }
             total_errors += stats.errors;
         }
     }

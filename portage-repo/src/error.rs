@@ -28,9 +28,12 @@ pub enum Error {
     #[error("atom parse error: {0}")]
     Atom(#[from] portage_atom::Error),
 
-    /// Error from the metadata cache parser.
+    /// Error from the metadata cache parser. Kept structured (not
+    /// stringified) so a `SRC_URI`/`LICENSE`/etc. parse failure's
+    /// [`portage_metadata::ParseDiagnostic`] survives to whatever actually
+    /// displays this error — see [`Error::parse_diagnostic`].
     #[error("metadata error: {0}")]
-    Metadata(String),
+    Metadata(#[from] portage_metadata::Error),
 
     /// Invalid profile directory or contents.
     #[error("invalid profile: {0}")]
@@ -58,9 +61,16 @@ pub enum Error {
     BuilderMissingSecondary,
 }
 
-impl From<portage_metadata::Error> for Error {
-    fn from(e: portage_metadata::Error) -> Self {
-        Error::Metadata(e.to_string())
+impl Error {
+    /// The structured parse diagnostic behind this error, if it wraps one of
+    /// portage-metadata's four grammar-parse variants. Call
+    /// [`portage_metadata::ParseDiagnostic::render`] on the result for the
+    /// full miette code frame, at the point of actually displaying it.
+    pub fn parse_diagnostic(&self) -> Option<&portage_metadata::ParseDiagnostic> {
+        match self {
+            Error::Metadata(e) => e.parse_diagnostic(),
+            _ => None,
+        }
     }
 }
 

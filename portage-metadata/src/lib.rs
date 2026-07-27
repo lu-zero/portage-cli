@@ -47,6 +47,7 @@ mod src_uri;
 
 // Re-export public types
 pub use cache::{CacheEntry, RawCacheEntry};
+pub use diagnostic::ParseDiagnostic;
 pub use eapi::Eapi;
 pub use error::{Error, Result};
 pub use iuse::{IUse, IUseDefault};

@@ -123,9 +123,20 @@ async fn main() {
             .unwrap_or(portage_repo::RegenWriteTarget::None),
     };
 
-    let stats = match regen_cache(&repo, &[], ebuilds, &opts, |done, total| {
-        eprint!("\r[{done}/{total}]");
-    })
+    let stats = match regen_cache(
+        &repo,
+        &[],
+        ebuilds,
+        &opts,
+        |done, total| {
+            eprint!("\r[{done}/{total}]");
+        },
+        |_ebuild, e| {
+            if let Some(diag) = e.parse_diagnostic() {
+                eprintln!("{}", diag.render());
+            }
+        },
+    )
     .await
     {
         Ok(s) => s,

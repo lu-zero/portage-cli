@@ -1,27 +1,47 @@
-//! Renders a winnow parse failure through miette, highlighting the exact
-//! byte span where parsing stopped in its surrounding context — instead of
-//! winnow's own bare-caret `Display`, which becomes unreadable once the
-//! source is long (a `mirror://` `SRC_URI` with dozens of entries, say):
-//! the caret sits under a single unbroken line, invisible once it scrolls
-//! off-screen.
+//! A structured winnow parse failure, kept structured rather than rendered
+//! to a string at parse time — so the miette code frame is built exactly
+//! once, at the point something actually displays the error, with a color
+//! decision made fresh at *that* point.
+//!
+//! Rendering eagerly (at parse time, deep in this crate) and carrying the
+//! result as a plain `String` through however many `Display` hops the
+//! wrapping error types add on the way to a terminal is how a previous
+//! version of this went wrong live: the pre-rendered ANSI bytes reached
+//! `tracing::error!` intact, but the text that actually reached the PTY
+//! afterwards was corrupted into literal `\x1b[...]` — the exact wrapping
+//! path responsible was never conclusively found, and didn't need to be:
+//! rendering lazily, right before display, sidesteps the whole class of
+//! "mangled somewhere in transit" bugs by never handing a pre-rendered
+//! string to anything in between.
 //!
 //! `miette` is already in this workspace's dependency graph (`brush-parser`
 //! depends on it for its own diagnostics), so this adds no new crate to
-//! resolve — just a small local bridge from `winnow::error::ParseError` to
-//! `miette::Diagnostic`.
+//! resolve.
 
 use miette::Diagnostic;
 
-#[derive(Debug, thiserror::Error, Diagnostic)]
-#[error("{message}")]
-struct WinnowDiagnostic {
-    message: String,
+/// A structured `SRC_URI`/`LICENSE`/`REQUIRED_USE`/`RESTRICT` parse failure.
+/// `Display` gives a short one-line summary (safe to use anywhere an
+/// ordinary error is expected — log lines, `anyhow` chains, ...); call
+/// [`ParseDiagnostic::render`] explicitly to get the full miette code frame,
+/// at the point something is actually about to show it to a user.
+#[derive(Debug, Clone, PartialEq, Eq, Diagnostic)]
+pub struct ParseDiagnostic {
+    what: &'static str,
     #[source_code]
     src: String,
     #[label("{label}")]
     span: miette::SourceSpan,
     label: String,
 }
+
+impl std::fmt::Display for ParseDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid {}", self.what)
+    }
+}
+
+impl std::error::Error for ParseDiagnostic {}
 
 /// Roughly how much source text to keep on each side of the failing span.
 /// SRC_URI/LICENSE/etc. values are whitespace-separated token soup with no
@@ -65,42 +85,53 @@ fn windowed(src: &str, span: std::ops::Range<usize>) -> (String, std::ops::Range
     (cropped, new_span)
 }
 
-/// Render a winnow parse failure as a miette-formatted string with a code
-/// frame. `what` names the grammar being parsed (e.g. `"SRC_URI"`), used in
-/// the top-line message; the label under the code frame is winnow's own
-/// accumulated context (e.g. a `StrContext::Label` from a `cut_err`), or a
-/// generic fallback when the failing parser pushed no context (most plain
-/// token/URI mismatches don't).
-pub(crate) fn render<E: std::fmt::Display>(
-    what: &str,
-    err: winnow::error::ParseError<&str, E>,
-) -> String {
-    let label = err.inner().to_string();
-    let label = if label.trim().is_empty() {
-        "parsing stopped here".to_string()
-    } else {
-        label
-    };
-    let (src, span) = windowed(err.input(), err.char_span());
-    let diag = WinnowDiagnostic {
-        message: format!("invalid {what}"),
-        src,
-        span: (span.start, span.len()).into(),
-        label,
-    };
-    // Explicitly no color, regardless of what miette's own terminal
-    // detection would decide: this string is built here, far from any
-    // terminal, then carried through `tracing::error!` to a writer this
-    // crate never sees — a second, independent color decision on top of
-    // whatever that writer already makes is how raw ANSI bytes end up
-    // mis-handled (observed live: literal `\x1b[...]` text instead of an
-    // actual color change). Keep the box-drawing/unicode structure, drop
-    // color entirely; this crate has no business deciding that anyway.
-    let handler =
-        miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::unicode_nocolor());
-    let mut out = String::new();
-    handler
-        .render_report(&mut out, &diag)
-        .expect("String's Write impl never fails");
-    out
+impl ParseDiagnostic {
+    /// Build a diagnostic from a winnow parse failure. `what` names the
+    /// grammar being parsed (e.g. `"SRC_URI"`). The label under the code
+    /// frame is winnow's own accumulated context (e.g. a `StrContext::Label`
+    /// from a `cut_err`), or a generic fallback when the failing parser
+    /// pushed no context (most plain token/URI mismatches don't).
+    pub(crate) fn from_winnow<E: std::fmt::Display>(
+        what: &'static str,
+        err: winnow::error::ParseError<&str, E>,
+    ) -> Self {
+        let label = err.inner().to_string();
+        let label = if label.trim().is_empty() {
+            "parsing stopped here".to_string()
+        } else {
+            label
+        };
+        let (src, span) = windowed(err.input(), err.char_span());
+        Self {
+            what,
+            src,
+            span: (span.start, span.len()).into(),
+            label,
+        }
+    }
+
+    /// Render the full miette code frame as a string, deciding color fresh
+    /// right now — not at construction time. `anstream::AutoStream::choice`
+    /// reads the same global `colorchoice` state `colorchoice-clap`'s
+    /// `--color` flag sets (plus `NO_COLOR`/real terminal detection) that
+    /// every other bit of color in this codebase already goes through, so
+    /// this can't disagree with whatever else is printing to the same
+    /// stream at the same time.
+    pub fn render(&self) -> String {
+        let colored = !matches!(
+            anstream::AutoStream::choice(&std::io::stderr()),
+            anstream::ColorChoice::Never
+        );
+        let theme = if colored {
+            miette::GraphicalTheme::unicode()
+        } else {
+            miette::GraphicalTheme::unicode_nocolor()
+        };
+        let handler = miette::GraphicalReportHandler::new_themed(theme);
+        let mut out = String::new();
+        handler
+            .render_report(&mut out, self)
+            .expect("String's Write impl never fails");
+        out
+    }
 }

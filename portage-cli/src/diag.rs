@@ -87,6 +87,17 @@ pub fn init(quiet: bool, verbose: u8, parallel: bool) {
 
     let floor = filter(quiet, verbose, parallel);
 
+    // `with_ansi` defaults to always-on regardless of redirection unless
+    // told otherwise — it does not auto-detect. Read the same global
+    // `colorchoice` state `--color`/`NO_COLOR` set (via `anstream`, already
+    // the source of truth for color everywhere else in this codebase — see
+    // `portage_metadata::diagnostic`'s own use of the identical check) so
+    // this "ERROR" tag agrees with the diagnostics it's printed alongside.
+    let colored = !matches!(
+        anstream::AutoStream::choice(&std::io::stderr()),
+        anstream::ColorChoice::Never
+    );
+
     // Two layers on one registry: console (stderr fmt) + the activity-bus
     // bridge (mirrors info/warn/error onto the current session's bus as
     // ActivityEvent::Diagnostic). Both honour the same level floor.
@@ -94,6 +105,7 @@ pub fn init(quiet: bool, verbose: u8, parallel: bool) {
         .with_writer(std::io::stderr)
         .with_target(false)
         .without_time()
+        .with_ansi(colored)
         .with_filter(floor.clone());
     let bus = crate::activity::BusLayer::new().with_filter(floor);
 

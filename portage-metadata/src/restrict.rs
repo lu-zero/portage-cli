@@ -50,7 +50,10 @@ impl RestrictExpr {
     /// ```
     pub fn parse(input: &str) -> Result<Vec<RestrictExpr>> {
         parse_restrict_string.parse(input).map_err(|e| {
-            Error::InvalidRestrict(crate::diagnostic::render("RESTRICT/PROPERTIES", e))
+            Error::InvalidRestrict(crate::diagnostic::ParseDiagnostic::from_winnow(
+                "RESTRICT/PROPERTIES",
+                e,
+            ))
         })
     }
 

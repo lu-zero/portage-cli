@@ -49,9 +49,11 @@ impl LicenseExpr {
     /// assert!(matches!(expr, LicenseExpr::License(_)));
     /// ```
     pub fn parse(input: &str) -> Result<Self> {
-        let entries: Vec<LicenseExpr> = parse_license_string
-            .parse(input)
-            .map_err(|e| Error::InvalidLicense(crate::diagnostic::render("LICENSE", e)))?;
+        let entries: Vec<LicenseExpr> = parse_license_string.parse(input).map_err(|e| {
+            Error::InvalidLicense(crate::diagnostic::ParseDiagnostic::from_winnow(
+                "LICENSE", e,
+            ))
+        })?;
 
         Ok(match entries.len() {
             0 => LicenseExpr::All(Vec::new()),

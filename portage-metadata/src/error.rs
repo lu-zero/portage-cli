@@ -17,23 +17,23 @@ pub enum Error {
     #[error("invalid phase: {0}")]
     InvalidPhase(String),
 
-    /// Invalid SRC_URI expression. The payload is already a fully-rendered
-    /// miette diagnostic (see `diagnostic::render`), headline included — no
-    /// extra prefix here, or it would be duplicated.
+    /// Invalid SRC_URI expression. Structured (not pre-rendered): call
+    /// [`Error::parse_diagnostic`] to get the miette code frame at the
+    /// point something actually displays this error.
     #[error("{0}")]
-    InvalidSrcUri(String),
+    InvalidSrcUri(crate::diagnostic::ParseDiagnostic),
 
     /// Invalid LICENSE expression. See [`Error::InvalidSrcUri`]'s doc.
     #[error("{0}")]
-    InvalidLicense(String),
+    InvalidLicense(crate::diagnostic::ParseDiagnostic),
 
     /// Invalid REQUIRED_USE expression. See [`Error::InvalidSrcUri`]'s doc.
     #[error("{0}")]
-    InvalidRequiredUse(String),
+    InvalidRequiredUse(crate::diagnostic::ParseDiagnostic),
 
     /// Invalid RESTRICT or PROPERTIES expression. See [`Error::InvalidSrcUri`]'s doc.
     #[error("{0}")]
-    InvalidRestrict(String),
+    InvalidRestrict(crate::diagnostic::ParseDiagnostic),
 
     /// Error parsing a metadata cache entry.
     #[error("invalid cache entry: {0}")]
@@ -50,6 +50,24 @@ pub enum Error {
     /// Invalid SLOT value (does not conform to PMS 3.1.3).
     #[error("invalid SLOT: {0}")]
     InvalidSlot(String),
+}
+
+impl Error {
+    /// The structured parse diagnostic behind this error, if it's one of the
+    /// four grammar variants that carry one. Callers that want the full
+    /// miette code frame (rather than the plain one-line [`Error`]
+    /// [`Display`](std::fmt::Display)) call
+    /// [`ParseDiagnostic::render`](crate::diagnostic::ParseDiagnostic::render)
+    /// on the result, at the point they're actually about to show it.
+    pub fn parse_diagnostic(&self) -> Option<&crate::diagnostic::ParseDiagnostic> {
+        match self {
+            Error::InvalidSrcUri(d)
+            | Error::InvalidLicense(d)
+            | Error::InvalidRequiredUse(d)
+            | Error::InvalidRestrict(d) => Some(d),
+            _ => None,
+        }
+    }
 }
 
 /// Result type for portage-metadata operations.

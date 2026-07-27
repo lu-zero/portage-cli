@@ -60,12 +60,20 @@ pub struct RegenStats {
 /// Source all `ebuilds` and optionally write `md5-cache` files.
 ///
 /// `on_progress(completed, total)` is called after each ebuild finishes.
+/// `on_error(ebuild, error)` is called for each sourcing failure — this
+/// library only ever emits a short `tracing::error!` itself (the structured
+/// "something happened" signal, feeding `-v`/`-q` and the activity bus);
+/// deciding *how to display* the error — including rendering a
+/// [`portage_metadata::Error::parse_diagnostic`]'s rich miette code frame —
+/// is the caller's call, not this library's. Library emits, application
+/// decides.
 pub async fn regen_cache(
     repo: &Repository,
     masters: &[Repository],
     ebuilds: Vec<Ebuild>,
     opts: &RegenOpts,
     on_progress: impl Fn(usize, usize) + Send + Sync + 'static,
+    on_error: impl Fn(&Ebuild, &crate::Error) + Send + Sync + 'static,
 ) -> Result<RegenStats> {
     let total = ebuilds.len();
     let write = opts.write.clone();
@@ -88,6 +96,7 @@ pub async fn regen_cache(
     let errors = Arc::new(AtomicUsize::new(0));
     let done = Arc::new(AtomicUsize::new(0));
     let on_progress = Arc::new(on_progress);
+    let on_error = Arc::new(on_error);
 
     // Clone repo into the 'static worker callback (cheap: Arc caches).
     let repo_for_write = repo.clone();
@@ -95,13 +104,22 @@ pub async fn regen_cache(
         let checksum_cache = Arc::clone(&checksum_cache);
         let errors = Arc::clone(&errors);
         let done = Arc::clone(&done);
+        let on_error = Arc::clone(&on_error);
         let write = write.clone();
         move |ebuild, result| {
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             on_progress(n, total);
             match result {
                 Err(e) => {
-                    tracing::error!("{}: source failed: {e}", ebuild.cpv());
+                    // Short structured signal only (respects `-v`/`-q`,
+                    // feeds the activity bus) — the diagnostic's own
+                    // headline (e.g. "invalid SRC_URI") follows right after
+                    // via `on_error`, so don't restate it here.
+                    match e.parse_diagnostic() {
+                        Some(_) => tracing::error!("{}: source failed", ebuild.cpv()),
+                        None => tracing::error!("{}: source failed: {e}", ebuild.cpv()),
+                    }
+                    on_error(&ebuild, &e);
                     errors.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok(sourced) => {

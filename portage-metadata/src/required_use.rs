@@ -57,9 +57,13 @@ impl RequiredUseExpr {
     /// assert!(matches!(expr, RequiredUseExpr::ExactlyOne(_)));
     /// ```
     pub fn parse(input: &str) -> Result<Self> {
-        let entries: Vec<RequiredUseExpr> = parse_required_use_string
-            .parse(input)
-            .map_err(|e| Error::InvalidRequiredUse(crate::diagnostic::render("REQUIRED_USE", e)))?;
+        let entries: Vec<RequiredUseExpr> =
+            parse_required_use_string.parse(input).map_err(|e| {
+                Error::InvalidRequiredUse(crate::diagnostic::ParseDiagnostic::from_winnow(
+                    "REQUIRED_USE",
+                    e,
+                ))
+            })?;
 
         Ok(match entries.len() {
             0 => RequiredUseExpr::All(Vec::new()),
