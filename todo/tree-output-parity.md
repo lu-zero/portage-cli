@@ -77,11 +77,23 @@ parity with emerge's plain-indent style is wanted later, that's a separate,
 smaller follow-up (swap the connector-building in `Tree::node` only — the row
 content itself is already shared and would need no change).
 
+**Second layout call** (also 2026-07-27, same conversation): the bracket
+status column stays flush-left at column 0 on every row, like `-p`'s own
+table, with the tree connector placed *after* it rather than the connector
+pushing the bracket itself further right at each depth level:
+
+```
+[ebuild  NS    ] dev-lang/rust-1.97.1 [1.93.1, 1.94.0, 1.95.0]  USE="-doc*"
+[nomerge       ] ├── app-arch/xz-utils-5.8.3
+[nomerge       ] │   ├── net-dns/c-ares-1.34.6
+```
+
 Mechanism: the whole per-row string emerge's `-p`/Pretty builds (bracket
 status, `cpn-ver`, old-version column, USE flags, size, destination suffix)
-was extracted out of `print_pretty_with_roots` into `format_plan_row`
-(`output.rs`), taking an `in_plan: bool`. `print_tree`'s existing
-box-drawing DFS (`Tree::node`) now calls it for every node instead of
+was extracted out of `print_pretty_with_roots` into `format_plan_parts`
+(`output.rs`), returning `(bracket, rest)` separately rather than one joined
+string so `Tree::node` can splice its indent between them. `print_tree`'s
+existing box-drawing DFS (`Tree::node`) now calls it for every node instead of
 printing a bare `cpn-ver`: a node present in the actual merge `order` gets
 its real computed action bracket; anything else (a dependency-graph node
 reached only to connect the tree — already satisfied, nothing to do) gets a

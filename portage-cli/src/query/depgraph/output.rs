@@ -1121,10 +1121,14 @@ pub(super) fn print_pretty_rooted(
     print_pretty_with_roots(ctx, &order, &merge_roots, cross);
 }
 
-/// Renders one row of the emerge-style plan display — bracket status,
-/// `cpn-ver`, old-version column, USE flags, size and destination suffix.
-/// Shared by the flat `-p` list and `--tree`'s depth-first walk, so a
-/// package looks identical everywhere it's shown.
+/// Builds the two halves of one row of the emerge-style plan display: the
+/// bracket status column (`"[ebuild  U  ]"`), and everything after it
+/// (`cpn-ver`, old-version column, USE flags, size, destination suffix).
+/// Returned separately rather than joined so callers can put other content
+/// (`--tree`'s indent) between the two, the way real emerge's own tables
+/// keep the status column flush-left regardless of tree depth. Shared by the
+/// flat `-p` list and `--tree`'s depth-first walk, so a package looks
+/// identical everywhere it's shown.
 ///
 /// `in_plan` picks the bracket: the real computed action (`[ebuild U]`,
 /// `[binary N]`, ...) for a package the plan actually merges, or a
@@ -1133,14 +1137,14 @@ pub(super) fn print_pretty_rooted(
 /// (already satisfied at this version, nothing to do here). Everything else
 /// (USE, old-version, size) is computed identically either way: emerge's own
 /// `-t` still shows a `[nomerge]` row's full USE/old-version detail.
-fn format_plan_row(
+fn format_plan_parts(
     ctx: &PrettyCtx,
     pkg: &PortagePackage,
     ver: &Version,
     merge_root: portage_atom_pubgrub::MergeRoot,
     cross: &super::root_aware::CrossContext,
     in_plan: bool,
-) -> String {
+) -> (String, String) {
     let &PrettyCtx {
         data,
         installed,
@@ -1278,9 +1282,10 @@ fn format_plan_row(
     } else {
         ("nomerge", "", " ".repeat(7))
     };
-    format!(
-        "[{C_BRACKET}{kind}{pad}{colored_field}{C_BRACKET:#}] {C_PKG}{cpn}-{ver}{slot_repo}{C_PKG:#}{old}{flag_str}{size_str}{dest_suffix}",
-    )
+    let bracket = format!("[{C_BRACKET}{kind}{pad}{colored_field}{C_BRACKET:#}]");
+    let rest =
+        format!("{C_PKG}{cpn}-{ver}{slot_repo}{C_PKG:#}{old}{flag_str}{size_str}{dest_suffix}");
+    (bracket, rest)
 }
 
 fn print_pretty_with_roots(
@@ -1299,8 +1304,8 @@ fn print_pretty_with_roots(
     writeln!(out, "Calculating dependencies... done!").ok();
 
     for ((pkg, ver), merge_root) in order.iter().zip(merge_roots) {
-        let row = format_plan_row(ctx, pkg, ver, *merge_root, cross, true);
-        writeln!(out, "{row}").ok();
+        let (bracket, rest) = format_plan_parts(ctx, pkg, ver, *merge_root, cross, true);
+        writeln!(out, "{bracket} {rest}").ok();
     }
 
     // emerge only prints the Total line in verbose mode.
@@ -1494,13 +1499,18 @@ impl<W: std::io::Write> Tree<'_, W> {
             "├── "
         };
         let in_plan = self.in_plan.contains(&(pkg.clone(), ver.clone()));
-        let row = format_plan_row(self.ctx, pkg, ver, pkg.merge_root(), self.cross, in_plan);
+        let (bracket, rest) =
+            format_plan_parts(self.ctx, pkg, ver, pkg.merge_root(), self.cross, in_plan);
         let suffix = if already {
             format!(" {C_DIM}(*){C_DIM:#}")
         } else {
             String::new()
         };
-        writeln!(self.out, "{prefix}{connector}{row}{suffix}").ok();
+        // Bracket status stays flush-left (a fixed-width column, like -p's
+        // own table) with the tree connector placed after it, rather than
+        // the connector pushing the bracket itself further right at each
+        // depth.
+        writeln!(self.out, "{bracket} {prefix}{connector}{rest}{suffix}").ok();
 
         if already {
             return;
