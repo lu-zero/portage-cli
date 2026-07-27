@@ -1,0 +1,28 @@
+Benchmark 1: em search gcc
+  Time (mean ± σ):      84.1 ms ±  22.2 ms    [User: 36.5 ms, System: 39.9 ms]
+  Range (min … max):    61.0 ms … 116.3 ms    5 runs
+ 
+Benchmark 2: em search python
+  Time (mean ± σ):     100.5 ms ±   7.9 ms    [User: 40.2 ms, System: 40.0 ms]
+  Range (min … max):    90.2 ms … 108.1 ms    5 runs
+ 
+Benchmark 3: em search firefox
+  Time (mean ± σ):      91.2 ms ±  11.0 ms    [User: 37.9 ms, System: 38.9 ms]
+  Range (min … max):    72.5 ms … 100.7 ms    5 runs
+ 
+Benchmark 4: em search rust
+  Time (mean ± σ):      95.0 ms ±  11.7 ms    [User: 33.6 ms, System: 67.0 ms]
+  Range (min … max):    83.2 ms … 109.5 ms    5 runs
+ 
+Benchmark 5: em -s gcc
+  Time (mean ± σ):     158.0 ms ±  98.3 ms    [User: 42.0 ms, System: 4187.5 ms]
+  Range (min … max):   101.6 ms … 333.4 ms    5 runs
+ 
+  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+ 
+Summary
+  em search gcc ran
+    1.08 ± 0.32 times faster than em search firefox
+    1.13 ± 0.33 times faster than em search rust
+    1.19 ± 0.33 times faster than em search python
+    1.88 ± 1.27 times faster than em -s gcc

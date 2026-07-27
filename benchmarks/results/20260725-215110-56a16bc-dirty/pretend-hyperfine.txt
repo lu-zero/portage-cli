@@ -1,0 +1,39 @@
+Benchmark 1: em -p firefox
+  Time (mean ± σ):      1.444 s ±  0.133 s    [User: 2.461 s, System: 14.358 s]
+  Range (min … max):    1.316 s …  1.648 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: em -p gcc
+  Time (mean ± σ):      1.075 s ±  0.153 s    [User: 1.993 s, System: 12.256 s]
+  Range (min … max):    0.962 s …  1.312 s    5 runs
+ 
+  Warning: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+ 
+Benchmark 3: em -p openssh
+  Time (mean ± σ):      1.023 s ±  0.070 s    [User: 2.309 s, System: 9.379 s]
+  Range (min … max):    0.957 s …  1.103 s    5 runs
+ 
+Benchmark 4: em -p python
+  Time (mean ± σ):      1.083 s ±  0.086 s    [User: 2.156 s, System: 14.844 s]
+  Range (min … max):    0.964 s …  1.206 s    5 runs
+ 
+Benchmark 5: em -p qtbase
+  Time (mean ± σ):      1.327 s ±  0.144 s    [User: 2.310 s, System: 10.127 s]
+  Range (min … max):    1.217 s …  1.555 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 6: em -p libreoffice
+  Time (mean ± σ):      1.686 s ±  0.120 s    [User: 2.705 s, System: 5.439 s]
+  Range (min … max):    1.559 s …  1.856 s    5 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  em -p openssh ran
+    1.05 ± 0.17 times faster than em -p gcc
+    1.06 ± 0.11 times faster than em -p python
+    1.30 ± 0.17 times faster than em -p qtbase
+    1.41 ± 0.16 times faster than em -p firefox
+    1.65 ± 0.16 times faster than em -p libreoffice

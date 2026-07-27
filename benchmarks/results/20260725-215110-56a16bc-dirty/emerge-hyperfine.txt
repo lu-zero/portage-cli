@@ -1,0 +1,15 @@
+Benchmark 1: emerge -p firefox
+  Time (mean ± σ):      4.094 s ±  0.043 s    [User: 4.018 s, System: 0.062 s]
+  Range (min … max):    4.045 s …  4.123 s    3 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: emerge -s gcc
+  Time (mean ± σ):      5.812 s ±  0.015 s    [User: 5.002 s, System: 1.088 s]
+  Range (min … max):    5.803 s …  5.829 s    3 runs
+ 
+  Warning: The first benchmarking run for this command was significantly slower than the rest (5.829 s). This could be caused by (filesystem) caches that were not filled until after the first run. You should consider using the '--warmup' option to fill those caches before the actual benchmark. Alternatively, use the '--prepare' option to clear the caches before each timing run.
+ 
+Summary
+  emerge -p firefox ran
+    1.42 ± 0.02 times faster than emerge -s gcc
