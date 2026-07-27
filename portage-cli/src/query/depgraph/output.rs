@@ -1121,12 +1121,26 @@ pub(super) fn print_pretty_rooted(
     print_pretty_with_roots(ctx, &order, &merge_roots, cross);
 }
 
-fn print_pretty_with_roots(
+/// Renders one row of the emerge-style plan display — bracket status,
+/// `cpn-ver`, old-version column, USE flags, size and destination suffix.
+/// Shared by the flat `-p` list and `--tree`'s depth-first walk, so a
+/// package looks identical everywhere it's shown.
+///
+/// `in_plan` picks the bracket: the real computed action (`[ebuild U]`,
+/// `[binary N]`, ...) for a package the plan actually merges, or a
+/// fixed-width `[nomerge]` placeholder — matching real emerge's tree
+/// display — for a dependency-graph node shown only to connect the tree
+/// (already satisfied at this version, nothing to do here). Everything else
+/// (USE, old-version, size) is computed identically either way: emerge's own
+/// `-t` still shows a `[nomerge]` row's full USE/old-version detail.
+fn format_plan_row(
     ctx: &PrettyCtx,
-    order: &[(PortagePackage, Version)],
-    merge_roots: &[portage_atom_pubgrub::MergeRoot],
+    pkg: &PortagePackage,
+    ver: &Version,
+    merge_root: portage_atom_pubgrub::MergeRoot,
     cross: &super::root_aware::CrossContext,
-) {
+    in_plan: bool,
+) -> String {
     let &PrettyCtx {
         data,
         installed,
@@ -1145,6 +1159,136 @@ fn print_pretty_with_roots(
         accept_keywords,
         binpkg_index,
     } = ctx;
+
+    let dest_suffix = match super::root_aware::display_root(merge_root, &cross.target, cross) {
+        r if r.as_str() == "/" => String::new(),
+        r => format!(" to {}/", r),
+    };
+    let cpn = pkg.cpn();
+    let (tag, old_ver) = action_tag(pkg, ver, installed);
+    let req = flag_reqs.get(pkg).copied();
+    let cache = find_cache(data, pkg, ver);
+
+    // emerge -p always shows USE flags; -v additionally shows the
+    // :slot/subslot::repo suffix and download size.
+    let cpv = Cpv::new(*cpn, ver.clone());
+    let defaults = cache
+        .map(super::effective_use::iuse_defaults)
+        .unwrap_or_default();
+    let mut effective_use =
+        resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
+    // `use.force`/`use.mask` (global + package + `*.stable.*`): applied to
+    // effective USE (forced on, then masked off — mask wins, matching
+    // portage), and their union is also the parenthesised-flag set portage
+    // shows in the USE string (`_create_use_string:325` sets
+    // `iuse_forced = use.force ∪ use.mask`).
+    let mut forced_display: HashSet<Interned<DefaultInterner>> = HashSet::new();
+    if let Some(c) = cache {
+        let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
+        let iuse = super::effective_use::iuse_set(c);
+        let slot_key = pkg.slot();
+        if !force_mask.is_empty() {
+            let (forced, masked) =
+                force_mask.effective(&cpv, slot_key.as_ref().map(|s| s.as_str()), stable, &iuse);
+            for &f in &forced {
+                effective_use.enable(f);
+            }
+            for &f in &masked {
+                effective_use.disable(f);
+            }
+            forced_display = forced.union(&masked).copied().collect();
+        }
+    }
+    super::effective_use::apply_ceded(&mut effective_use, *cpn, ceded);
+
+    // Would `-k`/`-K` reuse a local binpkg for this exact (cpv, USE)?
+    // Same `use_compatible` rule `run_merge_plan` uses to actually pick
+    // one — see `PrettyCtx::binpkg_index`'s doc for why remote (`-g`/
+    // `-G`) isn't checked here.
+    let is_binary = binpkg_index.is_some_and(|idx| {
+        let desired_use: Vec<String> = effective_use
+            .enabled_flags()
+            .iter()
+            .map(|f| f.as_str().to_string())
+            .collect();
+        // Empty CHOST and build_env_key: preview skips both gates (same as "unknown");
+        // the real merge path passes make.conf CHOST and build_env_key.
+        idx.find_reusable(&cpv.to_string(), &desired_use, "", "")
+            .is_some()
+    });
+
+    let previous = previous_entry(pkg, ver, installed_entries);
+
+    let flag_str = cache
+        .map(|c| {
+            format_flags(
+                c,
+                &effective_use,
+                use_expand,
+                use_expand_hidden,
+                &FlagCmp {
+                    req,
+                    previous,
+                    forced: &forced_display,
+                    all_flags: verbose >= 1,
+                },
+            )
+        })
+        .unwrap_or_default();
+
+    let slot_repo = if verbose >= 1 {
+        cache
+            .map(|c| slot_repo_suffix(c, super::repo::repo_name_of(data, &cpv)))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // emerge shows the previously-installed version(s): the same-slot
+    // version for an in-slot upgrade/downgrade, and *every* installed
+    // version of the package (across all slots) for a new-slot install.
+    // Mirrors portage's `_get_installed_best` (`myoldbest =
+    // installed_versions` for NS) and `convert_myoldbest`'s `[v1, v2, ...]`
+    // join, painted bold blue. Reinstalls (R) and first installs (N) get no
+    // column.
+    let old = match tag {
+        "U" | "D" => old_ver.map(|v| v.to_string()),
+        "NS" => installed_versions_col(cpn, installed),
+        _ => None,
+    }
+    .map(|content| format!(" {C_OLDVERSION}[{content}]{C_OLDVERSION:#}"))
+    .unwrap_or_default();
+    // Verbose mode appends the download size (distfiles not in DISTDIR).
+    let size_str = if verbose >= 1 {
+        format!(" {}", format_kib(sizes.get(&cpv).copied().unwrap_or(0)))
+    } else {
+        String::new()
+    };
+    // `[nomerge]` (real emerge's own `-t` marker for a graph node shown only
+    // to keep the tree connected) is a fixed-width placeholder, no action
+    // letter — padded to the same 14-char bracket width `ebuild `/`binary `
+    // plus their 7-char status field already have.
+    let (kind, pad, colored_field) = if in_plan {
+        let field = status_field(tag, slot_op_cpns.contains(cpn));
+        (
+            if is_binary { "binary" } else { "ebuild" },
+            " ",
+            colorize_status_field(&field),
+        )
+    } else {
+        ("nomerge", "", " ".repeat(7))
+    };
+    format!(
+        "[{C_BRACKET}{kind}{pad}{colored_field}{C_BRACKET:#}] {C_PKG}{cpn}-{ver}{slot_repo}{C_PKG:#}{old}{flag_str}{size_str}{dest_suffix}",
+    )
+}
+
+fn print_pretty_with_roots(
+    ctx: &PrettyCtx,
+    order: &[(PortagePackage, Version)],
+    merge_roots: &[portage_atom_pubgrub::MergeRoot],
+    cross: &super::root_aware::CrossContext,
+) {
     let mut out = anstream::stdout();
 
     writeln!(
@@ -1155,126 +1299,13 @@ fn print_pretty_with_roots(
     writeln!(out, "Calculating dependencies... done!").ok();
 
     for ((pkg, ver), merge_root) in order.iter().zip(merge_roots) {
-        let dest_suffix = match super::root_aware::display_root(*merge_root, &cross.target, cross) {
-            r if r.as_str() == "/" => String::new(),
-            r => format!(" to {}/", r),
-        };
-        let cpn = pkg.cpn();
-        let (tag, old_ver) = action_tag(pkg, ver, installed);
-        let req = flag_reqs.get(pkg).copied();
-        let cache = find_cache(data, pkg, ver);
-
-        // emerge -p always shows USE flags; -v additionally shows the
-        // :slot/subslot::repo suffix and download size.
-        let cpv = Cpv::new(*cpn, ver.clone());
-        let defaults = cache
-            .map(super::effective_use::iuse_defaults)
-            .unwrap_or_default();
-        let mut effective_use =
-            resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
-        // `use.force`/`use.mask` (global + package + `*.stable.*`): applied to
-        // effective USE (forced on, then masked off — mask wins, matching
-        // portage), and their union is also the parenthesised-flag set portage
-        // shows in the USE string (`_create_use_string:325` sets
-        // `iuse_forced = use.force ∪ use.mask`).
-        let mut forced_display: HashSet<Interned<DefaultInterner>> = HashSet::new();
-        if let Some(c) = cache {
-            let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
-            let iuse = super::effective_use::iuse_set(c);
-            let slot_key = pkg.slot();
-            if !force_mask.is_empty() {
-                let (forced, masked) = force_mask.effective(
-                    &cpv,
-                    slot_key.as_ref().map(|s| s.as_str()),
-                    stable,
-                    &iuse,
-                );
-                for &f in &forced {
-                    effective_use.enable(f);
-                }
-                for &f in &masked {
-                    effective_use.disable(f);
-                }
-                forced_display = forced.union(&masked).copied().collect();
-            }
-        }
-        super::effective_use::apply_ceded(&mut effective_use, *cpn, ceded);
-
-        // Would `-k`/`-K` reuse a local binpkg for this exact (cpv, USE)?
-        // Same `use_compatible` rule `run_merge_plan` uses to actually pick
-        // one — see `PrettyCtx::binpkg_index`'s doc for why remote (`-g`/
-        // `-G`) isn't checked here.
-        let is_binary = binpkg_index.is_some_and(|idx| {
-            let desired_use: Vec<String> = effective_use
-                .enabled_flags()
-                .iter()
-                .map(|f| f.as_str().to_string())
-                .collect();
-            // Empty CHOST and build_env_key: preview skips both gates (same as "unknown");
-            // the real merge path passes make.conf CHOST and build_env_key.
-            idx.find_reusable(&cpv.to_string(), &desired_use, "", "")
-                .is_some()
-        });
-
-        let previous = previous_entry(pkg, ver, installed_entries);
-
-        let flag_str = cache
-            .map(|c| {
-                format_flags(
-                    c,
-                    &effective_use,
-                    use_expand,
-                    use_expand_hidden,
-                    &FlagCmp {
-                        req,
-                        previous,
-                        forced: &forced_display,
-                        all_flags: verbose >= 1,
-                    },
-                )
-            })
-            .unwrap_or_default();
-
-        let slot_repo = if verbose >= 1 {
-            cache
-                .map(|c| slot_repo_suffix(c, super::repo::repo_name_of(data, &cpv)))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-
-        // emerge shows the previously-installed version(s): the same-slot
-        // version for an in-slot upgrade/downgrade, and *every* installed
-        // version of the package (across all slots) for a new-slot install.
-        // Mirrors portage's `_get_installed_best` (`myoldbest =
-        // installed_versions` for NS) and `convert_myoldbest`'s `[v1, v2, ...]`
-        // join, painted bold blue. Reinstalls (R) and first installs (N) get no
-        // column.
-        let old = match tag {
-            "U" | "D" => old_ver.map(|v| v.to_string()),
-            "NS" => installed_versions_col(cpn, installed),
-            _ => None,
-        }
-        .map(|content| format!(" {C_OLDVERSION}[{content}]{C_OLDVERSION:#}"))
-        .unwrap_or_default();
-        // Verbose mode appends the download size (distfiles not in DISTDIR).
-        let size_str = if verbose >= 1 {
-            format!(" {}", format_kib(sizes.get(&cpv).copied().unwrap_or(0)))
-        } else {
-            String::new()
-        };
-        let field = status_field(tag, slot_op_cpns.contains(cpn));
-        let colored_field = colorize_status_field(&field);
-        let kind = if is_binary { "binary" } else { "ebuild" };
-        writeln!(
-            out,
-            "[{C_BRACKET}{kind} {colored_field}{C_BRACKET:#}] {C_PKG}{cpn}-{ver}{slot_repo}{C_PKG:#}{old}{flag_str}{size_str}{dest_suffix}",
-        ).ok();
+        let row = format_plan_row(ctx, pkg, ver, *merge_root, cross, true);
+        writeln!(out, "{row}").ok();
     }
 
     // emerge only prints the Total line in verbose mode.
-    if verbose >= 1 {
-        writeln!(out, "{}", total_line(order, installed, sizes)).ok();
+    if ctx.verbose >= 1 {
+        writeln!(out, "{}", total_line(order, ctx.installed, ctx.sizes)).ok();
     }
 }
 
@@ -1378,10 +1409,19 @@ pub(super) fn print_json(
 
 pub(super) const C_DIM: Style = Style::new().effects(Effects::DIMMED);
 
+/// `--tree`: the same emerge-style rows `-p` shows (bracket status, USE, old
+/// version, size), indented by dependency depth with the box-drawing
+/// connectors em's tree already used — annotating the plan, not replacing it
+/// with a bare cpv tree. `order` is the actual merge plan; anything reached
+/// by the walk that isn't in it renders as `[nomerge]` (matching real
+/// emerge's own marker for a graph node shown only to keep the tree
+/// connected — already satisfied, nothing to do here).
 pub(super) fn print_tree(
+    ctx: &PrettyCtx,
     roots: &[(PortagePackage, Version)],
     edges: &[portage_atom_pubgrub::DepEdge],
-    installed_cpvs: &std::collections::HashSet<Cpv>,
+    order: &[(PortagePackage, Version)],
+    cross: &super::root_aware::CrossContext,
 ) {
     // version map: package -> version (from edges, covers all non-virtual nodes)
     let mut version_map: HashMap<&PortagePackage, &Version> = HashMap::new();
@@ -1408,10 +1448,15 @@ pub(super) fn print_tree(
         kids.retain(|(pkg, _)| seen.insert(*pkg));
     }
 
+    let in_plan: std::collections::HashSet<(PortagePackage, Version)> =
+        order.iter().cloned().collect();
+
     let mut tree = Tree {
         out: anstream::stdout(),
         children,
-        installed_cpvs,
+        ctx,
+        cross,
+        in_plan: &in_plan,
         visited: Default::default(),
     };
     for (i, (pkg, ver)) in roots.iter().enumerate() {
@@ -1425,7 +1470,9 @@ pub(super) fn print_tree(
 struct Tree<'a, W: std::io::Write> {
     out: W,
     children: HashMap<&'a PortagePackage, Vec<(&'a PortagePackage, &'a Version)>>,
-    installed_cpvs: &'a std::collections::HashSet<Cpv>,
+    ctx: &'a PrettyCtx<'a>,
+    cross: &'a super::root_aware::CrossContext,
+    in_plan: &'a std::collections::HashSet<(PortagePackage, Version)>,
     visited: std::collections::HashSet<*const PortagePackage>,
 }
 
@@ -1439,9 +1486,6 @@ impl<W: std::io::Write> Tree<'_, W> {
         is_root: bool,
     ) {
         let already = !self.visited.insert(pkg as *const _);
-        let cpn = pkg.cpn();
-        let is_installed = self.installed_cpvs.contains(&Cpv::new(*cpn, ver.clone()));
-
         let connector = if is_root {
             ""
         } else if is_last {
@@ -1449,26 +1493,14 @@ impl<W: std::io::Write> Tree<'_, W> {
         } else {
             "├── "
         };
-
-        if is_installed {
-            writeln!(
-                self.out,
-                "{prefix}{connector}{C_DIM}{cpn}-{ver}{C_DIM:#}{}",
-                if already { " (*)" } else { "" }
-            )
-            .ok();
+        let in_plan = self.in_plan.contains(&(pkg.clone(), ver.clone()));
+        let row = format_plan_row(self.ctx, pkg, ver, pkg.merge_root(), self.cross, in_plan);
+        let suffix = if already {
+            format!(" {C_DIM}(*){C_DIM:#}")
         } else {
-            writeln!(
-                self.out,
-                "{prefix}{connector}{C_PKG}{cpn}-{ver}{C_PKG:#}{}",
-                if already {
-                    format!(" {C_DIM}(*){C_DIM:#}")
-                } else {
-                    String::new()
-                }
-            )
-            .ok();
-        }
+            String::new()
+        };
+        writeln!(self.out, "{prefix}{connector}{row}{suffix}").ok();
 
         if already {
             return;

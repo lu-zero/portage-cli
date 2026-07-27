@@ -1222,38 +1222,36 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // Pretty/JSON/Tree preview built from it) inherit the exclusion for free.
     let plan_entries = root_aware::build_plan(order.clone());
 
+    // Verbose mode shows per-package download size and a total; skip the
+    // Manifest/DISTDIR work entirely in plain mode. Shared by Pretty and
+    // Tree — Tree renders the same per-package row, so it needs the same
+    // sizes and the same `PrettyCtx`.
+    let sizes = if verbose >= 1 {
+        download_size::compute(repo_path, &distdir, &data, &order, &final_policy, &ceded)
+    } else {
+        HashMap::new()
+    };
+    let pretty_ctx = output::PrettyCtx {
+        data: &data,
+        installed: &installed,
+        installed_entries: &target_installed,
+        pre_env: &pre_env,
+        env_use: &env_use,
+        package_use: &package_use,
+        use_expand: &use_expand,
+        use_expand_hidden: &use_expand_hidden,
+        flag_reqs: &flag_reqs,
+        sizes: &sizes,
+        slot_op_cpns: &slot_op_cpns,
+        verbose,
+        ceded: &ceded,
+        force_mask: &force_mask,
+        accept_keywords: &accept_keywords,
+        binpkg_index,
+    };
+
     match format {
-        DepgraphFormat::Pretty => {
-            // Verbose mode shows per-package download size and a total; skip the
-            // Manifest/DISTDIR work entirely in plain mode.
-            let sizes = if verbose >= 1 {
-                download_size::compute(repo_path, &distdir, &data, &order, &final_policy, &ceded)
-            } else {
-                HashMap::new()
-            };
-            output::print_pretty_rooted(
-                &output::PrettyCtx {
-                    data: &data,
-                    installed: &installed,
-                    installed_entries: &target_installed,
-                    pre_env: &pre_env,
-                    env_use: &env_use,
-                    package_use: &package_use,
-                    use_expand: &use_expand,
-                    use_expand_hidden: &use_expand_hidden,
-                    flag_reqs: &flag_reqs,
-                    sizes: &sizes,
-                    slot_op_cpns: &slot_op_cpns,
-                    verbose,
-                    ceded: &ceded,
-                    force_mask: &force_mask,
-                    accept_keywords: &accept_keywords,
-                    binpkg_index,
-                },
-                &plan_entries,
-                &cross,
-            )
-        }
+        DepgraphFormat::Pretty => output::print_pretty_rooted(&pretty_ctx, &plan_entries, &cross),
         DepgraphFormat::Json => output::print_json(&data, &order, &edges, &installed, &flag_reqs)?,
         DepgraphFormat::Tree => {
             let roots: Vec<_> = root_pkgs
@@ -1274,7 +1272,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     ver.map(|v| (pkg.clone(), v))
                 })
                 .collect();
-            output::print_tree(&roots, &edges, &target_installed_cpvs)
+            output::print_tree(&pretty_ctx, &roots, &edges, &order, &cross)
         }
     }
 
