@@ -186,6 +186,8 @@ fn is_uri_char(c: char) -> bool {
                 | '@'
                 | '#'
                 | '?'
+                | '!'   // RFC 3986 sub-delim; go-module.eclass mirror:// URIs use it
+                        // to escape uppercase letters (e.g. github.com/!puerkito!bio/...)
                 | '['   // used in legacy Debian-mirror URLs (e.g. vdr-calc-0[1].0.1-rc5.tgz)
                 | ']'
         )
@@ -195,8 +197,10 @@ fn is_filename_char(c: char) -> bool {
     // '{' and '}' are permitted for rename targets where the ebuild author
     // wrote {P} instead of ${P}; portage accepts such filenames in practice.
     // '@' appears in real rename targets (e.g. sec-keys/openpgp-keys-kernel
-    // uses `-> gregkh@kernel.org.key`).
-    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+' | '{' | '}' | '@')
+    // uses `-> gregkh@kernel.org.key`). '!' and '%' appear in go-module.eclass
+    // generated rename targets (percent-encoded Go module paths with escaped
+    // uppercase letters, e.g. `-> github.com%2F!puerkito!bio%2Fgoquery%2F...`).
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+' | '{' | '}' | '@' | '!' | '%')
 }
 
 fn is_flag_char(c: char) -> bool {
@@ -829,5 +833,48 @@ mod tests {
             }
             _ => unreachable!("expected Renamed"),
         }
+    }
+
+    #[test]
+    fn go_module_mirror_uri_with_bang_escapes() {
+        // go-module.eclass's generated EGO_SUM_SRC_URI escapes uppercase
+        // letters in Go import paths as `!lowercase` (pentoo's
+        // dev-go/fetchbot-1.3, live-found 2026-07-27); '!' is an RFC 3986
+        // sub-delim, legal unencoded in a URI.
+        let entries = SrcUriEntry::parse(
+            "mirror://goproxy//github.com/!puerkito!bio/goquery/@v/v1.5.1.zip -> github.com%2F!puerkito!bio%2Fgoquery%2F@v%2Fv1.5.1.zip",
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            SrcUriEntry::Renamed { url, target, .. } => {
+                assert_eq!(
+                    url,
+                    "mirror://goproxy//github.com/!puerkito!bio/goquery/@v/v1.5.1.zip"
+                );
+                assert_eq!(
+                    target,
+                    "github.com%2F!puerkito!bio%2Fgoquery%2F@v%2Fv1.5.1.zip"
+                );
+            }
+            _ => unreachable!("expected Renamed"),
+        }
+    }
+
+    #[test]
+    fn uri_with_literal_braces_from_an_unexpanded_variable_is_rejected() {
+        // pentoo's dev-util/kaleido-bin-0.2.1 has a `v{$PV}` typo (meant
+        // `v${PV}`); bash leaves the braces literal since `{$PV}` isn't a
+        // brace-expansion pattern. Deliberately still an error: this is a
+        // genuine upstream ebuild bug, not a real-world convention worth
+        // tolerating (unlike '{'/'}' in *rename targets*, which stays
+        // permitted above — that pattern is a deliberate ebuild-author
+        // shorthand, not a bug).
+        assert!(
+            SrcUriEntry::parse(
+                "https://example.com/releases/download/v{0.2.1}/kaleido_linux_arm64.zip -> kaleido-bin-0.2.1.zip",
+            )
+            .is_err()
+        );
     }
 }
