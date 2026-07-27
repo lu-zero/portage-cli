@@ -88,5 +88,19 @@ pub(crate) fn render<E: std::fmt::Display>(
         span: (span.start, span.len()).into(),
         label,
     };
-    format!("{:?}", miette::Report::new(diag))
+    // Explicitly no color, regardless of what miette's own terminal
+    // detection would decide: this string is built here, far from any
+    // terminal, then carried through `tracing::error!` to a writer this
+    // crate never sees — a second, independent color decision on top of
+    // whatever that writer already makes is how raw ANSI bytes end up
+    // mis-handled (observed live: literal `\x1b[...]` text instead of an
+    // actual color change). Keep the box-drawing/unicode structure, drop
+    // color entirely; this crate has no business deciding that anyway.
+    let handler =
+        miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::unicode_nocolor());
+    let mut out = String::new();
+    handler
+        .render_report(&mut out, &diag)
+        .expect("String's Write impl never fails");
+    out
 }

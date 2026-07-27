@@ -894,6 +894,12 @@ mod tests {
         assert!(err.contains('{'));
         // The message is a short code frame, not the ~230-char raw source.
         assert!(err.lines().all(|l| l.chars().count() < 200));
+        // No ANSI escapes: this string is built far from any terminal and
+        // carried through `tracing::error!` to a writer this crate never
+        // sees. Live-found: miette's own color auto-detection embedded raw
+        // ESC bytes here that a second, independent color decision further
+        // down the pipeline mishandled into literal `\x1b[...]` text.
+        assert!(!err.contains('\u{1b}'));
     }
 
     #[test]
