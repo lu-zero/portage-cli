@@ -17,9 +17,9 @@ pub enum Error {
     #[error("invalid phase: {0}")]
     InvalidPhase(String),
 
-    /// Invalid SRC_URI expression. Structured (not pre-rendered): call
-    /// [`Error::parse_diagnostic`] to get the miette code frame at the
-    /// point something actually displays this error.
+    /// Invalid SRC_URI expression. Structured (not pre-rendered): the
+    /// application renders the inner [`crate::diagnostic::ParseDiagnostic`]
+    /// as a miette code frame at display time.
     #[error("{0}")]
     InvalidSrcUri(crate::diagnostic::ParseDiagnostic),
 
@@ -54,11 +54,8 @@ pub enum Error {
 
 impl Error {
     /// The structured parse diagnostic behind this error, if it's one of the
-    /// four grammar variants that carry one. Callers that want the full
-    /// miette code frame (rather than the plain one-line [`Error`]
-    /// [`Display`](std::fmt::Display)) call
-    /// [`ParseDiagnostic::render`](crate::diagnostic::ParseDiagnostic::render)
-    /// on the result, at the point they're actually about to show it.
+    /// four grammar variants that carry one. UI code treats the result as a
+    /// [`miette::Diagnostic`] and renders a code frame at display time.
     pub fn parse_diagnostic(&self) -> Option<&crate::diagnostic::ParseDiagnostic> {
         match self {
             Error::InvalidSrcUri(d)

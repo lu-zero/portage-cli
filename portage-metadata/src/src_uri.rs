@@ -884,8 +884,8 @@ mod tests {
     fn plain_display_is_a_short_headline_not_the_whole_code_frame() {
         // The `Error`/`ParseDiagnostic` `Display` is the safe default for
         // ordinary log lines and `anyhow` chains: a short one-line summary,
-        // not a multi-line report. The full code frame is opt-in, via
-        // `.render()` — see the next test.
+        // not a multi-line report. The full code frame is opt-in via a
+        // miette handler at the UI boundary — see the next test.
         let err = SrcUriEntry::parse("amd64? ( v{oops}/bad.tar.gz )")
             .unwrap_err()
             .to_string();
@@ -897,21 +897,17 @@ mod tests {
         // The actual pentoo dev-util/kaleido-bin-0.2.1 SRC_URI: winnow's own
         // Display would put the caret under a ~230-char single line, far
         // enough right it's invisible without horizontal scrolling.
-        // `ParseDiagnostic::render` must instead show a short code frame
-        // with the caret directly under the offending '{' and a label.
+        // `render_nocolor` must instead show a short code frame with the
+        // caret directly under the offending '{' and a label.
         let err = SrcUriEntry::parse(
             "amd64? ( https://github.com/plotly/Kaleido/releases/download/v0.2.1/kaleido_linux_x64.zip -> kaleido-bin-0.2.1.zip ) arm64? ( https://github.com/plotly/Kaleido/releases/download/v{0.2.1}/kaleido_linux_arm64.zip -> kaleido-bin-0.2.1.zip )",
         )
         .unwrap_err();
-        let rendered = err.parse_diagnostic().unwrap().render();
+        let rendered = err.parse_diagnostic().unwrap().render_nocolor();
         assert!(rendered.contains("invalid SRC_URI"));
         assert!(rendered.contains('{'));
         // The message is a short code frame, not the ~230-char raw source.
         assert!(rendered.lines().all(|l| l.chars().count() < 200));
-        // No ANSI escapes here: `cargo test`'s stderr isn't a real terminal,
-        // so `render`'s `anstream::AutoStream::choice` check resolves to
-        // no-color, matching what every other bit of color in this codebase
-        // would decide for the same stream.
         assert!(!rendered.contains('\u{1b}'));
     }
 
@@ -929,7 +925,7 @@ mod tests {
         src.push_str("v{oops}/bad.tar.gz");
         assert!(src.len() > 500);
         let err = SrcUriEntry::parse(&src).unwrap_err();
-        let rendered = err.parse_diagnostic().unwrap().render();
+        let rendered = err.parse_diagnostic().unwrap().render_nocolor();
         assert!(rendered.contains('{'));
         assert!(rendered.lines().all(|l| l.chars().count() < 200));
     }

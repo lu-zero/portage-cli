@@ -15,7 +15,6 @@ portage-atom = { workspace = true }
 winnow = { workspace = true }
 thiserror = { workspace = true }
 miette = { workspace = true }
-anstream = { workspace = true }
 
 [features]
 default = []

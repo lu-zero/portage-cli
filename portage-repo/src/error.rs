@@ -59,13 +59,16 @@ pub enum Error {
     /// [`crate::RepositoryBuilder`] was opened without configuring a secondary cache.
     #[error("repository builder: secondary metadata cache not configured")]
     BuilderMissingSecondary,
+
+    /// Failed to write a sourced cache entry (regen path).
+    #[error("cache write failed: {0}")]
+    CacheWrite(String),
 }
 
 impl Error {
     /// The structured parse diagnostic behind this error, if it wraps one of
-    /// portage-metadata's four grammar-parse variants. Call
-    /// [`portage_metadata::ParseDiagnostic::render`] on the result for the
-    /// full miette code frame, at the point of actually displaying it.
+    /// portage-metadata's four grammar-parse variants. UI code renders the
+    /// result as a miette code frame at display time.
     pub fn parse_diagnostic(&self) -> Option<&portage_metadata::ParseDiagnostic> {
         match self {
             Error::Metadata(e) => e.parse_diagnostic(),

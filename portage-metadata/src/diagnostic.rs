@@ -1,18 +1,11 @@
 //! A structured winnow parse failure, kept structured rather than rendered
-//! to a string at parse time — so the miette code frame is built exactly
-//! once, at the point something actually displays the error, with a color
-//! decision made fresh at *that* point.
+//! to a string at parse time.
 //!
-//! Rendering eagerly (at parse time, deep in this crate) and carrying the
-//! result as a plain `String` through however many `Display` hops the
-//! wrapping error types add on the way to a terminal is how a previous
-//! version of this went wrong live: the pre-rendered ANSI bytes reached
-//! `tracing::error!` intact, but the text that actually reached the PTY
-//! afterwards was corrupted into literal `\x1b[...]` — the exact wrapping
-//! path responsible was never conclusively found, and didn't need to be:
-//! rendering lazily, right before display, sidesteps the whole class of
-//! "mangled somewhere in transit" bugs by never handing a pre-rendered
-//! string to anything in between.
+//! This crate exposes the diagnostic as a [`miette::Diagnostic`] (source +
+//! span + label). **Rendering** — color, graphical theme, writing to a
+//! stream — is the application's job (e.g. `portage_cli::diag`), not this
+//! library's. Carrying a pre-rendered `String` through tracing / bus hops
+//! is how an earlier version mangled ANSI escapes live.
 //!
 //! `miette` is already in this workspace's dependency graph (`brush-parser`
 //! depends on it for its own diagnostics), so this adds no new crate to
@@ -21,10 +14,11 @@
 use miette::Diagnostic;
 
 /// A structured `SRC_URI`/`LICENSE`/`REQUIRED_USE`/`RESTRICT` parse failure.
-/// `Display` gives a short one-line summary (safe to use anywhere an
-/// ordinary error is expected — log lines, `anyhow` chains, ...); call
-/// [`ParseDiagnostic::render`] explicitly to get the full miette code frame,
-/// at the point something is actually about to show it to a user.
+///
+/// `Display` gives a short one-line summary (safe for log lines, `anyhow`
+/// chains, activity-bus `error` fields). Implementors of a UI should treat
+/// this as a [`miette::Diagnostic`] and render a code frame at display time
+/// (see `portage_cli::diag::print_diagnostic`).
 #[derive(Debug, Clone, PartialEq, Eq, Diagnostic)]
 pub struct ParseDiagnostic {
     what: &'static str,
@@ -110,24 +104,13 @@ impl ParseDiagnostic {
         }
     }
 
-    /// Render the full miette code frame as a string, deciding color fresh
-    /// right now — not at construction time. `anstream::AutoStream::choice`
-    /// reads the same global `colorchoice` state `colorchoice-clap`'s
-    /// `--color` flag sets (plus `NO_COLOR`/real terminal detection) that
-    /// every other bit of color in this codebase already goes through, so
-    /// this can't disagree with whatever else is printing to the same
-    /// stream at the same time.
-    pub fn render(&self) -> String {
-        let colored = !matches!(
-            anstream::AutoStream::choice(&std::io::stderr()),
-            anstream::ColorChoice::Never
-        );
-        let theme = if colored {
-            miette::GraphicalTheme::unicode()
-        } else {
-            miette::GraphicalTheme::unicode_nocolor()
-        };
-        let handler = miette::GraphicalReportHandler::new_themed(theme);
+    /// Render a no-color miette code frame (for unit tests and plain logs).
+    ///
+    /// Production UIs should prefer a color-aware handler at the application
+    /// boundary (`portage_cli::diag::print_diagnostic`).
+    pub fn render_nocolor(&self) -> String {
+        let handler =
+            miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::unicode_nocolor());
         let mut out = String::new();
         handler
             .render_report(&mut out, self)

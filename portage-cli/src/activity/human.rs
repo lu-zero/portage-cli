@@ -39,7 +39,7 @@ use std::io::{IsTerminal, Write};
 use std::sync::Mutex;
 
 use super::bus::ActivitySink;
-use super::event::{ActivityEvent, ActivityMergeRoot, PkgKind};
+use super::event::{ActivityEvent, ActivityMergeRoot, ActivityMode, PkgKind};
 use crate::style::{C_COUNT, C_PKG, C_PKG_BINARY};
 
 /// Emerge-style label for a phase, or `None` to suppress (internal `pkg_*`
@@ -92,6 +92,7 @@ struct JobStatus {
     /// suffix (real emerge only adds it when the root isn't `/`).
     host_root: String,
     merge_root: String,
+    mode: ActivityMode,
 }
 
 /// Terminal renderer for the activity bus. Attached as a **direct** (inline)
@@ -118,24 +119,32 @@ impl HumanStdoutSink {
         }
     }
 
-    /// Erase the in-place `Jobs: ...` line (tty only) so the next banner does
-    /// not land on top of it — mirrors `JobStatusDisplay._erase`.
+    /// Erase the in-place status line so the next banner does not land on
+    /// top of it — mirrors `JobStatusDisplay._erase`. Regen counters live on
+    /// stderr; merge job status on stdout.
     fn erase_status(&self, job_id: &str) {
-        if !self.is_tty {
-            return;
-        }
         let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(js) = jobs.get_mut(job_id)
             && js.displayed
         {
-            print!("\r\x1b[K");
+            if js.mode == ActivityMode::Regen {
+                // Always clear the counter line (tty or redirected with `\r`).
+                eprint!("\r\x1b[K");
+                let _ = std::io::stderr().flush();
+            } else if self.is_tty {
+                print!("\r\x1b[K");
+            }
             js.displayed = false;
         }
     }
 
-    /// Redraw `Jobs: N of M complete[, R running][, F failed]` for sessions
-    /// with `--jobs > 1`; a no-op otherwise (matches real emerge, which never
-    /// shows this line for a sequential run).
+    /// Redraw progress for the session.
+    ///
+    /// - **Regen:** always `[done/total]` (optionally with a failed count) —
+    ///   the traditional `em regen` / egencache-style counter.
+    /// - **Merge (and friends):** `Jobs: N of M complete…` only when
+    ///   `--jobs > 1` (matches real emerge's sequential path, which never
+    ///   shows that line).
     fn draw_status(&self, job_id: &str) {
         let running = self
             .state
@@ -148,23 +157,43 @@ impl HumanStdoutSink {
         let Some(js) = jobs.get_mut(job_id) else {
             return;
         };
-        if js.jobs <= 1 {
-            return;
-        }
-        let mut line = format!("Jobs: {} of {} complete", js.completed, js.plan_total);
-        if running > 0 {
-            line.push_str(&format!(", {running} running"));
-        }
-        if js.failed > 0 {
-            line.push_str(&format!(", {} failed", js.failed));
-        }
+        let line = if js.mode == ActivityMode::Regen {
+            if js.failed > 0 {
+                format!(
+                    "[{}/{}] ({} failed)",
+                    js.completed, js.plan_total, js.failed
+                )
+            } else {
+                format!("[{}/{}]", js.completed, js.plan_total)
+            }
+        } else {
+            if js.jobs <= 1 {
+                return;
+            }
+            let mut line = format!("Jobs: {} of {} complete", js.completed, js.plan_total);
+            if running > 0 {
+                line.push_str(&format!(", {running} running"));
+            }
+            if js.failed > 0 {
+                line.push_str(&format!(", {} failed", js.failed));
+            }
+            line
+        };
         if self.is_tty {
             print!("\r\x1b[K{line}");
             js.displayed = true;
         } else {
-            println!("{line}");
+            // Non-TTY: regen keeps a single-line counter; merge jobs already
+            // printed per-banner lines.
+            if js.mode == ActivityMode::Regen {
+                eprint!("\r{line}");
+                js.displayed = true;
+            } else {
+                println!("{line}");
+            }
         }
         let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
     }
 
     /// `" {preposition} {root}/"`, or empty when the root is `/` — real
@@ -212,6 +241,8 @@ impl ActivitySink for HumanStdoutSink {
                 flags,
                 merge_root,
                 host_root,
+                mode,
+                argv,
                 ..
             } => {
                 self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(
@@ -224,18 +255,33 @@ impl ActivitySink for HumanStdoutSink {
                         displayed: false,
                         host_root: host_root.clone(),
                         merge_root: merge_root.clone(),
+                        mode: *mode,
                     },
                 );
-                if !self.quiet {
-                    self.draw_status(job_id);
+                if self.quiet {
+                    return;
                 }
+                if *mode == ActivityMode::Regen {
+                    // Driver puts `regen ::repo (N ebuilds)` in argv[1] when present.
+                    let banner = argv
+                        .get(1)
+                        .cloned()
+                        .unwrap_or_else(|| format!("regen ({plan_total} ebuilds)"));
+                    eprintln!("{banner}");
+                }
+                self.draw_status(job_id);
             }
             ActivityEvent::SessionEnd { job_id, .. } => {
                 let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(js) = jobs.remove(job_id)
                     && js.displayed
                 {
-                    println!();
+                    // Regen progress was on stderr; merge jobs status on stdout.
+                    if js.mode == ActivityMode::Regen {
+                        eprintln!();
+                    } else {
+                        println!();
+                    }
                 }
             }
             ActivityEvent::PkgStart {
@@ -247,6 +293,18 @@ impl ActivitySink for HumanStdoutSink {
                 kind,
                 ..
             } => {
+                let mode = self
+                    .jobs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(job_id)
+                    .map(|j| j.mode)
+                    .unwrap_or_default();
+                // Regen does not emit per-ebuild start banners (thousands of
+                // packages); only track location if we ever need it.
+                if mode == ActivityMode::Regen {
+                    return;
+                }
                 self.state.lock().unwrap_or_else(|e| e.into_inner()).insert(
                     (job_id.clone(), cpv.clone()),
                     PkgLoc {
@@ -334,6 +392,13 @@ impl ActivitySink for HumanStdoutSink {
                 error,
                 ..
             } => {
+                let mode = self
+                    .jobs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(job_id)
+                    .map(|j| j.mode)
+                    .unwrap_or_default();
                 let had = self
                     .state
                     .lock()
@@ -347,6 +412,20 @@ impl ActivitySink for HumanStdoutSink {
                             js.failed += 1;
                         }
                     }
+                }
+                if mode == ActivityMode::Regen {
+                    // Progress only for successes; failures always print a
+                    // short line (rich miette frames, if any, are printed by
+                    // the regen driver after this event — same bus item).
+                    if !*ok {
+                        self.erase_status(job_id);
+                        let why = error.as_deref().unwrap_or("(no message)");
+                        eprintln!(">>> failed: {cpv}: {why}");
+                    }
+                    if !self.quiet {
+                        self.draw_status(job_id);
+                    }
+                    return;
                 }
                 if *ok {
                     if !self.quiet

@@ -75,6 +75,32 @@ fn filter(quiet: bool, verbose: u8, parallel: bool) -> Targets {
         .with_targets(OURS.iter().map(|t| (*t, floor(quiet, verbose, parallel))))
 }
 
+/// Whether stderr should get ANSI color (honours `--color` / `NO_COLOR` /
+/// real TTY detection via `anstream`).
+pub fn stderr_wants_color() -> bool {
+    !matches!(
+        anstream::AutoStream::choice(&std::io::stderr()),
+        anstream::ColorChoice::Never
+    )
+}
+
+/// Render a [`miette::Diagnostic`] code frame to stderr.
+///
+/// Color is decided here, at the UI boundary — never pre-baked into a
+/// library error string that might later travel through tracing or JSONL.
+pub fn print_diagnostic(diag: &dyn miette::Diagnostic) {
+    let theme = if stderr_wants_color() {
+        miette::GraphicalTheme::unicode()
+    } else {
+        miette::GraphicalTheme::unicode_nocolor()
+    };
+    let handler = miette::GraphicalReportHandler::new_themed(theme);
+    let mut out = String::new();
+    if handler.render_report(&mut out, diag).is_ok() {
+        eprint!("{out}");
+    }
+}
+
 /// Install the global tracing subscriber. Call once at startup, before any
 /// library code that emits tracing events.
 ///
@@ -88,15 +114,9 @@ pub fn init(quiet: bool, verbose: u8, parallel: bool) {
     let floor = filter(quiet, verbose, parallel);
 
     // `with_ansi` defaults to always-on regardless of redirection unless
-    // told otherwise — it does not auto-detect. Read the same global
-    // `colorchoice` state `--color`/`NO_COLOR` set (via `anstream`, already
-    // the source of truth for color everywhere else in this codebase — see
-    // `portage_metadata::diagnostic`'s own use of the identical check) so
-    // this "ERROR" tag agrees with the diagnostics it's printed alongside.
-    let colored = !matches!(
-        anstream::AutoStream::choice(&std::io::stderr()),
-        anstream::ColorChoice::Never
-    );
+    // told otherwise — it does not auto-detect. Same colorchoice check as
+    // [`stderr_wants_color`] / miette frames so tags and code frames agree.
+    let colored = stderr_wants_color();
 
     // Two layers on one registry: console (stderr fmt) + the activity-bus
     // bridge (mirrors info/warn/error onto the current session's bus as

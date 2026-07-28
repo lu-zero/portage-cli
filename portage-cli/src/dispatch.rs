@@ -131,6 +131,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             dedup,
         } => {
             regen::run(
+                globals,
                 repos,
                 &globals.repo_path(),
                 repos_dir.as_deref(),

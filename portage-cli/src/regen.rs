@@ -1,7 +1,22 @@
+//! Metadata-cache regeneration (`em regen`).
+//!
+//! Library work ([`portage_repo::regen_cache`]) only reports each finished
+//! ebuild through a callback. This applet owns the activity bus and the
+//! terminal: progress and short failures are [`ActivityEvent`]s rendered by
+//! [`crate::activity::HumanStdoutSink`]; rich miette frames for parse
+//! failures are printed here after the corresponding bus event (structured
+//! payload stays in-process — the wire form only carries a short string).
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use portage_repo::{RegenOpts, RegenWriteTarget, ReposConf, SourceOpts, regen_cache};
+
+use crate::activity::{
+    ACTIVITY_EVENT_VERSION, ActivityBus, ActivityEvent, ActivityMergeRoot, ActivityMode, PkgKind,
+    SessionFlags,
+};
+use crate::cli::Cli;
 
 /// Regenerate metadata caches.
 ///
@@ -15,6 +30,7 @@ use portage_repo::{RegenOpts, RegenWriteTarget, ReposConf, SourceOpts, regen_cac
 /// secondary (`$XDG_CACHE_HOME/em/md5-cache/<name>`), configured at open.
 /// `--output DIR` forces a single directory instead.
 pub async fn run(
+    cli: &Cli,
     repos_args: &[String],
     main_repo_path: &str,
     repos_dir: Option<&str>,
@@ -73,6 +89,18 @@ pub async fn run(
         .unwrap_or_default();
     let repos_dir = repos_dir.map_or(default_repos_dir, PathBuf::from);
 
+    let roots = cli.roots();
+    let activity = crate::activity::default_cli_bus(roots.merge_root());
+    crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
+    crate::activity::attach_jsonl_outputs(
+        &activity,
+        cli.activity_fd,
+        cli.activity_jsonl.as_deref(),
+    )?;
+    if cli.emergelog {
+        crate::activity::attach_emergelog(&activity, roots.merge_root());
+    }
+
     let mut total_errors = 0usize;
     for target in &targets {
         let (repo, masters) =
@@ -90,39 +118,62 @@ pub async fn run(
             None => RegenWriteTarget::Repository,
         };
 
-        eprintln!("regen ::{} ({} ebuilds)", repo.name(), ebuilds.len());
+        let plan_total = ebuilds.len() as u32;
+        let job_id = crate::activity::resolve_job_id(&Default::default(), None);
+        let session_started = ActivityEvent::now();
+        let banner = format!("regen ::{} ({} ebuilds)", repo.name(), plan_total);
+        // HumanStdoutSink prints argv[1] as the regen banner.
+        let argv = vec!["em".into(), banner, "regen".into()];
+
+        activity.emit(ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: job_id.clone(),
+            parent_job_id: None,
+            pid: std::process::id(),
+            started_at: session_started,
+            argv,
+            merge_root: roots.merge_root().to_string(),
+            host_root: cli.broot().merge_root().to_string(),
+            mode: ActivityMode::Regen,
+            plan_total,
+            flags: SessionFlags {
+                jobs: jobs.map(|j| j as u32),
+                ..Default::default()
+            },
+            plan: vec![],
+            blockers: vec![],
+        });
+
         let opts = RegenOpts {
             source: SourceOpts { jobs, dedup },
             write,
         };
-        let stats = regen_cache(
-            &repo,
-            &masters,
-            ebuilds,
-            &opts,
-            |done, total| {
-                eprint!("\r[{done}/{total}]");
-            },
-            // `regen_cache` only ever emits a short `tracing::error!` itself
-            // (the structured "something happened" signal); rendering a
-            // rich miette code frame — including the color decision — is
-            // ours to make here, not the library's.
-            |_ebuild, e| {
-                if let Some(diag) = e.parse_diagnostic() {
-                    eprintln!("{}", diag.render());
-                }
-            },
-        )
+        let bus = activity.clone();
+        let job_id_cb = job_id.clone();
+        let stats = regen_cache(&repo, &masters, ebuilds, &opts, {
+            move |ebuild, _done, _total, result| {
+                emit_item(&bus, &job_id_cb, ebuild, result);
+            }
+        })
         .await
         .context("regen")?;
-        eprintln!();
+
+        let failed = stats.errors as u32;
+        let completed = stats.total.saturating_sub(stats.errors) as u32;
+        activity.emit(ActivityEvent::SessionEnd {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id,
+            parent_job_id: None,
+            at: ActivityEvent::now(),
+            ok: stats.errors == 0,
+            completed,
+            failed,
+            seconds: ActivityEvent::now() - session_started,
+        });
+
         if stats.errors > 0 {
-            // Each error already printed its own rich diagnostic above (see
-            // the `on_error` callback just above) — this per-repo count
-            // only adds information when there's more than one target to
-            // attribute it to. With a single target it would just restate
-            // the same count a second time before the final bail restates
-            // it a third.
+            // Per-repo tally only when attributing across multiple targets;
+            // single-target runs already showed each failure + the final bail.
             if targets.len() > 1 {
                 eprintln!("::{}: {} sourcing errors", repo.name(), stats.errors);
             }
@@ -134,4 +185,44 @@ pub async fn run(
         bail!("{total_errors} sourcing errors");
     }
     Ok(())
+}
+
+/// Map one finished ebuild onto the bus (and rich UI for parse failures).
+fn emit_item(
+    bus: &ActivityBus,
+    job_id: &str,
+    ebuild: &portage_repo::Ebuild,
+    result: Result<(), portage_repo::Error>,
+) {
+    let cpv = ebuild.cpv().to_string();
+    let cpn = ebuild.cpv().cpn.to_string();
+    let at = ActivityEvent::now();
+    let (ok, error) = match &result {
+        Ok(()) => (true, None),
+        Err(e) => (false, Some(e.to_string())),
+    };
+
+    // Progress / short failure line — HumanStdoutSink owns the terminal form.
+    bus.emit(ActivityEvent::PkgEnd {
+        v: ACTIVITY_EVENT_VERSION,
+        job_id: job_id.to_string(),
+        parent_job_id: None,
+        cpv,
+        cpn,
+        merge_root: ActivityMergeRoot::Target,
+        kind: PkgKind::Source,
+        ok,
+        at,
+        seconds: 0.0,
+        phases: vec![],
+        error,
+    });
+
+    // Rich code frame stays off the wire (JSONL only has the short `error`
+    // string above). Color/theme decided here at the UI boundary.
+    if let Err(e) = &result
+        && let Some(diag) = e.parse_diagnostic()
+    {
+        crate::diag::print_diagnostic(diag);
+    }
 }

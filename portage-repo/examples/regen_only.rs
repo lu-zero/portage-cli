@@ -123,20 +123,17 @@ async fn main() {
             .unwrap_or(portage_repo::RegenWriteTarget::None),
     };
 
-    let stats = match regen_cache(
-        &repo,
-        &[],
-        ebuilds,
-        &opts,
-        |done, total| {
-            eprint!("\r[{done}/{total}]");
-        },
-        |_ebuild, e| {
+    let stats = match regen_cache(&repo, &[], ebuilds, &opts, |ebuild, done, total, result| {
+        eprint!("\r[{done}/{total}]");
+        if let Err(e) = result {
+            // Library example: short line + no-color code frame (the real
+            // `em regen` applet maps this onto the activity bus instead).
+            eprintln!("\n{}: {e}", ebuild.cpv());
             if let Some(diag) = e.parse_diagnostic() {
-                eprintln!("{}", diag.render());
+                eprint!("{}", diag.render_nocolor());
             }
-        },
-    )
+        }
+    })
     .await
     {
         Ok(s) => s,

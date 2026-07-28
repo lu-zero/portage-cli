@@ -15,6 +15,8 @@ pub enum ActivityMode {
     Depclean,
     FetchOnly,
     BuildpkgOnly,
+    /// Metadata-cache regeneration (`em regen`) — ebuild source/write, not a merge.
+    Regen,
 }
 
 /// How a package is being acted on.

@@ -17,6 +17,8 @@ pub struct EmergeLogSink {
     lock: Mutex<()>,
     /// Display ROOT for "to {root}" lines (session merge root).
     merge_root_display: Mutex<String>,
+    /// Current session mode — regen skips per-item lines (thousands of ebuilds).
+    mode: Mutex<ActivityMode>,
 }
 
 impl EmergeLogSink {
@@ -26,6 +28,7 @@ impl EmergeLogSink {
             path: log_path.into(),
             lock: Mutex::new(()),
             merge_root_display: Mutex::new("/".into()),
+            mode: Mutex::new(ActivityMode::Merge),
         }
     }
 
@@ -63,6 +66,10 @@ impl EmergeLogSink {
             eprintln!("warning: emergelog {}: {e}", self.path);
         }
     }
+
+    fn mode(&self) -> ActivityMode {
+        *self.mode.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 impl ActivitySink for EmergeLogSink {
@@ -79,6 +86,7 @@ impl ActivitySink for EmergeLogSink {
                     .merge_root_display
                     .lock()
                     .unwrap_or_else(|e| e.into_inner()) = merge_root.clone();
+                *self.mode.lock().unwrap_or_else(|e| e.into_inner()) = *mode;
                 let when = chrono_like(*started_at);
                 self.append_line(&format!("Started emerge on: {when}"));
                 let cmd = if argv.is_empty() {
@@ -92,10 +100,14 @@ impl ActivitySink for EmergeLogSink {
                     }
                     ActivityMode::Unmerge => " === Unmerging... ",
                     ActivityMode::Depclean => " >>> depclean ",
+                    ActivityMode::Regen => " >>> regen ",
                 };
                 self.append_line(&format!("{tag}{cmd}"));
             }
             ActivityEvent::PkgStart { cpv, index, of, .. } => {
+                if self.mode() == ActivityMode::Regen {
+                    return;
+                }
                 let root = self
                     .merge_root_display
                     .lock()
@@ -104,6 +116,9 @@ impl ActivitySink for EmergeLogSink {
                 self.append_line(&format!(" >>> emerge ({index} of {of}) {cpv} to {root}"));
             }
             ActivityEvent::PhaseEnter { cpv, phase, .. } => {
+                if self.mode() == ActivityMode::Regen {
+                    return;
+                }
                 // Approximate Portage phase banners for the common cases.
                 let label = match phase.as_str() {
                     "fetch" => "Fetching",
@@ -115,6 +130,9 @@ impl ActivitySink for EmergeLogSink {
                 self.append_line(&format!(" === {label} ({cpv})"));
             }
             ActivityEvent::PkgEnd { cpv, ok, .. } => {
+                if self.mode() == ActivityMode::Regen {
+                    return;
+                }
                 let root = self
                     .merge_root_display
                     .lock()

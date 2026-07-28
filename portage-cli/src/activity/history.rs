@@ -10,7 +10,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::bus::ActivitySink;
-use super::event::{ActivityEvent, ActivityMergeRoot, PhaseTiming, PkgKind};
+use super::event::{ActivityEvent, ActivityMergeRoot, ActivityMode, PhaseTiming, PkgKind};
 
 /// One finished package action (one JSONL line).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -30,10 +30,15 @@ pub struct HistoryRecord {
 }
 
 /// Appends [`HistoryRecord`]s on [`ActivityEvent::PkgEnd`].
+///
+/// Skips [`ActivityMode::Regen`] sessions — regenerating thousands of ebuilds
+/// must not pollute the merge-duration history used for ETA.
 pub struct HistorySink {
     path: Utf8PathBuf,
     /// Serialize multi-job appends on the same path within one process.
     lock: Mutex<()>,
+    /// job_id → mode from the most recent [`ActivityEvent::SessionStart`].
+    modes: Mutex<std::collections::HashMap<String, ActivityMode>>,
 }
 
 impl HistorySink {
@@ -42,6 +47,7 @@ impl HistorySink {
         Self {
             path: merge_root.join("var/cache/edb/em-activity/history/merges.jsonl"),
             lock: Mutex::new(()),
+            modes: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -80,34 +86,57 @@ impl HistorySink {
 
 impl ActivitySink for HistorySink {
     fn on_event(&self, event: &ActivityEvent) {
-        let ActivityEvent::PkgEnd {
-            job_id,
-            cpv,
-            cpn,
-            merge_root,
-            kind,
-            ok,
-            at,
-            seconds,
-            phases,
-            error,
-            ..
-        } = event
-        else {
-            return;
-        };
-        self.append(&HistoryRecord {
-            ts_end: *at,
-            job_id: job_id.clone(),
-            cpn: cpn.clone(),
-            cpv: cpv.clone(),
-            merge_root: *merge_root,
-            kind: *kind,
-            ok: *ok,
-            seconds: *seconds,
-            phases: phases.clone(),
-            error: error.clone(),
-        });
+        match event {
+            ActivityEvent::SessionStart { job_id, mode, .. } => {
+                self.modes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(job_id.clone(), *mode);
+            }
+            ActivityEvent::SessionEnd { job_id, .. } => {
+                self.modes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(job_id);
+            }
+            ActivityEvent::PkgEnd {
+                job_id,
+                cpv,
+                cpn,
+                merge_root,
+                kind,
+                ok,
+                at,
+                seconds,
+                phases,
+                error,
+                ..
+            } => {
+                let mode = self
+                    .modes
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(job_id)
+                    .copied()
+                    .unwrap_or(ActivityMode::Merge);
+                if mode == ActivityMode::Regen {
+                    return;
+                }
+                self.append(&HistoryRecord {
+                    ts_end: *at,
+                    job_id: job_id.clone(),
+                    cpn: cpn.clone(),
+                    cpv: cpv.clone(),
+                    merge_root: *merge_root,
+                    kind: *kind,
+                    ok: *ok,
+                    seconds: *seconds,
+                    phases: phases.clone(),
+                    error: error.clone(),
+                });
+            }
+            _ => {}
+        }
     }
 }
 
