@@ -971,8 +971,16 @@ pub enum Applet {
         args: Vec<String>,
     },
 
-    #[command(about = "Sync repositories")]
-    Sync { repos: Vec<String> },
+    /// Sync ebuild repositories from `repos.conf` (`sync-type = git` only).
+    ///
+    /// With no names, syncs every entry with `auto-sync = yes` (Portage
+    /// default) and a usable `sync-type`/`sync-uri`. Named repos are synced
+    /// regardless of `auto-sync`.
+    #[command(about = "Sync repositories (git only)")]
+    Sync {
+        /// Repo names from repos.conf (default: auto-sync enabled repos)
+        repos: Vec<String>,
+    },
 
     #[command(about = "Remove orphaned/unused packages")]
     Depclean {
@@ -1275,8 +1283,12 @@ pub enum MaintCommand {
         #[arg(value_name = "REPO")]
         repos: Vec<String>,
     },
-    #[command(about = "Sync repositories")]
-    Sync { repos: Vec<String> },
+    /// Same as `em sync` — shared implementation.
+    #[command(about = "Sync repositories (git only)")]
+    Sync {
+        /// Repo names from repos.conf (default: auto-sync enabled repos)
+        repos: Vec<String>,
+    },
     #[command(about = "Check (and optionally fix) problems in the world file")]
     World {
         /// Remove orphaned entries from the world file

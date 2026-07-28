@@ -48,6 +48,7 @@ anyhow = { workspace = true }
 anstream = { workspace = true }
 anstyle = { workspace = true }
 miette = { workspace = true }
+gix = { workspace = true }
 terminal_size = { workspace = true }
 colorchoice-clap = { workspace = true }
 camino = { workspace = true }

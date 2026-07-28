@@ -6,4 +6,5 @@ pub mod regen_use;
 pub mod resume;
 pub mod revisions;
 pub mod sets;
+pub mod sync;
 pub mod world;

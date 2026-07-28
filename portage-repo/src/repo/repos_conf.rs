@@ -47,6 +47,25 @@ pub struct RepoEntry {
     pub location: Location,
     /// Names of master repositories (often empty; layout.conf normally wins).
     pub masters: Vec<String>,
+    /// `sync-type` from repos.conf (`git`, `rsync`, …). Empty means unsyncable.
+    pub sync_type: Option<String>,
+    /// `sync-uri` from repos.conf (remote URL for the sync module).
+    pub sync_uri: Option<String>,
+    /// `auto-sync` from repos.conf. Defaults to `true` when unset (Portage).
+    pub auto_sync: bool,
+    /// `volatile` from repos.conf. When `true`, sync must not clobber local
+    /// changes (`git reset --hard` / `clean`). Unset means “infer from
+    /// ownership” at sync time (Portage: volatile if not root/portage-owned).
+    pub volatile: Option<bool>,
+}
+
+impl RepoEntry {
+    /// Whether this entry can be synced (has both type and URI, on-disk path).
+    pub fn is_syncable(&self) -> bool {
+        self.location.as_path().is_some()
+            && self.sync_type.as_ref().is_some_and(|t| !t.is_empty())
+            && self.sync_uri.as_ref().is_some_and(|u| !u.is_empty())
+    }
 }
 
 /// Parsed `repos.conf` describing every configured repository.
@@ -138,6 +157,10 @@ impl ReposConf {
                             aliases,
                         },
                         masters,
+                        sync_type: None,
+                        sync_uri: None,
+                        auto_sync: false,
+                        volatile: None,
                     });
                 }
                 let location = s.get("location")?;
@@ -145,6 +168,16 @@ impl ReposConf {
                     name: name.clone(),
                     location: Location::Path(PathBuf::from(location)),
                     masters,
+                    sync_type: s.get("sync-type").cloned().filter(|t| !t.is_empty()),
+                    sync_uri: s.get("sync-uri").cloned().filter(|u| !u.is_empty()),
+                    // Portage default: auto-sync = yes
+                    auto_sync: match s.get("auto-sync").map(|v| v.trim().to_ascii_lowercase()) {
+                        None => true,
+                        Some(v) => matches!(v.as_str(), "yes" | "true"),
+                    },
+                    volatile: s
+                        .get("volatile")
+                        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "yes" | "true")),
                 })
             })
             .collect();
@@ -215,10 +248,13 @@ main-repo = gentoo
 
 [gentoo]
 location = /var/db/repos/gentoo
+sync-type = git
+sync-uri = https://github.com/gentoo-mirror/gentoo.git
 
 [crossdev]
 location = /var/db/repos/crossdev
 masters = gentoo
+auto-sync = no
 "#,
         );
         let rc = ReposConf::load_from(&[&conf]).unwrap();
@@ -227,6 +263,14 @@ masters = gentoo
         assert_eq!(rc.repos()[1].name, "crossdev");
         assert_eq!(rc.repos()[1].masters, vec!["gentoo"]);
         assert_eq!(rc.main_repo().map(|r| r.name.as_str()), Some("gentoo"));
+        let gentoo = rc.find("gentoo").unwrap();
+        assert_eq!(gentoo.sync_type.as_deref(), Some("git"));
+        assert!(gentoo.sync_uri.as_ref().unwrap().contains("gentoo-mirror"));
+        assert!(gentoo.auto_sync);
+        assert!(gentoo.is_syncable());
+        let cross = rc.find("crossdev").unwrap();
+        assert!(!cross.auto_sync);
+        assert!(!cross.is_syncable());
     }
 
     #[test]

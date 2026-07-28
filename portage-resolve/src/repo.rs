@@ -1460,6 +1460,10 @@ mod tests {
                 aliases,
             },
             masters: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            auto_sync: false,
+            volatile: None,
         };
 
         let data = load_repos(&repo, &[], std::slice::from_ref(&alias_entry)).await;
@@ -1493,6 +1497,10 @@ mod tests {
                 aliases,
             },
             masters: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            auto_sync: false,
+            volatile: None,
         };
 
         let data = load_repos(&repo, &[], std::slice::from_ref(&alias_entry)).await;

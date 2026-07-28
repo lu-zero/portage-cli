@@ -118,10 +118,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             eprintln!("portageq: command={} args={:?}", command, args);
             bail!("not implemented: portageq")
         }
-        Applet::Sync { repos } => {
-            eprintln!("sync: repos={:?}", repos);
-            bail!("not implemented: sync")
-        }
+        Applet::Sync { repos } => maint::sync::run(repos, globals).await,
         Applet::Depclean { atoms } => crate::depclean::run_with_targets(globals, atoms).await,
         Applet::Regen {
             repos,
@@ -274,10 +271,7 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
             let roots = globals.roots();
             maint::revisions::run(repos, roots.target())
         }
-        Some(MaintCommand::Sync { repos }) => {
-            eprintln!("emaint: sync repos={:?}", repos);
-            bail!("not implemented: emaint sync")
-        }
+        Some(MaintCommand::Sync { repos }) => maint::sync::run(repos, globals).await,
         Some(MaintCommand::World { fix }) => {
             let vdb = open_cli_vdb(globals)?;
             let roots = globals.roots();
