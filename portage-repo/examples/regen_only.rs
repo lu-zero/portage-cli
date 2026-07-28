@@ -123,28 +123,32 @@ async fn main() {
             .unwrap_or(portage_repo::RegenWriteTarget::None),
     };
 
-    let stats = match regen_cache(&repo, &[], ebuilds, &opts, |ebuild, done, total, result| {
-        eprint!("\r[{done}/{total}]");
-        if let Err(e) = result {
-            // Library example: short line + no-color code frame (the real
-            // `em regen` applet maps this onto the activity bus instead).
-            eprintln!("\n{}: {e}", ebuild.cpv());
-            if let Some(diag) = e.parse_diagnostic() {
-                eprint!("{}", diag.render_nocolor());
-            }
-        }
-    })
-    .await
-    {
-        Ok(s) => s,
+    let items = match regen_cache(&repo, &[], ebuilds, &opts) {
+        Ok(rx) => rx,
         Err(e) => {
-            eprintln!("\nFatal error: {e}");
+            eprintln!("Fatal error: {e}");
             process::exit(1);
         }
     };
 
+    let mut total = 0usize;
+    let mut errors = 0usize;
+    while let Ok(item) = items.recv_async().await {
+        total = item.total;
+        eprint!("\r[{}/{}]", item.index, item.total);
+        if let Err(e) = &item.result {
+            // Library example: short line + no-color code frame (the real
+            // `em regen` applet maps items onto the activity bus instead).
+            eprintln!("\n{}: {e}", item.ebuild.cpv());
+            if let Some(diag) = e.parse_diagnostic() {
+                eprint!("{}", diag.render_nocolor());
+            }
+            errors += 1;
+        }
+    }
+
     eprintln!();
-    println!("Total: {}  Errors: {}", stats.total, stats.errors);
+    println!("Total: {total}  Errors: {errors}");
 
     let (hits, misses) = portage_repo::inherit::cache_stats();
     let total_lookups = hits + misses;
@@ -157,7 +161,7 @@ async fn main() {
         );
     }
 
-    if stats.errors > 0 {
+    if errors > 0 {
         process::exit(1);
     }
 }

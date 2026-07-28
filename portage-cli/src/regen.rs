@@ -1,16 +1,17 @@
 //! Metadata-cache regeneration (`em regen`).
 //!
-//! Library work ([`portage_repo::regen_cache`]) only reports each finished
-//! ebuild through a callback. This applet owns the activity bus and the
-//! terminal: progress and short failures are [`ActivityEvent`]s rendered by
-//! [`crate::activity::HumanStdoutSink`]; rich miette frames for parse
-//! failures are printed here after the corresponding bus event (structured
-//! payload stays in-process — the wire form only carries a short string).
+//! Library work ([`portage_repo::regen_cache`]) streams one
+//! [`portage_repo::RegenItem`] per finished ebuild. This applet owns the
+//! activity bus and the terminal: progress and short failures are
+//! [`ActivityEvent`]s rendered by [`crate::activity::HumanStdoutSink`]; rich
+//! miette frames for parse failures are printed here after the corresponding
+//! bus event (structured payload stays in-process — the wire form only
+//! carries a short string).
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use portage_repo::{RegenOpts, RegenWriteTarget, ReposConf, SourceOpts, regen_cache};
+use portage_repo::{RegenItem, RegenOpts, RegenWriteTarget, ReposConf, SourceOpts, regen_cache};
 
 use crate::activity::{
     ACTIVITY_EVENT_VERSION, ActivityBus, ActivityEvent, ActivityMergeRoot, ActivityMode, PkgKind,
@@ -148,36 +149,35 @@ pub async fn run(
             source: SourceOpts { jobs, dedup },
             write,
         };
-        let bus = activity.clone();
-        let job_id_cb = job_id.clone();
-        let stats = regen_cache(&repo, &masters, ebuilds, &opts, {
-            move |ebuild, _done, _total, result| {
-                emit_item(&bus, &job_id_cb, ebuild, result);
-            }
-        })
-        .await
-        .context("regen")?;
+        let items = regen_cache(&repo, &masters, ebuilds, &opts).context("regen setup")?;
 
-        let failed = stats.errors as u32;
-        let completed = stats.total.saturating_sub(stats.errors) as u32;
+        let mut errors = 0usize;
+        while let Ok(item) = items.recv_async().await {
+            if item.result.is_err() {
+                errors += 1;
+            }
+            emit_item(&activity, &job_id, item);
+        }
+
+        let completed = plan_total.saturating_sub(errors as u32);
         activity.emit(ActivityEvent::SessionEnd {
             v: ACTIVITY_EVENT_VERSION,
             job_id,
             parent_job_id: None,
             at: ActivityEvent::now(),
-            ok: stats.errors == 0,
+            ok: errors == 0,
             completed,
-            failed,
+            failed: errors as u32,
             seconds: ActivityEvent::now() - session_started,
         });
 
-        if stats.errors > 0 {
+        if errors > 0 {
             // Per-repo tally only when attributing across multiple targets;
             // single-target runs already showed each failure + the final bail.
             if targets.len() > 1 {
-                eprintln!("::{}: {} sourcing errors", repo.name(), stats.errors);
+                eprintln!("::{}: {} sourcing errors", repo.name(), errors);
             }
-            total_errors += stats.errors;
+            total_errors += errors;
         }
     }
 
@@ -188,16 +188,11 @@ pub async fn run(
 }
 
 /// Map one finished ebuild onto the bus (and rich UI for parse failures).
-fn emit_item(
-    bus: &ActivityBus,
-    job_id: &str,
-    ebuild: &portage_repo::Ebuild,
-    result: Result<(), portage_repo::Error>,
-) {
-    let cpv = ebuild.cpv().to_string();
-    let cpn = ebuild.cpv().cpn.to_string();
+fn emit_item(bus: &ActivityBus, job_id: &str, item: RegenItem) {
+    let cpv = item.ebuild.cpv().to_string();
+    let cpn = item.ebuild.cpv().cpn.to_string();
     let at = ActivityEvent::now();
-    let (ok, error) = match &result {
+    let (ok, error) = match &item.result {
         Ok(()) => (true, None),
         Err(e) => (false, Some(e.to_string())),
     };
@@ -220,7 +215,7 @@ fn emit_item(
 
     // Rich code frame stays off the wire (JSONL only has the short `error`
     // string above). Color/theme decided here at the UI boundary.
-    if let Err(e) = &result
+    if let Err(e) = &item.result
         && let Some(diag) = e.parse_diagnostic()
     {
         crate::diag::print_diagnostic(diag);

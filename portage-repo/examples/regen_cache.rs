@@ -207,7 +207,11 @@ async fn main() {
         dedup: false,
     };
 
-    source_parallel(&repo, &masters, ebuilds, &opts, &ctx, {
+    let source_rx = source_parallel(&repo, &masters, ebuilds, &opts, &ctx);
+    // Drain on several tasks so comparison work stays parallel with sourcing.
+    let mut handles = Vec::new();
+    for _ in 0..jobs {
+        let source_rx = source_rx.clone();
         let repo = Arc::clone(&repo);
         let progress = Arc::clone(&progress);
         let errors = Arc::clone(&errors);
@@ -217,112 +221,115 @@ async fn main() {
         let diffs = Arc::clone(&diffs);
         let quiet = args.quiet;
 
-        move |ebuild, result| {
-            let i = progress.fetch_add(1, Ordering::Relaxed) + 1;
-            let cpv = ebuild.cpv();
-            let cpv_str = cpv.to_string();
-            if !quiet {
-                eprint!("\r[{i}/{total}] {cpv_str:<60}");
-            }
-
-            let metadata = match result {
-                Err(e) => {
-                    eprintln!("\nERROR sourcing {cpv_str}: {e}");
-                    errors.fetch_add(1, Ordering::Relaxed);
-                    return;
+        handles.push(tokio::spawn(async move {
+            while let Ok((ebuild, result)) = source_rx.recv_async().await {
+                let i = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                let cpv = ebuild.cpv();
+                let cpv_str = cpv.to_string();
+                if !quiet {
+                    eprint!("\r[{i}/{total}] {cpv_str:<60}");
                 }
-                Ok(s) => s,
-            };
 
-            let reference = match repo.cache_entry(cpv) {
-                Ok(Some(c)) => c,
-                Ok(None) => {
-                    eprintln!("\nMISSING cache for {cpv_str}");
-                    missing_cache.fetch_add(1, Ordering::Relaxed);
-                    success.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-                Err(e) => {
-                    eprintln!("\nERROR reading cache for {cpv_str}: {e}");
-                    errors.fetch_add(1, Ordering::Relaxed);
-                    return;
-                }
-            };
+                let metadata = match result {
+                    Err(e) => {
+                        eprintln!("\nERROR sourcing {cpv_str}: {e}");
+                        errors.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    Ok(s) => s,
+                };
 
-            let ebuild_md5 = fs::read(ebuild.path())
-                .map(|b| format!("{:x}", md5::compute(&b)))
-                .ok();
+                let reference = match repo.cache_entry(cpv) {
+                    Ok(Some(c)) => c,
+                    Ok(None) => {
+                        eprintln!("\nMISSING cache for {cpv_str}");
+                        missing_cache.fetch_add(1, Ordering::Relaxed);
+                        success.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("\nERROR reading cache for {cpv_str}: {e}");
+                        errors.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                };
 
-            let portage_repo::source::SourcedEbuild {
-                metadata,
-                eclasses: eclass_paths,
-            } = metadata;
-            let eclasses: Vec<(String, String)> = eclass_paths
-                .into_iter()
-                .filter_map(|(name, path)| {
-                    fs::read(path.as_std_path())
-                        .ok()
-                        .map(|data| (name, format!("{:x}", md5::compute(&data))))
-                })
-                .collect();
+                let ebuild_md5 = fs::read(ebuild.path())
+                    .map(|b| format!("{:x}", md5::compute(&b)))
+                    .ok();
 
-            let sourced_entry = CacheEntry {
-                metadata,
-                md5: ebuild_md5,
-                eclasses,
-            };
+                let portage_repo::source::SourcedEbuild {
+                    metadata,
+                    eclasses: eclass_paths,
+                } = metadata;
+                let eclasses: Vec<(String, String)> = eclass_paths
+                    .into_iter()
+                    .filter_map(|(name, path)| {
+                        fs::read(path.as_std_path())
+                            .ok()
+                            .map(|data| (name, format!("{:x}", md5::compute(&data))))
+                    })
+                    .collect();
 
-            let ref_serialized = reference.serialize();
-            let src_serialized = sourced_entry.serialize();
+                let sourced_entry = CacheEntry {
+                    metadata,
+                    md5: ebuild_md5,
+                    eclasses,
+                };
 
-            let ref_map = parse_cache_map(&ref_serialized);
-            let src_map = parse_cache_map(&src_serialized);
+                let ref_serialized = reference.serialize();
+                let src_serialized = sourced_entry.serialize();
 
-            let mut has_diff = false;
-            let mut new_diffs = Vec::new();
-            for &key in COMPARE_KEYS {
-                let ref_val = ref_map.get(key).copied().unwrap_or("");
-                let src_val = src_map.get(key).copied().unwrap_or("");
+                let ref_map = parse_cache_map(&ref_serialized);
+                let src_map = parse_cache_map(&src_serialized);
 
-                if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
-                    let dups = find_extra_duplicates(ref_val, src_val);
-                    if !dups.is_empty() {
-                        eprintln!(
-                            "\nWARN {cpv_str} {key}: extra duplicate tokens: {}",
-                            dups.join(", ")
-                        );
+                let mut has_diff = false;
+                let mut new_diffs = Vec::new();
+                for &key in COMPARE_KEYS {
+                    let ref_val = ref_map.get(key).copied().unwrap_or("");
+                    let src_val = src_map.get(key).copied().unwrap_or("");
+
+                    if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
+                        let dups = find_extra_duplicates(ref_val, src_val);
+                        if !dups.is_empty() {
+                            eprintln!(
+                                "\nWARN {cpv_str} {key}: extra duplicate tokens: {}",
+                                dups.join(", ")
+                            );
+                        }
+                    }
+
+                    let differs = if UNORDERED_KEYS.contains(&key) {
+                        token_multiset(ref_val) != token_multiset(src_val)
+                    } else {
+                        ref_val != src_val
+                    };
+
+                    if differs {
+                        has_diff = true;
+                        new_diffs.push(FieldDiff {
+                            cpv: cpv_str.clone(),
+                            key: key.to_string(),
+                            expected: ref_val.to_string(),
+                            got: src_val.to_string(),
+                        });
                     }
                 }
 
-                let differs = if UNORDERED_KEYS.contains(&key) {
-                    token_multiset(ref_val) != token_multiset(src_val)
-                } else {
-                    ref_val != src_val
-                };
-
-                if differs {
-                    has_diff = true;
-                    new_diffs.push(FieldDiff {
-                        cpv: cpv_str.clone(),
-                        key: key.to_string(),
-                        expected: ref_val.to_string(),
-                        got: src_val.to_string(),
-                    });
+                if has_diff {
+                    mismatches.fetch_add(1, Ordering::Relaxed);
+                    diffs.lock().unwrap().extend(new_diffs);
                 }
+                success.fetch_add(1, Ordering::Relaxed);
             }
-
-            if has_diff {
-                mismatches.fetch_add(1, Ordering::Relaxed);
-                diffs.lock().unwrap().extend(new_diffs);
-            }
-            success.fetch_add(1, Ordering::Relaxed);
+        }));
+    }
+    for h in handles {
+        if let Err(e) = h.await {
+            eprintln!("\nFatal error: {e}");
+            process::exit(1);
         }
-    })
-    .await
-    .unwrap_or_else(|e| {
-        eprintln!("\nFatal error: {e}");
-        process::exit(1);
-    });
+    }
 
     if !args.quiet {
         eprintln!();

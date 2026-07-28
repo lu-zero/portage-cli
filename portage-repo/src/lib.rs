@@ -57,7 +57,7 @@ pub use error::{Error, Result};
 // Re-export the most-used types at crate root for backwards compat
 pub use build::{EbuildShell, run_helper};
 pub use cache::{
-    CacheReadOpts, RegenOpts, RegenStats, RegenWriteTarget, cache_cpvs, cache_entries_parallel,
+    CacheReadOpts, RegenItem, RegenOpts, RegenWriteTarget, cache_cpvs, cache_entries_parallel,
     regen_cache,
 };
 pub use gentoo_core::arch::ExoticKey;
@@ -95,4 +95,4 @@ pub use repo::{Manifest, ManifestEntry};
 pub use repo::{
     Profile, ProfileDesc, ProfileEnv, ProfileEnvLayer, ProfileStack, ProfileStatus, UseFlags,
 };
-pub use source::{SourceContext, SourceOpts, source_parallel, source_single};
+pub use source::{SourceContext, SourceItem, SourceOpts, source_parallel, source_single};

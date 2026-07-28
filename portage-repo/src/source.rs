@@ -1,11 +1,11 @@
 //! Parallel ebuild sourcing.
 //!
-//! - [`source_parallel`] — stream all ebuilds through a worker pool, callback per result
+//! - [`source_parallel`] — worker pool; results as a stream (completion order)
 //! - [`source_single`] — source one ebuild (emerge cache-miss path)
 //!
 //! Both share a [`SourceContext`] that holds the eclass AST cache. Pass the
 //! same instance across calls within a single run to maximise cache hits.
-//! No disk I/O is performed here; writing cache files is `crate::regen`.
+//! No disk I/O is performed here; writing cache files is `crate::cache`.
 
 use std::sync::Arc;
 
@@ -28,6 +28,9 @@ pub struct SourcedEbuild {
     /// Eclasses sourced for this ebuild, paired `(name, file path)`.
     pub eclasses: Vec<(String, Utf8PathBuf)>,
 }
+
+/// One finished source attempt, in completion order.
+pub type SourceItem = (Ebuild, Result<SourcedEbuild>);
 
 type AstCache = Arc<papaya::HashMap<String, brush_parser::ast::Program>>;
 
@@ -54,21 +57,20 @@ pub struct SourceOpts {
     pub dedup: bool,
 }
 
-/// Source `ebuilds` in parallel, calling `on_result` for each outcome.
+/// Source `ebuilds` in parallel; return a stream of outcomes in completion order.
 ///
-/// Results arrive in completion order (not submission order). The run
-/// continues on per-ebuild errors; failures are delivered through `Err`.
-pub async fn source_parallel<F>(
+/// Must be called from a Tokio runtime: workers and the work feeder are
+/// spawned on it. Drain the receiver until it disconnects (all items done,
+/// or the consumer dropped early — workers then stop sending).
+///
+/// Per-ebuild failures are `Err` items on the stream; the pool keeps going.
+pub fn source_parallel(
     repo: &Repository,
     masters: &[Repository],
     ebuilds: Vec<Ebuild>,
     opts: &SourceOpts,
     ctx: &SourceContext,
-    on_result: F,
-) -> Result<()>
-where
-    F: Fn(Ebuild, Result<SourcedEbuild>) + Send + Sync + 'static,
-{
+) -> flume::Receiver<SourceItem> {
     let jobs = opts.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -78,38 +80,40 @@ where
     let repo = Arc::new(repo.clone());
     let masters: Arc<Vec<Repository>> = Arc::new(masters.to_vec());
     let ctx = ctx.clone();
-    let on_result = Arc::new(on_result);
 
-    let (tx, rx) = flume::bounded::<Ebuild>(jobs * 2);
+    let (work_tx, work_rx) = flume::bounded::<Ebuild>(jobs * 2);
+    let (out_tx, out_rx) = flume::bounded::<SourceItem>(jobs * 2);
 
-    let mut handles = Vec::with_capacity(jobs);
     for _ in 0..jobs {
-        let rx = rx.clone();
+        let work_rx = work_rx.clone();
+        let out_tx = out_tx.clone();
         let repo = Arc::clone(&repo);
         let masters = Arc::clone(&masters);
         let ctx = ctx.clone();
-        let on_result = Arc::clone(&on_result);
 
-        handles.push(tokio::spawn(async move {
+        tokio::spawn(async move {
             let master_refs: Vec<&Repository> = masters.iter().collect();
-            while let Ok(ebuild) = rx.recv_async().await {
+            while let Ok(ebuild) = work_rx.recv_async().await {
                 let result = source_one(&repo, &master_refs, &ebuild, &ctx, dedup).await;
-                on_result(ebuild, result);
+                if out_tx.send_async((ebuild, result)).await.is_err() {
+                    break; // consumer gone
+                }
             }
-        }));
+        });
     }
-    drop(rx);
+    drop(work_rx);
+    drop(out_tx); // workers hold the remaining senders
 
-    for ebuild in ebuilds {
-        let _ = tx.send_async(ebuild).await;
-    }
-    drop(tx);
+    tokio::spawn(async move {
+        for ebuild in ebuilds {
+            if work_tx.send_async(ebuild).await.is_err() {
+                break;
+            }
+        }
+        // work_tx drop → workers exit → out senders drop → out_rx ends
+    });
 
-    for h in handles {
-        let _ = h.await;
-    }
-
-    Ok(())
+    out_rx
 }
 
 /// Source a single ebuild and return its metadata.
