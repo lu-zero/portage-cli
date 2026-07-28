@@ -67,7 +67,7 @@ thiserror = "2"
 miette = { version = "7.6.0", default-features = false, features = ["derive", "fancy"] }
 # Same line as pkgcraft (already in the graph via portage-bench); used by
 # `em sync` for git clone/fetch without shelling the network path through git.
-gix = { version = "0.83.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "sha256"] }
+gix = { version = "0.83.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "revision", "sha1", "sha256"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 winnow = { version = "1.0", features = ["ascii"] }
 bzip2 = "0.4"

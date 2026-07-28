@@ -1,10 +1,10 @@
 //! `em sync` / `em maint sync` — update ebuild repositories from `repos.conf`.
 //!
 //! **Git only (MVP).** `sync-type = git` repos are cloned/fetched with
-//! [`gix`] (same stack pkgcraft uses). After a fetch, the worktree is applied
-//! with `git reset --hard @{upstream}` so the tree matches Portage's
-//! non-volatile update (gix fetch alone only updates remote-tracking refs).
-//! Other `sync-type`s (rsync, …) are skipped with a clear message for now.
+//! [`gix`]. After a fetch, the worktree is applied with a pure-gix hard-reset
+//! composition ([`crate::gix_ext`]) — the orchestration gitoxide still lists
+//! as unfinished porcelain. Other `sync-type`s (rsync, …) are skipped with a
+//! clear message for now.
 //!
 //! Selection (Portage / emaint):
 //! - named repos: those names, regardless of `auto-sync`
@@ -12,13 +12,13 @@
 //!   syncable (`sync-type` + `sync-uri` + on-disk `location`)
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_repo::{RepoEntry, ReposConf};
 
 use crate::cli::Cli;
+use crate::gix_ext;
 
 /// Run repository sync for `em sync` and `em maint sync`.
 ///
@@ -139,12 +139,12 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
         let volatile = resolve_volatile(entry, path.as_std_path());
         let action = if path.join(".git").is_dir() {
             if volatile {
-                format!("git fetch + ff-only merge in {path} from {sync_uri}")
+                format!("gix fetch + ff-only hard-reset in {path} from {sync_uri}")
             } else {
-                format!("git fetch + hard reset in {path} from {sync_uri}")
+                format!("gix fetch + hard-reset in {path} from {sync_uri}")
             }
         } else {
-            format!("git clone {sync_uri} → {path}")
+            format!("gix clone {sync_uri} → {path}")
         };
         return Ok(SyncOutcome::Pretend(action));
     }
@@ -171,7 +171,6 @@ fn resolve_volatile(entry: &RepoEntry, path: &Path) -> bool {
     if let Some(v) = entry.volatile {
         return v;
     }
-    // Infer: treat as volatile (don't clobber) when the tree is user-owned.
     match std::fs::metadata(path).ok().map(|m| {
         #[cfg(unix)]
         {
@@ -184,21 +183,18 @@ fn resolve_volatile(entry: &RepoEntry, path: &Path) -> bool {
             0u32
         }
     }) {
-        // root (0) or common portage uid — non-volatile (Portage may clobber)
         Some(0) => false,
         Some(uid) if is_portage_uid(uid) => false,
-        // missing path (clone target) → non-volatile default for system repos
         None => false,
         Some(_) => true,
     }
 }
 
 fn is_portage_uid(uid: u32) -> bool {
-    // Best-effort: the portage user is commonly uid 250 on Gentoo.
     uid == 250
 }
 
-/// Clone or fetch+apply a git repo with gix (+ git CLI for hard reset).
+/// Clone or fetch+hard-reset with pure gix.
 ///
 /// Returns whether the worktree tip changed.
 fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
@@ -218,20 +214,19 @@ fn git_clone(path: &Utf8Path, url: gix::Url, quiet: bool) -> Result<()> {
         std::fs::create_dir_all(parent).with_context(|| format!("creating parent of {path}"))?;
     }
     if !quiet {
-        eprintln!(">>> git clone {url} → {path}");
+        eprintln!(">>> gix clone {url} → {path}");
     }
-    // Portage uses --depth 1 for new clones.
     let mut prepare = gix::prepare_clone(url, path.as_std_path())
-        .map_err(|e| anyhow::anyhow!("git clone prepare: {e}"))?
+        .map_err(|e| anyhow::anyhow!("gix clone prepare: {e}"))?
         .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(
             std::num::NonZeroU32::new(1).expect("1"),
         ));
     let (mut checkout, _outcome) = prepare
         .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .map_err(|e| anyhow::anyhow!("git clone fetch: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("gix clone fetch: {e}"))?;
     let (_repo, _) = checkout
         .main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .map_err(|e| anyhow::anyhow!("git clone checkout: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("gix clone checkout: {e}"))?;
     Ok(())
 }
 
@@ -241,9 +236,8 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
 
     let before = head_id(&repo);
 
-    // Align remote URL with repos.conf when non-volatile (Portage does this).
     if !volatile
-        && let Err(e) = set_default_remote_url(&repo, uri)
+        && let Err(e) = align_remote_url(&repo, uri)
         && !quiet
     {
         eprintln!(">>> warning: could not set remote URL to {uri}: {e:#}");
@@ -257,7 +251,7 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
     remote = remote.with_fetch_tags(gix::remote::fetch::Tags::None);
 
     if !quiet {
-        eprintln!(">>> git fetch in {path}");
+        eprintln!(">>> gix fetch in {path}");
     }
     let connection = remote
         .connect(gix::remote::Direction::Fetch)
@@ -269,20 +263,19 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
         .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
         .map_err(|e| anyhow::anyhow!("fetch: {e}"))?;
 
-    // gix fetch updates remote-tracking refs; apply them to the worktree.
-    // Use the system `git` for reset/clean — matches Portage and keeps the
-    // worktree mutation path simple until a pure-gix hard-reset is wired.
-    if volatile {
-        git_cmd(path, &["merge", "--ff-only", "@{upstream}"], quiet)?;
-    } else {
-        // Non-volatile: clobber local drift so shallow clones stay syncable
-        // (Portage git clean -fdx + reset --hard).
-        let _ = git_cmd(path, &["clean", "-fdx"], quiet);
-        git_cmd(path, &["reset", "--hard", "@{upstream}"], quiet)?;
-    }
-
+    // Re-open so we see updated remote-tracking refs.
     let repo =
-        gix::open(path.as_std_path()).map_err(|e| anyhow::anyhow!("re-open after reset: {e}"))?;
+        gix::open(path.as_std_path()).map_err(|e| anyhow::anyhow!("re-open after fetch: {e}"))?;
+    let tip = gix_ext::resolve_upstream_tip(&repo).map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if !quiet {
+        eprintln!(
+            ">>> gix hard-reset{} in {path}",
+            if volatile { " (ff-only)" } else { "" }
+        );
+    }
+    gix_ext::hard_reset_to(&repo, tip, volatile).map_err(|e| anyhow::anyhow!("{e}"))?;
+
     let after = head_id(&repo);
     Ok(before != after)
 }
@@ -291,48 +284,19 @@ fn head_id(repo: &gix::Repository) -> Option<gix::ObjectId> {
     repo.head_id().ok().map(|id| id.detach())
 }
 
-fn set_default_remote_url(repo: &gix::Repository, uri: &str) -> Result<()> {
-    // Prefer updating via git CLI — gix remote set-url is more ceremony.
-    let remote = repo
+fn align_remote_url(repo: &gix::Repository, uri: &str) -> Result<()> {
+    let name = repo
         .remote_default_name(gix::remote::Direction::Fetch)
-        .ok_or_else(|| anyhow::anyhow!("no default remote name"))?;
-    let remote = remote.to_string();
-    let cwd = repo.workdir().unwrap_or(repo.git_dir());
-    let status = Command::new("git")
-        .args(["remote", "set-url", &remote, uri])
-        .current_dir(cwd)
-        .status()
-        .with_context(|| format!("git remote set-url in {}", cwd.display()))?;
-    if !status.success() {
-        bail!("git remote set-url failed ({status})");
-    }
-    Ok(())
-}
-
-fn git_cmd(path: &Utf8Path, args: &[&str], quiet: bool) -> Result<()> {
-    if !quiet {
-        eprintln!(">>> git {} ({path})", args.join(" "));
-    }
-    let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(path.as_std_path());
-    // Keep git from walking out of the repo (Portage GIT_CEILING_DIRECTORIES).
-    if let Some(parent) = path.parent() {
-        cmd.env("GIT_CEILING_DIRECTORIES", parent.as_std_path());
-    }
-    cmd.args(args);
-    let status = cmd
-        .status()
-        .with_context(|| format!("running git {} in {path}", args.join(" ")))?;
-    if !status.success() {
-        bail!("git {} failed in {path} ({status})", args.join(" "));
-    }
-    Ok(())
+        .ok_or_else(|| anyhow::anyhow!("no default remote name"))?
+        .to_string();
+    gix_ext::set_remote_url(repo, &name, uri).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::Path;
 
     fn write(path: &Path, body: &str) {
         if let Some(p) = path.parent() {

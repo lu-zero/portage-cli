@@ -16,6 +16,8 @@ pub(crate) mod ebuild;
 pub mod elfscan;
 pub(crate) mod emerge;
 pub(crate) mod error;
+/// Pure-gix helpers (hard-reset composition; candidate for upstream gitoxide).
+pub(crate) mod gix_ext;
 pub(crate) mod maint;
 pub(crate) mod merge;
 pub(crate) mod pkg;
