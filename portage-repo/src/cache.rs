@@ -1,8 +1,7 @@
 //! Metadata cache operations — regeneration and (future) bulk reading.
 //!
-//! [`regen_cache`] sources all ebuilds via [`crate::source::source_parallel`]
-//! and writes the resulting `md5-cache` files to disk, streaming one
-//! [`RegenItem`] per ebuild in completion order.
+//! [`regen_cache`] sources all ebuilds and writes `md5-cache` files, sending
+//! one [`RegenItem`] per finished ebuild on a caller-supplied channel.
 //!
 //! The sourcing concern (running bash, extracting metadata) lives in
 //! [`crate::source`]; this module owns the disk I/O side.
@@ -17,7 +16,7 @@ use camino::Utf8Path;
 use portage_metadata::CacheEntry;
 
 use crate::metadata_cache::{DirMetadataCache, MetadataCache};
-use crate::source::{SourceContext, SourceOpts, SourcedEbuild, source_parallel};
+use crate::source::{SourceContext, SourceOpts, SourcedEbuild};
 use crate::{Ebuild, Repository, Result};
 
 /// Shared eclass file → md5 cache used across all regen workers.
@@ -49,10 +48,19 @@ pub struct RegenOpts {
     pub write: RegenWriteTarget,
 }
 
+/// Result counters returned by [`regen_cache`].
+#[derive(Debug, Clone, Default)]
+pub struct RegenStats {
+    /// Number of ebuilds processed.
+    pub total: usize,
+    /// Number of ebuilds that failed to source or write.
+    pub errors: usize,
+}
+
 /// One finished regen attempt (source + optional cache write), completion order.
 ///
 /// This library does **not** print or own a UI channel — the application
-/// drains the stream and maps items onto its activity bus / terminal.
+/// maps items onto its activity bus / terminal.
 #[derive(Debug)]
 pub struct RegenItem {
     /// The ebuild that was processed.
@@ -68,18 +76,32 @@ pub struct RegenItem {
 
 /// Source all `ebuilds` and optionally write `md5-cache` files.
 ///
-/// Returns a stream of [`RegenItem`]s in completion order. Must be called
-/// from a Tokio runtime. Drain until the receiver disconnects.
+/// Finished items are sent on `out` in completion order. The worker pool is
+/// driven on the **caller's** task (feed + join) — the same scheduling shape
+/// as the pre-stream callback API. Spawn a concurrent consumer of a clone of
+/// the paired [`flume::Receiver`] *before* awaiting if you want progressive
+/// UI; this future owns `out` and drops it when the pool finishes, which
+/// closes the receiver.
 ///
-/// Writes stay parallel: several workers compete for sourced results from
-/// [`source_parallel`] and perform the cache write themselves before
-/// emitting a [`RegenItem`].
-pub fn regen_cache(
+/// # Example
+///
+/// ```ignore
+/// let (tx, rx) = flume::unbounded();
+/// let ui = tokio::spawn(async move {
+///     while let Ok(item) = rx.recv_async().await {
+///         /* progress / errors */
+///     }
+/// });
+/// let stats = regen_cache(repo, masters, ebuilds, &opts, tx).await?;
+/// ui.await?;
+/// ```
+pub async fn regen_cache(
     repo: &Repository,
     masters: &[Repository],
     ebuilds: Vec<Ebuild>,
     opts: &RegenOpts,
-) -> Result<flume::Receiver<RegenItem>> {
+    out: flume::Sender<RegenItem>,
+) -> Result<RegenStats> {
     let total = ebuilds.len();
     let write = opts.write.clone();
 
@@ -96,73 +118,65 @@ pub fn regen_cache(
         }
     }
 
-    let jobs = opts.source.jobs.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-    });
-
     let ctx = SourceContext::new();
-    let source_rx = source_parallel(repo, masters, ebuilds, &opts.source, &ctx);
     let checksum_cache: ChecksumCache = Arc::new(papaya::HashMap::new());
     let done = Arc::new(AtomicUsize::new(0));
-    let (out_tx, out_rx) = flume::bounded::<RegenItem>(jobs * 2);
+    let errors = Arc::new(AtomicUsize::new(0));
+    let errors_cb = Arc::clone(&errors);
     let repo_for_write = repo.clone();
 
-    // Competing consumers of the source stream: keep write I/O parallel.
-    for _ in 0..jobs {
-        let source_rx = source_rx.clone();
-        let out_tx = out_tx.clone();
-        let checksum_cache = Arc::clone(&checksum_cache);
-        let done = Arc::clone(&done);
-        let write = write.clone();
-        let repo_for_write = repo_for_write.clone();
-
-        tokio::spawn(async move {
-            while let Ok((ebuild, result)) = source_rx.recv_async().await {
-                let item_result = match result {
-                    Err(e) => Err(e),
-                    Ok(sourced) => {
-                        let write_err = match &write {
-                            RegenWriteTarget::None => None,
-                            RegenWriteTarget::Dir(dir) => {
-                                write_entry_to_dir(&ebuild, sourced, dir, &checksum_cache).err()
-                            }
-                            RegenWriteTarget::Repository => {
-                                build_entry(&ebuild, sourced, &checksum_cache)
-                                    .and_then(|entry| {
-                                        repo_for_write
-                                            .write_cache_entry(ebuild.cpv(), &entry)
-                                            .map_err(|e| e.to_string())
-                                    })
-                                    .err()
-                            }
-                        };
-                        match write_err {
-                            Some(e) => Err(crate::Error::CacheWrite(e)),
-                            None => Ok(()),
+    crate::source::source_parallel_join(
+        repo,
+        masters,
+        ebuilds,
+        &opts.source,
+        &ctx,
+        move |ebuild, result| {
+            let item_result = match result {
+                Err(e) => Err(e),
+                Ok(sourced) => {
+                    let write_err = match &write {
+                        RegenWriteTarget::None => None,
+                        RegenWriteTarget::Dir(dir) => {
+                            write_entry_to_dir(&ebuild, sourced, dir, &checksum_cache).err()
                         }
+                        RegenWriteTarget::Repository => {
+                            build_entry(&ebuild, sourced, &checksum_cache)
+                                .and_then(|entry| {
+                                    repo_for_write
+                                        .write_cache_entry(ebuild.cpv(), &entry)
+                                        .map_err(|e| e.to_string())
+                                })
+                                .err()
+                        }
+                    };
+                    match write_err {
+                        Some(e) => Err(crate::Error::CacheWrite(e)),
+                        None => Ok(()),
                     }
-                };
-                let index = done.fetch_add(1, Ordering::Relaxed) + 1;
-                if out_tx
-                    .send_async(RegenItem {
-                        ebuild,
-                        index,
-                        total,
-                        result: item_result,
-                    })
-                    .await
-                    .is_err()
-                {
-                    break;
                 }
+            };
+            if item_result.is_err() {
+                errors_cb.fetch_add(1, Ordering::Relaxed);
             }
-        });
-    }
-    drop(out_tx);
+            let index = done.fetch_add(1, Ordering::Relaxed) + 1;
+            // Sync send: never park a worker on the UI hand-off. Pair with an
+            // unbounded (or large) receiver so a slow consumer cannot stall
+            // the pool via channel capacity.
+            let _ = out.send(RegenItem {
+                ebuild,
+                index,
+                total,
+                result: item_result,
+            });
+        },
+    )
+    .await?;
 
-    Ok(out_rx)
+    Ok(RegenStats {
+        total,
+        errors: errors.load(Ordering::Relaxed),
+    })
 }
 
 fn eclass_md5(path: &Utf8Path, cache: &ChecksumCache) -> std::result::Result<md5::Digest, String> {

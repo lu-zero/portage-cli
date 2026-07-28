@@ -57,8 +57,8 @@ pub use error::{Error, Result};
 // Re-export the most-used types at crate root for backwards compat
 pub use build::{EbuildShell, run_helper};
 pub use cache::{
-    CacheReadOpts, RegenItem, RegenOpts, RegenWriteTarget, cache_cpvs, cache_entries_parallel,
-    regen_cache,
+    CacheReadOpts, RegenItem, RegenOpts, RegenStats, RegenWriteTarget, cache_cpvs,
+    cache_entries_parallel, regen_cache,
 };
 pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};

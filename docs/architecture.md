@@ -192,7 +192,7 @@ or `.secondary_memory()`.
 - `struct MakeConf` — `make.conf` round-trip editing (byte-precise via comment spans)
 - `struct PackageConf` / `PackageToken` — `package.use`/`package.keywords`/etc. parsing
 - `struct ReposConf` / `RepoEntry` — `repos.conf` parsing
-- Cache module: `regen_cache()` → stream of `RegenItem`, `cache_entries_parallel()`, `CacheReadOpts`, `RegenOpts`
+- Cache module: `regen_cache(…, Sender<RegenItem>)` → `RegenStats`, `cache_entries_parallel()`, `CacheReadOpts`, `RegenOpts`
 - Source module: `source_single()`, `source_parallel()` → stream of `SourceItem`, `SourceContext`, `SourceOpts`
 - Re-exports from `gentoo_core`: `Arch`, `KnownArch`, `ExoticKey`
 

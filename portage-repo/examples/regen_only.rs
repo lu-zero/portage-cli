@@ -123,32 +123,37 @@ async fn main() {
             .unwrap_or(portage_repo::RegenWriteTarget::None),
     };
 
-    let items = match regen_cache(&repo, &[], ebuilds, &opts) {
-        Ok(rx) => rx,
+    let (tx, rx) = flume::unbounded::<portage_repo::RegenItem>();
+    let ui = tokio::spawn(async move {
+        let mut errors = 0usize;
+        while let Ok(item) = rx.recv_async().await {
+            eprint!("\r[{}/{}]", item.index, item.total);
+            if let Err(e) = &item.result {
+                // Library example: short line + no-color code frame (the real
+                // `em regen` applet maps items onto the activity bus instead).
+                eprintln!("\n{}: {e}", item.ebuild.cpv());
+                if let Some(diag) = e.parse_diagnostic() {
+                    eprint!("{}", diag.render_nocolor());
+                }
+                errors += 1;
+            }
+        }
+        errors
+    });
+
+    let stats = match regen_cache(&repo, &[], ebuilds, &opts, tx).await {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("Fatal error: {e}");
             process::exit(1);
         }
     };
-
-    let mut total = 0usize;
-    let mut errors = 0usize;
-    while let Ok(item) = items.recv_async().await {
-        total = item.total;
-        eprint!("\r[{}/{}]", item.index, item.total);
-        if let Err(e) = &item.result {
-            // Library example: short line + no-color code frame (the real
-            // `em regen` applet maps items onto the activity bus instead).
-            eprintln!("\n{}: {e}", item.ebuild.cpv());
-            if let Some(diag) = e.parse_diagnostic() {
-                eprint!("{}", diag.render_nocolor());
-            }
-            errors += 1;
-        }
-    }
+    let ui_errors = ui.await.unwrap_or(0);
+    // Prefer the library counter (always complete); UI may have seen the same.
+    let _ = ui_errors;
 
     eprintln!();
-    println!("Total: {total}  Errors: {errors}");
+    println!("Total: {}  Errors: {}", stats.total, stats.errors);
 
     let (hits, misses) = portage_repo::inherit::cache_stats();
     let total_lookups = hits + misses;
@@ -161,7 +166,7 @@ async fn main() {
         );
     }
 
-    if errors > 0 {
+    if stats.errors > 0 {
         process::exit(1);
     }
 }

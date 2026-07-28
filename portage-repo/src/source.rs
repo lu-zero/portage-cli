@@ -59,11 +59,12 @@ pub struct SourceOpts {
 
 /// Source `ebuilds` in parallel; return a stream of outcomes in completion order.
 ///
-/// Must be called from a Tokio runtime: workers and the work feeder are
-/// spawned on it. Drain the receiver until it disconnects (all items done,
-/// or the consumer dropped early — workers then stop sending).
+/// Must be called from a Tokio runtime. Drain the receiver until it
+/// disconnects. Per-ebuild failures are `Err` items; the pool keeps going.
 ///
-/// Per-ebuild failures are `Err` items on the stream; the pool keeps going.
+/// Internally this is the classic feed-then-join worker pool (same shape that
+/// used an `on_result` callback): the result stream is just the hand-off to
+/// the caller, not a second pipeline stage that re-parks workers.
 pub fn source_parallel(
     repo: &Repository,
     masters: &[Repository],
@@ -71,6 +72,45 @@ pub fn source_parallel(
     opts: &SourceOpts,
     ctx: &SourceContext,
 ) -> flume::Receiver<SourceItem> {
+    let (out_tx, out_rx) = flume::unbounded::<SourceItem>();
+    let repo = repo.clone();
+    let masters = masters.to_vec();
+    let opts = opts.clone();
+    let ctx = ctx.clone();
+
+    tokio::spawn(async move {
+        let _ = source_parallel_join(
+            &repo,
+            &masters,
+            ebuilds,
+            &opts,
+            &ctx,
+            move |ebuild, result| {
+                // Unbounded + sync send: never park a worker on the hand-off.
+                let _ = out_tx.send((ebuild, result));
+            },
+        )
+        .await;
+    });
+
+    out_rx
+}
+
+/// Classic worker pool: feed work, run `on_result` on the worker task, join.
+///
+/// Kept as the shared engine for [`source_parallel`] and [`crate::cache::regen_cache`]
+/// so the stream API does not change the scheduling shape.
+pub(crate) async fn source_parallel_join<F>(
+    repo: &Repository,
+    masters: &[Repository],
+    ebuilds: Vec<Ebuild>,
+    opts: &SourceOpts,
+    ctx: &SourceContext,
+    on_result: F,
+) -> Result<()>
+where
+    F: Fn(Ebuild, Result<SourcedEbuild>) + Send + Sync + 'static,
+{
     let jobs = opts.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -80,40 +120,40 @@ pub fn source_parallel(
     let repo = Arc::new(repo.clone());
     let masters: Arc<Vec<Repository>> = Arc::new(masters.to_vec());
     let ctx = ctx.clone();
+    let on_result = Arc::new(on_result);
 
     let (work_tx, work_rx) = flume::bounded::<Ebuild>(jobs * 2);
-    let (out_tx, out_rx) = flume::bounded::<SourceItem>(jobs * 2);
 
+    let mut handles = Vec::with_capacity(jobs);
     for _ in 0..jobs {
         let work_rx = work_rx.clone();
-        let out_tx = out_tx.clone();
         let repo = Arc::clone(&repo);
         let masters = Arc::clone(&masters);
         let ctx = ctx.clone();
+        let on_result = Arc::clone(&on_result);
 
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             let master_refs: Vec<&Repository> = masters.iter().collect();
             while let Ok(ebuild) = work_rx.recv_async().await {
                 let result = source_one(&repo, &master_refs, &ebuild, &ctx, dedup).await;
-                if out_tx.send_async((ebuild, result)).await.is_err() {
-                    break; // consumer gone
-                }
+                on_result(ebuild, result);
             }
-        });
+        }));
     }
     drop(work_rx);
-    drop(out_tx); // workers hold the remaining senders
 
-    tokio::spawn(async move {
-        for ebuild in ebuilds {
-            if work_tx.send_async(ebuild).await.is_err() {
-                break;
-            }
-        }
-        // work_tx drop → workers exit → out senders drop → out_rx ends
-    });
+    // Feed on this task (interleaved with workers via send_async backpressure),
+    // then join — same structure as the pre-stream implementation.
+    for ebuild in ebuilds {
+        let _ = work_tx.send_async(ebuild).await;
+    }
+    drop(work_tx);
 
-    out_rx
+    for h in handles {
+        let _ = h.await;
+    }
+
+    Ok(())
 }
 
 /// Source a single ebuild and return its metadata.

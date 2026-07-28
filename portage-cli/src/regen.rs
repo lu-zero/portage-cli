@@ -1,8 +1,8 @@
 //! Metadata-cache regeneration (`em regen`).
 //!
-//! Library work ([`portage_repo::regen_cache`]) streams one
-//! [`portage_repo::RegenItem`] per finished ebuild. This applet owns the
-//! activity bus and the terminal: progress and short failures are
+//! Library work ([`portage_repo::regen_cache`]) sends one
+//! [`portage_repo::RegenItem`] per finished ebuild on a channel. This applet
+//! owns the activity bus and the terminal: progress and short failures are
 //! [`ActivityEvent`]s rendered by [`crate::activity::HumanStdoutSink`]; rich
 //! miette frames for parse failures are printed here after the corresponding
 //! bus event (structured payload stays in-process — the wire form only
@@ -149,35 +149,43 @@ pub async fn run(
             source: SourceOpts { jobs, dedup },
             write,
         };
-        let items = regen_cache(&repo, &masters, ebuilds, &opts).context("regen setup")?;
 
-        let mut errors = 0usize;
-        while let Ok(item) = items.recv_async().await {
-            if item.result.is_err() {
-                errors += 1;
+        // Concurrent UI drain: pool runs on this task (feed+join); items land
+        // on an unbounded channel so the consumer never parks workers.
+        let (tx, rx) = flume::unbounded();
+        let bus = activity.clone();
+        let job_id_ui = job_id.clone();
+        let ui = tokio::spawn(async move {
+            while let Ok(item) = rx.recv_async().await {
+                emit_item(&bus, &job_id_ui, item);
             }
-            emit_item(&activity, &job_id, item);
-        }
+        });
 
-        let completed = plan_total.saturating_sub(errors as u32);
+        let stats = regen_cache(&repo, &masters, ebuilds, &opts, tx)
+            .await
+            .context("regen")?;
+        // `tx` dropped inside regen_cache → rx disconnects → ui finishes.
+        ui.await.context("regen UI task")?;
+
+        let completed = plan_total.saturating_sub(stats.errors as u32);
         activity.emit(ActivityEvent::SessionEnd {
             v: ACTIVITY_EVENT_VERSION,
             job_id,
             parent_job_id: None,
             at: ActivityEvent::now(),
-            ok: errors == 0,
+            ok: stats.errors == 0,
             completed,
-            failed: errors as u32,
+            failed: stats.errors as u32,
             seconds: ActivityEvent::now() - session_started,
         });
 
-        if errors > 0 {
+        if stats.errors > 0 {
             // Per-repo tally only when attributing across multiple targets;
             // single-target runs already showed each failure + the final bail.
             if targets.len() > 1 {
-                eprintln!("::{}: {} sourcing errors", repo.name(), errors);
+                eprintln!("::{}: {} sourcing errors", repo.name(), stats.errors);
             }
-            total_errors += errors;
+            total_errors += stats.errors;
         }
     }
 
