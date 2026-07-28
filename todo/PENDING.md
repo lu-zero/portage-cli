@@ -1144,3 +1144,15 @@ blocked by the three independent findings above, tracked separately.
 - 🔴 clang linker config (Option B, `gentoo-linker.cfg`). [[select-toolchain]]
 - See also [[nonemptytree-bdeps-gap]], [[em-emptytree]], [[build-clean-env]],
   [[crossdev-target]], [[cross-support-self-review]] for older open threads.
+
+---
+
+## Later — progress UI (prodash vs indicatif)
+
+- 📌 **`em sync` backends (2026-07-29):** default is shell **`git`** + **`rsync`**
+  (`maint/sync/{git_cmd,rsync_cmd}.rs`). Pure **gix** is feature **`sync-gix`**
+  only (optional compile cost; not proven faster). Progress UI notes for gix
+  (prodash tree + indicatif poll / `rich` line renderer) live under
+  `gix_ext/progress/` when that feature is on. Later: document pros/cons and
+  benchmark gix vs `git` before considering default flip.
+

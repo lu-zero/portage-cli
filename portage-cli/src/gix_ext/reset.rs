@@ -34,6 +34,7 @@
 
 use std::path::{Path, PathBuf};
 
+use gix::Progress;
 use gix::bstr::{BStr, ByteSlice};
 use gix::refs::transaction::PreviousValue;
 use gix::worktree::stack::state::attributes;
@@ -118,11 +119,19 @@ pub fn is_ancestor(
 ///
 /// When `require_fast_forward` is true, fails with [`HardResetError::NotFastForward`]
 /// unless `HEAD` is an ancestor of `target` (volatile / ff-only semantics).
-pub fn hard_reset_to(
+///
+/// `progress` receives the force-checkout counters (files / bytes). Pass
+/// [`gix::progress::Discard`] when the caller does not care.
+pub fn hard_reset_to<P>(
     repo: &gix::Repository,
     target: gix::ObjectId,
     require_fast_forward: bool,
-) -> Result<(), HardResetError> {
+    mut progress: P,
+) -> Result<(), HardResetError>
+where
+    P: gix::NestedProgress,
+    P::SubProgress: gix::NestedProgress + 'static,
+{
     let workdir = repo
         .workdir()
         .ok_or(HardResetError::BareRepository)?
@@ -207,12 +216,17 @@ pub fn hard_reset_to(
         .into_arc()
         .map_err(|e| HardResetError::Checkout(e.to_string()))?;
 
+    let mut files = progress.add_child("checkout");
+    let mut bytes = progress.add_child("writing");
+    files.init(Some(index.entries().len()), gix::progress::count("files"));
+    bytes.init(None, gix::progress::bytes());
+
     gix::worktree::state::checkout(
         &mut index,
         &workdir,
         objects,
-        &gix::progress::Discard,
-        &gix::progress::Discard,
+        &files,
+        &bytes,
         &gix::interrupt::IS_INTERRUPTED,
         opts,
     )
@@ -379,7 +393,7 @@ mod tests {
         // After first push work has a; after fetch, tip has a=two, no b.
         // Intermediate push had b then deleted — tip has no b.
         let tip = resolve_upstream_tip(&repo).unwrap();
-        hard_reset_to(&repo, tip, false).unwrap();
+        hard_reset_to(&repo, tip, false, gix::progress::Discard).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(work.join("a.txt")).unwrap(),
@@ -414,7 +428,7 @@ mod tests {
         git(&work, &["commit", "-m", "main"]);
 
         let repo = gix::open(&work).unwrap();
-        let err = hard_reset_to(&repo, side, true).unwrap_err();
+        let err = hard_reset_to(&repo, side, true, gix::progress::Discard).unwrap_err();
         assert!(matches!(err, HardResetError::NotFastForward));
     }
 }

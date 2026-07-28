@@ -18,6 +18,8 @@
 //!
 //! Once that lands in `gix`, delete this module and call the upstream API.
 
+mod progress;
 mod reset;
 
+pub use progress::ProgressSession;
 pub use reset::{hard_reset_to, resolve_upstream_tip, set_remote_url};

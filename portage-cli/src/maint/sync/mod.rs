@@ -1,16 +1,29 @@
 //! `em sync` / `em maint sync` — update ebuild repositories from `repos.conf`.
 //!
-//! **Git only (MVP).** `sync-type = git` repos are cloned/fetched with
-//! [`gix`]. After a fetch, the worktree is applied with a pure-gix hard-reset
-//! composition ([`crate::gix_ext`]) — the orchestration gitoxide still lists
-//! as unfinished porcelain. Other `sync-type`s (rsync, …) are skipped with a
-//! clear message for now.
+//! ## Backends
+//!
+//! | `sync-type` | Default backend | Optional |
+//! |-------------|-----------------|----------|
+//! | `git` | shell `git` ([`git_cmd`]) | pure gix via feature **`sync-gix`** |
+//! | `rsync` | shell `rsync` ([`rsync_cmd`]) | — |
+//! | other | skipped with a message | — |
+//!
+//! gix is **not** the default: it pulls a large dep graph (build time) and we
+//! have not yet proven it faster than `/usr/bin/git` for Portage sync. Enable
+//! with `--features sync-gix` to dogfood the pure-Rust path.
 //!
 //! Selection (Portage / emaint):
 //! - named repos: those names, regardless of `auto-sync`
 //! - no names: every repo with `auto-sync = yes|true` (default yes) that is
 //!   syncable (`sync-type` + `sync-uri` + on-disk `location`)
 
+#[cfg(not(feature = "sync-gix"))]
+mod git_cmd;
+#[cfg(feature = "sync-gix")]
+mod git_gix;
+mod rsync_cmd;
+
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -18,12 +31,9 @@ use camino::{Utf8Path, Utf8PathBuf};
 use portage_repo::{RepoEntry, ReposConf};
 
 use crate::cli::Cli;
-use crate::gix_ext;
+use crate::style::{C_BOLD, C_ERROR, C_INFO, C_WARN};
 
 /// Run repository sync for `em sync` and `em maint sync`.
-///
-/// `repos` empty → auto-sync-enabled repos only. Non-empty → those names
-/// (error if unknown / not syncable as git).
 pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
     let conf = globals.roots().repos_conf().context("reading repos.conf")?;
     let selected = select_repos(&conf, repos)?;
@@ -31,7 +41,7 @@ pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
         if globals.quiet {
             return Ok(());
         }
-        println!(">>> Nothing to sync.");
+        info_line("Nothing to sync.");
         return Ok(());
     }
 
@@ -40,23 +50,23 @@ pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
         match sync_one(entry, globals).await {
             Ok(SyncOutcome::Skipped(why)) => {
                 if !globals.quiet {
-                    println!(">>> Skipping {}: {why}", entry.name);
+                    info_repo(&entry.name, &format!("Skipping — {why}"));
                 }
             }
             Ok(SyncOutcome::Pretend(msg)) => {
-                println!(">>> Would sync {}: {msg}", entry.name);
+                info_repo(&entry.name, &format!("Would sync — {msg}"));
             }
             Ok(SyncOutcome::Synced { changed }) => {
                 if !globals.quiet {
                     if changed {
-                        println!(">>> Synced {} (updated)", entry.name);
+                        info_repo(&entry.name, "Synced (updated)");
                     } else {
-                        println!(">>> Synced {} (already up to date)", entry.name);
+                        info_repo(&entry.name, "Synced (already up to date)");
                     }
                 }
             }
             Err(e) => {
-                eprintln!("!!! Failed to sync {}: {e:#}", entry.name);
+                error_repo(&entry.name, &format!("{e:#}"));
                 failed += 1;
             }
         }
@@ -68,7 +78,6 @@ pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
     Ok(())
 }
 
-/// Choose which conf entries to sync.
 fn select_repos<'a>(conf: &'a ReposConf, names: &[String]) -> Result<Vec<&'a RepoEntry>> {
     if names.is_empty() {
         return Ok(conf
@@ -102,6 +111,12 @@ enum SyncOutcome {
     Skipped(String),
 }
 
+#[derive(Debug, Clone, Copy)]
+enum SyncKind {
+    Git,
+    Rsync,
+}
+
 async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
     let Some(path) = entry.location.as_path() else {
         return Ok(SyncOutcome::Skipped("virtual/alias repo".into()));
@@ -129,41 +144,92 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
         bail!("missing sync-type or sync-uri in repos.conf");
     };
 
-    if !sync_type.eq_ignore_ascii_case("git") {
-        return Ok(SyncOutcome::Skipped(format!(
-            "sync-type={sync_type} not supported yet (git only)"
-        )));
-    }
+    let kind = match sync_type.to_ascii_lowercase().as_str() {
+        "git" => SyncKind::Git,
+        "rsync" => SyncKind::Rsync,
+        other => {
+            return Ok(SyncOutcome::Skipped(format!(
+                "sync-type={other} not supported (git, rsync)"
+            )));
+        }
+    };
+
+    let volatile = resolve_volatile(entry, path.as_std_path());
 
     if globals.pretend {
-        let volatile = resolve_volatile(entry, path.as_std_path());
-        let action = if path.join(".git").is_dir() {
-            if volatile {
-                format!("gix fetch + ff-only hard-reset in {path} from {sync_uri}")
-            } else {
-                format!("gix fetch + hard-reset in {path} from {sync_uri}")
-            }
-        } else {
-            format!("gix clone {sync_uri} → {path}")
+        let action = match kind {
+            SyncKind::Git => git_pretend(&path, sync_uri, volatile),
+            SyncKind::Rsync => rsync_cmd::pretend(&path, sync_uri),
         };
         return Ok(SyncOutcome::Pretend(action));
     }
 
     if !globals.quiet {
-        println!(">>> Syncing {} ({sync_uri})…", entry.name);
+        let mut out = anstream::stdout();
+        let _ = writeln!(
+            out,
+            "{C_INFO}>>>{C_INFO:#} Syncing repository '{C_BOLD}{}{C_BOLD:#}' into '{path}'...",
+            entry.name
+        );
+        if globals.verbose > 0 {
+            let _ = writeln!(
+                out,
+                "{C_INFO}>>>{C_INFO:#} sync-type={sync_type} sync-uri={sync_uri} backend={}",
+                backend_label(kind)
+            );
+        }
+        let _ = out.flush();
     }
 
-    let volatile = resolve_volatile(entry, path.as_std_path());
-    let changed = tokio::task::spawn_blocking({
-        let path = path.clone();
-        let sync_uri = sync_uri.to_string();
-        let quiet = globals.quiet;
-        move || git_sync(&path, &sync_uri, volatile, quiet)
+    let quiet = globals.quiet;
+    let path_c = path.clone();
+    let uri = sync_uri.to_string();
+    let changed = tokio::task::spawn_blocking(move || match kind {
+        SyncKind::Git => git_sync(&path_c, &uri, volatile, quiet),
+        SyncKind::Rsync => rsync_cmd::sync(&path_c, &uri, quiet),
     })
     .await
     .context("sync task join")??;
 
     Ok(SyncOutcome::Synced { changed })
+}
+
+fn backend_label(kind: SyncKind) -> &'static str {
+    match kind {
+        SyncKind::Git => {
+            #[cfg(feature = "sync-gix")]
+            {
+                "gix (pure Rust)"
+            }
+            #[cfg(not(feature = "sync-gix"))]
+            {
+                "git (command)"
+            }
+        }
+        SyncKind::Rsync => "rsync (command)",
+    }
+}
+
+fn git_pretend(path: &Utf8Path, uri: &str, volatile: bool) -> String {
+    #[cfg(feature = "sync-gix")]
+    {
+        git_gix::GixBackend.pretend(path, uri, volatile)
+    }
+    #[cfg(not(feature = "sync-gix"))]
+    {
+        git_cmd::GitCmdBackend.pretend(path, uri, volatile)
+    }
+}
+
+fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
+    #[cfg(feature = "sync-gix")]
+    {
+        git_gix::GixBackend.sync(path, uri, volatile, quiet)
+    }
+    #[cfg(not(feature = "sync-gix"))]
+    {
+        git_cmd::GitCmdBackend.sync(path, uri, volatile, quiet)
+    }
 }
 
 /// Portage `volatile`: explicit conf wins; else volatile if not root/portage-owned.
@@ -194,102 +260,42 @@ fn is_portage_uid(uid: u32) -> bool {
     uid == 250
 }
 
-/// Clone or fetch+hard-reset with pure gix.
-///
-/// Returns whether the worktree tip changed.
-fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
-    let url =
-        gix::url::parse(uri.into()).map_err(|e| anyhow::anyhow!("invalid sync-uri {uri}: {e}"))?;
+// ── colour helpers (shared by backends) ──────────────────────────────────
 
-    if path.join(".git").is_dir() || gix::open(path.as_std_path()).is_ok() {
-        git_update(path, uri, volatile, quiet)
-    } else {
-        git_clone(path, url, quiet)?;
-        Ok(true)
-    }
+pub(super) fn info_line(msg: &str) {
+    let mut out = anstream::stdout();
+    let _ = writeln!(out, "{C_INFO}>>>{C_INFO:#} {msg}");
+    let _ = out.flush();
 }
 
-fn git_clone(path: &Utf8Path, url: gix::Url, quiet: bool) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("creating parent of {path}"))?;
-    }
-    if !quiet {
-        eprintln!(">>> gix clone {url} → {path}");
-    }
-    let mut prepare = gix::prepare_clone(url, path.as_std_path())
-        .map_err(|e| anyhow::anyhow!("gix clone prepare: {e}"))?
-        .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(
-            std::num::NonZeroU32::new(1).expect("1"),
-        ));
-    let (mut checkout, _outcome) = prepare
-        .fetch_then_checkout(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .map_err(|e| anyhow::anyhow!("gix clone fetch: {e}"))?;
-    let (_repo, _) = checkout
-        .main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .map_err(|e| anyhow::anyhow!("gix clone checkout: {e}"))?;
-    Ok(())
+fn info_repo(name: &str, msg: &str) {
+    let mut out = anstream::stdout();
+    let _ = writeln!(
+        out,
+        "{C_INFO}>>>{C_INFO:#} {msg}: '{C_BOLD}{name}{C_BOLD:#}'"
+    );
+    let _ = out.flush();
 }
 
-fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
-    let repo = gix::open(path.as_std_path())
-        .map_err(|e| anyhow::anyhow!("opening git repo {path}: {e}"))?;
-
-    let before = head_id(&repo);
-
-    if !volatile
-        && let Err(e) = align_remote_url(&repo, uri)
-        && !quiet
-    {
-        eprintln!(">>> warning: could not set remote URL to {uri}: {e:#}");
-    }
-
-    let mut remote = repo
-        .find_default_remote(gix::remote::Direction::Fetch)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("default remote: {e}"))?
-        .ok_or_else(|| anyhow::anyhow!("no default remote configured in {path}"))?;
-    remote = remote.with_fetch_tags(gix::remote::fetch::Tags::None);
-
-    if !quiet {
-        eprintln!(">>> gix fetch in {path}");
-    }
-    let connection = remote
-        .connect(gix::remote::Direction::Fetch)
-        .map_err(|e| anyhow::anyhow!("connect remote: {e}"))?;
-    let prepare = connection
-        .prepare_fetch(gix::progress::Discard, Default::default())
-        .map_err(|e| anyhow::anyhow!("prepare fetch: {e}"))?;
-    prepare
-        .receive(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .map_err(|e| anyhow::anyhow!("fetch: {e}"))?;
-
-    // Re-open so we see updated remote-tracking refs.
-    let repo =
-        gix::open(path.as_std_path()).map_err(|e| anyhow::anyhow!("re-open after fetch: {e}"))?;
-    let tip = gix_ext::resolve_upstream_tip(&repo).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    if !quiet {
-        eprintln!(
-            ">>> gix hard-reset{} in {path}",
-            if volatile { " (ff-only)" } else { "" }
-        );
-    }
-    gix_ext::hard_reset_to(&repo, tip, volatile).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-    let after = head_id(&repo);
-    Ok(before != after)
+pub(super) fn warn_line(msg: &str) {
+    let mut out = anstream::stderr();
+    let _ = writeln!(out, "{C_WARN}!!!{C_WARN:#} {msg}");
+    let _ = out.flush();
 }
 
-fn head_id(repo: &gix::Repository) -> Option<gix::ObjectId> {
-    repo.head_id().ok().map(|id| id.detach())
+fn error_repo(name: &str, msg: &str) {
+    let mut out = anstream::stderr();
+    let _ = writeln!(
+        out,
+        "{C_ERROR}!!!{C_ERROR:#} Failed to sync '{C_BOLD}{name}{C_BOLD:#}': {msg}"
+    );
+    let _ = out.flush();
 }
 
-fn align_remote_url(repo: &gix::Repository, uri: &str) -> Result<()> {
-    let name = repo
-        .remote_default_name(gix::remote::Direction::Fetch)
-        .ok_or_else(|| anyhow::anyhow!("no default remote name"))?
-        .to_string();
-    gix_ext::set_remote_url(repo, &name, uri).map_err(|e| anyhow::anyhow!("{e}"))
+/// Shared trait for git backends (command vs gix).
+pub(super) trait GitBackend {
+    fn pretend(&self, path: &Utf8Path, uri: &str, volatile: bool) -> String;
+    fn sync(&self, path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool>;
 }
 
 #[cfg(test)]

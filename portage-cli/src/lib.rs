@@ -17,6 +17,8 @@ pub mod elfscan;
 pub(crate) mod emerge;
 pub(crate) mod error;
 /// Pure-gix helpers (hard-reset composition; candidate for upstream gitoxide).
+/// Only built with feature `sync-gix`.
+#[cfg(feature = "sync-gix")]
 pub(crate) mod gix_ext;
 pub(crate) mod maint;
 pub(crate) mod merge;

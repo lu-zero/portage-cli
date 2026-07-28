@@ -67,7 +67,26 @@ thiserror = "2"
 miette = { version = "7.6.0", default-features = false, features = ["derive", "fancy"] }
 # Same line as pkgcraft (already in the graph via portage-bench); used by
 # `em sync` for git clone/fetch without shelling the network path through git.
-gix = { version = "0.83.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "revision", "sha1", "sha256"] }
+# default-features off so we don't pull the whole extras set; keep the
+# performance bundle (parallel pack, caches) + zlib-rs — without those, fetch
+# "read pack" looks hung even in --release. Always optimised under profile.dev
+# (see [profile.dev.package."*"] below).
+gix = { version = "0.83.0", default-features = false, features = [
+    "blocking-http-transport-reqwest-rust-tls",
+    "worktree-mutation",
+    "revision",
+    "sha1",
+    "sha256",
+    "comfort",
+    "progress-tree",
+    "max-performance-safe",
+    "zlib-rs",
+] }
+# Sync progress UI: poll prodash tree → indicatif (default).
+indicatif = "0.17"
+# NestedProgress tree always (gix-compatible counters). Line renderer features
+# are enabled by portage-cli feature `rich` only.
+prodash = { version = "31", default-features = false, features = ["progress-tree"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 winnow = { version = "1.0", features = ["ascii"] }
 bzip2 = "0.4"
@@ -122,3 +141,10 @@ lto = true
 inherits = "release"
 debug = 1
 lto = false
+
+# Workspace crates stay opt-level 0 for fast rebuilds; every dependency
+# (gix-pack, zlib, reqwest, …) is fully optimised. Plain `cargo build` then
+# has usable `em sync` without needing `--release` for the gix stack alone.
+# (Cargo book: package."*" = all deps, not workspace members.)
+[profile.dev.package."*"]
+opt-level = 3

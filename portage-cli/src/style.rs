@@ -6,7 +6,7 @@
 //! Add palette entries here (and a mapping helper if a domain enum drives the
 //! choice, e.g. [`profile_status`]) rather than constructing styles inline.
 
-use anstyle::{AnsiColor, Color, Effects, Style};
+use anstyle::{Ansi256Color, AnsiColor, Color, Effects, Style};
 
 /// Usable output width: the real terminal's, or 80 when it has none (a pipe,
 /// a log file, a CI runner).
@@ -70,6 +70,20 @@ pub const C_PKG_BINARY: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor
 /// `MERGE_LIST_PROGRESS`, which is yellow — not to be confused with the
 /// testing-keyword yellow below, same colour, different meaning).
 pub const C_COUNT: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
+
+// ── Banner / diagnostic palette (Portage `>>>` / `!!!`) ───────────────────
+/// Info banner prefix (`>>>`) and routine status lines.
+pub const C_INFO: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+/// Soft failure / warning prefix (`!!!` or `>>> warning:`) — orange-ish.
+///
+/// Basic ANSI has no orange; xterm-256 colour 208 is the usual stand-in.
+pub const C_WARN: Style = Style::new()
+    .fg_color(Some(Color::Ansi256(Ansi256Color(208))))
+    .effects(Effects::BOLD);
+/// Hard failure prefix (`!!!`) and error text.
+pub const C_ERROR: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Red)))
+    .effects(Effects::BOLD);
 
 // ── Stability / status palette (stable=green, testing/dev=yellow, …=red) ────
 /// Stable keyword / stable profile.

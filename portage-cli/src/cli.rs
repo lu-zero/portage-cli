@@ -971,12 +971,15 @@ pub enum Applet {
         args: Vec<String>,
     },
 
-    /// Sync ebuild repositories from `repos.conf` (`sync-type = git` only).
+    /// Sync ebuild repositories from `repos.conf` (`git` and `rsync`).
     ///
     /// With no names, syncs every entry with `auto-sync = yes` (Portage
     /// default) and a usable `sync-type`/`sync-uri`. Named repos are synced
     /// regardless of `auto-sync`.
-    #[command(about = "Sync repositories (git only)")]
+    ///
+    /// Default backends shell out to `git` / `rsync` (Portage parity). Build
+    /// with `--features sync-gix` for the experimental pure-gix git path.
+    #[command(about = "Sync repositories (git, rsync)")]
     Sync {
         /// Repo names from repos.conf (default: auto-sync enabled repos)
         repos: Vec<String>,
@@ -1284,7 +1287,7 @@ pub enum MaintCommand {
         repos: Vec<String>,
     },
     /// Same as `em sync` — shared implementation.
-    #[command(about = "Sync repositories (git only)")]
+    #[command(about = "Sync repositories (git, rsync)")]
     Sync {
         /// Repo names from repos.conf (default: auto-sync enabled repos)
         repos: Vec<String>,
