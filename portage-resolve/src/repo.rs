@@ -44,7 +44,7 @@ pub struct AutounmaskCandidate {
 /// [`Keyword`] list is a `u32` comparison with no per-check allocation.
 ///
 /// Each token sets or clears exactly *its own* grant, nothing more — no token
-/// implies another at fold time ([`ArchAccept::add`] is a plain bit set/clear,
+/// implies another at fold time (`ArchAccept::add` is a plain bit set/clear,
 /// never a join). Real Portage's own matcher (`_getMissingKeywords`) works the
 /// same way: it is the *matcher*, not the accepted-token set, that treats
 /// e.g. a testing keyword as satisfied by `~arch`/`~*`/`**` — the set itself

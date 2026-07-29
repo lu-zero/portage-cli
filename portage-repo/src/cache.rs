@@ -42,7 +42,7 @@ pub enum RegenWriteTarget {
 /// Options for [`regen_cache`].
 #[derive(Debug, Clone, Default)]
 pub struct RegenOpts {
-    /// Ebuild sourcing options passed to [`source_parallel`].
+    /// Ebuild sourcing options passed to [`crate::source::source_parallel`].
     pub source: SourceOpts,
     /// Where to persist sourced metadata.
     pub write: RegenWriteTarget,
