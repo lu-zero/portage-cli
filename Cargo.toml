@@ -81,6 +81,11 @@ gix = { version = "0.83.0", default-features = false, features = [
     "progress-tree",
     "max-performance-safe",
     "zlib-rs",
+    # `status` (pulls `dirwalk`) backs the two guards `em sync`'s gix backend
+    # needs: `Repository::is_dirty` (refuse to clobber a volatile repo's
+    # uncommitted work) and `Repository::dirwalk_iter` (the `git clean -d -x`
+    # equivalent before a non-volatile hard reset).
+    "status",
 ] }
 # Sync progress UI: poll prodash tree → indicatif (default).
 indicatif = "0.17"

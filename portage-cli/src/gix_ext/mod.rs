@@ -22,4 +22,4 @@ mod progress;
 mod reset;
 
 pub use progress::ProgressSession;
-pub use reset::{hard_reset_to, resolve_upstream_tip, set_remote_url};
+pub use reset::{ResetGuard, clean_worktree, hard_reset_to, resolve_upstream_tip, set_remote_url};
