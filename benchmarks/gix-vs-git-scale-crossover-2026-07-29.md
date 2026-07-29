@@ -89,15 +89,83 @@ past that upper bound (147k objects) and shows the same win.
   cost is worth paying given the `::gentoo` win) rather than a settled "keep
   git" decision.
 
-## What's not yet done
+## Follow-up: warm re-sync and real network, both at `::gentoo` scale (same day)
 
-- This tested a cold shallow clone only, not the warmer/no-op re-sync case
-  that dominates real day-to-day `em sync` usage once a repo is already
-  cloned — that comparison (at real `::gentoo` scale) hasn't been run yet
-  and could tell a different story again.
-- Only `file://` (local disk) was tested at the real-`::gentoo` scale — the
-  network-layer effect confirmed at small scale hasn't been re-checked
-  against a large repo, where it might matter less (fixed TLS/negotiation
-  cost against a much longer transfer) or more.
-- Test used a shallow, 5-commit-deep mirror of the real tree, not the full
-  multi-year history `::gentoo` actually has on disk once synced normally.
+Both items above are now closed, with a further wrinkle each.
+
+### Warm re-sync (the actual day-to-day `em sync` case)
+
+Set up a "stale" client 5 commits behind tip (a realistic multi-day drift) on
+the real 147k-object `::gentoo` mirror, `file://` (local), and timed the
+actual incremental update:
+
+| Step | git | gix |
+|------|-----|-----|
+| fetch (`--depth 1`, negotiate + transfer) | 0.268s | **0.174s (~35% faster)** |
+| worktree update (`reset --hard`) | 0.531s | not measured — no `reset`/`checkout` subcommand in the `gix` CLI |
+| **total** | ~0.72-0.8s | incomplete |
+
+Even on a *small* increment (5 commits), gix's fetch step is faster — this
+reverses the earlier prediction that gix would lose here the way it lost on
+the pentoo depth-1/10 tests. But git's own `reset --hard` step is the bigger
+cost (0.53s > the 0.27s fetch) and it scales with the size of the *whole*
+checked-out tree (147k files), not the size of the diff (a handful of
+changed files) — a naive full-tree reset is expensive regardless of how
+small the actual change was. Whether gix's equivalent (`gix_ext::hard_reset_to`
+in this codebase, which similarly rebuilds the whole index from the target
+tree and does a full checkout pass) has the same scaling problem is not
+directly measured here — worth instrumenting `em`'s own sync path directly
+rather than the bare `gix` CLI, which doesn't expose this step standalone.
+
+### Real network, at `::gentoo` scale
+
+Repeated the original network test (`git clone --depth 1` vs `gix clone
+--depth 1`, real HTTPS against `github.com/gentoo-mirror/gentoo`), 2 runs
+each (scaled down from 3+3 given the ~74MB-per-run bandwidth cost against a
+public mirror):
+
+| | Run 1 | Run 2 | Avg |
+|---|---|---|---|
+| `git` | 19.19s | 19.63s | 19.41s |
+| `gix` | 20.14s | 22.13s | 21.14s |
+
+**Gix is ~9% slower over real network at this scale** — the opposite of the
+local `file://` result (gix +15% faster) at the same repo size. Real network
+latency/bandwidth reintroduces enough transport-layer overhead (the same
+effect found dominating the original small-repo network test) to outweigh
+gix's local-processing advantage, even once that advantage is large enough
+to win decisively with the network removed. Sample size here is smaller (2
+runs, not reordered) than the rest of this investigation — a real signal
+given its size and direction, but less rigorously confirmed than the other
+findings in this doc.
+
+### Revised picture
+
+The `::gentoo`-scale story is not simply "gix wins for large repos" — it
+depends on which part of the operation dominates:
+- **Cold clone over the real network**: git wins (transport-layer cost
+  reasserts itself at scale).
+- **Cold clone locally / already-fetched data**: gix wins (its bulk
+  processing throughput is genuinely better once fixed overhead stops
+  dominating).
+- **Warm re-sync's fetch step**: gix wins, even for a small increment.
+- **Warm re-sync's worktree-update step**: dominated by total tree size for
+  git; gix's equivalent cost is still unmeasured.
+
+Given real `em sync` usage is overwhelmingly warm re-syncs over a real
+network connection (not local, not cold), the two most representative
+numbers — network cold-clone (git wins) and reset/checkout cost (unmeasured
+for gix) — are the ones actually needed to settle the recommendation, and
+one of them isn't answered yet. Not a basis for a default flip either way.
+
+## Remaining gaps
+
+- gix's worktree-update (reset/checkout) cost for a warm re-sync at
+  `::gentoo` scale — needs direct instrumentation of `em`'s own
+  `gix_ext::hard_reset_to`, not the bare CLI.
+- Warm re-sync has not been tested over the real network (only fetch+reset
+  locally, and cold-clone over network — not the combination that most
+  resembles real daily usage).
+- Test used a shallow, handful-of-commits-deep mirror of the real tree, not
+  the full multi-year history `::gentoo` actually has on disk once synced
+  normally.
