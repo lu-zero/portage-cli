@@ -17,6 +17,8 @@
 //!
 //! Quiet mode yields [`DoOrDiscard`] discards (no tree, no UI).
 
+use std::io::IsTerminal;
+
 use gix::progress::DoOrDiscard;
 
 #[cfg(not(feature = "rich"))]
@@ -45,6 +47,15 @@ pub type ProgressChild = DoOrDiscard<prodash::tree::Item>;
 
 impl ProgressSession {
     /// `quiet` suppresses all progress UI (gix still gets a discard sink).
+    ///
+    /// The prodash progress *tree* (the counters gix mutates) is always
+    /// created when not quiet; a renderer is only spawned when stderr is a
+    /// real terminal. Under a captured pipe (CI log capture, `cargo llvm-cov`,
+    /// redirection) the renderer's draw thread writes ANSI redraws to stderr
+    /// and can block on a full pipe, deadlocking `Drop` (and contaminating
+    /// sibling tests whose subprocesses inherit that fd). Skipping the
+    /// renderer there keeps the session (and counters) valid without the
+    /// deadlock.
     pub fn new(quiet: bool) -> Self {
         if quiet {
             return Self {
@@ -61,20 +72,27 @@ impl ProgressSession {
             .into(),
         );
 
-        let ui = {
+        let interactive = std::io::stderr().is_terminal();
+        let ui = if interactive {
             #[cfg(not(feature = "rich"))]
             {
-                UiGuard::Indicatif(indicatif_render::spawn(std::sync::Arc::clone(&root)))
+                Some(UiGuard::Indicatif(indicatif_render::spawn(
+                    std::sync::Arc::clone(&root),
+                )))
             }
             #[cfg(feature = "rich")]
             {
-                UiGuard::ProdashLine(prodash_line::spawn(std::sync::Arc::clone(&root)))
+                Some(UiGuard::ProdashLine(prodash_line::spawn(
+                    std::sync::Arc::clone(&root),
+                )))
             }
+        } else {
+            None
         };
 
         Self {
             root: Some(root),
-            _ui: Some(ui),
+            _ui: ui,
         }
     }
 
