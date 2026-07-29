@@ -42,15 +42,27 @@ pub struct AutounmaskCandidate {
 /// Tokens are parsed (and their arches interned) at config-read time, so the
 /// solver never sees a keyword string — matching against a package's
 /// [`Keyword`] list is a `u32` comparison with no per-check allocation.
+///
+/// Each token sets or clears exactly *its own* grant, nothing more — no token
+/// implies another at fold time ([`ArchAccept::add`] is a plain bit set/clear,
+/// never a join). Real Portage's own matcher (`_getMissingKeywords`) works the
+/// same way: it is the *matcher*, not the accepted-token set, that treats
+/// e.g. a testing keyword as satisfied by `~arch`/`~*`/`**` — the set itself
+/// stays a flat, literal collection of independent tokens. Baking "testing
+/// implies stable" into the fold (an earlier version of this code did) makes
+/// `-arch` and `-~arch` collapse into the same non-invertible join, breaking
+/// the documented `package.accept_keywords` idiom `media-video/mplayer -~x86`
+/// ("accept ~x86 in general, but pin this one package to stable only") — found
+/// live during a design review (Claude Opus 5), verified against `portage(5)`.
 #[derive(Clone, Copy)]
 pub enum AcceptToken {
     /// `arch` — accept the stable keyword for this arch.
     Stable(Interned<DefaultInterner>),
-    /// `~arch` — accept the testing keyword (implies stable) for this arch.
+    /// `~arch` — accept the testing keyword for this arch.
     Testing(Interned<DefaultInterner>),
     /// `*` — accept a stable keyword for any arch.
     AnyStable,
-    /// `~*` — accept a testing keyword for any arch (implies stable).
+    /// `~*` — accept a testing keyword for any arch.
     AnyTesting,
     /// `**` — accept regardless of keywords (even an unkeyworded/live ebuild).
     Any,
@@ -58,20 +70,18 @@ pub enum AcceptToken {
     /// so later tokens rebuild from empty (make.conf(5), applied to the
     /// incremental `ACCEPT_KEYWORDS`). The mirror of ebuild `KEYWORDS=-*`.
     ClearAll,
-    /// `-arch` — withdraw this one arch's accept, even if an earlier token in
-    /// the same incremental stack (a profile's bare `arch`/`~arch`, or a
-    /// broader `*`/`~*`) had granted it.
-    ///
-    /// Simplification vs. real Portage: upstream's matcher works over a set of
-    /// *literal token strings*, so `-riscv` only ever discards a literal
-    /// `riscv`/`~riscv` string if present — it is inert against a separate `*`
-    /// wildcard token, which is untouched. Our folded `ArchAccept` bools don't
-    /// track which token granted `stable`/`testing`, so `-arch` here clears
-    /// both bits unconditionally for that arch, including when they came from
-    /// a wildcard. In practice `*`/`~*` combined with a specific `-arch` veto
-    /// is a rare construction; treated as an open question, not a fixed
-    /// design, pending a closer look (see `todo/accept-properties-restrict.md`).
+    /// `-arch` — withdraw this arch's *stable* grant only. Does not touch
+    /// `~arch`/`*`/`~*`/`**` — those are different literal tokens.
     Negate(Interned<DefaultInterner>),
+    /// `-~arch` — withdraw this arch's *testing* grant only (the
+    /// `media-video/mplayer -~x86` "pin to stable" idiom). Distinct from
+    /// [`AcceptToken::Negate`]: clearing both on any dash-prefixed arch token
+    /// was the bug that idiom exposed.
+    NegateTesting(Interned<DefaultInterner>),
+    /// `-~*` — withdraw the `~*` (any-arch testing) grant specifically.
+    NegateAnyTesting,
+    /// `-**` — withdraw the `**` (accept-anything) grant specifically.
+    NegateAny,
 }
 
 impl AcceptToken {
@@ -82,14 +92,14 @@ impl AcceptToken {
             "~*" => Some(Self::AnyTesting),
             "*" => Some(Self::AnyStable),
             "-*" => Some(Self::ClearAll),
-            _ if tok.starts_with('-') => {
-                let arch = tok[1..].strip_prefix('~').unwrap_or(&tok[1..]);
-                if arch.is_empty() {
-                    None
-                } else {
-                    Some(Self::Negate(Interned::intern(arch)))
-                }
-            }
+            "-**" => Some(Self::NegateAny),
+            "-~*" => Some(Self::NegateAnyTesting),
+            _ if tok.starts_with('-') => match tok[1..].strip_prefix('~') {
+                Some(arch) if !arch.is_empty() => Some(Self::NegateTesting(Interned::intern(arch))),
+                Some(_) => None, // "-~" alone: malformed
+                None if !tok[1..].is_empty() => Some(Self::Negate(Interned::intern(&tok[1..]))),
+                None => None, // bare "-": malformed
+            },
             _ => match tok.strip_prefix('~') {
                 Some(arch) => Some(Self::Testing(Interned::intern(arch))),
                 None => Some(Self::Stable(Interned::intern(tok))),
@@ -98,53 +108,50 @@ impl AcceptToken {
     }
 }
 
-/// The accept decision for a single (interned) arch, reduced to flags.
+/// The accept decision for a single (interned) arch: which literal tokens are
+/// currently granted. Each bit tracks exactly one token — no cross-bit
+/// implication — so [`Self::accepts`] (the matcher) decides how a stable vs.
+/// testing keyword is satisfied, the same split real Portage's own matcher
+/// makes over its flat token set. This is what makes `-arch`/`-~arch`
+/// independently invertible: see [`AcceptToken`]'s doc.
 #[derive(Clone, Copy, Default)]
 struct ArchAccept {
-    /// A stable keyword for the arch is accepted.
+    /// `arch` is granted.
     stable: bool,
-    /// A testing (`~arch`) keyword is accepted (implies `stable`).
+    /// `~arch` is granted.
     testing: bool,
+    /// `*` is granted.
+    any_stable: bool,
+    /// `~*` is granted.
+    any_testing: bool,
     /// `**` — accept even with no matching keyword.
     any: bool,
 }
 
 impl ArchAccept {
-    /// Fold one token's contribution, relative to the target `arch`.
+    /// Fold one token's contribution, relative to the target `arch` — a plain
+    /// set/clear of the one bit that token names, never a join with another.
     fn add(&mut self, tok: AcceptToken, arch: Interned<DefaultInterner>) {
         match tok {
-            // `-*` clear-all: reset to accepting nothing; later tokens rebuild.
-            AcceptToken::ClearAll => {
-                *self = Self::default();
-            }
-            // testing is a superset of stable, so accepting it implies stable.
-            AcceptToken::Any => {
-                self.any = true;
-                self.testing = true;
-                self.stable = true;
-            }
-            AcceptToken::AnyTesting => {
-                self.testing = true;
-                self.stable = true;
-            }
-            AcceptToken::AnyStable => self.stable = true,
-            AcceptToken::Testing(a) if a == arch => {
-                self.testing = true;
-                self.stable = true;
-            }
+            AcceptToken::ClearAll => *self = Self::default(),
+            AcceptToken::Any => self.any = true,
+            AcceptToken::AnyTesting => self.any_testing = true,
+            AcceptToken::AnyStable => self.any_stable = true,
+            AcceptToken::Testing(a) if a == arch => self.testing = true,
             AcceptToken::Stable(a) if a == arch => self.stable = true,
-            // `-arch`: withdraw this arch's accept (see `AcceptToken::Negate`'s
-            // doc for the simplification vs. a literal-token-set model). `any`
-            // (`**`) is a categorically different override, left untouched.
-            AcceptToken::Negate(a) if a == arch => {
-                self.stable = false;
-                self.testing = false;
-            }
+            AcceptToken::Negate(a) if a == arch => self.stable = false,
+            AcceptToken::NegateTesting(a) if a == arch => self.testing = false,
+            AcceptToken::NegateAnyTesting => self.any_testing = false,
+            AcceptToken::NegateAny => self.any = false,
             _ => {}
         }
     }
 
-    /// Whether a package with `keywords` is accepted under this decision.
+    /// Whether a package with `keywords` is accepted under this decision —
+    /// the matcher: a stable keyword is satisfied by `arch` or `*`; a testing
+    /// keyword by `~arch` or `~*`. Neither implies the other here; a config
+    /// that wants both grants both (as a profile's baseline `arch` plus a
+    /// user's additive `~arch` normally do).
     fn accepts(self, keywords: &[Keyword], arch: Interned<DefaultInterner>) -> bool {
         if self.any {
             return true;
@@ -152,8 +159,8 @@ impl ArchAccept {
         keywords.iter().any(|kw| {
             kw.arch == arch
                 && match kw.stability {
-                    Stability::Stable => self.stable,
-                    Stability::Testing => self.testing,
+                    Stability::Stable => self.stable || self.any_stable,
+                    Stability::Testing => self.testing || self.any_testing,
                     _ => false,
                 }
         })
@@ -1520,6 +1527,79 @@ mod tests {
             AcceptToken::parse("-riscv").is_some(),
             "-arch now parses instead of being silently dropped"
         );
+    }
+
+    /// Regression test for the bug a design review (Claude Opus 5) found live:
+    /// `package.accept_keywords`'s own documented "pin to stable" idiom
+    /// (`portage(5)`: `media-video/mplayer -~x86`) needs `-~arch` to withdraw
+    /// *only* the testing grant, leaving the stable one intact. An earlier
+    /// version of `AcceptToken::parse` stripped the `~` and treated `-~x86`
+    /// identically to `-x86`, so this idiom fully masked the package instead
+    /// of pinning it to stable.
+    #[test]
+    fn negate_testing_pins_a_package_to_stable_without_masking_it() {
+        let arch = Arch::intern("x86");
+        let kws = |s: &str| Keyword::parse_line(s).unwrap();
+        let stable = kws("x86");
+        let testing = kws("~x86");
+        let foo = Cpv::parse("media-video/mplayer-1").unwrap();
+
+        // System-wide: testing enabled. Per-package: pin mplayer to stable.
+        let ak = AcceptKeywords::new(
+            &arch,
+            &[
+                AcceptToken::parse("x86").unwrap(),
+                AcceptToken::parse("~x86").unwrap(),
+            ],
+            vec![(
+                dep("media-video/mplayer"),
+                vec![AcceptToken::parse("-~x86").unwrap()],
+            )],
+        );
+        assert!(
+            ak.accepts(&stable, &foo, None),
+            "stable mplayer must still be accepted"
+        );
+        assert!(
+            !ak.accepts(&testing, &foo, None),
+            "-~x86 must withdraw the testing grant for mplayer specifically"
+        );
+
+        // Confirm the system-wide default (no override) still accepts testing —
+        // the veto must be scoped to mplayer, not global.
+        let bar = Cpv::parse("dev-libs/bar-1").unwrap();
+        assert!(ak.accepts(&testing, &bar, None), "bar keeps testing");
+    }
+
+    /// `-~*` and `-**` are their own tokens, not swallowed by the generic
+    /// `-arch` branch (which previously interned "*"/"**' as bogus arch names,
+    /// making them permanently inert since no real arch is ever named "*").
+    #[test]
+    fn negate_any_testing_and_negate_any_are_not_inert() {
+        let arch = Arch::intern("amd64");
+        let kws = |s: &str| Keyword::parse_line(s).unwrap();
+        let offarch_stable = kws("x86");
+        let offarch_testing = kws("~x86");
+        let foo = Cpv::parse("dev-libs/foo-1").unwrap();
+
+        let any_testing_then_negated = AcceptKeywords::from_global(&arch, &["~*", "-~*", "amd64"]);
+        assert!(
+            !any_testing_then_negated.accepts(&offarch_testing, &foo, None),
+            "-~* must withdraw the ~* grant"
+        );
+
+        let any_then_negated = AcceptKeywords::from_global(&arch, &["**", "-**", "amd64"]);
+        assert!(
+            !any_then_negated.accepts(&offarch_stable, &foo, None),
+            "-** must withdraw the ** grant"
+        );
+        assert!(
+            any_then_negated.accepts(&kws("amd64"), &foo, None),
+            "the trailing bare amd64 grant still applies"
+        );
+
+        assert!(AcceptToken::parse("-~*").is_some());
+        assert!(AcceptToken::parse("-**").is_some());
     }
 
     #[test]
