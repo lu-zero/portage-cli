@@ -115,6 +115,7 @@ fn merge_merge_flags_with(globals: &Cli, args: &MergeFlags, force_buildpkg: bool
 pub(crate) fn merge_merge_flags_fields(base: &MergeFlags, over: &MergeFlags) -> MergeFlags {
     MergeFlags {
         ask: over.ask || base.ask,
+        eta: over.eta || base.eta,
         update: over.update || base.update,
         autounmask_write: over.autounmask_write || base.autounmask_write,
         oneshot: over.oneshot || base.oneshot,
@@ -1634,6 +1635,8 @@ mod tests {
             ex_gdb: false,
             depgraph_flags: crate::cli::DepgraphFlags::default(),
             merge_flags: crate::cli::MergeFlags::default(),
+            activity: crate::cli::ActivityArgs::default(),
+            privilege: None,
         }
     }
 

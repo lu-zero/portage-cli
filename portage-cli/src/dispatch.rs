@@ -126,6 +126,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             repos_dir,
             jobs,
             dedup,
+            activity: _,
         } => {
             regen::run(
                 globals,

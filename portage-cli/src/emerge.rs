@@ -478,7 +478,7 @@ async fn emerge_atoms_inner(
     };
 
     if cli.pretend {
-        if cli.eta {
+        if merge_flags.eta {
             print_eta();
         }
         return Ok(());
@@ -499,7 +499,7 @@ async fn emerge_atoms_inner(
         "merge"
     };
     if merge_flags.ask {
-        if cli.eta {
+        if merge_flags.eta {
             print_eta();
         }
         if !confirm_action(verb, outcome.plan.len())? {
@@ -546,12 +546,13 @@ async fn emerge_atoms_inner(
     // `quiet` here is the user's `-q`, NOT the jobs-derived phase-log quiet —
     // `-j>1` keeps banners while still sending build output to build.log.
     crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
+    let activity_args = cli.effective_activity();
     crate::activity::attach_jsonl_outputs(
         &activity,
-        cli.activity_fd,
-        cli.activity_jsonl.as_deref(),
+        activity_args.activity_fd,
+        activity_args.activity_jsonl.as_deref(),
     )?;
-    if cli.emergelog {
+    if activity_args.emergelog {
         crate::activity::attach_emergelog(&activity, roots.merge_root());
     }
     // Prefer resume job_id so markers and activity share one correlation key.

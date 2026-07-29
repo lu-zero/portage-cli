@@ -155,11 +155,12 @@ fn will_build(cli: &Cli) -> bool {
 /// `None` when no wrapping is needed (root, already wrapped, `EM_PRIVILEGE=none`,
 /// or a non-building command), so the caller proceeds normally.
 pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
-    let _ = PRIVILEGE_REQUEST.set(cli.privilege);
+    let privilege = cli.effective_privilege();
+    let _ = PRIVILEGE_REQUEST.set(privilege);
     if !will_build(cli) {
         return None;
     }
-    match Backend::detect(cli.privilege) {
+    match Backend::detect(privilege) {
         Backend::RealRoot => None,
         // Fakeroost/pseudoroot/sudo are scoped, not umbrellas (Q6): the ptrace
         // tax / real root must stay off the compile. build_and_merge delegates

@@ -138,6 +138,18 @@ pub struct MergeFlags {
     #[arg(long)]
     pub autosolve_use: bool,
 
+    /// With `-p`/`--pretend`, print an ETA for the plan from activity history
+    /// (median of recent successful merges per package; wall uses the build
+    /// graph + `--jobs` when blockers are available).
+    ///
+    /// Lives here (not `global = true` on `Cli`): like `--ask`, `--eta` only
+    /// means something to a merge-shaped command — `em news --eta` or
+    /// `em grep --eta` parsed fine but did nothing. The merge path reads it
+    /// off the (already-merged) `MergeFlags`, so it works before or after the
+    /// subcommand name for the staged builds too.
+    #[arg(long = "eta")]
+    pub eta: bool,
+
     /// With `-u`/`--update` `-D`/`--deep`: when moving a version-pinned
     /// family (e.g. upgrading `llvm` pulls `clang` along) would leave a
     /// retained installed package's pin broken (e.g. `lldb` still pinned to

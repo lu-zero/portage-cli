@@ -7,8 +7,10 @@ use gentoo_core::Arch;
 use portage_atom_pubgrub::DepClass;
 use portage_resolve::Roots;
 
+mod activity;
 mod depgraph_flags;
 mod merge_flags;
+pub use activity::ActivityArgs;
 pub use depgraph_flags::DepgraphFlags;
 pub use merge_flags::MergeFlags;
 
@@ -42,26 +44,12 @@ pub struct Cli {
     #[arg(short = 'p', long, global = true)]
     pub pretend: bool,
 
-    /// With `-p`/`--pretend`, print an ETA for the plan from activity history
-    /// (median of recent successful merges per package; wall uses the build
-    /// graph + `--jobs` when blockers are available).
-    #[arg(long = "eta", global = true)]
-    pub eta: bool,
-
-    /// Write activity events as JSONL to file descriptor N (subprocess
-    /// front-ends). Takes ownership of the FD.
-    // Activity status design is documented in todo/activity-status.md.
-    #[arg(long = "activity-fd", value_name = "N", global = true)]
-    pub activity_fd: Option<i32>,
-
-    /// Append activity events as JSONL to PATH (not `-`; use `--activity-fd`).
-    #[arg(long = "activity-jsonl", value_name = "PATH", global = true)]
-    pub activity_jsonl: Option<String>,
-
-    /// Dual-write Portage-compatible emerge.log lines (opt-in; qlop/genlop).
-    /// Path defaults to `<merge-root>/var/log/emerge.log` (or `/var/log/emerge.log`).
-    #[arg(long = "emergelog", global = true, env = "EM_EMERGELOG")]
-    pub emergelog: bool,
+    /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/`--emergelog`)
+    /// for the merge path. Flattened (not `global = true`) so they only appear
+    /// on commands that drive an activity bus; the merge path reads the
+    /// applet-merged set via [`Cli::effective_activity`].
+    #[command(flatten)]
+    pub activity: ActivityArgs,
 
     /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
     /// `em`'s own debug/trace logs (see also `RUST_LOG`).
@@ -97,7 +85,12 @@ pub struct Cli {
     /// compiled-in fake root), pseudoroot, fakeroost, hakoniwa (userns mapped
     /// root), sudo (real root), or none; backends unsupported on this platform
     /// are compiled out. Ignored when already root.
-    #[arg(long, value_enum, default_value_t = Privilege::Auto, global = true, env = "EM_PRIVILEGE")]
+    ///
+    /// Not `global`: it is read at process start ([`crate::privilege`]'s
+    /// supervisor re-exec, before dispatch) from the top-level value; the
+    /// staged-build applets (`crossdev`/`toolchain`/`stages`) carry their own
+    /// optional override, merged by [`Cli::effective_privilege`].
+    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
     pub privilege: Privilege,
 
     /// Search package names (each argument is a pattern).
@@ -553,6 +546,39 @@ impl Cli {
             _ => vec![std::path::PathBuf::from("/var/db/repos/gentoo")],
         }
     }
+
+    /// Effective activity-output flags for the dispatched command: the
+    /// applet's own flattened [`ActivityArgs`] (Regen / the crossdev staged
+    /// builds) merged over the top-level set, subcommand winning when set —
+    /// the same precedence `crossdev::merge_merge_flags` uses for `MergeFlags`.
+    /// Applets without their own activity args just get the top-level set.
+    pub fn effective_activity(&self) -> ActivityArgs {
+        use crate::cli::activity::merge_activity_args_fields;
+        let sub = match &self.applet {
+            Some(Applet::Regen { activity, .. }) => activity,
+            Some(Applet::Crossdev(a)) => &a.activity,
+            Some(Applet::Toolchain(a)) => &a.activity,
+            Some(Applet::Stages(a)) => &a.activity,
+            _ => return self.activity.clone(),
+        };
+        merge_activity_args_fields(&self.activity, sub)
+    }
+
+    /// Effective privilege backend for the dispatched command. `--privilege`
+    /// is read at process start (the supervisor re-exec, before dispatch), so
+    /// the top-level `Cli::privilege` is the base; the crossdev staged applets
+    /// (`crossdev`/`toolchain`/`stages`) carry an optional override that wins
+    /// when set, so `em crossdev --setup --privilege sudo` and
+    /// `em --privilege sudo crossdev --setup` both land on `sudo`.
+    pub fn effective_privilege(&self) -> Privilege {
+        let sub = match &self.applet {
+            Some(Applet::Crossdev(a)) => &a.privilege,
+            Some(Applet::Toolchain(a)) => &a.privilege,
+            Some(Applet::Stages(a)) => &a.privilege,
+            _ => return self.privilege,
+        };
+        sub.unwrap_or(self.privilege)
+    }
 }
 
 #[cfg(test)]
@@ -1006,6 +1032,10 @@ pub enum Applet {
         /// Deduplicate top-level dep tokens before writing
         #[arg(long)]
         dedup: bool,
+        /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/
+        /// `--emergelog`) — `em regen` drives its own activity bus.
+        #[command(flatten)]
+        activity: ActivityArgs,
     },
 
     #[command(about = "Create binary packages from installed files")]
@@ -1203,6 +1233,14 @@ pub struct CrossdevArgs {
 
     #[command(flatten)]
     pub merge_flags: MergeFlags,
+
+    #[command(flatten)]
+    pub activity: ActivityArgs,
+
+    /// Override the top-level `--privilege` for this crossdev run only (see
+    /// [`Cli::effective_privilege`]).
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub privilege: Option<Privilege>,
 }
 
 /// `em toolchain` — bootstrap a self-hosting native toolchain into `--root`.
@@ -1225,6 +1263,14 @@ pub struct ToolchainArgs {
 
     #[command(flatten)]
     pub merge_flags: MergeFlags,
+
+    #[command(flatten)]
+    pub activity: ActivityArgs,
+
+    /// Override the top-level `--privilege` for this toolchain run only (see
+    /// [`Cli::effective_privilege`]).
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub privilege: Option<Privilege>,
 }
 
 // `em stages` — assemble stage-build artifacts (stage1/stage3/stage4) *using*
@@ -1244,6 +1290,14 @@ pub struct StagesArgs {
 
     #[command(flatten)]
     pub merge_flags: MergeFlags,
+
+    #[command(flatten)]
+    pub activity: ActivityArgs,
+
+    /// Override the top-level `--privilege` for this stages run only (see
+    /// [`Cli::effective_privilege`]).
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub privilege: Option<Privilege>,
 }
 
 #[derive(Subcommand)]

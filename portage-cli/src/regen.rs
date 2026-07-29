@@ -93,12 +93,13 @@ pub async fn run(
     let roots = cli.roots();
     let activity = crate::activity::default_cli_bus(roots.merge_root());
     crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
+    let activity_args = cli.effective_activity();
     crate::activity::attach_jsonl_outputs(
         &activity,
-        cli.activity_fd,
-        cli.activity_jsonl.as_deref(),
+        activity_args.activity_fd,
+        activity_args.activity_jsonl.as_deref(),
     )?;
-    if cli.emergelog {
+    if activity_args.emergelog {
         crate::activity::attach_emergelog(&activity, roots.merge_root());
     }
 

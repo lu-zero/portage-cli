@@ -393,6 +393,7 @@ pub fn merge_resume_flags(saved: &MergeFlags, cli: &MergeFlags) -> MergeFlags {
     MergeFlags {
         // Ephemeral — current invocation only.
         ask: cli.ask,
+        eta: cli.eta,
         tree: cli.tree,
         json: cli.json,
         // Job shape — saved base, CLI can only add.
