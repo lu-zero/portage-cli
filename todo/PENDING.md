@@ -1151,8 +1151,18 @@ blocked by the three independent findings above, tracked separately.
 
 - 📌 **`em sync` backends (2026-07-29):** default is shell **`git`** + **`rsync`**
   (`maint/sync/{git_cmd,rsync_cmd}.rs`). Pure **gix** is feature **`sync-gix`**
-  only (optional compile cost; not proven faster). Progress UI notes for gix
-  (prodash tree + indicatif poll / `rich` line renderer) live under
-  `gix_ext/progress/` when that feature is on. Later: document pros/cons and
-  benchmark gix vs `git` before considering default flip.
+  only (5.4x build-time cost, confirmed, unaffected by the below). Progress UI
+  notes for gix (prodash tree + indicatif poll / `rich` line renderer) live
+  under `gix_ext/progress/` when that feature is on.
+  **Runtime correction (same day):** benchmarked twice — first against
+  `pentoo-overlay` only (small overlay, ~500 packages), concluded "not proven
+  faster"; that conclusion does not hold. A depth-scaling test found gix's
+  runtime crosses over from slower (small repos) to faster past roughly
+  15k-65k objects, and a real clone of `::gentoo` (147k objects, just
+  `--depth 1`) confirmed gix **~15% faster** there — the repo `em sync`
+  actually matters most for. See
+  `benchmarks/{sync-gix-vs-git,gix-vs-git-scale-crossover}-2026-07-29.md`.
+  Not yet a default-flip decision (build cost still real, warm-resync/large-repo
+  case not retested) — but "not proven faster" is no longer the state of
+  things. Revisit before citing the older doc's verdict.
 

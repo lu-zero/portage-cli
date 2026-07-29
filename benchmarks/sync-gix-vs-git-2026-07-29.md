@@ -1,13 +1,27 @@
 # Benchmark: gix vs git for `em sync` — 2026-07-29
 
+## ⚠️ Correction (same day) — see `gix-vs-git-scale-crossover-2026-07-29.md`
+
+**The runtime conclusion below does not hold for `::gentoo`, the repo `em
+sync` matters most for.** This test used only `pentoo-overlay` (~500
+packages) — a small-repo test whose result does not generalize. A follow-up
+against a real clone of the Gentoo tree found **gix ~15% faster**, and a
+depth-scaling test on pentoo itself found the gap **crosses over** from gix
+losing (small repos) to gix winning (once past roughly 15k-65k objects) —
+`::gentoo` is more than 2x past that crossover at just `--depth 1`. The
+build-time finding below (5.4x) is unaffected and still stands. Treat the
+"Verdict"/"Recommendation" sections below as **superseded** for the runtime
+claim — read the crossover doc before using this file to justify keeping git
+as the default for `::gentoo` sync specifically.
+
 ## Summary
 
 Testing the two git backends for `em sync`: the default shell-based `git` command vs. the pure-Rust `gix` backend (opt-in via `--features sync-gix`).
 
 **Key findings:**
 - **Build time cost is substantial**: sync-gix adds **5.4× build time** (47s → 4m 14s) and **6 MB binary size increase**.
-- **Sync runtime overhead is modest**: cold clone +44% slower, warm re-sync only +9% slower.
-- **Verdict**: The build-time cost outweighs modest runtime gains; sync-gix is not ready as default.
+- **Sync runtime overhead is modest** *on a small overlay repo (`pentoo-overlay`, ~500 packages)*: cold clone +44% slower, warm re-sync only +9% slower. **This does not hold at `::gentoo` scale — see the correction above.**
+- **Verdict (small-repo case only)**: The build-time cost outweighs modest runtime gains on a repo this size; sync-gix is not ready as default *for small overlays*. Not a settled verdict for `::gentoo` itself.
 
 ---
 
@@ -137,34 +151,36 @@ Testing the two git backends for `em sync`: the default shell-based `git` comman
 
 ---
 
-## Recommendation
+## Recommendation — ⚠️ superseded, see `gix-vs-git-scale-crossover-2026-07-29.md`
 
-**Do NOT make gix the default backend.**
+*(Left in place for the audit trail — this section's runtime rationale turned
+out to be scoped to `pentoo-overlay` only and does not hold for `::gentoo`.
+Do not use this section on its own to justify a backend decision.)*
 
-**Rationale:**
-1. **Module doc requirement not met**: "we have not yet proven it faster than `/usr/bin/git` for Portage sync"
-   - sync-gix is **9% slower** on warm re-sync (the real-world case)
-   - sync-gix is **44% slower** on cold clone (network-bound, not a fair comparison)
-   - No runtime win to justify the cost
+**~~Do NOT make gix the default backend.~~** — the build-time rationale
+(point 2 below) still stands on its own; points 1 and 3 do not, once tested
+against the repo that actually matters.
 
-2. **Build-time cost is prohibitive for default**:
+**Rationale (original, small-repo-only):**
+1. ~~**Module doc requirement not met**: "we have not yet proven it faster than `/usr/bin/git` for Portage sync"~~
+   - sync-gix is **9% slower** on warm re-sync **on pentoo-overlay** — reverses to **~15% faster** on a real `::gentoo` clone (147k objects); see the crossover doc.
+   - sync-gix is **44% slower** on cold clone (network-bound; also only tested on pentoo-overlay)
+   - ~~No runtime win to justify the cost~~ — there is one, at `::gentoo` scale
+
+2. **Build-time cost is prohibitive for default**: (unaffected by the above, still valid)
    - 5.4× slower (47s → 254s)
    - Significant friction for developers, CI, and build systems
    - Users who don't want gix still pay the cost if it becomes default
 
-3. **No clear user benefit**:
-   - Warm re-sync (daily use) is only 56ms faster per repo with git than sync-gix
-   - Users would see slower builds but faster syncs; net negative
+3. ~~**No clear user benefit**~~ — see point 1; there is a clear benefit at `::gentoo` scale, this was only true for the small-repo case tested.
 
-### Suggested Path Forward
+### Suggested Path Forward (original — item 2 below is what actually happened)
 
-1. **Keep sync-gix as opt-in feature** (`--features sync-gix`) for power users and testing
-2. **Document this benchmark** in:
-   - `portage-cli/src/maint/sync/mod.rs` (update module doc with measured numbers)
-   - `todo/PENDING.md` (mark "progress UI" section as "measured, not ready for default flip")
-3. **Future investigation** (deferred):
+1. **Keep sync-gix as opt-in feature** (`--features sync-gix`) for power users and testing — still reasonable given the build-time cost, independent of the runtime correction
+2. ~~**Document this benchmark** in `todo/PENDING.md` (mark "progress UI" section as "measured, not ready for default flip")~~ — done, then corrected same day; see `todo/PENDING.md` and the crossover doc
+3. **Future investigation** (deferred — item 2 (larger repos) is now done, see the crossover doc; the rest remain open):
    - Profile sync-gix's build: identify heavy dependencies
-   - Test against larger repos (gentoo, crossdev overlays) to see if overhead scales differently
+   - ~~Test against larger repos (gentoo, crossdev overlays) to see if overhead scales differently~~ — done, see `gix-vs-git-scale-crossover-2026-07-29.md`
    - Measure cold clone against different network conditions
    - Consider partial builds or feature gates to reduce sync-gix compile time
 
