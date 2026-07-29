@@ -1,12 +1,12 @@
 # `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` visibility gates
 
-STATUS: **deferred — lowest priority; prerequisites now DONE.** The rest of the
-`package.*` and interning work this note waited on has landed (commits 26fa1d7 →
+STATUS: **in progress (2026-07-29).** Prerequisites landed (commits 26fa1d7 →
 10f3ffd: `package.accept_keywords`, `package.license`, and the fully-interned
 keyword/license/`package.use`/force-mask hot paths — a net 1.16–1.27× resolve
 speedup, see below). These two `ACCEPT_*` gates almost never mask anything
-(defaults accept all), so they remain parity polish, not a correctness blocker —
-the last visibility gate left after keywords/license/mask.
+(defaults accept all), so they remain parity polish, not a correctness blocker.
+Now actively implementing, reusing `AcceptLicense` per the consolidation
+decision below rather than a third hand-rolled manager.
 
 ## The gap
 
@@ -68,3 +68,53 @@ Cheap once the accept-list/overlay pattern from keywords/license is reused.
 DONE — see `todo/done/package-env.md`: both the non-USE build-environment
 slice and the resolver-side USE-from-`package.env` slice landed 2026-07-20
 (`load_package_env_use` in `portage-resolve/src/use_env.rs`).
+
+## Consolidation decision (2026-07-29, Sonnet + Fable second opinion)
+
+Considered whether `AcceptKeywords`/`AcceptLicenses` (and this file's planned
+properties/restrict) should share one generic engine. Checked real PMS
+(`profile-variables.tex`, cloned from `anongit.gentoo.org/git/proj/pms.git`):
+the spec's own "incremental variable" mechanism (the formal `-token`/`-*`
+algorithm) is mandatory only for `USE`/`USE_EXPAND*`/`CONFIG_PROTECT*` —
+profile-stacking only, no per-atom-override dimension. `ACCEPT_KEYWORDS`/
+`ACCEPT_LICENSE`/`ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT` are **not mentioned
+anywhere in PMS** — pure package-manager policy that borrows the same token
+syntax by convention, not because the spec unifies them. Real Portage's own
+`KeywordsManager`/`LicenseManager` are separate hand-written classes.
+
+**Verdict: two tiers, not three, and not one.** Keywords stay separate
+(`ArchAccept`: arch-scoped bool flags, no USE-conditional evaluation ever,
+since PMS's `KEYWORDS` is a flat non-conditional list per `ebuild-vars.tex`).
+Properties/restrict join the license family instead of getting a third
+hand-rolled implementation: `LICENSE`/`PROPERTIES`/`RESTRICT` (unlike
+`KEYWORDS`) use the full dependency-spec grammar and can be USE-conditional,
+needing the same `use_reduce`-style evaluation license already has.
+
+Fable's follow-up sharpened the license-family plan further: `@GROUP`
+expansion is a **parse-time-only** concern — `AcceptLicense::from_tokens` is
+the only method touching `LicenseGroupRegistry`; `merge`/`accepts`/
+`accepts_expr` never do. So the group-free "core" properties/restrict needs
+already exists as `AcceptLicense` itself — construct it via a group-free path
+(properties/restrict tokens have no groups) and reuse the `AcceptLicenses`
+wrapper shape verbatim (one type, instantiated three times), rather than
+writing new abstraction.
+
+The `AcceptKeywords`/`AcceptLicenses` per-package storage shape difference
+(raw tokens refolded per query vs. pre-merged overlay objects) looked like an
+inconsistency worth normalizing, but isn't — it's cost-driven, not gratuitous
+(`ArchAccept` is `Copy`, free to refold, and the pending `-arch` fix needs raw
+tokens since incremental `-tok` cancellation is order-dependent; licenses
+pre-merge to avoid re-interning/re-expanding groups per query). Leave both as
+they are.
+
+### Known gap carried forward: per-package match ordering
+
+Both `AcceptKeywords::decision` and `AcceptLicenses::effective_for` apply
+matching `package.*` overlay entries in **file order** (`Vec` iteration).
+Real Portage applies them via `ordered_by_atom_specificity` — more specific
+atoms win regardless of file position. Not yet confirmed to cause an actual
+visible bug (most `package.*` files don't have conflicting overlapping atoms
+for the same cpv), but it's a real divergence from spec behavior and should
+be fixed in one shared spot once something depends on it — do not silently
+carry it into the properties/restrict implementation without at least a
+comment noting the gap.
