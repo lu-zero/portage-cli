@@ -6,13 +6,13 @@
 //!
 //!   pk repo metadata regen -p <cache-dir> -n -f -j <N> <repo>
 
+#[cfg(all(feature = "mimalloc", not(feature = "dhat-heap")))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
-
-#[cfg(feature = "mimalloc")]
-#[global_allocator]
-static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::path::PathBuf;
 use std::process;
