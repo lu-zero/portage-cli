@@ -37,6 +37,33 @@ fn current_clang_slot_path(globals: &Cli) -> Utf8PathBuf {
     config_dir.join("clang").join("current-slot")
 }
 
+/// Path to a slot's `gentoo-linker.cfg` (owned by `llvm-core/clang-linker-config`'s
+/// `src_install`, keyed on its `default-lld` USE flag — not something `em
+/// select` manages; this is read-only display, mirroring `llvm_base_dir`'s
+/// own prefix-vs-system root resolution).
+fn linker_cfg_path(globals: &Cli, slot: &str) -> Utf8PathBuf {
+    if is_prefix_context(globals) {
+        let roots = globals.outer_roots();
+        if let Some(eprefix) = roots.eprefix() {
+            return eprefix
+                .join("etc/clang")
+                .join(slot)
+                .join("gentoo-linker.cfg");
+        }
+    }
+    Utf8PathBuf::from(format!("/etc/clang/{slot}/gentoo-linker.cfg"))
+}
+
+/// The `-fuse-ld=` value from a slot's `gentoo-linker.cfg`, if present.
+fn linker_default(globals: &Cli, slot: &str) -> Option<String> {
+    let content = std::fs::read_to_string(linker_cfg_path(globals, slot)).ok()?;
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .find_map(|line| line.strip_prefix("-fuse-ld=").map(str::to_string))
+}
+
 /// An LLVM/clang slot.
 #[derive(Debug, Clone)]
 struct ClangSlot {
@@ -244,6 +271,10 @@ fn list(globals: &Cli) -> Result<()> {
                 slot_display.push_str(target);
             }
             slot_display.push(']');
+        }
+
+        if let Some(linker) = linker_default(globals, &slot.name) {
+            slot_display.push_str(&format!(" (default linker: {linker})"));
         }
 
         if is_current {

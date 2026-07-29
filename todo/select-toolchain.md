@@ -602,8 +602,39 @@ prefer a same-arch offset's own toolchain dir (this doc's still-open
 "broadening the condition" plan, distinct from today's wrapper fix) remains
 undone.
 
-## Open: clang linker config (Option B)
+## Closed: clang linker config (Option B) — 2026-07-29
 
-`-fuse-ld=` lives in `/etc/clang/<SLOT>/gentoo-linker.cfg`, not env.d. Decide:
-fold into `em select linker`, a `em select clang linker` subcommand, or flags on
-`em select clang set`. Low priority.
+`-fuse-ld=` lives in `/etc/clang/<SLOT>/gentoo-linker.cfg`, not env.d. The
+three options this note posed (fold into `em select linker`, a `em select
+clang linker` subcommand, or flags on `em select clang set`) all assumed a
+selector was warranted. Got Opus's opinion first; the real ebuild
+(`llvm-core/clang-linker-config-<SLOT>.ebuild`) settled it:
+
+```
+IUSE="default-lld"
+src_install() {
+	insinto "/etc/clang/${SLOT}"
+	newins - gentoo-linker.cfg <<-EOF
+		-fuse-ld=$(usex default-lld lld bfd)
+	EOF
+}
+```
+
+This isn't a switchable profile like gcc/binutils/linker — it's the plain
+installed output of one ebuild, keyed on a single USE flag, state that
+already lives in `package.use`/the VDB like any other config file. Real
+Gentoo has no eselect-equivalent for it either. So: **no `set` command**.
+`em -1 llvm-core/clang-linker-config:<SLOT>` (with `default-lld` toggled in
+`package.use`) already covers it, matching Portage's own mechanism exactly.
+Writing `gentoo-linker.cfg` directly would desync it from `package.use`/VDB
+— the same divergence class as the CTARGET sysroot leak and the `select
+--root` dangling-wrapper bugs found earlier. `em select clang`'s
+`current-slot` file (read by nothing else in the tree) was also the wrong
+home to bolt this onto.
+
+Landed the one thing worth adding: **read-only** display. `em select clang
+list` now shows each slot's current `-fuse-ld=` value next to it (parsed
+straight from `gentoo-linker.cfg`, no new state, no `set`) —
+`portage-cli/src/select/clang.rs`'s `linker_cfg_path`/`linker_default`.
+Live-verified against this host's real slots: `clang-20`/`21`/`22` all show
+`(default linker: bfd)`, matching `/etc/clang/*/gentoo-linker.cfg` on disk.
