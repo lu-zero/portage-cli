@@ -1529,6 +1529,48 @@ mod tests {
         );
     }
 
+    /// Answers the open question left after the `-arch`/`-~arch` fix (see
+    /// `todo/accept-properties-restrict.md`'s consolidation notes): does
+    /// `-arch` retract a *wildcard* grant (`*`/`**`) for that one arch, or
+    /// only a specific bare `arch`/`~arch` token? Real Portage's matcher
+    /// works over a flat set of literal strings — `-riscv` only ever
+    /// discards a literal `riscv` token if present, and is inert against a
+    /// separate `*`/`**` token, which stays granted. `ArchAccept::add`
+    /// already matches this exactly (each token clears only its own bit —
+    /// `Negate` clears `stable`, never `any_stable`/`any`), so this was
+    /// already correct once the fold stopped joining tokens together; this
+    /// test just makes that answer explicit and locks it in.
+    #[test]
+    fn negate_arch_does_not_retract_a_wildcard_grant() {
+        let arch = Arch::intern("riscv");
+        let kws = |s: &str| Keyword::parse_line(s).unwrap();
+        let stable = kws("riscv");
+        let testing = kws("~riscv");
+        let foo = Cpv::parse("dev-libs/foo-1").unwrap();
+
+        // `* -riscv`: real Portage still accepts riscv here, since `-riscv`
+        // discards the literal `riscv` token, not the separate `*` token.
+        let star_then_veto = AcceptKeywords::from_global(&arch, &["*", "-riscv"]);
+        assert!(
+            star_then_veto.accepts(&stable, &foo, None),
+            "-arch must not retract a `*` grant for the same arch"
+        );
+
+        // `** -riscv`: same reasoning, `**` is untouched by `-riscv`.
+        let any_then_veto = AcceptKeywords::from_global(&arch, &["**", "-riscv"]);
+        assert!(
+            any_then_veto.accepts(&testing, &foo, None),
+            "-arch must not retract a `**` grant for the same arch"
+        );
+
+        // The only way to actually exclude one arch from an otherwise
+        // wildcard-accepting config is `-*` (clear-all) followed by
+        // re-granting everything except it — there is no narrower "retract
+        // just this arch from the wildcard" token, matching upstream.
+        let star_reset_without_riscv = AcceptKeywords::from_global(&arch, &["**", "-*", "amd64"]);
+        assert!(!star_reset_without_riscv.accepts(&stable, &foo, None));
+    }
+
     /// Regression test for the bug a design review (Claude Opus 5) found live:
     /// `package.accept_keywords`'s own documented "pin to stable" idiom
     /// (`portage(5)`: `media-video/mplayer -~x86`) needs `-~arch` to withdraw

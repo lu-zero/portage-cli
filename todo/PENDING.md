@@ -57,7 +57,7 @@ this table is the triage index.
   through this same comparison (native only so far); no file-tree/version
   diff against the real stage3 tarball has been done (only a VDB
   package-set comparison).
-- ~~`ACCEPT_KEYWORDS` `-arch` removal; `ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT`~~ — ✅ both done 2026-07-29 (see [[accept-properties-restrict]]); `-arch`'s wildcard-interaction simplification vs. a literal-token-set model is an open question, not yet revisited
+- ~~`ACCEPT_KEYWORDS` `-arch` removal; `ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT`~~ — ✅ both done 2026-07-29 (see [[accept-properties-restrict]]). The wildcard-interaction question is also closed: the `43dbd07` redesign (five independent `ArchAccept` bits, `-arch` clears only its own bit) already matches real Portage's literal-token-set behavior — `* -riscv` still accepts riscv via the `*` grant, same as upstream. Locked in by `negate_arch_does_not_retract_a_wildcard_grant` in `portage-resolve/src/repo.rs`.
 - Privilege: in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test; brush procsub deadlock pin bump — [[fakeroot-privilege-backends]], [[stage-build-shakeout]]
 - Large design (not near-term): full [[root-topology-refactor]]; availability-walk [[dedup-availability-walks]]; M3 sandbox (namespaces)
 - Upstream-ish: brush `PIPESTATUS`/`declare -a` on Dynamic — [[brush-pipestatus-not-reset]] (em workaround in place)
