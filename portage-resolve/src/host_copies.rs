@@ -236,7 +236,7 @@ mod tests {
 
     use super::*;
     use crate::force_mask::ForceMask;
-    use crate::repo::{self, AcceptKeywords, AcceptLicenses};
+    use crate::repo::{self, AcceptKeywords, AcceptLicenses, AcceptProperties, AcceptRestrict};
     use crate::root_aware;
 
     fn accept_all_licenses() -> AcceptLicense {
@@ -315,6 +315,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
@@ -396,6 +398,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
@@ -478,6 +482,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],

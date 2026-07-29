@@ -53,6 +53,20 @@ fn build_entries(candidates: &[AutounmaskCandidate], kind: &str) -> Vec<Entry> {
                         tokens: lics.clone(),
                     });
                 }
+                ("properties", FilterReason::Properties(props)) => {
+                    entries.push(Entry {
+                        filename: f.clone(),
+                        atom: a.clone(),
+                        tokens: props.clone(),
+                    });
+                }
+                ("restrict", FilterReason::Restrict(r)) => {
+                    entries.push(Entry {
+                        filename: f.clone(),
+                        atom: a.clone(),
+                        tokens: r.clone(),
+                    });
+                }
                 _ => {}
             }
         }
@@ -79,8 +93,11 @@ pub(super) fn report(candidates: &[AutounmaskCandidate]) {
     let unmask = build_entries(candidates, "unmask");
     let kw = build_entries(candidates, "keywords");
     let lic = build_entries(candidates, "license");
+    let props = build_entries(candidates, "properties");
+    let restr = build_entries(candidates, "restrict");
 
-    if unmask.is_empty() && kw.is_empty() && lic.is_empty() {
+    if unmask.is_empty() && kw.is_empty() && lic.is_empty() && props.is_empty() && restr.is_empty()
+    {
         return;
     }
 
@@ -143,6 +160,48 @@ pub(super) fn report(candidates: &[AutounmaskCandidate]) {
             writeln!(out, "{C_PKG}{}{C_PKG:#} {token_str}", e.atom).ok();
         }
     }
+    if !props.is_empty() {
+        writeln!(
+            out,
+            "\n{C_PKG}The following property changes are necessary to proceed:{C_PKG:#}"
+        )
+        .ok();
+        writeln!(
+            out,
+            " (see \"package.properties\" in the portage(5) man page for more details)"
+        )
+        .ok();
+        for e in &props {
+            let token_str = e
+                .tokens
+                .iter()
+                .map(|t| format!("{C_DIM}{t}{C_DIM:#}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            writeln!(out, "{C_PKG}{}{C_PKG:#} {token_str}", e.atom).ok();
+        }
+    }
+    if !restr.is_empty() {
+        writeln!(
+            out,
+            "\n{C_PKG}The following restrict changes are necessary to proceed:{C_PKG:#}"
+        )
+        .ok();
+        writeln!(
+            out,
+            " (see \"package.accept_restrict\" in the portage(5) man page for more details)"
+        )
+        .ok();
+        for e in &restr {
+            let token_str = e
+                .tokens
+                .iter()
+                .map(|t| format!("{C_DIM}{t}{C_DIM:#}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            writeln!(out, "{C_PKG}{}{C_PKG:#} {token_str}", e.atom).ok();
+        }
+    }
 }
 
 /// Write autounmask entries to the appropriate files under `portage_dir`
@@ -158,6 +217,16 @@ pub(super) fn write(
     )?;
     write_kind(candidates, "unmask", &portage_dir.join("package.unmask"))?;
     write_kind(candidates, "license", &portage_dir.join("package.license"))?;
+    write_kind(
+        candidates,
+        "properties",
+        &portage_dir.join("package.properties"),
+    )?;
+    write_kind(
+        candidates,
+        "restrict",
+        &portage_dir.join("package.accept_restrict"),
+    )?;
     Ok(())
 }
 

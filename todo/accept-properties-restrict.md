@@ -1,12 +1,18 @@
 # `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` visibility gates
 
-STATUS: **in progress (2026-07-29).** Prerequisites landed (commits 26fa1d7 →
-10f3ffd: `package.accept_keywords`, `package.license`, and the fully-interned
-keyword/license/`package.use`/force-mask hot paths — a net 1.16–1.27× resolve
-speedup, see below). These two `ACCEPT_*` gates almost never mask anything
-(defaults accept all), so they remain parity polish, not a correctness blocker.
-Now actively implementing, reusing `AcceptLicense` per the consolidation
-decision below rather than a third hand-rolled manager.
+STATUS: **✅ done (2026-07-29).** Implemented reusing `AcceptLicense`/
+`AcceptLicenses` verbatim (type-aliased `AcceptProperties`/`AcceptRestrict`),
+per the consolidation decision below — no third hand-rolled manager. Global
+`ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT` (process env, else profile/make.conf,
+default `*`) + `/etc/portage/package.properties`/`package.accept_restrict`
+(site + config-overlay) load in `use_env.rs`; gate wired into
+`Adapter::version_accepted` and `filter_reasons_for` (`FilterReason::
+Properties`/`Restrict`); autounmask writes `package.properties`/
+`package.accept_restrict` entries same as license. `RestrictExpr`'s
+USE-conditional branches evaluate against effective USE, same as `LICENSE`.
+Tests: `portage-resolve/src/repo.rs`'s `accept_properties_and_restrict_reuse_
+the_license_engine` (unit) and `restrict_not_accepted_filters_the_version`
+(end-to-end via `filter_reasons_for`/`version_accepted`).
 
 ## The gap
 

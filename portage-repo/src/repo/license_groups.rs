@@ -4,8 +4,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use portage_metadata::LicenseExpr;
 use portage_metadata::interner::{DefaultInterner, Interned};
+use portage_metadata::{LicenseExpr, RestrictExpr};
 
 use crate::error::{Error, Result};
 use crate::repo::named_groups::{GroupEntry, expand_group, group_ref_name};
@@ -126,6 +126,16 @@ impl AcceptLicense {
         out
     }
 
+    /// Build from raw tokens with no `@GROUP` support — for `ACCEPT_PROPERTIES`/
+    /// `ACCEPT_RESTRICT`, which share `ACCEPT_LICENSE`'s token grammar
+    /// (`*`, `-token`, `-*`) but have no license-group concept. A `@name`
+    /// token here (nonsensical for these variables) resolves against an
+    /// empty registry and so contributes nothing, rather than being taken
+    /// literally as a token named `@name`.
+    pub fn from_tokens_plain(tokens: &[String]) -> Self {
+        Self::from_tokens(tokens, &LicenseGroupRegistry::default())
+    }
+
     fn insert(&mut self, deny: bool, lic: Interned<DefaultInterner>) {
         if deny {
             self.denied.insert(lic);
@@ -234,6 +244,71 @@ impl AcceptLicense {
                     .iter()
                     .flat_map(|e| self.licenses_needed(e, enabled))
                     .collect()
+            }
+        }
+    }
+
+    /// Whether every top-level `RESTRICT`/`PROPERTIES` entry is accepted.
+    /// `enabled` reports whether a USE flag is active (see `accepts_expr`'s
+    /// doc — same conditional-branch handling). Unlike [`LicenseExpr`],
+    /// [`RestrictExpr`] has no `||` any-of group: a value is a flat entry
+    /// list, an implicit AND, which is exactly what a slice's top level is.
+    pub fn accepts_restrict(
+        &self,
+        entries: &[RestrictExpr],
+        enabled: &dyn Fn(&str) -> bool,
+    ) -> bool {
+        entries
+            .iter()
+            .all(|e| self.accepts_restrict_entry(e, enabled))
+    }
+
+    fn accepts_restrict_entry(&self, entry: &RestrictExpr, enabled: &dyn Fn(&str) -> bool) -> bool {
+        match entry {
+            RestrictExpr::Token(name) => self.accepts(name),
+            RestrictExpr::UseConditional {
+                flag,
+                negated,
+                entries,
+            } => enabled(flag) == *negated || self.accepts_restrict(entries, enabled),
+        }
+    }
+
+    /// Collect entries not covered by this accept list (mirrors `licenses_needed`).
+    pub fn restrict_needed(
+        &self,
+        entries: &[RestrictExpr],
+        enabled: &dyn Fn(&str) -> bool,
+    ) -> Vec<String> {
+        entries
+            .iter()
+            .flat_map(|e| self.restrict_needed_entry(e, enabled))
+            .collect()
+    }
+
+    fn restrict_needed_entry(
+        &self,
+        entry: &RestrictExpr,
+        enabled: &dyn Fn(&str) -> bool,
+    ) -> Vec<String> {
+        match entry {
+            RestrictExpr::Token(name) => {
+                if self.accepts(name) {
+                    Vec::new()
+                } else {
+                    vec![name.clone()]
+                }
+            }
+            RestrictExpr::UseConditional {
+                flag,
+                negated,
+                entries,
+            } => {
+                if enabled(flag) == *negated {
+                    Vec::new()
+                } else {
+                    self.restrict_needed(entries, enabled)
+                }
             }
         }
     }

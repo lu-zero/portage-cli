@@ -279,6 +279,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_accept_keywords,
         accept_license,
         package_license,
+        accept_properties,
+        package_properties,
+        accept_restrict,
+        package_restrict,
         distdir,
         provided,
     } = use_env;
@@ -320,6 +324,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         repo::AcceptKeywords::new(accept_arch, &accept_keywords, package_accept_keywords);
     // Likewise fold global ACCEPT_LICENSE with per-package package.license.
     let accept_licenses = repo::AcceptLicenses::new(accept_license, package_license);
+    // Same fold for ACCEPT_PROPERTIES/ACCEPT_RESTRICT — see
+    // `todo/accept-properties-restrict.md`'s consolidation decision for why
+    // these reuse `AcceptLicenses`/`AcceptLicense` rather than new types.
+    let accept_properties = repo::AcceptProperties::new(accept_properties, package_properties);
+    let accept_restrict = repo::AcceptRestrict::new(accept_restrict, package_restrict);
 
     let target_installed_cpvs: std::collections::HashSet<Cpv> = target_installed
         .iter()
@@ -367,6 +376,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_mask: &package_mask,
         package_unmask: &package_unmask,
         accept_licenses: &accept_licenses,
+        accept_properties: &accept_properties,
+        accept_restrict: &accept_restrict,
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
@@ -446,6 +457,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_mask: &package_mask,
         package_unmask: &package_unmask,
         accept_licenses: &accept_licenses,
+        accept_properties: &accept_properties,
+        accept_restrict: &accept_restrict,
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
@@ -515,6 +528,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     package_mask: &package_mask,
                     package_unmask: &package_unmask,
                     accept_licenses: &accept_licenses,
+                    accept_properties: &accept_properties,
+                    accept_restrict: &accept_restrict,
                     pre_env: &pre_env,
                     env_use: &env_use,
                     package_use: pkg_use,
@@ -720,6 +735,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 package_mask: &package_mask,
                 package_unmask: &package_unmask,
                 accept_licenses: &accept_licenses,
+                accept_properties: &accept_properties,
+                accept_restrict: &accept_restrict,
                 pre_env: &pre_env,
                 env_use: &env_use,
                 package_use: &package_use,
@@ -987,6 +1004,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 package_mask: &package_mask,
                 package_unmask: &package_unmask,
                 accept_licenses: &accept_licenses,
+                accept_properties: &accept_properties,
+                accept_restrict: &accept_restrict,
                 pre_env: &pre_env,
                 env_use: &env_use,
                 package_use: &package_use,
@@ -1120,6 +1139,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_mask: &package_mask,
         package_unmask: &package_unmask,
         accept_licenses: &accept_licenses,
+        accept_properties: &accept_properties,
+        accept_restrict: &accept_restrict,
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
@@ -1211,6 +1232,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_mask: &package_mask,
         package_unmask: &package_unmask,
         accept_licenses: &accept_licenses,
+        accept_properties: &accept_properties,
+        accept_restrict: &accept_restrict,
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,

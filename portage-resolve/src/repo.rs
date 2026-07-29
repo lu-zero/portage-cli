@@ -20,6 +20,10 @@ pub enum FilterReason {
     Masked,
     /// One or more licenses not in ACCEPT_LICENSE.
     License(Vec<String>),
+    /// One or more `PROPERTIES` tokens not in ACCEPT_PROPERTIES.
+    Properties(Vec<String>),
+    /// One or more `RESTRICT` tokens not in ACCEPT_RESTRICT.
+    Restrict(Vec<String>),
 }
 
 /// A package version that was excluded and could resolve a dropped dep.
@@ -338,6 +342,17 @@ impl AcceptLicenses {
     }
 }
 
+/// `ACCEPT_PROPERTIES` + `package.properties`. Same shape as [`AcceptLicenses`],
+/// reused verbatim rather than a hand-rolled third manager: both are "global
+/// accept-list + per-package atom-matched overlay" over the identical
+/// [`portage_repo::AcceptLicense`] engine, constructed group-free via
+/// [`portage_repo::AcceptLicense::from_tokens_plain`] (`PROPERTIES`/`RESTRICT`
+/// have no `@GROUP` concept). See `todo/accept-properties-restrict.md`'s
+/// consolidation decision.
+pub type AcceptProperties = AcceptLicenses;
+/// `ACCEPT_RESTRICT` + `package.accept_restrict` — see [`AcceptProperties`].
+pub type AcceptRestrict = AcceptLicenses;
+
 /// Returns true if the license expression is fully covered by `accept`,
 /// evaluating `use? ( … )` branches against `enabled` (a package's effective
 /// USE). For an expression with no conditionals, `enabled` is never consulted.
@@ -455,6 +470,65 @@ fn license_ok_for(
     license_accepted(lic, &accept, &use_predicate(&cfg))
 }
 
+/// True if a `RESTRICT`/`PROPERTIES` value contains any `flag? ( … )`
+/// conditional. Mirrors [`license_has_conditional`] for [`RestrictExpr`]'s
+/// flatter shape (top level is an implicit AND-list, no `||` group).
+fn restrict_has_conditional(entries: &[portage_metadata::RestrictExpr]) -> bool {
+    use portage_metadata::RestrictExpr;
+    entries.iter().any(|e| match e {
+        RestrictExpr::Token(_) => false,
+        RestrictExpr::UseConditional { .. } => true,
+    })
+}
+
+/// Whether every entry of a `RESTRICT`/`PROPERTIES` value is accepted under
+/// `accept`, evaluating conditionals against the version's effective USE only
+/// when the value actually has any (same hot-path shortcut as `license_ok_for`).
+fn restrict_family_ok_for(
+    entries: &[portage_metadata::RestrictExpr],
+    accept: &AcceptLicenses,
+    cpv: &Cpv,
+    meta: &portage_metadata::EbuildMetadata,
+    policy: &ResolvePolicy,
+) -> bool {
+    if entries.is_empty() {
+        return true;
+    }
+    let slot = Some(meta.slot.slot);
+    let a = accept.effective_for(cpv, slot);
+    if !restrict_has_conditional(entries) {
+        return a.accepts_restrict(entries, &|_| false);
+    }
+    let cfg = effective_use_config(policy, cpv, meta, slot);
+    a.accepts_restrict(entries, &use_predicate(&cfg))
+}
+
+/// Whether `meta`'s `PROPERTIES` is accepted for version `cpv` — see
+/// [`restrict_family_ok_for`].
+fn properties_ok_for(
+    cpv: &Cpv,
+    meta: &portage_metadata::EbuildMetadata,
+    policy: &ResolvePolicy,
+) -> bool {
+    restrict_family_ok_for(
+        &meta.properties,
+        policy.accept_properties,
+        cpv,
+        meta,
+        policy,
+    )
+}
+
+/// Whether `meta`'s `RESTRICT` is accepted for version `cpv` — see
+/// [`restrict_family_ok_for`].
+fn restrict_ok_for(
+    cpv: &Cpv,
+    meta: &portage_metadata::EbuildMetadata,
+    policy: &ResolvePolicy,
+) -> bool {
+    restrict_family_ok_for(&meta.restrict, policy.accept_restrict, cpv, meta, policy)
+}
+
 /// Check whether `mask_dep` matches the given `cpv` (version + CPN, no slot check).
 /// Whether `cpv` (in `slot`) is masked: some mask atom matches and no unmask
 /// atom does (`/etc/portage/package.unmask` cancels masks per package,
@@ -563,6 +637,10 @@ pub struct ResolvePolicy<'a> {
     pub package_unmask: &'a [Dep],
     /// Resolved `ACCEPT_LICENSE`/`package.license` decision.
     pub accept_licenses: &'a AcceptLicenses,
+    /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision.
+    pub accept_properties: &'a AcceptProperties,
+    /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision.
+    pub accept_restrict: &'a AcceptRestrict,
     /// USE folded up through `make.conf` — see [`Adapter::pre_env`].
     pub pre_env: &'a portage_atom_pubgrub::UseLayer,
     /// Process-environment USE layer — see [`Adapter::env_use`].
@@ -587,6 +665,10 @@ pub struct Adapter<'a> {
     pub package_unmask: &'a [Dep],
     /// Resolved `ACCEPT_LICENSE`/`package.license` decision.
     pub accept_licenses: &'a AcceptLicenses,
+    /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision.
+    pub accept_properties: &'a AcceptProperties,
+    /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision.
+    pub accept_restrict: &'a AcceptRestrict,
     /// USE folded up through `make.conf` (profile make.defaults + extra
     /// confs) — everything below the `package.use`/`env` layers in portage's
     /// real fold order. Pre-parsed [`portage_atom_pubgrub::UseLayer`]; combined with `env_use` and
@@ -621,6 +703,8 @@ impl Adapter<'_> {
             .accepts(&meta.keywords, cpv, Some(meta.slot.slot))
             && !is_masked(self.package_mask, self.package_unmask, cpv, &meta.slot)
             && self.license_ok(cpv, meta)
+            && properties_ok_for(cpv, meta, &self.policy())
+            && restrict_ok_for(cpv, meta, &self.policy())
     }
 
     /// The newest keyword/mask/license-accepted version of `cpn`, with its
@@ -732,6 +816,8 @@ impl<'a> Adapter<'a> {
             package_mask: self.package_mask,
             package_unmask: self.package_unmask,
             accept_licenses: self.accept_licenses,
+            accept_properties: self.accept_properties,
+            accept_restrict: self.accept_restrict,
             pre_env: self.pre_env,
             env_use: self.env_use,
             package_use: self.package_use,
@@ -1161,6 +1247,8 @@ pub fn filter_reason_text(reasons: &[FilterReason]) -> String {
             FilterReason::Keyword(kw) => format!("{kw} keyword"),
             FilterReason::Masked => "package.mask".to_string(),
             FilterReason::License(l) => format!("{} license(s)", l.join(" ")),
+            FilterReason::Properties(p) => format!("{} propert(y/ies)", p.join(" ")),
+            FilterReason::Restrict(r) => format!("{} restriction(s)", r.join(" ")),
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -1228,6 +1316,30 @@ pub fn filter_reasons_for(
             };
             if !needed.is_empty() {
                 reasons.push(FilterReason::License(needed));
+            }
+        }
+        if !meta.properties.is_empty() {
+            let accept = policy.accept_properties.effective_for(cpv, slot);
+            let needed = if restrict_has_conditional(&meta.properties) {
+                let cfg = effective_use_config(policy, cpv, meta, slot);
+                accept.restrict_needed(&meta.properties, &use_predicate(&cfg))
+            } else {
+                accept.restrict_needed(&meta.properties, &|_| false)
+            };
+            if !needed.is_empty() {
+                reasons.push(FilterReason::Properties(needed));
+            }
+        }
+        if !meta.restrict.is_empty() {
+            let accept = policy.accept_restrict.effective_for(cpv, slot);
+            let needed = if restrict_has_conditional(&meta.restrict) {
+                let cfg = effective_use_config(policy, cpv, meta, slot);
+                accept.restrict_needed(&meta.restrict, &use_predicate(&cfg))
+            } else {
+                accept.restrict_needed(&meta.restrict, &|_| false)
+            };
+            if !needed.is_empty() {
+                reasons.push(FilterReason::Restrict(needed));
             }
         }
 
@@ -1432,6 +1544,61 @@ mod tests {
         assert!(plain.effective_for(&foo, None).accepts("MIT"));
     }
 
+    /// `AcceptProperties`/`AcceptRestrict` are the same engine as
+    /// `AcceptLicenses` (type aliases, per the consolidation decision in
+    /// `todo/accept-properties-restrict.md`) — group-free construction, same
+    /// per-package overlay fold, `RestrictExpr`'s USE-conditional evaluation.
+    #[test]
+    fn accept_properties_and_restrict_reuse_the_license_engine() {
+        // Global accepts only `mirror`; per-package `dev-libs/foo interactive`
+        // adds `interactive` for foo only (no interaction with a `-deny`, which
+        // `AcceptLicense::merge`'s union-only `denied` set cannot be
+        // re-allowed by a per-package overlay short of `-*` — the same rule
+        // `accept_license_per_package_override` relies on).
+        let global = AcceptLicense::from_tokens_plain(&["mirror".into()]);
+        let foo = Cpv::parse("dev-libs/foo-1").unwrap();
+        let bar = Cpv::parse("dev-libs/bar-1").unwrap();
+
+        let accept_properties = AcceptProperties::new(
+            global.clone(),
+            vec![(
+                dep("dev-libs/foo"),
+                AcceptLicense::from_tokens_plain(&["interactive".into()]),
+            )],
+        );
+        let interactive = portage_metadata::RestrictExpr::parse("interactive").unwrap();
+        assert!(
+            accept_properties
+                .effective_for(&foo, None)
+                .accepts_restrict(&interactive, &|_| false)
+        );
+        assert!(
+            !accept_properties
+                .effective_for(&bar, None)
+                .accepts_restrict(&interactive, &|_| false)
+        );
+
+        // A USE-conditional entry only contributes when its flag is active.
+        let accept_restrict = AcceptRestrict::new(
+            AcceptLicense::from_tokens_plain(&["*".into(), "-bindist".into()]),
+            Vec::new(),
+        );
+        let conditional = portage_metadata::RestrictExpr::parse("bindist? ( bindist )").unwrap();
+        let accept = accept_restrict.effective_for(&foo, None);
+        assert!(
+            accept.accepts_restrict(&conditional, &|f| f != "bindist"),
+            "inactive flag: the bindist restriction never applies"
+        );
+        assert!(
+            !accept.accepts_restrict(&conditional, &|f| f == "bindist"),
+            "active flag: bindist is required and not accepted"
+        );
+        assert_eq!(
+            accept.restrict_needed(&conditional, &|f| f == "bindist"),
+            vec!["bindist".to_string()]
+        );
+    }
+
     /// Build a one-package `RepoData` from md5-cache text.
     fn repo_with(cpv: &str, cache_text: &str) -> (RepoData, Cpv) {
         let cpv = Cpv::parse(cpv).unwrap();
@@ -1598,6 +1765,8 @@ mod tests {
                     package_mask: &[],
                     package_unmask: &[],
                     accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+                    accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+                    accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
                     pre_env: empty_layer(),
                     env_use: empty_layer(),
                     package_use: &[],
@@ -1644,6 +1813,8 @@ mod tests {
             package_mask: &mask,
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
@@ -1687,6 +1858,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
@@ -1698,6 +1871,67 @@ mod tests {
         // An unknown CPN has nothing to report either.
         let absent = Cpn::try_new("app-misc/absent").expect("cpn parses");
         assert!(filter_reasons_for(&data, &absent, &vs, &policy).is_empty());
+    }
+
+    /// End-to-end: an ebuild's `RESTRICT` token not in `ACCEPT_RESTRICT` filters
+    /// it out with `FilterReason::Restrict`, and `version_accepted` agrees.
+    #[test]
+    fn restrict_not_accepted_filters_the_version() {
+        let (data, cpv) = repo_with(
+            "net-misc/thing-1.0",
+            "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nRESTRICT=bindist\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let deny_bindist = AcceptRestrict::new(
+            AcceptLicense::from_tokens_plain(&["*".into(), "-bindist".into()]),
+            Vec::new(),
+        );
+        let policy = ResolvePolicy {
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &deny_bindist,
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &ForceMask::default(),
+        };
+        let cpn = Cpn::try_new("net-misc/thing").expect("cpn parses");
+        let vs = portage_atom_pubgrub::PortageVersionSet::any();
+        let found = filter_reasons_for(&data, &cpn, &vs, &policy);
+        assert!(matches!(
+            found.as_slice(),
+            [c] if matches!(c.reasons.as_slice(), [FilterReason::Restrict(r)] if r == &["bindist".to_string()])
+        ));
+
+        let adapter = Adapter {
+            data: &data,
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &std::collections::HashSet::new(),
+            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &deny_bindist,
+            pre_env: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &ForceMask::default(),
+            autosolve_use: true,
+        };
+        let entry = &data.versions[&cpn][0].1;
+        assert!(!adapter.version_accepted(&cpv, entry));
+
+        // Accepting bindist makes the same version pass.
+        let accept_all = AcceptRestrict::new(accept_all_licenses(), Vec::new());
+        let adapter_allow = Adapter {
+            accept_restrict: &accept_all,
+            ..adapter
+        };
+        assert!(adapter_allow.version_accepted(&cpv, entry));
     }
 
     /// `target_package`'s unslotted return is the caller's signal that nothing
@@ -1716,6 +1950,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
@@ -1759,6 +1995,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
@@ -1799,6 +2037,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
@@ -1837,6 +2077,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
@@ -1885,6 +2127,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
@@ -1938,6 +2182,8 @@ mod tests {
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],

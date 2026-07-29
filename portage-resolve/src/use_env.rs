@@ -52,6 +52,15 @@ pub struct UseEnv {
     /// Per-package `package.license` entries: `(atom, overlay)`, each overlay
     /// already parsed/expanded against the license groups.
     pub package_license: Vec<(Dep, AcceptLicense)>,
+    /// Effective global `ACCEPT_PROPERTIES`. Same token grammar as
+    /// `ACCEPT_LICENSE` minus `@GROUP` (`AcceptLicense::from_tokens_plain`).
+    pub accept_properties: AcceptLicense,
+    /// Per-package `package.properties` entries — see `package_license`.
+    pub package_properties: Vec<(Dep, AcceptLicense)>,
+    /// Effective global `ACCEPT_RESTRICT`. See `accept_properties`.
+    pub accept_restrict: AcceptLicense,
+    /// Per-package `package.accept_restrict` entries — see `package_license`.
+    pub package_restrict: Vec<(Dep, AcceptLicense)>,
     /// Resolved `DISTDIR` (where fetched distfiles live), for download-size accounting.
     pub distdir: String,
     /// `package.provided` CPVs from the profile stack: packages the system
@@ -195,6 +204,55 @@ async fn compute_use_env(
         ));
     }
 
+    // ACCEPT_PROPERTIES / ACCEPT_RESTRICT: same shape as ACCEPT_LICENSE minus
+    // @GROUP support (no license-group registry to load or pass), process env
+    // overrides the profile/make.conf value, default "*" (accept everything —
+    // portage's make.globals default, why these gates almost never mask).
+    let no_groups = LicenseGroupRegistry::default();
+    let accept_properties_tokens = match std::env::var("ACCEPT_PROPERTIES") {
+        Ok(env) if !env.is_empty() => env.split_whitespace().map(str::to_string).collect(),
+        _ => {
+            let v = split_var("ACCEPT_PROPERTIES");
+            if v.is_empty() {
+                vec!["*".to_string()]
+            } else {
+                v
+            }
+        }
+    };
+    let accept_properties = AcceptLicense::from_tokens_plain(&accept_properties_tokens);
+    let mut package_properties: Vec<(Dep, AcceptLicense)> =
+        load_package_license(portage_dir.join("package.properties").as_str(), &no_groups);
+    if let Some(overlay) = config_overlay {
+        package_properties.extend(load_package_license(
+            overlay.join("package.properties").as_str(),
+            &no_groups,
+        ));
+    }
+
+    let accept_restrict_tokens = match std::env::var("ACCEPT_RESTRICT") {
+        Ok(env) if !env.is_empty() => env.split_whitespace().map(str::to_string).collect(),
+        _ => {
+            let v = split_var("ACCEPT_RESTRICT");
+            if v.is_empty() {
+                vec!["*".to_string()]
+            } else {
+                v
+            }
+        }
+    };
+    let accept_restrict = AcceptLicense::from_tokens_plain(&accept_restrict_tokens);
+    let mut package_restrict: Vec<(Dep, AcceptLicense)> = load_package_license(
+        portage_dir.join("package.accept_restrict").as_str(),
+        &no_groups,
+    );
+    if let Some(overlay) = config_overlay {
+        package_restrict.extend(load_package_license(
+            overlay.join("package.accept_restrict").as_str(),
+            &no_groups,
+        ));
+    }
+
     let distdir = shell
         .get_var("DISTDIR")
         .filter(|s| !s.is_empty())
@@ -290,6 +348,10 @@ async fn compute_use_env(
         package_accept_keywords,
         accept_license,
         package_license,
+        accept_properties,
+        package_properties,
+        accept_restrict,
+        package_restrict,
         distdir,
         provided,
     })

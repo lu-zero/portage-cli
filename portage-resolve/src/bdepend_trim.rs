@@ -209,6 +209,8 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             accept_licenses,
+            accept_properties: accept_licenses,
+            accept_restrict: accept_licenses,
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
