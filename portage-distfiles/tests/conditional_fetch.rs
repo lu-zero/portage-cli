@@ -36,12 +36,22 @@ fn read_request(stream: &TcpStream) -> (String, std::collections::HashMap<String
     (path, headers)
 }
 
+/// `Connection: close` on every response is load-bearing, not decoration:
+/// the server below serves exactly one request per accepted connection, but
+/// HTTP/1.1 defaults to keep-alive, so without this header `reqwest`/hyper
+/// is entitled to reuse the `Packages.gz` connection for the `Packages`
+/// request. When it does, the server has already moved on to `accept()`ing
+/// a new connection and never reads the reused one; the original
+/// `TcpStream` is then dropped at the end of its loop iteration, closing
+/// the socket out from under the client's in-flight second request —
+/// observed as a flaky `hyper::Error(IncompleteMessage)`.
 fn write_response(mut stream: &TcpStream, status_line: &str, extra_headers: &str, body: &str) {
     let resp = format!(
-        "{status_line}\r\nContent-Length: {}\r\n{extra_headers}\r\n{body}",
+        "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n{body}",
         body.len()
     );
     stream.write_all(resp.as_bytes()).unwrap();
+    let _ = stream.flush();
 }
 
 /// Serves exactly two requests on one listener: `Packages.gz` (always 404,
