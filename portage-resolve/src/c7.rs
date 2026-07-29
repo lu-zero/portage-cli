@@ -25,7 +25,7 @@ use portage_atom_pubgrub::{
 use portage_metadata::CacheEntry;
 use std::collections::HashMap;
 
-use portage_repo::{AcceptLicense, LicenseGroupRegistry};
+use portage_repo::{AcceptSet, LicenseGroupRegistry};
 
 use crate::force_mask::ForceMask;
 
@@ -36,7 +36,7 @@ fn empty_layer() -> &'static portage_atom_pubgrub::UseLayer {
 }
 
 use crate::repo::{
-    AcceptKeywords, AcceptLicenses, Adapter, RepoData, ResolvePolicy, target_package,
+    AcceptKeywords, AcceptOverlay, Adapter, RepoData, ResolvePolicy, target_package,
 };
 
 /// Build a `RepoData` from `(cpv, md5-cache-text)` pairs.
@@ -95,8 +95,8 @@ fn solve_with(
 ) -> Option<Outcome> {
     let arch = Arch::intern("amd64");
     let accept = AcceptKeywords::from_global(&arch, &["amd64"]);
-    let lic = AcceptLicenses::new(
-        AcceptLicense::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
+    let lic = AcceptOverlay::new(
+        AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
         Vec::new(),
     );
     let fm = ForceMask::default();

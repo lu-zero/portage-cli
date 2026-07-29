@@ -146,11 +146,11 @@ mod tests {
 
     use std::collections::{HashMap, HashSet};
 
-    use portage_repo::{AcceptLicense, LicenseGroupRegistry};
+    use portage_repo::{AcceptSet, LicenseGroupRegistry};
 
     use super::*;
     use crate::Roots;
-    use crate::repo::{AcceptKeywords, AcceptLicenses, RepoData, ResolvePolicy};
+    use crate::repo::{AcceptKeywords, AcceptOverlay, RepoData, ResolvePolicy};
 
     fn empty_roots() -> Roots {
         Roots::default()
@@ -182,8 +182,8 @@ mod tests {
         let fm = crate::force_mask::ForceMask::default();
         let arch = gentoo_core::Arch::intern("amd64");
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
-        let al = AcceptLicenses::new(
-            AcceptLicense::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
+        let al = AcceptOverlay::new(
+            AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
             Vec::new(),
         );
         let ctx = TrimCtx {

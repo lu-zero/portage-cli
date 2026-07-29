@@ -4,7 +4,7 @@ use camino::Utf8Path;
 use portage_atom::Dep;
 use portage_atom::interner::Interned;
 use portage_atom_pubgrub::{UseLayer, UseOverride};
-use portage_repo::{AcceptLicense, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
+use portage_repo::{AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
 
 use crate::force_mask::{ForceMask, index_by_cpn};
 use crate::repo::AcceptToken;
@@ -48,19 +48,19 @@ pub struct UseEnv {
     /// empty token list (expanded to `~arch` when the host arch is known).
     pub package_accept_keywords: Vec<(Dep, Vec<AcceptToken>)>,
     /// Effective global `ACCEPT_LICENSE` after `@GROUP` expansion and `-` denials.
-    pub accept_license: AcceptLicense,
+    pub accept_license: AcceptSet,
     /// Per-package `package.license` entries: `(atom, overlay)`, each overlay
     /// already parsed/expanded against the license groups.
-    pub package_license: Vec<(Dep, AcceptLicense)>,
+    pub package_license: Vec<(Dep, AcceptSet)>,
     /// Effective global `ACCEPT_PROPERTIES`. Same token grammar as
-    /// `ACCEPT_LICENSE` minus `@GROUP` (`AcceptLicense::from_tokens_plain`).
-    pub accept_properties: AcceptLicense,
+    /// `ACCEPT_LICENSE` minus `@GROUP` (`AcceptSet::from_tokens_plain`).
+    pub accept_properties: AcceptSet,
     /// Per-package `package.properties` entries — see `package_license`.
-    pub package_properties: Vec<(Dep, AcceptLicense)>,
+    pub package_properties: Vec<(Dep, AcceptSet)>,
     /// Effective global `ACCEPT_RESTRICT`. See `accept_properties`.
-    pub accept_restrict: AcceptLicense,
+    pub accept_restrict: AcceptSet,
     /// Per-package `package.accept_restrict` entries — see `package_license`.
-    pub package_restrict: Vec<(Dep, AcceptLicense)>,
+    pub package_restrict: Vec<(Dep, AcceptSet)>,
     /// Resolved `DISTDIR` (where fetched distfiles live), for download-size accounting.
     pub distdir: String,
     /// `package.provided` CPVs from the profile stack: packages the system
@@ -182,16 +182,16 @@ async fn compute_use_env(
             _ => from_profile,
         }
     };
-    let accept_license = AcceptLicense::from_tokens(&accept_license_tokens, &license_groups);
+    let accept_license = AcceptSet::from_tokens(&accept_license_tokens, &license_groups);
 
     // Per-package `package.license`, in portage's precedence order: profile
     // stack, then site `/etc/portage/package.license`, then the config overlay.
-    // Each line's tokens are expanded into an `AcceptLicense` overlay now.
-    let mut package_license: Vec<(Dep, AcceptLicense)> = stack
+    // Each line's tokens are expanded into an `AcceptSet` overlay now.
+    let mut package_license: Vec<(Dep, AcceptSet)> = stack
         .package_license()
         .unwrap_or_default()
         .into_iter()
-        .map(|(dep, toks)| (dep, AcceptLicense::from_tokens(&toks, &license_groups)))
+        .map(|(dep, toks)| (dep, AcceptSet::from_tokens(&toks, &license_groups)))
         .collect();
     package_license.extend(load_package_license(
         portage_dir.join("package.license").as_str(),
@@ -220,8 +220,8 @@ async fn compute_use_env(
             }
         }
     };
-    let accept_properties = AcceptLicense::from_tokens_plain(&accept_properties_tokens);
-    let mut package_properties: Vec<(Dep, AcceptLicense)> =
+    let accept_properties = AcceptSet::from_tokens_plain(&accept_properties_tokens);
+    let mut package_properties: Vec<(Dep, AcceptSet)> =
         load_package_license(portage_dir.join("package.properties").as_str(), &no_groups);
     if let Some(overlay) = config_overlay {
         package_properties.extend(load_package_license(
@@ -241,8 +241,8 @@ async fn compute_use_env(
             }
         }
     };
-    let accept_restrict = AcceptLicense::from_tokens_plain(&accept_restrict_tokens);
-    let mut package_restrict: Vec<(Dep, AcceptLicense)> = load_package_license(
+    let accept_restrict = AcceptSet::from_tokens_plain(&accept_restrict_tokens);
+    let mut package_restrict: Vec<(Dep, AcceptSet)> = load_package_license(
         portage_dir.join("package.accept_restrict").as_str(),
         &no_groups,
     );
@@ -519,9 +519,9 @@ fn load_package_keywords(path: &str) -> Vec<(Dep, Vec<AcceptToken>)> {
 
 /// Load `package.license`: `(atom, overlay)` per line, `#` comments, optionally a
 /// directory. Each line's license tokens (`@GROUP`, `-deny`, `*`, names) are
-/// expanded against `groups` into a per-package [`AcceptLicense`] overlay now,
+/// expanded against `groups` into a per-package [`AcceptSet`] overlay now,
 /// so resolution never re-parses them.
-fn load_package_license(path: &str, groups: &LicenseGroupRegistry) -> Vec<(Dep, AcceptLicense)> {
+fn load_package_license(path: &str, groups: &LicenseGroupRegistry) -> Vec<(Dep, AcceptSet)> {
     let mut result = Vec::new();
     for line in portage_repo::read_config_lines(path).unwrap_or_default() {
         let mut parts = line.split_whitespace();
@@ -532,7 +532,7 @@ fn load_package_license(path: &str, groups: &LicenseGroupRegistry) -> Vec<(Dep, 
             continue;
         };
         let tokens: Vec<String> = parts.map(String::from).collect();
-        result.push((dep, AcceptLicense::from_tokens(&tokens, groups)));
+        result.push((dep, AcceptSet::from_tokens(&tokens, groups)));
     }
     result
 }

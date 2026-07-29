@@ -1,5 +1,5 @@
 //! License group definitions from `profiles/license_groups` and
-//! [`AcceptLicense`] token expansion for `ACCEPT_LICENSE`.
+//! [`AcceptSet`] token expansion for `ACCEPT_LICENSE`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -81,18 +81,18 @@ fn classify_license_token(token: &str) -> Result<GroupEntry<Interned<DefaultInte
 /// Effective `ACCEPT_LICENSE` after expanding `@GROUP` tokens and applying
 /// `-` denials (portage `accept_license` semantics).
 #[derive(Debug, Clone, Default)]
-pub struct AcceptLicense {
+pub struct AcceptSet {
     /// `*` was present among allow tokens.
     pub allow_all: bool,
     /// This list encountered `-*` (incremental clear-all). Used by
-    /// [`AcceptLicense::merge`] so a package.license line of `-* @FREE` can
+    /// [`AcceptSet::merge`] so a package.license line of `-* @FREE` can
     /// replace a global `ACCEPT_LICENSE=*`, not OR onto it.
     pub cleared: bool,
     allowed: HashSet<Interned<DefaultInterner>>,
     denied: HashSet<Interned<DefaultInterner>>,
 }
 
-impl AcceptLicense {
+impl AcceptSet {
     /// Build from raw `ACCEPT_LICENSE` tokens and a loaded group registry.
     pub fn from_tokens(tokens: &[String], groups: &LicenseGroupRegistry) -> Self {
         let mut out = Self::default();
@@ -146,10 +146,10 @@ impl AcceptLicense {
 
     /// Layer `other` on top of this list for a per-package `package.license`
     /// overlay. When `other` was built from a token list that included `-*`
-    /// ([`AcceptLicense::cleared`]), replace allow_all/allowed with other's
+    /// ([`AcceptSet::cleared`]), replace allow_all/allowed with other's
     /// post-clear state (so `-* @FREE` can restrict a global `*`). Otherwise
     /// union sets and OR `allow_all` (additive package.license lines).
-    pub fn merge(&mut self, other: &AcceptLicense) {
+    pub fn merge(&mut self, other: &AcceptSet) {
         if other.cleared {
             self.allow_all = other.allow_all;
             self.allowed = other.allowed.clone();
@@ -338,7 +338,7 @@ OSI Apache-2.0
     #[test]
     fn accept_license_expands_groups_and_denies() {
         let reg = LicenseGroupRegistry::parse(SAMPLE);
-        let acc = AcceptLicense::from_tokens(&["@FREE-SOFTWARE".into(), "-GPL-2+".into()], &reg);
+        let acc = AcceptSet::from_tokens(&["@FREE-SOFTWARE".into(), "-GPL-2+".into()], &reg);
         assert!(acc.accepts("MIT"));
         assert!(!acc.accepts("GPL-2+"));
         assert!(!acc.accepts("unknown"));
@@ -347,7 +347,7 @@ OSI Apache-2.0
     #[test]
     fn accept_license_star_with_deny() {
         let reg = LicenseGroupRegistry::default();
-        let acc = AcceptLicense::from_tokens(&["*".into(), "-MIT".into()], &reg);
+        let acc = AcceptSet::from_tokens(&["*".into(), "-MIT".into()], &reg);
         assert!(acc.accepts("GPL-2"));
         assert!(!acc.accepts("MIT"));
     }
@@ -355,9 +355,9 @@ OSI Apache-2.0
     #[test]
     fn package_license_clear_replaces_global_allow_all() {
         let reg = LicenseGroupRegistry::parse(SAMPLE);
-        let mut global = AcceptLicense::from_tokens(&["*".into()], &reg);
+        let mut global = AcceptSet::from_tokens(&["*".into()], &reg);
         assert!(global.accepts("all-rights-reserved"));
-        let pkg = AcceptLicense::from_tokens(&["-*".into(), "@FREE-SOFTWARE".into()], &reg);
+        let pkg = AcceptSet::from_tokens(&["-*".into(), "@FREE-SOFTWARE".into()], &reg);
         assert!(pkg.cleared);
         global.merge(&pkg);
         assert!(global.accepts("MIT"));
@@ -372,10 +372,8 @@ OSI Apache-2.0
         let reg = LicenseGroupRegistry::default();
         // `-*` discards everything accumulated so far (allows and the `*`
         // allow-all), so later tokens rebuild from empty: only BSD is accepted.
-        let acc = AcceptLicense::from_tokens(
-            &["*".into(), "MIT".into(), "-*".into(), "BSD".into()],
-            &reg,
-        );
+        let acc =
+            AcceptSet::from_tokens(&["*".into(), "MIT".into(), "-*".into(), "BSD".into()], &reg);
         assert!(acc.accepts("BSD"), "BSD added after the clear-all");
         assert!(!acc.accepts("MIT"), "MIT cleared by -*");
         assert!(
@@ -394,7 +392,7 @@ OSI Apache-2.0
     fn conditional_license_respects_use() {
         let reg = LicenseGroupRegistry::default();
         // Only the free licenses are accepted (stand-in for @FREE).
-        let acc = AcceptLicense::from_tokens(&["GPL-2+".into(), "LGPL-2.1+".into()], &reg);
+        let acc = AcceptSet::from_tokens(&["GPL-2+".into(), "LGPL-2.1+".into()], &reg);
         let expr =
             LicenseExpr::parse("gpl? ( GPL-2+ fdk? ( all-rights-reserved ) ) !gpl? ( LGPL-2.1+ )")
                 .unwrap();

@@ -232,15 +232,15 @@ mod tests {
     }
 
     use portage_metadata::CacheEntry;
-    use portage_repo::{AcceptLicense, LicenseGroupRegistry};
+    use portage_repo::{AcceptSet, LicenseGroupRegistry};
 
     use super::*;
     use crate::force_mask::ForceMask;
-    use crate::repo::{self, AcceptKeywords, AcceptLicenses, AcceptProperties, AcceptRestrict};
+    use crate::repo::{self, AcceptKeywords, AcceptOverlay, AcceptProperties, AcceptRestrict};
     use crate::root_aware;
 
-    fn accept_all_licenses() -> AcceptLicense {
-        AcceptLicense::from_tokens(&["*".into()], &LicenseGroupRegistry::default())
+    fn accept_all_licenses() -> AcceptSet {
+        AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default())
     }
 
     /// Build a `RepoData` from `(cpv, md5-cache-text)` pairs, one version per CPN
@@ -314,7 +314,7 @@ mod tests {
             accept_keywords: &accept_keywords,
             package_mask: &[],
             package_unmask: &[],
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
@@ -397,7 +397,7 @@ mod tests {
             accept_keywords: &accept_keywords,
             package_mask: &[],
             package_unmask: &[],
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
@@ -481,7 +481,7 @@ mod tests {
             accept_keywords: &accept_keywords,
             package_mask: &[],
             package_unmask: &[],
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),

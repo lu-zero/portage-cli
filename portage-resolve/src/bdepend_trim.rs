@@ -187,12 +187,12 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use portage_metadata::CacheEntry;
-    use portage_repo::{AcceptLicense, LicenseGroupRegistry};
+    use portage_repo::{AcceptSet, LicenseGroupRegistry};
 
     use super::*;
     use crate::Roots;
     use crate::force_mask::ForceMask;
-    use crate::repo::{AcceptKeywords, AcceptLicenses};
+    use crate::repo::{AcceptKeywords, AcceptOverlay};
 
     fn empty_roots() -> Roots {
         Roots::default()
@@ -201,7 +201,7 @@ mod tests {
     /// The permissive keyword/license policy the trim tests fold USE under.
     fn test_policy<'a>(
         accept_keywords: &'a AcceptKeywords,
-        accept_licenses: &'a AcceptLicenses,
+        accept_licenses: &'a AcceptOverlay,
         force_mask: &'a ForceMask,
     ) -> ResolvePolicy<'a> {
         ResolvePolicy {
@@ -218,9 +218,9 @@ mod tests {
         }
     }
 
-    fn accept_all_licenses() -> AcceptLicenses {
-        AcceptLicenses::new(
-            AcceptLicense::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
+    fn accept_all_licenses() -> AcceptOverlay {
+        AcceptOverlay::new(
+            AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),
             Vec::new(),
         )
     }

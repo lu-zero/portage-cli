@@ -298,19 +298,19 @@ impl AcceptKeywords {
 /// The global list applies to every package; per-package entries extend it
 /// (allow more, or `-deny`) for versions whose atom matches. The common
 /// no-override path borrows the global decision — no allocation.
-pub struct AcceptLicenses {
-    global: portage_repo::AcceptLicense,
+pub struct AcceptOverlay {
+    global: portage_repo::AcceptSet,
     /// `(atom, overlay)` — each overlay is the per-line tokens parsed into an
-    /// `AcceptLicense`, merged onto the global decision for matching versions.
-    per_package: Vec<(Dep, portage_repo::AcceptLicense)>,
+    /// `AcceptSet`, merged onto the global decision for matching versions.
+    per_package: Vec<(Dep, portage_repo::AcceptSet)>,
 }
 
-impl AcceptLicenses {
+impl AcceptOverlay {
     /// Build from the global `ACCEPT_LICENSE` decision plus per-package
     /// `package.license` overlays.
     pub fn new(
-        global: portage_repo::AcceptLicense,
-        per_package: Vec<(Dep, portage_repo::AcceptLicense)>,
+        global: portage_repo::AcceptSet,
+        per_package: Vec<(Dep, portage_repo::AcceptSet)>,
     ) -> Self {
         Self {
             global,
@@ -325,12 +325,12 @@ impl AcceptLicenses {
         &self,
         cpv: &Cpv,
         slot: Option<Interned<DefaultInterner>>,
-    ) -> Cow<'_, portage_repo::AcceptLicense> {
+    ) -> Cow<'_, portage_repo::AcceptSet> {
         if self.per_package.is_empty() {
             return Cow::Borrowed(&self.global);
         }
         let slot_str = slot.as_ref().map(|s| s.as_str());
-        let mut merged: Option<portage_repo::AcceptLicense> = None;
+        let mut merged: Option<portage_repo::AcceptSet> = None;
         for (dep, overlay) in &self.per_package {
             if dep.matches_cpv(cpv, slot_str) {
                 merged
@@ -342,23 +342,27 @@ impl AcceptLicenses {
     }
 }
 
-/// `ACCEPT_PROPERTIES` + `package.properties`. Same shape as [`AcceptLicenses`],
+/// `ACCEPT_LICENSE` + `package.license` — the license-family name for
+/// [`AcceptOverlay`] (three equally-named aliases of the same generic
+/// engine; see [`AcceptProperties`]/[`AcceptRestrict`]).
+pub type AcceptLicenses = AcceptOverlay;
+/// `ACCEPT_PROPERTIES` + `package.properties`. Same shape as [`AcceptOverlay`],
 /// reused verbatim rather than a hand-rolled third manager: both are "global
 /// accept-list + per-package atom-matched overlay" over the identical
-/// [`portage_repo::AcceptLicense`] engine, constructed group-free via
-/// [`portage_repo::AcceptLicense::from_tokens_plain`] (`PROPERTIES`/`RESTRICT`
+/// [`portage_repo::AcceptSet`] engine, constructed group-free via
+/// [`portage_repo::AcceptSet::from_tokens_plain`] (`PROPERTIES`/`RESTRICT`
 /// have no `@GROUP` concept). See `todo/accept-properties-restrict.md`'s
 /// consolidation decision.
-pub type AcceptProperties = AcceptLicenses;
+pub type AcceptProperties = AcceptOverlay;
 /// `ACCEPT_RESTRICT` + `package.accept_restrict` — see [`AcceptProperties`].
-pub type AcceptRestrict = AcceptLicenses;
+pub type AcceptRestrict = AcceptOverlay;
 
 /// Returns true if the license expression is fully covered by `accept`,
 /// evaluating `use? ( … )` branches against `enabled` (a package's effective
 /// USE). For an expression with no conditionals, `enabled` is never consulted.
 pub fn license_accepted(
     expr: &LicenseExpr,
-    accept: &portage_repo::AcceptLicense,
+    accept: &portage_repo::AcceptSet,
     enabled: &dyn Fn(&str) -> bool,
 ) -> bool {
     accept.accepts_expr(expr, enabled)
@@ -368,7 +372,7 @@ pub fn license_accepted(
 /// against `enabled` (see [`license_accepted`]).
 fn licenses_needed(
     expr: &LicenseExpr,
-    accept: &portage_repo::AcceptLicense,
+    accept: &portage_repo::AcceptSet,
     enabled: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
     accept.licenses_needed(expr, enabled)
@@ -486,7 +490,7 @@ fn restrict_has_conditional(entries: &[portage_metadata::RestrictExpr]) -> bool 
 /// when the value actually has any (same hot-path shortcut as `license_ok_for`).
 fn restrict_family_ok_for(
     entries: &[portage_metadata::RestrictExpr],
-    accept: &AcceptLicenses,
+    accept: &AcceptOverlay,
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
     policy: &ResolvePolicy,
@@ -636,7 +640,7 @@ pub struct ResolvePolicy<'a> {
     /// `package.unmask` atoms (cancel a mask per package).
     pub package_unmask: &'a [Dep],
     /// Resolved `ACCEPT_LICENSE`/`package.license` decision.
-    pub accept_licenses: &'a AcceptLicenses,
+    pub accept_licenses: &'a AcceptOverlay,
     /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision.
     pub accept_properties: &'a AcceptProperties,
     /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision.
@@ -664,7 +668,7 @@ pub struct Adapter<'a> {
     /// `package.unmask` atoms (cancel a mask per package).
     pub package_unmask: &'a [Dep],
     /// Resolved `ACCEPT_LICENSE`/`package.license` decision.
-    pub accept_licenses: &'a AcceptLicenses,
+    pub accept_licenses: &'a AcceptOverlay,
     /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision.
     pub accept_properties: &'a AcceptProperties,
     /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision.
@@ -1393,10 +1397,10 @@ mod tests {
     use super::*;
     use crate::force_mask::{ForceMask, index_by_cpn};
     use portage_atom_pubgrub::{PackageRepository, UseFlagState};
-    use portage_repo::{AcceptLicense, LicenseGroupRegistry};
+    use portage_repo::{AcceptSet, LicenseGroupRegistry};
 
-    fn accept_all_licenses() -> AcceptLicense {
-        AcceptLicense::from_tokens(&["*".into()], &LicenseGroupRegistry::default())
+    fn accept_all_licenses() -> AcceptSet {
+        AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default())
     }
 
     fn dep(s: &str) -> Dep {
@@ -1521,16 +1525,16 @@ mod tests {
     #[test]
     fn accept_license_per_package_override() {
         let groups = LicenseGroupRegistry::default();
-        let global = AcceptLicense::from_tokens(&["MIT".into()], &groups);
+        let global = AcceptSet::from_tokens(&["MIT".into()], &groups);
         let foo = Cpv::parse("dev-libs/foo-1").unwrap();
         let bar = Cpv::parse("dev-libs/bar-1").unwrap();
 
         // package.license `dev-libs/foo GPL-2` accepts GPL-2 for foo only.
-        let licenses = AcceptLicenses::new(
+        let licenses = AcceptOverlay::new(
             global.clone(),
             vec![(
                 dep("dev-libs/foo"),
-                AcceptLicense::from_tokens(&["GPL-2".into()], &groups),
+                AcceptSet::from_tokens(&["GPL-2".into()], &groups),
             )],
         );
         assert!(licenses.effective_for(&foo, None).accepts("GPL-2"));
@@ -1539,23 +1543,23 @@ mod tests {
         assert!(licenses.effective_for(&bar, None).accepts("MIT"));
 
         // No per-package entries ⇒ the global decision is borrowed unchanged.
-        let plain = AcceptLicenses::new(global, Vec::new());
+        let plain = AcceptOverlay::new(global, Vec::new());
         assert!(!plain.effective_for(&foo, None).accepts("GPL-2"));
         assert!(plain.effective_for(&foo, None).accepts("MIT"));
     }
 
     /// `AcceptProperties`/`AcceptRestrict` are the same engine as
-    /// `AcceptLicenses` (type aliases, per the consolidation decision in
+    /// `AcceptOverlay` (type aliases, per the consolidation decision in
     /// `todo/accept-properties-restrict.md`) — group-free construction, same
     /// per-package overlay fold, `RestrictExpr`'s USE-conditional evaluation.
     #[test]
     fn accept_properties_and_restrict_reuse_the_license_engine() {
         // Global accepts only `mirror`; per-package `dev-libs/foo interactive`
         // adds `interactive` for foo only (no interaction with a `-deny`, which
-        // `AcceptLicense::merge`'s union-only `denied` set cannot be
+        // `AcceptSet::merge`'s union-only `denied` set cannot be
         // re-allowed by a per-package overlay short of `-*` — the same rule
         // `accept_license_per_package_override` relies on).
-        let global = AcceptLicense::from_tokens_plain(&["mirror".into()]);
+        let global = AcceptSet::from_tokens_plain(&["mirror".into()]);
         let foo = Cpv::parse("dev-libs/foo-1").unwrap();
         let bar = Cpv::parse("dev-libs/bar-1").unwrap();
 
@@ -1563,7 +1567,7 @@ mod tests {
             global.clone(),
             vec![(
                 dep("dev-libs/foo"),
-                AcceptLicense::from_tokens_plain(&["interactive".into()]),
+                AcceptSet::from_tokens_plain(&["interactive".into()]),
             )],
         );
         let interactive = portage_metadata::RestrictExpr::parse("interactive").unwrap();
@@ -1580,7 +1584,7 @@ mod tests {
 
         // A USE-conditional entry only contributes when its flag is active.
         let accept_restrict = AcceptRestrict::new(
-            AcceptLicense::from_tokens_plain(&["*".into(), "-bindist".into()]),
+            AcceptSet::from_tokens_plain(&["*".into(), "-bindist".into()]),
             Vec::new(),
         );
         let conditional = portage_metadata::RestrictExpr::parse("bindist? ( bindist )").unwrap();
@@ -1764,7 +1768,7 @@ mod tests {
                     accept_keywords: &ak,
                     package_mask: &[],
                     package_unmask: &[],
-                    accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+                    accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
                     accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
                     accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
                     pre_env: empty_layer(),
@@ -1812,7 +1816,7 @@ mod tests {
             accept_keywords: &ak,
             package_mask: &mask,
             package_unmask: &[],
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
@@ -1857,7 +1861,7 @@ mod tests {
             accept_keywords: &ak,
             package_mask: &[],
             package_unmask: &[],
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
@@ -1884,14 +1888,14 @@ mod tests {
         let arch = Arch::intern("amd64");
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
         let deny_bindist = AcceptRestrict::new(
-            AcceptLicense::from_tokens_plain(&["*".into(), "-bindist".into()]),
+            AcceptSet::from_tokens_plain(&["*".into(), "-bindist".into()]),
             Vec::new(),
         );
         let policy = ResolvePolicy {
             accept_keywords: &ak,
             package_mask: &[],
             package_unmask: &[],
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &deny_bindist,
             pre_env: empty_layer(),
@@ -1913,7 +1917,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &deny_bindist,
             pre_env: empty_layer(),
@@ -1949,7 +1953,7 @@ mod tests {
             accept_keywords: &ak,
             package_mask: &[],
             package_unmask: &[],
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: empty_layer(),
@@ -1994,7 +1998,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
@@ -2036,7 +2040,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
@@ -2076,7 +2080,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
@@ -2126,7 +2130,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
@@ -2181,7 +2185,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
-            accept_licenses: &AcceptLicenses::new(accept_all_licenses(), Vec::new()),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
             pre_env: &pre_env,
