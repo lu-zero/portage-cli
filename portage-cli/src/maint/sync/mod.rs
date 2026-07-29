@@ -256,8 +256,27 @@ fn resolve_volatile(entry: &RepoEntry, path: &Path) -> bool {
     }
 }
 
+/// Resolve the `portage` user's uid from the host's `/etc/passwd` by name.
+/// Falls back to the conventional Gentoo uid (250) when there is no entry
+/// (e.g. a minimal chroot with no passwd db yet) — same fallback shape as
+/// `portage-repo`'s `resolve_owner`.
+fn portage_uid() -> Option<u32> {
+    let content = std::fs::read_to_string("/etc/passwd").ok()?;
+    parse_portage_uid(&content)
+}
+
+fn parse_portage_uid(passwd: &str) -> Option<u32> {
+    passwd.lines().find_map(|line| {
+        let cols: Vec<&str> = line.split(':').collect();
+        (cols.first() == Some(&"portage"))
+            .then(|| cols.get(2))
+            .flatten()
+            .and_then(|s| s.parse().ok())
+    })
+}
+
 fn is_portage_uid(uid: u32) -> bool {
-    uid == 250
+    portage_uid().unwrap_or(250) == uid
 }
 
 // ── colour helpers (shared by backends) ──────────────────────────────────
@@ -358,6 +377,21 @@ sync-uri = https://example/local.git
         let selected = select_repos(&rc, &["local".into()]).unwrap();
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].name, "local");
+    }
+
+    #[test]
+    fn portage_uid_resolves_by_name_not_hardcoded_id() {
+        assert_eq!(
+            parse_portage_uid(
+                "root:x:0:0:root:/root:/bin/bash\nportage:x:999:999:portage:/var/tmp/portage:/sbin/nologin\n"
+            ),
+            Some(999)
+        );
+    }
+
+    #[test]
+    fn portage_uid_is_none_without_a_matching_entry() {
+        assert_eq!(parse_portage_uid("root:x:0:0:root:/root:/bin/bash\n"), None);
     }
 
     #[test]
