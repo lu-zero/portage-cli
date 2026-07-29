@@ -1162,7 +1162,14 @@ blocked by the three independent findings above, tracked separately.
   `--depth 1`) confirmed gix **~15% faster** there — the repo `em sync`
   actually matters most for. See
   `benchmarks/{sync-gix-vs-git,gix-vs-git-scale-crossover}-2026-07-29.md`.
-  Not yet a default-flip decision (build cost still real, warm-resync/large-repo
-  case not retested) — but "not proven faster" is no longer the state of
-  things. Revisit before citing the older doc's verdict.
+  **Follow-up (same day):** warm re-sync and real-network-at-scale both
+  tested. Picture is mixed, not a clean win either way: gix's fetch step
+  is faster even on a small warm-resync increment, but git's `reset --hard`
+  (the bigger cost, scaling with total tree size) has no measured gix
+  equivalent yet; and over the *real network* at `::gentoo` scale git is
+  ~9% faster again (transport overhead reasserts itself once network
+  latency is back in the picture). Still not a default-flip decision —
+  see `gix-vs-git-scale-crossover-2026-07-29.md`'s "Remaining gaps" for
+  what would actually settle it (gix-side reset/checkout cost via `em`'s
+  own code, warm resync over real network).
 
