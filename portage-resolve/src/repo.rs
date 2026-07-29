@@ -54,19 +54,38 @@ pub enum AcceptToken {
     /// so later tokens rebuild from empty (make.conf(5), applied to the
     /// incremental `ACCEPT_KEYWORDS`). The mirror of ebuild `KEYWORDS=-*`.
     ClearAll,
+    /// `-arch` — withdraw this one arch's accept, even if an earlier token in
+    /// the same incremental stack (a profile's bare `arch`/`~arch`, or a
+    /// broader `*`/`~*`) had granted it.
+    ///
+    /// Simplification vs. real Portage: upstream's matcher works over a set of
+    /// *literal token strings*, so `-riscv` only ever discards a literal
+    /// `riscv`/`~riscv` string if present — it is inert against a separate `*`
+    /// wildcard token, which is untouched. Our folded `ArchAccept` bools don't
+    /// track which token granted `stable`/`testing`, so `-arch` here clears
+    /// both bits unconditionally for that arch, including when they came from
+    /// a wildcard. In practice `*`/`~*` combined with a specific `-arch` veto
+    /// is a rare construction; treated as an open question, not a fixed
+    /// design, pending a closer look (see `todo/accept-properties-restrict.md`).
+    Negate(Interned<DefaultInterner>),
 }
 
 impl AcceptToken {
-    /// Parse one token. Returns `None` for tokens we don't model — the
-    /// incremental `-arch` removal form, which the previous string matcher also
-    /// silently ignored.
+    /// Parse one token.
     pub fn parse(tok: &str) -> Option<Self> {
         match tok {
             "**" => Some(Self::Any),
             "~*" => Some(Self::AnyTesting),
             "*" => Some(Self::AnyStable),
             "-*" => Some(Self::ClearAll),
-            _ if tok.starts_with('-') => None,
+            _ if tok.starts_with('-') => {
+                let arch = tok[1..].strip_prefix('~').unwrap_or(&tok[1..]);
+                if arch.is_empty() {
+                    None
+                } else {
+                    Some(Self::Negate(Interned::intern(arch)))
+                }
+            }
             _ => match tok.strip_prefix('~') {
                 Some(arch) => Some(Self::Testing(Interned::intern(arch))),
                 None => Some(Self::Stable(Interned::intern(tok))),
@@ -110,6 +129,13 @@ impl ArchAccept {
                 self.stable = true;
             }
             AcceptToken::Stable(a) if a == arch => self.stable = true,
+            // `-arch`: withdraw this arch's accept (see `AcceptToken::Negate`'s
+            // doc for the simplification vs. a literal-token-set model). `any`
+            // (`**`) is a categorically different override, left untouched.
+            AcceptToken::Negate(a) if a == arch => {
+                self.stable = false;
+                self.testing = false;
+            }
             _ => {}
         }
     }
@@ -1347,6 +1373,36 @@ mod tests {
         assert!(
             per.accepts(&offarch, &bar, None),
             "bar keeps the global ** accept"
+        );
+    }
+
+    #[test]
+    fn accept_keywords_negate_arch_withdraws_a_specific_grant() {
+        let arch = Arch::intern("riscv");
+        let kws = |s: &str| Keyword::parse_line(s).unwrap();
+        let stable = kws("riscv");
+        let testing = kws("~riscv");
+        let foo = Cpv::parse("dev-libs/foo-1").unwrap();
+
+        // `arch -arch`: the veto comes after the grant in the same stack (the
+        // shape a downstream profile uses to withdraw an ancestor's `arch`).
+        let vetoed = AcceptKeywords::from_global(&arch, &["riscv", "-riscv"]);
+        assert!(!vetoed.accepts(&stable, &foo, None), "the veto must win");
+
+        // Order matters, same as `-*`: a grant *after* the veto still applies.
+        let regranted = AcceptKeywords::from_global(&arch, &["riscv", "-riscv", "~riscv"]);
+        assert!(
+            regranted.accepts(&testing, &foo, None),
+            "a later token re-grants after an earlier veto"
+        );
+
+        // `-riscv` must not affect a different arch.
+        let other_arch = AcceptKeywords::from_global(&Arch::intern("amd64"), &["-riscv", "amd64"]);
+        assert!(other_arch.accepts(&kws("amd64"), &foo, None));
+
+        assert!(
+            AcceptToken::parse("-riscv").is_some(),
+            "-arch now parses instead of being silently dropped"
         );
     }
 
