@@ -6,7 +6,9 @@
 //! with the previous shallow history, so a plain `git merge`/`--ff-only`
 //! refuses with "unrelated histories". Portage avoids that entirely:
 //! - clone: `git clone --depth 1 <uri> <path>`
-//! - update: `git fetch origin --depth 1`, then
+//! - update: `git fetch origin` (shallow, `--depth 1`, unless the repo is
+//!   volatile and was not already shallow — Portage never shallows a repo
+//!   the user cloned in full), then
 //!   - non-volatile: `git clean --force -d -x` (drop orphaned files a prior
 //!     shallow sync left behind — the actual failure mode these bugs are
 //!     about) followed by `git reset --hard` (always succeeds regardless of
@@ -15,6 +17,13 @@
 //!     --merge` does not require a common ancestor, so it survives the
 //!     shallow-history case while still refusing to clobber uncommitted
 //!     worktree changes
+//! - a shallow fetch runs `git gc --auto` afterward (bug #599008: unreachable
+//!   objects from repeated shallow fetches otherwise pile up until `gc`
+//!   eventually fails outright)
+//! - the remote URL is only rewritten when it actually differs from
+//!   `sync-uri`, and only for non-volatile repos
+//! - `GIT_CEILING_DIRECTORIES` is set so git can never operate on a `.git`
+//!   above the target repo
 //! - skip reset when HEAD already matches `@{upstream}`
 
 use std::path::Path;
@@ -80,31 +89,68 @@ fn git_update(path: &Path, uri: &str, volatile: bool, quiet: bool) -> Result<boo
     let before = rev_parse(path, "HEAD").ok();
 
     if !volatile {
-        // Align origin URL when Portage would rewrite it (non-volatile).
-        let set = git_stdio(true, path)
-            .args(["-C", path_s, "remote", "set-url", "origin", uri])
-            .status();
-        match set {
-            Ok(st) if st.success() => {}
-            Ok(st) if !quiet => {
-                warn_line(&format!("git remote set-url origin failed ({st})"));
+        // Only rewrite the remote URL when it actually differs from
+        // `sync-uri` — matches Portage's `git_remote_url != self.repo.sync_uri`
+        // check, avoiding an unconditional fork on every single sync.
+        match remote_url(path, "origin") {
+            Ok(current) if current == uri => {}
+            Ok(_) | Err(_) => {
+                let set = git_stdio(true, path)
+                    .args(["-C", path_s, "remote", "set-url", "origin", uri])
+                    .status();
+                match set {
+                    Ok(st) if st.success() => {}
+                    Ok(st) if !quiet => {
+                        warn_line(&format!("git remote set-url origin failed ({st})"));
+                    }
+                    Err(e) if !quiet => {
+                        warn_line(&format!("git remote set-url origin: {e}"));
+                    }
+                    _ => {}
+                }
             }
-            Err(e) if !quiet => {
-                warn_line(&format!("git remote set-url origin: {e}"));
-            }
-            _ => {}
         }
     }
 
+    // Portage never shallows a volatile repo the user cloned in full —
+    // `sync_depth` only drops to 0 (full fetch) in that one case; a
+    // non-volatile repo always gets the shallow (depth 1) treatment.
+    let shallow = if volatile {
+        is_shallow_repository(path).unwrap_or(true)
+    } else {
+        true
+    };
+
     if !quiet {
-        info_line(&format!("git fetch origin --depth 1 in {path_s}"));
+        info_line(&format!(
+            "git fetch origin{} in {path_s}",
+            if shallow { " --depth 1" } else { "" }
+        ));
+    }
+    let mut fetch_args = vec!["-C", path_s, "fetch", "origin"];
+    if shallow {
+        fetch_args.extend(["--depth", "1"]);
     }
     let fetch = git_stdio(quiet, path)
-        .args(["-C", path_s, "fetch", "origin", "--depth", "1"])
+        .args(&fetch_args)
         .status()
         .context("spawning git fetch")?;
     if !fetch.success() {
         bail!("git fetch failed with {fetch}");
+    }
+
+    if shallow {
+        // Unreachable objects from repeated shallow fetches otherwise pile
+        // up until `gc` eventually fails outright (bug #599008).
+        let gc = git_stdio(quiet, path)
+            .args(["-C", path_s, "-c", "gc.autodetach=false", "gc", "--auto"])
+            .status();
+        if let Ok(st) = gc
+            && !st.success()
+            && !quiet
+        {
+            warn_line(&format!("git gc --auto failed ({st})"));
+        }
     }
 
     let tip = rev_parse(path, "@{upstream}")
@@ -172,6 +218,7 @@ fn git_update(path: &Path, uri: &str, volatile: bool, quiet: bool) -> Result<boo
 fn rev_parse(cwd: &Path, rev: &str) -> Result<String> {
     let out = Command::new("git")
         .current_dir(cwd)
+        .env("GIT_CEILING_DIRECTORIES", ceiling_string(cwd))
         .args(["rev-parse", rev])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -186,6 +233,53 @@ fn rev_parse(cwd: &Path, rev: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// `true` unless `git rev-parse --is-shallow-repository` prints exactly
+/// `false` — matches Portage's own string comparison (`is_shallow_res ==
+/// "false"`), so any unexpected output conservatively keeps the shallow path.
+fn is_shallow_repository(cwd: &Path) -> Result<bool> {
+    let out = Command::new("git")
+        .current_dir(cwd)
+        .env("GIT_CEILING_DIRECTORIES", ceiling_string(cwd))
+        .args(["rev-parse", "--is-shallow-repository"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .context("git rev-parse --is-shallow-repository")?;
+    if !out.status.success() {
+        bail!("git rev-parse --is-shallow-repository failed");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim() != "false")
+}
+
+/// The configured URL of `remote`, read locally (no network access) — same
+/// call Portage uses (`git ls-remote --get-url <remote>`) to decide whether
+/// `sync-uri` actually changed before rewriting it.
+fn remote_url(cwd: &Path, remote: &str) -> Result<String> {
+    let out = Command::new("git")
+        .current_dir(cwd)
+        .env("GIT_CEILING_DIRECTORIES", ceiling_string(cwd))
+        .args(["ls-remote", "--get-url", remote])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .context("git ls-remote --get-url")?;
+    if !out.status.success() {
+        bail!("git ls-remote --get-url failed");
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Colon-delimited list of every ancestor of `cwd`, for `GIT_CEILING_DIRECTORIES`
+/// (mirrors Portage's `_gen_ceiling_string`): stops git's upward `.git` search
+/// at `cwd` so it can never wander above the target repo.
+fn ceiling_string(cwd: &Path) -> String {
+    cwd.ancestors()
+        .skip(1)
+        .filter_map(|p| p.to_str())
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
 /// `cwd` is always pinned explicitly (never left to the inherited process
 /// cwd): the OS must resolve *some* working directory to fork/exec `git`
 /// even though `-C <path>` is what actually tells git where the repo is, and
@@ -195,6 +289,7 @@ fn rev_parse(cwd: &Path, rev: &str) -> Result<String> {
 fn git_stdio(quiet: bool, cwd: &Path) -> Command {
     let mut c = Command::new("git");
     c.current_dir(cwd);
+    c.env("GIT_CEILING_DIRECTORIES", ceiling_string(cwd));
     if quiet {
         c.stdout(Stdio::null()).stderr(Stdio::null());
     } else {
@@ -350,5 +445,72 @@ mod tests {
             .sync(&f.overlay, &f.remote_uri, false, true)
             .unwrap();
         assert!(!changed, "no upstream change: sync must report unchanged");
+    }
+
+    /// Portage never shallows a volatile repo the user cloned in full —
+    /// `sync_depth` only drops to 0 (full fetch, no `--depth`) in exactly
+    /// that case. A full clone updated as volatile must stay full.
+    #[test]
+    fn volatile_update_does_not_shallow_a_full_clone() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        // A plain (non-shallow) clone, bypassing GitCmdBackend's own
+        // always-shallow initial clone.
+        git(
+            f._tmp.path(),
+            &["clone", "-q", &f.remote_uri, f.overlay.as_str()],
+        );
+        assert!(!is_shallow_repository(f.overlay.as_std_path()).unwrap());
+
+        advance_remote(&f, "two\n");
+        GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, true, true)
+            .unwrap();
+
+        assert!(
+            !is_shallow_repository(f.overlay.as_std_path()).unwrap(),
+            "a volatile update must not shallow a repo that started full"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.overlay.join("a.txt")).unwrap(),
+            "two\n"
+        );
+    }
+
+    #[test]
+    fn nonvolatile_sync_realigns_remote_url_when_sync_uri_changes() {
+        let _path = crate::test_support::path_lock();
+        let f = fixture();
+        GitCmdBackend
+            .sync(&f.overlay, &f.remote_uri, false, true)
+            .unwrap();
+        assert_eq!(
+            remote_url(f.overlay.as_std_path(), "origin").unwrap(),
+            f.remote_uri
+        );
+
+        // A second bare copy with identical history — a stand-in for a
+        // mirror switch in repos.conf's `sync-uri`.
+        let mirror = f._tmp.path().join("mirror.git");
+        git(
+            f._tmp.path(),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                f.remote_uri.trim_start_matches("file://"),
+                mirror.to_str().unwrap(),
+            ],
+        );
+        let mirror_uri = format!("file://{}", mirror.display());
+
+        GitCmdBackend
+            .sync(&f.overlay, &mirror_uri, false, true)
+            .unwrap();
+        assert_eq!(
+            remote_url(f.overlay.as_std_path(), "origin").unwrap(),
+            mirror_uri,
+            "origin must be realigned to the new sync-uri"
+        );
     }
 }
