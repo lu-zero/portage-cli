@@ -1,10 +1,13 @@
 # Build-dir clean + environment handling — portage parity
 
-STATUS: **partial; auditing against portage (2026-06-22).** Triggered by the
-staged cross glibc still building headers-only on a reinstall
-([[reinstall-default]], [[crossdev-target]]). Comparison of em's build-dir
-lifecycle to portage `bin/phase-functions.sh` / `bin/misc-functions.sh`
-(portage-3.0.79).
+STATUS: **partial — the triggering symptom closed 2026-07-29 (see
+[[reinstall-default]]: live sandbox run found no USE-application bug, real
+`libc.so`/`libstdc++.so` both present after reinstall). Remaining scope is
+just the `noclean`/`keeptemp` FEATURES-parity gap below.** Originally
+triggered by the staged cross glibc apparently still building headers-only on
+a reinstall ([[reinstall-default]], [[crossdev-target]]) — comparison of em's
+build-dir lifecycle to portage `bin/phase-functions.sh` /
+`bin/misc-functions.sh` (portage-3.0.79) below stands on its own regardless.
 
 ## What portage does
 
@@ -46,7 +49,8 @@ lifecycle to portage `bin/phase-functions.sh` / `bin/misc-functions.sh`
 
 ## Next
 
-Instrument the cross glibc build shell (`use headers-only`, `${USE}`) on a
-reinstall to settle whether the headers-only result is a USE-application bug in
-the carried shell or a downstream effect of the missing cross `as`/`ld`
-([[select-toolchain]]). Then add `noclean`/`keeptemp` FEATURES parity.
+Live sandbox run (2026-07-29) settled this: a full `em crossdev --setup` for
+riscv64 produced a correctly-recorded `-headers-only` glibc with a real
+`libc.so`, and gcc-stage2 with a real `+cxx`/`libstdc++.so` — no USE-carry bug
+in the shell. Remaining work here is just `noclean`/`keeptemp` FEATURES parity
+(item 1 above); no further instrumentation needed.

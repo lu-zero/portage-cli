@@ -1,6 +1,7 @@
 # Explicit-target reinstall default (emerge `foo && foo` → two installs)
 
-STATUS: **core fixed 2026-06-22; one follow-up symptom open (staged glibc).**
+STATUS: **done — core fixed 2026-06-22; follow-up symptom live-verified closed
+2026-07-29 (did not reproduce).**
 Behaviour difference vs emerge: emerge *reinstalls an explicitly-requested atom
 by default* (`[ebuild   R   ]`), so `emerge foo && emerge foo` builds foo twice;
 `--noreplace`/`-n` opts out. `em` instead **skipped** a target already in the VDB
@@ -18,16 +19,30 @@ DONE:
 
 Verified: cross `--setup` now rebuilds **all 6 steps, no skips, no collisions**.
 
-OPEN — **staged glibc still installs headers-only.** With the above, step 5
-(full glibc) rebuilds, but the result is still headers-only (622-byte CONTENTS,
-no `libc.so`), even though the recorded/plan USE has `-headers-only` and the
-process `USE` env is empty. `just_headers()` is `is_crosscompile && use
-headers-only`, so the *build shell* evaluated `use headers-only` true despite the
-plan. Not a stale work dir (em already pre-build-cleans). Suspect either the
-build shell not honouring the plan's `-headers-only` for an at-best-version
-reinstall, or the activation gap (no cross `as`/`ld`) forcing a degraded build.
-Compare against portage (below) and instrument `use headers-only` in the glibc
-build shell. (gcc-stage2 likewise produced no `libstdc++` — same family.)
+CLOSED (2026-07-29, live sandbox) — **staged-glibc-headers-only did not
+reproduce.** Ran a genuine fresh `em --target riscv64-unknown-linux-gnu
+crossdev --setup` end-to-end in a real `crossdev-stages` sandbox
+(`em-reinstall-usecheck-0729`, aarch64 host stage3), no shortcuts. All 6 steps
+completed; inspected the actual on-disk result rather than the plan/pretend
+output:
+- `cross-riscv64-unknown-linux-gnu/glibc-2.43-r2` VDB: `IUSE` lists
+  `headers-only`, `USE` does **not** — the step-5 reinstall correctly recorded
+  it off. `CONTENTS` is 1581 lines / 165KB (not the reported 622-byte stub);
+  real `libc.so`/`libc.so.6` present under the sysroot.
+- `cross-riscv64-unknown-linux-gnu/gcc-16.1.1_p20260718` VDB: `USE` has `+cxx`;
+  real `libstdc++.so`/`libstdc++.so.6.0.35` present under
+  `/usr/lib/gcc/riscv64-unknown-linux-gnu/16/` (gcc-stage2's own runtime-lib
+  path, not the sysroot tree — the earlier "missing" read on this same
+  investigation was just a wrong search path, not an absence).
+
+Both symptoms this note described are simply not present in a real run. This
+matches the earlier full static trace (this session) of the USE-flag
+propagation chain, which found no caching/staleness bug at any of ~7 layers
+from `crossdev/stages.rs` down to the spawned build shell. Whatever produced
+the original 622-byte/no-libstdc++ observation did not reproduce here —
+likely fixed incidentally by one of the two 2026-06-22 commits below, or was
+specific to a since-changed environment. Not chasing further without a fresh
+repro.
 
 ## Why it matters now
 
