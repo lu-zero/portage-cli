@@ -43,9 +43,14 @@ this table is the triage index.
 
 ### Smaller / polish (pick opportunistically)
 
-- **Activity status / event bus** (design locked 2026-07-22) — structured
-  `ActivityEvent` stream for crossdev-stages and library callers; live FS +
-  history JSONL sinks; emerge.log opt-in only; `em log` + `-p --eta` — [[activity-status]]
+- ~~Activity status / event bus~~ — ✅ **implemented** (PR1-7 + follow-ups
+  landed 2026-07-22; this line was stale, undersold it as design-only).
+  `ActivityEvent` bus, live FS + history JSONL sinks, `em log
+  current|list|time|predict`, `em -p --eta`, opt-in `--emergelog` all real
+  and wired. Two small gaps remain: load-average display/throttle
+  (`--load-average` parsed but never read by the scheduler) and
+  `PkgKind::Binpkg` never reaching `PkgStart` (binary-merge wording path
+  unreachable) — [[activity-status]]
 - Shallow `-p` package-set still ~72 vs emerge ~79 on firefox hosts (pre-existing; not a `-uD` regression) — [[nonemptytree-bdeps-gap]], [[deep-in-slot-upgrades]]
 - Residual provider choice on deep plans (`rust` vs `rust-bin`, tooling set) — polish, not blocking
 - Numeric `--deep=N` (boolean only today); Resolvo `set_prefer_update` still trait default no-op
