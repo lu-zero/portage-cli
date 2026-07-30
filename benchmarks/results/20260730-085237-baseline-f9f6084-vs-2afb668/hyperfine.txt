@@ -1,0 +1,57 @@
+== parity (baseline vs current, same host repo state) ==
+dev-qt/qtbase                  base=42   cur=42   diffs=0
+app-text/texlive-core          base=155  cur=155  diffs=0
+www-client/firefox             base=75   cur=75   diffs=0
+mail-client/thunderbird        base=78   cur=78   diffs=0
+app-office/libreoffice         base=134  cur=134  diffs=0
+app-emulation/qemu             base=2    cur=2    diffs=0
+
+Plan shapes are identical baseline vs current — any timing delta below is a
+real perf delta, not a resolution-graph size difference. Both binaries exit 1
+on -p www-client/firefox (pre-existing live-system conflict: installed
+llvm-core/lldb-22.1.6 pinned against installed llvm-22.1.6 vs. a proposed
+llvm-22.1.8 update) — same on both, timed with hyperfine -i.
+
+== firefox -p (8 runs, -N, warmup 2) ==
+Benchmark 1: baseline (2afb668)
+  Time (mean ± σ):      1.271 s ±  0.019 s    [User: 2.637 s, System: 0.767 s]
+  Range (min … max):    1.246 s …  1.300 s    8 runs
+
+Benchmark 2: current (f9f6084)
+  Time (mean ± σ):      1.080 s ±  0.020 s    [User: 2.527 s, System: 0.977 s]
+  Range (min … max):    1.059 s …  1.113 s    8 runs
+
+Summary: current ran 1.18 ± 0.03 times faster than baseline
+
+== libreoffice -p (8 runs, -N, warmup 2) ==
+Benchmark 1: baseline (2afb668)
+  Time (mean ± σ):      1.604 s ±  0.024 s    [User: 2.924 s, System: 0.832 s]
+  Range (min … max):    1.569 s …  1.650 s    8 runs
+
+Benchmark 2: current (f9f6084)
+  Time (mean ± σ):      1.244 s ±  0.028 s    [User: 2.669 s, System: 0.756 s]
+  Range (min … max):    1.201 s …  1.291 s    8 runs
+
+Summary: current ran 1.29 ± 0.03 times faster than baseline
+
+== multi (5 pkgs) -p (8 runs, -N, warmup 2) ==
+Benchmark 1: baseline (2afb668)
+  Time (mean ± σ):      1.758 s ±  0.022 s    [User: 3.023 s, System: 0.730 s]
+  Range (min … max):    1.715 s …  1.783 s    8 runs
+
+Benchmark 2: current (f9f6084)
+  Time (mean ± σ):      1.356 s ±  0.020 s    [User: 2.817 s, System: 0.816 s]
+  Range (min … max):    1.324 s …  1.387 s    8 runs
+
+Summary: current ran 1.30 ± 0.03 times faster than baseline
+
+== -s gcc (8 runs, -N, warmup 2) ==
+Benchmark 1: baseline (2afb668)
+  Time (mean ± σ):     102.8 ms ±  12.4 ms    [User: 42.0 ms, System: 41.0 ms]
+  Range (min … max):    79.1 ms … 116.5 ms    8 runs
+
+Benchmark 2: current (f9f6084)
+  Time (mean ± σ):      99.4 ms ±  16.8 ms    [User: 53.3 ms, System: 34.5 ms]
+  Range (min … max):    73.6 ms … 124.4 ms    8 runs
+
+Summary: current ran 1.03 ± 0.21 times faster than baseline (within noise)

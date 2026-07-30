@@ -292,7 +292,7 @@ RESULT: parity FAILED
 
 Re-run with `EM=target/release/em ./benchmarks/bench-em-vs-emerge.sh` (or RUNS=... in env). The numbers above are from the completed background task (task id call-eefbc70e-0d82-4a1a-876a-f0b701552214-501) that tee'd the log; a copy of the exact output is persisted at `benchmarks/results/dep-thalia-5runs-2026-06-14.txt` for the blogpost.
 
-See also `benchmarks/machines/README.md`, `BENCHMARKS.md`, and the scripts' own header comments + portage-repo/docs/benchmarks.md .
+See also `benchmarks/machines/README.md`, `BENCHMARKS.md`, and the scripts' own header comments + `benchmarks/results/portage-repo-regen-vs-pkgcraft-2026-03-04.md` (the old portage-repo/docs/benchmarks.md, moved out of the way of the root docs/benchmarks.md map — it's a frozen 2026-03-04 data point, not a living doc).
 
 This (plus the regen tables above from the compare + per-crate scripts) is the clean set of full blown numbers.
 

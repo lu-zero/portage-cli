@@ -115,6 +115,28 @@ Use `bench-resolve-modes.sh` after changing `-u`/`-D`/`-N` behaviour: it
 reports package counts and cpn-set diffs per mode, em mode-to-mode deltas
 (shallow → deep → newuse), and hyperfine wall times for each flag set.
 
+### 4. Per-crate ad hoc library-level scripts (regen internals, no `em` binary)
+
+A few crates keep their own small shell scripts next to the code they time,
+deliberately co-located rather than centralized, because they benchmark a
+library entry point (an `examples/` binary), not the `em` CLI:
+
+- `bench-regen.sh` (workspace root) — the full `em` CLI's `regen` at
+  multiple thread counts + peak RSS.
+- `portage-repo/bench-regen.sh` / `bench-pk.sh` / `bench.sh` — the
+  `regen_only` example (library-level regen, no CLI overhead) vs pkgcraft's
+  `pk repo metadata regen`, individually or head-to-head via `hyperfine`.
+- `portage-repo/benchmark.sh` — a self-contained driver that clones a
+  Gentoo mirror if absent, builds, verifies via `regen_cache`, then times
+  `regen_only`; writes `/tmp/benchmark_results.csv`.
+- `portage-repo/benchmark_baseline.txt` — a hand-maintained historical
+  timing table; update it when a change intentionally affects performance.
+
+Full usage and a worked example table are in `portage-repo/AGENTS.md`'s
+"Scripts" section; `benchmarks/machines/mneme.md` collects every one of
+these scripts' invocations and output in one place for reproducing a full
+machine run.
+
 ## Before/after comparisons for a specific change
 
 For "did my change actually help", the cheapest reliable method (no
