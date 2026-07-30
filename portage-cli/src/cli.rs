@@ -1090,8 +1090,9 @@ pub enum Applet {
 
     #[command(about = "Rebuild packages with broken shared library deps")]
     Revdep {
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
+        /// Only consider consumers of libraries whose soname contains NAME.
+        #[arg(short = 'L', long, value_name = "NAME")]
+        library: Option<String>,
     },
 
     #[command(about = "Display Portage elog files")]

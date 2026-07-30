@@ -32,6 +32,7 @@ pub(crate) mod quickpkg;
 pub(crate) mod regen;
 /// Open repos with em's durable user md5-cache root.
 pub(crate) mod repo_open;
+pub(crate) mod revdep;
 pub(crate) mod search;
 pub(crate) mod select;
 pub(crate) mod setup;

@@ -17,6 +17,12 @@ impl KnownSets {
         let root = root.unwrap_or(Utf8Path::new("/"));
         let mut names = HashSet::new();
 
+        // `@preserved-rebuild` is handled directly by `emerge.rs::expand_sets`
+        // (a VDB/registry query, not a config-file-defined set), so it's
+        // always known even on an `em`-only root that never merged
+        // `sys-apps/portage` and so lacks `.../config/sets/portage.conf`.
+        names.insert("preserved-rebuild".to_string());
+
         // Built-in sets from /usr/share/portage/config/sets/*.conf
         let builtin_dir = root.join("usr/share/portage/config/sets");
         collect_from_conf_dir(&builtin_dir, &mut names);
@@ -144,5 +150,15 @@ mod tests {
         let dir = make_root("", &[".hidden"]);
         let sets = KnownSets::load(Some(Utf8Path::from_path(dir.path()).unwrap()));
         assert!(!sets.contains(".hidden"));
+    }
+
+    #[test]
+    fn preserved_rebuild_is_always_known() {
+        // Even with no `sys-apps/portage`-installed config/sets directory at
+        // all (an `em`-only root), `@preserved-rebuild` must still validate —
+        // it's computed directly by `expand_sets`, not read from disk here.
+        let dir = make_root("", &[]);
+        let sets = KnownSets::load(Some(Utf8Path::from_path(dir.path()).unwrap()));
+        assert!(sets.contains("preserved-rebuild"));
     }
 }

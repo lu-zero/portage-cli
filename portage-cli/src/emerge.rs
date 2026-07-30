@@ -29,6 +29,9 @@ pub(crate) fn parse_atoms_strict(raw: &[String]) -> Result<Vec<portage_atom::Dep
 /// `portage_repo::SetResolver`. The profile stack comes from
 /// `<config_root>/etc/portage/make.profile` (for `@system`/`@profile`); user
 /// sets, `@world`, and `@selected` are read from `eroot` (the install target).
+/// `@preserved-rebuild` is handled separately, inline below — it's a
+/// VDB/preserve-libs-registry query (real portage's
+/// `PreservedLibraryConsumerSet`), which `SetResolver` has no access to.
 ///
 /// Failures (unknown set, bad profile link) are reported and the offending
 /// token dropped, matching `parse_atoms`' tolerance of bad atoms — a typo
@@ -57,6 +60,25 @@ pub(crate) fn expand_sets(
             out.push(TargetAtom::explicit(s.clone()));
             continue;
         };
+
+        // `@preserved-rebuild` needs the live VDB + preserve-libs registry,
+        // neither of which `SetResolver` (profile/config-only, in
+        // `portage_repo`) has access to — compute it here instead of
+        // through the generic resolver path below.
+        if name == "preserved-rebuild" {
+            match portage_vdb::Vdb::open(eroot.join("var/db/pkg")) {
+                Ok(vdb) => {
+                    let registry = preserve_libs::PreservedLibsRegistry::load(eroot);
+                    let atoms = preserve_libs::preserved_rebuild_atoms(&vdb, &registry, eroot);
+                    out.extend(atoms.iter().map(|d| TargetAtom {
+                        atom: d.to_string(),
+                        origin: TargetOrigin::Set(name.to_string()),
+                    }));
+                }
+                Err(e) => eprintln!("warning: skipping @{name}: {e}"),
+            }
+            continue;
+        }
 
         if resolver.is_none() {
             let portage_dir = config_root
@@ -325,6 +347,20 @@ async fn emerge_atoms_inner(
     // resolution. Sets are read from the config root's profile (@system) and
     // the merge target (@world/@selected, user sets).
     let expanded = expand_sets(raw_atoms, roots.config(), roots.merge_root());
+    // A set-only request (e.g. `@preserved-rebuild`, `@world` on an
+    // up-to-date system) legitimately expanding to nothing is not a typo —
+    // unlike a bad literal atom, which always yields at least one
+    // `TargetAtom::explicit` entry from `expand_sets` even when invalid (it
+    // only ever drops *set* references). Report it the same way real emerge
+    // does for an empty selection, rather than falling into the generic
+    // "no valid atoms" error below.
+    if expanded.is_empty()
+        && !raw_atoms.is_empty()
+        && raw_atoms.iter().all(|s| portage_repo::is_set_ref(s))
+    {
+        println!(">>> Nothing to merge; quitting.");
+        return Ok(());
+    }
     // Resolved one at a time (not via `resolve_atoms`) so each atom keeps the
     // provenance `expand_sets` gave it; unresolvable ones are warned about and
     // dropped, exactly as `resolve_atoms` does.
@@ -1031,6 +1067,76 @@ mod tests {
     fn open_vdb(dir: &std::path::Path) -> portage_vdb::Vdb {
         let root = camino::Utf8PathBuf::try_from(dir.to_owned()).unwrap();
         portage_vdb::Vdb::open(root.join("var/db/pkg")).unwrap()
+    }
+
+    /// Same skip-if-absent precedent as `elfscan.rs`'s own tests: a real
+    /// system `.so`, so `@preserved-rebuild` wiring can be exercised without
+    /// hand-synthesizing an ELF file.
+    fn real_system_lib() -> Option<(camino::Utf8PathBuf, crate::elfscan::ElfInfo)> {
+        for candidate in ["/usr/lib64/libz.so.1", "/lib64/libz.so.1"] {
+            let path = camino::Utf8PathBuf::from(candidate);
+            if let Some(info) = crate::elfscan::scan_file(path.as_std_path())
+                && info.soname.is_some()
+            {
+                return Some((path, info));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn expand_sets_resolves_preserved_rebuild_via_the_vdb() {
+        let Some((lib_path, info)) = real_system_lib() else {
+            return;
+        };
+        let soname = info.soname.unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let eroot = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let vdb_root = eroot.join("var/db/pkg");
+        let pkg_dir = vdb_root.join("app-misc").join("consumer-1.0");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("SLOT"), "0").unwrap();
+        std::fs::write(pkg_dir.join("CONTENTS"), "obj /usr/bin/consumer bbbb 0\n").unwrap();
+        std::fs::write(
+            pkg_dir.join("NEEDED.ELF.2"),
+            format!("X86_64;/usr/bin/consumer;;;{soname};{}\n", info.category),
+        )
+        .unwrap();
+
+        // Registry paths resolve against `eroot` in production (real root ==
+        // real VDB root); copy the real lib into the tempdir at the same
+        // relative location so that join still finds a real, parseable ELF.
+        let staged_lib = eroot.join(lib_path.as_str().trim_start_matches('/'));
+        std::fs::create_dir_all(staged_lib.parent().unwrap()).unwrap();
+        std::fs::copy(lib_path.as_std_path(), staged_lib.as_std_path()).unwrap();
+
+        let mut reg = preserve_libs::PreservedLibsRegistry::load(&eroot);
+        reg.register(
+            &portage_atom::Cpv::parse("sys-libs/libfoo-1.0").unwrap(),
+            "0",
+            1,
+            vec![lib_path],
+        );
+        reg.store();
+
+        let expanded = expand_sets(&["@preserved-rebuild".to_string()], None, &eroot);
+        assert_eq!(expanded.len(), 1);
+        assert_eq!(expanded[0].atom, "app-misc/consumer:0");
+        assert_eq!(
+            expanded[0].origin,
+            TargetOrigin::Set("preserved-rebuild".to_string())
+        );
+    }
+
+    #[test]
+    fn expand_sets_preserved_rebuild_is_empty_with_no_registry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let eroot = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(eroot.join("var/db/pkg")).unwrap();
+
+        let expanded = expand_sets(&["@preserved-rebuild".to_string()], None, &eroot);
+        assert!(expanded.is_empty());
     }
 
     #[test]

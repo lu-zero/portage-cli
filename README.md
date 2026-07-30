@@ -43,7 +43,7 @@ subcommands corresponding to the traditional tools.
 | `quickpkg` | `quickpkg` | Working — GPKG from installed files / VDB `CONTENTS`; skips `CONFIG_PROTECT` by default |
 | `mirror` | `emirrordist` | Stub |
 | `clean` | `eclean` | Stub |
-| `revdep` | `revdep-rebuild` | Stub |
+| `revdep` | `revdep-rebuild` | Working — VDB-metadata-based, `-L`/`--library`; see below |
 | `news` | `eselect news` | Stub |
 | `glsa` | `glsa-check` | Stub |
 | `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/activity.md) |
@@ -159,6 +159,34 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
 - `world` — `@set` references are validated by name but not by content (e.g.
   `@preserved-rebuild` is accepted as long as the name is known).
 - `all`, `cleanconfmem`, `logs`, `merges`, `movebin` — not implemented.
+
+---
+
+### `em revdep` (revdep-rebuild)
+
+Detects installed packages whose own ELF objects require a shared-library
+soname nothing installed currently provides, and rebuilds them
+(`--oneshot --complete-graph`, matching gentoolkit's own always-on flags).
+`-L`/`--library NAME` narrows the check to sonames containing `NAME`.
+
+Deliberately **VDB-metadata-based**, not gentoolkit's live `scanelf` rescan of
+`ld.so.conf`/`PATH` directories: every installed package's own
+`NEEDED.ELF.2` VDB field already records what its own ELF objects require, so
+a broken soname's owning package is already known while walking — no
+`CONTENTS`-intersection ownership pass needed (unlike gentoolkit's
+`assign.py`, whose scan is global and path-keyed).
+
+**Gaps vs revdep-rebuild:**
+- Only catches breakage in files already recorded as ELF-owning VDB entries;
+  a hand-installed binary or a file modified out-of-band without a matching
+  VDB update is invisible to it.
+- No `.la` libtool-archive dependency checking.
+- No `-i`/cache-file reuse (always a fresh scan).
+
+`@preserved-rebuild` (real portage's special set for packages still linking
+against a `FEATURES=preserve-libs`-preserved library) is also implemented —
+usable directly, e.g. `em -p @preserved-rebuild`, anywhere a set name is
+accepted, not only through `em revdep`.
 
 ---
 

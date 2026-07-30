@@ -11,23 +11,24 @@
 //! Hooked into `ebuild::unmerge_package`, the one function both `-C` and
 //! ordinary version-bump replacement funnel through, so both benefit.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use portage_atom::Cpv;
+use portage_atom::{Cpv, Dep};
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, Vdb};
 
 use crate::elfscan;
 use crate::util::write_atomic;
 
 /// One parsed `NEEDED.ELF.2` line: `MACHINE;path;SONAME;RPATH;needed,csv;category`
-/// — the exact format `elfscan::scan_image` writes.
-struct NeededRecord {
-    category: String,
-    path: Utf8PathBuf,
-    soname: Option<String>,
-    needed: Vec<String>,
+/// — the exact format `elfscan::scan_image` writes. `pub(crate)` so
+/// `revdep.rs` can reuse the same parsing instead of re-implementing it.
+pub(crate) struct NeededRecord {
+    pub(crate) category: String,
+    pub(crate) path: Utf8PathBuf,
+    pub(crate) soname: Option<String>,
+    pub(crate) needed: Vec<String>,
 }
 
 fn parse_needed_line(line: &str) -> Option<NeededRecord> {
@@ -50,7 +51,7 @@ fn parse_needed_line(line: &str) -> Option<NeededRecord> {
     })
 }
 
-fn package_needed(pkg: &InstalledPackage) -> Vec<NeededRecord> {
+pub(crate) fn package_needed(pkg: &InstalledPackage) -> Vec<NeededRecord> {
     pkg.field("NEEDED.ELF.2")
         .ok()
         .flatten()
@@ -259,12 +260,77 @@ impl PreservedLibsRegistry {
     /// these no longer appear in any live package's CONTENTS, so callers
     /// needing their link metadata must re-scan them directly
     /// ([`elfscan::scan_file`]).
-    fn all_paths(&self) -> impl Iterator<Item = Utf8PathBuf> {
+    pub(crate) fn all_paths(&self) -> impl Iterator<Item = Utf8PathBuf> {
         self.data
             .values()
             .flat_map(|e| e.paths.iter())
             .map(Utf8PathBuf::from)
     }
+}
+
+/// The `@preserved-rebuild` special set: every installed package whose own
+/// `NEEDED.ELF.2` still requires a soname that no live package provides
+/// anymore, but that `registry` is only keeping on disk because of that
+/// requirement — real portage's `PreservedLibraryConsumerSet`
+/// (`portage/_sets/libs.py`'s `load()`). Simplified the same way
+/// [`find_libs_to_preserve`] already is: matched by (multilib category,
+/// soname) alone, no RPATH/RUNPATH directory disambiguation (real portage's
+/// `findConsumers(..., greedy=False)`). That costs little in practice — a
+/// registry entry only exists because the replacing package's own copy
+/// dropped that exact soname, so a live duplicate provider of the identical
+/// soname essentially never coexists with it.
+///
+/// A preserved lib is never counted as its own consumer, matching real
+/// portage's `consumers.difference_update(libs)`.
+///
+/// `root` resolves each registry path to a real file, same convention
+/// [`build_link_graph`] already uses for its own registry rescan.
+pub fn preserved_rebuild_atoms(
+    vdb: &Vdb,
+    registry: &PreservedLibsRegistry,
+    root: &Utf8Path,
+) -> Vec<Dep> {
+    let preserved_paths: HashSet<Utf8PathBuf> = registry.all_paths().collect();
+    if preserved_paths.is_empty() {
+        return Vec::new();
+    }
+
+    let mut preserved_provides: HashSet<(String, String)> = HashSet::new();
+    for path in &preserved_paths {
+        let rel = path.as_str().trim_start_matches('/');
+        if let Some(info) = elfscan::scan_file(root.join(rel).as_std_path())
+            && let Some(soname) = info.soname
+        {
+            preserved_provides.insert((info.category, soname));
+        }
+    }
+    if preserved_provides.is_empty() {
+        return Vec::new();
+    }
+
+    let mut atoms: BTreeMap<String, Dep> = BTreeMap::new();
+    for pkg in vdb.packages() {
+        for rec in package_needed(&pkg) {
+            if preserved_paths.contains(&rec.path) {
+                continue;
+            }
+            let consumes_preserved = rec
+                .needed
+                .iter()
+                .any(|n| preserved_provides.contains(&(rec.category.clone(), n.clone())));
+            if !consumes_preserved {
+                continue;
+            }
+            let Ok(slot) = pkg.slot_main() else { continue };
+            let text = format!("{}:{slot}", pkg.cpv().cpn);
+            if let std::collections::btree_map::Entry::Vacant(e) = atoms.entry(text.clone())
+                && let Ok(dep) = Dep::parse(&text)
+            {
+                e.insert(dep);
+            }
+        }
+    }
+    atoms.into_values().collect()
 }
 
 /// A library kept on disk because [`find_libs_to_preserve`] found it still
@@ -627,5 +693,105 @@ mod tests {
         let preserved = find_libs_to_preserve(&graph, &libfoo, &old_contents);
 
         assert!(preserved.is_empty());
+    }
+
+    /// A real system `.so` to drive `preserved_rebuild_atoms` tests without
+    /// hand-synthesizing an ELF file — same precedent as `elfscan.rs`'s own
+    /// tests (skip, don't fail, if the host doesn't have it).
+    fn real_system_lib() -> Option<(Utf8PathBuf, elfscan::ElfInfo)> {
+        for candidate in ["/usr/lib64/libz.so.1", "/lib64/libz.so.1"] {
+            let path = Utf8PathBuf::from(candidate);
+            if let Some(info) = elfscan::scan_file(path.as_std_path())
+                && info.soname.is_some()
+            {
+                return Some((path, info));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn preserved_rebuild_flags_a_real_consumer() {
+        let Some((lib_path, info)) = real_system_lib() else {
+            return;
+        };
+        let soname = info.soname.unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let vdb_root = root.join("var/db/pkg");
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "app-misc",
+            "consumer-1.0",
+            "obj /usr/bin/consumer bbbb 0\n",
+            &format!("X86_64;/usr/bin/consumer;;;{soname};{}\n", info.category),
+        );
+        std::fs::write(
+            vdb_root.join("app-misc").join("consumer-1.0").join("SLOT"),
+            "0",
+        )
+        .unwrap();
+        let vdb = Vdb::open(&vdb_root).unwrap();
+
+        let mut reg = PreservedLibsRegistry::load(&root);
+        reg.register(
+            &Cpv::parse("sys-libs/libfoo-1.0").unwrap(),
+            "0",
+            1,
+            vec![lib_path],
+        );
+
+        // Resolve registry paths against the real root ("/"), independent of
+        // the fake VDB's own tempdir root.
+        let atoms = preserved_rebuild_atoms(&vdb, &reg, Utf8Path::new("/"));
+        assert_eq!(atoms.len(), 1);
+        assert_eq!(atoms[0].to_string(), "app-misc/consumer:0");
+    }
+
+    #[test]
+    fn preserved_rebuild_excludes_the_preserved_lib_as_its_own_consumer() {
+        let Some((lib_path, info)) = real_system_lib() else {
+            return;
+        };
+        let soname = info.soname.unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let vdb_root = root.join("var/db/pkg");
+        // A package whose own NEEDED.ELF.2 record IS the preserved path
+        // itself (self-referential, exercises only the exclusion branch).
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "sys-libs",
+            "libfoo-1.0",
+            "obj /usr/lib64/libz.so.1 aaaa 0\n",
+            &format!("X86_64;{lib_path};{soname};;{soname};{}\n", info.category),
+        );
+        let vdb = Vdb::open(&vdb_root).unwrap();
+
+        let mut reg = PreservedLibsRegistry::load(&root);
+        reg.register(
+            &Cpv::parse("sys-libs/libfoo-1.0").unwrap(),
+            "0",
+            1,
+            vec![lib_path],
+        );
+
+        let atoms = preserved_rebuild_atoms(&vdb, &reg, Utf8Path::new("/"));
+        assert!(atoms.is_empty());
+    }
+
+    #[test]
+    fn preserved_rebuild_empty_registry_yields_no_atoms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let vdb_root = root.join("var/db/pkg");
+        std::fs::create_dir_all(&vdb_root).unwrap();
+        let vdb = Vdb::open(&vdb_root).unwrap();
+        let reg = PreservedLibsRegistry::load(&root);
+
+        let atoms = preserved_rebuild_atoms(&vdb, &reg, &root);
+        assert!(atoms.is_empty());
     }
 }
