@@ -1104,15 +1104,16 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     // worse, a stale ${D} image whose leftover files would then be merged.
     // Standalone `em ebuild` (merge_mode=false) is left untouched — re-running
     // a single phase against the existing tree is a debug use case, and
-    // portage's `ebuild` command doesn't auto-clean either. `keepwork` opts out
-    // (FEATURES=keepwork keeps the tree for inspection), matching the post-merge
-    // cleanup below. `build.log` and the `.em-helpers` shim dir are left: the
-    // log is truncated by the phase-log tee, and the shims are idempotent.
-    if !features.contains("keepwork")
-        && let Some(wd) = work_dir
-        && let Some(subs) = group.clean_subs()
-    {
-        for sub in subs {
+    // portage's `ebuild` command doesn't auto-clean either.
+    //
+    // FEATURES (make.conf(5)):
+    // - `keepwork` — skip pre-clean (and post-clean) so WORKDIR can be reused
+    // - `keeptemp` — keep `${T}` (`temp/`) through cleans that would wipe it
+    // - `noclean` — post-merge only (does not disable this pre-clean)
+    // `build.log` and the `.em-helpers` shim dir are left: the log is truncated
+    // by the phase-log tee, and the shims are idempotent.
+    if let (Some(wd), Some(subs)) = (work_dir, group.clean_subs()) {
+        for sub in filter_clean_subs(subs, &features, CleanWhen::Pre) {
             let _ = std::fs::remove_dir_all(wd.join(sub));
         }
     }
@@ -1273,19 +1274,60 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         }
     }
 
-    // Successful merge chain: drop the build tree, keeping build.log
-    // (FEATURES=keepwork keeps everything).
+    // Successful merge chain: drop the build tree, keeping build.log.
+    // FEATURES: keepwork keeps everything; noclean keeps source+temp
+    // (work/temp); keeptemp keeps only temp. image/homedir still go unless
+    // keepwork (stale ${D} must not linger). worker-env is droppable once
+    // install has finished unless keepwork.
     if group.should_tree_drop()
-        && !features.contains("keepwork")
         && let Some(wd) = work_dir
     {
-        for sub in ["work", "image", "temp", "homedir"] {
+        let post_subs = ["work", "image", "temp", "homedir"];
+        let keep = filter_clean_subs(&post_subs, &features, CleanWhen::Post);
+        for sub in keep {
             let _ = std::fs::remove_dir_all(wd.join(sub));
         }
-        let _ = std::fs::remove_file(wd.join("worker-env").as_std_path());
+        if !features.contains("keepwork") {
+            let _ = std::fs::remove_file(wd.join("worker-env").as_std_path());
+        }
     }
 
     Ok(())
+}
+
+/// When a build-tree clean runs relative to the phase loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CleanWhen {
+    /// Before phases (stale-tree scrub).
+    Pre,
+    /// After a successful merge chain.
+    Post,
+}
+
+/// Apply `FEATURES=keepwork|keeptemp|noclean` to a clean-subdir list.
+///
+/// Portage make.conf(5) / `__dyn_clean` shape:
+/// - **keepwork** — skip all cleaning (pre and post)
+/// - **keeptemp** — never delete `temp/` (`${T}`)
+/// - **noclean** — after merge only: keep source and temporary files
+///   (`work/` + `temp/`); still drop `image/` / `homedir`
+fn filter_clean_subs(
+    subs: &[&'static str],
+    features: &std::collections::HashSet<String>,
+    when: CleanWhen,
+) -> Vec<&'static str> {
+    if features.contains("keepwork") {
+        return Vec::new();
+    }
+    let mut out: Vec<&'static str> = subs.to_vec();
+    if features.contains("keeptemp") {
+        out.retain(|s| *s != "temp");
+    }
+    if when == CleanWhen::Post && features.contains("noclean") {
+        // "Do not delete the source and temporary files after the merge"
+        out.retain(|s| *s != "work" && *s != "temp");
+    }
+    out
 }
 
 /// Exclusive flock on `<work_base>/.merge.lock` (the grandparent of the
@@ -2945,6 +2987,39 @@ mod tests {
             assert!(subs.contains(&"work"), "{group:?}: {subs:?}");
             assert!(subs.contains(&"temp"), "{group:?}: {subs:?}");
         }
+    }
+
+    fn feats(tokens: &[&str]) -> std::collections::HashSet<String> {
+        tokens.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn filter_clean_keepwork_skips_everything() {
+        let base = ["work", "image", "temp", "homedir"];
+        assert!(filter_clean_subs(&base, &feats(&["keepwork"]), CleanWhen::Pre).is_empty());
+        assert!(filter_clean_subs(&base, &feats(&["keepwork"]), CleanWhen::Post).is_empty());
+    }
+
+    #[test]
+    fn filter_clean_keeptemp_preserves_temp_pre_and_post() {
+        let base = ["work", "image", "temp", "homedir"];
+        let pre = filter_clean_subs(&base, &feats(&["keeptemp"]), CleanWhen::Pre);
+        assert_eq!(pre, vec!["work", "image", "homedir"]);
+        let post = filter_clean_subs(&base, &feats(&["keeptemp"]), CleanWhen::Post);
+        assert_eq!(post, vec!["work", "image", "homedir"]);
+    }
+
+    #[test]
+    fn filter_clean_noclean_only_affects_post() {
+        let base = ["work", "image", "temp", "homedir"];
+        let pre = filter_clean_subs(&base, &feats(&["noclean"]), CleanWhen::Pre);
+        assert_eq!(pre, base.to_vec(), "noclean must not disable pre-clean");
+        let post = filter_clean_subs(&base, &feats(&["noclean"]), CleanWhen::Post);
+        assert_eq!(
+            post,
+            vec!["image", "homedir"],
+            "noclean keeps source (work) and temp"
+        );
     }
 
     // Regression test for the jinja2 stage3 failure: restoring `PIPESTATUS`

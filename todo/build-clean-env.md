@@ -1,13 +1,12 @@
 # Build-dir clean + environment handling — portage parity
 
-STATUS: **partial — the triggering symptom closed 2026-07-29 (see
-[[reinstall-default]]: live sandbox run found no USE-application bug, real
-`libc.so`/`libstdc++.so` both present after reinstall). Remaining scope is
-just the `noclean`/`keeptemp` FEATURES-parity gap below.** Originally
-triggered by the staged cross glibc apparently still building headers-only on
-a reinstall ([[reinstall-default]], [[crossdev-target]]) — comparison of em's
-build-dir lifecycle to portage `bin/phase-functions.sh` /
-`bin/misc-functions.sh` (portage-3.0.79) below stands on its own regardless.
+STATUS: **✅ done 2026-07-30** — `noclean`/`keeptemp`/`keepwork` FEATURES
+parity in `ebuild.rs` (`filter_clean_subs`); triggering USE-reinstall symptom
+closed 2026-07-29 (see [[reinstall-default]]). Originally triggered by the
+staged cross glibc apparently still building headers-only on a reinstall
+([[reinstall-default]], [[crossdev-target]]) — comparison of em's build-dir
+lifecycle to portage `bin/phase-functions.sh` / `bin/misc-functions.sh`
+(portage-3.0.79) below stands on its own regardless.
 
 ## What portage does
 
@@ -38,19 +37,17 @@ build-dir lifecycle to portage `bin/phase-functions.sh` /
 - **Pre-build clean** (`ebuild.rs:411`): removes `work/ image/ temp/ homedir`
   when `merge_mode && !keepwork`. **Post-merge clean** (`:452`): same gating.
 - Gaps vs portage:
-  1. Only **`keepwork`** is honoured — **`noclean`** and **`keeptemp`** are not.
-     Add them (noclean ⇒ skip both cleans; keeptemp ⇒ keep `temp/`).
+  1. ✅ **`keepwork` / `keeptemp` / `noclean`** — `filter_clean_subs` (2026-07-30):
+     keepwork skips pre+post; keeptemp keeps `temp/`; noclean keeps
+     `work/`+`temp/` on post only (make.conf(5); still pre-cleans).
   2. No phase **stamp files** ⇒ no interrupted-build resume (em rebuilds from
      scratch). Acceptable for now; revisit if rebuild cost matters.
-  3. The carried-shell model means USE must be (re)applied to the shell from the
-     plan and not inherited from a previous package's shell. Confirm a fresh
-     shell per `build_and_merge` (it is) and that `set_use_flags(plan)` fully
-     determines `use <flag>` — the open glibc symptom suggests verifying this.
+  3. ✅ USE-carry / fresh shell — live sandbox 2026-07-29: no USE-application
+     bug (see [[reinstall-default]]).
 
-## Next
+## Closed
 
-Live sandbox run (2026-07-29) settled this: a full `em crossdev --setup` for
-riscv64 produced a correctly-recorded `-headers-only` glibc with a real
-`libc.so`, and gcc-stage2 with a real `+cxx`/`libstdc++.so` — no USE-carry bug
-in the shell. Remaining work here is just `noclean`/`keeptemp` FEATURES parity
-(item 1 above); no further instrumentation needed.
+Live sandbox run (2026-07-29) settled the USE symptom: a full `em crossdev
+--setup` for riscv64 produced a correctly-recorded `-headers-only` glibc with a
+real `libc.so`, and gcc-stage2 with a real `+cxx`/`libstdc++.so`. FEATURES
+clean-flag parity landed 2026-07-30.
