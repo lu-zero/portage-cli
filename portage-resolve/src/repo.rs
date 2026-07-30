@@ -39,53 +39,83 @@ pub struct AutounmaskCandidate {
 
 /// One parsed `ACCEPT_KEYWORDS` / `package.accept_keywords` token.
 ///
-/// Tokens are parsed (and their arches interned) at config-read time, so the
-/// solver never sees a keyword string — matching against a package's
-/// [`Keyword`] list is a `u32` comparison with no per-check allocation.
+/// # Spec split (PMS vs Portage)
 ///
-/// Each token sets or clears exactly *its own* grant, nothing more — no token
-/// implies another at fold time ([`KeywordAccept::add`] is a plain set insert
-/// / remove, never a join). Real Portage's own matcher
-/// (`KeywordsManager._getMissingKeywords`) keeps the accepted set as flat
-/// *literal* token strings (`arm64`, `~arm64`, `riscv`, `*`, `**`, …) and
-/// matches package `KEYWORDS` by exact membership (plus `*`/`~*`/`**`
-/// wildcards). Baking "testing implies stable" into the fold makes
-/// `-arch` and `-~arch` collapse into the same non-invertible join, breaking
-/// the documented `package.accept_keywords` idiom `media-video/mplayer -~x86`
-/// ("accept ~x86 in general, but pin this one package to stable only").
+/// - **Package-side** keywords (`KEYWORDS="amd64 ~arm64 -mips"`) are PMS
+///   vocabulary — [PMS 7.3.3](https://projects.gentoo.org/pms/9/pms.html#keywords)
+///   (stable / testing / disabled / `-*`). Parsed into
+///   [`portage_metadata::Keyword`].
+/// - **User/profile-side** acceptance (`ACCEPT_KEYWORDS`,
+///   `/etc/portage/package.accept_keywords`) is **Portage policy**, not PMS:
+///   - [`make.conf(5)`](https://dev.gentoo.org/~zmedico/portage/doc/man/make.conf.5.html)
+///     — `ACCEPT_KEYWORDS` is an *incremental* variable (profile → globals →
+///     make.conf → env); defaults to `$ARCH`; users typically add `~arch`.
+///   - [`portage(5)`](https://dev.gentoo.org/~zmedico/portage/doc/man/portage.5.html)
+///     — `package.accept_keywords` *augments* that set per atom; bare atom ⇒
+///     unstable host arch; special tokens `*` / `~*` / `**`; documented pin
+///     idiom `media-video/mplayer -~x86`.
 ///
-/// Foreign-arch tokens are first-class: crossdev's usual
-/// `cross-…/pkg riscv ~riscv -arm64 -~arm64` must *grant* `riscv`/`~riscv`
-/// and *withdraw* host `arm64`/`~arm64` for that package. A host-arch-only
-/// bitfield drops the foreign grants and still applies the host vetoes,
-/// masking every version (found live: `cross-riscv64-…/linux-headers`).
+/// Visibility is exact membership of a package `KEYWORDS` token in the
+/// folded accept set (Portage `KeywordsManager._getMissingKeywords`), not
+/// “host arch bits only”. Wildcards on the *accept* side: `*` = any stable
+/// package keyword, `~*` = any testing package keyword, `**` = always.
+///
+/// # Fold rules (why this shape)
+///
+/// Tokens are interned at config-read time so the solver never sees a raw
+/// keyword string. Each token sets or clears **exactly its own** grant —
+/// [`KeywordAccept::add`] is set insert/remove, never a lattice join.
+///
+/// Real Portage keeps `pgroups` as a flat set of *literal strings*
+/// (`arm64`, `~arm64`, `riscv`, `*`, `**`, …). Match is `token in set` (plus
+/// wildcards). That implies:
+///
+/// 1. **`-arch` and `-~arch` are independent** — `portage(5)`'s
+///    `media-video/mplayer -~x86` must leave stable `x86` accepted while
+///    withdrawing only `~x86`. Folding “testing ⇒ stable” at add-time made
+///    both negations clear both bits (bug fixed in the Opus review pass).
+/// 2. **Foreign arches are first-class** — crossdev’s usual line
+///    `cross-…/pkg riscv ~riscv -arm64 -~arm64` must *grant* target tokens
+///    and *withdraw* host ones. A host-only bitfield drops `riscv`/`~riscv`
+///    as no-ops and still applies `-arm64`/`-~arm64`, emptying the set and
+///    masking every version (live canary:
+///    `cross-riscv64-unknown-linux-gnu/linux-headers`).
+/// 3. **`~arch` does not accept stable `arch`** (and vice versa) at match
+///    time — profile baseline is typically `ARCH` plus make.conf `~ARCH`.
+/// 4. **`-*` clear-all** resets the accept set (incremental rebuild), same
+///    family as make.conf(5) incremental clear-all for `USE`/`ACCEPT_*`.
+///
+/// # Failure modes we already hit
+///
+/// | Shortcut | What broke |
+/// |----------|------------|
+/// | Host-arch bools only | Crossdev foreign-arch grants ignored |
+/// | Join testing⇒stable at fold | `mplayer -~x86` fully masked |
+/// | Treat `-~arch` as `-arch` | Same pin idiom fully masked |
 #[derive(Clone, Copy)]
 pub enum AcceptToken {
-    /// `arch` — accept the stable keyword for this arch.
+    /// `arch` — accept the stable package keyword for this arch (any arch name).
     Stable(Interned<DefaultInterner>),
-    /// `~arch` — accept the testing keyword for this arch.
+    /// `~arch` — accept the testing package keyword for this arch.
     Testing(Interned<DefaultInterner>),
-    /// `*` — accept a stable keyword for any arch.
+    /// `*` — package visible if stable on any architecture (`portage(5)`).
     AnyStable,
-    /// `~*` — accept a testing keyword for any arch.
+    /// `~*` — package visible if testing on any architecture (`portage(5)`).
     AnyTesting,
-    /// `**` — accept regardless of keywords (even an unkeyworded/live ebuild).
+    /// `**` — always visible; package `KEYWORDS` ignored (`portage(5)`).
     Any,
-    /// `-*` — incremental clear-all: discard every accept accumulated so far,
-    /// so later tokens rebuild from empty (make.conf(5), applied to the
-    /// incremental `ACCEPT_KEYWORDS`). The mirror of ebuild `KEYWORDS=-*`.
+    /// `-*` — incremental clear-all of the accept set so later tokens rebuild
+    /// it (make.conf(5) incremental variables; same idea as ebuild `KEYWORDS=-*`).
     ClearAll,
-    /// `-arch` — withdraw this arch's *stable* grant only. Does not touch
-    /// `~arch`/`*`/`~*`/`**` — those are different literal tokens.
+    /// `-arch` — withdraw only the stable grant for this arch (literal token
+    /// discard). Does not touch `~arch` / `*` / `~*` / `**`.
     Negate(Interned<DefaultInterner>),
-    /// `-~arch` — withdraw this arch's *testing* grant only (the
-    /// `media-video/mplayer -~x86` "pin to stable" idiom). Distinct from
-    /// [`AcceptToken::Negate`]: clearing both on any dash-prefixed arch token
-    /// was the bug that idiom exposed.
+    /// `-~arch` — withdraw only the testing grant (portage(5) pin-to-stable
+    /// idiom `media-video/mplayer -~x86`). Must stay distinct from [`Negate`].
     NegateTesting(Interned<DefaultInterner>),
-    /// `-~*` — withdraw the `~*` (any-arch testing) grant specifically.
+    /// `-~*` — withdraw the `~*` grant specifically.
     NegateAnyTesting,
-    /// `-**` — withdraw the `**` (accept-anything) grant specifically.
+    /// `-**` — withdraw the `**` grant specifically.
     NegateAny,
 }
 
@@ -115,14 +145,36 @@ impl AcceptToken {
 
 /// Folded accept set: multi-arch literal tokens plus wildcards.
 ///
-/// Mirrors Portage's flat `pgroups` set (`KeywordsManager._getEgroups` /
-/// `_getMissingKeywords`): each `arch` / `~arch` is an independent membership
-/// entry for *any* architecture, not only the host. Wildcards `*` / `~*` /
-/// `**` are separate flags that wildcards do not join with specific arches at
-/// fold time — so `-arch` never retracts a `*` grant (literal-token semantics).
+/// This is Portage’s `pgroups` set after incremental stacking
+/// (`KeywordsManager._getEgroups` for env/package lines,
+/// `_getMissingKeywords` for the match against ebuild `KEYWORDS`).
+///
+/// ## Why not “host arch + five bools”?
+///
+/// A host-only model is tempting (`stable`/`testing` bits for `$ARCH` only)
+/// because bare `ACCEPT_KEYWORDS="arm64 ~arm64"` never mentions another arch.
+/// It is **wrong** for `package.accept_keywords`, which routinely lists
+/// *other* arches (crossdev target keywords, binary packages on a foreign
+/// KEYWORDS line, `*`/`~*`/`**`). Those tokens are ordinary set members in
+/// Portage; they are not “host-relative modifiers”.
+///
+/// ## Match algorithm (must stay Portage-shaped)
+///
+/// For each positive package keyword `gp` in `KEYWORDS` (PMS 7.3.3 tokens):
+/// - exact membership: `gp`’s arch is in [`Self::stable`] or [`Self::testing`]
+///   according to stability (stable `arm64` ≠ testing `~arm64`);
+/// - else wildcards on the accept side: `*` if the package has any stable
+///   keyword, `~*` if any testing, `**` always.
+///
+/// Package-side `-arch` / `-*` are “disabled” entries and do not accept;
+/// Portage strips `-*` from the ebuild keyword list before matching.
+///
+/// Fold never joins tokens: `-arch` removes only that stable arch and does
+/// **not** retract a separate `*` grant (literal-token semantics; locked by
+/// `negate_arch_does_not_retract_a_wildcard_grant`).
 #[derive(Clone, Default)]
 struct KeywordAccept {
-    /// Arches granted via a bare `arch` token.
+    /// Arches granted via a bare `arch` token (any architecture name).
     stable: HashSet<Interned<DefaultInterner>>,
     /// Arches granted via a `~arch` token.
     testing: HashSet<Interned<DefaultInterner>>,
@@ -136,6 +188,9 @@ struct KeywordAccept {
 
 impl KeywordAccept {
     /// Fold one token — plain insert/remove of the named grant, never a join.
+    ///
+    /// Order matters the same way as Portage incremental lists: a later grant
+    /// after a veto re-adds; `-*` clears everything so subsequent tokens rebuild.
     fn add(&mut self, tok: AcceptToken) {
         match tok {
             AcceptToken::ClearAll => *self = Self::default(),
@@ -159,9 +214,12 @@ impl KeywordAccept {
         }
     }
 
-    /// Portage `_getMissingKeywords` match: a package keyword is accepted when
-    /// its exact token is in the set, or a covering wildcard is granted.
-    /// (`~arch` does **not** satisfy a stable `arch` keyword, and vice versa.)
+    /// Portage `_getMissingKeywords` match: accept when some package keyword’s
+    /// exact token is in the set, or a covering wildcard is granted.
+    ///
+    /// `~arch` on the accept side does **not** satisfy a stable package
+    /// `arch` keyword (verified against Portage: missing list stays `['arm64']`
+    /// when only `~arm64` is accepted).
     fn accepts(&self, keywords: &[Keyword]) -> bool {
         if self.any {
             return true;
@@ -189,9 +247,12 @@ impl KeywordAccept {
     }
 
     /// Whether the package is accepted on a *stable* keyword path (gates
-    /// `use.stable.{force,mask}`). True when some package `KEYWORDS` entry is
-    /// a stable arch that this set accepts (or `*` / `**` covers it) — not
-    /// merely when the accept set also grants a testing token.
+    /// profile `use.stable.{force,mask}`).
+    ///
+    /// Depends on the **package** having a stable keyword that this set
+    /// accepts — not on whether the accept set also grants some `~arch`.
+    /// A host with `ACCEPT_KEYWORDS="arm64 ~arm64"` still treats
+    /// `KEYWORDS="arm64"` packages as stable for use.stable.* purposes.
     fn is_stable_for(&self, keywords: &[Keyword]) -> bool {
         if !self.accepts(keywords) {
             return false;
@@ -210,20 +271,31 @@ impl KeywordAccept {
     }
 }
 
-/// Global `ACCEPT_KEYWORDS` plus per-package `package.accept_keywords`, parsed
-/// into interned tokens once.
+/// Global `ACCEPT_KEYWORDS` plus per-package `package.accept_keywords`.
 ///
-/// The global decision is precomputed; per-package entries are folded in per
-/// version only when present, so the common no-override path clones nothing
-/// beyond a cheap `KeywordAccept` borrow via [`Self::decision`].
+/// # Layering (Portage)
+///
+/// 1. Global incremental `ACCEPT_KEYWORDS` (profile `make.defaults` usually
+///    contributes `$ARCH`; make.conf often adds `~$ARCH`) — see make.conf(5).
+/// 2. Per-package lines from profile + `/etc/portage/package.accept_keywords`
+///    (+ legacy `package.keywords`) — portage(5): each line *augments* the
+///    accept set for matching atoms; a bare atom expands to host `~arch`.
+///
+/// Effective set for a version = fold (1) then all matching lines of (2) in
+/// file order (Portage also applies atom specificity ordering; we fold every
+/// match, which is correct when lines do not contradict each other for the
+/// same atom — the crossdev files on this project are one line per CP).
+///
+/// Host [`Self::arch`] is **not** the accept universe: it is only used for
+/// bare-atom expansion and autounmask `~arch` suggestions. All arch names in
+/// tokens are stored in [`KeywordAccept`].
 pub struct AcceptKeywords {
-    /// Host arch, interned — used for bare-atom expansion and autounmask
-    /// `~arch` suggestions.
+    /// Host arch, interned — bare-atom expansion and autounmask `~arch` only.
     arch: Interned<DefaultInterner>,
     /// Precomputed decision from the global `ACCEPT_KEYWORDS` tokens.
     global: KeywordAccept,
     /// Per-package overrides: `(atom, [tokens])`. A bare atom is pre-expanded to
-    /// `~arch` (portage's rule). Empty ⇒ no per-package work in the hot path.
+    /// `~arch` (portage(5)). Empty ⇒ no per-package work in the hot path.
     per_package: Vec<(Dep, Vec<AcceptToken>)>,
 }
 
