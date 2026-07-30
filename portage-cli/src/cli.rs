@@ -1285,6 +1285,14 @@ pub struct StagesArgs {
     #[arg(long)]
     pub stage1: bool,
 
+    /// Emptytree rebuild of `@system` into `--root` (catalyst `stage3/chroot.sh`:
+    /// `emerge -e --update --deep --with-bdeps=y @system`). Forces `-e -uD
+    /// --with-bdeps` on top of other merge flags; seeds PKGDIR with `-b` like
+    /// stage1. No stage2 (crossdev model). Requires a usable root (typically
+    /// after `--stage1` or an unpacked seed).
+    #[arg(long)]
+    pub stage3: bool,
+
     #[command(flatten)]
     pub depgraph_flags: DepgraphFlags,
 

@@ -55,7 +55,7 @@ subcommands corresponding to the traditional tools.
 | `setup` | — | Working — bootstrap a prefix layout (`--local` / `--prefix`) |
 | `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap (`--target`) |
 | `toolchain` | — | Working — native self-hosting toolchain bootstrap into `--root` |
-| `stages` | catalyst stage1 | Partial — `--stage1` (`packages.build`); stage3/stage4 not first-class flags yet |
+| `stages` | catalyst stage1/3 | Partial — `--stage1` (`packages.build`), `--stage3` (emptytree `@system`); no stage4 yet |
 | `dispatch` | `dispatch-conf` | Stub |
 | `etc` | `etc-update` | Stub |
 | `env` | `env-update` | Working — `profile.env` + `ld.so.conf` from `etc/env.d` |

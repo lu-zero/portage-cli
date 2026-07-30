@@ -16,7 +16,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 
 | Pri | Item | Status | Detail |
 |-----|------|--------|--------|
-| **1** | **Stage production** — `em stages --stage1` works; first-class stage3/stage4 and per-arch binhost assembly still open | 🟡 | [[em-stages-and-binhosts]], [[em-stages-scenario-matrix]] |
+| **1** | **Stage production** — `--stage1` + first-class `--stage3` (emptytree `@system`) 2026-07-30; stage4 / per-arch binhost assembly still open | 🟡 | [[em-stages-and-binhosts]], [[em-stages-scenario-matrix]] |
 | **2** | **Binpkg multi-instance / build-env identity residual** — phases 1–2 landed; live S1 verify + dual PKGDIR/header harden open | 🟡 | [[binpkg-subtargets]] |
 | **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` never reaches `PkgStart` still open | 🟡 | [[activity-status]] |
 | **4** | **Distfile GENTOO_MIRRORS parity residual** — core fetch facets done; no remote `layout.conf`, no `/etc/portage/mirrors`, etc. | 🟡 | [[distfile-fetch-reliability]] |

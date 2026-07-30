@@ -588,20 +588,32 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     Ok(())
 }
 
-/// `em stages --stage1`: emerge the profile's `packages.build` bootstrap set
-/// into `--root` — baselayout (USE=build, `--nodeps`) then the minimal stage1
-/// package list (USE="-* build"), mirroring catalyst's `stage1/chroot.sh`.
-/// Requires the ROOT's own toolchain already built (`em toolchain --setup`);
-/// stage1 assumes a working `<chost>-gcc` is already in the root, it does not
-/// build one (that's [`toolchain`]). With `-p` it prints the plan instead of
-/// building.
+/// `em stages --stage1` / `--stage3`: stage production into `--root`.
+///
+/// - **stage1** — baselayout + `packages.build` (USE="-* build"), catalyst
+///   `stage1/chroot.sh`; needs a working ROOT toolchain ([`toolchain`]).
+/// - **stage3** — emptytree `@system` (`-e -uD --with-bdeps`), catalyst
+///   `stage3/chroot.sh`. No stage2 (crossdev model).
+///
+/// Both may be passed: stage1 runs first, then stage3. With `-p` each step
+/// prints a plan instead of building.
 pub(crate) async fn stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
-    if !args.stage1 {
+    if !args.stage1 && !args.stage3 {
         bail!(
-            "em stages does stage1 only for now — pass --stage1 to emerge the \
-             profile's packages.build bootstrap set into --root"
+            "em stages: pass --stage1 and/or --stage3 \
+             (--stage1 = packages.build bootstrap; --stage3 = emptytree @system)"
         );
     }
+    if args.stage1 {
+        run_stage1(args, globals).await?;
+    }
+    if args.stage3 {
+        run_stage3(args, globals).await?;
+    }
+    Ok(())
+}
+
+async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
     let merge_root = globals.roots().merge_root().to_owned();
     if merge_root.as_str() == "/" {
         bail!("em stages --stage1 needs --root <dir>: a stage1 into / is meaningless");
@@ -660,6 +672,55 @@ pub(crate) async fn stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Resu
     .await?;
     if !globals.pretend {
         writeln!(out, "\n>>> stage1 ready in {merge_root}").ok();
+    }
+    Ok(())
+}
+
+/// Emptytree `@system` rebuild into `--root` (catalyst stage3).
+async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
+    let merge_root = globals.roots().merge_root().to_owned();
+    if merge_root.as_str() == "/" {
+        bail!("em stages --stage3 needs --root <dir>: a stage3 into / is meaningless");
+    }
+    let mut out = anstream::stdout();
+    let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
+    writeln!(
+        out,
+        "\n{C_LABEL}{verb} stage3{C_LABEL:#} into {merge_root} — emptytree @system (-e -uD --with-bdeps)"
+    )
+    .ok();
+    out.flush().ok();
+
+    // Catalyst `stage3/chroot.sh`: emerge -e --update --deep --with-bdeps=y @system.
+    // Force those knobs on top of the user's merge/depgraph flags; still seed
+    // PKGDIR with -b like stage1.
+    let mut merge_flags = merge_merge_flags_with(globals, &args.merge_flags, true);
+    merge_flags.emptytree = true;
+    merge_flags.update = true;
+    merge_flags.with_bdeps = true;
+    let mut depgraph_flags = merge_depgraph_flags(globals, &args.depgraph_flags);
+    depgraph_flags.deep = true;
+
+    crate::emerge_atoms(
+        globals,
+        &["@system".to_string()],
+        crate::EmergeOpts {
+            use_override: &[],
+            nodeps: false,
+            depgraph_flags: Some(depgraph_flags),
+            merge_flags: Some(merge_flags),
+            bypass_cross_root: false,
+            target_only_installed_view: false,
+            update_world: false,
+            is_resume: false,
+            activity: None,
+            activity_session: Default::default(),
+        },
+    )
+    .await?;
+
+    if !globals.pretend {
+        writeln!(out, "\n>>> stage3 ready in {merge_root}").ok();
     }
     Ok(())
 }
