@@ -22,6 +22,7 @@ pub(crate) mod error;
 pub(crate) mod gix_ext;
 pub(crate) mod maint;
 pub(crate) mod merge;
+pub(crate) mod mirrordist;
 pub(crate) mod pkg;
 pub(crate) mod postprocess;
 pub(crate) mod preflight;

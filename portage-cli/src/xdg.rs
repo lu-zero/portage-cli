@@ -63,6 +63,15 @@ pub fn md5_cache_dir(repo_name: &str) -> Utf8PathBuf {
     md5_cache_root().join(repo_name)
 }
 
+/// `$XDG_STATE_HOME/em/mirrordist` — `em mirrordist`'s own deletion-grace
+/// state files (one JSON file per repo/distfiles-target pair; see
+/// `mirrordist::DeletionDb`). Deliberately outside `--distfiles` so it's
+/// neither rsynced to mirror clients nor mistaken for an orphan by
+/// mirrordist's own scan.
+pub fn mirrordist_state_dir() -> Utf8PathBuf {
+    em_state_dir().join("mirrordist")
+}
+
 fn env_path(var: &str) -> Option<Utf8PathBuf> {
     std::env::var(var)
         .ok()

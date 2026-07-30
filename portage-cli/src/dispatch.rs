@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::str::FromStr;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 
 use crate::cli::{
     self, Applet, CleanTarget, GlsaCommand, LogCommand, MaintCommand, NewsCommand, QueryCommand,
@@ -164,9 +164,44 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Mirror { args } => {
-            eprintln!("mirror: args={:?}", args);
-            bail!("not implemented: mirror")
+        Applet::MirrorDist {
+            repo,
+            repos_dir,
+            distfiles,
+            jobs,
+            delete,
+            deletion_delay,
+            deletion_db,
+            success_log,
+            failure_log,
+            scheduled_deletion_log,
+            whitelist_from,
+            verify_existing_digest,
+            gentoo_mirrors_fallback,
+            delete_allow_incomplete,
+        } => {
+            let deletion_delay = humantime::parse_duration(deletion_delay)
+                .with_context(|| format!("--deletion-delay {deletion_delay:?}"))?;
+            crate::mirrordist::run(
+                globals,
+                &crate::mirrordist::MirrorDistOpts {
+                    repo: repo.clone(),
+                    repos_dir: repos_dir.clone(),
+                    distfiles: distfiles.clone(),
+                    jobs: *jobs,
+                    delete: *delete,
+                    deletion_delay,
+                    deletion_db: deletion_db.clone(),
+                    success_log: success_log.clone(),
+                    failure_log: failure_log.clone(),
+                    scheduled_deletion_log: scheduled_deletion_log.clone(),
+                    whitelist_from: whitelist_from.clone(),
+                    verify_existing_digest: *verify_existing_digest,
+                    gentoo_mirrors_fallback: *gentoo_mirrors_fallback,
+                    delete_allow_incomplete: *delete_allow_incomplete,
+                },
+            )
+            .await
         }
         Applet::Pkg { command } => pkg::run(command, globals),
         Applet::Query { command } => run_query(command, globals).await,

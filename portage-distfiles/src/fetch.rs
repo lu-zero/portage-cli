@@ -1,9 +1,59 @@
+use std::collections::HashMap;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_repo::{Manifest, ManifestEntry};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{Error, Result};
 use crate::resolver::Distfile;
+
+/// `filename -> DIST` [`ManifestEntry`], for O(1) lookup during a fetch
+/// batch. The old approach — a linear `manifest.dist_entries().find()` scan
+/// per file — is fine for one package's ~5-entry Manifest (the only case
+/// before a repo-wide mirror tool existed); a combined Manifest spanning a
+/// whole repo is tens of thousands of entries, where the linear scan becomes
+/// O(files²), run from inside concurrently-scheduled async tasks.
+#[derive(Debug, Clone, Default)]
+pub struct DistDigests(HashMap<String, ManifestEntry>);
+
+impl DistDigests {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    /// Fold `manifest`'s `DIST` entries in. First entry per filename wins —
+    /// matches first-owner-wins ownership when folding multiple packages'
+    /// manifests into one combined index.
+    pub fn extend_from_manifest(&mut self, manifest: &Manifest) {
+        for entry in manifest.dist_entries() {
+            if let ManifestEntry::Dist { filename, .. } = entry {
+                self.0
+                    .entry(filename.clone())
+                    .or_insert_with(|| entry.clone());
+            }
+        }
+    }
+
+    pub fn get(&self, filename: &str) -> Option<&ManifestEntry> {
+        self.0.get(filename)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<&Manifest> for DistDigests {
+    fn from(manifest: &Manifest) -> Self {
+        let mut digests = Self::new();
+        digests.extend_from_manifest(manifest);
+        digests
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -39,6 +89,28 @@ pub struct FetchConfig {
     pub resume_command: Option<String>,
     /// Maximum number of distfiles fetched concurrently.  Defaults to 4.
     pub max_concurrent: usize,
+    /// Accept an already-present file on **size alone**, skipping the full
+    /// hash. Default `false` — every present file is always fully
+    /// re-verified, exactly today's behavior. Set `true` for a repo-wide
+    /// mirror tool: re-hashing a multi-hundred-GB mirror on every run would
+    /// turn a "nothing to do" pass into a full-disk scan. Matches real
+    /// `emirrordist`'s own default (size-trust; `--verify-existing-digest`
+    /// opts into hashing).
+    pub trust_existing_size: bool,
+    /// Download to a temporary path in the distdir, verify, then rename over
+    /// the final path — instead of streaming straight to the final path and
+    /// only removing it on failed verification. Default `false` (today's
+    /// behavior, fine for a private build-box DISTDIR). Set `true` when the
+    /// distdir is being served live (a mirror): otherwise a client fetching
+    /// mid-download sees a partial or briefly-corrupt file under its real
+    /// name. **No cross-run resume of an atomic-mode download** — a leftover
+    /// temp file from an interrupted attempt is discarded and the file is
+    /// fetched fresh, never appended to (deliberately simpler than the
+    /// direct-to-dest path's `Range`-resume support). Only affects
+    /// [`FetchStrategy::Builtin`] — a [`FetchStrategy::Command`] template
+    /// (real portage's own `FETCHCOMMAND`) writes directly to `${DISTDIR}`
+    /// by its own construction and isn't wrapped.
+    pub atomic_write: bool,
 }
 
 impl Default for FetchConfig {
@@ -48,6 +120,8 @@ impl Default for FetchConfig {
             fallback_command: None,
             resume_command: None,
             max_concurrent: 4,
+            trust_existing_size: false,
+            atomic_write: false,
         }
     }
 }
@@ -127,7 +201,23 @@ impl Fetcher {
     ///
     /// If the file already exists and passes verification it is not
     /// re-downloaded.  If a partial file is present a resume is attempted.
+    ///
+    /// Builds a [`DistDigests`] from `manifest` for this one call — thin
+    /// wrapper over [`Self::fetch_distfile_digests`]. A caller fetching many
+    /// files against the same manifest (i.e. [`Self::fetch_all`]) builds the
+    /// index once instead of once per file.
     pub async fn fetch_distfile(&self, df: &Distfile, manifest: &Manifest) -> Result<FetchStatus> {
+        self.fetch_distfile_digests(df, &DistDigests::from(manifest))
+            .await
+    }
+
+    /// Same as [`Self::fetch_distfile`], but takes a pre-built [`DistDigests`]
+    /// index instead of re-deriving one from a [`Manifest`] every call.
+    pub async fn fetch_distfile_digests(
+        &self,
+        df: &Distfile,
+        digests: &DistDigests,
+    ) -> Result<FetchStatus> {
         // RESTRICT=fetch: the ebuild forbids automatic downloading.
         // Return immediately so the caller can run pkg_nofetch.
         if df.restriction.as_deref() == Some("fetch") {
@@ -136,7 +226,7 @@ impl Fetcher {
 
         let dest = self.distdir.join(&df.filename);
 
-        let manifest_entry = manifest_entry_for(manifest, &df.filename);
+        let manifest_entry = digests.get(&df.filename);
 
         // Fast path: already present and valid (writable dir first, then the
         // read-only locations).
@@ -146,6 +236,9 @@ impl Fetcher {
                 continue;
             }
             let valid = match manifest_entry {
+                Some(entry) if self.config.trust_existing_size => {
+                    dist_size(entry).is_some_and(|size| current_size(&candidate) == size)
+                }
                 Some(entry) => entry.verify_file(candidate.as_std_path()).is_ok(),
                 // No manifest entry to verify against — treat as present.
                 None => candidate.is_file(),
@@ -206,24 +299,40 @@ impl Fetcher {
     ///
     /// Up to `config.max_concurrent` downloads run simultaneously.
     /// Each result is paired with the originating [`Distfile`] reference.
+    ///
+    /// Builds one [`DistDigests`] index from `manifest` for the whole batch —
+    /// thin wrapper over [`Self::fetch_all_digests`].
     pub async fn fetch_all<'a>(
         &self,
         distfiles: &'a [Distfile],
         manifest: &Manifest,
     ) -> Vec<(&'a Distfile, Result<FetchStatus>)> {
+        self.fetch_all_digests(distfiles, &DistDigests::from(manifest))
+            .await
+    }
+
+    /// Same as [`Self::fetch_all`], but takes a pre-built [`DistDigests`]
+    /// index — the primitive a repo-wide mirror tool needs, where the
+    /// combined digest set spans many packages' manifests and would be far
+    /// too expensive to rebuild from scratch per file.
+    pub async fn fetch_all_digests<'a>(
+        &self,
+        distfiles: &'a [Distfile],
+        digests: &DistDigests,
+    ) -> Vec<(&'a Distfile, Result<FetchStatus>)> {
         use futures_util::StreamExt;
         use std::sync::Arc;
 
         let fetcher = Arc::new(self.clone());
-        let manifest = Arc::new(manifest.clone());
+        let digests = Arc::new(digests.clone());
         let max = self.config.max_concurrent.max(1);
 
         futures_util::stream::iter(distfiles)
             .map(|df| {
                 let fetcher = Arc::clone(&fetcher);
-                let manifest = Arc::clone(&manifest);
+                let digests = Arc::clone(&digests);
                 async move {
-                    let r = fetcher.fetch_distfile(df, &manifest).await;
+                    let r = fetcher.fetch_distfile_digests(df, &digests).await;
                     (df, r)
                 }
             })
@@ -243,13 +352,54 @@ impl Fetcher {
         manifest_entry: Option<&ManifestEntry>,
     ) -> Result<()> {
         match &self.config.strategy {
+            FetchStrategy::Builtin if self.config.atomic_write => {
+                self.fetch_builtin_atomic(url, dest, manifest_entry).await
+            }
             FetchStrategy::Builtin => self.fetch_builtin(url, dest, manifest_entry).await,
+            // `atomic_write` only wraps the builtin path — a Command template
+            // (FETCHCOMMAND) writes straight to `${DISTDIR}` by its own
+            // construction, same as real portage.
             FetchStrategy::Command(template) => {
                 self.run_command(template, url, dest.file_name().unwrap_or(""), dest)
                     .await?;
                 verify_or_discard(manifest_entry, dest)
             }
         }
+    }
+
+    /// Download to a temp path, verify, then rename over `dest` — never seen
+    /// by anything reading `dest` until it's a complete, verified file. No
+    /// resume: any leftover temp from a previous attempt is discarded and the
+    /// file is always fetched fresh (see [`FetchConfig::atomic_write`]).
+    async fn fetch_builtin_atomic(
+        &self,
+        url: &str,
+        dest: &Utf8Path,
+        manifest_entry: Option<&ManifestEntry>,
+    ) -> Result<()> {
+        let temp = self.atomic_temp_path(dest.file_name().unwrap_or("?"));
+        let _ = std::fs::remove_file(temp.as_std_path());
+        match self.download_full(url, &temp, manifest_entry).await {
+            Ok(()) => {
+                std::fs::rename(temp.as_std_path(), dest.as_std_path()).map_err(|e| Error::Io {
+                    path: dest.to_path_buf().into_std_path_buf(),
+                    source: e,
+                })
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(temp.as_std_path());
+                Err(e)
+            }
+        }
+    }
+
+    /// Temp path for an atomic-write in-progress download of `filename`, in
+    /// the writable distdir. Prefixed with `.` and suffixed distinctively so
+    /// a caller scanning the distdir (e.g. an orphan/deletion sweep) can
+    /// recognize and skip it — never a legitimate distfile, never resumed
+    /// across calls or runs. See [`is_atomic_temp_name`].
+    fn atomic_temp_path(&self, filename: &str) -> Utf8PathBuf {
+        self.distdir.join(format!(".{filename}.__em_download__"))
     }
 
     async fn fetch_builtin(
@@ -407,19 +557,18 @@ impl Fetcher {
     }
 }
 
+/// The exact filename shape [`Fetcher`]'s atomic-write mode uses for an
+/// in-progress download (`.{filename}.__em_download__`). A directory scan
+/// that walks a distdir (an orphan/deletion sweep) must recognize and skip
+/// these — never a legitimate distfile, and always safe to remove as a
+/// stale leftover from an interrupted run.
+pub fn is_atomic_temp_name(name: &str) -> bool {
+    name.starts_with('.') && name.ends_with(".__em_download__")
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-fn manifest_entry_for<'a>(manifest: &'a Manifest, filename: &str) -> Option<&'a ManifestEntry> {
-    manifest.dist_entries().find(|e| {
-        if let ManifestEntry::Dist { filename: f, .. } = e {
-            f == filename
-        } else {
-            false
-        }
-    })
-}
 
 /// Current on-disk size of `dest`, or 0 when it is absent or unreadable.
 fn current_size(dest: &Utf8Path) -> u64 {
@@ -574,5 +723,162 @@ mod tests {
         std::fs::write(dest.as_std_path(), b"STALE").unwrap();
         link_into_distdir(&src, &dest);
         assert_eq!(std::fs::read(dest.as_std_path()).unwrap(), b"PATCH");
+    }
+
+    fn dist_entry(filename: &str, content: &[u8]) -> ManifestEntry {
+        use blake2::{Blake2b512, Digest};
+        ManifestEntry::Dist {
+            filename: filename.to_string(),
+            size: content.len() as u64,
+            hashes: vec![(
+                "BLAKE2B".to_string(),
+                hex::encode(Blake2b512::digest(content)),
+            )],
+        }
+    }
+
+    #[test]
+    fn dist_digests_first_manifest_wins_on_duplicate_filename() {
+        let mut digests = DistDigests::new();
+        let first = Manifest {
+            entries: vec![dist_entry("foo.tar.gz", b"first")],
+        };
+        let second = Manifest {
+            entries: vec![dist_entry("foo.tar.gz", b"second-and-longer")],
+        };
+        digests.extend_from_manifest(&first);
+        digests.extend_from_manifest(&second);
+
+        assert_eq!(digests.len(), 1);
+        let ManifestEntry::Dist { size, .. } = digests.get("foo.tar.gz").unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(*size, "first".len() as u64);
+    }
+
+    #[test]
+    fn dist_digests_skips_non_dist_entries() {
+        let mut digests = DistDigests::new();
+        digests.extend_from_manifest(&Manifest {
+            entries: vec![ManifestEntry::Timestamp {
+                value: "2026-01-01T00:00:00Z".to_string(),
+            }],
+        });
+        assert!(digests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn trust_existing_size_accepts_wrong_content_right_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let distdir = Utf8Path::from_path(tmp.path()).unwrap().to_path_buf();
+        let filename = "foo.tar.gz";
+        let real_content = b"the real content".to_vec();
+        // Present file has the right *size* but different content (a
+        // single flipped byte, guaranteeing identical length) — under
+        // trust_existing_size this must still count as present, without ever
+        // touching `df.urls` (left empty here to prove no network path runs).
+        let mut wrong_content = real_content.clone();
+        wrong_content[0] = b'X';
+        std::fs::write(distdir.join(filename).as_std_path(), &wrong_content).unwrap();
+
+        let mut digests = DistDigests::new();
+        digests.extend_from_manifest(&Manifest {
+            entries: vec![dist_entry(filename, &real_content)],
+        });
+
+        let fetcher = Fetcher::new(
+            distdir,
+            FetchConfig {
+                trust_existing_size: true,
+                ..Default::default()
+            },
+        );
+        let df = Distfile {
+            filename: filename.to_string(),
+            urls: vec![],
+            restriction: None,
+        };
+        let status = fetcher.fetch_distfile_digests(&df, &digests).await.unwrap();
+        assert_eq!(status, FetchStatus::AlreadyPresent);
+    }
+
+    #[tokio::test]
+    async fn trust_existing_size_false_falls_through_to_a_fetch_attempt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let distdir = Utf8Path::from_path(tmp.path()).unwrap().to_path_buf();
+        let filename = "foo.tar.gz";
+        let real_content = b"the real content".to_vec();
+        // Same length, single flipped byte — same rationale as the
+        // trust_existing_size test above.
+        let mut wrong_content = real_content.clone();
+        wrong_content[0] = b'X';
+        std::fs::write(distdir.join(filename).as_std_path(), &wrong_content).unwrap();
+
+        let mut digests = DistDigests::new();
+        digests.extend_from_manifest(&Manifest {
+            entries: vec![dist_entry(filename, &real_content)],
+        });
+
+        // Default config: full hash verification, wrong content fails it, and
+        // with no URLs to try next there is nothing left but to report failure
+        // — never a silent "AlreadyPresent" on bad content.
+        let fetcher = Fetcher::new(distdir, FetchConfig::default());
+        let df = Distfile {
+            filename: filename.to_string(),
+            urls: vec![],
+            restriction: None,
+        };
+        let err = fetcher
+            .fetch_distfile_digests(&df, &digests)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::AllFailed { .. }));
+    }
+
+    #[test]
+    fn is_atomic_temp_name_recognizes_the_pattern() {
+        assert!(is_atomic_temp_name(".foo.tar.gz.__em_download__"));
+        assert!(!is_atomic_temp_name("foo.tar.gz"));
+        assert!(!is_atomic_temp_name("layout.conf"));
+    }
+
+    #[tokio::test]
+    async fn atomic_write_leaves_no_file_at_dest_until_verified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let distdir = Utf8Path::from_path(tmp.path()).unwrap().to_path_buf();
+        let filename = "foo.tar.gz";
+        let dest = distdir.join(filename);
+
+        // Stale leftover from a previous interrupted run — must not be
+        // resumed, and must not survive to confuse anything.
+        let temp = distdir.join(format!(".{filename}.__em_download__"));
+        std::fs::write(temp.as_std_path(), b"stale partial").unwrap();
+
+        let fetcher = Fetcher::new(
+            distdir.clone(),
+            FetchConfig {
+                atomic_write: true,
+                ..Default::default()
+            },
+        );
+        // No reachable URL: the atomic path must fail (network unreachable)
+        // without ever creating `dest`, and must clean up its own temp file
+        // on failure rather than leaving it behind.
+        let df = Distfile {
+            filename: filename.to_string(),
+            urls: vec!["http://127.0.0.1:1/unreachable".to_string()],
+            restriction: None,
+        };
+        let digests = DistDigests::new();
+        let result = fetcher.fetch_distfile_digests(&df, &digests).await;
+        assert!(result.is_err());
+        assert!(
+            !dest.as_std_path().exists(),
+            "dest must not appear on failure"
+        );
+        assert!(
+            !temp.as_std_path().exists(),
+            "the atomic temp file must not linger after a failed attempt"
+        );
     }
 }

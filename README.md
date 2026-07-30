@@ -41,7 +41,7 @@ subcommands corresponding to the traditional tools.
 | `ebuild` | `ebuild` | Working — fetch, unpack, phases, merge, VDB registration |
 | `depclean` | `emerge --depclean` | Working — reverse-dep orphan clean (`-c`); world-aware |
 | `quickpkg` | `quickpkg` | Working — GPKG from installed files / VDB `CONTENTS`; skips `CONFIG_PROTECT` by default |
-| `mirror` | `emirrordist` | Stub |
+| `mirrordist` | `emirrordist` | Working — flat-layout distfiles mirror builder, `--delete` with grace-period pruning; see below |
 | `clean` | `eclean` | Stub |
 | `revdep` | `revdep-rebuild` | Working — VDB-metadata-based, `-L`/`--library`; see below |
 | `news` | `eselect news` | Stub |
@@ -187,6 +187,44 @@ a broken soname's owning package is already known while walking — no
 against a `FEATURES=preserve-libs`-preserved library) is also implemented —
 usable directly, e.g. `em -p @preserved-rebuild`, anywhere a set name is
 accepted, not only through `em revdep`.
+
+---
+
+### `em mirrordist` (`emirrordist`)
+
+Not to be confused with `em select mirrors` (a `mirrorselect`/`eselect
+mirror` workalike — picks which upstream `GENTOO_MIRRORS` *this machine*
+fetches from). `em mirrordist` is the opposite-direction tool: it walks a
+repository's every ebuild (every version currently in the tree, all USE
+branches — a mirror must carry whatever any USE setting could ever need),
+fetches every distfile its `SRC_URI` references, and verifies each against
+the repo's `Manifest` — the server side of a Gentoo mirror. Requires an
+up-to-date metadata cache (`em regen <repo>` first for any repo that doesn't
+already ship one — this reads `metadata/md5-cache` directly rather than
+falling back to live ebuild sourcing on a cache miss).
+
+`--delete` prunes distfiles no longer referenced, behind two safety gates:
+it refuses outright if the metadata scan was incomplete (missing cache
+entries, unparseable `SRC_URI`/`RESTRICT`, missing digests or Manifests —
+override with `--delete-allow-incomplete`) or if the scan found nothing
+referenced at all (no override — a wrong `--repo` or an empty tree must
+never look like "delete everything"). Orphans get a `--deletion-delay`
+grace period (default `7d`) tracked in `em`'s own JSON state file, not
+portage's `shelve`/dbm format — same convention as the preserve-libs
+registry. `RESTRICT=fetch`/`RESTRICT=mirror` are evaluated with matchnone
+semantics (every USE-conditional dropped, negated included) so a client's
+particular USE selection can never change what gets mirrored.
+
+**Gaps vs emirrordist:**
+- Flat distfiles layout only — no GLEP 75 `filename-hash` (content-hash)
+  layout support yet (what `distfiles.gentoo.org` itself uses); a
+  `layout.conf` declaring one is refused rather than silently mishandled.
+- No `--recycle-dir`, `--content-db`, `--distfiles-db`, `--mirror-overrides`,
+  `--restrict-mirror-exemptions`, `--symlinks`, or `--tries` budget (an
+  ordered URL list is tried until the first success instead).
+- No GENTOO_MIRRORS fallback by default (`--gentoo-mirrors-fallback` opts
+  in) — real emirrordist never falls back to a peer mirror either; this
+  just makes that an explicit choice rather than a silent default.
 
 ---
 

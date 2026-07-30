@@ -14,6 +14,8 @@ pub mod resolver;
 pub use binhost::{IndexFetch, fetch_binpkg, fetch_index};
 pub use binhost_cache::fetch_index_cached;
 pub use error::{Error, Result};
-pub use fetch::{FetchConfig, FetchStatus, FetchStrategy, Fetcher};
+pub use fetch::{
+    DistDigests, FetchConfig, FetchStatus, FetchStrategy, Fetcher, is_atomic_temp_name,
+};
 pub use mirrors::{Endpoint, Mirror, MirrorList, default_mirror_list};
-pub use resolver::{Distfile, DistfileResolver, collect_filenames};
+pub use resolver::{Distfile, DistfileResolver, ResolveOpts, RestrictGate, collect_filenames};

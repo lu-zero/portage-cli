@@ -73,6 +73,53 @@ impl RestrictExpr {
         }
         out
     }
+
+    /// Tokens that apply **unconditionally** — every USE-conditional group
+    /// dropped, `flag?` and `!flag?` alike.
+    ///
+    /// This is portage's `use_reduce(restrict, flat=True, matchnone=True)`
+    /// (`portage/dep/__init__.py`): the `matchnone` docstring reads "Treat
+    /// all conditionals as inactive," and `is_active()` returns `False` for
+    /// *every* conditional under it, negated included — this is not "treat
+    /// every USE flag as unset" (a `!flag?` under that reading would still
+    /// apply), it is "no conditional ever applies, full stop."
+    ///
+    /// Server-side tools (`emirrordist`) use this so that no client's
+    /// particular USE selection can change what gets mirrored: a
+    /// `RESTRICT="!test? ( mirror )"` package *is* restricted here, exactly
+    /// as it is for real portage.
+    ///
+    /// No recursion needed: [`RestrictExpr`] has no `Group` variant — bare
+    /// parens are already flattened into the top-level slice by the parser
+    /// — so a top-level [`RestrictExpr::UseConditional`] is dropped whole,
+    /// its nested content included or not.
+    ///
+    /// Contrast [`Self::flat_tokens`], which flattens conditional bodies
+    /// **into** the result regardless of the flag — the opposite bias, and
+    /// wrong for this use.
+    ///
+    /// ```
+    /// use portage_metadata::RestrictExpr;
+    ///
+    /// let entries = RestrictExpr::parse("mirror !test? ( fetch )").unwrap();
+    /// assert_eq!(RestrictExpr::unconditional_tokens(&entries), vec!["mirror"]);
+    /// ```
+    pub fn unconditional_tokens(entries: &[RestrictExpr]) -> Vec<&str> {
+        entries
+            .iter()
+            .filter_map(|e| match e {
+                RestrictExpr::Token(t) => Some(t.as_str()),
+                RestrictExpr::UseConditional { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Whether `token` applies unconditionally. See [`Self::unconditional_tokens`].
+    pub fn has_unconditional(entries: &[RestrictExpr], token: &str) -> bool {
+        entries
+            .iter()
+            .any(|e| matches!(e, RestrictExpr::Token(t) if t == token))
+    }
 }
 
 impl fmt::Display for RestrictExpr {
@@ -293,5 +340,33 @@ mod tests {
     #[test]
     fn invalid_use_conditional_flag_starting_with_at() {
         assert!(RestrictExpr::parse("@flag? ( test )").is_err());
+    }
+
+    #[test]
+    fn unconditional_tokens_keeps_only_plain_tokens() {
+        let entries = RestrictExpr::parse("mirror bindist? ( fetch )").unwrap();
+        assert_eq!(RestrictExpr::unconditional_tokens(&entries), vec!["mirror"]);
+    }
+
+    /// The matchnone regression: a *negated* conditional is dropped too,
+    /// not included — matchnone means "no conditional ever applies," not
+    /// "treat every flag as unset" (which would make `!flag?` apply).
+    #[test]
+    fn unconditional_tokens_drops_negated_conditionals_too() {
+        let entries = RestrictExpr::parse("!test? ( mirror )").unwrap();
+        assert!(RestrictExpr::unconditional_tokens(&entries).is_empty());
+    }
+
+    #[test]
+    fn has_unconditional_true_for_plain_token() {
+        let entries = RestrictExpr::parse("mirror test").unwrap();
+        assert!(RestrictExpr::has_unconditional(&entries, "mirror"));
+        assert!(!RestrictExpr::has_unconditional(&entries, "fetch"));
+    }
+
+    #[test]
+    fn has_unconditional_false_for_any_conditional_token() {
+        let entries = RestrictExpr::parse("bindist? ( fetch ) !live? ( fetch )").unwrap();
+        assert!(!RestrictExpr::has_unconditional(&entries, "fetch"));
     }
 }

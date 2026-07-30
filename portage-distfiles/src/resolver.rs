@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use blake2::{Blake2b512, Digest};
-use portage_metadata::SrcUriEntry;
+use portage_metadata::{RestrictExpr, SrcUriEntry};
 use portage_repo::Repository;
 
 use crate::error::{Error, Result};
@@ -34,8 +34,67 @@ pub struct Distfile {
     /// Download URLs in priority order — GENTOO_MIRRORS first (mirrors-before-
     /// upstream, matching portage), then the expanded `mirror://`/upstream URLs.
     pub urls: Vec<String>,
-    /// EAPI 8+ restriction: `Some("fetch")` or `Some("mirror")`.
+    /// EAPI 8+ per-URI restriction prefix, as parsed off the raw `SRC_URI`
+    /// text: `Some("fetch")` for a `fetch+` prefix, `Some("mirror")` for
+    /// `mirror+`.
+    ///
+    /// Per PMS 8.2.2.5, this prefix is an **exemption** from a package-level
+    /// `RESTRICT=fetch`/`RESTRICT=mirror` — "this particular URI may still be
+    /// fetched/mirrored despite the package-level restriction" — not a
+    /// restriction on the URI itself. `Fetcher::fetch_distfile`'s current
+    /// handling of this field (treating `Some("fetch")` as *itself* meaning
+    /// "don't fetch") has that backwards, and this file's own `expand_url`
+    /// GENTOO_MIRRORS suppression on `Some("mirror")` has the same inversion
+    /// in the other direction — both are pre-existing, undocumented-until-now
+    /// bugs in this field's only consumers, not fixed here (see
+    /// [`DistfileResolver::resolve_uri_map`], which does its own, correct
+    /// package-level+per-URI gating and never reads this field at all).
     pub restriction: Option<String>,
+}
+
+/// Package-level `RESTRICT` gate for [`DistfileResolver::resolve_uri_map`],
+/// evaluated with matchnone semantics (`RestrictExpr::has_unconditional`) by
+/// the caller — a client-side USE choice must never change what a mirror
+/// redistributes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RestrictGate {
+    /// `RESTRICT=fetch` (unconditional) — drop every URI without a
+    /// `fetch+`/`mirror+` prefix.
+    pub fetch: bool,
+    /// `RESTRICT=mirror`, or implied by `RESTRICT=fetch` — drop every URI
+    /// without a `mirror+` prefix.
+    pub mirror: bool,
+}
+
+impl RestrictGate {
+    /// Build the gate from a parsed `RESTRICT` expression, matchnone-evaluated
+    /// (`RestrictExpr::has_unconditional`). `RESTRICT=fetch` implies
+    /// mirror-restriction too (real portage:
+    /// `restrict_mirror = restrict_fetch or "mirror" in restrict`,
+    /// `FetchIterator.py`) — a `fetch+`-tagged URI is exempted from the fetch
+    /// check only, so under plain `RESTRICT=fetch` it is *still* excluded
+    /// from mirroring; only a `mirror+`-tagged URI survives either
+    /// restriction.
+    pub fn from_restrict(entries: &[RestrictExpr]) -> Self {
+        let fetch = RestrictExpr::has_unconditional(entries, "fetch");
+        let mirror = fetch || RestrictExpr::has_unconditional(entries, "mirror");
+        Self { fetch, mirror }
+    }
+}
+
+/// Options for [`DistfileResolver::resolve_uri_map`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ResolveOpts {
+    /// Append GENTOO_MIRRORS *after* the ebuild's own URIs, as a last-resort
+    /// fallback. `false` is the right default for a mirror builder: it goes
+    /// to upstream, not to a peer mirror — real emirrordist never falls back
+    /// to GENTOO_MIRRORS at all. Named (and ordered) to match the
+    /// `--gentoo-mirrors-fallback` CLI flag, unlike `resolve`/`resolve_all`'s
+    /// unconditional mirrors-*first* behavior.
+    pub gentoo_mirrors_fallback: bool,
+    /// Package-level RESTRICT gate. Default (`RestrictGate::default()`) is
+    /// unrestricted.
+    pub restrict: RestrictGate,
 }
 
 /// Resolves `SRC_URI` entries into concrete [`Distfile`]s.
@@ -90,6 +149,80 @@ impl DistfileResolver {
         let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
         collect_uri_pairs_all(entries, &mut raw);
         self.build_distfiles(raw)
+    }
+
+    /// One [`Distfile`] per **filename** (URLs merged/deduped, in `SRC_URI`
+    /// order, ignoring USE conditionals — like [`Self::resolve_all`]), gated
+    /// by package-level `RESTRICT` via `opts.restrict`.
+    ///
+    /// Unlike [`Self::resolve`]/[`Self::resolve_all`], which return one
+    /// `Distfile` **per URI** (a real bug for any caller that treats a
+    /// filename as having a single fetch record — concurrently fetching two
+    /// `Distfile`s that both write `distdir/<filename>` races) and populate
+    /// `Distfile::restriction` from the (currently inverted, see that
+    /// field's docs) per-URI prefix alone, this method does the RESTRICT
+    /// gating itself, correctly, and always returns `restriction: None`.
+    ///
+    /// Gating, per real portage (`FetchIterator.py`): a `fetch+`/`mirror+`
+    /// URI prefix is an *exemption* from `opts.restrict`, not a restriction.
+    /// `opts.restrict.mirror` must already include the `RESTRICT=fetch`
+    /// implication (`RestrictGate::from_restrict` does this) — under plain
+    /// `RESTRICT=fetch`, only a `mirror+`-tagged URI survives; a `fetch+`-tagged
+    /// one does not (it exempts the fetch check only, and fetch implies the
+    /// mirror check too).
+    pub fn resolve_uri_map(&self, entries: &[SrcUriEntry], opts: &ResolveOpts) -> Vec<Distfile> {
+        let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
+        collect_uri_pairs_all(entries, &mut raw);
+
+        let mut order: Vec<String> = Vec::new();
+        let mut by_filename: HashMap<String, Vec<String>> = HashMap::new();
+
+        for (url, filename, uri_restriction) in raw {
+            let override_mirror = uri_restriction.as_deref() == Some("mirror");
+            let override_fetch = override_mirror || uri_restriction.as_deref() == Some("fetch");
+            if opts.restrict.fetch && !override_fetch {
+                continue;
+            }
+            if opts.restrict.mirror && !override_mirror {
+                continue;
+            }
+
+            let list = by_filename.entry(filename.clone()).or_insert_with(|| {
+                order.push(filename.clone());
+                Vec::new()
+            });
+            for candidate in self.expand_url(&url, &filename) {
+                if !list.contains(&candidate) {
+                    list.push(candidate);
+                }
+            }
+        }
+
+        if opts.gentoo_mirrors_fallback {
+            for filename in &order {
+                if let Some(list) = by_filename.get_mut(filename) {
+                    for mirror in &self.gentoo_mirrors {
+                        for candidate in gentoo_distfile_urls(mirror, filename) {
+                            if !list.contains(&candidate) {
+                                list.push(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        order
+            .into_iter()
+            .filter_map(|filename| {
+                let urls = by_filename.remove(&filename)?;
+                (!urls.is_empty()).then_some(Distfile {
+                    filename,
+                    urls,
+                    restriction: None,
+                })
+            })
+            .collect()
     }
 
     fn build_distfiles(&self, raw: Vec<(String, String, Option<String>)>) -> Vec<Distfile> {
@@ -370,5 +503,158 @@ mod tests {
         let mut names: Vec<&str> = dfs.iter().map(|d| d.filename.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, ["base.tar.gz", "doc.tar.gz", "dyn.tar.gz"]);
+    }
+
+    #[test]
+    fn restrict_gate_from_restrict_fetch_implies_mirror() {
+        let entries = RestrictExpr::parse("fetch").unwrap();
+        let gate = RestrictGate::from_restrict(&entries);
+        assert!(gate.fetch);
+        assert!(gate.mirror);
+    }
+
+    #[test]
+    fn restrict_gate_from_restrict_mirror_alone() {
+        let entries = RestrictExpr::parse("mirror").unwrap();
+        let gate = RestrictGate::from_restrict(&entries);
+        assert!(!gate.fetch);
+        assert!(gate.mirror);
+    }
+
+    #[test]
+    fn restrict_gate_from_restrict_none() {
+        let entries = RestrictExpr::parse("test").unwrap();
+        let gate = RestrictGate::from_restrict(&entries);
+        assert!(!gate.fetch);
+        assert!(!gate.mirror);
+    }
+
+    #[test]
+    fn resolve_uri_map_merges_multiple_uris_for_one_filename() {
+        let r = resolver(&[]);
+        let entries =
+            SrcUriEntry::parse("https://a.example.com/foo.tar.gz https://b.example.com/foo.tar.gz")
+                .unwrap();
+        let dfs = r.resolve_uri_map(&entries, &ResolveOpts::default());
+        assert_eq!(dfs.len(), 1);
+        assert_eq!(dfs[0].filename, "foo.tar.gz");
+        assert_eq!(
+            dfs[0].urls,
+            [
+                "https://a.example.com/foo.tar.gz",
+                "https://b.example.com/foo.tar.gz"
+            ]
+        );
+        assert_eq!(dfs[0].restriction, None);
+    }
+
+    #[test]
+    fn resolve_uri_map_dedupes_identical_urls() {
+        let r = resolver(&[]);
+        // Same URL appearing via two SRC_URI tokens (e.g. re-listed in a
+        // USE-conditional branch that resolve_all also descends into).
+        let entries = SrcUriEntry::parse(
+            "https://a.example.com/foo.tar.gz doc? ( https://a.example.com/foo.tar.gz )",
+        )
+        .unwrap();
+        let dfs = r.resolve_uri_map(&entries, &ResolveOpts::default());
+        assert_eq!(dfs.len(), 1);
+        assert_eq!(dfs[0].urls, ["https://a.example.com/foo.tar.gz"]);
+    }
+
+    #[test]
+    fn resolve_uri_map_gentoo_mirrors_fallback_off_by_default() {
+        let r = resolver(&["https://mirror.gentoo.org"]);
+        let entries = SrcUriEntry::parse("https://example.com/foo.tar.gz").unwrap();
+        let dfs = r.resolve_uri_map(&entries, &ResolveOpts::default());
+        assert_eq!(dfs[0].urls, ["https://example.com/foo.tar.gz"]);
+    }
+
+    #[test]
+    fn resolve_uri_map_gentoo_mirrors_fallback_appends_last() {
+        let r = resolver(&["https://mirror.gentoo.org"]);
+        let entries = SrcUriEntry::parse("https://example.com/foo.tar.gz").unwrap();
+        let opts = ResolveOpts {
+            gentoo_mirrors_fallback: true,
+            ..Default::default()
+        };
+        let dfs = r.resolve_uri_map(&entries, &opts);
+        let mut expected = vec!["https://example.com/foo.tar.gz".to_string()];
+        expected.extend(gentoo_distfile_urls(
+            "https://mirror.gentoo.org",
+            "foo.tar.gz",
+        ));
+        assert_eq!(dfs[0].urls, expected);
+    }
+
+    /// The real-portage regression case: `RESTRICT=fetch` + a `fetch+`-tagged
+    /// URI is still excluded — `fetch+` only exempts the fetch check, and
+    /// `RESTRICT=fetch` implies the mirror check too, which nothing exempts
+    /// it from.
+    #[test]
+    fn resolve_uri_map_restrict_fetch_with_fetch_plus_override_is_still_excluded() {
+        let r = resolver(&[]);
+        let entries = vec![SrcUriEntry::Uri {
+            url: "https://example.com/foo.tar.gz".to_owned(),
+            filename: "foo.tar.gz".to_owned(),
+            restriction: Some("fetch".to_owned()),
+        }];
+        let opts = ResolveOpts {
+            restrict: RestrictGate {
+                fetch: true,
+                mirror: true,
+            },
+            ..Default::default()
+        };
+        let dfs = r.resolve_uri_map(&entries, &opts);
+        assert!(dfs.is_empty());
+    }
+
+    /// Only a `mirror+`-tagged URI survives `RESTRICT=fetch`.
+    #[test]
+    fn resolve_uri_map_restrict_fetch_with_mirror_plus_override_is_included() {
+        let r = resolver(&[]);
+        let entries = vec![SrcUriEntry::Uri {
+            url: "https://example.com/foo.tar.gz".to_owned(),
+            filename: "foo.tar.gz".to_owned(),
+            restriction: Some("mirror".to_owned()),
+        }];
+        let opts = ResolveOpts {
+            restrict: RestrictGate {
+                fetch: true,
+                mirror: true,
+            },
+            ..Default::default()
+        };
+        let dfs = r.resolve_uri_map(&entries, &opts);
+        assert_eq!(dfs.len(), 1);
+        assert_eq!(dfs[0].urls, ["https://example.com/foo.tar.gz"]);
+    }
+
+    #[test]
+    fn resolve_uri_map_plain_restrict_mirror_excludes_unoverridden_uri() {
+        let r = resolver(&[]);
+        let entries = vec![SrcUriEntry::Uri {
+            url: "https://example.com/foo.tar.gz".to_owned(),
+            filename: "foo.tar.gz".to_owned(),
+            restriction: None,
+        }];
+        let opts = ResolveOpts {
+            restrict: RestrictGate {
+                fetch: false,
+                mirror: true,
+            },
+            ..Default::default()
+        };
+        let dfs = r.resolve_uri_map(&entries, &opts);
+        assert!(dfs.is_empty());
+    }
+
+    #[test]
+    fn resolve_uri_map_unrestricted_is_unaffected() {
+        let r = resolver(&[]);
+        let entries = SrcUriEntry::parse("https://example.com/foo.tar.gz").unwrap();
+        let dfs = r.resolve_uri_map(&entries, &ResolveOpts::default());
+        assert_eq!(dfs.len(), 1);
     }
 }

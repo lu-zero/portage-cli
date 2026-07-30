@@ -1051,10 +1051,62 @@ pub enum Applet {
         include_unmodified_config: String,
     },
 
-    #[command(about = "Fetch/mirror distfiles")]
-    Mirror {
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
+    #[command(
+        name = "mirrordist",
+        alias = "emirrordist",
+        about = "Build/maintain a distfiles mirror (emirrordist workalike)",
+        long_about = "Walks every ebuild in a repository, fetches every distfile its \
+SRC_URI references (all versions, all USE branches), and verifies each against \
+the repo Manifest — the server side of a Gentoo mirror.\n\n\
+Not to be confused with `em select mirrors`, which chooses which mirrors *this* \
+machine fetches from.\n\n\
+Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays."
+    )]
+    MirrorDist {
+        /// repos.conf name or path. Defaults to the main repo (opposite
+        /// default from `em regen`, which excludes it).
+        repo: Option<String>,
+        /// Directory containing master repositories.
+        #[arg(long, value_name = "DIR")]
+        repos_dir: Option<String>,
+        /// Distfiles directory to populate.
+        #[arg(long, value_name = "DIR", required = true)]
+        distfiles: camino::Utf8PathBuf,
+        /// Concurrent downloads.
+        #[arg(short = 'j', long)]
+        jobs: Option<usize>,
+        /// Delete distfiles no longer referenced by any ebuild.
+        #[arg(long)]
+        delete: bool,
+        /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`).
+        #[arg(long, value_name = "DURATION", default_value = "7d")]
+        deletion_delay: String,
+        /// Deletion-grace state file (default: $XDG_STATE_HOME/em/mirrordist/<repo>-*.json).
+        #[arg(long, value_name = "FILE")]
+        deletion_db: Option<camino::Utf8PathBuf>,
+        /// Tab-delimited log of fetched files (appended).
+        #[arg(long, value_name = "FILE")]
+        success_log: Option<camino::Utf8PathBuf>,
+        /// Tab-delimited log of fetch failures (appended).
+        #[arg(long, value_name = "FILE")]
+        failure_log: Option<camino::Utf8PathBuf>,
+        /// Report of files scheduled for deletion, grouped by date (rewritten).
+        #[arg(long, value_name = "FILE")]
+        scheduled_deletion_log: Option<camino::Utf8PathBuf>,
+        /// File(s) listing distfile names --delete must never remove (one
+        /// name per line, `#`-comments ignored).
+        #[arg(long, value_name = "FILE")]
+        whitelist_from: Vec<camino::Utf8PathBuf>,
+        /// Re-hash already-present files instead of trusting their size.
+        #[arg(long)]
+        verify_existing_digest: bool,
+        /// Also try GENTOO_MIRRORS after the ebuild's own URIs (real
+        /// emirrordist never does this — off by default).
+        #[arg(long)]
+        gentoo_mirrors_fallback: bool,
+        /// Allow --delete even when some ebuilds had no metadata cache entry.
+        #[arg(long)]
+        delete_allow_incomplete: bool,
     },
 
     #[command(about = "Query package information")]
