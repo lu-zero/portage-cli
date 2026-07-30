@@ -24,9 +24,10 @@
 //!   — an `em`-specific extra beyond what real emerge shows interactively,
 //!   for anyone who wants the detail.
 //! - `--jobs N` (N > 1): redraw a persistent `Jobs: N of M complete, R
-//!   running` status line (real emerge's `JobStatusDisplay`), erased before
-//!   and redrawn after each banner so parallel output doesn't just interleave
-//!   silently.
+//!   running` status line (real emerge's `JobStatusDisplay`), including a
+//!   right-padded `Load avg: …` suffix (same precision rules as
+//!   `JobStatusDisplay._load_avg_str`), erased before and redrawn after each
+//!   banner so parallel output doesn't just interleave silently.
 //!
 //! `index`/`of` live on `PkgStart`; `PhaseEnter`/`PhaseLeave` only carry
 //! `cpv`, so the sink remembers the last `PkgStart` per `(job_id, cpv)` to
@@ -176,6 +177,26 @@ impl HumanStdoutSink {
             }
             if js.failed > 0 {
                 line.push_str(&format!(", {} failed", js.failed));
+            }
+            // Portage pads the jobs column then appends `Load avg: …` so the
+            // load stays right-aligned under a fixed jobs-column width. We
+            // approximate with a small floor pad (emerges's is ~48 cols) then
+            // truncate to the tty width so a huge loadavg never wraps.
+            let load = super::loadavg::load_avg_display();
+            const JOBS_COL: usize = 48;
+            if line.len() < JOBS_COL {
+                line.push_str(&" ".repeat(JOBS_COL - line.len()));
+            } else {
+                line.push(' ');
+            }
+            line.push_str(&load);
+            if self.is_tty
+                && let Some((terminal_size::Width(w), _)) = terminal_size::terminal_size()
+            {
+                let w = w as usize;
+                if w > 0 && line.len() > w {
+                    line.truncate(w);
+                }
             }
             line
         };

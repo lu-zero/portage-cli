@@ -24,30 +24,13 @@ Default output shows nothing between `Emerging` and `Installing` again;
 `verbose >= 1` keeps the old every-phase view as an intentional `em`-only
 extra (never real emerge behavior, so nothing lost keeping it opt-in).
 
-**Open gap: load average, for full `Jobs:` line parity.** Real emerge's
-`JobStatusDisplay._display_status` pads the `Jobs: N of M complete[, R
-running][, F failed]` line out to the terminal width and appends
-`Load avg: 1.23, 1.10, 0.98` (`_emerge/getloadavg.py`: `os.getloadavg()`,
-falling back to parsing `/proc/loadavg`'s first three fields on platforms
-without it — three decimals-of-precision rule in
-`JobStatusDisplay._load_avg_str` depends on the max of the three: `<10` →
-`.2f`, `<100` → `.1f`, else `.0f`). `em`'s `draw_status` in
-`activity/human.rs` has no load-average field at all yet — needs a small
-`getloadavg()`-equivalent (read `/proc/loadavg`, split on whitespace, parse
-the first three floats) appended to the line the same way.
-
-**While checking this, found a related dead flag, same class as the
-`-K`/`-X` bugs from the 2026-07-21 parser audit
-([[parser-audit-full-pass-2026-07-21]]):** `-l`/`--load-average` is parsed
-(`cli/merge_flags.rs`), threaded through `-r`/`--resume` and crossdev's
-flag-merge helpers (`maint/resume.rs`, `crossdev/mod.rs`), but **never once
-read** by the actual scheduler — `merge/mod.rs`/`emerge.rs` have no
-`load_average` reference at all. Real emerge's `--load-average` throttles
-*starting new parallel jobs* when load is already too high (checked before
-each new `FuturesUnordered` slot in `merge_parallel`); `em` currently
-ignores the flag entirely and always starts up to `--jobs N` regardless of
-system load. Fixing both the display and the throttle at the same time
-makes sense — they need the same underlying load-average read.
+**Load average — DONE (2026-07-30).** `activity/loadavg.rs` reads
+`/proc/loadavg` (Portage's fallback), formats with
+`JobStatusDisplay._load_avg_str` precision, and appends `Load avg: …` on the
+`Jobs:` line (`human.rs`, padded ~48 cols, tty-truncated). `--load-average`
+throttles further starts in `merge_parallel` once ≥1 job is running and
+1-minute load ≥ LOAD (`PollScheduler._can_add_job`); the first concurrent
+job is always allowed.
 
 **`--eta` on `-a`/`--ask`, and prettier output — DONE (2026-07-23).** The
 eta-computation block (`DurationStore::load` / `EtaPkg` collection /

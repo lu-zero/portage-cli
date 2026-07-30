@@ -12,6 +12,7 @@ mod history;
 mod human;
 mod jsonl_fd;
 mod live_fs;
+mod loadavg;
 mod projection;
 
 pub use bus::{ActivityBus, ActivitySink, BackgroundSink, RecordingSink};
@@ -28,6 +29,7 @@ pub use history::{
 pub use human::HumanStdoutSink;
 pub use jsonl_fd::JsonlFdSink;
 pub use live_fs::{LiveFsSink, load_live_from_disk, pid_alive};
+pub use loadavg::{can_start_under_load, format_load_avg, get_loadavg, load_avg_display};
 pub use projection::{InflightPkg, LiveProjection, LiveSession};
 
 use std::sync::{Arc, Mutex};

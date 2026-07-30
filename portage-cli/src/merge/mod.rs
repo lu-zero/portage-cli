@@ -529,7 +529,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let (merged, skipped, failures) = if jobs <= 1 {
         merge_sequential(&run).await
     } else {
-        merge_parallel(&run, blockers, jobs).await
+        merge_parallel(&run, blockers, jobs, merge_flags.load_average).await
     };
 
     // Refresh ${ROOT}/etc/profile.env and the linker cache, as emerge does
@@ -1037,6 +1037,10 @@ impl Scheduler {
 /// root, VDB counter, and world/profile files are only mutated by one package
 /// at a time. Returns `(merged, skipped, failures)`.
 ///
+/// `--load-average LOAD` (Portage `PollScheduler._can_add_job`): once at least
+/// one job is running, further starts wait until the 1-minute load average
+/// drops below `LOAD`. The first concurrent job is always allowed.
+///
 /// Concurrency is single-threaded (`FuturesUnordered`, not spawned tasks): the
 /// `EbuildShell` need not be `Send`, and parallelism still comes from the
 /// concurrently-running build subprocesses.
@@ -1044,6 +1048,7 @@ async fn merge_parallel(
     run: &MergeRun<'_>,
     blockers: &[Vec<usize>],
     jobs: usize,
+    load_average: Option<f64>,
 ) -> (usize, usize, Vec<MergeFailure>) {
     let flags = run.action_flags();
     let total = run.plan.len();
@@ -1059,6 +1064,11 @@ async fn merge_parallel(
 
     loop {
         while !stop_new && inflight.len() < jobs {
+            // Load throttle before pulling a ready package, so a high-load
+            // machine does not even dequeue work that cannot start yet.
+            if !crate::activity::can_start_under_load(load_average, inflight.len()) {
+                break;
+            }
             let Some(i) = sched.next_ready() else { break };
             let planned = &run.plan[i];
             let entry_roots = entry_roots(planned, run.roots, run.host_roots);

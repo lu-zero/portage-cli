@@ -121,7 +121,11 @@ pub struct MergeFlags {
     #[arg(short = 'j', long, value_name = "N")]
     pub jobs: Option<u32>,
 
-    /// Maximum load average to allow when starting new builds.
+    /// Maximum 1-minute load average allowed when starting additional
+    /// parallel builds (`--jobs` > 1). Once at least one job is running,
+    /// further starts wait until load drops below LOAD (Portage
+    /// `PollScheduler._can_add_job`). The first concurrent job is always
+    /// allowed. Displayed on the `Jobs:` status line regardless.
     #[arg(short = 'l', long, value_name = "LOAD")]
     pub load_average: Option<f64>,
 
