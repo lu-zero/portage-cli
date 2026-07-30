@@ -44,16 +44,21 @@ pub struct AutounmaskCandidate {
 /// [`Keyword`] list is a `u32` comparison with no per-check allocation.
 ///
 /// Each token sets or clears exactly *its own* grant, nothing more — no token
-/// implies another at fold time (`ArchAccept::add` is a plain bit set/clear,
-/// never a join). Real Portage's own matcher (`_getMissingKeywords`) works the
-/// same way: it is the *matcher*, not the accepted-token set, that treats
-/// e.g. a testing keyword as satisfied by `~arch`/`~*`/`**` — the set itself
-/// stays a flat, literal collection of independent tokens. Baking "testing
-/// implies stable" into the fold (an earlier version of this code did) makes
+/// implies another at fold time ([`KeywordAccept::add`] is a plain set insert
+/// / remove, never a join). Real Portage's own matcher
+/// (`KeywordsManager._getMissingKeywords`) keeps the accepted set as flat
+/// *literal* token strings (`arm64`, `~arm64`, `riscv`, `*`, `**`, …) and
+/// matches package `KEYWORDS` by exact membership (plus `*`/`~*`/`**`
+/// wildcards). Baking "testing implies stable" into the fold makes
 /// `-arch` and `-~arch` collapse into the same non-invertible join, breaking
 /// the documented `package.accept_keywords` idiom `media-video/mplayer -~x86`
-/// ("accept ~x86 in general, but pin this one package to stable only") — found
-/// live during a design review (Claude Opus 5), verified against `portage(5)`.
+/// ("accept ~x86 in general, but pin this one package to stable only").
+///
+/// Foreign-arch tokens are first-class: crossdev's usual
+/// `cross-…/pkg riscv ~riscv -arm64 -~arm64` must *grant* `riscv`/`~riscv`
+/// and *withdraw* host `arm64`/`~arm64` for that package. A host-arch-only
+/// bitfield drops the foreign grants and still applies the host vetoes,
+/// masking every version (found live: `cross-riscv64-…/linux-headers`).
 #[derive(Clone, Copy)]
 pub enum AcceptToken {
     /// `arch` — accept the stable keyword for this arch.
@@ -108,18 +113,19 @@ impl AcceptToken {
     }
 }
 
-/// The accept decision for a single (interned) arch: which literal tokens are
-/// currently granted. Each bit tracks exactly one token — no cross-bit
-/// implication — so [`Self::accepts`] (the matcher) decides how a stable vs.
-/// testing keyword is satisfied, the same split real Portage's own matcher
-/// makes over its flat token set. This is what makes `-arch`/`-~arch`
-/// independently invertible: see [`AcceptToken`]'s doc.
-#[derive(Clone, Copy, Default)]
-struct ArchAccept {
-    /// `arch` is granted.
-    stable: bool,
-    /// `~arch` is granted.
-    testing: bool,
+/// Folded accept set: multi-arch literal tokens plus wildcards.
+///
+/// Mirrors Portage's flat `pgroups` set (`KeywordsManager._getEgroups` /
+/// `_getMissingKeywords`): each `arch` / `~arch` is an independent membership
+/// entry for *any* architecture, not only the host. Wildcards `*` / `~*` /
+/// `**` are separate flags that wildcards do not join with specific arches at
+/// fold time — so `-arch` never retracts a `*` grant (literal-token semantics).
+#[derive(Clone, Default)]
+struct KeywordAccept {
+    /// Arches granted via a bare `arch` token.
+    stable: HashSet<Interned<DefaultInterner>>,
+    /// Arches granted via a `~arch` token.
+    testing: HashSet<Interned<DefaultInterner>>,
     /// `*` is granted.
     any_stable: bool,
     /// `~*` is granted.
@@ -128,41 +134,78 @@ struct ArchAccept {
     any: bool,
 }
 
-impl ArchAccept {
-    /// Fold one token's contribution, relative to the target `arch` — a plain
-    /// set/clear of the one bit that token names, never a join with another.
-    fn add(&mut self, tok: AcceptToken, arch: Interned<DefaultInterner>) {
+impl KeywordAccept {
+    /// Fold one token — plain insert/remove of the named grant, never a join.
+    fn add(&mut self, tok: AcceptToken) {
         match tok {
             AcceptToken::ClearAll => *self = Self::default(),
             AcceptToken::Any => self.any = true,
             AcceptToken::AnyTesting => self.any_testing = true,
             AcceptToken::AnyStable => self.any_stable = true,
-            AcceptToken::Testing(a) if a == arch => self.testing = true,
-            AcceptToken::Stable(a) if a == arch => self.stable = true,
-            AcceptToken::Negate(a) if a == arch => self.stable = false,
-            AcceptToken::NegateTesting(a) if a == arch => self.testing = false,
+            AcceptToken::Testing(a) => {
+                self.testing.insert(a);
+            }
+            AcceptToken::Stable(a) => {
+                self.stable.insert(a);
+            }
+            AcceptToken::Negate(a) => {
+                self.stable.remove(&a);
+            }
+            AcceptToken::NegateTesting(a) => {
+                self.testing.remove(&a);
+            }
             AcceptToken::NegateAnyTesting => self.any_testing = false,
             AcceptToken::NegateAny => self.any = false,
-            _ => {}
         }
     }
 
-    /// Whether a package with `keywords` is accepted under this decision —
-    /// the matcher: a stable keyword is satisfied by `arch` or `*`; a testing
-    /// keyword by `~arch` or `~*`. Neither implies the other here; a config
-    /// that wants both grants both (as a profile's baseline `arch` plus a
-    /// user's additive `~arch` normally do).
-    fn accepts(self, keywords: &[Keyword], arch: Interned<DefaultInterner>) -> bool {
+    /// Portage `_getMissingKeywords` match: a package keyword is accepted when
+    /// its exact token is in the set, or a covering wildcard is granted.
+    /// (`~arch` does **not** satisfy a stable `arch` keyword, and vice versa.)
+    fn accepts(&self, keywords: &[Keyword]) -> bool {
         if self.any {
             return true;
         }
-        keywords.iter().any(|kw| {
-            kw.arch == arch
-                && match kw.stability {
-                    Stability::Stable => self.stable || self.any_stable,
-                    Stability::Testing => self.testing || self.any_testing,
-                    _ => false,
+        let mut has_stable = false;
+        let mut has_testing = false;
+        for kw in keywords {
+            match kw.stability {
+                Stability::Stable => {
+                    has_stable = true;
+                    if self.stable.contains(&kw.arch) {
+                        return true;
+                    }
                 }
+                Stability::Testing => {
+                    has_testing = true;
+                    if self.testing.contains(&kw.arch) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        (has_stable && self.any_stable) || (has_testing && self.any_testing)
+    }
+
+    /// Whether the package is accepted on a *stable* keyword path (gates
+    /// `use.stable.{force,mask}`). True when some package `KEYWORDS` entry is
+    /// a stable arch that this set accepts (or `*` / `**` covers it) — not
+    /// merely when the accept set also grants a testing token.
+    fn is_stable_for(&self, keywords: &[Keyword]) -> bool {
+        if !self.accepts(keywords) {
+            return false;
+        }
+        if self.any {
+            // `**` accepts unkeyworded/live ebuilds too; treat as non-stable
+            // unless a concrete stable keyword is also present and would match.
+            return keywords.iter().any(|kw| {
+                kw.stability == Stability::Stable
+                    && (self.any_stable || self.stable.contains(&kw.arch) || self.any)
+            });
+        }
+        keywords.iter().any(|kw| {
+            kw.stability == Stability::Stable && (self.any_stable || self.stable.contains(&kw.arch))
         })
     }
 }
@@ -170,14 +213,15 @@ impl ArchAccept {
 /// Global `ACCEPT_KEYWORDS` plus per-package `package.accept_keywords`, parsed
 /// into interned tokens once.
 ///
-/// The global decision is precomputed for the host arch; per-package entries
-/// are folded in per version only when present, so the common no-override path
-/// is allocation-free and reduces to a keyword scan with `u32` comparisons.
+/// The global decision is precomputed; per-package entries are folded in per
+/// version only when present, so the common no-override path clones nothing
+/// beyond a cheap `KeywordAccept` borrow via [`Self::decision`].
 pub struct AcceptKeywords {
-    /// Host arch, interned — the axis every acceptance check compares against.
+    /// Host arch, interned — used for bare-atom expansion and autounmask
+    /// `~arch` suggestions.
     arch: Interned<DefaultInterner>,
     /// Precomputed decision from the global `ACCEPT_KEYWORDS` tokens.
-    global: ArchAccept,
+    global: KeywordAccept,
     /// Per-package overrides: `(atom, [tokens])`. A bare atom is pre-expanded to
     /// `~arch` (portage's rule). Empty ⇒ no per-package work in the hot path.
     per_package: Vec<(Dep, Vec<AcceptToken>)>,
@@ -195,13 +239,13 @@ impl AcceptKeywords {
         per_package: Vec<(Dep, Vec<AcceptToken>)>,
     ) -> Self {
         let arch_key = Interned::intern(arch.as_str());
-        let mut global_accept = ArchAccept::default();
+        let mut global_accept = KeywordAccept::default();
         for &tok in global {
-            global_accept.add(tok, arch_key);
+            global_accept.add(tok);
         }
         // An empty global list means "stable only" (the historical fallback).
         if global.is_empty() {
-            global_accept.stable = true;
+            global_accept.stable.insert(arch_key);
         }
         let per_package = per_package
             .into_iter()
@@ -236,22 +280,30 @@ impl AcceptKeywords {
     }
 
     /// The accept decision for one package version, folding any matching
-    /// per-package overrides into the precomputed global decision. Returns the
-    /// global decision unchanged (no work) in the common no-override case.
-    fn decision(&self, cpv: &Cpv, slot: Option<Interned<DefaultInterner>>) -> ArchAccept {
+    /// per-package overrides into the precomputed global decision. Borrows the
+    /// global set when nothing matches (the common path).
+    fn decision(
+        &self,
+        cpv: &Cpv,
+        slot: Option<Interned<DefaultInterner>>,
+    ) -> Cow<'_, KeywordAccept> {
         if self.per_package.is_empty() {
-            return self.global;
+            return Cow::Borrowed(&self.global);
         }
         let slot_str = slot.as_ref().map(|s| s.as_str());
-        let mut acc = self.global;
+        let mut acc: Option<KeywordAccept> = None;
         for (dep, toks) in &self.per_package {
             if dep.matches_cpv(cpv, slot_str) {
+                let set = acc.get_or_insert_with(|| self.global.clone());
                 for &t in toks {
-                    acc.add(t, self.arch);
+                    set.add(t);
                 }
             }
         }
-        acc
+        match acc {
+            Some(owned) => Cow::Owned(owned),
+            None => Cow::Borrowed(&self.global),
+        }
     }
 
     /// Whether `keywords` is accepted for this version.
@@ -261,19 +313,19 @@ impl AcceptKeywords {
         cpv: &Cpv,
         slot: Option<Interned<DefaultInterner>>,
     ) -> bool {
-        self.decision(cpv, slot).accepts(keywords, self.arch)
+        self.decision(cpv, slot).accepts(keywords)
     }
 
-    /// Whether this version is merged on a *stable* basis (accepted, and not via
-    /// a testing keyword) — gates the `use.stable.{force,mask}` sets.
+    /// Whether this version is merged on a *stable* keyword path — gates the
+    /// `use.stable.{force,mask}` sets. Independent of whether a testing grant
+    /// is also present in the accept set.
     pub fn is_stable(
         &self,
         keywords: &[Keyword],
         cpv: &Cpv,
         slot: Option<Interned<DefaultInterner>>,
     ) -> bool {
-        let d = self.decision(cpv, slot);
-        d.accepts(keywords, self.arch) && !d.testing
+        self.decision(cpv, slot).is_stable_for(keywords)
     }
 
     /// The keyword token an autounmask would need: the version is not accepted.
@@ -1449,9 +1501,63 @@ mod tests {
         let bare = AcceptKeywords::new(&arch, &[tok("arm64")], vec![(dep("dev-libs/foo"), vec![])]);
         assert!(bare.accepts(&testing, &foo, None));
 
-        // A testing merge is never "stable" for use.stable.* gating.
+        // use.stable.* gates on a stable *package* keyword path, not on whether
+        // the accept set also happens to grant testing.
         assert!(global.is_stable(&stable, &foo, None));
         assert!(!per.is_stable(&testing, &foo, None));
+        // Host accepts both arm64 and ~arm64: a stable-keyworded package is
+        // still "stable" for use.stable.* (the old host-bit `!d.testing` check
+        // wrongly treated every ~arch host as never-stable).
+        let both = AcceptKeywords::from_global(&arch, &["arm64", "~arm64"]);
+        assert!(both.is_stable(&stable, &foo, None));
+        assert!(!both.is_stable(&testing, &foo, None));
+    }
+
+    /// Crossdev's usual `package.accept_keywords` shape: grant the *target*
+    /// arch and withdraw the host arch so a package keyworded `~riscv` (and
+    /// often also `~arm64` from the mirrored ebuild) is accepted via riscv,
+    /// not rejected after `-arm64 -~arm64` clears the host grants.
+    ///
+    /// Regression for the host-arch-only `ArchAccept` bitfield, which dropped
+    /// foreign-arch tokens as no-ops and left only the host vetoes.
+    #[test]
+    fn accept_keywords_foreign_arch_crossdev_idiom() {
+        let host = Arch::intern("arm64");
+        let tok = |s: &str| AcceptToken::parse(s).unwrap();
+        let kws = |s: &str| Keyword::parse_line(s).unwrap();
+        // Real linux-headers KEYWORDS shape (abbreviated): testing on many
+        // arches including host and target.
+        let keywords = kws("~arm64 ~riscv ~amd64");
+        let cpv = Cpv::parse("cross-riscv64-unknown-linux-gnu/linux-headers-7.1").unwrap();
+
+        let ak = AcceptKeywords::new(
+            &host,
+            &[tok("arm64"), tok("~arm64")],
+            vec![(
+                dep("cross-riscv64-unknown-linux-gnu/linux-headers"),
+                vec![tok("riscv"), tok("~riscv"), tok("-arm64"), tok("-~arm64")],
+            )],
+        );
+        assert!(
+            ak.accepts(&keywords, &cpv, None),
+            "must accept via ~riscv after host arm64/~arm64 are withdrawn"
+        );
+        // Without the foreign-arch grant, the same vetoes fully mask it.
+        let veto_only = AcceptKeywords::new(
+            &host,
+            &[tok("arm64"), tok("~arm64")],
+            vec![(
+                dep("cross-riscv64-unknown-linux-gnu/linux-headers"),
+                vec![tok("-arm64"), tok("-~arm64")],
+            )],
+        );
+        assert!(
+            !veto_only.accepts(&keywords, &cpv, None),
+            "host vetoes alone must mask when only ~arm64/~riscv remain"
+        );
+        // Unrelated package keeps the global ~arm64 accept.
+        let other = Cpv::parse("sys-fs/btrfs-progs-7.1").unwrap();
+        assert!(ak.accepts(&kws("~arm64"), &other, None));
     }
 
     #[test]
@@ -1535,11 +1641,12 @@ mod tests {
     /// only a specific bare `arch`/`~arch` token? Real Portage's matcher
     /// works over a flat set of literal strings — `-riscv` only ever
     /// discards a literal `riscv` token if present, and is inert against a
-    /// separate `*`/`**` token, which stays granted. `ArchAccept::add`
-    /// already matches this exactly (each token clears only its own bit —
-    /// `Negate` clears `stable`, never `any_stable`/`any`), so this was
-    /// already correct once the fold stopped joining tokens together; this
-    /// test just makes that answer explicit and locks it in.
+    /// separate `*`/`**` token, which stays granted. `KeywordAccept::add`
+    /// already matches this exactly (each token clears only its own set
+    /// membership — `Negate` removes a stable arch, never `any_stable`/
+    /// `any`), so this was already correct once the fold stopped joining
+    /// tokens together; this test just makes that answer explicit and locks
+    /// it in.
     #[test]
     fn negate_arch_does_not_retract_a_wildcard_grant() {
         let arch = Arch::intern("riscv");
