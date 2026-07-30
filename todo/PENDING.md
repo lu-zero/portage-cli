@@ -2,109 +2,76 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-07-18**.
+here briefly for context). Updated **2026-07-30**.
 
-**Also closed outside this arc (2026-07-18):** emerge-style **`-uD` in-slot
-upgrades** — [[deep-in-slot-upgrades]]; **`-N`/`-U` USE-drift rebuilds**
-(Portage-aligned, no eager BDEPEND) — [[newuse]]; parallel + mmap
-**elfscan** vs scanelf; **`benchmarks/bench-resolve-modes.sh`** (`-p`/`-up`/
-`-uNp`/`-uDp`/`-uNDp` vs emerge). Slot-only `:*` bumps remain
-[[deep-slot-bump]].
+**How to use this file:** start from the open queue below; jump to the linked
+note for design. Long historical narrative for the 2026-07-05 riscv shakeout
+and the full binhost/migration log remains below the `---` (do not delete — it
+is the audit trail). Fully closed design notes live under `todo/done/`;
+`[[name]]` links still resolve by filename there.
 
-## RESUME HERE (2026-07-18) — next pending queue
+## RESUME HERE (2026-07-30) — open queue
 
-Resolver deep-update / newuse are landed. Prefer the next work by **value for
-stages + host parity**, not by file age. Detail lives in the linked notes;
-this table is the triage index.
-
-### Suggested order
+### Suggested order (value for stages + host parity)
 
 | Pri | Item | Status | Detail |
 |-----|------|--------|--------|
-| **1** | **`--prefix`/`--local` should prefer their own toolchain over the host's** — split 2026-07-23 into 3 phases: (1) ✅ `em select` confdir population under `--prefix` — done, found+fixed a real `get_chost` host-fallback bug live in a crossdev-stages sandbox; (2) ✅ build-path awareness — `shell.rs`'s toolchain-selection gate now also fires for a native `--prefix`/`--local` build once one has its own activated compiler; (3) ✅ `em active` (2026-07-25) — persistent `$XDG_STATE_HOME/em/active`, shell `eval "$(em active env)"`, bare `em` picks up registered prefix/local (explicit flags win). `--root` defaulting to host stays correct as-is (catalyst seed-compiler model, not a bug) | ✅ all 3 phases | [[select-toolchain]] |
-| **2** | **CLI short-flag remnants** — all landed: `-P`/`-W`/`-F` 2026-07-21, `-r`/`--resume` + `em maint cleanresume` 2026-07-22 | ✅ | [[cli-flag-parity]] |
-| **3** | **Binhost polish** — GPG verify/sign done 2026-07-23 (`pgp`/rpgp crate); **URI BASE_URI, auto-reindex, stages default `-b`, CHOST reuse gate** done 2026-07-18. Remaining: per-arch binhost for stage assembly (blocked on `em stages` gaining stage3/stage4) | ✅ 2026-07-23 | [[em-stages-and-binhosts]]; binhosts section below |
-| **4** | **Parser audit** — full pass complete 2026-07-21; 2 real bugs found+fixed (inverted `!flag?` USE-dep, package.* dir dotfile leak), rest confirmed correct/documented | ✅ 2026-07-21 | [[parser-audit]] |
-| **5** | **`package.env` USE in the resolver** — build-env slice ✅; USE from env files now folded at plan time too | ✅ 2026-07-20 | [[package-env]] |
-| **6** | **Blocker Tier-1** — detect/report ✅; auto-unmerge **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
-| **0** | **md5-cache blind spot** — an ebuild with no cache entry was *invisible* to em (reported "no ebuilds"), 63 tree-wide incl. the world member `sys-fs/btrfs-progs-7.1`, which em reinstalled at 7.0 while emerge upgraded to 7.1. Fixed on master: suspects-only digest (absent or newer-than-sync), memoised in a sync-stamped sidecar; 0.98s → 1.01s. Follow-ups: regen-on-sync, and lazy per-cpv load (memory) | ✅ 2026-07-26 | [[md5-cache-blind-spot]] |
-| **8** | **Finish the update chain** — `em -tpuD --complete-graph rust` now pulls `llvm-core/lldb` in alongside `llvm:22`/`clang:22` instead of leaving it behind with a broken `~` pin; flag off is a no-op (verified: `-pu`/`-p @world` row counts unchanged). Left open: precise "upgrade reverted" wording for the PubGrub-backtracks case, and unifying with `subslot::find_rebuilds` for `sphinx-rtd-theme`-class USE-dep/subslot parity | ✅ 2026-07-27 | [[slot-chain-completion]] |
-| **9** | **`--tree` annotates the plan now** — em's `-t` kept its own `├──`/`└──` box-drawing (user preferred it over copying emerge's plain-indent style) but every node now shows the real `[ebuild ...]`/`[nomerge]` bracket, USE, old-version and size, matching what `-p` shows — previously a bare cpv tree with none of that | ✅ 2026-07-27 | [[tree-output-parity]] |
-| **7** | **Selective resolution** — all 3 commits landed 2026-07-26: root targets carry set provenance and unsatisfiable ones are classified pre-solve (`em -p @world` prints its plan + emerge's masked warning instead of aborting on `app-misc/asciinema`); `selective` implemented, so `--noreplace` is live and `-u` stops reinstalling up-to-date targets; `__internal__/root` and the `(dependency required by …)` trailer cleaned up. Left open: em detects none of emerge's slot-operator `r` rebuilds, so `@world` runs list ~110 fewer rows — a separate, pre-existing gap | ✅ 2026-07-26 | [[selective-resolution]] |
-
-### Verified closed / demoted (2026-07-18)
-
-| Item | Result |
-|------|--------|
-| **#36 inherit / `E_IUSE`** | ✅ **Already fixed.** `inherit` accumulates into `E_*`; `source_ebuild` merges ebuild + eclass values (PMS 10.2). Unit tests in `portage-repo/tests/brush_compat.rs` (`inherit_*`) all green. Host md5-cache for `app-alternatives/gpg` shows full IUSE. |
-| **task #17 BROOT / riscv systemd-utils resolve** | ✅ core fix live-verified 2026-07-17. **Full** `--emptytree sys-apps/systemd-utils` still blocked by **Gentoo-side** gaps (`acl` undeclared `attr` dep; `pam.eclass` `dopamd -r`), not em BROOT. Track under shakeout, not as an open em feature. |
-| **`em quickpkg`** | ✅ implemented 2026-07-18 — GPKG from VDB `CONTENTS` + live files; Portage `gpkg.get_metadata` accepts containers. |
-| **`-f`/`--fetchonly`** | ✅ 2026-07-18 — fetch distfiles / remote binpkgs only; no build or install. |
+| **1** | **Stage production** — `em stages --stage1` works; first-class stage3/stage4 and per-arch binhost assembly still open | 🟡 | [[em-stages-and-binhosts]], [[em-stages-scenario-matrix]] |
+| **2** | **Binpkg multi-instance / build-env identity residual** — phases 1–2 landed; live S1 verify + dual PKGDIR/header harden open | 🟡 | [[binpkg-subtargets]] |
+| **3** | **Activity residual** — bus/`em log`/ETA done; `--load-average` unused by scheduler; `PkgKind::Binpkg` never reaches `PkgStart` | 🟡 | [[activity-status]] |
+| **4** | **Distfile GENTOO_MIRRORS parity residual** — core fetch facets done; no remote `layout.conf`, no `/etc/portage/mirrors`, etc. | 🟡 | [[distfile-fetch-reliability]] |
+| **5** | **Build-dir clean / FEATURES** — reinstall symptom closed; `noclean`/`keeptemp` parity open | 🟡 | [[build-clean-env]] |
+| **6** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
+| **7** | **Blocker Tier-1 auto-unmerge** — detect/report done; destructive step **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
+| **8** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
+| **9** | **Upstream-ish** — brush `PIPESTATUS` / `declare -a` on Dynamic (em workaround in place) | 🔴 | [[brush-pipestatus-not-reset]] |
 
 ### Smaller / polish (pick opportunistically)
 
-- ~~Activity status / event bus~~ — ✅ **implemented** (PR1-7 + follow-ups
-  landed 2026-07-22; this line was stale, undersold it as design-only).
-  `ActivityEvent` bus, live FS + history JSONL sinks, `em log
-  current|list|time|predict`, `em -p --eta`, opt-in `--emergelog` all real
-  and wired. Two small gaps remain: load-average display/throttle
-  (`--load-average` parsed but never read by the scheduler) and
-  `PkgKind::Binpkg` never reaching `PkgStart` (binary-merge wording path
-  unreachable) — [[activity-status]]
-- Shallow `-p` package-set still ~72 vs emerge ~79 on firefox hosts (pre-existing; not a `-uD` regression) — [[nonemptytree-bdeps-gap]], [[deep-in-slot-upgrades]]
-- Residual provider choice on deep plans (`rust` vs `rust-bin`, tooling set) — polish, not blocking
+- Shallow `-p` package-set can still differ slightly from emerge on some hosts — see `todo/done/nonemptytree-bdeps-gap.md`, `todo/done/deep-in-slot-upgrades.md`
+- Residual provider choice on deep plans (`rust` vs `rust-bin`, tooling set)
 - Numeric `--deep=N` (boolean only today); Resolvo `set_prefer_update` still trait default no-op
-- ~~Releng lean stage profile vs default profile (5-package @system delta)~~ —
-  understood, not pursuing (private catalyst stage-spec USE overrides, not a
-  resolvable em bug); see `todo/done/stage3-vs-real-comparison.md`. Two real
-  items carried forward from that investigation: the riscv64 **cross**
-  stage3 (`--cross sys-apps/systemd-utils`, "task #17") has never been run
-  through this same comparison (native only so far); no file-tree/version
-  diff against the real stage3 tarball has been done (only a VDB
-  package-set comparison).
-- ~~`ACCEPT_KEYWORDS` `-arch` removal; `ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT`~~ — ✅ both done 2026-07-29 (see [[accept-properties-restrict]]). The wildcard-interaction question is also closed: the `43dbd07` redesign (five independent `ArchAccept` bits, `-arch` clears only its own bit) already matches real Portage's literal-token-set behavior — `* -riscv` still accepts riscv via the `*` grant, same as upstream. Locked in by `negate_arch_does_not_retract_a_wildcard_grant` in `portage-resolve/src/repo.rs`.
-- Privilege: in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test; brush procsub deadlock pin bump — [[fakeroot-privilege-backends]], [[stage-build-shakeout]]
-- Large design (not near-term): full [[root-topology-refactor]]; availability-walk [[dedup-availability-walks]]; M3 sandbox (namespaces)
-- Upstream-ish: brush `PIPESTATUS`/`declare -a` on Dynamic — [[brush-pipestatus-not-reset]] (em workaround in place)
+- Slot-operator `r` rebuilds under `@world` still under-detected vs emerge (noted under selective-resolution landing)
+- Cross stage3 file-tree/version diff vs real stage3 tarball never done (VDB package-set only) — `todo/done/stage3-vs-real-comparison.md`
+- `PORTAGE_CHECKSUM_FILTER` still unimplemented (orthogonal to ACCEPT_PROPERTIES/RESTRICT, which are done)
+- Review sweep log: [[review-findings-2026-07-24]]; structural cross notes: [[cross-support-self-review]]
 
-### Recently closed (keep for orientation)
+### Recently closed (2026-07-18 → 2026-07-30) — notes in `todo/done/`
 
 | Item | When | Notes |
 |------|------|--------|
-| `-uD` in-slot upgrades | 2026-07-18 | `prefer_update`; keep host-satisfied BDEPEND on deep update |
-| `-N`/`-U` USE-drift rebuilds | 2026-07-18 | Portage-aligned; eager BDEPEND reinstall mode **rejected** |
-| elfscan parallel + mmap/strtab | 2026-07-18 | install-image scan ~scanelf recursive parity |
-| resolve-mode hyperfine matrix | 2026-07-18 | `benchmarks/bench-resolve-modes.sh` |
-| `-c` depclean, `-C` unmerge, world write, `-1` oneshot | earlier | [[cli-flag-parity]] |
-| `-b`/`-B` GPKG, `-k`/`-K`/`-g`/`-G`, binrepos, index cache | earlier | `-K` no-source **enforced** in merge loop |
-| `em quickpkg` | 2026-07-18 | GPKG from installed files; CONFIG_PROTECT skip default |
-| `-f`/`--fetchonly` | 2026-07-18 | distfile / remote-binpkg download only |
-| inherit / `E_IUSE` (#36) | earlier (verified 2026-07-18) | stash/accumulate + post-source merge |
-| native `toolchain --setup` activation + `select pkgconf` | 2026-07-17 | wrappers re-rooted; open = PATH prefer (row 1) |
-| `portage-resolve` extraction (depgraph → library) | 2026-07-16 | stages 1–7 done |
+| `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` + `-arch` vs `*` | 2026-07-29 | [[accept-properties-restrict]] |
+| Explicit-target reinstall default | 2026-07-29 (follow-up) | [[reinstall-default]] |
+| `--complete-graph` slot-chain completion | 2026-07-27 | [[slot-chain-completion]] |
+| `--tree` plan annotations | 2026-07-27 | [[tree-output-parity]] |
+| Selective resolution / `@world` / `--noreplace` | 2026-07-26 | [[selective-resolution]] |
+| md5-cache blind spot | 2026-07-26 | [[md5-cache-blind-spot]] |
+| `em active` + prefix/local toolchain prefer | 2026-07-23–25 | [[select-toolchain]] |
+| Binhost GPG verify/sign | 2026-07-23 | [[em-stages-and-binhosts]] |
+| Parser audit | 2026-07-21 | [[parser-audit]] |
+| CLI short-flag remnants (`-P`/`-W`/`-F`/`-r`) | 2026-07-21–22 | [[cli-flag-parity]] |
+| `package.env` USE at plan time | 2026-07-20 | [[package-env]] |
+| `-uD` in-slot upgrades | 2026-07-18 | [[deep-in-slot-upgrades]] |
+| `-N`/`-U` USE-drift rebuilds | 2026-07-18 | [[newuse]] |
+| Target derivation (slot/version-qualified) | 2026-06-19 | [[target-derivation]] |
+| `portage-resolve` extraction | 2026-07-16 | stages 1–7 done |
+| inherit / `E_IUSE` (#36) | verified 2026-07-18 | brush_compat `inherit_*` |
+| `em quickpkg`, `-f`/`--fetchonly` | 2026-07-18 | |
 
-**How to use this file:** start from the table above; jump to the linked
-note for design. Long historical narrative for the 2026-07-05 riscv shakeout
-and the full binhost/migration log remains below (do not delete — it is the
-audit trail).
+**2026-07-30 prune pass:** moved fully-closed notes to `todo/done/`:
+`accept-properties-restrict`, `deep-in-slot-upgrades`, `md5-cache-blind-spot`,
+`parser-audit`, `select-toolchain`, `selective-resolution`,
+`slot-chain-completion`, `tree-output-parity`, `reinstall-default`,
+`target-derivation`. (Earlier 2026-07-23 prune moved 16 more — see git history
+of `todo/done/`.)
 
-**2026-07-23 prune pass:** a full audit found 15 `todo/*.md` files fully
-closed with no remaining open claims (self-confirmed DONE, verified against
-current code) — moved to `todo/done/` to declutter the active directory
-without losing the audit trail: `autounmask-convergence`, `broad-basket-gaps`,
+**2026-07-23 prune pass:** `autounmask-convergence`, `broad-basket-gaps`,
 `broot-filter-use-dep`, `cli-flag-parity`, `cross-derive-on-the-fly`,
 `deep-slot-bump`, `installed-revbump-update-on-prune`,
 `license-use-conditional-bug`, `newuse`, `nonemptytree-bdeps-gap`,
 `package-env`, `session-status-2026-07-05-needs-review`,
 `stage-build-shakeout`, `stage3-vs-real-comparison`, `unslop_plan`,
-`useconfig-clone-elimination`. `[[name]]` links below to any of these still
-resolve by filename — just look under `todo/done/` instead of `todo/`.
-Several still-active files had stale claims corrected in the same pass
-(`accept-properties-restrict`, `distfile-fetch-reliability`, `em-emptytree`,
-`em-root-characterization`, `em-stages-and-binhosts`,
-`fakeroot-privilege-backends`, `root-topology-refactor`, plus
-`docs/root-topology.md`) — see each file's own diff/annotations for what
-changed.
+`useconfig-clone-elimination`.
 
 ---
 
@@ -439,44 +406,30 @@ blocked by the three independent findings above, tracked separately.
   ROOT's own `<chost>-gcc` + SYSROOT=ROOT* rather than the host's compiler
   (confirmed still missing both at the `em select` layer and one level deeper
   in the build shell — see [[select-toolchain]]'s 2026-07-16 addendum — this
-  run used the host's gcc, matching catalyst's seed-compiler model by
-  accident, not em's own intended crossdev-style design); the riscv64 *cross*
-  stage3 target (`sys-apps/systemd-utils --cross`, "task #17") is untested by
-  this run (native only). [[em-stages-and-binhosts]]
+  run used the host's gcc — matching catalyst's seed-compiler model for
+  plain `--root`, which is intentional; `--prefix`/`--local` prefer their own
+  toolchain once activated — see `todo/done/select-toolchain.md`); the riscv64
+  *cross* stage3 target (`sys-apps/systemd-utils --cross`, "task #17") is
+  untested by this run (native only). [[em-stages-and-binhosts]]
 - ✅ **`USE="-*"` clear-all** — now honoured across the USE/USE_EXPAND
   incremental merge (profile→globals→conf→env layers) and the shell-state read,
   so catalyst's `USE="-* build"` collapses the closure as expected.
 - ✅ **`ACCEPT_LICENSE`/`ACCEPT_KEYWORDS` `-*`** — clear-all now honoured
   (`AcceptLicense::from_tokens` clears allow_all+allowed+denied;
   `AcceptToken::ClearAll` resets the accept decision, global and per-package).
-- 🟡 **Remaining `-*` gaps are feature work, not patches:**
-  - ✅ `package.use` USE_EXPAND colon form (`L10N: -* en`,
-    `PYTHON_TARGETS: -* python2_7`) — `expand_use_expand_colon` (use_env.rs) parses
-    `KEY:` group headers against the live USE_EXPAND keys, expands values to
-    interned `UseOverride`s (no String detour), and treats a `-*` inside a group as
-    "clear the group's live values, then trailing values rebuild it".
-  - `ACCEPT_KEYWORDS` `-arch` removal still dropped (additive ArchAccept model).
-  - `ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT`/`PORTAGE_CHECKSUM_FILTER` — the vars
-    themselves are unimplemented (zero refs); their GLEP-23 `*`/`-*` is moot
-    until the vars exist.
-  - `use.mask`/`use.force` correctly take only per-flag `-` (no `-*`, portage(5)).
+- ✅ **`-*` / ACCEPT_* gaps that were open here are closed** (keep this
+  bullet so the historical “remaining gaps” list is not re-opened by mistake):
+  - ✅ `package.use` USE_EXPAND colon form (`L10N: -* en`, …)
+  - ✅ `ACCEPT_KEYWORDS` `-arch` vs wildcards — Portage-literal token set
+    (`43dbd07`); see `todo/done/accept-properties-restrict.md`
+  - ✅ `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` — done 2026-07-29
+  - 🔴 `PORTAGE_CHECKSUM_FILTER` still unimplemented (unrelated)
+  - `use.mask`/`use.force` correctly take only per-flag `-` (no `-*`, portage(5))
   [[em-root-characterization]]
-- ✅ **Native toolchain activation via `em select` — wrapper fixed 2026-07-17.**
-  `em toolchain --setup --root <dir>` already activated via the real
-  `gcc-config`/`binutils-config` in postinst (ROOT-scoped correctly by em's own
-  `ROOT`/`EROOT` env) — but for a plain `--root` offset the resulting
-  `usr/bin/<chost>-gcc` was a genuinely **dangling** symlink (its target isn't
-  re-rooted, so it resolves against the real host filesystem, not the offset —
-  confirmed via `readlink -f` failing). `--prefix`/`--local` never had this
-  problem (real gcc-config is EPREFIX-aware there). Gave `em toolchain --setup`'s
-  native path a real `post_step` (`activate_native_toolchain`, `crossdev/mod.rs`
-  — it was `|_| Ok(())`) that re-activates via `em`'s own EPREFIX-aware `select`
-  machinery, which re-roots the wrapper correctly. Verified live: both gcc and
-  binutils wrappers now resolve and run under `--root`; `--prefix` unaffected
-  (idempotent re-activation, no regression). **Still open, separately**:
-  nothing in the native (`chost == cbuild`) build path prefers this wrapper
-  over the host's own `gcc` on `$PATH` — out of scope for this fix, tracked in
-  [[select-toolchain]].
+- ✅ **Native toolchain activation via `em select` — wrapper fixed 2026-07-17;
+  prefix/local PATH prefer + `em active` closed 2026-07-23–25** (see
+  `todo/done/select-toolchain.md`). `--root` still uses the host seed
+  compiler by design (catalyst model).
 - ✅ **`em select` used `roots()` instead of `outer_roots()` everywhere —
   FIXED 2026-07-17 (`75067f1`).** Found live verifying the new `pkgconf`
   wrapper across `--root`/`--prefix`/`--local` (per Luca: "what is important

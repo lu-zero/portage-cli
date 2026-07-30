@@ -21,13 +21,18 @@ gentoo-interner ─┐
 portage-atom ────┤
    │             ├─ portage-metadata ─┐
    │             │                    ├─ portage-repo ───── portage-distfiles
-   ├─ portage-solver ─┬─ portage-atom-pubgrub ─────────────┐
-   │                  └─ portage-atom-resolvo ─────────────┤
-   │                                                       │
-   │                  portage-binpkg ───────────────────────┤
-   │                  portage-vdb ──────────────────────────┤
-   └──────────────────────────────────────────────────────── portage-cli (em)
+   ├─ portage-solver ─┬─ portage-atom-pubgrub ──┐         │
+   │                  └─ portage-atom-resolvo   │         │
+   │                                            │         │
+   │                  portage-binpkg ───────────┤         │
+   │                  portage-vdb ──────────────┤         │
+   │                                            v         v
+   └──────────────────────────── portage-resolve ─── portage-cli (em)
 ```
+
+`portage-resolve` sits between the solver bridges / repo / VDB and the CLI:
+USE/keyword/mask policy, root-aware post-solve trimming, and plan assembly.
+It depends on `portage-repo` (brush), so it is unpublishable.
 
 `portage-bench` (in `benchmarks/`) depends on both solver bridges plus
 `portage-repo` for benchmarking. See [`docs/benchmarks.md`](benchmarks.md)
@@ -35,33 +40,37 @@ for how to run benchmarks across the workspace.
 
 ## Crate catalog
 
-### Published on crates.io
+Versions below are the **workspace** package versions in each crate's
+`Cargo.toml` (crates.io may lag until the next publish).
+
+### Publishable (on crates.io when released)
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `gentoo-interner` | 0.3.1 | String interning |
-| `gentoo-core` | 0.5.1 | Architecture types, variants |
-| `portage-atom` | 0.10.0 | PMS atom parsing |
-| `portage-metadata` | 0.8.0 | md5-cache entry parsing, EAPI, keywords |
-| `portage-atom-pubgrub` | 0.6.0 | PubGrub solver bridge (default in `em`) |
-| `portage-atom-resolvo` | 0.7.1 | SAT dependency solver (resolvo bridge) |
-| `portage-solver` | 0.1.0 | Solver-agnostic trait and shared vocabulary |
-| `portage-vdb` | 0.1.0 | Installed package database (`/var/db/pkg`) |
-| `portage-binpkg` | 0.1.0 | GPKG binary package read/write |
-| `gentoo-stages` | 0.5.1 | Stage3 tarball fetch/cache |
+| `gentoo-interner` | 0.4.0 | String interning |
+| `gentoo-core` | 0.6.0 | Architecture types, variants |
+| `portage-atom` | 0.11.0 | PMS atom parsing |
+| `portage-metadata` | 0.9.0 | md5-cache entry parsing, EAPI, keywords |
+| `portage-atom-pubgrub` | 0.7.0 | PubGrub solver bridge (default in `em`) |
+| `portage-atom-resolvo` | 0.8.0 | SAT dependency solver (resolvo bridge) |
+| `portage-solver` | 0.2.0 | Solver-agnostic trait and shared vocabulary |
+| `portage-vdb` | 0.2.0 | Installed package database (`/var/db/pkg`) |
+| `portage-binpkg` | 0.2.0 | GPKG binary package read/write |
+| `gentoo-stages` | 0.6.0 | Stage3 tarball fetch/cache |
 
 ### Local only (`publish = false` in workspace)
 
 | Crate | Version | Purpose | Blocker |
 |-------|---------|---------|---------|
+| `portage-resolve` | 0.0.1 | Resolution policy / plan layer | Depends on `portage-repo` (brush) |
 | `portage-repo` | 0.1.0 | Repo layout, ebuilds, profiles, manifests | Depends on `brush-*` (not on crates.io) |
-| `portage-distfiles` | 0.1.0 | Source distfile fetching & resolution | Workspace-only for now |
+| `portage-distfiles` | 0.1.0 | Source distfile fetching & resolution | Depends on `portage-repo` |
 | `portage-bench` | 0.1.0 | Benchmark harness | Dev tool, not a library |
 | `portage-cli` | 0.1.0 | The `em` binary | Unpublished binary crate |
 
 ## Per-crate public API
 
-### `gentoo-interner` (v0.3.1)
+### `gentoo-interner` (v0.4.0)
 
 String interning foundation. Default backend is **papaya** (concurrent
 hash map); `lasso` and `symbol-table` backends available as feature flags.
@@ -72,7 +81,7 @@ hash map); `lasso` and `symbol-table` backends available as feature flags.
 - `struct GlobalInterner` *(feature: interner, default)* — process-global interner
 - `type DefaultInterner` — alias: `GlobalInterner`
 
-### `gentoo-core` (v0.5.1)
+### `gentoo-core` (v0.6.0)
 
 Architecture and release-variant types.
 
@@ -81,7 +90,7 @@ Architecture and release-variant types.
 - `type ExoticKey<I>` — alias for `Interned<I>`
 - `struct Variant<I>` — release media variant (`arch-flavor`): `parse()`, `flavor()`
 
-### `portage-atom` (v0.10.0)
+### `portage-atom` (v0.11.0)
 
 PMS atom parser — the vocabulary every other crate speaks.
 
@@ -103,7 +112,7 @@ PMS atom parser — the vocabulary every other crate speaks.
 - Builder types *(feature: `builder`)*: `CpnBuilder`, `CpvBuilder`, `DepBuilder`, `SlotBuilder`, `UseDepBuilder`, `SuffixBuilder`, `VersionBuilder`
 - Re-exports `gentoo_interner as interner`
 
-### `portage-metadata` (v0.8.0)
+### `portage-metadata` (v0.9.0)
 
 Ebuild metadata cache parser.
 
@@ -117,7 +126,7 @@ Ebuild metadata cache parser.
 - `struct LicenseExpr`, `struct RequiredUseExpr`, `struct RestrictExpr`, `struct SrcUriEntry`
 - Re-exports `portage_atom::interner`
 
-### `portage-solver` (v0.1.0)
+### `portage-solver` (v0.2.0)
 
 Solver-agnostic vocabulary shared by both solver bridges.
 
@@ -128,7 +137,7 @@ Solver-agnostic vocabulary shared by both solver bridges.
 - `enum RequiredUse` — REQUIRED_USE encoding vocabulary
 - Depends only on `portage-atom` and `thiserror`; no pubgrub or resolvo
 
-### `portage-atom-resolvo` (v0.7.1)
+### `portage-atom-resolvo` (v0.8.0)
 
 SAT-based dependency solver bridge using resolvo.
 
@@ -143,7 +152,7 @@ SAT-based dependency solver bridge using resolvo.
 - `struct InMemoryRepository` — HashMap-backed test impl
 - `fn version_matches()` — PMS version matching
 
-### `portage-atom-pubgrub` (v0.6.0)
+### `portage-atom-pubgrub` (v0.7.0)
 
 PubGrub-based dependency solver bridge — the solver `em` uses by default.
 
@@ -196,7 +205,7 @@ or `.secondary_memory()`.
 - Source module: `source_single()`, `source_parallel()` → stream of `SourceItem`, `SourceContext`, `SourceOpts`
 - Re-exports from `gentoo_core`: `Arch`, `KnownArch`, `ExoticKey`
 
-### `portage-vdb` (v0.1.0)
+### `portage-vdb` (v0.2.0)
 
 Installed package database reader/writer for `/var/db/pkg`.
 
@@ -208,7 +217,7 @@ Installed package database reader/writer for `/var/db/pkg`.
 - `struct MergeSpec` — Specification for registering a new installed package
 - Directory iterators: `AllPackages`, `Category`, `Categories`, `Packages`
 
-### `portage-binpkg` (v0.1.0)
+### `portage-binpkg` (v0.2.0)
 
 Gentoo binary package (GPKG) read/write per [GLEP 78](https://www.gentoo.org/glep/glep-0078.html).
 
@@ -228,13 +237,30 @@ Source distfile fetching and resolution.
 - `struct Fetcher` — Downloads distfiles (builtin HTTP or external command)
 - `struct FetchConfig` / `enum FetchStrategy` / `enum FetchStatus` — Fetch configuration and result
 
-### `gentoo-stages` (v0.5.1)
+### `gentoo-stages` (v0.6.0)
 
 Stage3 tarball fetch and cache management.
 
 - `struct Stage3` — Stage3 image info: `is_cached()`, `file_path()`
 - `struct Client` / `ClientBuilder` — HTTP client for mirror listings
 - `struct Cache` — Local filesystem cache
+
+### `portage-resolve` (v0.0.1, unpublished)
+
+Resolution-policy and plan layer used by `em -p` / the merge path. Migrated
+out of `portage-cli`'s former `query/depgraph/*` (2026-07-16). Depends on
+`portage-repo` / `portage-vdb` / `portage-atom-pubgrub`; **no** clap or
+anstream dependency (rendering stays in `portage-cli`).
+
+- `struct Roots` — multi-root topology (BROOT / config / target / EPREFIX)
+- `mod repo` — `RepoData` / `Adapter`, keyword/mask/license/properties/restrict acceptance
+- `mod use_env` / `force_mask` / `effective_use` — profile/`package.*` USE folding
+- `mod installed` / `conflicts` / `subslot` / `use_reinstall` — VDB views and rebuilds
+- `mod root_aware` / `bdepend_trim` / `depend_trim` / `host_copies` — root-aware plan
+- `mod package_use` / `required_use` / `download_size` / `bdepend_avail`
+
+CLI-only pieces that stay in `portage-cli`: plan rendering (`output.rs`),
+autounmask write UX, and the `em query depgraph` command shape.
 
 ## Target derivation: argv → request
 

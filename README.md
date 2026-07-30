@@ -32,7 +32,9 @@ subcommands corresponding to the traditional tools.
 | `atom` | — | Working |
 | `query` | `equery` | Partial — see below |
 | `use` | `euse` | Partial — see below |
+| `pkg` | — | Working — edit `package.use` / `.accept_keywords` / `.mask` / `.env` |
 | `maint` | `emaint` | Partial — see below |
+| `sync` | `emaint sync` / `emerge --sync` | Working — `git` and `rsync` from `repos.conf` |
 | `regen` | `emerge --regen` | Working |
 | `search` | `emerge --search` | Working |
 | *(default)* | `emerge` | Working — resolve → build loop; `-uD` in-slot upgrades; `--prefix` / multi-root |
@@ -46,9 +48,14 @@ subcommands corresponding to the traditional tools.
 | `glsa` | `glsa-check` | Stub |
 | `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/activity.md) |
 | `grep` | `egreplite` | Stub |
-| `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, … |
+| `portageq` | `portageq` | Stub |
+| `read` | `elogv` / elog reader | Stub |
+| `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, … |
+| `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
+| `setup` | — | Working — bootstrap a prefix layout (`--local` / `--prefix`) |
 | `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap (`--target`) |
 | `toolchain` | — | Working — native self-hosting toolchain bootstrap into `--root` |
+| `stages` | catalyst stage1 | Partial — `--stage1` (`packages.build`); stage3/stage4 not first-class flags yet |
 | `dispatch` | `dispatch-conf` | Stub |
 | `etc` | `etc-update` | Stub |
 | `env` | `env-update` | Working — `profile.env` + `ld.so.conf` from `etc/env.d` |
@@ -137,7 +144,12 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
 | `world` | Working | Checks `world` + `world_sets`; validates `@set` refs against known sets from `/usr/share/portage/config/sets/`, `/etc/portage/sets.conf`, and `/etc/portage/sets/`; `--fix` rewrites both files |
 | `revisions` | Working | Purges `repo_revisions` JSON (sync commit history); optional per-repo targeting |
 | `moveinst` | Partial | Detects packages needing rename from `profiles/updates/`; does not apply moves or scan installed dependency metadata |
-| `regen` | Working | Available as `em regen` |
+| `binhost` | Working | Regenerates the `Packages` index under `PKGDIR` |
+| `binpkg` | Working | em-only: `verify` / `list` / `prune` / `fingerprint` / `gpg-import` (no real `emaint` equivalent) |
+| `cleanresume` | Working | Reports / discards saved resume lists (`--fix`) |
+| `sync` | Working | Same implementation as `em sync` |
+| `regen-use` | Working | Regenerates `profiles/use.local.desc` from `metadata.xml` |
+| `regen` | Working | Available as top-level `em regen` |
 
 **Gaps vs emaint:**
 
@@ -146,8 +158,7 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
   mode that writes to the VDB.
 - `world` — `@set` references are validated by name but not by content (e.g.
   `@preserved-rebuild` is accepted as long as the name is known).
-- `all`, `binhost`, `cleanconfmem`, `cleanresume`, `logs`, `merges`,
-  `movebin`, `sync` — not implemented.
+- `all`, `cleanconfmem`, `logs`, `merges`, `movebin` — not implemented.
 
 ---
 
@@ -172,8 +183,10 @@ bootstrap toolchains and assemble stages.
 
 The native toolchain and the cross bootstrap share one staged driver
 (`crossdev::stages`), differing only in atom naming and how the `glibc ↔ gcc`
-cycle is broken. Stage *production* (stage1 `packages.build`, stage3
-`--emptytree @system`) is the next layer.
+cycle is broken. Stage *production*: `em stages --stage1` installs the
+profile's `packages.build` set (catalyst stage1 model); a full stage3-style
+tree is still assembled with plain `em --emptytree @system` (no first-class
+`--stage3` / `--stage4` flags yet).
 
 ---
 
@@ -208,6 +221,7 @@ dependency graph, per-crate API catalog, and design reference.
 | `portage-atom-resolvo` | SAT dependency solver (resolvo bridge) | Published |
 | `portage-vdb` | Installed package database (`/var/db/pkg`) | Published |
 | `portage-binpkg` | GPKG binary package read/write | Published |
+| `portage-resolve` | Resolution policy / plan layer (USE, roots, post-solve) | Local only |
 | `portage-repo` | Repo layout, profiles, metadata cache, ebuild sourcing | Local only |
 | `portage-distfiles` | Distfile fetch and mirror resolution | Local only |
 | `portage-cli` | The `em` binary | Local only |
@@ -252,9 +266,11 @@ pin after brush work is a **routine** flow (test → push `mine/for-portage-repo
 
 ```bash
 cargo build
+# CI parity — see AGENTS.md (cargo test includes doctests; nextest does not)
 cargo test --workspace --exclude portage-bench
 cargo clippy --workspace --exclude portage-bench -- -D warnings
 cargo fmt --all -- --check
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench --no-deps
 cargo msrv verify --rust-version 1.95 --path portage-cli
 ```
 

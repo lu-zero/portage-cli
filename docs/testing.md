@@ -19,7 +19,10 @@ crate (test-function count, not a quality signal, just where the mass is):
 CLI plumbing get their fast, deterministic coverage.
 
 Run: `cargo test --workspace --exclude portage-bench` (matches CI exactly —
-see below).
+see below). That command runs **unit tests, integration tests, and
+doctests**. `cargo nextest` runs unit/integration only — pair it with
+`cargo test --workspace --exclude portage-bench --doc` when iterating with
+nextest so doctest-only breakage does not surprise CI.
 
 ### 2. Crate-level integration tests (`tests/*.rs`)
 
@@ -206,13 +209,17 @@ All run on `stable` and the declared MSRV (currently 1.95):
 
 | Job | Command |
 |---|---|
-| `test` | `cargo test --workspace --exclude portage-bench` |
+| `test` | `cargo test --workspace --exclude portage-bench` (unit + integration + **doctests**) |
 | `msrv` | `cargo msrv verify --rust-version 1.95 --path portage-cli` |
 | `clippy` | `cargo clippy --workspace --exclude portage-bench -- -D warnings` |
 | `fmt` | `cargo fmt --all -- --check` |
 | `bench-smoke` | `cargo check -p portage-bench --benches` (compiles benches, doesn't run them) |
 | `coverage` | `cargo llvm-cov --workspace --exclude portage-bench --all-features --lcov` → Codecov |
 | `doc` | `cargo doc --workspace --exclude portage-bench --no-deps` (`RUSTDOCFLAGS=-D warnings`) |
+
+Do not treat “nextest green” as CI-green: nextest skips doctests, and the
+`doc` job is a separate gate for rustdoc warnings (broken intra-doc links,
+etc.).
 
 `portage-bench` is excluded from `test`/`clippy`/`coverage`/`doc` everywhere
 (it's a dev-only harness with a pinned `pkgcraft` git dependency that CI
@@ -296,15 +303,19 @@ individual commands):
 1. `cargo build` (or `--release` if timing/behaviour matters — debug
    builds of anything touching `brush` are too slow to trust for feel).
 2. `cargo nextest run --workspace --exclude portage-bench` (not plain
-   `cargo test` — see above).
+   `cargo test` for the bulk suite — see above) **plus**
+   `cargo test --workspace --exclude portage-bench --doc` (nextest does
+   not run doctests; CI’s `test` job does).
 3. `cargo clippy --workspace --exclude portage-bench -- -D warnings`.
 4. `cargo fmt --all -- --check` (CI enforces this; `clippy` passing is not
    sufficient on its own).
-5. For anything touching resolution/USE/root handling: `SKIP_TIMING=1
+5. `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench
+   --no-deps` (CI `doc` job).
+6. For anything touching resolution/USE/root handling: `SKIP_TIMING=1
    ./benchmarks/bench-em-vs-emerge.sh` at minimum; a targeted live
    `-vp`/`-p` comparison against real `emerge` for the specific case the
    change targets, reading the *entire* output.
-6. For anything touching performance-sensitive code: the two-binary
+7. For anything touching performance-sensitive code: the two-binary
    `hyperfine` recipe in `docs/benchmarks.md`, on a target big enough for
    the effect to clear the noise floor.
 7. For anything touching the ebuild shell / `../brush`: the **Bumping

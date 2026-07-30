@@ -2,16 +2,50 @@
 
 ## Build Commands
 
+Match CI (`.github/workflows/ci.yml`) before opening a PR. Locally, prefer
+`cargo nextest` for the unit/integration suite (see [docs/testing.md](./docs/testing.md));
+still run plain `cargo test` at least once if you need CI-identical behaviour
+(doctests + default libtest scheduling).
+
 ```bash
-cargo build                        # Build the em binary
+# Core suite — CI `test` job (includes unit, integration, *and* doctests)
 cargo test --workspace --exclude portage-bench
+# Prefer for day-to-day (process-per-test; avoids portage-repo cwd races):
+cargo nextest run --workspace --exclude portage-bench
+# nextest does *not* run doctests — also run:
+cargo test --workspace --exclude portage-bench --doc
+
 cargo clippy --workspace --exclude portage-bench -- -D warnings
 cargo fmt --all -- --check
+
+# CI `doc` job (rustdoc warnings are hard errors)
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench --no-deps
+
+# CI `bench-smoke` (compile only)
+cargo check -p portage-bench --benches
 
 # MSRV verification (use the project's cargo-msrv tool)
 cargo install cargo-msrv
 cargo msrv verify --rust-version 1.95 --path portage-cli
 ```
+
+### Pre-PR / “would CI pass?” checklist
+
+| Job | Local equivalent |
+|-----|------------------|
+| `test` | `cargo test --workspace --exclude portage-bench` (unit + integration + **doctests**) |
+| `clippy` | `cargo clippy --workspace --exclude portage-bench -- -D warnings` |
+| `fmt` | `cargo fmt --all -- --check` |
+| `doc` | `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench --no-deps` |
+| `bench-smoke` | `cargo check -p portage-bench --benches` |
+| `msrv` | `cargo msrv verify --rust-version 1.95 --path portage-cli` |
+| `coverage` | optional locally (`cargo llvm-cov …`); uploads to Codecov in CI |
+
+**Doctests:** plain `cargo test` runs them; `cargo nextest` does not. Broken
+doc examples fail CI’s `test` job even when nextest is green. Rustdoc warnings
+(broken links, invalid codeblocks, etc.) fail the separate `doc` job.
+
+Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/testing.md).
 
 ## Architecture
 
@@ -19,8 +53,8 @@ cargo msrv verify --rust-version 1.95 --path portage-cli
   [clap](https://crates.io/crates/clap) derive macros, subcommands of the
   top-level `Cli` struct. Keep `main.rs` thin; extract modules as complexity grows.
 - Business logic is delegated to the library crates (`portage-atom`,
-  `portage-metadata`, `portage-solver`, `portage-repo`, `portage-atom-pubgrub`,
-  `portage-vdb`, `portage-binpkg`, `portage-distfiles`, …).
+  `portage-metadata`, `portage-solver`, `portage-resolve`, `portage-repo`,
+  `portage-atom-pubgrub`, `portage-vdb`, `portage-binpkg`, `portage-distfiles`, …).
 - **Read [`docs/architecture.md`](./docs/architecture.md) first** — it is the
   main architecture reference (crate catalog, the `em -p` resolution pipeline,
   USE stacking precedence, the USE/solver boundary, post-solve validation, and
@@ -28,7 +62,7 @@ cargo msrv verify --rust-version 1.95 --path portage-cli
 
 ## Dependencies
 
-Workspace members (14 crates + `portage-bench`):
+Workspace members (14 library/binary crates + `portage-bench`):
 
 - `gentoo-interner` — string interning
 - `gentoo-core` — architecture and variant types
@@ -37,13 +71,14 @@ Workspace members (14 crates + `portage-bench`):
 - `portage-solver` — solver-agnostic trait and shared vocabulary
 - `portage-atom-pubgrub` — PubGrub solver bridge (`em` resolves through this by default)
 - `portage-atom-resolvo` — Resolvo SAT solver bridge (cross-check)
+- `portage-resolve` — resolution policy / plan layer (USE, roots, post-solve; depends on `portage-repo`, unpublished)
 - `portage-repo` — repository layout, profile stack, embedded ebuild shell
 - `portage-vdb` — installed package database (`/var/db/pkg`)
 - `portage-binpkg` — GPKG binary package read/write
 - `portage-distfiles` — distfile fetch and mirror resolution
 - `gentoo-stages` — stage3 tarball fetch/cache
 - `portage-cli` — the `em` binary (unpublished)
-- `portage-bench` — benchmark harness (excluded from CI)
+- `portage-bench` — benchmark harness (excluded from most CI jobs; compile smoke only)
 
 CLI/runtime deps: `clap`, `tokio`, `anyhow`, `thiserror`.
 
@@ -105,6 +140,8 @@ brush".
 - No dead code, no unused dependencies
 - Doc comments on all public types and functions
 - Tests live in a `#[cfg(test)] mod tests` block
+- Keep doctests compiling and green (`cargo test --doc`); rustdoc under
+  `RUSTDOCFLAGS=-D warnings` must stay clean
 
 ## Commits
 
@@ -143,8 +180,9 @@ When a dependency bump needs a newer compiler, raise `rust-version` in
 
 See [`docs/testing.md`](./docs/testing.md) for the full picture: why
 `cargo nextest` is preferred locally over plain `cargo test` (known
-`portage-repo` flakiness), the live-parity-against-real-`emerge` workflow
-that has caught most of this project's real bugs, and the pre-PR checklist.
+`portage-repo` flakiness), that nextest skips doctests, the
+live-parity-against-real-`emerge` workflow that has caught most of this
+project's real bugs, and the pre-PR checklist.
 
 ## Gentoo host tests
 

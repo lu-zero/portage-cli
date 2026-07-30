@@ -1,16 +1,23 @@
 # portage-resolve
 
-Resolution-policy and plan layer for Gentoo Portage dependency resolution —
-**placeholder, not yet populated**.
+Resolution-policy and plan layer for Gentoo Portage dependency resolution.
 
-Reserved ahead of a planned migration out of the
-[`em`](https://github.com/lu-zero/portage-cli) Portage CLI's `query::depgraph`
-module: repository-fact adaptation, USE/keyword/mask policy, root-aware
-post-solve trimming, and plan assembly on top of the
-[`portage-atom-pubgrub`](https://crates.io/crates/portage-atom-pubgrub) solver
-bridge. See `em`'s `todo/PENDING.md` for the staged migration plan.
+Turns repository facts + configuration into a solved, ordered merge plan on
+top of the
+[`portage-atom-pubgrub`](https://crates.io/crates/portage-atom-pubgrub)
+solver bridge: USE/keyword/mask/license/properties/restrict policy,
+root-aware post-solve trimming, and plan assembly. Used by the
+[`em`](https://github.com/lu-zero/portage-cli) Portage CLI.
 
-Nothing here yet.
+Computes policy; renders nothing (no clap / anstream dependency — that
+boundary is deliberate). CLI presentation lives in `portage-cli`.
+
+## Status
+
+Workspace-local (`publish = false`). Depends on `portage-repo` (brush git
+fork), so it is unpublishable past the placeholder `v0.0.1` name reservation
+on crates.io. Migrated out of `portage-cli`'s former `query/depgraph/*` in
+staged landings (2026-07-15/16).
 
 ## License
 
