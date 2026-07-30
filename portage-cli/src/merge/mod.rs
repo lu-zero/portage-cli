@@ -54,12 +54,50 @@ pub(crate) struct ActivityTrack {
     pub live_root: camino::Utf8PathBuf,
 }
 
-fn pkg_kind(flags: &ActionFlags) -> crate::activity::PkgKind {
+/// Activity kind for `PkgStart`/`PkgEnd` banners (`Emerging` vs `Emerging
+/// binary` vs `Fetching`). Binpkg reuse is decided here with the same
+/// `find_reusable` rules as [`act_on_package`], so the status line and
+/// human sink colour match what the merge path will actually do — not a
+/// conservative `Source` default that made `PkgKind::Binpkg` unreachable.
+fn pkg_kind_for_entry(
+    flags: &ActionFlags,
+    planned: &query::depgraph::PlannedMerge,
+    binpkg_index: Option<&portage_binpkg::BinpkgIndex>,
+    remote_indices: &[portage_binpkg::RemoteBinpkgIndex],
+    desired_chost: &str,
+    desired_build_env_key: &str,
+) -> crate::activity::PkgKind {
     if flags.fetchonly || flags.fetch_all_uri {
-        crate::activity::PkgKind::FetchOnly
+        return crate::activity::PkgKind::FetchOnly;
+    }
+    let desired_use: Vec<String> = planned
+        .use_flags
+        .iter()
+        .map(|f| f.as_str().to_string())
+        .collect();
+    let local = binpkg_index.and_then(|idx| {
+        idx.find_reusable(
+            &planned.cpv.to_string(),
+            &desired_use,
+            desired_chost,
+            desired_build_env_key,
+        )
+    });
+    if local.is_some() {
+        return crate::activity::PkgKind::Binpkg;
+    }
+    let remote = remote_indices.iter().any(|idx| {
+        idx.find_reusable(
+            &planned.cpv.to_string(),
+            &desired_use,
+            desired_chost,
+            desired_build_env_key,
+        )
+        .is_some()
+    });
+    if remote {
+        crate::activity::PkgKind::Binpkg
     } else {
-        // Binpkg vs source decided inside act_on_package; Source is the
-        // conservative default for start events (refined later with phases).
         crate::activity::PkgKind::Source
     }
 }
@@ -913,7 +951,14 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
 
         // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
         // `PkgStart` event emitted below — no ad-hoc print here.
-        let kind = pkg_kind(&flags);
+        let kind = pkg_kind_for_entry(
+            &flags,
+            planned,
+            entry_index,
+            run.remote_indices,
+            &desired_env.chost,
+            &desired_build_env_key,
+        );
         let pkg_started =
             emit_pkg_start(&run.activity, planned, (i + 1) as u32, total as u32, kind);
         let activity_pkg = activity_pkg_ctx(&run.activity, planned);
@@ -1100,7 +1145,14 @@ async fn merge_parallel(
             started += 1;
             // `>>> Emerging (N of M)` is rendered by `HumanStdoutSink` from the
             // `PkgStart` event emitted below — no ad-hoc print here.
-            let kind = pkg_kind(&flags);
+            let kind = pkg_kind_for_entry(
+                &flags,
+                planned,
+                entry_index,
+                run.remote_indices,
+                &desired_env.chost,
+                &desired_build_env_key,
+            );
             let pkg_started =
                 emit_pkg_start(&run.activity, planned, started as u32, total as u32, kind);
             let gate = &merge_gate;
