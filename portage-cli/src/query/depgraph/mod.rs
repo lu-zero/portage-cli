@@ -1369,6 +1369,17 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         }
     }
 
+    // `Total:`/`Size of downloads:` print *after* the advisories above (not
+    // right after the merge list, as it used to): the caller's `--eta`
+    // estimate prints immediately after this, once `depgraph()` returns, and
+    // the two must be adjacent — previously the advisory block sat between
+    // them, splitting one logical summary in two.
+    if matches!(format, DepgraphFormat::Pretty) && verbose >= 1 {
+        use std::io::Write as _;
+        let mut out = anstream::stdout();
+        writeln!(out, "{}", output::total_line(&order, &installed, &sizes)).ok();
+    }
+
     // The merge plan for the build loop: ebuild paths come from the package's
     // source repo (main or overlay), USE from the same effective fold the
     // displayed plan used.

@@ -142,9 +142,11 @@ pub struct MergeFlags {
     #[arg(long)]
     pub autosolve_use: bool,
 
-    /// With `-p`/`--pretend`, print an ETA for the plan from activity history
-    /// (median of recent successful merges per package; wall uses the build
-    /// graph + `--jobs` when blockers are available).
+    /// With `-p`/`--pretend` or `-a`/`--ask`, print an "Expected time of
+    /// completion" for the plan alongside the merge list, estimated from
+    /// activity history (median of recent successful merges per package;
+    /// wall uses the build graph + `--jobs` when blockers are available).
+    /// Shown even when the plan needs USE/mask changes to proceed.
     ///
     /// Lives here (not `global = true` on `Cli`): like `--ask`, `--eta` only
     /// means something to a merge-shaped command — `em news --eta` or

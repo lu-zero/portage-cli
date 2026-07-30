@@ -10,7 +10,7 @@ use portage_atom_pubgrub::{
 };
 use portage_metadata::CacheEntry;
 
-pub(super) use crate::style::{C_OLDVERSION, C_PKG};
+pub(super) use crate::style::{C_BOLD, C_OLDVERSION, C_PKG};
 
 // emerge color scheme: bold green for keywords/atoms/tags, bold red/blue for flags
 // Package names use plain green (not bold) to match portage's PKG_MERGE style
@@ -950,7 +950,13 @@ fn slot_repo_suffix(cache: &CacheEntry, repo_name: &str) -> String {
 
 /// Render the emerge-style `Total:` breakdown, e.g.
 /// `Total: 26 packages (20 new, 1 upgrade, 5 reinstalls)`.
-fn total_line(
+///
+/// Printed by the caller (`depgraph()`) *after* the advisory block (USE
+/// changes, unsatisfiable targets, conflicts, ...), not from here — it needs
+/// to sit next to `--eta`'s "Expected time of completion" line, which is
+/// itself only printed once the whole plan (including those advisories) is
+/// known. See `depgraph()`'s own call site for why.
+pub(super) fn total_line(
     order: &[(PortagePackage, Version)],
     installed: &HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
     sizes: &HashMap<Cpv, u64>,
@@ -966,7 +972,8 @@ fn total_line(
             _ => {}
         }
     }
-    let plural = |n: usize, s: &str| format!("{n} {s}{}", if n == 1 { "" } else { "s" });
+    let plural =
+        |n: usize, s: &str| format!("{C_BOLD}{n}{C_BOLD:#} {s}{}", if n == 1 { "" } else { "s" });
     // Order mirrors portage's PackageCounters.__str__: upgrades, downgrades,
     // new, in new slot, reinstall.
     let mut parts = Vec::new();
@@ -977,7 +984,7 @@ fn total_line(
         parts.push(plural(down, "downgrade"));
     }
     if new > 0 {
-        parts.push(format!("{new} new"));
+        parts.push(format!("{C_BOLD}{new}{C_BOLD:#} new"));
     }
     if new_slot > 0 {
         parts.push(plural(new_slot, "in new slot"));
@@ -997,11 +1004,17 @@ fn total_line(
                 .unwrap_or(0)
         })
         .sum();
-    let downloads = format!(", Size of downloads: {}", format_kib(total_bytes));
+    let downloads = format!(
+        "\nSize of downloads: {C_BOLD}{}{C_BOLD:#}",
+        format_kib(total_bytes)
+    );
     if parts.is_empty() {
-        format!("\nTotal: {n} {pkgs}{downloads}")
+        format!("\nTotal: {C_BOLD}{n}{C_BOLD:#} {pkgs}{downloads}")
     } else {
-        format!("\nTotal: {n} {pkgs} ({}){downloads}", parts.join(", "))
+        format!(
+            "\nTotal: {C_BOLD}{n}{C_BOLD:#} {pkgs} ({}){downloads}",
+            parts.join(", ")
+        )
     }
 }
 
@@ -1308,11 +1321,6 @@ fn print_pretty_with_roots(
     for ((pkg, ver), merge_root) in order.iter().zip(merge_roots) {
         let (bracket, rest) = format_plan_parts(ctx, pkg, ver, *merge_root, cross, true);
         writeln!(out, "{bracket} {rest}").ok();
-    }
-
-    // emerge only prints the Total line in verbose mode.
-    if ctx.verbose >= 1 {
-        writeln!(out, "{}", total_line(order, ctx.installed, ctx.sizes)).ok();
     }
 }
 

@@ -39,8 +39,6 @@ pub const C_PKG: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green
 pub const C_LABEL: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
 /// Emphasis without colour.
 pub const C_BOLD: Style = Style::new().effects(Effects::BOLD);
-/// Secondary/detail text (subdued, e.g. the ETA breakdown line).
-pub const C_DIM: Style = Style::new().effects(Effects::DIMMED);
 /// "Current selection" marker (`*`).
 pub const C_STAR: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Green)))

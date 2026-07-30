@@ -503,12 +503,12 @@ pub fn format_time(store: &DurationStore, atom: Option<&str>) -> String {
     }
 }
 
-/// Format ETA for human output. Callers writing to a terminal should print
-/// this through `anstream` (not plain `print!`/`println!`) so the embedded
-/// style codes are stripped on non-tty output, matching the convention in
-/// `activity/human.rs`.
+/// Format ETA for human output. Only the headline value (`unknown`, or the
+/// `~time` estimate) is bold, matching how `Total:`/`Size of downloads:`
+/// bold their own headline numbers — everything else on this line, and the
+/// whole detail line below it, stays plain.
 pub fn format_eta(eta: &Eta) -> String {
-    use crate::style::{C_BOLD, C_DIM, C_TESTING};
+    use crate::style::C_BOLD;
     use std::fmt::Write as _;
 
     // No build history for any planned package: a soft warning, not a fake
@@ -518,7 +518,7 @@ pub fn format_eta(eta: &Eta) -> String {
         let mut out = String::new();
         let _ = writeln!(
             out,
-            "{C_TESTING}ETA unknown{C_TESTING:#} — no build history for {} package{} yet",
+            "Expected time of completion: {C_BOLD}unknown{C_BOLD:#} — no build history for {} package{} yet",
             eta.unknown,
             if eta.unknown == 1 { "" } else { "s" },
         );
@@ -533,12 +533,11 @@ pub fn format_eta(eta: &Eta) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{C_BOLD}ETA{C_BOLD:#} ~{C_BOLD}{}{C_BOLD:#} wall ({mode}, {} job{})",
+        "Expected time of completion: ~{C_BOLD}{}{C_BOLD:#} wall ({mode}, {} job{})",
         format_seconds(eta.wall_seconds),
         eta.jobs,
         if eta.jobs == 1 { "" } else { "s" },
     );
-    // Detail line is dimmed so the headline wall time above stands out.
     let unknown_suffix = if eta.unknown > 0 {
         format!(", {} unknown package time(s)", eta.unknown)
     } else {
@@ -546,7 +545,7 @@ pub fn format_eta(eta: &Eta) -> String {
     };
     let _ = writeln!(
         out,
-        "{C_DIM}  {} serial, {} known{unknown_suffix}{C_DIM:#}",
+        "  {} serial, {} known{unknown_suffix}",
         format_seconds(eta.serial_seconds),
         eta.known,
     );

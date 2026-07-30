@@ -426,6 +426,27 @@ async fn emerge_atoms_inner(
     })
     .await?;
 
+    // Shared by the `-p` preview below and the `-a` confirm prompt further
+    // down — same "bind, write, flush" shape `activity/human.rs` uses for
+    // every styled stdout write, so ANSI codes still strip cleanly on
+    // non-tty output.
+    let print_eta = || {
+        let mut out = anstream::stdout();
+        let _ = write!(out, "{}", eta_message(&roots, merge_flags, &outcome));
+        let _ = out.flush();
+    };
+
+    // Shown here (before the `ConfigChangesNeeded` bail-out below), not only
+    // once the plan is fully clean: the plan preview itself (`Total:`/`Size
+    // of downloads:`) is already printed by `depgraph()` above even when USE
+    // changes are required, so a `--pretend` run with `--eta` on a plan that
+    // needs config changes must still show it — previously it silently never
+    // printed in that case, since the old call site was below this
+    // early-return.
+    if cli.pretend && merge_flags.eta && !outcome.plan.is_empty() {
+        print_eta();
+    }
+
     // A non-zero resolver exit means USE/mask changes are needed (the change
     // block was already printed). Surface it as a typed error so the normal
     // Result flow yields exit 1 — `main` prints it quietly, and the staged
@@ -467,20 +488,7 @@ async fn emerge_atoms_inner(
         preflight::check(&outcome.plan, &roots, &outcome.provided)?;
     }
 
-    // Shared by the `-p` preview below and the `-a` confirm prompt further
-    // down — same "bind, write, flush" shape `activity/human.rs` uses for
-    // every styled stdout write, so ANSI codes still strip cleanly on
-    // non-tty output.
-    let print_eta = || {
-        let mut out = anstream::stdout();
-        let _ = write!(out, "{}", eta_message(&roots, merge_flags, &outcome));
-        let _ = out.flush();
-    };
-
     if cli.pretend {
-        if merge_flags.eta {
-            print_eta();
-        }
         return Ok(());
     }
 
