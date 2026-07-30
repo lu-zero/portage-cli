@@ -98,6 +98,11 @@ had, discovered only by reading full `-vp` output line by line).
 
 ### 5. Manual / privileged live testing (not automatable in CI)
 
+For the full **toolchain → stage1 → stage3** flow (native and cross) and how
+to drive it through a crossdev-stages sandbox, see the draft
+[`stages-and-testing.md`](./stages-and-testing.md). Below is the shorter
+sandbox recipe used by `test-scripts/`.
+
 Some of this project's surface can only be verified by actually building
 real packages under real privilege boundaries — no unit test substitutes
 for it:
