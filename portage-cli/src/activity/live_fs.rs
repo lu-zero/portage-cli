@@ -20,6 +20,13 @@ pub struct LiveFsSink {
     /// Keep a projection so phase updates can rewrite inflight JSON without
     /// re-reading every field from the event alone.
     state: Mutex<LiveProjection>,
+    /// Set on the first write failure (e.g. an unwritable `EROOT` when not
+    /// running as root) so the rest of the session neither repeats the same
+    /// warning nor keeps paying for doomed writes — a single merge emits a
+    /// `SessionStart`/heartbeats/`PkgStart`/`PhaseEnter`/`PhaseLeave` per
+    /// phase/`PkgEnd`, and a broken activity root would otherwise print one
+    /// identical line per event, sometimes hundreds of them.
+    disabled: std::sync::atomic::AtomicBool,
 }
 
 impl LiveFsSink {
@@ -28,6 +35,7 @@ impl LiveFsSink {
         Self {
             activity_root: merge_root.into(),
             state: Mutex::new(LiveProjection::new()),
+            disabled: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -52,11 +60,18 @@ impl LiveFsSink {
             .join(format!("{pf}.json"))
     }
 
-    fn write_json(path: &Utf8Path, value: &impl Serialize) {
+    fn write_json(&self, path: &Utf8Path, value: &impl Serialize) {
+        use std::sync::atomic::Ordering;
+        if self.disabled.load(Ordering::Relaxed) {
+            return;
+        }
         match serde_json::to_string_pretty(value) {
             Ok(s) => {
                 if let Err(e) = write_atomic(path, s) {
-                    eprintln!("warning: activity live fs write {path}: {e:#}");
+                    self.disabled.store(true, Ordering::Relaxed);
+                    eprintln!(
+                        "warning: activity live fs write {path}: {e:#} — disabling live activity tracking for this session"
+                    );
                 }
             }
             Err(e) => eprintln!("warning: activity live fs serialise: {e}"),
@@ -105,7 +120,7 @@ impl LiveFsSink {
             })
             .collect();
         let path = self.session_path(job_id);
-        Self::write_json(
+        self.write_json(
             &path,
             &SessionFile {
                 job_id: &s.job_id,
@@ -150,7 +165,7 @@ impl LiveFsSink {
             phases_done: &'a [(String, f64)],
         }
         let path = self.inflight_path(job_id, merge_root, cpv);
-        Self::write_json(
+        self.write_json(
             &path,
             &InflightFile {
                 cpv: &p.cpv,

@@ -616,6 +616,69 @@ mod tests {
         assert!(loaded2.active().is_empty());
     }
 
+    /// An unwritable activity root (e.g. `EROOT` owned by root, running
+    /// unprivileged) must not keep retrying a doomed write on every single
+    /// event — a real merge emits a `SessionStart`, periodic heartbeats, a
+    /// `PkgStart`/`PkgEnd` per package and a `PhaseEnter`/`PhaseLeave` per
+    /// phase, so an un-short-circuited sink would hammer the same failure
+    /// over and over. Once the first write fails, later events must be
+    /// no-ops (verified here by making the directory writable again and
+    /// confirming a later event still produces no file).
+    #[test]
+    fn live_fs_sink_stops_retrying_after_the_first_write_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use camino::Utf8PathBuf;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let sink = Arc::new(LiveFsSink::new(root.clone()));
+        let bus = ActivityBus::new();
+        bus.add_sink(sink);
+
+        let job = "job-unwritable";
+        let start = ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: job.into(),
+            parent_job_id: None,
+            pid: std::process::id(),
+            started_at: 1.0,
+            argv: vec!["em".into()],
+            merge_root: root.as_str().into(),
+            host_root: "/".into(),
+            mode: ActivityMode::Merge,
+            plan_total: 0,
+            flags: SessionFlags::default(),
+            plan: vec![],
+            blockers: vec![],
+        };
+        bus.emit(start.clone());
+
+        // Restore write access — if the sink still attempted writes it would
+        // now succeed, so a still-missing file proves it stopped trying
+        // rather than merely failing again silently.
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        bus.emit(ActivityEvent::SessionHeartbeat {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: job.into(),
+            parent_job_id: None,
+            at: 2.0,
+            completed: 0,
+            failed: 0,
+        });
+
+        assert!(
+            !root
+                .join("var/cache/edb/em-activity/live")
+                .join(job)
+                .join("session.json")
+                .as_std_path()
+                .exists(),
+            "sink must stay disabled for the rest of the session, not retry once fixed"
+        );
+    }
+
     #[test]
     fn jsonl_round_trip() {
         let ev = ActivityEvent::PkgEnd {
