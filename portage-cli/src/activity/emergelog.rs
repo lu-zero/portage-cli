@@ -63,7 +63,7 @@ impl EmergeLogSink {
         })();
         if let Err(e) = res {
             // Host /var/log often needs root — soft-fail.
-            eprintln!("warning: emergelog {}: {e}", self.path);
+            tracing::warn!("emergelog {}: {e}", self.path);
         }
     }
 

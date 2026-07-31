@@ -1129,7 +1129,8 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         /// Remove (disable) flags
         #[arg(short = 'r', long = "remove", value_name = "FLAG")]
         remove: Vec<String>,
-        /// Path to make.conf (default: /etc/portage/make.conf)
+        /// Path to make.conf (default: resolved like other config commands,
+        /// following --config-root/--local/--prefix)
         #[arg(long = "make-conf", value_name = "PATH")]
         make_conf: Option<camino::Utf8PathBuf>,
     },

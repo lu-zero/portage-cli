@@ -210,7 +210,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             add,
             remove,
             make_conf,
-        } => use_flags::run(add, remove, make_conf.as_deref()),
+        } => use_flags::run(globals, add, remove, make_conf.as_deref()),
         Applet::Revdep { library } => crate::revdep::run(globals, library.as_deref()).await,
         Applet::Read { args } => {
             eprintln!("read: args={:?}", args);
