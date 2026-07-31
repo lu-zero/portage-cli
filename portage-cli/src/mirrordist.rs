@@ -98,7 +98,16 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
 
     let whitelist = parse_whitelist(&opts.whitelist_from)?;
     let referenced = plan.referenced();
-    let state = scan_distdir(&opts.distfiles, &referenced, &whitelist)?;
+    // Only actually remove stale atomic-write temp files on a real run —
+    // `-p` must leave the filesystem untouched even though it still reports
+    // the count (see print_report).
+    let state = scan_distdir(&opts.distfiles, &referenced, &whitelist, !cli.pretend)?;
+    if !cli.pretend && state.stale_partials > 0 {
+        println!(
+            ">>> Removed {} stale partial download(s) left over from an interrupted run.",
+            state.stale_partials
+        );
+    }
 
     let repo_name = repo.path().file_name().unwrap_or("repo").to_string();
     let db_path = opts
@@ -503,20 +512,31 @@ fn parse_whitelist(paths: &[Utf8PathBuf]) -> Result<HashSet<String>> {
 struct DistdirState {
     present: BTreeMap<String, u64>,
     orphans: Vec<String>,
+    /// Leftover `.__em_download__` atomic-write temp files found at scan
+    /// time — always from an interrupted previous run, never legitimate
+    /// (see [`is_atomic_temp_name`]). Without active cleanup these are
+    /// invisible to both `present`/`orphans` forever, which would leak disk
+    /// space silently (in particular for a filename that later falls out of
+    /// the referenced set entirely and so is never attempted again).
+    stale_partials: usize,
 }
 
-/// Skips directories, `layout.conf` itself (real emirrordist's flat layout
-/// happily treats it as an ordinary file and will schedule it for deletion
-/// — a known real-world quirk, not inherited here), and the atomic-write
-/// temp pattern (`is_atomic_temp_name` — never a legitimate distfile, always
-/// a leftover from an interrupted download).
+/// Skips directories and `layout.conf` itself (real emirrordist's flat
+/// layout happily treats it as an ordinary file and will schedule it for
+/// deletion — a known real-world quirk, not inherited here). A leftover
+/// atomic-write temp file (`is_atomic_temp_name`) is removed when
+/// `remove_stale_partials` is set (real fetch runs; never under `-p`, which
+/// must leave the filesystem untouched) and always excluded from
+/// `present`/`orphans` either way — it is never a legitimate distfile.
 fn scan_distdir(
     distfiles: &Utf8Path,
     referenced: &HashSet<&str>,
     whitelist: &HashSet<String>,
+    remove_stale_partials: bool,
 ) -> Result<DistdirState> {
     let mut present = BTreeMap::new();
     let mut orphans = Vec::new();
+    let mut stale_partials = 0usize;
 
     let entries = std::fs::read_dir(distfiles.as_std_path())
         .with_context(|| format!("reading distfiles dir {distfiles}"))?;
@@ -527,7 +547,14 @@ fn scan_distdir(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name == "layout.conf" || is_atomic_temp_name(&name) {
+        if name == "layout.conf" {
+            continue;
+        }
+        if is_atomic_temp_name(&name) {
+            stale_partials += 1;
+            if remove_stale_partials {
+                let _ = std::fs::remove_file(entry.path());
+            }
             continue;
         }
         present.insert(name.clone(), meta.len());
@@ -536,7 +563,11 @@ fn scan_distdir(
         }
     }
 
-    Ok(DistdirState { present, orphans })
+    Ok(DistdirState {
+        present,
+        orphans,
+        stale_partials,
+    })
 }
 
 fn now_unix() -> u64 {
@@ -776,6 +807,12 @@ fn print_report(
         to_fetch.len(),
         format_size(to_fetch_bytes, BINARY)
     );
+    if state.stale_partials > 0 {
+        println!(
+            "  stale partials   {} file(s) from an interrupted run (not removed in pretend mode)",
+            state.stale_partials
+        );
+    }
     if delete_requested {
         println!("  orphaned         {} file(s)", state.orphans.len());
         println!("    delete now     {} file(s)", delete_now.len());
@@ -1000,11 +1037,12 @@ mod tests {
         std::fs::create_dir_all(distfiles.join("subdir").as_std_path()).unwrap();
 
         let referenced: HashSet<&str> = ["foo.tar.gz"].into_iter().collect();
-        let state = scan_distdir(distfiles, &referenced, &HashSet::new()).unwrap();
+        let state = scan_distdir(distfiles, &referenced, &HashSet::new(), false).unwrap();
 
         assert_eq!(state.present.len(), 1);
         assert!(state.present.contains_key("foo.tar.gz"));
         assert!(state.orphans.is_empty());
+        assert_eq!(state.stale_partials, 1);
     }
 
     #[test]
@@ -1016,10 +1054,46 @@ mod tests {
 
         let referenced: HashSet<&str> = HashSet::new();
         let whitelist: HashSet<String> = ["kept.tar.gz".to_string()].into_iter().collect();
-        let state = scan_distdir(distfiles, &referenced, &whitelist).unwrap();
+        let state = scan_distdir(distfiles, &referenced, &whitelist, false).unwrap();
 
         assert_eq!(state.present.len(), 2);
         assert_eq!(state.orphans, vec!["orphan.tar.gz".to_string()]);
+    }
+
+    /// Pretend/dry-run mode (`remove_stale_partials: false`) must count but
+    /// never touch the filesystem — the count is reported, the file stays.
+    #[test]
+    fn scan_distdir_pretend_counts_stale_partials_without_deleting() {
+        let dir = tempfile::tempdir().unwrap();
+        let distfiles = Utf8Path::from_path(dir.path()).unwrap();
+        let temp = distfiles.join(".foo.tar.gz.__em_download__");
+        std::fs::write(temp.as_std_path(), b"partial").unwrap();
+
+        let state = scan_distdir(distfiles, &HashSet::new(), &HashSet::new(), false).unwrap();
+
+        assert_eq!(state.stale_partials, 1);
+        assert!(temp.as_std_path().exists(), "dry-run must not delete");
+    }
+
+    /// A real run (`remove_stale_partials: true`) actually removes leftover
+    /// atomic-write temp files — this is the fix for the leak where a
+    /// filename that falls out of the referenced set is never attempted
+    /// again and so its stray temp file would otherwise sit forever,
+    /// invisible to both the orphan scan and `--delete`.
+    #[test]
+    fn scan_distdir_real_run_deletes_stale_partials() {
+        let dir = tempfile::tempdir().unwrap();
+        let distfiles = Utf8Path::from_path(dir.path()).unwrap();
+        let temp = distfiles.join(".foo.tar.gz.__em_download__");
+        std::fs::write(temp.as_std_path(), b"partial").unwrap();
+
+        let state = scan_distdir(distfiles, &HashSet::new(), &HashSet::new(), true).unwrap();
+
+        assert_eq!(state.stale_partials, 1);
+        assert!(
+            !temp.as_std_path().exists(),
+            "a real run must remove the leftover temp file"
+        );
     }
 
     #[test]
