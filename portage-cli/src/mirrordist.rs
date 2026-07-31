@@ -166,6 +166,7 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
                         .and_then(dist_entry_size)
                         .unwrap_or(0);
                     let msg = format!("added {size} bytes");
+                    tracing::info!("mirrordist: {} {msg}", df.filename);
                     if let Some(owner) = owner {
                         log.success(owner, &df.filename, &msg);
                     } else {
@@ -173,8 +174,15 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
                     }
                     added += 1;
                 }
-                Ok(FetchStatus::AlreadyPresent) => {}
+                // Same-tree-mostly-present is the steady-state case for a
+                // repeated mirror run — logged at `debug` (`-vv`), not
+                // `info`, so a run over an already-current, multi-hundred-GB
+                // mirror doesn't drown real activity in noise by default.
+                Ok(FetchStatus::AlreadyPresent) => {
+                    tracing::debug!("mirrordist: {} already present", df.filename);
+                }
                 Ok(FetchStatus::FetchRestricted) => {
+                    tracing::warn!("mirrordist: {} is fetch-restricted", df.filename);
                     if let Some(owner) = owner {
                         log.failure(owner, &df.filename, "fetch-restricted");
                     } else {
@@ -183,6 +191,7 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
                     failed += 1;
                 }
                 Err(e) => {
+                    tracing::warn!("mirrordist: {} failed: {e}", df.filename);
                     if let Some(owner) = owner {
                         log.failure(owner, &df.filename, &e.to_string());
                     } else {
@@ -200,7 +209,9 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
     if opts.delete {
         if !plan.is_complete() && !opts.delete_allow_incomplete {
             bail!(
-                "refusing --delete: metadata scan is incomplete ({} missing cache, {} metadata errors, {} missing digests, {} manifest errors) — pass --delete-allow-incomplete to override",
+                "refusing --delete: metadata scan is incomplete ({} missing cache, {} metadata errors, {} missing digests, {} manifest errors) — \
+                 missing-cache entries usually mean the repo needs `em regen` first; \
+                 pass --delete-allow-incomplete to override",
                 plan.cpvs_missing_cache,
                 plan.cpvs_metadata_error,
                 plan.missing_digest,
