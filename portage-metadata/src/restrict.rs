@@ -85,9 +85,10 @@ impl RestrictExpr {
     /// apply), it is "no conditional ever applies, full stop."
     ///
     /// Server-side tools (`emirrordist`) use this so that no client's
-    /// particular USE selection can change what gets mirrored: a
-    /// `RESTRICT="!test? ( mirror )"` package *is* restricted here, exactly
-    /// as it is for real portage.
+    /// particular USE selection can change what gets mirrored: only plain
+    /// tokens apply. A package with `RESTRICT="mirror"` is restricted; one
+    /// with only `RESTRICT="!test? ( mirror )"` is **not** — matchnone drops
+    /// every conditional (including negated ones), same as real portage.
     ///
     /// No recursion needed: [`RestrictExpr`] has no `Group` variant — bare
     /// parens are already flattened into the top-level slice by the parser

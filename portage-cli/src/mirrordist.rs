@@ -107,7 +107,12 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
         .unwrap_or_else(|| default_deletion_db_path(&repo_name, &opts.distfiles));
     let mut db = DeletionDb::load(&db_path);
     let now = now_unix();
-    db.retain_present(&state.present.keys().cloned().collect());
+    // Drop DB entries for files that are no longer orphans: gone from disk
+    // *or* re-referenced by the tree while still present (real emirrordist's
+    // DeletionIterator: `if filename in file_owners: del deletion_db[filename]`).
+    // Keeping a re-referenced entry would shrink the next grace period.
+    let orphan_set: HashSet<String> = state.orphans.iter().cloned().collect();
+    db.retain_orphans(&orphan_set);
     let (delete_now, scheduled) =
         deletion_decisions(&mut db, &state.orphans, now, opts.deletion_delay);
 
@@ -130,10 +135,20 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
         let distfiles: Vec<Distfile> = plan.files.iter().map(|f| f.distfile.clone()).collect();
         let results = fetcher.fetch_all_digests(&distfiles, &plan.digests).await;
 
+        // Owner lookup by filename — do not zip against completion/input order.
+        // `fetch_all_digests` preserves input order, but each result already
+        // carries its Distfile; keying by name stays correct if that ever changes.
+        let owner_by_file: HashMap<&str, &Cpv> = plan
+            .files
+            .iter()
+            .map(|f| (f.distfile.filename.as_str(), &f.owner))
+            .collect();
+
         let mut log = EventLog::open(opts.success_log.as_deref(), opts.failure_log.as_deref())?;
         let mut added = 0usize;
         let mut failed = 0usize;
-        for (owned, (df, result)) in plan.files.iter().zip(results) {
+        for (df, result) in results {
+            let owner = owner_by_file.get(df.filename.as_str()).copied();
             match result {
                 Ok(FetchStatus::Downloaded) => {
                     let size = plan
@@ -141,20 +156,35 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
                         .get(&df.filename)
                         .and_then(dist_entry_size)
                         .unwrap_or(0);
-                    log.success(&owned.owner, &df.filename, &format!("added {size} bytes"));
+                    let msg = format!("added {size} bytes");
+                    if let Some(owner) = owner {
+                        log.success(owner, &df.filename, &msg);
+                    } else {
+                        log.success_anon(&df.filename, &msg);
+                    }
                     added += 1;
                 }
                 Ok(FetchStatus::AlreadyPresent) => {}
                 Ok(FetchStatus::FetchRestricted) => {
-                    log.failure(&owned.owner, &df.filename, "fetch-restricted");
+                    if let Some(owner) = owner {
+                        log.failure(owner, &df.filename, "fetch-restricted");
+                    } else {
+                        log.failure_anon(&df.filename, "fetch-restricted");
+                    }
                     failed += 1;
                 }
                 Err(e) => {
-                    log.failure(&owned.owner, &df.filename, &e.to_string());
+                    if let Some(owner) = owner {
+                        log.failure(owner, &df.filename, &e.to_string());
+                    } else {
+                        log.failure_anon(&df.filename, &e.to_string());
+                    }
                     failed += 1;
                 }
             }
         }
+        // Real emirrordist always exits 0 after summarizing fetch failures
+        // (MirrorDistTask._post_deletion sets returncode = EX_OK). Match that.
         println!(">>> {added} file(s) added, {failed} failed.");
     }
 
@@ -548,20 +578,23 @@ impl DeletionDb {
         *self.data.entry(filename.to_string()).or_insert(now)
     }
 
-    /// Drop entries for filenames no longer physically present in the
-    /// distfiles dir (`DeletionIterator.py`'s own pruning) — without this
-    /// the db grows forever and `--scheduled-deletion-log` reports ghosts.
-    fn retain_present(&mut self, present: &HashSet<String>) {
-        self.data.retain(|filename, _| present.contains(filename));
+    /// Keep only entries that are still current orphans.
+    ///
+    /// Real emirrordist's `DeletionIterator` deletes a db key when the file is
+    /// re-owned (`filename in file_owners`) or gone from the distfiles set.
+    /// Retaining only the current orphan set covers both: a re-referenced
+    /// file still on disk is dropped so its grace clock resets if it becomes
+    /// an orphan again later; a ghost path no longer on disk is dropped so
+    /// the db and `--scheduled-deletion-log` stay finite.
+    fn retain_orphans(&mut self, orphans: &HashSet<String>) {
+        self.data.retain(|filename, _| orphans.contains(filename));
     }
 }
 
 /// Apply the grace period: a fresh orphan is scheduled (recorded, not
-/// deleted); one whose delay has elapsed is deleted; a referenced file
-/// clears its entry (handled by the caller via [`DeletionDb::retain_present`]
-/// running against `present`, not `orphans`, before this is called — a
-/// reappearing file is simply absent from `orphans` and so never touched
-/// here, and was already dropped from `db` if it had a stale entry).
+/// deleted); one whose delay has elapsed is deleted. Re-referenced or
+/// absent files are already gone from `db` via [`DeletionDb::retain_orphans`]
+/// before this runs, so a later re-orphan gets a fresh `first_seen`.
 fn deletion_decisions(
     db: &mut DeletionDb,
     orphans: &[String],
@@ -588,13 +621,21 @@ fn deletion_decisions(
 }
 
 fn default_deletion_db_path(repo_name: &str, distfiles: &Utf8Path) -> Utf8PathBuf {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    distfiles.as_str().hash(&mut hasher);
-    crate::xdg::mirrordist_state_dir().join(format!(
-        "{repo_name}-{:016x}-deletion.json",
-        hasher.finish()
-    ))
+    // Stable across Rust releases — `DefaultHasher` is deliberately not.
+    // FNV-1a 64-bit is enough to disambiguate distfiles paths for a state
+    // filename; not a security boundary.
+    let key = fnv1a64(distfiles.as_str().as_bytes());
+    crate::xdg::mirrordist_state_dir().join(format!("{repo_name}-{key:016x}-deletion.json"))
+}
+
+/// FNV-1a 64-bit — fixed algorithm, independent of std's `DefaultHasher`.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for &b in bytes {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// Tab-delimited append-only logs, matching real emirrordist's line shapes:
@@ -631,6 +672,10 @@ impl EventLog {
 
     fn failure(&mut self, cpv: &Cpv, file: &str, message: &str) {
         Self::write_line(&mut self.failure, &format!("{cpv}\t{file}\t{message}\n"));
+    }
+
+    fn failure_anon(&mut self, file: &str, message: &str) {
+        Self::write_line(&mut self.failure, &format!("-\t{file}\t{message}\n"));
     }
 
     fn write_line(file: &mut Option<std::fs::File>, line: &str) {
@@ -1028,19 +1073,63 @@ mod tests {
     }
 
     #[test]
-    fn deletion_db_reappearing_file_clears_its_entry() {
+    fn deletion_db_absent_from_disk_clears_its_entry() {
         let dir = tempfile::tempdir().unwrap();
         let path = Utf8Path::from_path(dir.path()).unwrap().join("db.json");
         let mut db = DeletionDb::load(&path);
         db.note_orphan("foo.tar.gz", 1000);
         assert_eq!(db.data.len(), 1);
 
-        // The file reappeared as a live, present distfile — retain_present
-        // (called with the *present* set, not orphans) must clear its entry,
-        // resetting the grace clock rather than carrying it over.
-        let present: HashSet<String> = HashSet::new(); // foo.tar.gz absent == still gone
-        db.retain_present(&present);
+        // File no longer on disk → not in the current orphan set either.
+        let orphans: HashSet<String> = HashSet::new();
+        db.retain_orphans(&orphans);
         assert!(db.data.is_empty());
+    }
+
+    /// Real emirrordist: re-owned files are dropped from the deletion db so a
+    /// later re-orphan starts a fresh grace period.
+    #[test]
+    fn deletion_db_re_referenced_while_present_resets_grace() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8Path::from_path(dir.path()).unwrap().join("db.json");
+        let mut db = DeletionDb::load(&path);
+        let delay = Duration::from_secs(100);
+
+        // T0: orphaned.
+        let orphans = vec!["foo.tar.gz".to_string()];
+        let (delete_now, _) = deletion_decisions(&mut db, &orphans, 1000, delay);
+        assert!(delete_now.is_empty());
+        assert_eq!(db.data.get("foo.tar.gz"), Some(&1000));
+
+        // T1: re-referenced by the tree while still on disk — no longer an orphan.
+        let orphans_empty: HashSet<String> = HashSet::new();
+        db.retain_orphans(&orphans_empty);
+        assert!(db.data.is_empty());
+
+        // T2: orphaned again — first_seen must be T2, not T0.
+        let orphans = vec!["foo.tar.gz".to_string()];
+        let (delete_now, scheduled) = deletion_decisions(&mut db, &orphans, 1000 + 200, delay);
+        assert!(
+            delete_now.is_empty(),
+            "grace must restart, not be already elapsed"
+        );
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduled[0].1, 1000 + 200 + 100);
+        assert_eq!(db.data.get("foo.tar.gz"), Some(&(1000 + 200)));
+    }
+
+    #[test]
+    fn default_deletion_db_path_is_stable_for_same_inputs() {
+        let a = default_deletion_db_path("gentoo", Utf8Path::new("/mnt/mirror"));
+        let b = default_deletion_db_path("gentoo", Utf8Path::new("/mnt/mirror"));
+        assert_eq!(a, b);
+        // Known FNV-1a of the path string — lock the algorithm so upgrades
+        // don't rename operators' state files.
+        let key = fnv1a64(b"/mnt/mirror");
+        assert!(
+            a.as_str().contains(&format!("{key:016x}")),
+            "path {a} should embed stable key {key:016x}"
+        );
     }
 
     #[test]
