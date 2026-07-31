@@ -474,6 +474,19 @@ fn reexec_sudo() -> i32 {
     }
 }
 
+/// `DISTDIR` from make.conf (root-aware, following `--config-root`/`--local`/
+/// `--prefix` like `crate::select::config_portage_dir`'s other callers, e.g.
+/// `mirrordist::gentoo_mirrors_list`), falling back to real portage's own
+/// default when unset — not the bare host `/var/cache/distfiles`.
+#[cfg(all(feature = "hakoniwa", target_os = "linux"))]
+fn distdir(cli: &Cli) -> String {
+    let path = crate::select::config_portage_dir(cli).join("make.conf");
+    portage_repo::MakeConf::load(&path)
+        .ok()
+        .and_then(|mc| mc.get("DISTDIR").map(str::to_string))
+        .unwrap_or_else(|| "/var/cache/distfiles".to_string())
+}
+
 #[cfg(all(feature = "fakeroost", target_os = "linux"))]
 mod fakeroost {
     use std::process::Command;
@@ -601,12 +614,18 @@ mod hakoniwa {
         bind_rw(container, "/tmp");
         bind_rw(container, "/var/tmp");
         // `rootfs("/")` binds only the FHS prefixes (/usr, /etc, /bin, /lib*, /sbin) —
-        // not the portage data trees under /var that a build reads/writes. Bind the
-        // ebuild repositories read-only and the distfiles dir read-write (the inner em
-        // fetches into it). The build/merge trees (work_base, merge_root, eprefix) are
-        // bound above; the em binary itself is bound by reexec.
-        bind_ro(container, "/var/db/repos");
-        bind_rw(container, "/var/cache/distfiles");
+        // not the portage data trees under /var that a build reads/writes. Bind every
+        // configured repo read-only and DISTDIR read-write (the inner em fetches into
+        // it) — via `Cli::search_repos`/repos.conf and make.conf, not the conventional
+        // /var/db/repos and /var/cache/distfiles paths, which a non-default repos.conf
+        // or DISTDIR would silently miss. The build/merge trees (work_base, merge_root,
+        // eprefix) are bound above; the em binary itself is bound by reexec.
+        for repo in cli.search_repos() {
+            if let Some(path) = repo.to_str() {
+                bind_ro(container, path);
+            }
+        }
+        bind_rw(container, &super::distdir(cli));
         if let Some(relocate) = roots.relocate_root() {
             bind_rw(container, relocate.join("var/cache/distfiles").as_ref());
             bind_rw(container, relocate.join("var/tmp").as_ref());
@@ -740,11 +759,40 @@ mod hakoniwa {
 
 #[cfg(all(test, feature = "hakoniwa", target_os = "linux"))]
 mod tests {
+    use clap::Parser as _;
+
     use super::*;
 
     #[test]
     fn userns_knob_zero_means_unavailable() {
         // Don't assert true on real hosts — only that we don't panic reading the knob.
         let _ = hakoniwa::userns_available();
+    }
+
+    /// `distdir` must follow `--local`'s own make.conf, not the host's — the
+    /// same bug class as the sandbox's old hardcoded `/var/db/repos` and
+    /// `/var/cache/distfiles` bind targets.
+    #[test]
+    fn distdir_follows_local_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let portage_dir = prefix.join("etc/portage");
+        std::fs::create_dir_all(portage_dir.as_std_path()).unwrap();
+        std::fs::write(
+            portage_dir.join("make.conf").as_std_path(),
+            "DISTDIR=\"/custom/distfiles\"\n",
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["em", "--local", prefix.as_str(), "-p", "sys-libs/zlib"]);
+        assert_eq!(distdir(&cli), "/custom/distfiles");
+    }
+
+    #[test]
+    fn distdir_falls_back_to_the_real_portage_default_when_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let cli = Cli::parse_from(["em", "--local", prefix.as_str(), "-p", "sys-libs/zlib"]);
+        assert_eq!(distdir(&cli), "/var/cache/distfiles");
     }
 }
