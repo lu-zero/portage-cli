@@ -69,12 +69,12 @@ impl LiveFsSink {
             Ok(s) => {
                 if let Err(e) = write_atomic(path, s) {
                     self.disabled.store(true, Ordering::Relaxed);
-                    eprintln!(
-                        "warning: activity live fs write {path}: {e:#} — disabling live activity tracking for this session"
+                    tracing::warn!(
+                        "activity live fs write {path}: {e:#} — disabling live activity tracking for this session"
                     );
                 }
             }
-            Err(e) => eprintln!("warning: activity live fs serialise: {e}"),
+            Err(e) => tracing::warn!("activity live fs serialise: {e}"),
         }
     }
 

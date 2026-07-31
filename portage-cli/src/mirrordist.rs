@@ -231,7 +231,7 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
                     log.success_anon(filename, "removed");
                 }
                 Err(e) => {
-                    eprintln!("mirrordist: could not remove {filename}: {e}");
+                    tracing::warn!("mirrordist: could not remove {filename}: {e}");
                 }
             }
         }
