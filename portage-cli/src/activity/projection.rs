@@ -286,4 +286,11 @@ impl LiveProjection {
     pub fn get_mut(&mut self, job_id: &str) -> Option<&mut LiveSession> {
         self.sessions.get_mut(job_id)
     }
+
+    /// Combine sessions loaded from a second live-fs root (job_ids are
+    /// unique, so this is a plain union — e.g. `em regen`'s XDG activity
+    /// root alongside a real merge root's).
+    pub fn merge(&mut self, other: Self) {
+        self.sessions.extend(other.sessions);
+    }
 }

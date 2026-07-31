@@ -91,7 +91,10 @@ pub async fn run(
     let repos_dir = repos_dir.map_or(default_repos_dir, PathBuf::from);
 
     let roots = cli.roots();
-    let activity = crate::activity::default_cli_bus(roots.merge_root());
+    // Not `roots.merge_root()`: regen must stay usable unprivileged (see
+    // `xdg::regen_activity_root`'s doc), unlike a real merge's activity bus.
+    let activity_root = crate::xdg::regen_activity_root();
+    let activity = crate::activity::default_cli_bus(&activity_root);
     crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
     let activity_args = cli.effective_activity();
     crate::activity::attach_jsonl_outputs(

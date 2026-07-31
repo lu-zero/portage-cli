@@ -514,11 +514,22 @@ fn run_glsa(command: &Option<GlsaCommand>) -> Result<()> {
     }
 }
 
+/// Live sessions from the real merge root plus `em regen`'s own XDG activity
+/// root (see `xdg::regen_activity_root`'s doc — regen's activity bus doesn't
+/// live under the merge root, unlike a real merge's).
+fn load_live_sessions(roots: &portage_resolve::Roots) -> crate::activity::LiveProjection {
+    let mut proj = crate::activity::load_live_from_disk(roots.merge_root());
+    proj.merge(crate::activity::load_live_from_disk(
+        &crate::xdg::regen_activity_root(),
+    ));
+    proj
+}
+
 fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
     let roots = globals.roots();
     match command {
         None | Some(LogCommand::Current) => {
-            let proj = crate::activity::load_live_from_disk(roots.merge_root());
+            let proj = load_live_sessions(&roots);
             let now = crate::activity::ActivityEvent::now();
             print!("{}", crate::activity::format_current(&proj, now));
             Ok(())
@@ -537,7 +548,7 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
             Ok(())
         }
         Some(LogCommand::Predict) => {
-            let proj = crate::activity::load_live_from_disk(roots.merge_root());
+            let proj = load_live_sessions(&roots);
             let active = proj.active();
             if active.is_empty() {
                 bail!("log predict: no ongoing activity session");

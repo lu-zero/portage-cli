@@ -72,6 +72,18 @@ pub fn mirrordist_state_dir() -> Utf8PathBuf {
     em_state_dir().join("mirrordist")
 }
 
+/// `$XDG_STATE_HOME/em/activity` — stand-in "merge root" for `em regen`'s
+/// activity bus. Unlike a real merge, `regen` is designed to run
+/// unprivileged (its own cache write already falls back to
+/// [`md5_cache_root`] when the in-tree cache isn't writable), but its
+/// activity bus used to be built from the real `--root` unconditionally,
+/// so `LiveFsSink` tried (and, unprivileged, failed) to write under
+/// `<root>/var/cache/edb/em-activity/live`. Passing this path instead keeps
+/// regen's live-session tracking working without root.
+pub fn regen_activity_root() -> Utf8PathBuf {
+    em_state_dir().join("activity")
+}
+
 fn env_path(var: &str) -> Option<Utf8PathBuf> {
     std::env::var(var)
         .ok()

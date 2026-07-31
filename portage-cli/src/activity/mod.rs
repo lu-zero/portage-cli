@@ -436,6 +436,51 @@ mod tests {
         assert_eq!(p.active()[0].completed, 1);
     }
 
+    /// `em log current` merges the real merge root with regen's separate XDG
+    /// activity root (see `xdg::regen_activity_root`) — job_ids are unique,
+    /// so this must be a plain union, not one overwriting the other.
+    #[test]
+    fn live_projection_merge_unions_sessions_from_two_roots() {
+        let mut a = LiveProjection::new();
+        a.apply(&ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: "merge-job".into(),
+            parent_job_id: None,
+            pid: 1,
+            started_at: 1.0,
+            argv: vec!["em".into()],
+            merge_root: "/".into(),
+            host_root: "/".into(),
+            mode: ActivityMode::Merge,
+            plan_total: 1,
+            flags: SessionFlags::default(),
+            plan: vec![],
+            blockers: vec![],
+        });
+
+        let mut b = LiveProjection::new();
+        b.apply(&ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: "regen-job".into(),
+            parent_job_id: None,
+            pid: 2,
+            started_at: 2.0,
+            argv: vec!["em".into()],
+            merge_root: "/".into(),
+            host_root: "/".into(),
+            mode: ActivityMode::Regen,
+            plan_total: 1,
+            flags: SessionFlags::default(),
+            plan: vec![],
+            blockers: vec![],
+        });
+
+        a.merge(b);
+        assert!(a.get("merge-job").is_some());
+        assert!(a.get("regen-job").is_some());
+        assert_eq!(a.active().len(), 2);
+    }
+
     #[cfg(unix)]
     #[test]
     fn worker_reemit_socket_round_trip() {
