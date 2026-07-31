@@ -232,7 +232,8 @@ impl DistfileResolver {
                 // (make.conf(5): "These locations are used to download files before
                 // the ones listed in the ebuild scripts"). GENTOO_MIRRORS are
                 // skipped for mirror-restricted files and for `mirror://gentoo/`
-                // (which `expand_url` already routed through the gentoo mirrors).
+                // (expanded via thirdpartymirrors / GLEP-75 fallback in
+                // `expand_url` — prepending GENTOO_MIRRORS again would double them).
                 let mut urls = Vec::new();
                 let use_gentoo_mirrors = restriction.as_deref() != Some("mirror")
                     && !url.starts_with("mirror://gentoo/");
@@ -261,17 +262,37 @@ impl DistfileResolver {
 
     /// Expand a single URL to one or more concrete download URLs.
     ///
-    /// `mirror://gentoo/path` uses GENTOO_MIRRORS with the full path suffix.
-    /// `mirror://name/path` (other names) is expanded via `thirdpartymirrors`.
-    /// Direct URLs are returned as-is; GENTOO_MIRRORS fallback is added by
-    /// the caller (`resolve`) so it can be gated on the restriction flag.
+    /// Every `mirror://name/path` — **including** `mirror://gentoo/` — is
+    /// expanded via `profiles/thirdpartymirrors` (path append), matching both
+    /// Portage client fetch and real `emirrordist` (`Config.mirrors =
+    /// thirdpartymirrors()`). Real emirrordist never consults `GENTOO_MIRRORS`
+    /// at all: that list is the *client's* preferred peer mirrors, and using
+    /// it would make a mirror-of-a-mirror.
+    ///
+    /// `GENTOO_MIRRORS` is only used here as a last-resort fallback when the
+    /// name is `gentoo` and thirdpartymirrors has no `gentoo` key (minimal test
+    /// fixtures / incomplete overlays). Production Gentoo trees always ship
+    /// that key. Callers that want GENTOO_MIRRORS as an extra peer fallback for
+    /// ordinary upstream URIs use `resolve` / `resolve_all` or
+    /// [`ResolveOpts::gentoo_mirrors_fallback`].
+    ///
+    /// Direct URLs are returned as-is.
     fn expand_url(&self, url: &str, filename: &str) -> Vec<String> {
         if let Some(rest) = url.strip_prefix("mirror://") {
             let (mirror_name, path) = rest.split_once('/').unwrap_or((rest, filename));
+            // Official map first — including the `gentoo` entry in a real tree
+            // (`https://distfiles.gentoo.org/distfiles`, …). emirrordist's
+            // FetchTask does the same path-append expansion.
+            if let Some(bases) = self.thirdparty.get(mirror_name) {
+                return bases
+                    .iter()
+                    .map(|base| format!("{}/{path}", base.trim_end_matches('/')))
+                    .collect();
+            }
+            // Fixture / incomplete-overlay fallback only: GENTOO_MIRRORS with
+            // GLEP 75 filename-hash layout. Not used by mirrordist when
+            // GENTOO_MIRRORS is intentionally empty (no peer-mirror fallback).
             if mirror_name == "gentoo" {
-                // mirror://gentoo/[subdir/]file → GENTOO_MIRRORS in filename-hash
-                // layout (hashed-first, flat fallback). The content-mirror layout
-                // keys on the final filename component, not any historical subdir.
                 let fname = path.rsplit('/').next().unwrap_or(path);
                 return self
                     .gentoo_mirrors
@@ -279,13 +300,7 @@ impl DistfileResolver {
                     .flat_map(|m| gentoo_distfile_urls(m, fname))
                     .collect();
             }
-            if let Some(bases) = self.thirdparty.get(mirror_name) {
-                return bases
-                    .iter()
-                    .map(|base| format!("{}/{path}", base.trim_end_matches('/')))
-                    .collect();
-            }
-            // Unknown mirror name — no direct URLs; caller will add GENTOO_MIRRORS
+            // Unknown mirror name — no direct URLs; caller may add GENTOO_MIRRORS
             // as a last-resort fallback (unless mirror-restricted).
             vec![]
         } else {
@@ -476,6 +491,52 @@ mod tests {
             dfs[0].urls,
             ["https://mirrors.kde.org/stable/frameworks/foo.tar.xz"]
         );
+    }
+
+    /// Real emirrordist expands `mirror://gentoo/` via thirdpartymirrors
+    /// only — never GENTOO_MIRRORS (that would mirror a peer mirror). The
+    /// profiles map's `gentoo` entry already ends in `/distfiles`.
+    #[test]
+    fn mirror_gentoo_uses_thirdpartymirrors_not_gentoo_mirrors() {
+        let r = DistfileResolver::new(
+            vec![(
+                "gentoo".to_owned(),
+                vec![
+                    "https://distfiles.gentoo.org/distfiles".to_owned(),
+                    "https://gentoo.osuosl.org/distfiles".to_owned(),
+                ],
+            )],
+            // Intentionally non-empty peer list: must not appear in the plan.
+            vec!["https://peer-mirror.example/".to_owned()],
+        );
+        let entries = SrcUriEntry::parse("mirror://gentoo/logsentry-1.1.1.tar.gz").unwrap();
+        let dfs = r.resolve_uri_map(&entries, &ResolveOpts::default());
+        assert_eq!(dfs.len(), 1);
+        assert_eq!(
+            dfs[0].urls,
+            [
+                "https://distfiles.gentoo.org/distfiles/logsentry-1.1.1.tar.gz",
+                "https://gentoo.osuosl.org/distfiles/logsentry-1.1.1.tar.gz",
+            ]
+        );
+        assert!(
+            dfs[0]
+                .urls
+                .iter()
+                .all(|u| !u.contains("peer-mirror.example")),
+            "GENTOO_MIRRORS must not expand mirror://gentoo under resolve_uri_map"
+        );
+    }
+
+    /// With no thirdpartymirrors `gentoo` key and empty GENTOO_MIRRORS
+    /// (mirrordist's default), `mirror://gentoo/` yields no URLs and the
+    /// file is dropped from the plan — same as an unknown mirror name.
+    #[test]
+    fn mirror_gentoo_with_no_thirdparty_and_empty_gentoo_mirrors_is_dropped() {
+        let r = DistfileResolver::new(vec![], vec![]);
+        let entries = SrcUriEntry::parse("mirror://gentoo/foo.tar.gz").unwrap();
+        let dfs = r.resolve_uri_map(&entries, &ResolveOpts::default());
+        assert!(dfs.is_empty());
     }
 
     #[test]

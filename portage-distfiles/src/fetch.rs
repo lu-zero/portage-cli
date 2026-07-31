@@ -295,10 +295,14 @@ impl Fetcher {
         }))
     }
 
-    /// Fetch all distfiles in parallel, returning per-file results in input order.
+    /// Fetch all distfiles in parallel, returning per-file results in **input
+    /// order**.
     ///
     /// Up to `config.max_concurrent` downloads run simultaneously.
     /// Each result is paired with the originating [`Distfile`] reference.
+    /// Callers that only need the embedded `Distfile` can ignore order; callers
+    /// that zip against a parallel side table (owner CPV, etc.) must rely on
+    /// this guarantee or key by `Distfile::filename`.
     ///
     /// Builds one [`DistDigests`] index from `manifest` for the whole batch —
     /// thin wrapper over [`Self::fetch_all_digests`].
@@ -315,6 +319,9 @@ impl Fetcher {
     /// index — the primitive a repo-wide mirror tool needs, where the
     /// combined digest set spans many packages' manifests and would be far
     /// too expensive to rebuild from scratch per file.
+    ///
+    /// Results are returned in **input order** (`StreamExt::buffered`), not
+    /// completion order (`buffer_unordered` would scramble them).
     pub async fn fetch_all_digests<'a>(
         &self,
         distfiles: &'a [Distfile],
@@ -336,7 +343,7 @@ impl Fetcher {
                     (df, r)
                 }
             })
-            .buffer_unordered(max)
+            .buffered(max)
             .collect()
             .await
     }
