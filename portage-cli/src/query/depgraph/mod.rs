@@ -509,6 +509,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         autounmask_candidates: Vec<repo::AutounmaskCandidate>,
         slot_op_cpns: HashSet<Cpn>,
         dep_conflicts: Vec<conflicts::Conflict>,
+        // Target-routed merge plan entries, kept alongside `dep_conflicts` for
+        // the blocker classifier (`conflicts::classify_blockers`), which needs
+        // the same "what's proposed" view to simulate an auto-unmerge.
+        proposed: Vec<conflicts::ProposedPkg>,
         exclude_omitted: usize,
         resume_omitted: usize,
     }
@@ -1047,6 +1051,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 autounmask_candidates,
                 slot_op_cpns,
                 dep_conflicts,
+                proposed,
                 exclude_omitted,
                 resume_omitted,
             })
@@ -1110,6 +1115,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         autounmask_candidates,
         slot_op_cpns,
         dep_conflicts,
+        proposed,
         exclude_omitted,
         resume_omitted,
     } = outcome;
@@ -1333,10 +1339,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             );
         }
 
-        let mut violations = provider.check_blockers(&solution);
-        violations.extend(provider.check_repo_constraints(&solution));
-        if !violations.is_empty() {
-            output::report_solver_violations(&violations);
+        let hits = provider.check_blockers_detailed(&solution);
+        let classified = conflicts::classify_blockers(&hits, &target_installed, &proposed);
+        output::report_blockers(&classified);
+
+        let repo_violations = provider.check_repo_constraints(&solution);
+        if !repo_violations.is_empty() {
+            output::report_repo_constraint_violations(&repo_violations);
         }
 
         let ru_violations = required_use::find_violations(&data, &order, &final_policy, &ceded);

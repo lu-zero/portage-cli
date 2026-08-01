@@ -260,34 +260,14 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_exp
     }
 }
 
-/// Report blocker (`!`/`!!`) and `::repo` violations detected post-solve.
-/// The solver does not model these, so they are surfaced here like slot
-/// conflicts rather than failing resolution.
-pub(super) fn report_solver_violations(violations: &[portage_atom_pubgrub::Error]) {
+/// Report `::repo` constraint violations detected post-solve. The solver
+/// does not model these, so they are surfaced here like slot conflicts
+/// rather than failing resolution. Blockers have their own, richer
+/// [`report_blockers`] (classified auto-remove/conflict verdicts, not just
+/// an advisory string).
+pub(super) fn report_repo_constraint_violations(violations: &[portage_atom_pubgrub::Error]) {
     use portage_atom_pubgrub::Error;
     let mut out = anstream::stderr();
-
-    let blockers: Vec<&Error> = violations
-        .iter()
-        .filter(|e| matches!(e, Error::BlockerConflict { .. }))
-        .collect();
-    if !blockers.is_empty() {
-        writeln!(out, "\n{C_OFF}!!!{C_OFF:#} Blocker conflict(s) detected:\n").ok();
-        for e in blockers {
-            if let Error::BlockerConflict {
-                pkg,
-                blocker,
-                strength,
-            } = e
-            {
-                writeln!(
-                    out,
-                    "  {C_PKG}{pkg}{C_PKG:#} blocks {C_OFF}{blocker}{C_OFF:#} ({strength})",
-                )
-                .ok();
-            }
-        }
-    }
 
     let repos: Vec<&Error> = violations
         .iter()
@@ -304,6 +284,97 @@ pub(super) fn report_solver_violations(violations: &[portage_atom_pubgrub::Error
                 writeln!(out, "  {C_PKG}{pkg}{C_PKG:#}: {msg}").ok();
             }
         }
+    }
+}
+
+/// Report classified blocker (`!`/`!!`) hits: Step 1 of the blocker Tier-1
+/// auto-unmerge plan (`todo/blocker-enforcement.md`) — analysis and richer
+/// advisory text only, no plan mutation. `PreExisting` verdicts (both sides
+/// already installed) are deliberately not printed, matching real emerge's
+/// own suppression of that case ("the damage is already done";
+/// `_emerge/depgraph.py`'s `_validate_blockers`).
+pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::ClassifiedBlocker]) {
+    use portage_resolve::conflicts::BlockerVerdict;
+
+    if classified.is_empty() {
+        return;
+    }
+    let mut out = anstream::stderr();
+    let mut would_unmerge: Vec<Cpv> = Vec::new();
+    let mut hard_conflict = false;
+
+    writeln!(out, "\n{C_OFF}!!!{C_OFF:#} Blocker conflict(s) detected:\n").ok();
+    for c in classified {
+        let owner = format!("{}-{}", c.hit.owner, c.hit.owner_version);
+        let strength = match c.hit.atom.blocker {
+            Some(portage_atom::Blocker::Strong) => "strong(!!)",
+            _ => "weak(!)",
+        };
+        writeln!(
+            out,
+            "  {C_PKG}{owner}{C_PKG:#} blocks {C_OFF}{}{C_OFF:#} ({strength})",
+            c.hit.atom
+        )
+        .ok();
+        for verdict in &c.verdicts {
+            match verdict {
+                BlockerVerdict::WouldUnmerge { cpv, order } => {
+                    let when = match order {
+                        portage_resolve::conflicts::UnmergeOrder::AfterBlocker => {
+                            "after the blocking merge"
+                        }
+                        portage_resolve::conflicts::UnmergeOrder::BeforeBlocker => {
+                            "before the blocking merge"
+                        }
+                    };
+                    writeln!(
+                        out,
+                        "      resolved: {cpv} is not required by anything retained;\n\
+                         \x20     emerge would unmerge it ({when})"
+                    )
+                    .ok();
+                    would_unmerge.push(cpv.clone());
+                }
+                BlockerVerdict::StillNeeded { cpv, obstacles } => {
+                    hard_conflict = hard_conflict || strength == "strong(!!)";
+                    for o in obstacles {
+                        writeln!(
+                            out,
+                            "      unresolved: {cpv} is still required by {} ({})",
+                            o.needed_by, o.dep
+                        )
+                        .ok();
+                    }
+                }
+                BlockerVerdict::PlannedCoexistence { cpv } => {
+                    hard_conflict = true;
+                    writeln!(
+                        out,
+                        "      unresolved: {cpv} is itself part of this plan — cannot coexist"
+                    )
+                    .ok();
+                }
+                BlockerVerdict::PreExisting { .. } => {}
+            }
+        }
+    }
+
+    if !would_unmerge.is_empty() {
+        would_unmerge.sort_by_key(ToString::to_string);
+        would_unmerge.dedup();
+        writeln!(out).ok();
+        for cpv in &would_unmerge {
+            writeln!(out, ">>> would unmerge: {C_PKG}{cpv}{C_PKG:#}").ok();
+        }
+    }
+
+    if hard_conflict {
+        writeln!(
+            out,
+            "\n * Error: The above package list contains packages which cannot be\n\
+             * installed at the same time on the same system."
+        )
+        .ok();
     }
 }
 
