@@ -137,30 +137,55 @@ fn collect_violations(
     present: &HashMap<Cpn, Vec<(Slot, Cpv)>>,
     out: &mut Vec<Conflict>,
 ) {
+    walk_unsatisfied_deps(entries, touched, present, out, &mut |dep| {
+        // The name is touched but no present package satisfies the dep.
+        // Proposed packages are pushed before retained ones, so the first
+        // present entry is the proposed version to blame.
+        present
+            .get(&dep.cpn)
+            .and_then(|c| c.first())
+            .map(|(_, cpv)| cpv.version.clone())
+            .map(|proposed_ver| Conflict {
+                installed_cpn: owner.cpn,
+                slot,
+                installed_ver: owner.version.clone(),
+                dep: dep.clone(),
+                proposed_ver,
+                owner_replaced_by: owner_replaced_by.cloned(),
+            })
+    });
+}
+
+/// Shared dependency-tree walk for "is this atom satisfied by what's
+/// present after the plan" checks: [`find_conflicts`] (blame a violation on
+/// the proposed version) and [`removal_obstacles`] (blame it on the removed
+/// candidate) need the identical group semantics — `AllOf`/`^^`/`??` report
+/// any unsatisfied branch naming a touched package; `AnyOf` (`||`) only
+/// reports when *every* alternative is violated (e.g. `virtual/resolvconf`'s
+/// `|| ( net-dns/openresolv sys-apps/systemd[resolvconf] )` survives
+/// openresolv's removal as long as the systemd branch is satisfied) — so
+/// this is one function, not two copies that could drift apart.
+///
+/// `on_violation` decides both whether an unsatisfied atom counts (`None`
+/// skips it) and what to record (`Some(t)` pushes `t`); it can look up
+/// `dep.cpn` in `present` itself when it needs to blame a specific version.
+fn walk_unsatisfied_deps<T>(
+    entries: &[DepEntry],
+    touched: &HashSet<Cpn>,
+    present: &HashMap<Cpn, Vec<(Slot, Cpv)>>,
+    out: &mut Vec<T>,
+    on_violation: &mut impl FnMut(&Dep) -> Option<T>,
+) {
     for entry in entries {
         match entry {
             DepEntry::Atom(dep) => {
                 if dep.blocker.is_some() || !touched.contains(&dep.cpn) {
                     continue;
                 }
-                if !dep_satisfied(dep, present) {
-                    // The name is touched but no present package satisfies the
-                    // dep. Proposed packages are pushed before retained ones, so
-                    // the first present entry is the proposed version to blame.
-                    let proposed_ver = present
-                        .get(&dep.cpn)
-                        .and_then(|c| c.first())
-                        .map(|(_, cpv)| cpv.version.clone());
-                    if let Some(proposed_ver) = proposed_ver {
-                        out.push(Conflict {
-                            installed_cpn: owner.cpn,
-                            slot,
-                            installed_ver: owner.version.clone(),
-                            dep: dep.clone(),
-                            proposed_ver,
-                            owner_replaced_by: owner_replaced_by.cloned(),
-                        });
-                    }
+                if !dep_satisfied(dep, present)
+                    && let Some(t) = on_violation(dep)
+                {
+                    out.push(t);
                 }
             }
             DepEntry::AllOf(children)
@@ -170,30 +195,20 @@ fn collect_violations(
                 // unsatisfied branch that names a touched package is reported.
                 // Coarser than full group semantics, but previously these
                 // groups were ignored entirely.
-                collect_violations(
-                    slot,
-                    children,
-                    owner,
-                    owner_replaced_by,
-                    touched,
-                    present,
-                    out,
-                );
+                walk_unsatisfied_deps(children, touched, present, out, on_violation);
             }
             // AnyOf: a conflict only exists if ALL alternatives are violated.
             DepEntry::AnyOf(children) => {
-                let branch_violations: Vec<Vec<Conflict>> = children
+                let branch_violations: Vec<Vec<T>> = children
                     .iter()
                     .map(|child| {
                         let mut v = Vec::new();
-                        collect_violations(
-                            slot,
+                        walk_unsatisfied_deps(
                             std::slice::from_ref(child),
-                            owner,
-                            owner_replaced_by,
                             touched,
                             present,
                             &mut v,
+                            on_violation,
                         );
                         v
                     })
@@ -210,6 +225,127 @@ fn collect_violations(
             DepEntry::UseConditional { .. } => {}
         }
     }
+}
+
+/// A retained package that still needs one of the removal candidates a
+/// blocker names — the reason that candidate cannot be auto-removed.
+#[derive(Debug, Clone)]
+pub struct RemovalObstacle {
+    /// The candidate cpn that is still needed.
+    pub needed: Cpn,
+    /// The candidate's slot.
+    pub needed_slot: Slot,
+    /// The retained installed package whose dep still needs it.
+    pub needed_by: Cpv,
+    /// The dep atom that needs it.
+    pub dep: Dep,
+}
+
+/// Simulate unmerging `candidates` (retained installed packages a blocker
+/// names) from the post-plan world [`find_conflicts`] builds. Returns the
+/// obstacles; a candidate with no obstacle is safe to auto-remove — what
+/// emerge schedules as an uninstall for an orphaned blocked package.
+///
+/// Candidates are removed *jointly*, with a fixpoint: a candidate found
+/// still-needed is put back into the world and the rest re-checked, so a
+/// pair of mutually-dependent removable candidates resolves correctly, and
+/// a candidate that turns out needed can still anchor another.
+///
+/// Does not need to scan `proposed`'s own deps against the candidates: a
+/// retained installed package by definition has no solution edge pointing
+/// at it — anything depending on its cpn/slot would have pulled that
+/// Favor-policy installed package into the solution instead of leaving it
+/// retained (see `PortageDependencyProvider`'s solve semantics), so only
+/// `installed` packages' deps can possibly still need a removal candidate.
+pub fn removal_obstacles(
+    candidates: &[(Cpn, Slot)],
+    installed: &[VdbEntry],
+    proposed: &[ProposedPkg],
+) -> Vec<RemovalObstacle> {
+    let mut removed: HashSet<(Cpn, Slot)> = candidates.iter().copied().collect();
+    let mut final_obstacles = Vec::new();
+
+    loop {
+        // Every obstacle `removal_obstacles_once` returns necessarily names
+        // a still-`removed` candidate (that's what `touched` restricts the
+        // walk to) — each one is confirmed *not* removable and must be
+        // excluded from the trial removal set, permanently: put it back
+        // into the world (drop it from `removed`) and recheck the rest,
+        // since excluding it can reactivate its own dependencies (the
+        // fixpoint a mutually-dependent pair of candidates needs).
+        let obstacles = removal_obstacles_once(&removed, installed, proposed);
+        if obstacles.is_empty() {
+            return final_obstacles;
+        }
+        let newly_excluded: HashSet<(Cpn, Slot)> = obstacles
+            .iter()
+            .map(|o| (o.needed, o.needed_slot))
+            .collect();
+        final_obstacles.extend(obstacles);
+        removed.retain(|c| !newly_excluded.contains(c));
+        if removed.is_empty() {
+            return final_obstacles;
+        }
+    }
+}
+
+fn removal_obstacles_once(
+    removed: &HashSet<(Cpn, Slot)>,
+    installed: &[VdbEntry],
+    proposed: &[ProposedPkg],
+) -> Vec<RemovalObstacle> {
+    let replaced: HashMap<(Cpn, Slot), &Version> = proposed
+        .iter()
+        .map(|p| ((p.cpn, p.slot), &p.version))
+        .collect();
+
+    let mut present: HashMap<Cpn, Vec<(Slot, Cpv)>> = HashMap::new();
+    for p in proposed {
+        present
+            .entry(p.cpn)
+            .or_default()
+            .push((p.slot, Cpv::new(p.cpn, p.version.clone())));
+    }
+    for e in installed {
+        let slot = e.slot.as_deref().map(Interned::intern);
+        if replaced.contains_key(&(e.cpn, slot)) || removed.contains(&(e.cpn, slot)) {
+            continue;
+        }
+        present
+            .entry(e.cpn)
+            .or_default()
+            .push((slot, Cpv::new(e.cpn, e.version.clone())));
+    }
+
+    // Only a removal candidate's own cpn matters here — an installed
+    // consumer's dep on anything else is unaffected by this simulation.
+    let touched: HashSet<Cpn> = removed.iter().map(|(cpn, _)| *cpn).collect();
+
+    let mut out = Vec::new();
+    for owner in installed {
+        let slot = owner.slot.as_deref().map(Interned::intern);
+        if replaced.contains_key(&(owner.cpn, slot)) || removed.contains(&(owner.cpn, slot)) {
+            // A replaced owner's dep strings die with it; a removed
+            // candidate no longer needs to satisfy its own deps.
+            continue;
+        }
+        let active_flags: HashSet<Interned<_>> = owner.active_use.iter().copied().collect();
+        let evaluated = DepEntry::evaluate_use(&owner.deps, &active_flags);
+        walk_unsatisfied_deps(&evaluated, &touched, &present, &mut out, &mut |dep| {
+            let needed_slot = removed
+                .iter()
+                .find(|(cpn, _)| *cpn == dep.cpn)
+                .map(|(_, s)| *s)
+                .unwrap_or(None);
+            Some(RemovalObstacle {
+                needed: dep.cpn,
+                needed_slot,
+                needed_by: Cpv::new(owner.cpn, owner.version.clone()),
+                dep: dep.clone(),
+            })
+        });
+    }
+    out
 }
 
 /// An installed package's active blocker atoms (USE conditionals resolved
@@ -395,6 +531,129 @@ mod tests {
         assert_eq!(
             retained[0].slot.map(|s| s.to_string()),
             Some("22".to_owned())
+        );
+    }
+
+    fn cand(cpn: &str, slot: &str) -> (Cpn, Slot) {
+        (
+            Cpn::try_new(cpn).expect("test cpn parses"),
+            Some(Interned::intern(slot)),
+        )
+    }
+
+    /// An installed package nothing else depends on is safe to auto-remove:
+    /// no obstacle.
+    #[test]
+    fn orphaned_candidate_has_no_obstacle() {
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
+        let obstacles = removal_obstacles(&[cand("net-dns/openresolv", "0")], &installed, &[]);
+        assert!(
+            obstacles.is_empty(),
+            "orphan should be removable: {obstacles:?}"
+        );
+    }
+
+    /// A retained installed package still depending on the candidate blocks
+    /// removal. This is also the blame-lookup regression case Fable's plan
+    /// flagged: after the candidate is removed, `present` has *no* entries
+    /// left at all for its cpn (nothing else provides that name), which is
+    /// exactly the shape the old inline `present.get(...).and_then(|c|
+    /// c.first())` blame silently dropped instead of reporting.
+    #[test]
+    fn still_needed_candidate_reports_an_obstacle() {
+        let installed = vec![
+            entry("net-dns/openresolv", "0", "3.17.4", &[]),
+            entry("app-misc/keeper", "0", "2.0", &["net-dns/openresolv"]),
+        ];
+        let obstacles = removal_obstacles(&[cand("net-dns/openresolv", "0")], &installed, &[]);
+        assert_eq!(obstacles.len(), 1);
+        assert_eq!(
+            obstacles[0].needed,
+            Cpn::try_new("net-dns/openresolv").unwrap()
+        );
+        assert_eq!(
+            obstacles[0].needed_by,
+            Cpv::new(
+                Cpn::try_new("app-misc/keeper").unwrap(),
+                Version::parse("2.0").unwrap()
+            )
+        );
+    }
+
+    /// The canonical `virtual/resolvconf` shape: `|| ( net-dns/openresolv
+    /// sys-apps/systemd )` survives openresolv's removal because the
+    /// systemd branch (proposed, i.e. being installed) is still present —
+    /// the `AnyOf` group is not violated just because one alternative is
+    /// gone, matching real portage's actual auto-removal of an orphaned
+    /// blocked package in this exact scenario.
+    #[test]
+    fn any_of_group_survives_removal_via_the_other_branch() {
+        // entry()'s helper only builds flat Atom entries; a real `||` group
+        // needs DepEntry::parse, which understands the full dep-string
+        // grammar (groups included), unlike the plain Dep::parse used above.
+        let resolvconf = VdbEntry {
+            cpn: Cpn::try_new("virtual/resolvconf").expect("test cpn parses"),
+            slot: Some(Interned::intern("0")),
+            version: "1.0".parse().expect("test version parses"),
+            active_use: Vec::new(),
+            iuse: Vec::new(),
+            deps: DepEntry::parse("|| ( net-dns/openresolv sys-apps/systemd )")
+                .expect("test dep string parses"),
+        };
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[]), resolvconf];
+        let plan = vec![proposed("sys-apps/systemd", "0", "260.2")];
+        let obstacles = removal_obstacles(&[cand("net-dns/openresolv", "0")], &installed, &plan);
+        assert!(
+            obstacles.is_empty(),
+            "AnyOf group must survive via the systemd branch: {obstacles:?}"
+        );
+    }
+
+    /// Joint removal fixpoint, both directions:
+    /// - A and B are both candidates; B is A's only consumer. Removing them
+    ///   jointly succeeds (B's dep on A never gets walked, since a removed
+    ///   candidate's own deps are skipped as an owner).
+    /// - Adding a retained consumer C of B changes the outcome: B is no
+    ///   longer safe to remove (needed by C), so B is put back into the
+    ///   world and rechecked as an owner — which re-activates its own
+    ///   dependency on A, so A becomes an obstacle too (needed by B).
+    #[test]
+    fn fixpoint_reintroduces_a_still_needed_candidates_own_dependency() {
+        // Both A and B removable jointly: nothing outside the candidate set
+        // needs either.
+        let obstacles = removal_obstacles(
+            &[cand("dev-libs/a", "0"), cand("dev-libs/b", "0")],
+            &[
+                entry("dev-libs/a", "0", "1.0", &[]),
+                entry("dev-libs/b", "0", "1.0", &["dev-libs/a"]),
+            ],
+            &[],
+        );
+        assert!(
+            obstacles.is_empty(),
+            "A and B should be jointly removable: {obstacles:?}"
+        );
+
+        // C retained, depends on B: B can no longer be removed, and the
+        // fixpoint must notice that B's own dep on A (now reactivated,
+        // since B is back in the world) makes A an obstacle too.
+        let obstacles = removal_obstacles(
+            &[cand("dev-libs/a", "0"), cand("dev-libs/b", "0")],
+            &[
+                entry("dev-libs/a", "0", "1.0", &[]),
+                entry("dev-libs/b", "0", "1.0", &["dev-libs/a"]),
+                entry("app-misc/c", "0", "1.0", &["dev-libs/b"]),
+            ],
+            &[],
+        );
+        let needed: HashSet<_> = obstacles.iter().map(|o| o.needed).collect();
+        assert!(
+            needed.contains(&Cpn::try_new("dev-libs/b").unwrap()),
+            "B should be reported as needed (by C): {obstacles:?}"
+        );
+        assert!(
+            needed.contains(&Cpn::try_new("dev-libs/a").unwrap()),
+            "A should be reported as needed (by B, reactivated by the fixpoint): {obstacles:?}"
         );
     }
 }
