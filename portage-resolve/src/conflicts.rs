@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Cpv, Dep, DepEntry, Operator, Version};
-use portage_atom_pubgrub::PortageVersionSet;
+use portage_atom::{Blocker, Cpn, Cpv, Dep, DepEntry, Operator, Version};
+use portage_atom_pubgrub::{BlockerHit, PortageVersionSet};
 
 use crate::installed::VdbEntry;
 
@@ -401,9 +401,201 @@ pub fn dep_to_version_set(dep: &Dep) -> PortageVersionSet {
     }
 }
 
+/// When an auto-removed victim would be unmerged, relative to the merge of
+/// the package that blocks it — real portage's `BlockerDepPriority` edge
+/// direction (`_emerge/depgraph.py`, `_validate_blockers`): a strong `!!`
+/// blocker cannot tolerate any overlap, so its unmerge is ordered *before*
+/// the blocking merge; a weak `!` blocker tolerates transient overlap, so
+/// its unmerge is ordered *after*. Both are equally auto-removed when
+/// nothing else needs the blocked package — this only affects scheduling,
+/// not whether removal happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnmergeOrder {
+    /// Weak `!`: unmerge after the blocking package merges.
+    AfterBlocker,
+    /// Strong `!!`: unmerge before the blocking package merges.
+    BeforeBlocker,
+}
+
+/// The classification outcome for one blocker/victim pair.
+#[derive(Debug, Clone)]
+pub enum BlockerVerdict {
+    /// Nothing retained still needs the blocked installed package — real
+    /// emerge would schedule it for unmerge. Advisory-only until Step 2
+    /// (`todo/blocker-enforcement.md`) threads this into the actual plan.
+    WouldUnmerge {
+        /// The blocked installed package that would be removed.
+        cpv: Cpv,
+        /// Scheduling relative to the blocking merge (display/Step-2 only).
+        order: UnmergeOrder,
+    },
+    /// The blocked installed package is still needed: a genuine,
+    /// unresolvable conflict (for a strong blocker) or an unresolved soft
+    /// block (for a weak one) — the caller decides the display severity
+    /// from the originating hit's blocker strength.
+    StillNeeded {
+        /// The blocked installed package that cannot safely be removed.
+        cpv: Cpv,
+        /// Why it can't: every remaining reason something still needs it.
+        obstacles: Vec<RemovalObstacle>,
+    },
+    /// The blocked package is itself in the plan — both end-states coexist.
+    /// A hard conflict regardless of blocker strength: final-state
+    /// coexistence, not transient overlap, is what weak `!` tolerates.
+    PlannedCoexistence {
+        /// The package coexisting with the blocker in the final plan.
+        cpv: Cpv,
+    },
+    /// Both the owner and the victim are already-installed, retained
+    /// packages. Real portage suppresses these ("two currently installed
+    /// packages conflict with each other... the damage is already done",
+    /// `depgraph.py`'s `_validate_blockers`) rather than reporting them as
+    /// actionable.
+    PreExisting {
+        /// The other already-installed package in the pre-existing conflict.
+        cpv: Cpv,
+    },
+}
+
+/// One blocker hit, classified per victim.
+#[derive(Debug, Clone)]
+pub struct ClassifiedBlocker {
+    /// The underlying detected blocker hit.
+    pub hit: BlockerHit,
+    /// One verdict per victim (or, for a reciprocal hit whose victim is a
+    /// solution member, per the owner-as-removal-candidate case — see
+    /// [`classify_blockers`]).
+    pub verdicts: Vec<BlockerVerdict>,
+}
+
+/// Classify every blocker hit as auto-removable, a genuine conflict, or a
+/// case portage itself treats as non-actionable — Step 1 of the blocker
+/// Tier-1 auto-unmerge plan (`todo/blocker-enforcement.md`): analysis only,
+/// no plan mutation.
+///
+/// The removal candidates from every hit are simulated *jointly* in one
+/// [`removal_obstacles`] call (not per-hit), so a mutually-dependent pair of
+/// candidates named by two different blockers still resolves correctly, and
+/// the openresolv-style forward+reciprocal edge pair for one real conflict
+/// collapses onto the same candidate.
+pub fn classify_blockers(
+    hits: &[BlockerHit],
+    installed: &[VdbEntry],
+    proposed: &[ProposedPkg],
+) -> Vec<ClassifiedBlocker> {
+    // Every (cpn, slot) that some hit needs a removal verdict for: a victim
+    // that's a retained installed package, or — for a reciprocal hit whose
+    // victim is a solution member — the owner itself (see the module-level
+    // classification table in the loop below).
+    let mut candidates: HashSet<(Cpn, Slot)> = HashSet::new();
+    for hit in hits {
+        for victim in &hit.victims {
+            if victim.retained_installed {
+                candidates.insert((*victim.package.cpn(), victim.package.slot()));
+            } else if hit.owner_installed {
+                candidates.insert((*hit.owner.cpn(), hit.owner.slot()));
+            }
+        }
+    }
+    let candidates: Vec<(Cpn, Slot)> = candidates.into_iter().collect();
+    let obstacles = removal_obstacles(&candidates, installed, proposed);
+    let mut obstacles_by_candidate: HashMap<(Cpn, Slot), Vec<RemovalObstacle>> = HashMap::new();
+    for o in obstacles {
+        obstacles_by_candidate
+            .entry((o.needed, o.needed_slot))
+            .or_default()
+            .push(o);
+    }
+
+    let verdict_for_candidate =
+        |cpn: Cpn, slot: Slot, cpv: Cpv, order: UnmergeOrder| match obstacles_by_candidate
+            .get(&(cpn, slot))
+        {
+            Some(obs) if !obs.is_empty() => BlockerVerdict::StillNeeded {
+                cpv,
+                obstacles: obs.clone(),
+            },
+            _ => BlockerVerdict::WouldUnmerge { cpv, order },
+        };
+
+    hits.iter()
+        .map(|hit| {
+            let order = match hit.atom.blocker {
+                Some(Blocker::Strong) => UnmergeOrder::BeforeBlocker,
+                _ => UnmergeOrder::AfterBlocker,
+            };
+            let verdicts = hit
+                .victims
+                .iter()
+                .map(|victim| {
+                    let victim_cpv = Cpv::new(*victim.package.cpn(), victim.version.clone());
+                    match (hit.owner_installed, victim.retained_installed) {
+                        (true, true) => BlockerVerdict::PreExisting { cpv: victim_cpv },
+                        (false, false) => BlockerVerdict::PlannedCoexistence { cpv: victim_cpv },
+                        // Forward hit: the victim is the removal candidate.
+                        (false, true) => verdict_for_candidate(
+                            *victim.package.cpn(),
+                            victim.package.slot(),
+                            victim_cpv,
+                            order,
+                        ),
+                        // Reciprocal hit: the owner is the removal candidate,
+                        // not the (immovable, planned) victim.
+                        (true, false) => verdict_for_candidate(
+                            *hit.owner.cpn(),
+                            hit.owner.slot(),
+                            Cpv::new(*hit.owner.cpn(), hit.owner_version.clone()),
+                            order,
+                        ),
+                    }
+                })
+                .collect();
+            ClassifiedBlocker {
+                hit: hit.clone(),
+                verdicts,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_atom_pubgrub::{BlockerVictim, PortagePackage};
+
+    fn pkg(cpn: &str, slot: &str) -> PortagePackage {
+        PortagePackage::slotted(
+            Cpn::try_new(cpn).expect("test cpn parses"),
+            Interned::intern(slot),
+        )
+    }
+
+    /// A single-victim blocker hit, mirroring what `check_blockers_detailed`
+    /// would produce for one owner/atom/victim triple.
+    #[allow(clippy::too_many_arguments)]
+    fn hit(
+        owner_cpn: &str,
+        owner_slot: &str,
+        owner_ver: &str,
+        owner_installed: bool,
+        atom: &str,
+        victim_cpn: &str,
+        victim_slot: &str,
+        victim_ver: &str,
+        victim_retained_installed: bool,
+    ) -> BlockerHit {
+        BlockerHit {
+            owner: pkg(owner_cpn, owner_slot),
+            owner_version: owner_ver.parse().expect("test version parses"),
+            owner_installed,
+            atom: Dep::parse(atom).expect("test blocker atom parses"),
+            victims: vec![BlockerVictim {
+                package: pkg(victim_cpn, victim_slot),
+                version: victim_ver.parse().expect("test version parses"),
+                retained_installed: victim_retained_installed,
+            }],
+        }
+    }
 
     fn entry(cpn: &str, slot: &str, version: &str, deps: &[&str]) -> VdbEntry {
         VdbEntry {
@@ -655,5 +847,210 @@ mod tests {
             needed.contains(&Cpn::try_new("dev-libs/a").unwrap()),
             "A should be reported as needed (by B, reactivated by the fixpoint): {obstacles:?}"
         );
+    }
+
+    fn single_verdict(classified: &[ClassifiedBlocker]) -> &BlockerVerdict {
+        assert_eq!(classified.len(), 1);
+        assert_eq!(classified[0].verdicts.len(), 1);
+        &classified[0].verdicts[0]
+    }
+
+    /// Forward hit (owner is a planned/solution package), weak blocker,
+    /// orphaned installed victim: emerge would auto-unmerge it, ordered
+    /// after the blocking merge.
+    #[test]
+    fn forward_weak_orphan_would_unmerge_after() {
+        let h = hit(
+            "sys-apps/systemd",
+            "0",
+            "260.2",
+            false,
+            "!net-dns/openresolv",
+            "net-dns/openresolv",
+            "0",
+            "3.17.4",
+            true,
+        );
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
+        let classified = classify_blockers(&[h], &installed, &[]);
+        assert!(matches!(
+            single_verdict(&classified),
+            BlockerVerdict::WouldUnmerge {
+                order: UnmergeOrder::AfterBlocker,
+                ..
+            }
+        ));
+    }
+
+    /// Same shape, but a retained consumer still needs the victim: a
+    /// genuine (soft, for a weak blocker) conflict, not auto-removable.
+    #[test]
+    fn forward_weak_still_needed() {
+        let h = hit(
+            "sys-apps/systemd",
+            "0",
+            "260.2",
+            false,
+            "!net-dns/openresolv",
+            "net-dns/openresolv",
+            "0",
+            "3.17.4",
+            true,
+        );
+        let installed = vec![
+            entry("net-dns/openresolv", "0", "3.17.4", &[]),
+            entry("app-misc/keeper", "0", "2.0", &["net-dns/openresolv"]),
+        ];
+        let classified = classify_blockers(&[h], &installed, &[]);
+        assert!(matches!(
+            single_verdict(&classified),
+            BlockerVerdict::StillNeeded { .. }
+        ));
+    }
+
+    /// A strong `!!` blocker orders the auto-unmerge *before* the blocking
+    /// merge instead of after — the real weak/strong asymmetry (both are
+    /// equally auto-removed; only the scheduling edge differs).
+    #[test]
+    fn strong_blocker_orders_unmerge_before() {
+        let h = hit(
+            "sys-apps/systemd",
+            "0",
+            "260.2",
+            false,
+            "!!net-dns/openresolv",
+            "net-dns/openresolv",
+            "0",
+            "3.17.4",
+            true,
+        );
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
+        let classified = classify_blockers(&[h], &installed, &[]);
+        assert!(matches!(
+            single_verdict(&classified),
+            BlockerVerdict::WouldUnmerge {
+                order: UnmergeOrder::BeforeBlocker,
+                ..
+            }
+        ));
+    }
+
+    /// Reciprocal hit: an installed owner's blocker fires against a planned
+    /// (solution-member) victim — the *owner*, not the immovable victim, is
+    /// the removal candidate (mirrors installed openresolv's `!systemd`
+    /// against a planned systemd).
+    #[test]
+    fn reciprocal_hit_makes_the_owner_the_candidate() {
+        let h = hit(
+            "net-dns/openresolv",
+            "0",
+            "3.17.4",
+            true,
+            "!sys-apps/systemd",
+            "sys-apps/systemd",
+            "0",
+            "260.2",
+            false,
+        );
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
+        let classified = classify_blockers(&[h], &installed, &[]);
+        match single_verdict(&classified) {
+            BlockerVerdict::WouldUnmerge { cpv, .. } => {
+                assert_eq!(cpv.cpn, Cpn::try_new("net-dns/openresolv").unwrap());
+            }
+            other => panic!("expected WouldUnmerge for the owner, got {other:?}"),
+        }
+    }
+
+    /// Both owner and victim are in the final plan: a hard conflict
+    /// regardless of blocker strength (weak `!` tolerates transient
+    /// overlap, not permanent coexistence).
+    #[test]
+    fn planned_coexistence_is_a_hard_conflict() {
+        let h = hit(
+            "app-misc/a",
+            "0",
+            "1.0",
+            false,
+            "!app-misc/b",
+            "app-misc/b",
+            "0",
+            "1.0",
+            false,
+        );
+        let classified = classify_blockers(&[h], &[], &[]);
+        assert!(matches!(
+            single_verdict(&classified),
+            BlockerVerdict::PlannedCoexistence { .. }
+        ));
+    }
+
+    /// Owner and victim are both already-installed, retained packages: real
+    /// portage suppresses this as non-actionable ("damage already done").
+    #[test]
+    fn pre_existing_conflict_between_two_installed_packages() {
+        let h = hit(
+            "app-misc/a",
+            "0",
+            "1.0",
+            true,
+            "!app-misc/b",
+            "app-misc/b",
+            "0",
+            "1.0",
+            true,
+        );
+        let installed = vec![
+            entry("app-misc/a", "0", "1.0", &[]),
+            entry("app-misc/b", "0", "1.0", &[]),
+        ];
+        let classified = classify_blockers(&[h], &installed, &[]);
+        assert!(matches!(
+            single_verdict(&classified),
+            BlockerVerdict::PreExisting { .. }
+        ));
+    }
+
+    /// The canonical `virtual/resolvconf` scenario end-to-end through
+    /// classify_blockers: both the forward hit (systemd blocks installed
+    /// openresolv) and the reciprocal hit (installed openresolv blocks
+    /// planned systemd) collapse onto the *same* removal candidate
+    /// (openresolv) via the joint simulation, and both get a consistent
+    /// verdict.
+    #[test]
+    fn systemd_resolvconf_canonical_case_both_edges_agree() {
+        let forward = hit(
+            "sys-apps/systemd",
+            "0",
+            "260.2",
+            false,
+            "!net-dns/openresolv",
+            "net-dns/openresolv",
+            "0",
+            "3.17.4",
+            true,
+        );
+        let reciprocal = hit(
+            "net-dns/openresolv",
+            "0",
+            "3.17.4",
+            true,
+            "!sys-apps/systemd",
+            "sys-apps/systemd",
+            "0",
+            "260.2",
+            false,
+        );
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
+        let classified = classify_blockers(&[forward, reciprocal], &installed, &[]);
+        assert_eq!(classified.len(), 2);
+        for c in &classified {
+            match &c.verdicts[..] {
+                [BlockerVerdict::WouldUnmerge { cpv, .. }] => {
+                    assert_eq!(cpv.cpn, Cpn::try_new("net-dns/openresolv").unwrap());
+                }
+                other => panic!("expected WouldUnmerge for openresolv, got {other:?}"),
+            }
+        }
     }
 }
