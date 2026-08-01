@@ -3,6 +3,22 @@
 STATUS: in progress — executing. Using one dedicated sandbox per scenario
 (not shared) since `crossdev-stages sandbox setup` is fast/cheap per-name.
 
+**Update 2026-08-01: the `cede_required_use`/`installed_cpvs.contains(cpv)`
+bug documented throughout this file (awk-4 REQUIRED_USE finding, first
+raised below and re-confirmed multiple times further down) is FIXED,
+commit `58d335b`.** Every "fix direction: drop the `installed_cpvs` early
+return" note in this doc is **superseded** — that naive fix was verified
+wrong (it reintroduces a real prior bug, commit `b919014`'s systemd-utils/
+jinja2 protection). The actual fix adds a second set,
+`Adapter::rebuilding_cpvs` (installed cpvs this run rebuilds anyway — a
+non-selective explicit root target or a `-N`/`-U` USE-drift rebuild,
+computed from the plan's own already-installed-filter logic), and guards
+ceding on `installed_cpvs.contains(cpv) && !rebuilding_cpvs.contains(cpv)`.
+See [[cede-required-use-repro-not-fixed]] for the full story. Every
+reference to "the known `cede_required_use` bug" or "drop the
+`installed_cpvs` early return" below is historical diagnosis, not current
+status — don't re-open this without checking that memory/commit first.
+
 ## Execution log
 
 - **`crossdev-stages sandbox setup --dry-run` is not actually a dry-run**:
