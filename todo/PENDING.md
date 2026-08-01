@@ -22,7 +22,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **4** | **Distfile GENTOO_MIRRORS parity residual** — core fetch facets done; no remote `layout.conf`, no `/etc/portage/mirrors`, etc. | 🟡 | [[distfile-fetch-reliability]] |
 | **5** | **Build-dir clean / FEATURES** — reinstall symptom closed; `noclean`/`keeptemp` parity open | 🟡 | [[build-clean-env]] |
 | **6** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
-| **7** | **Blocker Tier-1 auto-unmerge** — detect/report done; destructive step **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
+| **7** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; destructive Step 2 **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
 | **8** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
 
 ### Smaller / polish (pick opportunistically)
