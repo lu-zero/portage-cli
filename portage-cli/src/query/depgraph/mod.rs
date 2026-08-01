@@ -464,6 +464,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         force_mask: &force_mask,
         installed_cpvs: solver_installed_cpvs,
+        // Computed later (needs `root_pkgs`, not yet built here); inert
+        // anyway since `autosolve_use: false` below means `cede_required_use`
+        // is never reached through this Adapter.
+        rebuilding_cpvs: &empty_solver_cpvs,
         autosolve_use: false,
     });
 
@@ -492,6 +496,41 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // added dependent look like a user-requested target.
     let root_pkgs: Vec<PortagePackage> = root_deps.iter().map(|(p, _)| p.clone()).collect();
     let pristine_package_use = package_use.clone();
+
+    // Installed cpvs this run rebuilds anyway — Level-C's cede gate
+    // (`repo::Adapter::rebuilding_cpvs`) treats these as build targets, not
+    // as "installed and staying installed" (see its doc comment for why
+    // that distinction matters — commit `b919014`). Mirrors the plan's own
+    // already-installed filter below: a non-selective explicit root target
+    // (reinstalled `[R]` at its installed version — e.g. `em stages
+    // --stage1`'s `packages.build` atoms) or a `-N`/`-U` USE-drift rebuild.
+    // Computed once, using the pristine `target_policy`/`package_use` — same
+    // accepted approximation `slot_map` above documents (a co-solve-ceded
+    // flag could in principle flip license acceptance and thus this
+    // decision, but that's PMS-legal-and-vanishingly-rare, not worth
+    // recomputing per iteration for). `--emptytree` needs no entry: its
+    // `installed_cpvs` is already empty (`solver_installed_cpvs` above), so
+    // cede already applies universally there.
+    let mut rebuilding_installed_cpvs: std::collections::HashSet<Cpv> =
+        std::collections::HashSet::new();
+    if !emptytree_native {
+        for e in &target_installed {
+            let pkg = match e.slot.filter(|s| !s.is_empty()) {
+                Some(s) => PortagePackage::slotted(e.cpn, s),
+                None => PortagePackage::unslotted(e.cpn),
+            };
+            let explicit_reinstall = !selective
+                && root_pkgs
+                    .iter()
+                    .any(|r| r.cpn() == pkg.cpn() && r.slot() == pkg.slot());
+            let use_rebuild = use_reinstall_mode.is_some_and(|mode| {
+                package_needs_use_reinstall(mode, e, &pkg, &data, &target_policy)
+            });
+            if explicit_reinstall || use_rebuild {
+                rebuilding_installed_cpvs.insert(Cpv::new(e.cpn, e.version.clone()));
+            }
+        }
+    }
 
     /// Everything a single solve-and-plan attempt produces that the rest of
     /// [`depgraph`] needs — bundled so the `--complete-graph` repair loop
@@ -539,6 +578,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     package_use: pkg_use,
                     force_mask: &force_mask,
                     installed_cpvs: solver_installed_cpvs,
+                    rebuilding_cpvs: &rebuilding_installed_cpvs,
                     autosolve_use,
                 };
                 // Outlives `adapter` (it borrows the same run-scoped refs, including
@@ -1015,6 +1055,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 package_use: &package_use,
                 force_mask: &force_mask,
                 installed_cpvs: solver_installed_cpvs,
+                rebuilding_cpvs: &rebuilding_installed_cpvs,
                 autosolve_use: false,
             };
             order = host_copies::compute(&order, &host_copies_adapter, roots, &cross);
@@ -1245,6 +1286,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         force_mask: &force_mask,
         installed_cpvs: solver_installed_cpvs,
+        rebuilding_cpvs: &rebuilding_installed_cpvs,
         autosolve_use: false,
     };
     // `order` is already exclude-filtered above, so `plan_entries` (and the

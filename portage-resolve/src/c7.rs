@@ -106,6 +106,7 @@ fn solve_with(
         package_mask: &[],
         package_unmask: &[],
         installed_cpvs: &std::collections::HashSet::new(),
+        rebuilding_cpvs: &std::collections::HashSet::new(),
         accept_licenses: &lic,
         accept_properties: &lic,
         accept_restrict: &lic,

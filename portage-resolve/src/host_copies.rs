@@ -322,6 +322,7 @@ mod tests {
             package_use: &[],
             force_mask: &force_mask,
             installed_cpvs: &installed_cpvs,
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             autosolve_use: false,
         };
 
@@ -405,6 +406,7 @@ mod tests {
             package_use: &[],
             force_mask: &force_mask,
             installed_cpvs: &installed_cpvs,
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             autosolve_use: false,
         };
 
@@ -489,6 +491,7 @@ mod tests {
             package_use: &[],
             force_mask: &force_mask,
             installed_cpvs: &installed_cpvs,
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             autosolve_use: false,
         };
 

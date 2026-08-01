@@ -820,8 +820,22 @@ pub struct Adapter<'a> {
     /// Exact installed cpvs. A version that is installed and staying installed
     /// never has its `REQUIRED_USE` flags ceded — its USE was decided at build
     /// time, and only packages being built get theirs auto-satisfied (emerge
-    /// likewise leaves installed packages' constraints alone).
+    /// likewise leaves installed packages' constraints alone). See
+    /// [`Self::rebuilding_cpvs`] for the exception: an installed cpv that is
+    /// nonetheless being rebuilt this run.
     pub installed_cpvs: &'a std::collections::HashSet<Cpv>,
+    /// Installed cpvs this run rebuilds anyway — non-selective explicit root
+    /// targets (reinstalled `[R]` at their installed version, e.g. `em stages
+    /// --stage1`'s `packages.build` atoms) and `-N`/`-U` USE-drift rebuilds.
+    /// Level-C treats these as "being built": their `REQUIRED_USE` is
+    /// re-decided for the new build's USE context, unlike a package that is
+    /// installed and staying installed (see `installed_cpvs`'s doc comment,
+    /// and commit `b919014` for why that distinction matters — config drift
+    /// on a genuinely untouched installed package must not invent USE
+    /// decisions). Mid-solve USE-dep-forced reinstalls and post-solve subslot
+    /// rebuilds aren't known yet when this set is built, so those stay
+    /// Level-A advisory only — a documented limitation, not a bug.
+    pub rebuilding_cpvs: &'a std::collections::HashSet<Cpv>,
     /// Level-C: when set, cede each package's non-pinned `REQUIRED_USE` flags to
     /// the solver (`SolverDecided`) instead of fixing them. See
     /// `portage-atom-pubgrub/docs/required-use-level-c.md`.
@@ -886,7 +900,7 @@ impl Adapter<'_> {
     ) {
         use portage_atom_pubgrub::{UseFlagState, resolve_effective_use};
 
-        if self.installed_cpvs.contains(cpv) {
+        if self.installed_cpvs.contains(cpv) && !self.rebuilding_cpvs.contains(cpv) {
             return;
         }
         let Some(ru) = &m.required_use else {
@@ -2218,6 +2232,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &deny_bindist,
@@ -2299,6 +2314,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -2341,6 +2357,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -2381,6 +2398,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -2403,19 +2421,23 @@ mod tests {
         }
     }
 
-    // Reproduces the `em stages --stage1 --prefix <dir>` finding in
-    // todo/em-stages-scenario-matrix.md: `cede_required_use`'s
-    // `installed_cpvs.contains(cpv)` early return fires for *any* cpv already
+    // Fixes the `em stages --stage1 --prefix <dir>` finding in
+    // todo/em-stages-scenario-matrix.md: `cede_required_use`'s old
+    // `installed_cpvs.contains(cpv)` early return fired for *any* cpv already
     // in the "installed" view, even when that exact cpv is the one currently
     // being resolved with a REQUIRED_USE-violating config (e.g. stage1's
     // `USE="-* build"` suppressing app-alternatives.eclass's `+`-default
-    // flag) — so autosolve-use never gets a chance to cede/re-decide it, and
-    // the plan carries a genuine REQUIRED_USE violation into the build,
-    // which then dies at pkg_setup/src_install. This test is the currently
-    // FAILING half of the story; see `installed_and_violated_stays_ceded_off_is_the_bug`
-    // below for why the early return can't just be deleted outright.
+    // flag on `app-alternatives/awk-4`, itself a literal `packages.build`
+    // root target) — so autosolve-use never got a chance to cede/re-decide
+    // it, and the plan carried a genuine REQUIRED_USE violation into the
+    // build, which then died at pkg_setup/src_install. Fixed (Fable-planned)
+    // by adding `rebuilding_cpvs`: an installed cpv also in that set is
+    // being rebuilt this run (non-selective explicit root target, or
+    // -N/-U USE-drift), so its REQUIRED_USE is ceded like any other build
+    // target — see `installed_and_untouched_package_required_use_drift_is_not_ceded`
+    // below for why `installed_cpvs` alone still gates everything else.
     #[test]
-    fn already_installed_cpv_with_violated_required_use_is_not_ceded_bug_repro() {
+    fn installed_but_rebuilding_cpv_with_violated_required_use_is_ceded() {
         let (data, cpv) = repo_with(
             "cat/pkg-1.0",
             "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
@@ -2429,12 +2451,15 @@ mod tests {
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
         let mut installed = std::collections::HashSet::new();
         installed.insert(cpv.clone());
+        let mut rebuilding = std::collections::HashSet::new();
+        rebuilding.insert(cpv.clone());
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &installed,
+            rebuilding_cpvs: &rebuilding,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -2446,45 +2471,32 @@ mod tests {
         };
 
         let desired = adapter.desired_use(&cpv);
-        // BUG: with today's code this assertion holds (neither flag gets
-        // ceded) even though REQUIRED_USE is violated and autosolve-use is
-        // on — reproducing the awk-4/stage1 finding. A real fix should make
-        // at least one of these `SolverDecided` instead, like the
-        // not-installed case does.
-        let neither_ceded = ["a", "b"].iter().all(|f| {
-            !matches!(
-                desired.get(Interned::intern(f)),
-                UseFlagState::SolverDecided { .. }
-            )
-        });
-        assert!(
-            neither_ceded,
-            "bug reproduction failed: a flag was ceded even though cpv is in \
-             installed_cpvs — either the bug is already fixed, or this early \
-             return no longer behaves as todo/em-stages-scenario-matrix.md describes"
-        );
+        for f in ["a", "b"] {
+            assert!(
+                matches!(
+                    desired.get(Interned::intern(f)),
+                    UseFlagState::SolverDecided { .. }
+                ),
+                "flag {f} should be ceded for an installed cpv that is also \
+                 being rebuilt this run (the awk-4/stage1 fix)"
+            );
+        }
     }
 
-    // Why the early return exists at all (commit b919014, 2026-06-10): an
-    // installed package that is genuinely staying installed (not part of
-    // this run's build) must NOT have its REQUIRED_USE flags ceded just
-    // because profile/config drift now violates them — only packages being
-    // *built* get their constraints auto-satisfied, matching real emerge
-    // (installed-package violations are Level-A advisories only). Without
-    // this guard, config drift on an untouched package invents a USE
-    // decision that can cascade into a spurious rebuild of something else
-    // entirely (the original bug: installed systemd-utils' `^^` drifted
-    // against a moved PYTHON_SINGLE_TARGET, autosolve ceded it, and a C7
-    // co-solve forced a spurious jinja2 rebuild for a target nothing needs).
-    //
-    // This test proves that story still holds today: a naive "just delete
-    // the `installed_cpvs.contains(cpv)` check" fix would make this test
-    // fail (both flags would get ceded), reintroducing b919014's bug for
-    // any genuinely-untouched installed package whose REQUIRED_USE drifts.
-    // A real fix needs a way to distinguish "installed and staying
-    // installed" from "installed at this cpv but being rebuilt this run
-    // under a different USE context" (stage1/--prefix's case) — `Adapter`
-    // has no such signal today, only the one `installed_cpvs` set.
+    // Why `installed_cpvs` alone still gates everything else (commit
+    // b919014, 2026-06-10): an installed package that is genuinely staying
+    // installed (not in `rebuilding_cpvs`) must NOT have its `REQUIRED_USE`
+    // flags ceded just because profile/config drift now violates them —
+    // only packages being *built* get their constraints auto-satisfied,
+    // matching real emerge (installed-package violations are Level-A
+    // advisories only). Without this guard, config drift on an untouched
+    // package invents a USE decision that can cascade into a spurious
+    // rebuild of something else entirely (the original bug: installed
+    // systemd-utils' `^^` drifted against a moved PYTHON_SINGLE_TARGET,
+    // autosolve ceded it, and a C7 co-solve forced a spurious jinja2 rebuild
+    // for a target nothing needs). `rebuilding_cpvs` is empty here — this
+    // cpv is installed but not a rebuild target — so the guard must still
+    // hold exactly as before the fix above.
     #[test]
     fn installed_and_untouched_package_required_use_drift_is_not_ceded() {
         let (data, cpv) = repo_with(
@@ -2504,6 +2516,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &installed,
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -2523,6 +2536,105 @@ mod tests {
                 ),
                 "flag {f} must not be ceded for an installed, untouched package \
                  whose REQUIRED_USE merely drifted — see commit b919014"
+            );
+        }
+    }
+
+    // A rebuilding cpv whose REQUIRED_USE is already satisfied must not be
+    // gratuitously ceded — the `unsatisfied.is_empty()` check (present
+    // regardless of `rebuilding_cpvs`) still short-circuits correctly, same
+    // guarantee `satisfied_constraint_cedes_nothing` proves for a
+    // never-installed package.
+    #[test]
+    fn rebuilding_cpv_with_satisfied_required_use_cedes_nothing() {
+        let (data, cpv) = repo_with(
+            "cat/pkg-1.0",
+            "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("a"); // only a on ⇒ ?? satisfied
+
+        let fm = ForceMask::default();
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let mut installed = std::collections::HashSet::new();
+        installed.insert(cpv.clone());
+        let mut rebuilding = std::collections::HashSet::new();
+        rebuilding.insert(cpv.clone());
+        let adapter = Adapter {
+            data: &data,
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &installed,
+            rebuilding_cpvs: &rebuilding,
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            pre_env: &pre_env,
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &fm,
+            autosolve_use: true,
+        };
+
+        let desired = adapter.desired_use(&cpv);
+        for f in ["a", "b"] {
+            assert!(
+                !matches!(
+                    desired.get(Interned::intern(f)),
+                    UseFlagState::SolverDecided { .. }
+                ),
+                "flag {f} must not be ceded when REQUIRED_USE already holds, \
+                 rebuilding or not"
+            );
+        }
+    }
+
+    // `rebuilding_cpvs` containing a cpv that ISN'T installed must not change
+    // anything: the not-installed path already ceded correctly before this
+    // field existed (`unforced_flags_are_ceded`), and the new condition
+    // (`installed_cpvs.contains(cpv) && !rebuilding_cpvs.contains(cpv)`) must
+    // not accidentally degrade to `!rebuilding_cpvs.contains(cpv)` alone.
+    #[test]
+    fn rebuilding_cpvs_membership_alone_does_not_gate_a_never_installed_package() {
+        let (data, cpv) = repo_with(
+            "cat/pkg-1.0",
+            "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("a b");
+
+        let fm = ForceMask::default();
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        // cpv is in rebuilding_cpvs but NOT in installed_cpvs — should not
+        // matter; the not-installed path always ceded.
+        let mut rebuilding = std::collections::HashSet::new();
+        rebuilding.insert(cpv.clone());
+        let adapter = Adapter {
+            data: &data,
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &rebuilding,
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            pre_env: &pre_env,
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &fm,
+            autosolve_use: true,
+        };
+
+        let desired = adapter.desired_use(&cpv);
+        for f in ["a", "b"] {
+            assert!(
+                matches!(
+                    desired.get(Interned::intern(f)),
+                    UseFlagState::SolverDecided { .. }
+                ),
+                "flag {f} should be ceded for a never-installed package regardless of rebuilding_cpvs"
             );
         }
     }
@@ -2555,6 +2667,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -2610,6 +2723,7 @@ mod tests {
             package_mask: &[],
             package_unmask: &[],
             installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
