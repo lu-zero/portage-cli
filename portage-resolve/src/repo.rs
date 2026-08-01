@@ -2403,6 +2403,130 @@ mod tests {
         }
     }
 
+    // Reproduces the `em stages --stage1 --prefix <dir>` finding in
+    // todo/em-stages-scenario-matrix.md: `cede_required_use`'s
+    // `installed_cpvs.contains(cpv)` early return fires for *any* cpv already
+    // in the "installed" view, even when that exact cpv is the one currently
+    // being resolved with a REQUIRED_USE-violating config (e.g. stage1's
+    // `USE="-* build"` suppressing app-alternatives.eclass's `+`-default
+    // flag) — so autosolve-use never gets a chance to cede/re-decide it, and
+    // the plan carries a genuine REQUIRED_USE violation into the build,
+    // which then dies at pkg_setup/src_install. This test is the currently
+    // FAILING half of the story; see `installed_and_violated_stays_ceded_off_is_the_bug`
+    // below for why the early return can't just be deleted outright.
+    #[test]
+    fn already_installed_cpv_with_violated_required_use_is_not_ceded_bug_repro() {
+        let (data, cpv) = repo_with(
+            "cat/pkg-1.0",
+            "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        // Both flags on ⇒ ?? ( a b ) violated — identical config shape to
+        // `unforced_flags_are_ceded`, the only difference is `installed_cpvs`.
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("a b");
+
+        let fm = ForceMask::default();
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let mut installed = std::collections::HashSet::new();
+        installed.insert(cpv.clone());
+        let adapter = Adapter {
+            data: &data,
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &installed,
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            pre_env: &pre_env,
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &fm,
+            autosolve_use: true,
+        };
+
+        let desired = adapter.desired_use(&cpv);
+        // BUG: with today's code this assertion holds (neither flag gets
+        // ceded) even though REQUIRED_USE is violated and autosolve-use is
+        // on — reproducing the awk-4/stage1 finding. A real fix should make
+        // at least one of these `SolverDecided` instead, like the
+        // not-installed case does.
+        let neither_ceded = ["a", "b"].iter().all(|f| {
+            !matches!(
+                desired.get(Interned::intern(f)),
+                UseFlagState::SolverDecided { .. }
+            )
+        });
+        assert!(
+            neither_ceded,
+            "bug reproduction failed: a flag was ceded even though cpv is in \
+             installed_cpvs — either the bug is already fixed, or this early \
+             return no longer behaves as todo/em-stages-scenario-matrix.md describes"
+        );
+    }
+
+    // Why the early return exists at all (commit b919014, 2026-06-10): an
+    // installed package that is genuinely staying installed (not part of
+    // this run's build) must NOT have its REQUIRED_USE flags ceded just
+    // because profile/config drift now violates them — only packages being
+    // *built* get their constraints auto-satisfied, matching real emerge
+    // (installed-package violations are Level-A advisories only). Without
+    // this guard, config drift on an untouched package invents a USE
+    // decision that can cascade into a spurious rebuild of something else
+    // entirely (the original bug: installed systemd-utils' `^^` drifted
+    // against a moved PYTHON_SINGLE_TARGET, autosolve ceded it, and a C7
+    // co-solve forced a spurious jinja2 rebuild for a target nothing needs).
+    //
+    // This test proves that story still holds today: a naive "just delete
+    // the `installed_cpvs.contains(cpv)` check" fix would make this test
+    // fail (both flags would get ceded), reintroducing b919014's bug for
+    // any genuinely-untouched installed package whose REQUIRED_USE drifts.
+    // A real fix needs a way to distinguish "installed and staying
+    // installed" from "installed at this cpv but being rebuilt this run
+    // under a different USE context" (stage1/--prefix's case) — `Adapter`
+    // has no such signal today, only the one `installed_cpvs` set.
+    #[test]
+    fn installed_and_untouched_package_required_use_drift_is_not_ceded() {
+        let (data, cpv) = repo_with(
+            "cat/pkg-1.0",
+            "EAPI=7\nSLOT=0\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("a b"); // drifted: both on now
+
+        let fm = ForceMask::default();
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let mut installed = std::collections::HashSet::new();
+        installed.insert(cpv.clone());
+        let adapter = Adapter {
+            data: &data,
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &installed,
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            pre_env: &pre_env,
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &fm,
+            autosolve_use: true,
+        };
+
+        let desired = adapter.desired_use(&cpv);
+        for f in ["a", "b"] {
+            assert!(
+                !matches!(
+                    desired.get(Interned::intern(f)),
+                    UseFlagState::SolverDecided { .. }
+                ),
+                "flag {f} must not be ceded for an installed, untouched package \
+                 whose REQUIRED_USE merely drifted — see commit b919014"
+            );
+        }
+    }
+
     // Regression for the em stages --stage1 --target riscv64 finding
     // (todo/stage-build-shakeout.md): util-linux's
     // REQUIRED_USE="python? ( foo ) su? ( pam )" has two independent
