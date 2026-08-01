@@ -24,7 +24,6 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **6** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
 | **7** | **Blocker Tier-1 auto-unmerge** — detect/report done; destructive step **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
 | **8** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
-| **9** | **Upstream-ish** — brush `PIPESTATUS` / `declare -a` on Dynamic (em workaround in place) | 🔴 | [[brush-pipestatus-not-reset]] |
 
 ### Smaller / polish (pick opportunistically)
 
@@ -40,6 +39,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 
 | Item | When | Notes |
 |------|------|--------|
+| brush `PIPESTATUS`/`declare -a` on Dynamic — fixed independently on `for-portage-repo` (`64b38e16`), not the never-merged `pipestatus-dynamic-freeze` branch; live-verified | 2026-08-01 | [[brush-pipestatus-not-reset]] |
 | `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` + `-arch` vs `*` | 2026-07-29 | [[accept-properties-restrict]] |
 | Explicit-target reinstall default | 2026-07-29 (follow-up) | [[reinstall-default]] |
 | `--complete-graph` slot-chain completion | 2026-07-27 | [[slot-chain-completion]] |

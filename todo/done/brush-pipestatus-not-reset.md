@@ -1,9 +1,26 @@
 # brush: `declare -a`/`-A` on a Dynamic variable permanently destroys it (PIPESTATUS case)
 
-STATUS: OPEN. Root-caused and reproduced in 3 lines of pure shell, no
-em/eclass involved. Worked around on the `em` side (see below) so this is
-not blocking anything in portage-cli anymore, but it's a real brush
-correctness bug worth fixing/upstreaming — repo: `~/Sources/brush`.
+STATUS: FIXED, confirmed 2026-08-01. `~/Sources/brush`'s `for-portage-repo`
+branch (currently pinned rev `09fa1325`) independently fixed this as part of
+its larger "shape-aware dynamic well-known variables" rewrite
+(`64b38e16`/`3d2b176e`), not via the separate `pipestatus-dynamic-freeze`
+branch (`871b675c`/`47b8d1d9`/`7cb0530e`) described below, which was never
+merged into `for-portage-repo`. `ShellVariable`'s conversion methods now
+carry a `DynamicValueKind` (`IndexedArray`/`AssociativeArray`/`Scalar`) and a
+`resolved_dynamic_value` snapshot parameter; a `Dynamic` value whose kind
+already matches the target shape (e.g. `PIPESTATUS` under `declare -a`) hits
+an early `Ok(())` arm and keeps its `getter`/`setter` binding live, instead of
+falling into the old `_` arm that unconditionally overwrote `self.value`.
+
+Live-verified directly against a fresh `for-portage-repo` build
+(`cargo build --release -p brush --bin brush`) with the exact repro below:
+output is `0 0 0`, matching real bash exactly (previously `1`, frozen).
+
+The rest of this file is kept as the original diagnosis/root-cause writeup
+for reference — the "suggested fix directions" section is superseded by the
+above (a different, more general mechanism than what was originally
+proposed, also covering `RANDOM`/`SECONDS`-style scalar dynamics via the
+snapshot parameter).
 
 ## Symptom
 
