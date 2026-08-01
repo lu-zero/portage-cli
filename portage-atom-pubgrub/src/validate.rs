@@ -28,6 +28,40 @@ pub struct SlotOperatorBinding {
     pub operator: &'static str,
 }
 
+/// One package satisfied by a blocker's atom after the plan.
+#[derive(Debug, Clone)]
+pub struct BlockerVictim {
+    /// The package satisfying the blocker atom.
+    pub package: PortagePackage,
+    /// Its version.
+    pub version: Version,
+    /// `true`: an installed package the plan retains (a removal candidate).
+    /// `false`: a solution member (the plan installs/keeps it — this
+    /// package's own end-state coexists with the blocker, a hard conflict
+    /// regardless of blocker strength).
+    pub retained_installed: bool,
+}
+
+/// One blocker atom satisfied by at least one package present after the
+/// plan, with full victim identity — the input to blocker classification
+/// (auto-removable vs. genuine conflict), unlike [`Error::BlockerConflict`]'s
+/// flattened advisory strings.
+#[derive(Debug, Clone)]
+pub struct BlockerHit {
+    /// The package declaring the blocker.
+    pub owner: PortagePackage,
+    /// The owner's version.
+    pub owner_version: Version,
+    /// `true` when `owner` is a retained installed package (the reciprocal
+    /// loop, e.g. an installed package blocking something in the plan)
+    /// rather than a solution member.
+    pub owner_installed: bool,
+    /// The blocker atom; `atom.blocker` carries the weak/strong strength.
+    pub atom: Dep,
+    /// Every package the atom matched, post-plan.
+    pub victims: Vec<BlockerVictim>,
+}
+
 impl PortageDependencyProvider {
     /// Validate USE-dep constraints against a solution (post-solve check).
     ///
@@ -189,12 +223,40 @@ impl PortageDependencyProvider {
     /// A blocker `!dev-libs/foo` means that if this package is installed,
     /// `dev-libs/foo` (with matching version/slot constraints if any) must
     /// NOT be in the solution.
+    ///
+    /// Thin wrapper over [`Self::check_blockers_detailed`] for existing
+    /// callers that only want the advisory strings — new code (blocker
+    /// classification) should call the detailed form, which keeps the
+    /// victim's identity instead of throwing it away.
     pub fn check_blockers(
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
     ) -> Vec<Error> {
         let mut conflicts = Vec::new();
         let mut seen = std::collections::HashSet::new();
+        for hit in self.check_blockers_detailed(solution) {
+            record_blocker(
+                &mut conflicts,
+                &mut seen,
+                format!("{}-{}", hit.owner, hit.owner_version),
+                &hit.atom,
+            );
+        }
+        conflicts
+    }
+
+    /// Validate blockers against a solution (post-solve check), keeping full
+    /// victim identity for classification (auto-removable vs. genuine
+    /// conflict) rather than collapsing to an advisory string.
+    ///
+    /// A blocker `!dev-libs/foo` means that if this package is installed,
+    /// `dev-libs/foo` (with matching version/slot constraints if any) must
+    /// NOT be in the solution.
+    pub fn check_blockers_detailed(
+        &self,
+        solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
+    ) -> Vec<BlockerHit> {
+        let mut hits = Vec::new();
         // `(cpn, slot)` the plan installs into; an installed package absent here
         // is retained after the merge. O(1) vs scanning the whole solution.
         let solution_keys: std::collections::HashSet<_> =
@@ -210,13 +272,15 @@ impl PortageDependencyProvider {
                 continue;
             };
             for blocker in &vd.blockers {
-                if self.blocker_hit(blocker, solution, &retained) {
-                    record_blocker(
-                        &mut conflicts,
-                        &mut seen,
-                        format!("{}-{}", pkg, version),
-                        blocker,
-                    );
+                let victims = self.blocker_victims(blocker, solution, &retained);
+                if !victims.is_empty() {
+                    hits.push(BlockerHit {
+                        owner: pkg.clone(),
+                        owner_version: version.clone(),
+                        owner_installed: false,
+                        atom: blocker.clone(),
+                        victims,
+                    });
                 }
             }
         }
@@ -231,35 +295,51 @@ impl PortageDependencyProvider {
                 continue;
             };
             for blocker in blockers {
-                if self.blocker_hit(blocker, solution, &retained) {
-                    record_blocker(
-                        &mut conflicts,
-                        &mut seen,
-                        format!("{}-{}", owner, owner_ver),
-                        blocker,
-                    );
+                let victims = self.blocker_victims(blocker, solution, &retained);
+                if !victims.is_empty() {
+                    hits.push(BlockerHit {
+                        owner: owner.clone(),
+                        owner_version: owner_ver.clone(),
+                        owner_installed: true,
+                        atom: blocker.clone(),
+                        victims,
+                    });
                 }
             }
         }
 
-        conflicts
+        hits
     }
 
-    /// Whether `blocker`'s atom is satisfied by any package present after the
-    /// plan — a solution member, or an installed one `retained` keeps in place.
-    fn blocker_hit(
+    /// Every package present after the plan (a solution member, or an
+    /// installed one `retained` keeps in place) that satisfies `blocker`'s
+    /// atom.
+    fn blocker_victims(
         &self,
         blocker: &Dep,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
         retained: &impl Fn(&PortagePackage) -> bool,
-    ) -> bool {
-        solution
+    ) -> Vec<BlockerVictim> {
+        let mut victims: Vec<BlockerVictim> = solution
             .iter()
-            .any(|(p, v)| self.blocker_satisfied_by(blocker, p, v, false))
-            || self
-                .installed
+            .filter(|(p, v)| self.blocker_satisfied_by(blocker, p, v, false))
+            .map(|(p, v)| BlockerVictim {
+                package: p.clone(),
+                version: v.clone(),
+                retained_installed: false,
+            })
+            .collect();
+        victims.extend(
+            self.installed
                 .iter()
-                .any(|(p, (v, _))| retained(p) && self.blocker_satisfied_by(blocker, p, v, true))
+                .filter(|(p, (v, _))| retained(p) && self.blocker_satisfied_by(blocker, p, v, true))
+                .map(|(p, (v, _))| BlockerVictim {
+                    package: p.clone(),
+                    version: v.clone(),
+                    retained_installed: true,
+                }),
+        );
+        victims
     }
 
     /// Whether `blocker`'s atom (cpn/slot, version, and any USE-dep) is satisfied
@@ -596,6 +676,18 @@ mod tests {
             !conflicts.is_empty(),
             "should detect blocker conflict between openssl and libressl"
         );
+
+        // check_blockers_detailed twin: keeps the victim's identity instead
+        // of collapsing to an advisory string.
+        let hits = provider.check_blockers_detailed(&solution);
+        assert_eq!(hits.len(), 1);
+        assert!(!hits[0].owner_installed);
+        assert_eq!(hits[0].victims.len(), 1);
+        assert_eq!(
+            hits[0].victims[0].package,
+            PortagePackage::unslotted(Cpn::parse("dev-libs/libressl").unwrap())
+        );
+        assert!(!hits[0].victims[0].retained_installed);
     }
 
     /// Regression test for the same bug class as `graph.rs`'s
@@ -771,6 +863,23 @@ mod tests {
             1,
             "blocker against the retained installed openresolv must still fire"
         );
+
+        // check_blockers_detailed twin: victim identity is preserved so a
+        // classifier can distinguish "installed and orphaned" from "still
+        // needed" without re-deriving it from a formatted string.
+        let hits = provider.check_blockers_detailed(&solution);
+        assert_eq!(hits.len(), 1);
+        assert!(!hits[0].owner_installed, "owner is the solved systemd");
+        assert_eq!(hits[0].victims.len(), 1);
+        assert_eq!(
+            hits[0].victims[0].package,
+            PortagePackage::unslotted(Cpn::parse("net-dns/openresolv").unwrap())
+        );
+        assert_eq!(
+            hits[0].victims[0].version,
+            Version::parse("3.17.4").unwrap()
+        );
+        assert!(hits[0].victims[0].retained_installed);
     }
 
     // Reciprocal of the above: a blocker declared by a retained *installed*
@@ -815,6 +924,21 @@ mod tests {
             1,
             "installed openresolv's blocker against the solved systemd must fire"
         );
+
+        // check_blockers_detailed twin: the reciprocal owner is flagged
+        // installed, and its victim is the solved (not installed) systemd —
+        // the shape a classifier needs to know "the owner is the removal
+        // candidate here, not the victim".
+        let hits = provider.check_blockers_detailed(&solution);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].owner_installed);
+        assert_eq!(hits[0].owner, openresolv);
+        assert_eq!(hits[0].victims.len(), 1);
+        assert_eq!(
+            hits[0].victims[0].package,
+            PortagePackage::unslotted(Cpn::parse("sys-apps/systemd").unwrap())
+        );
+        assert!(!hits[0].victims[0].retained_installed);
     }
 
     #[test]
