@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-07-30**.
+here briefly for context). Updated **2026-08-03**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -20,10 +20,9 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **2** | **Binpkg multi-instance / build-env identity residual** — phases 1–2 landed; live S1 verify + dual PKGDIR/header harden open | 🟡 | [[binpkg-subtargets]] |
 | **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` never reaches `PkgStart` still open | 🟡 | [[activity-status]] |
 | **4** | **Distfile GENTOO_MIRRORS parity residual** — core fetch facets done; no remote `layout.conf`, no `/etc/portage/mirrors`, etc. | 🟡 | [[distfile-fetch-reliability]] |
-| **5** | **Build-dir clean / FEATURES** — reinstall symptom closed; `noclean`/`keeptemp` parity open | 🟡 | [[build-clean-env]] |
-| **6** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
-| **7** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; destructive Step 2 **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
-| **8** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
+| **5** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
+| **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; `cede_required_use` awk-4/stage1 bug fixed 2026-08-01; destructive Step 2 **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
+| **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
 
 ### Smaller / polish (pick opportunistically)
 
@@ -35,10 +34,13 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 - `PORTAGE_CHECKSUM_FILTER` still unimplemented (orthogonal to ACCEPT_PROPERTIES/RESTRICT, which are done)
 - Review sweep log: [[review-findings-2026-07-24]]; structural cross notes: [[cross-support-self-review]]
 
-### Recently closed (2026-07-18 → 2026-07-30) — notes in `todo/done/`
+### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 
 | Item | When | Notes |
 |------|------|--------|
+| `cede_required_use` awk-4/stage1 REQUIRED_USE-reconsideration bug | 2026-08-01 | `Adapter::rebuilding_cpvs`, Fable-designed, [[em-stages-scenario-matrix]] |
+| Blocker Tier-1 Step 1 (classify_blockers advisory verdicts) | 2026-08-01 | [[blocker-enforcement]] (Step 2 unmerge still open) |
+| Build-dir clean FEATURES parity (`keepwork`/`keeptemp`/`noclean`) | 2026-07-30 | [[build-clean-env]] |
 | brush `PIPESTATUS`/`declare -a` on Dynamic — fixed independently on `for-portage-repo` (`64b38e16`), not the never-merged `pipestatus-dynamic-freeze` branch; live-verified | 2026-08-01 | [[brush-pipestatus-not-reset]] |
 | `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` + `-arch` vs `*` | 2026-07-29 | [[accept-properties-restrict]] |
 | Explicit-target reinstall default | 2026-07-29 (follow-up) | [[reinstall-default]] |
