@@ -1161,6 +1161,14 @@ to match the surrounding `>>>`-style output, not printed as raw
 `phase{phase="..."}: ...` span-labeled tracing output by default. Not
 investigated further yet — just flagged live 2026-08-03.
 
+Specifically: ` INFO phase{phase="qmerge"}: merge: sys-devel/binutils-2.46.1
+registered (counter=7)` — the raw `phase{phase="qmerge"}: ` span-label
+prefix is leaking straight from the `tracing` span into user-facing output
+verbatim. Real portage doesn't print a qmerge-registration line like this
+at all in normal mode; if `em` wants to keep the information, it needs its
+own plain-text format (no span labels, no `phase="..."` internals), not the
+tracing subscriber's default rendering.
+
 ## Later — progress UI (prodash vs indicatif)
 
 - 📌 **`em sync` backends (2026-07-29):** default is shell **`git`** + **`rsync`**
