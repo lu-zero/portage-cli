@@ -51,6 +51,17 @@ pub fn load_target_installed(roots: &crate::Roots) -> Vec<VdbEntry> {
 
 /// Union of two VDB roots with target shadowing base (prefix / general overlay).
 /// `None` means the host `/var/db/pkg`.
+///
+/// Dedup key is `(Cpn, slot)`, not `(Cpn, version)` — shadowing must win
+/// regardless of version, or a base-root entry at a different version from
+/// the target's own never gets displaced (found live 2026-08-03: after a
+/// real `--prefix` merge landed `sys-devel/binutils-2.46.1` in the target's
+/// own VDB, a subsequent `-p` still showed `[2.46.0]`, the host's installed
+/// version, as the base to "upgrade" from — the two versions are different
+/// keys under a version-keyed dedup, so both survived the union instead of
+/// the target's newer entry shadowing the base's older one). Same package,
+/// different slots are still both kept (each slot is a genuinely distinct
+/// installed package), since the key includes `slot`.
 pub fn load_installed(
     base: Option<&camino::Utf8Path>,
     target: Option<&camino::Utf8Path>,
@@ -59,11 +70,12 @@ pub fn load_installed(
     if target != base {
         roots.push(base);
     }
-    let mut seen: std::collections::HashSet<(Cpn, String)> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(Cpn, Option<Interned<DefaultInterner>>)> =
+        std::collections::HashSet::new();
     let mut out: Vec<VdbEntry> = Vec::new();
     for root in roots {
         for entry in load_one(root) {
-            if seen.insert((entry.cpn, entry.version.to_string())) {
+            if seen.insert((entry.cpn, entry.slot)) {
                 out.push(entry);
             }
         }
@@ -314,5 +326,58 @@ mod tests {
         let entries = load_host_installed(&roots);
 
         assert_eq!(entries.len(), 1, "must still find the host-only entry");
+    }
+
+    /// Regression test: `load_installed`'s target-shadows-base union must
+    /// dedup by `(Cpn, slot)`, not `(Cpn, version)` — a base entry at a
+    /// *different* version than the target's own must not survive the
+    /// union. Found live 2026-08-03: a real `--prefix` merge landed
+    /// `sys-devel/binutils-2.46.1` in the target's own VDB, but the host's
+    /// VDB still had the older `binutils-2.46.0` — a subsequent `-p` kept
+    /// showing `[2.46.0]` (the host's version) as the installed base to
+    /// "upgrade" from, because the old version-keyed dedup treated the two
+    /// versions as distinct entries and let both through.
+    #[test]
+    fn load_installed_target_shadows_base_even_at_a_different_version() {
+        let host = tempfile::tempdir().unwrap();
+        let prefix = tempfile::tempdir().unwrap();
+        write_fake_vdb_entry(host.path(), "sys-devel/binutils-2.46.0", "");
+        write_fake_vdb_entry(prefix.path(), "sys-devel/binutils-2.46.1", "");
+
+        let entries = load_installed(
+            Some(host.path().try_into().unwrap()),
+            Some(prefix.path().try_into().unwrap()),
+        );
+
+        assert_eq!(
+            entries.len(),
+            1,
+            "the base's older version must be shadowed, not unioned alongside the target's"
+        );
+        assert_eq!(entries[0].version.to_string(), "2.46.1");
+    }
+
+    /// Same package, genuinely different slots (e.g. two active `gcc` slots)
+    /// must both survive — the fix must not over-collapse by `Cpn` alone.
+    #[test]
+    fn load_installed_keeps_distinct_slots_of_the_same_package() {
+        let host = tempfile::tempdir().unwrap();
+        let prefix = tempfile::tempdir().unwrap();
+        let pkg_dir = host.path().join("var/db/pkg/sys-devel/gcc-15.2.0");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("EAPI"), "8").unwrap();
+        std::fs::write(pkg_dir.join("SLOT"), "15").unwrap();
+        std::fs::write(pkg_dir.join("CONTENTS"), "").unwrap();
+        std::fs::write(pkg_dir.join("USE"), "").unwrap();
+        write_fake_vdb_entry(prefix.path(), "sys-devel/gcc-16.1.1", "");
+        let pkg_dir = prefix.path().join("var/db/pkg/sys-devel/gcc-16.1.1");
+        std::fs::write(pkg_dir.join("SLOT"), "16").unwrap();
+
+        let entries = load_installed(
+            Some(host.path().try_into().unwrap()),
+            Some(prefix.path().try_into().unwrap()),
+        );
+
+        assert_eq!(entries.len(), 2, "distinct slots must both be kept");
     }
 }
