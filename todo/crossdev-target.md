@@ -25,6 +25,39 @@ activation/wrapper polish. Goal: make `em` act as a `{target}-emerge` that actua
 covering **both** the GCC and the **LLVM/Clang** toolchain models. Target libc is
 the standard choice (glibc / musl, and LLVM libc only as a generic option).
 
+**Update 2026-08-03 — three corrections before trusting anything below:**
+1. **CLI syntax throughout this doc is stale.** Every `crossdev -t <tuple>` /
+   `em --cross <tuple>` / `-s0..s4` / `--ov-*` shown below is what the CLI
+   looked like *before* 2026-07-09's rename (`todo/PENDING.md`): the tuple
+   flag is now the single **global `--target`/`-T`**, with no separate `-t`
+   on `crossdev` itself. Historical command lines are left as-is (they're
+   what was literally run at the time) — read them as `-t <tuple>` →
+   `--target <tuple>` / `-T <tuple>` mentally. `docs/crossdev.md` has the
+   current, accurate flag reference and examples.
+2. **The doc's "LLVM leads"/"LLVM first"/"simpler, preferred path" framing
+   throughout (e.g. the "Stage B/C" ordering, "## LLVM/Clang cross specifics"
+   below) is planning language from before either path was attempted — it
+   is not a report of relative maturity.** What actually happened is the
+   opposite: the **GCC** two-stage path is the one with a repeated,
+   validated end-to-end bootstrap (through 2026-06-27, below). LLVM/Clang
+   only ever got the setup-layer scaffolding (`CrossTarget::parse`,
+   `cross_llvm-*` category/package-set derivation, `-L` flag) — no LLVM
+   toolchain bootstrap has actually been run.
+3. **No `em`-driven cross-*build* of a CMake/TableGen-based package (e.g.
+   `llvm-core/clang` itself) has ever been tested.** The 2026-06-27 "clang
+   validated" entry below is a **raw host `clang` binary** manually invoked
+   with `--target=riscv64-… --sysroot=…` against the em-built sysroot — a
+   sysroot-usability smoke test, not `em --target riscv64-unknown-linux-gnu
+   llvm-core/clang` going through the normal cross-merge path. Every
+   target package actually built through `em` so far is a small
+   autotools/econf leaf (zlib, ncurses, readline, bzip2, libpcre2, less).
+   This is a genuine, unverified gap, not a known-blocked one: "Stage D —
+   true dual-root scheduling" (below) is about a single CPV needing both a
+   host-native and a target-cross build simultaneously, which doesn't apply
+   here (clang's BDEPEND tools — cmake, python — are ordinary host-native
+   BDEPENDs, already routed by `host_copies.rs`, "the common case" per that
+   section). Worth an empirical test, not a re-plan.
+
 **2026-07-08 — derive-on-the-fly landed; `--prefix` setup now unprivileged.**
 The on-disk symlink overlay (`write_overlay`) is gone. `cross-<tuple>/<pkg>`
 is now derived from `::gentoo` at resolve time via a `Location::Alias`
@@ -81,12 +114,14 @@ Verified against the actual binary/code, not docs (which understated it):
 
 **Reconciliation:** the earlier "crossdev not started beyond `-p`" framing was
 stale. Cross-context **detection** and **dual-root `MergeRoot` routing** are
-implemented (`root_aware.rs`, `host_copies.rs`, pubgrub `MergeRoot`). What's
-genuinely missing: (a) the **entry-point ergonomics** — a `--cross <tuple>` /
-`<CTARGET>-emerge` that points `config_root` at the sysroot (today hand-driven as
-`--config-root /usr/<CTARGET> --root /usr/<CTARGET>`); (b) the actual cross
-**build** (run phases with cross env); (c) the **`--local` sub-path retarget**
-(below).
+implemented (`root_aware.rs`, `host_copies.rs`, pubgrub `MergeRoot`).
+**(a) entry-point ergonomics is now DONE** — superseded by the global
+`--target`/`-T` flag (2026-07-09, see the 2026-08-03 update note above);
+`docs/crossdev.md` is the current reference. (b) the actual cross **build**
+also landed and is validated end-to-end for the GCC model (below). What
+remains genuinely open: (c) the **`--local` sub-path retarget** (below), and
+whether a CMake/TableGen-scale package cross-builds cleanly (2026-08-03
+update note, point 3).
 
 ### Gap for the retarget requirement (point 1)
 `--local` currently hardcodes `target = EPREFIX = ~/.gentoo`. A cross sysroot at
