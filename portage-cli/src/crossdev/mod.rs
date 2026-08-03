@@ -460,7 +460,9 @@ fn activate_toolchain(target: &CrossTarget, globals: &Cli, step: &stages::StageS
         // gates on it (real crossdev's own `cross-pkg-config` has no build
         // step at all — it's a static script plus a per-target symlink).
         // See `select/pkgconf.rs`'s module doc for why this needs to exist.
-        crate::select::activate_pkgconf(&roots, tuple)?;
+        // `is_native: false` — a genuine foreign `CTARGET`, never the host's
+        // own CHOST.
+        crate::select::activate_pkgconf(&roots, tuple, false)?;
         activated
     } else {
         return Ok(());
@@ -493,7 +495,10 @@ fn activate_native_toolchain(globals: &Cli, step: &stages::StageStep) -> Result<
         crate::select::activate_binutils(&roots, &tuple)?
     } else if atom_is_package(atom, "gcc") {
         let activated = crate::select::activate_compiler(&roots, &tuple)?;
-        crate::select::activate_pkgconf(&roots, &tuple)?;
+        // `is_native: true` — see `activate_pkgconf`'s doc comment for why
+        // this must be an explicit signal, not something the function infers
+        // from `roots` alone (found live 2026-08-03).
+        crate::select::activate_pkgconf(&roots, &tuple, true)?;
         activated
     } else {
         return Ok(());

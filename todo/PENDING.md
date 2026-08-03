@@ -998,6 +998,39 @@ blocked by the three independent findings above, tracked separately.
   `--local` to `--prefix` (overlay borrows host tools; standalone must own
   its python), `--prefix` sets EPREFIX=P. Design: [[root-topology]] (doc)
   + [[root-topology-refactor]] (tasks).
+- 🟡 **`activate_pkgconf`'s `is_native` bool is a workaround that smells,
+  needs further review (2026-08-03).** Found live testing a from-scratch
+  `--prefix` cross-toolchain bootstrap: `em toolchain --setup`'s native
+  post-step activates a `<host-CHOST>-pkg-config` wrapper
+  (`em-cross-pkg-config`, `ESYSROOT`-only scoped) that shadows the real
+  system's own `<chost>-pkg-config` symlink — the shadowed one can't see
+  host-installed packages, breaking any later `--prefix` build (e.g.
+  `sys-devel/binutils`'s optional `debuginfod` BDEPEND) that used to find
+  them transparently. Root cause: `--prefix` and `--local` set `EPREFIX`
+  identically in `cli.rs` (`base_roots()`), so the build-env layer can't
+  tell apart `--local`'s genuine standalone closure (where `ESYSROOT`-only
+  scoping is correct) from `--prefix`'s overlay (which is supposed to
+  *borrow* the host, per this file's own "Root topology refactor" entry
+  above — `--prefix` sets `EPREFIX=P` there too, so that refactor should
+  subsume this). Patched narrowly for now: `activate_pkgconf(roots, target,
+  is_native: bool)` — callers explicitly declare whether `target` is the
+  host's own native CHOST, and the function no-ops when `is_native &&
+  roots.is_overlay()` (commit pending this session). This is a call-site
+  contract, not something the function enforces on its own from `roots`
+  alone (`roots.is_overlay()` is *also* true for a genuine `--prefix
+  --target T crossdev --setup`'s correct, `is_native: false` activation, so
+  it can't be inferred from `roots` alone without the explicit flag) —
+  revisit once the root topology refactor lands, since a real
+  `RootTopology::Overlayed` variant would make this the type system's job,
+  not a bool every caller has to remember to pass correctly.
+- ✅ **`load_installed`'s VDB union dedup keyed by `(Cpn, version)` instead
+  of `(Cpn, slot)` — FIXED 2026-08-03** (`ae20cd6`). `--prefix`'s "target
+  shadows base" union never actually shadowed a package whose version
+  differs between the two roots (a base-root entry at a different version
+  from the target's own survived the union instead of being displaced).
+  Found live: after a real `--prefix` merge landed a newer `sys-devel/
+  binutils` in the prefix's own VDB, `-p` kept showing the host's older
+  installed version as the base to "upgrade" from, forever.
 - ✅ **`--local` spuriously engaging dual-root solver machinery — FIXED
   2026-07-16.** `CrossContext::detect()` treated any non-`/` target as
   needing dual-root bookkeeping, which wrongly included `--local` (whose
@@ -1106,6 +1139,27 @@ blocked by the three independent findings above, tracked separately.
   [[crossdev-target]], [[cross-support-self-review]] for older open threads.
 
 ---
+
+## Later — normal-verbosity log output is ugly (2026-08-03)
+
+Raw `tracing`-style lines leak into the default (non-`-v`) merge output,
+mixed in with the clean `>>> Installing`/`>>> Completed` emerge-style lines
+— visibly inconsistent, e.g.:
+
+```
+ INFO post-install: 155 file(s) compressed, 0 symlink(s) retargeted, 22 object(s) stripped
+>>> Installing (1 of 1) sys-devel/binutils-2.46.1 to /var/tmp/prefix-t1/
+ * Switching to aarch64-unknown-linux-gnu-2.46.1 ...
+ INFO phase{phase="qmerge"}: merge: sys-devel/binutils-2.46.1 registered (counter=7)
+>>> Completed (1 of 1) sys-devel/binutils-2.46.1 to /var/tmp/prefix-t1/
+ INFO Done — 1 package(s) merged into /var/tmp/prefix-t1
+```
+
+These `tracing::info!` call sites (post-install stats, qmerge registration,
+the final "Done" summary) should either be gated behind `-v` or reformatted
+to match the surrounding `>>>`-style output, not printed as raw
+`phase{phase="..."}: ...` span-labeled tracing output by default. Not
+investigated further yet — just flagged live 2026-08-03.
 
 ## Later — progress UI (prodash vs indicatif)
 

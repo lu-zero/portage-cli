@@ -263,7 +263,33 @@ fn current_backend(roots: &Roots, target: &str) -> Option<(String, Utf8PathBuf)>
 /// re-picked, the same `FillGapsOnly`-style deference this codebase uses
 /// elsewhere for one-time bootstrap state. Returns `false` if no known
 /// backend is reachable and there's no shared script to link to yet.
-pub fn activate_pkgconf(roots: &Roots, target: &str) -> Result<bool> {
+///
+/// `is_native` (true only for `target == ` the host's own native CHOST, from
+/// `crossdev::activate_native_toolchain`) skips activation entirely under a
+/// `roots.is_overlay()` topology (`--prefix`). The shared script's
+/// `ESYSROOT`-only scoping is correct for `--local`/`--root` (standalone
+/// closures — nothing outside `ESYSROOT` should be visible anyway) and for a
+/// genuine foreign `CTARGET` (`is_native: false`, real cross target — the
+/// only place its own sysroot's packages could live). `--prefix` is neither:
+/// it's documented and designed as an overlay that *borrows* the host's
+/// already-populated system (`roots.base()` is the host, unlike `--local`'s
+/// `Some(prefix)`), and activating this wrapper for the native/host CHOST
+/// there regresses a `--prefix` build from "transparently uses the real
+/// system pkgconf" (what happens before this ever runs, and what an explicit
+/// `em select pkgconf set` still does — that command's own `run()` never
+/// goes through this function) to isolated-like-`--local`. Found live
+/// 2026-08-03: a `--prefix` build of `sys-devel/binutils` that never ran
+/// `toolchain --setup` found the host's real `libdebuginfod` via the
+/// system's own `pkgconf` symlink; the identical build under a `--prefix`
+/// that HAD run `toolchain --setup` failed, because that run's
+/// `activate_pkgconf` call had shadowed the system symlink with an
+/// `ESYSROOT`-scoped wrapper for the *host's own* CHOST. `is_overlay()`
+/// alone can't gate this: it's also true for a genuine `--prefix --target T
+/// crossdev --setup`'s own (correct, `is_native: false`) activation.
+pub fn activate_pkgconf(roots: &Roots, target: &str, is_native: bool) -> Result<bool> {
+    if is_native && roots.is_overlay() {
+        return Ok(false);
+    }
     let link = wrapper_path(roots, target);
     if std::fs::symlink_metadata(&link).is_ok() {
         return Ok(true);
@@ -415,7 +441,7 @@ mod tests {
         let _path = PathGuard::set(&[&bindir]);
 
         let roots = test_roots(dir.path());
-        assert!(activate_pkgconf(&roots, "riscv64-unknown-linux-gnu").unwrap());
+        assert!(activate_pkgconf(&roots, "riscv64-unknown-linux-gnu", false).unwrap());
 
         let (name, _) = current_backend(&roots, "riscv64-unknown-linux-gnu").unwrap();
         assert_eq!(name, "pkgconf", "must prefer pkgconf over pkg-config");
@@ -453,7 +479,7 @@ mod tests {
         let _path = PathGuard::set(&[&bindir]);
 
         let roots = test_roots(dir.path());
-        assert!(activate_pkgconf(&roots, "riscv64-unknown-linux-gnu").unwrap());
+        assert!(activate_pkgconf(&roots, "riscv64-unknown-linux-gnu", false).unwrap());
         let (name, _) = current_backend(&roots, "riscv64-unknown-linux-gnu").unwrap();
         assert_eq!(name, "pkg-config");
     }
@@ -469,7 +495,7 @@ mod tests {
         let _path = PathGuard::set(&[&empty_bindir]);
 
         let roots = test_roots(dir.path());
-        assert!(!activate_pkgconf(&roots, "riscv64-unknown-linux-gnu").unwrap());
+        assert!(!activate_pkgconf(&roots, "riscv64-unknown-linux-gnu", false).unwrap());
         assert!(current_backend(&roots, "riscv64-unknown-linux-gnu").is_none());
     }
 
@@ -506,7 +532,7 @@ mod tests {
 
         // A second target's auto-activation must reuse the same choice,
         // not silently re-pick pkgconf.
-        assert!(activate_pkgconf(&roots, "aarch64-unknown-linux-gnu").unwrap());
+        assert!(activate_pkgconf(&roots, "aarch64-unknown-linux-gnu", false).unwrap());
         let (name, _) = current_backend(&roots, "aarch64-unknown-linux-gnu").unwrap();
         assert_eq!(
             name, "pkg-config",
@@ -530,6 +556,56 @@ mod tests {
             current_backend(&roots, "x86_64-unknown-linux-gnu").is_none(),
             "an unconfigured target must not inherit another target's status"
         );
+    }
+
+    /// Regression test for the bug found live 2026-08-03: activating the
+    /// native/host-CHOST pkg-config wrapper under a `--prefix` overlay
+    /// shadows the real system's own `<chost>-pkg-config` (which correctly
+    /// finds host-installed packages) with an `ESYSROOT`-only-scoped one
+    /// (which can't). `is_native: true` under `roots.is_overlay()` must
+    /// no-op, leaving no symlink behind at all.
+    #[test]
+    fn activate_pkgconf_skips_native_chost_under_prefix_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let bindir = dir.path().join("bin");
+        std::fs::create_dir_all(&bindir).unwrap();
+        write_fake_backend(&bindir, "pkgconf");
+        let _path = PathGuard::set(&[&bindir]);
+
+        let host = dir.path().join("host");
+        let prefix = dir.path().join("prefix");
+        let roots = Roots::for_test_overlay(host.to_str().unwrap(), prefix.to_str().unwrap());
+
+        assert!(
+            !activate_pkgconf(&roots, "aarch64-unknown-linux-gnu", true).unwrap(),
+            "native-CHOST activation must no-op under a --prefix overlay"
+        );
+        assert!(
+            current_backend(&roots, "aarch64-unknown-linux-gnu").is_none(),
+            "must leave no symlink behind"
+        );
+    }
+
+    /// A genuine foreign `CTARGET` (`is_native: false`) must still activate
+    /// normally under the same `--prefix` overlay — only the native/host
+    /// case is special-cased, not `is_overlay()` on its own.
+    #[test]
+    fn activate_pkgconf_still_activates_a_real_cross_target_under_prefix_overlay() {
+        let dir = tempfile::tempdir().unwrap();
+        let bindir = dir.path().join("bin");
+        std::fs::create_dir_all(&bindir).unwrap();
+        write_fake_backend(&bindir, "pkgconf");
+        let _path = PathGuard::set(&[&bindir]);
+
+        let host = dir.path().join("host");
+        let prefix = dir.path().join("prefix");
+        let roots = Roots::for_test_overlay(host.to_str().unwrap(), prefix.to_str().unwrap());
+
+        assert!(
+            activate_pkgconf(&roots, "riscv64-unknown-linux-gnu", false).unwrap(),
+            "a genuine cross target must still activate under --prefix"
+        );
+        assert!(current_backend(&roots, "riscv64-unknown-linux-gnu").is_some());
     }
 
     /// The shared script must actually work as a real shell script,

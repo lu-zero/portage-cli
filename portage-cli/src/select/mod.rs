@@ -57,8 +57,13 @@ pub fn current_compiler_slot(roots: &Roots, target: &str) -> Option<String> {
 /// exist at all). Run alongside [`activate_binutils`]/[`activate_compiler`]
 /// so a plain `crossdev --setup`/`toolchain --setup` leaves a real, working
 /// `pkg-config` behind without an extra manual step.
-pub fn activate_pkgconf(roots: &Roots, target: &str) -> Result<bool> {
-    pkgconf::activate_pkgconf(roots, target)
+///
+/// `is_native` must be `true` only when `target` is the host's own native
+/// CHOST (`crossdev/mod.rs`'s `activate_native_toolchain`), never for a
+/// genuine foreign `CTARGET` — see [`pkgconf::activate_pkgconf`]'s doc
+/// comment for why this can't be inferred from `roots` alone.
+pub fn activate_pkgconf(roots: &Roots, target: &str, is_native: bool) -> Result<bool> {
+    pkgconf::activate_pkgconf(roots, target, is_native)
 }
 
 /// Dispatch `em select <module> <action>`.
