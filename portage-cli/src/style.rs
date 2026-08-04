@@ -85,6 +85,13 @@ pub const C_WARN: Style = Style::new()
 pub const C_ERROR: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)))
     .effects(Effects::BOLD);
+/// The default answer in a `[y/N]`-style confirm prompt — real portage's
+/// `PROMPT_CHOICE_DEFAULT` (plain green, not bold; `UserQuery.query`'s
+/// default `colours=[PROMPT_CHOICE_DEFAULT, PROMPT_CHOICE_OTHER]`).
+pub const C_CHOICE_DEFAULT: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+/// The non-default answer in a `[y/N]`-style confirm prompt — real portage's
+/// `PROMPT_CHOICE_OTHER` (plain red, not bold).
+pub const C_CHOICE_OTHER: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red)));
 
 // ── Stability / status palette (stable=green, testing/dev=yellow, …=red) ────
 /// Stable keyword / stable profile.

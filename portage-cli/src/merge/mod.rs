@@ -261,8 +261,19 @@ fn check_pkgdir_writable(pkgdir: &camino::Utf8Path) -> Result<()> {
 /// or EOF.
 pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
     use std::io::Write;
-    print!("\n>>> Would you like to {verb} these {count} package(s)? [y/N] ");
-    std::io::stdout().flush().ok();
+
+    use crate::style::{C_CHOICE_DEFAULT, C_CHOICE_OTHER};
+    // "N" is the default (empty input / EOF -> no), so it gets
+    // PROMPT_CHOICE_DEFAULT's green, matching real portage's own
+    // `UserQuery.query` — the color follows which answer is the default,
+    // not a fixed "y is green" rule. Through anstream (not a bare `print!`)
+    // so the color strips itself when stdout is not a terminal.
+    let mut out = anstream::stdout();
+    let _ = write!(
+        out,
+        "\n>>> Would you like to {verb} these {count} package(s)? [{C_CHOICE_OTHER}y{C_CHOICE_OTHER:#}/{C_CHOICE_DEFAULT}N{C_CHOICE_DEFAULT:#}] "
+    );
+    let _ = out.flush();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line)? == 0 {
         return Ok(false);
