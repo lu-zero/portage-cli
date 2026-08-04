@@ -85,6 +85,16 @@ pub const C_WARN: Style = Style::new()
 pub const C_ERROR: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)))
     .effects(Effects::BOLD);
+
+/// `einfo`'s `" * "` marker colour — real portage's `EOutput._styles`
+/// `INFO`=`"darkgreen"`, which `portage/output.py`'s `codes` dict maps to
+/// `0x00AA00` → plain ANSI 32: green, *not* bold.
+///
+/// There is deliberately no `C_MARKER_WARN`/`C_MARKER_ERROR` counterpart:
+/// `ewarn`'s `"yellow"` (`0xFFFF55` → `33;01m`) and `eerror`'s `"red"`
+/// (`0xFF5555` → `31;01m`) are the same bold codes as [`C_WARN`]/[`C_ERROR`]
+/// above, so the marker reuses those.
+pub const C_MARKER_INFO: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
 /// The default answer in a `[y/N]`-style confirm prompt — real portage's
 /// `PROMPT_CHOICE_DEFAULT` (plain green, not bold; `UserQuery.query`'s
 /// default `colours=[PROMPT_CHOICE_DEFAULT, PROMPT_CHOICE_OTHER]`).

@@ -75,7 +75,12 @@ impl builtins::Command for UnpackCommand {
                     return 1;
                 }
 
-                tracing::info!(">>> Unpacking {} to {}", archive, cwd.display());
+                tracing::info!(
+                    target: crate::ACTION_TARGET,
+                    ">>> Unpacking {} to {}",
+                    archive,
+                    cwd.display()
+                );
 
                 match unpack_archive(&src_path, &cwd, eapi) {
                     Ok(0) => {}

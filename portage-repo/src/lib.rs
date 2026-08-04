@@ -49,6 +49,7 @@ pub mod package_env;
 pub(crate) mod repo;
 pub mod source;
 
+pub use build::ACTION_TARGET;
 pub use build::EbuildEnv;
 pub use build::inherit;
 

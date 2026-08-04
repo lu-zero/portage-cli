@@ -120,13 +120,21 @@ pub fn print_diagnostic(diag: &dyn miette::Diagnostic) {
 /// this reimplements just enough of it.
 ///
 /// `INFO` is this codebase's routine status channel (the doc table above:
-/// "per-package status + warnings + errors") — real portage's own status
-/// lines (`>>> Emerging …`, `>>> Unpacking …`) carry no log-level tag at all,
-/// and every `tracing::info!` call site here already writes its own natural
-/// prefix into the message (`"fetch: …"`, `">>> Unpacking …"`). Gluing an
-/// `INFO` tag in front of an already-prefixed line reads as redundant noise,
-/// not a real log level a user needs to triage — so `INFO` gets no tag,
-/// matching plain stdout.
+/// "per-package status + warnings + errors"), and real portage draws on two
+/// distinct conventions for it: a bare `">>> "` line for a major action
+/// announcement (`Emerging`, `Unpacking`), and `einfo`'s colored `" * "`
+/// marker for an ordinary informational note. A literal `"INFO"` tag matches
+/// neither, and is redundant noise on top of a call site's own `">>> "`
+/// prefix.
+///
+/// Which of the two an event is comes from its `tracing` **target**
+/// (`portage_repo::ACTION_TARGET`, checked below), not from sniffing the
+/// rendered message text for a `">>> "` prefix: the message is free-form
+/// call-site text, not a stable contract to pattern-match on, and `tracing`
+/// already gives every event a structured field for exactly this kind of
+/// routing decision. An event on that target is left bare (it already wrote
+/// its own `">>> "`); everything else gets `einfo`'s `" * "` in
+/// [`crate::style::C_MARKER_INFO`].
 ///
 /// `WARN`/`ERROR` map to real portage's `ewarn`/`eerror` (`portage/output.py`'s
 /// `EOutput`): a colored `" * "` marker in [`crate::style::C_WARN`]/
@@ -154,8 +162,23 @@ where
         event: &Event<'_>,
     ) -> fmt::Result {
         let level = event.metadata().level();
+        if *level == Level::INFO {
+            // An event on `portage_repo::ACTION_TARGET` already wrote its own
+            // `">>> "` action-announcement prefix (`">>> Unpacking …"`) and
+            // stays bare; everything else is an ordinary informational note
+            // — real portage's `einfo` equivalent — and gets a green `" * "`.
+            if event.metadata().target() != portage_repo::ACTION_TARGET {
+                if writer.has_ansi_escapes() {
+                    let s = crate::style::C_MARKER_INFO;
+                    write!(writer, "{s} * {s:#}")?;
+                } else {
+                    write!(writer, " * ")?;
+                }
+            }
+            ctx.format_fields(writer.by_ref(), event)?;
+            return writeln!(writer);
+        }
         match *level {
-            Level::INFO => {}
             Level::WARN | Level::ERROR => {
                 if writer.has_ansi_escapes() {
                     // Matches portage/output.py: colorize("WARN"|"ERR", " * ").
@@ -185,6 +208,7 @@ where
                     write!(writer, "{level:>5} ")?;
                 }
             }
+            Level::INFO => unreachable!(),
         }
         ctx.format_fields(writer.by_ref(), event)?;
         writeln!(writer)
@@ -282,7 +306,8 @@ mod tests {
 
     /// `CompactFormatter`'s own rendering, exercised end to end through a
     /// real `tracing_subscriber` registry (not just the filter): `INFO` gets
-    /// no tag at all, `WARN`/`ERROR` get portage's colored `" * "` marker —
+    /// einfo's `" * "` marker unless it is an `ACTION_TARGET` event (which
+    /// stays bare), `WARN`/`ERROR` get portage's colored `" * "` marker —
     /// never a literal `"WARN"`/`"ERROR"` word — and no span-context prefix
     /// leaks in even though the event fires inside `pkg`/`phase` spans
     /// (mirroring `BusLayer`'s own real usage).
@@ -324,6 +349,10 @@ mod tests {
                 let phase = tracing::info_span!("phase", phase = "fetch");
                 let _phase = phase.enter();
                 tracing::info!("fetch: binutils-2.46.1.tar.xz (already present)");
+                tracing::info!(
+                    target: portage_repo::ACTION_TARGET,
+                    ">>> Unpacking binutils-2.46.1.tar.xz to /work"
+                );
                 tracing::warn!("something needs attention");
                 tracing::error!("something failed");
             });
@@ -335,13 +364,24 @@ mod tests {
         let mut lines = plain.lines();
         assert_eq!(
             lines.next().unwrap(),
-            "fetch: binutils-2.46.1.tar.xz (already present)",
-            "INFO must carry no tag and no span context: {plain:?}"
+            " * fetch: binutils-2.46.1.tar.xz (already present)",
+            "an ordinary INFO note gets einfo's \" * \" marker, no span context: {plain:?}"
+        );
+        assert_eq!(
+            lines.next().unwrap(),
+            ">>> Unpacking binutils-2.46.1.tar.xz to /work",
+            "an event on ACTION_TARGET (already carrying its own >>> prefix) \
+             must stay bare, not get a second marker: {plain:?}"
         );
         assert_eq!(lines.next().unwrap(), " * something needs attention");
         assert_eq!(lines.next().unwrap(), " * something failed");
 
         let colored = render(true);
+        assert!(
+            colored.contains("\x1b[32m * \x1b[0mfetch: binutils"),
+            "an ordinary INFO note's \" * \" marker is portage's darkgreen, \
+             i.e. plain ANSI green: {colored:?}"
+        );
         assert!(
             colored.contains("\x1b[33m * \x1b[0msomething needs attention"),
             "WARN must use portage's yellow \" * \" marker, not a text tag: {colored:?}"
