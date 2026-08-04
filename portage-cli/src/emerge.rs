@@ -380,7 +380,10 @@ async fn emerge_atoms_inner(
         )
         .collect();
     if atoms.is_empty() {
-        bail!("em: no valid atoms");
+        // No "em: " prefix: the colored `!!!` banner this ends up printed
+        // through (main.rs's print_fatal_error) already marks it as em's own
+        // diagnostic, same as the per-atom warning(s) just printed above it.
+        bail!("no valid atoms");
     }
 
     // World selection (real emerge's `_world_atom`): only the genuine
