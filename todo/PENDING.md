@@ -1153,7 +1153,17 @@ blocked by the three independent findings above, tracked separately.
 
 ---
 
-## Later — normal-verbosity log output is ugly (2026-08-03)
+## Later — normal-verbosity log output is ugly (2026-08-03) — FIXED 2026-08-04
+
+**FIXED 2026-08-04** (`4354742`): post-install stats and qmerge registration
+downgraded `tracing::info!` → `tracing::debug!` (developer detail, matches
+real portage showing neither interactively; the debug floor never fires by
+default so the `phase{phase="qmerge"}:` span-label leak disappears with it).
+The "Done" summary stays default-visible but as a plain `>>> Done — ...`
+line gated on the same `quiet` flag as the rest of the merge output, not a
+bare tracing event. Live-verified with a real `sys-libs/zlib` merge.
+
+Original report below, kept for context:
 
 Raw `tracing`-style lines leak into the default (non-`-v`) merge output,
 mixed in with the clean `>>> Installing`/`>>> Completed` emerge-style lines
