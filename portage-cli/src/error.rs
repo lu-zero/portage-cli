@@ -12,3 +12,15 @@ pub use anyhow::Result;
 #[derive(Debug, thiserror::Error)]
 #[error("USE/mask changes are required to proceed (see above)")]
 pub struct ConfigChangesNeeded;
+
+/// No atom on the command line resolved to anything mergeable/queryable.
+///
+/// Each failure already printed its own `!!!` warning (unresolvable atom,
+/// ambiguous name with its "pass -u" hint, etc.), so — same pattern as
+/// [`ConfigChangesNeeded`] — this is carried purely to drive a non-zero exit
+/// through the normal `Result` flow, without a final generic "no valid
+/// atoms" line that adds nothing beyond what the warnings above it already
+/// said (found live 2026-08-04: it read as a second, unrelated failure).
+#[derive(Debug, thiserror::Error)]
+#[error("no valid atoms (see warnings above)")]
+pub struct NoValidAtoms;

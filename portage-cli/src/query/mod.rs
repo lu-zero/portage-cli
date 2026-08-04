@@ -104,7 +104,11 @@ fn resolve_ambiguous(
     // leaves you to retype the full atom; naming the installed one and the
     // flag that would pick it is strictly more helpful (found live 2026-08-04).
     let hint = installed
-        .map(|(_, cpn)| format!("\n    {C_PKG}{cpn}{C_PKG:#} is installed — pass -u to update it"))
+        .map(|(_, cpn)| {
+            format!(
+                "\n    {C_PKG}{cpn}{C_PKG:#} is installed — pass {C_BOLD}-u{C_BOLD:#} to update it"
+            )
+        })
         .unwrap_or_default();
     Err(anyhow!(
         "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous, matching: {}{hint}",

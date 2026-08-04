@@ -388,10 +388,12 @@ async fn emerge_atoms_inner(
         )
         .collect();
     if atoms.is_empty() {
-        // No "em: " prefix: the colored `!!!` banner this ends up printed
-        // through (main.rs's print_fatal_error) already marks it as em's own
-        // diagnostic, same as the per-atom warning(s) just printed above it.
-        bail!("no valid atoms");
+        // No extra "!!! no valid atoms" line: each atom that failed already
+        // printed its own warning above (unresolvable, ambiguous + "-u"
+        // hint, ...) — a generic follow-up line adds nothing and reads as a
+        // second, unrelated failure. `NoValidAtoms` just drives the exit
+        // code; main.rs recognises it and stays quiet.
+        return Err(error::NoValidAtoms.into());
     }
 
     // World selection (real emerge's `_world_atom`): only the genuine

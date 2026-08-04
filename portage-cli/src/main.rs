@@ -70,11 +70,13 @@ fn main() {
         // change block); do it explicitly so nothing printed is lost.
         use std::io::Write;
         std::io::stdout().flush().ok();
-        // A "changes needed" resolve exits 1 quietly — the change block is already
-        // printed (and the staged driver prints its step header), so an `error:`
-        // line would be noise. Everything else gets the message.
+        // A "changes needed" resolve, or an all-atoms-failed run, exits 1
+        // quietly — the real explanation (change block / per-atom warnings)
+        // is already printed, so a final generic `!!!` line would be noise,
+        // not new information.
         if e.downcast_ref::<portage_cli::ConfigChangesNeeded>()
             .is_none()
+            && e.downcast_ref::<portage_cli::NoValidAtoms>().is_none()
         {
             portage_cli::print_fatal_error(&e);
         }

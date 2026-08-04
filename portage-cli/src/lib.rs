@@ -51,7 +51,7 @@ pub use activity::{
     estimate_remaining, estimate_remaining_with_blockers,
 };
 pub(crate) use emerge::{EmergeOpts, emerge_atoms};
-pub use error::ConfigChangesNeeded;
+pub use error::{ConfigChangesNeeded, NoValidAtoms};
 
 /// Dispatch one parsed invocation to its applet or the default emerge path.
 pub async fn run(cli: &cli::Cli) -> error::Result<()> {

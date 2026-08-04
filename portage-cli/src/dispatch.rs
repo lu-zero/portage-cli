@@ -370,7 +370,9 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 .map(|d| query::depgraph::TargetAtom::explicit(d.to_string()))
                 .collect();
             if atoms.is_empty() {
-                bail!("equery depgraph: no valid atoms");
+                // Same reasoning as emerge.rs's atoms.is_empty() check: each
+                // failed atom already printed its own warning above.
+                return Err(crate::error::NoValidAtoms.into());
             }
             let roots = globals.roots();
             // See `DepgraphOpts::host_merge_root`: `Cli::broot()` stays
