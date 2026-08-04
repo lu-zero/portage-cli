@@ -426,7 +426,7 @@ fn combine_binhosts(
             continue;
         };
         let Some(sync_uri) = s.get("sync-uri").map(|v| normalize_binhost_uri(v)) else {
-            crate::style::warn_line(&format!("missing sync-uri setting for binrepo {name}"));
+            crate::style::warn_line!("missing sync-uri setting for binrepo {name}");
             continue;
         };
         seen_uris.insert(sync_uri.clone());

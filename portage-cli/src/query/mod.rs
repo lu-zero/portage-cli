@@ -208,7 +208,7 @@ pub fn resolve_atoms(
     for s in raw {
         match resolve_atom(repo, vdb, mode, s) {
             Ok(dep) => out.push(dep),
-            Err(e) => crate::style::warn_line(&format!("{e}")),
+            Err(e) => crate::style::warn_line!("{e}"),
         }
     }
     out

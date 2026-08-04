@@ -129,35 +129,78 @@ pub const C_DISABLED: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)))
     .effects(Effects::BOLD);
 
-/// Print a warning line to stderr: a colored `!!!` banner ([`C_WARN`],
-/// orange) followed by `msg` — the uniform replacement for a bare,
-/// uncoloured `eprintln!("warning: …")`. For a non-fatal problem where the
-/// caller carries on regardless (an optional side effect failed, an item was
-/// skipped in a batch, …).
+// ── Console line emitters ─────────────────────────────────────────────────
+//
+// Each form below has a `*_impl` function (the writer) and a same-named
+// `macro_rules!` (the public interface, mirroring std's `println!`): callers
+// always go through the macro form (`style::warn_line!("…", args)`), never
+// the bare function. The macro forwards its args via `format_args!` (zero-
+// allocation `fmt::Arguments`), NOT `format!` (which would build a temporary
+// `String` only for the function's own `writeln!` to re-format — a double
+// format pass for every line). The `_impl` function is what the macro
+// expands to, kept `pub(crate)` (not hidden) so it can be named via
+// `$crate::style::…` regardless of the caller's `use` site; do not call it
+// directly.
+
+/// Underlying writer for [`warn_line!`] — print a warning line to stderr:
+/// a colored `!!!` banner ([`C_WARN`], yellow) followed by `args`. The
+/// uniform replacement for a bare, uncoloured `eprintln!("warning: …")`.
+/// For a non-fatal problem where the caller carries on regardless (an
+/// optional side effect failed, an item was skipped in a batch, …).
 ///
 /// Goes through [`anstream::stderr`] like the rest of this module's output,
 /// so the color strips itself when stderr is not a terminal — including any
-/// [`C_PKG`]/[`C_BOLD`]/… styling already baked into `msg` (e.g. from an
+/// [`C_PKG`]/[`C_BOLD`]/… styling already baked into `args` (e.g. from an
 /// [`anyhow::Error`]'s `Display`): `anstream` strips ANSI escapes from the
 /// byte stream itself, regardless of where in the pipeline they were added.
-pub fn warn_line(msg: &str) {
+pub(crate) fn warn_line_impl(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
     let mut out = anstream::stderr();
-    let _ = writeln!(out, "{C_WARN}!!!{C_WARN:#} {msg}");
+    let _ = writeln!(out, "{C_WARN}!!!{C_WARN:#} {args}");
     let _ = out.flush();
 }
 
-/// Print an error line to stderr: a colored `!!!` banner ([`C_ERROR`], red)
-/// followed by `msg` — the uniform replacement for a bare, uncoloured
-/// `eprintln!("error: …")` or a plain `eprintln!("!!! …")`. For an item's
-/// requested operation that definitively failed, whether or not the overall
-/// command carries on to the next item.
-pub fn error_line(msg: &str) {
+/// Underlying writer for [`error_line!`] — print an error line to stderr:
+/// a colored `!!!` banner ([`C_ERROR`], red) followed by `args`. The uniform
+/// replacement for a bare, uncoloured `eprintln!("error: …")` or a plain
+/// `eprintln!("!!! …")`. For an item's requested operation that definitively
+/// failed, whether or not the overall command carries on to the next item.
+pub(crate) fn error_line_impl(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
     let mut out = anstream::stderr();
-    let _ = writeln!(out, "{C_ERROR}!!!{C_ERROR:#} {msg}");
+    let _ = writeln!(out, "{C_ERROR}!!!{C_ERROR:#} {args}");
     let _ = out.flush();
 }
+
+// ── Public macro forms (println!-style format-arg ergonomics) ─────────────
+//
+// The macro IS the public interface (mirrors std's `println!`): call sites
+// write `style::warn_line!("{} failed: {e}", path)` instead of the older
+// `style::warn_line(&format!("{} failed: {e}", path))` boilerplate. A bare
+// string still works (`warn_line!("literal")`), and any `Display` value can
+// be inlined directly (`warn_line!("{}", e)` replaces the older
+// `warn_line(&e.to_string())`).
+//
+// Args are forwarded to the writer via `format_args!` (zero-allocation
+// `fmt::Arguments`), not `format!` (which would build a temporary `String`
+// only for the writer's own `writeln!` to re-format — a double format pass
+// for every line; `writeln!(… "{}", fmt::Arguments)` is a single pass).
+
+/// `warn_line!("…", args…)` — see [`warn_line_impl`] (the writer).
+macro_rules! warn_line {
+    ($($arg:tt)*) => {
+        $crate::style::warn_line_impl(::std::format_args!($($arg)*))
+    };
+}
+
+/// `error_line!("…", args…)` — see [`error_line_impl`] (the writer).
+macro_rules! error_line {
+    ($($arg:tt)*) => {
+        $crate::style::error_line_impl(::std::format_args!($($arg)*))
+    };
+}
+
+pub(crate) use {error_line, warn_line};
 
 /// Render one line in real portage's `ebegin`/`eend` shape (`portage/
 /// output.py`'s `EOutput`): `" * {msg} ..."` immediately followed by a

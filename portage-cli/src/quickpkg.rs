@@ -65,7 +65,7 @@ async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
     for arg in &expanded {
         let pkgs = resolve_arg(&vdb, arg, merge_root);
         if pkgs.is_empty() {
-            crate::style::warn_line(&format!("no installed package matches '{arg}'"));
+            crate::style::warn_line!("no installed package matches '{arg}'");
             missing.push(arg.clone());
             continue;
         }
@@ -94,7 +94,7 @@ async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
                     successes.push((cpv, size));
                 }
                 Err(e) => {
-                    crate::style::error_line(&format!("Failed to package {cpv}: {e:#}"));
+                    crate::style::error_line!("Failed to package {cpv}: {e:#}");
                     failed += 1;
                 }
             }
@@ -114,7 +114,7 @@ async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
                     eprintln!(">>> Packages index: {n} entries -> {pkgdir}/Packages");
                 }
             }
-            Err(e) => crate::style::warn_line(&format!("could not refresh Packages index: {e:#}")),
+            Err(e) => crate::style::warn_line!("could not refresh Packages index: {e:#}"),
         }
     }
 
@@ -311,7 +311,7 @@ fn stage_entry(
                 std::fs::create_dir_all(parent)?;
             }
             if !src.exists() {
-                crate::style::warn_line(&format!("missing file (skipped): {src}"));
+                crate::style::warn_line!("missing file (skipped): {src}");
                 return Ok(());
             }
             // Prefer hardlink (cheap, preserves content); fall back to copy.
@@ -340,7 +340,7 @@ fn stage_entry(
                 })
                 .unwrap_or_default();
             if target_owned.is_empty() {
-                crate::style::warn_line(&format!("empty symlink target (skipped): {}", entry.path));
+                crate::style::warn_line!("empty symlink target (skipped): {}", entry.path);
                 return Ok(());
             }
             // Remove and recreate if a previous hardlink attempt left something.
@@ -350,7 +350,7 @@ fn stage_entry(
         }
         ContentsKind::Fifo | ContentsKind::Dev => {
             // Rare in packages; skip rather than require root to recreate nodes.
-            crate::style::warn_line(&format!("skipping {:?} entry {}", entry.kind, entry.path));
+            crate::style::warn_line!("skipping {:?} entry {}", entry.kind, entry.path);
         }
     }
     Ok(())

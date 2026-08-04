@@ -118,16 +118,16 @@ fn edit_valued(
                 if let Some(path_override) = path_override {
                     let target = base.join(path_override);
                     if &target != file {
-                        crate::style::warn_line(&format!(
+                        crate::style::warn_line!(
                             "entry found in {}, ignoring --path",
                             file.file_name().unwrap_or("?")
-                        ));
+                        );
                     }
                 }
                 update_valued_entry(pc, file, &atom, add, subtract, drop, conf_name)?;
             }
             _ => {
-                crate::style::error_line("atom found in multiple files:");
+                crate::style::error_line!("atom found in multiple files:");
                 for &i in &matches {
                     eprintln!("  {}", all[i].0);
                 }
@@ -164,10 +164,10 @@ fn update_valued_entry(
 ) -> Result<()> {
     let all_entries: Vec<_> = pc.find_all(atom).collect();
     if all_entries.len() > 1 && atom.version.is_none() {
-        crate::style::error_line(&format!(
+        crate::style::error_line!(
             "multiple entries for {atom} in {}:",
             file.file_name().unwrap_or("?")
-        ));
+        );
         for e in &all_entries {
             let values: Vec<&str> = e.values().collect();
             if values.is_empty() {
@@ -284,7 +284,7 @@ fn edit_mask(
                     println!("removed {atom} from {}", file.file_name().unwrap_or("?"));
                 }
                 _ => {
-                    crate::style::error_line("atom found in multiple files:");
+                    crate::style::error_line!("atom found in multiple files:");
                     for &i in &matches {
                         eprintln!("  {}", all[i].0);
                     }

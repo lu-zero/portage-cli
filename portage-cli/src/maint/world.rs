@@ -231,7 +231,7 @@ fn check_world_file(
         let dep = match Dep::parse(trimmed) {
             Ok(d) => d,
             Err(e) => {
-                crate::style::warn_line(&format!("invalid world entry '{trimmed}': {e}"));
+                crate::style::warn_line!("invalid world entry '{trimmed}': {e}");
                 invalid.push(trimmed.to_owned());
                 continue;
             }
@@ -357,7 +357,7 @@ pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
         lines.join("\n") + "\n"
     };
     if let Err(e) = write_atomic(&path, new_content) {
-        crate::style::warn_line(&format!("could not update {path}: {e:#}"));
+        crate::style::warn_line!("could not update {path}: {e:#}");
     }
 }
 

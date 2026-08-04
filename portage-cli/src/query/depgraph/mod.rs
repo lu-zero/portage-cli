@@ -225,7 +225,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .filter_map(|s| match Dep::parse(s) {
             Ok(d) => Some(d),
             Err(e) => {
-                crate::style::warn_line(&format!("skipping invalid --exclude atom '{s}': {e}"));
+                crate::style::warn_line!("skipping invalid --exclude atom '{s}': {e}");
                 None
             }
         })
@@ -713,7 +713,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         Err(_) if autosolve_use => {
                             // REQUIRED_USE could not be auto-satisfied; fall back to a
                             // fixed-USE solve so the plan + Level-A advisory still appear.
-                            crate::style::warn_line(
+                            crate::style::warn_line!(
                                 "--autosolve-use could not satisfy REQUIRED_USE; \
                              falling back to a fixed-USE plan.",
                             );

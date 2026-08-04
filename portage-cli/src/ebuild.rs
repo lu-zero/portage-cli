@@ -862,9 +862,9 @@ fn resolve_masters(
                     out.push(master);
                 }
                 Err(e) => {
-                    crate::style::warn_line(&format!(
+                    crate::style::warn_line!(
                         "master repo '{name}' for {repo_root} unavailable: {e}"
-                    ));
+                    );
                 }
             }
         }
@@ -989,9 +989,9 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         .map(|e| e.join("etc/portage"));
     if !apply_profile_env(&mut shell, config_root, config_overlay.as_deref()).await? {
         let cr = config_root.unwrap_or_else(|| Utf8Path::new("/"));
-        crate::style::warn_line(&format!(
+        crate::style::warn_line!(
             "no usable profile at {cr}/etc/portage/make.profile — building without profile defaults"
-        ));
+        );
     }
 
     // Per-package build environment: `/etc/portage/package.env` maps this package
@@ -1440,12 +1440,12 @@ async fn build_binpkg_standalone(
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
     let ebuild_dest = installed.path().join(format!("{pf}.ebuild"));
     if let Err(e) = std::fs::copy(ebuild.path(), ebuild_dest.as_std_path()) {
-        crate::style::warn_line(&format!("could not copy ebuild into package metadata: {e}"));
+        crate::style::warn_line!("could not copy ebuild into package metadata: {e}");
     }
     if let Ok(ref data) = env_dump
         && let Err(e) = write_environment_bz2(&installed, data)
     {
-        crate::style::warn_line(&format!("could not write environment.bz2: {e}"));
+        crate::style::warn_line!("could not write environment.bz2: {e}");
     }
 
     write_binpkg(shell, ebuild, work_root, root, installed.path())
@@ -1516,9 +1516,7 @@ fn write_binpkg(
     // `em maint binhost` (quickpkg already reindexes; normal `-b`/`-B` did not).
     let chost = shell.get_var("CHOST").unwrap_or_default();
     if let Err(e) = portage_binpkg::index_pkgdir(&pkgdir, &chost) {
-        crate::style::warn_line(&format!(
-            "could not refresh Packages index after {out}: {e:#}"
-        ));
+        crate::style::warn_line!("could not refresh Packages index after {out}: {e:#}");
     }
     Ok(out)
 }
@@ -1812,10 +1810,7 @@ async fn run_fetch(
                         ansi
                     )
                 );
-                crate::style::error_line(&format!(
-                    "{} is fetch-restricted (RESTRICT=fetch)",
-                    df.filename
-                ));
+                crate::style::error_line!("{} is fetch-restricted (RESTRICT=fetch)", df.filename);
                 any_restricted = true;
             }
             Err(e) => {
@@ -1828,7 +1823,7 @@ async fn run_fetch(
                         ansi
                     )
                 );
-                crate::style::error_line(&format!("{} failed: {e}", df.filename));
+                crate::style::error_line!("{} failed: {e}", df.filename);
                 any_failed = true;
             }
         }
@@ -1976,13 +1971,13 @@ async fn run_merge(
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
     let ebuild_dest = installed.path().join(format!("{pf}.ebuild"));
     if let Err(e) = std::fs::copy(ebuild.path(), ebuild_dest.as_std_path()) {
-        crate::style::warn_line(&format!("could not copy ebuild into VDB: {e}"));
+        crate::style::warn_line!("could not copy ebuild into VDB: {e}");
     }
 
     if let Ok(ref data) = env_dump
         && let Err(e) = write_environment_bz2(&installed, data)
     {
-        crate::style::warn_line(&format!("could not write environment.bz2: {e}"));
+        crate::style::warn_line!("could not write environment.bz2: {e}");
     }
 
     // debug, not info: this is internal VDB bookkeeping (the counter), and
@@ -2096,9 +2091,9 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
         None
     };
     if old_ebuild.is_none() && staged_env.is_none() {
-        crate::style::warn_line(&format!(
+        crate::style::warn_line!(
             "old ebuild not found at {old_ebuild_src} and no environment.bz2 — skipping pkg_prerm/pkg_postrm"
-        ));
+        );
     }
 
     let old_sourced = match &old_ebuild {
@@ -2285,26 +2280,26 @@ fn stage_env_bz2(pkg: &InstalledPackage, work_root: &Utf8Path) -> Option<Utf8Pat
     }
     let temp_dir = work_root.join("temp");
     if let Err(e) = std::fs::create_dir_all(temp_dir.as_std_path()) {
-        crate::style::warn_line(&format!("could not create {temp_dir}: {e}"));
+        crate::style::warn_line!("could not create {temp_dir}: {e}");
         return None;
     }
     let temp_env = temp_dir.join("environment.old");
     let compressed = match std::fs::read(env_bz2.as_std_path()) {
         Ok(d) => d,
         Err(e) => {
-            crate::style::warn_line(&format!("could not read environment.bz2: {e}"));
+            crate::style::warn_line!("could not read environment.bz2: {e}");
             return None;
         }
     };
     let decompressed = match decompress_bzip2(&compressed) {
         Ok(d) => d,
         Err(e) => {
-            crate::style::warn_line(&format!("could not decompress environment.bz2: {e}"));
+            crate::style::warn_line!("could not decompress environment.bz2: {e}");
             return None;
         }
     };
     if let Err(e) = std::fs::write(temp_env.as_std_path(), &decompressed) {
-        crate::style::warn_line(&format!("could not write temp environment: {e}"));
+        crate::style::warn_line!("could not write temp environment: {e}");
         return None;
     }
     Some(temp_env)
@@ -2320,7 +2315,7 @@ async fn try_run_phase_from_env_file(
 ) -> bool {
     let source_cmd = format!(". '{}'", env_file.as_str().replace('\'', "'\\''"));
     if shell.run_string(&source_cmd).await.is_err() {
-        crate::style::warn_line("could not source saved environment");
+        crate::style::warn_line!("could not source saved environment");
         return false;
     }
 
@@ -2350,7 +2345,7 @@ async fn try_run_phase_from_env_file(
         ))
         .await
     {
-        crate::style::warn_line(&format!("{func} from environment.bz2 failed: {e}"));
+        crate::style::warn_line!("{func} from environment.bz2 failed: {e}");
     }
 
     true
@@ -2386,7 +2381,7 @@ fn remove_old_unique_files(
         let dest = match safe_dest_under(root, &entry.path) {
             Ok(d) => d,
             Err(e) => {
-                crate::style::warn_line(&format!("skipping unsafe CONTENTS path: {e:#}"));
+                crate::style::warn_line!("skipping unsafe CONTENTS path: {e:#}");
                 continue;
             }
         };
@@ -2396,7 +2391,7 @@ fn remove_old_unique_files(
                 if (dest.exists() || std::fs::symlink_metadata(dest.as_std_path()).is_ok())
                     && let Err(e) = std::fs::remove_file(dest.as_std_path())
                 {
-                    crate::style::warn_line(&format!("could not remove {dest}: {e}"));
+                    crate::style::warn_line!("could not remove {dest}: {e}");
                 }
             }
             ContentsKind::Dir => {

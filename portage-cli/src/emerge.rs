@@ -75,7 +75,7 @@ pub(crate) fn expand_sets(
                         origin: TargetOrigin::Set(name.to_string()),
                     }));
                 }
-                Err(e) => crate::style::warn_line(&format!("skipping @{name}: {e}")),
+                Err(e) => crate::style::warn_line!("skipping @{name}: {e}"),
             }
             continue;
         }
@@ -98,7 +98,7 @@ pub(crate) fn expand_sets(
                     resolver = Some(portage_repo::SetResolver::new(stack, eroot));
                 }
                 Err(e) => {
-                    crate::style::warn_line(&format!("cannot expand @{name}: {e}"));
+                    crate::style::warn_line!("cannot expand @{name}: {e}");
                     // Cannot expand any sets if resolver creation failed; push raw string
                     out.push(TargetAtom::explicit(s.clone()));
                     continue;
@@ -113,7 +113,7 @@ pub(crate) fn expand_sets(
                     atom: d.to_string(),
                     origin: TargetOrigin::Set(name.to_string()),
                 })),
-                Err(e) => crate::style::warn_line(&format!("skipping @{name}: {e}")),
+                Err(e) => crate::style::warn_line!("skipping @{name}: {e}"),
             }
         } else {
             // Resolver creation failed for earlier set; push raw string
@@ -381,7 +381,7 @@ async fn emerge_atoms_inner(
                     origin: t.origin.clone(),
                 }),
                 Err(e) => {
-                    crate::style::warn_line(&format!("{e}"));
+                    crate::style::warn_line!("{e}");
                     None
                 }
             },
@@ -821,7 +821,7 @@ fn match_installed_atoms(
     for raw in atoms {
         let pkgs = crate::vdb::find_packages(vdb, raw);
         if pkgs.is_empty() {
-            crate::style::warn_line(&format!("no installed package matches '{raw}'"));
+            crate::style::warn_line!("no installed package matches '{raw}'");
             unmatched.push(raw.as_str());
             continue;
         }
@@ -914,7 +914,7 @@ fn select_world_atoms(atoms: &[TargetAtom]) -> Vec<portage_atom::Dep> {
         .filter_map(|t| match portage_atom::Dep::parse(&t.atom) {
             Ok(d) => Some(d),
             Err(e) => {
-                crate::style::warn_line(&format!("skipping invalid world atom '{}': {e}", t.atom));
+                crate::style::warn_line!("skipping invalid world atom '{}': {e}", t.atom);
                 None
             }
         })
@@ -1028,11 +1028,11 @@ pub(crate) async fn run_unmerge_batch(
     shell.set_terminal_columns(crate::style::term_width());
     let config_overlay = roots.eprefix().map(|e| e.join("etc/portage"));
     if !ebuild::apply_profile_env(&mut shell, roots.config(), config_overlay.as_deref()).await? {
-        crate::style::warn_line(&format!(
+        crate::style::warn_line!(
             "no usable profile at {}/etc/portage/make.profile — {} without profile defaults",
             roots.config().unwrap_or(Utf8Path::new("/")),
             gerund.to_lowercase()
-        ));
+        );
     }
 
     // One shared graph + registry for the whole batch, not rebuilt per
@@ -1054,7 +1054,7 @@ pub(crate) async fn run_unmerge_batch(
         )
         .await
         {
-            crate::style::error_line(&format!("failed to {verb} {pkg}: {e:#}"));
+            crate::style::error_line!("failed to {verb} {pkg}: {e:#}");
             failures += 1;
             continue;
         }
@@ -1067,7 +1067,7 @@ pub(crate) async fn run_unmerge_batch(
     // after each package, so libraries just deleted don't linger in the
     // dynamic linker cache until the next unrelated install.
     if let Err(e) = maint::env::env_update(&root) {
-        crate::style::warn_line(&format!("env-update after {verb} failed: {e:#}"));
+        crate::style::warn_line!("env-update after {verb} failed: {e:#}");
     }
 
     if failures > 0 {

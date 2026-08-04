@@ -319,7 +319,7 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
             )
             .await
             .map_err(|e| {
-                crate::style::warn_line(&format!("ebuild availability not checked: {e:#}"));
+                crate::style::warn_line!("ebuild availability not checked: {e:#}");
             })
             .ok();
             maint::world::run(&vdb, *fix, roots.target(), tree.as_ref())
@@ -599,7 +599,7 @@ fn run_atom(atoms: &[String]) {
     for raw in atoms {
         match portage_atom::Dep::from_str(raw) {
             Ok(dep) => println!("{dep}"),
-            Err(e) => crate::style::error_line(&format!("'{raw}': {e}")),
+            Err(e) => crate::style::error_line!("'{raw}': {e}"),
         }
     }
 }

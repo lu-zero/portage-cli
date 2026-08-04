@@ -98,12 +98,10 @@ impl PreservedLibsRegistry {
         match serde_json::to_string_pretty(&self.data) {
             Ok(json) => {
                 if let Err(e) = write_atomic(&self.path, json) {
-                    crate::style::warn_line(&format!("could not write {}: {e:#}", self.path));
+                    crate::style::warn_line!("could not write {}: {e:#}", self.path);
                 }
             }
-            Err(e) => crate::style::warn_line(&format!(
-                "could not serialize preserved_libs_registry: {e}"
-            )),
+            Err(e) => crate::style::warn_line!("could not serialize preserved_libs_registry: {e}"),
         }
     }
 
@@ -228,9 +226,7 @@ impl PreservedLibsRegistry {
                         println!(">>> preserved-libs: dropped missing {path}");
                     }
                     Err(e) => {
-                        crate::style::warn_line(&format!(
-                            "preserved-libs: could not remove {path}: {e}"
-                        ));
+                        crate::style::warn_line!("preserved-libs: could not remove {path}: {e}");
                         remaining.push(path_s.clone());
                     }
                 }
