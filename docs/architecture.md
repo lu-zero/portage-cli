@@ -306,12 +306,26 @@ Intended target semantics (all match emerge):
 ### Ambiguity and partial-failure policy (intentional divergences)
 
 - **Category ambiguity** — a bare name matching several categories (e.g. `clang`
-  → `dev-python/clang`, `llvm-core/clang`): install-type operations error and
-  list the candidates (`ResolveMode::Error`); update operations (`-u`) take the
-  installed candidate when exactly one is installed
-  (`ResolveMode::PreferInstalled`, with a warning). **emerge always errors** on an
-  ambiguous short name regardless of what is installed — em is deliberately more
-  lenient under `-u`.
+  → `dev-python/clang`, `llvm-core/clang`): **emerge always hard-errors** on an
+  ambiguous short name, dumping the candidate list with no further help,
+  regardless of what is installed or which flags were given (verified live
+  against real `emerge -p clang` and `emerge -up clang` on a host with
+  `llvm-core/clang` installed — both refuse identically). `ResolveMode`
+  (`portage-cli/src/query/mod.rs`) is em's three-way, command-driven divergence:
+  - `Error` — plain `em <name>` (a mutating command shouldn't silently guess).
+    Still names the installed candidate and suggests `-u` when exactly one
+    matches, unlike real emerge's bare list.
+  - `PreferInstalled` — `em -u <name>`: silently takes the installed candidate
+    when exactly one matches (with a `note:`), same hard-error-with-hint
+    otherwise.
+  - `Ask` — `em -a <name>` (takes precedence over `-u`): interactively prompts
+    with a numbered list, installed candidate marked and offered as the
+    empty-input default; falls through to `Error`'s hard-error-with-hint on
+    EOF or an unrecognised answer. Real emerge has no equivalent of this at
+    all — it never asks, it just refuses.
+  Read-only `em query *` commands (`depends`/`keywords`/`meta`/`uses`/`which`/
+  `depgraph`) stay on `Error` (still hint-augmented) — no `-u`/`-a` concept
+  applies to them.
 - **Multi-target with one unresolvable atom** — em drops the bad atom with a
   warning and proceeds with the rest, erroring only when *all* fail. **emerge
   aborts the whole command.**

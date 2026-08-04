@@ -290,7 +290,15 @@ async fn emerge_atoms_inner(
     }
     let repo = crate::repo_open::open(repo_path.as_std_path())?;
     let vdb = open_cli_vdb(cli).ok();
-    let mode = if merge_flags.update {
+    // `-a` takes precedence over `-u`: explicitly asking to be asked beats a
+    // silent auto-pick. Neither still hard-errors on ambiguity (a mutating
+    // command shouldn't silently guess), but that error now names the
+    // installed candidate and suggests `-u` — real emerge just dumps the
+    // candidate list with no such hint, regardless of any flag. See
+    // docs/architecture.md's "Ambiguity and partial-failure policy" section.
+    let mode = if merge_flags.ask {
+        query::ResolveMode::Ask
+    } else if merge_flags.update {
         query::ResolveMode::PreferInstalled
     } else {
         query::ResolveMode::Error

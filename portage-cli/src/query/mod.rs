@@ -15,16 +15,23 @@ use anyhow::{Context, anyhow};
 use portage_repo::Repository;
 use portage_vdb::Vdb;
 
-use crate::style::{C_BOLD, C_PKG};
+use crate::style::{C_BOLD, C_COUNT, C_PKG, C_WARN};
 
 /// How to handle ambiguous bare package names (matching multiple categories).
 #[derive(Clone, Copy, Debug)]
 pub enum ResolveMode {
-    /// Report ambiguity as an error listing the candidates.
+    /// Report ambiguity as an error listing the candidates. If exactly one
+    /// candidate is installed, the error names it and suggests `-u`.
     Error,
-    /// Prefer the installed package (if exactly one matches). Otherwise error.
-    /// A warning is printed when disambiguation occurs.
+    /// Prefer the installed package (if exactly one matches). Otherwise error
+    /// (same as [`Error`](Self::Error), hint included). A note is printed
+    /// when disambiguation occurs.
     PreferInstalled,
+    /// Interactively prompt for which candidate was meant (`--ask`) — real
+    /// emerge has no equivalent (it just hard-errors); this is `em`'s own
+    /// escape hatch for the case `Error`'s hint points at. Falls through to
+    /// `Error`'s hard-error-with-hint on EOF or an invalid answer.
+    Ask,
 }
 
 /// Resolve a raw atom string, expanding bare package names via the repo.
@@ -33,9 +40,12 @@ pub enum ResolveMode {
 /// * bare `name` — looked up in the repository.
 ///
 /// Ambiguity handling depends on [`ResolveMode`]:
-/// - [`Error`](ResolveMode::Error) — always error listing candidates.
+/// - [`Error`](ResolveMode::Error) — error listing candidates (naming the
+///   installed one and suggesting `-u`, if exactly one is installed).
 /// - [`PreferInstalled`](ResolveMode::PreferInstalled) — if exactly one
-///   candidate is installed, use it (with a warning); otherwise error.
+///   candidate is installed, use it (with a note); otherwise same as `Error`.
+/// - [`Ask`](ResolveMode::Ask) — interactively prompt for a choice; same as
+///   `Error` if that doesn't resolve it (EOF, invalid answer).
 pub fn resolve_atom(
     repo: &Repository,
     vdb: Option<&Vdb>,
@@ -63,9 +73,10 @@ fn resolve_ambiguous(
     raw: &str,
     candidates: &[portage_atom::Cpn],
 ) -> anyhow::Result<portage_atom::Dep> {
+    let installed = vdb.and_then(|vdb| pick_installed(vdb, candidates));
+
     if let ResolveMode::PreferInstalled = mode
-        && let Some(vdb) = vdb
-        && let Some((dep, cpn)) = pick_installed(vdb, candidates)
+        && let Some((dep, cpn)) = &installed
     {
         eprintln!(
             "note: '{C_BOLD}{raw}{C_BOLD:#}' is ambiguous ({}); using installed {C_PKG}{cpn}{C_PKG:#}",
@@ -75,16 +86,39 @@ fn resolve_ambiguous(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        return Ok(dep.clone());
+    }
+
+    if let ResolveMode::Ask = mode
+        && let Some(dep) = ask_which_candidate(vdb, raw, candidates)
+    {
         return Ok(dep);
     }
+
     let names: Vec<String> = candidates
         .iter()
         .map(|c| format!("{C_PKG}{c}{C_PKG:#}"))
         .collect();
+    // Even under Error (or a failed Ask), tell the user the one thing that
+    // would have resolved it — real emerge just dumps the candidate list and
+    // leaves you to retype the full atom; naming the installed one and the
+    // flag that would pick it is strictly more helpful (found live 2026-08-04).
+    let hint = installed
+        .map(|(_, cpn)| format!("\n    {C_PKG}{cpn}{C_PKG:#} is installed — pass -u to update it"))
+        .unwrap_or_default();
     Err(anyhow!(
-        "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous, matching: {}",
+        "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous, matching: {}{hint}",
         names.join(", ")
     ))
+}
+
+/// Whether `cpn` has an installed entry in `vdb`.
+fn is_installed(vdb: &Vdb, cpn: &portage_atom::Cpn) -> bool {
+    vdb.category(cpn.category.as_ref()).is_some_and(|cat| {
+        cat.packages()
+            .into_iter()
+            .any(|p| p.cpn().package.as_ref() == cpn.package.as_ref())
+    })
 }
 
 /// Find the single installed candidate among `candidates`.
@@ -95,14 +129,7 @@ fn pick_installed<'a>(
 ) -> Option<(portage_atom::Dep, &'a portage_atom::Cpn)> {
     let installed: Vec<&portage_atom::Cpn> = candidates
         .iter()
-        .filter(|cpn| {
-            let Some(cat) = vdb.category(cpn.category.as_ref()) else {
-                return false;
-            };
-            cat.packages()
-                .into_iter()
-                .any(|p| p.cpn().package.as_ref() == cpn.package.as_ref())
-        })
+        .filter(|cpn| is_installed(vdb, cpn))
         .collect();
     match installed.as_slice() {
         [cpn] => portage_atom::Dep::from_str(&cpn.to_string())
@@ -110,6 +137,57 @@ fn pick_installed<'a>(
             .map(|dep| (dep, *cpn)),
         _ => None,
     }
+}
+
+/// Interactively resolve an ambiguous bare name (`--ask`): list `candidates`
+/// numbered, marking any installed one, and prompt for a choice — real emerge
+/// has no equivalent, it just hard-errors (`ResolveMode::Error`'s job here).
+/// Empty input picks the sole installed candidate if there is exactly one;
+/// any other unrecognised answer (including EOF) returns `None` so the
+/// caller falls through to the hard ambiguity error.
+fn ask_which_candidate(
+    vdb: Option<&Vdb>,
+    raw: &str,
+    candidates: &[portage_atom::Cpn],
+) -> Option<portage_atom::Dep> {
+    use std::io::Write;
+
+    let default = vdb.and_then(|vdb| pick_installed(vdb, candidates));
+    let mut out = anstream::stderr();
+    let _ = writeln!(
+        out,
+        "{C_WARN}!!!{C_WARN:#} '{C_BOLD}{raw}{C_BOLD:#}' is ambiguous:"
+    );
+    for (i, cpn) in candidates.iter().enumerate() {
+        let tag = match vdb {
+            Some(vdb) if is_installed(vdb, cpn) => " (installed)",
+            _ => "",
+        };
+        let _ = writeln!(
+            out,
+            "  {C_COUNT}{}{C_COUNT:#}) {C_PKG}{cpn}{C_PKG:#}{tag}",
+            i + 1
+        );
+    }
+    let _ = match &default {
+        Some((_, cpn)) => write!(out, "Which package did you mean? [{C_PKG}{cpn}{C_PKG:#}] "),
+        None => write!(out, "Which package did you mean? "),
+    };
+    let _ = out.flush();
+
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).ok()? == 0 {
+        return None;
+    }
+    let choice = line.trim();
+    if choice.is_empty() {
+        return default.map(|(dep, _)| dep);
+    }
+    choice
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| n >= 1 && n <= candidates.len())
+        .and_then(|n| portage_atom::Dep::from_str(&candidates[n - 1].to_string()).ok())
 }
 
 /// Resolve multiple raw atom strings, expanding bare names via the repo.
@@ -228,6 +306,27 @@ mod tests {
         assert!(err.to_string().contains("ambiguous"));
         assert!(err.to_string().contains("sys-apps/foo"));
         assert!(err.to_string().contains("app-misc/foo"));
+    }
+
+    #[test]
+    fn resolve_atom_error_mode_hints_the_installed_candidate() {
+        // Error mode still hard-errors (a mutating command shouldn't
+        // silently guess), but names the one installed candidate and points
+        // at -u — regression test for the 2026-08-04 UX request.
+        let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
+        let (_vdir, vdb) = make_vdb(&[("sys-apps", "foo", "1.0")]);
+        let err = resolve_atom(&repo, Some(&vdb), ResolveMode::Error, "foo").unwrap_err();
+        assert!(err.to_string().contains("ambiguous"));
+        assert!(err.to_string().contains("sys-apps/foo"));
+        assert!(err.to_string().contains("is installed"));
+        assert!(err.to_string().contains("-u"));
+    }
+
+    #[test]
+    fn resolve_atom_error_mode_no_hint_when_none_installed() {
+        let (_dir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
+        let err = resolve_atom(&repo, None, ResolveMode::Error, "foo").unwrap_err();
+        assert!(!err.to_string().contains("is installed"));
     }
 
     #[test]
