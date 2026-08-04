@@ -1766,9 +1766,21 @@ async fn run_fetch(
 
     let results = fetcher.fetch_all(&distfiles, &manifest).await;
 
+    // A SRC_URI naming the same file more than once (e.g. sys-devel/binutils'
+    // mirror://gnu/... and https://sourceware.org/... both resolving to
+    // binutils-${PV}.tar.xz) currently produces one `Distfile`/result per URI,
+    // not per filename (a separate, pre-existing bug in
+    // `DistfileResolver::resolve`/`resolve_all`, not fixed here — see
+    // `resolve_uri_map`'s own doc comment). Render each filename's outcome
+    // once rather than once per underlying URI. Found live 2026-08-04
+    // re-emerging sys-devel/binutils, which printed "already present" twice.
+    let mut seen = std::collections::HashSet::new();
     let mut any_failed = false;
     let mut any_restricted = false;
     for (df, result) in results {
+        if !seen.insert(df.filename.clone()) {
+            continue;
+        }
         match result {
             Ok(FetchStatus::AlreadyPresent) => {
                 tracing::info!("fetch: {} (already present)", df.filename);
