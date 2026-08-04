@@ -123,14 +123,25 @@ fn group_use_flags(flags: &[String], use_expand: &[String]) -> Vec<GroupedUse> {
     out
 }
 
-/// Color one USE-dep token like the `-p` plan's flag column: enabled
-/// (`C_ON`) or, with a leading `-`, disabled (`C_OFF`). Simpler than
-/// [`flag_token`]'s on/new/flipped distinctions — a use-dep just states a
-/// required state, there is no "old build" to diff it against.
+/// Plain on/off coloring, no change marker: `C_ON name` or `C_OFF -name`.
+/// This is [`flag_token`]'s "unchanged" rendering (the on/off rows of its
+/// table with no `*`/`%`) — shared because it is *all* a bare use-dep needs:
+/// a constraint just states a required flag state, there is no "old build"
+/// to diff it against and so no flip/new/dropped marker is ever applicable.
+fn colorize_on_off(name: &str, enabled: bool) -> String {
+    if enabled {
+        format!("{C_ON}{name}{C_ON:#}")
+    } else {
+        format!("{C_OFF}-{name}{C_OFF:#}")
+    }
+}
+
+/// Color one USE-dep token via [`colorize_on_off`], reading the leading `-`
+/// (negated use-dep) as "disabled".
 fn colorize_use_flag(tok: &str) -> String {
     match tok.strip_prefix('-') {
-        Some(rest) => format!("{C_OFF}-{rest}{C_OFF:#}"),
-        None => format!("{C_ON}{tok}{C_ON:#}"),
+        Some(rest) => colorize_on_off(rest, false),
+        None => colorize_on_off(tok, true),
     }
 }
 
@@ -869,7 +880,7 @@ fn flag_token(
     }
     let token = if enabled {
         if is_new || (in_old_use && show_unchanged) {
-            format!("{C_ON}{name}{C_ON:#}")
+            colorize_on_off(name, true)
         } else if !in_old_iuse {
             format!("{C_NEW_FLAG}{name}%*{C_NEW_FLAG:#}")
         } else if !in_old_use {
@@ -878,7 +889,7 @@ fn flag_token(
             return None;
         }
     } else if is_new || (in_old_iuse && !in_old_use && show_unchanged) {
-        format!("{C_OFF}-{name}{C_OFF:#}")
+        colorize_on_off(name, false)
     } else if !in_old_iuse {
         format!("{C_NEW_FLAG}-{name}%{C_NEW_FLAG:#}")
     } else if in_old_use {
