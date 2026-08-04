@@ -1031,6 +1031,27 @@ blocked by the three independent findings above, tracked separately.
   Found live: after a real `--prefix` merge landed a newer `sys-devel/
   binutils` in the prefix's own VDB, `-p` kept showing the host's older
   installed version as the base to "upgrade" from, forever.
+- ✅ **Uniform `!!!` warning/error styling across the CLI — FIXED 2026-08-04.**
+  ~55 call sites across 18 files were a mix of three conventions: colored
+  `!!!` (only `maint/sync/mod.rs`, the intended style per `style.rs`'s own
+  doc comments), plain uncolored `!!!` (9 sites), and bare `eprintln!("warning: …")`/
+  `eprintln!("error: …")` with no `!!!` at all (~46 sites) — found live
+  (`em -p clang --prefix …`'s ambiguous-atom warning had none of the three).
+  Added `style::warn_line`/`style::error_line` (orange/red `!!!` via
+  `anstream`, TTY-aware) and migrated every site, dropping the redundant
+  "warning:"/"error:" word since the colored banner now carries it. Severity
+  split: `warn_line` for a non-fatal problem where the caller carries on
+  (an optional side effect failed, an item was skipped in a batch);
+  `error_line` for an item's *requested* operation definitively failing
+  (build/package/unmerge failed, digest mismatch, ambiguous PACKAGE.* entry),
+  even when the overall command keeps going to the next item. `main.rs`'s
+  top-level fatal-error sink now goes through the same styling via a new
+  `portage_cli::print_fatal_error` (style itself stays `pub(crate)`). Also:
+  `query::resolve_ambiguous`'s "'X' is ambiguous, matching: …" now bolds the
+  term and colors each candidate atom — ANSI baked directly into the
+  `anyhow::Error` string is safe here since `anstream`'s writer strips
+  escapes from the byte stream itself regardless of where they were added,
+  live-verified with `--color=always` vs. a plain pipe.
 - ✅ **World-atom selection re-parsed raw atoms, rejecting bare names on a
   real merge but not under `-p` — FIXED 2026-08-04** (`cb7c508`). `em <atom>`
   resolves each target through `query::resolve_atom` (disambiguates a bare

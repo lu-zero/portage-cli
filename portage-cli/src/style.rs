@@ -97,6 +97,36 @@ pub const C_DISABLED: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)))
     .effects(Effects::BOLD);
 
+/// Print a warning line to stderr: a colored `!!!` banner ([`C_WARN`],
+/// orange) followed by `msg` — the uniform replacement for a bare,
+/// uncoloured `eprintln!("warning: …")`. For a non-fatal problem where the
+/// caller carries on regardless (an optional side effect failed, an item was
+/// skipped in a batch, …).
+///
+/// Goes through [`anstream::stderr`] like the rest of this module's output,
+/// so the color strips itself when stderr is not a terminal — including any
+/// [`C_PKG`]/[`C_BOLD`]/… styling already baked into `msg` (e.g. from an
+/// [`anyhow::Error`]'s `Display`): `anstream` strips ANSI escapes from the
+/// byte stream itself, regardless of where in the pipeline they were added.
+pub fn warn_line(msg: &str) {
+    use std::io::Write;
+    let mut out = anstream::stderr();
+    let _ = writeln!(out, "{C_WARN}!!!{C_WARN:#} {msg}");
+    let _ = out.flush();
+}
+
+/// Print an error line to stderr: a colored `!!!` banner ([`C_ERROR`], red)
+/// followed by `msg` — the uniform replacement for a bare, uncoloured
+/// `eprintln!("error: …")` or a plain `eprintln!("!!! …")`. For an item's
+/// requested operation that definitively failed, whether or not the overall
+/// command carries on to the next item.
+pub fn error_line(msg: &str) {
+    use std::io::Write;
+    let mut out = anstream::stderr();
+    let _ = writeln!(out, "{C_ERROR}!!!{C_ERROR:#} {msg}");
+    let _ = out.flush();
+}
+
 /// Style for a profile's stability status (same palette as keyword stability).
 pub fn profile_status(status: &portage_repo::ProfileStatus) -> Style {
     use portage_repo::ProfileStatus::*;

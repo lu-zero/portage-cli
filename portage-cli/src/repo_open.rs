@@ -63,11 +63,11 @@ pub fn overlays_from_conf(
             match open_with_masters(path, &repos_dir) {
                 Ok(pair) => Some(pair),
                 Err(err) => {
-                    eprintln!(
-                        "!!! skipping repo '{}' at {}: {err}",
+                    crate::style::warn_line(&format!(
+                        "skipping repo '{}' at {}: {err}",
                         e.name,
                         e.location.as_path().unwrap_or(Path::new("")).display()
-                    );
+                    ));
                     None
                 }
             }

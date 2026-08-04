@@ -15,6 +15,8 @@ use anyhow::{Context, anyhow};
 use portage_repo::Repository;
 use portage_vdb::Vdb;
 
+use crate::style::{C_BOLD, C_PKG};
+
 /// How to handle ambiguous bare package names (matching multiple categories).
 #[derive(Clone, Copy, Debug)]
 pub enum ResolveMode {
@@ -66,18 +68,21 @@ fn resolve_ambiguous(
         && let Some((dep, cpn)) = pick_installed(vdb, candidates)
     {
         eprintln!(
-            "note: '{raw}' is ambiguous ({}); using installed {cpn}",
+            "note: '{C_BOLD}{raw}{C_BOLD:#}' is ambiguous ({}); using installed {C_PKG}{cpn}{C_PKG:#}",
             candidates
                 .iter()
-                .map(|c| c.to_string())
+                .map(|c| format!("{C_PKG}{c}{C_PKG:#}"))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
         return Ok(dep);
     }
-    let names: Vec<String> = candidates.iter().map(|c| c.to_string()).collect();
+    let names: Vec<String> = candidates
+        .iter()
+        .map(|c| format!("{C_PKG}{c}{C_PKG:#}"))
+        .collect();
     Err(anyhow!(
-        "'{raw}' is ambiguous, matching: {}",
+        "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous, matching: {}",
         names.join(", ")
     ))
 }
@@ -121,7 +126,7 @@ pub fn resolve_atoms(
     for s in raw {
         match resolve_atom(repo, vdb, mode, s) {
             Ok(dep) => out.push(dep),
-            Err(e) => eprintln!("warning: {e}"),
+            Err(e) => crate::style::warn_line(&format!("{e}")),
         }
     }
     out

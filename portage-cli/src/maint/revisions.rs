@@ -36,7 +36,7 @@ fn purge_repos(path: &Utf8Path, repos: &[String]) -> Result<()> {
         if map.remove(repo).is_some() {
             removed.push(repo.as_str());
         } else {
-            eprintln!("warning: repo '{repo}' not found in {path}");
+            crate::style::warn_line(&format!("repo '{repo}' not found in {path}"));
         }
     }
 

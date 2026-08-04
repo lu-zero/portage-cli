@@ -57,7 +57,9 @@ fn main() {
     {
         Ok(runtime) => runtime,
         Err(e) => {
-            eprintln!("error: failed to build the tokio runtime: {e}");
+            portage_cli::print_fatal_error_display(format!(
+                "failed to build the tokio runtime: {e}"
+            ));
             std::process::exit(1);
         }
     };
@@ -74,7 +76,7 @@ fn main() {
         if e.downcast_ref::<portage_cli::ConfigChangesNeeded>()
             .is_none()
         {
-            eprintln!("error: {e:#}");
+            portage_cli::print_fatal_error(&e);
         }
         std::process::exit(1);
     }

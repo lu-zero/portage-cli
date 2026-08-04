@@ -16,6 +16,7 @@ use crate::binpkg::{
     DesiredBuildEnv, read_make_conf_var, resolve_gpg_verify_home_for_roots, resolve_pkgdir,
 };
 use crate::cli::{BinpkgAction, Cli};
+use crate::style::C_ERROR;
 
 /// Dispatch `em maint binpkg <action>`.
 pub async fn run(action: &BinpkgAction, globals: &Cli) -> Result<()> {
@@ -61,16 +62,26 @@ async fn verify(
     let report: VerifyReport =
         portage_binpkg::maint::verify(pkgdir, chost, fix, require_signature, keyring.as_ref())?;
 
+    use std::io::Write;
+    let mut out = anstream::stdout();
     for problem in &report.problems {
         if problem.missing {
-            println!("!!! missing: {} ({})", problem.cpv, problem.path);
+            let _ = writeln!(
+                out,
+                "{C_ERROR}!!!{C_ERROR:#} missing: {} ({})",
+                problem.cpv, problem.path
+            );
             continue;
         }
         if problem.size_mismatch.is_some()
             || problem.md5_mismatch.is_some()
             || problem.sha1_mismatch.is_some()
         {
-            println!("!!! digest mismatch: {} ({})", problem.cpv, problem.path);
+            let _ = writeln!(
+                out,
+                "{C_ERROR}!!!{C_ERROR:#} digest mismatch: {} ({})",
+                problem.cpv, problem.path
+            );
         }
         if let Some((got, expected)) = problem.size_mismatch {
             println!("    size: got {got}, expected {expected}");
@@ -94,6 +105,7 @@ async fn verify(
             _ => {}
         }
     }
+    let _ = out.flush();
 
     println!(
         "emaint binpkg verify: {} ok, {} corrupt, {} missing (of {})",

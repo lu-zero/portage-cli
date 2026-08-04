@@ -163,7 +163,7 @@ pub fn worker_activity_bus(live_root: &Utf8Path, reemit_path: Option<&str>) -> A
     if let Some(path) = reemit_path.filter(|p| !p.is_empty()) {
         match JsonlFdSink::connect_reemit(path) {
             Ok(sink) => bus.add_sink(Arc::new(sink)),
-            Err(e) => eprintln!("warning: activity re-emit connect {path}: {e}"),
+            Err(e) => crate::style::warn_line(&format!("activity re-emit connect {path}: {e}")),
         }
     }
     bus

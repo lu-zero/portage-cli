@@ -57,3 +57,23 @@ pub use error::ConfigChangesNeeded;
 pub async fn run(cli: &cli::Cli) -> error::Result<()> {
     dispatch::run(cli).await
 }
+
+/// Print a fatal, top-level `anyhow::Error` the same way every other
+/// `!!!`-styled diagnostic in `em` looks (`style::error_line`) — `main.rs`'s
+/// sink for whatever an applet's `?`/`bail!` propagated all the way up.
+/// `style` itself is `pub(crate)`, so `main.rs` (a separate binary crate)
+/// needs this thin public wrapper rather than reaching in directly.
+///
+/// Formats with `{:#}` (anyhow's alternate form), not `Display::to_string`,
+/// so the full `Caused by: …` context chain still prints, not just the
+/// top-level message.
+pub fn print_fatal_error(e: &anyhow::Error) {
+    style::error_line(&format!("{e:#}"));
+}
+
+/// Same styling as [`print_fatal_error`], for a startup failure (no
+/// `anyhow::Error` yet to hand it — e.g. the tokio runtime itself failed to
+/// build) where a plain [`std::fmt::Display`] is all there is.
+pub fn print_fatal_error_display(e: impl std::fmt::Display) {
+    style::error_line(&e.to_string());
+}

@@ -7,7 +7,7 @@ use portage_vdb::Vdb;
 
 use super::sets::KnownSets;
 use crate::query::which::dep_matches_cpv;
-use crate::style::C_PKG;
+use crate::style::{C_PKG, C_WARN};
 use crate::util::write_atomic;
 
 const DEFAULT_WORLD: &str = "/var/lib/portage/world";
@@ -231,7 +231,7 @@ fn check_world_file(
         let dep = match Dep::parse(trimmed) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("warning: invalid world entry '{trimmed}': {e}");
+                crate::style::warn_line(&format!("invalid world entry '{trimmed}': {e}"));
                 invalid.push(trimmed.to_owned());
                 continue;
             }
@@ -300,8 +300,13 @@ fn check_world_sets_file(
         }
     }
 
-    for atom in &orphaned {
-        println!("!!! {path}: '{atom}': unknown set");
+    if !orphaned.is_empty() {
+        use std::io::Write;
+        let mut out = anstream::stdout();
+        for atom in &orphaned {
+            let _ = writeln!(out, "{C_WARN}!!!{C_WARN:#} {path}: '{atom}': unknown set");
+        }
+        let _ = out.flush();
     }
     *orphaned_count += orphaned.len();
 
@@ -352,7 +357,7 @@ pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
         lines.join("\n") + "\n"
     };
     if let Err(e) = write_atomic(&path, new_content) {
-        eprintln!("warning: could not update {path}: {e:#}");
+        crate::style::warn_line(&format!("could not update {path}: {e:#}"));
     }
 }
 

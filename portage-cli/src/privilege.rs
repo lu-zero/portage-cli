@@ -317,7 +317,7 @@ async fn spawn_install_worker_with_reemit(
             let (stream, _) = match listener.accept() {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("warning: activity re-emit accept: {e}");
+                    crate::style::warn_line(&format!("activity re-emit accept: {e}"));
                     return;
                 }
             };
@@ -331,7 +331,7 @@ async fn spawn_install_worker_with_reemit(
                 }
                 match crate::activity::ActivityEvent::from_jsonl_line(&line) {
                     Ok(ev) => bus.emit(ev),
-                    Err(e) => eprintln!("warning: activity re-emit parse: {e}"),
+                    Err(e) => crate::style::warn_line(&format!("activity re-emit parse: {e}")),
                 }
             }
         }

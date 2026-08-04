@@ -504,8 +504,8 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let remote_indices: Vec<portage_binpkg::RemoteBinpkgIndex> = if want_remote {
         let binhosts = binpkg::portage_binhosts(globals).await;
         if binhosts.is_empty() {
-            eprintln!(
-                "warning: --getbinpkg set but no binhost configured (PORTAGE_BINHOST unset, no binrepos.conf)"
+            crate::style::warn_line(
+                "--getbinpkg set but no binhost configured (PORTAGE_BINHOST unset, no binrepos.conf)",
             );
         }
         let mut fetched = Vec::new();
@@ -578,7 +578,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         && !fetchonly
         && let Err(e) = maint::env::env_update(merge_root)
     {
-        eprintln!("warning: env-update failed: {e:#}");
+        crate::style::warn_line(&format!("env-update failed: {e:#}"));
     }
 
     if failures.is_empty() {
@@ -868,7 +868,7 @@ fn record_package_outcome(
                     &planned.cpv.to_string(),
                 )
             {
-                eprintln!("warning: could not update resume progress: {e:#}");
+                crate::style::warn_line(&format!("could not update resume progress: {e:#}"));
             }
             // Refresh this root's `ld.so.cache` immediately, not just once at
             // the very end of the whole batch (the caller's own `env_update`
@@ -882,7 +882,7 @@ fn record_package_outcome(
                 && !flags.fetch_all_uri
                 && let Err(e) = maint::env::env_update(merge_root)
             {
-                eprintln!("warning: env-update failed: {e:#}");
+                crate::style::warn_line(&format!("env-update failed: {e:#}"));
             }
             true
         }

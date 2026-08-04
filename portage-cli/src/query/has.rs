@@ -26,7 +26,7 @@ pub fn run(vdb: &Vdb, args: &[String]) -> Result<()> {
             Ok(Some(v)) if !v.is_empty() => v,
             Ok(_) => continue,
             Err(e) => {
-                eprintln!("warning: {pkg}: {e}");
+                crate::style::warn_line(&format!("{pkg}: {e}"));
                 continue;
             }
         };

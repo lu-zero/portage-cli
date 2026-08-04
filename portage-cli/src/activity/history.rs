@@ -60,13 +60,13 @@ impl HistorySink {
         if let Some(parent) = self.path.parent()
             && let Err(e) = std::fs::create_dir_all(parent.as_std_path())
         {
-            eprintln!("warning: activity history mkdir {parent}: {e}");
+            crate::style::warn_line(&format!("activity history mkdir {parent}: {e}"));
             return;
         }
         let line = match serde_json::to_string(rec) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("warning: activity history serialise: {e}");
+                crate::style::warn_line(&format!("activity history serialise: {e}"));
                 return;
             }
         };
@@ -79,7 +79,7 @@ impl HistorySink {
             Ok::<(), std::io::Error>(())
         })();
         if let Err(e) = res {
-            eprintln!("warning: activity history append {}: {e}", self.path);
+            crate::style::warn_line(&format!("activity history append {}: {e}", self.path));
         }
     }
 }

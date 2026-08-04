@@ -596,10 +596,10 @@ fn run_set(reference: &Option<String>, globals: &Cli) -> Result<()> {
     let ctx = resolve_set_target(globals)?;
     let path_str = ctx.path.to_string();
     if !ctx.path.exists() {
-        eprintln!(
-            "warning: {} does not exist yet — register it anyway (run em setup first if needed)",
+        crate::style::warn_line(&format!(
+            "{} does not exist yet — register it anyway (run em setup first if needed)",
             ctx.path
-        );
+        ));
     }
 
     let mut store = load()?.unwrap_or_default();
@@ -657,10 +657,10 @@ fn run_add(name: &Option<String>, globals: &Cli) -> Result<()> {
     let ctx = resolve_set_target(globals)?;
     let path_str = ctx.path.to_string();
     if !ctx.path.exists() {
-        eprintln!(
-            "warning: {} does not exist yet — register it anyway (run em setup first if needed)",
+        crate::style::warn_line(&format!(
+            "{} does not exist yet — register it anyway (run em setup first if needed)",
             ctx.path
-        );
+        ));
     }
 
     let entry_name = name.clone().unwrap_or_else(|| {
