@@ -838,6 +838,76 @@ fn write_minimal_ebuild(repo_root: &std::path::Path, category: &str, pn: &str) -
     Utf8PathBuf::from_path_buf(path).unwrap()
 }
 
+/// Build a minimal ebuild that `inherit`s an eclass which plain-assigns
+/// `IUSE="foo"` (matching real `verify-sig.eclass`'s own `IUSE="verify-sig"`
+/// — a plain assignment, not `+=`), for the `already_phase_sourced` tests
+/// below.
+fn write_ebuild_with_plain_iuse_eclass(repo_root: &std::path::Path) -> Utf8PathBuf {
+    std::fs::create_dir_all(repo_root.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
+    std::fs::create_dir_all(repo_root.join("eclass")).unwrap();
+    std::fs::write(repo_root.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_root.join("profiles/repo_name"), "t\n").unwrap();
+    std::fs::write(repo_root.join("eclass/plainiuse.eclass"), "IUSE=\"foo\"\n").unwrap();
+    let ebdir = repo_root.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    let path = ebdir.join("pkg-1.ebuild");
+    std::fs::write(
+        &path,
+        "EAPI=8\ninherit plainiuse\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\n\
+         S=\"${WORKDIR}\"\npkg_setup() { :; }\n",
+    )
+    .unwrap();
+    Utf8PathBuf::from_path_buf(path).unwrap()
+}
+
+/// Verifies the invariant `portage-cli`'s `run_merge` fix (2026-08-04) relies
+/// on: once an ebuild has been sourced by an earlier phase in this same shell
+/// (`run_phase`'s own `need_source`-gated sourcing — `unpack`/`prepare`/etc.
+/// in a real merge), the resulting `IUSE` already correctly folds in an
+/// eclass's own plain-assignment contribution (matching real
+/// `verify-sig.eclass`'s `IUSE="verify-sig"`) via the PMS 10.2 `E_IUSE`
+/// combine — so a caller can read it via `collect_env()` directly, guarded by
+/// `is_phase_sourced`, instead of calling `source_ebuild` again.
+///
+/// `run_merge` calling `source_ebuild` unconditionally (the pre-fix bug) was
+/// confirmed live: `sys-devel/binutils`'s VDB `IUSE` came out missing
+/// `verify-sig`, even though the pre-merge dependency plan showed it
+/// correctly and the md5-cache (via `em regen`) also has it. The exact
+/// bash/eclass-level reason the *specific* live sequence of phases dropped it
+/// wasn't isolated in a minimal repro here (a synthetic multi-pass
+/// `source_ebuild`/`run_phase` sequence modeled on the real merge's phase
+/// order did not reproduce the loss) — this test instead locks down the
+/// precondition the fix depends on, and the fix itself was verified directly
+/// against the real `::gentoo` binutils ebuild (VDB `IUSE` now matches the
+/// cache).
+#[tokio::test]
+async fn already_phase_sourced_iuse_includes_eclass_contribution() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_ebuild_with_plain_iuse_eclass(&repo_path);
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    assert!(shell.is_phase_sourced(&ebuild));
+    assert!(
+        shell.collect_env().iuse.iter().any(|f| f == "foo"),
+        "already-phase-sourced IUSE must include the eclass's own contribution: {:?}",
+        shell.collect_env().iuse
+    );
+}
+
 /// Regression test for a bug found live 2026-08-04 bootstrapping a riscv64
 /// cross toolchain under `--prefix`: `cross-<tuple>/binutils` compiles with
 /// the prefix's own native compiler, whose default system header search is

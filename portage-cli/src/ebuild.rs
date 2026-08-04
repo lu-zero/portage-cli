@@ -1824,10 +1824,26 @@ async fn run_merge(
     let temp_dir = work_root.join("temp");
     std::fs::create_dir_all(temp_dir.as_std_path()).context("creating temp dir")?;
 
-    shell
-        .source_ebuild(ebuild)
-        .await
-        .context("sourcing ebuild")?;
+    // In a merge run the ebuild is already sourced (an earlier phase —
+    // unpack/prepare/etc. — ran first in this same shell): avoid re-sourcing
+    // here, exactly like `run_fetch` already does (see its own comment).
+    // Doing so anyway doesn't just risk dropping a custom `S`; found live
+    // 2026-08-04, it silently dropped `sys-devel/binutils`'s own
+    // `inherit verify-sig` (which sets plain `IUSE="verify-sig"`) from the
+    // VDB's `IUSE` file, even though the pre-merge dependency plan correctly
+    // showed it and `em regen`'s own md5-cache has it too. Fixed by checking
+    // `is_phase_sourced` first, matching `run_fetch`'s already-established
+    // pattern, and verified live (VDB `IUSE` now matches the cache) — the
+    // precise bash/eclass-level reason the extra re-source drops it wasn't
+    // isolated in a minimal repro (see the regression test in
+    // `portage-repo/src/build/shell/tests.rs`), but skipping the redundant
+    // sourcing is correct regardless: the ebuild's already fully sourced.
+    if !shell.is_phase_sourced(ebuild) {
+        shell
+            .source_ebuild(ebuild)
+            .await
+            .context("sourcing ebuild")?;
+    }
     let env = shell.collect_env();
 
     let env_dump = capture_environment(shell, work_root).await;
