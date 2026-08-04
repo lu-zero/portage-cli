@@ -592,26 +592,13 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         crate::style::warn_line!("env-update failed: {e:#}");
     }
 
+    // On success, stay silent: `HumanStdoutSink` already prints a
+    // `>>> Completed (N of M) {cpv} to {ROOT}/` line per merged package
+    // (and `>>> Emerging`/`>>> Fetching` for the start), so a trailing
+    // `>>> Done — N package(s) merged into …` would just repeat the last
+    // banner. Real emerge likewise prints no end-of-run summary on a
+    // successful merge. Failures still get a structured report below.
     if failures.is_empty() {
-        let extra = if skipped > 0 {
-            format!(" ({skipped} already installed)")
-        } else {
-            String::new()
-        };
-        let done = if fetchonly {
-            format!("{merged} package(s) fetched")
-        } else if buildpkgonly {
-            format!("{merged} binary package(s) built")
-        } else {
-            format!("{merged} package(s) merged into {merge_root}")
-        };
-        // Plain `>>>`-style line, not a raw tracing event: this final summary
-        // is genuinely default-visible UX (unlike the two debug-only lines
-        // above it in the log), so it should look like the rest of the
-        // merge output, not carry an "INFO" tag (todo/PENDING.md 2026-08-03).
-        if !quiet {
-            println!(">>> Done — {done}{extra}");
-        }
         return Ok(());
     }
 

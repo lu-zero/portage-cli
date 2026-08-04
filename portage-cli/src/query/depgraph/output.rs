@@ -1230,6 +1230,12 @@ pub(super) struct PrettyCtx<'a> {
     /// add a network fetch to a plain `-p` preview; the merge itself still
     /// checks them via `run_merge_plan`'s own index.
     pub binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
+    /// Wall-clock time spent in the resolution phase (initial solve + any
+    /// `--complete-graph` repair rounds), shown on the Pretty plan as
+    /// `Dependency resolution took N.NN s.` — the one emerge-parity stats
+    /// line we surface. PubGrub 0.4 doesn't expose a backtrack count, so we
+    /// omit the `(backtrack: N/M)` suffix real portage appends.
+    pub resolve_secs: f64,
 }
 
 /// Print the emerge-style pretty plan, honouring each entry's
@@ -1299,6 +1305,7 @@ fn format_plan_parts(
         force_mask,
         accept_keywords,
         binpkg_index,
+        resolve_secs: _,
     } = ctx;
 
     let dest_suffix = match super::root_aware::display_root(merge_root, &cross.target, cross) {
@@ -1438,7 +1445,12 @@ fn print_pretty_with_roots(
         "{C_PKG}These are the packages that would be merged, in order:{C_PKG:#}\n"
     )
     .ok();
-    writeln!(out, "Calculating dependencies... done!").ok();
+    // Real portage pairs a `Calculating dependencies... done!` line with a
+    // `Dependency resolution took 1.06 s (backtrack: 0/20).` stats line; we
+    // skip the former (redundant right above the plan) and keep the timing,
+    // which is the only bit carrying real information. PubGrub exposes no
+    // backtrack count, so no `(backtrack: …)` suffix.
+    writeln!(out, "Dependency resolution took {:.2} s.", ctx.resolve_secs).ok();
 
     for ((pkg, ver), merge_root) in order.iter().zip(merge_roots) {
         let (bracket, rest) = format_plan_parts(ctx, pkg, ver, *merge_root, cross, true);

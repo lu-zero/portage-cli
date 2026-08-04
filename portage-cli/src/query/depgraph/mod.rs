@@ -1098,6 +1098,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             })
         };
 
+    // Time the whole resolution phase: the initial solve plus any
+    // `--complete-graph` repair rounds (each is another pubgrub run).
+    // Reported in the emerge-style plan preview in place of real portage's
+    // `Calculating dependencies... done!` / `Dependency resolution took …`
+    // pair — we drop the former (redundant once the plan is shown) and keep
+    // the latter, the bit that actually carries information.
+    let resolve_start = std::time::Instant::now();
     let mut solve_targets: Vec<(PortagePackage, PortageVersionSet)> = root_deps.clone();
     let mut repaired: HashSet<Cpn> = HashSet::new();
     let mut outcome = solve_round(solve_targets.clone())?;
@@ -1144,6 +1151,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             }
         }
     }
+    let resolve_secs = resolve_start.elapsed().as_secs_f64();
 
     let RoundOutcome {
         provider,
@@ -1319,6 +1327,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         force_mask: &force_mask,
         accept_keywords: &accept_keywords,
         binpkg_index,
+        resolve_secs,
     };
 
     match format {
