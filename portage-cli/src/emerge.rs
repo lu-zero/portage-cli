@@ -396,17 +396,7 @@ async fn emerge_atoms_inner(
         && !merge_flags.fetchonly
         && !merge_flags.onlydeps;
     let world_atoms: Vec<portage_atom::Dep> = if should_update_world {
-        raw_atoms
-            .iter()
-            .filter(|s| !s.starts_with('@'))
-            .filter_map(|s| match portage_atom::Dep::parse(s) {
-                Ok(d) => Some(d),
-                Err(e) => {
-                    eprintln!("warning: skipping invalid world atom '{s}': {e}");
-                    None
-                }
-            })
-            .collect()
+        select_world_atoms(&atoms)
     } else {
         Vec::new()
     };
@@ -896,6 +886,28 @@ fn drop_highest_version_per_cpn(
         .collect()
 }
 
+/// Real emerge's world-atom selection (`_world_atom`): only the literal,
+/// explicitly-named atoms make it onto the world set, never `@set`
+/// expansions. Takes the already-*resolved* `atoms` — bare names like `gcc`
+/// disambiguated via `query::resolve_atom` upstream — not the raw
+/// command-line strings: re-parsing the raw strings independently here used
+/// to bypass that disambiguation and reject any bare package name as an
+/// invalid cpn on a real (non-`-p`) merge, even though the exact same atom
+/// had just resolved fine for the depgraph itself (found live 2026-08-04).
+fn select_world_atoms(atoms: &[TargetAtom]) -> Vec<portage_atom::Dep> {
+    atoms
+        .iter()
+        .filter(|t| t.origin == TargetOrigin::Explicit)
+        .filter_map(|t| match portage_atom::Dep::parse(&t.atom) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("warning: skipping invalid world atom '{}': {e}", t.atom);
+                None
+            }
+        })
+        .collect()
+}
+
 /// `-W`/`--deselect`: remove `atoms` (or `@set` names) from the world file
 /// only — no removal, no dependency graph, no VDB access at all beyond the
 /// world file itself. Matches real emerge's own `--deselect` action.
@@ -1186,6 +1198,27 @@ mod tests {
 
         let versions: Vec<String> = removable.iter().map(|p| p.cpv().to_string()).collect();
         assert_eq!(versions, vec!["app-misc/foo-1.0".to_string()]);
+    }
+
+    #[test]
+    fn select_world_atoms_accepts_an_already_resolved_bare_name() {
+        // Regression test for the 2026-08-04 bug: `atoms` here holds the
+        // *resolved* form (what `query::resolve_atom` turned bare "gcc"
+        // into), not the raw command-line string — selection must use that,
+        // not re-parse "gcc" on its own and reject it as an invalid cpn.
+        let atoms = vec![TargetAtom::explicit("sys-devel/gcc")];
+        let world = select_world_atoms(&atoms);
+        assert_eq!(world.len(), 1);
+        assert_eq!(world[0].to_string(), "sys-devel/gcc");
+    }
+
+    #[test]
+    fn select_world_atoms_drops_set_expansions() {
+        let atoms = vec![TargetAtom {
+            atom: "sys-devel/gcc".to_string(),
+            origin: TargetOrigin::Set("world".to_string()),
+        }];
+        assert!(select_world_atoms(&atoms).is_empty());
     }
 
     #[test]
