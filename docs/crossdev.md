@@ -172,6 +172,36 @@ em --target riscv64-unknown-linux-gnu sys-apps/coreutils  # one target package
 These resolve and install into the target sysroot (`<EROOT>/usr/<tuple>`),
 using the sysroot's own `make.conf` for `CHOST`/`CFLAGS`/keywords.
 
+### Worked example: bootstrap a toolchain and cross-build a real package, under `--prefix`
+
+End-to-end recipe, unprivileged, confirmed live 2026-08-04
+(`riscv64-unknown-linux-gnu`, GCC model):
+
+```
+# 1. Bootstrap the cross toolchain into the prefix (binutils → headers →
+#    gcc-stage1 → glibc → gcc-stage2). Takes a while — it's a real compiler
+#    build. --jobs N parallelizes across independent packages in the plan
+#    (MAKEOPTS still parallelizes within one package).
+em --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
+
+# 2. Cross-build an ordinary target package set through the toolchain just
+#    built — no separate entry point, same --target flag as any other em
+#    command. -b writes binpkgs alongside the merge.
+em --prefix /opt/xp --target riscv64-unknown-linux-gnu -b llvm-core/clang --jobs 8
+```
+
+Step 2 pulls in `llvm-core/clang`'s full dependency closure as ordinary
+target-arch packages (`sys-libs/zlib`, `sys-libs/ncurses`,
+`sys-apps/findutils`, ...) — genuinely different from `--setup`'s own
+`cross-<tuple>/*` packages (see "Two package classes" above): these install
+*into* the sysroot using the sysroot's own `CHOST`/`CFLAGS`, with no
+special-casing needed once the toolchain from step 1 exists. `em` scopes
+which packages may borrow the prefix's own native search paths (host-side
+tools) from which must resolve purely against the target sysroot (this
+step's packages) automatically — see `setup.rs`'s `BASHRC_PREFIX` and
+`shell.rs`'s `ESYSROOT` computation if you're touching that logic, not
+something to work around here.
+
 ### Build one cross-category package directly (no `--target` needed)
 
 A `cross-<tuple>/<pkg>` atom fully identifies its own target through its
