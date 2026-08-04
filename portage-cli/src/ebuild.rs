@@ -1774,6 +1774,14 @@ async fn run_fetch(
     // `resolve_uri_map`'s own doc comment). Render each filename's outcome
     // once rather than once per underlying URI. Found live 2026-08-04
     // re-emerging sys-devel/binutils, which printed "already present" twice.
+    // Real portage's own fetch check reports each distfile via `ebegin`/`eend`
+    // (`eout.ebegin(f"{file} size ;-)"); eout.eend(0)`) — a colored `" * "`
+    // line ending in a right-aligned `"[ ok ]"`/`"[ !! ]"` bracket, not a log
+    // line. `crate::style::estatus_line` renders that same shape (see its own
+    // doc comment for why this can print it in one shot instead of real
+    // portage's separate begin-now/finish-later calls).
+    let width = crate::style::term_width();
+    let ansi = crate::diag::stderr_wants_color();
     let mut seen = std::collections::HashSet::new();
     let mut any_failed = false;
     let mut any_restricted = false;
@@ -1782,21 +1790,44 @@ async fn run_fetch(
             continue;
         }
         match result {
-            Ok(FetchStatus::AlreadyPresent) => {
-                tracing::info!("fetch: {} (already present)", df.filename);
-            }
-            Ok(FetchStatus::Downloaded) => {
-                tracing::info!("fetch: {} ok", df.filename);
+            Ok(FetchStatus::AlreadyPresent | FetchStatus::Downloaded) => {
+                eprintln!(
+                    "{}",
+                    crate::style::estatus_line(
+                        &format!("fetch: {}", df.filename),
+                        true,
+                        width,
+                        ansi
+                    )
+                );
             }
             Ok(FetchStatus::FetchRestricted) => {
                 eprintln!(
-                    "fetch: {} is fetch-restricted (RESTRICT=fetch)",
-                    df.filename
+                    "{}",
+                    crate::style::estatus_line(
+                        &format!("fetch: {}", df.filename),
+                        false,
+                        width,
+                        ansi
+                    )
                 );
+                crate::style::error_line(&format!(
+                    "{} is fetch-restricted (RESTRICT=fetch)",
+                    df.filename
+                ));
                 any_restricted = true;
             }
             Err(e) => {
-                eprintln!("fetch: {} failed: {e}", df.filename);
+                eprintln!(
+                    "{}",
+                    crate::style::estatus_line(
+                        &format!("fetch: {}", df.filename),
+                        false,
+                        width,
+                        ansi
+                    )
+                );
+                crate::style::error_line(&format!("{} failed: {e}", df.filename));
                 any_failed = true;
             }
         }

@@ -95,6 +95,18 @@ pub const C_ERROR: Style = Style::new()
 /// (`0xFF5555` → `31;01m`) are the same bold codes as [`C_WARN`]/[`C_ERROR`]
 /// above, so the marker reuses those.
 pub const C_MARKER_INFO: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+/// `eend`'s bracket color (`portage/output.py`'s `BRACKET` = `"blue"` →
+/// `0x5555FF` → `34;01m`, bold blue) — encloses the `"ok"`/`"!!"` text in
+/// `"[ ok ]"`/`"[ !! ]"`.
+pub const C_BRACKET: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Blue)))
+    .effects(Effects::BOLD);
+/// `eend`'s success text color (`portage/output.py`'s `GOOD` = `"green"` →
+/// `0x55FF55` → `32;01m`, bold green — distinct from [`C_MARKER_INFO`]'s
+/// plain `darkgreen`; portage uses two different greens here).
+pub const C_GOOD: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Green)))
+    .effects(Effects::BOLD);
 /// The default answer in a `[y/N]`-style confirm prompt — real portage's
 /// `PROMPT_CHOICE_DEFAULT` (plain green, not bold; `UserQuery.query`'s
 /// default `colours=[PROMPT_CHOICE_DEFAULT, PROMPT_CHOICE_OTHER]`).
@@ -147,6 +159,44 @@ pub fn error_line(msg: &str) {
     let _ = out.flush();
 }
 
+/// Render one line in real portage's `ebegin`/`eend` shape (`portage/
+/// output.py`'s `EOutput`): `" * {msg} ..."` immediately followed by a
+/// right-aligned `"[ ok ]"`/`"[ !! ]"` bracket — e.g. what real portage shows
+/// for a fetch's already-verified-distfile check
+/// (`eout.ebegin(f"{file} size ;-)"); eout.eend(0)`).
+///
+/// Unlike real portage's own `ebegin`(prints immediately, no newline)/`eend`
+/// (completes the same line later), this renders the whole line in one call:
+/// every caller here already has the outcome in hand by the time it prints
+/// anything (e.g. `Fetcher::fetch_all` gathers every distfile's result
+/// before any of them get reported), so there's no live gap to bridge and,
+/// just as importantly, no risk of two concurrent checks' half-written
+/// "began" lines interleaving on the terminal.
+///
+/// `width` is the terminal width ([`term_width`]); `ansi` whether to color
+/// the bracket (real portage's `BRACKET`=blue, `GOOD`=green, `BAD`=red).
+pub fn estatus_line(msg: &str, ok: bool, width: usize, ansi: bool) -> String {
+    let plain_head = format!(" * {msg} ...");
+    // Matches EOutput.__eend's own "%*s%s" % (term_columns - last_e_len - 7, "", brackets):
+    // last_e_len is this line's own length so far; -7 is "[ ok ]"/"[ !! ]"'s
+    // 6 characters plus a 1-column margin so an exact-width terminal doesn't
+    // wrap. Measured on the plain text: ANSI escapes occupy no columns on
+    // screen and must never count toward the width.
+    let pad = width.saturating_sub(plain_head.chars().count() + 7).max(1);
+    let padding = " ".repeat(pad);
+    if ansi {
+        let result = if ok { C_GOOD } else { C_ERROR };
+        let result_text = if ok { "ok" } else { "!!" };
+        format!(
+            "{C_MARKER_INFO} * {C_MARKER_INFO:#}{msg} ...{padding}\
+             {C_BRACKET}[ {C_BRACKET:#}{result}{result_text}{result:#}{C_BRACKET} ]{C_BRACKET:#}"
+        )
+    } else {
+        let bracket = if ok { "[ ok ]" } else { "[ !! ]" };
+        format!("{plain_head}{padding}{bracket}")
+    }
+}
+
 /// Style for a profile's stability status (same palette as keyword stability).
 pub fn profile_status(status: &portage_repo::ProfileStatus) -> Style {
     use portage_repo::ProfileStatus::*;
@@ -195,5 +245,40 @@ mod tests {
     #[test]
     fn no_items_means_no_lines() {
         assert!(wrap_items(&[], 4, 80).is_empty());
+    }
+
+    /// Right edge lands one column short of `width` (real portage's own
+    /// `EOutput.__eend` deliberately leaves a 1-column margin so an
+    /// exact-width terminal doesn't wrap) — checked plain (no ANSI padding
+    /// characters to throw off a byte-length check).
+    #[test]
+    fn estatus_line_ok_right_aligns_one_short_of_width() {
+        let line = estatus_line("fetch: binutils-2.46.1.tar.xz", true, 80, false);
+        assert_eq!(line.len(), 79);
+        assert!(line.starts_with(" * fetch: binutils-2.46.1.tar.xz ..."));
+        assert!(line.ends_with("[ ok ]"));
+    }
+
+    #[test]
+    fn estatus_line_failure_uses_the_failure_bracket() {
+        let line = estatus_line("fetch: foo.tar.gz", false, 80, false);
+        assert!(line.ends_with("[ !! ]"));
+    }
+
+    #[test]
+    fn estatus_line_colors_only_under_ansi() {
+        let plain = estatus_line("x", true, 80, false);
+        assert!(!plain.contains('\x1b'));
+        let colored = estatus_line("x", true, 80, true);
+        assert!(colored.contains("\x1b[32mok"), "{colored:?}");
+    }
+
+    /// A message longer than the terminal must not underflow the padding
+    /// arithmetic (`saturating_sub` + a `.max(1)` floor) — must still
+    /// terminate with the bracket, not panic.
+    #[test]
+    fn estatus_line_survives_a_narrow_terminal() {
+        let line = estatus_line("a very long message indeed", true, 10, false);
+        assert!(line.ends_with("[ ok ]"));
     }
 }
