@@ -1260,15 +1260,69 @@ impl EbuildShell {
             let prefix_bin = self
                 .build_broot
                 .as_deref()
-                .map(|broot| broot.join("usr/bin"))
-                .filter(|bin| bin.join(format!("{chost}-gcc")).is_file());
+                .map(|broot| broot.join("usr/bin"));
+            let tool_exists = |bin: Option<&Utf8PathBuf>, tuple: &str, tool: &str| -> bool {
+                match bin {
+                    Some(bin) => bin.join(format!("{tuple}-{tool}")).is_file(),
+                    None => program_on_path(&format!("{tuple}-{tool}")),
+                }
+            };
+            let tool_path = |bin: Option<&Utf8PathBuf>, tuple: &str, tool: &str| -> Utf8PathBuf {
+                match bin {
+                    // Use the absolute prefix path when known: em's own
+                    // post-`src_install` estrip (and any helper) runs the tool
+                    // outside the build shell, with the host process PATH that
+                    // lacks the $HOME prefix bin — a bare `${tuple}-strip` then
+                    // fails. A bare name is fine for host crossdev (on PATH).
+                    Some(bin) => bin.join(format!("{tuple}-{tool}")),
+                    None => Utf8PathBuf::from(format!("{tuple}-{tool}")),
+                }
+            };
+
+            // A genuine cross-*target* package (`cross-<tuple>/glibc`,
+            // `.../linux-headers` — installed by `crossdev --setup`'s "libc"/
+            // "kernel headers" steps) has its own `CTARGET` in `package.env`
+            // but, unlike the host-arch toolchain-*tool* packages
+            // (`binutils`/`gcc`/`gdb`, which `package.env` additionally marks
+            // with `TARGET_ABI` since *their own* compile identity stays the
+            // host's), its own role really is producing CTARGET code — its
+            // toolchain vars must be `${CTARGET}-<tool>`, not `${CHOST}-<tool>`.
+            // `CHOST` here may be the *ambient* value (e.g. under `crossdev
+            // --setup`'s `bypass_cross_root`, which deliberately routes the
+            // libc/headers steps through host config for unrelated reasons —
+            // see `crossdev/mod.rs`'s `run_staged` doc), not this package's own.
+            //
+            // Found live 2026-08-04 bootstrapping riscv64 glibc under
+            // `--prefix`: em proactively exported `CC=<host CHOST>-gcc` before
+            // glibc's own `sanity_prechecks` ran its `tc-getCPP ${CTARGET}`
+            // probe (real `glibc-9999.ebuild`'s `get_kheader_version`) — that
+            // probe is *designed* to self-correct to the right cross tool via
+            // its own explicit `${CTARGET}` argument, but only when `$CC`
+            // starts out unset; `tc-getPROG`'s repair can't recover once it's
+            // already set to something (even something wrong). Predates
+            // `9b9e77a`'s Phase 2, which broadened `chost != cbuild` to also
+            // fire whenever `build_eprefix.is_some()` — correct for its own
+            // target case (native same-arch `--prefix`/`--local` builds), but
+            // incidentally also catches this one, since `bypass_cross_root`
+            // can make `CHOST` equal `CBUILD` here for a reason unrelated to
+            // this actually being a same-arch build.
+            let target_abi_set = self
+                .get_var("TARGET_ABI")
+                .filter(|s| !s.is_empty())
+                .is_some();
+            let target_tuple = self
+                .get_var("CTARGET")
+                .filter(|t| !t.is_empty() && !target_abi_set && *t != chost);
+            let tool_tuple = target_tuple.clone().unwrap_or_else(|| chost.clone());
+
+            let prefix_bin = prefix_bin.filter(|bin| tool_exists(Some(bin), &tool_tuple, "gcc"));
             if let Some(bin) = &prefix_bin {
                 let path = self.get_var("PATH").unwrap_or_default();
                 if !path.split(':').any(|p| p == bin.as_str()) {
                     self.set_var("PATH", &format!("{bin}:{path}"));
                 }
             }
-            if prefix_bin.is_some() || program_on_path(&format!("{chost}-gcc")) {
+            if prefix_bin.is_some() || program_on_path(&format!("{tool_tuple}-gcc")) {
                 for (var, tool) in [
                     ("CC", "gcc"),
                     ("CXX", "g++"),
@@ -1286,37 +1340,59 @@ impl EbuildShell {
                     if self.get_var(var).filter(|s| !s.is_empty()).is_none() {
                         // Unlike the other 11 (built by crossdev's own toolchain
                         // steps alongside gcc, so they exist whenever gcc does),
-                        // `${chost}-pkg-config` is never created by anything em
-                        // builds — real crossdev relies on a separately-installed
-                        // `cross-pkg-config` wrapper this project doesn't
-                        // reproduce. Blindly setting PKG_CONFIG here pointed at a
-                        // file that doesn't exist, which — unlike an unset var —
-                        // short-circuits `tc-getPKG_CONFIG`'s own "already set"
-                        // fast path and skips its real PATH-search/bare-name
-                        // fallback entirely. Found live via `sys-libs/readline`
-                        // in a from-scratch riscv64 cross build: `PKG_CONFIG`
-                        // ended up pointing at a nonexistent
-                        // `/usr/bin/<chost>-pkg-config`, and every command
-                        // substitution using it died with "command not found"
-                        // instead of falling back to bare `pkg-config`. Verify
-                        // existence per tool instead of trusting the gate above,
-                        // which only checked `${chost}-gcc`.
-                        let candidate = match &prefix_bin {
-                            Some(bin) => bin.join(format!("{chost}-{tool}")),
-                            None => Utf8PathBuf::from(format!("{chost}-{tool}")),
-                        };
-                        let exists = match &prefix_bin {
-                            Some(_) => candidate.is_file(),
-                            None => program_on_path(&format!("{chost}-{tool}")),
-                        };
-                        if exists {
-                            // Use the absolute prefix path when known: em's own
-                            // post-`src_install` estrip (and any helper) runs the
-                            // tool outside the build shell, with the host process
-                            // PATH that lacks the $HOME prefix bin — a bare
-                            // `${CHOST}-strip` then fails. A bare name is fine for
-                            // host crossdev (on PATH).
-                            self.set_var(var, candidate.as_str());
+                        // `${tool_tuple}-pkg-config` is never created by anything
+                        // em builds — real crossdev relies on a
+                        // separately-installed `cross-pkg-config` wrapper this
+                        // project doesn't reproduce. Blindly setting PKG_CONFIG
+                        // here pointed at a file that doesn't exist, which —
+                        // unlike an unset var — short-circuits
+                        // `tc-getPKG_CONFIG`'s own "already set" fast path and
+                        // skips its real PATH-search/bare-name fallback
+                        // entirely. Found live via `sys-libs/readline` in a
+                        // from-scratch riscv64 cross build. Verify existence per
+                        // tool instead of trusting the gate above, which only
+                        // checked `${tool_tuple}-gcc`.
+                        if tool_exists(prefix_bin.as_ref(), &tool_tuple, tool) {
+                            self.set_var(
+                                var,
+                                tool_path(prefix_bin.as_ref(), &tool_tuple, tool).as_str(),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // A genuine target package's own toolchain vars now point at
+            // CTARGET (above); also give real toolchain-funcs.eclass's
+            // `tc-getBUILD_*` family (`BUILD_CC`, `BUILD_CXX`, …) the ambient
+            // host/CBUILD-side tools, so a host-side sub-probe that correctly
+            // asks for the *build* compiler still gets one — matching
+            // `tc-getBUILD_PROG`'s own real var-check order (`BUILD_CC` /
+            // `CC_FOR_BUILD` / `HOSTCC`, never falling back to plain `CC` at
+            // all once genuinely cross-compiling).
+            if target_tuple.is_some() {
+                let host_bin = self
+                    .build_broot
+                    .as_deref()
+                    .map(|broot| broot.join("usr/bin"));
+                let host_bin = host_bin.filter(|bin| tool_exists(Some(bin), &chost, "gcc"));
+                if host_bin.is_some() || program_on_path(&format!("{chost}-gcc")) {
+                    for (var, tool) in [
+                        ("BUILD_CC", "gcc"),
+                        ("BUILD_CXX", "g++"),
+                        ("BUILD_AR", "ar"),
+                        ("BUILD_NM", "nm"),
+                        ("BUILD_RANLIB", "ranlib"),
+                        ("BUILD_STRIP", "strip"),
+                        ("BUILD_OBJCOPY", "objcopy"),
+                        ("BUILD_READELF", "readelf"),
+                        ("BUILD_LD", "ld"),
+                        ("BUILD_PKG_CONFIG", "pkg-config"),
+                    ] {
+                        if self.get_var(var).filter(|s| !s.is_empty()).is_none()
+                            && tool_exists(host_bin.as_ref(), &chost, tool)
+                        {
+                            self.set_var(var, tool_path(host_bin.as_ref(), &chost, tool).as_str());
                         }
                     }
                 }
@@ -1747,6 +1823,27 @@ impl EbuildShell {
             };
             self.set_var("ESYSROOT", &esysroot);
             self.set_var("BROOT", "/");
+
+            // Host-arch toolchain-tool packages (`cross-<tuple>/{binutils,gcc,
+            // gdb,...}`) compile with the prefix's own native compiler, but a
+            // BDEPEND resolved via `USE=debuginfod` (dev-libs/elfutils) may not
+            // itself be installed as a native prefix package. pkg-config
+            // correctly finds it via the real host system's own .pc file (see
+            // `select/pkgconf.rs`'s `is_native` fix) — but the compiler itself
+            // has no knowledge of the host's `/usr/include`: built with
+            // `--prefix=<prefix>`, its own default system search is confined to
+            // `<prefix>/usr/include`. `-idirafter` (searched only after -I
+            // flags and the compiler's own default dirs) adds the host path as
+            // a last-resort fallback without ever shadowing anything the
+            // prefix itself provides. Found live 2026-08-04 bootstrapping a
+            // riscv64 cross toolchain under `--prefix`: binutils's dwarf.c hit
+            // `elfutils/debuginfod.h: No such file or directory` despite
+            // pkg-config finding `libdebuginfod >= 0.188` on the host.
+            if cross_host_tool_tuple.is_some() && self.build_sysroot.is_some() {
+                let cppflags = self.get_var("CPPFLAGS").unwrap_or_default();
+                let updated = format!("{cppflags} -idirafter /usr/include");
+                self.set_var("CPPFLAGS", updated.trim_start());
+            }
         }
 
         // PORTAGE_INST_UID/GID: owner dobin/dosbin apply via `install -o/-g`.

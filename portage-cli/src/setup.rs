@@ -101,18 +101,35 @@ const BASHRC_PREFIX: &str = r#"# Overlay search paths for `em --prefix DIR` (cre
 if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 	_ov="${EPREFIX%/}"
 	_libdir="$(get_libdir 2>/dev/null || echo lib)"
+	# PATH stays unconditional: cross_host_tool_tuple packages (binutils/gcc,
+	# CTARGET set + TARGET_ABI also set — see the CTARGET check below) still
+	# need ${EPREFIX}/usr/bin on PATH to find ${CTARGET}-gcc, or tc-getCC
+	# falls back to the host ${CHOST}-gcc (see this recipe's own doc comment).
 	export PATH="${_ov}/usr/bin${PATH:+:${PATH}}"
-	export PKG_CONFIG_PATH="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-	# meson.eclass pins PKG_CONFIG_LIBDIR to the prefix alone when the env var
-	# isn't already set (it *replaces* pkg-config's built-in default search,
-	# unlike PKG_CONFIG_PATH, which is additive) — so a host-satisfied BDEPEND
-	# (e.g. dev-libs/libpcre2 for dev-vcs/git's meson build) becomes invisible
-	# to a meson-based build even though PKG_CONFIG_PATH alone would have
-	# found it. Search the prefix first, then the host, matching BASHRC_LOCAL.
-	export PKG_CONFIG_LIBDIR="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig:/usr/${_libdir}/pkgconfig:/usr/share/pkgconfig${PKG_CONFIG_LIBDIR:+:${PKG_CONFIG_LIBDIR}}"
-	export CPPFLAGS="-I${_ov}/usr/include${CPPFLAGS:+ ${CPPFLAGS}}"
-	export LDFLAGS="-L${_ov}/usr/${_libdir} -Wl,-rpath-link,${_ov}/usr/${_libdir}${LDFLAGS:+ ${LDFLAGS}}"
-	export CMAKE_PREFIX_PATH="${_ov}/usr${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+	# A genuine cross-*target* package (CTARGET set, no TARGET_ABI — glibc/
+	# linux-headers under `crossdev --setup`'s "libc"/"kernel headers" steps;
+	# TARGET_ABI is what `multilib::env_block` additionally sets for the
+	# host-arch toolchain-*tool* packages, see portage-repo/src/build/
+	# shell.rs's matching Rust-side check) must NOT borrow the prefix's own
+	# native search paths below — they're a different architecture, and
+	# stacking them ahead of the package's own in-tree `-I` flags corrupts
+	# its build. Found live 2026-08-04: glibc's own
+	# sysdeps/unix/sysv/linux/sysdep.h resolved `<endian.h>` to the prefix's
+	# native aarch64 headers instead of its own riscv64 in-tree copy,
+	# tripping its "_LIBC must not be defined by applications" guard.
+	if [[ -z ${CTARGET} || -n ${TARGET_ABI} ]]; then
+		export PKG_CONFIG_PATH="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+		# meson.eclass pins PKG_CONFIG_LIBDIR to the prefix alone when the env var
+		# isn't already set (it *replaces* pkg-config's built-in default search,
+		# unlike PKG_CONFIG_PATH, which is additive) — so a host-satisfied BDEPEND
+		# (e.g. dev-libs/libpcre2 for dev-vcs/git's meson build) becomes invisible
+		# to a meson-based build even though PKG_CONFIG_PATH alone would have
+		# found it. Search the prefix first, then the host, matching BASHRC_LOCAL.
+		export PKG_CONFIG_LIBDIR="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig:/usr/${_libdir}/pkgconfig:/usr/share/pkgconfig${PKG_CONFIG_LIBDIR:+:${PKG_CONFIG_LIBDIR}}"
+		export CPPFLAGS="-I${_ov}/usr/include${CPPFLAGS:+ ${CPPFLAGS}}"
+		export LDFLAGS="-L${_ov}/usr/${_libdir} -Wl,-rpath-link,${_ov}/usr/${_libdir}${LDFLAGS:+ ${LDFLAGS}}"
+		export CMAKE_PREFIX_PATH="${_ov}/usr${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+	fi
 	unset _ov _libdir
 fi
 "#;
@@ -490,6 +507,92 @@ mod tests {
         assert!(
             cmake_prefix_path.contains(&format!("{prefix}/usr")),
             "CMAKE_PREFIX_PATH: {cmake_prefix_path}"
+        );
+    }
+
+    /// Regression test for a bug found live 2026-08-04 bootstrapping riscv64
+    /// glibc under `--prefix`: a genuine cross-*target* package (`CTARGET`
+    /// set, no `TARGET_ABI` — matches `crossdev --setup`'s "libc"/"kernel
+    /// headers" steps' own `package.env`) must NOT get the prefix's own
+    /// native `CPPFLAGS`/`LDFLAGS`/`PKG_CONFIG_*`/`CMAKE_PREFIX_PATH`
+    /// injection — glibc's own `sysdeps/unix/sysv/linux/sysdep.h` resolved
+    /// `<endian.h>` to the prefix's native aarch64 headers instead of its
+    /// own riscv64 in-tree copy, tripping its "_LIBC must not be defined by
+    /// applications" guard. `PATH` must still gain the prefix's `usr/bin`
+    /// though — `cross_host_tool_tuple` packages (binutils/gcc, `TARGET_ABI`
+    /// also set) still need it to find `${CTARGET}-gcc`.
+    #[tokio::test]
+    async fn overlay_bashrc_skips_host_paths_for_a_genuine_target_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().to_str().unwrap();
+        let body = bashrc_body("--prefix", prefix);
+
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("ROOT".to_string(), "/".to_string());
+        env.insert("EPREFIX".to_string(), prefix.to_string());
+        env.insert(
+            "CTARGET".to_string(),
+            "riscv64-unknown-linux-gnu".to_string(),
+        );
+        portage_repo::MakeConf::parse(body)
+            .unwrap()
+            .apply_to(&mut env)
+            .await
+            .unwrap();
+
+        let get = |name: &str| env.get(name).cloned().unwrap_or_default();
+        assert!(
+            get("PATH").contains(&format!("{prefix}/usr/bin")),
+            "PATH: {}",
+            get("PATH")
+        );
+        assert!(get("CPPFLAGS").is_empty(), "CPPFLAGS: {}", get("CPPFLAGS"));
+        assert!(get("LDFLAGS").is_empty(), "LDFLAGS: {}", get("LDFLAGS"));
+        assert!(
+            get("PKG_CONFIG_PATH").is_empty(),
+            "PKG_CONFIG_PATH: {}",
+            get("PKG_CONFIG_PATH")
+        );
+        assert!(
+            get("PKG_CONFIG_LIBDIR").is_empty(),
+            "PKG_CONFIG_LIBDIR: {}",
+            get("PKG_CONFIG_LIBDIR")
+        );
+        assert!(
+            get("CMAKE_PREFIX_PATH").is_empty(),
+            "CMAKE_PREFIX_PATH: {}",
+            get("CMAKE_PREFIX_PATH")
+        );
+    }
+
+    /// The host-arch toolchain-*tool* package class (`binutils`/`gcc` —
+    /// `TARGET_ABI` also set alongside `CTARGET`) must keep getting the host
+    /// path injection, exactly as before this fix.
+    #[tokio::test]
+    async fn overlay_bashrc_keeps_host_paths_for_a_cross_host_tool_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().to_str().unwrap();
+        let body = bashrc_body("--prefix", prefix);
+
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("ROOT".to_string(), "/".to_string());
+        env.insert("EPREFIX".to_string(), prefix.to_string());
+        env.insert(
+            "CTARGET".to_string(),
+            "riscv64-unknown-linux-gnu".to_string(),
+        );
+        env.insert("TARGET_ABI".to_string(), "lp64d".to_string());
+        portage_repo::MakeConf::parse(body)
+            .unwrap()
+            .apply_to(&mut env)
+            .await
+            .unwrap();
+
+        let get = |name: &str| env.get(name).cloned().unwrap_or_default();
+        assert!(
+            get("CPPFLAGS").contains(&format!("{prefix}/usr/include")),
+            "CPPFLAGS: {}",
+            get("CPPFLAGS")
         );
     }
 

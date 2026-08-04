@@ -1065,6 +1065,58 @@ blocked by the three independent findings above, tracked separately.
   already-resolved atoms (filtered to `TargetOrigin::Explicit`) instead of
   re-parsing, extracted into a small pure `select_world_atoms` helper with
   regression tests (`portage-cli/src/emerge.rs`).
+- ✅ **First-ever clean `--prefix` riscv64-unknown-linux-gnu crossdev
+  bootstrap, from scratch, all 6 steps — DONE 2026-08-04.** `em --prefix P
+  -T riscv64-unknown-linux-gnu crossdev --setup` now completes cleanly
+  (binutils → kernel headers → glibc-headers-only → gcc-stage1 → glibc-full
+  → gcc-stage2, cxx/fortran/openmp all enabled) and produces a genuinely
+  working toolchain — live-verified compiling and linking real C *and* C++
+  programs to a correct riscv64 ELF binary. Three real, independent bugs
+  found and fixed getting here, all the same underlying class ("a `--prefix`
+  overlay's host-borrowing machinery doesn't know a genuine cross-*target*
+  package, unlike a host-arch toolchain-*tool* package, must never see the
+  prefix's own native paths"):
+  1. `dwarf.c`/`objdump.c`: `elfutils/debuginfod.h` not found despite
+     `dev-libs/elfutils` being host-installed — the prefix's own native
+     compiler has no knowledge of the real host's `/usr/include` (it was
+     configured `--prefix=<prefix>`, so its own default system search is
+     confined there). Fixed with a scoped `-idirafter /usr/include` CPPFLAGS
+     fallback, gated on `cross_host_tool_tuple` (`portage-repo/src/build/
+     shell.rs`).
+  2. glibc's own `sanity_prechecks` → `get_kheader_version` →
+     `tc-getCPP ${CTARGET}` resolved to the *host's* compiler
+     (`aarch64-unknown-linux-gnu-gcc`, not `-mabi=lp64d`-aware), reading back
+     as kernel version `0.0.0` and hard-erroring "linux-headers version too
+     low!" — `em`'s own proactive `CC=${CHOST}-gcc` export (added in
+     `9b9e77a`'s Phase 2, correct for same-arch `--prefix`/`--local` native
+     builds) also fired for this genuine cross-*target* package, since
+     `crossdev --setup`'s `bypass_cross_root` makes ambient `CHOST` equal
+     `CBUILD` here for an unrelated reason — and once `$CC` is pre-set,
+     `tc-getPROG`'s own `$CTARGET`-argument repair can't recover. Fixed by
+     preferring `CTARGET` over ambient `CHOST` for a package whose
+     `package.env` sets `CTARGET` without `TARGET_ABI` (the signal
+     `multilib::env_block`'s `target_package: bool` already uses to
+     distinguish `PackageArch::Target` from `::Host` — i.e. genuine target
+     packages, not `binutils`/`gcc`/`gdb`), plus a matching `BUILD_CC`/
+     `BUILD_CXX`/… export for real toolchain-funcs' own `tc-getBUILD_CC`
+     family (confirmed genuinely consumed: `glibc-9999.ebuild`'s
+     headers-only pass literally calls `tc-getBUILD_CC`).
+  3. glibc's own `sysdeps/unix/sysv/linux/sysdep.h` (`#include <endian.h>`)
+     resolved to the prefix's native aarch64 `/usr/include/endian.h` instead
+     of its own riscv64 in-tree copy, tripping glibc's internal "_LIBC must
+     not be defined by applications" guard — `setup.rs`'s `BASHRC_PREFIX`
+     bashrc hook (an `em`-only invention; real crossdev has no `--prefix`
+     overlay concept and needs nothing like it) unconditionally injects
+     `-I${EPREFIX}/usr/include` etc. into `CPPFLAGS`/`LDFLAGS`/
+     `PKG_CONFIG_*`/`CMAKE_PREFIX_PATH` for every package under the prefix.
+     Fixed with the same `CTARGET`-without-`TARGET_ABI` guard as #2, this
+     time in the bash recipe itself; `PATH`'s own prefix-bin-dir addition
+     stays unconditional (still needed so `cross_host_tool_tuple` packages
+     find `${CTARGET}-gcc`).
+  All three confirmed via real, minimal regression tests (not just the live
+  run) — `portage-repo/src/build/shell/tests.rs` (3 new),
+  `portage-cli/src/setup.rs` (2 new). Next: `em -T riscv64-unknown-linux-gnu
+  -b llvm-core/clang` cross-build test, then write up the recipe in `docs/`.
 - ✅ **`--local` spuriously engaging dual-root solver machinery — FIXED
   2026-07-16.** `CrossContext::detect()` treated any non-`/` target as
   needing dual-root bookkeeping, which wrongly included `--local` (whose

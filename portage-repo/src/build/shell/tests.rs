@@ -687,6 +687,95 @@ async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
     );
 }
 
+/// Regression test for a bug found live 2026-08-04 bootstrapping riscv64
+/// glibc under `--prefix`: a genuine cross-*target* package (`CTARGET` set,
+/// no `TARGET_ABI` — matches `crossdev --setup`'s "libc"/"kernel headers"
+/// steps' own `package.env`, unlike the host-arch toolchain-*tool* packages)
+/// must get `CC`/etc. as `${CTARGET}-<tool>`, not `${CHOST}-<tool>`, even
+/// though `CHOST` here is the *ambient* value (e.g. `crossdev --setup`'s
+/// `bypass_cross_root` routes these steps through host config for unrelated
+/// reasons) — real glibc's own `sanity_prechecks` runs a `tc-getCPP
+/// ${CTARGET}` probe that can only self-correct to the right cross tool when
+/// `$CC` starts out unset; a premature `${CHOST}-gcc` export defeats it.
+/// Also checks the new `BUILD_CC` export: real toolchain-funcs.eclass's
+/// `tc-getBUILD_CC` checks `BUILD_CC`/`CC_FOR_BUILD`/`HOSTCC` (never plain
+/// `CC`) once genuinely cross-compiling, so a host-side sub-probe still
+/// needs a real ambient/CBUILD-side compiler available under that name.
+#[tokio::test]
+async fn cross_target_package_toolchain_uses_ctarget_not_ambient_chost() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+
+    let prefix = dir.path().join("prefix");
+    let bin = prefix.join("usr/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let host_gcc = bin.join("aarch64-unknown-linux-gnu-gcc");
+    std::fs::write(&host_gcc, "#!/bin/sh\n:\n").unwrap();
+    let target_gcc = bin.join("riscv64-unknown-linux-gnu-gcc");
+    std::fs::write(&target_gcc, "#!/bin/sh\n:\n").unwrap();
+
+    let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+
+    // Ambient CHOST/CBUILD both aarch64 (matching bypass_cross_root's
+    // host-config resolution for this step) — package.env's own CTARGET
+    // names the real target, with no TARGET_ABI (unlike binutils/gcc).
+    shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
+    shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
+    shell.set_var("CTARGET", "riscv64-unknown-linux-gnu");
+    shell.init_build_env().await.unwrap();
+
+    assert_eq!(
+        shell.get_var("CC").as_deref(),
+        Some(target_gcc.to_str().unwrap()),
+        "a genuine cross-target package must get CTARGET's own compiler, not the ambient CHOST's"
+    );
+    assert_eq!(
+        shell.get_var("BUILD_CC").as_deref(),
+        Some(host_gcc.to_str().unwrap()),
+        "BUILD_CC must still resolve to the ambient/CBUILD-side compiler for host-side sub-probes"
+    );
+}
+
+/// The host-arch toolchain-*tool* package class (`binutils`/`gcc`/`gdb` —
+/// `package.env` marks these with `TARGET_ABI`, unlike genuine target
+/// packages) must keep using `${CHOST}-<tool>`, exactly as before this fix —
+/// their own compile identity genuinely is the host's, `CTARGET` there only
+/// describes what the *resulting* cross compiler will target, not this
+/// package's own build.
+#[tokio::test]
+async fn cross_host_tool_package_still_uses_chost_when_target_abi_set() {
+    let dir = tempdir().unwrap();
+    let mut shell = minimal_shell(dir.path()).await;
+
+    let prefix = dir.path().join("prefix");
+    let bin = prefix.join("usr/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let host_gcc = bin.join("aarch64-unknown-linux-gnu-gcc");
+    std::fs::write(&host_gcc, "#!/bin/sh\n:\n").unwrap();
+    let target_gcc = bin.join("riscv64-unknown-linux-gnu-gcc");
+    std::fs::write(&target_gcc, "#!/bin/sh\n:\n").unwrap();
+
+    let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+
+    shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
+    shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
+    shell.set_var("CTARGET", "riscv64-unknown-linux-gnu");
+    shell.set_var("TARGET_ABI", "lp64d");
+    shell.init_build_env().await.unwrap();
+
+    assert_eq!(
+        shell.get_var("CC").as_deref(),
+        Some(host_gcc.to_str().unwrap()),
+        "binutils/gcc/gdb (TARGET_ABI set) must keep the host CHOST compiler"
+    );
+    assert!(
+        shell.get_var("BUILD_CC").unwrap_or_default().is_empty(),
+        "BUILD_CC is only for the genuine-target-package case"
+    );
+}
+
 /// A plain `--root`/bare build (no `--prefix`/`--local`, so `build_eprefix`
 /// stays `None`) must NOT be affected by the Phase 2 gate change — real
 /// `--root` defaulting to the host's `gcc` on `PATH` is correct as-is
@@ -727,5 +816,130 @@ async fn native_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     assert!(
         shell.get_var("PKG_CONFIG").unwrap_or_default().is_empty(),
         "PKG_CONFIG must stay unset when the wrapper doesn't exist, not point at a dead path"
+    );
+}
+
+/// Build a minimal ebuild fixture at `<category>/<pn>` and return its path,
+/// for tests that need `run_phase` (category/pn only exist per-ebuild,
+/// unlike the `init_build_env`-only tests above).
+fn write_minimal_ebuild(repo_root: &std::path::Path, category: &str, pn: &str) -> Utf8PathBuf {
+    std::fs::create_dir_all(repo_root.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
+    std::fs::write(repo_root.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_root.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_root.join(category).join(pn);
+    std::fs::create_dir_all(&ebdir).unwrap();
+    let path = ebdir.join(format!("{pn}-1.ebuild"));
+    std::fs::write(
+        &path,
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\npkg_setup() { :; }\n",
+    )
+    .unwrap();
+    Utf8PathBuf::from_path_buf(path).unwrap()
+}
+
+/// Regression test for a bug found live 2026-08-04 bootstrapping a riscv64
+/// cross toolchain under `--prefix`: `cross-<tuple>/binutils` compiles with
+/// the prefix's own native compiler, whose default system header search is
+/// confined to `<prefix>/usr/include` — it has no knowledge of the real
+/// host's `/usr/include`, where a BDEPEND like dev-libs/elfutils
+/// (`USE=debuginfod`) that isn't itself installed as a native prefix package
+/// actually lives. `binutils/dwarf.c` hit `elfutils/debuginfod.h: No such
+/// file or directory` despite pkg-config correctly finding
+/// `libdebuginfod >= 0.188` on the host. CPPFLAGS must gain a `-idirafter
+/// /usr/include` fallback for exactly this package class, under a
+/// `--prefix`-style overlay (`build_sysroot` set — see `build_sysroot`'s own
+/// doc comment: `Some` only for the host-borrowing overlay case, `None` for
+/// `--local`'s standalone closure).
+#[tokio::test]
+async fn cross_host_tool_package_gets_a_host_include_fallback_under_prefix() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path =
+        write_minimal_ebuild(&repo_path, "cross-riscv64-unknown-linux-gnu", "binutils");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let sysroot = Utf8PathBuf::from("/");
+    shell.set_build_roots(None, Some(&sysroot), None, None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let cppflags = shell.get_var("CPPFLAGS").unwrap_or_default();
+    assert!(
+        cppflags.contains("-idirafter /usr/include"),
+        "cross-<tuple>/binutils under a --prefix overlay must get the host include fallback: {cppflags}"
+    );
+}
+
+/// Same package class, but no `build_sysroot` (`--local`'s standalone
+/// closure, not a `--prefix` overlay — `build_sysroot` stays `None`): must
+/// NOT get the host include fallback. `--local` is meant to own everything
+/// itself, not reach for the host's headers.
+#[tokio::test]
+async fn cross_host_tool_package_no_host_fallback_without_overlay() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path =
+        write_minimal_ebuild(&repo_path, "cross-riscv64-unknown-linux-gnu", "binutils");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let cppflags = shell.get_var("CPPFLAGS").unwrap_or_default();
+    assert!(
+        !cppflags.contains("/usr/include"),
+        "no --prefix overlay in play: CPPFLAGS must stay untouched: {cppflags}"
+    );
+}
+
+/// An ordinary (non-`cross-*`) package must never get the host include
+/// fallback, even under a `--prefix` overlay — it is specific to the
+/// host-arch crossdev toolchain-tool package class.
+#[tokio::test]
+async fn ordinary_package_no_host_fallback_even_under_prefix() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-libs", "zlib");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let sysroot = Utf8PathBuf::from("/");
+    shell.set_build_roots(None, Some(&sysroot), None, None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let cppflags = shell.get_var("CPPFLAGS").unwrap_or_default();
+    assert!(
+        !cppflags.contains("/usr/include"),
+        "an ordinary package must not get the cross-host-tool fallback: {cppflags}"
     );
 }
