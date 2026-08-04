@@ -594,7 +594,13 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         } else {
             format!("{merged} package(s) merged into {merge_root}")
         };
-        tracing::info!("Done — {done}{extra}");
+        // Plain `>>>`-style line, not a raw tracing event: this final summary
+        // is genuinely default-visible UX (unlike the two debug-only lines
+        // above it in the log), so it should look like the rest of the
+        // merge output, not carry an "INFO" tag (todo/PENDING.md 2026-08-03).
+        if !quiet {
+            println!(">>> Done — {done}{extra}");
+        }
         return Ok(());
     }
 

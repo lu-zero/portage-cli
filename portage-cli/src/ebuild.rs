@@ -1644,7 +1644,11 @@ fn post_process_after_install(
 
     let stats = postprocess::post_process_image(&image_dir, &cfg)?;
     if stats.compressed + stats.relinked + stats.stripped > 0 {
-        tracing::info!(
+        // debug, not info: real portage doesn't print an interactive
+        // ecompress/estrip summary either — this is developer detail
+        // (`-vv`/`RUST_LOG`), not something that belongs mixed into the
+        // default `>>>`-style merge output (todo/PENDING.md 2026-08-03).
+        tracing::debug!(
             "post-install: {} file(s) compressed, {} symlink(s) retargeted, {} object(s) stripped",
             stats.compressed,
             stats.relinked,
@@ -1917,7 +1921,11 @@ async fn run_merge(
         eprintln!("warning: could not write environment.bz2: {e}");
     }
 
-    tracing::info!(
+    // debug, not info: this is internal VDB bookkeeping (the counter), and
+    // at info level it was rendered with the enclosing `phase{phase="qmerge"}:`
+    // span label leaking straight into default output — real portage has no
+    // equivalent line at all in normal mode (todo/PENDING.md 2026-08-03).
+    tracing::debug!(
         "merge: {}/{}-{} registered (counter={counter})",
         ebuild.category(),
         ebuild.name(),
