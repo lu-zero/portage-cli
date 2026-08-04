@@ -769,6 +769,24 @@ impl EbuildShell {
         self.bashrc_files = files;
     }
 
+    /// `COLUMNS` for phase subprocesses — the caller's own terminal width
+    /// (`em`'s `style::term_width()`; this crate has no business querying a
+    /// terminal itself, it just carries the value into the phase env).
+    /// Matches real portage's `doebuild.py`, which sets this "in order to
+    /// prevent unnecessary stty calls" (its own comment). Without it, real
+    /// `gentoo-functions`' tty-capability probe (`rc.sh`'s
+    /// `_update_tty_level`/`_update_columns`) sees `PORTAGE_BIN_PATH` is set
+    /// (which `em` already exports) and takes its `from_portage` branch,
+    /// which reads `$COLUMNS` instead of calling `stty size` at all — with no
+    /// `COLUMNS`, that branch fails and every `gentoo-functions` consumer a
+    /// `pkg_postinst` calls (`binutils-config`, `gcc-config`, …) falls back
+    /// to its own non-tty rendering, regardless of whether `em`'s own
+    /// invocation is running in a real, capable terminal. Found live
+    /// 2026-08-04 re-emerging `sys-devel/binutils`.
+    pub fn set_terminal_columns(&mut self, columns: usize) {
+        self.set_var("COLUMNS", &columns.to_string());
+    }
+
     /// Log phase output to `path` (created on first write): tee'd to the
     /// console, or captured silently when `quiet`.
     pub fn set_phase_log(&mut self, path: Option<(Utf8PathBuf, bool)>) {
@@ -1946,7 +1964,7 @@ impl EbuildShell {
              REPLACING_VERSIONS REPLACED_BY_VERSION \
              MAKEOPTS CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CC CXX AR RANLIB NM STRIP \
              INSDESTTREE EXEDESTTREE DOCDESTTREE DESTTREE _into_dir _insopts _exeopts \
-             MOPREFIX ABI CONF_LIBDIR CHOST CBUILD CTARGET ARCH",
+             MOPREFIX ABI CONF_LIBDIR CHOST CBUILD CTARGET ARCH COLUMNS",
         )
         .await
         .ok();

@@ -1063,3 +1063,53 @@ async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
         "ESYSROOT must equal the already-substituted sysroot alone, not sysroot+outer-eprefix doubled: {esysroot}"
     );
 }
+
+/// Regression test for a bug found live 2026-08-04 re-emerging
+/// `sys-devel/binutils`: without `COLUMNS` exported into the phase env, real
+/// `gentoo-functions`' tty-capability probe (`rc.sh`'s `_update_tty_level`/
+/// `_update_columns`) sees `PORTAGE_BIN_PATH` set (`em` already exports it)
+/// and takes its `from_portage` branch, which reads `$COLUMNS` instead of
+/// calling `stty size` — with no `COLUMNS` at all, that branch fails and
+/// every `gentoo-functions` consumer a `pkg_postinst` calls
+/// (`binutils-config`, `gcc-config`, …) falls back to its own non-tty
+/// rendering. `set_terminal_columns` must both set the var (for `em`'s own
+/// Rust builtins to read) and export it as a real environment variable (for
+/// a real external subprocess like `binutils-config` to see it at all).
+#[tokio::test]
+async fn set_terminal_columns_is_exported_to_phase_subprocesses() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-devel", "binutils");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell.set_terminal_columns(123);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    assert_eq!(shell.get_var("COLUMNS").as_deref(), Some("123"));
+
+    // Exported (not just set): a real subprocess must see it as a real OS
+    // environment variable, not just brush's own internal variable table.
+    // Captured via command substitution into a var (run_string's own exit
+    // code doesn't reflect the script's internal commands' exit statuses,
+    // so a plain `assert!(result.is_ok())` on the grep itself would prove
+    // nothing).
+    shell
+        .run_string("_test_exported=$(export -p | grep -c '^declare -x COLUMNS=')")
+        .await
+        .unwrap();
+    assert_eq!(
+        shell.get_var("_test_exported").as_deref(),
+        Some("1"),
+        "COLUMNS must be in the exported-variable list, not just brush's internal table"
+    );
+}

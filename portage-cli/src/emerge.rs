@@ -1025,6 +1025,7 @@ pub(crate) async fn run_unmerge_batch(
         roots.eprefix(),
         Some(broot.merge_root()),
     );
+    shell.set_terminal_columns(crate::style::term_width());
     let config_overlay = roots.eprefix().map(|e| e.join("etc/portage"));
     if !ebuild::apply_profile_env(&mut shell, roots.config(), config_overlay.as_deref()).await? {
         crate::style::warn_line(&format!(
