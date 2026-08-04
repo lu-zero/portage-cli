@@ -1115,8 +1115,75 @@ blocked by the three independent findings above, tracked separately.
      find `${CTARGET}-gcc`).
   All three confirmed via real, minimal regression tests (not just the live
   run) — `portage-repo/src/build/shell/tests.rs` (3 new),
-  `portage-cli/src/setup.rs` (2 new). Next: `em -T riscv64-unknown-linux-gnu
-  -b llvm-core/clang` cross-build test, then write up the recipe in `docs/`.
+  `portage-cli/src/setup.rs` (2 new).
+- ✅ **`em -T riscv64-unknown-linux-gnu -b llvm-core/clang` cross-build test —
+  2 more real bugs found+fixed, DONE 2026-08-04 (`ad59ed0`).** The three
+  bugs above only covered `crossdev --setup`'s own steps; running an
+  *ordinary* `--target`-substituted package build (not under `crossdev
+  --setup` at all — `sys-libs/zlib`, `sys-apps/install-xattr`,
+  `sys-apps/findutils`, `sys-apps/attr`, `sys-libs/ncurses`,
+  `sys-libs/binutils-libs`, `net-libs/nghttp3`, `sys-apps/gentoo-functions`)
+  hit the *same class* of "host-borrowing machinery doesn't know a genuine
+  cross-target package" bug, twice more, in two different places:
+  1. `setup.rs`'s `BASHRC_PREFIX` still injected the prefix's own native
+     `CPPFLAGS`/`LDFLAGS`/`PKG_CONFIG_*` search paths for these packages —
+     the existing `CTARGET`-without-`TARGET_ABI` guard only excludes
+     `crossdev --setup`'s own target-class steps (`bypass_cross_root` keeps
+     their `CHOST == CBUILD`); an *ordinary* `--target` package has
+     `CBUILD != CHOST` (`CHOST` correctly resolves from the sysroot's own
+     `make.conf`) but still fell through the guard, since it has no
+     `CTARGET` set at all. Fixed by adding a `"${CBUILD}" == "${CHOST}"`
+     condition — verified against real crossdev's own `doemerge` (plain
+     `emerge` for every package, host `CHOST` throughout) and `cross-emerge`
+     (never touches plain `CPPFLAGS`/`CFLAGS`/`LDFLAGS` for a target-package
+     build at all, only the *scoped* `BUILD_CFLAGS`/etc.). Initially
+     proposed removing the injection entirely; corrected mid-session — real
+     crossdev's `cross-emerge` never mixes host-side and target-side
+     package builds in one invocation the way `em`'s single `--prefix`
+     merge run does, so plain native `--prefix` packages and `crossdev
+     --setup`'s own `binutils`/`gcc` (also `CBUILD == CHOST`) still
+     genuinely need it.
+  2. `shell.rs`'s `ESYSROOT` computation doubled the outer prefix onto an
+     *already-substituted* target sysroot: `Cli::roots()`'s `--target`
+     branch sets `base == target == the sysroot`, so `Roots::build_sysroot()`
+     returns `None` (its own doc: "`None` means same as the install
+     target"), but `eprefix` still carries the *outer* prefix (deliberately
+     — `relocate_root` anchors distfiles/work trees there). The existing
+     `ESYSROOT = SYSROOT + EPREFIX` formula (correct for `crossdev
+     --setup`'s own `glibc`/`linux-headers`, where `build_sysroot()` stays
+     `Some` via a different code path) doubled it here instead. **Real
+     Gentoo Prefix's own patched gcc reads `ESYSROOT` directly** to compute
+     its runtime `-isysroot` (confirmed live: a bogus doubled `ESYSROOT` env
+     var alone, no `--sysroot=` flag anywhere on the command line,
+     reproduces `cc1`'s doubled `-isysroot` verbatim) — so this broke every
+     ordinary target-arch package's own system header search, surfacing as
+     an unrelated-looking `sys/types.h: No such file or directory` inside
+     each package's own build (zlib's `zconf.h`, autoconf's own
+     feature-test compiles, etc. — not a `CPPFLAGS`-pollution symptom this
+     time, a `-isysroot` one). Fixed with a `self.build_sysroot.is_none()`
+     addition to the existing `eprefix.is_empty()` branch.
+  Debugging notes: the first live re-test after fix #1 alone showed *zero*
+  improvement — traced to `setup.rs`'s `write_if_absent` never regenerating
+  an already-bootstrapped sandbox's `bashrc` file; had to delete it and
+  re-run `em setup` before the fix actually took effect. Bug #2 was found by
+  wrapping the cross-`gcc` binary to capture its real runtime env and `-v`
+  output during an actual `em ebuild` phase (a bare manual command-line
+  reproduction outside `em` doesn't set `ESYSROOT` at all, so it never
+  reproduced). Both confirmed via new regression tests
+  (`overlay_bashrc_skips_host_paths_for_an_ordinary_target_package` in
+  `setup.rs`, `esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix`
+  in `shell/tests.rs`) and a real, from-scratch riscv64 clang cross-build:
+  18/20 packages that previously failed almost immediately now build
+  cleanly. **2 failures remain, both confirmed unrelated to `em`:**
+  `llvm-core/llvm-common` hits a merged-usr/split-usr profile consistency
+  check (a real sandbox setup gap, not investigated further this pass);
+  `dev-libs/libgpg-error` hits a genuine upstream incompatibility between
+  its own `GPGRT_LOCK_INITIALIZER` macro and GCC 16's stricter C
+  flexible-array-member initialization rules (matches the known,
+  already-documented "GCC version too new for this package" class of
+  non-`em` issue — see [[gcc-bootstrap-compiler-version-mismatch]]). Not
+  investigated further; task #29 (write up the recipe in `docs/`) is next,
+  independent of these two.
 - ✅ **`--local` spuriously engaging dual-root solver machinery — FIXED
   2026-07-16.** `CrossContext::detect()` treated any non-`/` target as
   needing dual-root bookkeeping, which wrongly included `--local` (whose
