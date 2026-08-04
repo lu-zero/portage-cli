@@ -6,7 +6,7 @@
 //! Add palette entries here (and a mapping helper if a domain enum drives the
 //! choice, e.g. [`profile_status`]) rather than constructing styles inline.
 
-use anstyle::{Ansi256Color, AnsiColor, Color, Effects, Style};
+use anstyle::{AnsiColor, Color, Effects, Style};
 
 /// Usable output width: the real terminal's, or 80 when it has none (a pipe,
 /// a log file, a CI runner).
@@ -70,15 +70,18 @@ pub const C_PKG_BINARY: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor
 pub const C_COUNT: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 
 // ── Banner / diagnostic palette (Portage `>>>` / `!!!`) ───────────────────
-/// Info banner prefix (`>>>`) and routine status lines.
-pub const C_INFO: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-/// Soft failure / warning prefix (`!!!` or `>>> warning:`) — orange-ish.
-///
-/// Basic ANSI has no orange; xterm-256 colour 208 is the usual stand-in.
+// The `>>>` info tag is deliberately plain (uncoloured) — matching both real
+// portage's own interactive banners and the ~50 existing `>>>` call sites
+// across this codebase (the primary `>>> Installing`/`>>> Completed` merge
+// banners included); `!!!`, bold + coloured, is what's meant to stand out.
+/// Soft failure / warning prefix (`!!!`) — real portage's own `PORTAGE_COLOR_WARN`
+/// (`isolated-functions.sh`) is `\e[33;01m`, i.e. plain yellow, bold — not the
+/// xterm-256 orange this used to be.
 pub const C_WARN: Style = Style::new()
-    .fg_color(Some(Color::Ansi256(Ansi256Color(208))))
+    .fg_color(Some(Color::Ansi(AnsiColor::Yellow)))
     .effects(Effects::BOLD);
-/// Hard failure prefix (`!!!`) and error text.
+/// Hard failure prefix (`!!!`) and error text — matches real portage's
+/// `PORTAGE_COLOR_BAD`/`PORTAGE_COLOR_ERR` (`\e[31;01m`, red, bold).
 pub const C_ERROR: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)))
     .effects(Effects::BOLD);

@@ -31,7 +31,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use portage_repo::{RepoEntry, ReposConf};
 
 use crate::cli::Cli;
-use crate::style::{C_BOLD, C_ERROR, C_INFO, C_WARN};
+use crate::style::{C_BOLD, C_ERROR, C_WARN};
 
 /// Run repository sync for `em sync` and `em maint sync`.
 pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
@@ -168,13 +168,13 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
         let mut out = anstream::stdout();
         let _ = writeln!(
             out,
-            "{C_INFO}>>>{C_INFO:#} Syncing repository '{C_BOLD}{}{C_BOLD:#}' into '{path}'...",
+            ">>> Syncing repository '{C_BOLD}{}{C_BOLD:#}' into '{path}'...",
             entry.name
         );
         if globals.verbose > 0 {
             let _ = writeln!(
                 out,
-                "{C_INFO}>>>{C_INFO:#} sync-type={sync_type} sync-uri={sync_uri} backend={}",
+                ">>> sync-type={sync_type} sync-uri={sync_uri} backend={}",
                 backend_label(kind)
             );
         }
@@ -283,16 +283,13 @@ fn is_portage_uid(uid: u32) -> bool {
 
 pub(super) fn info_line(msg: &str) {
     let mut out = anstream::stdout();
-    let _ = writeln!(out, "{C_INFO}>>>{C_INFO:#} {msg}");
+    let _ = writeln!(out, ">>> {msg}");
     let _ = out.flush();
 }
 
 fn info_repo(name: &str, msg: &str) {
     let mut out = anstream::stdout();
-    let _ = writeln!(
-        out,
-        "{C_INFO}>>>{C_INFO:#} {msg}: '{C_BOLD}{name}{C_BOLD:#}'"
-    );
+    let _ = writeln!(out, ">>> {msg}: '{C_BOLD}{name}{C_BOLD:#}'");
     let _ = out.flush();
 }
 
