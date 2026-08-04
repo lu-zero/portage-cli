@@ -618,7 +618,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let fail_verb = if fetchonly { "fetch" } else { "merge" };
     eprintln!("\n>>> {} package(s) failed to {fail_verb}:", failures.len());
     for f in &failures {
-        eprintln!("  * {}", f.cpv);
+        crate::style::ewarn_sub_bullet!("{}", f.cpv);
         eprintln!("      {}", f.cause);
         if f.log.exists() {
             eprintln!("      log: {}", f.log);

@@ -378,20 +378,19 @@ fn warn_bindist(pkg: &InstalledPackage) {
         .map(|f| f.trim_start_matches(['+', '-']))
         .collect();
     if iuse_plain.contains("bindist") && !use_flags.iter().any(|f| f == "bindist") {
-        eprintln!(" * {}: package was emerged with USE=-bindist!", pkg.cpv());
-        eprintln!(
-            " * {}: it might not be legal to redistribute this.",
-            pkg.cpv()
-        );
+        // Routed through `tracing::warn!` rather than a hand-rolled
+        // `eprintln!(" * …")`: `diag::CompactFormatter` then paints the
+        // ` * ` marker yellow on a TTY (real portage's `ewarn` colour) and
+        // leaves it bare under piping — matching every other WARN-flavoured
+        // marker in the codebase instead of staying uncolored regardless.
+        tracing::warn!("{}: package was emerged with USE=-bindist!", pkg.cpv());
+        tracing::warn!("{}: it might not be legal to redistribute this.", pkg.cpv());
     }
     if let Ok(Some(restrict)) = pkg.field("RESTRICT")
         && restrict.split_whitespace().any(|t| t == "bindist")
     {
-        eprintln!(" * {}: package has RESTRICT=bindist!", pkg.cpv());
-        eprintln!(
-            " * {}: it might not be legal to redistribute this.",
-            pkg.cpv()
-        );
+        tracing::warn!("{}: package has RESTRICT=bindist!", pkg.cpv());
+        tracing::warn!("{}: it might not be legal to redistribute this.", pkg.cpv());
     }
 }
 

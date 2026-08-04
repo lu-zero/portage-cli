@@ -172,6 +172,41 @@ pub(crate) fn error_line_impl(args: std::fmt::Arguments<'_>) {
     let _ = out.flush();
 }
 
+/// Underlying writer for [`einfo_line!`] — print an informational line to
+/// **stdout** in real portage's `einfo` shape: `" * {args}"`, the marker in
+/// [`C_MARKER_INFO`]. The stdout-bound mirror of the ` * ` marker
+/// [`crate::diag::CompactFormatter`] renders for an `INFO`-level `tracing`
+/// event on stderr.
+///
+/// Prefer `tracing::info!` when the message belongs on stderr with the rest
+/// of the build status flow; this helper is only for structured stdout
+/// reports whose stream contract is part of the command's primary output
+/// (e.g. `revdep`/`preserve_libs`'s `>>> package: <cpv>` / ` * ...` shape,
+/// where a pipe consumer may want the report separate from diagnostics).
+/// `args` is the text after the marker — the `" * "` prefix is added here.
+pub(crate) fn einfo_line_impl(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let mut out = anstream::stdout();
+    let _ = writeln!(out, "{C_MARKER_INFO} * {C_MARKER_INFO:#}{args}");
+    let _ = out.flush();
+}
+
+/// Underlying writer for [`ewarn_sub_bullet!`] — print an indented `einfo`
+/// sub-bullet to **stderr** with the marker in [`C_WARN`] (`ewarn`'s own
+/// colour): `"  * {args}"`, plain when stderr is not a terminal. Used for
+/// structured sub-item listings under a `>>>`-banner that itself carries the
+/// overall warning header (e.g. the per-`cpv` failure list under `>>> N
+/// package(s) failed to merge:` in the merge summary) — a single
+/// [`tracing::warn!`] per item would lose the visual hierarchy and prefix
+/// every continuation line, so this keeps the listing shape while still
+/// painting the marker to match every other WARN-flavoured ` * `.
+pub(crate) fn ewarn_sub_bullet_impl(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let mut out = anstream::stderr();
+    let _ = writeln!(out, "  {C_WARN}*{C_WARN:#} {args}");
+    let _ = out.flush();
+}
+
 // ── Public macro forms (println!-style format-arg ergonomics) ─────────────
 //
 // The macro IS the public interface (mirrors std's `println!`): call sites
@@ -200,7 +235,21 @@ macro_rules! error_line {
     };
 }
 
-pub(crate) use {error_line, warn_line};
+/// `einfo_line!("…", args…)` — see [`einfo_line_impl`] (the writer).
+macro_rules! einfo_line {
+    ($($arg:tt)*) => {
+        $crate::style::einfo_line_impl(::std::format_args!($($arg)*))
+    };
+}
+
+/// `ewarn_sub_bullet!("…", args…)` — see [`ewarn_sub_bullet_impl`] (the writer).
+macro_rules! ewarn_sub_bullet {
+    ($($arg:tt)*) => {
+        $crate::style::ewarn_sub_bullet_impl(::std::format_args!($($arg)*))
+    };
+}
+
+pub(crate) use {einfo_line, error_line, ewarn_sub_bullet, warn_line};
 
 /// Render one line in real portage's `ebegin`/`eend` shape (`portage/
 /// output.py`'s `EOutput`): `" * {msg} ..."` immediately followed by a

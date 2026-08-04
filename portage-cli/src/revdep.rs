@@ -127,7 +127,7 @@ fn find_broken_consumers(
 fn report(consumer: &BrokenConsumer) {
     println!(">>> package: {}", consumer.cpv);
     for need in &consumer.broken {
-        println!(" * broken: {} (needed by {})", need.soname, need.consumer);
+        crate::style::einfo_line!("broken: {} (needed by {})", need.soname, need.consumer);
     }
 }
 

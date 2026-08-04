@@ -465,9 +465,9 @@ pub fn report_preserved(cpv: &Cpv, preserved: &[PreserveEntry], vdb: &Vdb) {
     }
     println!(">>> package: {cpv}");
     for entry in preserved {
-        println!(" * preserved: {}", entry.path);
+        crate::style::einfo_line!("preserved: {}", entry.path);
         if let Some(sym) = &entry.soname_symlink {
-            println!(" * preserved: {sym}");
+            crate::style::einfo_line!("preserved: {sym}");
         }
         for c in entry.consumers.iter().take(MAX_DISPLAY) {
             let owner = vdb

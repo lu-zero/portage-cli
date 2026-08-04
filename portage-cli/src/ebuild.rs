@@ -1992,13 +1992,14 @@ async fn run_merge(
     );
 
     if !protected.is_empty() {
-        println!(
-            "\n * {} protected config file(s) were installed with a ._cfg name.\n \
-             * Run `em dispatch` (dispatch-conf) or `em etc` to merge them:",
+        println!();
+        crate::style::einfo_line!(
+            "{} protected config file(s) were installed with a ._cfg name.",
             protected.len()
         );
+        crate::style::einfo_line!("Run `em dispatch` (dispatch-conf) or `em etc` to merge them:");
         for p in &protected {
-            println!(" *   {p}");
+            crate::style::einfo_line!("  {p}");
         }
     }
 
