@@ -943,3 +943,53 @@ async fn ordinary_package_no_host_fallback_even_under_prefix() {
         "an ordinary package must not get the cross-host-tool fallback: {cppflags}"
     );
 }
+
+/// Regression test for a bug found live 2026-08-04 testing an ordinary
+/// `-T riscv64-unknown-linux-gnu -b llvm-core/clang` package build
+/// (`sys-libs/zlib` — NOT under `crossdev --setup`, so `cross_host_tool_tuple`
+/// is `None`): `Cli::roots()`'s global `--target` substitution sets
+/// `base == target == the sysroot`, so `Roots::build_sysroot()` returns
+/// `None` and `set_build_roots`'s own `sysroot: None` here reproduces it —
+/// but `eprefix` still carries the *outer* prefix. `ESYSROOT` must equal the
+/// (already fully-substituted) sysroot alone, not `sysroot + eprefix`
+/// doubled — real Gentoo Prefix's own patched gcc reads `ESYSROOT` directly
+/// to compute its runtime `-isysroot`, so a doubled value broke every
+/// target-arch package's own system header search (confirmed live: `gcc -v`
+/// showed `-isysroot <sysroot>/<outer-prefix>/`, a path that doesn't exist).
+#[tokio::test]
+async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-libs", "zlib");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let sysroot_dir = dir.path().join("prefix/usr/riscv64-unknown-linux-gnu");
+    std::fs::create_dir_all(&sysroot_dir).unwrap();
+    let sysroot_path = Utf8PathBuf::from_path_buf(sysroot_dir.clone()).unwrap();
+    let outer_prefix = Utf8PathBuf::from_path_buf(dir.path().join("prefix")).unwrap();
+
+    // `build_sysroot: None` reproduces `Roots::build_sysroot()` returning
+    // `None` (base == target == the already-substituted sysroot); `eprefix`
+    // still carries the outer `--prefix` path, exactly as `Cli::roots()`'s
+    // `--target` branch leaves it.
+    shell.set_build_roots(None, None, Some(&outer_prefix), None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, sysroot_dir.as_path())
+        .await
+        .unwrap();
+
+    let esysroot = shell.get_var("ESYSROOT").unwrap_or_default();
+    assert_eq!(
+        esysroot.trim_end_matches('/'),
+        sysroot_path.as_str().trim_end_matches('/'),
+        "ESYSROOT must equal the already-substituted sysroot alone, not sysroot+outer-eprefix doubled: {esysroot}"
+    );
+}

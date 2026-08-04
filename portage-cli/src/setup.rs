@@ -106,18 +106,43 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 	# need ${EPREFIX}/usr/bin on PATH to find ${CTARGET}-gcc, or tc-getCC
 	# falls back to the host ${CHOST}-gcc (see this recipe's own doc comment).
 	export PATH="${_ov}/usr/bin${PATH:+:${PATH}}"
-	# A genuine cross-*target* package (CTARGET set, no TARGET_ABI — glibc/
-	# linux-headers under `crossdev --setup`'s "libc"/"kernel headers" steps;
-	# TARGET_ABI is what `multilib::env_block` additionally sets for the
-	# host-arch toolchain-*tool* packages, see portage-repo/src/build/
-	# shell.rs's matching Rust-side check) must NOT borrow the prefix's own
-	# native search paths below — they're a different architecture, and
-	# stacking them ahead of the package's own in-tree `-I` flags corrupts
-	# its build. Found live 2026-08-04: glibc's own
-	# sysdeps/unix/sysv/linux/sysdep.h resolved `<endian.h>` to the prefix's
-	# native aarch64 headers instead of its own riscv64 in-tree copy,
-	# tripping its "_LIBC must not be defined by applications" guard.
-	if [[ -z ${CTARGET} || -n ${TARGET_ABI} ]]; then
+	# Only inject below for a genuinely host-side package. Checked against
+	# real crossdev's own two reference tools: /usr/bin/crossdev's
+	# `doemerge` (bootstraps binutils/gcc/glibc/linux-headers via plain
+	# `emerge`, host CHOST throughout for every one of them) and
+	# /usr/bin/cross-emerge (installs an ordinary package for the target,
+	# CHOST=<target>). cross-emerge never touches plain CPPFLAGS/CFLAGS/
+	# LDFLAGS at all — PORTAGE_CONFIGROOT pointing at the sysroot already
+	# gets them right from the sysroot's own make.conf — it only pulls the
+	# host's own values into the *scoped* BUILD_CFLAGS/BUILD_CPPFLAGS/
+	# BUILD_LDFLAGS, exactly what toolchain-funcs.eclass/meson.eclass/
+	# cargo.eclass expect. But cross-emerge only ever handles the
+	# target-package case; `em`'s single `--prefix` merge mixes host-side
+	# and target-side packages in the same run, so unlike cross-emerge we
+	# still need this injection for two host-side cases: a plain native
+	# package (CBUILD == CHOST, no CTARGET at all), and `crossdev --setup`'s
+	# own host-arch toolchain-*tool* packages (binutils/gcc — CBUILD ==
+	# CHOST too, since `bypass_cross_root` routes them through the outer/
+	# host config same as a native package, but package.env additionally
+	# marks them with TARGET_ABI, set by `multilib::env_block` — see
+	# portage-repo/src/build/shell.rs's matching Rust-side check).
+	#
+	# Everything else must NOT borrow the prefix's own native search
+	# paths: a genuine `--target` package (CBUILD != CHOST, since its
+	# CHOST correctly comes from the sysroot's own make.conf) or
+	# `crossdev --setup`'s own glibc/linux-headers steps (CBUILD == CHOST
+	# via bypass_cross_root's routing, but CTARGET set with no TARGET_ABI
+	# marks them target-class regardless). Stacking the prefix's paths
+	# ahead of either's own in-tree `-I` flags corrupts the build — found
+	# live 2026-08-04, two ways: glibc's own
+	# sysdeps/unix/sysv/linux/sysdep.h resolved `<endian.h>` to the
+	# prefix's native aarch64 headers instead of its own riscv64 in-tree
+	# copy (tripping its "_LIBC must not be defined by applications"
+	# guard), and plain sys-libs/zlib / sys-apps/install-xattr (ordinary
+	# dependencies of a `-T riscv64-unknown-linux-gnu -b llvm-core/clang`
+	# build, not under `crossdev --setup` at all) failed to link
+	# ("cannot find Scrt1.o") for the identical reason.
+	if [[ "${CBUILD}" == "${CHOST}" ]] && [[ -z ${CTARGET} || -n ${TARGET_ABI} ]]; then
 		export PKG_CONFIG_PATH="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 		# meson.eclass pins PKG_CONFIG_LIBDIR to the prefix alone when the env var
 		# isn't already set (it *replaces* pkg-config's built-in default search,
@@ -463,6 +488,9 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
+        // Plain native --prefix package: CBUILD == CHOST, no CTARGET.
+        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
+        env.insert("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
@@ -520,7 +548,11 @@ mod tests {
     /// own riscv64 in-tree copy, tripping its "_LIBC must not be defined by
     /// applications" guard. `PATH` must still gain the prefix's `usr/bin`
     /// though — `cross_host_tool_tuple` packages (binutils/gcc, `TARGET_ABI`
-    /// also set) still need it to find `${CTARGET}-gcc`.
+    /// also set) still need it to find `${CTARGET}-gcc`. `CBUILD`/`CHOST`
+    /// are both set to the host's own value here, matching real
+    /// `bypass_cross_root` routing for `crossdev --setup`'s own
+    /// glibc/linux-headers steps — the `CTARGET`-without-`TARGET_ABI` check
+    /// is what excludes this case, not `CBUILD == CHOST` (which holds here).
     #[tokio::test]
     async fn overlay_bashrc_skips_host_paths_for_a_genuine_target_package() {
         let dir = tempfile::tempdir().unwrap();
@@ -530,6 +562,8 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
+        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
+        env.insert("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string());
         env.insert(
             "CTARGET".to_string(),
             "riscv64-unknown-linux-gnu".to_string(),
@@ -566,8 +600,9 @@ mod tests {
     }
 
     /// The host-arch toolchain-*tool* package class (`binutils`/`gcc` —
-    /// `TARGET_ABI` also set alongside `CTARGET`) must keep getting the host
-    /// path injection, exactly as before this fix.
+    /// `TARGET_ABI` also set alongside `CTARGET`, `CBUILD == CHOST` via
+    /// `bypass_cross_root`'s routing) must keep getting the host path
+    /// injection, exactly as before this fix.
     #[tokio::test]
     async fn overlay_bashrc_keeps_host_paths_for_a_cross_host_tool_package() {
         let dir = tempfile::tempdir().unwrap();
@@ -577,6 +612,8 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
+        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
+        env.insert("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string());
         env.insert(
             "CTARGET".to_string(),
             "riscv64-unknown-linux-gnu".to_string(),
@@ -593,6 +630,58 @@ mod tests {
             get("CPPFLAGS").contains(&format!("{prefix}/usr/include")),
             "CPPFLAGS: {}",
             get("CPPFLAGS")
+        );
+    }
+
+    /// Regression test for the newest bug found live 2026-08-04: an ordinary
+    /// `--target riscv64-unknown-linux-gnu` package (`sys-libs/zlib`,
+    /// `sys-apps/install-xattr`, ...) has `CBUILD != CHOST` (its `CHOST`
+    /// correctly resolves from the sysroot's own `make.conf`) and no
+    /// `CTARGET` set at all — the pre-existing `CTARGET`-without-`TARGET_ABI`
+    /// check alone didn't catch this case, only the newly-added
+    /// `CBUILD == CHOST` guard does. Confirmed against real crossdev's own
+    /// `/usr/bin/cross-emerge`, which never injects host paths into plain
+    /// `CPPFLAGS`/`LDFLAGS` for a target-package build (see this recipe's own
+    /// doc comment).
+    #[tokio::test]
+    async fn overlay_bashrc_skips_host_paths_for_an_ordinary_target_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().to_str().unwrap();
+        let body = bashrc_body("--prefix", prefix);
+
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("ROOT".to_string(), "/".to_string());
+        env.insert("EPREFIX".to_string(), prefix.to_string());
+        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
+        env.insert("CHOST".to_string(), "riscv64-unknown-linux-gnu".to_string());
+        portage_repo::MakeConf::parse(body)
+            .unwrap()
+            .apply_to(&mut env)
+            .await
+            .unwrap();
+
+        let get = |name: &str| env.get(name).cloned().unwrap_or_default();
+        assert!(
+            get("PATH").contains(&format!("{prefix}/usr/bin")),
+            "PATH: {}",
+            get("PATH")
+        );
+        assert!(get("CPPFLAGS").is_empty(), "CPPFLAGS: {}", get("CPPFLAGS"));
+        assert!(get("LDFLAGS").is_empty(), "LDFLAGS: {}", get("LDFLAGS"));
+        assert!(
+            get("PKG_CONFIG_PATH").is_empty(),
+            "PKG_CONFIG_PATH: {}",
+            get("PKG_CONFIG_PATH")
+        );
+        assert!(
+            get("PKG_CONFIG_LIBDIR").is_empty(),
+            "PKG_CONFIG_LIBDIR: {}",
+            get("PKG_CONFIG_LIBDIR")
+        );
+        assert!(
+            get("CMAKE_PREFIX_PATH").is_empty(),
+            "CMAKE_PREFIX_PATH: {}",
+            get("CMAKE_PREFIX_PATH")
         );
     }
 

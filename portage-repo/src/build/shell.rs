@@ -1814,9 +1814,37 @@ impl EbuildShell {
             // comment above). Reuses `cross_host_tool_tuple` computed there —
             // found 2026-07-03 doing a from-scratch cross-stage1 test, see
             // [[stage-build-shakeout]].
+            //
+            // `self.build_sysroot.is_none()` catches a second, distinct
+            // doubling case, found live 2026-08-04 testing an ordinary
+            // `-T riscv64-unknown-linux-gnu -b llvm-core/clang` package build
+            // (`sys-libs/zlib` et al. — NOT under `crossdev --setup`, so
+            // `cross_host_tool_tuple` is `None` here too): `Cli::roots()`'s
+            // global `--target` substitution sets `base == target == the
+            // sysroot` (`cli.rs`'s `roots()`), so `Roots::build_sysroot()`
+            // returns `None` (its own doc comment: "`None` means same as the
+            // install target") and `sysroot` above falls back to `root_str`
+            // — already the *fully substituted* sysroot path. `eprefix`,
+            // though, still carries the *outer* prefix (deliberately, so
+            // `relocate_root` anchors distfiles/work trees there — see
+            // `roots()`'s doc comment) — so appending it here doubles the
+            // sysroot exactly like the `cross_host_tool_tuple` case above,
+            // but for an unrelated reason. Real Gentoo Prefix's own
+            // patched gcc reads `ESYSROOT` directly to compute its runtime
+            // `-isysroot` (confirmed live: a bogus doubled `ESYSROOT` env var
+            // alone, with no `--sysroot=` flag anywhere on the command line,
+            // reproduces `cc1`'s doubled `-isysroot` verbatim), so this
+            // doubling broke every ordinary target-arch package's own system
+            // header search (`sys/types.h` and friends "No such file"),
+            // masquerading as a build-system-specific compile failure in
+            // each package. Crossdev `--setup`'s own `glibc`/`linux-headers`
+            // steps are unaffected: `bypass_cross_root` routes them through
+            // `outer_roots()`, where `base` and `target` genuinely differ
+            // (`Some("/")` vs `Some(<outer prefix>)`), so `build_sysroot()`
+            // stays `Some` and this new arm never fires for them.
             let esysroot = if let Some(tuple) = cross_host_tool_tuple {
                 format!("{root_str}usr/{tuple}/")
-            } else if eprefix.is_empty() {
+            } else if eprefix.is_empty() || self.build_sysroot.is_none() {
                 sysroot.clone()
             } else {
                 format!("{}/{}/", sysroot_trimmed, eprefix.trim_start_matches('/'))
