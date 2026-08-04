@@ -1031,6 +1031,19 @@ blocked by the three independent findings above, tracked separately.
   Found live: after a real `--prefix` merge landed a newer `sys-devel/
   binutils` in the prefix's own VDB, `-p` kept showing the host's older
   installed version as the base to "upgrade" from, forever.
+- ✅ **World-atom selection re-parsed raw atoms, rejecting bare names on a
+  real merge but not under `-p` — FIXED 2026-08-04** (`cb7c508`). `em <atom>`
+  resolves each target through `query::resolve_atom` (disambiguates a bare
+  name like `gcc` to `sys-devel/gcc`) before building the depgraph — but the
+  separate world-file-update step re-parsed the *raw* command-line strings
+  from scratch via `Dep::parse`, which has no such disambiguation and
+  rejects a bare name as an invalid cpn. Only fired on a real (non-`-p`)
+  merge, since `-p` skips world-atom selection entirely — found live:
+  `em -q gcc --prefix /var/tmp/prefix-t1/` failed with "invalid world atom
+  'gcc'" while `em -p -q gcc --prefix …` resolved fine. Fixed by reusing the
+  already-resolved atoms (filtered to `TargetOrigin::Explicit`) instead of
+  re-parsing, extracted into a small pure `select_world_atoms` helper with
+  regression tests (`portage-cli/src/emerge.rs`).
 - ✅ **`--local` spuriously engaging dual-root solver machinery — FIXED
   2026-07-16.** `CrossContext::detect()` treated any non-`/` target as
   needing dual-root bookkeeping, which wrongly included `--local` (whose
