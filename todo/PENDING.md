@@ -522,6 +522,15 @@ blocked by the three independent findings above, tracked separately.
   Verified: `em ebuild bash-5.3_p15.ebuild fetch` computes the full SRC_URI
   (tarball + 15 patches). Empty SRC_URI remains a legitimate state (84 meta/virtual
   ebuilds have `SRC_URI=""`), so no fail-fast on empty.
+  - **The same gap turned up again in `run_merge` 2026-08-05, fixed in
+    `0a1f6b4`.** `run_merge` (unlike `run_fetch`) called `source_ebuild`
+    unconditionally, without checking `is_phase_sourced` first — re-emerging
+    `sys-devel/binutils` wrote a VDB `IUSE` file missing `verify-sig` (from
+    `inherit verify-sig`'s plain `IUSE="verify-sig"` assignment), even
+    though the pre-merge dependency plan and `em regen`'s own md5-cache both
+    correctly include it. Fixed the same way `run_fetch` already was: check
+    `is_phase_sourced` first. New regression test in
+    `portage-repo/src/build/shell/tests.rs`.
 - ✅ **`em select mirrors` — DONE.** `list`/`show`/`set` with `--country`/`--region`
   filters; mirror list from Gentoo's XML API (`portage_distfiles::MirrorList`),
   writes `GENTOO_MIRRORS` to make.conf. `select/mirrors.rs`.
@@ -1293,7 +1302,7 @@ blocked by the three independent findings above, tracked separately.
 
 ---
 
-## Later — normal-verbosity log output is ugly (2026-08-03) — FIXED 2026-08-04
+## Later — normal-verbosity log output is ugly (2026-08-03) — FIXED 2026-08-04, extended 2026-08-05
 
 **FIXED 2026-08-04** (`4354742`): post-install stats and qmerge registration
 downgraded `tracing::info!` → `tracing::debug!` (developer detail, matches
@@ -1302,6 +1311,47 @@ default so the `phase{phase="qmerge"}:` span-label leak disappears with it).
 The "Done" summary stays default-visible but as a plain `>>> Done — ...`
 line gated on the same `quiet` flag as the rest of the merge output, not a
 bare tracing event. Live-verified with a real `sys-libs/zlib` merge.
+
+**Extended 2026-08-05** (`21c0c80`, `721657e`, `93d9be2`, `f30c69b`): the
+narrow fix above only handled two call sites; the underlying rendering gap
+(raw `tracing`-style output not matching real portage's own console
+conventions) was systemic. Fully addressed via a custom
+`diag::CompactFormatter`, in three commits:
+
+1. `21c0c80` — drop `tracing_subscriber`'s default span-context prefix
+   entirely (the `pkg{cpv=...}:phase{phase="..."}:` leak this section
+   originally reported), and switch `WARN`/`ERROR` from a literal colored
+   text tag to real portage's own `ewarn`/`eerror` convention: a colored
+   `" * "` marker (`portage/output.py`'s `EOutput`), distinguished by color
+   alone (yellow/red — already matched this codebase's existing colors).
+2. `721657e` — `INFO` (the routine status channel) gets `einfo`'s `" * "`
+   marker by default, *except* an event on the new
+   `portage_repo::ACTION_TARGET` (a structured `tracing` target, not a
+   sniffed-text heuristic — an earlier draft tried string-matching the
+   rendered message for a `">>> "` prefix and was correctly rejected),
+   which stays bare since it already wrote its own portage-style `">>> "`
+   action-announcement line (`Emerging`, `Unpacking`).
+3. `93d9be2` — `run_fetch`'s already-present/downloaded/restricted/failed
+   reporting now renders via a new `style::estatus_line` helper, matching
+   real portage's own `ebegin`/`eend` shape (`" * msg ..."` + a right-aligned
+   `"[ ok ]"`/`"[ !! ]"`, colored `BRACKET`/`GOOD`/`BAD` per
+   `portage/output.py`) — also fixed the *actual bug* this uncovered:
+   `resolve`/`resolve_all` returned one `Distfile` per **URI**, not per
+   filename, so a `SRC_URI` naming one file twice (binutils' own
+   `mirror://gnu/...` + `https://sourceware.org/...`) printed "already
+   present" twice (`b31e144`) and could race two concurrent fetches to the
+   same destination path.
+4. `f30c69b` — exports `COLUMNS` into the phase env (real portage's
+   `doebuild.py` does this too, "to prevent unnecessary stty calls"). Does
+   **not** by itself fix `binutils-config`'s own two-line wrapping (see
+   [[binutils-config-tty-rendering-deferred]] for the full chain and why a
+   real PTY was investigated and explicitly deferred after a critical
+   review found real correctness risks for a narrow, purely cosmetic
+   payoff) — kept anyway since it's free and matches real portage.
+
+All three console-rendering commits + `COLUMNS` are covered by new
+regression tests (`diag.rs`, `style.rs`, `shell/tests.rs`) and verified live
+against a real `sys-devel/binutils` merge.
 
 Original report below, kept for context:
 
