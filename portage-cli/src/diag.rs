@@ -27,7 +27,13 @@
 //! whole thing when that detail *is* what you want
 //! (`RUST_LOG=expansion=debug`).
 
+use std::fmt;
+
+use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, Targets};
+use tracing_subscriber::fmt::FmtContext;
+use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
+use tracing_subscriber::registry::LookupSpan;
 
 /// Crates whose events the verbosity flags actually govern. Third-party
 /// targets are deliberately absent: they keep the `WARN` default.
@@ -101,6 +107,90 @@ pub fn print_diagnostic(diag: &dyn miette::Diagnostic) {
     }
 }
 
+/// Console event formatter: no span context, and portage's own `" * "`
+/// marker convention for `WARN`/`ERROR` instead of a literal text tag.
+///
+/// `tracing_subscriber`'s default (`Full`) formatter prefixes every event
+/// with its enclosing span scope, e.g. `pkg{cpv=sys-devel/binutils-2.46.1}:
+/// phase{phase="fetch"}: fetch: binutils-2.46.1.tar.xz (already present)` —
+/// the `pkg`/`phase` spans exist so [`crate::activity::BusLayer`] can label a
+/// diagnostic with the package/phase it fired in (its own doc comment), not
+/// for the console. There's no builder toggle to hide span context on the
+/// stock formatter (the crate's `Full`/`Compact` formats always print it), so
+/// this reimplements just enough of it.
+///
+/// `INFO` is this codebase's routine status channel (the doc table above:
+/// "per-package status + warnings + errors") — real portage's own status
+/// lines (`>>> Emerging …`, `>>> Unpacking …`) carry no log-level tag at all,
+/// and every `tracing::info!` call site here already writes its own natural
+/// prefix into the message (`"fetch: …"`, `">>> Unpacking …"`). Gluing an
+/// `INFO` tag in front of an already-prefixed line reads as redundant noise,
+/// not a real log level a user needs to triage — so `INFO` gets no tag,
+/// matching plain stdout.
+///
+/// `WARN`/`ERROR` map to real portage's `ewarn`/`eerror` (`portage/output.py`'s
+/// `EOutput`): a colored `" * "` marker in [`crate::style::C_WARN`]/
+/// [`crate::style::C_ERROR`], distinguished from `einfo` purely by *color*,
+/// never by a literal `"WARN"`/`"ERROR"` word — so this drops the text tag
+/// for those two levels in favor of the marker, matching portage's own
+/// convention instead of inventing a different one. No call
+/// site's own message text embeds a `"!!! "`/`">>> "` marker of its own for
+/// `WARN`/`ERROR` today (checked directly, so this can't double them up) —
+/// if one ever does, it should drop this crate's own `" * "` at that call
+/// site instead of the reverse. `DEBUG`/`TRACE` keep the plain text tag: they
+/// have no real-portage equivalent (developer detail, never in default
+/// output — see the floor table above), so there's no convention to match.
+struct CompactFormatter;
+
+impl<S, N> FormatEvent<S, N> for CompactFormatter
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> fmt::Result {
+        let level = event.metadata().level();
+        match *level {
+            Level::INFO => {}
+            Level::WARN | Level::ERROR => {
+                if writer.has_ansi_escapes() {
+                    // Matches portage/output.py: colorize("WARN"|"ERR", " * ").
+                    let s = if *level == Level::WARN {
+                        crate::style::C_WARN
+                    } else {
+                        crate::style::C_ERROR
+                    };
+                    write!(writer, "{s} * {s:#}")?;
+                } else {
+                    write!(writer, " * ")?;
+                }
+            }
+            Level::DEBUG | Level::TRACE => {
+                if writer.has_ansi_escapes() {
+                    // Developer-only tags with no real-portage equivalent to
+                    // match — plain `anstyle` colors, not part of the shared
+                    // UI palette.
+                    let color = if *level == Level::DEBUG {
+                        anstyle::AnsiColor::Blue
+                    } else {
+                        anstyle::AnsiColor::Magenta
+                    };
+                    let s = anstyle::Style::new().fg_color(Some(anstyle::Color::Ansi(color)));
+                    write!(writer, "{s}{level:>5}{s:#} ")?;
+                } else {
+                    write!(writer, "{level:>5} ")?;
+                }
+            }
+        }
+        ctx.format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
+
 /// Install the global tracing subscriber. Call once at startup, before any
 /// library code that emits tracing events.
 ///
@@ -126,6 +216,7 @@ pub fn init(quiet: bool, verbose: u8, parallel: bool) {
         .with_target(false)
         .without_time()
         .with_ansi(colored)
+        .event_format(CompactFormatter)
         .with_filter(floor.clone());
     let bus = crate::activity::BusLayer::new().with_filter(floor);
 
@@ -187,5 +278,81 @@ mod tests {
             assert!(!f.would_enable("portage_cli::merge", &Level::INFO));
             assert!(f.would_enable("portage_cli::merge", &Level::WARN));
         }
+    }
+
+    /// `CompactFormatter`'s own rendering, exercised end to end through a
+    /// real `tracing_subscriber` registry (not just the filter): `INFO` gets
+    /// no tag at all, `WARN`/`ERROR` get portage's colored `" * "` marker —
+    /// never a literal `"WARN"`/`"ERROR"` word — and no span-context prefix
+    /// leaks in even though the event fires inside `pkg`/`phase` spans
+    /// (mirroring `BusLayer`'s own real usage).
+    #[test]
+    fn compact_formatter_matches_portage_conventions() {
+        use std::sync::{Arc, Mutex};
+
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Clone)]
+        struct Buf(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Buf {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().write(b)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Buf {
+            type Writer = Buf;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        fn render(ansi: bool) -> String {
+            let buf = Buf(Arc::new(Mutex::new(Vec::new())));
+            let fmt = tracing_subscriber::fmt::layer()
+                .with_writer(buf.clone())
+                .with_target(false)
+                .without_time()
+                .with_ansi(ansi)
+                .event_format(CompactFormatter);
+            let subscriber = tracing_subscriber::registry().with(fmt);
+            tracing::subscriber::with_default(subscriber, || {
+                let pkg = tracing::info_span!("pkg", cpv = "sys-devel/binutils-2.46.1");
+                let _pkg = pkg.enter();
+                let phase = tracing::info_span!("phase", phase = "fetch");
+                let _phase = phase.enter();
+                tracing::info!("fetch: binutils-2.46.1.tar.xz (already present)");
+                tracing::warn!("something needs attention");
+                tracing::error!("something failed");
+            });
+            let bytes = buf.0.lock().unwrap().clone();
+            String::from_utf8(bytes).unwrap()
+        }
+
+        let plain = render(false);
+        let mut lines = plain.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            "fetch: binutils-2.46.1.tar.xz (already present)",
+            "INFO must carry no tag and no span context: {plain:?}"
+        );
+        assert_eq!(lines.next().unwrap(), " * something needs attention");
+        assert_eq!(lines.next().unwrap(), " * something failed");
+
+        let colored = render(true);
+        assert!(
+            colored.contains("\x1b[33m * \x1b[0msomething needs attention"),
+            "WARN must use portage's yellow \" * \" marker, not a text tag: {colored:?}"
+        );
+        assert!(
+            colored.contains("\x1b[31m * \x1b[0msomething failed"),
+            "ERROR must use portage's red \" * \" marker, not a text tag: {colored:?}"
+        );
+        assert!(
+            !colored.contains("WARN") && !colored.contains("ERROR"),
+            "no literal level word anywhere: {colored:?}"
+        );
     }
 }
