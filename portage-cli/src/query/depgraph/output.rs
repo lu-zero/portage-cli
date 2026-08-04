@@ -123,6 +123,28 @@ fn group_use_flags(flags: &[String], use_expand: &[String]) -> Vec<GroupedUse> {
     out
 }
 
+/// Color one USE-dep token like the `-p` plan's flag column: enabled
+/// (`C_ON`) or, with a leading `-`, disabled (`C_OFF`). Simpler than
+/// [`flag_token`]'s on/new/flipped distinctions — a use-dep just states a
+/// required state, there is no "old build" to diff it against.
+fn colorize_use_flag(tok: &str) -> String {
+    match tok.strip_prefix('-') {
+        Some(rest) => format!("{C_OFF}-{rest}{C_OFF:#}"),
+        None => format!("{C_ON}{tok}{C_ON:#}"),
+    }
+}
+
+/// Color every space-separated token in an already-[`wrap_items`](crate::style::wrap_items)-wrapped
+/// chunk. Coloring must happen after wrapping, not before — embedded ANSI
+/// bytes would otherwise inflate `wrap_items`'s plain `.len()`-based width math.
+fn colorize_use_flags_chunk(chunk: &str) -> String {
+    chunk
+        .split(' ')
+        .map(colorize_use_flag)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_expand: &[String]) {
     use std::collections::{BTreeMap, BTreeSet};
     // A constraint carried by a package the plan itself replaces is stale, not
@@ -209,6 +231,9 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_exp
                     let atom = format!("{C_OFF}{constraint}{C_OFF:#}");
 
                     // One-line form of each group, joined for the inline case.
+                    // Plain (uncoloured) — used to measure whether it fits;
+                    // colouring first would inflate the width check with
+                    // ANSI bytes.
                     let inline = groups
                         .iter()
                         .map(|g| {
@@ -230,7 +255,21 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_exp
                     if inline.is_empty() {
                         writeln!(out, "      {atom} []").ok();
                     } else if fits {
-                        writeln!(out, "      {atom} [{inline}]").ok();
+                        let inline_colored = groups
+                            .iter()
+                            .map(|g| {
+                                let varname = g.var.clone().unwrap_or_else(|| "USE".to_string());
+                                let values = g
+                                    .values
+                                    .iter()
+                                    .map(|v| colorize_use_flag(v))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                format!("{varname}=\"{values}\"")
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        writeln!(out, "      {atom} [{inline_colored}]").ok();
                     } else {
                         writeln!(out, "      {atom} [").ok();
                         for g in &groups {
@@ -240,10 +279,11 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_exp
                             let chunks = crate::style::wrap_items(&g.values, value_col, width);
                             let n = chunks.len();
                             for (i, chunk) in chunks.iter().enumerate() {
+                                let colored_chunk = colorize_use_flags_chunk(chunk);
                                 if i == 0 {
-                                    write!(out, "{:>col_var$}{prefix}{chunk}", "").ok();
+                                    write!(out, "{:>col_var$}{prefix}{colored_chunk}", "").ok();
                                 } else {
-                                    write!(out, "\n{:>value_col$}{chunk}", "").ok();
+                                    write!(out, "\n{:>value_col$}{colored_chunk}", "").ok();
                                 }
                                 if i + 1 == n {
                                     write!(out, "\"").ok();
@@ -1674,6 +1714,32 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].var.as_deref(), Some("LLVM_TARGETS"));
         assert_eq!(got[0].values, ["AArch64", "-X86"]);
+    }
+
+    #[test]
+    fn colorize_use_flag_distinguishes_enabled_and_disabled() {
+        // Enabled: C_ON (red). Disabled (leading `-`): C_OFF (blue), and the
+        // dash is kept inside the colored span, not left plain in front of it.
+        assert_eq!(
+            colorize_use_flag("AArch64"),
+            format!("{C_ON}AArch64{C_ON:#}")
+        );
+        assert_eq!(
+            colorize_use_flag("-debuginfod"),
+            format!("{C_OFF}-debuginfod{C_OFF:#}")
+        );
+    }
+
+    #[test]
+    fn colorize_use_flags_chunk_colors_each_token_independently() {
+        // Regression test for the 2026-08-04 UX request: the wrapped
+        // multi-line USE_EXPAND rendering must still color per-token, not
+        // just the inline single-line case.
+        let got = colorize_use_flags_chunk("AArch64 -debuginfod X86");
+        assert_eq!(
+            got,
+            format!("{C_ON}AArch64{C_ON:#} {C_OFF}-debuginfod{C_OFF:#} {C_ON}X86{C_ON:#}")
+        );
     }
 
     #[test]
