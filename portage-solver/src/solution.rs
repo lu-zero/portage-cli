@@ -22,6 +22,76 @@ pub enum MergeRoot {
     Target,
 }
 
+/// What kind of build a plan entry is — the structural answer to "is this a
+/// host-class or target-class build?", replacing the `cross_host_tool_tuple`
+/// name-allowlist + `CTARGET`/`TARGET_ABI` shell-env sniffing the build shell
+/// re-derives per entry today.
+///
+/// Computed once from the entry's identity + the solve's cross context (see
+/// [`BuildClass::classify`]) and carried on the [`SelectedPackage`], so every
+/// downstream consumer (build shell, preflight, display) reads one field
+/// instead of re-deriving it from shadows. Part of the root-topology
+/// refactor's Track A; see `todo/root-topology-refactor.md`.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum BuildClass {
+    /// A native build merged to the build host (`BROOT`,
+    /// [`MergeRoot::Host`]): typically an unsatisfied `BDEPEND` the host
+    /// lacks, scheduled onto the host side.
+    NativeHost,
+    /// A native build merged to the target root (`ROOT`): `CBUILD == CHOST`,
+    /// no `CTARGET`. Plain `em <atom>`, `--root`, `--prefix` target packages.
+    NativeTarget,
+    /// A foreign-arch build merged to the target root: a `--target`
+    /// invocation with `CBUILD != CHOST`. `triple` is `CTARGET` where the
+    /// topology carries it (threaded in Track A4; `None` until then).
+    CrossTarget {
+        /// The target triple (`CTARGET`), populated once Track A4 lifts the
+        /// triples out of shell-env rediscovery.
+        triple: Option<String>,
+    },
+    /// A cross-toolchain step: a package in the `cross-<tuple>/` category
+    /// (host-side cross tools — binutils/gcc/etc. produced by `crossdev`),
+    /// built to run on `CHOST`. `triple` is parsed from the category.
+    ///
+    /// The libc/headers bootstrap steps (`sys-libs/glibc`,
+    /// `sys-kernel/linux-headers`) also belong here semantically — they run
+    /// under `bypass_cross_root` (a CLI-level flag the solver does not see),
+    /// so they classify as [`NativeTarget`](Self::NativeTarget) for now and
+    /// are re-stamped `CrossTool` once that flag retires (Track A3).
+    CrossTool {
+        /// The `cross-<tuple>` triple parsed from the category.
+        triple: String,
+    },
+}
+
+impl BuildClass {
+    /// Derive the build class from a plan entry's identity and the solve's
+    /// cross context.
+    ///
+    /// A `cross-<tuple>/` category identifies a host-side cross-toolchain
+    /// tool; otherwise [`MergeRoot`] plus the cross flags pick between
+    /// native-host, native-target, and foreign-arch-target.
+    pub fn classify(
+        cpn: &Cpn,
+        merge_root: MergeRoot,
+        cross_active: bool,
+        is_cross_arch: bool,
+    ) -> Self {
+        if let Some(triple) = cpn.category.as_str().strip_prefix("cross-") {
+            return Self::CrossTool {
+                triple: triple.to_string(),
+            };
+        }
+        match merge_root {
+            MergeRoot::Host => Self::NativeHost,
+            MergeRoot::Target if cross_active && is_cross_arch => {
+                Self::CrossTarget { triple: None }
+            }
+            MergeRoot::Target => Self::NativeTarget,
+        }
+    }
+}
+
 /// A resolved package in a plan: identity + selected version.
 ///
 /// This is the solver-agnostic counterpart of pubgrub's
@@ -38,16 +108,24 @@ pub struct SelectedPackage {
     pub slot: Option<Interned<DefaultInterner>>,
     /// Merge destination.
     pub merge_root: MergeRoot,
+    /// What kind of build this entry is (host-class vs target-class, native
+    /// vs cross). Computed once at selection; see [`BuildClass`].
+    pub build_class: BuildClass,
 }
 
 impl SelectedPackage {
     /// Create a target-root selected package.
+    ///
+    /// Defaults to [`BuildClass::NativeTarget`] — callers resolving into a
+    /// cross or host context should construct the struct directly (or use
+    /// [`BuildClass::classify`]) so the field reflects the real topology.
     pub fn new(cpn: Cpn, version: Version, slot: Option<Interned<DefaultInterner>>) -> Self {
         Self {
             cpn,
             version,
             slot,
             merge_root: MergeRoot::Target,
+            build_class: BuildClass::NativeTarget,
         }
     }
 }
@@ -252,4 +330,73 @@ pub enum SolveError {
     /// The provider could not satisfy the request for another reason.
     #[error("{0}")]
     Provider(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cn(cat: &str, pkg: &str) -> Cpn {
+        Cpn::new(cat, pkg)
+    }
+
+    #[test]
+    fn cross_category_is_a_cross_tool_regardless_of_merge_root() {
+        let cpn = cn("cross-riscv64-unknown-linux-gnu", "gcc");
+        // Category wins for every merge-root / cross-flag combination: a
+        // `cross-<tuple>/` package is a host-side tool by construction.
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Host, false, false),
+            BuildClass::CrossTool {
+                triple: "riscv64-unknown-linux-gnu".to_string(),
+            }
+        );
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Target, true, true),
+            BuildClass::CrossTool {
+                triple: "riscv64-unknown-linux-gnu".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn native_target_with_no_cross() {
+        let cpn = cn("dev-libs", "foo");
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Target, false, false),
+            BuildClass::NativeTarget
+        );
+    }
+
+    #[test]
+    fn merge_root_host_is_native_host() {
+        let cpn = cn("dev-libs", "foo");
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Host, false, false),
+            BuildClass::NativeHost
+        );
+        // Even under an active cross context: a Host-rooted ordinary package
+        // is a native host build (an unsatisfied BDEPEND), not a cross tool.
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Host, true, true),
+            BuildClass::NativeHost
+        );
+    }
+
+    #[test]
+    fn cross_arch_target_is_cross_target_with_deferred_triple() {
+        let cpn = cn("sys-apps", "foo");
+        // Real foreign-arch build: cross_active AND is_cross_arch both on.
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Target, true, true),
+            BuildClass::CrossTarget { triple: None }
+        );
+        // Same-arch offset (`--root <dir>`) has cross_active on but
+        // is_cross_arch off — it stays NativeTarget, the routing that
+        // `broot_filtered` already handles.
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Target, true, false),
+            BuildClass::NativeTarget
+        );
+    }
 }

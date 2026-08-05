@@ -3,6 +3,142 @@
 Design doc: [`docs/root-topology.md`](../docs/root-topology.md). This file
 tracks the implementation work it implies. Status: 🔴 not started · 🟡 partial · ✅ done.
 
+---
+
+## Current plan (2026-08-05 reframing)
+
+A full code census overturned the original premise (below) that this
+refactor's goal is "replace the `Roots` flat bag with a `RootTopology`/
+`RootSet` enum." Three findings reframe it:
+
+1. **That enum never landed.** The only trace is a private `RootSet`
+   (`portage-cli/src/cli.rs:197`) whose `Dual`/`Overlayed` variants are
+   `#[allow(dead_code)]`. It was deliberately scoped down on 2026-07-09
+   to `satisfaction_root(DepClass)` as two fields on the existing struct
+   — "same payoff, far less churn." That was the right call: the
+   filesystem-role question ("which path answers which role?") is
+   essentially solved.
+2. **`satisfaction_root(DepClass)` works** (`portage-resolve/src/roots.rs:232`,
+   17 lines, 16 call sites). `Roots` carries 7 path fields + 3 bools
+   (not "five `Option<PathBuf>`" as the docs still claim).
+3. **The acute pain (the crossdev guard-narrowing instability in the
+   2026-08 review) is a *different* problem:** per-package **build-class**
+   discrimination in the build shell, not per-invocation topology. The
+   build shell re-derives "is this a host-class or target-class build?"
+   from `cross_host_tool_tuple` (a `category.strip_prefix("cross-")` +
+   name allowlist, `portage-repo/src/build/shell.rs:1584`), the
+   `CTARGET`/`TARGET_ABI`/`CHOST`/`CBUILD` shell-env vars, and a runtime
+   `bypass_cross_root: bool` thread — across 5 special-casings in
+   `shell.rs` plus the `portage-cli/src/setup.rs:145` bashrc guard.
+   Every "narrow the guard again" commit is one of these re-derivations
+   gaining another term.
+
+So: kill the shadow-discrimination (centerpiece), then the slow-burn
+type-discipline cleanup, then reconcile the docs. The full enum
+migration of all 69 `.roots()` callers is **not recommended** — high
+churn, low payoff now that `satisfaction_root` exists.
+
+### Track A (centerpiece): a typed `BuildClass`, planner-stamped
+
+The planner already *knows* each entry's class — it has `MergeRoot`
+(`portage-solver/src/solution.rs:16`), `bypass_cross_root`, the
+`PackageArch` table (`portage-cli/src/crossdev/target.rs:196`), and the
+`cross-<tuple>` category — then throws it away, forcing the build shell
+to re-derive it. Stamp a typed enum onto each plan entry and read it
+directly:
+
+```rust
+enum BuildClass {
+    NativeHost,                              // unsatisfied BDEPEND → BROOT
+    NativeTarget,                            // plain em/--root/--prefix target pkg
+    CrossTarget  { triple: String },         // --target foreign-arch pkg (CBUILD≠CHOST)
+    CrossTool    { triple: String },         // cross-<tuple>/{binutils,gcc,…} & libc/headers
+}
+```
+
+Replaces every shadow: `cross_host_tool_tuple` → `CrossTool`;
+`bypass_cross_root: bool` (8 sites) → planner stamps `CrossTool`;
+`CTARGET`/`TARGET_ABI`/`CHOST==CBUILD` sniff (`shell.rs:1368`,
+`setup.rs:145`) → `match build_class`; `build_sysroot.is_none()`
+two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
+`PackageArch` becomes the input to `BuildClass`, not a parallel vocab.
+
+- ✅ **A1 (landed)** Define `BuildClass` (`portage-solver/src/solution.rs`)
+  + stamp it next to `MergeRoot` on `SelectedPackage`. Classification lives
+  in `BuildClass::classify(cpn, merge_root, cross_active, is_cross_arch)`,
+  invoked at the pubgrub→`SelectedPackage` conversion (`to_selected`,
+  `portage-atom-pubgrub/src/solver_impl.rs`) where the entry identity and
+  cross context are both in scope. Parallel field, no shell changes;
+  pinned by `solution::tests::*` (4 cases). The libc/headers `CrossTool`
+  case stays `NativeTarget` here (it needs `bypass_cross_root`, not in the
+  solver) and folds in at A3.
+- **A2** Thread to `EbuildShell::run_phase`; replace `cross_host_tool_tuple`
+  + the 5 downstream special-casings with `match build_class`. Convert
+  the 11 `portage-repo/src/build/shell/tests.rs` tests to class-setup.
+- **A3** Retire `bypass_cross_root: bool` (8 sites). Re-key the
+  `setup.rs:145` bashrc guard's condition on the class.
+- **A4** Lift `CHOST`/`CBUILD`/`CTARGET` out of shell-env rediscovery
+  into a typed `Triples { build, host, target }` constructed once at
+  profile load (`portage-repo/src/build/profile.rs:2339`), threaded with
+  `Roots`/`BuildClass`. `is_cross_arch: bool` stays on `Roots` for
+  `satisfaction_root`'s `IDEPEND` cell but becomes `build != host`.
+
+Gate (must stay green throughout): the root-routing tests in
+`cli.rs` (13), `portage-repo/src/build/shell/tests.rs` (11),
+`portage-atom-pubgrub/src/provider/tests.rs` (11), plus
+`root_aware.rs`/`bdepend_avail.rs`/`installed.rs`/`merge/mod.rs`.
+
+### Track B (slow-burn): topology type-discipline + `DepStampPolicy`
+
+- **B1 `DepStampPolicy`** (the 🟡 item, lines 401-413 below). Extract
+  the duplicated `MergeRoot` stamping in `cross_target_runtime_deps`/
+  `host_native_deps`/`broot_filtered` (`solve.rs:431-522`) into one
+  policy struct + shared body. Pure `portage-atom-pubgrub`, no CLI churn.
+- **B2 Un-dead `RootSet`.** Make the private enum live so
+  `Cli::roots()`/`outer_roots()`/`base_roots()`/`broot()` become methods
+  on a returned typed topology rather than four sibling `Cli` methods
+  callers must choose between. Scope deliberately narrow: the 69
+  `.roots()` consumers keep receiving a `Roots` (low churn); churn is
+  internal to the 4 builders + the 33 `.outer_roots()` callers. After
+  Track A so `BuildClass` already carries the triples and `RootSet`
+  doesn't need a `CrossArch` field.
+- **B3** Collapse the `Cli::broot()` vs `Roots::broot()` name footgun.
+
+### Track C: doc reconciliation
+
+`docs/root-topology.md` claims `RootTopology`/`RootSet`/`CrossArch`
+exist as "target design" — they don't; its own Status section partially
+corrects this but the body doesn't. Also "five `Option<PathBuf>`"
+undercounts (7 + 3 bools). `docs/root-model.md:14` says BROOT is "always
+host `/`" — `--local` makes it the prefix (the file itself contradicts
+this two paragraphs later). Update each alongside the code track it
+describes (A → §"satisfaction-root mapping", B → §"variant enum"). Mark
+the enum-migration items below closed-as-not-pursued.
+
+### Deferred / rejected
+
+- Full `RootTopology` enum migration across all 69 `.roots()` callers —
+  rejected (again): `satisfaction_root` captured the payoff; most sites
+  consume a `Roots`, they don't choose between views. B2 covers the
+  subset that does.
+- Tier 3 mutable-BROOT on a foreign host (`build-environment.md`);
+  zero-config merged sysroot via `fuse-overlayfs` (M3).
+
+### Sizing & order
+
+| track | files | LOC est. | risk | order |
+|---|---|---|---|---|
+| A | portage-solver/resolve/atom-pubgrub + `build/shell.rs` + cli emerge/crossdev/setup | +300/−250 | medium | A1→A2→A3→C(A) |
+| B1 | `provider/solve.rs` | +60/−40 | low | after A3 |
+| A4 | profile.rs + Roots + shell | +120/−80 | medium | after B1 |
+| B2 | `cli.rs` + 33 `.outer_roots()` | +150/−120 | low-medium | after A4 |
+| C | 3 docs | docs | none | with each track |
+
+Recommended: **A1 → A2 → A3 → C(A) → B1 → A4 → C(rest) → B2 → B3.**
+A1–A3 alone retire the crossdev guard instability the review flagged.
+
+---
+
 **Correction (2026-07-23), two points the body below doesn't yet know about:**
 - The "`--root` config resolution" entry right below says the 2026-07-09
   landed fix made `Roots::config()` default to `config_root.or(root)` (own
@@ -300,6 +436,12 @@ to land as part of (or before) the refactor.
     `-p` run.
 
 ## The variant refactor (structural)
+
+> **Note (2026-08-05):** the enum-migration framing of this section is
+> superseded by the "Current plan" at the top of this file — the
+> `RootTopology`/`RootSet`-as-storage migration was not pursued (and is
+> not recommended). What this section documents as ✅ is accurate: those
+> fixes *did* land. The remaining 🟡 (`DepStampPolicy`) is now Track B1.
 
 - ✅ **`Roots.satisfaction_root(DepClass)` — landed 2026-07-09.** Scoped down
   from the doc's original `RootTopology`/`RootSet`-as-storage proposal to a
