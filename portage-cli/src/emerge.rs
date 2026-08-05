@@ -1063,6 +1063,10 @@ pub(crate) async fn run_unmerge_batch(
     registry.reclaim(vdb, &root);
     registry.store();
 
+    // `pkg_prerm`/`pkg_postrm` queue their messages in this process (there is
+    // no worker seam on a removal), so this is what prints them.
+    crate::elog::finalize_echo();
+
     // Refresh ld.so.cache / profile.env after removals — same as merge does
     // after each package, so libraries just deleted don't linger in the
     // dynamic linker cache until the next unrelated install.

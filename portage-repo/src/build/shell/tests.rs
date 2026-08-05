@@ -1318,8 +1318,10 @@ async fn e_output_builtins_capture_elog_messages() {
     // Multi-line messages are recorded one entry per line, as the `while read`
     // loop feeding `>> ${T}/logging/...` gives; an empty message is skipped.
     captured_stderr(&mut shell, "einfo $'one\\ntwo'; einfo ''").await;
-    // `ebegin` contributes nothing, and a failing `eend` reports through
-    // `eerror`, so its diagnostic lands as an ERROR.
+    // `ebegin` records an INFO entry — it renders through `einfon`, dots and
+    // all (`isolated-functions.sh`'s `einfon "${msg}"`), so what is filed is
+    // what the user saw. A failing `eend` reports through `eerror`, so its
+    // diagnostic lands as an ERROR; `eend` itself records nothing else.
     captured_stderr(
         &mut shell,
         "ebegin Doing; eend 1 failed; ebegin Two; eend 0",
@@ -1329,7 +1331,7 @@ async fn e_output_builtins_capture_elog_messages() {
     assert_eq!(
         std::fs::read_to_string(logging.join("postinst")).unwrap(),
         "INFO hi\nLOG logged\nWARN warned\nERROR bad\nQA qa\nINFO nolf\n\
-         INFO one\nINFO two\nERROR failed\n"
+         INFO one\nINFO two\nINFO Doing ...\nERROR failed\nINFO Two ...\n"
     );
 
     // Messages raised outside a phase go to `other`, portage's
@@ -1339,6 +1341,62 @@ async fn e_output_builtins_capture_elog_messages() {
     assert_eq!(
         std::fs::read_to_string(logging.join("other")).unwrap(),
         "LOG stray\n"
+    );
+}
+
+/// Messages go through `echo -e`, so a `\n` in one is a line break in both the
+/// printed output and the recorded entry — portage's `e*` helpers all render
+/// (and record) via `echo -e "$@"`.
+#[tokio::test]
+async fn e_output_builtins_expand_escapes_like_echo_e() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    write_minimal_ebuild(&repo_path, "sys-devel", "binutils");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell
+        .run_string("unset -f einfo einfon elog ewarn eerror eqawarn ebegin eend")
+        .await
+        .unwrap();
+    shell.set_terminal(crate::TerminalConfig {
+        columns: 80,
+        colors: crate::PortageColors::default(),
+    });
+
+    let t = dir.path().join("temp");
+    let logging = t.join("logging");
+    std::fs::create_dir_all(&logging).unwrap();
+    shell
+        .run_string(&format!(
+            "export T={} EBUILD_PHASE=postinst",
+            t.to_str().unwrap()
+        ))
+        .await
+        .unwrap();
+
+    // A literal backslash-n in the argument, not a real newline.
+    assert_eq!(
+        captured_stderr(&mut shell, r#"einfo 'one\ntwo'"#).await,
+        " * one\n * two"
+    );
+    // An escape `echo -e` does not know keeps its backslash.
+    assert_eq!(
+        captured_stderr(&mut shell, r#"einfo 'a\qb'"#).await,
+        r" * a\qb"
+    );
+    // `\c` ends the message there.
+    assert_eq!(
+        captured_stderr(&mut shell, r#"einfo 'keep\cdrop'"#).await,
+        " * keep"
+    );
+
+    // What was recorded is what was shown.
+    assert_eq!(
+        std::fs::read_to_string(logging.join("postinst")).unwrap(),
+        "INFO one\nINFO two\nINFO a\\qb\nINFO keep\n"
     );
 }
 

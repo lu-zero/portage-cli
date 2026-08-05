@@ -201,8 +201,16 @@ fn pump(master: std::fs::File, mut log: std::fs::File, stop: &std::sync::atomic:
             &master,
             rustix::event::PollFlags::IN,
         )];
-        let ready =
-            rustix::event::poll(&mut fds, Some(if done { &nowait } else { &tick })).unwrap_or(0);
+        // A signal is not end-of-output: `poll` is not restarted for us, and
+        // tokio installs handlers process-wide to reap children, so a `SIGCHLD`
+        // from a parallel job landing on this thread during the final drain
+        // would otherwise be read as "nothing left" and truncate the tail of
+        // the phase from both the console and the log.
+        let ready = match rustix::event::poll(&mut fds, Some(if done { &nowait } else { &tick })) {
+            Ok(ready) => ready,
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(_) => 0,
+        };
         if ready == 0 {
             // Nothing queued and the phase is over: everything it wrote has
             // been forwarded.
@@ -212,8 +220,10 @@ fn pump(master: std::fs::File, mut log: std::fs::File, stop: &std::sync::atomic:
             continue;
         }
         // A pty master reports `EIO` rather than end-of-file once no slave is
-        // open; both mean the same thing here.
+        // open; both mean the same thing here. `EINTR` means neither — see the
+        // note above `poll`.
         match rustix::io::read(&master, &mut buf) {
+            Err(rustix::io::Errno::INTR) => continue,
             Ok(0) | Err(_) => break,
             Ok(n) => {
                 let chunk = &buf[..n];

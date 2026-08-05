@@ -31,6 +31,45 @@ fn marker(style: Style) -> String {
     format!(" {style}*{style:#} ")
 }
 
+/// Expand backslash escapes the way `echo -e` does.
+///
+/// Every one of portage's `e*` helpers renders its message through
+/// `echo -e "$@"` (and records it through the same), so `ewarn "a\nb"` is two
+/// lines to a user of real portage. Applied once, before the message is either
+/// printed or recorded, so the two never disagree.
+///
+/// `\c` truncates the rest, as in `echo -e`. Unknown escapes are left alone,
+/// backslash and all — again matching `echo -e`.
+fn expand_escapes(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut chars = msg.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('a') => out.push('\x07'),
+            Some('b') => out.push('\x08'),
+            Some('e') => out.push('\x1b'),
+            Some('f') => out.push('\x0c'),
+            Some('v') => out.push('\x0b'),
+            Some('\\') => out.push('\\'),
+            Some('c') => break,
+            // Not an escape `echo -e` knows: keep it verbatim.
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 /// Portage's `__elog_base`: append `<CLASS> <line>` to
 /// `${T}/logging/${EBUILD_PHASE}`, the file the elog system replays once the
 /// package is merged.
@@ -110,7 +149,7 @@ impl builtins::Command for EchoMessageCommand {
         };
         let einfon = context.command_name == "einfon";
         let prefix = marker(style);
-        let msg = self.message.join(" ");
+        let msg = expand_escapes(&self.message.join(" "));
         elog_base(context.shell, class, &msg);
 
         let shell = context.shell;
@@ -148,9 +187,13 @@ impl builtins::Command for EbeginCommand {
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
         let prefix = marker(colors(&context).info);
-        let msg = self.message.join(" ");
+        // Portage's `ebegin` renders through `einfon "${msg} ..."`, so the
+        // recorded entry is INFO and carries the trailing dots too — the
+        // message elog files is the one the user saw.
+        let msg = format!("{} ...", expand_escapes(&self.message.join(" ")));
+        elog_base(context.shell, "INFO", &msg);
         let shell = context.shell;
-        let _ = writeln!(context.params.stderr(shell), "{prefix}{msg} ...");
+        let _ = writeln!(context.params.stderr(shell), "{prefix}{msg}");
         Ok(brush_core::ExecutionResult::success())
     }
 }
@@ -201,7 +244,7 @@ impl builtins::Command for EendCommand {
         // `__eend` emits its failure diagnostic through `eerror`, so it is
         // captured as an ERROR entry exactly like a direct `eerror` call.
         let failure_msg = (code != 0)
-            .then(|| self.message.join(" "))
+            .then(|| expand_escapes(&self.message.join(" ")))
             .filter(|m| !m.is_empty());
         if let Some(msg) = &failure_msg {
             elog_base(context.shell, "ERROR", msg);

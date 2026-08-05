@@ -264,9 +264,16 @@ Files written by real portage are read too (both the flat layout and
 `FEATURES=split-elog`'s per-category directories), and vice versa — the
 on-disk format is portage's own, not an `em` invention.
 
+A failed phase files its messages too — the `ewarn`/`eerror` explaining why a
+build died is the most useful thing elog carries, and `${T}` is about to be
+cleaned. So do the `pkg_prerm`/`pkg_postrm` of a package being removed or
+replaced.
+
 **Gaps vs portage:** no `mail`/`syslog` modules; the `summary.log` header
-records UTC rather than local time; messages from a phase that *failed* are
-not filed (only a completed merge chain dispatches).
+records UTC rather than local time; the log files are created with the
+process umask rather than portage's `0o2770 portage:portage` (so under the
+`sudo` privilege backend they come out root-owned, and an unprivileged
+`em read --delete` on them will fail).
 
 ---
 

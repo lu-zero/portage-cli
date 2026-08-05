@@ -508,7 +508,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
     // Whatever the merge chain left for the `echo` module — this process for a
     // whole-chain run, the `__worker` child for a split one — is held here and
     // replayed once the whole run finishes, as `mod_echo` does.
-    crate::elog::take_pending(cpv, &work_dir);
+    crate::elog::take_pending(cpv, &work_dir, root);
     result
 }
 
@@ -605,7 +605,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
 
     // A binpkg still runs pkg_preinst/pkg_postinst, so it has elog messages of
     // its own to hand to the end-of-run replay.
-    crate::elog::take_pending(cpv, &work_dir);
+    crate::elog::take_pending(cpv, &work_dir, root);
     result
 }
 
@@ -819,7 +819,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
     } else {
         PhaseGroup::Install
     };
-    run_inner(RunInner {
+    let result = run_inner(RunInner {
         ebuild_path,
         cpv: Some(&cpv),
         group: &group,
@@ -837,7 +837,14 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         activity,
     })
     .await
-    .with_context(|| format!("merge log: {log}"))
+    .with_context(|| format!("merge log: {log}"));
+
+    // A slot replacement runs the old package's pkg_prerm/pkg_postrm here, and
+    // those queue their `echo` share in this process — the parent only ever
+    // collects the *new* package's handoff. Print them before the worker exits
+    // or they die with it.
+    crate::elog::finalize_echo();
+    result
 }
 
 /// Resolve a repo's master repositories (depth-first), so eclasses inherited
@@ -1128,6 +1135,11 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         for sub in filter_clean_subs(subs, &features, CleanWhen::Pre) {
             let _ = std::fs::remove_dir_all(wd.join(sub));
         }
+        // The elog handoff sits at the work dir's top level, out of reach of
+        // the clean above (like `build.log`). A run killed between the worker
+        // writing it and the parent collecting it would otherwise have its
+        // messages replayed against this merge.
+        crate::elog::discard_stale_pending(wd);
     }
 
     // `-k`/`--usepkg`: extract the binpkg image *after* the clean above (which
@@ -1197,105 +1209,121 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
 
     let fetch_all_uri = matches!(group, PhaseGroup::FetchOnly { all_uri: true });
     let phases = group.phases();
-    for phase in &phases {
-        // In the merge chain, src_test only runs under FEATURES=test
-        // (an explicit `em ebuild … test` always runs it).
-        if merge_mode && phase == "test" && !features.contains("test") {
-            continue;
-        }
-
-        // Serialise the merge critical section under `--jobs`: builds (compile
-        // phases) run concurrently, but the qmerge — collision check, VDB
-        // counter, world/profile updates — must not interleave across packages.
-        // The guard is held only for this phase; non-merge phases stay parallel.
-        // The in-process gate only covers tasks in this process; parallel
-        // `__worker` children serialise on the flock (design Q2 — released by
-        // the kernel if a worker dies).
-        let _merge_guard = match (merge_gate, phase.as_str()) {
-            (Some(gate), "merge" | "qmerge") => Some(gate.lock().await),
-            _ => None,
-        };
-        let _merge_flock = match (merge_mode, work_dir, phase.as_str()) {
-            (true, Some(wd), "merge" | "qmerge") => lock_merge_flock(wd).await,
-            _ => None,
-        };
-        let phase_started = activity.as_ref().map(|a| a.phase_enter(phase));
-        let phase_result = async {
-            run_one_phase(
-                &mut shell,
-                &ebuild,
-                &repo,
-                phase,
-                &work_root,
-                root,
-                fetch_all_uri,
-            )
-            .await
-        }
-        .instrument(tracing::info_span!("phase", phase))
-        .await;
-        if let (Some(act), Some(started)) = (activity.as_ref(), phase_started) {
-            // Emit leave even on failure so dashboards do not stick mid-phase.
-            act.phase_leave(phase, started);
-        }
-        phase_result?;
-        drop(_merge_flock);
-        drop(_merge_guard);
-
-        // Portage runs ecompress/estrip at the tail of __dyn_install: the
-        // shell still holds the docompress/dostrip lists src_install built
-        // up, and everything downstream (preinst, CONTENTS, qmerge) sees
-        // the final image.
-        if phase == "install" {
-            post_process_after_install(&shell, &work_root, &features)?;
-        }
-    }
-
-    // Compile parent: dump the live variables for the Install worker to
-    // source. Lives at work_dir top-level — the Install clean doesn't touch it.
-    if group.should_dump_env() {
-        let env_data = capture_variables(&mut shell, &work_root)
-            .await
-            .map_err(|e| anyhow!("capturing environment for worker-env handoff: {e}"))?;
-        let env_path = work_root.join("worker-env");
-        std::fs::write(env_path.as_std_path(), &env_data)
-            .with_context(|| format!("writing {env_path}"))?;
-    }
-
-    // Build a binary package from the freshly-merged image + VDB entry, if asked.
-    // Runs after qmerge (VDB + CONTENTS written) and before the build tree is
-    // dropped, inside the same privilege session so ${D} ownership/xattrs are
-    // read correctly. `-B`/`BuildOnly` never ran qmerge at all, so it computes
-    // its own scratch metadata instead (`build_binpkg_standalone`) -- and,
-    // unlike `-b`'s packaging (a bonus on top of an already-successful
-    // install), a packaging failure here is the *whole* operation failing,
-    // so it propagates instead of just printing a warning.
-    if buildpkg && group.should_buildpkg() {
-        let is_buildonly = matches!(group, PhaseGroup::BuildOnly);
-        let result = if is_buildonly {
-            build_binpkg_standalone(&mut shell, &ebuild, &work_root, root).await
-        } else {
-            build_binpkg(&shell, &ebuild, &work_root, root)
-        };
-        match result {
-            Ok(path) => tracing::info!("Created binary package: {path}"),
-            Err(e) if is_buildonly => {
-                return Err(e.context("--buildpkgonly: creating binary package"));
+    // The chain's outcome is held rather than propagated, so the elog dispatch
+    // below runs whether it succeeded or failed — portage dispatches from a
+    // `finally` (`Scheduler.py`'s `_locked_task_cleanup`) for the same reason:
+    // the `ewarn`/`eerror` a phase raised on its way to dying is precisely the
+    // message elog exists to preserve, and `${T}` is about to be cleaned.
+    let chain_result: Result<()> = async {
+        for phase in &phases {
+            // In the merge chain, src_test only runs under FEATURES=test
+            // (an explicit `em ebuild … test` always runs it).
+            if merge_mode && phase == "test" && !features.contains("test") {
+                continue;
             }
-            Err(e) => tracing::warn!("--buildpkg failed for {}: {e:#}", ebuild.cpv()),
+
+            // Serialise the merge critical section under `--jobs`: builds (compile
+            // phases) run concurrently, but the qmerge — collision check, VDB
+            // counter, world/profile updates — must not interleave across packages.
+            // The guard is held only for this phase; non-merge phases stay parallel.
+            // The in-process gate only covers tasks in this process; parallel
+            // `__worker` children serialise on the flock (design Q2 — released by
+            // the kernel if a worker dies).
+            let _merge_guard = match (merge_gate, phase.as_str()) {
+                (Some(gate), "merge" | "qmerge") => Some(gate.lock().await),
+                _ => None,
+            };
+            let _merge_flock = match (merge_mode, work_dir, phase.as_str()) {
+                (true, Some(wd), "merge" | "qmerge") => lock_merge_flock(wd).await,
+                _ => None,
+            };
+            let phase_started = activity.as_ref().map(|a| a.phase_enter(phase));
+            let phase_result = async {
+                run_one_phase(
+                    &mut shell,
+                    &ebuild,
+                    &repo,
+                    phase,
+                    &work_root,
+                    root,
+                    fetch_all_uri,
+                )
+                .await
+            }
+            .instrument(tracing::info_span!("phase", phase))
+            .await;
+            if let (Some(act), Some(started)) = (activity.as_ref(), phase_started) {
+                // Emit leave even on failure so dashboards do not stick mid-phase.
+                act.phase_leave(phase, started);
+            }
+            phase_result?;
+            drop(_merge_flock);
+            drop(_merge_guard);
+
+            // Portage runs ecompress/estrip at the tail of __dyn_install: the
+            // shell still holds the docompress/dostrip lists src_install built
+            // up, and everything downstream (preinst, CONTENTS, qmerge) sees
+            // the final image.
+            if phase == "install" {
+                post_process_after_install(&shell, &work_root, &features)?;
+            }
         }
+
+        // Compile parent: dump the live variables for the Install worker to
+        // source. Lives at work_dir top-level — the Install clean doesn't touch it.
+        if group.should_dump_env() {
+            let env_data = capture_variables(&mut shell, &work_root)
+                .await
+                .map_err(|e| anyhow!("capturing environment for worker-env handoff: {e}"))?;
+            let env_path = work_root.join("worker-env");
+            std::fs::write(env_path.as_std_path(), &env_data)
+                .with_context(|| format!("writing {env_path}"))?;
+        }
+
+        // Build a binary package from the freshly-merged image + VDB entry, if asked.
+        // Runs after qmerge (VDB + CONTENTS written) and before the build tree is
+        // dropped, inside the same privilege session so ${D} ownership/xattrs are
+        // read correctly. `-B`/`BuildOnly` never ran qmerge at all, so it computes
+        // its own scratch metadata instead (`build_binpkg_standalone`) -- and,
+        // unlike `-b`'s packaging (a bonus on top of an already-successful
+        // install), a packaging failure here is the *whole* operation failing,
+        // so it propagates instead of just printing a warning.
+        if buildpkg && group.should_buildpkg() {
+            let is_buildonly = matches!(group, PhaseGroup::BuildOnly);
+            let result = if is_buildonly {
+                build_binpkg_standalone(&mut shell, &ebuild, &work_root, root).await
+            } else {
+                build_binpkg(&shell, &ebuild, &work_root, root)
+            };
+            match result {
+                Ok(path) => tracing::info!("Created binary package: {path}"),
+                Err(e) if is_buildonly => {
+                    return Err(e.context("--buildpkgonly: creating binary package"));
+                }
+                Err(e) => tracing::warn!("--buildpkg failed for {}: {e:#}", ebuild.cpv()),
+            }
+        }
+        Ok(())
     }
+    .await;
 
     // File the messages the phases left in `${T}/logging` before the build tree
     // — and with it `${T}` — goes away. This side of the split is the one that
     // still has the files, and (being the privilege-wrapped `__worker` for a
     // split build) the one that can write under `<broot>/var/log/portage`; the
     // parent picks up the `echo` module's share from the work dir afterwards.
-    if group.should_tree_drop()
-        && let Some(wd) = work_dir
+    //
+    // On success only the group that ends the chain dispatches, so a split
+    // build files once (from the worker) rather than twice. A *failure* ends
+    // the chain wherever it happens, so any group dispatches — otherwise a
+    // compile failure in the un-wrapped parent, which never tree-drops, would
+    // lose exactly the diagnostics that explain it.
+    if let Some(wd) = work_dir
+        && (group.should_tree_drop() || chain_result.is_err())
     {
         dispatch_elog(&shell, &ebuild, &work_root, wd, roots);
     }
+    chain_result?;
 
     // Successful merge chain: drop the build tree, keeping build.log.
     // FEATURES: keepwork keeps everything; noclean keeps source+temp
@@ -2197,6 +2225,10 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
         }
     }
 
+    // Both removal phases have run; file what they said before the caller
+    // deletes the scratch tree they said it in.
+    dispatch_unmerge_elog(shell, old_pkg.cpv(), old_work_root, root);
+
     Ok(())
 }
 
@@ -3053,21 +3085,70 @@ fn dispatch_elog(
     if log.is_empty() {
         return;
     }
+    let config = elog_config(shell, roots.broot);
+    crate::elog::dispatch(
+        &config,
+        ebuild.cpv(),
+        &log,
+        crate::elog::Echo::Handoff(work_dir),
+    );
+}
+
+/// The same, for the `pkg_prerm`/`pkg_postrm` of a package being removed.
+///
+/// Real portage files these too (`vartree.py`'s
+/// `_elog_process(phasefilter=("prerm", "postrm"))`) — the "after removing
+/// this, you should …" `ewarn` is one of the more useful things elog carries.
+/// They are echoed [in process](crate::elog::Echo::InProcess): the removal's
+/// scratch work root is deleted the moment it finishes, so there is nowhere to
+/// leave a handoff, and every caller is a process that finalizes its own queue.
+fn dispatch_unmerge_elog(
+    shell: &portage_repo::EbuildShell,
+    cpv: &portage_atom::Cpv,
+    old_work_root: &Utf8Path,
+    root: &Utf8Path,
+) {
+    let log = crate::elog::PackageLog::collect(&old_work_root.join("temp/logging"));
+    if log.is_empty() {
+        return;
+    }
+    let config = elog_config(shell, None);
+    crate::elog::dispatch(
+        &config,
+        cpv,
+        &log,
+        crate::elog::Echo::InProcess { root: Some(root) },
+    );
+}
+
+/// Resolve the elog settings from the live shell.
+///
+/// The log directory follows portage's `mod_save`: `PORTAGE_LOGDIR` when set,
+/// otherwise `<broot>/var/log/portage` — `broot` rather than the merge root
+/// because the logs describe what *this* `em` did, and belong where `em` runs.
+/// `broot_hint` is the caller's root model when it has one; otherwise the
+/// shell's own `BROOT`, which the build environment already set for the active
+/// topology, stands in.
+fn elog_config(
+    shell: &portage_repo::EbuildShell,
+    broot_hint: Option<&Utf8Path>,
+) -> crate::elog::Config {
     let configured = elog_setting(shell, "PORTAGE_LOGDIR");
     let logdir = if configured.trim().is_empty() {
-        roots
-            .broot
-            .unwrap_or_else(|| Utf8Path::new("/"))
-            .join("var/log/portage")
+        let broot = broot_hint
+            .map(Utf8Path::to_owned)
+            .or_else(|| shell.get_var("BROOT").map(Utf8PathBuf::from))
+            .filter(|b| !b.as_str().is_empty())
+            .unwrap_or_else(|| Utf8PathBuf::from("/"));
+        broot.join("var/log/portage")
     } else {
         Utf8PathBuf::from(configured.trim())
     };
-    let config = crate::elog::Config::new(
+    crate::elog::Config::new(
         &elog_setting(shell, "PORTAGE_ELOG_CLASSES"),
         &elog_setting(shell, "PORTAGE_ELOG_SYSTEM"),
         logdir,
-    );
-    crate::elog::dispatch(&config, ebuild.cpv(), &log, work_dir);
+    )
 }
 
 /// `FETCHCOMMAND`/`RESUMECOMMAND` from the live ebuild shell — root-aware for
