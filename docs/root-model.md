@@ -35,8 +35,28 @@ planner installed = VDB(R) ∪ VDB(P)                   # P shadows R; equal ⇒
 merge into    = P
 sysroot search = [P, R]                                # ordered, P wins; equal ⇒ [R]
 broot         = / (native/cross)  | prefix subset (Tier 3)   # see Sequencing below
-EPREFIX       = ""                                     # we use ROOT, not Gentoo-Prefix EPREFIX
+EPREFIX       = --prefix || --local || ""              # empty only for --root/host
 ```
+
+**`EPREFIX` is not cosmetic, and it is not empty under `--prefix`.** `--prefix P`
+and `--local D` both set it (`Cli::base_roots`, asserted by `cli.rs`'s
+`prefix_sets_eprefix`), and a build records it: a package merged into an overlay
+prefix has `EPREFIX="<P>"` in its `environment.bz2`.
+
+That matters because **a non-empty `EPREFIX` flips ebuilds into their
+Gentoo-Prefix code paths**, which branch on prefix *flavor*. The distinction
+they draw is `prefix-guest` (a prefix sharing the host's libc and loader) versus
+a standalone/RAP prefix that owns its own. `llvm-core/clang` is the worked
+example: without `prefix-guest` it builds with `-DDEFAULT_SYSROOT=${EPREFIX}`
+and patches its ELF-interpreter path to `${EPREFIX}/` (`clang-22.1.8.ebuild:88`
+and `:263`).
+
+An **overlay `--prefix` is semantically a prefix-guest** — it has no libc of its
+own by construction, since `R = /`. Presenting `EPREFIX` without that flavor
+makes a toolchain bake standalone-prefix assumptions into a tree that will never
+satisfy them: the resulting compiler looks for headers, `crt*.o` and its loader
+under `P`, finds none, and cannot build a hello-world. A `--local` prefix, which
+does own its libc, wants the standalone behaviour it already gets.
 
 `--prefix` never changes `config_root` or `base_root` — only the destination.
 That is the whole difference between "full offset" and "overlay":
