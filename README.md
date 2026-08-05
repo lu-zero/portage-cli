@@ -270,10 +270,13 @@ cleaned. So do the `pkg_prerm`/`pkg_postrm` of a package being removed or
 replaced.
 
 **Gaps vs portage:** no `mail`/`syslog` modules; the `summary.log` header
-records UTC rather than local time; the log files are created with the
-process umask rather than portage's `0o2770 portage:portage` (so under the
-`sudo` privilege backend they come out root-owned, and an unprivileged
-`em read --delete` on them will fail).
+records UTC rather than local time. A log directory `em` creates is mode
+`2770` like portage's, but group-owned by whoever ran `em` (`SUDO_GID`)
+rather than by `portage` — under `--privilege sudo` the portage group would
+leave the logs unmanageable by the user who asked for them, which is the
+opposite of the point. An existing directory is never re-permissioned, so a
+system where portage already owns `/var/log/portage` keeps its own scheme
+and `em`'s files inherit the portage group from it.
 
 ---
 

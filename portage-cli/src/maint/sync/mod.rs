@@ -266,13 +266,9 @@ fn portage_uid() -> Option<u32> {
 }
 
 fn parse_portage_uid(passwd: &str) -> Option<u32> {
-    passwd.lines().find_map(|line| {
-        let cols: Vec<&str> = line.split(':').collect();
-        (cols.first() == Some(&"portage"))
-            .then(|| cols.get(2))
-            .flatten()
-            .and_then(|s| s.parse().ok())
-    })
+    // `passwd` and `group` rows both carry the id in field 2, so one parser
+    // serves both — see [`crate::util::id_by_name_in`].
+    crate::util::id_by_name_in(passwd, "portage")
 }
 
 fn is_portage_uid(uid: u32) -> bool {

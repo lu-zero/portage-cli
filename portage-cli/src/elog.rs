@@ -474,8 +474,58 @@ fn pf(cpv: &portage_atom::Cpv) -> String {
     format!("{}-{}", cpv.cpn.package, cpv.version)
 }
 
+/// Create the elog directory group-owned and setgid, portage's `mod_save`.
+///
+/// The point is the *directory*: mode 2770 lets any member of the group create
+/// and remove entries in it whoever owns them, and the setgid bit puts every
+/// file that lands there in the same group. That is what keeps logs written by
+/// a privileged run (`--privilege sudo`, where the worker is real root)
+/// manageable afterwards by the unprivileged user who ran `em`. Every other
+/// backend already writes as that user — `pseudoroot` and `fakeroost` only fake
+/// `chown`, and hakoniwa maps the container's root back to the caller — so this
+/// is specifically the `sudo` case.
+///
+/// The group is the *invoking user's*, not `portage`. Naming portage's group
+/// looks like the faithful choice and is the wrong one here: under
+/// `--privilege sudo` that `chown` succeeds (root may give a directory to any
+/// group), leaving `portage:2770` — and a user who is not in the portage group,
+/// which is the usual case, still cannot manage their own logs. `SUDO_GID` is
+/// the group of whoever actually ran `em`, so it always can. Without it the
+/// creator's own group is already that answer and nothing needs changing.
+///
+/// This costs nothing against real portage's convention, because of the next
+/// paragraph: a system where portage already made `/var/log/portage`
+/// `portage:portage` keeps it, and `em`'s files land in it setgid-inherited
+/// into the portage group exactly as portage's own do.
+///
+/// **Only on creation.** An existing directory's permissions belong to the
+/// administrator (portage's own code says as much), and on a real Gentoo system
+/// portage created this one long ago — so on the common path none of this runs.
+fn ensure_elogdir(elogdir: &Utf8Path) -> std::io::Result<()> {
+    if elogdir.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(elogdir.as_std_path())?;
+
+    // Mode first, and unconditionally: the setgid bit is what makes every file
+    // written here — by any later run, under any backend — inherit the
+    // directory's group instead of the writer's.
+    let _ = rustix::fs::chmod(
+        elogdir.as_std_path(),
+        rustix::fs::Mode::from_bits_truncate(0o2770),
+    );
+    if let Some(gid) = std::env::var("SUDO_GID").ok().and_then(|g| g.parse().ok()) {
+        let _ = rustix::fs::chown(
+            elogdir.as_std_path(),
+            None,
+            Some(rustix::fs::Gid::from_raw(gid)),
+        );
+    }
+    Ok(())
+}
+
 fn write_elog_file(elogdir: &Utf8Path, name: &str, body: &str, append: bool) {
-    if let Err(e) = std::fs::create_dir_all(elogdir.as_std_path()) {
+    if let Err(e) = ensure_elogdir(elogdir) {
         crate::style::warn_line!("elog: cannot create {elogdir}: {e}");
         return;
     }
@@ -883,6 +933,42 @@ mod tests {
         );
         assert!(PackageLog::collect(&logging).is_empty());
         assert!(!logging.join("postinst").exists());
+    }
+
+    /// A directory `em` creates gets the group and setgid bit; one that already
+    /// exists is left exactly as the administrator set it.
+    #[test]
+    fn the_elogdir_is_only_shaped_when_created() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base = camino::Utf8Path::from_path(dir.path()).unwrap();
+
+        let fresh = base.join("fresh");
+        ensure_elogdir(&fresh).unwrap();
+        let mode = std::fs::metadata(fresh.as_std_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o2770, "setgid + group rwx");
+
+        // An existing directory keeps whatever it had.
+        let existing = base.join("existing");
+        std::fs::create_dir_all(existing.as_std_path()).unwrap();
+        std::fs::set_permissions(
+            existing.as_std_path(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        ensure_elogdir(&existing).unwrap();
+        assert_eq!(
+            std::fs::metadata(existing.as_std_path())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o700
+        );
     }
 
     /// A stamp is whatever is in a file name, not necessarily what `save`
