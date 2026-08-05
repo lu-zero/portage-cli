@@ -52,8 +52,7 @@ always starting a build from scratch. `Install` correctly does **not** wipe
 `work` (its doc comment already called this out: "`work/` holds the compile
 artifacts").
 
-But until this was found (chasing a real stage1 failure — see
-`todo/stage-build-shakeout.md`), `Install`'s clean step *also* wiped `temp`
+But until this was found (chasing a real stage1 failure), `Install`'s clean step *also* wiped `temp`
 — on the unstated assumption that only `work/` needed cross-phase
 persistence. That assumption is wrong for the same PMS reason `work/`
 itself needs to persist: `T` is defined the same way, "for arbitrary use...

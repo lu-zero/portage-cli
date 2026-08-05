@@ -9,8 +9,7 @@ separate `crossdev` binary, no on-disk symlink overlay.
 This is the user-facing how-to. For the design rationale (why the category
 is derived on the fly, how root/config resolution works across `--target`/
 `--prefix`/`--local`, the `PackageArch` host/target split) see
-[`root-topology.md`](./root-topology.md) and
-`../todo/root-topology-refactor.md`/`../todo/crossdev-target.md`.
+[`root-topology.md`](./root-topology.md).
 
 ## The model, briefly
 

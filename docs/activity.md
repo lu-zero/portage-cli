@@ -5,9 +5,7 @@ phase transitions) that front-ends, dashboards, and ETA consume. The flat
 `emerge.log` transcript is an **optional compatibility sink**, not the control
 plane — live status and history live in typed on-disk state instead.
 
-Design rationale and the full event schema live in
-[`todo/activity-status.md`](../todo/activity-status.md); this page is the
-user-facing how-to.
+This page is the user-facing how-to.
 
 ## What is recorded, and where
 
@@ -196,4 +194,4 @@ cat $ROOT/var/cache/edb/em-activity/history/merges.jsonl | jq -s .
 `BackgroundSink`, `LiveProjection`, and `DurationStore`. Embedders and
 `crossdev-stages` can `bus.subscribe()` for an in-process `broadcast::Receiver`
 and/or attach their own sinks, sharing one event schema with the subprocess
-wire form above. See `todo/activity-status.md` § "Plugging into emerge_atoms".
+wire form above.

@@ -47,9 +47,8 @@ portage-bench`. Locally, **prefer `cargo nextest run --workspace --exclude
 portage-bench`** — `portage-repo`'s shell/profile tests call
 `std::env::set_current_dir` (process-global) and race under `cargo test`'s
 default parallel-thread execution, producing sporadic unrelated failures
-(documented in `todo/stage-build-shakeout.md`'s finding #35 triage: of 28
-failures in one run, 24 were an unrelated `--jobs` race, 1 a real bug, 3
-pre-existing flakes from this same root cause). nextest's process-per-test
+(one triage found 28 failures in a single run: 24 an unrelated `--jobs` race,
+1 a real bug, 3 pre-existing flakes from this same root cause). nextest's process-per-test
 isolation sidesteps it. **If a plain `cargo test` run shows scattered
 failures in `build::shell`/`build::profile` tests that don't relate to your
 change, re-run under nextest before concluding you have a regression** —
@@ -177,7 +176,7 @@ sudo chroot "$SB" /usr/local/bin/em --help   # sanity check before anything real
 ```
 
 From there, drive scenarios exactly as documented in
-`docs/root-model.md`/`todo/em-stages-scenario-matrix.md`: e.g.
+`docs/root-model.md`: e.g.
 `sudo chroot "$SB" /usr/local/bin/em toolchain --setup --root /root/x -p`
 first (fast, catches resolution regressions), then the real (non-`-p`) run.
 
@@ -188,8 +187,7 @@ skipping Level-C autosolve for already-installed packages under `--prefix`,
 and `--local`'s preflight BDEPEND check not recognizing `PATH`-found host
 tools — both invisible to `-p`-only testing against a repo tree with
 nothing installed, and both requiring a *real* stage3 base (already-populated
-VDB) to reproduce. See `todo/em-stages-scenario-matrix.md` for the full
-write-up.
+VDB) to reproduce.
 
 Clean up when done: `sudo umount "$SB"/{var/cache/distfiles,sys,dev,proc,var/db/repos/gentoo}` (or `umount -R`
 for the rbind under `dev`), then `./target/release/crossdev-stages sandbox destroy --name em-test-1`.

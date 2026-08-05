@@ -292,25 +292,20 @@ compile once overnight when configure is clean.)
 ## M5 — emerge UX completeness (post-firefox, ordered by value)
 
 - [x] `-b`/`--buildpkg` + `-B`/`--buildpkgonly`: GPKG producer on merge /
-      image-only (`portage-binpkg`, PKGDIR + `Packages` index) — see
-      `todo/em-stages-and-binhosts.md` / `todo/PENDING.md` binhosts section
+      image-only (`portage-binpkg`, PKGDIR + `Packages` index)
 - [x] `quickpkg` from installed files (GPKG via VDB `CONTENTS`; CONFIG_PROTECT
-      skip by default — `todo` / `portage-cli/src/quickpkg.rs`)
+      skip by default — `portage-cli/src/quickpkg.rs`)
 - [x] `-k`/`--usepkg` local reuse + `-K`/`--usepkgonly` (no source fallback);
       also `-g`/`--getbinpkg` / `-G` remote (+ `binrepos.conf`, index cache)
 - [x] `em -C` unmerge + `-c`/`--depclean` + world file write + `-1`/`--oneshot`
-      (`todo/cli-flag-parity.md`)
 - [x] `@world`/`@system` set resolution — `expand_sets` (`90803fb`) resolves
       `@system`/`@profile` from the config-root profile and
       `@world`/`@selected`/user sets from the merge target.
 - [x] `--update --deep --newuse` — **`-uD` in-slot upgrades** and **`-N`/`-U`
-      USE-drift rebuilds** done 2026-07-18 (`todo/deep-in-slot-upgrades.md`,
-      `todo/newuse.md`); `-D`/`-e` drive `prefer_newest_slot`
-      (`todo/deep-slot-bump.md`).
+      USE-drift rebuilds** done 2026-07-18; `-D`/`-e` drive `prefer_newest_slot`.
 - [x] `--fetchonly` / `-f` — distfile (and remote-binpkg) download only; no
       build/install (`portage-cli` `PhaseGroup::FetchOnly`, 2026-07-18)
 - [ ] Remaining short flags: `-P` prune, `-r` resume, `-W` deselect
-      (`todo/cli-flag-parity.md`)
 
 ## M6 — Prefix polish
 
@@ -325,7 +320,7 @@ compile once overnight when configure is clean.)
 - [ ] Push master to origin (local `master` runs ahead of `origin/master`)
 - [ ] Run `benchmarks/bench-em-vs-emerge.sh` after each milestone; parity
       regressions block
-- [ ] brush upstream: `todo/checkpoint.md` (checkpoint/restore API)
+- [ ] brush upstream: checkpoint/restore API
 - [ ] pubgrub upstream: portage-cli#1 ↔ pubgrub-rs#120 (multi-literal
       incompatibilities)
 - [ ] Blockers/`::repo` Tier-1 enforcement (advisory today; `::repo` newly

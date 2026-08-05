@@ -11,7 +11,6 @@ Related:
 
 - Root topology: [`root-topology.md`](./root-topology.md), [`root-model.md`](./root-model.md)
 - Crossdev CLI: [`crossdev.md`](./crossdev.md)
-- Design backlog: `todo/em-stages-and-binhosts.md`, `todo/em-stages-scenario-matrix.md`
 - Live harness notes: [`test-scripts/README.md`](../test-scripts/README.md), [`testing.md`](./testing.md)
 
 ---
@@ -349,8 +348,8 @@ echo 'USE="-* bindist"' >> /path/to/stage/etc/portage/make.conf
 em --root /path/to/stage stages --stage3 -p
 ```
 
-(Whether that matches releng’s private catalyst USE is a separate
-question — often it will not; see `todo/done/stage3-vs-real-comparison.md`.)
+(Whether that matches releng's private catalyst USE is a separate
+question — often it will not.)
 
 ---
 

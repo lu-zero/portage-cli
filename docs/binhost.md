@@ -4,9 +4,7 @@
 containers) locally (`-b`/`-B`, `-k`/`-K`) and over the network (`-g`/`-G`,
 `binrepos.conf`/`PORTAGE_BINHOST`). This is the how-to: what makes two
 binpkgs interchangeable, and the recipes for running this across boards,
-cross-compilation targets, and a shared cache. For the underlying design and
-implementation history (scenario matrix, landing commits) see
-[`../todo/binpkg-subtargets.md`](../todo/binpkg-subtargets.md).
+cross-compilation targets, and a shared cache.
 
 ## Identity model
 
@@ -110,9 +108,7 @@ em --target "$T" -k -e @system
 
 This is code-complete and unit-tested (per-entry PKGDIR dual index, no
 fallback to the target index when the host index is unavailable); a live
-verification against a real crossdev sandbox is still tracked as open in
-[`../todo/binpkg-subtargets.md`](../todo/binpkg-subtargets.md)'s success
-criteria.
+verification against a real crossdev sandbox is still WIP.
 
 ### Recipe 4 — remote binhosts (`binrepos.conf`)
 

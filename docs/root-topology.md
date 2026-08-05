@@ -13,8 +13,8 @@ assignment in `run_phase`).
 > targets — but as two new fields on the existing flat struct, not the
 > `RootSet` enum below; the enum itself, `CrossArch`, and the
 > `provider.packages` privatization are still proposal, not present reality.
-> See the "Status" section at the bottom and `todo/root-topology-refactor.md`
-> for exactly what landed vs. what's still open.
+> See the "Status" section at the bottom for exactly what landed vs. what's
+> still open.
 
 ## The four roles
 
@@ -97,10 +97,9 @@ The dep-class → role map is fixed by PMS table 8.2:
 
 Getting a build right is, mechanically, getting this map right. Almost every
 hard bug in the cross/stage work has been one role silently standing in for
-another.
-// Specific findings are documented in todo/stage-build-shakeout.md:
-// #17 CTARGET leak, #18 CHOST invisible, #28–#33 Host/Target root conflation,
-// #29 build-machine pkgconfig searching the target sysroot.
+another — CTARGET leaking sysroot-wide, CHOST invisible to subprocesses,
+Host/Target root conflation, build-machine pkgconfig searching the target
+sysroot.
 
 ## The variant enum (target design)
 
@@ -238,7 +237,7 @@ C=/ (ro)  B=T=<offset>  S=T  BR=/ (ro)    CBUILD==CHOST
   `is_overlay()`); satisfaction checking then reads host ∪ prefix VDB
   (`Avail::initial_bdepend`/`load_host_installed`), so a tool already built
   into the prefix by an earlier run is recognized without rebuilding.
-  Fixed 2026-07-09 — see `todo/root-topology-refactor.md`.
+  Fixed 2026-07-09.
 
 **(2b) `--local`: self-contained deployment (any host).** The prefix at
 `~/.gentoo` is standalone — base = target = `~/.gentoo`, carrying its own VDB,
@@ -304,7 +303,6 @@ C=B=T=<offset>/usr/<T>  S=<offset>/usr/<T>  BR=<offset>     CBUILD≠CHOST
   the sysroot subdir. The jinja2/perl/Host-BDEPEND routing bugs were
   all about BDEPEND edges landing in `base_roots()` instead of `/` or the
   sysroot.
-  // Findings #28–#33 are documented in todo/stage-build-shakeout.md.
 - If the host *is* Gentoo and complete, (2a) applies and BR can read `/` — but
   the session deliberately kept it self-contained under the offset to avoid
   depending on the real machine.
@@ -333,9 +331,7 @@ toolchain.
   `dev-python/jinja2` for `systemd-utils`) runs on BROOT under the *host's*
   python — must be installed for the host python target, not the target one.
   Unsatisfied BDEPEND must schedule a **`MergeRoot::Host` merge** into BROOT,
-  not into the target sysroot.
-  // The #28/#30/#31/#32 bug class is documented in todo/stage-build-shakeout.md.
-  All have been fixed.
+  not into the target sysroot. All instances of this bug class have been fixed.
 - **Genuine bootstrap SCCs.** `gawk → bison → gettext → libxml2 → meson →
   python → gawk` is a real strongly-connected component with no valid linear
   order. Broken by seeding one member (`--nodeps`), exactly as catalyst/portage
@@ -344,10 +340,9 @@ toolchain.
 
 **Not a hazard, despite prior claims:** "some ebuilds just can't
 cross-build." Every such case in the session turned out to be a
-misdiagnosed env-var bug (build-machine pkgconfig searching the target sysroot;
-CTARGET leak; CHOST invisible to subprocesses). Real cross builds a full
-// Findings #29 (fixed by `BUILD_PKG_CONFIG_LIBDIR` → outer EROOT in `de87153`),
-// #17, and #18 are in todo/stage-build-shakeout.md.
+misdiagnosed env-var bug (build-machine pkgconfig searching the target sysroot,
+fixed by `BUILD_PKG_CONFIG_LIBDIR` → outer EROOT in `de87153`; CTARGET leak;
+CHOST invisible to subprocesses). Real cross builds a full
 target-native stage3 *without ever executing a target binary on the host* —
 the build phase runs the host compiler producing target binaries that don't
 run until installed on target hardware. `qemu-user` is at most a per-ebuild
@@ -445,8 +440,6 @@ enable. `--root-deps=rdeps` (forced on for this path, mirroring
 not the RDEPEND half sharing the same `COMMON_DEPEND` — this is the exact
 scenario the BROOT-satisfaction fix above now covers. Historical
 "stage1 complete" claims never actually hit this because every prior run reused a
-// Session status and pending work are in todo/session-status-2026-07-05-needs-review.md
-// and todo/PENDING.md.
 sysroot that had already accumulated `perl`/`portage`/etc. from earlier,
 unrelated work in the same sysroot across many sessions — nobody had
 bootstrapped a genuinely empty `--root` from absolute zero before.
@@ -532,9 +525,8 @@ Cross needs three things the native cases don't: a way to see
 `cross-<tuple>/<pkg>` as buildable packages, the sysroot's `make.conf`
 (pinning `CHOST`/`CBUILD`/`CTARGET`), and the two-stage gcc bootstrap. The
 `cross-<tuple>` packages are now **derived on the fly** from `::gentoo` via a
-`Location::Alias` repos.conf entry (no on-disk symlink overlay).
-// Cross-derive-on-the-fly design is in todo/cross-derive-on-the-fly.md.
-written by `write_alias_repo_conf` in
+`Location::Alias` repos.conf entry (no on-disk symlink overlay), written by
+`write_alias_repo_conf` in
 [`crossdev/mod.rs`](../portage-cli/src/crossdev/mod.rs):
 
 ```
@@ -556,15 +548,13 @@ em --prefix <P> --target <tuple> stages --stage1
 `etc/portage/{make.conf,make.profile}` via `write_sysroot_config` (the
 `make.conf` that pins the triples and sets `PKG_CONFIG_*`/
 `BUILD_PKG_CONFIG_LIBDIR`). The per-target
-// Finding #29 fix is documented in todo/stage-build-shakeout.md.
 CTARGET/ABI-CFLAGS env is written by `write_cross_env` into the config
 overlay (`<prefix>/etc/portage` under `--prefix`/`--local`, host
 `/etc/portage` otherwise) — unprivileged under `--prefix`. `--setup` runs `BootstrapKind::Cross` (two-stage gcc) and implies
 `--init-target`. `--target <tuple>` is a single global flag serving both
 roles — setting a target up (`crossdev`) and using an already-set-up one
 later (`stages`, plain `em <atom>`) — not two separate flags that could
-disagree (crossdev used to have its own local `-t`; retired 2026-07-09,
-see `todo/root-topology-refactor.md`).
+disagree (crossdev used to have its own local `-t`; retired 2026-07-09).
 
 ### Lifecycle × topology map
 
@@ -628,8 +618,7 @@ variant refactor's payoff is that both sides ask
   (`run_phase` sets `PORTAGE_CONFIGROOT`/`ROOT`/`SYSROOT`/`BROOT`), per-class
   VDB checks, `MergeRoot` on solver nodes, Host-BDEPEND scheduling,
   `BUILD_PKG_CONFIG_LIBDIR` for cross. **`satisfaction_root(class)` — landed
-  2026-07-09** (see `todo/root-topology-refactor.md` for the full story):
-  scoped down from a full `RootTopology`/`RootSet`-enum replacement to two
+  2026-07-09**, scoped down from a full `RootTopology`/`RootSet`-enum replacement to two
   new fields on the existing `Roots` (`broot`, `is_cross_arch`) plus a
   `satisfaction_root(DepClass)` method — same payoff (one `Roots` value
   answers `BDEPEND`/`DEPEND`/`RDEPEND`/`IDEPEND`/`PDEPEND` without a second
@@ -646,8 +635,7 @@ variant refactor's payoff is that both sides ask
   Landed shortly after, same session: `--prefix`'s unsatisfied BDEPEND now
   merges into the prefix (never the read-only host) and its satisfaction
   check weaves host ∪ prefix VDB — `Cli::broot()` returns `outer_roots()`
-  for the overlay case instead of a host-anchored `Roots`; see
-  `todo/root-topology-refactor.md`'s "Behaviour changes" for the full story.
+  for the overlay case instead of a host-anchored `Roots`.
   Also resolved, same session: `--root`'s config resolution (this doc's own
   § "Override semantics" table below now reflects it) — `Roots::config()`
   keeps its original `--config-root`-or-`--root` default (own everything is
@@ -656,18 +644,16 @@ variant refactor's payoff is that both sides ask
   `Roots::config_root_explicit()` (only ever `--config-root`, matching real
   eselect's `profile.eselect`, which never derives a config root from `ROOT`
   alone) replaces `config()` in `select/mod.rs`.
-  // Behaviour changes are in todo/root-topology-refactor.md.
   The full story includes why the first attempt (making `config()` itself
   parity-follow `ROOT=`) broke `em select` and was reverted.
 - **Not pursued** — the `RootSet` enum (`Single`/`Dual`/`Overlayed`) as
   `Roots`'s storage representation, and a `CrossArch` triples type (the plain
   `is_cross_arch: bool` covers `satisfaction_root`'s one cell that needs it).
-- ✅ **Privatizing `provider.packages` behind `package_data()` — landed
+- **Privatizing `provider.packages` behind `package_data()` — landed
   2026-07-09.** A different crate, a different invariant (`host_aliases`) from
   the `Roots`-accessor confusion this pass targeted, but the same underlying
   lesson (a raw lookup bypassing an alias-resolving accessor). Found 12 more
   instances of the bug class beyond the already-fixed `dependency_graph` one.
-  // The full list and fix are in todo/root-topology-refactor.md.
 - **Deferred (out of scope here)** — Tier 3 mutable-BROOT bootstrap on a
   foreign host (`build-environment.md`), zero-config merged sysroot via
   `fuse-overlayfs` (M3).

@@ -91,8 +91,7 @@ BROOT is the prefix itself (`Cli::base_roots()`'s `--local` branch,
 during a `--local` build are found via the shell's inherited `PATH`, not by
 depending on the host's portage-tracked VDB state, so a finished `--local`
 prefix can be moved/used standalone without carrying an implicit host
-dependency. **Known gap (found 2026-07-12, see
-`todo/em-stages-scenario-matrix.md`)**: `preflight.rs`'s BDEPEND check has
+dependency. **Known gap (found 2026-07-12)**: `preflight.rs`'s BDEPEND check has
 no equivalent "found via `PATH`, no VDB entry needed" concept — it only
 checks VDB entries at the BROOT it's given, which for `--local` is the
 prefix's own (empty, for a from-scratch build) VDB. This makes a `--local`
@@ -188,7 +187,7 @@ cross-compiler crossdev's toolchain bootstrap already built and that
 `riscv64-unknown-linux-gnu-gcc` on `PATH` resolves to. See
 `portage-cli/src/crossdev/mod.rs`'s module doc for the full distinction —
 conflating the two is exactly what caused a hard-to-read GCC self-bootstrap
-failure (`todo/stage-build-shakeout.md` finding #19).
+failure.
 
 Portage's depgraph (_emerge_, EAPI 7+) routes each dep string with an explicit
 **`(dep_root, priority)`** pair:
@@ -435,8 +434,7 @@ to `/`** (a `MergeRoot::Host` entry), not be silently broot-filtered. The
 offset `@system` gap (em 177 vs emerge 180; the `nghttp2/nghttp3/ngtcp2`
 host-side build copies) is exactly this. Once the solver emits
 `(cpn, slot, MergeRoot::Host)` entries for native offsets, Tier 1 reaches
-parity. Tracked in `todo/em-root-characterization.md` and
-`todo/nonemptytree-bdeps-gap.md`.
+parity.
 
 ### Tier 2 — crossdev (`{target}-emerge`, `CBUILD ≠ CHOST`)
 

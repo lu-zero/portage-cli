@@ -373,7 +373,7 @@ Stages, in order:
     dropping edges already satisfied on BROOT or by earlier plan entries. Native
     `--emptytree` skips the trim: the provider returns the full deep closure
     straight from the solve (`rebuild_tree` ⇒ un-pruned `vd.merged`), so there is
-    no post-solve re-list (see `todo/em-emptytree.md`).
+    no post-solve re-list.
 9. **Render** (`output.rs`) — `pretty` (emerge `-p`/`-pv`), `json`, or `tree`.
    Verbose `-pv` also shows per-package download size and a "Size of downloads"
    total (`download_size.rs`): distfiles from each package's `Manifest`,
