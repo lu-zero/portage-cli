@@ -186,8 +186,8 @@ mod tests {
     /// virtual identity (category `cross-riscv64-unknown-linux-gnu`) must
     /// win over whatever category the real on-disk ebuild's path implies
     /// (`sys-devel`, from the real `gcc` ebuild it's aliased to) — this is
-    /// the CPV/CATEGORY-preservation invariant from
-    /// `todo/cross-derive-on-the-fly.md`, "The merge-path decoupling".
+    /// the CPV/CATEGORY-preservation invariant known as "the merge-path
+    /// decoupling".
     #[test]
     fn with_cpv_keeps_the_given_identity_not_the_paths() -> Result<()> {
         let dir = tempfile::tempdir().map_err(io_err(std::path::Path::new("tempdir")))?;

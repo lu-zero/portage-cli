@@ -265,8 +265,7 @@ pub fn build_env_key_from_fields(fields: &BTreeMap<&str, &str>) -> String {
 /// empty key (unkeyed/no ISA-relevant flags), `"native"` for `"__native__"`,
 /// else the first 12 hex chars of the MD5 of the full key. Shared by
 /// `em maint binpkg list`'s KEY column and `em maint binpkg fingerprint`, so
-/// the two correlate and the slug is usable as a PKGDIR path component
-/// (`todo/binpkg-subtargets.md` recipe 1).
+/// the two correlate and the slug is usable as a PKGDIR path component.
 pub fn short_build_env_key(key: &str) -> String {
     match key {
         "" => "generic".to_string(),

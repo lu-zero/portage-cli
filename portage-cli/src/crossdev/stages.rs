@@ -17,7 +17,6 @@
 //!   cross-only —
 //!   `toolchain.eclass` gates every stage1 affordance on `is_crosscompile`, so a
 //!   native gcc is always `--enable-shared` and *requires* a full in-ROOT libc.
-// Root characterization details are documented in todo/em-root-characterization.md.
 //!
 //! Each step is one `em`-equivalent merge with a per-step USE override and the
 //! `--nodeps` / `headers-only` bootstrap flags crossdev uses (`/usr/bin/crossdev`
@@ -89,7 +88,6 @@ impl Libc {
 /// single typed decision point for "build a toolchain into a fresh root": the
 /// cross-vs-native split that the driver previously re-derived at each call
 /// site.
-// Cross-support self-review details are in todo/cross-support-self-review.md.
 #[derive(Debug, Clone)]
 pub enum BootstrapKind {
     /// Cross-compilation into a `<CTARGET>` sysroot (`CBUILD ≠ CHOST`): atoms
@@ -376,7 +374,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
 ///
 /// Used when `sys-devel/gcc`'s resolved version needs a newer
 /// `cross-<CTARGET>/gcc` than what `gcc-config` currently has active — see
-/// `stage1()` in `crossdev/mod.rs` and `todo/stage-build-shakeout.md`.
+/// `stage1()` in `crossdev/mod.rs`.
 ///
 /// `version` pins the exact `sys-devel/gcc` version just resolved (e.g.
 /// `"16.1.1_p20260606"`), via an `=` atom rather than a bare `cross-<CTARGET>
@@ -576,8 +574,7 @@ mod tests {
     /// Real-category bypass atoms (`sys-apps/baselayout`, `virtual/os-headers`)
     /// are intentionally not cross-aliased — they're host/EPREFIX-arch packages
     /// merged via their real category — so they're filtered out before the
-    /// check. See `todo/cross-derive-on-the-fly.md`, "Keeping the build plan
-    /// honest".
+    /// check, keeping the build plan honest.
     #[test]
     fn toolchain_plan_atoms_are_all_in_packages_set() {
         use portage_atom::Dep;
@@ -658,8 +655,7 @@ mod tests {
     fn self_contained_cross_gets_baselayout_and_drops_debuginfod() {
         // A from-scratch `--root DIR` crossdev EPREFIX has no host-shared
         // merged-usr skeleton or libs — same needs as native, found 2026-07-03
-        // doing a real from-scratch cross-stage1 test (see
-        // todo/stage-build-shakeout.md).
+        // doing a real from-scratch cross-stage1 test.
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let plan = toolchain_plan(&BootstrapKind::Cross(t), true);
         assert_eq!(labels(&plan)[0], "baselayout");

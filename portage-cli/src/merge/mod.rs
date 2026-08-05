@@ -294,7 +294,6 @@ pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
 // silently built into the sysroot instead — the package "succeeded" but
 // never became available where the later build that needed it actually
 // looked.
-// Design details are in todo/stage-build-shakeout.md.
 fn entry_roots<'a>(
     planned: &query::depgraph::PlannedMerge,
     roots: &'a portage_resolve::Roots,
@@ -312,7 +311,6 @@ fn entry_roots<'a>(
 // target's otherwise. Mirrors [`entry_roots`]'s selection — see
 // `run_merge_plan`'s `dual_pkgdir` for why these can genuinely differ under
 // `--target`.
-// Binpkg subtargets design is in todo/binpkg-subtargets.md S1/S4.
 fn entry_binpkg_index<'a>(
     planned: &query::depgraph::PlannedMerge,
     target: Option<&'a portage_binpkg::BinpkgIndex>,
@@ -410,7 +408,6 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // same PKGDIR as `roots`, so this is a no-op there — deliberately compared
     // by resolved path, not gated on "is --target active", so a plain `--root`
     // whose config-root make.conf
-    // Binpkg subtargets design (S1/S4) is in todo/binpkg-subtargets.md.
     // sets a different PKGDIR is still handled correctly.
     let target_pkgdir = binpkg::resolve_pkgdir_for_roots(roots).await;
     let host_pkgdir = binpkg::resolve_pkgdir_for_roots(&host_roots).await;
@@ -424,7 +421,6 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // `--keep-going` run once dozens of packages have already silently died.
     // Found live during stage build shakeout: a stage3 --buildpkg attempt
     // hit a permission-denied PKGDIR (fixed separately — resolve_pkgdir is now
-    // Design details are in todo/stage-build-shakeout.md.
     // root-aware), and each failure surfaced as an unexplained, silent worker
     // death rather than the single clear error this check now gives instead.
     // Fetch-only never writes PKGDIR (remote binpkg cache is under work_base).

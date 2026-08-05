@@ -57,8 +57,7 @@ impl CrossContext {
     /// that false positive made a same-arch offset build's `DEPEND` stay
     /// unconditionally pinned to the target sysroot in `solve.rs` instead of
     /// dropping host-satisfied edges — `em --root <dir> sys-devel/gcc`
-    /// pulled 127 packages where real `ROOT=<dir> emerge` pulls 16. See
-    /// `todo/root-topology-refactor.md`.
+    /// pulled 127 packages where real `ROOT=<dir> emerge` pulls 16.
     pub fn is_cross_arch(&self) -> bool {
         match (self.chost.as_deref(), self.cbuild.as_deref()) {
             (Some(c), Some(b)) => c != b,
@@ -104,7 +103,7 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     // regular Target one, duplicate entries preflight then rejects the
     // order of. `roots.broot() == None` means "trivially equals
     // merge_root" (see `Roots::broot`'s own doc), so that case reads as
-    // "doesn't differ" correctly too. See todo/dedup-availability-walks.md.
+    // "doesn't differ" correctly too.
     let broot_differs = roots.broot().is_some_and(|b| b.as_str() != target.as_str());
     let (chost, cbuild) = read_chost_cbuild(&sysroot);
     let cross_arch = match (chost.as_deref(), cbuild.as_deref()) {

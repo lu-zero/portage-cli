@@ -2739,7 +2739,7 @@ fn host_installed_satisfies_cross_bdepend_with_bdeps() {
 /// for `dev-python/jinja2` built for the wrong python target) never
 /// scheduled a Host-root rebuild, so `em` silently omitted it from the
 /// plan and the target package's own build later failed for a "missing"
-/// dependency `em` itself dropped. See todo/stage-build-shakeout.md.
+/// dependency `em` itself dropped.
 #[test]
 fn cross_target_build_pulls_unsatisfied_bdepend() {
     let mut repo = InMemoryRepository::new();

@@ -43,8 +43,6 @@ pub struct PlannedMerge {
     /// `ebuild_path` was resolved through. Kept as a real `Cpv`, not a
     /// formatted string, so nothing downstream has to re-derive it by
     /// parsing a path or string.
-    // Design note: this decoupling is documented in todo/cross-derive-on-the-fly.md,
-    // "The merge-path decoupling".
     pub cpv: Cpv,
     /// Absolute path to the ebuild.
     pub ebuild_path: camino::Utf8PathBuf,
@@ -128,7 +126,6 @@ pub struct DepgraphOpts<'a> {
     /// target always needs it; `em stages --stage1` building ordinary packages
     /// against an already-working toolchain should not), not of the sysroot's
     /// CHOST/CBUILD alone.
-    // See todo/stage-build-shakeout.md for design rationale.
     pub root_deps_rdeps: bool,
     /// `--deep`: re-examine transitive deps. With [`Self::update`], enables
     /// in-slot upgrades for packages in the graph (emerge `-uD`). Alone, bumps
@@ -188,7 +185,7 @@ pub struct DepgraphOpts<'a> {
     /// into the plan too rather than stopping the chain halfway. Gated
     /// behind an explicit flag because there is no emerge parity to validate
     /// against and the policy can revert an upgrade a dependent has no
-    /// satisfying version for — see todo/slot-chain-completion.md.
+    /// satisfying version for.
     pub complete_graph: bool,
 }
 
@@ -324,9 +321,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         repo::AcceptKeywords::new(accept_arch, &accept_keywords, package_accept_keywords);
     // Likewise fold global ACCEPT_LICENSE with per-package package.license.
     let accept_licenses = repo::AcceptLicenses::new(accept_license, package_license);
-    // Same fold for ACCEPT_PROPERTIES/ACCEPT_RESTRICT — see
-    // `todo/accept-properties-restrict.md`'s consolidation decision for why
-    // these reuse `AcceptLicenses`/`AcceptLicense` rather than new types.
+    // Same fold for ACCEPT_PROPERTIES/ACCEPT_RESTRICT — these reuse
+    // `AcceptLicenses`/`AcceptLicense` rather than new types.
     let accept_properties = repo::AcceptProperties::new(accept_properties, package_properties);
     let accept_restrict = repo::AcceptRestrict::new(accept_restrict, package_restrict);
 
@@ -339,7 +335,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // checked against `target_installed_cpvs`: a real target system commonly
     // has its own same-named, same-version package (a *different* build, for
     // a different root) which would otherwise wrongly look "already
-    // installed" here — see `todo/stage-build-shakeout.md` #32.
+    // installed" here.
     let host_installed_cpvs: std::collections::HashSet<Cpv> = host_installed
         .iter()
         .map(|e| Cpv::new(*e.package.cpn(), e.version.clone()))
@@ -820,7 +816,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // sole reason some other, not-yet-installed package (e.g.
             // `sys-libs/libxcrypt`, pulled in only via `virtual/libcrypt`'s RDEPEND)
             // is required; scanning only `order` made such a package look orphaned
-            // and wrongly trimmable. See `todo/stage-build-shakeout.md`.
+            // and wrongly trimmable.
             let full_order: Vec<(PortagePackage, Version)> = provider
                 .install_order(&solution)
                 .into_iter()
@@ -860,8 +856,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // merely pulled as a satisfied dep (e.g. python:3.13 under a
                 // `python` target) must not be re-listed. Set provenance plays
                 // no part: `emerge @world` reinstalls its members exactly as it
-                // reinstalls a named atom (measured, see
-                // todo/selective-resolution.md).
+                // reinstalls a named atom (measured).
                 || (!selective
                     && root_pkgs
                         .iter()
@@ -967,7 +962,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             }
             // Native --emptytree lists the full deep closure straight from the solve
             // (the provider returns un-pruned deps under `rebuild_tree`); no post-solve
-            // re-list. See todo/em-emptytree.md "AGREED REDESIGN".
+            // re-list.
 
             let edges: Vec<_> = provider
                 .dependency_graph(&solution)
@@ -1117,8 +1112,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // ones genuine chain repair can fix: an installed package whose
             // pin the plan just broke, not itself replaced this run. Each one
             // is re-targeted as a root dep by its own cpn/slot so the solver
-            // picks a version compatible with the rest of the plan — see
-            // todo/slot-chain-completion.md.
+            // picks a version compatible with the rest of the plan.
             let candidates: Vec<(PortagePackage, PortageVersionSet)> =
                 conflicts::retained_owners(&outcome.dep_conflicts)
                     .filter(|c| repaired.insert(c.installed_cpn))
@@ -1505,9 +1499,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // package (`sys-devel/gcc`) it was cloned from, while `cpv`/the
             // displayed plan above still reports the cross cpv (the ebuild's
             // own CPV text, parsed back out of the directory name by
-            // `Ebuild::from_path`, must match for VDB/gcc-config routing —
-            // see `todo/cross-derive-on-the-fly.md`, "The merge-path
-            // decoupling").
+            // `Ebuild::from_path`, must match for VDB/gcc-config routing).
             let real_cpn = data.real_cpn_of.get(cpn).copied().unwrap_or(*cpn);
             let real_cpv = Cpv::new(real_cpn, ver.clone());
             let ebuild_path = repo_path_of(&real_cpv)

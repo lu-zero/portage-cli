@@ -1,7 +1,6 @@
 //! Gentoo Portage command-line library backing the `em` binary.
 
 // Structured merge activity events (library channel + on-disk sinks).
-// Activity status design is documented in todo/activity-status.md.
 /// Persistent active `--prefix`/`--local` registration (`em active`).
 pub(crate) mod active;
 pub mod activity;

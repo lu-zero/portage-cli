@@ -14,7 +14,6 @@
 //! single solve balloons the Target closure (the Tier 1 aliasing blocker).
 //! Keeping the Target solve single-rooted preserves its parity (12 packages
 //! for curl); the host copies are derived against the host VDB afterwards.
-// Nonemptytree BDEPEND gap design is in todo/nonemptytree-bdeps-gap.md.
 //!
 //! `cross.active` (any offset/dual-root context — plain `--root`/`--prefix`
 //! included, not just cross-arch) can, for some invocations (e.g. crossdev's
@@ -24,7 +23,6 @@
 //! its availability and seen-set from whatever `MergeRoot::Host` entries are
 //! already present, and only fills genuine remaining gaps (the
 //! `dev-perl/Digest-HMAC` duplicate finding).
-// Root topology design is in todo/root-topology-refactor.md.
 //!
 //! Host copies reuse the Target solve's version for a CPN (same arch, same
 //! repo), falling back to the newest *accepted* (keyword/mask/license) repo
@@ -162,9 +160,9 @@ pub fn compute(
 /// package's unsatisfied BDEPEND/IDEPEND edge — so a *top-level* BDEPEND/
 /// IDEPEND gap reaching here means this walk's `Avail` view and the
 /// solver's own `host_installed` view disagreed, or a post-solve trim
-/// dropped a needed `@host` entry: worth surfacing, see
-/// `todo/dedup-availability-walks.md` Step 4. A copy's own recursed-into
-/// edges never trigger this: those packages never went through the solver,
+/// dropped a needed `@host` entry: worth surfacing. A copy's own
+/// recursed-into edges never trigger this: those packages never went
+/// through the solver,
 /// nothing else schedules their build deps.
 fn visit_unsatisfied(
     ctx: &Ctx<'_>,
@@ -190,7 +188,7 @@ fn visit_unsatisfied(
             }
             // Developer signal, not user-facing: the solver should already
             // cover this under cross.active, so a hit here means that path
-            // missed one (todo/dedup-availability-walks.md Step 4).
+            // missed one.
             if top_level && class != "DEPEND" {
                 tracing::debug!("host_copies: top-level {class} gap for {cpn} (from {pkg})");
             }
@@ -272,7 +270,7 @@ mod tests {
     }
 
     /// Regression test for the `5989eb1` fix (the `dev-perl/Digest-HMAC`
-    /// duplicate-plan-entry incident, `todo/root-topology-refactor.md`): when
+    /// duplicate-plan-entry incident): when
     /// the solver's own dual-root expansion has already scheduled a
     /// `MergeRoot::Host` node for a CPN (simulating crossdev's host-arch
     /// tools), `compute` must not re-derive or duplicate it. Before that fix

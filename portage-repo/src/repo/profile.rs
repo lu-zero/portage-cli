@@ -1279,8 +1279,8 @@ mod tests {
         // profiles/arch/riscv/packages has `-*sys-apps/busybox`, removing
         // `default/linux`'s `*sys-apps/busybox` system add. Found 2026-07-03
         // building the riscv profile's packages.build list for the first
-        // time (see todo/stage-build-shakeout.md) — no prior profile stack
-        // this codebase exercised happened to use this removal form.
+        // time — no prior profile stack this codebase exercised happened to
+        // use this removal form.
         let dir = tempfile::tempdir().unwrap();
         let parent = make_profile(&dir, "parent", &[]);
         std::fs::write(

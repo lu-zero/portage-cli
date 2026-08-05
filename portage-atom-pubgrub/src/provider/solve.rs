@@ -345,7 +345,7 @@ impl PortageDependencyProvider {
         // real edges. Do NOT broot-prune host-satisfied build deps — under emptytree
         // the host (BROOT) seed is for bootstrap version choice, ordering/cycle-break
         // and action tags, never for membership. `emptytree_native` is `!cross.active`,
-        // so this precedes the cross paths. See todo/em-emptytree.md "AGREED REDESIGN".
+        // so this precedes the cross paths.
         if self.rebuild_tree {
             return vd.merged.clone();
         }
@@ -362,8 +362,7 @@ impl PortageDependencyProvider {
         // host-satisfied DEPEND the same way BDEPEND/IDEPEND already are.
         // Found 2026-07-11: without this, `em --root <dir> sys-devel/gcc`
         // pulled 127 packages (perl, portage, gnupg, eselect, rsync, ...)
-        // where real `ROOT=<dir> emerge sys-devel/gcc` pulls 16 — see
-        // `todo/root-topology-refactor.md`.
+        // where real `ROOT=<dir> emerge sys-devel/gcc` pulls 16.
         if self.cross_active && self.is_cross_arch && package.merge_root() == MergeRoot::Target {
             // A built package's BDEPEND is strictly required to build it, so
             // (mirroring `broot_filtered`'s native equivalent) `--with-bdeps`
@@ -401,7 +400,7 @@ impl PortageDependencyProvider {
         // outright whenever the *host* happens to already have it installed
         // (e.g. `em --root <dir> sys-devel/gcc` on a host that already has
         // gcc) — collapsing the plan to 0 packages instead of adding gcc to
-        // the target. Found 2026-07-11, see `todo/root-topology-refactor.md`.
+        // the target. Found 2026-07-11.
         if !package.is_virtual() && !self.host_installed.is_empty() {
             return Dependencies::Available(broot_filtered(self, vd));
         }
@@ -454,8 +453,7 @@ fn cross_target_runtime_deps(
     // live: this call omitted it entirely, so a target package's unsatisfied
     // BDEPEND (e.g. sys-apps/systemd-utils needing dev-python/jinja2 built for
     // a python target the host's installed jinja2 lacked) never scheduled a
-    // rebuild; the package's own configure/build then failed instead. See
-    // todo/stage-build-shakeout.md.
+    // rebuild; the package's own configure/build then failed instead.
     if include_bdepend {
         append_unsatisfied_broot(&mut out, vd.bdepend(), provider, vd, MergeRoot::Host);
     }
@@ -496,7 +494,7 @@ fn host_native_deps(
 /// `sys-apps/portage`, `app-crypt/gnupg`, `app-admin/eselect`,
 /// `net-misc/rsync`) transitively via `virtual/os-headers` →
 /// `sys-kernel/linux-headers` → `dev-lang/perl` — a 127-package plan for a
-/// real `emerge`'s 16. See `todo/root-topology-refactor.md`.
+/// real `emerge`'s 16.
 fn broot_filtered(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
@@ -545,8 +543,7 @@ fn broot_filtered(
 /// was never checked at all. `Root`/`UseDecision` are excluded (never
 /// virtual-satisfiable): they aren't a real installable alternative, and
 /// REQUIRED_USE/ceding machinery must keep deciding them, not have them
-/// silently treated as "the host already has it". See
-/// `todo/root-topology-refactor.md`.
+/// silently treated as "the host already has it".
 fn host_satisfied_on_broot(
     provider: &PortageDependencyProvider,
     vd: &VersionData,

@@ -1,7 +1,7 @@
 //! Persistent "active" `--prefix` / `--local` for dogfooding.
 //!
-//! Phase 3 of `todo/select-toolchain.md`: register a default topology so bare
-//! `em <pkg>` picks up a prefix/local without repeating flags every time.
+//! Registers a default topology so bare `em <pkg>` picks up a prefix/local
+//! without repeating flags every time.
 //! Explicit `--prefix` / `--local` / `--root` always win over the registration.
 //!
 //! State lives under `$XDG_STATE_HOME/em/active` (default

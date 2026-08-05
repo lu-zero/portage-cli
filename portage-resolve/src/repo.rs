@@ -482,8 +482,7 @@ pub type AcceptLicenses = AcceptOverlay;
 /// accept-list + per-package atom-matched overlay" over the identical
 /// [`portage_repo::AcceptSet`] engine, constructed group-free via
 /// [`portage_repo::AcceptSet::from_tokens_plain`] (`PROPERTIES`/`RESTRICT`
-/// have no `@GROUP` concept). See `todo/accept-properties-restrict.md`'s
-/// consolidation decision.
+/// have no `@GROUP` concept).
 pub type AcceptProperties = AcceptOverlay;
 /// `ACCEPT_RESTRICT` + `package.accept_restrict` — see [`AcceptProperties`].
 pub type AcceptRestrict = AcceptOverlay;
@@ -738,9 +737,8 @@ pub struct RepoData {
     /// (`mod.rs`) to find the real on-disk file for a derived cross cpv — but
     /// that's only half of the merge-path decoupling. `Ebuild::from_path`
     /// still re-derives CATEGORY from that real path's text, which loses the
-    /// cross category on an actual merge; see `todo/cross-derive-on-the-fly.md`,
-    /// "The merge-path decoupling", before wiring a real producer of
-    /// `Location::Alias` entries.
+    /// cross category on an actual merge — this should be resolved before
+    /// wiring a real producer of `Location::Alias` entries.
     pub real_cpn_of: HashMap<Cpn, Cpn>,
 }
 
@@ -860,8 +858,7 @@ impl Adapter<'_> {
     /// cache entry. `None` when the CPN is absent from the repo or has no
     /// accepted version. Centralizes the "newest accepted version" pick so a
     /// caller can't drift from `version_accepted` the way `host_copies`'s own
-    /// inline copy once did (`todo/root-topology-refactor.md`, the
-    /// `dev-vcs/git-9999` selection bug).
+    /// inline copy once did (the `dev-vcs/git-9999` selection bug).
     pub fn newest_accepted(&self, cpn: Cpn) -> Option<(&Cpv, &CacheEntry)> {
         self.data
             .versions
@@ -935,7 +932,7 @@ impl Adapter<'_> {
         // dependency edge that doesn't reflect the real (settled) USE state.
         // Found 2026-07-03: util-linux's own `su?(pam)` violation was ceding
         // `python` too, spuriously wiring it to dev-lang/python and creating a
-        // fake install-order cycle. See todo/stage-build-shakeout.md.
+        // fake install-order cycle.
         let mut names = std::collections::BTreeSet::new();
         for clause in &unsatisfied {
             collect_required_use_flags(clause, &mut names);
@@ -1228,7 +1225,7 @@ pub async fn load_repos(
     // Inject alias (virtual) repos: for each Location::Alias, clone the source
     // repo's versions for each aliased package under the destination category.
     // This is the in-memory equivalent of crossdev's symlink overlay — no
-    // on-disk tree needed. See todo/cross-derive-on-the-fly.md.
+    // on-disk tree needed.
     // Collect first, then inject, to avoid borrowing `versions` while mutating.
     type CrossInject = (String, Cpn, Vec<(Cpv, CacheEntry)>);
     let mut cross_inject: Vec<CrossInject> = Vec::new();
@@ -1721,8 +1718,7 @@ mod tests {
         );
     }
 
-    /// Answers the open question left after the `-arch`/`-~arch` fix (see
-    /// `todo/accept-properties-restrict.md`'s consolidation notes): does
+    /// Answers the open question left after the `-arch`/`-~arch` fix: does
     /// `-arch` retract a *wildcard* grant (`*`/`**`) for that one arch, or
     /// only a specific bare `arch`/`~arch` token? Real Portage's matcher
     /// works over a flat set of literal strings — `-riscv` only ever
@@ -1864,8 +1860,7 @@ mod tests {
     }
 
     /// `AcceptProperties`/`AcceptRestrict` are the same engine as
-    /// `AcceptOverlay` (type aliases, per the consolidation decision in
-    /// `todo/accept-properties-restrict.md`) — group-free construction, same
+    /// `AcceptOverlay` (type aliases) — group-free construction, same
     /// per-package overlay fold, `RestrictExpr`'s USE-conditional evaluation.
     #[test]
     fn accept_properties_and_restrict_reuse_the_license_engine() {
@@ -1985,8 +1980,7 @@ mod tests {
 
     /// `load_repos` injects `Location::Alias` entries as in-memory `cross-<tuple>/<pkg>`
     /// packages cloned from the source repo, with `real_cpn_of` recording the
-    /// derivation — the in-memory equivalent of crossdev's symlink overlay
-    /// (todo/cross-derive-on-the-fly.md).
+    /// derivation — the in-memory equivalent of crossdev's symlink overlay.
     #[tokio::test]
     async fn load_repos_injects_alias_cross_packages() {
         let (_dir, repo) = disk_repo("sys-devel/gcc-15.2.1", "EAPI=8\nDESCRIPTION=t\nSLOT=0\n");
@@ -2056,7 +2050,7 @@ mod tests {
     // and version constraint (emerge semantics): a bare name / `:*` picks the
     // newest slot, but `:slot` and `=…-ver*` pin the matching slot rather than
     // collapsing to the newest. Regression for the python:3.13 / =python-3.13*
-    // gap (todo/target-derivation.md).
+    // gap.
 
     fn empty_layer() -> &'static portage_atom_pubgrub::UseLayer {
         use std::sync::OnceLock;
@@ -2421,8 +2415,8 @@ mod tests {
         }
     }
 
-    // Fixes the `em stages --stage1 --prefix <dir>` finding in
-    // todo/em-stages-scenario-matrix.md: `cede_required_use`'s old
+    // Fixes the `em stages --stage1 --prefix <dir>` finding:
+    // `cede_required_use`'s old
     // `installed_cpvs.contains(cpv)` early return fired for *any* cpv already
     // in the "installed" view, even when that exact cpv is the one currently
     // being resolved with a REQUIRED_USE-violating config (e.g. stage1's
@@ -2639,8 +2633,8 @@ mod tests {
         }
     }
 
-    // Regression for the em stages --stage1 --target riscv64 finding
-    // (todo/stage-build-shakeout.md): util-linux's
+    // Regression for the em stages --stage1 --target riscv64 finding:
+    // util-linux's
     // REQUIRED_USE="python? ( foo ) su? ( pam )" has two independent
     // top-level clauses. Only `su? ( pam )` is violated (su on, pam off);
     // `python? ( foo )` is independently satisfied (python off, vacuous).

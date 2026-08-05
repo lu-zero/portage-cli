@@ -2,8 +2,7 @@
 //!
 //! A version with no cache entry is invisible rather than merely uncached:
 //! `RepoData` is built from cache entries alone, so the version can never be
-//! selected and the atom reports as "no ebuilds". See
-//! `todo/md5-cache-blind-spot.md`.
+//! selected and the atom reports as "no ebuilds".
 
 use std::collections::HashSet;
 

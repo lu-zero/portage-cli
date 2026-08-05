@@ -1294,7 +1294,7 @@ impl EbuildShell {
         // real native `${CHOST}-gcc` now exists inside the prefix. A plain
         // `--root` offset stays untouched (`build_eprefix` is `None` there,
         // matching the confirmed catalyst seed-compiler default of using the
-        // host's compiler). See `todo/select-toolchain.md`'s Phase 2.
+        // host's compiler).
         //
         // For `--cross` into a `--local` prefix the `<chost>-*` wrappers
         // (`crossdev --setup`) live in `<broot>/usr/bin`, which is under $HOME

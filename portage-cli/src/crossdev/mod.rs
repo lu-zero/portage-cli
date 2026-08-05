@@ -12,7 +12,6 @@
 //! plan are shared with the **native toolchain** ([`toolchain`], `em toolchain
 //! --setup`): a self-hosting toolchain into `--root` (`CHOST == CBUILD`) is the
 //! same `glibc ↔ gcc` cycle as a cross toolchain, broken the same staged way.
-// Design note: root characterization is documented in todo/em-root-characterization.md.
 //!
 //! The install location follows em's root model: the sysroot is
 //! `<EROOT>/usr/<CTARGET>`, so `em crossdev <t>` targets `/usr/<CTARGET>` (like
@@ -23,7 +22,6 @@
 //!
 //! Easy to conflate, and doing so caused real confusion chasing a stage1
 //! failure: they are **not** the same compiler at any point.
-// See todo/stage-build-shakeout.md finding #19 for details.
 //!
 //! - **`cross-<CTARGET>/gcc`** (this module's overlay category, built by
 //!   [`stages::toolchain_plan`]) is the **host-side cross-compiler**: it runs
@@ -45,8 +43,7 @@
 //! newer major version using an older one as `CC_FOR_TARGET` (a real GCC
 //! limitation, not an em bug). Keeping the two in sync is a `--update`/rebuild
 //! concern.
-// Pending work for crossdev update and version-mismatch warnings is tracked
-// in todo/stage-build-shakeout.md finding #19.
+// Pending work: crossdev update and version-mismatch warnings.
 
 mod config_plan;
 mod multilib;
@@ -93,7 +90,6 @@ pub(crate) fn merge_depgraph_flags_fields(
 /// taking precedence — the same "either position works" merge
 /// [`merge_depgraph_flags`] already does for `--deep`/`--newuse`, needed here
 /// for the same reason (`em -j 80 stages --stage1` vs `em stages --stage1 -j 80`).
-// See todo/stage-build-shakeout.md for the design rationale.
 fn merge_merge_flags(globals: &Cli, args: &MergeFlags) -> MergeFlags {
     merge_merge_flags_with(globals, args, false)
 }
@@ -476,8 +472,7 @@ fn activate_toolchain(target: &CrossTarget, globals: &Cli, step: &stages::StageS
 /// Native twin of [`activate_toolchain`]: run the `binutils-config`/
 /// `gcc-config` equivalent after each native toolchain step builds, so
 /// `<EROOT>/usr/bin/<CHOST>-*` wrappers actually exist. `em toolchain --setup`
-/// used to pass `|_| Ok(())` as its post_step here — see `todo/PENDING.md`'s
-/// "Native toolchain activation via `em select`" entry. `tuple` is the host's
+/// used to pass `|_| Ok(())` as its post_step here. `tuple` is the host's
 /// own CHOST (native means `CHOST == CBUILD`; `--root`/`--prefix`/`--local`
 /// all inherit the host's profile/make.conf for a native build, so
 /// `select::get_chost` already resolves it correctly there — no separate
@@ -536,9 +531,9 @@ fn step_flags(step: &stages::StageStep) -> String {
 ///
 /// This is the *toolchain* primitive only — the compiler the stages build
 /// against. The actual stage production (stage1 `packages.build`, stage3
-/// `--emptytree @system`) lives in `em stages` (see
-/// `todo/em-stages-and-binhosts.md`). Requires `--root <dir>` (a toolchain into
-/// `/` is meaningless). With `-p` each step prints its plan instead of building.
+/// `--emptytree @system`) lives in `em stages`. Requires `--root <dir>` (a
+/// toolchain into `/` is meaningless). With `-p` each step prints its plan
+/// instead of building.
 pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -> Result<()> {
     if !args.setup {
         bail!(
@@ -742,7 +737,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
 /// target libraries (e.g. `libatomic`) can pass driver flags only a
 /// matching-or-newer major version understands, so an older active
 /// cross-compiler silently breaks deep inside a target library's own
-/// `configure` — see `todo/stage-build-shakeout.md`.
+/// `configure`.
 ///
 /// Best-effort: any failure determining compatibility (no active compiler
 /// yet is the *expected* "needs building" case and always weaves in; an
@@ -1025,7 +1020,7 @@ fn init_target(
     // Derive the cross packages on the fly: a `Location::Alias` repos.conf
     // entry declares `cross-<tuple>/<pkg>` as a virtual alias for its real
     // `::gentoo` package, materialised in-memory at load time. No on-disk
-    // symlink overlay. See todo/cross-derive-on-the-fly.md.
+    // symlink overlay.
     entries.push(alias_repo_conf_entry(
         globals,
         &gentoo_path,
@@ -1068,8 +1063,7 @@ fn init_target(
 /// `cross-<tuple>/<pkg>` packages from `::gentoo` at resolve time — the
 /// in-memory replacement for the old on-disk symlink overlay. The entry maps
 /// the destination cross category to the real `(category, package)` set from
-/// [`CrossTarget::packages`], the single source of truth. See
-/// `todo/cross-derive-on-the-fly.md`.
+/// [`CrossTarget::packages`], the single source of truth.
 ///
 /// The real packages' existence under `gentoo` is verified up front (a missing
 /// source package would later surface as a resolver `NoVersions` with no hint
@@ -1325,17 +1319,17 @@ fn make_conf_body(target: &CrossTarget, sysroot: &Utf8Path, outer_root: &Utf8Pat
          # own .pc files never leak into a foreign-arch cross build (found live:\n\
          # iproute2's ./configure auto-detected the host's net-libs/libtirpc via\n\
          # plain pkg-config, linked -ltirpc, then failed since the target sysroot\n\
-         # never had it — see todo/stage-build-shakeout.md).\n\
+         # never had it).\n\
          PKG_CONFIG_SYSROOT_DIR=\"{sysroot}\"\n\
          PKG_CONFIG_LIBDIR=\"{sysroot}/usr/lib64/pkgconfig:{sysroot}/usr/lib/pkgconfig:{sysroot}/usr/share/pkgconfig\"\n\
          # meson.eclass (and any buildsystem following the same convention) reads\n\
          # BUILD_PKG_CONFIG_LIBDIR for its *native* build-machine pkg-config search\n\
          # path, falling back to the target PKG_CONFIG_LIBDIR above when unset — the\n\
          # same host/target conflation bug as the bare zstd.m4 case in\n\
-         # sys-devel/binutils (see todo/stage-build-shakeout.md #29), just for\n\
-         # buildsystems that otherwise do the right thing. Point it at the outer\n\
-         # EROOT's own native pkgconfig dirs (host BDEPEND packages build there —\n\
-         # see [[em-root-characterization]] Tier 1 item 2), not the bare host `/`.\n\
+         # sys-devel/binutils, just for buildsystems that otherwise do the right\n\
+         # thing. Point it at the outer EROOT's own native pkgconfig dirs (host\n\
+         # BDEPEND packages build there — see [[em-root-characterization]] Tier 1\n\
+         # item 2), not the bare host `/`.\n\
          BUILD_PKG_CONFIG_LIBDIR=\"{outer_root}/usr/lib64/pkgconfig:{outer_root}/usr/lib/pkgconfig:{outer_root}/usr/share/pkgconfig\"\n",
         target.cflags(),
     )
@@ -1405,8 +1399,8 @@ fn branch_bound(version: &Version) -> String {
 /// what the *host* would already select for the real package instead of
 /// blanket-accepting the whole category regardless of version — which
 /// silently preferred live `9999` ebuilds over perfectly good dated
-/// snapshots/releases (`todo/root-topology-refactor.md`, the `dev-vcs/git`
-/// finding, and this same overreach for the toolchain packages themselves —
+/// snapshots/releases (the `dev-vcs/git` finding, and this same overreach
+/// for the toolchain packages themselves —
 /// confirmed live: `sys-devel/binutils`/`sys-devel/gcc` both carry real
 /// `~riscv` keywords on recent non-live snapshots in this environment, so
 /// a blanket `**` was never actually necessary to unblock riscv crossdev).
@@ -1527,8 +1521,7 @@ fn cross_env_entries(
     // overshot: it also silently preferred each package's live `9999` ebuild
     // over a perfectly good dated snapshot, whenever the solver's own
     // dual-root expansion or the toolchain packages' own root-atom
-    // resolution had to pick a version at all (`todo/root-topology-
-    // refactor.md`, "auto-unmasking is too eager"). `host_arch_keyword_line`
+    // resolution had to pick a version at all. `host_arch_keyword_line`
     // mirrors what the host would already select for the real package
     // instead — pinned to its installed version, or bounded to its release
     // branch — using `**` only within that scope, not the whole category.
@@ -1856,10 +1849,9 @@ mod tests {
 
         // `cross_env_entries`'s host-ABI/`**`-keyword treatment for extras
         // needs a real `multilib.eclass` (sourced via brush) that a bare
-        // temp-dir fixture doesn't have — live-verified separately instead
-        // (see todo/root-topology-refactor.md), same as the rest of
-        // `write_cross_env`'s multilib-dependent behaviour, which has no
-        // unit test either for the same reason.
+        // temp-dir fixture doesn't have — live-verified separately instead,
+        // same as the rest of `write_cross_env`'s multilib-dependent
+        // behaviour, which has no unit test either for the same reason.
     }
 
     #[test]

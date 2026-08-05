@@ -16,7 +16,7 @@ pub enum Location {
     /// A virtual repository: no on-disk tree. Packages are derived from a
     /// source repo, re-categorized under one or more destination categories.
     /// Used by `crossdev` to present `cross-<tuple>/<pkg>` packages without a
-    /// symlink overlay — see `todo/cross-derive-on-the-fly.md`.
+    /// symlink overlay.
     Alias {
         /// The source repo name (e.g. `"gentoo"`) whose packages are aliased.
         source: String,

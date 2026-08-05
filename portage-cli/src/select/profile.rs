@@ -7,8 +7,6 @@
 //!
 //! Target the sysroot with the global `--config-root`
 //! (e.g. `em --config-root /usr/<CTARGET> select profile set <path>`).
-// Design note: profile-linking for cross targets is documented in
-// todo/crossdev-target.md.
 
 use std::io::Write as _;
 

@@ -144,8 +144,7 @@ impl Roots {
     /// pointed at an empty directory and failed to configure. Found live
     /// 2026-07-16 running the toolchain bootstrap into a fresh `--prefix`
     /// for the first time (previously only tested via `-p`/individual
-    /// package builds, never a real end-to-end run — see
-    /// `todo/em-stages-scenario-matrix.md`).
+    /// package builds, never a real end-to-end run).
     ///
     /// Deliberately does *not* touch `base` itself: `base` also drives
     /// [`build_sysroot`](Self::build_sysroot) (SYSROOT/ESYSROOT — what the
@@ -220,8 +219,8 @@ impl Roots {
     /// distinct from the host when `CBUILD==CHOST`, confirmed empirically
     /// against real portage (`ROOT=X emerge sys-devel/gcc` against an empty
     /// `X` doesn't need `os-headers`/`perl`/etc. built fresh into `X`; glibc
-    /// and gcc's own DEPEND is satisfied by the host, 2026-07-11, see
-    /// `todo/root-topology-refactor.md`) — only a genuine cross build
+    /// and gcc's own DEPEND is satisfied by the host, 2026-07-11) — only a
+    /// genuine cross build
     /// (`--target`, foreign-arch) keeps DEPEND pinned to the target sysroot,
     /// since the host's own-arch VDB can't satisfy a foreign-arch DEPEND at
     /// all; `RDEPEND`/`PDEPEND` always resolve against the target

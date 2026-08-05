@@ -48,7 +48,6 @@ pub(crate) async fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
 // unprivileged builds can't anyway. Caught live: a stage3 `--buildpkg` run
 // tried to write there, got `EACCES`, and appears to have destabilized the
 // fakeroost ptrace session for several packages.
-// Stage build shakeout findings are in todo/stage-build-shakeout.md.
 // Skip straight to a root-relative default in that case; `$PKGDIR`/
 // config-root `make.conf` (explicit user choices) still apply regardless of root.
 pub(crate) async fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
@@ -329,8 +328,7 @@ impl DesiredBuildEnv {
 // `verify_signature` are parsed and carried but not yet *enforced*: `frozen`
 // ("prefer a locally cached index over fetching fresh") needs the
 // not-yet-built local index cache to have any effect, and
-// `verify_signature` needs the not-yet-built GPG verify step — both are
-// tracked in todo/PENDING.md.
+// `verify_signature` needs the not-yet-built GPG verify step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinRepoEntry {
     /// Section name, or an md5 hex digest of the `sync-uri` for a
@@ -551,7 +549,6 @@ mod tests {
     // entry actually wants) resolve as a plain host build — the two must
     // disagree here, or a Host BDEPEND entry would look up binpkgs in the
     // wrong PKGDIR.
-    // Binpkg subtargets design (S1/S4) is in todo/binpkg-subtargets.md.
     #[tokio::test]
     async fn resolve_pkgdir_for_roots_target_vs_host() {
         assert!(

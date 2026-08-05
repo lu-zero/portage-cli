@@ -71,8 +71,7 @@ impl PortageDependencyProvider {
             // riscv64 stage3 `--cross` build routed a whole chain of Host
             // BDEPEND packages (`dev-lang/perl` and its `dev-perl/*`
             // consumers) with no ordering edges between them, so `perl`
-            // landed *after* consumers that need it — see
-            // `todo/stage-build-shakeout.md` #33.
+            // landed *after* consumers that need it.
             let Some(data) = self.package_data(pkg) else {
                 continue;
             };

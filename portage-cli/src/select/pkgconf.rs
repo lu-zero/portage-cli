@@ -33,7 +33,6 @@
 //! - sanity-checks the output for `-I`/`-L` flags outside the sysroot and
 //!   refuses to emit them — this prevents cross-build leakage similar to
 //!   net-libs/libtirpc.
-// Design details are in todo/stage-build-shakeout.md.
 //!
 //! [`SCRIPT_TEMPLATE`] below is a close adaptation of that real script
 //! (same derivation order, same safety net); the only piece genuinely
@@ -157,7 +156,7 @@ output=$("${REAL_PKG_CONFIG}" "$@")
 ret=$?
 
 # Refuse to silently leak host -I/-L paths into a cross build (the exact
-# bug class todo/stage-build-shakeout.md documents for net-libs/libtirpc).
+# bug class net-libs/libtirpc hit).
 bad_lines=$(
 	printf "%s\n" ${output} |
 	grep '^-[LI]' |

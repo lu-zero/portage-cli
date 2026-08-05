@@ -296,7 +296,7 @@ async fn compute_use_env(
     // package.use, overlay package.env — real portage doesn't interleave
     // config layers either). Previously this was build-time only (the
     // resolved plan's USE won, so `-p` could show flags the actual build
-    // didn't use); see `todo/package-env.md`.
+    // didn't use).
     package_use.extend(load_package_env_use(&portage_dir).await);
     if let Some(overlay) = config_overlay {
         package_use.extend(load_package_env_use(overlay).await);

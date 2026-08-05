@@ -41,7 +41,7 @@ pub struct TrimCtx<'a> {
 /// be the sole reason some other, not-yet-installed package is required (its
 /// own DEPEND/RDEPEND edges don't stop existing just because it needs no
 /// action itself). Scanning only `order` made such a dependency look
-/// orphaned and wrongly trimmable — see `todo/stage-build-shakeout.md`.
+/// orphaned and wrongly trimmable.
 pub fn trim_within_run_bdepend(
     order: Vec<(PortagePackage, Version)>,
     full_solution_order: &[(PortagePackage, Version)],

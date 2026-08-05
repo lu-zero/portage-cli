@@ -158,7 +158,6 @@ impl CrossTarget {
     /// binutils/headers/gcc/libc toolchain. `em` has no `--ex-gdb`/`--ex-pkg`
     /// equivalent yet, so there's nothing to wire it to — it was previously here
     /// unconditionally by mistake.
-    // Extra packages support is tracked in todo/crossdev-target.md "Extra" section.
     pub fn packages(&self) -> Vec<(&'static str, &'static str, PackageArch)> {
         use PackageArch::{Host, Target};
         let mut pkgs: Vec<(&'static str, &'static str, PackageArch)> = Vec::new();

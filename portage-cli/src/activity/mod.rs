@@ -2,7 +2,6 @@
 //!
 //! Call sites emit via [`ActivityBus`]; front-ends subscribe or read the live
 //! FS sink. emerge.log is not the control plane.
-// Activity status design is documented in todo/activity-status.md.
 
 mod bus;
 mod bus_layer;

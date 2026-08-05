@@ -24,7 +24,6 @@
 pub struct ActivityArgs {
     /// Write activity events as JSONL to file descriptor N (subprocess
     /// front-ends). Takes ownership of the FD.
-    // Activity status design is documented in todo/activity-status.md.
     #[arg(long = "activity-fd", value_name = "N")]
     pub activity_fd: Option<i32>,
 

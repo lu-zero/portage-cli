@@ -235,8 +235,7 @@ pub struct PortageDependencyProvider {
     /// 2026-07-11: `CrossContext::is_cross_arch()`'s CHOST/CBUILD-unreadable
     /// fallback used to treat *any* non-host sysroot as foreign-arch, so a
     /// same-arch `--root` build always took the cross branch and never
-    /// dropped host-satisfied `DEPEND` at all. See
-    /// `todo/root-topology-refactor.md`.
+    /// dropped host-satisfied `DEPEND` at all.
     pub(crate) is_cross_arch: bool,
     /// Host `@host` instances alias target package data (no duplicate ingest).
     pub(crate) host_aliases: HashMap<PortagePackage, PortagePackage>,

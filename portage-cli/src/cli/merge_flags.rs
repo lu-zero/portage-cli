@@ -28,7 +28,6 @@
 //! straight off the top-level `Cli` regardless of where the subcommand's own
 //! flattened copy might set them — so a flag given *after* the subcommand
 //! silently had no effect even where clap did accept it.
-// Stage build shakeout findings are in todo/stage-build-shakeout.md.
 #[derive(clap::Args, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MergeFlags {

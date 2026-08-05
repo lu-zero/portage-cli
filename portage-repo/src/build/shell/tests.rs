@@ -650,9 +650,9 @@ async fn cross_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     );
 }
 
-/// Phase 2 of the `--prefix`/`--local` toolchain-awareness work
-/// (`todo/select-toolchain.md`): a **native** build (CHOST == CBUILD) under
-/// `--prefix`/`--local` used to never enter the toolchain-selection block at
+/// Phase 2 of the `--prefix`/`--local` toolchain-awareness work: a
+/// **native** build (CHOST == CBUILD) under `--prefix`/`--local` used to
+/// never enter the toolchain-selection block at
 /// all (it was gated on `chost != cbuild`), so it silently fell through to
 /// the host's `gcc` on `$PATH` even after the prefix had built and activated
 /// its own compiler. `build_eprefix.is_some()` now also opens the gate;

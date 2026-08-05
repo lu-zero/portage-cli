@@ -139,8 +139,7 @@ mod tests {
         TargetOrigin::Set(name.to_string())
     }
 
-    /// The behaviour table this mirrors lives in `todo/selective-resolution.md`;
-    /// every row was measured against emerge 3.13.
+    /// Every row was measured against emerge 3.13.
     #[test]
     fn fatal_vs_soft_matches_portage() {
         use RootTargetDecision::*;

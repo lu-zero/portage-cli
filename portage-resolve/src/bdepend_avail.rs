@@ -73,8 +73,8 @@ impl Avail {
     /// `merge/mod.rs`), so satisfaction must be checked against that same
     /// root's VDB, or a package built there on one run is never recognized
     /// as already satisfied on the next. This mirrors the
-    /// `load_host_installed` fix — see `todo/stage-build-shakeout.md`
-    /// #28/#30 — for the same bug in the solver's own host-installed view.
+    /// `load_host_installed` fix for the same bug in the solver's own
+    /// host-installed view.
     ///
     /// `--prefix` (an unprivileged overlay) additionally weaves in the
     /// prefix's own VDB: `Cli::broot()` now sends an unsatisfied BDEPEND
@@ -97,7 +97,7 @@ impl Avail {
     /// and `target` used to both be the (possibly empty) offset, so that old
     /// logic never consulted the host at all: found 2026-07-11 comparing `em
     /// --root` against real `ROOT=X emerge`'s own (much smaller) plan for
-    /// `sys-devel/gcc` — see `todo/root-topology-refactor.md`.
+    /// `sys-devel/gcc`.
     ///
     /// Checking `merge_root() != satisfaction_root(Depend)` (not
     /// `roots.is_overlay()`) is deliberate: a bare `--root` now resolves
@@ -107,7 +107,7 @@ impl Avail {
     /// earlier run must still count as DEPEND-satisfied even though the host
     /// lacks it, or a resumed stage build hits a false preflight failure
     /// (found independently reviewing this same day's fix, before it ever
-    /// shipped — see `todo/root-topology-refactor.md`).
+    /// shipped).
     pub fn initial_depend(roots: &Roots) -> Self {
         let depend_root = roots.satisfaction_root(DepClass::Depend);
         let mut out = vdb_avail_entries(Some(depend_root));
@@ -689,7 +689,7 @@ mod tests {
     /// the 2026-07-11 fix that made DEPEND resolve against BROOT for a
     /// native build (`satisfaction_root(DepClass::Depend)`) — that fix
     /// alone regressed this case by dropping the old `VDB(base) ∪
-    /// VDB(target)` weave entirely. See `todo/root-topology-refactor.md`.
+    /// VDB(target)` weave entirely.
     #[test]
     fn initial_depend_weaves_in_the_target_vdb_for_a_bare_root() {
         let broot = tempfile::tempdir().unwrap();

@@ -4,7 +4,6 @@
 //! (for `create`) lays down a local overlay skeleton on disk. Remote
 //! repositories (`sync-type`/`sync-uri` and the online repository list) are not
 //! yet supported.
-// TODO: Remote repository support is tracked in todo/crossdev-target.md.
 
 use std::io::Write as _;
 

@@ -12,7 +12,6 @@
 //! binds must cover the whole run), as does `em ebuild … install/qmerge`
 //! (the debug applet runs phases in-process, with no worker seam). qmerge is
 //! serialised across worker processes by an flock in `ebuild.rs`.
-// Privilege backend design is in todo/fakeroot-privilege-backends.md.
 //!
 //! Each fake-root backend is a default-on cargo feature compiled only where
 //! it works — fakeroost and hakoniwa are Linux kernel interfaces, pseudoroot
@@ -31,7 +30,6 @@
 //!   ENOENT`) that silently killed ~1/3 of packages' install workers *after*
 //!   qmerge had already succeeded.
 //!
-//! Stage build shakeout findings are in todo/stage-build-shakeout.md.
 //! pseudoroot doesn't share that failure mode.
 //! - `fakeroost` — pure-Rust ptrace+seccomp fake root (no privilege):
 //!   ownership is faked in-session, on-disk stays the build user. Covers every
@@ -219,7 +217,6 @@ pub struct WorkerArgs<'a> {
     /// process boundary explicitly so the worker never re-derives it from
     /// `ebuild_path`'s on-disk directory name, which is wrong for a
     /// cross-derived package.
-    // The merge-path decoupling is documented in todo/cross-derive-on-the-fly.md.
     pub cpv: &'a str,
     pub use_flags: &'a str,
     pub work_base: &'a str,

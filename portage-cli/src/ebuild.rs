@@ -139,7 +139,6 @@ impl PhaseGroup {
     // that staged file between the two processes and `doins` failed on a
     // file that existed moments earlier in the same build. Caught live
     // chasing a stage1 gnupg failure.
-    // Stage build shakeout findings are in todo/stage-build-shakeout.md.
     fn clean_subs(&self) -> Option<&'static [&'static str]> {
         match self {
             Self::Full | Self::Compile | Self::BinpkgMerge | Self::BuildOnly => {
@@ -1015,7 +1014,6 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     // FEATURES, *FLAGS, MAKEOPTS, … take effect per package. Sourced before the
     // resolved USE is applied (below) so the plan's USE wins — USE set by an env
     // file is intentionally not reflected here (a resolver-side follow-up).
-    // Package env design is in todo/package-env.md.
     {
         let base = config_root.unwrap_or_else(|| Utf8Path::new("/"));
         let mut portage_dirs = vec![base.join("etc/portage").into_std_path_buf()];
@@ -2850,7 +2848,6 @@ async fn capture_environment(
 // parent's stale 1-element snapshot. That silently broke `distutils-r1`'s
 // `pipestatus || die` check (`dev-python/jinja2`, the `install//usr/bin`
 // listing failure).
-// Brush pipestatus design is in todo/brush-pipestatus-not-reset.md.
 // Filtering the dump is the correct fix independent of that brush bug: these
 // variables are bash-maintained state, not build environment, and were never
 // meant to cross a process boundary.
@@ -3250,7 +3247,6 @@ mod tests {
     // Regression test for the jinja2 stage3 failure: restoring `PIPESTATUS`
     // (or the other bash dynamic vars) into the Install worker pins a stale
     // snapshot that brush never resizes on later pipelines.
-    // Brush pipestatus design is in todo/brush-pipestatus-not-reset.md.
     // The fix is simply never dumping them in the first place.
     #[test]
     fn filter_declare_dump_drops_readonly_and_dynamic_vars() {

@@ -524,7 +524,6 @@ mod tests {
         // base to layer over) must NOT get BASHRC_PREFIX's CPPFLAGS/LDFLAGS
         // injection — it actively breaks builds by out-ranking a package's
         // own project-local `-I` flags (found 2026-07-03).
-        // Stage build shakeout findings are in todo/stage-build-shakeout.md.
         let dir = tempfile::tempdir().unwrap();
         let body = bashrc_body("--root", dir.path().to_str().unwrap());
         assert_eq!(body, "", "self-contained --root must get an empty bashrc");
@@ -769,7 +768,6 @@ mod tests {
         // serial (no host make.conf to inherit MAKEOPTS from) — found
         // 2026-07-03 when a full gcc bootstrap ran single-threaded for over
         // an hour on a 128-core box.
-        // Stage build shakeout findings are in todo/stage-build-shakeout.md.
         let dir = tempfile::tempdir().unwrap();
         let cli = Cli::parse_from(["em", "--root", dir.path().to_str().unwrap()]);
         super::bootstrap(&cli.roots()).unwrap();
@@ -787,7 +785,6 @@ mod tests {
         // any package whose newest versions dropped their stable keyword for
         // the host arch (e.g. a cross-toolchain build stuck on a years-old
         // compiler release).
-        // Stage build shakeout findings are in todo/stage-build-shakeout.md.
         let Some(host_kw) = super::host_accept_keywords() else {
             return; // nothing to assert if the test host itself has none set
         };
