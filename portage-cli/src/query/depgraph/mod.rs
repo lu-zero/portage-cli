@@ -1,6 +1,6 @@
 mod autounmask;
 
-pub use portage_atom_pubgrub::MergeRoot;
+pub use portage_atom_pubgrub::{BuildClass, MergeRoot};
 mod output;
 mod package_use;
 mod targets;
@@ -37,6 +37,12 @@ use crate::cli::DepgraphFormat;
 pub struct PlannedMerge {
     /// Where this package is merged (`BROOT` host vs target `ROOT`).
     pub merge_root: MergeRoot,
+    /// What kind of build this entry is (host-class vs target-class, native
+    /// vs cross) — the planner's structural answer, computed once here via
+    /// [`BuildClass::classify`] and threaded to the build shell so it stops
+    /// re-deriving it from the `cross-` category prefix. See
+    /// `todo/root-topology-refactor.md` Track A.
+    pub build_class: BuildClass,
     /// The identity to build/register under (display + work-dir naming +
     /// VDB category) — for a cross-derived package this is the *virtual*
     /// cpv (`cross-<tuple>/gcc-...`), which may differ from the real cpn
@@ -1508,6 +1514,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 .join(format!("{}-{}.ebuild", real_cpn.package, ver));
             PlannedMerge {
                 merge_root: entry.merge_root,
+                build_class: BuildClass::classify(
+                    cpn,
+                    entry.merge_root,
+                    cross.active,
+                    cross.is_cross_arch(),
+                ),
                 cpv: cpv.clone(),
                 ebuild_path,
                 use_flags: flags,

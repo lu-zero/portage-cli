@@ -24,10 +24,11 @@ use std::fmt;
 use portage_atom::Cpn;
 use portage_atom::interner::{DefaultInterner, Interned};
 
-// `MergeRoot` is the shared vocabulary type, defined once in `portage-solver`.
-// Solver nodes are keyed by `(CPN, slot, merge_root)` so the same CPV can appear
-// twice under cross (native host tool + cross target runtime).
-pub use portage_solver::MergeRoot;
+// `MergeRoot`/`BuildClass` are the shared vocabulary types, defined once in
+// `portage-solver`. Solver nodes are keyed by `(CPN, slot, merge_root)` so the
+// same CPV can appear twice under cross (native host tool + cross target
+// runtime).
+pub use portage_solver::{BuildClass, MergeRoot};
 
 /// A PubGrub-compatible package identifier.
 ///

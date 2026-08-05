@@ -81,15 +81,24 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
   category — the exact current logic, name-allowlist preserved. Pure refactor,
   no behaviour change, all 442 portage-repo tests green. `portage-repo` gains
   the lightweight `portage-solver` vocab dep (precedent: `portage-atom-pubgrub`).
-- **A2b** Plumb the *planner-stamped* `build_class` (computed today at the
-  pubgrub→`SelectedPackage` conversion but currently discarded) through
-  `PlanEntry` → `PlannedMerge` → `RunInner` → `set_build_class`, so the shell
-  reads the planner value and the category fallback retires. Wrinkles: the
-  `__worker` subprocess seam needs `BuildClass: Display + FromStr` + a flag
-  (follow `--force-verify-signature`); the unmerge path (`emerge.rs:1021`)
-  re-derives from the installed CPN's category. The §4 CTARGET/`TARGET_ABI`
-  toolchain-var sniff is separate — a within-`CrossTool` sub-distinction
-  (host-tool vs libc/headers) the current enum doesn't carry; folds in at A3.
+- 🟡 **A2b (core landed; worker deferred)** The planner-stamped `build_class`
+  now flows to the shell for the in-process build path: `PlannedMerge`
+  (`query/depgraph/mod.rs`) carries `build_class` (computed once at
+  construction via `BuildClass::classify` with the depgraph's cross context);
+  `BuildAndMerge` + `RunInner` (`ebuild.rs`) thread it; `run_inner` calls
+  `shell.set_build_class(...)` when `Some`. The 4 in-process phase groups
+  (FetchOnly/BuildOnly/Compile/Full) pass the planner value; the standalone
+  `em ebuild` debug path, the `__worker` install child, the `merge_binpkg`
+  binpkg path, and the unmerge path pass `None` (shell falls back to the
+  `cross-` category — correct for every current package, since the planner
+  value only diverges from the category once A3 widens the enum for
+  libc/headers). `BuildClass` re-exported via `portage-atom-pubgrub`
+  (alongside `MergeRoot`). Regression-safe via the `Option` fallback.
+- **A2b-worker (deferred)** Thread `build_class` across the `__worker`
+  subprocess + `merge_binpkg` + unmerge: needs `BuildClass: Display + FromStr`
+  + a hidden `--build-class=` flag (follow `--force-verify-signature`), and
+  `build_class` on `MergeBinpkg`. Only required once A3 makes the planner
+  value diverge from the category for those paths.
 - **A3** Retire `bypass_cross_root: bool` (8 sites). Re-key the
   `setup.rs:145` bashrc guard's condition on the class.
 - **A4** Lift `CHOST`/`CBUILD`/`CTARGET` out of shell-env rediscovery
