@@ -45,6 +45,15 @@ pub trait EnvDProfile: Sized + 'static {
         &[]
     }
 
+    /// Config belonging to a *different* toolchain that this selection
+    /// nonetheless owns — `gcc-config` writing clang's
+    /// `gentoo-gcc-install.cfg` is the real-world case. Runs after the env.d
+    /// profile and the wrappers; `vars` is the parsed env.d profile.
+    /// Default: nothing.
+    fn sync_foreign_config(_roots: &Roots, _vars: &BTreeMap<String, String>) -> Result<()> {
+        Ok(())
+    }
+
     /// Create the toolchain wrapper symlinks in `<EPREFIX>/usr/bin` — the half of
     /// `binutils-config`/`gcc-config` that makes `<CTARGET>-gcc` find its cross
     /// `as`/`ld`. `vars` is the parsed env.d profile. Default: none — modules that
@@ -266,7 +275,9 @@ fn set_profile<T: EnvDProfile>(
     std::fs::write(&global_env_path, env_content)
         .with_context(|| format!("writing {}", global_env_path))?;
 
-    T::install_wrappers(roots, target, &parse_env_vars(&profile_content))?;
+    let vars = parse_env_vars(&profile_content);
+    T::install_wrappers(roots, target, &vars)?;
+    T::sync_foreign_config(roots, &vars)?;
 
     Ok(())
 }

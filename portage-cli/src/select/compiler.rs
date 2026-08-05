@@ -47,6 +47,47 @@ impl env_d::EnvDProfile for GccProfileType {
         };
         install_gcc_wrappers(&env_d::eprefix(roots), target, gcc_path)
     }
+
+    fn sync_foreign_config(roots: &Roots, vars: &BTreeMap<String, String>) -> Result<()> {
+        write_clang_gcc_install_cfg(&env_d::eprefix(roots), vars)
+    }
+}
+
+/// Tell clang which GCC installation to use — `gcc-config`'s own last act
+/// (`gcc-config:797-806`), which reaches into *clang's* config directory
+/// because clang has no way to know that the gcc selection changed.
+///
+/// The value is the first `:` component of the profile's `LDPATH`
+/// (gcc-config's `get_lib_path`), e.g.
+/// `/usr/lib/gcc/aarch64-unknown-linux-gnu/16`. Without it clang falls back to
+/// scanning for a GCC, which picks *a* toolchain rather than the selected one.
+///
+/// Only rewrites a file that already exists, exactly as gcc-config's `-f` guard
+/// does: the file belongs to `llvm-core/clang-common`, and creating it where
+/// clang is not installed would leave a stray config nothing owns.
+fn write_clang_gcc_install_cfg(eprefix: &Utf8Path, vars: &BTreeMap<String, String>) -> Result<()> {
+    let path = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
+    if !path.exists() {
+        return Ok(());
+    }
+    let Some(lib_path) = vars
+        .get("LDPATH")
+        .and_then(|p| p.split(':').next())
+        .filter(|p| !p.is_empty())
+    else {
+        return Ok(());
+    };
+    let body = format!(
+        "# This file is maintained by gcc-config.\n\
+         # It is used to specify the selected GCC installation.\n\
+         --gcc-install-dir=\"{lib_path}\"\n"
+    );
+    // `mv_if_diff` in the original: leave the mtime alone when nothing changed,
+    // so a re-select does not look like a config edit to anything watching.
+    if std::fs::read_to_string(path.as_std_path()).is_ok_and(|old| old == body) {
+        return Ok(());
+    }
+    crate::util::write_atomic(&path, &body)
 }
 
 /// Replicate `gcc-config`'s `usr/bin/<T>-<tool>` → `<GCC_PATH>/<T>-<tool>` symlinks
@@ -224,5 +265,54 @@ mod tests {
             std::fs::read_link(&bin_cc).unwrap(),
             std::path::Path::new(&format!("{target}-gcc"))
         );
+    }
+
+    /// `gcc-config`'s clang hand-off: rewrite an existing
+    /// `gentoo-gcc-install.cfg`, never create one, and leave it alone when the
+    /// selection did not actually change.
+    #[test]
+    fn clang_gcc_install_cfg_follows_gcc_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let eprefix = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert(
+            "LDPATH".to_string(),
+            // Multi-component, as a multilib profile has it: only the first counts.
+            "/usr/lib/gcc/aarch64-unknown-linux-gnu/16:/usr/lib/gcc/aarch64-unknown-linux-gnu/16/32"
+                .to_string(),
+        );
+
+        // clang not installed ⇒ no file, and none invented.
+        write_clang_gcc_install_cfg(&eprefix, &vars).unwrap();
+        let cfg = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
+        assert!(!cfg.exists(), "must not create a file clang-common owns");
+
+        // clang installed ⇒ the selected install dir is written.
+        std::fs::create_dir_all(cfg.parent().unwrap().as_std_path()).unwrap();
+        std::fs::write(cfg.as_std_path(), "# placeholder\n").unwrap();
+        write_clang_gcc_install_cfg(&eprefix, &vars).unwrap();
+        let written = std::fs::read_to_string(cfg.as_std_path()).unwrap();
+        assert!(
+            written.ends_with("--gcc-install-dir=\"/usr/lib/gcc/aarch64-unknown-linux-gnu/16\"\n"),
+            "{written}"
+        );
+
+        // Re-selecting the same profile rewrites nothing.
+        let before = std::fs::metadata(cfg.as_std_path())
+            .unwrap()
+            .modified()
+            .unwrap();
+        write_clang_gcc_install_cfg(&eprefix, &vars).unwrap();
+        assert_eq!(
+            std::fs::metadata(cfg.as_std_path())
+                .unwrap()
+                .modified()
+                .unwrap(),
+            before
+        );
+
+        // No LDPATH in the profile ⇒ nothing to say, existing file untouched.
+        write_clang_gcc_install_cfg(&eprefix, &std::collections::BTreeMap::new()).unwrap();
+        assert_eq!(std::fs::read_to_string(cfg.as_std_path()).unwrap(), written);
     }
 }
