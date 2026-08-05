@@ -1128,6 +1128,52 @@ async fn set_terminal_is_exported_to_phase_subprocesses() {
     assert_eq!(shell.get_var("NO_COLOR").as_deref(), Some("1"));
 }
 
+/// The host's `TERM` reaches the phase, as it does through portage's
+/// environ_whitelist.
+///
+/// Leaving it unset is not the neutral choice it looks like: bash substitutes
+/// `dumb` for an unset `TERM`, and `dumb` is the first thing every capability
+/// probe tests for — real `gentoo-functions` throws away its entire palette on
+/// it (`rc.sh`'s `_has_color_terminal`), which is why `elibtoolize` (really the
+/// external `eltpatch` script) printed flat markers even in a capable terminal.
+#[tokio::test]
+async fn host_term_reaches_the_phase() {
+    // SAFETY: single-threaded test, and the value is read during shell setup
+    // below rather than by another thread.
+    unsafe { std::env::set_var("TERM", "xterm-256color") };
+
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-devel", "binutils");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    shell
+        .run_phase(
+            &ebuild,
+            "setup",
+            &dir.path().join("work"),
+            std::path::Path::new("/"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(shell.get_var("TERM").as_deref(), Some("xterm-256color"));
+    shell
+        .run_string("_test_exported=$(export -p | grep -c '^declare -x TERM=')")
+        .await
+        .unwrap();
+    assert_eq!(
+        shell.get_var("_test_exported").as_deref(),
+        Some("1"),
+        "TERM must be exported: only a real external subprocess like `eltpatch` reads it"
+    );
+}
+
 /// Run `script` and return what it wrote to stderr, with trailing newlines
 /// stripped by the command substitution as usual.
 async fn captured_stderr(shell: &mut EbuildShell, script: &str) -> String {

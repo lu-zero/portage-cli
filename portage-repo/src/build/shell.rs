@@ -1180,6 +1180,16 @@ impl EbuildShell {
             .collect::<Vec<_>>()
             .join(":");
         self.set_var("PATH", &base_path);
+        // TERM rides through from the host, as it does in portage
+        // (`special_env_vars.py`'s environ_whitelist). Leaving it unset is not
+        // neutral: bash substitutes `dumb` for an unset TERM, and `dumb` is
+        // what every terminal-capability probe tests for first — real
+        // `gentoo-functions` drops its whole palette on it
+        // (`rc.sh`'s `_has_color_terminal`), so `elibtoolize` and friends came
+        // out flat even in a fully capable terminal.
+        if let Ok(term) = std::env::var("TERM") {
+            self.set_var("TERM", &term);
+        }
         // Our do*/new* install helpers are Rust builtins plus a few bash
         // wrappers (INSTALL_HELPERS below), so portage need not be installed. We still
         // export PORTAGE_BIN_PATH when available because some eclasses reference
@@ -1994,7 +2004,7 @@ impl EbuildShell {
              REPLACING_VERSIONS REPLACED_BY_VERSION \
              MAKEOPTS CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CC CXX AR RANLIB NM STRIP \
              INSDESTTREE EXEDESTTREE DOCDESTTREE DESTTREE _into_dir _insopts _exeopts \
-             MOPREFIX ABI CONF_LIBDIR CHOST CBUILD CTARGET ARCH COLUMNS NOCOLOR NO_COLOR",
+             MOPREFIX ABI CONF_LIBDIR CHOST CBUILD CTARGET ARCH COLUMNS NOCOLOR NO_COLOR TERM",
         )
         .await
         .ok();
