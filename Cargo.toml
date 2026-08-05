@@ -102,7 +102,7 @@ httpdate = "1"
 url = "2"
 humansize = "2"
 humantime = "2"
-rustix = { version = "1", features = ["fs", "process"] }
+rustix = { version = "1", features = ["event", "fs", "process", "pty", "termios"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 anstream = "1"
 anstyle = "1"

@@ -1,6 +1,7 @@
 pub(crate) mod commands;
 pub mod env;
 pub(crate) mod profile;
+pub(crate) mod pty;
 pub mod shell;
 pub(crate) mod stubs;
 pub mod terminal;

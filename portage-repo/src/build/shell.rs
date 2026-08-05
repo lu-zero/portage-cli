@@ -12,6 +12,7 @@ use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
 
 use super::commands;
 use super::commands::inherit;
+use super::pty;
 use super::stubs;
 use super::terminal;
 use super::ver_funcs;
@@ -2097,6 +2098,10 @@ impl EbuildShell {
 
         let phase_defined = self.shell.funcs().get(func_name).is_some();
         if phase_defined {
+            // Kept alive until after the phase returns: dropping it closes the
+            // pty and joins its reader, so the phase's output is fully drained
+            // to the console and the log before anything else happens.
+            let mut pty = None;
             let invocation = match &self.phase_log {
                 Some((log, quiet)) => {
                     if let Some(parent) = log.parent() {
@@ -2119,16 +2124,35 @@ impl EbuildShell {
                     if *quiet {
                         format!("{{ {func_name} ; }} >> {log} 2>&1")
                     } else {
-                        // The process-sub body may be polled after the phase
-                        // (and even after the build tree is cleaned up); cd
-                        // out of the cwd it cloned so the lazy `tee` spawn
-                        // never starts from a deleted ${S}.
-                        format!("{{ {func_name} ; }} > >(cd / && tee -a {log}) 2>&1")
+                        // A pty on fd 1, so the phase and everything it spawns
+                        // sees a real terminal — the only thing that satisfies
+                        // `gentoo-functions`' per-call `[ -t 1 ]`, which no
+                        // amount of TERM/COLUMNS can. `em`'s own reader takes
+                        // the place of `tee`. Falls back when there is no
+                        // console to render to, as portage falls back to a
+                        // plain pipe.
+                        pty = pty::PhasePty::open(log);
+                        match &pty {
+                            Some(pty) => {
+                                format!("{{ {func_name} ; }} > {} 2>&1", pty.slave_path())
+                            }
+                            // The process-sub body may be polled after the
+                            // phase (and even after the build tree is cleaned
+                            // up); cd out of the cwd it cloned so the lazy
+                            // `tee` spawn never starts from a deleted ${S}.
+                            None => {
+                                format!("{{ {func_name} ; }} > >(cd / && tee -a {log}) 2>&1")
+                            }
+                        }
                     }
                 }
                 None => func_name.to_string(),
             };
-            self.run_string(&invocation).await?;
+            let phase_result = self.run_string(&invocation).await;
+            // Drain and close the pty before looking at how the phase went: a
+            // failing phase's own output is the first thing anyone reads.
+            drop(pty);
+            phase_result?;
             // `die` aborts the phase even when it ran in a subshell or a
             // helper pipeline whose exit status the phase ignored.
             if let Some(msg) = self.die_flag.take() {

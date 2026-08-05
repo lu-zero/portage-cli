@@ -42,10 +42,35 @@ consume, not parallel ad-hoc prints. Verbosity is decided in one place:
 
 | Flags | Console | Build/phase output |
 |-------|---------|--------------------|
-| default | `>>> Emerging (N of M)` + per-phase `===` banners | tee'd to terminal **and** `build.log` |
+| default | `>>> Emerging (N of M)` + per-phase `===` banners | copied to terminal **and** `build.log` |
 | `-j>1` | banners (one line/pkg; readable) | `build.log` only (no interleaving) |
 | `-q` | nothing (failures still print) | `build.log` only |
-| `-v` | banners + per-phase elapsed time | tee'd |
+| `-v` | banners + per-phase elapsed time | copied to both |
+
+### The phase's terminal
+
+In the two rows that reach the terminal, the phase's stdout/stderr is a **pty**
+(`portage-repo/src/build/pty.rs`, real portage's `portage/util/_pty.py`), read
+by `em` and copied to the console and the log. It is not a nicety: the `e*`
+implementation every *external* Gentoo tool uses (`gentoo-functions`, hence
+`binutils-config`, `gcc-config`, and the `eltpatch` behind `elibtoolize`)
+re-checks `[ -t 1 ]` on **every** call before it will colour anything or place
+`eend`'s indicator with cursor motion. Through a pipe both fail, so those tools
+rendered flat and line-wrapped no matter what `TERM`/`COLUMNS` said.
+
+Consequences worth knowing:
+
+- **`build.log` contains ANSI escapes** for anything that colours itself when
+  attached to a terminal — the phase's own `e*` output, and also `gcc`,
+  `cmake`, `ninja` and friends. Real portage's logs have the same property for
+  the same reason. `OPOST` is turned off on the slave (as `_pty.py` does), so
+  what does *not* get in is `\r\n`: line endings stay one byte.
+- **No pty when there is no terminal** — piped output, `-q`, and `-j>1` all
+  keep the previous `tee`, so CI logs and captured output are unchanged.
+- The reader is a plain OS thread, not a `tokio` task, because the phase
+  blocks on writing once the pty buffer fills and a starved reader would
+  deadlock the merge. It stops when the last slave closes, with a bounded
+  linger so a background process that inherited fd 1 cannot hold a merge open.
 
 `-v` stops there: it is a display flag, so it does not raise the tracing floor.
 `em`'s own debug/trace logs need `-vv`/`-vvv`, and those still leave dependency
