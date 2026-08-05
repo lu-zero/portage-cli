@@ -471,17 +471,182 @@ pub fn finalize_echo() {
 
     let mut out = anstream::stdout();
     for (cpv, log) in &items {
-        let info = crate::style::PORTAGE_COLORS.info;
-        let pkg = crate::style::C_PKG;
-        let _ = writeln!(out);
-        let _ = writeln!(
-            out,
-            " {info}*{info:#} Messages for package {pkg}{cpv}{pkg:#}:"
-        );
-        let _ = writeln!(out);
-        log.print_to(&mut out);
+        print_block(&mut out, cpv, log);
     }
     let _ = out.flush();
+}
+
+/// One package's block as `echo` renders it: a blank line, the header, a blank
+/// line, then the messages. Shared with `em read`, which shows a saved log in
+/// the same shape the live run would have.
+fn print_block(out: &mut impl Write, package: &str, log: &PackageLog) {
+    let info = crate::style::PORTAGE_COLORS.info;
+    let pkg = crate::style::C_PKG;
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        " {info}*{info:#} Messages for package {pkg}{package}{pkg:#}:"
+    );
+    let _ = writeln!(out);
+    log.print_to(out);
+}
+
+// ── Reading back what was saved (`em read`) ───────────────────────────────
+
+/// A per-package file the `save` module wrote.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedLog {
+    pub path: Utf8PathBuf,
+    /// `<category>/<pf>`, recovered from the file name.
+    pub package: String,
+    /// The file name's `%Y%m%d-%H%M%S` stamp, which is also its sort key.
+    pub stamp: String,
+}
+
+impl SavedLog {
+    /// The stamp as a human reads it. Purely presentational — the stamp itself
+    /// stays the sort key, since it is already lexicographically ordered.
+    pub fn when(&self) -> String {
+        let (date, time) = match self.stamp.split_once('-') {
+            Some(parts) if parts.0.len() == 8 && parts.1.len() == 6 => parts,
+            _ => return self.stamp.clone(),
+        };
+        format!(
+            "{}-{}-{} {}:{}:{}",
+            &date[..4],
+            &date[4..6],
+            &date[6..],
+            &time[..2],
+            &time[2..4],
+            &time[4..]
+        )
+    }
+}
+
+/// Every per-package file under `<logdir>/elog`, newest first.
+///
+/// Both layouts portage writes are read: the flat
+/// `<category>:<pf>:<stamp>.log`, and `FEATURES=split-elog`'s
+/// `<category>/<pf>:<stamp>.log`. `summary.log` is skipped — it is an
+/// append-only digest of the same messages, not a per-package file.
+pub fn saved_logs(elogdir: &Utf8Path) -> Vec<SavedLog> {
+    fn parse(path: Utf8PathBuf, category: Option<&str>) -> Option<SavedLog> {
+        let name = path.file_name()?.strip_suffix(".log")?;
+        let mut parts = name.split(':');
+        let (category, pf) = match category {
+            // split-elog: the category is the directory, so the name is
+            // `<pf>:<stamp>` and a `:` in it would be neither.
+            Some(category) => (category.to_string(), parts.next()?.to_string()),
+            None => (parts.next()?.to_string(), parts.next()?.to_string()),
+        };
+        let stamp = parts.next()?.to_string();
+        (parts.next().is_none()).then(|| SavedLog {
+            path,
+            package: format!("{category}/{pf}"),
+            stamp,
+        })
+    }
+
+    let mut logs = Vec::new();
+    let Ok(dir) = std::fs::read_dir(elogdir.as_std_path()) else {
+        return logs;
+    };
+    for entry in dir.flatten() {
+        let Ok(path) = Utf8PathBuf::from_path_buf(entry.path()) else {
+            continue;
+        };
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let category = path.file_name().map(str::to_string);
+            let Ok(inner) = std::fs::read_dir(path.as_std_path()) else {
+                continue;
+            };
+            logs.extend(inner.flatten().filter_map(|e| {
+                let path = Utf8PathBuf::from_path_buf(e.path()).ok()?;
+                parse(path, category.as_deref())
+            }));
+        } else if let Some(log) = parse(path, None) {
+            logs.push(log);
+        }
+    }
+    logs.sort_by(|a, b| {
+        b.stamp
+            .cmp(&a.stamp)
+            .then_with(|| a.package.cmp(&b.package))
+    });
+    logs
+}
+
+/// `<logdir>/elog`: `PORTAGE_LOGDIR` from the environment, then from the
+/// root-aware make.conf, then `<broot>/var/log/portage` — the same chain
+/// [`crate::ebuild`]'s writer side resolves, so a reader started with the same
+/// `--root`/`--config-root` looks where the merge actually wrote.
+async fn elogdir(globals: &crate::cli::Cli) -> Utf8PathBuf {
+    let roots = globals.roots();
+    let configured = match std::env::var("PORTAGE_LOGDIR") {
+        Ok(dir) if !dir.trim().is_empty() => Some(dir),
+        _ => crate::binpkg::read_make_conf_var_for_roots(&roots, "PORTAGE_LOGDIR").await,
+    };
+    let logdir = match configured.map(|d| d.trim().to_string()) {
+        Some(dir) if !dir.is_empty() => Utf8PathBuf::from(dir),
+        _ => roots
+            .broot()
+            .unwrap_or_else(|| Utf8Path::new("/"))
+            .join("var/log/portage"),
+    };
+    logdir.join("elog")
+}
+
+/// `em read` — show what the `save` module filed, the job `elogv` does
+/// interactively.
+pub async fn run_read(
+    globals: &crate::cli::Cli,
+    package: Option<&str>,
+    list: bool,
+    limit: usize,
+    delete: bool,
+) -> anyhow::Result<()> {
+    let elogdir = elogdir(globals).await;
+    let mut logs = saved_logs(&elogdir);
+    if let Some(filter) = package {
+        logs.retain(|log| log.package.contains(filter));
+    }
+    if logs.is_empty() {
+        // Nothing filed is a normal state, not a failure — but say which
+        // directory was looked in, since a wrong `--root` looks identical.
+        match package {
+            Some(filter) => println!("no elog messages for {filter} in {elogdir}"),
+            None => println!("no elog messages in {elogdir}"),
+        }
+        return Ok(());
+    }
+    let shown = if limit == 0 { logs.len() } else { limit };
+    let hidden = logs.len().saturating_sub(shown);
+    logs.truncate(shown);
+
+    let mut out = anstream::stdout();
+    for log in &logs {
+        if list {
+            let _ = writeln!(out, "{}  {}", log.when(), log.package);
+            continue;
+        }
+        match std::fs::read_to_string(log.path.as_std_path()) {
+            Ok(text) => print_block(&mut out, &log.package, &PackageLog::from_text(&text)),
+            Err(e) => crate::style::warn_line!("cannot read {}: {e}", log.path),
+        }
+    }
+    if hidden > 0 {
+        let _ = writeln!(out, "\n({hidden} older package(s) not shown; -n0 for all)");
+    }
+    let _ = out.flush();
+
+    if delete {
+        for log in &logs {
+            if let Err(e) = std::fs::remove_file(log.path.as_std_path()) {
+                crate::style::warn_line!("cannot remove {}: {e}", log.path);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -657,6 +822,43 @@ mod tests {
             work.as_path(),
         );
         assert!(!off.exists());
+    }
+
+    #[test]
+    fn saved_logs_read_both_layouts_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let elogdir = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let write = |rel: &str| {
+            let path = elogdir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap().as_std_path()).unwrap();
+            std::fs::write(path.as_std_path(), "LOG: postinst\nhi\n").unwrap();
+        };
+        write("app-misc:probe-1:20260805-061818.log");
+        write("sys-devel:binutils-2.45:20260804-120000.log");
+        // FEATURES=split-elog puts the category in a directory instead.
+        write("dev-libs/openssl-3.6:20260806-000000.log");
+        // Neither of these is a per-package file.
+        write("summary.log");
+        std::fs::create_dir_all(elogdir.join("empty-cat").as_std_path()).unwrap();
+
+        let logs = saved_logs(elogdir);
+        let names: Vec<_> = logs.iter().map(|l| l.package.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "dev-libs/openssl-3.6",
+                "app-misc/probe-1",
+                "sys-devel/binutils-2.45"
+            ]
+        );
+        assert_eq!(logs[1].when(), "2026-08-05 06:18:18");
+
+        // A round trip through the saved file gets the structure back.
+        let text = std::fs::read_to_string(logs[1].path.as_std_path()).unwrap();
+        assert_eq!(
+            PackageLog::from_text(&text),
+            log_of(&[("postinst", Class::Log, "hi")])
+        );
     }
 
     #[test]

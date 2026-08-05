@@ -49,7 +49,7 @@ subcommands corresponding to the traditional tools.
 | `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/activity.md) |
 | `grep` | `egreplite` | Stub |
 | `portageq` | `portageq` | Stub |
-| `read` | `elogv` / elog reader | Stub |
+| `read` | `elogv` / elog reader | Working — reads what the elog `save` module filed; see below |
 | `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, … |
 | `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
 | `setup` | — | Working — bootstrap a prefix layout (`--local` / `--prefix`) |
@@ -228,6 +228,45 @@ particular USE selection can never change what gets mirrored.
   `SRC_URI` is still expanded via `profiles/thirdpartymirrors` (the
   official distfiles hosts), same as real emirrordist's
   `Config.mirrors = thirdpartymirrors()`.
+
+---
+
+### `em read` (elogv) and the elog system
+
+An ebuild's `einfo`/`elog`/`ewarn`/`eerror`/`eqawarn` calls are not just
+printed: each is also recorded against the phase that raised it, and replayed
+once the package is merged — real portage's elog system, driven by the same
+three settings.
+
+- `PORTAGE_ELOG_CLASSES` (default `log warn error`) selects which classes are
+  kept.
+- `PORTAGE_ELOG_SYSTEM` (default `save_summary:log,warn,error,qa echo`)
+  selects what happens to them. A module may override the class list with a
+  `module:classes` suffix. Implemented: **`save`** (one
+  `<category>:<pf>:<timestamp>.log` per package), **`save_summary`** (appended
+  to `summary.log`), and **`echo`** (the *"Messages for package …"* block at
+  the end of the run). `mail`, `mail_summary`, `syslog` and `custom` are
+  accepted and ignored, as portage ignores a module it cannot import.
+- `PORTAGE_LOGDIR` (default `<broot>/var/log/portage`) is where the file
+  modules write, under an `elog/` subdirectory.
+
+`em read` shows what `save` filed, newest first — the job `elogv` does
+interactively:
+
+```console
+$ em read -l                    # index only
+$ em read                       # the 10 most recent packages' messages
+$ em read dev-libs/ -n0         # every package matching, no limit
+$ em read --delete              # show, then remove what was shown
+```
+
+Files written by real portage are read too (both the flat layout and
+`FEATURES=split-elog`'s per-category directories), and vice versa — the
+on-disk format is portage's own, not an `em` invention.
+
+**Gaps vs portage:** no `mail`/`syslog` modules; the `summary.log` header
+records UTC rather than local time; messages from a phase that *failed* are
+not filed (only a completed merge chain dispatches).
 
 ---
 

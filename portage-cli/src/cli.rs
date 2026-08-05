@@ -1150,8 +1150,17 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 
     #[command(about = "Display Portage elog files")]
     Read {
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
+        /// Only show packages whose `<category>/<pf>` contains this text.
+        package: Option<String>,
+        /// List what is filed instead of printing the messages.
+        #[arg(short, long)]
+        list: bool,
+        /// Show only this many of the most recent packages; 0 for all.
+        #[arg(short = 'n', long, default_value_t = 10)]
+        limit: usize,
+        /// Remove each file once it has been shown.
+        #[arg(long)]
+        delete: bool,
     },
 
     #[command(about = "Read/manage GLEP 42 news items")]

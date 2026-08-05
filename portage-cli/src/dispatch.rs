@@ -212,10 +212,12 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             make_conf,
         } => use_flags::run(globals, add, remove, make_conf.as_deref()),
         Applet::Revdep { library } => crate::revdep::run(globals, library.as_deref()).await,
-        Applet::Read { args } => {
-            eprintln!("read: args={:?}", args);
-            bail!("not implemented: read")
-        }
+        Applet::Read {
+            package,
+            list,
+            limit,
+            delete,
+        } => crate::elog::run_read(globals, package.as_deref(), *list, *limit, *delete).await,
         Applet::News { command } => run_news(command),
         Applet::Glsa { command } => run_glsa(command),
         Applet::Log { command } => run_log(command, globals),
