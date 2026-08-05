@@ -95,26 +95,6 @@ cargo doc --no-deps               # no warnings
 
 [MIT](LICENSE-MIT)
 
-## Contributing
-
-Contributions welcome! Please ensure:
-- Tests pass (`cargo test`)
-- Code is formatted (`cargo fmt`)
-- No clippy warnings (`cargo clippy`)
-- PMS compliance is maintained
-
-### Conventional Commits
-
-This project uses [Conventional Commits](https://www.conventionalcommits.org/).
-Prefix your commit messages with a type:
-
-- `feat:` — new functionality
-- `fix:` — bug fix
-- `refactor:` — code restructuring without behaviour change
-- `docs:` — documentation only
-- `test:` — adding or updating tests
-- `chore:` — maintenance (CI, dependencies, tooling)
-
 ## Author
 
 Luca Barbato <lu_zero@gentoo.org>

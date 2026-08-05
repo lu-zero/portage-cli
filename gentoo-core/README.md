@@ -3,21 +3,11 @@
 [![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/gentoo-core.svg)](https://crates.io/crates/gentoo-core)
 [![docs.rs](https://docs.rs/gentoo-core/badge.svg)](https://docs.rs/gentoo-core)
-[![LICENSE](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/lu-zero/gentoo-core/actions/workflows/ci.yml/badge.svg)](https://github.com/lu-zero/gentoo-core/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/github/lu-zero/gentoo-core/graph/badge.svg?token=fApuKCrcgU)](https://codecov.io/github/lu-zero/gentoo-core)
 
-Core Gentoo types and utilities for Rust applications.
-
-
-## Overview
-
-`gentoo-core` provides fundamental Gentoo-specific types and utilities that can be used across various Gentoo-related Rust projects.
-
-## Features
-
-- Gentoo architecture representation and parsing
-- Variant configuration for Gentoo systems
+Gentoo architecture and release-variant types: parsing, keyword mapping, and
+representation.
 
 ## Architecture Support
 

@@ -17,23 +17,13 @@ A Rust library for parsing Portage package atoms, based on the [Package Manager 
 
 `portage-atom` provides types and parsing for Gentoo/Portage package atoms
 using the [winnow](https://crates.io/crates/winnow) parser combinator
-library.
+library, with PMS version ordering (Algorithm 3.1).
 
-## Features
-
-- Parses atoms according to PMS (versions, slots, USE deps, blockers, repos)
-- PMS version ordering (Algorithm 3.1)
-- winnow 0.7 parser combinators
-
-## What is a Portage Atom?
-
-A Portage atom is a string that specifies a package or set of packages in Gentoo/Portage package managers. The full syntax:
+Full atom syntax:
 
 ```
 [!|!!][<|<=|=|~|>=|>]<category>/<package>[-<version>][:slot][::repository][use-deps]
 ```
-
-### Examples
 
 ```
 dev-lang/rust                          # Simple unversioned atom
@@ -123,50 +113,9 @@ assert!(v3 < v1);  // RC versions are less than release
 - **`Blocker`**: Weak (`!`) or strong (`!!`) blockers
 - **`Operator`**: Version operators (`<`, `<=`, `=`, `~`, `>=`, `>`, `=*`)
 
-## Package Manager Specification (PMS)
+## Examples
 
-This library implements:
-
-### Version Specification (PMS Chapter 3)
-- Version syntax: `1.2.3a_alpha4_beta5_pre6_rc7_p8-r9`
-- Version operators and comparison (Algorithm 3.1)
-- Revision handling
-
-### Dependency Specification (PMS Chapter 8)
-- Package dependency atoms
-- Blockers (weak `!` and strong `!!`)
-- Slot dependencies (`:slot`, `:slot/subslot`, `:=`, `:*`)
-- USE dependencies with all variants
-- Repository IDs (`::repo`)
-
-## Design
-
-The library uses [winnow](https://crates.io/crates/winnow) 0.7 for parsing:
-
-- **Parser Combinators**: Composable, type-safe parsing
-- **Zero-Copy**: Minimizes allocations where possible
-- **Error Handling**: Clear error messages with context
-- **Extensible**: Easy to add new features or customize parsing
-
-Key design principles:
-1. **Minimal Dependencies**: Only essential crates
-2. **PMS Compliance**: Strict adherence to specification
-3. **Type Safety**: Rust's type system prevents invalid atoms
-4. **Performance**: Efficient parsing with minimal overhead
-
-## Testing
-
-Run the test suite:
-
-```bash
-cargo test
-```
-
-Run the example:
-
-```bash
-cargo run --example parse_atoms
-```
+`cargo run --example parse_atoms`
 
 ## Related Projects
 
@@ -180,23 +129,7 @@ cargo run --example parse_atoms
 
 ## Contributing
 
-Contributions welcome! Please ensure:
-- Tests pass (`cargo test`)
-- Code is formatted (`cargo fmt`)
-- No clippy warnings (`cargo clippy`)
-- PMS compliance is maintained
-
-### Conventional Commits
-
-This project uses [Conventional Commits](https://www.conventionalcommits.org/).
-Prefix your commit messages with a type:
-
-- `feat:` — new functionality
-- `fix:` — bug fix
-- `refactor:` — code restructuring without behaviour change
-- `docs:` — documentation only
-- `test:` — adding or updating tests
-- `chore:` — maintenance (CI, dependencies, tooling)
+See [AGENTS.md](AGENTS.md) for project conventions and contribution guidelines.
 
 ## Author
 
