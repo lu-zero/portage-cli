@@ -56,7 +56,7 @@ pub use build::inherit;
 pub use error::{Error, Result};
 
 // Re-export the most-used types at crate root for backwards compat
-pub use build::{EbuildShell, run_helper};
+pub use build::{EbuildShell, PortageColors, TerminalConfig, run_helper};
 pub use cache::{
     CacheReadOpts, RegenItem, RegenOpts, RegenStats, RegenWriteTarget, cache_cpvs,
     cache_entries_parallel, regen_cache,

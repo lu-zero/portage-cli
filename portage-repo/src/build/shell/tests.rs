@@ -1072,11 +1072,13 @@ async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
 /// calling `stty size` — with no `COLUMNS` at all, that branch fails and
 /// every `gentoo-functions` consumer a `pkg_postinst` calls
 /// (`binutils-config`, `gcc-config`, …) falls back to its own non-tty
-/// rendering. `set_terminal_columns` must both set the var (for `em`'s own
-/// Rust builtins to read) and export it as a real environment variable (for
-/// a real external subprocess like `binutils-config` to see it at all).
+/// rendering. `set_terminal` must export it as a real environment variable
+/// (`em`'s own Rust builtins take the width from `TerminalState` instead, but a
+/// real external subprocess like `binutils-config` can only see an export).
+/// `NOCOLOR`/`NO_COLOR` ride along for the same reason — several eclasses read
+/// them directly.
 #[tokio::test]
-async fn set_terminal_columns_is_exported_to_phase_subprocesses() {
+async fn set_terminal_is_exported_to_phase_subprocesses() {
     let dir = tempdir().unwrap();
     let repo_path = dir.path().join("repo");
     let ebuild_path = write_minimal_ebuild(&repo_path, "sys-devel", "binutils");
@@ -1086,7 +1088,10 @@ async fn set_terminal_columns_is_exported_to_phase_subprocesses() {
         .open(&repo_path)
         .unwrap();
     let mut shell = repo.shell().await.unwrap();
-    shell.set_terminal_columns(123);
+    shell.set_terminal(crate::TerminalConfig {
+        columns: 123,
+        colors: crate::PortageColors::default(),
+    });
 
     let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
     let work = dir.path().join("work");
@@ -1104,12 +1109,138 @@ async fn set_terminal_columns_is_exported_to_phase_subprocesses() {
     // so a plain `assert!(result.is_ok())` on the grep itself would prove
     // nothing).
     shell
-        .run_string("_test_exported=$(export -p | grep -c '^declare -x COLUMNS=')")
+        .run_string(
+            "_test_exported=$(export -p | grep -cE '^declare -x (COLUMNS|NOCOLOR|NO_COLOR)=')",
+        )
         .await
         .unwrap();
     assert_eq!(
         shell.get_var("_test_exported").as_deref(),
-        Some("1"),
-        "COLUMNS must be in the exported-variable list, not just brush's internal table"
+        Some("3"),
+        "COLUMNS/NOCOLOR/NO_COLOR must be in the exported-variable list, not just brush's \
+         internal table"
     );
+
+    // A plain palette is portage's `__unset_colors`, which both halves of the
+    // convention must agree on: `NOCOLOR=true` for the eclasses that read
+    // portage's spelling, a *non-empty* `NO_COLOR` for everyone else.
+    assert_eq!(shell.get_var("NOCOLOR").as_deref(), Some("true"));
+    assert_eq!(shell.get_var("NO_COLOR").as_deref(), Some("1"));
+}
+
+/// Run `script` and return what it wrote to stderr, with trailing newlines
+/// stripped by the command substitution as usual.
+async fn captured_stderr(shell: &mut EbuildShell, script: &str) -> String {
+    shell
+        .run_string(&format!("_captured=$({{ {script} ; }} 2>&1)"))
+        .await
+        .unwrap();
+    shell.get_var("_captured").unwrap_or_default()
+}
+
+/// The `e*` builtins render exactly as portage's `isolated-functions.sh` does,
+/// in both of the two modes it has.
+///
+/// Portage's bash half performs no terminal detection of its own: `RC_ENDCOL`
+/// is hardcoded to `"yes"`, and the only switch is `__set_colors` versus
+/// `__unset_colors`. With colours off `ENDCOL` is empty, so `eend`'s
+/// `echo -e "${ENDCOL} ${msg}"` degrades to the indicator on a line of its own;
+/// with colours on the same line becomes cursor-up plus cursor-forward, landing
+/// the indicator at the end of the line `ebegin` wrote.
+#[tokio::test]
+async fn e_output_builtins_render_like_isolated_functions() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    write_minimal_ebuild(&repo_path, "sys-devel", "binutils");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    // A fresh shell is set up for metadata sourcing, where `stubs.rs` shadows
+    // the output builtins with no-op shell functions; `run_phase` unsets those
+    // for real phases, and so must this.
+    shell
+        .run_string("unset -f einfo einfon elog ewarn eerror eqawarn ebegin eend")
+        .await
+        .unwrap();
+
+    // ── __unset_colors ────────────────────────────────────────────────────
+    shell.set_terminal(crate::TerminalConfig {
+        columns: 80,
+        colors: crate::PortageColors::default(),
+    });
+
+    assert_eq!(captured_stderr(&mut shell, "einfo hello").await, " * hello");
+    // Every line of a multi-line message carries the marker, as portage's
+    // `while read -r` loop gives it.
+    assert_eq!(
+        captured_stderr(&mut shell, "einfo $'one\\ntwo'").await,
+        " * one\n * two"
+    );
+    // einfon is the one that does not end the line — that is what the `n` is
+    // for, and `ebegin` is built on it.
+    assert_eq!(
+        captured_stderr(&mut shell, "einfon bare; printf END").await,
+        " * bareEND"
+    );
+    assert_eq!(
+        captured_stderr(&mut shell, "ebegin Doing; eend 0").await,
+        " * Doing ...\n [ ok ]"
+    );
+    // A failing eend reports through eerror first, so the indicator lands at
+    // the end of *that* line rather than the ebegin one.
+    assert_eq!(
+        captured_stderr(&mut shell, "ebegin Doing; eend 1 nope").await,
+        " * Doing ...\n * nope\n [ !! ]"
+    );
+
+    // eend's argument is the exit status it reports *and* returns.
+    shell
+        .run_string("eend 3 2>/dev/null; _rc=$?")
+        .await
+        .unwrap();
+    assert_eq!(shell.get_var("_rc").as_deref(), Some("3"));
+
+    // ── __set_colors ──────────────────────────────────────────────────────
+    let ansi = |c| anstyle::Style::new().fg_color(Some(anstyle::Color::Ansi(c)));
+    shell.set_terminal(crate::TerminalConfig {
+        columns: 80,
+        colors: crate::PortageColors {
+            info: ansi(anstyle::AnsiColor::Green),
+            bracket: ansi(anstyle::AnsiColor::Blue),
+            good: ansi(anstyle::AnsiColor::Cyan),
+            ..Default::default()
+        },
+    });
+
+    // Only the `*` is painted; the spaces framing it are not
+    // (`" ${PORTAGE_COLOR_INFO}*${PORTAGE_COLOR_NORMAL} ${REPLY}"`).
+    assert_eq!(
+        captured_stderr(&mut shell, "einfo hello").await,
+        " \x1b[32m*\x1b[0m hello"
+    );
+    // ENDCOL (up one line, then `COLS - 8` right), then the indicator: colour
+    // switches between segments with a single reset at the end, as portage's
+    // `"${BRACKET}[ ${GOOD}ok${BRACKET} ]${NORMAL}"` does. Closing each segment
+    // instead would render identically while emitting three extra escapes.
+    assert_eq!(
+        captured_stderr(&mut shell, "ebegin Doing; eend 0").await,
+        " \x1b[32m*\x1b[0m Doing ...\n\x1b[A\x1b[72C \x1b[34m[ \x1b[36mok\x1b[34m ]\x1b[0m"
+    );
+}
+
+/// A palette with no colour in it is portage's `__unset_colors`, which is what
+/// lets `eend` decide between its two renderings without a second flag to keep
+/// in sync. anstyle renders an empty style as the empty string at both ends,
+/// so this holds by construction — pin it, since `eend` depends on it.
+#[test]
+fn a_default_palette_is_plain() {
+    assert!(crate::PortageColors::default().is_plain());
+    let colors = crate::PortageColors {
+        qawarn: anstyle::Style::new()
+            .fg_color(Some(anstyle::Color::Ansi(anstyle::AnsiColor::Yellow))),
+        ..Default::default()
+    };
+    assert!(!colors.is_plain());
 }

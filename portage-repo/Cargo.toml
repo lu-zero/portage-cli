@@ -29,6 +29,7 @@ gentoo-core = { workspace = true }
 brush-core = { workspace = true, features = ["experimental-parser"] }
 brush-builtins = { workspace = true }
 brush-parser = { workspace = true }
+anstyle = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 regex = { workspace = true }

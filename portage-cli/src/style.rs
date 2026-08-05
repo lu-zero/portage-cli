@@ -14,6 +14,40 @@ pub fn term_width() -> usize {
     terminal_size::terminal_size().map_or(80, |(terminal_size::Width(w), _)| w as usize)
 }
 
+/// Portage's `PORTAGE_COLOR_*` palette for the `e*` builtins a build phase
+/// calls, mapped onto this module's own constants — every code verified against
+/// `portage/output.py`'s `_styles` table (`INFO`=`darkgreen`→`32m`,
+/// `LOG`/`GOOD`=`green`→`32;01m`, `WARN`=`yellow`→`33;01m`,
+/// `QAWARN`=`brown`→`33m`, `ERR`/`BAD`=`red`→`31;01m`,
+/// `BRACKET`=`blue`→`34;01m`).
+pub const PORTAGE_COLORS: portage_repo::PortageColors = portage_repo::PortageColors {
+    info: C_MARKER_INFO,
+    log: C_GOOD,
+    warn: C_WARN,
+    qawarn: C_QAWARN,
+    err: C_ERROR,
+    bracket: C_BRACKET,
+    good: C_GOOD,
+    bad: C_ERROR,
+};
+
+/// How a build phase should see the console: this process's width, and
+/// portage's palette unless colour is off.
+///
+/// `portage-repo` never asks the terminal anything itself — this is the one
+/// place the answer is resolved, mirroring the split real portage keeps between
+/// its Python and bash halves.
+pub fn terminal_config() -> portage_repo::TerminalConfig {
+    portage_repo::TerminalConfig {
+        columns: term_width(),
+        colors: if crate::diag::stdout_wants_color() {
+            PORTAGE_COLORS
+        } else {
+            portage_repo::PortageColors::default()
+        },
+    }
+}
+
 /// Wrap `items` into space-separated lines that fit `width`, each line after
 /// the first indented by `indent`. Never splits an item, so a single item
 /// longer than the width simply overflows its line.
@@ -107,6 +141,10 @@ pub const C_BRACKET: Style = Style::new()
 pub const C_GOOD: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Green)))
     .effects(Effects::BOLD);
+/// `eqawarn`'s marker colour (`portage/output.py`'s `QAWARN` = `"brown"` →
+/// `33m`, plain yellow) — deliberately one shade quieter than [`C_WARN`]'s
+/// bold, since a QA notice is aimed at the ebuild's author, not its user.
+pub const C_QAWARN: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
 /// The default answer in a `[y/N]`-style confirm prompt — real portage's
 /// `PROMPT_CHOICE_DEFAULT` (plain green, not bold; `UserQuery.query`'s
 /// default `colours=[PROMPT_CHOICE_DEFAULT, PROMPT_CHOICE_OTHER]`).

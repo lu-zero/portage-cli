@@ -1032,7 +1032,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     // not yet visible to later builds in the run — that needs a merged sysroot,
     // which is shelved (see docs/root-model.md "Overlay support — shelved").
     shell.set_build_roots(config_root, sysroot, eprefix, broot);
-    shell.set_terminal_columns(crate::style::term_width());
+    shell.set_terminal(crate::style::terminal_config());
 
     if let Some(flags) = use_flags {
         // The resolved plan's effective USE for this package overrides the

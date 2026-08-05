@@ -13,6 +13,7 @@ use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
 use super::commands;
 use super::commands::inherit;
 use super::stubs;
+use super::terminal;
 use super::ver_funcs;
 use crate::error::{Error, Result};
 use crate::repo::ebuild::Ebuild;
@@ -379,6 +380,9 @@ pub struct EbuildShell {
     /// Resolved `PORTAGE_INST_UID`/`PORTAGE_INST_GID` for `dobin`/`dosbin` and
     /// PATH shims. Shared (Arc) like `die_flag`.
     inst_owner: commands::inst_owner::InstOwnerDefaults,
+    /// Width and palette the `e*` output builtins render with. Shared (Arc)
+    /// like `die_flag`. Set by [`EbuildShell::set_terminal`].
+    terminal: terminal::TerminalState,
     /// `PORTAGE_CONFIGROOT` for phases — where profile/make.conf live. `None`
     /// keeps the host. Set by the merge driver from the root model.
     build_config_root: Option<Utf8PathBuf>,
@@ -707,6 +711,9 @@ impl EbuildShell {
         let inst_owner = commands::inst_owner::InstOwnerDefaults::default();
         shell.set_shared(inst_owner.clone());
 
+        let terminal = terminal::TerminalState::default();
+        shell.set_shared(terminal.clone());
+
         let mut ebuild_shell = EbuildShell {
             shell,
             distdir_override: None,
@@ -714,6 +721,7 @@ impl EbuildShell {
             die_flag,
             install_paths,
             inst_owner,
+            terminal,
             build_config_root: None,
             build_sysroot: None,
             build_eprefix: None,
@@ -769,22 +777,44 @@ impl EbuildShell {
         self.bashrc_files = files;
     }
 
-    /// `COLUMNS` for phase subprocesses — the caller's own terminal width
-    /// (`em`'s `style::term_width()`; this crate has no business querying a
-    /// terminal itself, it just carries the value into the phase env).
-    /// Matches real portage's `doebuild.py`, which sets this "in order to
-    /// prevent unnecessary stty calls" (its own comment). Without it, real
-    /// `gentoo-functions`' tty-capability probe (`rc.sh`'s
-    /// `_update_tty_level`/`_update_columns`) sees `PORTAGE_BIN_PATH` is set
-    /// (which `em` already exports) and takes its `from_portage` branch,
-    /// which reads `$COLUMNS` instead of calling `stty size` at all — with no
-    /// `COLUMNS`, that branch fails and every `gentoo-functions` consumer a
-    /// `pkg_postinst` calls (`binutils-config`, `gcc-config`, …) falls back
-    /// to its own non-tty rendering, regardless of whether `em`'s own
-    /// invocation is running in a real, capable terminal. Found live
-    /// 2026-08-04 re-emerging `sys-devel/binutils`.
-    pub fn set_terminal_columns(&mut self, columns: usize) {
-        self.set_var("COLUMNS", &columns.to_string());
+    /// Describe the caller's terminal to this shell: width and palette for the
+    /// `e*` output builtins, plus the environment variables an ebuild or an
+    /// external helper script reads for itself.
+    ///
+    /// This crate has no business querying a terminal — the caller
+    /// (`portage-cli`) resolves `--color`/`NO_COLOR`/TTY-detection and its own
+    /// width once, and carries the answer in. The same split real portage uses
+    /// between its Python and bash halves.
+    ///
+    /// Three variables go into the phase env, each with real consumers outside
+    /// this crate:
+    ///
+    /// * `COLUMNS` — real portage's `doebuild.py` sets it "in order to prevent
+    ///   unnecessary stty calls" (its own comment). Without it,
+    ///   `gentoo-functions`' tty-capability probe (`rc.sh`'s
+    ///   `_update_tty_level`/`_update_columns`) sees `PORTAGE_BIN_PATH` set
+    ///   (which `em` already exports) and takes its `from_portage` branch,
+    ///   which reads `$COLUMNS` instead of calling `stty size` at all — so with
+    ///   no `COLUMNS`, every `gentoo-functions` consumer a `pkg_postinst` calls
+    ///   (`binutils-config`, `gcc-config`, …) falls back to its non-tty
+    ///   rendering however capable `em`'s own terminal is. Found live
+    ///   2026-08-04 re-emerging `sys-devel/binutils`.
+    /// * `NOCOLOR` — `cargo.eclass` (`CARGO_TERM_COLOR`), `cmake.eclass`
+    ///   (`CMAKE_COLOR_MAKEFILE`) and `ruby-ng.eclass` all read it.
+    /// * `NO_COLOR` — the cross-project convention, read by
+    ///   `python-utils-r1.eclass`, `zig-utils.eclass` and `gentoo-functions`
+    ///   itself. Per the convention any non-empty value disables colour, so
+    ///   the enabled case must set it *empty*, not to a false-ish word.
+    ///
+    /// `PORTAGE_COLOR_*` deliberately stays out of the environment: portage
+    /// exports it only because its own `e*` helpers are bash, and nothing in
+    /// `::gentoo` reads it — checked across every eclass and ebuild.
+    pub fn set_terminal(&mut self, terminal: terminal::TerminalConfig) {
+        self.terminal.set(terminal);
+        self.set_var("COLUMNS", &terminal.columns.to_string());
+        let plain = terminal.colors.is_plain();
+        self.set_var("NOCOLOR", if plain { "true" } else { "false" });
+        self.set_var("NO_COLOR", if plain { "1" } else { "" });
     }
 
     /// Log phase output to `path` (created on first write): tee'd to the
@@ -1964,7 +1994,7 @@ impl EbuildShell {
              REPLACING_VERSIONS REPLACED_BY_VERSION \
              MAKEOPTS CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CC CXX AR RANLIB NM STRIP \
              INSDESTTREE EXEDESTTREE DOCDESTTREE DESTTREE _into_dir _insopts _exeopts \
-             MOPREFIX ABI CONF_LIBDIR CHOST CBUILD CTARGET ARCH COLUMNS",
+             MOPREFIX ABI CONF_LIBDIR CHOST CBUILD CTARGET ARCH COLUMNS NOCOLOR NO_COLOR",
         )
         .await
         .ok();

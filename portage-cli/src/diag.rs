@@ -90,6 +90,20 @@ pub fn stderr_wants_color() -> bool {
     )
 }
 
+/// Whether stdout should get ANSI color, on the same terms as
+/// [`stderr_wants_color`].
+///
+/// Build-phase output is the caller here: it reaches the console through the
+/// `tee` on the shell's *stdout*, so stdout is what decides whether an ebuild
+/// may colour itself — the same stream real portage tests
+/// (`actions.py`'s `sys.stdout.isatty()`).
+pub fn stdout_wants_color() -> bool {
+    !matches!(
+        anstream::AutoStream::choice(&std::io::stdout()),
+        anstream::ColorChoice::Never
+    )
+}
+
 /// Render a [`miette::Diagnostic`] code frame to stderr.
 ///
 /// Color is decided here, at the UI boundary — never pre-baked into a
