@@ -9,6 +9,7 @@ use brush_core::{
     ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable, SourceInfo,
 };
 use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
+use portage_solver::BuildClass;
 
 use super::commands;
 use super::commands::inherit;
@@ -408,6 +409,16 @@ pub struct EbuildShell {
     /// unchrooted, unlike a cross-compiler (host-native by construction) or
     /// the real host's own tools.
     build_broot: Option<Utf8PathBuf>,
+    /// What kind of build this package is — the structural "host-class vs
+    /// target-class, native vs cross" answer, replacing the local
+    /// `cross_host_tool_tuple` re-derivation. `None` ⇒ fall back to deriving
+    /// [`BuildClass::CrossTool`] from the ebuild's `cross-<tuple>/` category
+    /// (the historical path); `Some` is the value the planner stamped (Track
+    /// A2b threads it through; until then every site is category-derived).
+    /// Read by the PATH/EPREFIX/ESYSROOT/CPPFLAGS fixups in `run_phase` to
+    /// tell a host-side cross tool (`cross-<tuple>/{binutils,gcc,…}`) from an
+    /// ordinary target package.
+    build_class: Option<BuildClass>,
     /// Portage `bashrc` hooks sourced per phase after the environment is set up
     /// (profile `profile.bashrc` files in stack order, then the user's
     /// `${PORTAGE_CONFIGROOT}/etc/portage/bashrc`). Not PMS; matches portage's
@@ -727,6 +738,7 @@ impl EbuildShell {
             build_sysroot: None,
             build_eprefix: None,
             build_broot: None,
+            build_class: None,
             bashrc_files: Vec::new(),
             baseline: None,
             phase_sourced_ebuild: None,
@@ -770,6 +782,14 @@ impl EbuildShell {
         self.build_sysroot = sysroot.map(Utf8Path::to_path_buf);
         self.build_eprefix = eprefix.map(Utf8Path::to_path_buf);
         self.build_broot = broot.map(Utf8Path::to_path_buf);
+    }
+
+    /// Set the build class for subsequent phases — the planner-stamped answer
+    /// to "is this a host-class or target-class build?" When unset, `run_phase`
+    /// falls back to deriving [`BuildClass::CrossTool`] from the ebuild's
+    /// `cross-<tuple>/` category (the historical behaviour).
+    pub fn set_build_class(&mut self, class: BuildClass) {
+        self.build_class = Some(class);
     }
 
     /// Set the `bashrc` hooks to source per phase (profile `profile.bashrc`
@@ -1573,17 +1593,26 @@ impl EbuildShell {
         let category = ebuild.category();
         let pn = ebuild.name();
 
-        // Whether this package is one of the *host-side* cross toolchain tools
-        // (built to run on CBUILD, targeting CTARGET — lives under the `cross-*`
-        // symlink category). Computed once, early, and reused by both the PATH
-        // fix below and the EPREFIX/ESYSROOT fix further down: it's the one
-        // signal that distinguishes "this package's own ROOT is the top-level
-        // EROOT, host-arch-executable" from "this package's own ROOT is the
-        // foreign-arch target sysroot" — an *ordinary* package being built to
-        // install *into* a `--cross` target sysroot is emphatically the latter.
-        let cross_host_tool_tuple = category
-            .strip_prefix("cross-")
-            .filter(|_| matches!(pn, "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers"));
+        // The build class — the structural "host-class vs target-class, native
+        // vs cross" answer for this package. The planner stamps it on the plan
+        // entry (`SelectedPackage.build_class`); until that threads through
+        // (Track A2b), fall back to the historical derivation: a `cross-<tuple>/`
+        // category identifies a host-side cross-toolchain tool. Read by the
+        // PATH/EPREFIX/ESYSROOT/CPPFLAGS fixups below to tell such a tool from
+        // an ordinary target package — the one signal that distinguishes "this
+        // package's own ROOT is the top-level EROOT, host-arch-executable" from
+        // "this package's own ROOT is the foreign-arch target sysroot".
+        let build_class = self.build_class.clone().unwrap_or_else(|| {
+            match category
+                .strip_prefix("cross-")
+                .filter(|_| matches!(pn, "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers"))
+            {
+                Some(tuple) => BuildClass::CrossTool {
+                    triple: tuple.to_string(),
+                },
+                None => BuildClass::NativeTarget,
+            }
+        });
 
         // FILESDIR is the ebuild's own dir + `files` (PMS), not repo+cat+pn —
         // they differ only for a `cross-*` symlink, whose real files live with
@@ -1690,7 +1719,7 @@ impl EbuildShell {
             }
         };
         // `<root>/usr/bin` on PATH, for the host-side cross-toolchain-building
-        // steps only (`cross_host_tool_tuple.is_some()`: this package is
+        // steps only (`BuildClass::CrossTool`: this package is
         // `cross-<T>/{binutils,gcc,gdb,clang-crossdev-wrappers}` itself, built
         // to run on CBUILD). A later step in that same sequence genuinely
         // needs an earlier one's own `<root>/usr/bin/<T>-*` output (e.g.
@@ -1701,7 +1730,7 @@ impl EbuildShell {
         // see [[stage-build-shakeout]].
         //
         // NOT applied to a plain self-contained `--root DIR` bootstrap with
-        // no active `--cross` at all (`cross_host_tool_tuple.is_none()` and
+        // no active `--cross` at all (not a `CrossTool` and
         // `build_config_root.is_none()` both true) — this used to also fire
         // there, reasoning by analogy that `root_str` is equally
         // host-arch-executable in that case too. Live-tested for the first
@@ -1728,7 +1757,7 @@ impl EbuildShell {
         if root_str != "/"
             && self.build_eprefix.is_none()
             && self.build_sysroot.is_none()
-            && cross_host_tool_tuple.is_some()
+            && matches!(build_class, BuildClass::CrossTool { .. })
         {
             let bin = format!("{root_str}usr/bin");
             let path = self.get_var("PATH").unwrap_or_default();
@@ -1786,16 +1815,19 @@ impl EbuildShell {
         // `ED`, `EROOT`, `SYSROOT`, `ESYSROOT` — six PMS location variables —
         // through a chain of local variables computed in sequence. `PATH`
         // above and `EPREFIX`/`ESYSROOT` here all key off the same
-        // `cross_host_tool_tuple` signal (computed once, near `category`/`pn`,
+        // `build_class` signal (computed once, near `category`/`pn`,
         // above). If a further package-class special-case shows up, this
         // whole block deserves extracting into a small `RootVars { root,
         // eprefix, ed, eroot, sysroot, esysroot }` value type built by one
-        // function that takes `(category, pn, root_str, build_sysroot,
+        // function that takes `(build_class, root_str, build_sysroot,
         // build_eprefix)` and returns all six together — so the invariants
         // connecting them (ED must track EPREFIX; ESYSROOT must NOT
         // double-count a flipped EPREFIX) are enforced in one place instead
         // of by convention across a 100-line function.
-        let eprefix = if cross_host_tool_tuple.is_some() && eprefix.is_empty() && root_str != "/" {
+        let eprefix = if matches!(build_class, BuildClass::CrossTool { .. })
+            && eprefix.is_empty()
+            && root_str != "/"
+        {
             root_str.trim_end_matches('/').to_string()
         } else {
             eprefix
@@ -1875,7 +1907,7 @@ impl EbuildShell {
             // `--root`) and running it through the generic `sysroot_trimmed +
             // eprefix` formula below would double the offset (`sysroot` is
             // *also* `root_str` for a plain `--root` build — see the flip's
-            // comment above). Reuses `cross_host_tool_tuple` computed there —
+            // comment above). Reuses `build_class` computed there —
             // found 2026-07-03 doing a from-scratch cross-stage1 test, see
             // [[stage-build-shakeout]].
             //
@@ -1883,7 +1915,7 @@ impl EbuildShell {
             // doubling case, found live 2026-08-04 testing an ordinary
             // `-T riscv64-unknown-linux-gnu -b llvm-core/clang` package build
             // (`sys-libs/zlib` et al. — NOT under `crossdev --setup`, so
-            // `cross_host_tool_tuple` is `None` here too): `Cli::roots()`'s
+            // `build_class` is not `CrossTool` here either): `Cli::roots()`'s
             // global `--target` substitution sets `base == target == the
             // sysroot` (`cli.rs`'s `roots()`), so `Roots::build_sysroot()`
             // returns `None` (its own doc comment: "`None` means same as the
@@ -1892,7 +1924,7 @@ impl EbuildShell {
             // though, still carries the *outer* prefix (deliberately, so
             // `relocate_root` anchors distfiles/work trees there — see
             // `roots()`'s doc comment) — so appending it here doubles the
-            // sysroot exactly like the `cross_host_tool_tuple` case above,
+            // sysroot exactly like the `CrossTool` case above,
             // but for an unrelated reason. Real Gentoo Prefix's own
             // patched gcc reads `ESYSROOT` directly to compute its runtime
             // `-isysroot` (confirmed live: a bogus doubled `ESYSROOT` env var
@@ -1906,8 +1938,8 @@ impl EbuildShell {
             // `outer_roots()`, where `base` and `target` genuinely differ
             // (`Some("/")` vs `Some(<outer prefix>)`), so `build_sysroot()`
             // stays `Some` and this new arm never fires for them.
-            let esysroot = if let Some(tuple) = cross_host_tool_tuple {
-                format!("{root_str}usr/{tuple}/")
+            let esysroot = if let BuildClass::CrossTool { triple } = &build_class {
+                format!("{root_str}usr/{triple}/")
             } else if eprefix.is_empty() || self.build_sysroot.is_none() {
                 sysroot.clone()
             } else {
@@ -1931,7 +1963,7 @@ impl EbuildShell {
             // riscv64 cross toolchain under `--prefix`: binutils's dwarf.c hit
             // `elfutils/debuginfod.h: No such file or directory` despite
             // pkg-config finding `libdebuginfod >= 0.188` on the host.
-            if cross_host_tool_tuple.is_some() && self.build_sysroot.is_some() {
+            if matches!(build_class, BuildClass::CrossTool { .. }) && self.build_sysroot.is_some() {
                 let cppflags = self.get_var("CPPFLAGS").unwrap_or_default();
                 let updated = format!("{cppflags} -idirafter /usr/include");
                 self.set_var("CPPFLAGS", updated.trim_start());

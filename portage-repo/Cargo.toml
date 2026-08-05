@@ -22,6 +22,7 @@ symbol-table = ["portage-atom/symbol-table", "portage-metadata/symbol-table"]
 portage-atom = { workspace = true }
 portage-metadata = { workspace = true }
 portage-vdb = { workspace = true }
+portage-solver = { workspace = true }
 gentoo-core = { workspace = true }
 # Pinned to a fork commit for reproducible CI (we don't commit Cargo.lock);
 # bump when intentionally updating brush. Local dev overrides to a worktree

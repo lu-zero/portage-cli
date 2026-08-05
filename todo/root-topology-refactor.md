@@ -72,9 +72,24 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
   pinned by `solution::tests::*` (4 cases). The libc/headers `CrossTool`
   case stays `NativeTarget` here (it needs `bypass_cross_root`, not in the
   solver) and folds in at A3.
-- **A2** Thread to `EbuildShell::run_phase`; replace `cross_host_tool_tuple`
-  + the 5 downstream special-casings with `match build_class`. Convert
-  the 11 `portage-repo/src/build/shell/tests.rs` tests to class-setup.
+- ✅ **A2a (landed)** Add a typed `build_class: Option<BuildClass>` field +
+  `set_build_class` setter to `EbuildShell` (`portage-repo/src/build/shell.rs`),
+  and replace the 4 `cross_host_tool_tuple` read sites (PATH prepend, EPREFIX
+  flip, ESYSROOT doubling, `-idirafter` host fallback — all `CrossTool`-gated)
+  with typed `matches!(build_class, BuildClass::CrossTool{..})` reads. `Option`
+  so `None` falls back to deriving `CrossTool` from the ebuild's `cross-<tuple>/`
+  category — the exact current logic, name-allowlist preserved. Pure refactor,
+  no behaviour change, all 442 portage-repo tests green. `portage-repo` gains
+  the lightweight `portage-solver` vocab dep (precedent: `portage-atom-pubgrub`).
+- **A2b** Plumb the *planner-stamped* `build_class` (computed today at the
+  pubgrub→`SelectedPackage` conversion but currently discarded) through
+  `PlanEntry` → `PlannedMerge` → `RunInner` → `set_build_class`, so the shell
+  reads the planner value and the category fallback retires. Wrinkles: the
+  `__worker` subprocess seam needs `BuildClass: Display + FromStr` + a flag
+  (follow `--force-verify-signature`); the unmerge path (`emerge.rs:1021`)
+  re-derives from the installed CPN's category. The §4 CTARGET/`TARGET_ABI`
+  toolchain-var sniff is separate — a within-`CrossTool` sub-distinction
+  (host-tool vs libc/headers) the current enum doesn't carry; folds in at A3.
 - **A3** Retire `bypass_cross_root: bool` (8 sites). Re-key the
   `setup.rs:145` bashrc guard's condition on the class.
 - **A4** Lift `CHOST`/`CBUILD`/`CTARGET` out of shell-env rediscovery
