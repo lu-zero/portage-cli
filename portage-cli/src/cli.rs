@@ -1076,7 +1076,7 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`).
         #[arg(long, value_name = "DURATION", default_value = "7d")]
         deletion_delay: String,
-        /// Deletion-grace state file (default: $XDG_STATE_HOME/em/mirrordist/<repo>-*.json).
+        /// Deletion-grace state file (default: `$XDG_STATE_HOME/em/mirrordist/<repo>-*.json`).
         #[arg(long, value_name = "FILE")]
         deletion_db: Option<camino::Utf8PathBuf>,
         /// Tab-delimited log of fetched files (appended).

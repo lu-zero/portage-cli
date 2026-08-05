@@ -64,7 +64,7 @@ pub struct AutounmaskCandidate {
 ///
 /// Tokens are interned at config-read time so the solver never sees a raw
 /// keyword string. Each token sets or clears **exactly its own** grant —
-/// [`KeywordAccept::add`] is set insert/remove, never a lattice join.
+/// `KeywordAccept::add` is set insert/remove, never a lattice join.
 ///
 /// Real Portage keeps `pgroups` as a flat set of *literal strings*
 /// (`arm64`, `~arm64`, `riscv`, `*`, `**`, …). Match is `token in set` (plus
@@ -111,7 +111,7 @@ pub enum AcceptToken {
     /// discard). Does not touch `~arch` / `*` / `~*` / `**`.
     Negate(Interned<DefaultInterner>),
     /// `-~arch` — withdraw only the testing grant (portage(5) pin-to-stable
-    /// idiom `media-video/mplayer -~x86`). Must stay distinct from [`Negate`].
+    /// idiom `media-video/mplayer -~x86`). Must stay distinct from [`Self::Negate`].
     NegateTesting(Interned<DefaultInterner>),
     /// `-~*` — withdraw the `~*` grant specifically.
     NegateAnyTesting,
@@ -286,9 +286,9 @@ impl KeywordAccept {
 /// match, which is correct when lines do not contradict each other for the
 /// same atom — the crossdev files on this project are one line per CP).
 ///
-/// Host [`Self::arch`] is **not** the accept universe: it is only used for
+/// Host `arch` is **not** the accept universe: it is only used for
 /// bare-atom expansion and autounmask `~arch` suggestions. All arch names in
-/// tokens are stored in [`KeywordAccept`].
+/// tokens are stored in `KeywordAccept`.
 pub struct AcceptKeywords {
     /// Host arch, interned — bare-atom expansion and autounmask `~arch` only.
     arch: Interned<DefaultInterner>,
