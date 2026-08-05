@@ -445,22 +445,75 @@ pub fn default_local_path() -> Utf8PathBuf {
     crate::xdg::home().join(".gentoo")
 }
 
+/// `PATH` entries contributed by the prefix's `etc/env.d`, highest priority
+/// first.
+///
+/// Packages that live outside `usr/bin` reach `PATH` only this way — LLVM is
+/// the worked example: every `llvm-core/llvm` slot installs its binaries under
+/// `usr/lib/llvm/<slot>/bin` and ships an `env.d/60llvm-NNNN` to advertise
+/// them, and `em select clang` writes a `59llvm-selected` that sorts ahead to
+/// express a choice. Without reading env.d, a prefix's compilers are installed
+/// but unreachable, and any selection is inert.
+///
+/// Files are read in name order, which *is* the priority order by construction
+/// (that is what the numeric prefixes are for). Only `PATH` is consumed here:
+/// `LDPATH` belongs to `ld.so.conf` via `env-update`, not to a shell.
+fn env_d_path_entries(prefix: &Utf8Path) -> Vec<String> {
+    let dir = prefix.join("etc/env.d");
+    let Ok(entries) = std::fs::read_dir(dir.as_std_path()) else {
+        return Vec::new();
+    };
+    let mut files: Vec<_> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.path())
+        .collect();
+    files.sort();
+
+    let mut out = Vec::new();
+    for file in files {
+        let Ok(content) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for line in content.lines() {
+            let line = line.trim();
+            let Some(value) = line.strip_prefix("PATH=") else {
+                continue;
+            };
+            for entry in value.trim_matches('"').split(':').filter(|e| !e.is_empty()) {
+                if !out.iter().any(|e| e == entry) {
+                    out.push(entry.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Shell snippet suitable for `eval "$(em active env)"` (bash/zsh).
 ///
-/// Prepends the prefix's `usr/bin` and `bin` to `PATH` and exports
-/// `EM_ACTIVE_KIND` / `EM_ACTIVE_PATH` markers. Does **not** set `EPREFIX`
-/// globally — that would confuse host tools; `em` itself reads the state file.
+/// Prepends the prefix's `etc/env.d` `PATH` entries — which is how anything
+/// outside `usr/bin` becomes reachable, and how an `em select clang` choice
+/// takes effect — followed by the prefix's own `usr/bin` and `bin`, and
+/// exports the `EM_ACTIVE_KIND` / `EM_ACTIVE_PATH` markers. Does **not** set
+/// `EPREFIX` globally — that would confuse host tools; `em` itself reads the
+/// state file.
 pub fn env_exports(ctx: &ActiveContext) -> String {
     let p = ctx.path.as_str();
     // Escape path components for use inside double quotes, then append the
     // `${PATH:+:$PATH}` expansion *unescaped* so the shell still expands it.
-    let bin1 = shell_escape_double_inner(&format!("{p}/usr/bin"));
-    let bin2 = shell_escape_double_inner(&format!("{p}/bin"));
+    let mut parts: Vec<String> = env_d_path_entries(&ctx.path)
+        .iter()
+        .map(|e| shell_escape_double_inner(e))
+        .collect();
+    parts.push(shell_escape_double_inner(&format!("{p}/usr/bin")));
+    parts.push(shell_escape_double_inner(&format!("{p}/bin")));
+    let path = parts.join(":");
     format!(
         "# em active env — eval this in bash/zsh\n\
          export EM_ACTIVE_KIND={}\n\
          export EM_ACTIVE_PATH={}\n\
-         export PATH=\"{bin1}:{bin2}${{PATH:+:$PATH}}\"\n",
+         export PATH=\"{path}${{PATH:+:$PATH}}\"\n",
         ctx.kind.as_str(),
         shell_double_quote(p),
     )
@@ -753,6 +806,51 @@ fn finalize_abs_path(path: Utf8PathBuf) -> Result<Utf8PathBuf> {
 
 #[cfg(test)]
 mod tests {
+
+    /// env.d is how a prefix's compilers become reachable at all, and the
+    /// numeric prefixes *are* the priority order — an `em select clang`
+    /// choice (`59llvm-selected`) has to land ahead of the slot's own
+    /// `60llvm-*`, and both ahead of plain `usr/bin`.
+    #[test]
+    fn env_exports_honour_env_d_priority_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let env_d = prefix.join("etc/env.d");
+        std::fs::create_dir_all(env_d.as_std_path()).unwrap();
+        std::fs::write(
+            env_d.join("60llvm-9977").as_std_path(),
+            "PATH=\"/p/usr/lib/llvm/22/bin\"\nLDPATH=\"/p/usr/lib/llvm/22/lib64\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            env_d.join("59llvm-selected").as_std_path(),
+            "PATH=\"/p/usr/lib/llvm/21/bin\"\n",
+        )
+        .unwrap();
+
+        let ctx = ActiveContext {
+            kind: ActiveKind::Prefix,
+            path: prefix.clone(),
+        };
+        let out = env_exports(&ctx);
+        let path_line = out
+            .lines()
+            .find(|l| l.starts_with("export PATH="))
+            .expect("PATH export");
+
+        let selected = path_line.find("/p/usr/lib/llvm/21/bin").expect("selection");
+        let slot_default = path_line.find("/p/usr/lib/llvm/22/bin").expect("60llvm");
+        let usr_bin = path_line
+            .find(&format!("{prefix}/usr/bin"))
+            .expect("usr/bin");
+        assert!(
+            selected < slot_default && slot_default < usr_bin,
+            "selection must outrank the slot default, both ahead of usr/bin: {path_line}"
+        );
+        // LDPATH is ld.so.conf's business, not a shell's.
+        assert!(!path_line.contains("lib64"), "{path_line}");
+    }
+
     use super::*;
     use crate::test_support::home_lock;
     use clap::Parser;

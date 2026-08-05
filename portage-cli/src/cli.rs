@@ -1651,7 +1651,9 @@ pub enum ClangAction {
     Show,
     #[command(about = "Set the active LLVM/clang slot")]
     Set {
-        /// LLVM slot to activate (e.g., `22` or `1` for list number).
+        /// LLVM slot to activate: a slot (`22`), a slot qualified by where it
+        /// lives (`22@host`, `22@prefix`), or a `list` number. A bare slot present
+        /// in both resolves to the prefix's..
         slot: String,
     },
 }
