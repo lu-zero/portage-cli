@@ -35,7 +35,14 @@
 //!   inject, and none to filter back out of the output.
 //!
 //! Every failure path falls back to the previous `tee`, as portage falls back
-//! to a plain pipe.
+//! to a plain pipe. One such path is worth naming because it looks like a bug
+//! and is not: under `--privilege hakoniwa` the container's devfs provides only
+//! `null`, `zero`, `full`, `random`, `urandom` and `tty`, so there is no
+//! `/dev/ptmx` for `openpt` to open and no pty at all — phases there keep the
+//! `tee` and render flat. Handing the shell a descriptor instead of a path
+//! would not change that: the failure is at pty *creation*, before any path is
+//! resolved. Fixing it means giving that container a devpts, which no default
+//! configuration reaches (`Backend::auto_backend` never selects hakoniwa).
 
 use std::io::Write;
 use std::os::fd::OwnedFd;
