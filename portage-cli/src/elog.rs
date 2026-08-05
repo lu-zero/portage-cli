@@ -272,7 +272,11 @@ impl PackageLog {
     /// Inverse of [`to_handoff`](Self::to_handoff).
     fn from_handoff(text: &str) -> Self {
         let mut log = Self::default();
-        for line in text.lines() {
+        // `split('\n')` not `lines()`: a trailing `\r` is content, not a line
+        // break (portage bug #390833) — same contract as [`collect`](Self::collect),
+        // so the round trip stays byte-faithful instead of dropping the `\r`
+        // every `echo` replay would otherwise lose.
+        for line in text.split('\n').filter(|l| !l.is_empty()) {
             let parsed = line.split_once(' ').and_then(|(class, rest)| {
                 let (phase, message) = rest.split_once(' ')?;
                 let phase = EBUILD_PHASES.iter().find(|p| **p == phase)?;
@@ -538,6 +542,11 @@ fn write_elog_file(elogdir: &Utf8Path, name: &str, body: &str, append: bool) {
         .open(path.as_std_path());
     match opened {
         Ok(mut file) => {
+            // Group-readable, matching `ensure_elogdir`'s setgid intent: a log
+            // filed under `sudo` lands `root:<invoker group>` and must stay
+            // openable by that group for `em read`, which the process umask
+            // (0077 under strict sudo) would otherwise deny.
+            let _ = rustix::fs::fchmod(&file, rustix::fs::Mode::from_bits_truncate(0o660));
             if let Err(e) = file.write_all(body.as_bytes()) {
                 crate::style::warn_line!("elog: cannot write {path}: {e}");
             }
@@ -919,6 +928,19 @@ mod tests {
         assert_ne!(PackageLog::from_text(&log.to_text()), log);
     }
 
+    /// A trailing `\r` inside a message is content, not a line break (portage
+    /// bug #390833). `collect` keeps it via `split('\n')`; `from_handoff` must
+    /// agree, or every `echo` replay silently drops the byte.
+    #[test]
+    fn the_handoff_preserves_a_trailing_carriage_return() {
+        let log = log_of(&[
+            ("postinst", Class::Log, "first line"),
+            ("postinst", Class::Log, "second line\r"),
+            ("postinst", Class::Log, "third line"),
+        ]);
+        assert_eq!(PackageLog::from_handoff(&log.to_handoff()), log);
+    }
+
     /// Collecting consumes the files, so a build tree kept by
     /// `FEATURES=keeptemp` cannot have its messages filed twice.
     #[test]
@@ -968,6 +990,30 @@ mod tests {
                 .mode()
                 & 0o7777,
             0o700
+        );
+    }
+
+    /// `write_elog_file` forces group-readable (0o660) regardless of umask, so
+    /// `em read` can display a file a sudo'd merge filed as
+    /// `root:<invoker group>` — the directory's setgid bit only makes such
+    /// files deletable, not readable.
+    #[test]
+    fn write_elog_file_is_group_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let elogdir = camino::Utf8Path::from_path(dir.path())
+            .unwrap()
+            .join("elog");
+        write_elog_file(&elogdir, "summary.log", "body\n", true);
+        let mode = std::fs::metadata(elogdir.join("summary.log"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o7777,
+            0o660,
+            "elog files are group-readable (0o660)"
         );
     }
 
