@@ -55,36 +55,6 @@ fn is_numeric(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// Look up `name` in a colon-separated `passwd`/`group` database, returning the
-/// requested 0-based fields. `passwd` rows are `name:pw:uid:gid:…`, `group` rows
-/// `name:pw:gid:…`; missing file or absent name ⇒ `None`.
-fn db_lookup(path: &Path, name: &str, fields: &[usize]) -> Option<Vec<String>> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        let cols: Vec<&str> = line.split(':').collect();
-        if cols.first() == Some(&name) {
-            return fields
-                .iter()
-                .map(|&i| cols.get(i).map(|s| s.to_string()))
-                .collect();
-        }
-    }
-    None
-}
-
-/// True when `path` exists and has at least one non-empty, non-comment line.
-/// Used to distinguish "no passwd yet (bootstrap)" from "passwd present but
-/// name missing (hard error, like portage)".
-fn db_file_populated(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    content.lines().any(|l| {
-        let t = l.trim();
-        !t.is_empty() && !t.starts_with('#')
-    })
-}
-
 /// Look up `name` in the target passwd/group first; if that **file is missing
 /// or empty** (pre-baselayout ROOT), fall back to the host `/etc` database so
 /// stage/bootstrap builds can still `fowners root:portage` under a fake-root
@@ -98,15 +68,15 @@ fn db_lookup_target_or_host(
     fields: &[usize],
 ) -> Option<Vec<String>> {
     let target = pwdb_etc.join(file);
-    if let Some(v) = db_lookup(&target, name, fields) {
+    if let Some(v) = crate::userdb::lookup(&target, name, fields) {
         return Some(v);
     }
-    if db_file_populated(&target) {
+    if crate::userdb::is_populated(&target) {
         // Target has a db and the name is simply not there — do not invent
         // host ids (portage hard-dies in this case).
         return None;
     }
-    db_lookup(Path::new("/etc").join(file).as_path(), name, fields)
+    crate::userdb::lookup(Path::new("/etc").join(file).as_path(), name, fields)
 }
 
 /// Resolve an `fowners` owner spec (`user[:group]`) to numeric `uid[:gid]`
@@ -1617,7 +1587,7 @@ mod tests {
         let got = resolve_owner("root:root", &etc).unwrap();
         assert_eq!(got, "0:0");
         // Name present only on host, not in empty target.
-        if db_lookup(Path::new("/etc/passwd"), "portage", &[2]).is_some() {
+        if crate::userdb::id_in_file(Path::new("/etc/passwd"), "portage").is_some() {
             let got = resolve_owner("root:portage", &etc).unwrap();
             assert!(
                 got.starts_with("0:"),

@@ -6,23 +6,6 @@ use anyhow::{Context, Result};
 use camino::Utf8Path;
 use tempfile::NamedTempFile;
 
-/// Look up a numeric id by name in the contents of a colon-separated
-/// `passwd`/`group` database. Both put the id in field 2 (`name:pw:uid:…`,
-/// `name:pw:gid:…`), so one parser serves both.
-///
-/// Text in, so the caller decides which database and stays testable. Note this
-/// bypasses NSS — fine for the local system accounts it is asked about, and
-/// every caller has a defined fallback when a name does not resolve.
-pub(crate) fn id_by_name_in(db: &str, name: &str) -> Option<u32> {
-    db.lines().find_map(|line| {
-        let mut cols = line.split(':');
-        (cols.next() == Some(name))
-            .then(|| cols.nth(1))
-            .flatten()
-            .and_then(|id| id.parse().ok())
-    })
-}
-
 /// Write `contents` to `path` only if it does not already exist (idempotent
 /// scaffolding for `em setup` / `em crossdev`, which must not clobber a file the
 /// user or a previous run wrote).

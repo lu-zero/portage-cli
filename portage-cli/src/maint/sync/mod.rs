@@ -266,9 +266,7 @@ fn portage_uid() -> Option<u32> {
 }
 
 fn parse_portage_uid(passwd: &str) -> Option<u32> {
-    // `passwd` and `group` rows both carry the id in field 2, so one parser
-    // serves both — see [`crate::util::id_by_name_in`].
-    crate::util::id_by_name_in(passwd, "portage")
+    portage_repo::userdb::id_in(passwd, "portage")
 }
 
 fn is_portage_uid(uid: u32) -> bool {
