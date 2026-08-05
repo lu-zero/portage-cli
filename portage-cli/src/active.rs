@@ -440,6 +440,34 @@ pub fn absolutize(path: &Utf8Path) -> Result<Utf8PathBuf> {
         .map_err(|p| anyhow::anyhow!("active path is not valid UTF-8: {}", p.display()))
 }
 
+/// Register `path` as an available entry, without activating it.
+///
+/// `em setup` calls this so a prefix it just created shows up in
+/// `em active list` immediately: the registry exists so you can *choose*
+/// between prefixes, which first requires knowing they are there. Creating one
+/// by hand and then having to re-state its path to register it is busywork.
+///
+/// The active pointer is deliberately left alone. Building a prefix is not a
+/// statement that you want bare `em` to start using it, and silently
+/// repointing the default topology at a new tree is exactly the kind of
+/// surprise the explicit-registration design was meant to avoid.
+///
+/// Idempotent: re-running setup on the same directory updates that entry in
+/// place (keeping a name the user chose) rather than adding a duplicate.
+/// Returns the entry name, or `None` when no state could be written — a
+/// read-only `$XDG_STATE_HOME` must not fail a setup that otherwise worked.
+pub fn register_available(kind: ActiveKind, path: &Utf8Path) -> Option<String> {
+    let path = absolutize(path).ok()?;
+    let mut store = load().ok().flatten().unwrap_or_default();
+    let already_active = store.active_entry().map(|e| e.path.clone());
+    let name = store.add_entry(ActiveEntry::new(kind, path));
+    // `add_entry` never changes the pointer, but assert the intent here so a
+    // future change to it cannot quietly start hijacking the active context.
+    debug_assert_eq!(store.active_entry().map(|e| e.path.clone()), already_active);
+    save(&store).ok()?;
+    Some(name)
+}
+
 /// Default `--local` path (`~/.gentoo`), matching [`Cli`]'s flag semantics.
 pub fn default_local_path() -> Utf8PathBuf {
     crate::xdg::home().join(".gentoo")
@@ -806,6 +834,41 @@ fn finalize_abs_path(path: Utf8PathBuf) -> Result<Utf8PathBuf> {
 
 #[cfg(test)]
 mod tests {
+
+    /// `em setup` registers what it built so it is selectable, but must not
+    /// take over the active pointer — creating a prefix is not a decision to
+    /// start using it.
+    #[test]
+    fn registering_an_entry_never_moves_the_active_pointer() {
+        let mut store = ActiveStore::new();
+        store.add_entry(ActiveEntry::new(
+            ActiveKind::Local,
+            Utf8PathBuf::from("/home/u/.gentoo"),
+        ));
+        store
+            .set_active(&EntryReference::Path(Utf8PathBuf::from("/home/u/.gentoo")))
+            .unwrap();
+        let before = store.active_entry().unwrap().path.clone();
+
+        let name = store.add_entry(ActiveEntry::new(
+            ActiveKind::Prefix,
+            Utf8PathBuf::from("/var/tmp/newprefix"),
+        ));
+        assert_eq!(name, "newprefix", "name comes from the directory");
+        assert_eq!(
+            store.active_entry().unwrap().path,
+            before,
+            "adding must not hijack the active context"
+        );
+        assert_eq!(store.entries.len(), 2);
+
+        // Re-running setup on the same directory updates in place.
+        store.add_entry(ActiveEntry::new(
+            ActiveKind::Prefix,
+            Utf8PathBuf::from("/var/tmp/newprefix"),
+        ));
+        assert_eq!(store.entries.len(), 2, "no duplicate for the same path");
+    }
 
     /// env.d is how a prefix's compilers become reachable at all, and the
     /// numeric prefixes *are* the priority order — an `em select clang`

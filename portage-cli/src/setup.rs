@@ -19,7 +19,7 @@
 //! absent, so re-running never clobbers a user's edits.
 
 use anyhow::{Context, Result};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::util::write_if_absent;
 use portage_resolve::Roots;
@@ -171,10 +171,38 @@ const SKELETON: &[&str] = &[
     "usr/share",
 ];
 
+/// A layout `bootstrap` created that `em active` is able to select between.
+pub struct Registrable {
+    pub kind: crate::active::ActiveKind,
+    pub eroot: Utf8PathBuf,
+}
+
+/// `em setup` — bootstrap a layout and register it as available.
+///
+/// Registration lives here rather than in [`bootstrap`] because it is a
+/// property of *the command*, not of building a layout: `crossdev` bootstraps
+/// prefixes as an internal step, and those are not topologies a user chooses
+/// between. Keeping [`bootstrap`] free of it also keeps it free of side effects
+/// outside the tree it is given — its callers include tests.
+pub fn run(roots: &Roots) -> Result<()> {
+    let Some(registrable) = bootstrap(roots)? else {
+        return Ok(());
+    };
+    // Available only — the active pointer is the user's to move, with
+    // `em active set`.
+    if let Some(name) = crate::active::register_available(registrable.kind, &registrable.eroot) {
+        println!("    registered as:  {name}   (em active list / em active set {name})");
+    }
+    Ok(())
+}
+
 /// Bootstrap the layout described by `roots`. Needs a target other than the host
 /// `/` — i.e. `--local`, `--prefix DIR`, or `--root DIR` (the cross-sysroot
 /// confdir case; pair with `em select profile` to set its profile).
-pub fn bootstrap(roots: &Roots) -> Result<()> {
+///
+/// Returns the topology when it is one `em active` can register; see
+/// [`run`], which is what the applet calls.
+pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
     let eroot = roots.merge_root();
     if eroot.as_str() == "/" {
         anyhow::bail!(
@@ -269,7 +297,21 @@ pub fn bootstrap(roots: &Roots) -> Result<()> {
     if is_standalone_prefix {
         println!("    add to PATH:    {eroot}/usr/bin");
     }
-    Ok(())
+
+    // A self-contained `--root` is not a topology `em active` can select: it
+    // offsets config too, so it is driven by `--root`, never by a registered
+    // default.
+    Ok(match (is_standalone_prefix, is_overlay) {
+        (true, _) => Some(Registrable {
+            kind: crate::active::ActiveKind::Local,
+            eroot: eroot.to_owned(),
+        }),
+        (false, true) => Some(Registrable {
+            kind: crate::active::ActiveKind::Prefix,
+            eroot: eroot.to_owned(),
+        }),
+        (false, false) => None,
+    })
 }
 
 /// A commented `make.conf` placeholder documenting how the prefix is used.
@@ -433,6 +475,42 @@ mod tests {
     use clap::Parser;
 
     use crate::cli::Cli;
+
+    /// `bootstrap` reports which topology it built so `em setup` can register
+    /// it, and reports nothing for a self-contained `--root` — that one is
+    /// driven by the flag, not by a registered default. Registration itself
+    /// deliberately lives in `run`, not here: `crossdev` bootstraps prefixes
+    /// internally and tests bootstrap into tempdirs, and neither should touch
+    /// the user's state.
+    #[test]
+    fn bootstrap_reports_only_selectable_topologies() {
+        use crate::active::ActiveKind;
+
+        let dir = tempfile::tempdir().unwrap();
+        let base = camino::Utf8Path::from_path(dir.path()).unwrap();
+
+        let overlay = base.join("pfx");
+        let cli = Cli::parse_from(["em", "--prefix", overlay.as_str()]);
+        let got = super::bootstrap(&cli.roots())
+            .unwrap()
+            .expect("registrable");
+        assert_eq!(got.kind, ActiveKind::Prefix);
+        assert_eq!(got.eroot, overlay);
+
+        let local = base.join("loc");
+        let cli = Cli::parse_from(["em", "--local", local.as_str()]);
+        let got = super::bootstrap(&cli.roots())
+            .unwrap()
+            .expect("registrable");
+        assert_eq!(got.kind, ActiveKind::Local);
+
+        let root = base.join("root");
+        let cli = Cli::parse_from(["em", "--root", root.as_str()]);
+        assert!(
+            super::bootstrap(&cli.roots()).unwrap().is_none(),
+            "a self-contained --root is not something `em active` selects"
+        );
+    }
 
     fn bashrc_body(flag: &str, dir: &str) -> String {
         let cli = Cli::parse_from(["em", flag, dir]);
