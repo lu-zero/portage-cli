@@ -14,6 +14,7 @@ pub(crate) mod dispatch;
 pub(crate) mod ebuild;
 /// Install-image ELF scan (`NEEDED` / `NEEDED.ELF.2` generation).
 pub mod elfscan;
+pub(crate) mod elog;
 pub(crate) mod emerge;
 pub(crate) mod error;
 /// Pure-gix helpers (hard-reset composition; candidate for upstream gitoxide).

@@ -592,6 +592,11 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         crate::style::warn_line!("env-update failed: {e:#}");
     }
 
+    // Replay what the elog `echo` module collected, now that every package in
+    // the run has been through its phases — portage's `mod_echo.finalize`, and
+    // the reason those messages are batched rather than printed inline.
+    crate::elog::finalize_echo();
+
     // On success, stay silent: `HumanStdoutSink` already prints a
     // `>>> Completed (N of M) {cpv} to {ROOT}/` line per merged package
     // (and `>>> Emerging`/`>>> Fetching` for the start), so a trailing

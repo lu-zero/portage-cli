@@ -1612,7 +1612,12 @@ impl EbuildShell {
         let t = work_root.join("temp");
         let d = work_root.join("image");
         let homedir = work_root.join("homedir");
-        for dir in [&workdir, &t, &d, &homedir] {
+        // `${T}/logging` is portage's `PKG_LOGDIR`: its existence is what enables
+        // the `e*` builtins' elog capture, so it is created unconditionally per
+        // package (as `prepare_build_dirs.py` does) and the *dispatch* side
+        // decides what, if anything, to do with what lands there.
+        let pkg_logdir = t.join("logging");
+        for dir in [&workdir, &t, &d, &homedir, &pkg_logdir] {
             std::fs::create_dir_all(dir)
                 .map_err(|e| Error::Shell(format!("creating {}: {e}", dir.display())))?;
         }

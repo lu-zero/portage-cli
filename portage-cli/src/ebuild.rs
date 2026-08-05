@@ -417,8 +417,8 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         .with_context(|| format!("fetch log: {log}"));
     }
 
-    if buildpkgonly {
-        return run_inner(RunInner {
+    let result = if buildpkgonly {
+        run_inner(RunInner {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::BuildOnly,
@@ -436,10 +436,8 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             activity,
         })
         .await
-        .with_context(|| format!("build log: {log}"));
-    }
-
-    if let Some(backend) = crate::privilege::install_wrap_backend() {
+        .with_context(|| format!("build log: {log}"))
+    } else if let Some(backend) = crate::privilege::install_wrap_backend() {
         // Scoped privilege (Q6): compile runs un-wrapped in this process;
         // install+qmerge(+binpkg) delegates to a wrapped __worker child so the
         // ptrace tax / real root stays off the compile's make/gcc tree.
@@ -505,7 +503,13 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         })
         .await
         .with_context(|| format!("build log: {log}"))
-    }
+    };
+
+    // Whatever the merge chain left for the `echo` module — this process for a
+    // whole-chain run, the `__worker` child for a split one — is held here and
+    // replayed once the whole run finishes, as `mod_echo` does.
+    crate::elog::take_pending(cpv, &work_dir);
+    result
 }
 
 /// Inputs for [`merge_binpkg`] — reuse a pre-built GPKG without compiling.
@@ -552,7 +556,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
     let work_dir = work_base.join(ebuild.category()).join(pf);
     let log = work_dir.join("build.log");
 
-    if let Some(backend) = crate::privilege::install_wrap_backend() {
+    let result = if let Some(backend) = crate::privilege::install_wrap_backend() {
         // The qmerge chowns must run under (fake) root. Delegate to the
         // wrapped __worker (BinpkgMerge group, binpkg set).
         spawn_install_worker_step(
@@ -597,7 +601,12 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
         })
         .await
         .with_context(|| format!("merge log: {log}"))
-    }
+    };
+
+    // A binpkg still runs pkg_preinst/pkg_postinst, so it has elog messages of
+    // its own to hand to the end-of-run replay.
+    crate::elog::take_pending(cpv, &work_dir);
+    result
 }
 
 /// Inputs for [`run_install_worker`] (the privilege-wrapped `__worker` child).
@@ -1275,6 +1284,17 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             }
             Err(e) => tracing::warn!("--buildpkg failed for {}: {e:#}", ebuild.cpv()),
         }
+    }
+
+    // File the messages the phases left in `${T}/logging` before the build tree
+    // — and with it `${T}` — goes away. This side of the split is the one that
+    // still has the files, and (being the privilege-wrapped `__worker` for a
+    // split build) the one that can write under `<broot>/var/log/portage`; the
+    // parent picks up the `echo` module's share from the work dir afterwards.
+    if group.should_tree_drop()
+        && let Some(wd) = work_dir
+    {
+        dispatch_elog(&shell, &ebuild, &work_root, wd, roots);
     }
 
     // Successful merge chain: drop the build tree, keeping build.log.
@@ -2993,6 +3013,62 @@ fn gentoo_mirrors_list(shell: &portage_repo::EbuildShell) -> Vec<String> {
 /// Portage's shipped defaults; the source of `GENTOO_MIRRORS` when neither the
 /// environment nor make.conf overrides it.
 const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
+
+/// One `PORTAGE_ELOG_*` setting, along [`gentoo_mirrors_list`]'s
+/// environment → shell → `make.globals` chain — but stopping at the first layer
+/// that *sets* the variable, empty or not. `PORTAGE_ELOG_SYSTEM=""` in a
+/// make.conf is how elog gets turned off, so an empty value must not fall
+/// through to `make.globals`' non-empty default.
+fn elog_setting(shell: &portage_repo::EbuildShell, name: &str) -> String {
+    if let Ok(val) = std::env::var(name) {
+        return val;
+    }
+    if let Some(val) = shell.get_var(name) {
+        return val;
+    }
+    let mg = Utf8Path::new(MAKE_GLOBALS);
+    if mg.exists()
+        && let Ok(mc) = MakeConf::load(mg)
+        && let Some(val) = mc.get(name)
+    {
+        return val.to_string();
+    }
+    String::new()
+}
+
+/// Run the configured elog modules over whatever this package's phases left in
+/// `${T}/logging`.
+///
+/// The log directory follows portage's `mod_save`: `PORTAGE_LOGDIR` when set,
+/// otherwise `<broot>/var/log/portage` — `broot` rather than the merge root
+/// because the logs describe what *this* `em` did, and belong where `em` runs.
+fn dispatch_elog(
+    shell: &portage_repo::EbuildShell,
+    ebuild: &Ebuild,
+    work_root: &Utf8Path,
+    work_dir: &Utf8Path,
+    roots: RootContext<'_>,
+) {
+    let log = crate::elog::PackageLog::collect(&work_root.join("temp/logging"));
+    if log.is_empty() {
+        return;
+    }
+    let configured = elog_setting(shell, "PORTAGE_LOGDIR");
+    let logdir = if configured.trim().is_empty() {
+        roots
+            .broot
+            .unwrap_or_else(|| Utf8Path::new("/"))
+            .join("var/log/portage")
+    } else {
+        Utf8PathBuf::from(configured.trim())
+    };
+    let config = crate::elog::Config::new(
+        &elog_setting(shell, "PORTAGE_ELOG_CLASSES"),
+        &elog_setting(shell, "PORTAGE_ELOG_SYSTEM"),
+        logdir,
+    );
+    crate::elog::dispatch(&config, ebuild.cpv(), &log, work_dir);
+}
 
 /// `FETCHCOMMAND`/`RESUMECOMMAND` from the live ebuild shell — root-aware for
 /// the same reason as [`gentoo_mirrors_list`]. Previously read via a

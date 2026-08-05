@@ -1276,6 +1276,72 @@ async fn e_output_builtins_render_like_isolated_functions() {
     );
 }
 
+/// Every message the `e*` builtins print is also appended to
+/// `${T}/logging/${EBUILD_PHASE}`, portage's `__elog_base` — the file the elog
+/// system replays once the package is merged.
+#[tokio::test]
+async fn e_output_builtins_capture_elog_messages() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    write_minimal_ebuild(&repo_path, "sys-devel", "binutils");
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell
+        .run_string("unset -f einfo einfon elog ewarn eerror eqawarn ebegin eend")
+        .await
+        .unwrap();
+
+    let t = dir.path().join("temp");
+    let logging = t.join("logging");
+    shell
+        .run_string(&format!(
+            "export T={} EBUILD_PHASE=postinst",
+            t.to_str().unwrap()
+        ))
+        .await
+        .unwrap();
+
+    // Without the directory there is nowhere to capture to, and nothing is
+    // created on demand: its existence is the switch.
+    captured_stderr(&mut shell, "einfo before").await;
+    assert!(!logging.exists());
+
+    std::fs::create_dir_all(&logging).unwrap();
+    captured_stderr(
+        &mut shell,
+        "einfo hi; elog logged; ewarn warned; eerror bad; eqawarn qa; einfon nolf",
+    )
+    .await;
+    // Multi-line messages are recorded one entry per line, as the `while read`
+    // loop feeding `>> ${T}/logging/...` gives; an empty message is skipped.
+    captured_stderr(&mut shell, "einfo $'one\\ntwo'; einfo ''").await;
+    // `ebegin` contributes nothing, and a failing `eend` reports through
+    // `eerror`, so its diagnostic lands as an ERROR.
+    captured_stderr(
+        &mut shell,
+        "ebegin Doing; eend 1 failed; ebegin Two; eend 0",
+    )
+    .await;
+
+    assert_eq!(
+        std::fs::read_to_string(logging.join("postinst")).unwrap(),
+        "INFO hi\nLOG logged\nWARN warned\nERROR bad\nQA qa\nINFO nolf\n\
+         INFO one\nINFO two\nERROR failed\n"
+    );
+
+    // Messages raised outside a phase go to `other`, portage's
+    // `${EBUILD_PHASE:-other}`.
+    shell.run_string("export EBUILD_PHASE=").await.unwrap();
+    captured_stderr(&mut shell, "elog stray").await;
+    assert_eq!(
+        std::fs::read_to_string(logging.join("other")).unwrap(),
+        "LOG stray\n"
+    );
+}
+
 /// A palette with no colour in it is portage's `__unset_colors`, which is what
 /// lets `eend` decide between its two renderings without a second flag to keep
 /// in sync. anstyle renders an empty style as the empty string at both ends,

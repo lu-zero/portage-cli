@@ -31,6 +31,52 @@ fn marker(style: Style) -> String {
     format!(" {style}*{style:#} ")
 }
 
+/// Portage's `__elog_base`: append `<CLASS> <line>` to
+/// `${T}/logging/${EBUILD_PHASE}`, the file the elog system replays once the
+/// package is merged.
+///
+/// Capture is switched on by that directory *existing* — `run_phase` creates it
+/// per package, so metadata sourcing (which has no build dir) records nothing,
+/// exactly as `[[ -z "${1}" || -z "${T}" || ! -d "${T}/logging" ]] && return 1`
+/// arranges. `T` and `EBUILD_PHASE` are read from the shell rather than held in
+/// Rust state because both are per-phase values the shell already owns.
+///
+/// A file, not an in-memory buffer, because `pkg_preinst`/`pkg_postinst` run in
+/// the `em __worker` subprocess: their messages have no other way back.
+fn elog_base<SE: brush_core::ShellExtensions>(
+    shell: &brush_core::Shell<SE>,
+    class: &str,
+    msg: &str,
+) {
+    if msg.is_empty() {
+        return;
+    }
+    let Some(t) = shell.env_str("T").filter(|t| !t.is_empty()) else {
+        return;
+    };
+    let dir = std::path::Path::new(t.as_ref()).join("logging");
+    if !dir.is_dir() {
+        return;
+    }
+    let phase = shell
+        .env_str("EBUILD_PHASE")
+        .filter(|p| !p.is_empty())
+        .map_or_else(|| "other".to_string(), |p| p.into_owned());
+
+    let mut body = String::new();
+    for line in msg.split('\n') {
+        body.push_str(class);
+        body.push(' ');
+        body.push_str(line);
+        body.push('\n');
+    }
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(phase))
+        .and_then(|mut f| f.write_all(body.as_bytes()));
+}
+
 /// `einfo/einfon/elog/ewarn/eerror/eqawarn <message>`
 ///
 /// Prints ` * <message>` to stderr. All six share this implementation and
@@ -53,16 +99,19 @@ impl builtins::Command for EchoMessageCommand {
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
         let palette = colors(&context);
-        let style = match context.command_name.as_str() {
-            "ewarn" => palette.warn,
-            "eerror" => palette.err,
-            "eqawarn" => palette.qawarn,
-            "elog" => palette.log,
-            _ => palette.info,
+        // Colour and elog class travel together — one match so the two can't
+        // drift apart.
+        let (style, class) = match context.command_name.as_str() {
+            "ewarn" => (palette.warn, "WARN"),
+            "eerror" => (palette.err, "ERROR"),
+            "eqawarn" => (palette.qawarn, "QA"),
+            "elog" => (palette.log, "LOG"),
+            _ => (palette.info, "INFO"),
         };
         let einfon = context.command_name == "einfon";
         let prefix = marker(style);
         let msg = self.message.join(" ");
+        elog_base(context.shell, class, &msg);
 
         let shell = context.shell;
         let mut out = context.params.stderr(shell);
@@ -149,6 +198,15 @@ impl builtins::Command for EendCommand {
         let palette = terminal.colors;
         let code = self.exit_code.unwrap_or(0);
 
+        // `__eend` emits its failure diagnostic through `eerror`, so it is
+        // captured as an ERROR entry exactly like a direct `eerror` call.
+        let failure_msg = (code != 0)
+            .then(|| self.message.join(" "))
+            .filter(|m| !m.is_empty());
+        if let Some(msg) = &failure_msg {
+            elog_base(context.shell, "ERROR", msg);
+        }
+
         let shell = context.shell;
         let mut out = context.params.stderr(shell);
 
@@ -165,8 +223,7 @@ impl builtins::Command for EendCommand {
             // The diagnostic goes out first, as its own `eerror` line, so
             // `ENDCOL`'s single cursor-up puts the indicator at the end of
             // *that* line rather than the `ebegin` one — as in portage.
-            let msg = self.message.join(" ");
-            if !msg.is_empty() {
+            if let Some(msg) = &failure_msg {
                 let prefix = marker(palette.err);
                 for line in msg.split('\n') {
                     let _ = writeln!(out, "{prefix}{line}");
