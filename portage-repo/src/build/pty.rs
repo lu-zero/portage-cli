@@ -35,14 +35,14 @@
 //!   inject, and none to filter back out of the output.
 //!
 //! Every failure path falls back to the previous `tee`, as portage falls back
-//! to a plain pipe. One such path is worth naming because it looks like a bug
-//! and is not: under `--privilege hakoniwa` the container's devfs provides only
-//! `null`, `zero`, `full`, `random`, `urandom` and `tty`, so there is no
-//! `/dev/ptmx` for `openpt` to open and no pty at all — phases there keep the
-//! `tee` and render flat. Handing the shell a descriptor instead of a path
-//! would not change that: the failure is at pty *creation*, before any path is
-//! resolved. Fixing it means giving that container a devpts, which no default
-//! configuration reaches (`Backend::auto_backend` never selects hakoniwa).
+//! to a plain pipe.
+//!
+//! The sandboxed backend needs nothing special: `--privilege hakoniwa` runs the
+//! phase inside a user namespace, and that container's devfs already mounts its
+//! own `devpts` instance (`newinstance,ptmxmode=0666`) with `/dev/ptmx`
+//! symlinked to it, so `openpt` and the slave path both resolve inside the box.
+//! Verified live rather than assumed — an external `gentoo-functions` tool
+//! reports a tty on fd 1 and renders in colour under that backend.
 
 use std::io::Write;
 use std::os::fd::OwnedFd;
