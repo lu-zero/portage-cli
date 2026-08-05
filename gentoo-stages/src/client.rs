@@ -113,12 +113,10 @@ impl Client {
                     && let Some(file_name) = path.file_name().and_then(|s| s.to_str())
                     && file_name.starts_with("stage3-")
                 {
-                    // Try to extract info from the filename
                     let variant = extract_variant_from_filename(file_name);
                     let date = extract_date_from_filename(file_name);
 
-                    // Create a Stage3 instance for the cached file
-                    // We don't have size or URL for cached files, so use placeholders
+                    // No size or URL for cached files, so use placeholders.
                     let stage3 = Stage3::new(
                         file_name.to_string(),
                         String::new(), // Empty URL for cached files
@@ -297,24 +295,17 @@ fn extract_timestamp(filename: &str) -> u64 {
 /// Extract variant from stage3 filename
 /// The variant is everything between "stage3-" and the final "-{timestamp}.tar.xz"
 fn extract_variant_from_filename(filename: &str) -> String {
-    // Remove the .tar.xz extension
     let without_ext = filename.strip_suffix(".tar.xz").unwrap_or(filename);
-
-    // Remove the "stage3-" prefix
     let without_prefix = without_ext.strip_prefix("stage3-").unwrap_or(without_ext);
 
-    // Find the last hyphen that separates variant from timestamp
-    // We look for the pattern -YYYYMMDDTHHMMSSZ
+    // The last hyphen separates variant from the -YYYYMMDDTHHMMSSZ timestamp.
     if let Some(last_hyphen_pos) = without_prefix.rfind('-') {
-        // Check if the part after the last hyphen looks like a timestamp
         let potential_timestamp = &without_prefix[last_hyphen_pos + 1..];
         if potential_timestamp.contains('T') && potential_timestamp.ends_with('Z') {
-            // This is a timestamp, so everything before it is the variant
             return without_prefix[..last_hyphen_pos].to_string();
         }
     }
 
-    // Fallback: remove stage3- prefix if present
     without_prefix.to_string()
 }
 
@@ -324,14 +315,9 @@ fn extract_variant_from_filename(filename: &str) -> String {
 fn extract_date_from_filename(filename: &str) -> Option<&str> {
     // Split from the right to handle complex arch names with hyphens
     let mut parts = filename.rsplit('-');
-
-    // Get the last part (should be the timestamp)
     let last_part = parts.next()?;
-
-    // Remove .tar.xz extension if present
     let timestamp_part = last_part.strip_suffix(".tar.xz").unwrap_or(last_part);
 
-    // Check if it looks like a valid timestamp (contains T and ends with Z)
     if timestamp_part.contains('T') && timestamp_part.ends_with('Z') {
         Some(timestamp_part)
     } else {
