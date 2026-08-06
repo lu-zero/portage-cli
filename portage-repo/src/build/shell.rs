@@ -1386,14 +1386,32 @@ impl EbuildShell {
             // incidentally also catches this one, since `bypass_cross_root`
             // can make `CHOST` equal `CBUILD` here for a reason unrelated to
             // this actually being a same-arch build.
-            let target_abi_set = self
-                .get_var("TARGET_ABI")
-                .filter(|s| !s.is_empty())
-                .is_some();
-            let target_tuple = self
-                .get_var("CTARGET")
-                .filter(|t| !t.is_empty() && !target_abi_set && *t != chost);
-            let tool_tuple = target_tuple.clone().unwrap_or_else(|| chost.clone());
+            // `tool_tuple`: the triple whose `${tuple}-gcc`/`-ld`/… this
+            // package compiles *with*. The planner-stamped `build_class` is the
+            // answer when available (the in-process build path); fall back to
+            // the `CTARGET`/`TARGET_ABI` package.env sniff otherwise — which
+            // reads the exact marker bash crossdev writes (`set_env`'s
+            // `case ${l} in K|L) ... *)`), so it stays correct for the paths
+            // that don't carry `build_class` yet (`__worker` install, the
+            // standalone `em ebuild` debug entry). `produces_target_code`
+            // (formerly `target_tuple.is_some()`) gates the `BUILD_*` vars.
+            let (tool_tuple, produces_target_code) = match &self.build_class {
+                Some(BuildClass::CrossToolHost { .. }) => (chost.clone(), false),
+                Some(BuildClass::CrossToolTarget { triple }) => (triple.clone(), true),
+                _ => {
+                    let target_abi_set = self
+                        .get_var("TARGET_ABI")
+                        .filter(|s| !s.is_empty())
+                        .is_some();
+                    let target_tuple = self
+                        .get_var("CTARGET")
+                        .filter(|t| !t.is_empty() && !target_abi_set && *t != chost);
+                    (
+                        target_tuple.clone().unwrap_or_else(|| chost.clone()),
+                        target_tuple.is_some(),
+                    )
+                }
+            };
 
             let prefix_bin = prefix_bin.filter(|bin| tool_exists(Some(bin), &tool_tuple, "gcc"));
             if let Some(bin) = &prefix_bin {
@@ -1450,7 +1468,7 @@ impl EbuildShell {
             // `tc-getBUILD_PROG`'s own real var-check order (`BUILD_CC` /
             // `CC_FOR_BUILD` / `HOSTCC`, never falling back to plain `CC` at
             // all once genuinely cross-compiling).
-            if target_tuple.is_some() {
+            if produces_target_code {
                 let host_bin = self
                     .build_broot
                     .as_deref()

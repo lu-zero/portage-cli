@@ -119,15 +119,20 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
 - **A3b (deferred — needs live `crossdev --setup` verification):**
   ① retire `bypass_cross_root: bool` (16 sites: 10 sets + 2 reads + 4 defs,
   not 8) and stamp the *native* libc/headers steps `CrossToolTarget`;
-  ② rewire the §4 toolchain-var sniff (`shell.rs:1334-1478`,
-  `target_abi_set`/`target_tuple`) to read `build_class` — note the gate's
-  `build_eprefix.is_some()` arm does double duty (crossdev libc/headers under
-  `--prefix` + native-prefix compiler activation), so the split is delicate;
+  ② ✅ **(landed)** rewire the §4 toolchain-var sniff (`shell.rs:init_build_env`)
+  to read `build_class` for the `CrossTool` family (`CrossToolHost`→`${CHOST}-*`,
+  `CrossToolTarget`→`${CTARGET}-*`+`BUILD_*`), falling back to the
+  `TARGET_ABI`/`CTARGET` env sniff for unhooked paths (`__worker` install,
+  standalone). The gate's `build_eprefix.is_some()` double-duty (crossdev
+  libc/headers under `--prefix` + native-prefix compiler activation) is
+  preserved by changing only the `tool_tuple` *derivation*, not the gate.
+  Live-confirmed: `cross-riscv64…/glibc` rebuild passes with the
+  `build_class`-driven `tool_tuple`; 2 new unit tests pin the typed path
+  (incl. overriding a conflicting `CTARGET` env);
   ③ re-key the `setup.rs:145` bashrc guard — needs `BuildClass: Display`
   (deferred A2b-worker blocker) + a new `EM_BUILD_CLASS` shell var (no
-  precedent). The §4 `TARGET_ABI` read is *not* a gratuitous shadow — it reads
-  the exact marker crossdev writes, so it stays until A3b lands the typed
-  replacement.
+  precedent). The §4 `TARGET_ABI` read stays as the fallback — it reads the
+  exact marker crossdev writes, so it's correct until A2b-worker retires it.
 - **A4** Lift `CHOST`/`CBUILD`/`CTARGET` out of shell-env rediscovery
   into a typed `Triples { build, host, target }` constructed once at
   profile load (`portage-repo/src/build/profile.rs:2339`), threaded with
