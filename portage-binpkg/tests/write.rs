@@ -8,6 +8,34 @@ fn tar_list(args: &[&std::ffi::OsStr]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// Empty/missing `${D}` (virtual packages under EPREFIX never create `ED`)
+/// must still produce a valid GPKG — not `tar: Cannot open`.
+#[test]
+fn writes_gpkg_with_missing_image_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let image = tmp.path().join("image/root/xp"); // nested ED path, never created
+    let meta = tmp.path().join("vdb");
+    std::fs::create_dir_all(&meta).unwrap();
+    std::fs::write(meta.join("PF"), "virtual-acl-0\n").unwrap();
+    std::fs::write(meta.join("CATEGORY"), "virtual\n").unwrap();
+    std::fs::write(meta.join("SLOT"), "0\n").unwrap();
+    std::fs::write(meta.join("CONTENTS"), "").unwrap();
+
+    let out = tmp.path().join("virtual-acl-0-1.gpkg.tar");
+    write_gpkg(
+        &GpkgInput {
+            image_dir: &image,
+            metadata_dir: &meta,
+            basename: "virtual-acl-0",
+            signing: None,
+        },
+        &out,
+    )
+    .expect("empty/missing image must not fail --buildpkg");
+    assert!(out.is_file());
+    assert!(image.is_dir(), "tar_tree should create empty image dir");
+}
+
 #[test]
 fn writes_a_valid_gpkg_container() {
     let tmp = tempfile::tempdir().unwrap();

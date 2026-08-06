@@ -1576,6 +1576,17 @@ fn write_binpkg(
     let cat = ebuild.category();
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
     let image_dir = ed_image_dir(shell, work_root);
+    // `ED` is `image/${EPREFIX}` under `--prefix`/`--local`. Packages that
+    // install nothing (every `virtual/*`, many `*-toolchain-symlinks`) never
+    // create that nested path — `walk_image` treats a missing dir as empty and
+    // merges fine, but `tar -C ED` fails with `Cannot open: No such file or
+    // directory`. Live 2026-08-07: systemic `--buildpkg` failure under
+    // `--prefix --target -b`. Create an empty ED so the GPKG image member is
+    // a valid empty tree (same as a no-op install).
+    if !image_dir.exists() {
+        std::fs::create_dir_all(image_dir.as_std_path())
+            .with_context(|| format!("creating empty image dir {image_dir} for --buildpkg"))?;
+    }
     // PKGDIR precedence: $PKGDIR env (portage honours it) → the shell's resolved
     // value (make.conf/make.globals) → the default. Must agree with the
     // consumer's `binpkg::resolve_pkgdir` — including its root-awareness:

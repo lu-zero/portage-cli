@@ -145,6 +145,11 @@ pub fn write_gpkg(input: &GpkgInput, out_path: &Path) -> Result<()> {
 /// `prefix` (so members are `prefix/...`, directory entries included). With
 /// `xattrs`, file capabilities, ACLs and device nodes are preserved (pax format).
 fn tar_tree(dir: &Path, prefix: &str, out: &Path, xattrs: bool) -> Result<()> {
+    // Empty / missing image is valid (virtuals, symlink-only packages under
+    // EPREFIX never create `ED`). `tar -C` requires the directory to exist.
+    if !dir.exists() {
+        std::fs::create_dir_all(dir)?;
+    }
     let mut cmd = Command::new("tar");
     cmd.arg("--zstd")
         .arg("--numeric-owner")

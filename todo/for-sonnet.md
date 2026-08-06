@@ -280,19 +280,20 @@ for an entire class of packages whenever they're part of the plan.
 #### New bugs
 
 - **Dependency/scheduling race**: `sys-apps/sed`'s `econf` can run before
-  `sys-apps/acl` (a real DEPEND) has finished installing into the same
-  target sysroot, under `--jobs 80` — `checking for sys/acl.h... no` despite
-  the header genuinely existing on disk once the run finishes. No file:line
-  yet; needs someone to check the scheduler's readiness/dependency-edge
-  logic for same-sysroot ordering under high `--jobs`.
+  `sys-apps/acl` has finished installing into the same target sysroot, under
+  `--jobs 80` — `checking for sys/acl.h... no` despite the header existing
+  once the run finishes.
+  - **Root cause (Grok, 2026-08-07):** `build_blockers` only followed
+    `DEPEND`/`BDEPEND`. `sed[acl]` DEPEND is `virtual/acl`; the real
+    provider is only **RDEPEND** of that virtual. Scheduler unblocked sed
+    when the empty virtual finished, while `sys-apps/acl` was still building.
+  - **Fix:** include `RDEPEND` edges in `build_blockers` (same `to < from`
+    acyclicity as install_order soft RDEPEND). See depgraph/mod.rs.
 - **`--buildpkg` produces no binpkg for near-empty-image packages**
   (`virtual/*`, `*-toolchain-symlinks`) under `--prefix --target` — 12+
-  occurrences in one run, silent (non-fatal warning only), confirmed
-  pre-existing (not caused by this session's landed commits) but not
-  previously known to be this systemic. `tar: .../image/<merge_root>:
-  Cannot open` — looks like the buildpkg image-tar path assumes a full
-  nested `image/<merge_root>/...` copy exists, which an empty-content
-  package's image never has. No file:line yet (image dirs are cleaned up
-  post-merge, so this needs catching mid-run or reproducing with
-  `--keepwork`/similar to inspect the actual image layout before it's
-  removed).
+  occurrences, non-fatal warning; pre-existing, systemic.
+  - **Root cause (Grok, 2026-08-07):** pack uses `ED` = `image/${EPREFIX}`.
+    Empty packages never create that nested path; `walk_image` tolerates
+    missing, but `tar -C ED` fails (`Cannot open`).
+  - **Fix:** create empty `ED` before packaging; `tar_tree` also creates a
+    missing image dir. See `write_binpkg` / `portage-binpkg::tar_tree`.

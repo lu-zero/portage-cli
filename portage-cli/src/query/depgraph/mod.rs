@@ -72,10 +72,15 @@ pub struct DepgraphOutcome {
     /// The merge list in install order.
     pub plan: Vec<PlannedMerge>,
     /// For each `plan` entry, the indices of earlier entries that must finish
-    /// building before it can build — its in-plan build-time dependencies
-    /// (`DEPEND`/`BDEPEND` edges). Restricted to earlier indices, so it is
-    /// always acyclic; the `--jobs` scheduler uses it to parallelise builds
-    /// while respecting build order. Empty entry ⇒ no in-plan build deps.
+    /// building before it can build — in-plan `DEPEND`/`BDEPEND` **and**
+    /// `RDEPEND` edges. RDEPEND is included because Gentoo `virtual/*` packages
+    /// put real providers only in RDEPEND: e.g. `sed[acl]` DEPEND on
+    /// `virtual/acl`, which RDEPEND on `sys-apps/acl`. Blocking only on the
+    /// virtual lets `--jobs` start sed's configure while acl is still building
+    /// (live 2026-08-07, `--jobs 80`). Restricted to earlier indices, so it is
+    /// always acyclic (`install_order` already linearised soft RDEPEND cycles).
+    /// The `--jobs` scheduler uses this to parallelise builds while respecting
+    /// order. Empty entry ⇒ no in-plan deps that constrain start.
     pub build_blockers: Vec<Vec<usize>>,
     /// `package.provided` CPVs the system supplies, each with the repo slot it
     /// maps onto (derived from the version's slot series). The pre-flight build
@@ -1543,13 +1548,15 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         })
         .collect();
 
-    // Build-order adjacency for `--jobs`: for each plan entry, the indices of
-    // *earlier* entries it depends on at build time (DEPEND/BDEPEND). Matching
-    // is by CPN (an upgrade may remap the version), restricted to earlier
-    // indices so the relation is acyclic — `install_order` already linearised
-    // any cycle. A spurious blocker only costs parallelism; a missing one would
-    // risk building before a dep is merged, so CPN matching errs on the safe
-    // (more-blocking) side.
+    // Build-order adjacency for `--jobs`: earlier plan indices that must finish
+    // before this entry may *start*. Include RDEPEND as well as DEPEND/BDEPEND:
+    // `virtual/*` packages are empty and only RDEPEND their real providers, so
+    // DEPEND-only blockers let consumers race the provider (sed vs acl under
+    // high --jobs, 2026-08-07). Matching is by (MergeRoot, CPN); restricted to
+    // earlier indices so the relation is acyclic — `install_order` already
+    // linearised soft RDEPEND cycles (and drops soft edges that would cycle).
+    // A spurious blocker only costs parallelism; a missing one risks building
+    // before a dep is merged.
     let index_of: HashMap<(MergeRoot, Cpn), usize> = plan
         .iter()
         .enumerate()
@@ -1557,7 +1564,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .collect();
     let mut build_blockers: Vec<Vec<usize>> = vec![Vec::new(); plan.len()];
     for e in &edges {
-        if !matches!(e.class, DepClass::Depend | DepClass::Bdepend) {
+        if !matches!(
+            e.class,
+            DepClass::Depend | DepClass::Bdepend | DepClass::Rdepend
+        ) {
             continue;
         }
         let from_key = (e.from.0.merge_root(), *e.from.0.cpn());
