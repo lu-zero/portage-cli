@@ -1,8 +1,13 @@
 # Test plan — cross-emerge `llvm-core/clang` for riscv64, under `--prefix` and `--local`
 
-STATUS: 🟡 in progress — executing 2026-08-06, against `master` at `9b2e4c3`
-(includes the BuildClass/`PackageArch` fix, commit `1971b7c`, which this plan
-is meant to live-verify).
+STATUS: 🟡 both scenarios reached a terminal (blocked) state for this pass,
+2026-08-06, against `master` at `9b2e4c3` (includes the BuildClass/
+`PackageArch` fix, commit `1971b7c`, which this plan is meant to
+live-verify — no regression found in what did run). Neither scenario
+reached "confirm `-b` does the right thing": Scenario A is blocked by a real
+build-directory race (finding #4, reproduced deterministically); Scenario B
+is blocked by `--local`'s own pre-existing bootstrap hard cycle (finding
+#6). Both are recorded as findings, not worked around, per direction.
 
 ## Findings summary (as of 2026-08-06, mid-run)
 
@@ -40,7 +45,13 @@ log below):
    `category/pf`, with no distinction for which root a merge installs into.
    Consequence: `llvm-core/clang` itself never got a single
    `Emerging`/`Completed` line — the run stopped at 66/136, blocked
-   transitively by the 3 collided packages.
+   transitively by the 3 collided packages. **Reproduced deterministically**
+   on a second, fully fresh sandbox with the identical command (no
+   `--keep-going`): byte-for-byte the same 3 packages, same errors, same
+   66/136 stopping point — not timing-sensitive noise, a reliable outcome of
+   this dependency graph under `--jobs 80`. This is Scenario A's terminal
+   state for this pass; the buildpkg-verification checklist could not run
+   since the goal package never built.
 5. **Process mistake, corrected**: retried with `--keep-going`, against this
    project's own standing convention — it cascaded into an unrelated
    `merged-usr vs split-usr` die on further packages instead of surfacing
@@ -230,6 +241,23 @@ log below):
   involved. Confirms Scenario B's terminal state precisely: **a fresh
   `--local` cannot bootstrap anything — native or cross — without either the
   `--prefix`-first workaround or an already-populated prefix to start from.**
+- **Scenario A, step 3 — the build-directory race (finding #4) is
+  deterministic, not a rare timing fluke, and is this pass's terminal state
+  for `-b llvm-core/clang --jobs 80` under `--prefix`.** Retried on a fully
+  fresh `em-clang-prefix` sandbox (destroyed/recreated, `crossdev --setup`
+  redone clean, `EXIT=0`) with the identical command, no `--keep-going` this
+  time. Result: **byte-for-byte identical failure** — same 3 packages
+  (`llvm-runtimes/clang-rtlib-config-22`, `llvm-core/clang-linker-config-22`,
+  `llvm-runtimes/clang-stdlib-config-22`), same exact `newins` errors, same
+  stopping point (66 of 136, `63 ok, 0 already installed, 3 failed`). This
+  confirms the race isn't timing-sensitive noise — it's a reliable outcome
+  of this dependency graph under `--jobs 80`, reproducible from a clean
+  state. Following the same "document, don't route around it" approach
+  applied to Scenario B: **not** attempting a different `--jobs` value or
+  any other workaround to dodge it in this pass. `llvm-core/clang` itself
+  still never built, so the buildpkg-verification checklist below could not
+  be run — this is Scenario A's terminal state for this pass, not a partial
+  result to keep chasing with more retries.
 
 ## Goal
 
