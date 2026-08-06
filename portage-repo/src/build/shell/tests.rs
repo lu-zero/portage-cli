@@ -563,7 +563,7 @@ async fn minimal_shell(dir: &std::path::Path) -> EbuildShell {
 /// selection used to derive its bin dir from `build_config_root`
 /// (`PORTAGE_CONFIGROOT`) — a proxy that only coincidentally matched the
 /// crossdev sysroot layout. It must instead come from `build_broot`
-/// (`Cli::broot()`'s merge root — the real host for a privileged `--root`,
+/// (`Cli::host_roots()`'s merge root — the real host for a privileged `--root`,
 /// the prefix itself for an unprivileged `--prefix` overlay), so a `${CHOST}-
 /// gcc` built into the prefix (not the host) is still found.
 #[tokio::test]
@@ -671,7 +671,7 @@ async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
     // `--prefix`/`--local`: broot and eprefix both resolve to the prefix
-    // itself (see the gate's own doc comment on `Cli::broot()`).
+    // itself (see the gate's own doc comment on `Cli::host_roots()`).
     shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
@@ -693,7 +693,7 @@ async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
 /// steps' own `package.env`, unlike the host-arch toolchain-*tool* packages)
 /// must get `CC`/etc. as `${CTARGET}-<tool>`, not `${CHOST}-<tool>`, even
 /// though `CHOST` here is the *ambient* value (e.g. `crossdev --setup`'s
-/// `bypass_cross_root` routes these steps through host config for unrelated
+/// `use_outer_eroot` routes these steps through host config for unrelated
 /// reasons) — real glibc's own `sanity_prechecks` runs a `tc-getCPP
 /// ${CTARGET}` probe that can only self-correct to the right cross tool when
 /// `$CC` starts out unset; a premature `${CHOST}-gcc` export defeats it.
@@ -717,7 +717,7 @@ async fn cross_target_package_toolchain_uses_ctarget_not_ambient_chost() {
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
     shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
 
-    // Ambient CHOST/CBUILD both aarch64 (matching bypass_cross_root's
+    // Ambient CHOST/CBUILD both aarch64 (matching use_outer_eroot's
     // host-config resolution for this step) — package.env's own CTARGET
     // names the real target, with no TARGET_ABI (unlike binutils/gcc).
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");

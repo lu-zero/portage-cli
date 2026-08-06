@@ -339,7 +339,7 @@ pub(super) fn report_repo_constraint_violations(violations: &[portage_atom_pubgr
 }
 
 /// Report classified blocker (`!`/`!!`) hits: Step 1 of the blocker Tier-1
-/// auto-unmerge plan (`todo/blocker-enforcement.md`) — analysis and richer
+/// auto-unmerge plan — analysis and richer
 /// advisory text only, no plan mutation. `PreExisting` verdicts (both sides
 /// already installed) are deliberately not printed, matching real emerge's
 /// own suppression of that case ("the damage is already done";

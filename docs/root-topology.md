@@ -13,7 +13,7 @@ assignment in `run_phase`).
 > (`portage-resolve/src/roots.rs`) carries `satisfaction_root(DepClass)`
 > directly (landed 2026-07-09), and `BuildClass` (`portage-solver`, stamped on
 > every plan entry and threaded to the build shell) now drives the host-vs-
-> target-vs-cross discrimination end-toend. The `RootSet` enum was removed as
+> target-vs-cross discrimination end-to-end. The `RootSet` enum was removed as
 > vestigial (it was a lossy path-only summary). The "variant enum (target
 > design)" section below stays as the historical proposal that informed the
 > field-based shape; the "Status" section at the bottom is authoritative for

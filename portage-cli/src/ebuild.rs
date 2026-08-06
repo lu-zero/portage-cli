@@ -187,7 +187,7 @@ pub struct RootContext<'a> {
     pub sysroot: Option<&'a Utf8Path>,
     pub eprefix: Option<&'a Utf8Path>,
     /// Where BDEPEND-class build tools (a cross toolchain, its pkg-config, …)
-    /// live for this invocation — `Cli::broot()`'s merge root. See
+    /// live for this invocation — `Cli::host_roots()`'s merge root. See
     /// `EbuildShell::build_broot`'s doc comment for the full rationale.
     pub broot: Option<&'a Utf8Path>,
     /// The native toolchain bootstrap (`em toolchain --setup`) is
@@ -1730,7 +1730,7 @@ fn post_process_after_install(
         // debug, not info: real portage doesn't print an interactive
         // ecompress/estrip summary either — this is developer detail
         // (`-vv`/`RUST_LOG`), not something that belongs mixed into the
-        // default `>>>`-style merge output (todo/PENDING.md 2026-08-03).
+        // default `>>>`-style merge output.
         tracing::debug!(
             "post-install: {} file(s) compressed, {} symlink(s) retargeted, {} object(s) stripped",
             stats.compressed,
@@ -2063,7 +2063,7 @@ async fn run_merge(
     // debug, not info: this is internal VDB bookkeeping (the counter), and
     // at info level it was rendered with the enclosing `phase{phase="qmerge"}:`
     // span label leaking straight into default output — real portage has no
-    // equivalent line at all in normal mode (todo/PENDING.md 2026-08-03).
+    // equivalent line at all in normal mode.
     tracing::debug!(
         "merge: {}/{}-{} registered (counter={counter})",
         ebuild.category(),

@@ -226,7 +226,7 @@ pub struct WorkerArgs<'a> {
     pub sysroot: Option<&'a str>,
     pub eprefix: Option<&'a str>,
     /// Where BDEPEND-class build tools live for this invocation
-    /// (`Cli::broot()`'s merge root) — see `EbuildShell::build_broot`.
+    /// (`Cli::host_roots()`'s merge root) — see `EbuildShell::build_broot`.
     pub broot: Option<&'a str>,
     /// See `ebuild::RootContext::self_contained_bootstrap`.
     pub self_contained_bootstrap: bool,

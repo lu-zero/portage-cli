@@ -383,7 +383,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 return Err(crate::error::NoValidAtoms.into());
             }
             let roots = globals.roots();
-            // See `DepgraphOpts::host_merge_root`: `Cli::broot()` stays
+            // See `DepgraphOpts::host_merge_root`: `Cli::host_roots()` stays
             // overlay-aware under `--target` substitution, unlike `roots`.
             let host_roots = globals.host_roots();
             let binpkg_index =

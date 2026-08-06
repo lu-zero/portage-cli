@@ -545,8 +545,8 @@ mod tests {
     }
 
     // A `--target` plan's own roots (`resolve_pkgdir`) resolve under the
-    // target sysroot, while `broot()` (host roots, what a `MergeRoot::Host`
-    // entry actually wants) resolve as a plain host build — the two must
+    // target sysroot, while `host_roots()` (what a `MergeRoot::Host` entry
+    // actually wants) resolves as a plain host build — the two must
     // disagree here, or a Host BDEPEND entry would look up binpkgs in the
     // wrong PKGDIR.
     #[tokio::test]
@@ -671,7 +671,7 @@ mod tests {
     }
 
     /// Under `--target`, the sysroot's own config (`roots()`) and the host's
-    /// (`broot()`) can have genuinely different make.conf CFLAGS — the
+    /// (`host_roots()`) can have genuinely different make.conf CFLAGS — the
     /// fingerprint command's `--host` flag exists exactly for this split.
     #[tokio::test]
     async fn desired_build_env_host_vs_target() {

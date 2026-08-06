@@ -388,7 +388,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // A `--target` plan can carry `MergeRoot::Host` entries (an unsatisfied
     // BDEPEND scheduled onto the build host — see `cross_target_runtime_deps`
     // in portage-atom-pubgrub). `roots` here is the `--target`-substituted
-    // sysroot; `broot()` is where a Host entry actually belongs — the real
+    // sysroot; `host_roots()` is where a Host entry actually belongs — the real
     // host `/` for plain `--root` (portage `ROOT=` parity: BDEPEND resolves
     // and installs on the host, full stop), matching `base_roots()` for
     // `--prefix`/`--local`. NOT `base_roots()` directly: that's "the outer
@@ -1277,7 +1277,7 @@ mod entry_roots_tests {
 
     /// `--prefix`: an unsatisfied `MergeRoot::Host` entry must merge into
     /// the prefix, not the real host — an unprivileged overlay can't write
-    /// `/`. `host_roots` here is `Cli::broot()`'s output for `--prefix`,
+    /// `/`. `host_roots` here is `Cli::host_roots()`'s output for `--prefix`,
     /// which now resolves to the prefix (`outer_roots()`), not the host.
     #[test]
     fn host_entry_installs_into_the_prefix_under_overlay_not_the_host() -> Result<()> {

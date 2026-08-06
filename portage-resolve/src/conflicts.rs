@@ -422,7 +422,7 @@ pub enum UnmergeOrder {
 pub enum BlockerVerdict {
     /// Nothing retained still needs the blocked installed package — real
     /// emerge would schedule it for unmerge. Advisory-only until Step 2
-    /// (`todo/blocker-enforcement.md`) threads this into the actual plan.
+    /// threads this into the actual plan.
     WouldUnmerge {
         /// The blocked installed package that would be removed.
         cpv: Cpv,
@@ -470,8 +470,7 @@ pub struct ClassifiedBlocker {
 
 /// Classify every blocker hit as auto-removable, a genuine conflict, or a
 /// case portage itself treats as non-actionable — Step 1 of the blocker
-/// Tier-1 auto-unmerge plan (`todo/blocker-enforcement.md`): analysis only,
-/// no plan mutation.
+/// Tier-1 auto-unmerge plan: analysis only, no plan mutation.
 ///
 /// The removal candidates from every hit are simulated *jointly* in one
 /// [`removal_obstacles`] call (not per-hit), so a mutually-dependent pair of

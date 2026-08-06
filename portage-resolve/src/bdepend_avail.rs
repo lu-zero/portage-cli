@@ -77,7 +77,7 @@ impl Avail {
     /// host-installed view.
     ///
     /// `--prefix` (an unprivileged overlay) additionally weaves in the
-    /// prefix's own VDB: `Cli::broot()` now sends an unsatisfied BDEPEND
+    /// prefix's own VDB: `Cli::host_roots()` now sends an unsatisfied BDEPEND
     /// there (the overlay can't write the real host `/`), so a package
     /// already built into the prefix by a previous run must also count as
     /// satisfied. Not done for `--root`/`--local`: there, nothing is ever
@@ -658,7 +658,7 @@ mod tests {
 
     /// `--prefix`: a BDEPEND satisfied only by the prefix's own VDB (never
     /// built into the real host) must still count as satisfied — the weave
-    /// this fixes, since `Cli::broot()` sends an unsatisfied one there.
+    /// this fixes, since `Cli::host_roots()` sends an unsatisfied one there.
     #[test]
     fn initial_bdepend_weaves_in_the_prefix_vdb_under_overlay() {
         let host = tempfile::tempdir().unwrap();

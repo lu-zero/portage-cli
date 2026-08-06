@@ -335,9 +335,10 @@ impl Cli {
     /// `--prefix` that's the host `/` (the overlay borrows host tools);
     /// under `--local`/`--root` it's the offset itself. **This is not
     /// necessarily BROOT** — for plain `--root` the two differ (BROOT is
-    /// always the host, see [`broot`](Self::broot)); they only coincide for
-    /// `--prefix`/`--local`, which is why this function used to be (mis)used
-    /// for BDEPEND checks too. Use [`broot`](Self::broot) for that.
+    /// always the host, see [`host_roots`](Self::host_roots)); they only
+    /// coincide for `--prefix`/`--local`, which is why this function used to
+    /// be (mis)used for BDEPEND checks too. Use
+    /// [`host_roots`](Self::host_roots) for that.
     pub(crate) fn base_roots(&self) -> Roots {
         let path = opt_path;
         match self.topology_source() {
@@ -780,9 +781,9 @@ mod tests {
 
     /// `--prefix` is an unprivileged overlay: it cannot write the real host
     /// `/`, so an unsatisfied `MergeRoot::Host` plan entry (`entry_roots()`
-    /// in `merge/mod.rs`, fed by `Cli::broot()`) must merge into the prefix
+    /// in `merge/mod.rs`, fed by `Cli::host_roots()`) must merge into the prefix
     /// instead — unlike `--root`, where the same entry correctly lands on
-    /// the real host because that invocation has root. `broot()`'s `.broot`
+    /// the real host because that invocation has root. `host_roots()`'s `.broot`
     /// field (the *satisfaction* root) stays the host either way; only the
     /// merge destination (`merge_root()`) differs here.
     #[test]
@@ -883,7 +884,7 @@ pub enum Applet {
         sysroot: Option<String>,
         #[arg(long)]
         eprefix: Option<String>,
-        /// Where BDEPEND-class build tools live (`Cli::broot()`'s merge root).
+        /// Where BDEPEND-class build tools live (`Cli::host_roots()`'s merge root).
         #[arg(long)]
         broot: Option<String>,
         /// See `ebuild::RootContext::self_contained_bootstrap`.

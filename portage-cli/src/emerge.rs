@@ -332,7 +332,7 @@ async fn emerge_atoms_inner(
     } else {
         roots
     };
-    // `Cli::broot()` (not `roots`): stays overlay-aware under `--target`
+    // `Cli::host_roots()` (not `roots`): stays overlay-aware under `--target`
     // substitution, so a `MergeRoot::Host` entry's `-p` display matches its
     // real merge destination even when `roots` has had its own overlay-ness
     // cleared by the sysroot substitution. See `DepgraphOpts::host_merge_root`.
@@ -986,7 +986,7 @@ pub(crate) async fn run_unmerge_batch(
     // `roots()` for config/sysroot/eprefix (this *is* a merge-target
     // operation, unlike `select`'s config-root-only concerns — see
     // `select-target-flag-collision-fix` memory for why those differ), and
-    // the separate `broot()` for BDEPEND-class tooling, never `roots()`'s
+    // the separate `host_roots()` for BDEPEND-class tooling, never `roots()`'s
     // own value. Computed before the `--pretend` return too, since `-p`
     // also needs `root` to preview any preserve-libs findings.
     let roots = cli.roots();

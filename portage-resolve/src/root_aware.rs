@@ -39,7 +39,7 @@ pub struct CrossContext {
     /// and the `CHOST` maps to a known arch. Derived once; drives keyword
     /// acceptance for the target.
     target_arch: Option<Arch>,
-    /// Where a `MergeRoot::Host` entry actually lands (mirrors `Cli::broot()`):
+    /// Where a `MergeRoot::Host` entry actually lands (mirrors `Cli::host_roots()`):
     /// the prefix under `--prefix` (an unprivileged overlay can't write the
     /// real host `/`), else the real host `/`. Used by [`display_root`] so
     /// the `-p` merge list matches where the merge actually goes.
@@ -74,11 +74,11 @@ impl CrossContext {
 }
 
 /// Detect cross context from CLI roots (no flag required). `host_merge_root`
-/// is `Cli::broot()`'s `merge_root()` — passed in rather than derived from
+/// is `Cli::host_roots()`'s `merge_root()` — passed in rather than derived from
 /// `roots.is_overlay()` here, because `roots` can be `--target`-substituted
 /// (its `eprefix`/overlay-ness cleared), which would wrongly report the real
 /// host as the destination for a `MergeRoot::Host` entry even under an
-/// unprivileged `--prefix` overlay (`Cli::broot()` stays overlay-aware
+/// unprivileged `--prefix` overlay (`Cli::host_roots()` stays overlay-aware
 /// regardless of `--target`, since it's derived from `base_roots()`).
 pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     let sysroot = roots
@@ -198,9 +198,9 @@ mod tests {
     use super::*;
 
     /// `--prefix`: a `MergeRoot::Host` entry must display as landing in the
-    /// prefix, not the real host — matching `Cli::broot()`'s merge
+    /// prefix, not the real host — matching `Cli::host_roots()`'s merge
     /// destination fix. Before that fix `display_root` hardcoded `/` here,
-    /// which stayed silently correct only because `Cli::broot()` itself
+    /// which stayed silently correct only because `Cli::host_roots()` itself
     /// used to be host-anchored for every topology.
     #[test]
     fn host_entry_displays_as_landing_in_the_prefix_under_overlay() {
@@ -260,7 +260,7 @@ mod tests {
 
     /// The combined `--prefix --target` case: `roots` here would be
     /// `--target`-substituted (eprefix cleared), but `host_merge_root` is
-    /// passed independently (from `Cli::broot()`, unaffected by that
+    /// passed independently (from `Cli::host_roots()`, unaffected by that
     /// substitution) — the whole point of not deriving `host_target` from
     /// `roots.is_overlay()` inside `detect`.
     #[test]

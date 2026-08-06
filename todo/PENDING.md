@@ -33,6 +33,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 - Cross stage3 file-tree/version diff vs real stage3 tarball never done (VDB package-set only) — `todo/done/stage3-vs-real-comparison.md`
 - `PORTAGE_CHECKSUM_FILTER` still unimplemented (orthogonal to ACCEPT_PROPERTIES/RESTRICT, which are done)
 - Review sweep log: [[review-findings-2026-07-24]]; structural cross notes: [[cross-support-self-review]]
+- Cross-emerge `llvm-core/clang` for riscv64 under both `--prefix` and `--local`, `-b`/buildpkg correctness included — plan drafted, not run: [[clang-crossbuild-prefix-local-test-plan]]
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 
