@@ -11,14 +11,15 @@ assignment in `run_phase`).
 > it. The `RootTopology`/`RootSet` enum this doc once proposed as the target
 > design was **superseded** by a field-based approach: `Roots`
 > (`portage-resolve/src/roots.rs`) carries `satisfaction_root(DepClass)`
-> directly (landed 2026-07-09), and `BuildClass` (`portage-solver`, stamped on
-> every plan entry and threaded to the build shell) now drives the host-vs-
-> target-vs-cross discrimination end-to-end. The `RootSet` enum was removed as
-> vestigial (it was a lossy path-only summary). The "variant enum (target
-> design)" section below stays as the historical proposal that informed the
-> field-based shape; the "Status" section at the bottom is authoritative for
-> what shipped. See `todo/root-topology-refactor.md` "Current plan" for the
-> full A/B track status.
+> directly (landed 2026-07-09). Track A then stamped `BuildClass` on plan
+> entries for host-vs-target-vs-cross discrimination; **2026-08-06** re-review
+> against bash-crossdev concluded that for `cross-*` / `cross_llvm-*` packages
+> that stamp is dual authority next to **package.env** and should be dropped
+> (see [`todo/drop-buildclass.md`](../todo/drop-buildclass.md) and
+> [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md)). The `RootSet` enum
+> was removed as vestigial. The "variant enum (target design)" section below
+> stays as historical context; the "Status" section at the bottom tracks what
+> shipped. See `todo/root-topology-refactor.md` for A/B track status.
 
 ## The four roles
 

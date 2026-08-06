@@ -40,6 +40,16 @@ churn, low payoff now that `satisfaction_root` exists.
 
 ### Track A (centerpiece): a typed `BuildClass`, planner-stamped
 
+> **2026-08-06 reversal.** Track A **landed**, but re-review against
+> bash-crossdev concluded that a full `BuildClass` for `cross-*` /
+> `cross_llvm-*` packages is between pointless and dangerous: those atoms
+> already get a durable host/target identity via **package.env** (host
+> emerge path), and the stamp is a second authority that can override the
+> env sniff. Plan to drop CrossTool stamps and keep at most a narrow
+> HostCodegen flag: **[[drop-buildclass]]**. Letter/env matrix:
+> [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md). The
+> A1–A3 history below stays as the audit trail of what shipped.
+
 The planner already *knows* each entry's class — it has `MergeRoot`
 (`portage-solver/src/solution.rs:16`), `bypass_cross_root`, the
 `PackageArch` table (`portage-cli/src/crossdev/target.rs:196`), and the

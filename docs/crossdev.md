@@ -9,7 +9,9 @@ separate `crossdev` binary, no on-disk symlink overlay.
 This is the user-facing how-to. For the design rationale (why the category
 is derived on the fly, how root/config resolution works across `--target`/
 `--prefix`/`--local`, the `PackageArch` host/target split) see
-[`root-topology.md`](./root-topology.md).
+[`root-topology.md`](./root-topology.md). For how **bash-crossdev** assigns
+stage letters and `package.env` (and where `em` still diverges — especially
+LLVM runtimes), see [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md).
 
 ## The model, briefly
 
@@ -25,16 +27,19 @@ is derived on the fly, how root/config resolution works across `--target`/
   etc.) do the actual cross-compilation magic, triggered by the category name
   — `em` doesn't reimplement cross-compilation, it just builds the aliased
   ebuild phases with the right env.
-- **Two package classes live in the same category.** `binutils`/`gcc`/
-  `clang-crossdev-wrappers` (and any `--ex-pkg` extra) are **host-arch**
-  tools: they run on the build machine and produce code for the target, so
-  they install onto the host/prefix, not the sysroot. Their keyword
-  acceptance mirrors what the *host* would already pick for the real
-  package (installed version, or the newest available one bounded to its
-  own release branch) — not a blanket accept-anything, which used to let a
-  package's live `9999` ebuild win over a perfectly good dated snapshot.
-  `linux-headers`/the libc/the LLVM runtimes are **target-arch**: they
-  install into the sysroot and get target-ABI env.
+- **Two package classes live in the same category (host emerge, not
+  cross-emerge).** `binutils`/`gcc`/`clang-crossdev-wrappers` (and any
+  `--ex-pkg` extra) are **host-arch** tools: they run on the build machine
+  and produce code for the target, so they install onto the host/prefix, not
+  the sysroot. Their keyword acceptance mirrors what the *host* would already
+  pick for the real package (installed version, or the newest available one
+  bounded to its own release branch) — not a blanket accept-anything, which
+  used to let a package's live `9999` ebuild win over a perfectly good dated
+  snapshot. `linux-headers`/the libc are **target-ABI** in package.env
+  (bash-crossdev letters K|L). LLVM runtimes install target code into the
+  sysroot via the ebuild but are **host-env** in bash-crossdev (`*` letters
+  R/U/A/P) — `em` still marks them target-env today; see the
+  [matrix](./bash-crossdev-matrix.md).
 - **The sysroot** is `<EROOT>/usr/<tuple>` — `/usr/<tuple>` for a bare/
   privileged setup, `<prefix>/usr/<tuple>` under `--prefix`/`--local`/
   `--root <dir>`.
