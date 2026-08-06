@@ -296,7 +296,7 @@ cross-compiler itself), exactly like the 2026-08-04 run.
 | # | Scenario | Topology flag | Known state going in |
 |---|---|---|---|
 | A | `--prefix` overlay | `--prefix DIR` | Proven once, informally, 2026-08-04 (commit `ad59ed0`) |
-| B | `--local` standalone prefix | `--local [DIR]` | **Never run for this scenario.** `--local`'s own native toolchain bootstrap has a known genuine hard-cycle partial failure (gdbm/elt-patches/meson/gettext/glibc[cet]/python); whether that blocks *crossdev's* toolchain too is an open question (see Scenario B step 0) |
+| B | `--local` standalone prefix | `--local [DIR]` | **Blocked on native bootstrap.** Empty-VDB hard cycle is expected; seed via `package.provided` (plan: [[local-bootstrap-provided]], [`docs/local-bootstrap.md`](../docs/local-bootstrap.md)). Crossdev under `--local` fails the same way until that lands. |
 
 ## 0. Sandbox setup (crossdev-stages)
 

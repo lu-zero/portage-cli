@@ -258,7 +258,9 @@ C=/ (ro)  B=T=<offset>  S=T  BR=/ (ro)    CBUILD==CHOST
 **(2b) `--local`: self-contained deployment (any host).** The prefix at
 `~/.gentoo` is standalone — base = target = `~/.gentoo`, carrying its own VDB,
 config, and (after bootstrap) its own toolchain. Works on a Gentoo host *and*
-on a foreign host (Debian/Arch/Fedora).
+on a foreign host (Debian/Arch/Fedora). Bootstrapping a toolchain into an
+**empty** prefix needs a host-tool seed via `package.provided` (empty VDB
+hard cycle otherwise) — see [`local-bootstrap.md`](./local-bootstrap.md).
 
 ```
 C=~/.gentoo/etc/portage  B=T=~/.gentoo  S=~/.gentoo  EPREFIX=~/.gentoo   CBUILD==CHOST
@@ -508,9 +510,11 @@ These don't run `toolchain --setup` themselves — they assume the host (or, for
 em --prefix /opt/prefix setup          # layout + overlay config + host-python symlinks
 em --prefix /opt/prefix <pkg>          # host compiler builds into P
 
-# --local (standalone): bootstrap the prefix's own toolchain first
+# --local (standalone): seed host tools, then bootstrap the prefix toolchain
 em --local setup                             # layout + own config, no python symlinks
 em --config-root ~/.gentoo select profile set <profile>  # required — see below
+# Empty VDB ⇒ hard cycle unless package.provided seeds host tools
+# (hand-write today; setup automation planned — docs/local-bootstrap.md)
 em --local toolchain --setup                 # build native toolchain INTO ~/.gentoo
 em --local stages --stage1                   # packages.build using the prefix's own gcc
 em --local <pkg>                             # now self-hosting
