@@ -11,7 +11,7 @@ unprivileged `.local` overlays, and (eventually) crossdev.
 | **base root** | (the planner's "installed" view) | what counts as already installed | `var/db/pkg` |
 | **target root** | `ROOT` / `EROOT` | where new files install + the new VDB | `var/db/pkg`, install dest |
 | **sysroot** | `SYSROOT` / `ESYSROOT` | where build-time `DEPEND` is found | headers / libs / `.pc` |
-| (build tools) | `BROOT` | where `BDEPEND` tools run | always host `/` |
+| (build tools) | `BROOT` | where `BDEPEND` tools run | host `/` for `--root`/`--prefix`/bare; the prefix itself for `--local` (see below) |
 
 ## The two user-facing flags
 
@@ -34,7 +34,7 @@ base_vdb      = --vdb || R/var/db/pkg
 planner installed = VDB(R) ∪ VDB(P)                   # P shadows R; equal ⇒ just one
 merge into    = P
 sysroot search = [P, R]                                # ordered, P wins; equal ⇒ [R]
-broot         = / (native/cross)  | prefix subset (Tier 3)   # see Sequencing below
+broot         = / (--root/--prefix/bare)  | the prefix (--local)   # see below
 EPREFIX       = --prefix || --local || ""              # empty only for --root/host
 ```
 
@@ -83,15 +83,14 @@ host counts as already installed. `--root` ignores it (full closure rebuilt into
 `foo/`); `--prefix` keeps it (only the delta lands in `foo/`).
 
 `--local` is a **third, distinct** mode, not "`--root` plus `EPREFIX`": its
-BROOT is the prefix itself (`Cli::base_roots()`'s `--local` branch,
-`cli.rs:567-581` — `broot: Some(prefix.clone())`), unlike `--root` and
-`--prefix`, both of which use the real host `/` as BROOT
-(`self.root_set().broot()` / `Some("/")` respectively). The design intent
-(per that branch's own comment) is relocatability: build tools invoked
-during a `--local` build are found via the shell's inherited `PATH`, not by
-depending on the host's portage-tracked VDB state, so a finished `--local`
-prefix can be moved/used standalone without carrying an implicit host
-dependency. **Known gap (found 2026-07-12)**: `preflight.rs`'s BDEPEND check has
+BROOT is the prefix itself (`Cli::base_roots()`'s `--local` branch sets
+`broot: Some(prefix.clone())`), unlike `--root` and `--prefix`, both of which
+use the real host `/` as BROOT (`Cli::host_roots()`'s non-overlay branch
+resolves `Local(prefix) => prefix, _ => "/"`). The design intent (per that
+branch's own comment) is relocatability: build tools invoked during a `--local`
+build are found via the shell's inherited `PATH`, not by depending on the
+host's portage-tracked VDB state, so a finished `--local` prefix can be
+moved/used standalone without carrying an implicit host dependency. **Known gap (found 2026-07-12)**: `preflight.rs`'s BDEPEND check has
 no equivalent "found via `PATH`, no VDB entry needed" concept — it only
 checks VDB entries at the BROOT it's given, which for `--local` is the
 prefix's own (empty, for a from-scratch build) VDB. This makes a `--local`
@@ -170,7 +169,7 @@ CHOST     = <target triple>          # from argv[0] or env
 SYSROOT   = /usr/${CHOST}            # unless overridden
 PORTAGE_CONFIGROOT = ${SYSROOT}      # target profile/make.conf
 CBUILD    = <host triple>            # portageq with CHOST unset
-BROOT     = /                        # always host
+BROOT     = /                        # host (or the prefix under --local)
 CROSS_CMD = emerge --root-deps=rdeps # legacy; EAPI 7+ uses BDEPEND instead
 ```
 

@@ -8,13 +8,17 @@ the `bashrc`/overlay recipe and the per-phase env (`SYSROOT`/`ESYSROOT`/`BROOT`
 assignment in `run_phase`).
 
 > **Slop warning.** Verify any claim here against the code before relying on
-> it. `Roots` (`portage-cli/src/cli.rs`) landed `satisfaction_root(DepClass)`
-> 2026-07-09 — the payoff this doc's `RootTopology`/`RootSet` enum proposal
-> targets — but as two new fields on the existing flat struct, not the
-> `RootSet` enum below; the enum itself, `CrossArch`, and the
-> `provider.packages` privatization are still proposal, not present reality.
-> See the "Status" section at the bottom for exactly what landed vs. what's
-> still open.
+> it. The `RootTopology`/`RootSet` enum this doc once proposed as the target
+> design was **superseded** by a field-based approach: `Roots`
+> (`portage-resolve/src/roots.rs`) carries `satisfaction_root(DepClass)`
+> directly (landed 2026-07-09), and `BuildClass` (`portage-solver`, stamped on
+> every plan entry and threaded to the build shell) now drives the host-vs-
+> target-vs-cross discrimination end-toend. The `RootSet` enum was removed as
+> vestigial (it was a lossy path-only summary). The "variant enum (target
+> design)" section below stays as the historical proposal that informed the
+> field-based shape; the "Status" section at the bottom is authoritative for
+> what shipped. See `todo/root-topology-refactor.md` "Current plan" for the
+> full A/B track status.
 
 ## The four roles
 
@@ -101,13 +105,24 @@ another — CTARGET leaking sysroot-wide, CHOST invisible to subprocesses,
 Host/Target root conflation, build-machine pkgconfig searching the target
 sysroot.
 
-## The variant enum (target design)
+## The variant enum (target design — superseded)
 
-Today `Roots` is a flat bag of five `Option<PathBuf>` fields, and every caller
-has to *know* which field answers which role for the current invocation. That
-is the structural debt the cross/stage session exposed: `host_roots` /
-`base_roots()` is threaded positionally across 9 files precisely because no
-type tells you "this is the host-side root for an unsatisfied BDEPEND."
+> **Superseded.** This section is the original enum proposal. It did **not**
+> ship as written: the maintainer chose a field-based approach instead (see the
+> slop warning above). `Roots` (`portage-resolve/src/roots.rs`) keeps its flat
+> fields but gained `satisfaction_root(DepClass)`; `BuildClass` carries the
+> host-vs-target-vs-cross discrimination; the `RootSet` enum below was removed.
+> The section is retained because its *role analysis* (the four roles, the
+> variant collapse, the satisfaction-root table) is what the field-based design
+> delivers on — read it for the model, not as a literal type proposal. The
+> "Status" section is authoritative for what's in the code.
+
+Today `Roots` is a flat bag of fields (the doc's earlier "five `Option<PathBuf>`"
+undercounted: it's seven path `Option<Utf8PathBuf>`s — config/base/target/broot/
+eprefix/config_overlay/config_root_explicit — plus three bools — is_cross_arch/
+relocate/installed_view_target_only), and every caller historically had to *know*
+which field answers which role. That was the structural debt the cross/stage
+session exposed — addressed by `satisfaction_root` + `BuildClass`, not the enum.
 
 The proposed shape makes the variant answer `satisfaction_root(dep_class)` as
 a pure function, so no caller holds an ambiguous `&Roots`. Config and its
@@ -232,7 +247,7 @@ C=/ (ro)  B=T=<offset>  S=T  BR=/ (ro)    CBUILD==CHOST
 - A BDEPEND the host lacks (e.g. jinja2 for a python target the host's jinja2
   doesn't cover): under `--root`, it lands on the real host `/` (privileged,
   writable — portage `ROOT=` parity). Under `--prefix`, the host is
-  read-only, so it instead lands in the prefix itself (`Cli::broot()` routes
+  read-only, so it instead lands in the prefix itself (`Cli::host_roots()` routes
   a `MergeRoot::Host` entry to `outer_roots()`, not the host, when
   `is_overlay()`); satisfaction checking then reads host ∪ prefix VDB
   (`Avail::initial_bdepend`/`load_host_installed`), so a tool already built
@@ -610,7 +625,7 @@ duplication. The invariant they must both honour is the table above. The
 variant refactor's payoff is that both sides ask
 `topology.satisfaction_root(class)` instead of re-deriving it from positional
 `&Roots` arguments, retiring the `host_roots`-threading smell.
-// Commits c421c95/732aefe/0e9b3e0 fixed "wrong root at one site" bugs.
+(Commits c421c95/732aefe/0e9b3e0 fixed "wrong root at one site" bugs.)
 
 ## Status
 
@@ -625,16 +640,16 @@ variant refactor's payoff is that both sides ask
   `host_roots` parameter), far less churn (no type rename, no 9-file enum
   migration). Reuses `portage_atom_pubgrub::DepClass`, the solver's own
   existing PMS dependency-class enum, rather than a second one. `base_roots()`
-  and `broot()` (the method) still exist — `merge/mod.rs`'s `entry_roots`
+  and `host_roots()` (the Cli method, formerly `broot()`) still exist — `merge/mod.rs`'s `entry_roots`
   genuinely needs a full `Roots` for a Host-routed entry (`config()`/
   `build_sysroot()`/`eprefix()`, to actually merge there), which
   `satisfaction_root`'s bare path can't provide.
   Also landed the same day: `--root`'s BROOT is the host (portage `ROOT=`
-  parity, `Cli::broot()`'s original motivation), and `--cross`/`crossdev -t`
+  parity, `Cli::host_roots()`'s original motivation), and `--cross`/`crossdev -t`
   unified into one `--target`/`-T` flag (crossdev's local `-t` retired).
   Landed shortly after, same session: `--prefix`'s unsatisfied BDEPEND now
   merges into the prefix (never the read-only host) and its satisfaction
-  check weaves host ∪ prefix VDB — `Cli::broot()` returns `outer_roots()`
+  check weaves host ∪ prefix VDB — `Cli::host_roots()` returns `outer_roots()`
   for the overlay case instead of a host-anchored `Roots`.
   Also resolved, same session: `--root`'s config resolution (this doc's own
   § "Override semantics" table below now reflects it) — `Roots::config()`
@@ -646,9 +661,34 @@ variant refactor's payoff is that both sides ask
   alone) replaces `config()` in `select/mod.rs`.
   The full story includes why the first attempt (making `config()` itself
   parity-follow `ROOT=`) broke `em select` and was reverted.
-- **Not pursued** — the `RootSet` enum (`Single`/`Dual`/`Overlayed`) as
-  `Roots`'s storage representation, and a `CrossArch` triples type (the plain
-  `is_cross_arch: bool` covers `satisfaction_root`'s one cell that needs it).
+- **`BuildClass` — landed (the root-topology refactor's Track A, 2026-08).**
+  A typed `BuildClass { NativeHost, NativeTarget, CrossTarget{triple},
+  CrossToolHost{triple}, CrossToolTarget{triple} }` (`portage-solver`,
+  re-exported via `portage-atom-pubgrub`) is computed once at plan
+  construction (`BuildClass::classify`) and stamped on every `SelectedPackage`
+  and `PlannedMerge`, then threaded to the build shell (`EbuildShell` field +
+  `set_build_class`, across the `__worker` subprocess via a `--build-class=`
+  flag). The shell reads it instead of re-deriving host-vs-target-vs-cross
+  from shadows: the §4 toolchain-var selection (`tool_tuple`), the four
+  `cross_host_tool_tuple` fixups (PATH/EPREFIX/ESYSROOT/`-idirafter`), and the
+  prefix `bashrc`'s host-path injection (via an exported `EM_BUILD_CLASS`).
+  `CrossTool` is split `Host`/`Target` the way bash crossdev splits its
+  toolchain (`set_env`'s `K|L` vs `*`): code-generating host tools vs
+  target-code sysroot libraries. Live-verified end-to-end in a riscv64
+  crossdev sandbox (full `--setup` + standalone `gcc`/`glibc` rebuilds).
+  `bypass_cross_root` was renamed `use_outer_eroot` for clarity; the solver's
+  two stamp routes share a `DepStampPolicy`. Full A/B track status in
+  [`todo/root-topology-refactor.md`](../todo/root-topology-refactor.md)
+  "Current plan".
+- **Removed (2026-08, was "Not pursued")** — the `RootSet` enum
+  (`Single`/`Dual`/`Overlayed`): it was a lossy path-only summary whose
+  `Single` collapsed `Local`+`Host` (which `base_roots` must distinguish), so
+  it couldn't drive the full `Roots` construction. Its only read was
+  `.broot()`, inlined at the two call sites. `satisfaction_root`'s
+  `is_cross_arch: bool` covers its one cell that needs the cross distinction;
+  a `CrossArch` triples type is still not needed there. The `Cli::broot()`
+  method (returned a full `Roots`) was renamed `Cli::host_roots()` to drop the
+  name clash with `Roots::broot()` (the path accessor).
 - **Privatizing `provider.packages` behind `package_data()` — landed
   2026-07-09.** A different crate, a different invariant (`host_aliases`) from
   the `Roots`-accessor confusion this pass targeted, but the same underlying

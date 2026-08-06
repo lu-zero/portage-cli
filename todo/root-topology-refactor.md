@@ -207,16 +207,21 @@ Gate (must stay green throughout): the root-routing tests in
   canonical BROOT-path accessor. 10 call sites updated; fmt/clippy/rustdoc
   clean, 1675 tests green.
 
-### Track C: doc reconciliation
+### Track C: doc reconciliation — ✅ landed
 
-`docs/root-topology.md` claims `RootTopology`/`RootSet`/`CrossArch`
-exist as "target design" — they don't; its own Status section partially
-corrects this but the body doesn't. Also "five `Option<PathBuf>`"
-undercounts (7 + 3 bools). `docs/root-model.md:14` says BROOT is "always
-host `/`" — `--local` makes it the prefix (the file itself contradicts
-this two paragraphs later). Update each alongside the code track it
-describes (A → §"satisfaction-root mapping", B → §"variant enum"). Mark
-the enum-migration items below closed-as-not-pursued.
+Reconciled `docs/root-topology.md` + `docs/root-model.md` with the shipped
+code (one pass, after A/B stabilized):
+- `root-topology.md` slop warning now states the enum proposal was superseded
+  by the field-based approach (`satisfaction_root` + `BuildClass`), `RootSet`
+  removed; the "variant enum (target design)" section carries a superseded
+  banner + the correct `Roots` field count (7 path + 3 bool); the Status
+  section records `BuildClass` (Track A), the `RootSet` removal (B2), the
+  `Cli::broot`→`host_roots` rename (B3), and `use_outer_eroot`.
+- `root-model.md` BROOT no longer claims "always host `/`" (table, derived-
+  values, per-phase block, and the `--local` section all now state the
+  `--local` exception); the broken `root_set().broot()` reference is replaced
+  with the `Cli::host_roots()` non-overlay rule; a stray `//`-comment line in
+  `root-topology.md` is fixed.
 
 ### Deferred / rejected
 
