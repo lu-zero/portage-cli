@@ -46,6 +46,8 @@ log below):
    concurrently into one shared `WORKDIR` and collided. Root cause:
    `default_work_base()` keys the work directory only on outer-prefix +
    `category/pf`, with no distinction for which root a merge installs into.
+   **Fix plan:** [[workdir-dual-root]] (per-target builddirs + lock/schedule
+   like Portage; multi-`em` coordination later).
    Consequence: `llvm-core/clang` itself never got a single
    `Emerging`/`Completed` line — the run stopped at 66/136, blocked
    transitively by the 3 collided packages. **Reproduced deterministically**

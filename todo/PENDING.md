@@ -25,6 +25,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
 | **8** | **Drop `BuildClass` for cross-*** — package.env is the durable classifier (bash-crossdev model); stamp is dual authority | 🔴 | [[drop-buildclass]], matrix: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md) |
 | **9** | **`--local` bootstrap via `package.provided`** — empty VDB hard cycle; seed host tools, then toolchain --setup (any-linux → macOS) | 🔴 | [[local-bootstrap-provided]], [`docs/local-bootstrap.md`](../docs/local-bootstrap.md) |
+| **10** | **Workdir dual-root race (P0)** — per-target builddirs + lock/schedule like Portage; dual plan entries under `--jobs` collide today | 🔴 | [[workdir-dual-root]], clang findings #3/#4 |
 
 ### Smaller / polish (pick opportunistically)
 
@@ -35,7 +36,8 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 - Cross stage3 file-tree/version diff vs real stage3 tarball never done (VDB package-set only) — `todo/done/stage3-vs-real-comparison.md`
 - `PORTAGE_CHECKSUM_FILTER` still unimplemented (orthogonal to ACCEPT_PROPERTIES/RESTRICT, which are done)
 - Review sweep log: [[review-findings-2026-07-24]]; structural cross notes: [[cross-support-self-review]]
-- Cross-emerge `llvm-core/clang` for riscv64 under both `--prefix` and `--local`, `-b`/buildpkg correctness included — plan drafted, not run: [[clang-crossbuild-prefix-local-test-plan]]
+- Cross-emerge `llvm-core/clang` for riscv64 under both `--prefix` and `--local`, `-b`/buildpkg correctness included — plan drafted; Scenario A blocked on workdir race, B on local bootstrap: [[clang-crossbuild-prefix-local-test-plan]]
+- **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 

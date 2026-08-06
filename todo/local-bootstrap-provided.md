@@ -197,7 +197,7 @@ native bootstrap works.
 - Making `--local` as cheap as `--prefix` on a fat Gentoo host (overlay stays
   the fast path)  
 - Lying forever: permanent provided of the whole `@system`  
-- Fixing the dual-plan-entry / WORKDIR race (separate bug)  
+- Fixing the dual-plan-entry / WORKDIR race — [[workdir-dual-root]]
 
 ---
 
