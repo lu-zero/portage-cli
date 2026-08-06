@@ -184,14 +184,20 @@ Gate (must stay green throughout): the root-routing tests in
   `prefer_update` keep-all-as-is branch), not a stamp, and forcing it into the
   policy would obscure it. Pure `portage-atom-pubgrub`, behaviour-identical,
   152 crate tests + 1675 workspace tests green.
-- **B2 Un-dead `RootSet`.** Make the private enum live so
-  `Cli::roots()`/`outer_roots()`/`base_roots()`/`broot()` become methods
-  on a returned typed topology rather than four sibling `Cli` methods
-  callers must choose between. Scope deliberately narrow: the 69
-  `.roots()` consumers keep receiving a `Roots` (low churn); churn is
-  internal to the 4 builders + the 33 `.outer_roots()` callers. After
-  Track A so `BuildClass` already carries the triples and `RootSet`
-  doesn't need a `CrossArch` field.
+- ✅ **B2 (landed — removed `RootSet` rather than un-deading it).** On
+  inspection "un-dead" was the wrong action: `RootSet` was a *path-only*
+  summary whose `Single` collapsed `Local`+`Host` (which `base_roots` must
+  distinguish for config/eprefix), so it couldn't drive the full `Roots`
+  construction — making it canonical was the high-churn/low-payoff reshape the
+  field-based `satisfaction_root` already superseded (the maintainer's own
+  2026-07-09 direction). Its only read was `.broot()`
+  (`Local → prefix`, else `/`); inlined at the two call sites
+  (`base_roots`' `Root|Host` arm → `/`; `broot`'s non-overlay branch →
+  `match topology_source { Local(p) => p, _ => "/" }`), and the dead enum +
+  `root_set()` + `TopologySource::Root`'s now-unused payload deleted.
+  `--local` vs `--prefix` unchanged (the `broot` site's non-overlay branch
+  still gives `--local` its own prefix; `--prefix` still returns early via
+  `is_overlay`). fmt/clippy/rustdoc clean, 1675 tests green.
 - **B3** Collapse the `Cli::broot()` vs `Roots::broot()` name footgun.
 
 ### Track C: doc reconciliation

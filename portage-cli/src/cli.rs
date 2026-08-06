@@ -186,49 +186,10 @@ fn home_dir() -> camino::Utf8PathBuf {
 enum TopologySource {
     Local(camino::Utf8PathBuf),
     Prefix(camino::Utf8PathBuf),
-    Root(camino::Utf8PathBuf),
+    /// `--root R`. The path itself is read from `self.root` at the one site
+    /// that needs it (`base_roots`), so this variant carries no payload.
+    Root,
     Host,
-}
-
-// The four filesystem roles (docs/root-topology.md § "The four roles"),
-// collapsed by how many coincide. `Cli::base_roots()` (BROOT view) and
-// `Cli::roots()` (install-target view) both derive from the same
-// `Cli::root_set()`, so they can't drift independently.
-enum RootSet {
-    /// All four roles collapse to one path: the bare invocation, or
-    /// `--local` (a standalone Gentoo-Prefix owns its own BROOT too).
-    Single { root: camino::Utf8PathBuf },
-    /// BROOT distinct from the install target. `--root R`: BROOT is always
-    /// the real host `/` (portage `ROOT=`/`{target}-emerge` parity) — an
-    /// offset install borrows the host's own BDEPEND tools; it does not
-    /// need its own copy of them.
-    #[allow(dead_code)] // target isn't read yet: base_roots()/roots() keep their
-    // own, separate "outer EROOT" derivation (see broot()'s doc comment on
-    // why that's a different question from BROOT). Kept here to match
-    // docs/root-topology.md's proposed shape for the fuller migration.
-    Dual {
-        broot: camino::Utf8PathBuf,
-        target: camino::Utf8PathBuf,
-    },
-    /// BROOT, base (build-against sysroot), and target all distinct.
-    /// `--prefix P`: broot = base = the host `/` (the overlay borrows host
-    /// tools and builds against them), target = P.
-    #[allow(dead_code)] // base/target aren't read yet, same reason as Dual above.
-    Overlayed {
-        broot: camino::Utf8PathBuf,
-        base: camino::Utf8PathBuf,
-        target: camino::Utf8PathBuf,
-    },
-}
-
-impl RootSet {
-    /// Where `BDEPEND` tools run and are checked against (BROOT).
-    fn broot(&self) -> &camino::Utf8Path {
-        match self {
-            RootSet::Single { root } => root,
-            RootSet::Dual { broot, .. } | RootSet::Overlayed { broot, .. } => broot,
-        }
-    }
 }
 
 /// `s.as_deref()` parsed as a path, or `None`.
@@ -254,8 +215,8 @@ impl Cli {
         if let Some(prefix) = opt_path(&self.prefix) {
             return TopologySource::Prefix(prefix);
         }
-        if let Some(root) = opt_path(&self.root) {
-            return TopologySource::Root(root);
+        if opt_path(&self.root).is_some() {
+            return TopologySource::Root;
         }
         match crate::active::load_active_context() {
             Ok(Some(ctx)) => match ctx.kind {
@@ -264,25 +225,6 @@ impl Cli {
             },
             // Missing or unreadable state → bare host (same as no registration).
             _ => TopologySource::Host,
-        }
-    }
-
-    /// The root model (docs/root-topology.md) from `--local`/`--prefix`/
-    /// `--root` (or the active registration), before config/overlay concerns.
-    fn root_set(&self) -> RootSet {
-        let host = camino::Utf8PathBuf::from("/");
-        match self.topology_source() {
-            TopologySource::Local(root) => RootSet::Single { root },
-            TopologySource::Prefix(target) => RootSet::Overlayed {
-                broot: host.clone(),
-                base: host,
-                target,
-            },
-            TopologySource::Root(target) => RootSet::Dual {
-                broot: host,
-                target,
-            },
-            TopologySource::Host => RootSet::Single { root: host },
         }
     }
 }
@@ -445,7 +387,7 @@ impl Cli {
                 .with_relocate(true)
                 .with_config_root_explicit(path(&self.config_root)),
             // Bare host or `--root` offset.
-            TopologySource::Root(_) | TopologySource::Host => Roots::default()
+            TopologySource::Root | TopologySource::Host => Roots::default()
                 // config: --config-root, else host `/` — true portage `ROOT=`
                 // parity (`PORTAGE_CONFIGROOT` defaults to `/` regardless of
                 // `ROOT`). The 2026-07-09 "own everything" self-contained
@@ -463,7 +405,10 @@ impl Cli {
                 // staying the offset for --root) — a DIFFERENT thing from
                 // BROOT, see satisfaction_root's doc comment.
                 .with_target(path(&self.root))
-                .with_broot(Some(self.root_set().broot().to_owned()))
+                // BROOT is always the real host `/` for `--root`/bare (portage
+                // `ROOT=`/`{target}-emerge` parity) — an offset install borrows
+                // the host's BDEPEND tools, never its own copy.
+                .with_broot(Some(camino::Utf8PathBuf::from("/")))
                 .with_cross_arch(false)
                 .with_eprefix(None)
                 .with_config_overlay(None)
@@ -479,8 +424,8 @@ impl Cli {
     ///
     /// Two different answers depending on privilege:
     /// - `--root` (privileged offset, portage `ROOT=` parity): the real host
-    ///   `/`, same as `root_set().broot()` — an unsatisfied Host-routed
-    ///   BDEPEND installs there because the invocation has root to do so.
+    ///   `/` — an unsatisfied Host-routed BDEPEND installs there because the
+    ///   invocation has root to do so.
     /// - `--prefix` (unprivileged overlay): the prefix itself
     ///   (`outer_roots()`, whose `merge_root()` is already the promoted
     ///   prefix-target view) — the overlay cannot write the real host `/`,
@@ -494,7 +439,13 @@ impl Cli {
         if base.is_overlay() {
             return self.outer_roots();
         }
-        let broot = self.root_set().broot().to_owned();
+        // BROOT for a non-overlay topology: `--local` owns its own BROOT (the
+        // prefix itself, so a finished `--local` tree is self-hosting /
+        // relocatable); `--root`/bare borrow the real host `/`.
+        let broot = match self.topology_source() {
+            TopologySource::Local(prefix) => prefix,
+            _ => camino::Utf8PathBuf::from("/"),
+        };
         Roots::default()
             .with_config(base.config().map(|p| p.to_owned()))
             .with_base(Some(broot.clone()))
