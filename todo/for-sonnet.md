@@ -177,4 +177,122 @@ verdict, paths to logs, and any new bug (file:line if known).
 
 ## Results
 
-_(Sonnet fills in)_
+### Results — 2026-08-07 (Sonnet)
+
+**em SHA:** `f250e62` (tip; code is `fad35a3`, `f250e62` is docs-only)
+
+Stopped after P0 + the pretend-purity half of P1.4 per direction ("enough
+bugs to stop here and report") — P1.1 (GCC linux-gnu env spot-check) was
+launched (`crossdev --setup` for a fresh `--prefix`) but not inspected;
+P1.2/P1.3 (bare-metal, LLVM `-L` musl) not attempted; P2 not attempted.
+
+#### P0 workdir / clang Scenario A
+
+**The workdir dual-root race is fixed. Confirmed via three independent
+signals, not just exit code:**
+
+1. New root-keyed workdir paths are real and in use: cross-toolchain host
+   packages build under `var/tmp/portage/root-xp/cross-<tuple>/<pf>/`;
+   ordinary target packages build under
+   `var/tmp/portage/root-xp-usr-riscv64-unknown-linux-gnu/<cat>/<pf>/` — host
+   and target instances of the same CPV now get genuinely different paths.
+2. `em --prefix "$P" --target riscv64-unknown-linux-gnu crossdev --setup
+   --jobs 8` → `EXIT=0`, all 6 stages, real
+   `riscv64-unknown-linux-gnu-gcc --version` runs (`16.1.1_p20260718`).
+3. `em --prefix "$P" --target riscv64-unknown-linux-gnu -b llvm-core/clang
+   --jobs 80` — **no doubled phases anywhere in any build.log**, and none of
+   the previously-racing packages (`llvm-runtimes/clang-rtlib-config-22`,
+   `llvm-core/clang-linker-config-22`, `llvm-runtimes/clang-stdlib-config-22`)
+   failed this time; both `llvm-core/llvm-common` and `llvm-core/clang-common`
+   merged cleanly. Progress reached 76/136 (previously stalled at 66/136
+   every time, deterministically).
+
+**But two other, independent real bugs now surface** (previously masked —
+never reached — by the workdir race):
+
+**New bug #1 — dependency/scheduling race, not a workdir issue.**
+`sys-apps/sed-4.10-r1`'s `econf` fails: `checking for sys/acl.h... no` →
+`configure: error: ACLs enabled but support not detected`. But
+`sys-apps/acl-2.4.0-r2` **did** merge into the same sysroot in this same run
+(confirmed: `/root/xp/usr/riscv64-unknown-linux-gnu/usr/include/sys/acl.h`
+exists on disk, and the VDB has `acl-2.4.0-r2` installed) — the header is
+there, just apparently not yet at the moment sed's `configure` ran. Under
+`--jobs 80` this reads as a genuine dependency-ordering/scheduling gap: sed
+should not be able to start `configure` before its `acl` dependency is fully
+installed into the target sysroot, but it did. Not root-caused further (no
+file:line yet — would need to check whether `sys-apps/acl` is actually
+encoded as a real DEPEND edge for `sed[acl]` in the resolved plan, or
+whether the scheduler's readiness check doesn't cover this class of
+same-sysroot ordering). This is what stopped the run (`EXIT=1`, `1 of 136
+package(s) failed to merge`) — `llvm-core/clang` itself was **not yet
+reached** when it stopped (only 76/136 done), so whether clang would
+complete past this point is still open.
+
+**New bug #2 — `--buildpkg` fails systematically for near-empty-image
+packages under `--prefix --target`, not just one isolated case.** Every
+`virtual/*` package installed into the sysroot in this run failed its
+`--buildpkg` step (12 occurrences: `virtual/libintl`, `virtual/libiconv`,
+`virtual/acl`, `virtual/libcrypt`, `virtual/os-headers`, four
+`virtual/perl-*`, `virtual/zlib`), plus one non-virtual symlink-only package
+(`llvm-core/llvm-toolchain-symlinks-22`) — always the same error shape:
+`tar: .../<cat>/<pf>/image/root/xp: Cannot open: No such file or directory`
+→ `--buildpkg failed for <pkg>: ... tar failed with exit code 2`. Reported
+as a non-fatal warning (the merge itself still succeeds, package still
+counts as installed), but no `.gpkg` is ever written for any of these.
+Pattern strongly suggests these are all packages whose merge image is empty
+or near-empty (virtuals typically install no real files of their own;
+`*-toolchain-symlinks` installs only symlinks) — the `image` dir for one
+checked (`virtual/libintl-0-r2`) no longer exists (already cleaned up
+post-merge, so emptiness at tar-time couldn't be directly re-confirmed, but
+no package with real installed content hit this in the same run).
+
+**This is not a new regression from `56435d4`/`480daff`/`fad35a3`** — it
+already reproduced, once, on `em` built from `cd9e0df` (pre-BuildClass-
+refactor) for `llvm-runtimes/clang-stdlib-config-22`'s host-side instance,
+in a prior session (see the clang test plan's Execution log). What's new
+here: confirmed on current tip, confirmed **not** limited to host-arch
+dual-role packages (this run's occurrences are almost all target-sysroot
+installs), and confirmed systemic (12+ packages in one run, not a one-off) —
+directly relevant to "-b does the right thing", the actual goal of the
+underlying clang test plan, since it means `-b` silently produces no binpkg
+for an entire class of packages whenever they're part of the plan.
+
+#### P1 package.env / BuildClass drop
+
+- GCC linux-gnu: **not inspected** — `crossdev --setup` was launched on a
+  fresh `--prefix` sandbox but the run was not followed through to a
+  package.env spot-check before stopping per direction.
+- bare-metal: not attempted.
+- LLVM -L: not attempted.
+- pretend: **both checks pass.**
+  - `em -p --prefix /root/never setup` → prints a labeled preview
+    (`>>> would bootstrap layout…`, `(pretend — no files written)`),
+    `/root/never` does not exist afterward. Confirms finding #1 (`em setup
+    -p` used to write for real) is fixed.
+  - `em -p --prefix /root/never2 --target riscv64-unknown-linux-gnu crossdev
+    --setup` on a **never-before-initialized** target → resolves and prints
+    the full real 6-step plan (binutils → headers → glibc-headers →
+    gcc-stage1 → glibc → gcc-stage2) correctly, `RC=0`, and `/root/never2`
+    does not exist afterward — genuinely zero disk writes. Confirms finding
+    #2 (`crossdev --setup -p` used to hard-fail on a first-time target with
+    `no ebuilds in ::gentoo or overlays`) is fixed.
+
+#### New bugs
+
+- **Dependency/scheduling race**: `sys-apps/sed`'s `econf` can run before
+  `sys-apps/acl` (a real DEPEND) has finished installing into the same
+  target sysroot, under `--jobs 80` — `checking for sys/acl.h... no` despite
+  the header genuinely existing on disk once the run finishes. No file:line
+  yet; needs someone to check the scheduler's readiness/dependency-edge
+  logic for same-sysroot ordering under high `--jobs`.
+- **`--buildpkg` produces no binpkg for near-empty-image packages**
+  (`virtual/*`, `*-toolchain-symlinks`) under `--prefix --target` — 12+
+  occurrences in one run, silent (non-fatal warning only), confirmed
+  pre-existing (not caused by this session's landed commits) but not
+  previously known to be this systemic. `tar: .../image/<merge_root>:
+  Cannot open` — looks like the buildpkg image-tar path assumes a full
+  nested `image/<merge_root>/...` copy exists, which an empty-content
+  package's image never has. No file:line yet (image dirs are cleaned up
+  post-merge, so this needs catching mid-run or reproducing with
+  `--keepwork`/similar to inspect the actual image layout before it's
+  removed).
