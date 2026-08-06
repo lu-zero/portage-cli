@@ -28,7 +28,7 @@ use portage_atom::interner::{DefaultInterner, Interned};
 // `portage-solver`. Solver nodes are keyed by `(CPN, slot, merge_root)` so the
 // same CPV can appear twice under cross (native host tool + cross target
 // runtime).
-pub use portage_solver::{BuildClass, MergeRoot};
+pub use portage_solver::{BuildClass, CrossRole, MergeRoot};
 
 /// A PubGrub-compatible package identifier.
 ///

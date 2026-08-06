@@ -398,7 +398,7 @@ pub struct EbuildShell {
     /// (host / ROOT-offset `--prefix`).
     build_eprefix: Option<Utf8PathBuf>,
     /// Where `BDEPEND`-class build tools (a `${CHOST}-*` cross toolchain, its
-    /// `pkg-config`, …) actually live for this invocation — `Cli::broot()`'s
+    /// `pkg-config`, …) actually live for this invocation — `Cli::host_roots()`'s
     /// merge root: the real host `/` for a privileged `--root` offset, the
     /// prefix itself for an unprivileged `--prefix` overlay (which cannot
     /// write the real host). `None` when unknown (the standalone `em ebuild`
@@ -1321,14 +1321,14 @@ impl EbuildShell {
         // (`crossdev --setup`) live in `<broot>/usr/bin`, which is under $HOME
         // and thus stripped from the sanitised build PATH — and the prefix
         // bashrc PATH hook does not run (EPREFIX unset under `--cross`).
-        // `build_broot` is `Cli::broot()`'s merge root: the prefix itself for
+        // `build_broot` is `Cli::host_roots()`'s merge root: the prefix itself for
         // this unprivileged-overlay case (see `build_broot`'s doc comment),
         // so `<build_broot>/usr/bin` is exactly that toolchain bin dir; expose
         // it on PATH so the whole toolchain (gcc/g++/ld/as/…) resolves. Host
         // crossdev (toolchain in `/usr/bin`, `build_broot` == the real host
         // `/`) is already on PATH, so this is a no-op there. The same
         // `build_broot` also already resolves correctly for the native-prefix
-        // case above: `Cli::broot()` returns the promoted prefix itself for a
+        // case above: `Cli::host_roots()` returns the promoted prefix itself for a
         // `--prefix` overlay (`is_overlay()` → `outer_roots()`), and for
         // `--local` broot == eprefix == the prefix already — no separate
         // eprefix-sourced bin dir is needed.
@@ -1368,7 +1368,7 @@ impl EbuildShell {
             // host's), its own role really is producing CTARGET code — its
             // toolchain vars must be `${CTARGET}-<tool>`, not `${CHOST}-<tool>`.
             // `CHOST` here may be the *ambient* value (e.g. under `crossdev
-            // --setup`'s `bypass_cross_root`, which deliberately routes the
+            // --setup`'s `use_outer_eroot`, which deliberately routes the
             // libc/headers steps through host config for unrelated reasons —
             // see `crossdev/mod.rs`'s `run_staged` doc), not this package's own.
             //
@@ -1383,7 +1383,7 @@ impl EbuildShell {
             // `9b9e77a`'s Phase 2, which broadened `chost != cbuild` to also
             // fire whenever `build_eprefix.is_some()` — correct for its own
             // target case (native same-arch `--prefix`/`--local` builds), but
-            // incidentally also catches this one, since `bypass_cross_root`
+            // incidentally also catches this one, since `use_outer_eroot`
             // can make `CHOST` equal `CBUILD` here for a reason unrelated to
             // this actually being a same-arch build.
             // `tool_tuple`: the triple whose `${tuple}-gcc`/`-ld`/… this
@@ -1614,27 +1614,15 @@ impl EbuildShell {
 
         // The build class — the structural "host-class vs target-class, native
         // vs cross" answer for this package. The planner stamps it on the plan
-        // entry (`SelectedPackage.build_class`); until that threads through
-        // (Track A2b), fall back to deriving it from the `cross-<tuple>/`
-        // category the same way `BuildClass::classify` does — host
-        // code-generator by default, libc/kernel-headers the target sysroot
-        // library. Read by the PATH/EPREFIX/ESYSROOT/CPPFLAGS fixups below to
-        // tell a host-side cross tool from an ordinary (or target-sysroot)
-        // package.
-        let build_class =
-            self.build_class
-                .clone()
-                .unwrap_or_else(|| match category.strip_prefix("cross-") {
-                    Some(tuple) => match pn {
-                        "linux-headers" | "glibc" | "musl" => BuildClass::CrossToolTarget {
-                            triple: tuple.to_string(),
-                        },
-                        _ => BuildClass::CrossToolHost {
-                            triple: tuple.to_string(),
-                        },
-                    },
-                    None => BuildClass::NativeTarget,
-                });
+        // entry (`PlannedMerge.build_class`) from the authoritative arch table;
+        // the binpkg-merge path carries no stamp, so it falls back to
+        // `BuildClass::unstamped`. Read by the PATH/EPREFIX/ESYSROOT/CPPFLAGS
+        // fixups below to tell a host-side cross tool from an ordinary (or
+        // target-sysroot) package.
+        let build_class = self
+            .build_class
+            .clone()
+            .unwrap_or_else(|| BuildClass::unstamped(category, pn));
 
         // Export the resolved build class to the shell env (its `Display`
         // token) so the generated `bashrc` (`setup.rs`'s `BASHRC_PREFIX`) can
@@ -1963,7 +1951,7 @@ impl EbuildShell {
             // header search (`sys/types.h` and friends "No such file"),
             // masquerading as a build-system-specific compile failure in
             // each package. Crossdev `--setup`'s own `glibc`/`linux-headers`
-            // steps are unaffected: `bypass_cross_root` routes them through
+            // steps are unaffected: `use_outer_eroot` routes them through
             // `outer_roots()`, where `base` and `target` genuinely differ
             // (`Some("/")` vs `Some(<outer prefix>)`), so `build_sysroot()`
             // stays `Some` and this new arm never fires for them.

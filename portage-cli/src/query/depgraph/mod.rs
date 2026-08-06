@@ -1,6 +1,6 @@
 mod autounmask;
 
-pub use portage_atom_pubgrub::{BuildClass, MergeRoot};
+pub use portage_atom_pubgrub::{BuildClass, CrossRole, MergeRoot};
 mod output;
 mod package_use;
 mod targets;
@@ -40,8 +40,7 @@ pub struct PlannedMerge {
     /// What kind of build this entry is (host-class vs target-class, native
     /// vs cross) — the planner's structural answer, computed once here via
     /// [`BuildClass::classify`] and threaded to the build shell so it stops
-    /// re-deriving it from the `cross-` category prefix. See
-    /// `todo/root-topology-refactor.md` Track A.
+    /// re-deriving it from the `cross-` category prefix.
     pub build_class: BuildClass,
     /// The identity to build/register under (display + work-dir naming +
     /// VDB category) — for a cross-derived package this is the *virtual*
@@ -112,11 +111,11 @@ pub struct DepgraphOpts<'a> {
     /// substitution, so a separate `host_roots` field is no longer needed
     /// (see `Cli::roots`'s doc comment).
     pub roots: &'a portage_resolve::Roots,
-    /// Where a `MergeRoot::Host` plan entry actually merges — `Cli::broot()`'s
+    /// Where a `MergeRoot::Host` plan entry actually merges — `Cli::host_roots()`'s
     /// `merge_root()`. Passed separately from `roots` because `roots` can be
     /// `--target`-substituted (its `eprefix`/`is_overlay()` cleared), which
     /// would make the `-p` display fall back to the real host even under an
-    /// unprivileged `--prefix` overlay; `Cli::broot()` is computed from
+    /// unprivileged `--prefix` overlay; `Cli::host_roots()` is computed from
     /// `base_roots()` and stays overlay-aware regardless of `--target`.
     pub host_merge_root: &'a Utf8Path,
     /// `--onlydeps`: drop the explicitly-requested targets from the plan,
@@ -1514,11 +1513,22 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 .join(format!("{}-{}.ebuild", real_cpn.package, ver));
             PlannedMerge {
                 merge_root: entry.merge_root,
+                // The cross host/target split is keyed on the *real* cpn:
+                // `cross-<tuple>/newlib` is `sys-libs/newlib`, and only the
+                // real name appears in the authoritative arch table.
                 build_class: BuildClass::classify(
                     cpn,
                     entry.merge_root,
                     cross.active,
                     cross.is_cross_arch(),
+                    crate::crossdev::target::cross_package_arch(
+                        real_cpn.category.as_str(),
+                        real_cpn.package.as_str(),
+                    )
+                    .map(|arch| match arch {
+                        crate::crossdev::target::PackageArch::Host => CrossRole::Host,
+                        crate::crossdev::target::PackageArch::Target => CrossRole::Target,
+                    }),
                 ),
                 cpv: cpv.clone(),
                 ebuild_path,

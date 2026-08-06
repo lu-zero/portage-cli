@@ -13,8 +13,8 @@
 //! their plain `Cpn`/[`SelectedPackage`] counterparts.
 
 use portage_solver::{
-    BuildClass, CededFlag, DepEdge, DroppedDep, InstalledPackage as SolverInstalled, Plan,
-    SelectedPackage, SolveError, Solver, TargetSpec, UseFlagRequirement, Violation,
+    CededFlag, DepEdge, DroppedDep, InstalledPackage as SolverInstalled, Plan, SelectedPackage,
+    SolveError, Solver, TargetSpec, UseFlagRequirement, Violation,
 };
 use pubgrub::PubGrubError;
 
@@ -109,16 +109,16 @@ impl Solver for PortageDependencyProvider {
         Ok(Plan {
             selected: solution
                 .iter()
-                .filter_map(|(p, v)| to_selected(p, v, self.cross_active, self.is_cross_arch))
+                .filter_map(|(p, v)| to_selected(p, v))
                 .collect(),
             graph: self
                 .dependency_graph(&solution)
                 .iter()
-                .filter_map(|e| map_dep_edge(e, self.cross_active, self.is_cross_arch))
+                .filter_map(map_dep_edge)
                 .collect(),
             install_order: PortageDependencyProvider::install_order(self, &solution)
                 .into_iter()
-                .filter_map(|(p, v)| to_selected(&p, &v, self.cross_active, self.is_cross_arch))
+                .filter_map(|(p, v)| to_selected(&p, &v))
                 .collect(),
             dropped_deps: self
                 .dropped_deps()
@@ -200,35 +200,32 @@ impl PortageDependencyProvider {
 }
 
 /// Map a PubGrub solution entry to a [`SelectedPackage`], dropping the
-/// solver-internal virtual nodes. `merge_root` and `build_class` are the
-/// shared vocabulary types (no mapping); the cross flags feed
-/// [`BuildClass::classify`].
-fn to_selected(
-    pkg: &PortagePackage,
-    ver: &portage_atom::Version,
-    cross_active: bool,
-    is_cross_arch: bool,
-) -> Option<SelectedPackage> {
+/// solver-internal virtual nodes. `merge_root` is a shared vocabulary type
+/// (no mapping).
+///
+/// Deliberately does **not** stamp a `BuildClass`: the `cross-<tuple>/`
+/// host-vs-target split is declared by `CrossTarget::packages()` in
+/// `portage-cli`, above this crate, so a stamp made here could only guess.
+/// `PlannedMerge` carries the one authoritative stamp instead.
+fn to_selected(pkg: &PortagePackage, ver: &portage_atom::Version) -> Option<SelectedPackage> {
     if pkg.is_virtual() {
         return None;
     }
-    let merge_root = pkg.merge_root();
     Some(SelectedPackage {
         cpn: *pkg.cpn(),
         version: ver.clone(),
         slot: pkg.slot(),
-        merge_root,
-        build_class: BuildClass::classify(pkg.cpn(), merge_root, cross_active, is_cross_arch),
+        merge_root: pkg.merge_root(),
     })
 }
 
 /// Translate a PubGrub `DepEdge` (keyed on `(PortagePackage, Version)`) into the
 /// plain form keyed on [`SelectedPackage`]. `None` if either endpoint is a
 /// virtual node (defensive: graph edges are real-only).
-fn map_dep_edge(edge: &PgDepEdge, cross_active: bool, is_cross_arch: bool) -> Option<DepEdge> {
+fn map_dep_edge(edge: &PgDepEdge) -> Option<DepEdge> {
     Some(DepEdge {
-        from: to_selected(&edge.from.0, &edge.from.1, cross_active, is_cross_arch)?,
-        to: to_selected(&edge.to.0, &edge.to.1, cross_active, is_cross_arch)?,
+        from: to_selected(&edge.from.0, &edge.from.1)?,
+        to: to_selected(&edge.to.0, &edge.to.1)?,
         class: edge.class,
         via_use_flag: edge.via_use_flag,
     })

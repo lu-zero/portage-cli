@@ -25,13 +25,12 @@ pub enum MergeRoot {
 /// What kind of build a plan entry is — the structural answer to "is this a
 /// host-class or target-class build?", replacing the `cross_host_tool_tuple`
 /// name-allowlist + `CTARGET`/`TARGET_ABI` shell-env sniffing the build shell
-/// re-derives per entry today.
+/// used to re-derive per entry.
 ///
 /// Computed once from the entry's identity + the solve's cross context (see
-/// [`BuildClass::classify`]) and carried on the [`SelectedPackage`], so every
+/// [`BuildClass::classify`]) and carried on the plan entry, so every
 /// downstream consumer (build shell, preflight, display) reads one field
-/// instead of re-deriving it from shadows. Part of the root-topology
-/// refactor's Track A; see `todo/root-topology-refactor.md`.
+/// instead of re-deriving it from shadows.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum BuildClass {
     /// A native build merged to the build host (`BROOT`,
@@ -59,19 +58,34 @@ pub enum BuildClass {
         triple: String,
     },
     /// A `cross-<tuple>/` package that is a **native target library populating
-    /// the sysroot** — the libc (glibc/musl) and kernel-headers. It is
-    /// `CTARGET` code itself (toolchain vars `${CTARGET}-<tool>`), installed
-    /// into the sysroot for the target.
+    /// the sysroot** — the libc (glibc/musl/newlib), kernel-headers, and the
+    /// LLVM runtimes. It is `CTARGET` code itself (toolchain vars
+    /// `${CTARGET}-<tool>`), installed into the sysroot for the target.
     ///
     /// Mirrors bash crossdev's `set_env` `case ${l} in K|L)` (target) vs `*)`
-    /// (host). The libc name varies per target, so this name set is an
-    /// approximation of crossdev's planning letter; the principled source is
-    /// `CrossTarget::packages()`'s `PackageArch` (a future follow-up routes
-    /// the refinement through that, at the depgraph layer).
+    /// (host).
     CrossToolTarget {
         /// The `cross-<tuple>` triple parsed from the category.
         triple: String,
     },
+}
+
+/// Which side of crossdev's `K|L` split a `cross-<tuple>/` package sits on.
+///
+/// Supplied to [`BuildClass::classify`] by the caller rather than re-derived
+/// from a package-name list here: the authoritative declaration is
+/// `CrossTarget::packages()`'s `PackageArch` in `portage-cli`, which this
+/// crate sits below. A name list duplicated here would silently disagree with
+/// it — as one did, misclassifying `newlib` and the `llvm-runtimes/*` as host
+/// tools.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum CrossRole {
+    /// Host binary generating target code (binutils/gcc/clang wrappers, and
+    /// every `--ex-pkg` extra).
+    Host,
+    /// Target-arch code installed into the sysroot (libc, kernel headers,
+    /// LLVM runtimes).
+    Target,
 }
 
 impl BuildClass {
@@ -79,28 +93,28 @@ impl BuildClass {
     /// cross context.
     ///
     /// A `cross-<tuple>/` category holds crossdev's toolchain, split the same
-    /// way bash crossdev's `set_env` does (`K|L` vs `*`): the libc
-    /// (glibc/musl) and kernel-headers are the **target** packages
-    /// ([`CrossToolTarget`](Self::CrossToolTarget) — they are `CTARGET` code);
-    /// everything else — binutils/gcc/gdb/wrappers and every `--ex-pkg` extra
-    /// — defaults to **host** ([`CrossToolHost`](Self::CrossToolHost) — host
-    /// binaries generating target code). Otherwise [`MergeRoot`] plus the
-    /// cross flags pick between native-host, native-target, and
-    /// foreign-arch-target.
+    /// way bash crossdev's `set_env` does (`K|L` vs `*`). Which side a given
+    /// package falls on is `cross_role`, which the caller reads from
+    /// `CrossTarget::packages()`'s `PackageArch` — the single place a cross
+    /// package's arch is declared. `None` means the package is not part of the
+    /// declared toolchain (an `--ex-pkg` extra), which crossdev's `*)` branch
+    /// gives the **host** treatment, same as `em`'s own extras handling.
+    ///
+    /// Outside `cross-<tuple>/`, [`MergeRoot`] plus the cross flags pick
+    /// between native-host, native-target, and foreign-arch-target, and
+    /// `cross_role` is ignored.
     pub fn classify(
         cpn: &Cpn,
         merge_root: MergeRoot,
         cross_active: bool,
         is_cross_arch: bool,
+        cross_role: Option<CrossRole>,
     ) -> Self {
         if let Some(triple) = cpn.category.as_str().strip_prefix("cross-") {
-            return match cpn.package.as_str() {
-                "linux-headers" | "glibc" | "musl" => Self::CrossToolTarget {
-                    triple: triple.to_string(),
-                },
-                _ => Self::CrossToolHost {
-                    triple: triple.to_string(),
-                },
+            let triple = triple.to_string();
+            return match cross_role {
+                Some(CrossRole::Target) => Self::CrossToolTarget { triple },
+                Some(CrossRole::Host) | None => Self::CrossToolHost { triple },
             };
         }
         match merge_root {
@@ -109,6 +123,32 @@ impl BuildClass {
                 Self::CrossTarget { triple: None }
             }
             MergeRoot::Target => Self::NativeTarget,
+        }
+    }
+
+    /// The class to assume on a path that carries no planner stamp — the
+    /// binary-package merge, which runs only `pkg_preinst`/`pkg_postinst` and
+    /// so never reaches the toolchain-var selection this discriminates.
+    ///
+    /// Deliberately **not** a second copy of the arch table: it recognises
+    /// only the host-side code generators by name (the pre-`BuildClass`
+    /// allowlist) and treats every other `cross-<tuple>/` package as target
+    /// code. Getting it wrong in the target direction costs nothing here;
+    /// getting it wrong in the *host* direction is what silently builds a
+    /// target libc with the host compiler, so the bias runs the safe way.
+    /// `cross_unstamped_never_claims_a_target_package_is_host` in
+    /// `portage-cli` pins it against the authoritative table.
+    pub fn unstamped(category: &str, pn: &str) -> Self {
+        match category.strip_prefix("cross-") {
+            Some(triple) => match pn {
+                "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers" => Self::CrossToolHost {
+                    triple: triple.to_string(),
+                },
+                _ => Self::CrossToolTarget {
+                    triple: triple.to_string(),
+                },
+            },
+            None => Self::NativeTarget,
         }
     }
 }
@@ -170,24 +210,16 @@ pub struct SelectedPackage {
     pub slot: Option<Interned<DefaultInterner>>,
     /// Merge destination.
     pub merge_root: MergeRoot,
-    /// What kind of build this entry is (host-class vs target-class, native
-    /// vs cross). Computed once at selection; see [`BuildClass`].
-    pub build_class: BuildClass,
 }
 
 impl SelectedPackage {
     /// Create a target-root selected package.
-    ///
-    /// Defaults to [`BuildClass::NativeTarget`] — callers resolving into a
-    /// cross or host context should construct the struct directly (or use
-    /// [`BuildClass::classify`]) so the field reflects the real topology.
     pub fn new(cpn: Cpn, version: Version, slot: Option<Interned<DefaultInterner>>) -> Self {
         Self {
             cpn,
             version,
             slot,
             merge_root: MergeRoot::Target,
-            build_class: BuildClass::NativeTarget,
         }
     }
 }
@@ -403,46 +435,96 @@ mod tests {
     }
 
     #[test]
-    fn cross_host_tool_defaults_host_sysroot_lib_is_target() {
+    fn cross_role_decides_the_split_not_the_package_name() {
         // bash crossdev's `set_env` `case ${l} in K|L)` (target) vs `*)`
-        // (host): a `cross-<tuple>/` package is HOST unless it's the libc
-        // (glibc/musl) or kernel-headers. So gcc (and any `--ex-pkg` extra)
-        // is a host code-generator; glibc is a target sysroot library.
+        // (host). Which side a package lands on comes from the caller's
+        // `CrossRole`, never from its name — the name-based version of this
+        // silently called `newlib` and the LLVM runtimes host tools.
         let tuple = "riscv64-unknown-linux-gnu";
-        let gcc = cn("cross-riscv64-unknown-linux-gnu", "gcc");
-        let gdb = cn("cross-riscv64-unknown-linux-gnu", "gdb"); // an --ex-pkg extra
-        let glibc = cn("cross-riscv64-unknown-linux-gnu", "glibc");
-        let headers = cn("cross-riscv64-unknown-linux-gnu", "linux-headers");
-        for cpn in [gcc, gdb] {
+        let cross = |pkg| cn("cross-riscv64-unknown-linux-gnu", pkg);
+        let host = BuildClass::CrossToolHost {
+            triple: tuple.to_string(),
+        };
+        let target = BuildClass::CrossToolTarget {
+            triple: tuple.to_string(),
+        };
+
+        // The role is authoritative for every name, including ones a name set
+        // would have to enumerate.
+        for pkg in ["gcc", "binutils", "clang-crossdev-wrappers"] {
+            let cpn = cross(pkg);
             assert_eq!(
-                BuildClass::classify(&cpn, MergeRoot::Host, false, false),
-                BuildClass::CrossToolHost {
-                    triple: tuple.to_string(),
-                }
+                BuildClass::classify(&cpn, MergeRoot::Host, false, false, Some(CrossRole::Host)),
+                host
             );
             // Category wins over merge_root/cross flags for the host tools.
             assert_eq!(
-                BuildClass::classify(&cpn, MergeRoot::Target, true, true),
-                BuildClass::CrossToolHost {
-                    triple: tuple.to_string(),
-                }
+                BuildClass::classify(&cpn, MergeRoot::Target, true, true, Some(CrossRole::Host)),
+                host
             );
         }
-        for cpn in [glibc, headers] {
+        for pkg in [
+            "glibc",
+            "musl",
+            "newlib",
+            "linux-headers",
+            "compiler-rt",
+            "libunwind",
+            "libcxxabi",
+            "libcxx",
+        ] {
             assert_eq!(
-                BuildClass::classify(&cpn, MergeRoot::Target, true, true),
-                BuildClass::CrossToolTarget {
-                    triple: tuple.to_string(),
+                BuildClass::classify(
+                    &cross(pkg),
+                    MergeRoot::Target,
+                    true,
+                    true,
+                    Some(CrossRole::Target)
+                ),
+                target
+            );
+        }
+
+        // Undeclared (an `--ex-pkg` extra) takes crossdev's `*)` host branch.
+        assert_eq!(
+            BuildClass::classify(&cross("gdb"), MergeRoot::Target, true, true, None),
+            host
+        );
+    }
+
+    #[test]
+    fn unstamped_never_claims_a_non_toolchain_cross_package_is_host() {
+        // The binpkg-merge fallback biases to target: mislabelling a target
+        // library as a host tool is what builds it with the wrong compiler,
+        // so only the known code generators get the host answer.
+        let tuple = "riscv64-unknown-linux-gnu".to_string();
+        for pkg in ["binutils", "gcc", "gdb", "clang-crossdev-wrappers"] {
+            assert_eq!(
+                BuildClass::unstamped("cross-riscv64-unknown-linux-gnu", pkg),
+                BuildClass::CrossToolHost {
+                    triple: tuple.clone()
                 }
             );
         }
+        for pkg in ["glibc", "musl", "newlib", "linux-headers", "libcxx"] {
+            assert_eq!(
+                BuildClass::unstamped("cross-riscv64-unknown-linux-gnu", pkg),
+                BuildClass::CrossToolTarget {
+                    triple: tuple.clone()
+                }
+            );
+        }
+        assert_eq!(
+            BuildClass::unstamped("dev-libs", "foo"),
+            BuildClass::NativeTarget
+        );
     }
 
     #[test]
     fn native_target_with_no_cross() {
         let cpn = cn("dev-libs", "foo");
         assert_eq!(
-            BuildClass::classify(&cpn, MergeRoot::Target, false, false),
+            BuildClass::classify(&cpn, MergeRoot::Target, false, false, None),
             BuildClass::NativeTarget
         );
     }
@@ -451,13 +533,18 @@ mod tests {
     fn merge_root_host_is_native_host() {
         let cpn = cn("dev-libs", "foo");
         assert_eq!(
-            BuildClass::classify(&cpn, MergeRoot::Host, false, false),
+            BuildClass::classify(&cpn, MergeRoot::Host, false, false, None),
             BuildClass::NativeHost
         );
         // Even under an active cross context: a Host-rooted ordinary package
         // is a native host build (an unsatisfied BDEPEND), not a cross tool.
         assert_eq!(
-            BuildClass::classify(&cpn, MergeRoot::Host, true, true),
+            BuildClass::classify(&cpn, MergeRoot::Host, true, true, None),
+            BuildClass::NativeHost
+        );
+        // A `CrossRole` is meaningless outside `cross-<tuple>/` and ignored.
+        assert_eq!(
+            BuildClass::classify(&cpn, MergeRoot::Host, true, true, Some(CrossRole::Target)),
             BuildClass::NativeHost
         );
     }
@@ -508,14 +595,14 @@ mod tests {
         let cpn = cn("sys-apps", "foo");
         // Real foreign-arch build: cross_active AND is_cross_arch both on.
         assert_eq!(
-            BuildClass::classify(&cpn, MergeRoot::Target, true, true),
+            BuildClass::classify(&cpn, MergeRoot::Target, true, true, None),
             BuildClass::CrossTarget { triple: None }
         );
         // Same-arch offset (`--root <dir>`) has cross_active on but
         // is_cross_arch off — it stays NativeTarget, the routing that
         // `broot_filtered` already handles.
         assert_eq!(
-            BuildClass::classify(&cpn, MergeRoot::Target, true, false),
+            BuildClass::classify(&cpn, MergeRoot::Target, true, false, None),
             BuildClass::NativeTarget
         );
     }

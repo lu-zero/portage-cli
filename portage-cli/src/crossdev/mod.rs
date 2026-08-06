@@ -48,7 +48,7 @@
 mod config_plan;
 mod multilib;
 pub mod stages;
-mod target;
+pub mod target;
 
 use std::io::Write;
 
@@ -798,7 +798,7 @@ fn gcc_needs_refresh(active_slot: Option<&str>, needed_slot: &str) -> bool {
 async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
     let repo_path_str = globals.repo_path();
     let roots = globals.roots();
-    // See `DepgraphOpts::host_merge_root`: `Cli::broot()` stays overlay-aware
+    // See `DepgraphOpts::host_merge_root`: `Cli::host_roots()` stays overlay-aware
     // under `--target` substitution, unlike `roots`.
     let host_roots = globals.host_roots();
     let outcome = crate::query::depgraph::depgraph(crate::query::depgraph::DepgraphOpts {
@@ -1328,8 +1328,7 @@ fn make_conf_body(target: &CrossTarget, sysroot: &Utf8Path, outer_root: &Utf8Pat
          # same host/target conflation bug as the bare zstd.m4 case in\n\
          # sys-devel/binutils, just for buildsystems that otherwise do the right\n\
          # thing. Point it at the outer EROOT's own native pkgconfig dirs (host\n\
-         # BDEPEND packages build there — see [[em-root-characterization]] Tier 1\n\
-         # item 2), not the bare host `/`.\n\
+         # BDEPEND packages build there), not the bare host `/`.\n\
          BUILD_PKG_CONFIG_LIBDIR=\"{outer_root}/usr/lib64/pkgconfig:{outer_root}/usr/lib/pkgconfig:{outer_root}/usr/share/pkgconfig\"\n",
         target.cflags(),
     )

@@ -39,8 +39,8 @@ pub use facts::{
 };
 pub use required_use::RequiredUse;
 pub use solution::{
-    BuildClass, CededFlag, DepEdge, DroppedDep, InstalledPackage, InstalledPolicy, MergeRoot, Plan,
-    SelectedPackage, SolveError, TargetSpec, UseFlagRequirement, Violation,
+    BuildClass, CededFlag, CrossRole, DepEdge, DroppedDep, InstalledPackage, InstalledPolicy,
+    MergeRoot, Plan, SelectedPackage, SolveError, TargetSpec, UseFlagRequirement, Violation,
 };
 pub use solver::Solver;
 pub use use_config::{

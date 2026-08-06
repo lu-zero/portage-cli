@@ -145,11 +145,10 @@ impl CrossTarget {
     /// in stage order. The cross magic lives in the eclasses, triggered by the
     /// `cross-*` category, so these point at the ordinary `::gentoo` ebuilds.
     ///
-    /// Each entry also states its [`PackageArch`] right here, at the single
-    /// place a cross package is declared — not in a separate, easily-desynced
-    /// name list (the old `is_target_package`). Adding a future host-arch
-    /// tool (e.g. `rust-std` for an LLVM+Rust cross build) forces picking
-    /// `Host` or `Target` right where it's introduced.
+    /// Each entry's [`PackageArch`] comes from [`CROSS_PACKAGE_ARCH`], the one
+    /// table — so adding a package here without declaring its arch there trips
+    /// `planned_packages_are_all_declared`, and the plan-entry `BuildClass`
+    /// stamp can never disagree with what this plans.
     ///
     /// `dev-debug/gdb` is deliberately NOT here: real crossdev only builds a
     /// cross gdb when `--ex-gdb` is explicitly passed (`EX_GDB` defaults
@@ -159,33 +158,92 @@ impl CrossTarget {
     /// equivalent yet, so there's nothing to wire it to — it was previously here
     /// unconditionally by mistake.
     pub fn packages(&self) -> Vec<(&'static str, &'static str, PackageArch)> {
-        use PackageArch::{Host, Target};
-        let mut pkgs: Vec<(&'static str, &'static str, PackageArch)> = Vec::new();
+        let mut pkgs: Vec<(&'static str, &'static str)> = Vec::new();
         if self.llvm {
             // Clang already cross-targets: no per-target compiler, just the
             // wrapper + the target runtimes built into the sysroot.
-            pkgs.push(("sys-devel", "clang-crossdev-wrappers", Host));
+            pkgs.push(("sys-devel", "clang-crossdev-wrappers"));
             if self.has_kernel {
-                pkgs.push(("sys-kernel", "linux-headers", Target));
+                pkgs.push(("sys-kernel", "linux-headers"));
             }
-            let (cat, pkg) = self.libc.package();
-            pkgs.push((cat, pkg, Target));
-            pkgs.push(("llvm-runtimes", "compiler-rt", Target));
-            pkgs.push(("llvm-runtimes", "libunwind", Target));
-            pkgs.push(("llvm-runtimes", "libcxxabi", Target));
-            pkgs.push(("llvm-runtimes", "libcxx", Target));
+            pkgs.push(self.libc.package());
+            pkgs.push(("llvm-runtimes", "compiler-rt"));
+            pkgs.push(("llvm-runtimes", "libunwind"));
+            pkgs.push(("llvm-runtimes", "libcxxabi"));
+            pkgs.push(("llvm-runtimes", "libcxx"));
         } else {
             // GCC: the classic binutils → headers → gcc → libc toolchain.
-            pkgs.push(("sys-devel", "binutils", Host));
+            pkgs.push(("sys-devel", "binutils"));
             if self.has_kernel {
-                pkgs.push(("sys-kernel", "linux-headers", Target));
+                pkgs.push(("sys-kernel", "linux-headers"));
             }
-            pkgs.push(("sys-devel", "gcc", Host));
-            let (cat, pkg) = self.libc.package();
-            pkgs.push((cat, pkg, Target));
+            pkgs.push(("sys-devel", "gcc"));
+            pkgs.push(self.libc.package());
         }
-        pkgs
+        pkgs.into_iter()
+            .map(|(cat, pkg)| {
+                let arch = cross_package_arch(cat, pkg);
+                debug_assert!(
+                    arch.is_some(),
+                    "{cat}/{pkg} is planned but absent from CROSS_PACKAGE_ARCH"
+                );
+                // Host is the same fall-through real crossdev gives an
+                // undeclared package; `planned_packages_are_all_declared`
+                // pins that this never fires for a package we do plan.
+                (cat, pkg, arch.unwrap_or(PackageArch::Host))
+            })
+            .collect()
     }
+}
+
+/// Every `(real_category, package)` a `cross-<tuple>/` category can hold, with
+/// the arch it builds for. The one table: [`CrossTarget::packages`] reads its
+/// `PackageArch` from here, and so does the plan-entry
+/// [`BuildClass`](portage_solver::BuildClass) stamp (via
+/// [`cross_package_arch`]) — a package declared `Target` here can never be
+/// built as a host tool by one path and a target library by the other.
+///
+/// Ordered as `CrossTarget::packages` emits them; membership, not order, is
+/// what matters to the lookup.
+const CROSS_PACKAGE_ARCH: &[(&str, &str, PackageArch)] = &[
+    ("sys-devel", "binutils", PackageArch::Host),
+    ("sys-devel", "gcc", PackageArch::Host),
+    ("sys-devel", "clang-crossdev-wrappers", PackageArch::Host),
+    ("sys-kernel", "linux-headers", PackageArch::Target),
+    ("sys-libs", "glibc", PackageArch::Target),
+    ("sys-libs", "musl", PackageArch::Target),
+    ("sys-libs", "newlib", PackageArch::Target),
+    ("llvm-runtimes", "compiler-rt", PackageArch::Target),
+    ("llvm-runtimes", "libunwind", PackageArch::Target),
+    ("llvm-runtimes", "libcxxabi", PackageArch::Target),
+    ("llvm-runtimes", "libcxx", PackageArch::Target),
+];
+
+/// The arch a `cross-<tuple>/<pkg>` package builds for, looked up by the
+/// **real** `category/package` it was cloned from (`RepoData::real_cpn_of`) —
+/// the `cross-<tuple>` category itself says nothing about host-vs-target.
+///
+/// A caller that could not resolve the real category (no `real_cpn_of`
+/// redirect) may pass the `cross-<tuple>` one: package names are unique across
+/// the table, so the name alone still answers. Without that, an unresolved
+/// redirect would silently read as "undeclared" and take the host branch —
+/// exactly the misclassification this table exists to prevent.
+///
+/// `None` for anything outside the declared toolchain: an `--ex-pkg` extra,
+/// which real crossdev's `set_env` gives the host branch (`case ${l} in K|L)`
+/// target `;; *)` host — `l=X` falls through to host), as does
+/// [`cross_env_entries`](super::cross_env_entries)' own extras loop.
+pub fn cross_package_arch(real_category: &str, package: &str) -> Option<PackageArch> {
+    let by_name = || {
+        CROSS_PACKAGE_ARCH
+            .iter()
+            .find(|(_, pkg, _)| *pkg == package)
+    };
+    CROSS_PACKAGE_ARCH
+        .iter()
+        .find(|(cat, pkg, _)| *cat == real_category && *pkg == package)
+        .or_else(by_name)
+        .map(|(_, _, arch)| *arch)
 }
 
 /// Whether a cross package runs on the build host (`CBUILD`) or compiles code
@@ -280,5 +338,110 @@ mod tests {
     fn llvm_rejects_glibc() {
         let err = CrossTarget::parse("riscv64-unknown-linux-gnu", true).unwrap_err();
         assert!(err.to_string().contains("glibc"));
+    }
+
+    /// Every shape of target `em crossdev` can plan, so the `debug_assert` in
+    /// `packages()` covers the whole space rather than whichever tuple a test
+    /// happened to name.
+    fn every_target() -> Vec<CrossTarget> {
+        ["riscv64-unknown-linux-gnu", "riscv64-unknown-elf"]
+            .iter()
+            .filter_map(|t| CrossTarget::parse(t, false).ok())
+            .chain(
+                ["aarch64-unknown-linux-musl", "riscv64-unknown-elf"]
+                    .iter()
+                    .filter_map(|t| CrossTarget::parse(t, true).ok()),
+            )
+            .collect()
+    }
+
+    #[test]
+    fn planned_packages_are_all_declared() {
+        for t in every_target() {
+            for (cat, pkg, _) in t.packages() {
+                assert!(
+                    cross_package_arch(cat, pkg).is_some(),
+                    "{cat}/{pkg} is planned for {} but missing from CROSS_PACKAGE_ARCH",
+                    t.tuple
+                );
+            }
+        }
+    }
+
+    /// The regression test for the 2026-08-06 misclassification: `newlib` and
+    /// the LLVM runtimes are target code, and neither the authoritative table
+    /// nor the unstamped fallback may call them host tools.
+    #[test]
+    fn cross_unstamped_never_claims_a_target_package_is_host() {
+        use portage_atom_pubgrub::BuildClass;
+        for t in every_target() {
+            let category = t.category();
+            for (cat, pkg, arch) in t.packages() {
+                assert_eq!(
+                    cross_package_arch(cat, pkg),
+                    Some(arch),
+                    "{cat}/{pkg} disagrees between packages() and the table"
+                );
+                if arch == PackageArch::Target {
+                    assert!(
+                        !matches!(
+                            BuildClass::unstamped(&category, pkg),
+                            BuildClass::CrossToolHost { .. }
+                        ),
+                        "{category}/{pkg} is target code but unstamped() calls it a host tool"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn newlib_and_llvm_runtimes_are_target_code() {
+        for pkg in ["newlib", "glibc", "musl"] {
+            assert_eq!(
+                cross_package_arch("sys-libs", pkg),
+                Some(PackageArch::Target)
+            );
+        }
+        for pkg in ["compiler-rt", "libunwind", "libcxxabi", "libcxx"] {
+            assert_eq!(
+                cross_package_arch("llvm-runtimes", pkg),
+                Some(PackageArch::Target)
+            );
+        }
+        for pkg in ["gcc", "binutils", "clang-crossdev-wrappers"] {
+            assert_eq!(
+                cross_package_arch("sys-devel", pkg),
+                Some(PackageArch::Host)
+            );
+        }
+        // An `--ex-pkg` extra is undeclared, which classify() reads as host.
+        assert_eq!(cross_package_arch("dev-debug", "gdb"), None);
+    }
+
+    /// The depgraph looks up the *real* cpn, but if a `real_cpn_of` redirect
+    /// is ever missing it passes the `cross-<tuple>` category through. The
+    /// name must still resolve, or the answer silently degrades to host.
+    #[test]
+    fn an_unresolved_redirect_still_finds_the_arch_by_name() {
+        assert_eq!(
+            cross_package_arch("cross-riscv64-unknown-elf", "newlib"),
+            Some(PackageArch::Target)
+        );
+        assert_eq!(
+            cross_package_arch("cross_llvm-aarch64-unknown-linux-musl", "libcxx"),
+            Some(PackageArch::Target)
+        );
+        assert_eq!(
+            cross_package_arch("cross-riscv64-unknown-linux-gnu", "gcc"),
+            Some(PackageArch::Host)
+        );
+        // Package names are unique across the table, which is what makes the
+        // name-only fallback unambiguous.
+        let mut names: Vec<&str> = CROSS_PACKAGE_ARCH.iter().map(|(_, pkg, _)| *pkg).collect();
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count, "duplicate package name in the table");
     }
 }
