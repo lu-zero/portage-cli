@@ -1,6 +1,6 @@
 # Drop `BuildClass` (cross-tool stamp) — plan and post-mortem
 
-Status: 🔴 not started · Design decided **2026-08-06**  
+Status: 🟡 landed **2026-08-07** — package.env letter-faithful (llvm host); HostCodegen PN allowlist; BuildClass/CrossRole/EM_BUILD_CLASS removed. Live verify (Step 5) still open  
 Companion reference: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md)  
 Related: Track A in [[root-topology-refactor]] (landed the stamp we now want to unwind)
 
@@ -133,7 +133,7 @@ crossdev no worse than today.
 - [x] Point Track A in [[root-topology-refactor]] at this reversal
 - [x] PENDING.md queue entry
 
-### Step 1 — Align package.env with bash-crossdev letters
+### Step 1 — Align package.env with bash-crossdev letters ✅
 
 **Goal:** durable files match `/usr/bin/crossdev` `set_env`, independent of
 BuildClass.
@@ -152,7 +152,7 @@ BuildClass.
 **Exit:** `em -p --target … crossdev --init-target` (GCC + `-L`) writes env
 that matches the matrix; no BuildClass change required yet.
 
-### Step 2 — Stop stamping CrossTool* from the depgraph
+### Step 2 — Stop stamping CrossTool* from the depgraph ✅
 
 **Goal:** in-process builds use package.env sniff for tool_tuple; stamps no
 longer override.
@@ -171,7 +171,7 @@ longer override.
 package.env; unit tests that required CrossRole reworked to env-based or
 deleted.
 
-### Step 3 — Isolate HostCodegen
+### Step 3 — Isolate HostCodegen ✅
 
 **Goal:** em-only specials without a second host/target enum.
 
@@ -187,7 +187,7 @@ deleted.
 
 **Exit:** HostCodegen sites greppable; no CrossToolHost/Target variants.
 
-### Step 4 — Delete BuildClass (or gut it)
+### Step 4 — Delete BuildClass (or gut it) ✅
 
 1. Remove `BuildClass` / `CrossRole` from `portage-solver` if unused.
 2. Remove from `PlannedMerge`, `RunInner`, privilege worker, Display/FromStr

@@ -9,7 +9,7 @@ use brush_core::{
     ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable, SourceInfo,
 };
 use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
-use portage_solver::BuildClass;
+
 
 use super::commands;
 use super::commands::inherit;
@@ -409,16 +409,6 @@ pub struct EbuildShell {
     /// unchrooted, unlike a cross-compiler (host-native by construction) or
     /// the real host's own tools.
     build_broot: Option<Utf8PathBuf>,
-    /// What kind of build this package is — the structural "host-class vs
-    /// target-class, native vs cross" answer, replacing the local
-    /// `cross_host_tool_tuple` re-derivation. `None` ⇒ fall back to deriving
-    /// a [`BuildClass::CrossToolHost`] / [`BuildClass::CrossToolTarget`] from
-    /// the ebuild's `cross-<tuple>/` category (the historical path); `Some` is the value the planner stamped (Track
-    /// A2b threads it through; until then every site is category-derived).
-    /// Read by the PATH/EPREFIX/ESYSROOT/CPPFLAGS fixups in `run_phase` to
-    /// tell a host-side cross tool (`cross-<tuple>/{binutils,gcc,…}`) from an
-    /// ordinary target package.
-    build_class: Option<BuildClass>,
     /// Portage `bashrc` hooks sourced per phase after the environment is set up
     /// (profile `profile.bashrc` files in stack order, then the user's
     /// `${PORTAGE_CONFIGROOT}/etc/portage/bashrc`). Not PMS; matches portage's
@@ -738,7 +728,6 @@ impl EbuildShell {
             build_sysroot: None,
             build_eprefix: None,
             build_broot: None,
-            build_class: None,
             bashrc_files: Vec::new(),
             baseline: None,
             phase_sourced_ebuild: None,
@@ -784,13 +773,23 @@ impl EbuildShell {
         self.build_broot = broot.map(Utf8Path::to_path_buf);
     }
 
-    /// Set the build class for subsequent phases — the planner-stamped answer
-    /// to "is this a host-class or target-class build?" When unset, `run_phase`
-    /// falls back to deriving [`BuildClass::CrossToolHost`] /
-    /// [`BuildClass::CrossToolTarget`] from the ebuild's `cross-<tuple>/`
-    /// category (the historical behaviour).
-    pub fn set_build_class(&mut self, class: BuildClass) {
-        self.build_class = Some(class);
+    /// Whether this `cross-*` / `cross_llvm-*` package is a **host code
+    /// generator** (binutils/gcc/gdb/clang-crossdev-wrappers) that needs
+    /// em-only PATH/EPREFIX/ESYSROOT/`-idirafter` specials.
+    ///
+    /// Distinct from package.env host-vs-target (bash `set_env` letters):
+    /// llvm-runtimes are host-env but **not** host-codegen. See
+    /// `todo/drop-buildclass.md` and `docs/bash-crossdev-matrix.md`.
+    pub fn is_cross_host_codegen(category: &str, pn: &str) -> bool {
+        let is_cross = category.starts_with("cross-") || category.starts_with("cross_llvm-");
+        is_cross && matches!(pn, "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers")
+    }
+
+    /// CTARGET triple from a cross category (`cross-<T>` or `cross_llvm-<T>`).
+    pub fn cross_category_triple(category: &str) -> Option<&str> {
+        category
+            .strip_prefix("cross_llvm-")
+            .or_else(|| category.strip_prefix("cross-"))
     }
 
     /// Set the `bashrc` hooks to source per phase (profile `profile.bashrc`
@@ -1387,31 +1386,20 @@ impl EbuildShell {
             // can make `CHOST` equal `CBUILD` here for a reason unrelated to
             // this actually being a same-arch build.
             // `tool_tuple`: the triple whose `${tuple}-gcc`/`-ld`/… this
-            // package compiles *with*. The planner-stamped `build_class` is the
-            // answer when available (the in-process build path); fall back to
-            // the `CTARGET`/`TARGET_ABI` package.env sniff otherwise — which
-            // reads the exact marker bash crossdev writes (`set_env`'s
-            // `case ${l} in K|L) ... *)`), so it stays correct for the paths
-            // that don't carry `build_class` yet (`__worker` install, the
-            // standalone `em ebuild` debug entry). `produces_target_code`
-            // (formerly `target_tuple.is_some()`) gates the `BUILD_*` vars.
-            let (tool_tuple, produces_target_code) = match &self.build_class {
-                Some(BuildClass::CrossToolHost { .. }) => (chost.clone(), false),
-                Some(BuildClass::CrossToolTarget { triple }) => (triple.clone(), true),
-                _ => {
-                    let target_abi_set = self
-                        .get_var("TARGET_ABI")
-                        .filter(|s| !s.is_empty())
-                        .is_some();
-                    let target_tuple = self
-                        .get_var("CTARGET")
-                        .filter(|t| !t.is_empty() && !target_abi_set && *t != chost);
-                    (
-                        target_tuple.clone().unwrap_or_else(|| chost.clone()),
-                        target_tuple.is_some(),
-                    )
-                }
-            };
+            // package compiles *with*. Driven solely by the package.env
+            // CTARGET/`TARGET_ABI` marker bash-crossdev writes (`set_env`
+            // `K|L` vs `*`) — not a planner BuildClass stamp
+            // (`todo/drop-buildclass.md`). `produces_target_code` gates
+            // the `BUILD_*` vars.
+            let target_abi_set = self
+                .get_var("TARGET_ABI")
+                .filter(|s| !s.is_empty())
+                .is_some();
+            let target_tuple = self
+                .get_var("CTARGET")
+                .filter(|t| !t.is_empty() && !target_abi_set && *t != chost);
+            let produces_target_code = target_tuple.is_some();
+            let tool_tuple = target_tuple.unwrap_or_else(|| chost.clone());
 
             let prefix_bin = prefix_bin.filter(|bin| tool_exists(Some(bin), &tool_tuple, "gcc"));
             if let Some(bin) = &prefix_bin {
@@ -1612,24 +1600,10 @@ impl EbuildShell {
         let category = ebuild.category();
         let pn = ebuild.name();
 
-        // The build class — the structural "host-class vs target-class, native
-        // vs cross" answer for this package. The planner stamps it on the plan
-        // entry (`PlannedMerge.build_class`) from the authoritative arch table;
-        // the binpkg-merge path carries no stamp, so it falls back to
-        // `BuildClass::unstamped`. Read by the PATH/EPREFIX/ESYSROOT/CPPFLAGS
-        // fixups below to tell a host-side cross tool from an ordinary (or
-        // target-sysroot) package.
-        let build_class = self
-            .build_class
-            .clone()
-            .unwrap_or_else(|| BuildClass::unstamped(category, pn));
-
-        // Export the resolved build class to the shell env (its `Display`
-        // token) so the generated `bashrc` (`setup.rs`'s `BASHRC_PREFIX`) can
-        // key its host-side search-path injection on a typed value instead of
-        // re-sniffing `CBUILD`/`CTARGET`/`TARGET_ABI`. Always set: `build_class`
-        // is resolved just above (planner-stamped or category-derived).
-        self.set_var("EM_BUILD_CLASS", &build_class.to_string());
+        // Host-codegen specials (PATH/EPREFIX/ESYSROOT/-idirafter) for
+        // binutils/gcc/gdb/clang wrappers only — not every host-env package.
+        let host_codegen = Self::is_cross_host_codegen(category, pn);
+        let cross_triple = Self::cross_category_triple(category).map(str::to_owned);
 
         // FILESDIR is the ebuild's own dir + `files` (PMS), not repo+cat+pn —
         // they differ only for a `cross-*` symlink, whose real files live with
@@ -1774,7 +1748,7 @@ impl EbuildShell {
         if root_str != "/"
             && self.build_eprefix.is_none()
             && self.build_sysroot.is_none()
-            && matches!(build_class, BuildClass::CrossToolHost { .. })
+            && host_codegen
         {
             let bin = format!("{root_str}usr/bin");
             let path = self.get_var("PATH").unwrap_or_default();
@@ -1841,10 +1815,7 @@ impl EbuildShell {
         // connecting them (ED must track EPREFIX; ESYSROOT must NOT
         // double-count a flipped EPREFIX) are enforced in one place instead
         // of by convention across a 100-line function.
-        let eprefix = if matches!(build_class, BuildClass::CrossToolHost { .. })
-            && eprefix.is_empty()
-            && root_str != "/"
-        {
+        let eprefix = if host_codegen && eprefix.is_empty() && root_str != "/" {
             root_str.trim_end_matches('/').to_string()
         } else {
             eprefix
@@ -1955,7 +1926,7 @@ impl EbuildShell {
             // `outer_roots()`, where `base` and `target` genuinely differ
             // (`Some("/")` vs `Some(<outer prefix>)`), so `build_sysroot()`
             // stays `Some` and this new arm never fires for them.
-            let esysroot = if let BuildClass::CrossToolHost { triple } = &build_class {
+            let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple.as_deref()) {
                 format!("{root_str}usr/{triple}/")
             } else if eprefix.is_empty() || self.build_sysroot.is_none() {
                 sysroot.clone()
@@ -1980,9 +1951,7 @@ impl EbuildShell {
             // riscv64 cross toolchain under `--prefix`: binutils's dwarf.c hit
             // `elfutils/debuginfod.h: No such file or directory` despite
             // pkg-config finding `libdebuginfod >= 0.188` on the host.
-            if matches!(build_class, BuildClass::CrossToolHost { .. })
-                && self.build_sysroot.is_some()
-            {
+            if host_codegen && self.build_sysroot.is_some() {
                 let cppflags = self.get_var("CPPFLAGS").unwrap_or_default();
                 let updated = format!("{cppflags} -idirafter /usr/include");
                 self.set_var("CPPFLAGS", updated.trim_start());

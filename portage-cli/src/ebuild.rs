@@ -7,7 +7,6 @@ use bzip2::Compression;
 use bzip2::write::BzEncoder;
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Cpv;
-use portage_atom_pubgrub::BuildClass;
 use portage_distfiles::{DistfileResolver, FetchConfig, FetchStatus, Fetcher};
 use portage_metadata::SrcUriEntry;
 use portage_repo::{Ebuild, EbuildEnv, MakeConf, Manifest, ReposConf, Repository};
@@ -348,7 +347,6 @@ pub async fn run(
         ebuild_path,
         cpv: None,
         group: &PhaseGroup::Debug(phases.to_vec()),
-        build_class: None,
         work_dir,
         repo_override,
         root,
@@ -396,10 +394,6 @@ pub struct BuildAndMerge<'a> {
     pub fetch_all_uri: bool,
     /// When set, emit phase enter/leave on the activity bus.
     pub activity: Option<crate::activity::ActivityPkgCtx>,
-    /// What kind of build this entry is — the planner-stamped
-    /// [`BuildClass`], threaded to the build shell so it reads a typed value
-    /// instead of re-deriving it from the `cross-` category prefix.
-    pub build_class: BuildClass,
 }
 
 /// Build one resolved plan entry through the full phase chain and merge it
@@ -423,7 +417,6 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
         fetchonly,
         fetch_all_uri,
         activity,
-        build_class,
     } = opts;
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
@@ -441,7 +434,6 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             group: &PhaseGroup::FetchOnly {
                 all_uri: fetch_all_uri,
             },
-            build_class: Some(build_class.clone()),
             work_dir: Some(&work_dir),
             repo_override: None,
             root,
@@ -464,7 +456,6 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::BuildOnly,
-            build_class: Some(build_class.clone()),
             work_dir: Some(&work_dir),
             repo_override: None,
             root,
@@ -490,7 +481,6 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::Compile,
-            build_class: Some(build_class.clone()),
             work_dir: Some(&work_dir),
             repo_override: None,
             root,
@@ -521,7 +511,6 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
                 buildpkg,
                 binpkg: None,
                 force_verify_signature: false,
-                build_class: Some(build_class.clone()),
                 activity: activity.as_ref(),
                 log_label: "build",
                 log: &log,
@@ -533,7 +522,6 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::Full,
-            build_class: Some(build_class.clone()),
             work_dir: Some(&work_dir),
             repo_override: None,
             root,
@@ -619,7 +607,6 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
                 buildpkg: false,
                 binpkg: Some(binpkg_path),
                 force_verify_signature,
-                build_class: None,
                 activity: activity.as_ref(),
                 log_label: "merge",
                 log: &log,
@@ -633,7 +620,6 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
             ebuild_path: ebuild_path.as_str(),
             cpv: Some(cpv),
             group: &PhaseGroup::BinpkgMerge,
-            build_class: None,
             work_dir: Some(&work_dir),
             repo_override: None,
             root,
@@ -674,9 +660,6 @@ pub struct InstallWorker<'a> {
     /// `FEATURES`/`BINPKG_GPG_VERIFY_GPG_HOME` itself, same as everything
     /// else it re-derives.
     pub force_verify_signature: bool,
-    /// Planner-stamped build class (parsed from the `--build-class` token); see
-    /// `RunInner::build_class`.
-    pub build_class: Option<BuildClass>,
     pub buildpkg: bool,
     pub quiet: bool,
     pub activity_job_id: Option<&'a str>,
@@ -726,9 +709,6 @@ struct WorkerStep<'a> {
     buildpkg: bool,
     binpkg: Option<&'a Utf8Path>,
     force_verify_signature: bool,
-    /// Planner-stamped build class for this entry; `None` ⇒ the worker derives
-    /// `CrossTool*` from the ebuild's `cross-` category.
-    build_class: Option<BuildClass>,
     activity: Option<&'a crate::activity::ActivityPkgCtx>,
     /// `build`/`merge` — names the log in the non-zero-exit error only.
     log_label: &'a str,
@@ -749,7 +729,6 @@ async fn spawn_install_worker_step(
         .collect::<Vec<_>>()
         .join(" ");
     let cpv_str = step.cpv.to_string();
-    let build_class_str = step.build_class.as_ref().map(|c| c.to_string());
     let (act_job, act_parent, act_live, act_side) = worker_activity_cli(step.activity);
     let reemit = step.activity.map(|a| a.bus.clone());
     let code = crate::privilege::spawn_install_worker(
@@ -770,7 +749,6 @@ async fn spawn_install_worker_step(
             quiet: step.quiet,
             binpkg: step.binpkg.map(|b| b.as_str()),
             force_verify_signature: step.force_verify_signature,
-            build_class: build_class_str.as_deref(),
             activity_job_id: act_job.as_deref(),
             activity_parent_job_id: act_parent.as_deref(),
             activity_live_root: act_live.as_deref(),
@@ -834,7 +812,6 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         roots,
         binpkg,
         force_verify_signature,
-        build_class,
         buildpkg,
         quiet,
         activity_job_id,
@@ -879,7 +856,6 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         ebuild_path,
         cpv: Some(&cpv),
         group: &group,
-        build_class,
         work_dir: Some(&work_dir),
         repo_override: None,
         root: Utf8Path::new(root),
@@ -975,12 +951,6 @@ struct RunInner<'a> {
     /// `-k` reuse or when the remote repo didn't request it.
     force_verify_signature: bool,
     activity: Option<crate::activity::ActivityPkgCtx>,
-    /// `Some` ⇒ stamp this build class on the shell (the planner's value);
-    /// `None` ⇒ let the shell fall back to deriving `CrossTool` from the
-    /// ebuild's `cross-` category (the historical path, used by the
-    /// standalone `em ebuild` debug entry and the `__worker` install child
-    /// until its subprocess serialization lands).
-    build_class: Option<BuildClass>,
 }
 
 async fn run_inner(opts: RunInner<'_>) -> Result<()> {
@@ -1000,7 +970,6 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         binpkg,
         force_verify_signature,
         activity,
-        build_class,
     } = opts;
     let RootContext {
         config_root,
@@ -1118,9 +1087,6 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     // not yet visible to later builds in the run — that needs a merged sysroot,
     // which is shelved (see docs/root-model.md "Overlay support — shelved").
     shell.set_build_roots(config_root, sysroot, eprefix, broot);
-    if let Some(class) = &build_class {
-        shell.set_build_class(class.clone());
-    }
     shell.set_terminal(crate::style::terminal_config());
 
     if let Some(flags) = use_flags {

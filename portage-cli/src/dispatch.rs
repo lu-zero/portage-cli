@@ -55,7 +55,6 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             self_contained_bootstrap,
             binpkg,
             force_verify_signature,
-            build_class,
             buildpkg,
             quiet,
             activity_job_id,
@@ -80,11 +79,6 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
                 },
                 binpkg: binpkg.as_deref(),
                 force_verify_signature: *force_verify_signature,
-                build_class: build_class
-                    .as_deref()
-                    .map(std::str::FromStr::from_str)
-                    .transpose()
-                    .map_err(anyhow::Error::msg)?,
                 buildpkg: *buildpkg,
                 quiet: *quiet,
                 activity_job_id: activity_job_id.as_deref(),

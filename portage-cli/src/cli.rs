@@ -903,12 +903,6 @@ pub enum Applet {
         buildpkg: bool,
         #[arg(long)]
         quiet: bool,
-        /// Planner-stamped build class token (`BuildClass`'s `Display` form) —
-        /// the typed "host-class vs target-class" answer, threaded across the
-        /// subprocess so the install phase reads it instead of re-deriving from
-        /// the `cross-` category. Omitted ⇒ category fallback.
-        #[arg(long)]
-        build_class: Option<String>,
         /// Parent activity session id — live FS phase updates only.
         #[arg(long)]
         activity_job_id: Option<String>,

@@ -1,6 +1,6 @@
 mod autounmask;
 
-pub use portage_atom_pubgrub::{BuildClass, CrossRole, MergeRoot};
+pub use portage_atom_pubgrub::MergeRoot;
 mod output;
 mod package_use;
 mod targets;
@@ -37,11 +37,6 @@ use crate::cli::DepgraphFormat;
 pub struct PlannedMerge {
     /// Where this package is merged (`BROOT` host vs target `ROOT`).
     pub merge_root: MergeRoot,
-    /// What kind of build this entry is (host-class vs target-class, native
-    /// vs cross) — the planner's structural answer, computed once here via
-    /// [`BuildClass::classify`] and threaded to the build shell so it stops
-    /// re-deriving it from the `cross-` category prefix.
-    pub build_class: BuildClass,
     /// The identity to build/register under (display + work-dir naming +
     /// VDB category) — for a cross-derived package this is the *virtual*
     /// cpv (`cross-<tuple>/gcc-...`), which may differ from the real cpn
@@ -1529,23 +1524,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 .join(format!("{}-{}.ebuild", real_cpn.package, ver));
             PlannedMerge {
                 merge_root: entry.merge_root,
-                // The cross host/target split is keyed on the *real* cpn:
-                // `cross-<tuple>/newlib` is `sys-libs/newlib`, and only the
-                // real name appears in the authoritative arch table.
-                build_class: BuildClass::classify(
-                    cpn,
-                    entry.merge_root,
-                    cross.active,
-                    cross.is_cross_arch(),
-                    crate::crossdev::target::cross_package_arch(
-                        real_cpn.category.as_str(),
-                        real_cpn.package.as_str(),
-                    )
-                    .map(|arch| match arch {
-                        crate::crossdev::target::PackageArch::Host => CrossRole::Host,
-                        crate::crossdev::target::PackageArch::Target => CrossRole::Target,
-                    }),
-                ),
                 cpv: cpv.clone(),
                 ebuild_path,
                 use_flags: flags,

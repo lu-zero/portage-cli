@@ -729,7 +729,6 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             fetchonly,
             fetch_all_uri,
             activity: activity_pkg.clone(),
-            build_class: planned.build_class.clone(),
         })
         .await;
     }
@@ -791,7 +790,6 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
                     fetchonly: false,
                     fetch_all_uri: false,
                     activity: activity_pkg.clone(),
-                    build_class: planned.build_class.clone(),
                 })
                 .await
             }
@@ -814,7 +812,6 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             fetchonly: false,
             fetch_all_uri: false,
             activity: activity_pkg.clone(),
-            build_class: planned.build_class.clone(),
         })
         .await
     }
@@ -1272,12 +1269,11 @@ async fn merge_parallel(
 #[cfg(test)]
 mod entry_roots_tests {
     use super::*;
-    use query::depgraph::{BuildClass, MergeRoot, PlannedMerge};
+    use query::depgraph::{MergeRoot, PlannedMerge};
 
     fn planned(merge_root: MergeRoot) -> Result<PlannedMerge> {
         Ok(PlannedMerge {
             merge_root,
-            build_class: BuildClass::NativeTarget,
             cpv: portage_atom::Cpv::parse("dev-python/jinja2-3.1.6")?,
             ebuild_path: camino::Utf8PathBuf::new(),
             use_flags: Vec::new(),

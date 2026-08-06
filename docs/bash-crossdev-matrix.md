@@ -98,16 +98,13 @@ package.env).
 | clang-crossdev-wrappers | C | host + `TARGET_*` | Host | host | **yes** (same class as gcc wrappers) |
 | linux-headers | K | target | Target | target | no |
 | musl / newlib | L | target | Target | target | no |
-| compiler-rt | **R** | **host** + `TARGET_*` | **Target** | **target** ⚠️ | no (ebuild uses host clang + `CTARGET`) |
-| libunwind | **U** | **host** | **Target** | **target** ⚠️ | no |
-| libcxxabi | **A** | **host** | **Target** | **target** ⚠️ | no |
-| libcxx | **P** | **host** | **Target** | **target** ⚠️ | no |
+| compiler-rt | **R** | **host** + `TARGET_*` | **Host** | host | no (ebuild uses host clang + `CTARGET`) |
+| libunwind | **U** | **host** | **Host** | host | no |
+| libcxxabi | **A** | **host** | **Host** | host | no |
+| libcxx | **P** | **host** | **Host** | host | no |
 
-⚠️ = **known em delta vs bash-crossdev**: we write K|L-style target env for
-llvm-runtimes because `PackageArch::Target` drives `env_block`. bash-crossdev
-gives them the host (`*`) branch. Fix under
-[`todo/drop-buildclass.md`](../todo/drop-buildclass.md) Step 1 before relying
-on package.env as the sole authority.
+em package.env for llvm-runtimes matches bash-crossdev host-env letters as of
+2026-08-07 (`todo/drop-buildclass.md`).
 
 Ebuilds still install target bits into `/usr/${CTARGET}/…` via
 `is_crosspkg` / cmake install prefixes; that is **not** the same as
@@ -138,15 +135,13 @@ This matches bash-crossdev’s K|L vs `*` marker without a second classifier.
 
 ---
 
-## `BuildClass` vs this matrix (why it is a bad fit)
+## `BuildClass` (removed 2026-08-07)
 
-| Hope for BuildClass | Reality |
-|---------------------|---------|
-| Re-state K\|L vs `*` for the shell | package.env already does; stamp runs *after* source and can override |
-| Drive HostCodegen specials | Real need, but only for B/G/C/D-ish — **not** all host-env letters (R/U/A/P) |
-| One table for llvm + gcc | `PackageArch::Target` for runtimes ≠ bash letter env; `cross_llvm-*` never hit `strip_prefix("cross-")` in classify |
-
-Full argument and removal plan: [`todo/drop-buildclass.md`](../todo/drop-buildclass.md).
+Planner-stamped `BuildClass` was dual authority next to package.env and has
+been removed. Tool selection uses the package.env CTARGET/`TARGET_ABI` sniff;
+PATH/EPREFIX/ESYSROOT specials use a narrow host-codegen PN allowlist
+(`EbuildShell::is_cross_host_codegen`). See
+[`todo/drop-buildclass.md`](../todo/drop-buildclass.md).
 
 ---
 

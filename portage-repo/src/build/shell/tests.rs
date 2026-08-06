@@ -776,12 +776,10 @@ async fn cross_host_tool_package_still_uses_chost_when_target_abi_set() {
     );
 }
 
-/// The planner-stamped `BuildClass::CrossToolHost` drives `tool_tuple` to the
-/// host triple even when a stale `CTARGET` env var is present (which the
-/// env-only fallback would mis-read as a target package). This is the typed
-/// path the in-process build takes; `binutils`/`gcc`/`gdb` land here.
+/// Host-env package.env marker (`TARGET_ABI` set, bash-crossdev `*`) keeps
+/// the host CHOST compiler even when CTARGET is present for the target ABI.
 #[tokio::test]
-async fn cross_tool_host_build_class_drives_tool_tuple_over_env() {
+async fn package_env_host_marker_uses_chost_tools() {
     let dir = tempdir().unwrap();
     let mut shell = minimal_shell(dir.path()).await;
 
@@ -795,33 +793,29 @@ async fn cross_tool_host_build_class_drives_tool_tuple_over_env() {
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
     shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
-    shell.set_build_class(BuildClass::CrossToolHost {
-        triple: "riscv64-unknown-linux-gnu".to_string(),
-    });
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
-    // A conflicting CTARGET that the env-only fallback would treat as a target
-    // package — build_class must win.
     shell.set_var("CTARGET", "riscv64-unknown-linux-gnu");
+    // Host-env package (binutils/gcc): TARGET_ABI set → host tools.
+    shell.set_var("TARGET_ABI", "lp64d");
     shell.init_build_env().await.unwrap();
 
     assert_eq!(
         shell.get_var("CC").as_deref(),
         Some(host_gcc.to_str().unwrap()),
-        "CrossToolHost uses the host CHOST compiler regardless of CTARGET env"
+        "TARGET_ABI set → host CHOST compiler"
     );
     assert!(
         shell.get_var("BUILD_CC").unwrap_or_default().is_empty(),
-        "CrossToolHost does not produce target code, so no BUILD_* vars"
+        "host-env package does not set BUILD_*"
     );
 }
 
-/// `BuildClass::CrossToolTarget` (the libc/kernel-headers sysroot library)
-/// drives `tool_tuple` to the target triple and sets `BUILD_*` to the host —
-/// with no `CTARGET` env var set at all, proving `build_class` is the source.
+/// Target-env package.env (K|L): CTARGET set, no TARGET_ABI → CTARGET tools
+/// and host BUILD_*.
 #[tokio::test]
-async fn cross_tool_target_build_class_drives_tool_tuple() {
+async fn package_env_target_marker_uses_ctarget_tools() {
     let dir = tempdir().unwrap();
     let mut shell = minimal_shell(dir.path()).await;
 
@@ -835,24 +829,22 @@ async fn cross_tool_target_build_class_drives_tool_tuple() {
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
     shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
-    shell.set_build_class(BuildClass::CrossToolTarget {
-        triple: "riscv64-unknown-linux-gnu".to_string(),
-    });
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
-    // No CTARGET env at all — build_class is the only signal.
+    shell.set_var("CTARGET", "riscv64-unknown-linux-gnu");
+    // No TARGET_ABI — K|L target package.
     shell.init_build_env().await.unwrap();
 
     assert_eq!(
         shell.get_var("CC").as_deref(),
         Some(target_gcc.to_str().unwrap()),
-        "CrossToolTarget uses the target triple's compiler"
+        "CTARGET without TARGET_ABI → target tools"
     );
     assert_eq!(
         shell.get_var("BUILD_CC").as_deref(),
         Some(host_gcc.to_str().unwrap()),
-        "CrossToolTarget still gets the host/CBUILD-side BUILD_CC"
+        "target package still gets host BUILD_CC"
     );
 }
 

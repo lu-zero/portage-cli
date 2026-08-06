@@ -111,7 +111,6 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use portage_atom_pubgrub::BuildClass;
 
     /// Build a plan entry from an already-parsed [`Cpv`] — never re-derives
     /// identity from a string internally, matching the rest of the merge
@@ -119,7 +118,6 @@ mod tests {
     fn planned(merge_root: MergeRoot, cpv: Cpv, depend: &str) -> Result<PlannedMerge> {
         Ok(PlannedMerge {
             merge_root,
-            build_class: BuildClass::NativeTarget,
             cpv,
             ebuild_path: camino::Utf8PathBuf::new(),
             use_flags: Vec::new(),

@@ -143,31 +143,10 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 	# build, not under `crossdev --setup` at all) failed to link
 	# ("cannot find Scrt1.o") for the identical reason.
 	#
-	# Keyed on `EM_BUILD_CLASS` (exported by `run_phase` from the
-	# planner-stamped `BuildClass`): inject for host-side packages
-	# (native-host/native-target/cross-tool-host), skip for target-code
-	# producers (cross-tool-target = libc/headers sysroot lib,
-	# cross-target = genuine `--target` foreign-arch package). The old
-	# `CBUILD==CHOST && (CTARGET empty || TARGET_ABI set)` was the
-	# env-shadow this replaces — same cases, typed instead of re-sniffed.
-	#
-	# The sniff survives as the fallback for an unset EM_BUILD_CLASS, which
-	# is what anything other than a current `em` sources this file with:
-	# an older `em`, or real portage. Without it those all take the "not
-	# host-class" branch for *every* package and silently stop finding the
-	# prefix's own deps.
-	if [[ -n ${EM_BUILD_CLASS} ]]; then
-		if [[ ${EM_BUILD_CLASS} == cross-tool-target* || ${EM_BUILD_CLASS} == cross-target* ]]; then
-			_host_class=0
-		else
-			_host_class=1
-		fi
-	elif [[ ${CBUILD:-${CHOST}} == ${CHOST} && ( -z ${CTARGET} || -n ${TARGET_ABI} ) ]]; then
-		_host_class=1
-	else
-		_host_class=0
-	fi
-	if [[ ${_host_class} == 1 ]]; then
+	# Host-class inject via package.env marker (bash-crossdev set_env):
+	# CBUILD==CHOST && (CTARGET empty || TARGET_ABI set). No EM_BUILD_CLASS
+	# (todo/drop-buildclass.md).
+	if [[ ${CBUILD:-${CHOST}} == ${CHOST} && ( -z ${CTARGET} || -n ${TARGET_ABI} ) ]]; then
 		export PKG_CONFIG_PATH="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 		# meson.eclass pins PKG_CONFIG_LIBDIR to the prefix alone when the env var
 		# isn't already set (it *replaces* pkg-config's built-in default search,
@@ -180,7 +159,7 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 		export LDFLAGS="-L${_ov}/usr/${_libdir} -Wl,-rpath-link,${_ov}/usr/${_libdir}${LDFLAGS:+ ${LDFLAGS}}"
 		export CMAKE_PREFIX_PATH="${_ov}/usr${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
 	fi
-	unset _ov _libdir _host_class
+	unset _ov _libdir
 fi
 "#;
 
@@ -644,8 +623,9 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        // Plain native --prefix package.
-        env.insert("EM_BUILD_CLASS".to_string(), "native-target".to_string());
+        // Plain native --prefix package: no CTARGET, CBUILD==CHOST default.
+        env.insert("CHOST".to_string(), "aarch64-pc-linux-gnu".to_string());
+        env.insert("CBUILD".to_string(), "aarch64-pc-linux-gnu".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
@@ -717,12 +697,10 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        // crossdev --setup's own glibc/linux-headers: a cross-tool-target
-        // (target sysroot library), which must NOT get the prefix's host paths.
-        env.insert(
-            "EM_BUILD_CLASS".to_string(),
-            "cross-tool-target:riscv64-unknown-linux-gnu".to_string(),
-        );
+        // K|L target package: CTARGET set, no TARGET_ABI.
+        env.insert("CHOST".to_string(), "aarch64-pc-linux-gnu".to_string());
+        env.insert("CBUILD".to_string(), "aarch64-pc-linux-gnu".to_string());
+        env.insert("CTARGET".to_string(), "riscv64-unknown-linux-gnu".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
@@ -767,12 +745,11 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        // The host-arch toolchain-*tool* packages (binutils/gcc) — a
-        // cross-tool-host — keep getting the host path injection.
-        env.insert(
-            "EM_BUILD_CLASS".to_string(),
-            "cross-tool-host:riscv64-unknown-linux-gnu".to_string(),
-        );
+        // Host tool package.env: TARGET_ABI set alongside CTARGET.
+        env.insert("CHOST".to_string(), "aarch64-pc-linux-gnu".to_string());
+        env.insert("CBUILD".to_string(), "aarch64-pc-linux-gnu".to_string());
+        env.insert("CTARGET".to_string(), "riscv64-unknown-linux-gnu".to_string());
+        env.insert("TARGET_ABI".to_string(), "lp64d".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
@@ -787,13 +764,10 @@ mod tests {
         );
     }
 
-    /// A prefix created by a current `em` still has to behave when something
-    /// that doesn't set `EM_BUILD_CLASS` sources its `bashrc` — an older `em`,
-    /// or real portage. Without the `CBUILD`/`CTARGET` fallback every package
-    /// takes the "not host-class" branch and the prefix's own deps silently
-    /// stop being found.
+    /// package.env CBUILD/CTARGET/TARGET_ABI sniff is the only host-class
+    /// gate (no EM_BUILD_CLASS).
     #[tokio::test]
-    async fn overlay_bashrc_falls_back_to_the_env_sniff_without_a_build_class() {
+    async fn overlay_bashrc_uses_package_env_sniff_for_host_class() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().to_str().unwrap();
         let body = bashrc_body("--prefix", prefix);
@@ -862,12 +836,9 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        // An ordinary --target riscv64 package — a cross-target — must not get
-        // the prefix's host paths either.
-        env.insert(
-            "EM_BUILD_CLASS".to_string(),
-            "cross-target:riscv64-unknown-linux-gnu".to_string(),
-        );
+        // Ordinary --target package: CBUILD != CHOST.
+        env.insert("CHOST".to_string(), "riscv64-unknown-linux-gnu".to_string());
+        env.insert("CBUILD".to_string(), "aarch64-pc-linux-gnu".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)

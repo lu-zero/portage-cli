@@ -146,9 +146,8 @@ impl CrossTarget {
     /// `cross-*` category, so these point at the ordinary `::gentoo` ebuilds.
     ///
     /// Each entry's [`PackageArch`] comes from [`CROSS_PACKAGE_ARCH`], the one
-    /// table — so adding a package here without declaring its arch there trips
-    /// `planned_packages_are_all_declared`, and the plan-entry `BuildClass`
-    /// stamp can never disagree with what this plans.
+    /// table for package.env / keywords — so adding a package here without
+    /// declaring its arch there trips `planned_packages_are_all_declared`.
     ///
     /// `dev-debug/gdb` is deliberately NOT here: real crossdev only builds a
     /// cross gdb when `--ex-gdb` is explicitly passed (`EX_GDB` defaults
@@ -197,14 +196,16 @@ impl CrossTarget {
 }
 
 /// Every `(real_category, package)` a `cross-<tuple>/` category can hold, with
-/// the arch it builds for. The one table: [`CrossTarget::packages`] reads its
-/// `PackageArch` from here, and so does the plan-entry
-/// [`BuildClass`](portage_solver::BuildClass) stamp (via
-/// [`cross_package_arch`]) — a package declared `Target` here can never be
-/// built as a host tool by one path and a target library by the other.
+/// the package.env arch from bash-crossdev's letter split (`set_env` `K|L` →
+/// Target, `*` → Host). [`CrossTarget::packages`] and
+/// [`cross_env_entries`](super::cross_env_entries) read this table — not a
+/// BuildClass stamp (`todo/drop-buildclass.md`).
 ///
-/// Ordered as `CrossTarget::packages` emits them; membership, not order, is
-/// what matters to the lookup.
+/// LLVM runtimes (R/U/A/P) are **host** env in bash-crossdev even though
+/// ebuilds install under `/usr/${CTARGET}` — see
+/// [`docs/bash-crossdev-matrix.md`](../../../docs/bash-crossdev-matrix.md).
+///
+/// Membership, not order, matters to the lookup.
 const CROSS_PACKAGE_ARCH: &[(&str, &str, PackageArch)] = &[
     ("sys-devel", "binutils", PackageArch::Host),
     ("sys-devel", "gcc", PackageArch::Host),
@@ -213,10 +214,10 @@ const CROSS_PACKAGE_ARCH: &[(&str, &str, PackageArch)] = &[
     ("sys-libs", "glibc", PackageArch::Target),
     ("sys-libs", "musl", PackageArch::Target),
     ("sys-libs", "newlib", PackageArch::Target),
-    ("llvm-runtimes", "compiler-rt", PackageArch::Target),
-    ("llvm-runtimes", "libunwind", PackageArch::Target),
-    ("llvm-runtimes", "libcxxabi", PackageArch::Target),
-    ("llvm-runtimes", "libcxx", PackageArch::Target),
+    ("llvm-runtimes", "compiler-rt", PackageArch::Host),
+    ("llvm-runtimes", "libunwind", PackageArch::Host),
+    ("llvm-runtimes", "libcxxabi", PackageArch::Host),
+    ("llvm-runtimes", "libcxx", PackageArch::Host),
 ];
 
 /// The arch a `cross-<tuple>/<pkg>` package builds for, looked up by the
@@ -325,7 +326,8 @@ mod tests {
         )));
         assert!(
             t.packages()
-                .contains(&("llvm-runtimes", "compiler-rt", PackageArch::Target))
+                .contains(&("llvm-runtimes", "compiler-rt", PackageArch::Host)),
+            "llvm-runtimes are host-env (bash letter R), not K|L"
         );
         // no per-target gcc/binutils
         assert!(
@@ -368,45 +370,68 @@ mod tests {
         }
     }
 
-    /// The regression test for the 2026-08-06 misclassification: `newlib` and
-    /// the LLVM runtimes are target code, and neither the authoritative table
-    /// nor the unstamped fallback may call them host tools.
+    /// package.env letter fidelity (bash-crossdev matrix): K|L target, else host.
     #[test]
-    fn cross_unstamped_never_claims_a_target_package_is_host() {
-        use portage_atom_pubgrub::BuildClass;
+    fn packages_match_the_arch_table() {
         for t in every_target() {
-            let category = t.category();
             for (cat, pkg, arch) in t.packages() {
                 assert_eq!(
                     cross_package_arch(cat, pkg),
                     Some(arch),
                     "{cat}/{pkg} disagrees between packages() and the table"
                 );
-                if arch == PackageArch::Target {
-                    assert!(
-                        !matches!(
-                            BuildClass::unstamped(&category, pkg),
-                            BuildClass::CrossToolHost { .. }
-                        ),
-                        "{category}/{pkg} is target code but unstamped() calls it a host tool"
-                    );
-                }
             }
         }
     }
 
+    /// Host codegen specials (PATH/ESYSROOT) are a narrow PN allowlist — not
+    /// every host-env package (llvm runtimes are host-env, not host-codegen).
     #[test]
-    fn newlib_and_llvm_runtimes_are_target_code() {
+    fn host_codegen_is_only_code_generators() {
+        use portage_repo::EbuildShell;
+        for t in every_target() {
+            let category = t.category();
+            for (_cat, pkg, _arch) in t.packages() {
+                let codegen = EbuildShell::is_cross_host_codegen(&category, pkg);
+                let expect = matches!(
+                    pkg,
+                    "binutils" | "gcc" | "clang-crossdev-wrappers"
+                );
+                assert_eq!(
+                    codegen, expect,
+                    "{category}/{pkg} host_codegen={codegen}, expected {expect}"
+                );
+            }
+        }
+        assert!(EbuildShell::is_cross_host_codegen(
+            "cross-riscv64-unknown-linux-gnu",
+            "gdb"
+        ));
+        assert!(!EbuildShell::is_cross_host_codegen(
+            "cross-riscv64-unknown-elf",
+            "newlib"
+        ));
+        assert!(!EbuildShell::is_cross_host_codegen(
+            "cross_llvm-aarch64-unknown-linux-musl",
+            "libcxx"
+        ));
+    }
+
+    #[test]
+    fn package_env_arch_matches_bash_crossdev_letters() {
         for pkg in ["newlib", "glibc", "musl"] {
             assert_eq!(
                 cross_package_arch("sys-libs", pkg),
-                Some(PackageArch::Target)
+                Some(PackageArch::Target),
+                "K|L target env"
             );
         }
+        // R/U/A/P: host env in bash-crossdev (not K|L).
         for pkg in ["compiler-rt", "libunwind", "libcxxabi", "libcxx"] {
             assert_eq!(
                 cross_package_arch("llvm-runtimes", pkg),
-                Some(PackageArch::Target)
+                Some(PackageArch::Host),
+                "llvm runtime host env"
             );
         }
         for pkg in ["gcc", "binutils", "clang-crossdev-wrappers"] {
@@ -415,7 +440,7 @@ mod tests {
                 Some(PackageArch::Host)
             );
         }
-        // An `--ex-pkg` extra is undeclared, which classify() reads as host.
+        // An `--ex-pkg` extra is undeclared → host env (crossdev `*)`).
         assert_eq!(cross_package_arch("dev-debug", "gdb"), None);
     }
 
@@ -430,7 +455,7 @@ mod tests {
         );
         assert_eq!(
             cross_package_arch("cross_llvm-aarch64-unknown-linux-musl", "libcxx"),
-            Some(PackageArch::Target)
+            Some(PackageArch::Host)
         );
         assert_eq!(
             cross_package_arch("cross-riscv64-unknown-linux-gnu", "gcc"),
