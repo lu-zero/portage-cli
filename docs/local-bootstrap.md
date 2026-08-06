@@ -8,6 +8,50 @@ Topology background: [`root-topology.md`](./root-topology.md) scenario **2b**.
 
 ---
 
+## Setup ladder (repo → profile → provided → toolchain)
+
+`package.provided` alone is not enough. A usable `--local` needs a complete
+**config root** under the prefix. As soon as
+`<prefix>/etc/portage/make.profile` exists, em treats the prefix as
+`PORTAGE_CONFIGROOT` and **stops** reading the host’s `repos.conf` / site
+profile — so repo and profile must be established **together**.
+
+| Step | What | Status today |
+|------|------|----------------|
+| **1. Layout** | dirs, `bashrc`, `make.conf` placeholder | ✅ `em setup --local` |
+| **2. Main repo (`::gentoo`)** | ebuild tree: **piggy-back** host tree if present, else **own** checkout under the prefix + `em sync` | 🟡 host tree often works while config is still host; **no** prefix `repos.conf` written by setup — breaks once config flips |
+| **3. Profile** | `make.profile` → path under that repo’s `profiles/` | 🟡 manual: `em --config-root DIR select profile set …` (note: **not** `em --local select` today); no defaults for Linux/macOS foreign hosts |
+| **4. `package.provided`** | host tools so empty VDB plans are cycle-free | 🔴 hand-write only |
+| **5. Toolchain** | `em --local toolchain --setup` | 🟡 blocked on 2–4 for a true empty prefix |
+
+**Target one-shot (planned):**
+
+```sh
+em setup --local [DIR] [--profile …] [--repo-location …] [--sync]
+em --local [DIR] toolchain --setup
+```
+
+### Repo (step 2) — piggy-back or own
+
+| Situation | Behaviour |
+|-----------|-----------|
+| Host has `::gentoo` (`repos.conf` or `/var/db/repos/gentoo`) | Write prefix `repos.conf` with `location =` that path (share the tree). |
+| No tree | `location = <prefix>/var/db/repos/gentoo` + default git `sync-uri`; run or instruct `em --local sync`. |
+| Override | User-supplied location / existing overlay `repos.conf` wins. |
+
+### Profile (step 3) — defaults and override
+
+| Host | Default when user does not pass `--profile` |
+|------|-----------------------------------------------|
+| Gentoo, host profile resolves **into the same tree** | Mirror host’s resolved `make.profile`. |
+| Linux foreign | **Prefix profile** for host ARCH (e.g. `default/linux/<arch>/<release>/no-multilib/prefix`) — safer under EPREFIX than a plain desktop profile. |
+| macOS | Newest `prefix/darwin/macos/…` for `arm64-macos` / `x64-macos`. If host OS is newer than any tree entry, still pick newest and **warn**. |
+| Always | Override: planned `em setup --local --profile …`; after setup, `em --local DIR select profile set …` (planned — topology flags target the prefix; today only `--config-root DIR` does). |
+
+Full algorithm and gaps: the todo’s **Setup ladder** section.
+
+---
+
 ## Why this is hard
 
 `--local` (default `~/.gentoo`, or `em --local DIR`) is **not** an overlay on a
@@ -33,15 +77,21 @@ reproducible self-contained tree).
 `package.provided` is a **first-class read** in em:
 
 1. Profile stack (including site profile
-   `<EROOT>/etc/portage/profile/package.provided`)
+   `{config root}/etc/portage/profile/package.provided`)
 2. Solver drops dependency edges that match a provided CPV (package is never
-   planned for merge)
-3. Preflight / BDEPEND availability treat provided as present
+   planned for merge as a *dependency*)
+3. Preflight / BDEPEND availability treat provided as present; depgraph also
+   seeds provided as host-installed for slot-aware BDEPEND
 
-**Not yet automated:** generating that file at `em setup --local`, probing host
-versions, or retiring provided lines after real packages land in the prefix
-VDB. Until the setup write path lands, a hand-written file under the site
-profile **already works** if you know what to list.
+**Config-root coupling:** for `--local`, em uses the **host** as config root
+until `<prefix>/etc/portage/make.profile` exists; only then does the prefix’s
+site profile (and its `package.provided`) apply. Hand-seeding provided under
+the prefix without that link is a silent no-op.
+
+**Not yet automated:** creating `make.profile` + generating provided at
+`em setup --local`, probing host versions, or retiring provided lines after
+real packages land in the prefix VDB. Until the setup write path lands, the
+manual recipe below works if both files are in place.
 
 ---
 
@@ -71,37 +121,78 @@ cross bug (confirmed 2026-08-06).
 
 ## Manual bootstrap (works today)
 
-On a machine with a usable host compiler and userland:
+On a machine with a usable host compiler and userland. **Three files matter
+together** once the prefix owns config:
+
+1. `repos.conf` — where `::gentoo` lives (host path or prefix checkout)
+2. `make.profile` — flips `PORTAGE_CONFIGROOT` to the prefix
+3. `profile/package.provided` — host-tool seed
+
+Without (2), provided under `$PREFIX` is ignored (host site profile wins).
+With (2) but without (1), the next `em --local` loses the host’s
+`repos.conf` and cannot open ebuilds.
 
 ```sh
 PREFIX=$HOME/.gentoo   # or any DIR
 em setup --local "$PREFIX"
 
+# 1) Main repo — piggy-back host tree (or point at your own checkout).
+mkdir -p "$PREFIX/etc/portage/repos.conf"
+if [[ ! -e $PREFIX/etc/portage/repos.conf/gentoo.conf ]]; then
+  GENTOO=$(portageq get_repo_path / gentoo 2>/dev/null || echo /var/db/repos/gentoo)
+  cat >"$PREFIX/etc/portage/repos.conf/gentoo.conf" <<EOF
+[DEFAULT]
+main-repo = gentoo
+[gentoo]
+location = $GENTOO
+EOF
+fi
+
+# 2) Own config root: without this, package.provided under $PREFIX is not read.
+#    Prefer a *prefix* profile under EPREFIX (not plain default/linux/…/desktop).
+#    Today select needs --config-root; planned: em --local "$PREFIX" select profile …
+mkdir -p "$PREFIX/etc/portage"
+if [[ ! -e $PREFIX/etc/portage/make.profile ]]; then
+  # Gentoo host: mirror host profile if it lives under the same tree.
+  # Foreign Linux: pick …/no-multilib/prefix for your ARCH from profiles.desc.
+  # macOS: newest prefix/darwin/macos/… for arm64-macos|x64-macos (warn if OS newer).
+  ln -s "$(readlink -f /etc/portage/make.profile)" \
+        "$PREFIX/etc/portage/make.profile"
+fi
+
+# 3) Bootstrap seed — host-supplied *tools*, not stage products.
+#    Prefer: do NOT list baselayout/binutils/linux-headers/glibc/gcc here so
+#    `toolchain --setup` still merges them into the prefix. List the cycle fuel
+#    (python, meson, gettext, elt-patches, coreutils, …). Versions: host VDB
+#    on Gentoo, or a version present in ::gentoo that satisfies deps.
 mkdir -p "$PREFIX/etc/portage/profile"
-# Managed block — versions should match what the host can actually run.
-# Example sketch (adjust versions to your host / tree):
 cat >> "$PREFIX/etc/portage/profile/package.provided" <<'EOF'
-# bootstrap seed — host-supplied until the prefix owns replacements
-sys-devel/gcc-14.2.1
-sys-devel/binutils-2.44
-sys-libs/glibc-2.41
-sys-kernel/linux-headers-6.12
+# bootstrap seed — host tools until the prefix owns replacements
+# (adjust versions to your host / tree; example sketch only)
 dev-lang/python-3.13.0
+dev-lang/perl-5.40.0
 dev-build/meson-1.7.0
 dev-build/ninja-1.12.1
 sys-devel/make-4.4.1
 dev-build/cmake-3.31.0
 app-portage/elt-patches-20250317
 app-arch/xz-utils-5.6.4
+sys-devel/gettext-0.23
 sys-apps/coreutils-9.6
 sys-apps/gawk-5.3.1
 sys-apps/grep-3.11
 sys-apps/sed-4.9
+sys-apps/findutils-4.10.0
+sys-apps/file-5.46
 sys-devel/m4-1.4.19
 dev-build/autoconf-2.72
 dev-build/automake-1.17
 sys-devel/libtool-2.5.4
 sys-devel/patch-2.7.6
+app-arch/bzip2-1.0.8
+app-arch/gzip-1.13
+app-arch/tar-1.35
+app-arch/zstd-1.5.7
 EOF
 
 em -p --local "$PREFIX" toolchain --setup   # expect: no hard-cycle preflight
@@ -112,15 +203,20 @@ em -p --local "$PREFIX" toolchain --setup   # expect: no hard-cycle preflight
 
 - Each line is an exact **CPV** (`cat/pkg-version`), optional leading `=`.
 - Versions must be ones the **solver accepts** for the deps that name them
-  (too-old floors can still fail version constraints).
-- Prefer host VDB versions on Gentoo (`ls /var/db/pkg/sys-devel/gcc`).
+  (too-old floors can still fail version constraints; prefer host VDB on
+  Gentoo: `ls /var/db/pkg/dev-lang/python*`).
 - On non-Gentoo hosts, pick versions present in the active `::gentoo` tree
-  that are ≤ what the host tools roughly are (or use known-good floors from
-  a tested matrix — TBD under the todo).
+  that are ≤ what the host tools roughly are (or use known-good floors —
+  TBD under the todo).
+- Prefer providing **build tools**, not the packages `toolchain --setup`
+  is about to install (binutils/headers/libc/gcc). Providing those can make
+  stage steps no-op.
 - Removing a line means “build this for real next time.”
+- Under `--local`, BROOT is the prefix: host VDB is **not** dual-root
+  woven in. Provided is the only solver-visible host seed.
 
 Site profile is the right place: Portage (and em) append
-`/etc/portage/profile` as the highest profile layer via
+`{PORTAGE_CONFIGROOT}/etc/portage/profile` as the highest profile layer via
 `ProfileStack::with_user_profile`.
 
 ---
@@ -153,12 +249,16 @@ Details and step list: [`todo/local-bootstrap-provided.md`](../todo/local-bootst
 
 ## What belongs in provided vs what must be built
 
-| Host supplies (candidates for provided) | Prefix should own eventually |
-|----------------------------------------|------------------------------|
-| C/C++ compiler driver used for bootstrap | prefix `sys-devel/gcc` or clang (after drop) |
-| Host libc + kernel headers (Linux) | optional own glibc — policy open |
-| python/meson/ninja used by ebuilds early | prefix copies once cycle is breakable |
-| coreutils/sed/grep/gawk/m4/… | prefix set when you care about independence |
+| Host supplies (v1 **provided** — cycle fuel) | Prefix builds via `toolchain --setup` (**not** provided) |
+|-----------------------------------------------|----------------------------------------------------------|
+| python, perl, meson, ninja, cmake, make, m4, autoconf/automake/libtool | `sys-apps/baselayout` |
+| gettext, elt-patches, xz/zstd/bzip2/gzip/tar | `sys-devel/binutils` |
+| coreutils, sed, grep, gawk, findutils, file, patch | `sys-kernel/linux-headers`, then libc, then `sys-devel/gcc` |
+
+Providing stage-product CPNs (gcc/glibc/binutils) can make those steps
+no-op while PATH still uses the host — fine only as an explicit temporary
+exception, not the default. Full policy:
+[`todo/local-bootstrap-provided.md`](../todo/local-bootstrap-provided.md).
 
 **HostCodegen / cross packages** are a different topic (host emerge of
 `cross-*` after native bootstrap) — see
