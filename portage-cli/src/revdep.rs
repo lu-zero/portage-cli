@@ -172,7 +172,7 @@ pub async fn run(cli: &cli::Cli, library: Option<&str>) -> Result<()> {
             nodeps: false,
             depgraph_flags: None,
             merge_flags: Some(merge_flags),
-            bypass_cross_root: false,
+            use_outer_eroot: false,
             target_only_installed_view: false,
             update_world: false,
             is_resume: false,

@@ -298,7 +298,7 @@ async fn setup(
     // which always implies this flag — not user-togglable here.
     let mut merge_flags = merge_merge_flags(globals, &args.merge_flags);
     merge_flags.root_deps = true;
-    // `bypass_cross_root: true` — this is `crossdev --setup <T>`, which since
+    // `use_outer_eroot: true` — this is `crossdev --setup <T>`, which since
     // the `--cross`/`-t` -> `--target` unification (`bcde18a`) always runs
     // with the global `--target` flag active (that's now the only way to
     // name the tuple). Before that unification the tuple came via crossdev's
@@ -354,7 +354,7 @@ fn post_step_cross(target: &CrossTarget, globals: &Cli, step: &stages::StageStep
 /// — cross activates `<CTARGET>-*` wrappers + ABI osdirs; native is a no-op.
 /// This is the shared driver both `--setup` (cross) and `stage1` (native) run.
 ///
-/// `bypass_cross_root` forces every step's merge into the plain outer EROOT
+/// `use_outer_eroot` forces every step's merge into the plain outer EROOT
 /// even when `globals.target` is set — for `cross-*` toolchain plans woven
 /// into a `--target`-active `stage1` run (see `maybe_weave_in_gcc_update`),
 /// which must never install under `--target`'s sysroot substitution.
@@ -363,7 +363,7 @@ async fn run_staged(
     globals: &Cli,
     depgraph_flags: crate::cli::DepgraphFlags,
     merge_flags: MergeFlags,
-    bypass_cross_root: bool,
+    use_outer_eroot: bool,
     target_only_installed_view: bool,
     post_step: impl Fn(&stages::StageStep) -> Result<()>,
 ) -> Result<()> {
@@ -391,7 +391,7 @@ async fn run_staged(
                 nodeps: step.nodeps,
                 depgraph_flags: Some(depgraph_flags.clone()),
                 merge_flags: Some(merge_flags.clone()),
-                bypass_cross_root,
+                use_outer_eroot,
                 target_only_installed_view,
                 // Internal staged-build step, not a user package
                 // selection — must not pollute the world file.
@@ -626,7 +626,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
 
     // The `cross-<CTARGET>/gcc` refresh (if needed) is a separate run: it
-    // always installs into the outer EROOT (`bypass_cross_root: true`),
+    // always installs into the outer EROOT (`use_outer_eroot: true`),
     // never `--target`'s sysroot substitution the stage1 packages below use.
     if let Some((target, refresh_plan)) = &refresh {
         writeln!(
@@ -709,7 +709,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             nodeps: false,
             depgraph_flags: Some(depgraph_flags),
             merge_flags: Some(merge_flags),
-            bypass_cross_root: false,
+            use_outer_eroot: false,
             target_only_installed_view: false,
             update_world: false,
             is_resume: false,
@@ -729,7 +729,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
 /// check whether `gcc-config`'s currently *active* `cross-<CTARGET>/gcc` is
 /// new enough to build it, and if not, return a
 /// [`stages::gcc_refresh_plan`] to run (into the outer EROOT, via
-/// `bypass_cross_root` — see [`run_staged`]) before the stage1 plan itself.
+/// `use_outer_eroot` — see [`run_staged`]) before the stage1 plan itself.
 ///
 /// `sys-devel/gcc` (`CHOST == CTARGET`) builds single-pass, not as a
 /// self-hosting bootstrap (`toolchain.eclass`'s `is_crosscompile()` is false
@@ -1478,7 +1478,7 @@ fn cross_env_entries(
 
     // Write into the outer EROOT's `etc/portage`, where the `cross-<tuple>/*`
     // builds read config (the staged driver routes them through
-    // `outer_roots()` under `bypass_cross_root` — see `emerge.rs`; that's `/`
+    // `outer_roots()` under `use_outer_eroot` — see `emerge.rs`; that's `/`
     // for `--root`/bare, the prefix for `--prefix`/`--local`, never `--target`'s
     // sysroot substitution). These are HOST-arch-built packages (binutils/gcc
     // produce target code, glibc/linux-headers carry target runtime info)
@@ -1493,7 +1493,7 @@ fn cross_env_entries(
     // `/etc/portage`), and fall back to the bare config root otherwise
     // (`--root`/plain host). This keeps the cross env scoped to the prefix and
     // unprivileged, and is read back correctly in every mode — including
-    // `bypass_cross_root` toolchain steps, whose `outer_roots()` preserves the
+    // `use_outer_eroot` toolchain steps, whose `outer_roots()` preserves the
     // same `config_overlay`.
     let base = globals.base_roots();
     let portage = if let Some(overlay) = base.config_overlay() {

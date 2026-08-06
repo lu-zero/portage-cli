@@ -137,9 +137,11 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
   doing it would create a latent surprise if a future consumer adds a
   native-`--root`-active arm. Left as `NativeTarget`. The `bypass_cross_root`
   flag itself is clean (one load-bearing read at `emerge.rs:325`, not a
-  multi-site shadow like `cross_host_tool_tuple` was); retiring it is cosmetic
-  churn across `emerge_atoms`'s ~10 callers for no behaviour change — deferred
-  unless reshaped to an explicit `Roots` override for bug-prevention value.
+  multi-site shadow like `cross_host_tool_tuple` was); an audit showed full
+  removal just relocates it (the staged driver fundamentally must signal
+  "merge to the outer EROOT"), so the cleanup landed was a **rename to
+  `use_outer_eroot`** — self-documenting at every call site (the historical
+  "forgot to set it true" bug class becomes harder to miss).
   ② ✅ **(landed)** rewire the §4 toolchain-var sniff (`shell.rs:init_build_env`)
   to read `build_class` for the `CrossTool` family (`CrossToolHost`→`${CHOST}-*`,
   `CrossToolTarget`→`${CTARGET}-*`+`BUILD_*`), falling back to the

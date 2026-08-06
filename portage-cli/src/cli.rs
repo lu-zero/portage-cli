@@ -387,7 +387,7 @@ impl Cli {
     /// `--target`-active invocation.
     ///
     /// `merge_root()` of the returned `Roots` is **the outer EROOT** (with
-    /// `--target`'s sysroot substitution undone) — where `bypass_cross_root`
+    /// `--target`'s sysroot substitution undone) — where `use_outer_eroot`
     /// toolchain-install steps land and where `write_cross_env`/
     /// `write_sysroot_config` (`crossdev/mod.rs`) write config. Under
     /// `--prefix` that's the host `/` (the overlay borrows host tools);
@@ -458,7 +458,7 @@ impl Cli {
                 // base: --root; host otherwise.
                 .with_base(path(&self.root))
                 // target: --root (install destination). This is "the outer
-                // EROOT" (bypass_cross_root, write_cross_env/
+                // EROOT" (use_outer_eroot, write_cross_env/
                 // write_sysroot_config in crossdev/mod.rs all rely on this
                 // staying the offset for --root) — a DIFFERENT thing from
                 // BROOT, see satisfaction_root's doc comment.

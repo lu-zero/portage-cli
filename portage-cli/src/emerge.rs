@@ -152,7 +152,7 @@ pub(crate) struct EmergeOpts<'a> {
     /// eclass always installs under the outer EROOT (`crossdev/mod.rs`'s module
     /// doc), never the target sysroot subdirectory `roots()` would otherwise
     /// substitute in.
-    pub bypass_cross_root: bool,
+    pub use_outer_eroot: bool,
     /// Drop the general `VDB(base) ∪ VDB(target)` installed-view sharing
     /// (`Roots::with_target_only_installed_view`) for this call. The native
     /// toolchain bootstrap (`crossdev::mod.rs`'s `toolchain()`) sets this: it
@@ -193,7 +193,7 @@ struct ResolvedEmergeOpts {
     nodeps: bool,
     depgraph_flags: Option<crate::cli::DepgraphFlags>,
     merge_flags: Option<crate::cli::MergeFlags>,
-    bypass_cross_root: bool,
+    use_outer_eroot: bool,
     target_only_installed_view: bool,
     extra_use_override: Option<String>,
     update_world: bool,
@@ -220,7 +220,7 @@ pub(crate) async fn emerge_atoms(
             nodeps: opts.nodeps,
             depgraph_flags: opts.depgraph_flags,
             merge_flags: opts.merge_flags,
-            bypass_cross_root: opts.bypass_cross_root,
+            use_outer_eroot: opts.use_outer_eroot,
             target_only_installed_view: opts.target_only_installed_view,
             extra_use_override,
             update_world: opts.update_world,
@@ -273,7 +273,7 @@ async fn emerge_atoms_inner(
         nodeps,
         depgraph_flags: depgraph_flags_override,
         merge_flags: merge_flags_override,
-        bypass_cross_root,
+        use_outer_eroot,
         target_only_installed_view,
         extra_use_override,
         update_world,
@@ -305,7 +305,7 @@ async fn emerge_atoms_inner(
     };
     // Root model (docs/root-model.md): config from roots.config (host for a
     // --prefix overlay), installed view = VDB(base) ∪ VDB(target), and the
-    // plan installs into target. `bypass_cross_root` (woven-in `cross-*`
+    // plan installs into target. `use_outer_eroot` (woven-in `cross-*`
     // toolchain steps only) uses the plain outer EROOT instead — that
     // category always installs there, never into `--target`'s sysroot
     // substitution (see `crossdev/mod.rs`'s module doc).
@@ -316,13 +316,13 @@ async fn emerge_atoms_inner(
     // EROOT this comment already says bypass steps need. Under `--root` the
     // two happen to coincide (no eprefix, `outer_roots()` returns
     // `base_roots()` unchanged), which is why this went unnoticed: every
-    // `bypass_cross_root` case tested before today was `--root`. Under
+    // `use_outer_eroot` case tested before today was `--root`. Under
     // `--prefix P`, `base_roots()` merged every crossdev toolchain step onto
     // the real host `/` instead of `P` — silently "worked" for binutils
     // (whose real-arch binaries just landed on host `/usr/bin`, harmless to
     // notice) but broke `linux-headers`/`glibc[headers-only]`, whose
     // build-against-sysroot path never saw the merged headers.
-    let roots = if bypass_cross_root {
+    let roots = if use_outer_eroot {
         cli.outer_roots()
     } else {
         cli.roots()
@@ -340,9 +340,9 @@ async fn emerge_atoms_inner(
     // `--target <tuple>` targets `<EROOT>/usr/<tuple>`; fail early with a setup
     // hint if that sysroot has not been laid down by `em crossdev --init-target`
     // (otherwise the profile/make.conf read fails with an opaque ENOENT). Skipped
-    // for `bypass_cross_root`: those steps target the outer EROOT on purpose, not
+    // for `use_outer_eroot`: those steps target the outer EROOT on purpose, not
     // the sysroot this check is guarding.
-    if let Some(tuple) = cli.target.as_deref().filter(|_| !bypass_cross_root) {
+    if let Some(tuple) = cli.target.as_deref().filter(|_| !use_outer_eroot) {
         let cfg = roots.config().unwrap_or_else(|| camino::Utf8Path::new("/"));
         if !cfg.join("etc/portage/make.conf").exists() {
             bail!(
@@ -737,7 +737,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             nodeps: cli.nodeps,
             depgraph_flags: None,
             merge_flags: None,
-            bypass_cross_root: false,
+            use_outer_eroot: false,
             target_only_installed_view: false,
             update_world: true,
             is_resume: false,
@@ -782,7 +782,7 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
             nodeps,
             depgraph_flags: Some(depgraph_flags),
             merge_flags: Some(merge_flags),
-            bypass_cross_root: false,
+            use_outer_eroot: false,
             target_only_installed_view: false,
             update_world: true,
             is_resume: true,

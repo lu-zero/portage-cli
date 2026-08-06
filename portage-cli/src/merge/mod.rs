@@ -393,7 +393,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // and installs on the host, full stop), matching `base_roots()` for
     // `--prefix`/`--local`. NOT `base_roots()` directly: that's "the outer
     // EROOT" (where crossdev's own `cross-*` toolchain *bootstrap* packages
-    // land via the separate `bypass_cross_root` mechanism in `emerge.rs`) —
+    // land via the separate `use_outer_eroot` mechanism in `emerge.rs`) —
     // a different, unprivileged-writable-location concern from "where does
     // an ordinary package's BDEPEND resolve". Equal to `roots` when `--target`
     // isn't active, so this is a no-op outside cross builds.

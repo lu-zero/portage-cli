@@ -122,7 +122,7 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 	# still need this injection for two host-side cases: a plain native
 	# package (CBUILD == CHOST, no CTARGET at all), and `crossdev --setup`'s
 	# own host-arch toolchain-*tool* packages (binutils/gcc — CBUILD ==
-	# CHOST too, since `bypass_cross_root` routes them through the outer/
+	# CHOST too, since `use_outer_eroot` routes them through the outer/
 	# host config same as a native package, but package.env additionally
 	# marks them with TARGET_ABI, set by `multilib::env_block` — see
 	# portage-repo/src/build/shell.rs's matching Rust-side check).
@@ -131,7 +131,7 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 	# paths: a genuine `--target` package (CBUILD != CHOST, since its
 	# CHOST correctly comes from the sysroot's own make.conf) or
 	# `crossdev --setup`'s own glibc/linux-headers steps (CBUILD == CHOST
-	# via bypass_cross_root's routing, but CTARGET set with no TARGET_ABI
+	# via use_outer_eroot's routing, but CTARGET set with no TARGET_ABI
 	# marks them target-class regardless). Stacking the prefix's paths
 	# ahead of either's own in-tree `-I` flags corrupts the build — found
 	# live 2026-08-04, two ways: glibc's own
@@ -634,7 +634,7 @@ mod tests {
     /// though — `cross_host_tool_tuple` packages (binutils/gcc, `TARGET_ABI`
     /// also set) still need it to find `${CTARGET}-gcc`. `CBUILD`/`CHOST`
     /// are both set to the host's own value here, matching real
-    /// `bypass_cross_root` routing for `crossdev --setup`'s own
+    /// `use_outer_eroot` routing for `crossdev --setup`'s own
     /// glibc/linux-headers steps — the `CTARGET`-without-`TARGET_ABI` check
     /// is what excludes this case, not `CBUILD == CHOST` (which holds here).
     #[tokio::test]
@@ -685,7 +685,7 @@ mod tests {
 
     /// The host-arch toolchain-*tool* package class (`binutils`/`gcc` —
     /// `TARGET_ABI` also set alongside `CTARGET`, `CBUILD == CHOST` via
-    /// `bypass_cross_root`'s routing) must keep getting the host path
+    /// `use_outer_eroot`'s routing) must keep getting the host path
     /// injection, exactly as before this fix.
     #[tokio::test]
     async fn overlay_bashrc_keeps_host_paths_for_a_cross_host_tool_package() {

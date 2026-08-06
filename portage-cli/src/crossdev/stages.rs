@@ -233,7 +233,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
     // after `em --prefix P --target T crossdev --setup` hit exactly this
     // explosion for a *non*-self-contained EPREFIX — but the real cause was a
     // separate bug (`crossdev::setup`'s `run_staged` call still passing
-    // `bypass_cross_root: false` after the `--cross`/`-t` -> `--target`
+    // `use_outer_eroot: false` after the `--cross`/`-t` -> `--target`
     // unification, so `cross-<tuple>/binutils` wrongly resolved DEPEND
     // against the empty *sysroot* instead of the host). With that fixed,
     // "the default cross EPREFIX is host-rooted" is true again, and
@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn default_cross_has_no_baselayout_and_keeps_debuginfod() {
         // The default (host-shared) cross EPREFIX is unaffected by the
-        // self-contained fix above. debuginfod stays on: `bypass_cross_root`
+        // self-contained fix above. debuginfod stays on: `use_outer_eroot`
         // (crossdev::setup) routes this step's DEPEND check to the host,
         // which already satisfies the closure.
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn cross_binutils_keeps_debuginfod() {
         // Cross binutils is host-rooted (via crossdev::setup's
-        // bypass_cross_root), so its debuginfod deps are host-satisfied —
+        // use_outer_eroot), so its debuginfod deps are host-satisfied —
         // no need to force the flag off (behaviour-preserving).
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
