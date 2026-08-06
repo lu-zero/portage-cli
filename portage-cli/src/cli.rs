@@ -434,7 +434,7 @@ impl Cli {
     ///   via `satisfaction_root`/`is_overlay`'s VDB-weave callers.
     /// - `--local`/bare: BROOT already equals the merge root, so the two
     ///   questions coincide.
-    pub(crate) fn broot(&self) -> Roots {
+    pub(crate) fn host_roots(&self) -> Roots {
         let base = self.base_roots();
         if base.is_overlay() {
             return self.outer_roots();
@@ -788,7 +788,7 @@ mod tests {
     #[test]
     fn prefix_overlay_broot_merges_into_prefix_not_host() {
         let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
-        let broot = cli.broot();
+        let broot = cli.host_roots();
         assert_eq!(
             broot.merge_root().as_str(),
             "/opt/p",

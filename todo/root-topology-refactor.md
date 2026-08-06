@@ -198,7 +198,14 @@ Gate (must stay green throughout): the root-routing tests in
   `--local` vs `--prefix` unchanged (the `broot` site's non-overlay branch
   still gives `--local` its own prefix; `--prefix` still returns early via
   `is_overlay`). fmt/clippy/rustdoc clean, 1675 tests green.
-- **B3** Collapse the `Cli::broot()` vs `Roots::broot()` name footgun.
+- ✅ **B3 (landed)** Collapsed the `Cli::broot()` vs `Roots::broot()` name
+  footgun (two different methods — Cli's returned a full `Roots`, Roots's
+  returned the `Option<&Utf8Path>` BROOT path — under the same name).
+  Renamed `Cli::broot()` → `Cli::host_roots()` (it returns the `Roots` a
+  `MergeRoot::Host` entry merges into; matches the `host_roots` variable
+  convention already used at most call sites). `Roots::broot()` stays as the
+  canonical BROOT-path accessor. 10 call sites updated; fmt/clippy/rustdoc
+  clean, 1675 tests green.
 
 ### Track C: doc reconciliation
 

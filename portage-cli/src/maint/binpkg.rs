@@ -199,7 +199,7 @@ fn list(pkgdir: &camino::Utf8Path) -> Result<()> {
 /// `PKGDIR=/var/cache/em-binpkgs/${CHOST}/$(em maint binpkg fingerprint)`.
 async fn fingerprint(globals: &Cli, full: bool, host: bool) -> Result<()> {
     let roots = if host {
-        globals.broot()
+        globals.host_roots()
     } else {
         globals.roots()
     };

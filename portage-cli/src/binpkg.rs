@@ -579,7 +579,7 @@ mod tests {
                 .join("var/cache/binpkgs")
         );
 
-        let host_roots = cli.broot();
+        let host_roots = cli.host_roots();
         assert_eq!(
             host_roots.merge_root().as_str(),
             "/",
@@ -704,7 +704,7 @@ mod tests {
         ]);
 
         let target_env = DesiredBuildEnv::for_roots(&cli.roots()).await;
-        let host_env = DesiredBuildEnv::for_roots(&cli.broot()).await;
+        let host_env = DesiredBuildEnv::for_roots(&cli.host_roots()).await;
         assert_eq!(target_env.cflags, "-O2 -march=rv64gcv");
         assert_eq!(host_env.cflags, "-O2 -march=armv8-a");
         assert_ne!(target_env.key(), host_env.key());

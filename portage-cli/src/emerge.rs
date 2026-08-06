@@ -336,7 +336,7 @@ async fn emerge_atoms_inner(
     // substitution, so a `MergeRoot::Host` entry's `-p` display matches its
     // real merge destination even when `roots` has had its own overlay-ness
     // cleared by the sysroot substitution. See `DepgraphOpts::host_merge_root`.
-    let host_roots = cli.broot();
+    let host_roots = cli.host_roots();
     // `--target <tuple>` targets `<EROOT>/usr/<tuple>`; fail early with a setup
     // hint if that sysroot has not been laid down by `em crossdev --init-target`
     // (otherwise the profile/make.conf read fails with an opaque ENOENT). Skipped
@@ -637,7 +637,7 @@ async fn emerge_atoms_inner(
         started_at: session_started,
         argv,
         merge_root: live_root.to_string(),
-        host_root: cli.broot().merge_root().to_string(),
+        host_root: cli.host_roots().merge_root().to_string(),
         mode,
         plan_total: outcome.plan.len() as u32,
         flags: crate::activity::SessionFlags {
@@ -991,7 +991,7 @@ pub(crate) async fn run_unmerge_batch(
     // also needs `root` to preview any preserve-libs findings.
     let roots = cli.roots();
     let root = roots.merge_root().to_owned();
-    let broot = cli.broot();
+    let broot = cli.host_roots();
 
     if cli.pretend {
         // Preview what preserve-libs would keep, without registering or

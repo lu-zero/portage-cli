@@ -397,7 +397,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // a different, unprivileged-writable-location concern from "where does
     // an ordinary package's BDEPEND resolve". Equal to `roots` when `--target`
     // isn't active, so this is a no-op outside cross builds.
-    let host_roots = globals.broot();
+    let host_roots = globals.host_roots();
 
     // Per-entry PKGDIR: a Host entry's binpkgs live in the *host*'s PKGDIR
     // (built with host CHOST/CFLAGS), a Target entry's in the target's own —

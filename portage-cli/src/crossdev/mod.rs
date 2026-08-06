@@ -800,7 +800,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
     let roots = globals.roots();
     // See `DepgraphOpts::host_merge_root`: `Cli::broot()` stays overlay-aware
     // under `--target` substitution, unlike `roots`.
-    let host_roots = globals.broot();
+    let host_roots = globals.host_roots();
     let outcome = crate::query::depgraph::depgraph(crate::query::depgraph::DepgraphOpts {
         repo_path: Utf8Path::new(&repo_path_str),
         atoms: &[crate::query::depgraph::TargetAtom::explicit(

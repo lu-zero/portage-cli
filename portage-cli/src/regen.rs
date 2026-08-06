@@ -138,7 +138,7 @@ pub async fn run(
             started_at: session_started,
             argv,
             merge_root: roots.merge_root().to_string(),
-            host_root: cli.broot().merge_root().to_string(),
+            host_root: cli.host_roots().merge_root().to_string(),
             mode: ActivityMode::Regen,
             plan_total,
             flags: SessionFlags {

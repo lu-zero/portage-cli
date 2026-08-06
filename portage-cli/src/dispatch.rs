@@ -102,7 +102,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         } => {
             let repo_override = globals.repo.as_deref();
             let roots = globals.roots();
-            let broot = globals.broot();
+            let broot = globals.host_roots();
             ebuild::run(
                 ebuild_path,
                 phase,
@@ -385,7 +385,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let roots = globals.roots();
             // See `DepgraphOpts::host_merge_root`: `Cli::broot()` stays
             // overlay-aware under `--target` substitution, unlike `roots`.
-            let host_roots = globals.broot();
+            let host_roots = globals.host_roots();
             let binpkg_index =
                 binpkg::open_local_index_for_preview(globals, &globals.merge_flags).await;
             let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
