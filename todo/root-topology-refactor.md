@@ -175,10 +175,15 @@ Gate (must stay green throughout): the root-routing tests in
 
 ### Track B (slow-burn): topology type-discipline + `DepStampPolicy`
 
-- **B1 `DepStampPolicy`** (the 🟡 item, lines 401-413 below). Extract
-  the duplicated `MergeRoot` stamping in `cross_target_runtime_deps`/
-  `host_native_deps`/`broot_filtered` (`solve.rs:431-522`) into one
-  policy struct + shared body. Pure `portage-atom-pubgrub`, no CLI churn.
+- ✅ **B1 (landed)** `DepStampPolicy` extraction. The two stamp routes
+  (`cross_target_runtime_deps` / `host_native_deps`) now share one
+  `stamped_deps` body parameterised by a `DepStampPolicy { runtime_stamp,
+  broot_unsatisfied_stamp, include_depend, include_binclude }` — so the two
+  can't drift apart on the next IDEPEND/BDEPEND shift. `broot_filtered` is
+  deliberately NOT folded in: it's a host-satisfaction *filter* (with its own
+  `prefer_update` keep-all-as-is branch), not a stamp, and forcing it into the
+  policy would obscure it. Pure `portage-atom-pubgrub`, behaviour-identical,
+  152 crate tests + 1675 workspace tests green.
 - **B2 Un-dead `RootSet`.** Make the private enum live so
   `Cli::roots()`/`outer_roots()`/`base_roots()`/`broot()` become methods
   on a returned typed topology rather than four sibling `Cli` methods

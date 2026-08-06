@@ -428,6 +428,70 @@ fn target_drops_depend(rdeps: bool, package: &PortagePackage) -> bool {
     rdeps && !package.is_virtual()
 }
 
+/// How [`stamped_deps`] routes a package's dependency classes — the two axes
+/// the stamp routes ([`cross_target_runtime_deps`] / [`host_native_deps`])
+/// differ along, kept in one place so they can't drift apart on the next
+/// IDEPEND/BDEPEND shift. [`broot_filtered`] is a host-satisfaction *filter*,
+/// not a stamp, and deliberately does not share this.
+struct DepStampPolicy {
+    /// Stamp applied to DEPEND/RDEPEND/PDEPEND (the runtime classes).
+    runtime_stamp: MergeRoot,
+    /// Stamp applied to an *unsatisfied* BDEPEND/IDEPEND edge — it merges there.
+    broot_unsatisfied_stamp: MergeRoot,
+    /// Include DEPEND at all (cross `--root-deps=rdeps` drops it).
+    include_depend: bool,
+    /// Include BDEPEND (cross gates it on the caller's `--with-bdeps`-shaped flag).
+    include_bdepend: bool,
+}
+
+/// Shared body of the two "stamp every runtime dep + schedule unsatisfied
+/// build/install deps onto BROOT" routes. Runtime classes (DEPEND/RDEPEND/
+/// PDEPEND) stamp to [`DepStampPolicy::runtime_stamp`]; an unsatisfied BDEPEND
+/// (when `include_bdepend`) or IDEPEND merges to
+/// [`DepStampPolicy::broot_unsatisfied_stamp`].
+///
+/// BDEPEND resolves on BROOT (the host), never the target sysroot — kept
+/// central here after a live bug where one route omitted it entirely, so a
+/// target package's unsatisfied BDEPEND (e.g. systemd-utils needing jinja2
+/// built for a python target the host's installed jinja2 lacked) never
+/// scheduled a rebuild and the package's own configure/build then failed.
+fn stamped_deps(
+    provider: &PortageDependencyProvider,
+    vd: &VersionData,
+    policy: DepStampPolicy,
+) -> DependencyConstraints<PortagePackage, PortageVersionSet> {
+    let depend = policy
+        .include_depend
+        .then(|| vd.depend().iter())
+        .into_iter()
+        .flatten();
+    let mut out: Vec<(PortagePackage, PortageVersionSet)> = depend
+        .chain(vd.rdepend())
+        .chain(vd.pdepend())
+        .map(|(p, vs, _)| (stamp_root(p, policy.runtime_stamp), vs.clone()))
+        .collect();
+    if policy.include_bdepend {
+        append_unsatisfied_broot(
+            &mut out,
+            vd.bdepend(),
+            provider,
+            vd,
+            policy.broot_unsatisfied_stamp,
+        );
+    }
+    append_unsatisfied_broot(
+        &mut out,
+        vd.idepend(),
+        provider,
+        vd,
+        policy.broot_unsatisfied_stamp,
+    );
+    out.into_iter().collect()
+}
+
+/// Cross-arch target build: runtime deps stamp to the target sysroot;
+/// `--root-deps=rdeps` drops DEPEND; unsatisfied BDEPEND/IDEPEND schedule onto
+/// the host (BROOT). See [`stamped_deps`] for the BDEPEND-on-BROOT rationale.
 fn cross_target_runtime_deps(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
@@ -435,47 +499,34 @@ fn cross_target_runtime_deps(
     root_deps_rdeps: bool,
     include_bdepend: bool,
 ) -> DependencyConstraints<PortagePackage, PortageVersionSet> {
-    // `--root-deps=rdeps` (cross-arch): discard `DEPEND` (class 0) from the
-    // sysroot graph entirely — the cross toolchain + the `RDEPEND` libraries
-    // already in the sysroot cover build-time needs, and a target build dep
-    // cannot install onto the host (wrong arch). Default (offset/same-arch):
-    // keep `DEPEND` → target ROOT.
-    let depend = (!root_deps_rdeps)
-        .then(|| vd.depend().iter())
-        .into_iter()
-        .flatten();
-    let mut out: Vec<(PortagePackage, PortageVersionSet)> = depend
-        .chain(vd.rdepend())
-        .chain(vd.pdepend())
-        .map(|(p, vs, _)| (stamp_root(p, MergeRoot::Target), vs.clone()))
-        .collect();
-    // BDEPEND resolves on BROOT (the host), never the target sysroot — found
-    // live: this call omitted it entirely, so a target package's unsatisfied
-    // BDEPEND (e.g. sys-apps/systemd-utils needing dev-python/jinja2 built for
-    // a python target the host's installed jinja2 lacked) never scheduled a
-    // rebuild; the package's own configure/build then failed instead.
-    if include_bdepend {
-        append_unsatisfied_broot(&mut out, vd.bdepend(), provider, vd, MergeRoot::Host);
-    }
-    append_unsatisfied_broot(&mut out, vd.idepend(), provider, vd, MergeRoot::Host);
-    out.into_iter().collect()
+    stamped_deps(
+        provider,
+        vd,
+        DepStampPolicy {
+            runtime_stamp: MergeRoot::Target,
+            broot_unsatisfied_stamp: MergeRoot::Host,
+            include_depend: !root_deps_rdeps,
+            include_bdepend,
+        },
+    )
 }
 
-/// Host-root native build (BDEPEND front-matter): all deps target the host instance.
+/// Host-root native build (BDEPEND front-matter): all deps target the host
+/// instance; unsatisfied BDEPEND/IDEPEND also schedule onto the host.
 fn host_native_deps(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
 ) -> DependencyConstraints<PortagePackage, PortageVersionSet> {
-    let mut out: Vec<(PortagePackage, PortageVersionSet)> = vd
-        .depend()
-        .iter()
-        .chain(vd.rdepend())
-        .chain(vd.pdepend())
-        .map(|(p, vs, _)| (stamp_root(p, MergeRoot::Host), vs.clone()))
-        .collect();
-    append_unsatisfied_broot(&mut out, vd.bdepend(), provider, vd, MergeRoot::Host);
-    append_unsatisfied_broot(&mut out, vd.idepend(), provider, vd, MergeRoot::Host);
-    out.into_iter().collect()
+    stamped_deps(
+        provider,
+        vd,
+        DepStampPolicy {
+            runtime_stamp: MergeRoot::Host,
+            broot_unsatisfied_stamp: MergeRoot::Host,
+            include_depend: true,
+            include_bdepend: true,
+        },
+    )
 }
 
 /// Native build: keep RDEPEND/PDEPEND; drop host-satisfied DEPEND, BDEPEND,
