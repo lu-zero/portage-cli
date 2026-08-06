@@ -150,7 +150,24 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 	# cross-target = genuine `--target` foreign-arch package). The old
 	# `CBUILD==CHOST && (CTARGET empty || TARGET_ABI set)` was the
 	# env-shadow this replaces — same cases, typed instead of re-sniffed.
-	if [[ -n ${EM_BUILD_CLASS} && ${EM_BUILD_CLASS} != cross-tool-target* && ${EM_BUILD_CLASS} != cross-target* ]]; then
+	#
+	# The sniff survives as the fallback for an unset EM_BUILD_CLASS, which
+	# is what anything other than a current `em` sources this file with:
+	# an older `em`, or real portage. Without it those all take the "not
+	# host-class" branch for *every* package and silently stop finding the
+	# prefix's own deps.
+	if [[ -n ${EM_BUILD_CLASS} ]]; then
+		if [[ ${EM_BUILD_CLASS} == cross-tool-target* || ${EM_BUILD_CLASS} == cross-target* ]]; then
+			_host_class=0
+		else
+			_host_class=1
+		fi
+	elif [[ ${CBUILD:-${CHOST}} == ${CHOST} && ( -z ${CTARGET} || -n ${TARGET_ABI} ) ]]; then
+		_host_class=1
+	else
+		_host_class=0
+	fi
+	if [[ ${_host_class} == 1 ]]; then
 		export PKG_CONFIG_PATH="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 		# meson.eclass pins PKG_CONFIG_LIBDIR to the prefix alone when the env var
 		# isn't already set (it *replaces* pkg-config's built-in default search,
@@ -163,7 +180,7 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 		export LDFLAGS="-L${_ov}/usr/${_libdir} -Wl,-rpath-link,${_ov}/usr/${_libdir}${LDFLAGS:+ ${LDFLAGS}}"
 		export CMAKE_PREFIX_PATH="${_ov}/usr${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
 	fi
-	unset _ov _libdir
+	unset _ov _libdir _host_class
 fi
 "#;
 
@@ -713,6 +730,62 @@ mod tests {
             get("CPPFLAGS").contains(&format!("{prefix}/usr/include")),
             "CPPFLAGS: {}",
             get("CPPFLAGS")
+        );
+    }
+
+    /// A prefix created by a current `em` still has to behave when something
+    /// that doesn't set `EM_BUILD_CLASS` sources its `bashrc` — an older `em`,
+    /// or real portage. Without the `CBUILD`/`CTARGET` fallback every package
+    /// takes the "not host-class" branch and the prefix's own deps silently
+    /// stop being found.
+    #[tokio::test]
+    async fn overlay_bashrc_falls_back_to_the_env_sniff_without_a_build_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().to_str().unwrap();
+        let body = bashrc_body("--prefix", prefix);
+
+        let sniff = |chost: &str, cbuild: &str, ctarget: &str| {
+            let (body, prefix) = (body.to_string(), prefix.to_string());
+            let (chost, cbuild, ctarget) =
+                (chost.to_string(), cbuild.to_string(), ctarget.to_string());
+            async move {
+                let mut env = std::collections::BTreeMap::new();
+                env.insert("ROOT".to_string(), "/".to_string());
+                env.insert("EPREFIX".to_string(), prefix);
+                env.insert("CHOST".to_string(), chost);
+                env.insert("CBUILD".to_string(), cbuild);
+                env.insert("CTARGET".to_string(), ctarget);
+                portage_repo::MakeConf::parse(body)
+                    .unwrap()
+                    .apply_to(&mut env)
+                    .await
+                    .unwrap();
+                env.get("CPPFLAGS").cloned().unwrap_or_default()
+            }
+        };
+
+        let inc = format!("{prefix}/usr/include");
+        // Plain native package: host-class, injected.
+        assert!(
+            sniff("aarch64-pc-linux-gnu", "aarch64-pc-linux-gnu", "")
+                .await
+                .contains(&inc)
+        );
+        // Genuine foreign-arch target package (CBUILD != CHOST): skipped.
+        assert!(
+            !sniff("riscv64-unknown-linux-gnu", "aarch64-pc-linux-gnu", "")
+                .await
+                .contains(&inc)
+        );
+        // Target-class cross step (CTARGET set, no TARGET_ABI): skipped.
+        assert!(
+            !sniff(
+                "aarch64-pc-linux-gnu",
+                "aarch64-pc-linux-gnu",
+                "riscv64-unknown-linux-gnu"
+            )
+            .await
+            .contains(&inc)
         );
     }
 

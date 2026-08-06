@@ -461,8 +461,17 @@ pub fn dispatch(config: &Config, cpv: &portage_atom::Cpv, log: &PackageLog, echo
         }
         match echo {
             Echo::Handoff(work_dir) => {
+                // Same 0660 guarantee as the save/save_summary logs: the
+                // privileged `__worker` writes this, the unprivileged parent
+                // reads it back in `take_pending` — and that read's failure
+                // path is a silent `return`, so a too-tight mode would drop
+                // the whole end-of-run replay with no diagnostic.
                 let path = work_dir.join(PENDING_ECHO_FILE);
-                if let Err(e) = std::fs::write(path.as_std_path(), filtered.to_handoff()) {
+                let written = std::fs::File::create(path.as_std_path()).and_then(|mut f| {
+                    group_rw(&f);
+                    f.write_all(filtered.to_handoff().as_bytes())
+                });
+                if let Err(e) = written {
                     crate::style::warn_line!("elog: cannot write {path}: {e}");
                 }
             }
@@ -542,17 +551,28 @@ fn write_elog_file(elogdir: &Utf8Path, name: &str, body: &str, append: bool) {
         .open(path.as_std_path());
     match opened {
         Ok(mut file) => {
-            // Group-readable, matching `ensure_elogdir`'s setgid intent: a log
-            // filed under `sudo` lands `root:<invoker group>` and must stay
-            // openable by that group for `em read`, which the process umask
-            // (0077 under strict sudo) would otherwise deny.
-            let _ = rustix::fs::fchmod(&file, rustix::fs::Mode::from_bits_truncate(0o660));
+            group_rw(&file);
             if let Err(e) = file.write_all(body.as_bytes()) {
                 crate::style::warn_line!("elog: cannot write {path}: {e}");
             }
         }
         Err(e) => crate::style::warn_line!("elog: cannot open {path}: {e}"),
     }
+}
+
+/// Force `0660` on a just-created elog file, matching `ensure_elogdir`'s
+/// setgid intent: filed under `sudo` it lands `root:<invoker group>` and must
+/// stay both readable by that group (`em read`) and writable by it, since a
+/// later unprivileged run appends to the same `summary.log`.
+///
+/// Not umask-derived, because the umask here is not knowable: `main` sets
+/// `0022` in every `em` process (so `sudo`'s own umask never survives), but an
+/// ebuild calling `umask` in the in-process brush shell changes the *real*
+/// process umask and nothing restores it before dispatch. Under `0022` alone
+/// the file would be group-readable but not group-writable; under an
+/// ebuild-tightened `0077` it would be neither.
+fn group_rw(file: &std::fs::File) {
+    let _ = rustix::fs::fchmod(file, rustix::fs::Mode::from_bits_truncate(0o660));
 }
 
 /// `%Y%m%d-%H%M%S` UTC, portage's elog file-name stamp, derived from an RFC 3339
@@ -1015,6 +1035,31 @@ mod tests {
             0o660,
             "elog files are group-readable (0o660)"
         );
+    }
+
+    /// The echo handoff needs the same guarantee: the privileged `__worker`
+    /// writes it and the unprivileged parent reads it back, whose failure path
+    /// is a silent `return` — a too-tight mode would drop the end-of-run
+    /// replay with no diagnostic at all.
+    #[test]
+    fn handoff_file_is_group_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let work = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let log = log_of(&[("postinst", Class::Log, "hello")]);
+        let config = Config::new("log", "echo", work.join("logs"));
+        dispatch(
+            &config,
+            &portage_atom::Cpv::parse("dev-libs/foo-1").unwrap(),
+            &log,
+            Echo::Handoff(work),
+        );
+        let mode = std::fs::metadata(work.join(PENDING_ECHO_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7777, 0o660, "the handoff file is group-readable");
     }
 
     /// A stamp is whatever is in a file name, not necessarily what `save`
