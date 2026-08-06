@@ -49,16 +49,26 @@ pub enum BuildClass {
         /// triples out of shell-env rediscovery.
         triple: Option<String>,
     },
-    /// A cross-toolchain step: a package in the `cross-<tuple>/` category
-    /// (host-side cross tools — binutils/gcc/etc. produced by `crossdev`),
-    /// built to run on `CHOST`. `triple` is parsed from the category.
+    /// A `cross-<tuple>/` package that is a **host binary generating target
+    /// code** — binutils/gcc/gdb/clang-crossdev-wrappers, and every
+    /// `--ex-pkg` extra. It runs on the build host (`CHOST`); only its output
+    /// targets `CTARGET`. Its own compile identity is the host's, so its
+    /// toolchain vars are `${CHOST}-<tool>`.
+    CrossToolHost {
+        /// The `cross-<tuple>` triple parsed from the category.
+        triple: String,
+    },
+    /// A `cross-<tuple>/` package that is a **native target library populating
+    /// the sysroot** — the libc (glibc/musl) and kernel-headers. It is
+    /// `CTARGET` code itself (toolchain vars `${CTARGET}-<tool>`), installed
+    /// into the sysroot for the target.
     ///
-    /// The libc/headers bootstrap steps (`sys-libs/glibc`,
-    /// `sys-kernel/linux-headers`) also belong here semantically — they run
-    /// under `bypass_cross_root` (a CLI-level flag the solver does not see),
-    /// so they classify as [`NativeTarget`](Self::NativeTarget) for now and
-    /// are re-stamped `CrossTool` once that flag retires (Track A3).
-    CrossTool {
+    /// Mirrors bash crossdev's `set_env` `case ${l} in K|L)` (target) vs `*)`
+    /// (host). The libc name varies per target, so this name set is an
+    /// approximation of crossdev's planning letter; the principled source is
+    /// `CrossTarget::packages()`'s `PackageArch` (a future follow-up routes
+    /// the refinement through that, at the depgraph layer).
+    CrossToolTarget {
         /// The `cross-<tuple>` triple parsed from the category.
         triple: String,
     },
@@ -68,9 +78,15 @@ impl BuildClass {
     /// Derive the build class from a plan entry's identity and the solve's
     /// cross context.
     ///
-    /// A `cross-<tuple>/` category identifies a host-side cross-toolchain
-    /// tool; otherwise [`MergeRoot`] plus the cross flags pick between
-    /// native-host, native-target, and foreign-arch-target.
+    /// A `cross-<tuple>/` category holds crossdev's toolchain, split the same
+    /// way bash crossdev's `set_env` does (`K|L` vs `*`): the libc
+    /// (glibc/musl) and kernel-headers are the **target** packages
+    /// ([`CrossToolTarget`](Self::CrossToolTarget) — they are `CTARGET` code);
+    /// everything else — binutils/gcc/gdb/wrappers and every `--ex-pkg` extra
+    /// — defaults to **host** ([`CrossToolHost`](Self::CrossToolHost) — host
+    /// binaries generating target code). Otherwise [`MergeRoot`] plus the
+    /// cross flags pick between native-host, native-target, and
+    /// foreign-arch-target.
     pub fn classify(
         cpn: &Cpn,
         merge_root: MergeRoot,
@@ -78,8 +94,13 @@ impl BuildClass {
         is_cross_arch: bool,
     ) -> Self {
         if let Some(triple) = cpn.category.as_str().strip_prefix("cross-") {
-            return Self::CrossTool {
-                triple: triple.to_string(),
+            return match cpn.package.as_str() {
+                "linux-headers" | "glibc" | "musl" => Self::CrossToolTarget {
+                    triple: triple.to_string(),
+                },
+                _ => Self::CrossToolHost {
+                    triple: triple.to_string(),
+                },
             };
         }
         match merge_root {
@@ -341,22 +362,39 @@ mod tests {
     }
 
     #[test]
-    fn cross_category_is_a_cross_tool_regardless_of_merge_root() {
-        let cpn = cn("cross-riscv64-unknown-linux-gnu", "gcc");
-        // Category wins for every merge-root / cross-flag combination: a
-        // `cross-<tuple>/` package is a host-side tool by construction.
-        assert_eq!(
-            BuildClass::classify(&cpn, MergeRoot::Host, false, false),
-            BuildClass::CrossTool {
-                triple: "riscv64-unknown-linux-gnu".to_string(),
-            }
-        );
-        assert_eq!(
-            BuildClass::classify(&cpn, MergeRoot::Target, true, true),
-            BuildClass::CrossTool {
-                triple: "riscv64-unknown-linux-gnu".to_string(),
-            }
-        );
+    fn cross_host_tool_defaults_host_sysroot_lib_is_target() {
+        // bash crossdev's `set_env` `case ${l} in K|L)` (target) vs `*)`
+        // (host): a `cross-<tuple>/` package is HOST unless it's the libc
+        // (glibc/musl) or kernel-headers. So gcc (and any `--ex-pkg` extra)
+        // is a host code-generator; glibc is a target sysroot library.
+        let tuple = "riscv64-unknown-linux-gnu";
+        let gcc = cn("cross-riscv64-unknown-linux-gnu", "gcc");
+        let gdb = cn("cross-riscv64-unknown-linux-gnu", "gdb"); // an --ex-pkg extra
+        let glibc = cn("cross-riscv64-unknown-linux-gnu", "glibc");
+        let headers = cn("cross-riscv64-unknown-linux-gnu", "linux-headers");
+        for cpn in [gcc, gdb] {
+            assert_eq!(
+                BuildClass::classify(&cpn, MergeRoot::Host, false, false),
+                BuildClass::CrossToolHost {
+                    triple: tuple.to_string(),
+                }
+            );
+            // Category wins over merge_root/cross flags for the host tools.
+            assert_eq!(
+                BuildClass::classify(&cpn, MergeRoot::Target, true, true),
+                BuildClass::CrossToolHost {
+                    triple: tuple.to_string(),
+                }
+            );
+        }
+        for cpn in [glibc, headers] {
+            assert_eq!(
+                BuildClass::classify(&cpn, MergeRoot::Target, true, true),
+                BuildClass::CrossToolTarget {
+                    triple: tuple.to_string(),
+                }
+            );
+        }
     }
 
     #[test]

@@ -99,8 +99,35 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
   + a hidden `--build-class=` flag (follow `--force-verify-signature`), and
   `build_class` on `MergeBinpkg`. Only required once A3 makes the planner
   value diverge from the category for those paths.
-- **A3** Retire `bypass_cross_root: bool` (8 sites). Re-key the
-  `setup.rs:145` bashrc guard's condition on the class.
+- ✅ **A3-step1 (landed)** Widened `BuildClass::CrossTool` into
+  `CrossToolHost{triple}` + `CrossToolTarget{triple}`, split the way bash
+  crossdev does (`/usr/bin/crossdev` `set_env` `case ${l} in K|L) ... *)`): the
+  libc (glibc/musl) + kernel-headers are the **target** sysroot libraries
+  (`CrossToolTarget` — they ARE `CTARGET` code); everything else —
+  binutils/gcc/gdb/wrappers and every `--ex-pkg` extra — defaults to **host**
+  (`CrossToolHost` — host binaries generating target code). `classify` inverted
+  accordingly (default Host, explicit Target = `{linux-headers, glibc, musl}`);
+  the 4 A2a shell fixups (PATH/EPREFIX/ESYSROOT/`-idirafter`) narrowed to
+  `CrossToolHost` only. This also **restores pre-A2b behaviour** for sysroot
+  libs: A2b-core's category-only `classify` had made those fixups fire for
+  `cross-<tuple>/glibc` (the old `cross_host_tool_tuple` name-allowlist used to
+  exclude it); narrowing to `CrossToolHost` excludes them again. Caveat: the
+  libc name varies per target, so the name set is an approximation of
+  crossdev's planning letter — the principalled source is
+  `CrossTarget::packages()`'s `PackageArch`; routing the refinement through
+  that (at the depgraph layer) is a follow-up.
+- **A3b (deferred — needs live `crossdev --setup` verification):**
+  ① retire `bypass_cross_root: bool` (16 sites: 10 sets + 2 reads + 4 defs,
+  not 8) and stamp the *native* libc/headers steps `CrossToolTarget`;
+  ② rewire the §4 toolchain-var sniff (`shell.rs:1334-1478`,
+  `target_abi_set`/`target_tuple`) to read `build_class` — note the gate's
+  `build_eprefix.is_some()` arm does double duty (crossdev libc/headers under
+  `--prefix` + native-prefix compiler activation), so the split is delicate;
+  ③ re-key the `setup.rs:145` bashrc guard — needs `BuildClass: Display`
+  (deferred A2b-worker blocker) + a new `EM_BUILD_CLASS` shell var (no
+  precedent). The §4 `TARGET_ABI` read is *not* a gratuitous shadow — it reads
+  the exact marker crossdev writes, so it stays until A3b lands the typed
+  replacement.
 - **A4** Lift `CHOST`/`CBUILD`/`CTARGET` out of shell-env rediscovery
   into a typed `Triples { build, host, target }` constructed once at
   profile load (`portage-repo/src/build/profile.rs:2339`), threaded with

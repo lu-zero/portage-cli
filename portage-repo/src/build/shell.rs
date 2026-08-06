@@ -412,8 +412,8 @@ pub struct EbuildShell {
     /// What kind of build this package is — the structural "host-class vs
     /// target-class, native vs cross" answer, replacing the local
     /// `cross_host_tool_tuple` re-derivation. `None` ⇒ fall back to deriving
-    /// [`BuildClass::CrossTool`] from the ebuild's `cross-<tuple>/` category
-    /// (the historical path); `Some` is the value the planner stamped (Track
+    /// a [`BuildClass::CrossToolHost`] / [`BuildClass::CrossToolTarget`] from
+    /// the ebuild's `cross-<tuple>/` category (the historical path); `Some` is the value the planner stamped (Track
     /// A2b threads it through; until then every site is category-derived).
     /// Read by the PATH/EPREFIX/ESYSROOT/CPPFLAGS fixups in `run_phase` to
     /// tell a host-side cross tool (`cross-<tuple>/{binutils,gcc,…}`) from an
@@ -786,8 +786,9 @@ impl EbuildShell {
 
     /// Set the build class for subsequent phases — the planner-stamped answer
     /// to "is this a host-class or target-class build?" When unset, `run_phase`
-    /// falls back to deriving [`BuildClass::CrossTool`] from the ebuild's
-    /// `cross-<tuple>/` category (the historical behaviour).
+    /// falls back to deriving [`BuildClass::CrossToolHost`] /
+    /// [`BuildClass::CrossToolTarget`] from the ebuild's `cross-<tuple>/`
+    /// category (the historical behaviour).
     pub fn set_build_class(&mut self, class: BuildClass) {
         self.build_class = Some(class);
     }
@@ -1596,23 +1597,26 @@ impl EbuildShell {
         // The build class — the structural "host-class vs target-class, native
         // vs cross" answer for this package. The planner stamps it on the plan
         // entry (`SelectedPackage.build_class`); until that threads through
-        // (Track A2b), fall back to the historical derivation: a `cross-<tuple>/`
-        // category identifies a host-side cross-toolchain tool. Read by the
-        // PATH/EPREFIX/ESYSROOT/CPPFLAGS fixups below to tell such a tool from
-        // an ordinary target package — the one signal that distinguishes "this
-        // package's own ROOT is the top-level EROOT, host-arch-executable" from
-        // "this package's own ROOT is the foreign-arch target sysroot".
-        let build_class = self.build_class.clone().unwrap_or_else(|| {
-            match category
-                .strip_prefix("cross-")
-                .filter(|_| matches!(pn, "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers"))
-            {
-                Some(tuple) => BuildClass::CrossTool {
-                    triple: tuple.to_string(),
-                },
-                None => BuildClass::NativeTarget,
-            }
-        });
+        // (Track A2b), fall back to deriving it from the `cross-<tuple>/`
+        // category the same way `BuildClass::classify` does — host
+        // code-generator by default, libc/kernel-headers the target sysroot
+        // library. Read by the PATH/EPREFIX/ESYSROOT/CPPFLAGS fixups below to
+        // tell a host-side cross tool from an ordinary (or target-sysroot)
+        // package.
+        let build_class =
+            self.build_class
+                .clone()
+                .unwrap_or_else(|| match category.strip_prefix("cross-") {
+                    Some(tuple) => match pn {
+                        "linux-headers" | "glibc" | "musl" => BuildClass::CrossToolTarget {
+                            triple: tuple.to_string(),
+                        },
+                        _ => BuildClass::CrossToolHost {
+                            triple: tuple.to_string(),
+                        },
+                    },
+                    None => BuildClass::NativeTarget,
+                });
 
         // FILESDIR is the ebuild's own dir + `files` (PMS), not repo+cat+pn —
         // they differ only for a `cross-*` symlink, whose real files live with
@@ -1719,7 +1723,7 @@ impl EbuildShell {
             }
         };
         // `<root>/usr/bin` on PATH, for the host-side cross-toolchain-building
-        // steps only (`BuildClass::CrossTool`: this package is
+        // steps only (`BuildClass::CrossToolHost`: this package is
         // `cross-<T>/{binutils,gcc,gdb,clang-crossdev-wrappers}` itself, built
         // to run on CBUILD). A later step in that same sequence genuinely
         // needs an earlier one's own `<root>/usr/bin/<T>-*` output (e.g.
@@ -1757,7 +1761,7 @@ impl EbuildShell {
         if root_str != "/"
             && self.build_eprefix.is_none()
             && self.build_sysroot.is_none()
-            && matches!(build_class, BuildClass::CrossTool { .. })
+            && matches!(build_class, BuildClass::CrossToolHost { .. })
         {
             let bin = format!("{root_str}usr/bin");
             let path = self.get_var("PATH").unwrap_or_default();
@@ -1824,7 +1828,7 @@ impl EbuildShell {
         // connecting them (ED must track EPREFIX; ESYSROOT must NOT
         // double-count a flipped EPREFIX) are enforced in one place instead
         // of by convention across a 100-line function.
-        let eprefix = if matches!(build_class, BuildClass::CrossTool { .. })
+        let eprefix = if matches!(build_class, BuildClass::CrossToolHost { .. })
             && eprefix.is_empty()
             && root_str != "/"
         {
@@ -1938,7 +1942,7 @@ impl EbuildShell {
             // `outer_roots()`, where `base` and `target` genuinely differ
             // (`Some("/")` vs `Some(<outer prefix>)`), so `build_sysroot()`
             // stays `Some` and this new arm never fires for them.
-            let esysroot = if let BuildClass::CrossTool { triple } = &build_class {
+            let esysroot = if let BuildClass::CrossToolHost { triple } = &build_class {
                 format!("{root_str}usr/{triple}/")
             } else if eprefix.is_empty() || self.build_sysroot.is_none() {
                 sysroot.clone()
@@ -1963,7 +1967,9 @@ impl EbuildShell {
             // riscv64 cross toolchain under `--prefix`: binutils's dwarf.c hit
             // `elfutils/debuginfod.h: No such file or directory` despite
             // pkg-config finding `libdebuginfod >= 0.188` on the host.
-            if matches!(build_class, BuildClass::CrossTool { .. }) && self.build_sysroot.is_some() {
+            if matches!(build_class, BuildClass::CrossToolHost { .. })
+                && self.build_sysroot.is_some()
+            {
                 let cppflags = self.get_var("CPPFLAGS").unwrap_or_default();
                 let updated = format!("{cppflags} -idirafter /usr/include");
                 self.set_var("CPPFLAGS", updated.trim_start());
