@@ -5,9 +5,12 @@ STATUS: 🟡 both scenarios reached a terminal (blocked) state for this pass,
 `PackageArch` fix, commit `1971b7c`, which this plan is meant to
 live-verify — no regression found in what did run). Neither scenario
 reached "confirm `-b` does the right thing": Scenario A is blocked by a real
-build-directory race (finding #4, reproduced deterministically); Scenario B
-is blocked by `--local`'s own pre-existing bootstrap hard cycle (finding
-#6). Both are recorded as findings, not worked around, per direction.
+build-directory race (finding #4, reproduced deterministically, **and
+confirmed pre-existing — reproduces identically on `em` built from `cd9e0df`,
+the commit right before glm-5.2's BuildClass refactor track — not a
+regression from that work**); Scenario B is blocked by `--local`'s own
+pre-existing bootstrap hard cycle (finding #6). Both are recorded as
+findings, not worked around, per direction.
 
 ## Findings summary (as of 2026-08-06, mid-run)
 
@@ -258,6 +261,41 @@ log below):
   still never built, so the buildpkg-verification checklist below could not
   be run — this is Scenario A's terminal state for this pass, not a partial
   result to keep chasing with more retries.
+- **Regression check, per Luca's question: does the build-directory race
+  predate glm-5.2's BuildClass refactor track, or was it introduced by it?**
+  Built `em` from `cd9e0df` (the commit immediately before Track A1,
+  `b977fdb`, first BuildClass commit — a `git worktree` at that rev, kept
+  separate from the working tree) and ran the identical scenario end-to-end
+  against a third fresh sandbox (`em-clang-prerefactor`): topology setup,
+  `crossdev --setup --jobs 80` (clean, `EXIT=0`, same 6 stages), then `-b
+  llvm-core/clang --jobs 80`. **Answer: it already existed. `--prefix`
+  cross-building clang did not fully work before the refactor either.**
+  The same class of dual-role work-dir collision hit 2 of the 3 packages
+  this run (`llvm-runtimes/clang-rtlib-config-22`,
+  `llvm-core/clang-linker-config-22`; `llvm-runtimes/clang-stdlib-config-22`
+  avoided the *install* collision this particular run — race timing isn't
+  identical run-to-run even though it's reliably reproducible within one
+  binary/codebase) and `llvm-core/clang` itself again never got a single
+  `Emerging`/`Installing`/`Completed` line — confirmed via the same grep
+  that found nothing on the post-refactor runs. **This confirms the race is
+  a pre-existing bug, not a regression introduced by the BuildClass/
+  `PackageArch` refactor** — the refactor didn't cause it and (so far)
+  hasn't fixed it either.
+
+  **Bonus finding, pre-refactor run only (not yet checked against current
+  `master`): a third, distinct real bug.** `clang-stdlib-config-22`'s
+  *host*-side instance (`to /root/xp/`, not the sysroot) merged successfully
+  this run, but its `--buildpkg` binpkg-write step then failed: `tar:
+  /root/xp/var/tmp/portage/llvm-runtimes/clang-stdlib-config-22/image/root/xp:
+  Cannot open: No such file or directory` — reported as a non-fatal warning
+  (the package still counts as merged), but the `.gpkg` binpkg was never
+  written. The `image/root/xp` path looks like the same host-vs-target path-
+  doubling class of bug as the earlier ESYSROOT/CBUILD findings
+  ([[riscv64-clang-crossbuild-cbuild-esysroot-fixed]]), now hitting binpkg
+  image-path computation for a host-arch dual-role package instead. Not
+  investigated further or confirmed against current `master` this pass —
+  flagging for a future session, since it directly affects `-b` correctness
+  for exactly the scenario this whole plan is about.
 
 ## Goal
 
