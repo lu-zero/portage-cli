@@ -23,6 +23,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **5** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
 | **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; `cede_required_use` awk-4/stage1 bug fixed 2026-08-01; destructive Step 2 **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
+| **8** | **Drop `BuildClass` for cross-*** — package.env is the durable classifier (bash-crossdev model); stamp is dual authority | 🔴 | [[drop-buildclass]], matrix: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md) |
 
 ### Smaller / polish (pick opportunistically)
 

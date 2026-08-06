@@ -1,7 +1,235 @@
 # Test plan — cross-emerge `llvm-core/clang` for riscv64, under `--prefix` and `--local`
 
-STATUS: 🔴 not started — plan only, drafted 2026-08-06. Nothing below has been
-run yet; this is the checklist to execute, not a report of results.
+STATUS: 🟡 in progress — executing 2026-08-06, against `master` at `9b2e4c3`
+(includes the BuildClass/`PackageArch` fix, commit `1971b7c`, which this plan
+is meant to live-verify).
+
+## Findings summary (as of 2026-08-06, mid-run)
+
+Confirmed working:
+
+- **Scenario A step 2** — `--prefix`, riscv64 crossdev toolchain bootstrap:
+  clean, all 6 stages, real `riscv64-unknown-linux-gnu-gcc --version` runs.
+  No regression from the `PackageArch`/BuildClass fix (`1971b7c`) this whole
+  plan exists to verify.
+
+Broken, confirmed with root cause (details + exact repro in the Execution
+log below):
+
+1. **`em setup -p` isn't a preview — it writes for real** and registers
+   `em active` state. `dispatch.rs`'s `Applet::Setup` dispatch passes no
+   pretend flag at all; every write in its sibling `crossdev/mod.rs`
+   consistently gates behind `!globals.pretend` (10+ sites) — an isolated
+   gap, not a spread pattern.
+2. **`em -p --target T crossdev --setup` can't preview a never-before-
+   initialized target — it just fails** (`no ebuilds in ::gentoo or
+   overlays`), because the alias `repos.conf` entry is correctly *not*
+   written under `-p`, but the next step's package-plan resolution still
+   needs it to exist on disk. Only bites a first-time target; re-running
+   `-p` after a real init works fine.
+3. **The known dual-plan-entry bug** (`llvm-core/llvm` listed twice,
+   2026-08-05 finding) **also hits `llvm-core/clang` itself, now confirmed
+   with `--target` set too**, not just plain `--prefix`.
+4. **Escalation of #3 — under real parallelism (`--jobs 80`) it's a genuine
+   build-directory race, not just a wasted plan slot, and it blocks the
+   goal package entirely.** Proved directly: the build.log for one of the 3
+   packages that failed shows every phase logged **twice** in the same
+   file — the host-arch and target-arch copies of the same package ran
+   concurrently into one shared `WORKDIR` and collided. Root cause:
+   `default_work_base()` keys the work directory only on outer-prefix +
+   `category/pf`, with no distinction for which root a merge installs into.
+   Consequence: `llvm-core/clang` itself never got a single
+   `Emerging`/`Completed` line — the run stopped at 66/136, blocked
+   transitively by the 3 collided packages.
+5. **Process mistake, corrected**: retried with `--keep-going`, against this
+   project's own standing convention — it cascaded into an unrelated
+   `merged-usr vs split-usr` die on further packages instead of surfacing
+   one clear thing. Killed it, threw the sandbox away rather than hand-patch
+   it, rebuilt clean, retrying without `--keep-going`.
+6. **`--local`: neither `crossdev --setup` nor the direct native `toolchain
+   --setup` can bootstrap a fresh `--local` — both fail at the identical
+   preflight check.** `crossdev --setup --local` fails exactly as it did on
+   2026-07-12 (`sys-devel/gcc needs glibc[cet]`, `glibc needs python`,
+   meson/gettext/elt-patches missing). Tested directly (not assumed): `em
+   --local ... toolchain --setup` — the plain native bootstrap, no crossdev
+   involved — hits the **identical** failure. Confirms this isn't a
+   crossdev-specific gap: it's `--local`'s own genuine, already-documented
+   11-node native-bootstrap hard cycle (`install-order-scc-tiebreak-fix`
+   memory), hit at the earliest possible point. **Per direction, no
+   workaround was attempted** — a fresh `--local` simply cannot bootstrap
+   anything, native or cross, without either the `--prefix`-first workaround
+   or an already-populated prefix to start from. This is Scenario B's
+   terminal state for this pass.
+
+## Execution log
+
+- **Sandboxes**: fresh `em-clang-prefix`/`em-clang-local` (`sandbox setup
+  --arch aarch64`), release `em` deployed to both, `em --help` sanity check
+  passes in both.
+- **Real bug found: `em setup -p` is not a preview — it writes for real and
+  registers `em active` state anyway.** `em --prefix /root/xp setup -p`
+  created `/root/xp/{etc,usr,var}` and wrote `~/.local/state/em/active*`
+  registering `xp` as an active prefix, identical to a non-`-p` run.
+  Root cause: `dispatch.rs`'s `Applet::Setup => setup::run(&globals.roots())`
+  passes no pretend flag at all, and `setup::run`/`setup::bootstrap`
+  (`portage-cli/src/setup.rs:212-222`) take only `&Roots` — there is no
+  gate to check. Every write path in `crossdev/mod.rs` (its close sibling —
+  `crossdev --setup` also implies `init_target`/`bootstrap`) consistently
+  guards real writes behind `!globals.pretend` (10+ call sites); `setup.rs`'s
+  `Applet::Setup` dispatch has no equivalent gate — an isolated gap, not a
+  spread pattern. Not fixed here (out of scope for this pass); flagging with
+  exact location for follow-up. **Consequence for this run**: proceeding
+  from the now-real `/root/xp` rather than re-doing the "preview" step, since
+  the side effect already happened.
+- **Real bug found: `em -p --target T crossdev --setup` cannot preview the
+  package plan for a target that has never been initialized before** — it
+  fails outright instead of showing what would happen. `em -p --prefix /root/xp
+  --target riscv64-unknown-linux-gnu crossdev --setup` printed the
+  `>>> config changes:` preview correctly, then failed resolving step 1/6:
+  `cross-riscv64-unknown-linux-gnu/binutils: no ebuilds in ::gentoo or
+  overlays`. Root cause: `crossdev/mod.rs::setup`'s own comment confirms
+  `init_target` is deliberately `-p`-aware and only *previews* the alias
+  `repos.conf` entry under `-p` rather than writing it (correct, matches
+  `--init-target`'s own documented pretend behavior) — but the very next
+  step, `run_staged`'s package-plan resolution, still reads the real on-disk
+  `repos.conf` to resolve `cross-<tuple>/binutils` etc., and since the alias
+  was never actually written, that category genuinely doesn't exist yet to
+  resolve against. Only reproduces for a target with **no prior
+  `--init-target`/`--setup` run** — once the alias exists on disk from an
+  earlier real run, `-p` previews fine (matches `docs/crossdev.md`'s
+  documented "safe to re-run" example, which is implicitly the
+  already-initialized case). Not fixed here; flagging with location.
+  **Consequence for this run**: went straight to the real (non-`-p`)
+  `crossdev --setup` for this first-time target, since `-p` cannot be used
+  to preview it.
+- **Scenario A, step 2 — full success.** `em --prefix /root/xp --target
+  riscv64-unknown-linux-gnu crossdev --setup --jobs 8` completed the full
+  6-step bootstrap (binutils → linux-headers → gcc-stage1 → libc → glibc →
+  gcc-stage2), `EXIT=0`, `>>> cross toolchain riscv64-unknown-linux-gnu
+  ready in /root/xp/usr/riscv64-unknown-linux-gnu`. Verified for real:
+  `/root/xp/usr/bin/riscv64-unknown-linux-gnu-gcc --version` runs, reports
+  `16.1.1_p20260718`. No regression vs. the 2026-08-04 informal run.
+- **Scenario A, step 3, `-p` pass: much larger closure than the 2026-08-04
+  informal run (~70+ packages vs. 18-20), and the known dual-plan-entry bug
+  recurs, now confirmed under `--target` too.** `em -p --prefix /root/xp
+  --target riscv64-unknown-linux-gnu -b llvm-core/clang` pulls in what's
+  effectively a target `@system` (glibc, gnupg, python-3.14, perl, curl,
+  rsync, sys-apps/portage, ...) plus the full LLVM/clang runtime stack —
+  larger than the earlier informal run, not investigated further (plausibly
+  a newer snapshot / different starting closure, not necessarily a
+  regression; no prior `-p` baseline exists to diff against for this exact
+  scenario). `llvm-core/clang-22.1.8` (and several `llvm-runtimes/*-config`
+  packages) appear twice in the plan, byte-identical, once `to /root/xp/`
+  (host) and once `to /root/xp/usr/riscv64-unknown-linux-gnu/` (target) —
+  this is `prefix-clang-test-2026-08-05`'s already-documented "dual BDEPEND
+  visibility" plan-duplication bug (previously found for `llvm-core/llvm`
+  under plain `--prefix`, no `--target`); now confirmed to also occur for
+  `llvm-core/clang` itself with `--target` set. Not a new bug — noting the
+  broader reproduction scope. Whether it actually double-builds (previously:
+  no, the second entry gets skipped via the VDB-presence check) is checked
+  in the real run below.
+- **Scenario B, step 0 — still blocked, unchanged from 2026-07-12.** `em
+  --local /root/xl setup` then `em --local /root/xl --target
+  riscv64-unknown-linux-gnu crossdev --setup --jobs 8` (real, not `-p` — the
+  known first-init `-p` gap applies here too) built a large plan (~90
+  packages, host-side BDEPEND tools for the toolchain bootstrap) then failed
+  at the same preflight check, same shape as the 2026-07-12 finding:
+  `sys-devel/gcc needs sys-libs/glibc[cet(-)?]`, `sys-libs/glibc needs || (
+  python:3.14 python:3.13 python:3.12 )`, plus meson/gettext/elt-patches
+  entries for several BDEPEND-class tools. Nothing landed since 2026-07-12
+  fixed this — `--local`'s empty-VDB preflight gap is orthogonal to the
+  `cede_required_use`/USE-fold work that did land in between. **Applying the
+  documented workaround** (`native-prefix-toolchain-bootstrap-fix` memory):
+  build a native toolchain via `--prefix` into the *same* directory
+  `--local` already points at (`/root/xl`), so `--local`'s own VDB has a
+  real compiler/meson/gettext/python to satisfy preflight against, before
+  retrying `crossdev --setup --local`.
+- **Scenario A, step 3, real run — new, more severe finding: the dual-plan-
+  entry bug is a genuine build-directory race under real parallelism, not
+  just a harmless wasted plan slot.** `em --prefix /root/xp --target
+  riscv64-unknown-linux-gnu -b llvm-core/clang --jobs 80` reached 66/136
+  packages then stopped: `llvm-runtimes/clang-rtlib-config-22`,
+  `llvm-core/clang-linker-config-22`, and `llvm-runtimes/clang-stdlib-config-22`
+  all failed identically (`die: newins: failed to install
+  .../temp/.gentoo-*.cfg.new-src`) — and **`llvm-core/clang-22.1.8` itself
+  never got a single `Emerging`/`Installing`/`Completed` line at all**
+  (grepped the full log) — the actual goal package never built, blocked
+  transitively by these three.
+
+  Root cause, confirmed directly (not inferred): `cat
+  /root/xp/var/tmp/portage/llvm-core/clang-linker-config-22/build.log` shows
+  **every phase logged twice** (`pkg_pretend` ×2, `pkg_setup` ×2, ...,
+  `src_install` ×2) in the exact same file — unambiguous proof the host-arch
+  and target-arch plan entries (the byte-identical duplicate `-p` already
+  showed, `prefix-clang-test-2026-08-05`'s known finding) actually ran
+  **concurrently in the same work directory** this time, not "second entry
+  skipped via VDB-presence check" as previously documented. One `src_install`
+  won the race and presumably succeeded; the other's `newins` then failed
+  because the source temp file the first one already consumed/moved was
+  gone. Mechanism: `default_work_base(prefix)` (`portage-cli/src/ebuild.rs:213`)
+  keys the work dir only on the **outer** prefix + `<category>/<pf>` — with
+  no distinction for *which* root (host EROOT vs. target sysroot) a given
+  merge is installing into, two plan entries for the same category/pf
+  literally share one `WORKDIR`/`build.log`. Previously invisible because
+  either the packages involved took long enough to naturally serialize under
+  lower parallelism, or the "does not double-build" claim was only checked
+  at a lower `--jobs` count — **this is the first time this bug's been run
+  under real high parallelism (`--jobs 80`, at the user's suggestion, 128
+  cores available) and it changed outcome from cosmetic to build-blocking.**
+  Not fixed here (out of scope for this pass) — flagging with the exact
+  mechanism and location, since "wasted plan slot" undersells it: any dual-
+  role package pair with a short enough build time to overlap under real
+  parallelism can hit this, and it blocks anything depending on it.
+- **Mistake, corrected by Luca: retried with `--keep-going`, which is
+  against this project's own standing convention (never pass `--keep-going`
+  to `em stages`/toolchain-class runs) and made things worse, not better.**
+  Pushing forward past the 3 raced failures didn't recover — it cascaded
+  into a new, unrelated-looking `die: ERROR: 23.0 merged-usr profile, but
+  disk is split-usr` on multiple subsequent packages, muddying the sysroot's
+  state instead of surfacing one clear thing to investigate. Killed the run
+  (`sudo kill -TERM`, clean exit, no orphaned processes) rather than let it
+  keep going. Per the hard sandbox rule, not attempting to hand-patch or
+  reason about exactly what's now inconsistent in `em-clang-prefix` —
+  destroying and recreating it fresh, redoing the (already-proven-working)
+  `crossdev --setup` step, then retrying the clang build without
+  `--keep-going` so a real failure stops cleanly for inspection instead of
+  cascading.
+- **Scenario B, direction from Luca: do not attempt the `--prefix`-first
+  workaround for the step-0 preflight failure. Document what works, what
+  doesn't, and why — first.** A workaround build (`em --prefix /root/xl
+  toolchain --setup --autounmask-write --jobs 80`, per
+  `native-prefix-toolchain-bootstrap-fix`) had already been started and was
+  in progress (7 of 8 packages, compiling `sys-devel/gcc`) when this
+  direction came in — killed cleanly (`sudo kill -TERM` on the actual `em`
+  process, confirmed gone, no orphans) rather than let it finish. **Scenario
+  B's result for this pass is therefore the step-0 finding above as its
+  terminal state**: `crossdev --setup` under a fresh `--local` fails at
+  preflight, unchanged since 2026-07-12, root cause not yet re-confirmed
+  against current code (only re-confirmed that the *symptom* is unchanged).
+  The `--prefix`-first workaround remains a documented, untested-in-this-pass
+  option for a future session, not something to reach for reflexively when a
+  `--local` scenario fails.
+- **Scenario B, direct test (per Luca's follow-up question — had skipped
+  this): does `em --local ... toolchain --setup` (the native bootstrap,
+  invoked directly, not via `crossdev`) fail the same way?** The `/root/xl`
+  used for the killed workaround above was contaminated (18 packages already
+  merged via `--prefix` before it was killed — confirmed via `var/db/pkg`)
+  so this needed a genuinely fresh sandbox, not the same one. Destroyed and
+  rebuilt `em-clang-local` clean, re-registered `--local /root/xl` (skeleton
+  only), then ran `em --local /root/xl toolchain --setup --autounmask-write
+  --jobs 80` directly. **Answer: yes, identical failure, same preflight
+  check, same package set** (`sys-devel/gcc needs sys-libs/glibc[cet(-)?]`,
+  `sys-libs/glibc needs || ( python:3.14 python:3.13 python:3.12 )`,
+  `app-arch/xz-utils needs app-portage/elt-patches`, several
+  `>=dev-build/meson-1.2.3` entries). This confirms `crossdev --setup
+  --local`'s failure isn't a crossdev-specific gap layered on top of
+  something else — it's `--local`'s own genuine, already-documented 11-node
+  native-bootstrap hard cycle (`install-order-scc-tiebreak-fix` memory;
+  `regression-matrix.sh` classifies this exact outcome `KNOWN-PARTIAL`, not
+  `FAIL`) hit at the earliest possible point, before `crossdev` is even
+  involved. Confirms Scenario B's terminal state precisely: **a fresh
+  `--local` cannot bootstrap anything — native or cross — without either the
+  `--prefix`-first workaround or an already-populated prefix to start from.**
 
 ## Goal
 
@@ -53,11 +281,31 @@ cd ~/Sources/crossdev-stages
 cargo build --release
 ./target/release/crossdev-stages sandbox setup --arch aarch64 --name em-clang-prefix
 ./target/release/crossdev-stages sandbox setup --arch aarch64 --name em-clang-local
+./target/release/crossdev-stages sandbox prepare --name em-clang-prefix --bare
+./target/release/crossdev-stages sandbox prepare --name em-clang-local --bare
 ```
 
-`sandbox setup` alone is enough — skip `sandbox prepare` (that installs a
-whole host-dependency list for the board/image pipeline; irrelevant to
-driving our own `em` binary against the shipped repo tree).
+**Correction, live-verified 2026-08-06 — `sandbox setup` alone is NOT
+enough anymore; the `crossdev-stages-sandbox` memory saying the stage3
+"already ships a full ... `::gentoo` tree" is stale/wrong for the current
+tool.** A fresh `sandbox setup`-only sandbox has an *empty*
+`var/db/repos/gentoo` (`em`/real `emerge` both fail immediately: `not a
+valid repository`). `sandbox prepare --name NAME --bare` ("configure portage
+and sync the tree, but do not install host packages") is what actually
+populates it — takes well under a minute, gpg-verifies the snapshot, no host
+package installs. Use `--bare`, not a bare `sandbox prepare` (which also
+installs the full board/image host-dependency list — still unneeded for
+driving our own `em` binary).
+
+**Do not** work around the empty-repo problem by manually
+`sudo mount --bind`-ing this workspace's own `portage-repo/gentoo` tree in
+(the recipe `test-scripts/README.md` still documents, paired there with
+`sudo chroot`) — tried first, and it breaks `sandbox run` outright
+(`mount(...) => EINVAL`, `sandbox run` does its own internal mount-namespace
+setup that a pre-existing manual bind mount on the sandbox root collides
+with). `sandbox prepare --bare` is the correct, current, `sandbox
+run`-compatible way to get a real tree; recovered by unmounting the manual
+binds, `sudo rm -rf`-ing both sandbox directories, and recreating fresh.
 
 Deploy the release `em` binary into each:
 
@@ -74,6 +322,80 @@ Drive everything from here with
 directly into the sandbox (same hard rule; `sandbox run` needs no manual
 `proc`/`dev`/`sys` mount management and doesn't leave orphaned mounts behind
 on a killed build).
+
+## How to retrieve logs
+
+Several distinct log sources exist here — don't conflate them, and don't dump
+full logs into your own output when a targeted grep will do (per
+`docs/testing.md`'s own rule: check the actual `build.log`, don't assume).
+
+- **The `em` invocation's own output** (resolve/plan/merge-summary — not a
+  single package's compiler output). Always redirect it to a file and check
+  an explicit exit marker, exactly like `test-scripts/regression-matrix.sh`
+  does, rather than trusting a truncated terminal scrollback:
+
+  ```sh
+  crossdev-stages sandbox run --name em-clang-prefix -- \
+    "em --prefix /root/xp --target riscv64-unknown-linux-gnu crossdev --setup --jobs N \
+       > /root/crossdev-setup.log 2>&1; echo EXIT=\$? >> /root/crossdev-setup.log"
+  crossdev-stages sandbox run --name em-clang-prefix -- \
+    "grep -o 'EXIT=[0-9]*' /root/crossdev-setup.log | tail -1"
+  ```
+
+- **On a merge failure, `em`'s own summary names the exact `build.log` to
+  read** (`merge/mod.rs`: each failed package gets a `log: <path>` line once
+  that file exists) — start there instead of guessing a path:
+
+  ```sh
+  crossdev-stages sandbox run --name em-clang-prefix -- \
+    "grep -A2 'failed to merge' /root/crossdev-setup.log"
+  ```
+
+  If a path isn't printed (e.g. the failure was before any build started —
+  preflight, resolve, fetch), there is no `build.log` for it; look at the
+  invocation log itself instead.
+
+- **Per-package `build.log` location**, if you need to construct the path
+  yourself rather than reading it off the failure summary: `<outer
+  prefix-or-local-path>/var/tmp/portage/<category>/<pf>/build.log`
+  (`default_work_base`) — the **outer** `--prefix`/`--local` path, not the
+  `--target` sysroot, even when `--target` is set (build work trees stay
+  anchored to the outer EROOT; only the *installed result* lands in the
+  sysroot — see `docs/crossdev.md`'s "Worked example" gotcha note).
+
+- **`elog` messages** (the `einfo`/`ewarn`/`eerror`/`eqawarn` summaries a
+  phase files, as opposed to raw compiler output) are retrieved with
+  `em read`, not by finding the file by hand:
+
+  ```sh
+  crossdev-stages sandbox run --name em-clang-prefix -- \
+    "em --prefix /root/xp --target riscv64-unknown-linux-gnu read llvm-core/clang"
+  crossdev-stages sandbox run --name em-clang-local -- \
+    "em --local /root/xl --target riscv64-unknown-linux-gnu read llvm-core/clang"
+  ```
+
+  **Pass the same `--prefix`/`--local`/`--target` flags you built with** —
+  `em read` resolves its log directory from `BROOT`, which differs by
+  scenario (`--prefix`'s BROOT is the host `/`; `--local`'s BROOT is the
+  prefix itself; `--target` never moves it). Using the wrong flag
+  combination silently looks in the wrong directory and reports "no elog
+  messages" instead of erroring — don't mistake that for "nothing was
+  logged". `-n0` shows all filed packages instead of the default 10; `-l`
+  lists filenames only, without printing message bodies.
+
+- **`crossdev-stages`'s own operational logs** (sandbox setup/prepare
+  progress — a different tool, not `em`) live under
+  `~/.cache/crossdev-stages/logs/<name>`. Only relevant if `sandbox setup`
+  itself misbehaves, not for anything `em`-side.
+
+- **Retrieval mechanics**: always go through `crossdev-stages sandbox run
+  --name <name> "<cmd>"` (`cat`/`grep`/`tail`/`em read`), never assume you
+  can read the sandbox's rootfs directly from the host — commands run as
+  real root inside the sandbox, so files a real build/merge creates are
+  root-owned on the host filesystem too. For a large `build.log`, grep for
+  `>>> Failed`/`die:`/`error:`/`ERROR:` first and only `tail`/read the
+  surrounding context once you know where to look, rather than retrieving
+  the whole file.
 
 ## Scenario A: `--prefix`
 
