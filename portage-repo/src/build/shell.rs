@@ -1636,6 +1636,13 @@ impl EbuildShell {
                     None => BuildClass::NativeTarget,
                 });
 
+        // Export the resolved build class to the shell env (its `Display`
+        // token) so the generated `bashrc` (`setup.rs`'s `BASHRC_PREFIX`) can
+        // key its host-side search-path injection on a typed value instead of
+        // re-sniffing `CBUILD`/`CTARGET`/`TARGET_ABI`. Always set: `build_class`
+        // is resolved just above (planner-stamped or category-derived).
+        self.set_var("EM_BUILD_CLASS", &build_class.to_string());
+
         // FILESDIR is the ebuild's own dir + `files` (PMS), not repo+cat+pn —
         // they differ only for a `cross-*` symlink, whose real files live with
         // the symlinked ebuild, under the real category.

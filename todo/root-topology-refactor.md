@@ -138,10 +138,16 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
   Live-confirmed: `cross-riscv64…/glibc` rebuild passes with the
   `build_class`-driven `tool_tuple`; 2 new unit tests pin the typed path
   (incl. overriding a conflicting `CTARGET` env);
-  ③ re-key the `setup.rs:145` bashrc guard — needs `BuildClass: Display`
-  (deferred A2b-worker blocker) + a new `EM_BUILD_CLASS` shell var (no
-  precedent). The §4 `TARGET_ABI` read stays as the fallback — it reads the
-  exact marker crossdev writes, so it's correct until A2b-worker retires it.
+  ③ ✅ **(landed)** re-key the `setup.rs:145` `BASHRC_PREFIX` guard on
+  `EM_BUILD_CLASS` (exported by `run_phase` from the resolved `BuildClass`):
+  inject host search paths for host-side packages
+  (`native-host`/`native-target`/`cross-tool-host:*`), skip for target-code
+  producers (`cross-tool-target:*` = libc/headers sysroot lib,
+  `cross-target*` = genuine `--target`). Replaces the old
+  `CBUILD==CHOST && (CTARGET empty || TARGET_ABI set)` env sniff with the
+  typed value. Live-confirmed: `cross-riscv64…/gcc` (CrossToolHost, fires) and
+  `cross-riscv64…/glibc` (CrossToolTarget, skips) rebuild cleanly; 4
+  `overlay_bashrc_*` unit tests re-keyed on `EM_BUILD_CLASS`.
 - **A4** Lift `CHOST`/`CBUILD`/`CTARGET` out of shell-env rediscovery
   into a typed `Triples { build, host, target }` constructed once at
   profile load (`portage-repo/src/build/profile.rs:2339`), threaded with

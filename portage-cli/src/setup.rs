@@ -142,7 +142,15 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 	# dependencies of a `-T riscv64-unknown-linux-gnu -b llvm-core/clang`
 	# build, not under `crossdev --setup` at all) failed to link
 	# ("cannot find Scrt1.o") for the identical reason.
-	if [[ "${CBUILD}" == "${CHOST}" ]] && [[ -z ${CTARGET} || -n ${TARGET_ABI} ]]; then
+	#
+	# Keyed on `EM_BUILD_CLASS` (exported by `run_phase` from the
+	# planner-stamped `BuildClass`): inject for host-side packages
+	# (native-host/native-target/cross-tool-host), skip for target-code
+	# producers (cross-tool-target = libc/headers sysroot lib,
+	# cross-target = genuine `--target` foreign-arch package). The old
+	# `CBUILD==CHOST && (CTARGET empty || TARGET_ABI set)` was the
+	# env-shadow this replaces — same cases, typed instead of re-sniffed.
+	if [[ -n ${EM_BUILD_CLASS} && ${EM_BUILD_CLASS} != cross-tool-target* && ${EM_BUILD_CLASS} != cross-target* ]]; then
 		export PKG_CONFIG_PATH="${_ov}/usr/${_libdir}/pkgconfig:${_ov}/usr/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 		# meson.eclass pins PKG_CONFIG_LIBDIR to the prefix alone when the env var
 		# isn't already set (it *replaces* pkg-config's built-in default search,
@@ -565,9 +573,8 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        // Plain native --prefix package: CBUILD == CHOST, no CTARGET.
-        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
-        env.insert("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string());
+        // Plain native --prefix package.
+        env.insert("EM_BUILD_CLASS".to_string(), "native-target".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
@@ -639,11 +646,11 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
-        env.insert("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string());
+        // crossdev --setup's own glibc/linux-headers: a cross-tool-target
+        // (target sysroot library), which must NOT get the prefix's host paths.
         env.insert(
-            "CTARGET".to_string(),
-            "riscv64-unknown-linux-gnu".to_string(),
+            "EM_BUILD_CLASS".to_string(),
+            "cross-tool-target:riscv64-unknown-linux-gnu".to_string(),
         );
         portage_repo::MakeConf::parse(body)
             .unwrap()
@@ -689,13 +696,12 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
-        env.insert("CHOST".to_string(), "x86_64-pc-linux-gnu".to_string());
+        // The host-arch toolchain-*tool* packages (binutils/gcc) — a
+        // cross-tool-host — keep getting the host path injection.
         env.insert(
-            "CTARGET".to_string(),
-            "riscv64-unknown-linux-gnu".to_string(),
+            "EM_BUILD_CLASS".to_string(),
+            "cross-tool-host:riscv64-unknown-linux-gnu".to_string(),
         );
-        env.insert("TARGET_ABI".to_string(), "lp64d".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
@@ -729,8 +735,12 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("ROOT".to_string(), "/".to_string());
         env.insert("EPREFIX".to_string(), prefix.to_string());
-        env.insert("CBUILD".to_string(), "x86_64-pc-linux-gnu".to_string());
-        env.insert("CHOST".to_string(), "riscv64-unknown-linux-gnu".to_string());
+        // An ordinary --target riscv64 package — a cross-target — must not get
+        // the prefix's host paths either.
+        env.insert(
+            "EM_BUILD_CLASS".to_string(),
+            "cross-target:riscv64-unknown-linux-gnu".to_string(),
+        );
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
