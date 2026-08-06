@@ -179,6 +179,10 @@ pub(crate) struct EmergeOpts<'a> {
     pub activity: Option<crate::activity::ActivityBus>,
     /// Session correlation (outer job_id / parent_job_id for staged plans).
     pub activity_session: crate::activity::ActivitySessionOpts,
+    /// In-memory crossdev aliases for this resolve (see
+    /// [`query::depgraph::DepgraphOpts::extra_aliases`]). Empty for normal
+    /// user emerges; staged crossdev `-p` passes the planned alias here.
+    pub extra_aliases: &'a [portage_repo::RepoEntry],
 }
 
 /// Resolve and (unless `--pretend`) merge `raw_atoms` with the global config in
@@ -189,7 +193,7 @@ pub(crate) struct EmergeOpts<'a> {
 /// `extra_use_override` by the time [`emerge_atoms_inner`] needs it) — keeps
 /// that function to a single options argument instead of one parameter per
 /// field.
-struct ResolvedEmergeOpts {
+struct ResolvedEmergeOpts<'a> {
     nodeps: bool,
     depgraph_flags: Option<crate::cli::DepgraphFlags>,
     merge_flags: Option<crate::cli::MergeFlags>,
@@ -200,6 +204,7 @@ struct ResolvedEmergeOpts {
     is_resume: bool,
     activity: Option<crate::activity::ActivityBus>,
     activity_session: crate::activity::ActivitySessionOpts,
+    extra_aliases: &'a [portage_repo::RepoEntry],
 }
 
 pub(crate) async fn emerge_atoms(
@@ -227,6 +232,7 @@ pub(crate) async fn emerge_atoms(
             is_resume: opts.is_resume,
             activity: opts.activity,
             activity_session: opts.activity_session,
+            extra_aliases: opts.extra_aliases,
         },
     )
     .await
@@ -267,7 +273,7 @@ fn eta_message(
 async fn emerge_atoms_inner(
     cli: &cli::Cli,
     raw_atoms: &[String],
-    opts: ResolvedEmergeOpts,
+    opts: ResolvedEmergeOpts<'_>,
 ) -> Result<()> {
     let ResolvedEmergeOpts {
         nodeps,
@@ -280,6 +286,7 @@ async fn emerge_atoms_inner(
         is_resume,
         activity: activity_override,
         activity_session,
+        extra_aliases,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
     let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
@@ -461,6 +468,7 @@ async fn emerge_atoms_inner(
             std::collections::HashSet::new()
         },
         complete_graph: merge_flags.complete_graph,
+        extra_aliases,
     })
     .await?;
 
@@ -743,6 +751,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             is_resume: false,
             activity: None,
             activity_session: Default::default(),
+            extra_aliases: &[],
         },
     )
     .await
@@ -791,6 +800,7 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
                 job_id: Some(state.job_id.clone()).filter(|s| !s.is_empty()),
                 parent_job_id: None,
             },
+            extra_aliases: &[],
         },
     )
     .await

@@ -312,6 +312,16 @@ async fn setup(
     // `crossdev --setup` post-unification for the first time (only
     // `--init-target`, which never reaches `run_staged`, had been
     // live-tested since).
+    // Under `-p`, init_target only previews config and does not write the
+    // repos.conf alias. Pass it in-memory so staged plan resolution still
+    // sees `cross-*` packages (load_repos injects aliases without disk).
+    let pretend_alias;
+    let extra_aliases: &[portage_repo::RepoEntry] = if globals.pretend {
+        pretend_alias = [alias_repo_entry(target, extras)];
+        &pretend_alias
+    } else {
+        &[]
+    };
     run_staged(
         &plan,
         globals,
@@ -319,6 +329,7 @@ async fn setup(
         merge_flags,
         true,
         false,
+        extra_aliases,
         post_step,
     )
     .await?;
@@ -365,6 +376,8 @@ async fn run_staged(
     merge_flags: MergeFlags,
     use_outer_eroot: bool,
     target_only_installed_view: bool,
+    // In-memory crossdev aliases (pretend first-time target / no repos.conf yet).
+    extra_aliases: &[portage_repo::RepoEntry],
     post_step: impl Fn(&stages::StageStep) -> Result<()>,
 ) -> Result<()> {
     let mut out = anstream::stdout();
@@ -399,6 +412,7 @@ async fn run_staged(
                 is_resume: false,
                 activity: None,
                 activity_session: Default::default(),
+                extra_aliases,
             },
         )
         .await?;
@@ -579,6 +593,7 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
         merge_flags,
         false,
         true,
+        &[],
         move |step: &stages::StageStep| activate_native_toolchain(globals, step),
     )
     .await?;
@@ -649,6 +664,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             merge_merge_flags_with(globals, &args.merge_flags, true),
             true,
             false,
+            &[],
             post_step,
         )
         .await?;
@@ -667,6 +683,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
         merge_merge_flags_with(globals, &args.merge_flags, true),
         false,
         false,
+        &[],
         |_| Ok(()),
     )
     .await?;
@@ -715,6 +732,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             is_resume: false,
             activity: None,
             activity_session: Default::default(),
+            extra_aliases: &[],
         },
     )
     .await?;
@@ -830,6 +848,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         resume_completed: std::collections::HashSet::new(),
         // Single-atom --nodeps probe: no update, so the gate is off regardless.
         complete_graph: false,
+        extra_aliases: &[],
     })
     .await
     .ok()?;
@@ -1107,6 +1126,36 @@ fn alias_repo_conf_entry(
         category: category.to_owned(),
         packages_line: alias_packages_line(target, extras),
     })
+}
+
+/// In-memory form of the crossdev alias — same identity as
+/// [`alias_repo_conf_entry`]'s on-disk file, for `load_repos` without writing
+/// (e.g. `crossdev --setup -p` on a never-initialized target).
+fn alias_repo_entry(target: &CrossTarget, extras: &[Cpn]) -> portage_repo::RepoEntry {
+    use std::collections::{HashMap, HashSet};
+
+    let category = target.category();
+    let mut pkgs: HashSet<Cpn> = HashSet::new();
+    for (cat, pkg, _) in target.packages() {
+        pkgs.insert(Cpn::new(cat, pkg));
+    }
+    for cpn in extras {
+        pkgs.insert(*cpn);
+    }
+    let mut aliases = HashMap::new();
+    aliases.insert(category, pkgs);
+    portage_repo::RepoEntry {
+        name: overlay_name(target),
+        location: portage_repo::Location::Alias {
+            source: "gentoo".to_string(),
+            aliases,
+        },
+        masters: Vec::new(),
+        sync_type: None,
+        sync_uri: None,
+        auto_sync: false,
+        volatile: None,
+    }
 }
 
 /// The self-contained-`--root`-only config entries (`gentoo.conf` +

@@ -276,25 +276,9 @@ pub(super) fn apply(
         }
     }
     if pretend {
-        // `repos.conf` aliases must exist on disk for the depgraph to resolve
-        // `cross-*` / `cross_llvm-*` atoms. Under `-p` we still materialize
-        // *only* those Alias entries so a first-time `crossdev --setup -p`
-        // can print a real package plan; package trees, make.conf, and
-        // package.env stay unwritten (Sonnet 2026-08-06: -p failed with
-        // "no ebuilds" when the alias was only previewed).
-        let mut wrote_alias = false;
-        for e in &to_apply {
-            if matches!(e, ConfigEntry::Alias { .. }) {
-                e.apply()?;
-                wrote_alias = true;
-            }
-        }
-        if wrote_alias {
-            println!(
-                ">>> wrote repos.conf alias(es) so -p can resolve cross-* atoms \
-                 (no other config written)"
-            );
-        }
+        // Fully pretend: no disk writes. Crossdev staged `-p` injects planned
+        // aliases in-memory via `EmergeOpts::extra_aliases` / `load_repos`
+        // (aliases are virtual — no on-disk tree required).
         return Ok(Outcome::Previewed);
     }
     if ask && !confirm_config_write(changed.len())? {

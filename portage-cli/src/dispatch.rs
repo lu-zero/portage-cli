@@ -417,6 +417,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 exclude: &globals.merge_flags.exclude,
                 resume_completed: std::collections::HashSet::new(),
                 complete_graph: globals.merge_flags.complete_graph,
+                extra_aliases: &[],
             })
             .await?;
             if outcome.exit_code != 0 {

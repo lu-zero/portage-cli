@@ -192,6 +192,12 @@ pub struct DepgraphOpts<'a> {
     /// against and the policy can revert an upgrade a dependent has no
     /// satisfying version for.
     pub complete_graph: bool,
+    /// In-memory `Location::Alias` repos to inject in addition to any loaded
+    /// from on-disk `repos.conf`. Used by `crossdev --setup -p` so a first-
+    /// time target can plan `cross-*` atoms without writing the alias file
+    /// (aliases are virtual — `load_repos` already materialises them in
+    /// memory). Empty for normal emerges.
+    pub extra_aliases: &'a [portage_repo::RepoEntry],
 }
 
 pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome> {
@@ -221,6 +227,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         exclude,
         resume_completed,
         complete_graph,
+        extra_aliases,
     } = opts;
     let exclude_atoms: Vec<Dep> = exclude
         .iter()
@@ -246,7 +253,16 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let repo = crate::repo_open::open(repo_path)
         .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
 
-    let (overlays, alias_repos) = crate::repo_open::overlays_from_conf(&repo, roots, multi_repo);
+    let (overlays, mut alias_repos) =
+        crate::repo_open::overlays_from_conf(&repo, roots, multi_repo);
+    // Caller-supplied aliases first so a pretend crossdev plan can inject the
+    // target about to be written; on-disk entries with the same name still
+    // apply (load_repos skips already-seen CPVs).
+    if !extra_aliases.is_empty() {
+        let mut merged = extra_aliases.to_vec();
+        merged.append(&mut alias_repos);
+        alias_repos = merged;
+    }
 
     let (data, (target_installed, installed_blockers), host_installed, use_env_result) = tokio::join!(
         repo::load_repos(&repo, &overlays, &alias_repos),

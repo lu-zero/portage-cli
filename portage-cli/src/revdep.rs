@@ -178,6 +178,7 @@ pub async fn run(cli: &cli::Cli, library: Option<&str>) -> Result<()> {
             is_resume: false,
             activity: None,
             activity_session: Default::default(),
+            extra_aliases: &[],
         },
     )
     .await
