@@ -210,6 +210,9 @@ pub struct RootContext<'a> {
 /// The base directory for build work trees: `<prefix>/var/tmp/portage` under
 /// a prefix; otherwise the system `/var/tmp/portage` when writable, falling
 /// back to the user cache.
+///
+/// Per-package trees live under [`package_work_dir`], which further keys by
+/// merge root so dual-root plan entries (host + target) never share a WORKDIR.
 pub fn default_work_base(prefix: Option<&Utf8Path>) -> Utf8PathBuf {
     if let Some(p) = prefix {
         return p.join("var/tmp/portage");
@@ -222,6 +225,38 @@ pub fn default_work_base(prefix: Option<&Utf8Path>) -> Utf8PathBuf {
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     Utf8PathBuf::from(home).join(".cache/em/build")
+}
+
+/// Stable subdirectory key for a merge root under [`default_work_base`].
+///
+/// Portage keeps `$PORTAGE_TMPDIR/portage/$CATEGORY/$PF` without ROOT in the
+/// path and serializes dual-ROOT same-CPV merges instead. em prefers
+/// **per-root builddirs** so host and target copies of the same CPV can run
+/// under `--jobs` without sharing a WORKDIR (Sonnet 2026-08-06 dual-plan race).
+///
+/// `/` → `host`; other paths → path with `/` replaced by `-` (trimmed).
+pub fn work_root_key(merge_root: &Utf8Path) -> String {
+    let s = merge_root.as_str().trim_end_matches('/');
+    if s.is_empty() || s == "/" {
+        return "host".to_string();
+    }
+    s.trim_start_matches('/').replace('/', "-")
+}
+
+/// Per-package work tree: `$work_base/<root-key>/<category>/<pf>`.
+///
+/// See [`work_root_key`]. Callers that only know the outer prefix work base
+/// must also pass the entry's merge root so dual-root plans isolate.
+pub fn package_work_dir(
+    work_base: &Utf8Path,
+    merge_root: &Utf8Path,
+    category: &str,
+    pf: &str,
+) -> Utf8PathBuf {
+    work_base
+        .join(work_root_key(merge_root))
+        .join(category)
+        .join(pf)
 }
 
 /// Source the host profile stack (`/etc/portage/make.profile` +
@@ -369,9 +404,9 @@ pub struct BuildAndMerge<'a> {
 
 /// Build one resolved plan entry through the full phase chain and merge it
 /// into `root`: the per-package effective USE replaces the make.conf USE, the
-/// work tree lives under `work_base/<category>/<pf>`, and `distdir` (when
-/// set, e.g. `<prefix>/var/cache/distfiles`) overrides the writable distfiles
-/// location.
+/// work tree lives under `work_base/<root-key>/<category>/<pf>` (see
+/// [`package_work_dir`]), and `distdir` (when set, e.g.
+/// `<prefix>/var/cache/distfiles`) overrides the writable distfiles location.
 pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
     let BuildAndMerge {
         ebuild_path,
@@ -392,7 +427,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
     } = opts;
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-    let work_dir = work_base.join(ebuild.category()).join(pf);
+    let work_dir = package_work_dir(work_base, root, ebuild.category(), &pf);
     let log = work_dir.join("build.log");
 
     // Fetch-only short-circuit (emerge `EbuildBuild` when opts.fetchonly): no
@@ -564,7 +599,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
     } = opts;
     let ebuild = Ebuild::with_cpv(cpv.clone(), ebuild_path);
     let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-    let work_dir = work_base.join(ebuild.category()).join(pf);
+    let work_dir = package_work_dir(work_base, root, ebuild.category(), &pf);
     let log = work_dir.join("build.log");
 
     let result = if let Some(backend) = crate::privilege::install_wrap_backend() {
@@ -821,9 +856,8 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         .with_context(|| format!("invalid --cpv {cpv_str:?} passed to __worker"))?;
     let ebuild_obj = Ebuild::with_cpv(cpv.clone(), Utf8Path::new(ebuild_path));
     let pf = format!("{}-{}", ebuild_obj.name(), ebuild_obj.version());
-    let work_dir = Utf8Path::new(work_base)
-        .join(ebuild_obj.category())
-        .join(pf);
+    // `root` is the merge root the parent used when choosing the work tree.
+    let work_dir = package_work_dir(Utf8Path::new(work_base), Utf8Path::new(root), ebuild_obj.category(), &pf);
     let log = work_dir.join("build.log");
 
     // LiveFs + optional JSONL re-emit to parent bus; parent owns Session/Pkg*/history.
@@ -1007,11 +1041,18 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         Some(p) => p.to_owned(),
         None => {
             let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-            Utf8Path::new("/var/tmp/portage")
-                .join(ebuild.category())
-                .join(pf)
+            package_work_dir(
+                Utf8Path::new("/var/tmp/portage"),
+                root,
+                ebuild.category(),
+                &pf,
+            )
         }
     };
+
+    // Portage `EbuildBuildDir`: exclusive use of this package tree for the
+    // whole phase chain (also blocks a second concurrent `em` on the same path).
+    let _builddir_lock = lock_builddir(&work_root).await;
 
     let master_refs: Vec<&Repository> = masters.iter().collect();
     let mut shell = repo
@@ -1413,16 +1454,40 @@ fn filter_clean_subs(
     out
 }
 
-/// Exclusive flock on `<work_base>/.merge.lock` (the grandparent of the
-/// per-package work dir), held around the merge critical section so parallel
-/// `__worker` processes — and concurrent em instances sharing the tree —
-/// cannot interleave qmerge. Blocking acquire runs off the async executor;
-/// released on drop (or by the kernel on process exit).
+/// Exclusive flock on `<work_base>/.merge.lock`, held around the merge
+/// critical section so parallel `__worker` processes — and concurrent em
+/// instances sharing the tree — cannot interleave qmerge.
+///
+/// `work_dir` is [`package_work_dir`] (`$work_base/<root-key>/<cat>/<pf>`), so
+/// the work base is three parents up. Blocking acquire runs off the async
+/// executor; released on drop (or by the kernel on process exit).
 async fn lock_merge_flock(work_dir: &Utf8Path) -> Option<std::fs::File> {
-    let base = work_dir.parent()?.parent()?;
+    // work_base / root_key / category / pf
+    let base = work_dir.parent()?.parent()?.parent()?;
     let path = base.join(".merge.lock").into_std_path_buf();
     tokio::task::spawn_blocking(move || {
         // append: never truncate — other processes may hold the lock fd.
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok()?;
+        rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).ok()?;
+        Some(f)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Exclusive flock on the package work directory itself (Portage
+/// `EbuildBuildDir`), held for the whole phase chain so two concurrent
+/// merges never share a WORKDIR even if scheduling fails to serialize them.
+async fn lock_builddir(work_dir: &Utf8Path) -> Option<std::fs::File> {
+    let dir = work_dir.to_owned();
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(dir.as_std_path()).ok()?;
+        let path = dir.join(".builddir.lock").into_std_path_buf();
         let f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -2320,8 +2385,8 @@ async fn unmerge_slot_occupant(u: UnmergeSlotOccupant<'_>) -> Result<()> {
 
 /// Standalone removal for `-C`/`--unmerge` (`emerge.rs::unmerge_atoms`): no
 /// replacement and no active install to derive a sibling scratch dir from,
-/// so the scratch tree is `<work_base>/<category>/<pf>.unmerge`. Reuses
-/// [`unmerge_package`] with an empty `new_contents`, so every file the
+/// so the scratch tree is `<work_base>/<root-key>/<category>/<pf>.unmerge`.
+/// Reuses [`unmerge_package`] with an empty `new_contents`, so every file the
 /// package owns is removed (except any preserve-libs finds still in use).
 ///
 /// `graph`/`registry`: built/loaded once by the caller for the *whole*
@@ -2337,9 +2402,12 @@ pub async fn unmerge_standalone(
     graph: &preserve_libs::LinkGraph,
     registry: &mut preserve_libs::PreservedLibsRegistry,
 ) -> Result<()> {
-    let old_work_root = work_base
-        .join(old_pkg.category())
-        .join(format!("{}.unmerge", old_pkg.pf()));
+    let old_work_root = package_work_dir(
+        work_base,
+        root,
+        old_pkg.category(),
+        &format!("{}.unmerge", old_pkg.pf()),
+    );
 
     unmerge_package(UnmergePackage {
         shell,
@@ -3200,6 +3268,29 @@ mod tests {
     use portage_vdb::ContentsKind;
     use std::fs;
     use std::os::unix::fs::symlink;
+
+    /// Dual-root same-CPV plan entries must not share a WORKDIR (Sonnet
+    /// 2026-08-06 `--jobs` race under `--prefix --target`).
+    #[test]
+    fn package_work_dir_isolates_merge_roots() {
+        let base = Utf8Path::new("/tmp/em-work");
+        let host = package_work_dir(base, Utf8Path::new("/"), "llvm-core", "clang-22.1.8");
+        let target = package_work_dir(
+            base,
+            Utf8Path::new("/opt/xp/usr/riscv64-unknown-linux-gnu"),
+            "llvm-core",
+            "clang-22.1.8",
+        );
+        assert_ne!(host, target);
+        assert!(host.as_str().contains("/host/llvm-core/clang-22.1.8"));
+        assert!(
+            target
+                .as_str()
+                .contains("opt-xp-usr-riscv64-unknown-linux-gnu")
+        );
+        assert_eq!(work_root_key(Utf8Path::new("/")), "host");
+        assert_eq!(work_root_key(Utf8Path::new("/")), work_root_key(Utf8Path::new("//")));
+    }
 
     /// Regression test for the gnupg stage1 failure: the Install worker must
     /// never wipe `temp` (`${T}`) — it's cross-phase scratch space the

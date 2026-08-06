@@ -254,7 +254,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         }
         Applet::Select { command } => select::run(command, globals).await,
         Applet::Active { command } => crate::active::run(command.as_ref(), globals),
-        Applet::Setup => setup::run(&globals.roots()),
+        Applet::Setup => setup::run(&globals.roots(), globals.pretend),
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
         Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
         Applet::Stages(args) => crossdev::stage1(args, globals).await,

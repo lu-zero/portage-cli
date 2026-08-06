@@ -1066,9 +1066,18 @@ impl Scheduler {
         }
     }
 
-    /// Pop the next node whose blockers are all satisfied, if any is waiting.
-    fn next_ready(&mut self) -> Option<usize> {
-        self.ready.pop_front()
+    /// Pop the next ready node for which `path_free` is true (e.g. workdir
+    /// not held by an inflight merge). Blocked nodes stay queued in order.
+    fn next_ready_free(&mut self, mut path_free: impl FnMut(usize) -> bool) -> Option<usize> {
+        let n = self.ready.len();
+        for _ in 0..n {
+            let i = self.ready.pop_front()?;
+            if path_free(i) {
+                return Some(i);
+            }
+            self.ready.push_back(i);
+        }
+        None
     }
 
     /// Mark node `i` finished (built or skipped), unblocking its dependents.
@@ -1114,6 +1123,12 @@ async fn merge_parallel(
     let mut started = 0usize;
     let mut stop_new = false;
     let mut inflight = FuturesUnordered::new();
+    // Portage `_prevent_builddir_collisions`: never run two merges that share
+    // a workdir path concurrently. Per-root builddirs make dual-ROOT same-CPV
+    // keys distinct; this still guards true path collisions (and same-key
+    // duplicates).
+    let mut inflight_workdirs: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     loop {
         while !stop_new && inflight.len() < jobs {
@@ -1122,10 +1137,31 @@ async fn merge_parallel(
             if !crate::activity::can_start_under_load(load_average, inflight.len()) {
                 break;
             }
-            let Some(i) = sched.next_ready() else { break };
+            let Some(i) = sched.next_ready_free(|j| {
+                let planned = &run.plan[j];
+                let mr = entry_roots(planned, run.roots, run.host_roots).merge_root();
+                let key = ebuild::package_work_dir(
+                    run.work_base,
+                    mr,
+                    planned.cpv.cpn.category.as_str(),
+                    &format!("{}-{}", planned.cpv.cpn.package, planned.cpv.version),
+                )
+                .to_string();
+                !inflight_workdirs.contains(&key)
+            }) else {
+                break;
+            };
             let planned = &run.plan[i];
             let entry_roots = entry_roots(planned, run.roots, run.host_roots);
             let merge_root = entry_roots.merge_root();
+            let work_key = ebuild::package_work_dir(
+                run.work_base,
+                merge_root,
+                planned.cpv.cpn.category.as_str(),
+                &format!("{}-{}", planned.cpv.cpn.package, planned.cpv.version),
+            )
+            .to_string();
+            inflight_workdirs.insert(work_key.clone());
             let entry_index = entry_binpkg_index(planned, run.binpkg_index, run.host_binpkg_index);
 
             // Per-entry desired build_env_key (S6: package.env-aware) and
@@ -1147,6 +1183,7 @@ async fn merge_parallel(
                 // Skips are silent (counted in the end summary); the
                 // `HumanStdoutSink` renders only packages that actually start.
                 skipped += 1;
+                inflight_workdirs.remove(&work_key);
                 sched.complete(i);
                 continue;
             }
@@ -1192,15 +1229,16 @@ async fn merge_parallel(
                         .as_ref()
                         .map(|a| a.phases_done())
                         .unwrap_or_default();
-                    (i, res, pkg_started, kind, phases)
+                    (i, work_key, res, pkg_started, kind, phases)
                 }
                 .instrument(pkg_span),
             );
         }
 
-        let Some((i, res, pkg_started, kind, phases)) = inflight.next().await else {
+        let Some((i, work_key, res, pkg_started, kind, phases)) = inflight.next().await else {
             break;
         };
+        inflight_workdirs.remove(&work_key);
         // On success the entry's dependents are unblocked; on failure they stay
         // blocked (their count never reaches 0), so a package whose build dep
         // failed is never started.

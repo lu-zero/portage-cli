@@ -1,6 +1,8 @@
 # Workdir isolation for dual-root / dual-plan builds
 
-Status: 🔴 not started · Design sketched **2026-08-06**  
+Status: 🟡 near-term landed on master (2026-08-06) — per-root builddirs +
+builddir flock + parallel schedule barrier; multi-`em` plan awareness still
+future  
 Live proof: [[clang-crossbuild-prefix-local-test-plan]] findings **#3 / #4**  
 Portage reference: `_emerge/Scheduler._prevent_builddir_collisions`,
 `EbuildBuildDir` (host Portage as of 2026-08)

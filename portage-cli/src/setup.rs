@@ -209,7 +209,14 @@ pub struct Registrable {
 /// prefixes as an internal step, and those are not topologies a user chooses
 /// between. Keeping [`bootstrap`] free of it also keeps it free of side effects
 /// outside the tree it is given — its callers include tests.
-pub fn run(roots: &Roots) -> Result<()> {
+///
+/// When `pretend` is true (global `-p`/`--pretend`), print what would be
+/// created and write nothing — same contract as crossdev's config plan under
+/// `-p` (Sonnet 2026-08-06: `Applet::Setup` previously ignored pretend).
+pub fn run(roots: &Roots, pretend: bool) -> Result<()> {
+    if pretend {
+        return preview(roots);
+    }
     let Some(registrable) = bootstrap(roots)? else {
         return Ok(());
     };
@@ -218,6 +225,36 @@ pub fn run(roots: &Roots) -> Result<()> {
     if let Some(name) = crate::active::register_available(registrable.kind, &registrable.eroot) {
         println!("    registered as:  {name}   (em active list / em active set {name})");
     }
+    Ok(())
+}
+
+/// `-p` / `--pretend` path for [`run`]: describe the layout without writing.
+fn preview(roots: &Roots) -> Result<()> {
+    let eroot = roots.merge_root();
+    if eroot.as_str() == "/" {
+        anyhow::bail!(
+            "em setup needs a target: use --local, --prefix DIR, or --root DIR \
+             (the host / is never bootstrapped)"
+        );
+    }
+    let has_eprefix = roots.eprefix().is_some();
+    let base_eq_target = roots.base() == roots.target();
+    let mode = if has_eprefix && base_eq_target {
+        "--local (standalone prefix)"
+    } else if has_eprefix {
+        "--prefix (overlay)"
+    } else {
+        "--root (self-contained offset)"
+    };
+    println!(">>> would bootstrap layout at {eroot} ({mode})");
+    println!(">>> would create skeleton dirs under {eroot} (etc/portage, var/db/pkg, …)");
+    let portage = roots
+        .config_overlay()
+        .map(Utf8Path::to_path_buf)
+        .unwrap_or_else(|| eroot.join("etc/portage"));
+    println!(">>> would ensure config files under {portage} (bashrc, make.conf placeholders)");
+    println!(">>> would register available entry for em active (not the active pointer)");
+    println!(">>> (pretend — no files written)");
     Ok(())
 }
 
@@ -500,6 +537,23 @@ mod tests {
     use clap::Parser;
 
     use crate::cli::Cli;
+
+    #[test]
+    fn pretend_run_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().to_str().unwrap();
+        let cli = crate::cli::Cli::try_parse_from(["em", "--prefix", prefix, "setup"]).unwrap();
+        let roots = cli.roots();
+        super::run(&roots, true).unwrap();
+        assert!(
+            !std::path::Path::new(prefix).join("etc/portage").exists(),
+            "pretend must not create etc/portage"
+        );
+        assert!(
+            !std::path::Path::new(prefix).join("var/db/pkg").exists(),
+            "pretend must not create var/db/pkg"
+        );
+    }
 
     /// `bootstrap` reports which topology it built so `em setup` can register
     /// it, and reports nothing for a self-contained `--root` — that one is
