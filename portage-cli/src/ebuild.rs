@@ -486,6 +486,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
                 buildpkg,
                 binpkg: None,
                 force_verify_signature: false,
+                build_class: Some(build_class.clone()),
                 activity: activity.as_ref(),
                 log_label: "build",
                 log: &log,
@@ -583,6 +584,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
                 buildpkg: false,
                 binpkg: Some(binpkg_path),
                 force_verify_signature,
+                build_class: None,
                 activity: activity.as_ref(),
                 log_label: "merge",
                 log: &log,
@@ -637,6 +639,9 @@ pub struct InstallWorker<'a> {
     /// `FEATURES`/`BINPKG_GPG_VERIFY_GPG_HOME` itself, same as everything
     /// else it re-derives.
     pub force_verify_signature: bool,
+    /// Planner-stamped build class (parsed from the `--build-class` token); see
+    /// `RunInner::build_class`.
+    pub build_class: Option<BuildClass>,
     pub buildpkg: bool,
     pub quiet: bool,
     pub activity_job_id: Option<&'a str>,
@@ -686,6 +691,9 @@ struct WorkerStep<'a> {
     buildpkg: bool,
     binpkg: Option<&'a Utf8Path>,
     force_verify_signature: bool,
+    /// Planner-stamped build class for this entry; `None` ⇒ the worker derives
+    /// `CrossTool*` from the ebuild's `cross-` category.
+    build_class: Option<BuildClass>,
     activity: Option<&'a crate::activity::ActivityPkgCtx>,
     /// `build`/`merge` — names the log in the non-zero-exit error only.
     log_label: &'a str,
@@ -706,6 +714,7 @@ async fn spawn_install_worker_step(
         .collect::<Vec<_>>()
         .join(" ");
     let cpv_str = step.cpv.to_string();
+    let build_class_str = step.build_class.as_ref().map(|c| c.to_string());
     let (act_job, act_parent, act_live, act_side) = worker_activity_cli(step.activity);
     let reemit = step.activity.map(|a| a.bus.clone());
     let code = crate::privilege::spawn_install_worker(
@@ -726,6 +735,7 @@ async fn spawn_install_worker_step(
             quiet: step.quiet,
             binpkg: step.binpkg.map(|b| b.as_str()),
             force_verify_signature: step.force_verify_signature,
+            build_class: build_class_str.as_deref(),
             activity_job_id: act_job.as_deref(),
             activity_parent_job_id: act_parent.as_deref(),
             activity_live_root: act_live.as_deref(),
@@ -789,6 +799,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         roots,
         binpkg,
         force_verify_signature,
+        build_class,
         buildpkg,
         quiet,
         activity_job_id,
@@ -834,7 +845,7 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
         ebuild_path,
         cpv: Some(&cpv),
         group: &group,
-        build_class: None,
+        build_class,
         work_dir: Some(&work_dir),
         repo_override: None,
         root: Utf8Path::new(root),

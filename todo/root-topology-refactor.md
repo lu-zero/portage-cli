@@ -94,11 +94,20 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
   value only diverges from the category once A3 widens the enum for
   libc/headers). `BuildClass` re-exported via `portage-atom-pubgrub`
   (alongside `MergeRoot`). Regression-safe via the `Option` fallback.
-- **A2b-worker (deferred)** Thread `build_class` across the `__worker`
-  subprocess + `merge_binpkg` + unmerge: needs `BuildClass: Display + FromStr`
-  + a hidden `--build-class=` flag (follow `--force-verify-signature`), and
-  `build_class` on `MergeBinpkg`. Only required once A3 makes the planner
-  value diverge from the category for those paths.
+- ✅ **A2b-worker (landed)** `BuildClass: Display + FromStr` (stable tokens
+  `native-host`/`native-target`/`cross-target[:<triple>]`/`cross-tool-host:<triple>`/
+  `cross-tool-target:<triple>`), threaded across the `__worker` subprocess via a
+  hidden `--build-class=` flag: `WorkerArgs` → `build_worker_command` → the
+  `__worker` CLI → `run_install_worker` → `run_inner` (now `Some` instead of
+  `None`). `build_and_merge`'s compile→worker handoff passes the planner value;
+  `merge_binpkg`'s handoff still `None` (deferred — separate `MergeBinpkg`
+  struct). Offline-verified (Display/FromStr round-trip tests + compile-correct
+  wiring + behaviour-equivalence: `Some(CrossTool*)` vs `None`→category-fallback
+  agree for every `cross-` package); in-process path live-confirmed. **Caveat:**
+  the `__worker` subprocess itself isn't live-exercised here — the
+  unprivileged `--prefix` sandbox has no privilege backend (install runs
+  in-process); a privilege-backed (sudo/pseudoroot) sandbox is needed to
+  observe the `--build-class` flag live. Unblocks A3b-③ (the bashrc re-key).
 - ✅ **A3-step1 (landed)** Widened `BuildClass::CrossTool` into
   `CrossToolHost{triple}` + `CrossToolTarget{triple}`, split the way bash
   crossdev does (`/usr/bin/crossdev` `set_env` `case ${l} in K|L) ... *)`): the

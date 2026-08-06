@@ -113,6 +113,47 @@ impl BuildClass {
     }
 }
 
+/// Stable token form for crossing the `__worker` subprocess boundary
+/// (`--build-class=<token>`) and, later, the bashrc shell seam
+/// (`EM_BUILD_CLASS`). Round-trips with `FromStr`. Triples contain no `:`,
+/// so `tag:triple` is unambiguous.
+impl std::fmt::Display for BuildClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NativeHost => f.write_str("native-host"),
+            Self::NativeTarget => f.write_str("native-target"),
+            Self::CrossTarget { triple: None } => f.write_str("cross-target"),
+            Self::CrossTarget { triple: Some(t) } => write!(f, "cross-target:{t}"),
+            Self::CrossToolHost { triple } => write!(f, "cross-tool-host:{triple}"),
+            Self::CrossToolTarget { triple } => write!(f, "cross-tool-target:{triple}"),
+        }
+    }
+}
+
+impl std::str::FromStr for BuildClass {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "native-host" => return Ok(Self::NativeHost),
+            "native-target" => return Ok(Self::NativeTarget),
+            "cross-target" => return Ok(Self::CrossTarget { triple: None }),
+            _ => {}
+        }
+        let (tag, triple) = s
+            .split_once(':')
+            .ok_or_else(|| format!("bad build-class token {s:?} (expected tag or tag:triple)"))?;
+        let triple = triple.to_string();
+        match tag {
+            "cross-target" => Ok(Self::CrossTarget {
+                triple: Some(triple),
+            }),
+            "cross-tool-host" => Ok(Self::CrossToolHost { triple }),
+            "cross-tool-target" => Ok(Self::CrossToolTarget { triple }),
+            other => Err(format!("bad build-class tag {other:?}")),
+        }
+    }
+}
+
 /// A resolved package in a plan: identity + selected version.
 ///
 /// This is the solver-agnostic counterpart of pubgrub's
@@ -418,6 +459,47 @@ mod tests {
         assert_eq!(
             BuildClass::classify(&cpn, MergeRoot::Host, true, true),
             BuildClass::NativeHost
+        );
+    }
+
+    #[test]
+    fn build_class_display_fromstr_round_trips() {
+        // Every variant round-trips Display -> FromStr.
+        let cases = [
+            BuildClass::NativeHost,
+            BuildClass::NativeTarget,
+            BuildClass::CrossTarget { triple: None },
+            BuildClass::CrossTarget {
+                triple: Some("riscv64-unknown-linux-gnu".to_string()),
+            },
+            BuildClass::CrossToolHost {
+                triple: "riscv64-unknown-linux-gnu".to_string(),
+            },
+            BuildClass::CrossToolTarget {
+                triple: "aarch64-unknown-linux-gnu".to_string(),
+            },
+        ];
+        for c in cases {
+            let s = c.to_string();
+            assert_eq!(
+                s.parse::<BuildClass>().unwrap(),
+                c,
+                "round-trip {c:?} via {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_class_fromstr_rejects_garbage() {
+        assert!("".parse::<BuildClass>().is_err());
+        // A triple-bearing tag with no triple is malformed.
+        assert!("cross-tool-host".parse::<BuildClass>().is_err());
+        assert!("cross-tool-target".parse::<BuildClass>().is_err());
+        // Unknown tag.
+        assert!(
+            "bogus:riscv64-unknown-linux-gnu"
+                .parse::<BuildClass>()
+                .is_err()
         );
     }
 

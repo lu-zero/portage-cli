@@ -236,6 +236,10 @@ pub struct WorkerArgs<'a> {
     /// of `FEATURES=binpkg-request-signature`. See `ebuild::RunInner`'s
     /// field of the same name.
     pub force_verify_signature: bool,
+    /// Planner-stamped `BuildClass` token (`Display` form) — see
+    /// `RunInner::build_class`. `None` ⇒ the worker falls back to deriving
+    /// `CrossTool*` from the ebuild's `cross-` category.
+    pub build_class: Option<&'a str>,
     pub buildpkg: bool,
     pub quiet: bool,
     /// Activity session id (same as parent `SessionStart.job_id`). When set
@@ -402,6 +406,9 @@ fn build_worker_command(
     }
     if args.force_verify_signature {
         cmd.arg("--force-verify-signature");
+    }
+    if let Some(class) = args.build_class {
+        cmd.arg("--build-class").arg(class);
     }
     if let Some(id) = args.activity_job_id {
         cmd.arg("--activity-job-id").arg(id);
