@@ -125,9 +125,21 @@ two-meaning-`None` (`shell.rs:1911`) → the arms carry the triple;
   crossdev's planning letter — the principalled source is
   `CrossTarget::packages()`'s `PackageArch`; routing the refinement through
   that (at the depgraph layer) is a follow-up.
-- **A3b (deferred — needs live `crossdev --setup` verification):**
-  ① retire `bypass_cross_root: bool` (16 sites: 10 sets + 2 reads + 4 defs,
-  not 8) and stamp the *native* libc/headers steps `CrossToolTarget`;
+- **A3b-① (analysed → intentionally not pursued as a behaviour change):**
+  retire `bypass_cross_root: bool` (16 sites) + stamp the *native* libc/headers
+  steps `CrossToolTarget`. Audit of every `build_class` consumer shows the
+  native flip is a **no-op**: all consumers are either the §4 block / bashrc
+  (gated behind `chost != cbuild || build_eprefix`, which is false for a plain
+  native `--root`), `CrossToolHost`-only matches (irrelevant to the
+  `NativeTarget`↔`CrossToolTarget` distinction), or the `EM_BUILD_CLASS` export
+  (read only by the `EPREFIX`-gated bashrc). So flipping native `sys-libs/glibc`
+  to `CrossToolTarget` changes the token but no observable behaviour — and
+  doing it would create a latent surprise if a future consumer adds a
+  native-`--root`-active arm. Left as `NativeTarget`. The `bypass_cross_root`
+  flag itself is clean (one load-bearing read at `emerge.rs:325`, not a
+  multi-site shadow like `cross_host_tool_tuple` was); retiring it is cosmetic
+  churn across `emerge_atoms`'s ~10 callers for no behaviour change — deferred
+  unless reshaped to an explicit `Roots` override for bug-prevention value.
   ② ✅ **(landed)** rewire the §4 toolchain-var sniff (`shell.rs:init_build_env`)
   to read `build_class` for the `CrossTool` family (`CrossToolHost`→`${CHOST}-*`,
   `CrossToolTarget`→`${CTARGET}-*`+`BUILD_*`), falling back to the
