@@ -236,6 +236,96 @@ writeup: `benchmarks/results/20260807-145520-softorder-732d604-vs-bf35c79/README
 
 ---
 
+### Results — 2026-08-07 (Sonnet), `em stages --stage1` under `--root`+`--target`, and the `732d604` regression confirmed + fixed by `566b67b`
+
+Luca asked for a quick check of `em stages --target riscv64-unknown-linux-gnu
+--root <path> --stage1`. First pass found a real blocker; traced it to a
+genuine regression from `732d604` (this session's own soft-order fix,
+above); `566b67b` (landed while investigating) fixes it. Full trail below
+since the first answer given in chat was wrong and needs a correction on
+the record.
+
+**Invocation note:** `--root` here must be the **outer** prefix
+(`/root/xp`), not the sysroot itself — `--target` appends the
+`usr/<tuple>` suffix internally. Pointing `--root` directly at the
+already-nested sysroot double-appends the suffix and fails immediately
+with `cannot resolve make.profile at .../usr/riscv64.../usr/riscv64.../etc/...`.
+Correct form: `em --root /root/xp --target riscv64-unknown-linux-gnu
+stages --stage1 -p`.
+
+**Correction to an earlier same-session chat answer:** I initially blamed
+a printed `!!! REQUIRED_USE flag constraints are unsatisfied` banner
+(`app-alternatives/{yacc,tar,lex,gzip,bzip2,awk}`, each missing their
+`^^ (...)` exactly-one-of selection under stage1's forced `USE="-*
+build"`) for the failure. **That banner is not the blocker** — confirmed
+by code read (`portage-resolve/src/required_use.rs`'s `find_violations` is
+a post-solve advisory-only check; `portage-cli/src/query/depgraph/mod.rs`
+explicitly excludes it from `exit_code`; the real gate is
+`--autosolve-use`, opt-in and off by default, matching real `emerge -p`'s
+own non-fatal advisory behavior for this same case) and empirically (the
+banner appears identically on both a broken and a working run — see
+below). This gap itself is pre-existing and long-known, not new: commit
+`defb035` (2026-07-12) already documents hitting this exact
+`app-alternatives/tar` `^^ ( gnu libarchive )` scenario during `em stages
+--stage1`, weeks before this session.
+
+**The actual blocker, found after re-reading the full (non-truncated)
+output:**
+
+```
+!!! pre-flight dependency check failed — these build dependencies are not
+satisfied by the installed view or earlier plan entries:
+  sys-devel/gcc-16.1.1_p20260718 needs: sys-libs/glibc[cet(-)?]
+```
+
+`sys-devel/gcc` was printed at plan index 90, `sys-libs/glibc` (its own
+BDEPEND) at 91 — backwards. This is the exact same bug class as the
+`llvm-core/clang` plan's pre-flight failure reported in the soft-order
+results above, now confirmed to also hit `stages --stage1`.
+
+**Confirmed as a genuine regression from `732d604`, not a pre-existing
+gap** — direct A/B against the pre-fix binary (`bf35c79`, still had a
+copy from the earlier benchmark run) on the identical sandbox/scenario:
+
+| em SHA | `sys-devel/gcc` (2nd instance) vs `sys-libs/glibc` | `-p` exit |
+|--------|------|------|
+| `bf35c79` (pre-`732d604`) | gcc at 60, glibc at 58 — **correct order** | `EXIT=0` |
+| `42e4042` (post-`732d604`, pre-`566b67b`) | gcc at 90, glibc at 91 — **inverted** | `EXIT=1` |
+
+Matches Luca's "it used to work" exactly: `bf35c79` really did work for
+this scenario; `732d604` broke it.
+
+**Now fixed by `566b67b`** (`fix(solver): lock pass-1-forward edges in
+soft-order repair`, landed mid-investigation) — its own commit message
+names this precise gcc/glibc case as the regression it addresses. Rebuilt
+`em` from `566b67b`, re-ran the identical `-p` command:
+
+- `sys-devel/gcc` (90) / `sys-libs/glibc` (91) → order restored, matches
+  `bf35c79`.
+- `EXIT=0`. `em stages --stage1` now completes its `-p` plan validation
+  cleanly under `--root`+`--target`. The REQUIRED_USE advisory banner
+  still prints (expected, confirmed non-fatal, unrelated) — present
+  identically on both the broken and the fixed run.
+- Also re-checked the `llvm-core/clang` plan-order regression from the
+  soft-order results above with `566b67b`: `virtual/libcrypt` (66) /
+  `sys-libs/pam` (67) still print before `sys-libs/glibc` (85) /
+  `sys-libs/libxcrypt` (86) — **but `-p` now exits 0** (previously `1` on
+  `42e4042`). This matches `566b67b`'s own documented remaining
+  limitation exactly (commit message: "unit test documents the hard path
+  virtual→python→glibc→libxcrypt that still blocks soft promote" — a real
+  hard/soft conflict needing dual-root routing or library-identity Favor,
+  not a repair-pass bug). Print order being "wrong" here no longer means
+  the schedule/pre-flight gate is actually broken — worth remembering for
+  future passes: check `-p`'s exit code and the pre-flight banner, not
+  just the printed index order, before calling something broken.
+
+**Not yet tested:** a real (non-`-p`) `em stages --stage1` merge to
+completion — this pass only confirms the plan validates cleanly, not that
+the actual bootstrap merges succeed end to end. Worth a follow-up pass if
+someone wants that confirmed.
+
+---
+
 ## Prior results (kept for history)
 
 Last full live pass before soft-order fix: **`1ac8067`** — #4/#5 PASS, #3 still broken (virtual Completed, libxcrypt never Emerging, stop on pam). Details below in archived sections.
