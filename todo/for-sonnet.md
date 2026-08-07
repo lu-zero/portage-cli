@@ -1,31 +1,112 @@
-# For Sonnet — live verification handoff (2026-08-07)
+# For Sonnet — live verification handoff
 
-**Pin:** `master` at **`fad35a3`** (or tip if only docs landed after).  
-**Do not** re-open design of Drop BuildClass or workdir dual-root without new
-evidence; this is **live verify + record findings**.
+**Current pin (do this next):** `master` at **`f8ac293`**  
+(“fix: honour bashrc die; seed baselayout for all toolchain plans”)
+
+Older pins below are historical. Build `em` from **`f8ac293`** (or tip if
+only docs landed after) before each campaign; note the SHA in Results.
 
 Unit tests already green. Unit tests do **not** catch silent host/target env
 or workdir races under real parallelism.
 
 ---
 
-## Context (what Grok landed)
+## NEXT HOMEWORK — `f8ac293` (Sonnet)
+
+**Goal:** re-run clang Scenario A after baselayout + bashrc-die fixes; confirm
+#4/#5, and either clear or pin #3 (libxcrypt never scheduled). Record + stop
+on the first new hard failure.
+
+### Rules (same as before)
+
+1. **Fresh sandbox only** — do not reuse `em-a46027b-verify` or any half-failed tree.
+2. **No `--keep-going`.**
+3. Record findings here under **Results**; do not implement large design fixes
+   in the same pass unless a one-line regression of `f8ac293`/`a46027b`.
+4. pam **is expected** in the clang graph (not a bug):
+   `clang → python → util-linux[pam] → sys-libs/pam` under
+   `default/linux` `USE=pam`. Do not spend time “removing” pam from the plan.
+
+### Commands (paths illustrative)
+
+```sh
+# build em at f8ac293
+git -C /path/to/portage-cli rev-parse --short=8 HEAD   # expect f8ac293 or later docs-only
+
+P=/root/xp   # fresh bare sandbox root
+em --prefix "$P" setup
+em --prefix "$P" --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
+# Expect EXIT=0, real riscv64-unknown-linux-gnu-gcc
+# Spot-check: baselayout ran *before* libc in the staged plan/log
+
+# layout check after crossdev --setup (bug #4)
+# merged-usr: bin should be a symlink into usr (or equivalent profile layout),
+# not two independent real directories with different content.
+ls -la "$P/usr/riscv64-unknown-linux-gnu/bin" \
+       "$P/usr/riscv64-unknown-linux-gnu/usr/bin" | head
+
+em --prefix "$P" --target riscv64-unknown-linux-gnu \
+  -b llvm-core/clang --jobs 80
+```
+
+### Pass / fail checklist
+
+| Check | Pass if |
+|-------|---------|
+| **#4 baselayout** | `crossdev --setup` plan/log has baselayout before libc; after setup, sysroot is **not** genuine split-usr (`bin` vs `usr/bin` both real, divergent content) |
+| **#5 bashrc die** | Zero silent “Completed after `die: … merged-usr … split-usr`” — if split-usr still exists, those packages must **fail**, not complete |
+| **#1/#2 still fixed** | No sed ACL race; no empty-ED `tar: Cannot open` on virtuals; virtuals still get `.gpkg` under `-b` |
+| **#3 libxcrypt** | Either (a) `sys-libs/libxcrypt` gets `Emerging` **before** pam configure, and pam finds libcrypt, **or** (b) still missing — then capture: plan line for libxcrypt, whether any `Emerging`, VDB path, and whether virtual/libcrypt completed earlier |
+| **Progress** | Note N/M; whether `llvm-core/clang` is reached |
+| **Workdir** | Still no doubled phases / dual WORKDIR for same CPV host+target |
+
+### If #3 still fails — collect this (do not fix yet)
+
+```sh
+# from the failed sandbox, after EXIT=1:
+rg -n 'libxcrypt|libcrypt|sys-libs/pam' "$LOG" | head -80
+ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/sys-libs/" 2>/dev/null
+ls "$P/usr/riscv64-unknown-linux-gnu/usr/include/crypt.h" 2>/dev/null
+# From the initial -p or plan dump of the same run: was libxcrypt [ebuild N]?
+```
+
+Hypotheses for Grok (you only need evidence):
+
+1. silent VDB skip (host weave / already-installed false positive)
+2. RDEPEND edge virtual/libcrypt → libxcrypt missing at schedule time (USE `prefix-guest` / `elibc_glibc`)
+3. plan listed it but never dequeued (blocker / stop_new)
+
+### Optional if P0 green and time left
+
+- P1 package.env letter spot-check (GCC crossdev --setup host vs target env files)
+- Pretend purity smoke (already green on a46027b; quick re-check only if easy)
+
+### Out of scope this pass
+
+- Implementing package.provided / --local bootstrap
+- Reintroducing BuildClass
+- Designing multi-em plan registry
+
+---
+
+## Context (what Grok landed — cumulative)
 
 | Commit | What |
 |--------|------|
-| `56435d4` | Per-root workdirs (`work_base/<root-key>/<cat>/<pf>`), builddir flock, parallel schedule barrier; `setup -p` no writes; crossdev `-p` first-time plan |
-| `480daff` | Crossdev `-p` injects aliases **in-memory** (no disk write) |
-| `fad35a3` | **Drop BuildClass**: package.env letter-faithful (llvm R/U/A/P = host); HostCodegen PN allowlist; no `EM_BUILD_CLASS` stamp |
+| `56435d4` | Per-root workdirs; setup/crossdev `-p` honour |
+| `480daff` | Crossdev `-p` in-memory aliases |
+| `fad35a3` | Drop BuildClass |
+| `a46027b` | RDEPEND in `build_blockers` (sed/acl); empty-ED `--buildpkg` |
+| `f8ac293` | bashrc `die` propagates; baselayout for **all** `toolchain_plan` |
 
 Plans / matrices:
 
 - [[drop-buildclass]] Step 5 live table  
-- [[workdir-dual-root]] near-term (code landed; re-verify Scenario A)  
-- [[local-bootstrap-provided]] still open (do **not** block on this unless
-  you have spare time for hand-written package.provided)  
-- [[clang-crossbuild-prefix-local-test-plan]] prior blocked state  
+- [[workdir-dual-root]] landed; keep regression-watching Scenario A  
+- [[local-bootstrap-provided]] open (not this handoff)  
+- [[clang-crossbuild-prefix-local-test-plan]]  
 
-Matrix reference: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md)
+Matrix: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md)
 
 ---
 
@@ -42,7 +123,7 @@ Matrix reference: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.
 
 ---
 
-## Priority queue
+## Priority queue (historical — first handoff)
 
 ### P0 — Re-verify workdir dual-root fix (clang Scenario A)
 
@@ -438,3 +519,26 @@ hooks → `Err`.
 **Bug #4 root cause:** baselayout only for `Native \|\| self_contained`, and
 LLVM returned before that block. Default `--prefix --target` cross never
 seeded sysroot baselayout; packages wrote real `/bin` vs `/usr/bin`.
+
+**Why pam is in the clang plan (not a bug):**  
+`llvm-core/clang` → `${PYTHON_DEPS}` → `dev-lang/python` → unconditional
+`sys-apps/util-linux` → profile `USE=pam` → `sys-libs/pam` →
+`virtual/libcrypt` / libxcrypt. Empty sysroot ⇒ all of that is planned.
+
+---
+
+### Results — YYYY-MM-DD (Sonnet), `f8ac293` re-verify
+
+**em SHA:** …
+
+#### crossdev --setup (baselayout / #4)
+- …
+
+#### clang -b --jobs 80
+- Progress: N/M …
+- #5 bashrc die behaviour: …
+- #3 libxcrypt: …
+- clang reached?: …
+
+#### New bugs
+- …
