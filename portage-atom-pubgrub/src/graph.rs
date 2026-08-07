@@ -145,6 +145,16 @@ impl PortageDependencyProvider {
     /// We do the same — only if a genuine hard (build-time) cycle remains, as
     /// with bootstrap cycles (`xz-utils` ↔ `elt-patches`), do we fall back to a
     /// deterministic lexicographic tie-break.
+    ///
+    /// Two refinements on top of that Portage-shaped walk (bug #3, 2026-08-07):
+    /// - **B:** inside a soft SCC, prefer fully soft-ready nodes among hard-ready
+    ///   ones (`order_cycle` pick order).
+    /// - **C:** after the walk, re-linearise promoting soft edges that remain
+    ///   acyclic w.r.t. hard (+ already promoted soft) constraints — pass-1
+    ///   orientation first, then inverted — with the pass-1 order as tie-break.
+    ///   Fixes empty `virtual/*` RDEPEND providers that pass-1 emitted early while
+    ///   the real provider was still hard-blocked (e.g. `virtual/libcrypt` before
+    ///   `sys-libs/libxcrypt` through the glibc bootstrap cycle).
     pub fn install_order(
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
@@ -252,7 +262,8 @@ impl PortageDependencyProvider {
             }
         }
 
-        result
+        // Pass 2: restore inverted soft edges that remain acyclic (bug #3).
+        repair_soft_inversions(result, &graph)
     }
 }
 
@@ -341,11 +352,12 @@ fn tarjan_scc(succ: &[Vec<usize>]) -> Vec<usize> {
 ///
 /// Within one hard-group (a real cycle, no valid order exists), fall back to
 /// the original heuristic: repeatedly emit the member closest to ready —
-/// fewest pending in-component hard deps, then fewest pending in-component
-/// soft+hard deps, then largest key for determinism. Groups that are all
-/// singletons (no real hard cycle present) behave identically to a plain
-/// topological sort — this only changes the outcome for components that
-/// actually contain a hard cycle.
+/// fewest pending in-component hard deps, then prefer no pending soft deps
+/// (**B**), then fewest pending soft+hard, then largest key for determinism.
+/// Groups that are all singletons (no real hard cycle present) behave
+/// identically to a plain topological sort when soft edges are acyclic —
+/// soft cycles still force a break; pass-2 (`repair_soft_inversions`) may
+/// restore inverted soft edges that remain acyclic with hard constraints.
 fn order_cycle(
     members: &[usize],
     succ_hard: &[Vec<usize>],
@@ -420,11 +432,17 @@ fn order_cycle(
                 let hb = indeg_hard[&b];
                 let aa = indeg_all[&a];
                 let ab = indeg_all[&b];
+                // Soft-pending when all-indegree exceeds hard-indegree (extra
+                // soft-only edges still unsatisfied). Prefer soft-ready among
+                // equal hard readiness (**B**).
+                let sa = aa > ha;
+                let sb = ab > hb;
                 // A pending cross-group hard predecessor always loses: that
                 // hard edge is never violated, unlike edges inside a genuine
                 // hard cycle. Largest key wins remaining ties.
                 pa.cmp(&pb)
                     .then(ha.cmp(&hb))
+                    .then(sa.cmp(&sb))
                     .then(aa.cmp(&ab))
                     .then_with(|| node_pv[b].0.cmp(&node_pv[a].0))
             })
@@ -449,6 +467,139 @@ fn order_cycle(
         }
     }
     out
+}
+
+/// Pass-2 repair after the soft-cycle walk (bug #3).
+///
+/// Pass-1 may emit a consumer before its RDEPEND provider when the provider is
+/// still hard-blocked inside a soft SCC (empty `virtual/libcrypt` before
+/// `sys-libs/libxcrypt`).  Rebuild a total order from:
+/// 1. hard edges (DEPEND/BDEPEND), skipping any that would hard-cycle;
+/// 2. soft edges that remain acyclic (pass-1 orientation first, then inverted);
+/// 3. Kahn topo with the pass-1 position as the ready-queue tie-break so
+///    unrelated packages keep their original relative order.
+fn repair_soft_inversions(
+    order: Vec<(PortagePackage, Version)>,
+    graph: &[DepEdge],
+) -> Vec<(PortagePackage, Version)> {
+    let n = order.len();
+    if n <= 1 {
+        return order;
+    }
+
+    let node_key = |p: &PortagePackage, v: &Version| format!("{p}-{v}");
+    let mut pos: HashMap<String, usize> = HashMap::with_capacity(n);
+    for (i, (p, v)) in order.iter().enumerate() {
+        pos.insert(node_key(p, v), i);
+    }
+
+    // `before_succ[u]` = nodes that must come *after* u (u before them).
+    let mut before_succ: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut indeg = vec![0usize; n];
+
+    let try_add = |u: usize, v: usize, succ: &mut [Vec<usize>], indeg: &mut [usize]| -> bool {
+        if u == v {
+            return false;
+        }
+        if succ[u].contains(&v) {
+            return true;
+        }
+        // Adding u→v (u before v) cycles if v can already reach u.
+        if reaches(v, u, succ) {
+            return false;
+        }
+        succ[u].push(v);
+        indeg[v] += 1;
+        true
+    };
+
+    // Collect soft edges as (dep_idx, consumer_idx) = dep before consumer.
+    let mut soft: Vec<(usize, usize)> = Vec::new();
+    for edge in graph {
+        let Some(&from_i) = pos.get(&node_key(&edge.from.0, &edge.from.1)) else {
+            continue;
+        };
+        let Some(&to_i) = pos.get(&node_key(&edge.to.0, &edge.to.1)) else {
+            continue;
+        };
+        match edge.class {
+            DepClass::Depend | DepClass::Bdepend => {
+                // Dependency before dependent. Skip if it would hard-cycle
+                // (true hard SCC); pass-1 relative order remains via tie-break.
+                let _ = try_add(to_i, from_i, &mut before_succ, &mut indeg);
+            }
+            DepClass::Rdepend => soft.push((to_i, from_i)),
+            _ => {}
+        }
+    }
+
+    // Promote soft edges that remain acyclic. Prefer pass-1 orientation first
+    // so already-correct soft order is locked in before we try to flip inverted
+    // ones (true soft cycles keep at most one direction). Inverted promotions
+    // fix empty virtuals emitted before their providers (bug #3).
+    //
+    // Among inverted edges, earliest pass-1 consumer first: that is the empty
+    // virtual emitted too early, and promoting its provider is the urgent fix.
+    // A later inverted soft in the same SCC may then be refused if both would
+    // hard-cycle together — greedy is fine; one provider-before-virtual restore
+    // is enough for pam/libcrypt.
+    soft.sort_unstable();
+    soft.dedup();
+    let (mut pass1_ok, mut inverted): (Vec<_>, Vec<_>) = soft
+        .into_iter()
+        .filter(|(d, c)| d != c)
+        .partition(|(d, c)| d < c);
+    pass1_ok.sort_unstable();
+    inverted.sort_by_key(|(dep, consumer)| (*consumer, *dep));
+    for (dep, consumer) in pass1_ok.into_iter().chain(inverted) {
+        let _ = try_add(dep, consumer, &mut before_succ, &mut indeg);
+    }
+
+    // Kahn with min-heap on pass-1 index so unconstrained pairs keep pass-1 order.
+    let mut ready: BinaryHeap<std::cmp::Reverse<usize>> = (0..n)
+        .filter(|&i| indeg[i] == 0)
+        .map(std::cmp::Reverse)
+        .collect();
+    let mut out = Vec::with_capacity(n);
+    let mut seen = 0usize;
+    while let Some(std::cmp::Reverse(i)) = ready.pop() {
+        out.push(order[i].clone());
+        seen += 1;
+        for &v in &before_succ[i] {
+            indeg[v] -= 1;
+            if indeg[v] == 0 {
+                ready.push(std::cmp::Reverse(v));
+            }
+        }
+    }
+    // Constraint graph should always be a DAG (we refused cyclic adds). If
+    // something still stalls, fall back to pass-1 rather than drop packages.
+    if seen != n {
+        return order;
+    }
+    out
+}
+
+/// Whether `start` can reach `target` following `succ` edges.
+fn reaches(start: usize, target: usize, succ: &[Vec<usize>]) -> bool {
+    if start == target {
+        return true;
+    }
+    let mut stack = vec![start];
+    let mut visited = vec![false; succ.len()];
+    visited[start] = true;
+    while let Some(u) = stack.pop() {
+        for &v in &succ[u] {
+            if v == target {
+                return true;
+            }
+            if !visited[v] {
+                visited[v] = true;
+                stack.push(v);
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -748,6 +899,190 @@ mod tests {
             elt_pos < sweep_pos,
             "elt (sweep's real hard BDEPEND) must order before sweep, got: {names:?}"
         );
+    }
+
+    /// Live clang-world #3 (2026-08-07): soft+hard cycle through the libcrypt
+    /// bootstrap chain lets `order_cycle` emit empty `virtual/libcrypt` *before*
+    /// its RDEPEND provider `sys-libs/libxcrypt`.
+    ///
+    /// Real tree cycle (all in one `succ_all` SCC once soft edges are kept):
+    /// ```text
+    /// virtual/libcrypt -RDEPEND→ libxcrypt -DEPEND→ glibc -DEPEND→ virtual/os-headers
+    ///   -RDEPEND→ linux-headers -BDEPEND→ perl -DEPEND→ virtual/libcrypt
+    /// ```
+    /// Hard graph alone is acyclic; only soft RDEPEND closes the loop. The
+    /// walker then prefers hard-ready nodes: empty virtuals have hard-indegree 0
+    /// (their provider edge is soft), so they emit first. Downstream
+    /// `build_blockers` only keeps edges with `to < from`, so the soft edge is
+    /// dropped and pam can start with no provider merged.
+    ///
+    /// Minimal dual-root fixture without this cycle *does* order provider first
+    /// (`cross_target_virtual_rdepend_provider_is_target_not_host`). This test
+    /// is the cycle shape that breaks live.
+    ///
+    /// Pass-1 alone (wrong): `virtual/os-headers`, **`virtual/libcrypt`**,
+    /// python, glibc, **libxcrypt**, … — fixed by pass-2 soft repair.
+    #[test]
+    fn empty_virtual_rdepend_orders_after_provider_through_soft_hard_cycle() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+        let depend = |atoms: &[&str]| PackageDeps {
+            depend: atoms
+                .iter()
+                .map(|a| DepEntry::Atom(Dep::parse(a).unwrap()))
+                .collect::<Vec<_>>()
+                .into(),
+            ..empty()
+        };
+        let rdepend = |atoms: &[&str]| PackageDeps {
+            rdepend: atoms
+                .iter()
+                .map(|a| DepEntry::Atom(Dep::parse(a).unwrap()))
+                .collect::<Vec<_>>()
+                .into(),
+            ..empty()
+        };
+        let bdepend = |atoms: &[&str]| PackageDeps {
+            bdepend: atoms
+                .iter()
+                .map(|a| DepEntry::Atom(Dep::parse(a).unwrap()))
+                .collect::<Vec<_>>()
+                .into(),
+            ..empty()
+        };
+
+        // Cycle members (names mirror Gentoo for readability in assert messages).
+        //
+        // Critical live detail: glibc's *hard* BDEPEND on tools (python, bison,
+        // …) keeps glibc (and thus libxcrypt) late inside the SCC, while empty
+        // `virtual/libcrypt` has hard-indegree 0 — its only edge to the provider
+        // is soft RDEPEND. Without the BDEPEND "weight", order_cycle can still
+        // clear the soft edge as a secondary key once glibc is hard-ready; with
+        // it, the empty virtual is eligible long before the provider.
+        repo.add_version(
+            Cpv::parse("virtual/libcrypt-2").unwrap(),
+            None,
+            None,
+            rdepend(&["sys-libs/libxcrypt"]),
+        );
+        repo.add_version(
+            Cpv::parse("sys-libs/libxcrypt-4.5.2").unwrap(),
+            None,
+            None,
+            // Hard DEPEND + soft RDEPEND on glibc (USE=system), like real ebuild.
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("sys-libs/glibc").unwrap())]).into(),
+                rdepend: (vec![DepEntry::Atom(Dep::parse("sys-libs/glibc").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-libs/glibc-2.43").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("virtual/os-headers").unwrap())]).into(),
+                // Stand-in for bison/pax-utils style BDEPEND that keeps glibc
+                // late *without* a hard edge back onto virtual/libcrypt (real
+                // cross builds often put python on Host; a Target python DEPEND
+                // on virtual/libcrypt would hard-path virtual → … → libxcrypt
+                // and make the soft promote impossible).
+                bdepend: (vec![DepEntry::Atom(Dep::parse("sys-devel/bison").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-devel/bison-3.8").unwrap(),
+            None,
+            None,
+            empty(),
+        );
+        repo.add_version(
+            Cpv::parse("virtual/os-headers-0").unwrap(),
+            None,
+            None,
+            rdepend(&["sys-kernel/linux-headers"]),
+        );
+        repo.add_version(
+            Cpv::parse("sys-kernel/linux-headers-7.1").unwrap(),
+            None,
+            None,
+            bdepend(&["dev-lang/perl"]),
+        );
+        repo.add_version(
+            Cpv::parse("dev-lang/perl-5.44").unwrap(),
+            None,
+            None,
+            depend(&["virtual/libcrypt"]),
+        );
+        // Consumer like pam: hard DEPEND on the empty virtual only.
+        repo.add_version(
+            Cpv::parse("sys-libs/pam-1.7.2").unwrap(),
+            None,
+            None,
+            depend(&["virtual/libcrypt"]),
+        );
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let pam = PortagePackage::unslotted(Cpn::parse("sys-libs/pam").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(pam, PortageVersionSet::any())])
+            .unwrap_or_else(|e| panic!("resolution failed: {e:?}"));
+
+        let order = provider.install_order(&solution);
+        let names: Vec<String> = order
+            .iter()
+            .map(|(p, v)| format!("{}-{v}", p.cpn()))
+            .collect();
+        let pos = |needle: &str| {
+            names
+                .iter()
+                .position(|n| n.starts_with(needle))
+                .unwrap_or_else(|| panic!("{needle} missing from order: {names:?}"))
+        };
+        let i_xcrypt = pos("sys-libs/libxcrypt");
+        let i_virt = pos("virtual/libcrypt");
+        let i_pam = pos("sys-libs/pam");
+        let i_headers = pos("sys-kernel/linux-headers");
+        let i_os = pos("virtual/os-headers");
+        let i_perl = pos("dev-lang/perl");
+        let i_glibc = pos("sys-libs/glibc");
+
+        assert!(
+            i_xcrypt < i_virt,
+            "empty virtual/libcrypt must install after its RDEPEND provider \
+             libxcrypt; order={names:?}"
+        );
+        assert!(
+            i_virt < i_pam,
+            "virtual/libcrypt before pam; order={names:?}"
+        );
+        assert!(
+            i_virt < i_perl,
+            "virtual/libcrypt before perl (hard DEPEND); order={names:?}"
+        );
+        assert!(
+            i_glibc < i_xcrypt,
+            "glibc before libxcrypt (hard DEPEND); order={names:?}"
+        );
+        // Soft os-headers → linux-headers may lose to the libcrypt soft promote
+        // when both cannot be kept in one SCC; libcrypt is the #3 priority.
+        // If both fit, headers should precede the empty os-headers virtual.
+        if i_headers < i_os {
+            // best case: both soft edges restored
+        } else {
+            // at least the hard chain still has glibc after *some* os-headers
+            assert!(
+                i_os < i_glibc,
+                "virtual/os-headers before glibc; order={names:?}"
+            );
+        }
     }
 
     /// Guard against regressing the case `order_cycle`'s original heuristic
