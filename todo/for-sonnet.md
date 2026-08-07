@@ -1,68 +1,69 @@
 # For Sonnet — live verification handoff
 
-**Current pin (do this next):** `master` at **`f8ac293`**  
-(“fix: honour bashrc die; seed baselayout for all toolchain plans”)
+**Current pin (do this next):** `master` at **`1ac8067`**  
+(`fix(crossdev): baselayout into target sysroot for merged-usr profiles`)
 
-Older pins below are historical. Build `em` from **`f8ac293`** (or tip if
-only docs landed after) before each campaign; note the SHA in Results.
-
-Unit tests already green. Unit tests do **not** catch silent host/target env
-or workdir races under real parallelism.
+Build `em` from that SHA (or tip if only docs after). Note the SHA in Results.
+Unit tests green; they do **not** replace live sandbox checks.
 
 ---
 
-## NEXT HOMEWORK — tip ≥ `f8ac293` (Sonnet)
+## NEXT HOMEWORK — `1ac8067` (Sonnet)
 
-**Goal:** re-verify setup → clang (and optionally setup → stage1 → clang).
-Confirm #4/#5 on setup. **Do not assume full @system/stage1 is required** for
-cross-build: the known gap is **library DEPEND identity** (`cross-T/glibc` vs
-`sys-libs/glibc` / musl), not “missing entire @system.” Runtime RDEPEND for a
-complete target userland is a separate goal. See [[libcrypt-never-scheduled]].
+### What landed since your last full pass
 
-**Useful probes (record both if time):**
+| SHA | What |
+|-----|------|
+| `f8ac293` | #5 bashrc die propagates; baselayout first in plan (**outer only** — incomplete for #4) |
+| `1ac8067` | **`StageStep::into_sysroot`**: cross baselayout merges under **`--target` sysroot**. Keeps **default merged-usr** profile |
 
-1. Setup-only → `em -p --target T sys-libs/zlib` (or clang `-p`): does the plan
-   re-pull full real-Cpn libc?  
-2. Setup-only → clang real run (current stress).  
-3. Optional: setup → stage1 → clang (richer base; compare plan size).
+### Product decisions (do not re-open)
 
-### Rules (same as before)
+1. **#4 layout:** make **disk match the default merged-usr profile**.  
+   **Rejected:** switch sysroot `make.profile` to `…/split-usr/…` so the die goes quiet.  
+2. Full **@system/stage1** not required for pure cross-build *theory*; library DEPEND identity remains open. Stage1 optional for plan-size comparison only.  
+3. **No `--keep-going`.** Fresh sandbox only. Record + stop; no large redesigns unless a one-line regression of `1ac8067`.
 
-1. **Fresh sandbox only** — do not reuse `em-a46027b-verify` or any half-failed tree.
-2. **No `--keep-going`.**
-3. Record findings here under **Results**; do not implement large design fixes
-   in the same pass unless a one-line regression of `f8ac293`/`a46027b`.
-4. pam **can still appear** after stage1 via
-   `clang → python → util-linux[pam] → pam` under `default/linux` `USE=pam`.
-   Do not spend time “removing” pam; do ensure stage1 ran first.
+### Goal
 
-### Commands (paths illustrative)
+1. **Confirm #4:** after `crossdev --setup` alone, **target sysroot** is merged-usr on disk.  
+2. **Confirm #5** still honest (die → fail, not Completed).  
+3. **Clang stress** past 42/136 if #4 holds; #3 evidence if still broken.  
+4. **Library identity** probe (`-p zlib`, outer vs sysroot VDB).
+
+### Commands
 
 ```sh
-git -C /path/to/portage-cli rev-parse --short=8 HEAD   # ≥ f8ac293
+git -C /path/to/portage-cli rev-parse --short=8 HEAD   # expect 1ac8067 or docs-only tip
+# build em from that tree
 
-P=/root/xp   # fresh bare sandbox root
+P=/root/xp   # FRESH bare sandbox — never reuse prior xp trees
 em --prefix "$P" setup
 
-# 1) Toolchain only (cross-<T>/* in sysroot VDB)
+# --- 1) Toolchain ---
 em --prefix "$P" --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
 # Expect EXIT=0, real riscv64-unknown-linux-gnu-gcc
-# Spot-check: baselayout before libc in plan/log
+# Log: baselayout should merge *to the sysroot* (…/usr/riscv64-…/), not only "to $P/"
 
-# layout after setup (bug #4)
-ls -la "$P/usr/riscv64-unknown-linux-gnu/bin" \
-       "$P/usr/riscv64-unknown-linux-gnu/usr/bin" | head
-# VDB: expect cross-*/glibc (and friends), not a full real-Cpn @system yet
-find "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg" -maxdepth 2 -type d | sort | head -40
+SYSROOT="$P/usr/riscv64-unknown-linux-gnu"
 
-# 2a) Probe library DEPEND (optional -p): does zlib plan a second full libc?
+# --- #4 PASS gate (immediately after setup, before clang) ---
+ls -la "$SYSROOT/bin" "$SYSROOT/usr/bin" | head -20
+# PASS: bin is a symlink into usr (merged-usr)
+# FAIL: bin and usr/bin both real dirs with different content
+readlink -f "$SYSROOT/etc/portage/make.profile"
+# Expect: default path WITHOUT "split-usr" in the path (merged-usr profile kept)
+
+echo "=== outer cross-* VDB ==="
+ls "$P/var/db/pkg/cross-riscv64-unknown-linux-gnu/" 2>/dev/null | head
+echo "=== sysroot VDB ==="
+find "$SYSROOT/var/db/pkg" -maxdepth 2 -type d 2>/dev/null | sort | head -40
+
+# --- 2) Library DEPEND probe ---
 em -p --prefix "$P" --target riscv64-unknown-linux-gnu sys-libs/zlib | tee /tmp/zlib-p.txt
-# Note whether sys-libs/glibc (or musl) appears as [ebuild N] despite cross-T/libc installed
+# Note: does [ebuild N] sys-libs/glibc appear despite cross-T/glibc files on disk?
 
-# 2b) Optional richer base (not required for pure cross-build theory)
-# em --prefix "$P" --target riscv64-unknown-linux-gnu stages --stage1 --autosolve-use --jobs 8
-
-# 3) Ordinary package stress (library-identity gap may still show)
+# --- 3) Clang stress ---
 em --prefix "$P" --target riscv64-unknown-linux-gnu \
   -b llvm-core/clang --jobs 80
 ```
@@ -71,73 +72,60 @@ em --prefix "$P" --target riscv64-unknown-linux-gnu \
 
 | Check | Pass if |
 |-------|---------|
-| **#4 baselayout (setup)** | `crossdev --setup` has baselayout before libc; sysroot not genuine split-usr |
-| **#5 bashrc die** | No silent “Completed after `die: … merged-usr … split-usr`” |
-| **Library identity** | After setup: VDB has `cross-*/glibc` (or musl); `-p zlib` notes whether real-Cpn libc is re-planned |
-| **#1/#2 still fixed** | No sed ACL race; no empty-ED tar on virtuals when `-b` runs |
-| **Clang** | Note N/M, libxcrypt Emerging?, clang reached?; optional compare after stage1 |
-| **Workdir** | No doubled phases / dual WORKDIR for same CPV host+target |
+| **#4 sysroot layout** | `$SYSROOT/bin` is a **symlink** (merged), not a real dir next to divergent `usr/bin`. Profile path stays **non–split-usr** default |
+| **#4 baselayout root** | Setup log: baselayout **to sysroot** (`…/usr/riscv64-…/`), not only outer `$P/` |
+| **#5 die honesty** | No “die then Completed”; failures appear in the failed-merge list |
+| **#1/#2** | No sed/acl race if sed runs; virtuals still get `.gpkg` under `-b` |
+| **#3** | If still broken: virtual Completes vs `sys-libs/glibc`/`libxcrypt` never `Emerging` — note plan lines + counts (you already root-caused the virtual-edge filter; do **not** implement it this pass) |
+| **Clang** | N/M; clang reached? |
+| **Workdir** | No dual-phase / dual WORKDIR for same CPV host+target |
 
-### If #3 still fails — collect this (do not fix yet)
-
-```sh
-# from the failed sandbox, after EXIT=1:
-rg -n 'libxcrypt|libcrypt|sys-libs/pam' "$LOG" | head -80
-ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/sys-libs/" 2>/dev/null
-ls "$P/usr/riscv64-unknown-linux-gnu/usr/include/crypt.h" 2>/dev/null
-# From the initial -p or plan dump of the same run: was libxcrypt [ebuild N]?
-```
-
-Hypotheses for Grok (you only need evidence) — **updated after code dig 2026-08-07**:
-
-Unit test `cross_target_virtual_rdepend_provider_is_target_not_host` (in
-`portage-atom-pubgrub`) shows the **simple dual-root case is correct**: host
-having `libxcrypt` does **not** suppress Target `libxcrypt`; install order is
-provider → virtual → pam; Target RDEPEND edge exists. So #3 is **not** “host
-Favor kills Target provider” in the minimal model.
-
-**Stronger live hypotheses (please gather):**
-
-1. **Cross glibc VDB identity vs `sys-libs/glibc`**  
-   `crossdev --setup` installs `cross-<T>/glibc` (plan CPV / VDB category).  
-   `sys-libs/libxcrypt[system]` DEPEND is `${CATEGORY}/glibc[-crypt]` → for a
-   normal target package that is **`sys-libs/glibc`**, a different Cpn.  
-   Installed `cross-T/glibc` may **not** Favor-satisfy `sys-libs/glibc`, so the
-   clang plan may pull a **second** full `sys-libs/glibc`. libxcrypt then waits
-   on that. Capture: is `sys-libs/glibc` (not only `cross-*/glibc`) in the
-   plan? Did it `Emerging` before pam failed?
-
-2. **Silent skip / never dequeued**  
-   Any `sys-libs/libxcrypt` line that is not `Emerging` — was it after a
-   package that never completed? `rg 'libxcrypt|sys-libs/glibc' LOG`.
-
-3. **USE on virtual empty RDEPEND** (weaker if plan lists libxcrypt):  
-   virtual RDEPEND is `!prefix-guest? ( elibc_glibc? ( libxcrypt… ) )`.  
-   Host VDB sample has RDEPEND already evaluated to `sys-libs/libxcrypt[system(-)]`.
-
-**Please dump from the failed sandbox:**
+### If #3 still fails — evidence only
 
 ```sh
-# After crossdev --setup, before or after clang fail:
-find "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg" -maxdepth 2 -type d | sort
-# Especially: cross-*/glibc vs sys-libs/glibc
-ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/cross-"*"/glibc-"* 2>/dev/null
-ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/sys-libs/glibc-"* 2>/dev/null
-ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/sys-libs/libxcrypt-"* 2>/dev/null
+rg -n 'Emerging.*(libxcrypt|sys-libs/glibc)|Completed.*libcrypt' "$LOG" | head -40
+rg -n 'sys-libs/glibc|sys-libs/libxcrypt|virtual/libcrypt' "$LOG" | head -40
 ```
 
-### Optional if P0 green and time left
+### Out of scope
 
-- P1 package.env letter spot-check (GCC crossdev --setup host vs target env files)
-- Pretend purity smoke (already green on a46027b; quick re-check only if easy)
+- Changing profile to `…/split-usr/…`  
+- Implementing the virtual-edge filter fix (record only)  
+- package.provided / --local bootstrap  
+- BuildClass, multi-em registry  
 
-### Out of scope this pass
+### Results template
 
-- Implementing package.provided / --local bootstrap
-- Reintroducing BuildClass
-- Designing multi-em plan registry
+```text
+### Results — YYYY-MM-DD (Sonnet), 1ac8067
+
+**em SHA:** …
+
+#### crossdev --setup / #4
+- baselayout merge root (log): …
+- ls -la $SYSROOT/bin: …
+- make.profile: …
+- outer vs sysroot VDB: …
+
+#### -p zlib (library identity)
+- …
+
+#### clang -b --jobs 80
+- Progress: N/M …
+- #5: …
+- #3: …
+- clang reached?: …
+
+#### New bugs
+- …
+```
 
 ---
+
+## Prior homework / results (historical)
+
+Older pins: `f8ac293`, `a46027b`, `fad35a3`. Full Results sections follow.
+
 
 ## Context (what Grok landed — cumulative)
 
