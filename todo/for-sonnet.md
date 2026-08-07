@@ -257,6 +257,150 @@ directly relevant to "-b does the right thing", the actual goal of the
 underlying clang test plan, since it means `-b` silently produces no binpkg
 for an entire class of packages whenever they're part of the plan.
 
+---
+
+### Results — 2026-08-07 (Sonnet), confirming `a46027b`
+
+**em SHA:** `a46027b` ("fix: high-jobs virtual RDEPEND race; empty-ED
+--buildpkg tar"). Fresh sandbox (`em-a46027b-verify`, `sandbox prepare
+--bare`), same P0 scenario: `em --prefix /root/xp setup` →
+`em --prefix /root/xp --target riscv64-unknown-linux-gnu crossdev --setup
+--jobs 8` (EXIT=0, real gcc) → `em --prefix /root/xp --target
+riscv64-unknown-linux-gnu -b llvm-core/clang --jobs 80`.
+
+**Both bugs #1 and #2 are fixed, confirmed directly, not just by absence of
+the old symptom:**
+
+- **Bug #1 (sed/acl RDEPEND scheduling race): fixed.** `sys-apps/sed-4.10-r1`
+  built with a single `Emerging`/`Completed` pair, no `configure: error:
+  ACLs enabled but support not detected`, no retry needed.
+- **Bug #2 (`--buildpkg` empty-ED tar failure): fixed.** Zero `tar failed`/
+  `Cannot open` messages anywhere in the log (previously 12+ occurrences).
+  Directly verified real `.gpkg.tar` files exist for every one of the
+  previously-failing packages: `find /root/xp -name '*.gpkg.tar'` → 66
+  files, including `virtual/libintl-0-r2-1.gpkg.tar`,
+  `virtual/libiconv-0-r2-1.gpkg.tar`, `virtual/libcrypt-2-r1-1.gpkg.tar`,
+  `virtual/os-headers-0-r2-1.gpkg.tar`, `virtual/zlib-1.3.1-r1-1.gpkg.tar`,
+  `virtual/acl-0-r2-1.gpkg.tar` — 66 packages completed this run, 66 real
+  binpkgs written, 1:1.
+- Workdir dual-root fix (`56435d4`) still holds: no duplicate `Emerging (N
+  of 136)` index, no duplicate CPV in the emerge order — checked
+  programmatically, zero dupes either way.
+
+**Progress: 66/136 (previous best was 76/136, but that run died on the
+sed/acl race before reaching this point in the graph — different failure
+axis, not a regression; this run got further on some branches and less far
+on others before its own new blocker below).**
+
+**Run stopped (`EXIT=1`, correctly *not* using `--keep-going`) on
+`sys-libs/pam-1.7.2`: `configure: Run-time dependency libcrypt found: NO`,
+`Run-time dependency libxcrypt found: NO`.** Root-caused:
+
+#### New bug #3 — a package can report "Completed" while its resolved runtime provider never gets scheduled at all
+
+`virtual/libcrypt-2-r1` was planned to pull in `sys-libs/libxcrypt-4.5.2`
+(both appear in the initial plan dump, `[ebuild N] sys-libs/libxcrypt-4.5.2
+... to /root/xp/usr/.../`). `virtual/libcrypt` reports `>>> Completed (33 of
+136)` early in the run — but `sys-libs/libxcrypt` **never gets a single
+`Emerging` line anywhere in the 136-package run**, and is confirmed absent
+after the fact: no `var/db/pkg/sys-libs/libxcrypt-*` VDB entry, no
+`usr/lib64/libcrypt.so*`, no `usr/include/crypt.h` on disk in the sysroot.
+This starves `sys-libs/pam` (a real RDEPEND consumer) of its crypt library
+much later in the run, producing a confusing downstream `meson.build:257`
+failure that doesn't point back to the real cause at all. This looks like
+the same *class* of bug `a46027b` fixed (RDEPEND edges through virtuals not
+tracked as blockers) but not the same *instance* — `virtual/libcrypt →
+sys-libs/libxcrypt` specifically is still not correctly wired, and unlike
+the sed/acl case this isn't even a race (libxcrypt isn't merely late, it's
+never scheduled at all in this run). Not root-caused to file:line — next
+step would be checking whether `sys-libs/libxcrypt` is even correctly
+resolved as `virtual/libcrypt`'s chosen provider in the plan, or silently
+dropped somewhere between plan construction and the scheduler's ready queue.
+Worth checking `portage-cli/src/query/depgraph/mod.rs` (the same file
+`a46027b` touched for the RDEPEND fix) for whether virtual-provider edges
+are handled differently from ordinary RDEPEND edges.
+
+#### New bug #4 — crossdev's LLVM/clang bootstrap path never seeds baselayout, so a merged-usr profile ends up genuinely split-usr on disk
+
+Confirmed by direct inspection: `/root/xp/usr/riscv64-unknown-linux-gnu/bin`
+and `.../usr/bin` are both real, separate, non-symlinked directories with
+*different* content (`bin` has `sed`/`tar`/`attr`/`acl` tools written by
+packages that install straight to `/bin`; `usr/bin` has `binutils-config`
+and friends) — a genuine split-usr layout, even though the profile
+(`default/linux/riscv/23.0/...`) declares merged-usr and every affected
+package shows `(-split-usr)` in its USE string. Root cause (via
+Explore-agent code read, not yet independently re-verified by me):
+`portage-cli/src/crossdev/stages.rs:165-224` (`toolchain_plan`) — the
+`kind.llvm()` branch returns early at line 201 (`clang wrappers → kernel
+headers → libc → runtimes`) and never reaches the baselayout-seeding block
+at lines 212-223, which is gated to `Native || self_contained` and lives
+only in the non-LLVM (GCC) branch's control flow. So `libc` (glibc,
+`stages.rs:187-192`, run during the earlier `crossdev --setup` step, before
+this scenario's main `-b llvm-core/clang` invocation) writes real content
+into `lib64` deterministically before `sys-apps/baselayout` ever gets a
+chance to run against that ROOT — not a race, a structural ordering gap
+specific to the LLVM cross-bootstrap path. The doc comment at
+`stages.rs:204-211` explains exactly why a fresh ROOT needs baselayout's
+skeleton first; that reasoning was apparently never extended to the LLVM
+branch.
+
+#### New bug #5 — `pkg_setup`'s profile-`bashrc` die is silently swallowed, so packages "complete" despite failing their own sanity check
+
+Directly downstream of bug #4, and independently a real correctness bug on
+its own: 27 separate `die: ERROR: 23.0 merged-usr profile, but disk is
+split-usr` lines appear in the log (from `profiles/releases/23.0/profile.bashrc`,
+which every package sources during `pkg_setup` and which correctly detects
+the split-usr state bug #4 caused) — yet only **one** package
+(`sys-libs/pam`, for the unrelated libcrypt reason above) ends up in the
+final failed-to-merge list. `sys-devel/gcc-config`, `sys-devel/binutils-config`,
+`sys-apps/acl`, `sys-libs/binutils-libs`, `app-alternatives/bzip2` all die
+in this check once or twice each, then go on to fetch/configure/install and
+report `>>> Completed` in the same run. Root-caused precisely (via
+Explore-agent code read):
+`portage-repo/src/build/shell.rs`, inside `run_phase`:
+- lines 2099-2111: profile `bashrc` hooks (including `profile.bashrc`) are
+  sourced via `self.run_string(&script).await.ok()` — both the die flag
+  this sets *and* any hard shell error from the hook itself are ignored at
+  this point (`.ok()` discards the `Result`).
+- **line 2117: `self.die_flag.take()`** unconditionally clears whatever the
+  bashrc hooks just set, before the real phase function body runs (line
+  2171) and before the only die-flag check in the function (line 2178,
+  which now sees an empty flag).
+- Confirmed via `portage-cli/src/ebuild.rs:1257-1298`/`1799-1802`: the
+  phase-chain loop only sees `run_phase`'s `Ok(())`, so
+  `src_unpack`/`src_configure`/`src_install` all proceed normally — matches
+  the observed behavior exactly (single EAPI/phase semantics bug, not
+  scheduler-related).
+
+**Fix shape (not yet implemented):** the die raised while sourcing the
+profile `bashrc` hooks (`shell.rs:2099-2111`) needs to be checked and
+propagated *before* `self.die_flag.take()` at line 2117 resets the slate for
+the phase function proper — either check-and-return right after the hook
+`run_string` call, or don't discard its `Result`/die-flag until after that
+check. This is a general EAPI-phase bug (any profile/eclass `bashrc` hook
+that calls `die` during `pkg_setup` is currently silently ignored), not
+specific to merged-usr or to crossdev — worth flagging as higher-priority
+than bug #4 itself, since bug #4 (crossdev not seeding baselayout) is
+plausibly acceptable/fixable on its own terms, but bug #5 means *any*
+`pkg_setup`-time bashrc sanity check in the whole `::gentoo` tree is
+currently a no-op in `em`.
+
+**Minor, not investigated further:** `dev-lang/perl-5.44.0`'s postinst
+elog reports `Unable to establish //root/xp//usr/bin/ptar symlink` (and
+~18 siblings) — note the double slash and that the path targets the
+*outer* prefix (`/root/xp/usr/bin`) rather than the target sysroot
+(`/root/xp/usr/riscv64-unknown-linux-gnu/usr/bin`) it was actually merging
+into. Non-fatal (elog warning only), but suggests an EPREFIX/EROOT
+path-join issue for at least one postinst code path under `--target`. Not
+root-caused; flagging for whoever picks this up next.
+
+**`llvm-core/clang` itself was still not reached** (66/136, stopped before
+getting there) — this remains open. The immediate next blocker for another
+pass would be either bug #3 (libcrypt) or bug #4/#5 (split-usr), whichever
+is fixed first; fixing #5 alone would surface whether other `pkg_setup`
+bashrc checks across the 136-package graph are also currently silent
+no-ops.
+
 #### P1 package.env / BuildClass drop
 
 - GCC linux-gnu: **not inspected** — `crossdev --setup` was launched on a
