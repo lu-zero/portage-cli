@@ -168,7 +168,7 @@ Once the toolchain exists, use the same `--target` flag with the ordinary
 `em` commands — no separate entry point:
 
 ```
-em --target riscv64-unknown-linux-gnu stages --stage1     # packages.build bootstrap set
+em --target riscv64-unknown-linux-gnu stages --stage1     # packages.build (@system seed)
 em --target riscv64-unknown-linux-gnu --emptytree @system # full target-native @system
 em --target riscv64-unknown-linux-gnu sys-apps/coreutils  # one target package
 ```
@@ -176,35 +176,41 @@ em --target riscv64-unknown-linux-gnu sys-apps/coreutils  # one target package
 These resolve and install into the target sysroot (`<EROOT>/usr/<tuple>`),
 using the sysroot's own `make.conf` for `CHOST`/`CFLAGS`/keywords.
 
+**`stages --stage1` is not optional before ordinary packages.**  
+`crossdev --setup` only lands **toolchain** identities (`cross-<tuple>/glibc`,
+`cross-<tuple>/gcc`, …). Ordinary ebuilds depend on **real** system Cpns
+(`sys-libs/glibc`, `sys-apps/baselayout`, …). Stage1’s `packages.build` set
+(under `USE="-* build …"`) is what seeds that **@system-shaped** tree so
+later `em --target T llvm-core/clang` (or coreutils, pam, …) Favor-satisfies
+libc/userland instead of planning a second full world on an empty real-Cpn
+VDB. Skipping stage1 is why empty-sysroot clang plans balloon and trip
+libcrypt / second-glibc class failures (2026-08-07).
+
 ### Worked example: bootstrap a toolchain and cross-build a real package, under `--prefix`
 
-End-to-end recipe, unprivileged, confirmed live 2026-08-04
-(`riscv64-unknown-linux-gnu`, GCC model):
+End-to-end recipe, unprivileged (`riscv64-unknown-linux-gnu`, GCC model).
+Correct ladder (toolchain → **stage1** → ordinary package):
 
 ```
-# 1. Bootstrap the cross toolchain into the prefix (binutils → headers →
-#    gcc-stage1 → glibc → gcc-stage2). Takes a while — it's a real compiler
-#    build. --jobs N parallelizes across independent packages in the plan
-#    (MAKEOPTS still parallelizes within one package).
+# 1. Cross toolchain only (binutils → headers → gcc-stage1 → glibc → gcc-stage2).
+#    Packages register as cross-<tuple>/… in the sysroot VDB.
 em --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
 
-# 2. Cross-build an ordinary target package set through the toolchain just
-#    built — no separate entry point, same --target flag as any other em
-#    command. -b writes binpkgs alongside the merge.
+# 2. Target @system seed (profile packages.build, USE=-* build).
+#    Lands real-category system packages the rest of the tree expects.
+em --prefix /opt/xp --target riscv64-unknown-linux-gnu stages --stage1 --autosolve-use --jobs 8
+
+# 3. Ordinary target package (clang’s full dep closure as real target-arch
+#    packages). -b writes binpkgs alongside the merge.
 em --prefix /opt/xp --target riscv64-unknown-linux-gnu -b llvm-core/clang --jobs 8
 ```
 
-Step 2 pulls in `llvm-core/clang`'s full dependency closure as ordinary
-target-arch packages (`sys-libs/zlib`, `sys-libs/ncurses`,
-`sys-apps/findutils`, ...) — genuinely different from `--setup`'s own
-`cross-<tuple>/*` packages (see "Two package classes" above): these install
-*into* the sysroot using the sysroot's own `CHOST`/`CFLAGS`, with no
-special-casing needed once the toolchain from step 1 exists. `em` scopes
-which packages may borrow the prefix's own native search paths (host-side
-tools) from which must resolve purely against the target sysroot (this
-step's packages) automatically — see `setup.rs`'s `BASHRC_PREFIX` and
-`shell.rs`'s `ESYSROOT` computation if you're touching that logic, not
-something to work around here.
+Step 3 is genuinely different from step 1’s `cross-<tuple>/*` packages (see
+"Two package classes" above): it installs *into* the sysroot using the
+sysroot’s own `CHOST`/`CFLAGS`. It still needs step 2 so DEPEND edges on
+`sys-libs/glibc` / baselayout / … see a real system VDB, not only
+`cross-<tuple>/glibc`. `em` scopes host-side vs target search paths
+automatically — see `setup.rs`’s `BASHRC_PREFIX` and `shell.rs`’s `ESYSROOT`.
 
 ### Build one cross-category package directly (no `--target` needed)
 

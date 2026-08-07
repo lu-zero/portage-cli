@@ -11,11 +11,18 @@ or workdir races under real parallelism.
 
 ---
 
-## NEXT HOMEWORK — `f8ac293` (Sonnet)
+## NEXT HOMEWORK — tip ≥ `f8ac293` (Sonnet)
 
-**Goal:** re-run clang Scenario A after baselayout + bashrc-die fixes; confirm
-#4/#5, and either clear or pin #3 (libxcrypt never scheduled). Record + stop
-on the first new hard failure.
+**Goal:** clang Scenario A with the **correct ladder**:
+`crossdev --setup` → **`stages --stage1`** → `llvm-core/clang`.  
+Confirm #4/#5 on setup; treat stage1 as **required @system seed** (not
+optional). Record + stop on first new hard failure after the full ladder.
+
+**Why stage1:** `crossdev --setup` only installs `cross-<T>/*` (toolchain
+identities). Ordinary packages Depend on **real** Cpns (`sys-libs/glibc`, …).
+Without stage1’s `packages.build`, the clang graph invents a second system
+world (libcrypt / second-glibc class failures). See [[libcrypt-never-scheduled]]
+and `docs/crossdev.md`.
 
 ### Rules (same as before)
 
@@ -23,28 +30,36 @@ on the first new hard failure.
 2. **No `--keep-going`.**
 3. Record findings here under **Results**; do not implement large design fixes
    in the same pass unless a one-line regression of `f8ac293`/`a46027b`.
-4. pam **is expected** in the clang graph (not a bug):
-   `clang → python → util-linux[pam] → sys-libs/pam` under
-   `default/linux` `USE=pam`. Do not spend time “removing” pam from the plan.
+4. pam **can still appear** after stage1 via
+   `clang → python → util-linux[pam] → pam` under `default/linux` `USE=pam`.
+   Do not spend time “removing” pam; do ensure stage1 ran first.
 
 ### Commands (paths illustrative)
 
 ```sh
-# build em at f8ac293
-git -C /path/to/portage-cli rev-parse --short=8 HEAD   # expect f8ac293 or later docs-only
+git -C /path/to/portage-cli rev-parse --short=8 HEAD   # ≥ f8ac293
 
 P=/root/xp   # fresh bare sandbox root
 em --prefix "$P" setup
+
+# 1) Toolchain only (cross-<T>/* in sysroot VDB)
 em --prefix "$P" --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
 # Expect EXIT=0, real riscv64-unknown-linux-gnu-gcc
-# Spot-check: baselayout ran *before* libc in the staged plan/log
+# Spot-check: baselayout before libc in plan/log
 
-# layout check after crossdev --setup (bug #4)
-# merged-usr: bin should be a symlink into usr (or equivalent profile layout),
-# not two independent real directories with different content.
+# layout after setup (bug #4)
 ls -la "$P/usr/riscv64-unknown-linux-gnu/bin" \
        "$P/usr/riscv64-unknown-linux-gnu/usr/bin" | head
+# VDB: expect cross-*/glibc (and friends), not a full real-Cpn @system yet
+find "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg" -maxdepth 2 -type d | sort | head -40
 
+# 2) REQUIRED — target @system seed (real Cpns, packages.build)
+em --prefix "$P" --target riscv64-unknown-linux-gnu \
+  stages --stage1 --autosolve-use --jobs 8
+# Expect EXIT=0. Re-check VDB: baselayout/shadow/… under real categories;
+# ideally sys-libs/glibc (or clear Favor path for libc) present for ordinary deps.
+
+# 3) Only then: ordinary package
 em --prefix "$P" --target riscv64-unknown-linux-gnu \
   -b llvm-core/clang --jobs 80
 ```
@@ -53,12 +68,12 @@ em --prefix "$P" --target riscv64-unknown-linux-gnu \
 
 | Check | Pass if |
 |-------|---------|
-| **#4 baselayout** | `crossdev --setup` plan/log has baselayout before libc; after setup, sysroot is **not** genuine split-usr (`bin` vs `usr/bin` both real, divergent content) |
-| **#5 bashrc die** | Zero silent “Completed after `die: … merged-usr … split-usr`” — if split-usr still exists, those packages must **fail**, not complete |
-| **#1/#2 still fixed** | No sed ACL race; no empty-ED `tar: Cannot open` on virtuals; virtuals still get `.gpkg` under `-b` |
-| **#3 libxcrypt** | Either (a) `sys-libs/libxcrypt` gets `Emerging` **before** pam configure, and pam finds libcrypt, **or** (b) still missing — then capture: plan line for libxcrypt, whether any `Emerging`, VDB path, and whether virtual/libcrypt completed earlier |
-| **Progress** | Note N/M; whether `llvm-core/clang` is reached |
-| **Workdir** | Still no doubled phases / dual WORKDIR for same CPV host+target |
+| **#4 baselayout (setup)** | `crossdev --setup` has baselayout before libc; sysroot not genuine split-usr |
+| **#5 bashrc die** | No silent “Completed after `die: … merged-usr … split-usr`” |
+| **Stage1** | EXIT=0; plan is packages.build-shaped (not 136-pkg clang world); real-Cpn system entries in sysroot VDB |
+| **#1/#2 still fixed** | No sed ACL race; no empty-ED tar on virtuals when `-b` runs |
+| **Clang after stage1** | Plan size ≪ 136 if stage1 did its job; libxcrypt/pam if present still schedule correctly; note N/M and whether clang is reached |
+| **Workdir** | No doubled phases / dual WORKDIR for same CPV host+target |
 
 ### If #3 still fails — collect this (do not fix yet)
 
