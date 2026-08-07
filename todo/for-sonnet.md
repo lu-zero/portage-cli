@@ -574,18 +574,83 @@ seeded sysroot baselayout; packages wrote real `/bin` vs `/usr/bin`.
 
 ---
 
-### Results — YYYY-MM-DD (Sonnet), `f8ac293` re-verify
+### Results — 2026-08-07 (Sonnet), `f8ac293` re-verify
 
-**em SHA:** …
+**em SHA:** `f8ac293` (tip at time of build; `30aa845` on top is docs-only).
+Fresh sandbox (`em-f8ac293-verify`, `sandbox prepare --bare`), same P0
+sequence as before.
 
 #### crossdev --setup (baselayout / #4)
-- …
+
+- **Ordering fix confirmed at the outer-prefix level.** Setup log shows
+  `[1/7] baselayout` before `[4/7] libc headers`/`[6/7] libc` — matches the
+  commit's intent exactly. `EXIT=0`, real
+  `riscv64-unknown-linux-gnu-gcc --version` works.
+- **But this baselayout step never touches the target sysroot, and the
+  underlying split-usr disk state is unchanged.** The `baselayout`
+  `StageStep` in `toolchain_plan` (`portage-cli/src/crossdev/stages.rs:183-188`)
+  uses a bare `"sys-apps/baselayout"` atom, explicitly *not* passed through
+  `atom()`'s `cross-<tuple>` rewrite (per the comment at line 179:
+  "baselayout is never part of the `cross-<tuple>` package set — bypass
+  `atom()`'s rewrite"). That means it always resolves against the
+  **host/outer** root (`to /root/xp/` in the log), never the **target**
+  sysroot (`/root/xp/usr/riscv64-unknown-linux-gnu/`). Meanwhile `libc`
+  (line 207-212 in the LLVM branch) *does* go through `atom()` and installs
+  straight into the target sysroot, during this same `crossdev --setup`
+  step — writing real content into `lib64`/`sbin` there before any
+  baselayout for that specific root has ever run (the target sysroot's own
+  baselayout is only reached later, as package #7 of the main 136-package
+  plan). Directly verified right after `crossdev --setup` finished:
+  `/root/xp/usr/riscv64-unknown-linux-gnu/{lib64,sbin}` are real,
+  non-symlinked directories with real glibc content already in them, and
+  `usr/{lib64,sbin}` are separate real directories — genuine split-usr,
+  unchanged from the `a46027b` run.
 
 #### clang -b --jobs 80
-- Progress: N/M …
-- #5 bashrc die behaviour: …
-- #3 libxcrypt: …
-- clang reached?: …
+
+- **Progress: 40 ok, 2 failed, 42/136** (lower than `a46027b`'s 66/136 —
+  see below, this is expected/correct, not a regression).
+- **#5 bashrc die behaviour: confirmed fixed.** `sys-devel/binutils-config`
+  and `sys-devel/gcc-config` both now **fail for real** —
+  `phase setup failed: shell error: bashrc (before pkg_setup): die: ERROR:
+  23.0 merged-usr profile, but disk is split-usr` — and correctly appear in
+  the final `2 package(s) failed to merge` summary. No more "die then
+  Completed anyway": the run legitimately stops scheduling new work after
+  this (no `--keep-going` used), which is why progress is *lower* this pass
+  than the previous one — `a46027b`'s run silently limped to 66/136 past
+  the same underlying split-usr state; this run correctly halts at 42/136
+  once it hits real, honest failures. Net: #5 is a genuine fix, its lower
+  headline number is the fix working as intended, not a regression.
+- **#3 libxcrypt: unchanged, reproduces identically.** `virtual/libcrypt-2-r1`
+  → `Completed (33 of 136)`; `sys-libs/libxcrypt-4.5.2` never gets a single
+  `Emerging` line in the whole run. Confirmed post-run:
+  `var/db/pkg/sys-libs/` contains only `ncurses`/`zlib`, no `libxcrypt`
+  entry; `usr/include/crypt.h` does not exist. Same evidence shape as the
+  `a46027b` pass — not yet investigated further per the homework's "you
+  only need evidence" instruction.
+- **#1 (sed/acl race): not re-reached this pass** — run stopped at 42/136,
+  before `sys-apps/sed` (planned but never got an `Emerging` line either).
+  Can't confirm or deny this pass; no evidence of regression, just not
+  exercised.
+- **#2 (buildpkg tar for virtuals): still fixed.** `find /root/xp -name
+  '*.gpkg.tar'` → 40 files for 40 ok packages, 1:1, zero tar errors in the
+  log.
+- **Workdir dual-root fix: still holds.** No duplicate `Emerging (N of
+  136)` index, no duplicate CPV in the emerge order.
+- **`llvm-core/clang` itself: not reached** (same as every prior pass).
 
 #### New bugs
-- …
+
+None beyond what's already tracked. This pass narrows bug #4 precisely:
+it's not a general "baselayout runs too late" problem anymore (ordering is
+correct now, confirmed via the setup log), it's that **`toolchain_plan`'s
+baselayout step only ever seeds the outer/host root, never the target
+sysroot that `libc` (and, in the non-LLVM branch, other `atom()`-rewritten
+steps) install into.** Fix shape: the `baselayout` `StageStep` needs a
+second instance (or a root-aware variant) that *does* go through the
+target-sysroot resolution — i.e. install `sys-apps/baselayout` into the
+same `EROOT` that `libc`/`kernel headers` are about to write into, before
+they run, for both the LLVM and non-LLVM branches. Whether that's "rewrite
+baselayout through `atom()` after all" or a distinct explicit sysroot-target
+step is a design call for whoever picks this up — flagging the shape, not
+prescribing the fix per the handoff rules.
