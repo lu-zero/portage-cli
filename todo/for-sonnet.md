@@ -319,10 +319,138 @@ names this precise gcc/glibc case as the regression it addresses. Rebuilt
   future passes: check `-p`'s exit code and the pre-flight banner, not
   just the printed index order, before calling something broken.
 
-**Not yet tested:** a real (non-`-p`) `em stages --stage1` merge to
-completion — this pass only confirms the plan validates cleanly, not that
-the actual bootstrap merges succeed end to end. Worth a follow-up pass if
-someone wants that confirmed.
+**Follow-up, same day: real (non-`-p`) `em stages --stage1` run.** Luca
+asked for this directly:
+```
+em --prefix P --root P --target riscv64-unknown-linux-gnu crossdev --setup
+em --prefix P --root P --target riscv64-unknown-linux-gnu stages --stage1
+```
+
+**New bug found first: bare `--root` (no `--prefix`) can't bootstrap
+crossdev at all.** `em --root /some/places --target riscv64-unknown-linux-gnu
+crossdev --setup` (real run, no `--prefix`) merges `[1/8] baselayout`
+successfully into the target sysroot, then dies immediately at `[2/8]
+binutils`:
+```
+!!! cross-riscv64-unknown-linux-gnu/binutils: no ebuilds in ::gentoo or overlays
+```
+despite the alias `repos.conf` entry being written correctly to disk in
+both `/some/places/etc/portage/repos.conf/` and the sysroot's own
+`etc/portage/repos.conf/` (confirmed by `cat`). Root cause, via code read:
+`Roots::repos_conf()` (`portage-resolve/src/roots.rs:259-263`) only picks
+up a config overlay when `TopologySource::Prefix` is in play
+(`cli.rs:306-322`/`:380-389` sets `with_config_overlay(Some(prefix/etc/portage))`);
+plain `--root`/`--host` topology never sets that overlay (`cli.rs:391-417`),
+so `repos_conf()` falls back to host `/` and never reads `--root`'s own
+`etc/portage` — the alias file is on disk but structurally never consulted.
+Confirmed genuine bug, not an untested-by-design gap (`with_own_config_root_if_self_contained()`
+exists for exactly this case but is only wired into
+`activate_toolchain`/`activate_native_toolchain`/`select`, not the
+`emerge_atoms_inner` path `depgraph()` actually uses). **Workaround that
+unblocks testing: also pass `--prefix` pointed at the same path as
+`--root`** — `em --prefix P --root P --target riscv64-unknown-linux-gnu
+crossdev --setup` then succeeds cleanly (`EXIT=0`, real toolchain, matches
+every prior `--prefix`-only pass this session).
+
+**Real `stages --stage1` (with the `--prefix`+`--root` workaround):
+progress 45/97, then a genuine, predictable failure** — not the advisory
+REQUIRED_USE gap noted above, but its real consequence once execution (not
+just planning) reaches it:
+```
+>>> Emerging (46 of 97) app-alternatives/yacc-1-r2 ...
+die: No selected alternative found (REQUIRED_USE ignored?!)
+dosym: failed to symlink .../usr/bin/yacc
+```
+All six `app-alternatives/*` packages (`yacc`, `tar`, `lex`, `gzip`,
+`bzip2`, `awk`) print with **every** option flag off (e.g. `USE="-bison
+-byacc (-reference)"`) — `yacc` is simply first alphabetically; the other
+five never got a chance to run (stopped correctly, no `--keep-going`) but
+would hit the identical die if reached, since none of them have a
+selectable alternative either. This confirms the REQUIRED_USE-under-`-*`
+gap flagged as advisory-only above is **build-fatal in practice**: the
+`app-alternatives.eclass`'s `get_alternative()` genuinely can't resolve a
+choice at real install time when stage1's forced `USE="-* build"` strips
+every option with nothing (not even a profile `BOOTSTRAP_USE`, checked
+earlier — `base/make.defaults`'s `BOOTSTRAP_USE` doesn't include
+`gnu`/`bison`/`gawk`/etc.) re-adding a default. **`em stages --stage1`
+does not currently complete for real** under `--target
+riscv64-unknown-linux-gnu`; stopped before reaching the point where
+`llvm-core/clang -b` could even be attempted per the requested sequence.
+
+Two distinct new bugs from this follow-up, in priority order: (1) bare
+`--root` crossdev bootstrap is structurally broken (config-overlay gap,
+file:line above) — the workaround (add matching `--prefix`) is viable but
+shouldn't be the permanent answer; (2) stage1's `app-alternatives/*`
+packages need a real default-selection mechanism under `-* build` (a
+per-eclass `+flag` default carve-out, or an explicit stage1 `package.use`
+seed for these six packages) — `BOOTSTRAP_USE` alone doesn't cover it.
+
+**Same-day continuation: `574b698`/`dad53e4` fix bug (2) — confirmed
+live, plus one sub-finding and one new distinct bug found past it.**
+
+- **`--autosolve-use` (before `dad53e4` landed) resolved 5 of 6
+  `app-alternatives/*` correctly** (`bzip2→reference`, `gzip→reference`,
+  `lex→flex`, `tar→gnu`, `yacc→bison` — each the eclass's own first-listed/
+  `+default` provider) **but picked `awk→mawk` instead of the eclass
+  default `gawk`.** Traced (not fully confirmed live — a research agent's
+  repro attempt exited silently): a `^^ (...)` REQUIRED_USE group is
+  compiled into the same `Choice`-node machinery as a real `||` OR-dep
+  group (`portage-atom-pubgrub/src/convert.rs:574-786`), not the simple
+  preference-biased path a single ceded flag gets — so it can fall into
+  `choose_version`'s general installed/needed-package-reaching heuristic
+  (`portage-atom-pubgrub/src/provider/solve.rs:140-256`) instead of
+  simply honoring `order_by_preference`. A related bug in exactly this
+  area is already on record (commit `defb035`,
+  `required_use_exactly_one_with_installed_alternative_does_not_overflow`
+  in `provider/tests.rs:1474-1524` — fixed a crash in this path but never
+  asserted *which* alternative gets picked). Root cause of the `mawk`
+  pick specifically not fully pinned down.
+- **`dad53e4`** (`fix(stage1): default autosolve-use; prefer IUSE
+  +defaults when ceding`) fixes this properly: `stages --stage1` now
+  defaults `--autosolve-use` on, and — this is the part that fixes the
+  `mawk`-not-`gawk` finding above — biases ceded-flag preference toward
+  the ebuild's own IUSE `+default` rather than leaving the choice to
+  whatever the general solver heuristic picks. **Live-verified**: rebuilt
+  `em` from `dad53e4`, re-ran real `stages --stage1` (same sandbox,
+  resuming past the 45+31 packages already installed from the two prior
+  attempts) — all six `app-alternatives/*` packages now merge cleanly
+  with no `--autosolve-use` flag needed on the command line, 20 more
+  packages complete (96 total across all three attempts).
+- **New bug found past the app-alternatives fix, real build (not
+  planning):** `dev-build/libtool-2.5.4`'s `src_configure` dies:
+  ```
+  configure: line 134: /some/places/bin/bash: No such file or directory
+  die: econf failed (configure exited 127)
+  ```
+  Root-caused via code read: this is **not** `em` trying to execute a
+  target-sysroot shell — it's real, stock upstream ebuild code
+  (`dev-build/libtool-2.5.4.ebuild:105`: `export CONFIG_SHELL="${EPREFIX}"/bin/bash`,
+  a legitimate real-Prefix idiom to pin a known-good bash) combined with
+  `em` feeding it the wrong value. `EPREFIX` for build-phase environment
+  is set verbatim from the raw `--prefix` CLI value
+  (`portage-repo/src/build/shell.rs:1764-1768,1842`, plumbed via
+  `Roots::eprefix()`) — correct for `--local` (a real standalone Prefix,
+  where a real bash genuinely is bootstrapped under `EPREFIX/bin/`), but
+  wrong for `--prefix` **overlay** mode, which `cli.rs:55` itself
+  documents as keeping BROOT on the real host. A narrow fix already
+  exists for exactly this class of problem — the `host_codegen` allowlist
+  added in `fad35a3` (this session's own earlier BuildClass-drop commit)
+  correctly redirects `EPREFIX` for `binutils`/`gcc`/`gdb`/
+  `clang-crossdev-wrappers` — but it was never generalized to other
+  host-executing native build tools like `libtool` that use the same
+  `${EPREFIX}/bin/foo` self-location pattern. **Not specific to the
+  `--prefix == --root` workaround** — any `--prefix DIR` overlay build of
+  a non-`host_codegen`-listed package whose ebuild self-locates via
+  `${EPREFIX}` would hit this identically, with or without `--root`/
+  `--target` at all. This is now the blocker: real `stages --stage1`
+  still doesn't complete end to end, stopped at `dev-build/libtool`
+  (~96/? — exact total package count for the fully-resolved plan not
+  re-confirmed after `dad53e4` changed the plan shape).
+
+Priority for whoever picks this up: the `host_codegen`-style `EPREFIX`
+redirect needs generalizing beyond the toolchain allowlist — probably to
+"any package building host-executing tooling," not a per-package list
+that has to be extended every time a new ebuild hits this pattern.
 
 ---
 
