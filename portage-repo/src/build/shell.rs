@@ -2096,6 +2096,16 @@ impl EbuildShell {
         // not a shell abort).
         self.run_string("shopt -u failglob").await.ok();
 
+        // Fresh die slate before bashrc + phase: clear stale flags from
+        // metadata sourcing or a previous phase so they don't abort this one.
+        // Must run *before* profile/user bashrc — those hooks (e.g.
+        // `profiles/releases/23.0/profile.bashrc`'s merged-usr check) call
+        // `die` and must be able to abort the phase. Previously the take()
+        // lived *after* bashrc and discarded their die, so packages reported
+        // Completed despite `die: ERROR: … merged-usr profile, but disk is
+        // split-usr` (live 2026-08-07, 27 packages under --prefix --target).
+        self.die_flag.take();
+
         // Source portage bashrc hooks (profile.bashrc files, then the user's
         // /etc/portage/bashrc) with the full phase environment available — not
         // PMS; matches portage's __source_all_bashrcs. A bashrc may define the
@@ -2108,14 +2118,15 @@ impl EbuildShell {
                 script.push_str(&format!("[[ -r '{0}' ]] && source '{0}'\n", f.as_str()));
             }
             self.run_string(&script).await.ok();
+            if let Some(msg) = self.die_flag.take() {
+                return Err(Error::Shell(format!(
+                    "bashrc (before {func_name}): die: {msg}"
+                )));
+            }
         }
 
         // Run the phase function (may have been defined by the ebuild or by
         // __ebuild_phase_funcs as a fallback calling default()).
-        // A fresh die slate for this phase (stale flags from metadata
-        // sourcing or a previous phase must not abort this one).
-        self.die_flag.take();
-
         let phase_defined = self.shell.funcs().get(func_name).is_some();
         if phase_defined {
             // Kept alive until after the phase returns: dropping it closes the

@@ -167,9 +167,29 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
     let owned = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let mut steps = Vec::new();
 
+    // Baselayout first for every empty-ROOT/sysroot bootstrap — native,
+    // self-contained cross, **and** default host-shared cross. gcc's startfile
+    // osdir is `../lib64` (needs `/usr/lib`); modern `merged-usr` profiles also
+    // need baselayout's bin↔usr/bin skeleton before any package writes real
+    // content into `/bin` vs `/usr/bin`. `link_abi_osdirs` only bridges libdirs
+    // and does not create that layout. Without this, default `--prefix --target`
+    // ends up genuinely split-usr on disk while the profile declares merged-usr
+    // (live 2026-08-07: 27× profile.bashrc die, then silently swallowed until
+    // the bashrc-die fix). Real category always: baselayout is never part of the
+    // `cross-<tuple>` package set — bypass `atom()`'s rewrite.
+    //
+    // LLVM used to `return` before this block entirely (wrappers → headers →
+    // libc → runtimes), so even self-contained LLVM never got baselayout.
+    steps.push(StageStep {
+        label: "baselayout".into(),
+        atoms: vec!["sys-apps/baselayout".to_string()],
+        use_override: owned(&["build"]),
+        nodeps: false,
+    });
+
     if kind.llvm() {
         // LLVM model: host clang already cross-targets, so there is no two-stage
-        // gcc. Wrappers → kernel headers → libc → runtimes.
+        // gcc. baselayout → wrappers → kernel headers → libc → runtimes.
         steps.push(StageStep {
             label: "clang wrappers".into(),
             atoms: vec![atom("sys-devel", "clang-crossdev-wrappers")],
@@ -201,27 +221,9 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
         return StagePlan { steps };
     }
 
-    // Native: baselayout first for the `/usr/lib` skeleton. gcc's startfile osdir
-    // is `../lib64`, so it resolves CRT objects via `<sysroot>/usr/lib/../lib64`,
-    // which a fresh ROOT can't traverse without `/usr/lib` (→ `cannot find
-    // crti.o`). Cross bridges the libdir with `link_abi_osdirs` instead. A
-    // self-contained cross EPREFIX needs the same bare-FS skeleton for the same
-    // reason native does (its `--root` has no host-shared `/usr/lib`/merged-usr
-    // layout either) — found 2026-07-03 doing a from-scratch cross-stage1 test,
-    // see [[stage-build-shakeout]].
+    // Self-contained still gates other empty-ROOT specials (debuginfod drop,
+    // os-headers for EPREFIX) below — baselayout is no longer one of them.
     let is_self_contained_bootstrap = matches!(kind, BootstrapKind::Native) || self_contained;
-    if is_self_contained_bootstrap {
-        // Always the real category: baselayout is a host/EPREFIX-arch package
-        // in both cases (never part of the `cross-<tuple>` overlay's package
-        // set — that overlay only symlinks the toolchain components), so it
-        // must bypass `atom()`'s cross rewrite.
-        steps.push(StageStep {
-            label: "baselayout".into(),
-            atoms: vec!["sys-apps/baselayout".to_string()],
-            use_override: owned(&["build"]),
-            nodeps: false,
-        });
-    }
 
     // Native binutils drops `debuginfod`: into the empty ROOT it would pull
     // elfutils → curl → … → glibc (47 pkgs vs 7) and trip the os-headers
@@ -531,6 +533,7 @@ mod tests {
         assert_eq!(
             labels(&plan),
             [
+                "baselayout",
                 "binutils",
                 "kernel headers",
                 "libc headers",
@@ -539,20 +542,21 @@ mod tests {
                 "gcc-stage2",
             ]
         );
-        // Atoms live in the cross-* overlay category.
+        // Baselayout is always real-category; cross-* atoms start at binutils.
+        assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
         assert!(
-            plan.steps[0].atoms[0].starts_with("cross-riscv64-unknown-linux-gnu/"),
+            plan.steps[1].atoms[0].starts_with("cross-riscv64-unknown-linux-gnu/"),
             "{:?}",
-            plan.steps[0].atoms
+            plan.steps[1].atoms
         );
         // Cross builds the linux-headers provider directly (no virtual/* in the
         // overlay; the cross DEPENDs resolve against the host).
         assert_eq!(
-            plan.steps[1].atoms[0],
+            plan.steps[2].atoms[0],
             "cross-riscv64-unknown-linux-gnu/linux-headers"
         );
         // libc headers step is the --nodeps cycle-breaker.
-        let libc_headers = &plan.steps[2];
+        let libc_headers = &plan.steps[3];
         assert!(libc_headers.nodeps);
         assert!(
             libc_headers
@@ -560,8 +564,8 @@ mod tests {
                 .contains(&"headers-only".to_string())
         );
         // stage1 gcc drops cxx/libc-dependent USE; stage2 keeps them.
-        assert!(plan.steps[3].use_override.contains(&"-cxx".to_string()));
-        assert!(!plan.steps[5].use_override.contains(&"-cxx".to_string()));
+        assert!(plan.steps[4].use_override.contains(&"-cxx".to_string()));
+        assert!(!plan.steps[6].use_override.contains(&"-cxx".to_string()));
     }
 
     /// **Invariant:** every `cross-<tuple>/<pkg>` atom `toolchain_plan` emits
@@ -682,17 +686,27 @@ mod tests {
     }
 
     #[test]
-    fn default_cross_has_no_baselayout_and_keeps_debuginfod() {
-        // The default (host-shared) cross EPREFIX is unaffected by the
-        // self-contained fix above. debuginfod stays on: `use_outer_eroot`
-        // (crossdev::setup) routes this step's DEPEND check to the host,
-        // which already satisfies the closure.
+    fn default_cross_seeds_baselayout_and_keeps_debuginfod() {
+        // Default (host-shared) cross still needs baselayout in the *sysroot*
+        // for merged-usr (2026-08-07); debuginfod stays on because
+        // `use_outer_eroot` routes DEPEND to the host, which already satisfies
+        // the closure. os-headers for EPREFIX remains self-contained-only.
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
-        assert!(!labels(&plan).contains(&"baselayout"));
+        assert_eq!(labels(&plan)[0], "baselayout");
+        assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
         let binutils = plan.steps.iter().find(|s| s.label == "binutils").unwrap();
         assert!(binutils.use_override.is_empty());
         assert!(!labels(&plan).contains(&"os-headers (EPREFIX)"));
+    }
+
+    #[test]
+    fn llvm_plan_seeds_baselayout_before_wrappers() {
+        let t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
+        assert_eq!(labels(&plan)[0], "baselayout");
+        assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
+        assert_eq!(labels(&plan)[1], "clang wrappers");
     }
 
     #[test]
@@ -767,7 +781,11 @@ mod tests {
         // no need to force the flag off (behaviour-preserving).
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
-        assert_eq!(plan.steps[0].label, "binutils");
-        assert!(plan.steps[0].use_override.is_empty());
+        let binutils = plan
+            .steps
+            .iter()
+            .find(|s| s.label == "binutils")
+            .expect("binutils step");
+        assert!(binutils.use_override.is_empty());
     }
 }

@@ -421,23 +421,20 @@ no-ops.
     #2 (`crossdev --setup -p` used to hard-fail on a first-time target with
     `no ebuilds in ::gentoo or overlays`) is fixed.
 
-#### New bugs
+#### New bugs (status after Grok follow-ups)
 
-- **Dependency/scheduling race**: `sys-apps/sed`'s `econf` can run before
-  `sys-apps/acl` has finished installing into the same target sysroot, under
-  `--jobs 80` — `checking for sys/acl.h... no` despite the header existing
-  once the run finishes.
-  - **Root cause (Grok, 2026-08-07):** `build_blockers` only followed
-    `DEPEND`/`BDEPEND`. `sed[acl]` DEPEND is `virtual/acl`; the real
-    provider is only **RDEPEND** of that virtual. Scheduler unblocked sed
-    when the empty virtual finished, while `sys-apps/acl` was still building.
-  - **Fix:** include `RDEPEND` edges in `build_blockers` (same `to < from`
-    acyclicity as install_order soft RDEPEND). See depgraph/mod.rs.
-- **`--buildpkg` produces no binpkg for near-empty-image packages**
-  (`virtual/*`, `*-toolchain-symlinks`) under `--prefix --target` — 12+
-  occurrences, non-fatal warning; pre-existing, systemic.
-  - **Root cause (Grok, 2026-08-07):** pack uses `ED` = `image/${EPREFIX}`.
-    Empty packages never create that nested path; `walk_image` tolerates
-    missing, but `tar -C ED` fails (`Cannot open`).
-  - **Fix:** create empty `ED` before packaging; `tar_tree` also creates a
-    missing image dir. See `write_binpkg` / `portage-binpkg::tar_tree`.
+| # | Issue | Status |
+|---|--------|--------|
+| 1 | sed/acl RDEPEND scheduling race | ✅ fixed `a46027b` (live confirmed) |
+| 2 | empty-ED `--buildpkg` tar | ✅ fixed `a46027b` (live confirmed) |
+| 3 | virtual/libcrypt Completed, libxcrypt never scheduled | 🟡 open — needs live re-verify after #4/#5; suspect USE/`prefix-guest` or silent skip, not only blockers |
+| 4 | no baselayout → genuine split-usr under merged-usr | ✅ fixed: seed baselayout for **all** `toolchain_plan` (incl. default cross + LLVM early path) |
+| 5 | profile bashrc `die` swallowed | ✅ fixed: check `die_flag` after bashrc, before phase body |
+
+**Bug #5 root cause:** `run_phase` ran `die_flag.take()` *after* sourcing
+bashrc, discarding profile.bashrc dies. Fix: take before bashrc; if die after
+hooks → `Err`.
+
+**Bug #4 root cause:** baselayout only for `Native \|\| self_contained`, and
+LLVM returned before that block. Default `--prefix --target` cross never
+seeded sysroot baselayout; packages wrote real `/bin` vs `/usr/bin`.

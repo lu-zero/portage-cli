@@ -230,6 +230,58 @@ async fn bashrc_files_are_sourced_during_a_phase() {
     );
 }
 
+/// Profile/user bashrc `die` must abort the phase (regression: die_flag was
+/// cleared after bashrc, so merged-usr checks were no-ops — 2026-08-07).
+#[tokio::test]
+async fn bashrc_die_aborts_the_phase() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         pkg_setup() { export EM_PHASE_RAN=1; }\n",
+    )
+    .unwrap();
+
+    let bashrc = dir.path().join("profile.bashrc");
+    std::fs::write(
+        &bashrc,
+        "die \"merged-usr profile, but disk is split-usr\"\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell.set_bashrc_files(vec![Utf8PathBuf::from_path_buf(bashrc).unwrap()]);
+
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+    let err = shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .expect_err("bashrc die must fail the phase");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("merged-usr") || msg.contains("die"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        shell.get_var("EM_PHASE_RAN").is_none(),
+        "pkg_setup body must not run after bashrc die"
+    );
+}
+
 #[tokio::test]
 async fn phase_aborts_on_die_not_on_trailing_exit() {
     // Portage aborts a phase only via `die` (helpers self-die; `eapply` /
