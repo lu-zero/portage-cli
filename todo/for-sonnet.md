@@ -777,3 +777,70 @@ cross `toolchain_plan` baselayout merges under `--target` even when
 Profile-path mechanics of `profile.bashrc` (string contains `split-usr` vs
 disk `/bin` symlink) remain correct diagnostics when layout and profile
 disagree; the fix is layout, not re-picking the profile.
+
+---
+
+### Results — 2026-08-07 (Sonnet), `1ac8067`
+
+**em SHA:** `1ac8067`. Fresh sandbox (`em-1ac8067-verify`, `sandbox prepare
+--bare`).
+
+#### crossdev --setup / #4
+
+- **Baselayout merge root (log):** `sys-apps/baselayout-2.18-r1 ... to
+  /root/xp/usr/riscv64-unknown-linux-gnu/` — target sysroot, not the outer
+  prefix. Matches the fix's intent exactly.
+- **`ls -la $SYSROOT/bin`:** `bin -> usr/bin`, a real symlink. Confirmed
+  still intact after the full 135-package run finished (not clobbered by
+  any later package).
+- **`make.profile`:** resolves to
+  `.../profiles/default/linux/riscv/23.0/rv64/lp64d` — default merged-usr
+  profile kept, no `split-usr` in the path, as the product decision
+  requires.
+- **Outer vs sysroot VDB:** outer (`$P/var/db/pkg/cross-riscv64-unknown-linux-gnu/`)
+  still has `binutils`/`gcc`/`glibc`/`linux-headers` as before. Sysroot's
+  own VDB (`$SYSROOT/var/db/pkg`), previously completely empty, now has a
+  real `sys-apps/baselayout-2.18-r1` entry.
+- **#4: PASS.**
+
+#### -p zlib (library identity)
+
+- Same as prior passes: `sys-libs/zlib` alone has no direct DEPEND edge on
+  glibc, so this probe doesn't exercise the identity question by itself
+  (not a new result; noted for completeness).
+
+#### clang -b --jobs 80
+
+- **Progress: 65 ok, 1 failed, 65/135** (up from 42/136 on the `f8ac293`
+  pass — real progress, not noise).
+- **#4 (sysroot layout): PASS**, confirmed above.
+- **#5 (die honesty): PASS**, and this pass has nothing to even test it
+  against — **zero** `merged-usr`/`split-usr` die messages anywhere in the
+  log this time (previous passes had 27). `sys-devel/gcc-config` and
+  `sys-devel/binutils-config` both completed cleanly with single
+  `Emerging`/`Completed` pairs, no die at all.
+- **#1/#2: still fixed.** `sys-apps/sed` built with a single clean
+  `Emerging`/`Completed`, no ACL race. `find /root/xp -name '*.gpkg.tar'`
+  → 65 files for 65 ok packages, 1:1, zero tar errors.
+- **#3: still broken, identical pattern.** `virtual/libcrypt-2-r1`
+  completes (`Completed (32 of 135)`) while `sys-libs/glibc-2.43-r2` and
+  `sys-libs/libxcrypt-4.5.2` are both listed as `[ebuild N]` in the plan
+  but neither ever gets an `Emerging` line — matches the already-root-caused
+  `query/depgraph/mod.rs:988-992` virtual-endpoint edge filter exactly (not
+  re-investigated further this pass, per "record only" instruction). This
+  is now the sole blocker: the run stops on `sys-libs/pam` (`Run-time
+  dependency libcrypt/libxcrypt found: NO`), the same downstream failure
+  as every previous pass.
+- **Workdir: still holds.** No duplicate `Emerging (N of 135)` index.
+- **`llvm-core/clang` itself: still not reached** — 65/135, stopped before
+  getting there. This remains the single next blocker for the whole
+  investigation.
+
+#### New bugs
+
+None. This pass is a clean confirmation: #4 and #5 are both genuinely
+fixed with no caveats found. The only remaining item blocking
+`llvm-core/clang` from ever being reached is bug #3, already root-caused
+to `query/depgraph/mod.rs:988-992` in the previous pass — fixing that
+filter (without breaking whatever it was originally added for) is the
+clear next step for whoever picks this up.
