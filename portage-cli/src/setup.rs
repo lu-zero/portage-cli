@@ -8,10 +8,11 @@
 //!   into `~/.gentoo`; builds its own python via `toolchain --setup`, so no
 //!   host-python symlinks. The `BASHRC_LOCAL` recipe (EPREFIX-based) covers the
 //!   in-place search-path needs.
-//! - `--prefix DIR` (overlay): EPREFIX set, base == host. Borrows host tools,
-//!   so symlinks host python into `${EPREFIX}/usr/bin` for the relocatable
-//!   shebangs EPREFIX produces. The `BASHRC_PREFIX` recipe (EPREFIX-based)
-//!   covers the overlay search-path needs.
+//! - `--prefix DIR` (overlay): EPREFIX set, base == host. Symlinks host
+//!   python/base tools into `${EPREFIX}/usr/bin` for relocatable shebangs,
+//!   then oneshot-merges `sys-apps/baselayout` (USE=build) so layout matches
+//!   the profile — same as `em -1 baselayout`, not a hand-rolled mkdir tree.
+//!   The `BASHRC_PREFIX` recipe covers overlay search-path needs.
 //! - `--root DIR` (self-contained offset): no EPREFIX. Own everything; no
 //!   CPPFLAGS injection (it actively breaks self-contained roots).
 //!
@@ -189,22 +190,66 @@ pub struct Registrable {
 /// between. Keeping [`bootstrap`] free of it also keeps it free of side effects
 /// outside the tree it is given — its callers include tests.
 ///
+/// After the skeleton + config, runs **`sys-apps/baselayout` oneshot** with
+/// `USE=build` (same idea as `em -1 baselayout`) so merged-usr / split-usr
+/// matches the active profile — do not reimplement baselayout in mkdir form.
+///
 /// When `pretend` is true (global `-p`/`--pretend`), print what would be
 /// created and write nothing — same contract as crossdev's config plan under
 /// `-p` (Sonnet 2026-08-06: `Applet::Setup` previously ignored pretend).
-pub fn run(roots: &Roots, pretend: bool) -> Result<()> {
-    if pretend {
-        return preview(roots);
+pub async fn run(cli: &crate::cli::Cli) -> Result<()> {
+    let roots = cli.roots();
+    if cli.pretend {
+        return preview(&roots);
     }
-    let Some(registrable) = bootstrap(roots)? else {
+    let Some(registrable) = bootstrap(&roots)? else {
+        // Self-contained `--root` still needs baselayout; bootstrap always
+        // returns `None` for that topology but did create the tree.
+        merge_baselayout(cli).await?;
         return Ok(());
     };
+    merge_baselayout(cli).await?;
     // Available only — the active pointer is the user's to move, with
     // `em active set`.
     if let Some(name) = crate::active::register_available(registrable.kind, &registrable.eroot) {
         println!("    registered as:  {name}   (em active list / em active set {name})");
     }
     Ok(())
+}
+
+/// Oneshot-merge `sys-apps/baselayout` with `USE=build` into the outer EROOT
+/// (`use_outer_eroot`), not the world file. Public so `crossdev --setup` can
+/// seed the same layout under `--prefix` before toolchain steps.
+pub async fn merge_baselayout(cli: &crate::cli::Cli) -> Result<()> {
+    let outer = cli.outer_roots();
+    let eroot = outer.merge_root();
+    if eroot.as_str() == "/" {
+        return Ok(());
+    }
+    println!(">>> merging sys-apps/baselayout (USE=build, oneshot) into {eroot}");
+    let use_override = ["build".to_string()];
+    let mut merge_flags = cli.merge_flags.clone();
+    merge_flags.oneshot = true;
+    crate::emerge_atoms(
+        cli,
+        &["sys-apps/baselayout".to_string()],
+        crate::EmergeOpts {
+            use_override: &use_override,
+            // Same as stage1 baselayout: install the skeleton without pulling
+            // the world; baselayout's own deps are minimal under USE=build.
+            nodeps: true,
+            depgraph_flags: None,
+            merge_flags: Some(merge_flags),
+            use_outer_eroot: true,
+            target_only_installed_view: false,
+            update_world: false,
+            is_resume: false,
+            activity: None,
+            activity_session: Default::default(),
+            extra_aliases: &[],
+        },
+    )
+    .await
 }
 
 /// `-p` / `--pretend` path for [`run`]: describe the layout without writing.
@@ -227,6 +272,7 @@ fn preview(roots: &Roots) -> Result<()> {
     };
     println!(">>> would bootstrap layout at {eroot} ({mode})");
     println!(">>> would create skeleton dirs under {eroot} (etc/portage, var/db/pkg, …)");
+    println!(">>> would oneshot-merge sys-apps/baselayout (USE=build) into {eroot}");
     let portage = roots
         .config_overlay()
         .map(Utf8Path::to_path_buf)
@@ -269,8 +315,8 @@ pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
         let p = eroot.join(dir);
         std::fs::create_dir_all(p.as_std_path()).with_context(|| format!("creating {p}"))?;
     }
-    // The libdir name is host-dependent; create both common ones so installs
-    // into either land in an existing tree.
+    // Libdir name is host-dependent; both so early installs have a landing
+    // place before baselayout (or packages) own the real layout.
     for libdir in ["usr/lib", "usr/lib64"] {
         let _ = std::fs::create_dir_all(eroot.join(libdir).as_std_path());
     }
@@ -462,30 +508,32 @@ fn link_host_pythons(eroot: &Utf8Path) -> Result<()> {
     Ok(())
 }
 
-/// Host base-system tools that ebuilds reference by their prefix-absolute path
-/// (`${EPREFIX}/usr/bin/<tool>`) rather than via `PATH`. In a real Gentoo Prefix
-/// the whole userland lives under `${EPREFIX}`; in `--local` only built packages
-/// do, so these must be exposed from the host. Example: the firefox ebuild sets
-/// `XARGS=${EPREFIX}/usr/bin/xargs` in its mozconfig, and the build greps trees
-/// with `find`. Extend as more such hard-coded references surface.
-///
-/// `perl`/`install`/`true`/`grep`/`env`/`ed` added 2026-08-07 after a live
-/// `--prefix` stage1 run turned up more hard-coded `${EPREFIX}/usr/bin/<tool>`
-/// references than just `xargs`/`find`.
-const HOST_BASE_TOOLS: &[&str] = &["xargs", "find", "perl", "install", "true", "grep", "env", "ed"];
+/// Host base-system tools that ebuilds reference by prefix-absolute path
+/// (`${EPREFIX}/bin/<tool>` or `${EPREFIX}/usr/bin/<tool>`) rather than PATH.
+/// Linked into `usr/bin`; after baselayout's merged-usr `bin`→`usr/bin`, both
+/// forms resolve. **Layout comes from merging baselayout**, not this list.
+const HOST_BASE_TOOLS: &[&str] = &[
+    "bash", "sh", "xargs", "find", "perl", "install", "true", "grep", "env", "ed",
+];
 
 /// Symlink the host base tools in [`HOST_BASE_TOOLS`] into `${EPREFIX}/usr/bin`
-/// when they are not already provided by the prefix. Idempotent, best-effort.
+/// when they are not already provided by the prefix. Tries `/usr/bin` then
+/// `/bin`. Idempotent, best-effort.
 fn link_host_base_tools(eroot: &Utf8Path) -> Result<()> {
     let bin = eroot.join("usr/bin");
     std::fs::create_dir_all(bin.as_std_path()).with_context(|| format!("creating {bin}"))?;
     for tool in HOST_BASE_TOOLS {
-        let host = format!("/usr/bin/{tool}");
         let link = bin.join(tool);
-        if link.as_std_path().symlink_metadata().is_ok() || !Utf8Path::new(&host).exists() {
+        if link.as_std_path().symlink_metadata().is_ok() {
             continue;
         }
-        let _ = std::os::unix::fs::symlink(&host, link.as_std_path());
+        for host in [format!("/usr/bin/{tool}"), format!("/bin/{tool}")] {
+            if !Utf8Path::new(&host).exists() {
+                continue;
+            }
+            let _ = std::os::unix::fs::symlink(&host, link.as_std_path());
+            break;
+        }
     }
     Ok(())
 }
@@ -521,13 +569,13 @@ mod tests {
 
     use crate::cli::Cli;
 
-    #[test]
-    fn pretend_run_writes_nothing() {
+    #[tokio::test]
+    async fn pretend_run_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().to_str().unwrap();
-        let cli = crate::cli::Cli::try_parse_from(["em", "--prefix", prefix, "setup"]).unwrap();
-        let roots = cli.roots();
-        super::run(&roots, true).unwrap();
+        let cli =
+            crate::cli::Cli::try_parse_from(["em", "-p", "--prefix", prefix, "setup"]).unwrap();
+        super::run(&cli).await.unwrap();
         assert!(
             !std::path::Path::new(prefix).join("etc/portage").exists(),
             "pretend must not create etc/portage"
@@ -932,7 +980,7 @@ mod tests {
         let cli = Cli::parse_from(["em", "--prefix", dir.path().to_str().unwrap()]);
         super::bootstrap(&cli.roots()).unwrap();
         let bin = cli.roots().merge_root().join("usr/bin");
-        // HOST_BASE_TOOLS = [xargs, find]; the test host should have at least one.
+        // HOST_BASE_TOOLS includes find/xargs; the test host should have at least one.
         let has_symlink = ["find", "xargs"]
             .iter()
             .any(|t| bin.join(t).as_std_path().symlink_metadata().is_ok());
@@ -943,6 +991,7 @@ mod tests {
     }
 
     /// `--root` (self-contained) does NOT symlink host tools — it owns everything.
+    /// (Layout comes from oneshot baselayout in [`super::run`], not bootstrap.)
     #[test]
     fn self_contained_root_does_not_symlink_host_tools() {
         let dir = tempfile::tempdir().unwrap();

@@ -183,7 +183,8 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
             args,
             &extras,
             config_plan::RefreshPolicy::Sync,
-        );
+        )
+        .await;
     }
     if args.setup {
         return setup(&target, globals, args, &extras).await;
@@ -266,7 +267,8 @@ async fn setup(
         args,
         extras,
         config_plan::RefreshPolicy::FillGapsOnly,
-    )?;
+    )
+    .await?;
     // A self-contained `--root DIR` EPREFIX has no host-shared merged-usr
     // skeleton or libs, so the plan needs the same from-scratch treatment as
     // native. `outer_roots()`, not `roots()`: this must stay anchored to the
@@ -1025,7 +1027,7 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
 /// edit as drift) from `--setup`'s own implied config-laydown step
 /// (`FillGapsOnly`: only create what's missing, so a hand edit made between
 /// an earlier `--init-target` and this `--setup` survives).
-fn init_target(
+async fn init_target(
     target: &CrossTarget,
     globals: &Cli,
     args: &CrossdevArgs,
@@ -1043,6 +1045,10 @@ fn init_target(
     let roots = globals.outer_roots();
     if roots.merge_root().as_str() != "/" && !globals.pretend {
         crate::setup::bootstrap(&roots)?;
+        // Outer EPREFIX layout via real baselayout (not mkdir), so
+        // `${EPREFIX}/bin/bash` etc. work before toolchain packages merge.
+        // Sysroot baselayout is a separate step in `toolchain_plan`.
+        crate::setup::merge_baselayout(globals).await?;
     }
     let gentoo_path = main_repo(globals)?.path().to_owned();
     let sysroot = sysroot(target, globals);
