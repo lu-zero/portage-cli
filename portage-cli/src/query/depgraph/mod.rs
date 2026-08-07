@@ -829,15 +829,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 .filter_map(|r| r.upgrade_to.as_ref().map(|v| (*r.package.cpn(), v.clone())))
                 .collect();
 
-            // Every real (non-virtual) package the solver actually selected, before
-            // the "already installed, nothing to display" filter below drops entries
-            // like `virtual/libcrypt` from the visible plan. Kept around so
-            // `bdepend_trim` can still see *their* dependency edges — an
-            // already-installed package that's invisible in `order` can still be the
-            // sole reason some other, not-yet-installed package (e.g.
-            // `sys-libs/libxcrypt`, pulled in only via `virtual/libcrypt`'s RDEPEND)
-            // is required; scanning only `order` made such a package look orphaned
-            // and wrongly trimmable.
+            // Every `Real` package the solver selected (install_order already
+            // omits solver-internal nodes; `!is_virtual()` is defensive). Gentoo
+            // category `virtual/*` (e.g. `virtual/libcrypt`) **are** Real and
+            // stay here. The next filter may drop them from the *displayed*
+            // plan when already installed — keep `full_order` so bdepend_trim
+            // still sees their RDEPEND (e.g. libxcrypt only required via the
+            // virtual) and does not treat providers as orphaned.
             let full_order: Vec<(PortagePackage, Version)> = provider
                 .install_order(&solution)
                 .into_iter()

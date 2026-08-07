@@ -1,124 +1,140 @@
 # For Sonnet — live verification handoff
 
-**Current pin (do this next):** `master` at **`1ac8067`**  
-(`fix(crossdev): baselayout into target sysroot for merged-usr profiles`)
+**Current pin (do this next):** `master` tip after **soft-order #3 fix**  
+(`fix(solver): repair soft RDEPEND order after soft-cycle walk` — B+C)
 
 Build `em` from that SHA (or tip if only docs after). Note the SHA in Results.
 Unit tests green; they do **not** replace live sandbox checks.
 
 ---
 
-## NEXT HOMEWORK — `1ac8067` (Sonnet)
+## NEXT HOMEWORK — soft-order #3 fix (Sonnet)
 
-### What landed since your last full pass
+### What landed (read this; do not re-blame the old root cause)
 
-| SHA | What |
-|-----|------|
-| `f8ac293` | #5 bashrc die propagates; baselayout first in plan (**outer only** — incomplete for #4) |
-| `1ac8067` | **`StageStep::into_sysroot`**: cross baselayout merges under **`--target` sysroot**. Keeps **default merged-usr** profile |
+| SHA / topic | What |
+|-------------|------|
+| `1ac8067` | #4 baselayout into **target sysroot** (merged-usr) — **confirmed PASS** last pass |
+| `bf35c79` | `is_virtual` = solver-internal only — **not** Gentoo `virtual/*`. Edge filter at depgraph is **not** why libxcrypt never Emerged |
+| **this tip** | **`install_order` B+C** in `portage-atom-pubgrub`: soft-ready pick + pass-2 acyclic soft-edge repair. Unit fixture: libxcrypt before `virtual/libcrypt` through the glibc soft/hard cycle |
+
+**Correct #3 root cause (Grok, 2026-08-07):**  
+`order_cycle` hard-first linearisation inside a soft SCC put empty `virtual/libcrypt` **before** `sys-libs/libxcrypt`. `build_blockers` only keeps edges with `to < from`, so the virtual did not wait; pam started and failed; `stop_new` prevented late glibc/libxcrypt from ever `Emerging`.
+
+**Not the bug:** `is_virtual` edge filter, silent VDB skip, “libxcrypt missing from plan” (it was in the plan, late).
 
 ### Product decisions (do not re-open)
 
-1. **#4 layout:** make **disk match the default merged-usr profile**.  
-   **Rejected:** switch sysroot `make.profile` to `…/split-usr/…` so the die goes quiet.  
-2. Full **@system/stage1** not required for pure cross-build *theory*; library DEPEND identity remains open. Stage1 optional for plan-size comparison only.  
-3. **No `--keep-going`.** Fresh sandbox only. Record + stop; no large redesigns unless a one-line regression of `1ac8067`.
+1. **#4 layout:** disk matches **default merged-usr** profile. No `split-usr` profile switch.  
+2. Full **@system/stage1** not required for pure cross theory; library DEPEND identity (cross-T vs real Cpn) remains a **separate** open item.  
+3. **No `--keep-going`.** Fresh sandbox only. **Record + stop** — no large redesigns. One-line regressions of the soft-order fix only if you can prove them.
 
 ### Goal
 
-1. **Confirm #4:** after `crossdev --setup` alone, **target sysroot** is merged-usr on disk.  
-2. **Confirm #5** still honest (die → fail, not Completed).  
-3. **Clang stress** past 42/136 if #4 holds; #3 evidence if still broken.  
-4. **Library identity** probe (`-p zlib`, outer vs sysroot VDB).
+1. **Primary — #3:** after this fix, plan order and schedule put **provider before empty virtual before pam**, and pam should see libcrypt **or** fail for a *new* reason (not “libxcrypt never Emerging”).  
+2. **Regression smoke:** #4/#5/#1/#2 still hold.  
+3. **How far does clang get?** N/M, first real failure if any.  
+4. **Library identity** note only (`-p` / VDB) — do not fix Favor/provided this pass.
 
 ### Commands
 
 ```sh
-git -C /path/to/portage-cli rev-parse --short=8 HEAD   # expect 1ac8067 or docs-only tip
+git -C /path/to/portage-cli rev-parse --short=8 HEAD
 # build em from that tree
 
 P=/root/xp   # FRESH bare sandbox — never reuse prior xp trees
 em --prefix "$P" setup
 
-# --- 1) Toolchain ---
+# --- 1) Toolchain (expect #4 still green) ---
 em --prefix "$P" --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
-# Expect EXIT=0, real riscv64-unknown-linux-gnu-gcc
-# Log: baselayout should merge *to the sysroot* (…/usr/riscv64-…/), not only "to $P/"
-
 SYSROOT="$P/usr/riscv64-unknown-linux-gnu"
+ls -la "$SYSROOT/bin"   # expect symlink → usr/bin (merged-usr)
 
-# --- #4 PASS gate (immediately after setup, before clang) ---
-ls -la "$SYSROOT/bin" "$SYSROOT/usr/bin" | head -20
-# PASS: bin is a symlink into usr (merged-usr)
-# FAIL: bin and usr/bin both real dirs with different content
-readlink -f "$SYSROOT/etc/portage/make.profile"
-# Expect: default path WITHOUT "split-usr" in the path (merged-usr profile kept)
-
-echo "=== outer cross-* VDB ==="
-ls "$P/var/db/pkg/cross-riscv64-unknown-linux-gnu/" 2>/dev/null | head
-echo "=== sysroot VDB ==="
-find "$SYSROOT/var/db/pkg" -maxdepth 2 -type d 2>/dev/null | sort | head -40
-
-# --- 2) Library DEPEND probe ---
-em -p --prefix "$P" --target riscv64-unknown-linux-gnu sys-libs/zlib | tee /tmp/zlib-p.txt
-# Note: does [ebuild N] sys-libs/glibc appear despite cross-T/glibc files on disk?
+# --- 2) Plan-order probe (cheap, before full clang) ---
+em -p --prefix "$P" --target riscv64-unknown-linux-gnu \
+  virtual/libcrypt sys-libs/pam 2>&1 | tee /tmp/libcrypt-pam-p.txt
+# In the printed plan order, expect roughly:
+#   … sys-libs/libxcrypt …  before  virtual/libcrypt  before  sys-libs/pam
+# (glibc may appear before libxcrypt if planned — fine)
+rg -n 'sys-libs/libxcrypt|virtual/libcrypt|sys-libs/pam|sys-libs/glibc' /tmp/libcrypt-pam-p.txt
 
 # --- 3) Clang stress ---
 em --prefix "$P" --target riscv64-unknown-linux-gnu \
-  -b llvm-core/clang --jobs 80
+  -b llvm-core/clang --jobs 80 2>&1 | tee /tmp/clang-softorder.log
 ```
 
 ### Pass / fail checklist
 
 | Check | Pass if |
 |-------|---------|
-| **#4 sysroot layout** | `$SYSROOT/bin` is a **symlink** (merged), not a real dir next to divergent `usr/bin`. Profile path stays **non–split-usr** default |
-| **#4 baselayout root** | Setup log: baselayout **to sysroot** (`…/usr/riscv64-…/`), not only outer `$P/` |
-| **#5 die honesty** | No “die then Completed”; failures appear in the failed-merge list |
+| **#3 plan order** | In `-p` and in clang plan dump: `sys-libs/libxcrypt` index **&lt;** `virtual/libcrypt` **&lt;** `sys-libs/pam` (same MergeRoot/sysroot) |
+| **#3 schedule** | `>>> Emerging` for `sys-libs/libxcrypt` (and likely `sys-libs/glibc` if still planned) **before** pam fails or completes |
+| **#3 outcome** | Either pam **configures** (libcrypt found in sysroot) **or** a **new** failure past libcrypt — not the old “virtual Completed, libxcrypt never Emerging” |
+| **#4** | `$SYSROOT/bin` still symlink; profile not split-usr |
+| **#5** | No die-then-Completed |
 | **#1/#2** | No sed/acl race if sed runs; virtuals still get `.gpkg` under `-b` |
-| **#3** | If still broken: virtual Completes vs `sys-libs/glibc`/`libxcrypt` never `Emerging` — note plan lines + counts (you already root-caused the virtual-edge filter; do **not** implement it this pass) |
-| **Clang** | N/M; clang reached? |
-| **Workdir** | No dual-phase / dual WORKDIR for same CPV host+target |
+| **Clang** | N ok / M total; `llvm-core/clang` reached? first failure package + phase |
+| **Workdir** | No duplicate Emerging index for same CPV host+target |
 
-### If #3 still fails — evidence only
+### If #3 still fails — evidence only (do not re-implement)
 
 ```sh
-rg -n 'Emerging.*(libxcrypt|sys-libs/glibc)|Completed.*libcrypt' "$LOG" | head -40
-rg -n 'sys-libs/glibc|sys-libs/libxcrypt|virtual/libcrypt' "$LOG" | head -40
+LOG=/tmp/clang-softorder.log
+# Plan positions
+rg -n '\[ebuild.*(libxcrypt|libcrypt|glibc|pam)' "$LOG" | head -30
+# Schedule
+rg -n 'Emerging.*(libxcrypt|glibc|libcrypt|pam)|Completed.*(libxcrypt|glibc|libcrypt|pam)|Failed.*pam' "$LOG" | head -40
+# Sysroot after stop
+ls "$SYSROOT/var/db/pkg/sys-libs/" 2>/dev/null
+ls "$SYSROOT/usr/include/crypt.h" "$SYSROOT/include/crypt.h" 2>/dev/null
+# Did soft promote lose to a hard path? Note Host vs Target on python/glibc lines if present
+rg -n 'python|glibc|libxcrypt|libcrypt' "$LOG" | rg '\[ebuild|Emerging' | head -40
 ```
+
+**Known residual risk (record, don’t redesign):** if a **hard** path `virtual/libcrypt → … → libxcrypt` exists on the **same** MergeRoot (e.g. Target python DEPEND on virtual **and** Target glibc BDEPEND on that python), pass-2 cannot promote the soft edge. Live cross often Host-routes python BDEPEND — note Host vs Target if #3 still inverted.
 
 ### Out of scope
 
 - Changing profile to `…/split-usr/…`  
-- Implementing the virtual-edge filter fix (record only)  
-- package.provided / --local bootstrap  
+- “Fixing” the depgraph `is_virtual` edge filter (wrong root cause)  
+- package.provided / Favor alias for cross-T → real Cpn (library identity)  
 - BuildClass, multi-em registry  
+- Implementing further order heuristics beyond evidence
 
 ### Results template
 
 ```text
-### Results — YYYY-MM-DD (Sonnet), 1ac8067
+### Results — YYYY-MM-DD (Sonnet), soft-order #3
 
 **em SHA:** …
 
-#### crossdev --setup / #4
-- baselayout merge root (log): …
-- ls -la $SYSROOT/bin: …
-- make.profile: …
-- outer vs sysroot VDB: …
-
-#### -p zlib (library identity)
-- …
+#### Plan order (-p virtual/libcrypt pam)
+- libxcrypt index vs virtual vs pam: …
+- PASS/FAIL #3 plan: …
 
 #### clang -b --jobs 80
-- Progress: N/M …
-- #5: …
-- #3: …
+- Progress: N ok, F failed, of M
+- Emerging libxcrypt?: Y/N (index)
+- Emerging glibc?: Y/N
+- virtual/libcrypt Completed before/after libxcrypt?: …
+- pam: success / fail (phase + reason)
+- #3 schedule PASS/FAIL: …
+- #4/#5/#1/#2: …
 - clang reached?: …
+- first failure if any: …
+
+#### Library identity (optional note)
+- outer cross-* VDB vs sysroot VDB: …
 
 #### New bugs
 - …
 ```
+
+---
+
+## Prior results (kept for history)
+
+Last full live pass before soft-order fix: **`1ac8067`** — #4/#5 PASS, #3 still broken (virtual Completed, libxcrypt never Emerging, stop on pam). Details below in archived sections.
 
 ---
 
