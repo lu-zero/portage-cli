@@ -473,11 +473,24 @@ fn order_cycle(
 ///
 /// Pass-1 may emit a consumer before its RDEPEND provider when the provider is
 /// still hard-blocked inside a soft SCC (empty `virtual/libcrypt` before
-/// `sys-libs/libxcrypt`).  Rebuild a total order from:
-/// 1. hard edges (DEPEND/BDEPEND), skipping any that would hard-cycle;
-/// 2. soft edges that remain acyclic (pass-1 orientation first, then inverted);
-/// 3. Kahn topo with the pass-1 position as the ready-queue tie-break so
-///    unrelated packages keep their original relative order.
+/// `sys-libs/libxcrypt`).  Rebuild a total order from constraints, carefully:
+///
+/// 1. **Lock pass-1-forward hard + soft edges** (`pos(dep) < pos(consumer)`).
+///    These form a subgraph of the pass-1 total order → always acyclic. Never
+///    drop a hard edge pass-1 already got right (live regression: pass-2 used
+///    to add hard edges in arbitrary order, skip some on a hard-SCC false
+///    path, then soft promotions reordered `gcc` before its BDEPEND `glibc`).
+/// 2. **Try inverted hard edges** (pass-1 violated a DEPEND/BDEPEND) if acyclic.
+/// 3. **Try inverted soft edges** (earliest pass-1 consumer first) if acyclic —
+///    this is the empty-virtual-before-provider fix when no hard path
+///    `virtual →* provider` blocks the promote.
+/// 4. Kahn topo with pass-1 index as ready-queue tie-break.
+///
+/// Limitation: when a **hard** path `virtual → … → provider` exists on the same
+/// MergeRoot (e.g. Target python DEPEND virtual, glibc BDEPEND python,
+/// libxcrypt DEPEND glibc), step 3 cannot promote and the virtual stays early.
+/// That is a real hard/soft conflict, not a repair bug — needs dual-root
+/// routing or library-identity Favor so the hard path does not exist on Target.
 fn repair_soft_inversions(
     order: Vec<(PortagePackage, Version)>,
     graph: &[DepEdge],
@@ -497,6 +510,15 @@ fn repair_soft_inversions(
     let mut before_succ: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut indeg = vec![0usize; n];
 
+    let force_add = |u: usize, v: usize, succ: &mut [Vec<usize>], indeg: &mut [usize]| {
+        if u == v || succ[u].contains(&v) {
+            return;
+        }
+        // Forward-in-pass-1 edges only — caller guarantees acyclicity.
+        succ[u].push(v);
+        indeg[v] += 1;
+    };
+
     let try_add = |u: usize, v: usize, succ: &mut [Vec<usize>], indeg: &mut [usize]| -> bool {
         if u == v {
             return false;
@@ -513,7 +535,8 @@ fn repair_soft_inversions(
         true
     };
 
-    // Collect soft edges as (dep_idx, consumer_idx) = dep before consumer.
+    // (dep_idx, consumer_idx) = dep must come before consumer.
+    let mut hard: Vec<(usize, usize)> = Vec::new();
     let mut soft: Vec<(usize, usize)> = Vec::new();
     for edge in graph {
         let Some(&from_i) = pos.get(&node_key(&edge.from.0, &edge.from.1)) else {
@@ -523,35 +546,39 @@ fn repair_soft_inversions(
             continue;
         };
         match edge.class {
-            DepClass::Depend | DepClass::Bdepend => {
-                // Dependency before dependent. Skip if it would hard-cycle
-                // (true hard SCC); pass-1 relative order remains via tie-break.
-                let _ = try_add(to_i, from_i, &mut before_succ, &mut indeg);
-            }
+            DepClass::Depend | DepClass::Bdepend => hard.push((to_i, from_i)),
             DepClass::Rdepend => soft.push((to_i, from_i)),
             _ => {}
         }
     }
-
-    // Promote soft edges that remain acyclic. Prefer pass-1 orientation first
-    // so already-correct soft order is locked in before we try to flip inverted
-    // ones (true soft cycles keep at most one direction). Inverted promotions
-    // fix empty virtuals emitted before their providers (bug #3).
-    //
-    // Among inverted edges, earliest pass-1 consumer first: that is the empty
-    // virtual emitted too early, and promoting its provider is the urgent fix.
-    // A later inverted soft in the same SCC may then be refused if both would
-    // hard-cycle together — greedy is fine; one provider-before-virtual restore
-    // is enough for pam/libcrypt.
+    hard.sort_unstable();
+    hard.dedup();
     soft.sort_unstable();
     soft.dedup();
-    let (mut pass1_ok, mut inverted): (Vec<_>, Vec<_>) = soft
+
+    let (hard_fwd, mut hard_inv): (Vec<_>, Vec<_>) = hard
         .into_iter()
         .filter(|(d, c)| d != c)
         .partition(|(d, c)| d < c);
-    pass1_ok.sort_unstable();
-    inverted.sort_by_key(|(dep, consumer)| (*consumer, *dep));
-    for (dep, consumer) in pass1_ok.into_iter().chain(inverted) {
+    let (soft_fwd, mut soft_inv): (Vec<_>, Vec<_>) = soft
+        .into_iter()
+        .filter(|(d, c)| d != c)
+        .partition(|(d, c)| d < c);
+
+    // 1. Lock every edge pass-1 already oriented correctly (subgraph of total order).
+    for (dep, consumer) in hard_fwd.into_iter().chain(soft_fwd) {
+        force_add(dep, consumer, &mut before_succ, &mut indeg);
+    }
+
+    // 2. Fix hard inversions when possible.
+    hard_inv.sort_by_key(|(dep, consumer)| (*consumer, *dep));
+    for (dep, consumer) in hard_inv {
+        let _ = try_add(dep, consumer, &mut before_succ, &mut indeg);
+    }
+
+    // 3. Fix soft inversions (empty virtual before provider, etc.).
+    soft_inv.sort_by_key(|(dep, consumer)| (*consumer, *dep));
+    for (dep, consumer) in soft_inv {
         let _ = try_add(dep, consumer, &mut before_succ, &mut indeg);
     }
 
@@ -572,8 +599,8 @@ fn repair_soft_inversions(
             }
         }
     }
-    // Constraint graph should always be a DAG (we refused cyclic adds). If
-    // something still stalls, fall back to pass-1 rather than drop packages.
+    // Constraint graph should always be a DAG (forward edges + refused cycles).
+    // If something still stalls, fall back to pass-1 rather than drop packages.
     if seen != n {
         return order;
     }
@@ -1083,6 +1110,226 @@ mod tests {
                 "virtual/os-headers before glibc; order={names:?}"
             );
         }
+    }
+
+    /// Live regression (Sonnet 2026-08-07, full clang plan after first B+C):
+    /// pass-2 reordered `sys-devel/gcc` *before* its hard BDEPEND
+    /// `sys-libs/glibc`, tripping pre-flight. Soft repair must never drop a
+    /// hard edge pass-1 already oriented correctly.
+    #[test]
+    fn repair_preserves_pass1_correct_hard_bdepend_with_soft_noise() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+
+        // Soft cycle that folds everything into one SCC:
+        // virt -R→ lib, lib -D→ glibc -D→ os, os -R→ hdr -B→ perl -D→ virt
+        // plus gcc -B→ glibc (must stay after glibc).
+        repo.add_version(
+            Cpv::parse("virtual/libcrypt-2").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                rdepend: (vec![DepEntry::Atom(Dep::parse("sys-libs/libxcrypt").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-libs/libxcrypt-4.5.2").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("sys-libs/glibc").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-libs/glibc-2.43").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("virtual/os-headers").unwrap())]).into(),
+                bdepend: (vec![DepEntry::Atom(Dep::parse("sys-devel/bison").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(Cpv::parse("sys-devel/bison-3.8").unwrap(), None, None, empty());
+        repo.add_version(
+            Cpv::parse("virtual/os-headers-0").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                rdepend: (vec![DepEntry::Atom(
+                    Dep::parse("sys-kernel/linux-headers").unwrap(),
+                )])
+                .into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-kernel/linux-headers-7.1").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                bdepend: (vec![DepEntry::Atom(Dep::parse("dev-lang/perl").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("dev-lang/perl-5.44").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("virtual/libcrypt").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-devel/gcc-16").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                // Real ebuild shape: BDEPEND on glibc (pre-flight checked this).
+                bdepend: (vec![DepEntry::Atom(Dep::parse("sys-libs/glibc").unwrap())]).into(),
+                depend: (vec![DepEntry::Atom(Dep::parse("sys-libs/glibc").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        // Root pulls gcc so the hard BDEPEND is in the solution.
+        repo.add_version(
+            Cpv::parse("app-misc/need-gcc-1").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("sys-devel/gcc").unwrap())]).into(),
+                ..empty()
+            },
+        );
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let root = PortagePackage::unslotted(Cpn::parse("app-misc/need-gcc").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(root, PortageVersionSet::any())])
+            .unwrap_or_else(|e| panic!("resolution failed: {e:?}"));
+
+        let order = provider.install_order(&solution);
+        let names: Vec<String> = order
+            .iter()
+            .map(|(p, v)| format!("{}-{v}", p.cpn()))
+            .collect();
+        let pos = |needle: &str| {
+            names
+                .iter()
+                .position(|n| n.starts_with(needle))
+                .unwrap_or_else(|| panic!("{needle} missing from order: {names:?}"))
+        };
+        let i_glibc = pos("sys-libs/glibc");
+        let i_gcc = pos("sys-devel/gcc");
+        assert!(
+            i_glibc < i_gcc,
+            "pass-2 must not put gcc before its hard BDEPEND glibc; order={names:?}"
+        );
+    }
+
+    /// Full-graph #3 limitation: hard path virtual → python → glibc → libxcrypt
+    /// makes soft provider-before-virtual promote impossible. Document that
+    /// repair does not invent a hard-illegal order (and may leave virtual early).
+    #[test]
+    fn hard_path_through_python_blocks_soft_libcrypt_promote() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+        repo.add_version(
+            Cpv::parse("virtual/libcrypt-2").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                rdepend: (vec![DepEntry::Atom(Dep::parse("sys-libs/libxcrypt").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-libs/libxcrypt-4.5.2").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("sys-libs/glibc").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-libs/glibc-2.43").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                bdepend: (vec![DepEntry::Atom(Dep::parse("dev-lang/python").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("dev-lang/python-3.14").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("virtual/libcrypt").unwrap())]).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("sys-libs/pam-1.7.2").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("virtual/libcrypt").unwrap())]).into(),
+                ..empty()
+            },
+        );
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let pam = PortagePackage::unslotted(Cpn::parse("sys-libs/pam").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(pam, PortageVersionSet::any())])
+            .unwrap_or_else(|e| panic!("resolution failed: {e:?}"));
+
+        let order = provider.install_order(&solution);
+        let names: Vec<String> = order
+            .iter()
+            .map(|(p, v)| format!("{}-{v}", p.cpn()))
+            .collect();
+        let pos = |needle: &str| {
+            names
+                .iter()
+                .position(|n| n.starts_with(needle))
+                .unwrap_or_else(|| panic!("{needle} missing: {names:?}"))
+        };
+        // Hard: virtual before python before glibc before libxcrypt.
+        assert!(
+            pos("virtual/libcrypt") < pos("dev-lang/python"),
+            "hard: virtual before python; {names:?}"
+        );
+        assert!(
+            pos("dev-lang/python") < pos("sys-libs/glibc"),
+            "hard: python before glibc; {names:?}"
+        );
+        assert!(
+            pos("sys-libs/glibc") < pos("sys-libs/libxcrypt"),
+            "hard: glibc before libxcrypt; {names:?}"
+        );
+        // Soft promote is illegal here; virtual *must* stay before libxcrypt.
+        assert!(
+            pos("virtual/libcrypt") < pos("sys-libs/libxcrypt"),
+            "hard path forbids provider-before-virtual; {names:?}"
+        );
     }
 
     /// Guard against regressing the case `order_cycle`'s original heuristic
