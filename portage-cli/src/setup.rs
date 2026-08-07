@@ -468,7 +468,11 @@ fn link_host_pythons(eroot: &Utf8Path) -> Result<()> {
 /// do, so these must be exposed from the host. Example: the firefox ebuild sets
 /// `XARGS=${EPREFIX}/usr/bin/xargs` in its mozconfig, and the build greps trees
 /// with `find`. Extend as more such hard-coded references surface.
-const HOST_BASE_TOOLS: &[&str] = &["xargs", "find"];
+///
+/// `perl`/`install`/`true`/`grep`/`env`/`ed` added 2026-08-07 after a live
+/// `--prefix` stage1 run turned up more hard-coded `${EPREFIX}/usr/bin/<tool>`
+/// references than just `xargs`/`find`.
+const HOST_BASE_TOOLS: &[&str] = &["xargs", "find", "perl", "install", "true", "grep", "env", "ed"];
 
 /// Symlink the host base tools in [`HOST_BASE_TOOLS`] into `${EPREFIX}/usr/bin`
 /// when they are not already provided by the prefix. Idempotent, best-effort.
