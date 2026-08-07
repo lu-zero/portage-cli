@@ -55,13 +55,14 @@ ls -la "$P/usr/riscv64-unknown-linux-gnu/bin" \
 # VDB: expect cross-*/glibc (and friends), not a full real-Cpn @system yet
 find "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg" -maxdepth 2 -type d | sort | head -40
 
-# 2) REQUIRED — target @system seed (real Cpns, packages.build)
-em --prefix "$P" --target riscv64-unknown-linux-gnu \
-  stages --stage1 --autosolve-use --jobs 8
-# Expect EXIT=0. Re-check VDB: baselayout/shadow/… under real categories;
-# ideally sys-libs/glibc (or clear Favor path for libc) present for ordinary deps.
+# 2a) Probe library DEPEND (optional -p): does zlib plan a second full libc?
+em -p --prefix "$P" --target riscv64-unknown-linux-gnu sys-libs/zlib | tee /tmp/zlib-p.txt
+# Note whether sys-libs/glibc (or musl) appears as [ebuild N] despite cross-T/libc installed
 
-# 3) Only then: ordinary package
+# 2b) Optional richer base (not required for pure cross-build theory)
+# em --prefix "$P" --target riscv64-unknown-linux-gnu stages --stage1 --autosolve-use --jobs 8
+
+# 3) Ordinary package stress (library-identity gap may still show)
 em --prefix "$P" --target riscv64-unknown-linux-gnu \
   -b llvm-core/clang --jobs 80
 ```
@@ -72,9 +73,9 @@ em --prefix "$P" --target riscv64-unknown-linux-gnu \
 |-------|---------|
 | **#4 baselayout (setup)** | `crossdev --setup` has baselayout before libc; sysroot not genuine split-usr |
 | **#5 bashrc die** | No silent “Completed after `die: … merged-usr … split-usr`” |
-| **Stage1** | EXIT=0; plan is packages.build-shaped (not 136-pkg clang world); real-Cpn system entries in sysroot VDB |
+| **Library identity** | After setup: VDB has `cross-*/glibc` (or musl); `-p zlib` notes whether real-Cpn libc is re-planned |
 | **#1/#2 still fixed** | No sed ACL race; no empty-ED tar on virtuals when `-b` runs |
-| **Clang after stage1** | Plan size ≪ 136 if stage1 did its job; libxcrypt/pam if present still schedule correctly; note N/M and whether clang is reached |
+| **Clang** | Note N/M, libxcrypt Emerging?, clang reached?; optional compare after stage1 |
 | **Workdir** | No doubled phases / dual WORKDIR for same CPV host+target |
 
 ### If #3 still fails — collect this (do not fix yet)
@@ -656,3 +657,112 @@ they run, for both the LLVM and non-LLVM branches. Whether that's "rewrite
 baselayout through `atom()` after all" or a distinct explicit sysroot-target
 step is a design call for whoever picks this up — flagging the shape, not
 prescribing the fix per the handoff rules.
+
+---
+
+### Results — 2026-08-07 (Sonnet), blank-slate probe (library identity hypothesis)
+
+**em SHA:** `f8ac293`-based tip (`f88d091` at time of this run; docs-only on
+top). Fresh sandbox (`em-stage1-ladder-verify`), no stage1 step run —
+followed the revised (library-identity) homework, not the earlier
+stage1-required version.
+
+**Directly answers the "is split-usr caused by skipping stage1" question:
+no.** Checked the disk layout immediately after `crossdev --setup` alone,
+on a completely blank sandbox, before anything else ever touched the tree:
+`usr/riscv64-unknown-linux-gnu/bin` does not exist yet, `usr/bin` already
+has real glibc-utility content, and `lib64`/`usr/lib64` are both real,
+separate, non-symlinked directories. The split-usr state is present at the
+earliest possible observation point — it cannot be a consequence of
+skipping a later stage1 step, since no later step has run yet.
+
+**Library-identity hypothesis (Grok's #1): confirmed directly, with a
+sharper finding than expected.**
+
+- VDB check right after `crossdev --setup`: `find
+  $P/usr/riscv64-unknown-linux-gnu/var/db/pkg -maxdepth 2` returns
+  **nothing** — the target sysroot's own VDB is completely empty. The
+  installed `cross-riscv64-unknown-linux-gnu/glibc-2.43-r2` (and
+  binutils/gcc/linux-headers) is recorded under `$P/var/db/pkg/cross-
+  riscv64-unknown-linux-gnu/`, the **outer prefix's** VDB — even though its
+  files are physically written into the target sysroot path. So anything
+  resolving dependencies *for the target sysroot* sees zero packages
+  installed there, regardless of what's really on disk.
+- `em -p --prefix "$P" --target riscv64-unknown-linux-gnu virtual/libcrypt
+  sys-libs/pam` on this exact state: plans a brand-new `sys-libs/glibc-
+  2.43-r2` (`[ebuild N]`) install, plus `sys-libs/libxcrypt-4.5.2`, then
+  `virtual/libcrypt-2-r1` — confirms the resolver doesn't credit the
+  already-installed `cross-*/glibc` as satisfying `sys-libs/glibc` for
+  ordinary target-sysroot packages, exactly per Grok's hypothesis.
+- **New, sharper finding: it's not just `libxcrypt` that never gets
+  dequeued — `sys-libs/glibc` doesn't either.** Re-checked both this run's
+  full clang log *and* the two earlier full runs
+  (`a46027b`/`f8ac293`-without-blank-slate): `sys-libs/glibc-2.43-r2` is
+  listed in the plan (`[ebuild N] sys-libs/glibc-2.43-r2 ...`, identical
+  line in all three logs) but **never once gets an `Emerging` line** in
+  any of them — the exact same "planned but never scheduled" pattern as
+  `sys-libs/libxcrypt`. Meanwhile `virtual/libcrypt-2-r1` itself schedules
+  fine and reports `Completed` (package #33 in the emerge order, well
+  before glibc/libxcrypt would need to run) in all three runs. This
+  reframes bug #3: it isn't specifically a libxcrypt problem, it's that
+  **whatever real-Cpn packages sit behind `virtual/libcrypt`'s RDEPEND
+  resolution (both `sys-libs/glibc` and `sys-libs/libxcrypt`) are
+  consistently excluded from scheduling, while the virtual that supposedly
+  depends on them merges anyway** — worth checking whether
+  `build_blockers`/the ready-queue logic treats a virtual's RDEPEND
+  edge as satisfied without ever actually gating on the provider package's
+  completion, for *any* provider, not specifically a libxcrypt corner case.
+
+**Run outcome: 40 ok, 2 failed (`binutils-config`, `gcc-config`, same
+merged-usr die as the previous `f8ac293` pass), 42/136 — byte-identical
+outcome to the earlier (non-blank-slate-verified) `f8ac293` run.**
+Deterministic, not timing noise. #1/#2/workdir all still hold (same checks
+as the previous pass, not re-run in full detail here since the outcome was
+identical).
+
+**Root cause found for half of this (why `virtual/libcrypt` doesn't wait on
+its provider) — confirmed by direct code read + a live disproof of the
+alternate hypothesis:**
+
+- **Confirmed by disk check:** `find $sysroot/var/db/pkg -iname
+  '*glibc*' -o -iname '*libxcrypt*'` on this exact sandbox → **nothing at
+  all**, not even a stale/partial directory. This rules out "silently
+  skipped because the merge-root already-installed check
+  (`portage-cli/src/merge/mod.rs:1173-1186`) sees a stale VDB dir" — there
+  is no VDB dir, stale or otherwise, for either package. So it's not a
+  false already-installed skip; `sys-libs/glibc`/`sys-libs/libxcrypt` are
+  never attempted at all, from a genuinely clean start.
+- **Confirmed by code read:** `portage-cli/src/query/depgraph/mod.rs:988-992`
+  filters the dependency-edge list *before* `build_blockers` is computed
+  from it (`mod.rs:1566` on):
+  ```rust
+  let edges: Vec<_> = provider
+      .dependency_graph(&solution)
+      .into_iter()
+      .filter(|e| !e.from.0.is_virtual() && !e.to.0.is_virtual())
+      .collect();
+  ```
+  This drops **every** edge where either endpoint is virtual — including
+  `virtual/libcrypt → sys-libs/glibc`, which is *exactly* the edge shape
+  `a46027b`'s own fix (`sed[acl] → virtual/acl → sys-apps/acl`) was meant
+  to preserve. The filter runs first and silently undoes the fix for this
+  specific case: `build_blockers[virtual/libcrypt]` ends up empty, so
+  `virtual/libcrypt` is ready from `Scheduler::new`
+  (`merge/mod.rs:1056-1058`) and can complete before its provider ever
+  starts — matching the observed behavior exactly.
+- **Still open:** the filter explains why `virtual/libcrypt` doesn't
+  *wait*, but not why `sys-libs/glibc`/`sys-libs/libxcrypt` never even get
+  *attempted* — dropping an edge should only make a node ready *earlier*,
+  never permanently stuck, and `build_blockers` is structurally acyclic
+  (`to < from` gate, `mod.rs:1578`), ruling out a scheduler deadlock. Given
+  the confirmed-clean VDB, the remaining candidates are: (a) a real file
+  collision/blocker against the physically-already-installed
+  `cross-riscv64-unknown-linux-gnu/glibc` at the same on-disk path (different
+  Cpn, same files) that never resolves, or (b) some other readiness
+  precondition for these two specific packages that's never satisfied.
+  Fix shape for the confirmed half: the `mod.rs:988-992` filter needs to
+  stop dropping edges where exactly one endpoint is virtual (only drop
+  virtual-to-virtual, or rethink the filter's purpose entirely) — but
+  don't apply that fix blind; it may have been added intentionally for a
+  different reason and could have its own blast radius, worth checking
+  its own history/tests before touching it.
