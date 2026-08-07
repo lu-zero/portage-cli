@@ -461,11 +461,16 @@ pub fn gcc_refresh_plan(target: &CrossTarget, version: &str) -> StagePlan {
 /// would otherwise wipe, matching the exact fold-order semantics
 /// `resolve_effective_use` implements — `BOOTSTRAP_USE` isn't itself part of
 /// the profile's `USE` fold, so it has to be spliced in here explicitly,
-/// same as catalyst does). Distinct from [`toolchain_plan`]'s
-/// `BootstrapKind::Native`, which builds the *compiler* itself
-/// (binutils/glibc/gcc) — stage1 assumes that toolchain already exists in the
-/// root and just emerges the minimal bootable package set with it, mirroring
-/// crossdev-stages' `install_stage1`.
+/// same as catalyst does).
+///
+/// Stage1 always runs with `--autosolve-use` (see [`crate::crossdev::run_stage1`]):
+/// conf-level `-*` clears IUSE `+` defaults (e.g. `app-alternatives` first
+/// provider), which violates `REQUIRED_USE`; Level-C cedes those flags and
+/// prefers the ebuild's `+` IUSE default when the config left the flag off.
+/// Distinct from [`toolchain_plan`]'s `BootstrapKind::Native`, which builds
+/// the *compiler* itself (binutils/glibc/gcc) — stage1 assumes that toolchain
+/// already exists in the root and just emerges the minimal bootable package
+/// set with it, mirroring crossdev-stages' `install_stage1`.
 pub fn stage1_plan(stack: &ProfileStack, bootstrap_use: &[String]) -> Result<StagePlan> {
     let mut steps = vec![StageStep {
         label: "baselayout".into(),
@@ -520,7 +525,7 @@ mod tests {
         assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
         assert_eq!(plan.steps[0].use_override, ["build"]);
         // Step 2: the full build-order list, version-qualified from `packages`,
-        // with the collapse-all USE.
+        // with the collapse-all USE (alternative defaults via --autosolve-use).
         assert_eq!(plan.steps[1].use_override, ["-*", "build"]);
         assert_eq!(
             plan.steps[1].atoms,

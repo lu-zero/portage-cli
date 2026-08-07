@@ -24,7 +24,7 @@ catalyst / crossdev-stages):
 |------|---------|--------------|-----|
 | **Toolchain** | `em toolchain --setup --root R` | Native self-hosting compiler + libc into `R`: baselayout → binutils → headers → glibc → gcc | step-local overrides inside the staged driver (not a stage recipe) |
 | **Cross toolchain** | `em --target T crossdev --setup` | Cross tools into `/usr/<T>` (host-side) + sysroot skeleton | eclass/crossdev model |
-| **Stage1** | `em stages --stage1 --root R` | Bootstrap set: baselayout (`USE=build`, `--nodeps`) then profile `packages.build` | **forced** conf-layer `USE="-* build ${BOOTSTRAP_USE}"` |
+| **Stage1** | `em stages --stage1 --root R` | Bootstrap set: baselayout (`USE=build`, `--nodeps`) then profile `packages.build` | **forced** conf-layer `USE="-* build ${BOOTSTRAP_USE}"`; **`--autosolve-use` always on** (IUSE `+` defaults preferred when `-*` wiped them) |
 | **Stage3** | `em stages --stage3 --root R` | Emptytree rebuild of `@system` | **none injected** — profile + ROOT `make.conf` + `package.use` only |
 | **Stage4** | *(not implemented)* | Would need a stage specification language | TBD |
 
@@ -135,7 +135,9 @@ em --root /path/to/stage \
 - **USE:** forced to catalyst-style bootstrap:
   - step baselayout: `USE=build`, `--nodeps`
   - step packages.build: `USE="-* build ${BOOTSTRAP_USE}"` (profile
-    `BOOTSTRAP_USE` re-applied after `-*`)
+    `BOOTSTRAP_USE` re-applied after `-*`); merge always uses `--autosolve-use`
+    so REQUIRED_USE after the wipe (e.g. `app-alternatives` `^^`) is ceded,
+    preferring ebuild `+` IUSE defaults
 - Seeds **PKGDIR** with `-b` by default (stage runs force buildpkg).
 - Requires a working toolchain already in the root.
 
@@ -336,7 +338,7 @@ export CROSS_TARGET=riscv64-unknown-linux-gnu
 |-------|--------|--------|
 | Profile | yes | yes |
 | ROOT `make.conf` | yes (then overridden) | **yes, decisive** |
-| Forced override | `-* build` + `BOOTSTRAP_USE` | **none** |
+| Forced override | `-* build` + `BOOTSTRAP_USE`; autosolve-use on | **none** |
 | Process `USE=` | conf-layer override wins for the step | normal stacking |
 | Goal | minimal bootstrap set | full `@system` as configured |
 

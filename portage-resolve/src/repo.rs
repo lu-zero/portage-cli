@@ -883,6 +883,12 @@ impl Adapter<'_> {
     /// to satisfy REQUIRED_USE. Flags the user pinned via package.use, or the
     /// profile forced/masked, are left fixed (hard choices we must not override).
     ///
+    /// When the resolved config has the flag **off**, but the ebuild's IUSE
+    /// carries a `+` default (wiped by conf-level `USE=-*`, as stage1 does),
+    /// prefer **on** instead of "keep off". That biases exclusive groups
+    /// (`^^`, `app-alternatives.eclass`) toward the eclass default provider
+    /// rather than an arbitrary member when every option was cleared.
+    ///
     /// Skips ceding entirely when the constraint already holds, so settled flags
     /// (e.g. a USE_EXPAND like LLVM_SLOT/PYTHON_TARGETS) are not re-decided and
     /// their conditional deps not gratuitously pulled — matching emerge, which
@@ -947,7 +953,12 @@ impl Adapter<'_> {
             {
                 continue;
             }
-            let prefer = matches!(cfg.get(flag), UseFlagState::Enabled);
+            // Keep-config when already on; if off, still prefer on when the
+            // ebuild's IUSE default is `+flag` (stage1 `-*` wipe recovery).
+            let prefer = matches!(cfg.get(flag), UseFlagState::Enabled)
+                || m.iuse
+                    .iter()
+                    .any(|iu| iu.name() == name.as_str() && iu.is_enabled_default());
             cfg.solver_decide(flag, prefer);
         }
     }
@@ -2371,6 +2382,54 @@ mod tests {
                 ),
                 "flag {f} should be ceded when nothing pins it"
             );
+        }
+    }
+
+    /// Stage1 `USE=-*` wipes IUSE `+` defaults so `^^ ( gawk busybox … )` has
+    /// every option off. Cede must prefer the ebuild's `+` default (`gawk`) so
+    /// the solver restores the app-alternatives.eclass first provider, not an
+    /// arbitrary member of the exclusive group.
+    #[test]
+    fn cede_prefers_iuse_plus_default_when_config_has_flag_off() {
+        let (data, cpv) = repo_with(
+            "app-alternatives/awk-4",
+            "EAPI=8\nSLOT=0\nIUSE=+gawk busybox mawk nawk\n\
+             REQUIRED_USE=^^ ( gawk busybox mawk nawk )\n\
+             KEYWORDS=amd64\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        // Conf-layer -* equivalent: no flags on (all providers off).
+        let pre_env = portage_atom_pubgrub::UseLayer::parse("-* build");
+
+        let fm = ForceMask::default();
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let adapter = Adapter {
+            data: &data,
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            pre_env: &pre_env,
+            env_use: empty_layer(),
+            package_use: &[],
+            force_mask: &fm,
+            autosolve_use: true,
+        };
+
+        let desired = adapter.desired_use(&cpv);
+        match desired.get(Interned::intern("gawk")) {
+            UseFlagState::SolverDecided { prefer: true } => {}
+            other => panic!("gawk (+ IUSE default) must prefer on when wiped by -*; got {other:?}"),
+        }
+        for f in ["busybox", "mawk", "nawk"] {
+            match desired.get(Interned::intern(f)) {
+                UseFlagState::SolverDecided { prefer: false } => {}
+                other => panic!("{f} (no +default) must prefer off when wiped by -*; got {other:?}"),
+            }
         }
     }
 

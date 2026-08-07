@@ -684,11 +684,17 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
         plan.steps.len()
     )
     .ok();
+    // Stage1's conf-layer `USE=-*` wipes IUSE `+` defaults (Portage-identical),
+    // so packages like app-alternatives/* violate REQUIRED_USE until Level-C
+    // cedes those flags. Always enable --autosolve-use for this step; cede
+    // prefers the ebuild's + IUSE default when the config left the flag off.
+    let mut stage1_merge = merge_merge_flags_with(globals, &args.merge_flags, true);
+    stage1_merge.autosolve_use = true;
     run_staged(
         &plan,
         globals,
         merge_depgraph_flags(globals, &args.depgraph_flags),
-        merge_merge_flags_with(globals, &args.merge_flags, true),
+        stage1_merge,
         false,
         false,
         &[],
