@@ -61,6 +61,15 @@ pub struct StageStep {
     /// headers-only libc step, to break the glibc→newer-gcc cycle before a
     /// compiler exists.
     pub nodeps: bool,
+    /// Merge into `--target`'s **sysroot** even when the staged driver would
+    /// otherwise force the outer EROOT (`use_outer_eroot: true` on
+    /// `crossdev --setup`). Required for sysroot **baselayout**: real
+    /// `sys-apps/baselayout` is not a `cross-*` atom, so without this it lands
+    /// only on the outer prefix while libc/`atom()` steps write into
+    /// `usr/<tuple>/` — leaving a merged-usr **profile** over a split-usr
+    /// **disk** (Sonnet 2026-08-07). Do **not** “fix” that by switching the
+    /// sysroot to a split-usr profile; match disk to the default profile.
+    pub into_sysroot: bool,
 }
 
 /// An ordered sequence of [`StageStep`]s run against one root.
@@ -172,19 +181,26 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
     // osdir is `../lib64` (needs `/usr/lib`); modern `merged-usr` profiles also
     // need baselayout's bin↔usr/bin skeleton before any package writes real
     // content into `/bin` vs `/usr/bin`. `link_abi_osdirs` only bridges libdirs
-    // and does not create that layout. Without this, default `--prefix --target`
-    // ends up genuinely split-usr on disk while the profile declares merged-usr
-    // (live 2026-08-07: 27× profile.bashrc die, then silently swallowed until
-    // the bashrc-die fix). Real category always: baselayout is never part of the
-    // `cross-<tuple>` package set — bypass `atom()`'s rewrite.
+    // and does not create that layout.
+    //
+    // Real category always (not `atom()`): baselayout is not in the cross
+    // overlay package set. For **cross**, set `into_sysroot` so the step merges
+    // under `--target`'s sysroot even though `crossdev --setup` runs the plan
+    // with `use_outer_eroot: true` (host tools like binutils/gcc). Without that,
+    // baselayout only seeded the outer prefix while libc wrote split dirs into
+    // `usr/<tuple>/` (Sonnet 2026-08-07). Product rule: keep the default
+    // **merged-usr** profile; make disk match it — do not switch the sysroot to
+    // a split-usr profile to paper over layout.
     //
     // LLVM used to `return` before this block entirely (wrappers → headers →
     // libc → runtimes), so even self-contained LLVM never got baselayout.
+    let baselayout_into_sysroot = matches!(kind, BootstrapKind::Cross(_));
     steps.push(StageStep {
         label: "baselayout".into(),
         atoms: vec!["sys-apps/baselayout".to_string()],
         use_override: owned(&["build"]),
         nodeps: false,
+        into_sysroot: baselayout_into_sysroot,
     });
 
     if kind.llvm() {
@@ -195,6 +211,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
             atoms: vec![atom("sys-devel", "clang-crossdev-wrappers")],
             use_override: vec![],
             nodeps: false,
+            into_sysroot: false,
         });
         if kind.has_kernel() {
             steps.push(StageStep {
@@ -202,6 +219,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
                 atoms: vec![kind.kernel_headers_atom()],
                 use_override: owned(&["headers-only"]),
                 nodeps: false,
+                into_sysroot: false,
             });
         }
         steps.push(StageStep {
@@ -209,6 +227,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
             atoms: vec![atom("sys-libs", kind.libc_pkg())],
             use_override: vec![],
             nodeps: false,
+            into_sysroot: false,
         });
         for rt in ["compiler-rt", "libunwind", "libcxxabi", "libcxx"] {
             steps.push(StageStep {
@@ -216,6 +235,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
                 atoms: vec![atom("llvm-runtimes", rt)],
                 use_override: vec![],
                 nodeps: false,
+                into_sysroot: false,
             });
         }
         return StagePlan { steps };
@@ -251,6 +271,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
         atoms: vec![atom("sys-devel", "binutils")],
         use_override: binutils_use,
         nodeps: false,
+        into_sysroot: false,
     });
 
     // Native breaks the glibc ↔ gcc cycle with the seed compiler (`BROOT=/`),
@@ -280,6 +301,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
                 atoms: vec![kind.kernel_headers_atom()],
                 use_override: owned(&["headers-only"]),
                 nodeps: false,
+                into_sysroot: false,
             });
         }
         steps.push(StageStep {
@@ -287,12 +309,14 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
             atoms: vec![atom("sys-libs", kind.libc_pkg())],
             use_override: vec![],
             nodeps: true,
+            into_sysroot: false,
         });
         steps.push(StageStep {
             label: "gcc".into(),
             atoms: vec![atom("sys-devel", "gcc")],
             use_override: owned(GCC_DISABLE),
             nodeps: false,
+            into_sysroot: false,
         });
         return StagePlan { steps };
     }
@@ -318,6 +342,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
                 atoms: vec!["virtual/os-headers".to_string()],
                 use_override: owned(&["headers-only"]),
                 nodeps: false,
+                into_sysroot: false,
             });
         }
         steps.push(StageStep {
@@ -325,6 +350,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
             atoms: vec![kind.kernel_headers_atom()],
             use_override: owned(&["headers-only"]),
             nodeps: false,
+            into_sysroot: false,
         });
         // libc headers first (--nodeps): gcc-stage1 needs them, but glibc itself
         // may DEPEND on a newer gcc we don't have yet — break the cycle.
@@ -333,6 +359,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
             atoms: vec![atom("sys-libs", kind.libc_pkg())],
             use_override: owned(&["headers-only"]),
             nodeps: true,
+            into_sysroot: false,
         });
     }
     let mut stage1 = owned(GCC_DISABLE);
@@ -342,12 +369,14 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
         atoms: vec![atom("sys-devel", "gcc")],
         use_override: stage1,
         nodeps: false,
+        into_sysroot: false,
     });
     steps.push(StageStep {
         label: "libc".into(),
         atoms: vec![atom("sys-libs", kind.libc_pkg())],
         use_override: vec![],
         nodeps: false,
+        into_sysroot: false,
     });
     let mut stage2 = owned(GCC_DISABLE);
     stage2.extend(owned(GCC_DISABLE_STAGE2));
@@ -356,6 +385,7 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
         atoms: vec![atom("sys-devel", "gcc")],
         use_override: stage2,
         nodeps: false,
+        into_sysroot: false,
     });
     StagePlan { steps }
 }
@@ -404,12 +434,14 @@ pub fn gcc_refresh_plan(target: &CrossTarget, version: &str) -> StagePlan {
                 atoms: vec![atom("sys-devel", "gcc")],
                 use_override: stage1,
                 nodeps: false,
+                into_sysroot: false,
             },
             StageStep {
                 label: "gcc-stage2 (refresh)".into(),
                 atoms: vec![atom("sys-devel", "gcc")],
                 use_override: stage2,
                 nodeps: false,
+                into_sysroot: false,
             },
         ],
     }
@@ -440,6 +472,7 @@ pub fn stage1_plan(stack: &ProfileStack, bootstrap_use: &[String]) -> Result<Sta
         atoms: vec!["sys-apps/baselayout".to_string()],
         use_override: vec!["build".to_string()],
         nodeps: true,
+        into_sysroot: false,
     }];
     let atoms: Vec<String> = stack
         .stage1_packages()?
@@ -453,6 +486,7 @@ pub fn stage1_plan(stack: &ProfileStack, bootstrap_use: &[String]) -> Result<Sta
         atoms,
         use_override,
         nodeps: false,
+        into_sysroot: false,
     });
     Ok(StagePlan { steps })
 }
@@ -706,7 +740,22 @@ mod tests {
         let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
         assert_eq!(labels(&plan)[0], "baselayout");
         assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
+        assert!(
+            plan.steps[0].into_sysroot,
+            "cross baselayout must merge into the target sysroot, not only outer EROOT"
+        );
         assert_eq!(labels(&plan)[1], "clang wrappers");
+        assert!(!plan.steps[1].into_sysroot);
+    }
+
+    #[test]
+    fn native_baselayout_does_not_force_sysroot() {
+        let plan = toolchain_plan(&BootstrapKind::Native, true);
+        assert_eq!(plan.steps[0].label, "baselayout");
+        assert!(
+            !plan.steps[0].into_sysroot,
+            "native toolchain has no --target sysroot substitution to force"
+        );
     }
 
     #[test]

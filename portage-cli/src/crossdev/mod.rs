@@ -396,6 +396,14 @@ async fn run_staged(
         )
         .ok();
         out.flush().ok();
+        // Per-step override: sysroot baselayout under crossdev --setup must
+        // honour `--target` even when the plan-wide flag forces outer EROOT
+        // for host-arch cross-* tools (see StageStep::into_sysroot).
+        let step_outer = if step.into_sysroot {
+            false
+        } else {
+            use_outer_eroot
+        };
         crate::emerge_atoms(
             globals,
             &step.atoms,
@@ -404,7 +412,7 @@ async fn run_staged(
                 nodeps: step.nodeps,
                 depgraph_flags: Some(depgraph_flags.clone()),
                 merge_flags: Some(merge_flags.clone()),
-                use_outer_eroot,
+                use_outer_eroot: step_outer,
                 target_only_installed_view,
                 // Internal staged-build step, not a user package
                 // selection — must not pollute the world file.
