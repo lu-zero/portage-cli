@@ -2853,3 +2853,157 @@ fn cross_target_build_pulls_unsatisfied_bdepend_even_if_target_already_has_it() 
          instance as satisfying the BDEPEND"
     );
 }
+
+/// Sonnet 2026-08-07 bug #3 (clang world under `--prefix --target`):
+/// `virtual/libcrypt` completed while `sys-libs/libxcrypt` never got
+/// `Emerging`, so pam's configure failed to find libcrypt in the *sysroot*.
+///
+/// Host often has `libxcrypt` (and even `virtual/libcrypt`) installed. Those
+/// must satisfy BDEPEND on BROOT only — they must **not** suppress a Target
+/// RDEPEND of the virtual. The provider must select Target `libxcrypt`,
+/// order it before the virtual, and emit a Target→Target RDEPEND edge so
+/// `build_blockers` can wait on the provider.
+#[test]
+fn cross_target_virtual_rdepend_provider_is_target_not_host() {
+    let mut repo = InMemoryRepository::new();
+    // Real provider (like sys-libs/libxcrypt).
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libxcrypt-4.5.2").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+    // Also an older host-like version so Favor/host can't "upgrade away".
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libxcrypt-4.4.38").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+    // Gentoo-style virtual: RDEPEND only (no DEPEND).
+    repo.add_version(
+        portage_atom::Cpv::parse("virtual/libcrypt-2").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("sys-libs/libxcrypt").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    // Consumer like pam.
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/pam-1.7.2").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            depend: (DepEntry::parse("virtual/libcrypt").unwrap()).into(),
+            rdepend: (DepEntry::parse("virtual/libcrypt").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    let mut provider = {
+        repo.set_use_config(UseConfig::new());
+        let mut p = PortageDependencyProvider::new(repo);
+        p.set_cross_active(true);
+        p.set_is_cross_arch(true);
+        p.set_with_bdeps(true);
+        p
+    };
+
+    // Host already has the provider (and could have the virtual) — BROOT only.
+    provider.add_host_installed(
+        PortagePackage::slotted(
+            Cpn::parse("sys-libs/libxcrypt").unwrap(),
+            Interned::intern("0"),
+        ),
+        Version::parse("4.4.38").unwrap(),
+        Vec::new(),
+        Vec::new(),
+    );
+    provider.add_host_installed(
+        PortagePackage::slotted(
+            Cpn::parse("virtual/libcrypt").unwrap(),
+            Interned::intern("0"),
+        ),
+        Version::parse("2").unwrap(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    let pam = PortagePackage::slotted(Cpn::parse("sys-libs/pam").unwrap(), Interned::intern("0"));
+    let solution = provider
+        .resolve_targets(vec![(pam, PortageVersionSet::any())])
+        .expect("solve pam");
+
+    let cpn_eq = |p: &PortagePackage, cat: &str, pkg: &str| {
+        p.cpn().category.as_str() == cat && p.cpn().package.as_str() == pkg
+    };
+    let target_xcrypt = solution.iter().find(|(p, _)| {
+        cpn_eq(p, "sys-libs", "libxcrypt") && p.merge_root() == MergeRoot::Target
+    });
+    assert!(
+        target_xcrypt.is_some(),
+        "Target sysroot must still get libxcrypt even when host has it; \
+         host-only satisfaction leaves pam without crypt.h in the sysroot. \
+         solution={:?}",
+        solution
+            .iter()
+            .map(|(p, v)| format!("{}@{:?}={v}", p.cpn(), p.merge_root()))
+            .collect::<Vec<_>>()
+    );
+
+    // Virtual must also be a Target merge (installs into sysroot VDB).
+    assert!(
+        solution
+            .iter()
+            .any(|(p, _)| cpn_eq(p, "virtual", "libcrypt") && p.merge_root() == MergeRoot::Target),
+        "virtual/libcrypt must merge as Target"
+    );
+
+    let order = provider.install_order(&solution);
+    let idx = |cat: &str, pkg: &str| {
+        order
+            .iter()
+            .position(|(p, _)| cpn_eq(p, cat, pkg) && p.merge_root() == MergeRoot::Target)
+    };
+    let i_xcrypt = idx("sys-libs", "libxcrypt").expect("libxcrypt in order");
+    let i_virt = idx("virtual", "libcrypt").expect("virtual in order");
+    let i_pam = idx("sys-libs", "pam").expect("pam in order");
+    assert!(
+        i_xcrypt < i_virt,
+        "libxcrypt must install before virtual/libcrypt (RDEPEND provider); \
+         order indices xcrypt={i_xcrypt} virt={i_virt}"
+    );
+    assert!(
+        i_virt < i_pam,
+        "virtual/libcrypt before pam; virt={i_virt} pam={i_pam}"
+    );
+
+    // Edge graph must carry Target virtual → Target libxcrypt RDEPEND for
+    // build_blockers (same keys as plan entries).
+    let edges = provider.dependency_graph(&solution);
+    let has_edge = edges.iter().any(|e| {
+        e.class == crate::graph::DepClass::Rdepend
+            && cpn_eq(&e.from.0, "virtual", "libcrypt")
+            && e.from.0.merge_root() == MergeRoot::Target
+            && cpn_eq(&e.to.0, "sys-libs", "libxcrypt")
+            && e.to.0.merge_root() == MergeRoot::Target
+    });
+    assert!(
+        has_edge,
+        "need Target RDEPEND edge virtual/libcrypt → libxcrypt for \
+         build_blockers; edges={:?}",
+        edges
+            .iter()
+            .map(|e| format!(
+                "{:?}: {}@{:?} -> {}@{:?}",
+                e.class,
+                e.from.0.cpn(),
+                e.from.0.merge_root(),
+                e.to.0.cpn(),
+                e.to.0.merge_root()
+            ))
+            .collect::<Vec<_>>()
+    );
+}

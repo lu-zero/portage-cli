@@ -70,11 +70,43 @@ ls "$P/usr/riscv64-unknown-linux-gnu/usr/include/crypt.h" 2>/dev/null
 # From the initial -p or plan dump of the same run: was libxcrypt [ebuild N]?
 ```
 
-Hypotheses for Grok (you only need evidence):
+Hypotheses for Grok (you only need evidence) — **updated after code dig 2026-08-07**:
 
-1. silent VDB skip (host weave / already-installed false positive)
-2. RDEPEND edge virtual/libcrypt → libxcrypt missing at schedule time (USE `prefix-guest` / `elibc_glibc`)
-3. plan listed it but never dequeued (blocker / stop_new)
+Unit test `cross_target_virtual_rdepend_provider_is_target_not_host` (in
+`portage-atom-pubgrub`) shows the **simple dual-root case is correct**: host
+having `libxcrypt` does **not** suppress Target `libxcrypt`; install order is
+provider → virtual → pam; Target RDEPEND edge exists. So #3 is **not** “host
+Favor kills Target provider” in the minimal model.
+
+**Stronger live hypotheses (please gather):**
+
+1. **Cross glibc VDB identity vs `sys-libs/glibc`**  
+   `crossdev --setup` installs `cross-<T>/glibc` (plan CPV / VDB category).  
+   `sys-libs/libxcrypt[system]` DEPEND is `${CATEGORY}/glibc[-crypt]` → for a
+   normal target package that is **`sys-libs/glibc`**, a different Cpn.  
+   Installed `cross-T/glibc` may **not** Favor-satisfy `sys-libs/glibc`, so the
+   clang plan may pull a **second** full `sys-libs/glibc`. libxcrypt then waits
+   on that. Capture: is `sys-libs/glibc` (not only `cross-*/glibc`) in the
+   plan? Did it `Emerging` before pam failed?
+
+2. **Silent skip / never dequeued**  
+   Any `sys-libs/libxcrypt` line that is not `Emerging` — was it after a
+   package that never completed? `rg 'libxcrypt|sys-libs/glibc' LOG`.
+
+3. **USE on virtual empty RDEPEND** (weaker if plan lists libxcrypt):  
+   virtual RDEPEND is `!prefix-guest? ( elibc_glibc? ( libxcrypt… ) )`.  
+   Host VDB sample has RDEPEND already evaluated to `sys-libs/libxcrypt[system(-)]`.
+
+**Please dump from the failed sandbox:**
+
+```sh
+# After crossdev --setup, before or after clang fail:
+find "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg" -maxdepth 2 -type d | sort
+# Especially: cross-*/glibc vs sys-libs/glibc
+ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/cross-"*"/glibc-"* 2>/dev/null
+ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/sys-libs/glibc-"* 2>/dev/null
+ls "$P/usr/riscv64-unknown-linux-gnu/var/db/pkg/sys-libs/libxcrypt-"* 2>/dev/null
+```
 
 ### Optional if P0 green and time left
 
