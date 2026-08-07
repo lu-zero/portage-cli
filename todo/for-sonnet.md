@@ -766,3 +766,63 @@ alternate hypothesis:**
   don't apply that fix blind; it may have been added intentionally for a
   different reason and could have its own blast radius, worth checking
   its own history/tests before touching it.
+
+---
+
+### A cleaner fix for bug #4 than baselayout-seeding: pick the `split-usr` profile for crossdev targets
+
+Luca asked whether we're "picking the right profile." Traced the actual
+die check (`portage-repo/gentoo/profiles/releases/23.0/profile.bashrc`) —
+it does **not** check for a baselayout-created marker. It's two
+independent checks that must **agree**:
+
+```sh
+__gentoo_get_disk_splitmerge()   # is ${EROOT}/bin a symlink (merged) / real dir (split) / absent (unknown)?
+__gentoo_get_profile_splitmerge() # does the make.profile symlink target contain "split-usr"?
+```
+
+It only `die`s when these two **disagree** (and — notably — does nothing
+at all if `/bin` doesn't exist yet, i.e. `unknown`, which is exactly why
+the very first blank-slate check right after `crossdev --setup` didn't
+itself die; the die only starts once ordinary packages begin writing real
+content to `/bin`).
+
+`crossdev/target.rs:128` picks `default/linux/riscv/23.0/rv64/lp64d` — the
+modern **merged-usr** default. A ready-made split-usr sibling already
+exists in the tree: `default/linux/riscv/23.0/rv64/split-usr/lp64d`
+(confirmed present under `portage-repo/gentoo/profiles/`), inheriting
+`profiles/features/split-usr`, which sets `PROFILE_23_USRTYPE="split-usr"`
+and force-enables `USE=split-usr` (`features/split-usr/use.force`).
+
+**A cross-compilation sysroot is never booted and never runs systemd — it
+only needs headers/libs to build against. There's no reason it needs the
+merged-usr symlink layout at all.** If `crossdev::target::profile_path()`
+selected the `split-usr` variant for target sysroots, the profile's
+declared type would genuinely match what crossdev naturally produces (real
+split directories, not merged-via-symlink), and the die simply wouldn't
+fire — not because a check got suppressed, but because declared and actual
+state would actually agree. This sidesteps the entire #4 baselayout-seeding
+problem (no need to seed baselayout into the target sysroot at all, no
+ordering dependency on `libc`/`kernel headers`) rather than trying to make
+baselayout win a race it structurally can't win once crossdev has already
+written real content.
+
+**Not yet verified live** — this is a code-read finding, not yet tested
+against a real sandbox. Checked one open question already: the existing
+`!self.has_kernel` bare-metal branch returns `"embedded"`
+(`crossdev/target.rs:122-124`) — that profile has no `parent` file and no
+`split-usr` references, and its path doesn't contain `"/23.0"` at all, so
+`__gentoo_get_profile_splitmerge` always returns `unknown` for it — the
+die can never fire there regardless of disk state. So this whole class of
+bug (#4/#5's split-usr fallout) is specific to the `default/linux/*/23.0`
+branch crossdev picks for kernel/full-OS targets; bare-metal targets are
+already structurally immune. One thing still worth checking: whether any
+*ordinary* runtime package actually being built for the target (not just
+toolchain identity packages) cares about merged-usr for its own
+correctness (e.g.
+some `pkg_setup`/eclass logic beyond this one profile.bashrc check) —
+`USE=split-usr` is force-set by the profile, which already shows up
+correctly in every plan line we've captured (`(-split-usr)` → flipped to
+real `split-usr`), so this is likely just a matter of switching which
+profile path crossdev links to, not a deeper compatibility question — but
+flagging as unverified rather than asserting it's risk-free.
