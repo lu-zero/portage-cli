@@ -132,6 +132,110 @@ rg -n 'python|glibc|libxcrypt|libcrypt' "$LOG" | rg '\[ebuild|Emerging' | head -
 
 ---
 
+### Results — 2026-08-07 (Sonnet), soft-order #3
+
+**em SHA:** `42e4042` (tip; code is `732d604`, `42e4042` on top is docs-only).
+Fresh sandbox (`em-softorder-verify`, `sandbox prepare --bare`).
+
+#### Plan order (`-p virtual/libcrypt sys-libs/pam`, isolated 2-target probe)
+
+- Order: `sys-libs/glibc` → `sys-libs/libxcrypt` → `virtual/libcrypt` →
+  `sys-libs/pam` — exactly the expected order.
+- **PASS** on this isolated probe.
+
+#### clang -b --jobs 80
+
+- **Progress: 0 ok, 0 failed, of 135 — the run never started merging at
+  all.** `EXIT=1` from a **pre-flight dependency check**, before the first
+  `>>> Emerging` line:
+  ```
+  !!! pre-flight dependency check failed — these build dependencies are not
+  satisfied by the installed view or earlier plan entries:
+    sys-devel/gcc-16.1.1_p20260718 needs: sys-libs/glibc[cet(-)?]
+  ```
+- **Emerging libxcrypt? N/A** — nothing ever started emerging.
+- **#3 schedule: cannot be evaluated this pass** — the run never reached
+  the scheduling phase.
+- **But the *plan-dump* order in this full 135-package graph is
+  inverted relative to the isolated probe above — this is the important
+  finding.** In the full clang plan: `virtual/libcrypt` is listed at index
+  **66**, `sys-libs/pam` at **67** — both **before** `sys-libs/glibc` (86)
+  and `sys-libs/libxcrypt` (87). This is the *opposite* order from the
+  isolated 2-target probe (which correctly put glibc/libxcrypt first). The
+  soft-order fix's correctness **does not generalize from the small
+  reproduction case to the full real-world graph** — embedding the same
+  virtual/provider/consumer triple in a much larger dependency graph (more
+  SCCs, more competing soft/hard edges) produces the old, wrong order
+  again. Caveat: this is the **printed plan order**, not confirmed
+  execution order (the scheduler may pick ready packages dynamically
+  rather than strictly walking the printed list) — but since the run
+  never got past pre-flight, execution order couldn't be directly
+  observed this pass either way.
+
+#### New bug — pre-flight check catches `sys-devel/gcc` scheduled before its own BDEPEND `sys-libs/glibc`
+
+Distinct from bug #3 (which was about a virtual completing without its
+provider). Here a **real** `sys-devel/gcc-16.1.1_p20260718` (a second,
+full, non-cross gcc for the target sysroot — same library-identity class
+as the `sys-libs/glibc` re-plan noted in earlier passes) is listed at plan
+index **85**, immediately **before** its own `sys-libs/glibc` BDEPEND at
+index **86** — backwards. `sys-libs/glibc`'s planned USE string does
+include `(-cet)` (the flag exists, just forced off), so the BDEPEND
+`glibc[cet(-)?]` (accepts either value) *would* be satisfiable by the
+planned glibc entry — except the checker correctly recognizes glibc
+hasn't been merged yet at the point gcc would need to consume it, since
+gcc is scheduled to run *first*. This reads as a genuine ordering
+violation surfaced by (apparently new, and evidently useful) pre-flight
+validation, not a false positive — the fix shape would be the same
+family as bug #3's (ordering/scheduling for real-Cpn BDEPEND edges), but
+this is the harder, non-virtual case: a plain real-to-real BDEPEND edge
+between two full packages, not a virtual's provider selection. Not
+root-caused to file:line this pass (out of scope — "record only" per the
+rules); worth checking whether this predates the soft-order fix or is a
+side effect of the pass-2 repair walk touching an unrelated part of the
+same larger SCC.
+
+#### #4/#5/#1/#2 regression smoke
+
+- **#4:** PASS — `$SYSROOT/bin` is a real symlink after `crossdev
+  --setup`, confirmed before the clang run.
+- **#5/#1/#2:** not exercised this pass — the run never reached any real
+  merge, so there's nothing to check die-honesty, sed/acl, or `--buildpkg`
+  against.
+- **Workdir:** not exercised (no merges attempted).
+
+#### Library identity (note only)
+
+Not re-checked this pass beyond what's already on record — the
+`sys-devel/gcc`/`sys-libs/glibc` re-plan for the target sysroot (same
+outer-vs-sysroot VDB split documented in the prior pass) is consistent
+with, and plausibly the direct cause of, the new pre-flight failure above.
+
+#### Summary
+
+The isolated fix (as tested in the small probe) works exactly as
+intended. But the full clang plan reveals two problems, neither
+previously visible because earlier passes never got this far: (1) the
+soft-order fix's correctness doesn't hold once the same virtual/provider
+triple sits inside the full 135-package graph, and (2) a new, distinct
+ordering violation between `sys-devel/gcc` and its own `sys-libs/glibc`
+BDEPEND blocks the run before any merge starts. `llvm-core/clang` is
+still not reached — this is the first pass where the blocker is a
+pre-flight rejection rather than a mid-build failure, which is arguably
+safer (no wasted build time, no partial/inconsistent sysroot state) but
+still fully blocking.
+
+#### Performance cost of the soft-order fix (`732d604`)
+
+Separately requested: benchmarked `732d604` against the immediately-prior
+`bf35c79` — criterion `resolve` microbench (mixed ±2-4% deltas, no
+consistent direction) plus three same-run interleaved `hyperfine`
+head-to-heads (exact soft-cycle scenario: 1.00×; full clang plan: 1.02×;
+unrelated host target: 1.00×). **No measurable regression.** Full
+writeup: `benchmarks/results/20260807-145520-softorder-732d604-vs-bf35c79/README.md`.
+
+---
+
 ## Prior results (kept for history)
 
 Last full live pass before soft-order fix: **`1ac8067`** — #4/#5 PASS, #3 still broken (virtual Completed, libxcrypt never Emerging, stop on pam). Details below in archived sections.

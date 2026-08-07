@@ -1,0 +1,198 @@
+   Compiling zeroize v1.9.0
+   Compiling log v0.4.33
+   Compiling num-traits v0.2.19
+   Compiling nix v0.31.3
+   Compiling serde_json v1.0.151
+   Compiling generic-array v0.14.7
+   Compiling flate2 v1.1.9
+   Compiling tracing-core v0.1.36
+   Compiling futures-util v0.3.33
+   Compiling gix-packetline v0.21.5
+   Compiling postcard v1.1.3
+   Compiling rustls-pki-types v1.15.1
+   Compiling aws-lc-rs v1.17.3
+   Compiling uzers v0.12.2
+   Compiling pubgrub v0.4.0
+   Compiling ipc-channel v0.22.0
+   Compiling tracing v0.1.44
+   Compiling rustls-native-certs v0.8.4
+   Compiling h2 v0.4.15
+   Compiling brush-parser v0.4.0 (/home/lu_zero/Sources/brush/brush-parser)
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling portage-atom-pubgrub v0.7.0 (/home/lu_zero/Sources/portage-cli/portage-atom-pubgrub)
+   Compiling sha1 v0.10.7
+   Compiling prefix-trie v0.8.4
+   Compiling chrono v0.4.45
+   Compiling num-integer v0.1.46
+   Compiling plotters v0.3.7
+   Compiling sha1-checked v0.10.0
+   Compiling tinytemplate v1.2.1
+   Compiling num-bigint v0.4.8
+   Compiling gix-hash v0.25.1
+   Compiling rustls-webpki v0.103.13
+   Compiling gix-hashtable v0.15.2
+   Compiling gix-commitgraph v0.37.1
+   Compiling gix-shallow v0.12.1
+   Compiling gix-object v0.60.0
+   Compiling hickory-proto v0.26.1
+   Compiling rustls v0.23.43
+   Compiling criterion v0.7.0
+   Compiling procfs-core v0.18.0
+   Compiling bigdecimal v0.4.10
+   Compiling gix-revwalk v0.31.0
+   Compiling gix-ref v0.63.0
+   Compiling gix-filter v0.30.0
+   Compiling gix-pack v0.70.0
+   Compiling gix-diff v0.63.0
+   Compiling gix-revision v0.45.0
+   Compiling gix-traverse v0.57.0
+   Compiling gix-negotiate v0.31.0
+   Compiling futures-executor v0.3.33
+   Compiling tower v0.5.3
+   Compiling command-fds v0.3.3
+   Compiling scallop v0.0.30 (/home/lu_zero/Sources/pkgcraft/crates/scallop)
+   Compiling futures v0.3.33
+   Compiling resolvo v0.11.1
+   Compiling gix-refspec v0.41.0
+   Compiling gix-index v0.51.0
+   Compiling tower-http v0.6.11
+   Compiling gix-config v0.56.0
+   Compiling gix-discover v0.51.0
+   Compiling hyper v1.11.0
+   Compiling hickory-net v0.26.1
+   Compiling uucore v0.8.0
+   Compiling gix-odb v0.80.0
+   Compiling gix-worktree v0.52.0
+   Compiling hickory-resolver v0.26.1
+   Compiling gix-worktree-state v0.30.0
+   Compiling portage-atom-resolvo v0.8.0 (/home/lu_zero/Sources/portage-cli/portage-atom-resolvo)
+   Compiling brush-core v0.5.0 (/home/lu_zero/Sources/brush/brush-core)
+   Compiling gix-submodule v0.30.0
+   Compiling hyper-util v0.1.20
+   Compiling procfs v0.18.0
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling gix-transport v0.57.2
+   Compiling gix-protocol v0.61.0
+   Compiling brush-builtins v0.2.0 (/home/lu_zero/Sources/brush/brush-builtins)
+   Compiling gix v0.83.0
+   Compiling portage-repo v0.1.0 (/home/lu_zero/Sources/portage-cli/portage-repo)
+   Compiling pkgcraft v0.0.31 (/home/lu_zero/Sources/pkgcraft/crates/pkgcraft)
+   Compiling portage-bench v0.1.0 (/home/lu_zero/Sources/portage-cli/benchmarks)
+    Finished `bench` profile [optimized] target(s) in 1m 57s
+     Running benches/resolve.rs (target/release/deps/resolve-e94bf02397053dc3)
+Gnuplot not found, using plotters backend
+Benchmarking resolve/load/load_repo
+Benchmarking resolve/load/load_repo: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.7s.
+Benchmarking resolve/load/load_repo: Collecting 10 samples in estimated 12.737 s (10 iterations)
+Benchmarking resolve/load/load_repo: Analyzing
+resolve/load/load_repo  time:   [1.2640 s 1.2647 s 1.2655 s]
+                        change: [+0.9099% +1.0886% +1.2548%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Benchmarking resolve/load/build_provider
+Benchmarking resolve/load/build_provider: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 19.5s.
+Benchmarking resolve/load/build_provider: Collecting 10 samples in estimated 19.525 s (10 iterations)
+Benchmarking resolve/load/build_provider: Analyzing
+resolve/load/build_provider
+                        time:   [545.38 ms 545.95 ms 546.83 ms]
+                        change: [+2.2352% +2.7548% +3.2631%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+
+repo loaded in 1.33s
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Collecting 10 samples in estimated 5.5262 s (440 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Analyzing
+resolve/targets/portage-atom-pubgrub/firefox
+                        time:   [12.502 ms 12.506 ms 12.511 ms]
+                        change: [+8.0434% +8.1972% +8.3070%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Collecting 10 samples in estimated 5.1676 s (1155 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Analyzing
+resolve/targets/portage-atom-pubgrub/gcc
+                        time:   [4.4501 ms 4.4519 ms 4.4533 ms]
+                        change: [+5.2016% +5.2499% +5.3004%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+Benchmarking resolve/targets/portage-atom-pubgrub/rust
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Collecting 10 samples in estimated 5.3402 s (660 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Analyzing
+resolve/targets/portage-atom-pubgrub/rust
+                        time:   [8.0469 ms 8.0493 ms 8.0517 ms]
+                        change: [+5.6208% +5.6673% +5.7171%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Collecting 10 samples in estimated 5.0589 s (1210 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Analyzing
+resolve/targets/portage-atom-pubgrub/openssh
+                        time:   [4.1630 ms 4.1636 ms 4.1646 ms]
+                        change: [+5.6441% +5.6905% +5.7352%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Benchmarking resolve/targets/portage-atom-pubgrub/python
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Collecting 10 samples in estimated 5.1318 s (880 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Analyzing
+resolve/targets/portage-atom-pubgrub/python
+                        time:   [5.7990 ms 5.8016 ms 5.8033 ms]
+                        change: [+4.3995% +4.4595% +4.5110%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+ACCEPT_KEYWORDS: ["arm64", "~arm64"]  effective_use: 156  package_mask: 24 atoms  package_use: 65 entries
+  USE contains: pam=true ssl=true static=false
+  installed packages from VDB: 713
+
+=== Solution sizes (keyword+mask filtered, profile USE) ===
+  firefox      → 274 packages
+  wrote /tmp/solver_firefox.txt
+  gcc          → 79 packages
+  wrote /tmp/solver_gcc.txt
+  rust         → 171 packages
+  wrote /tmp/solver_rust.txt
+  openssh: 406 deps dropped total
+    dropped llvm-runtimes/libatomic-stub: 29x
+    dropped app-emulation/wine-gecko: 24x
+    dropped llvm-runtimes/libgcc: 20x
+    dropped dev-lang/python: 19x
+    dropped app-arch/pdlzip: 15x
+    dropped app-emulation/wine-mono: 12x
+    dropped dev-util/mingw64-toolchain: 12x
+    dropped dev-lang/rust-bin: 10x
+    dropped dev-lang/rust: 10x
+    dropped app-misc/getopt: 8x
+    dropped dev-perl/GeoIP2: 6x
+    dropped llvm-core/clang: 5x
+    dropped www-servers/h2o: 5x
+    dropped www-servers/fnord: 4x
+    dropped dev-java/openjdk-jre-bin: 4x
+    dropped dev-util/spirv-llvm-translator: 4x
+    dropped dev-ruby/faraday-net_http: 4x
+    dropped sys-devel/native-cctools: 4x
+    dropped perl-core/Module-CoreList: 4x
+    dropped www-client/fetch: 4x
+  openssh 10.4_p1-r1: 24 merged deps | pam=true libcrypt=true openssl=true
+    dep: virtual/libcrypt:0
+    dep: sys-libs/pam:0
+    dep: virtual/libcrypt:0
+    dep: sys-libs/pam:0
+    dep: sys-auth/pambase:0
+  pam packages in provider: [Real { cpn: Cpn { category: Interned(26), package: Interned(252) }, slot: Some(Interned(17)), merge_root: Target }]
+  virtual/libcrypt packages in provider: [Real { cpn: Cpn { category: Interned(31), package: Interned(32) }, slot: Some(Interned(17)), merge_root: Target }]
+  openssh      → 48 packages
+  wrote /tmp/solver_openssh.txt
+  python       → 107 packages
+  wrote /tmp/solver_python.txt
