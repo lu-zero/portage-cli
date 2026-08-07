@@ -985,6 +985,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // (the provider returns un-pruned deps under `rebuild_tree`); no post-solve
             // re-list.
 
+            // Edges for "targets last" / build_blockers. Drop endpoints that are
+            // **solver-internal** nodes (`Choice` / `UseDecision` / … via
+            // `PortagePackage::is_virtual`) — not Gentoo `virtual/*` packages,
+            // which are `Real` and must keep RDEPEND edges (e.g.
+            // `virtual/libcrypt` → `sys-libs/libxcrypt`) for scheduling.
             let edges: Vec<_> = provider
                 .dependency_graph(&solution)
                 .into_iter()

@@ -707,8 +707,8 @@ impl PortageDependencyProvider {
     /// `package.provided` entry — the target's CPN is provided at a version the
     /// edge accepts. Slot is not considered (provided entries name a CPV).
     pub(crate) fn edge_is_provided(&self, target: &PortagePackage, vs: &PortageVersionSet) -> bool {
-        // Virtual variants (OR-group `Choice`, `SlotChoice`, `UseDecision`, …)
-        // have no CPN and can never be named by a `package.provided` entry.
+        // Solver-internal nodes (Choice/SlotChoice/UseDecision/…) have no CPN.
+        // Gentoo `virtual/*` packages are Real and can be provided normally.
         if target.is_virtual() {
             return false;
         }

@@ -155,7 +155,14 @@ impl PortagePackage {
         Self::SlotChoice { id }
     }
 
-    /// Returns `true` for solver-internal virtual variants.
+    /// `true` for **solver-internal** bookkeeping nodes only
+    /// ([`Root`](Self::Root), [`UseDecision`](Self::UseDecision),
+    /// [`Choice`](Self::Choice), [`SlotChoice`](Self::SlotChoice)).
+    ///
+    /// **Not** Gentoo category `virtual/*` packages (`virtual/libcrypt`, …):
+    /// those are ordinary [`Real`](Self::Real) nodes and return `false`.
+    /// Misreading this flag has already caused wrong live root-causes (e.g.
+    /// blaming a depgraph edge filter for dropping `virtual/*` RDEPEND).
     pub fn is_virtual(&self) -> bool {
         !matches!(self, Self::Real { .. })
     }
