@@ -176,41 +176,54 @@ em --target riscv64-unknown-linux-gnu sys-apps/coreutils  # one target package
 These resolve and install into the target sysroot (`<EROOT>/usr/<tuple>`),
 using the sysroot's own `make.conf` for `CHOST`/`CFLAGS`/keywords.
 
-**`stages --stage1` is not optional before ordinary packages.**  
-`crossdev --setup` only lands **toolchain** identities (`cross-<tuple>/glibc`,
-`cross-<tuple>/gcc`, …). Ordinary ebuilds depend on **real** system Cpns
-(`sys-libs/glibc`, `sys-apps/baselayout`, …). Stage1’s `packages.build` set
-(under `USE="-* build …"`) is what seeds that **@system-shaped** tree so
-later `em --target T llvm-core/clang` (or coreutils, pam, …) Favor-satisfies
-libc/userland instead of planning a second full world on an empty real-Cpn
-VDB. Skipping stage1 is why empty-sysroot clang plans balloon and trip
-libcrypt / second-glibc class failures (2026-08-07).
+### After setup: what is (and isn’t) required
+
+A full **`@system` / stage1 is not inherently required** just to *cross-build*
+packages into a sysroot. Runtime (RDEPEND) closure for a complete target
+userland is a different goal from “this emerge can compile and link.”
+
+What *is* required for ordinary target packages is that **library DEPEND**
+(headers / `.so` you build against under `SYSROOT`/`ESYSROOT`) is
+**solver-visible** under the **real Cpns** ebuilds name — profile-shaped
+libc (`sys-libs/glibc` *or* `sys-libs/musl`, …), headers, zlib, etc.
+
+`crossdev --setup` already puts those **files** on disk, but registers them
+as **`cross-<tuple>/…`**. Ordinary ebuilds Depend on **`sys-libs/glibc`** (or
+musl), not `cross-T/glibc`. Until Favor/provided/alias bridges that identity,
+the plan re-pulls a second libc (and friends) — the libcrypt / ballooned
+clang-plan class of failures (2026-08-07). That is a **library-identity**
+problem, not “missing full @system.”
+
+| Need | Satisfied by |
+|------|----------------|
+| Compiler + link against sysroot | Files under sysroot + correct **DEPEND** Favor/provided (libc/headers/libs) |
+| Full target runtime / chroot / stage | stage1 / `@system` / stage3 (optional for pure cross-build) |
+| Host build tools (BDEPEND) | BROOT / dual-root (host or prefix) |
+
+**Ways to fix library DEPEND** (product choice, not all required together):
+
+1. **Identity bridge** — installed `cross-T/foo` Favor-satisfies `real_cpn(foo)`, and/or `package.provided` for real libc/headers after setup.  
+2. **Register toolchain under real Cpns** in the sysroot VDB.  
+3. **stage1 / manual baselayout+libc** — works, but heavier than needed if the only gap is Cpn identity for libs already on disk.
 
 ### Worked example: bootstrap a toolchain and cross-build a real package, under `--prefix`
 
-End-to-end recipe, unprivileged (`riscv64-unknown-linux-gnu`, GCC model).
-Correct ladder (toolchain → **stage1** → ordinary package):
+End-to-end recipe, unprivileged (`riscv64-unknown-linux-gnu`, GCC model):
 
 ```
-# 1. Cross toolchain only (binutils → headers → gcc-stage1 → glibc → gcc-stage2).
-#    Packages register as cross-<tuple>/… in the sysroot VDB.
+# 1. Cross toolchain (binutils → headers → gcc-stage1 → libc → gcc-stage2).
+#    Files under sysroot; VDB identities are cross-<tuple>/… today.
 em --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
 
-# 2. Target @system seed (profile packages.build, USE=-* build).
-#    Lands real-category system packages the rest of the tree expects.
-em --prefix /opt/xp --target riscv64-unknown-linux-gnu stages --stage1 --autosolve-use --jobs 8
-
-# 3. Ordinary target package (clang’s full dep closure as real target-arch
-#    packages). -b writes binpkgs alongside the merge.
+# 2. Ordinary target package (real target-arch atoms into the sysroot).
+#    Needs library DEPEND satisfaction (see above) — not a full @system.
+#    Optional: stages --stage1 if you want packages.build / a richer base.
 em --prefix /opt/xp --target riscv64-unknown-linux-gnu -b llvm-core/clang --jobs 8
 ```
 
-Step 3 is genuinely different from step 1’s `cross-<tuple>/*` packages (see
-"Two package classes" above): it installs *into* the sysroot using the
-sysroot’s own `CHOST`/`CFLAGS`. It still needs step 2 so DEPEND edges on
-`sys-libs/glibc` / baselayout / … see a real system VDB, not only
-`cross-<tuple>/glibc`. `em` scopes host-side vs target search paths
-automatically — see `setup.rs`’s `BASHRC_PREFIX` and `shell.rs`’s `ESYSROOT`.
+Step 2 is different from step 1’s `cross-<tuple>/*` packages (see "Two package
+classes"): real Cpns, sysroot `CHOST`/`CFLAGS`. Host vs target search paths:
+`setup.rs` `BASHRC_PREFIX`, `shell.rs` `ESYSROOT`.
 
 ### Build one cross-category package directly (no `--target` needed)
 

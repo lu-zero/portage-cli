@@ -13,16 +13,18 @@ or workdir races under real parallelism.
 
 ## NEXT HOMEWORK — tip ≥ `f8ac293` (Sonnet)
 
-**Goal:** clang Scenario A with the **correct ladder**:
-`crossdev --setup` → **`stages --stage1`** → `llvm-core/clang`.  
-Confirm #4/#5 on setup; treat stage1 as **required @system seed** (not
-optional). Record + stop on first new hard failure after the full ladder.
+**Goal:** re-verify setup → clang (and optionally setup → stage1 → clang).
+Confirm #4/#5 on setup. **Do not assume full @system/stage1 is required** for
+cross-build: the known gap is **library DEPEND identity** (`cross-T/glibc` vs
+`sys-libs/glibc` / musl), not “missing entire @system.” Runtime RDEPEND for a
+complete target userland is a separate goal. See [[libcrypt-never-scheduled]].
 
-**Why stage1:** `crossdev --setup` only installs `cross-<T>/*` (toolchain
-identities). Ordinary packages Depend on **real** Cpns (`sys-libs/glibc`, …).
-Without stage1’s `packages.build`, the clang graph invents a second system
-world (libcrypt / second-glibc class failures). See [[libcrypt-never-scheduled]]
-and `docs/crossdev.md`.
+**Useful probes (record both if time):**
+
+1. Setup-only → `em -p --target T sys-libs/zlib` (or clang `-p`): does the plan
+   re-pull full real-Cpn libc?  
+2. Setup-only → clang real run (current stress).  
+3. Optional: setup → stage1 → clang (richer base; compare plan size).
 
 ### Rules (same as before)
 

@@ -1,80 +1,77 @@
-# Bug #3 — `virtual/libcrypt` / libxcrypt under empty sysroot (after crossdev only)
+# Library DEPEND vs @system after `crossdev --setup`
 
-Status: 🟡 reframed **2026-08-07** — **stage1 is required**, not optional  
-Live: Sonnet `a46027b` re-verify — pam configure: no libcrypt in sysroot  
-Handoff: [[for-sonnet]]
+Status: 🟡 reframed **2026-08-07** (not “must always stage1”)  
+Live: Sonnet — pam/libcrypt under setup-only clang world  
+Related: [[for-sonnet]], [`docs/crossdev.md`](../docs/crossdev.md)
 
-## Symptom (what Sonnet saw)
+## Symptom (setup-only → clang)
 
-- After **only** `crossdev --setup`, `em --target T -b llvm-core/clang` plans
-  ~136 packages including virtual/libcrypt + sys-libs/libxcrypt.
-- Virtual reports `>>> Completed` early; **no** `Emerging` for libxcrypt.
-- pam fails: no libcrypt in the **sysroot**.
+- Plan lists `virtual/libcrypt` + `sys-libs/libxcrypt`; virtual Completes;
+  libxcrypt never Emerges; pam sees no libcrypt in **sysroot**.
+- Underlying shape: **library DEPEND** wants real-Cpn libc; toolchain VDB
+  has **`cross-T/glibc`** (or musl), not `sys-libs/glibc` (or musl).
 
-## Correct process diagnosis (@system / stage1)
+## Two different problems
 
-This is primarily an **@system identity** gap, not “clang shouldn’t pull pam.”
+| Kind | What it means in cross | Full @system needed? |
+|------|------------------------|----------------------|
+| **Library DEPEND** | Headers / libs to **compile and link** against (`ESYSROOT`) | **No** — need those libs **present and Favor/provided under the Cpn the ebuild names** (profile libc: glibc *or* musl, headers, …). Files often already exist from `crossdev --setup`. |
+| **Runtime RDEPEND** | What the package needs to **run** on the target | **Not fully** for a pure cross-build env; a complete target userland later may want stage1/`@system`/stage3. |
+| **BDEPEND** | Tools on the build host | Host/prefix dual-root, not sysroot @system. |
 
-| Layer | What lands | VDB identity |
-|-------|------------|--------------|
-| **`crossdev --setup`** | Cross toolchain | `cross-<tuple>/glibc`, `cross-<tuple>/gcc`, … |
-| **`stages --stage1`** | Profile `packages.build` (`USE=-* build`) | **Real** Cpns: baselayout, shadow, … and a coherent system tree ordinary ebuilds Depend on |
-| **`em --target T clang`** | Ordinary target packages | Expect **`sys-libs/glibc`**, not only `cross-T/glibc` |
+So: **@system is not fully needed for a cross environment** when the goal is
+cross-compiling into a sysroot. The pain we hit is **library dependency
+identity**, not “missing entire @system.”
 
-`sys-libs/libxcrypt[system]` DEPEND is `${CATEGORY}/glibc[-crypt]` → for a
-normal package, **`sys-libs/glibc`**. Installed **`cross-T/glibc`** is a
-**different Cpn** and does not Favor-satisfy that edge. Without stage1 (or
-full @system), the clang graph invents a second libc / half-system world and
-scheduling failures (virtual done, provider never started) show up as pam
-libcrypt misses.
+## What `crossdev --setup` actually gives
 
-**Product rule:**  
+- **Files:** toolchain, kernel headers, libc (glibc *or* musl per tuple) under
+  the sysroot tree.
+- **VDB identity (em today):** `cross-<tuple>/glibc` (etc.), not
+  `sys-libs/glibc`.
 
-```text
-crossdev --setup  →  stages --stage1  →  ordinary packages (e.g. clang)
-```
+Ordinary ebuilds Depend on **real** Cpns (`sys-libs/glibc`, `sys-libs/musl`,
+`virtual/libcrypt` → libxcrypt with `elibc_*` gates). Favor does not treat
+`cross-T/glibc` as `sys-libs/glibc` → plan invents a second libc / stalls
+providers (libxcrypt never scheduled class).
 
-Stage1 is the **@system seed**. Skipping it is unsupported for fat target
-packages, same family as catalyst toolchain → stage1 → world.
+## bash-crossdev analogy
 
-Docs: [`docs/crossdev.md`](../docs/crossdev.md) worked example (updated).
+1. **Toolchain:** `emerge cross-T/…` (files into `/usr/T`).  
+2. **Ordinary packages:** `CHOST-emerge` with `ROOT=SYSROOT` and **real** atoms
+   (`sys-libs/zlib`). Wiki “base after crossdev” re-installs baselayout +
+   **real** libc into ROOT — same *library identity* role, not full @system
+   for every cross package.
 
-## Why pam is still “expected” once you *do* stage1 + clang
+Improvements for em (library side, not full @system):
+
+| Approach | Idea |
+|----------|------|
+| **Alias Favor** | Installed `cross-T/foo` satisfies `real_cpn(foo)` for target DEPEND |
+| **package.provided** | After setup, provide real libc/headers (files already there) |
+| **Real-Cpn VDB** | Register toolchain merges under real Cpns in the sysroot |
+| **stage1** | Still valid for a richer/bootstrap userland; **heavier** than needed if only libc/headers identity is broken |
+
+## pam / clang chain (still real)
 
 ```text
 clang → python → util-linux → USE=pam → pam → virtual/libcrypt → libxcrypt
 ```
 
-That chain is real. With stage1 first, more of the base is already present
-under controlled USE; clang’s remaining plan should be smaller and should see
-real system Cpns. Residual em bugs (scheduling, die, baselayout) can still be
-chased, but **not** by pretending stage1 is optional scaffolding.
+That pulls **library** needs (libcrypt) into the plan. Fix library Favor for
+libc first; do not require full @system just because pam appears.
 
-## Ruled out as *sole* root cause (unit)
+## Confirm matrix
 
-`cross_target_virtual_rdepend_provider_is_target_not_host` shows host
-`add_host_installed(libxcrypt)` does not suppress Target libxcrypt in a
-minimal dual-root solve. Useful dual-root hygiene; does **not** replace
-stage1 for a post-crossdev empty real-Cpn VDB.
+| Probe | What it tells us |
+|-------|------------------|
+| Setup-only: sysroot VDB `cross-T/glibc` vs `sys-libs/glibc` (or musl) | Identity gap |
+| Setup-only: `em -p --target T sys-libs/zlib` plans full real libc? | DEPEND not satisfied by cross-T |
+| After alias/provided/real-Cpn only: zlib/clang plan size | Library fix without stage1 |
+| After stage1: same | stage1 as optional richer base |
 
-## Residual em bugs (still real, orthogonal to “need stage1”)
+## Unit note
 
-| # | Issue | Status |
-|---|--------|--------|
-| 1–2 | RDEPEND blockers / empty-ED buildpkg | fixed `a46027b` |
-| 4–5 | baselayout + bashrc die | fixed `f8ac293` |
-| 3 as “libxcrypt never scheduled” after **correct** stage1 | may shrink or change shape — re-verify on setup → stage1 → clang | open |
-
-Optional later: map `cross-T/foo` → real Cpn for Favor (risky dual-identity).
-Prefer documenting stage1 as required over silent category aliasing.
-
-## Sonnet homework shape
-
-```sh
-em --prefix "$P" --target T crossdev --setup --jobs 8
-em --prefix "$P" --target T stages --stage1 --autosolve-use --jobs 8
-# Confirm sysroot VDB has real-category system pkgs, not only cross-*/
-em --prefix "$P" --target T -b llvm-core/clang --jobs 80
-```
-
-See [[for-sonnet]] NEXT HOMEWORK.
+`cross_target_virtual_rdepend_provider_is_target_not_host` rules out “host
+libxcrypt Favor kills Target provider” in a minimal dual-root model. It does
+not fix cross-T vs real-Cpn libc in the sysroot VDB.

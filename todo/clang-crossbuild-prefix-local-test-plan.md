@@ -306,14 +306,14 @@ GCC model), under **both** `--prefix` and `--local`:
 
 1. stand up the topology itself,
 2. bootstrap a cross toolchain inside it (`crossdev --setup`),
-3. **seed the target @system via `stages --stage1`** (`packages.build` —
-   required: setup only lands `cross-<T>/*`; ordinary packages need real
-   Cpns like `sys-libs/glibc` — see [[libcrypt-never-scheduled]],
-   `docs/crossdev.md` 2026-08-07),
-4. cross-build `llvm-core/clang` through that toolchain (the actual
-   "cross-emerge of clang" goal), and
-5. do all of that with `-b`/`--buildpkg` and have the resulting binpkg be
+3. cross-build `llvm-core/clang` through that toolchain (the actual
+   "cross-emerge of clang" goal) — needs **library DEPEND** satisfaction
+   (real-Cpn libc/headers; setup files may exist as `cross-T/*` only — see
+   [[libcrypt-never-scheduled]]; full @system/stage1 is **not** inherently
+   required for pure cross-build, only for a richer target userland),
+4. do all of that with `-b`/`--buildpkg` and have the resulting binpkg be
    correct and reusable — not just "the merge succeeded".
+   Optional control: `stages --stage1` before (3) to compare plan size.
 
 `--prefix` was already run through steps 2-3 once, informally, on
 2026-08-04 (`riscv64-clang-crossbuild-cbuild-esysroot-fixed` memory, fixes in
