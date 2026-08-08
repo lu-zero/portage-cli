@@ -106,7 +106,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
                 ebuild::RootContext {
                     config_root: roots.config(),
                     sysroot: roots.build_sysroot(),
-                    eprefix: roots.eprefix(),
+                    eprefix: roots.build_eprefix(),
                     broot: Some(broot.merge_root()),
                     self_contained_bootstrap: false,
                 },

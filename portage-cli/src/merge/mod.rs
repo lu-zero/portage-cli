@@ -688,7 +688,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     let root_ctx = ebuild::RootContext {
         config_root: entry_roots.config(),
         sysroot: entry_roots.build_sysroot(),
-        eprefix: entry_roots.eprefix(),
+        eprefix: entry_roots.build_eprefix(),
         broot: Some(host_roots.merge_root()),
         self_contained_bootstrap,
     };

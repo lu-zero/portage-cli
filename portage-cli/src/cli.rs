@@ -678,6 +678,60 @@ mod tests {
             Some("/tmp/p"),
             "distfiles/work must anchor under the outer prefix, not the sysroot"
         );
+        assert_eq!(
+            r.build_eprefix(),
+            None,
+            "a package merging into the sysroot builds unprefixed — eprefix() \
+             stays Some for relocate_root()'s benefit, but build_eprefix() must \
+             be None or its .pc/.la files bake in a prefix that doesn't exist \
+             inside the sysroot (live-verified: libffi's .pc under this exact \
+             topology, todo/for-sonnet.md 2026-08-08)"
+        );
+    }
+
+    /// Same sysroot substitution, now with an explicit `--root B` on top
+    /// (`stages --stage1 --prefix P --root B --target T`'s exact shape):
+    /// the sysroot is computed from the *redirected* destination
+    /// (`B/usr/T`, not `P/usr/T`), but `build_eprefix()` is still `None` —
+    /// live-verified (zlib, real merge, sandbox) to also hold for the
+    /// `--root`-without-`--target` case (`explicit_root_overrides_prefix_destination_only`
+    /// below is the non-cross twin of this test).
+    #[test]
+    fn prefix_plus_root_plus_target_sysroot_still_builds_unprefixed() {
+        let cli = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/p",
+            "--root",
+            "/tmp/b",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let r = cli.roots();
+        assert_eq!(
+            r.merge_root().as_str(),
+            "/tmp/b/usr/riscv64-unknown-linux-gnu"
+        );
+        assert_eq!(r.build_eprefix(), None);
+    }
+
+    /// Positive control: a plain `--prefix`/`--local` build (no `--root`
+    /// redirect, no `--target` substitution) still gets `build_eprefix() ==
+    /// eprefix()` — guards against over-clearing. The PMS invariant `EROOT
+    /// == ROOT + EPREFIX` holds here (`merge_root() == eprefix()`), so the
+    /// package genuinely is the thing living at that prefix and its `.pc`
+    /// files must say so.
+    #[test]
+    fn plain_prefix_and_local_still_report_build_eprefix() {
+        let prefix = Cli::parse_from(["em", "--prefix", "/tmp/p", "-p", "sys-libs/zlib"]);
+        let pr = prefix.roots();
+        assert_eq!(pr.build_eprefix().map(|p| p.as_str()), Some("/tmp/p"));
+
+        let local = Cli::parse_from(["em", "--local", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let lr = local.roots();
+        assert_eq!(lr.build_eprefix().map(|p| p.as_str()), Some("/tmp/a"));
     }
 
     /// An explicit `--root B` alongside `--prefix A` redirects only the
@@ -702,6 +756,14 @@ mod tests {
         assert_eq!(
             r.config_overlay().map(|p| p.as_str()),
             Some("/tmp/a/etc/portage")
+        );
+        assert_eq!(
+            r.build_eprefix(),
+            None,
+            "a package merging into the --root-redirected destination builds \
+             unprefixed too, not just the --target sysroot case — live-verified \
+             (zlib, real merge, sandbox): /tmp/a has no install of this package \
+             at all, so baking it into .pc/.la would point nowhere real"
         );
     }
 

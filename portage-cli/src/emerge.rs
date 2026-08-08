@@ -990,7 +990,7 @@ pub(crate) async fn run_unmerge_batch(
     shell.set_build_roots(
         roots.config(),
         roots.build_sysroot(),
-        roots.eprefix(),
+        roots.build_eprefix(),
         Some(broot.merge_root()),
     );
     shell.set_terminal(crate::style::terminal_config());
