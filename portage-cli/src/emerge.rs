@@ -994,8 +994,7 @@ pub(crate) async fn run_unmerge_batch(
         Some(broot.merge_root()),
     );
     shell.set_terminal(crate::style::terminal_config());
-    let config_overlay = roots.eprefix().map(|e| e.join("etc/portage"));
-    if !ebuild::apply_profile_env(&mut shell, roots.config(), config_overlay.as_deref()).await? {
+    if !ebuild::apply_profile_env(&mut shell, roots.config(), roots.config_overlay()).await? {
         crate::style::warn_line!(
             "no usable profile at {}/etc/portage/make.profile — {} without profile defaults",
             roots.config().unwrap_or(Utf8Path::new("/")),

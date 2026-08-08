@@ -512,13 +512,9 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     }
     // outer_roots(), not roots(): a native toolchain bootstrap must anchor to
     // the outer EROOT even if a global --target happens to also be set.
-    let merge_root = globals.outer_roots().merge_root().to_owned();
-    if merge_root.as_str() == "/" {
-        bail!(
-            "em toolchain --setup needs --root <dir>: a native toolchain into / is \
-             meaningless (use the host toolchain directly, or pass --root <empty>)"
-        );
-    }
+    let roots = globals.outer_roots();
+    let merge_root = roots.merge_root();
+    globals.require_root_distinct_from_host(&roots, "em toolchain --setup")?;
     if !globals.pretend {
         ensure_self_contained_prefix(globals)?;
     }
@@ -580,10 +576,9 @@ pub(crate) async fn stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Resu
 }
 
 async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
-    let merge_root = globals.roots().merge_root().to_owned();
-    if merge_root.as_str() == "/" {
-        bail!("em stages --stage1 needs --root <dir>: a stage1 into / is meaningless");
-    }
+    let roots = globals.roots();
+    let merge_root = roots.merge_root();
+    globals.require_root_distinct_from_host(&roots, "em stages --stage1")?;
     let stack = profile_stack(globals)?;
     let bootstrap_use = bootstrap_use(&stack, globals).await;
     let plan = stages::stage1_plan(&stack, &bootstrap_use)?;
@@ -654,10 +649,9 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
 
 /// Emptytree `@system` rebuild into `--root` (catalyst stage3).
 async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
-    let merge_root = globals.roots().merge_root().to_owned();
-    if merge_root.as_str() == "/" {
-        bail!("em stages --stage3 needs --root <dir>: a stage3 into / is meaningless");
-    }
+    let roots = globals.roots();
+    let merge_root = roots.merge_root();
+    globals.require_root_distinct_from_host(&roots, "em stages --stage3")?;
     let mut out = anstream::stdout();
     let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
     writeln!(

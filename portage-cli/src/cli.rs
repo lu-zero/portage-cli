@@ -307,18 +307,39 @@ impl Cli {
         let base = self.base_roots();
         if let Some(prefix) = base.eprefix().filter(|_| base.is_overlay()) {
             let prefix = prefix.to_path_buf();
-            return Roots::default()
-                .with_config(base.config().map(|p| p.to_owned()))
-                .with_base(None)
-                .with_target(Some(prefix.clone()))
-                .with_broot(base.broot().map(|p| p.to_owned()))
-                .with_cross_arch(base.is_cross_arch())
-                .with_eprefix(Some(prefix.clone()))
-                .with_config_overlay(Some(prefix.join("etc/portage")))
-                .with_relocate(true)
-                .with_config_root_explicit(base.config_root_explicit().map(|p| p.to_owned()));
+            let anchored = self.overlay_anchor(&base, prefix.clone());
+            // An explicit `--root B` alongside `--prefix A` redirects only the
+            // merge *destination* — EPREFIX/BROOT/config-overlay stay anchored
+            // to the prefix itself (`--prefix` still supplies the build
+            // context: host-shared toolchain, relocatable shebangs, overlay
+            // config). Without this, `self.root` was silently discarded the
+            // instant `--prefix` matched first in `topology_source()` —
+            // todo/for-sonnet.md 2026-08-08.
+            if let Some(target) = opt_path(&self.root) {
+                return anchored.with_target(Some(target));
+            }
+            return anchored;
         }
         base
+    }
+
+    /// The overlay's own anchor, ignoring any `--root` override — always
+    /// `prefix` itself. Shared by `outer_roots()` (which then applies an
+    /// explicit `--root` redirect on top, for the merge *destination* only)
+    /// and `host_roots()` (which must NOT apply that redirect: it answers
+    /// "where do the overlay's own host-shared build tools live", which
+    /// never moves just because `--root` retargets where packages install).
+    fn overlay_anchor(&self, base: &Roots, prefix: camino::Utf8PathBuf) -> Roots {
+        Roots::default()
+            .with_config(base.config().map(|p| p.to_owned()))
+            .with_base(None)
+            .with_target(Some(prefix.clone()))
+            .with_broot(base.broot().map(|p| p.to_owned()))
+            .with_cross_arch(base.is_cross_arch())
+            .with_eprefix(Some(prefix.clone()))
+            .with_config_overlay(Some(prefix.join("etc/portage")))
+            .with_relocate(true)
+            .with_config_root_explicit(base.config_root_explicit().map(|p| p.to_owned()))
     }
 
     /// The root model from `--local`/`--prefix`/`--root`/`--config-root`, before
@@ -361,10 +382,17 @@ impl Cli {
                 } else {
                     None
                 };
+                // An explicit `--root B` alongside `--local` redirects only the
+                // merge *destination* — EPREFIX/BROOT/config-overlay stay
+                // anchored to the local prefix itself (own build context is
+                // the whole point of `--local`). Without this, `self.root` was
+                // silently discarded the instant `--local` matched first in
+                // `topology_source()` — todo/for-sonnet.md 2026-08-08.
+                let target = path(&self.root).unwrap_or_else(|| prefix.clone());
                 Roots::default()
                     .with_config(config)
                     .with_base(Some(prefix.clone()))
-                    .with_target(Some(prefix.clone()))
+                    .with_target(Some(target))
                     .with_broot(Some(prefix.clone()))
                     .with_cross_arch(false)
                     .with_eprefix(Some(prefix.clone()))
@@ -436,8 +464,12 @@ impl Cli {
     ///   questions coincide.
     pub(crate) fn host_roots(&self) -> Roots {
         let base = self.base_roots();
-        if base.is_overlay() {
-            return self.outer_roots();
+        if let Some(prefix) = base.eprefix().filter(|_| base.is_overlay()) {
+            // Deliberately the un-redirected anchor (`overlay_anchor`), not
+            // `outer_roots()` — an explicit `--root` retargets the merge
+            // *destination* but never the overlay's own host-shared build
+            // context, so this must stay stable even when `--root` is set.
+            return self.overlay_anchor(&base, prefix.to_path_buf());
         }
         // BROOT for a non-overlay topology: `--local` owns its own BROOT (the
         // prefix itself, so a finished `--local` tree is self-hosting /
@@ -456,6 +488,35 @@ impl Cli {
             .with_config_overlay(base.config_overlay().map(|p| p.to_owned()))
             .with_relocate(base.relocate())
             .with_config_root_explicit(base.config_root_explicit().map(|p| p.to_owned()))
+    }
+
+    /// Reject an action (`toolchain --setup`, `stages --stage1`/`--stage3`)
+    /// whose resolved destination equals the host install path
+    /// (`host_roots()`) — bare `--local`, bare `--prefix` (`host_roots()`
+    /// redirects to that same tree for both — see their own doc comments),
+    /// bare host, and `--local --root <the same local path>` all collapse to
+    /// this. `--root DIR` alone, `--prefix P --target T`, and an explicit
+    /// `--root B` redirecting the destination away from `--prefix`/
+    /// `--local`'s own anchor (`base_roots`/`outer_roots`, above) all
+    /// genuinely differ from `host_roots()` and pass. Replaces an older,
+    /// narrower `merge_root == "/"` check — see todo/for-sonnet.md
+    /// 2026-08-08 for the live bug (a real `.pc` file corrupted under
+    /// `--prefix --target`, with no way to redirect the destination) this
+    /// closes off.
+    pub(crate) fn require_root_distinct_from_host(
+        &self,
+        resolved: &Roots,
+        action: &str,
+    ) -> anyhow::Result<()> {
+        let host = self.host_roots();
+        if resolved.merge_root() == host.merge_root() {
+            anyhow::bail!(
+                "{action} needs an explicit --root that doesn't equal the host \
+                 install path ({})",
+                host.merge_root()
+            );
+        }
+        Ok(())
     }
 
     /// Path used by single-repo applets. Falls back to `/var/db/repos/gentoo`
@@ -616,6 +677,156 @@ mod tests {
             r.relocate_root().map(|p| p.as_str()),
             Some("/tmp/p"),
             "distfiles/work must anchor under the outer prefix, not the sysroot"
+        );
+    }
+
+    /// An explicit `--root B` alongside `--prefix A` redirects only the
+    /// destination (`merge_root()`) — EPREFIX/config-overlay/relocate stay
+    /// anchored to `A`, matching `--prefix`'s own build-context role.
+    /// Previously `B` was silently discarded the moment `--prefix` matched in
+    /// `topology_source()` (todo/for-sonnet.md 2026-08-08).
+    #[test]
+    fn explicit_root_overrides_prefix_destination_only() {
+        let cli = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/a",
+            "--root",
+            "/tmp/b",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let r = cli.outer_roots();
+        assert_eq!(r.merge_root().as_str(), "/tmp/b");
+        assert_eq!(r.eprefix().map(|p| p.as_str()), Some("/tmp/a"));
+        assert_eq!(
+            r.config_overlay().map(|p| p.as_str()),
+            Some("/tmp/a/etc/portage")
+        );
+    }
+
+    /// Same override, now also combined with `--target`: the sysroot is
+    /// derived from the *redirected* destination (`B/usr/T`), not the prefix.
+    #[test]
+    fn explicit_root_overrides_prefix_destination_under_target() {
+        let cli = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/a",
+            "--root",
+            "/tmp/b",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let r = cli.roots();
+        assert_eq!(
+            r.merge_root().as_str(),
+            "/tmp/b/usr/riscv64-unknown-linux-gnu"
+        );
+    }
+
+    /// Same idea for `--local`: an explicit, genuinely different `--root B`
+    /// redirects the destination; BROOT/EPREFIX stay the local prefix itself
+    /// (still self-hosting for build-context purposes).
+    #[test]
+    fn explicit_root_overrides_local_destination_only() {
+        let cli = Cli::parse_from([
+            "em",
+            "--local",
+            "/tmp/a",
+            "--root",
+            "/tmp/b",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let r = cli.roots();
+        assert_eq!(r.merge_root().as_str(), "/tmp/b");
+        assert_eq!(r.broot().map(|p| p.as_str()), Some("/tmp/a"));
+        assert_eq!(r.eprefix().map(|p| p.as_str()), Some("/tmp/a"));
+    }
+
+    /// `--root` set to the *same* path as `--local`/`--prefix` is a no-op
+    /// (not a distinct override) — this is exactly the degenerate case
+    /// `require_root_distinct_from_host` must still reject.
+    #[test]
+    fn root_matching_local_is_not_a_distinct_override() {
+        let cli = Cli::parse_from([
+            "em",
+            "--local",
+            "/tmp/a",
+            "--root",
+            "/tmp/a",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let r = cli.roots();
+        assert_eq!(r.merge_root(), cli.host_roots().merge_root());
+    }
+
+    /// The actual guard: bare `--local`, bare `--prefix`, and bare host all
+    /// resolve to the same place their own build tools live and must be
+    /// rejected; `--root DIR` alone and `--prefix P --target T` genuinely
+    /// differ and must pass.
+    #[test]
+    fn require_root_distinct_from_host_rejects_the_degenerate_cases() {
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
+
+        let local = Cli::parse_from(["em", "--local", "/tmp/a", "-p", "sys-libs/zlib"]);
+        assert!(
+            local
+                .require_root_distinct_from_host(&local.roots(), "test")
+                .is_err()
+        );
+
+        let prefix = Cli::parse_from(["em", "--prefix", "/tmp/a", "-p", "sys-libs/zlib"]);
+        assert!(
+            prefix
+                .require_root_distinct_from_host(&prefix.roots(), "test")
+                .is_err()
+        );
+
+        let bare = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        assert!(
+            bare.require_root_distinct_from_host(&bare.roots(), "test")
+                .is_err()
+        );
+
+        let root = Cli::parse_from(["em", "--root", "/tmp/a", "-p", "sys-libs/zlib"]);
+        assert!(
+            root.require_root_distinct_from_host(&root.roots(), "test")
+                .is_ok()
+        );
+
+        let prefix_target = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/a",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert!(
+            prefix_target
+                .require_root_distinct_from_host(&prefix_target.roots(), "test")
+                .is_ok()
+        );
+
+        let prefix_root = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/a",
+            "--root",
+            "/tmp/b",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert!(
+            prefix_root
+                .require_root_distinct_from_host(&prefix_root.outer_roots(), "test")
+                .is_ok()
         );
     }
 
