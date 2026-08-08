@@ -514,7 +514,7 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     // the outer EROOT even if a global --target happens to also be set.
     let roots = globals.outer_roots();
     let merge_root = roots.merge_root();
-    globals.require_root_distinct_from_host(&roots, "em toolchain --setup")?;
+    globals.require_destination_not_bare_host(&roots, "em toolchain --setup")?;
     if !globals.pretend {
         ensure_self_contained_prefix(globals)?;
     }

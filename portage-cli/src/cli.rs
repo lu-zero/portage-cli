@@ -508,12 +508,48 @@ impl Cli {
         resolved: &Roots,
         action: &str,
     ) -> anyhow::Result<()> {
-        let host = self.host_roots();
-        if resolved.merge_root() == host.merge_root() {
+        // `--local` is deliberately exempt: it's self-contained by
+        // construction (never shared for anything else), so bootstrapping
+        // directly into a bare `--local` — no separate `--root` — is the
+        // established, working recipe for standing one up from nothing, not
+        // a footgun. `--prefix` (the overlay case) IS the footgun this
+        // guards: an unredirected `--prefix P` shares its own tree with
+        // whatever else that overlay is used for (`is_overlay()`'s own
+        // "unsatisfied BDEPEND lands in the prefix" role, `host_roots()`'s
+        // doc comment) — building an entire `stages` snapshot straight into
+        // it collides with that role.
+        if resolved.is_overlay() && resolved.eprefix() == Some(resolved.merge_root()) {
             anyhow::bail!(
                 "{action} needs an explicit --root that doesn't equal the host \
                  install path ({})",
-                host.merge_root()
+                resolved.merge_root()
+            );
+        }
+        self.require_destination_not_bare_host(resolved, action)
+    }
+
+    /// Narrower guard, also used standalone by `toolchain --setup`: only
+    /// rejects the true bare-host case (no `--prefix`/`--local`/`--root`
+    /// given at all — bootstrapping a fresh compiler straight into the real
+    /// host `/` is meaningless, use the host toolchain directly). Unlike
+    /// [`require_root_distinct_from_host`](Self::require_root_distinct_from_host),
+    /// a toolchain bootstrap directly into a bare `--prefix`/`--local` (no
+    /// separate `--root`) is the intended, already-verified recipe for
+    /// giving that overlay/tree its own compiler — `--prefix`'s own
+    /// `BDEPEND`-lands-in-the-prefix role means this doesn't collide with
+    /// anything else the way a full `stages` snapshot would.
+    pub(crate) fn require_destination_not_bare_host(
+        &self,
+        resolved: &Roots,
+        action: &str,
+    ) -> anyhow::Result<()> {
+        if resolved.merge_root().as_str() == "/"
+            && resolved.base().is_none()
+            && resolved.eprefix().is_none()
+        {
+            anyhow::bail!(
+                "{action} needs --prefix/--local/--root: a bootstrap into the bare \
+                 host / is meaningless (use the host toolchain directly)"
             );
         }
         Ok(())
@@ -835,11 +871,14 @@ mod tests {
     fn require_root_distinct_from_host_rejects_the_degenerate_cases() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
 
+        // `--local` is exempt: self-contained by construction, bootstrapping
+        // directly into it (no separate --root) is the intended recipe, not
+        // a footgun — see the doc comment on the function under test.
         let local = Cli::parse_from(["em", "--local", "/tmp/a", "-p", "sys-libs/zlib"]);
         assert!(
             local
                 .require_root_distinct_from_host(&local.roots(), "test")
-                .is_err()
+                .is_ok()
         );
 
         let prefix = Cli::parse_from(["em", "--prefix", "/tmp/a", "-p", "sys-libs/zlib"]);
@@ -889,6 +928,42 @@ mod tests {
             prefix_root
                 .require_root_distinct_from_host(&prefix_root.outer_roots(), "test")
                 .is_ok()
+        );
+    }
+
+    /// `toolchain --setup`'s own, narrower guard: bare `--prefix`/`--local`
+    /// (no separate `--root`) are the intended recipe for giving that
+    /// overlay/tree its own compiler and must pass — unlike `stages`'s
+    /// guard above, which rejects bare `--prefix` specifically. Only a true
+    /// bare host (nothing given at all) is rejected.
+    #[test]
+    fn require_destination_not_bare_host_only_rejects_true_bare_host() {
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
+
+        let local = Cli::parse_from(["em", "--local", "/tmp/a", "-p", "sys-libs/zlib"]);
+        assert!(
+            local
+                .require_destination_not_bare_host(&local.roots(), "test")
+                .is_ok()
+        );
+
+        let prefix = Cli::parse_from(["em", "--prefix", "/tmp/a", "-p", "sys-libs/zlib"]);
+        assert!(
+            prefix
+                .require_destination_not_bare_host(&prefix.roots(), "test")
+                .is_ok()
+        );
+
+        let root = Cli::parse_from(["em", "--root", "/tmp/a", "-p", "sys-libs/zlib"]);
+        assert!(
+            root.require_destination_not_bare_host(&root.roots(), "test")
+                .is_ok()
+        );
+
+        let bare = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        assert!(
+            bare.require_destination_not_bare_host(&bare.roots(), "test")
+                .is_err()
         );
     }
 
