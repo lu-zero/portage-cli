@@ -17,13 +17,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-portage-solver = "0.2"
+portage-solver = "0.3"
 ```
 
 ## Overview
 
 - **Facts vocabulary** — `PackageRepository`, `VersionFacts`, `PackageDeps`
-- **USE policy vocabulary** — `UseConfig`, `UseFlagState`, `apply_package_use`
+- **USE policy vocabulary** — `UseConfig`, `UseFlagState`, `UseLayer`,
+  `resolve_effective_use`
 - **Solution vocabulary** — `SelectedPackage`, `DepEdge`, `TargetSpec`
 - **`Solver` trait** — single interface both bridges implement for cross-checking
 

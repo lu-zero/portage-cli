@@ -1,6 +1,6 @@
 [package]
 name = "gentoo-stages"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
@@ -9,6 +9,7 @@ keywords = ["gentoo", "stages", "stage3", "cross-compilation"]
 rust-version.workspace = true
 repository.workspace = true
 categories = ["development-tools"]
+exclude = ["AGENTS.md", ".claude", "Cargo.lock", "cache"]
 
 [dependencies]
 gentoo-core = { workspace = true }

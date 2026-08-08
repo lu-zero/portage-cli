@@ -1,6 +1,6 @@
 [package]
 name = "gentoo-interner"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
@@ -9,6 +9,7 @@ keywords = ["gentoo", "interner", "string"]
 rust-version.workspace = true
 repository.workspace = true
 categories = ["data-structures", "memory-management"]
+exclude = ["AGENTS.md", "docs", "Cargo.lock"]
 
 [dependencies]
 papaya = { workspace = true, optional = true }

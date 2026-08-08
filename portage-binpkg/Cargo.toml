@@ -1,6 +1,6 @@
 [package]
 name = "portage-binpkg"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
@@ -10,6 +10,7 @@ keywords = ["gentoo", "portage", "binpkg", "gpkg"]
 rust-version.workspace = true
 repository.workspace = true
 categories = ["development-tools", "filesystem"]
+exclude = ["Cargo.lock"]
 
 [dependencies]
 sha2 = { workspace = true }

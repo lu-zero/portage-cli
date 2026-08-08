@@ -1,6 +1,6 @@
 [package]
 name = "portage-vdb"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
@@ -10,6 +10,7 @@ keywords = ["gentoo", "portage", "vdb", "installed"]
 rust-version.workspace = true
 repository.workspace = true
 categories = ["os::unix-apis", "development-tools"]
+exclude = ["Cargo.lock"]
 
 [dependencies]
 camino = { workspace = true }

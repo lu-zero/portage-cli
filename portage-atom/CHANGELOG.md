@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.11.1
+
+### Other
+
+- Packaging hygiene: exclude workspace-only files from the crates.io tarball.
+
+## 0.11.0
+
+### Breaking changes
+
+- PMS-correct `Version` comparison (algorithms 3.2–3.3): missing components are
+  no longer zero-padded (`1 < 1.0 < 1.0.0`); leading-zero components compare in
+  string mode (`1.01 < 1.1`); absent suffix numbers treat as `0`;
+  `glob_matches` no longer matches a shorter candidate. Aligns `Ord`/`Eq` with
+  Portage `vercmp`.
+- `Version::numbers` is now `SmallVec<[u64; 4]>` (`Numbers` alias) rather than
+  `Vec<u64>`; `Version::raw` / digit strings use `SmolStr`.
+
+### Features
+
+- `DepList` — `Arc`-backed dependency-tree list for cheap cloning on the
+  depgraph hot path.
+
+### Other
+
+- Inherit `rust-version` and `repository` from the workspace package metadata.
+
 ## 0.10.0
 
 ### Breaking changes

@@ -1,6 +1,6 @@
 [package]
 name = "portage-atom-resolvo"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
@@ -9,6 +9,7 @@ keywords = ["gentoo", "portage", "resolvo", "dependency", "solver"]
 rust-version.workspace = true
 repository.workspace = true
 categories = ["algorithms", "development-tools"]
+exclude = ["Cargo.lock"]
 
 [features]
 lasso = ["portage-atom/lasso"]

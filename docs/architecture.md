@@ -47,16 +47,16 @@ Versions below are the **workspace** package versions in each crate's
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `gentoo-interner` | 0.4.0 | String interning |
-| `gentoo-core` | 0.6.0 | Architecture types, variants |
-| `portage-atom` | 0.11.0 | PMS atom parsing |
-| `portage-metadata` | 0.9.0 | md5-cache entry parsing, EAPI, keywords |
-| `portage-atom-pubgrub` | 0.7.0 | PubGrub solver bridge (default in `em`) |
-| `portage-atom-resolvo` | 0.8.0 | SAT dependency solver (resolvo bridge) |
-| `portage-solver` | 0.2.0 | Solver-agnostic trait and shared vocabulary |
-| `portage-vdb` | 0.2.0 | Installed package database (`/var/db/pkg`) |
-| `portage-binpkg` | 0.2.0 | GPKG binary package read/write |
-| `gentoo-stages` | 0.6.0 | Stage3 tarball fetch/cache |
+| `gentoo-interner` | 0.4.1 | String interning |
+| `gentoo-core` | 0.6.1 | Architecture types, variants |
+| `portage-atom` | 0.11.1 | PMS atom parsing |
+| `portage-metadata` | 0.10.0 | md5-cache entry parsing, EAPI, keywords |
+| `portage-atom-pubgrub` | 0.8.0 | PubGrub solver bridge (default in `em`) |
+| `portage-atom-resolvo` | 0.8.1 | SAT dependency solver (resolvo bridge) |
+| `portage-solver` | 0.3.0 | Solver-agnostic trait and shared vocabulary |
+| `portage-vdb` | 0.2.1 | Installed package database (`/var/db/pkg`) |
+| `portage-binpkg` | 0.2.1 | GPKG binary package read/write |
+| `gentoo-stages` | 0.6.1 | Stage3 tarball fetch/cache |
 
 ### Local only (`publish = false` in workspace)
 
@@ -70,7 +70,7 @@ Versions below are the **workspace** package versions in each crate's
 
 ## Per-crate public API
 
-### `gentoo-interner` (v0.4.0)
+### `gentoo-interner` (v0.4.1)
 
 String interning foundation. Default backend is **papaya** (concurrent
 hash map); `lasso` and `symbol-table` backends available as feature flags.
@@ -81,7 +81,7 @@ hash map); `lasso` and `symbol-table` backends available as feature flags.
 - `struct GlobalInterner` *(feature: interner, default)* — process-global interner
 - `type DefaultInterner` — alias: `GlobalInterner`
 
-### `gentoo-core` (v0.6.0)
+### `gentoo-core` (v0.6.1)
 
 Architecture and release-variant types.
 
@@ -90,7 +90,7 @@ Architecture and release-variant types.
 - `type ExoticKey<I>` — alias for `Interned<I>`
 - `struct Variant<I>` — release media variant (`arch-flavor`): `parse()`, `flavor()`
 
-### `portage-atom` (v0.11.0)
+### `portage-atom` (v0.11.1)
 
 PMS atom parser — the vocabulary every other crate speaks.
 
@@ -112,7 +112,7 @@ PMS atom parser — the vocabulary every other crate speaks.
 - Builder types *(feature: `builder`)*: `CpnBuilder`, `CpvBuilder`, `DepBuilder`, `SlotBuilder`, `UseDepBuilder`, `SuffixBuilder`, `VersionBuilder`
 - Re-exports `gentoo_interner as interner`
 
-### `portage-metadata` (v0.9.0)
+### `portage-metadata` (v0.10.0)
 
 Ebuild metadata cache parser.
 
@@ -124,20 +124,21 @@ Ebuild metadata cache parser.
 - `struct Keyword<I>` / `enum Stability` — `Stable`, `Testing`, `Disabled`, `DisabledAll`
 - `struct IUse<I>` / `enum IUseDefault` — USE flag with default (+/-)
 - `struct LicenseExpr`, `struct RequiredUseExpr`, `struct RestrictExpr`, `struct SrcUriEntry`
+- `struct ParseDiagnostic` — structured winnow parse failure (`miette::Diagnostic`); four grammar `Error` variants carry it
 - Re-exports `portage_atom::interner`
 
-### `portage-solver` (v0.2.0)
+### `portage-solver` (v0.3.0)
 
 Solver-agnostic vocabulary shared by both solver bridges.
 
 - `trait Solver` — single abstraction both bridges implement
 - `trait PackageRepository`, `struct VersionFacts`, `struct PackageDeps` — facts fed to a solver
-- `struct UseConfig`, `enum UseFlagState` — per-package resolved USE policy (computed by consumer, not solver)
+- `struct UseConfig`, `enum UseFlagState`, `struct UseLayer` — per-package resolved USE policy (computed by consumer, not solver)
 - `struct SelectedPackage`, `struct DepEdge`, `struct TargetSpec` — solution/plan vocabulary in Portage terms
 - `enum RequiredUse` — REQUIRED_USE encoding vocabulary
 - Depends only on `portage-atom` and `thiserror`; no pubgrub or resolvo
 
-### `portage-atom-resolvo` (v0.8.0)
+### `portage-atom-resolvo` (v0.8.1)
 
 SAT-based dependency solver bridge using resolvo.
 
@@ -152,23 +153,24 @@ SAT-based dependency solver bridge using resolvo.
 - `struct InMemoryRepository` — HashMap-backed test impl
 - `fn version_matches()` — PMS version matching
 
-### `portage-atom-pubgrub` (v0.7.0)
+### `portage-atom-pubgrub` (v0.8.0)
 
 PubGrub-based dependency solver bridge — the solver `em` uses by default.
 
 - `struct PortagePackage` — Solver package identity: `Unslotted`, `Slotted`
 - `struct PortageVersionSet` — Wraps `Ranges<Version>` for pubgrub's `VersionSet` trait
-- `struct PortageDependencyProvider` — Main solver bridge: `new_for_targets()`, `resolve_targets()`, `dependency_graph()`, `install_order()`
+- `struct PortageDependencyProvider` — Main solver bridge: `new_for_targets()`, `resolve_targets()`, `dependency_graph()`, `install_order()`, `set_selective_no_update()`
 - `enum InstalledPolicy`, `struct InstalledPackage`, `struct DroppedDep` — Installed package handling
-- `struct UseConfig`, `enum UseFlagState` — Per-package USE configuration
+- `struct UseConfig`, `enum UseFlagState`, `struct UseLayer` — Per-package USE configuration
 - `struct CededFlag`, `struct UseFlagRequirement` — Level-C autosolve state
 - `struct PackageDeps`, `struct PackageVersions` — Per-version facts
 - `trait PackageRepository` — `all_packages()`, `versions_for()`, `desired_use()`
 - `struct InMemoryRepository` — HashMap-backed test impl
 - `enum RequiredUse` — REQUIRED_USE expression for solver encoding
 - `struct SlotOperatorBinding` — `:=` binding tracking for rebuild detection
+- `struct BlockerHit`, `struct BlockerVictim` — detailed blocker reporting
 - `enum DepClass`, `struct DepEdge` — Dependency classification and graph edges
-- `fn apply_package_use()` — Per-package `package.use` application
+- `fn resolve_effective_use()` — Per-package USE fold (re-export from `portage-solver`)
 - Re-exports `DefaultInterner`, `Interned` from `portage_atom::interner`
 
 ### `portage-repo` (v0.1.0)
@@ -205,7 +207,7 @@ or `.secondary_memory()`.
 - Source module: `source_single()`, `source_parallel()` → stream of `SourceItem`, `SourceContext`, `SourceOpts`
 - Re-exports from `gentoo_core`: `Arch`, `KnownArch`, `ExoticKey`
 
-### `portage-vdb` (v0.2.0)
+### `portage-vdb` (v0.2.1)
 
 Installed package database reader/writer for `/var/db/pkg`.
 
@@ -217,7 +219,7 @@ Installed package database reader/writer for `/var/db/pkg`.
 - `struct MergeSpec` — Specification for registering a new installed package
 - Directory iterators: `AllPackages`, `Category`, `Categories`, `Packages`
 
-### `portage-binpkg` (v0.2.0)
+### `portage-binpkg` (v0.2.1)
 
 Gentoo binary package (GPKG) read/write per [GLEP 78](https://www.gentoo.org/glep/glep-0078.html).
 
@@ -237,7 +239,7 @@ Source distfile fetching and resolution.
 - `struct Fetcher` — Downloads distfiles (builtin HTTP or external command)
 - `struct FetchConfig` / `enum FetchStrategy` / `enum FetchStatus` — Fetch configuration and result
 
-### `gentoo-stages` (v0.6.0)
+### `gentoo-stages` (v0.6.1)
 
 Stage3 tarball fetch and cache management.
 

@@ -1,6 +1,6 @@
 [package]
 name = "gentoo-core"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
@@ -9,6 +9,7 @@ keywords = ["gentoo", "core", "arch", "target"]
 categories = ["development-tools", "os::unix-apis"]
 repository.workspace = true
 rust-version.workspace = true
+exclude = ["AGENTS.md", "Cargo.lock"]
 
 [dependencies]
 gentoo-interner = { workspace = true }

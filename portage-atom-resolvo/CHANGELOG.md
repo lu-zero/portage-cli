@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.1
+
+### Other
+
+- Bump `resolvo` to 0.12.
+- Packaging hygiene: exclude local `Cargo.lock` from the crates.io tarball.
+
+## 0.8.0
+
+### Other
+
+- Depend on `portage-atom` 0.11 (PMS-correct `Version` ordering).
+- Inherit `rust-version` and `repository` from the workspace package metadata.
+- Clippy cleanups.
+
 ## 0.7.1
 
 ### Other

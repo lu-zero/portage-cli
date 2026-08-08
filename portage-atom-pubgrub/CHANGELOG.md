@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.8.0
+
+### Features
+
+- `check_blockers_detailed` keeps blocker victim identity (`BlockerHit` /
+  `BlockerVictim`).
+- `PortageDependencyProvider::set_selective_no_update`: when set, a satisfying
+  installed version is preferred over newest (selective / `--noreplace` path;
+  consumers that want `-u` leave it off).
+- Re-export `UseLayer` from the USE stack rewrite in `portage-solver`.
+- Humanize the synthetic root as “the requested targets” in no-solution reports
+  (`format_no_solution` / `format_solve_error`).
+
+### Bug fixes
+
+- Soft RDEPEND order repair after soft-cycle walk; lock pass-1-forward edges so
+  repair cannot invert hard dep order.
+
+### Other
+
+- Depend on `portage-solver` 0.3 and `portage-atom` 0.11.
+- Packaging hygiene: exclude workspace-only files from the crates.io tarball.
+
+## 0.7.0
+
+### Breaking changes
+
+- Re-exports `portage-solver` 0.2: `apply_package_use` →
+  `resolve_effective_use` (layer-ordered USE fold, Portage-aligned `USE=-*`).
+- Depends on `portage-solver` 0.2 and `portage-atom` 0.11.
+
+### Features
+
+- `Solver::set_prefer_update` for `-uD` in-slot upgrades (newest accepted
+  in-range version instead of early `Favor` return).
+- `--newuse` / `-N` and `--changed-use` / `-U` USE-drift rebuild detection.
+- Treat `package.provided` as present on the build host and in preflight.
+- Cross-compilation dual-root planning via the `Solver` trait
+  (`set_cross_active`, host/sysroot installed sets, `root_deps_rdeps`).
+
+### Bug fixes
+
+- Correct inverted `!flag?` USE-dep semantics (PMS 8.2.6.4).
+- Multi-slot USE-deps and branch-scoped blockers.
+- Stop `install_order` SCC tie-break from sweeping non-cyclic hard deps.
+- Layer-ordered USE fold (replace ad-hoc `wildcard_reset`).
+- `-uD` keeps host-satisfied build deps; ROOT-aware planning parity.
+- Stop `branch_installed_ver` recursing into REQUIRED_USE `UseDecision` nodes.
+
+### Performance
+
+- Arc-wrap dependency trees (`DepList`); intern Choice/SlotChoice less;
+  hoist loop-invariant slot-map / sysroot work.
+
+### Other
+
+- Re-export `portage-solver`'s `RequiredUse` instead of duplicating it.
+
 ## 0.6.0
 
 ### Breaking changes

@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.10.0
+
+### Breaking changes
+
+- `Error::Invalid{SrcUri,License,RequiredUse,Restrict}` now carry
+  `ParseDiagnostic` instead of `String`. Use `Error::parse_diagnostic()` (or
+  the variant payload) and render as a `miette::Diagnostic` in the application;
+  the library no longer pre-renders colorized strings.
+
+### Features
+
+- Structured `ParseDiagnostic` (`miette::Diagnostic`) for `SRC_URI` / `LICENSE` /
+  `REQUIRED_USE` / `RESTRICT` parse failures, with a cropped source window
+  around the failing span.
+
+### Bug fixes
+
+- Accept `!` in `SRC_URI` tokens (needed by live trees such as pentoo).
+- Never emit ANSI color from library diagnostic paths (CLI owns rendering).
+
+### Other
+
+- Depend on `miette` for structured diagnostics.
+- Packaging hygiene: exclude workspace-only files from the crates.io tarball.
+
+## 0.9.0
+
+### Performance
+
+- Stop round-tripping already-interned `IUSE` keys through the interner on the
+  per-version hot path (`From<&IUse<_>> for Interned<_>`).
+
+### Other
+
+- Inherit `rust-version` and `repository` from the workspace package metadata.
+
 ## 0.8.0
 
 ### Breaking changes
