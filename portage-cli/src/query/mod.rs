@@ -102,7 +102,7 @@ fn resolve_ambiguous(
     // Even under Error (or a failed Ask), tell the user the one thing that
     // would have resolved it — real emerge just dumps the candidate list and
     // leaves you to retype the full atom; naming the installed one and the
-    // flag that would pick it is strictly more helpful (found live 2026-08-04).
+    // flag that would pick it is strictly more helpful.
     let hint = installed
         .map(|(_, cpn)| {
             format!(

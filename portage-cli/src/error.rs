@@ -20,7 +20,7 @@ pub struct ConfigChangesNeeded;
 /// [`ConfigChangesNeeded`] — this is carried purely to drive a non-zero exit
 /// through the normal `Result` flow, without a final generic "no valid
 /// atoms" line that adds nothing beyond what the warnings above it already
-/// said (found live 2026-08-04: it read as a second, unrelated failure).
+/// said.
 #[derive(Debug, thiserror::Error)]
 #[error("no valid atoms (see warnings above)")]
 pub struct NoValidAtoms;

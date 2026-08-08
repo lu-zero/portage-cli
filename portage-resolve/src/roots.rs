@@ -127,38 +127,15 @@ impl Roots {
         self
     }
 
-    /// Force the planner's installed view to `VDB(target)` alone, dropping
-    /// the general `VDB(base) ∪ VDB(target)` overlay-sharing model
-    /// (`docs/root-model.md`) for this one operation.
+    /// Use only `VDB(target)` as the installed view, dropping base∪target
+    /// sharing (`docs/root-model.md`). Native toolchain bootstrap must merge
+    /// compiler/libc into the target rather than treating host VDB as
+    /// satisfied (under `--prefix`, host `virtual/os-headers` would otherwise
+    /// skip the merge and break glibc `--with-headers`).
     ///
-    /// The native toolchain bootstrap (`em toolchain --setup`,
-    /// `stages::toolchain_plan(Native, ..)`) is unconditionally
-    /// self-contained regardless of `--root`/`--prefix` topology — it must
-    /// place a working compiler and libc *inside* the target, not treat
-    /// whatever the host already has installed as satisfying it. Under
-    /// `--root` this was accidental (`base == target` there already, so
-    /// there was nothing to share), but under `--prefix` `base` is `None`
-    /// (bare host `/`), so `virtual/os-headers`/`sys-kernel/linux-headers`
-    /// resolved as already-satisfied from the *host's* real VDB and never
-    /// got merged into the prefix — glibc's own `--with-headers` then
-    /// pointed at an empty directory and failed to configure. Found live
-    /// 2026-07-16 running the toolchain bootstrap into a fresh `--prefix`
-    /// for the first time (previously only tested via `-p`/individual
-    /// package builds, never a real end-to-end run).
-    ///
-    /// Deliberately does *not* touch `base` itself: `base` also drives
-    /// [`build_sysroot`](Self::build_sysroot) (SYSROOT/ESYSROOT — what the
-    /// build compiles *against*) and [`satisfaction_root`](Self::satisfaction_root)
-    /// (`DepClass::Depend`'s resolution root). Overwriting `base` to force a
-    /// target-only installed view once broke both of those for the exact
-    /// same native-toolchain-bootstrap steps this method targets: with
-    /// `base == target`, `build_sysroot()` returned `None` (SYSROOT defaults
-    /// to ROOT, i.e. the prefix itself, same as EPREFIX) and gcc's own
-    /// `ESYSROOT = SYSROOT + EPREFIX` formula doubled the prefix path
-    /// (`--with-build-sysroot=<prefix>/<prefix>/`), which broke gcc's
-    /// self-build (wrong `-I` search order picked up glibc's own bundled
-    /// `obstack.h` over gcc's newer bundled copy). Found live 2026-07-16,
-    /// same session, testing this exact fix end to end.
+    /// Does not rewrite `base`: that also drives [`Self::build_sysroot`] and
+    /// DEPEND's satisfaction root. Forcing `base == target` doubled ESYSROOT
+    /// for gcc (`SYSROOT+EPREFIX`) and broke the self-build.
     pub fn with_target_only_installed_view(mut self) -> Self {
         self.installed_view_target_only = true;
         self
@@ -208,23 +185,14 @@ impl Roots {
         Some(self.eprefix().unwrap_or_else(|| self.merge_root()))
     }
 
-    /// Where an unsatisfied dependency of `class` resolves and is checked
-    /// against (docs/root-topology.md's satisfaction-root table, PMS table
-    /// 8.2): `BDEPEND` always resolves on `broot` (the true build host,
-    /// independent of any `--target` sysroot substitution); `IDEPEND` is
-    /// `broot` for a cross build, else the same as `RDEPEND`/`PDEPEND`;
-    /// `DEPEND` resolves against `base` when it genuinely differs from the
-    /// target (an overlay, e.g. `--prefix`); otherwise, for a native
-    /// (same-arch) build, `broot` — there's no separate build sysroot
-    /// distinct from the host when `CBUILD==CHOST`, confirmed empirically
-    /// against real portage (`ROOT=X emerge sys-devel/gcc` against an empty
-    /// `X` doesn't need `os-headers`/`perl`/etc. built fresh into `X`; glibc
-    /// and gcc's own DEPEND is satisfied by the host, 2026-07-11) — only a
-    /// genuine cross build
-    /// (`--target`, foreign-arch) keeps DEPEND pinned to the target sysroot,
-    /// since the host's own-arch VDB can't satisfy a foreign-arch DEPEND at
-    /// all; `RDEPEND`/`PDEPEND` always resolve against the target
-    /// (`merge_root()`).
+    /// Satisfaction root for an unsatisfied dep of `class` (docs/root-topology.md,
+    /// PMS table 8.2):
+    /// - `BDEPEND` → `broot` (build host; ignores `--target` substitution)
+    /// - `IDEPEND` → `broot` when cross, else same as `RDEPEND`
+    /// - `DEPEND` → `base` when it differs from target (overlay); else `broot`
+    ///   for native (`CBUILD==CHOST`, host satisfies DEPEND — matches portage
+    ///   `ROOT=X emerge`); target sysroot only for foreign-arch `--target`
+    /// - `RDEPEND`/`PDEPEND` → target (`merge_root()`)
     ///
     /// This replaces threading a second `host_roots: &Roots` alongside
     /// `roots` everywhere just to answer the `BDEPEND` question — `broot`

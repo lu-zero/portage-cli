@@ -127,18 +127,10 @@ impl PhaseGroup {
     /// parent produced that `src_install` may still need.
     /// Debug: none.
     ///
-    /// `temp` used to be wiped here too, on the reasoning that only `work/`
-    /// (the compile artifacts) needs to survive the Compile→Install process
-    /// boundary. But `${T}` is cross-phase scratch space by PMS convention,
-    /// not throwaway-per-phase: an ebuild's `src_prepare`/`src_configure` can
-    /// stage a file there for `src_install` to pick up later (e.g.
-    /// `app-crypt/gnupg`'s systemd unit templates, copied into `${T}` in
-    /// `src_prepare` and `doins`'d from there in `src_install_all`). Since
-    // `Install`'s own phase list is just `["install", "qmerge"]` (no
-    // `prepare` to redo the copy), wiping `temp` here silently destroyed
-    // that staged file between the two processes and `doins` failed on a
-    // file that existed moments earlier in the same build. Caught live
-    // chasing a stage1 gnupg failure.
+    /// Keep `temp` (`${T}`) across Compile→Install: PMS scratch that
+    /// `src_prepare` may stage for `src_install` (e.g. gnupg systemd units).
+    /// Install's phase list is only `install`/`qmerge`, so wiping temp here
+    /// would drop that staged state.
     fn clean_subs(&self) -> Option<&'static [&'static str]> {
         match self {
             Self::Full | Self::Compile | Self::BinpkgMerge | Self::BuildOnly => {
@@ -199,7 +191,6 @@ pub struct RootContext<'a> {
     /// the host's), but for THIS bootstrap it lands ahead of a package's own
     /// project-local `-I` flags and can shadow a version-matched local header
     /// with an incompatible one from the freshly-installed target libc —
-    /// found live 2026-07-16 running gcc's own `libiberty/obstack.c` self-
     /// build under `--prefix` (the exact same class of bug already fixed for
     /// `--root` on 2026-07-03, see `setup.rs`'s `BASHRC_PREFIX`/`self_contained`
     /// doc comment).
@@ -231,7 +222,7 @@ pub fn default_work_base(prefix: Option<&Utf8Path>) -> Utf8PathBuf {
 /// Portage keeps `$PORTAGE_TMPDIR/portage/$CATEGORY/$PF` without ROOT in the
 /// path and serializes dual-ROOT same-CPV merges instead. em prefers
 /// **per-root builddirs** so host and target copies of the same CPV can run
-/// under `--jobs` without sharing a WORKDIR (Sonnet 2026-08-06 dual-plan race).
+/// under `--jobs` without sharing a WORKDIR.
 ///
 /// `/` → `host`; other paths → path with `/` replaced by `-` (trimmed).
 pub fn work_root_key(merge_root: &Utf8Path) -> String {
@@ -1898,8 +1889,7 @@ async fn run_fetch(
     // not per filename (a separate, pre-existing bug in
     // `DistfileResolver::resolve`/`resolve_all`, not fixed here — see
     // `resolve_uri_map`'s own doc comment). Render each filename's outcome
-    // once rather than once per underlying URI. Found live 2026-08-04
-    // re-emerging sys-devel/binutils, which printed "already present" twice.
+    // once rather than once per underlying URI.
     // Real portage's own fetch check reports each distfile via `ebegin`/`eend`
     // (`eout.ebegin(f"{file} size ;-)"); eout.eend(0)`) — a colored `" * "`
     // line ending in a right-aligned `"[ ok ]"`/`"[ !! ]"` bracket, not a log
@@ -1978,20 +1968,8 @@ async fn run_merge(
     let temp_dir = work_root.join("temp");
     std::fs::create_dir_all(temp_dir.as_std_path()).context("creating temp dir")?;
 
-    // In a merge run the ebuild is already sourced (an earlier phase —
-    // unpack/prepare/etc. — ran first in this same shell): avoid re-sourcing
-    // here, exactly like `run_fetch` already does (see its own comment).
-    // Doing so anyway doesn't just risk dropping a custom `S`; found live
-    // 2026-08-04, it silently dropped `sys-devel/binutils`'s own
-    // `inherit verify-sig` (which sets plain `IUSE="verify-sig"`) from the
-    // VDB's `IUSE` file, even though the pre-merge dependency plan correctly
-    // showed it and `em regen`'s own md5-cache has it too. Fixed by checking
-    // `is_phase_sourced` first, matching `run_fetch`'s already-established
-    // pattern, and verified live (VDB `IUSE` now matches the cache) — the
-    // precise bash/eclass-level reason the extra re-source drops it wasn't
-    // isolated in a minimal repro (see the regression test in
-    // `portage-repo/src/build/shell/tests.rs`), but skipping the redundant
-    // sourcing is correct regardless: the ebuild's already fully sourced.
+    // Already sourced in an earlier phase of this shell — do not re-source
+    // (can drop eclass IUSE contributions; matches `run_fetch`).
     if !shell.is_phase_sourced(ebuild) {
         shell
             .source_ebuild(ebuild)
@@ -3252,7 +3230,6 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     /// Dual-root same-CPV plan entries must not share a WORKDIR (Sonnet
-    /// 2026-08-06 `--jobs` race under `--prefix --target`).
     #[test]
     fn package_work_dir_isolates_merge_roots() {
         let base = Utf8Path::new("/tmp/em-work");

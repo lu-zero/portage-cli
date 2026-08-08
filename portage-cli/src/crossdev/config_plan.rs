@@ -145,7 +145,7 @@ impl ConfigEntry {
                 // `alias-packages` line that merely *contains* our computed
                 // line as a prefix/substring (e.g. someone appended a
                 // package by hand instead of using `--ex-pkg`) must still
-                // count as drift, not "already up to date" — found live:
+                // count as drift, not "already up to date"
                 // a `.contains()` check here let a hand-added trailing
                 // package silently survive while an edit anywhere else in
                 // the line would just as silently have been clobbered, an

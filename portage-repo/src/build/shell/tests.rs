@@ -666,16 +666,8 @@ async fn cross_toolchain_selection_no_op_when_tool_unreachable() {
     assert!(shell.get_var("CC").unwrap_or_default().is_empty());
 }
 
-/// Regression test for a bug found live 2026-07-17 building `sys-libs/readline`
-/// in a from-scratch riscv64 cross build: the cross-toolchain block's own
-/// gate only checks that `${chost}-gcc` exists, then used to set all 12
-/// tool vars (including `PKG_CONFIG`) unconditionally from that same
-/// assumption. Unlike the other 11 (built by crossdev's own toolchain steps
-/// alongside gcc), nothing em builds ever creates a `${chost}-pkg-config`
-/// wrapper, so `PKG_CONFIG` ended up pointing at a file that doesn't exist —
-/// worse than leaving it unset, since `tc-getPKG_CONFIG`'s own "already set"
-/// fast path then skips its real PATH-search/bare-name fallback entirely,
-/// turning a normally-recoverable "no pkg-config" case into a hard failure.
+/// Do not set `PKG_CONFIG` to a missing `${chost}-pkg-config` just because
+/// `${chost}-gcc` exists — leave it unset so `tc-getPKG_CONFIG` can fall back.
 #[tokio::test]
 async fn cross_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     let dir = tempdir().unwrap();
@@ -739,20 +731,8 @@ async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
     );
 }
 
-/// Regression test for a bug found live 2026-08-04 bootstrapping riscv64
-/// glibc under `--prefix`: a genuine cross-*target* package (`CTARGET` set,
-/// no `TARGET_ABI` — matches `crossdev --setup`'s "libc"/"kernel headers"
-/// steps' own `package.env`, unlike the host-arch toolchain-*tool* packages)
-/// must get `CC`/etc. as `${CTARGET}-<tool>`, not `${CHOST}-<tool>`, even
-/// though `CHOST` here is the *ambient* value (e.g. `crossdev --setup`'s
-/// `use_outer_eroot` routes these steps through host config for unrelated
-/// reasons) — real glibc's own `sanity_prechecks` runs a `tc-getCPP
-/// ${CTARGET}` probe that can only self-correct to the right cross tool when
-/// `$CC` starts out unset; a premature `${CHOST}-gcc` export defeats it.
-/// Also checks the new `BUILD_CC` export: real toolchain-funcs.eclass's
-/// `tc-getBUILD_CC` checks `BUILD_CC`/`CC_FOR_BUILD`/`HOSTCC` (never plain
-/// `CC`) once genuinely cross-compiling, so a host-side sub-probe still
-/// needs a real ambient/CBUILD-side compiler available under that name.
+/// Target packages use `${CTARGET}-*` tools (not ambient CHOST) and export
+/// `BUILD_CC` for host-side sub-probes.
 #[tokio::test]
 async fn cross_target_package_toolchain_uses_ctarget_not_ambient_chost() {
     let dir = tempdir().unwrap();
@@ -995,7 +975,6 @@ fn write_ebuild_with_plain_iuse_eclass(repo_root: &std::path::Path) -> Utf8PathB
 /// `is_phase_sourced`, instead of calling `source_ebuild` again.
 ///
 /// `run_merge` calling `source_ebuild` unconditionally (the pre-fix bug) was
-/// confirmed live: `sys-devel/binutils`'s VDB `IUSE` came out missing
 /// `verify-sig`, even though the pre-merge dependency plan showed it
 /// correctly and the md5-cache (via `em regen`) also has it. The exact
 /// bash/eclass-level reason the *specific* live sequence of phases dropped it
@@ -1032,19 +1011,8 @@ async fn already_phase_sourced_iuse_includes_eclass_contribution() {
     );
 }
 
-/// Regression test for a bug found live 2026-08-04 bootstrapping a riscv64
-/// cross toolchain under `--prefix`: `cross-<tuple>/binutils` compiles with
-/// the prefix's own native compiler, whose default system header search is
-/// confined to `<prefix>/usr/include` — it has no knowledge of the real
-/// host's `/usr/include`, where a BDEPEND like dev-libs/elfutils
-/// (`USE=debuginfod`) that isn't itself installed as a native prefix package
-/// actually lives. `binutils/dwarf.c` hit `elfutils/debuginfod.h: No such
-/// file or directory` despite pkg-config correctly finding
-/// `libdebuginfod >= 0.188` on the host. CPPFLAGS must gain a `-idirafter
-/// /usr/include` fallback for exactly this package class, under a
-/// `--prefix`-style overlay (`build_sysroot` set — see `build_sysroot`'s own
-/// doc comment: `Some` only for the host-borrowing overlay case, `None` for
-/// `--local`'s standalone closure).
+/// Host cross tools under `--prefix` get `-idirafter /usr/include` so
+/// host-only BDEPEND headers resolve.
 #[tokio::test]
 async fn cross_host_tool_package_gets_a_host_include_fallback_under_prefix() {
     let dir = tempdir().unwrap();
@@ -1138,18 +1106,8 @@ async fn ordinary_package_no_host_fallback_even_under_prefix() {
     );
 }
 
-/// Regression test for a bug found live 2026-08-04 testing an ordinary
-/// `-T riscv64-unknown-linux-gnu -b llvm-core/clang` package build
-/// (`sys-libs/zlib` — NOT under `crossdev --setup`, so `cross_host_tool_tuple`
-/// is `None`): `Cli::roots()`'s global `--target` substitution sets
-/// `base == target == the sysroot`, so `Roots::build_sysroot()` returns
-/// `None` and `set_build_roots`'s own `sysroot: None` here reproduces it —
-/// but `eprefix` still carries the *outer* prefix. `ESYSROOT` must equal the
-/// (already fully-substituted) sysroot alone, not `sysroot + eprefix`
-/// doubled — real Gentoo Prefix's own patched gcc reads `ESYSROOT` directly
-/// to compute its runtime `-isysroot`, so a doubled value broke every
-/// target-arch package's own system header search (confirmed live: `gcc -v`
-/// showed `-isysroot <sysroot>/<outer-prefix>/`, a path that doesn't exist).
+/// Ordinary target packages: ESYSROOT is the substituted sysroot alone,
+/// never sysroot+outer-eprefix.
 #[tokio::test]
 async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
     let dir = tempdir().unwrap();
@@ -1188,19 +1146,8 @@ async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
     );
 }
 
-/// Regression test for a bug found live 2026-08-04 re-emerging
-/// `sys-devel/binutils`: without `COLUMNS` exported into the phase env, real
-/// `gentoo-functions`' tty-capability probe (`rc.sh`'s `_update_tty_level`/
-/// `_update_columns`) sees `PORTAGE_BIN_PATH` set (`em` already exports it)
-/// and takes its `from_portage` branch, which reads `$COLUMNS` instead of
-/// calling `stty size` — with no `COLUMNS` at all, that branch fails and
-/// every `gentoo-functions` consumer a `pkg_postinst` calls
-/// (`binutils-config`, `gcc-config`, …) falls back to its own non-tty
-/// rendering. `set_terminal` must export it as a real environment variable
-/// (`em`'s own Rust builtins take the width from `TerminalState` instead, but a
-/// real external subprocess like `binutils-config` can only see an export).
-/// `NOCOLOR`/`NO_COLOR` ride along for the same reason — several eclasses read
-/// them directly.
+/// `set_terminal` must export COLUMNS/NOCOLOR/NO_COLOR for external
+/// subprocesses (gentoo-functions, eclasses), not only brush-internal state.
 #[tokio::test]
 async fn set_terminal_is_exported_to_phase_subprocesses() {
     let dir = tempdir().unwrap();

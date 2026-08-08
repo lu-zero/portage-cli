@@ -60,8 +60,7 @@ pub fn query(tuple: &str, eclass_dir: &Utf8Path) -> Result<MultilibEnv> {
     // synthesize the `*_default` ABI entries (CHOST_default, CTARGET_default,
     // LIBDIR_default) that multilib-toolchain.eclass relies on. Without them,
     // a cross glibc build resolves CC to the host gcc and dies on the
-    // linux-headers version probe (found live: cross-riscv64/glibc under
-    // --prefix). This matches crossdev's `load_multilib_env` exactly.
+    // linux-headers version probe. Matches crossdev's `load_multilib_env`.
     let snippet = format!(
         r#"
 CTARGET={tuple}

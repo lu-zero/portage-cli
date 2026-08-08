@@ -62,16 +62,8 @@ impl PortageDependencyProvider {
             // `Target`-flavored alias (`self.packages` is keyed by whatever
             // identity the construction-time BFS discovered, always `Target`
             // for a real package — see `ensure_host_instances`/`host_aliases`).
-            // A direct `self.packages.get(pkg)` here always misses for a
-            // `Host` node, silently producing zero outgoing edges for it —
-            // so a Host package's own BDEPEND (e.g. one Host-routed perl
-            // module needing another Host-routed perl) never gets an
-            // ordering edge, and `install_order` falls back to an arbitrary
-            // tie-break instead of real dependency order. Found live: a
-            // riscv64 stage3 `--cross` build routed a whole chain of Host
-            // BDEPEND packages (`dev-lang/perl` and its `dev-perl/*`
-            // consumers) with no ordering edges between them, so `perl`
-            // landed *after* consumers that need it.
+            // Host nodes are keyed under their Target alias in `self.packages`;
+            // resolve via `package_data` so Host BDEPEND edges are not lost.
             let Some(data) = self.package_data(pkg) else {
                 continue;
             };
@@ -146,15 +138,13 @@ impl PortageDependencyProvider {
     /// with bootstrap cycles (`xz-utils` ↔ `elt-patches`), do we fall back to a
     /// deterministic lexicographic tie-break.
     ///
-    /// Two refinements on top of that Portage-shaped walk (bug #3, 2026-08-07):
-    /// - **B:** inside a soft SCC, prefer fully soft-ready nodes among hard-ready
-    ///   ones (`order_cycle` pick order).
-    /// - **C:** after the walk, re-linearise promoting soft edges that remain
-    ///   acyclic w.r.t. hard (+ already promoted soft) constraints — pass-1
-    ///   orientation first, then inverted — with the pass-1 order as tie-break.
-    ///   Fixes empty `virtual/*` RDEPEND providers that pass-1 emitted early while
-    ///   the real provider was still hard-blocked (e.g. `virtual/libcrypt` before
-    ///   `sys-libs/libxcrypt` through the glibc bootstrap cycle).
+    /// Refinements on the Portage-shaped walk:
+    /// - **B:** inside a soft SCC, prefer soft-ready among hard-ready nodes.
+    /// - **C:** after the walk, re-linearise promoting soft edges still acyclic
+    ///   w.r.t. hard (+ already-promoted soft) constraints (pass-1 orientation
+    ///   first, then inverted; pass-1 order as tie-break). Fixes empty
+    ///   `virtual/*` providers emitted before their real RDEPEND provider
+    ///   (e.g. `virtual/libcrypt` before `libxcrypt` via the glibc cycle).
     pub fn install_order(
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
@@ -328,36 +318,20 @@ fn tarjan_scc(succ: &[Vec<usize>]) -> Vec<usize> {
 
 /// Order the members of a single `succ_all` (hard+soft) component.
 ///
-/// A multi-member component here does NOT mean every member is part of a
-/// genuine hard cycle — an ordinary soft (RDEPEND) cycle anywhere among these
-/// packages folds everything reachable through it into one component, even
-/// packages with a perfectly ordinary, acyclic hard (DEPEND/BDEPEND) chain
-/// onto something inside it (e.g. dozens of bootstrap tools all needing
-/// `app-portage/elt-patches`, which itself has a genuine 2-node hard cycle
-/// with `app-arch/xz-utils` — found live 2026-07-16, a real `--local`
-/// from-scratch bootstrap folded 114 of 229 packages into one component this
-/// way). Those non-cyclic hard dependents must still be ordered after their
-/// real hard prerequisite, unconditionally — only the *actual* hard-cycle
-/// members have no valid total order and need a heuristic tie-break.
+/// A soft (RDEPEND) cycle folds many packages into one component even when
+/// most have acyclic hard chains (e.g. tools → elt-patches ↔ xz-utils). Hard
+/// dependents must still follow their hard prerequisites; only true hard-
+/// cycle members need a heuristic.
 ///
-/// So: first isolate the genuinely irreducible hard cycles within this
-/// component (Tarjan over `succ_hard` restricted to `members` — cheap, this
-/// component is usually tiny once soft edges are set aside). A member with
-/// an unmet hard predecessor *outside its own hard-group* is never emitted
-/// while an eligible member remains — every hard edge that isn't part of a
-/// real hard cycle is respected exactly, regardless of what unrelated soft
-/// cycle pulled it into this bigger component. This can't stall: the
-/// hard-group condensation is itself a DAG, so an eligible member (no
-/// pending cross-group hard predecessor) always exists.
-///
-/// Within one hard-group (a real cycle, no valid order exists), fall back to
-/// the original heuristic: repeatedly emit the member closest to ready —
-/// fewest pending in-component hard deps, then prefer no pending soft deps
-/// (**B**), then fewest pending soft+hard, then largest key for determinism.
-/// Groups that are all singletons (no real hard cycle present) behave
-/// identically to a plain topological sort when soft edges are acyclic —
-/// soft cycles still force a break; pass-2 (`repair_soft_inversions`) may
-/// restore inverted soft edges that remain acyclic with hard constraints.
+/// 1. Isolate irreducible hard cycles (Tarjan over `succ_hard` on `members`).
+/// 2. Never emit a member with an unmet hard predecessor outside its
+///    hard-group while an eligible member remains. The hard-group DAG
+///    guarantees progress.
+/// 3. Inside a hard-group: emit closest-to-ready (fewest pending hard, then
+///    prefer no pending soft (**B**), then fewest soft+hard, then key).
+///    Singleton groups behave like topo-sort when soft edges are acyclic;
+///    soft cycles still break; pass-2 (`repair_soft_inversions`) may
+///    restore inverted soft edges that remain acyclic with hard constraints.
 fn order_cycle(
     members: &[usize],
     succ_hard: &[Vec<usize>],
@@ -928,27 +902,10 @@ mod tests {
         );
     }
 
-    /// Live clang-world #3 (2026-08-07): soft+hard cycle through the libcrypt
-    /// bootstrap chain lets `order_cycle` emit empty `virtual/libcrypt` *before*
-    /// its RDEPEND provider `sys-libs/libxcrypt`.
-    ///
-    /// Real tree cycle (all in one `succ_all` SCC once soft edges are kept):
-    /// ```text
-    /// virtual/libcrypt -RDEPEND→ libxcrypt -DEPEND→ glibc -DEPEND→ virtual/os-headers
-    ///   -RDEPEND→ linux-headers -BDEPEND→ perl -DEPEND→ virtual/libcrypt
-    /// ```
-    /// Hard graph alone is acyclic; only soft RDEPEND closes the loop. The
-    /// walker then prefers hard-ready nodes: empty virtuals have hard-indegree 0
-    /// (their provider edge is soft), so they emit first. Downstream
-    /// `build_blockers` only keeps edges with `to < from`, so the soft edge is
-    /// dropped and pam can start with no provider merged.
-    ///
-    /// Minimal dual-root fixture without this cycle *does* order provider first
-    /// (`cross_target_virtual_rdepend_provider_is_target_not_host`). This test
-    /// is the cycle shape that breaks live.
-    ///
-    /// Pass-1 alone (wrong): `virtual/os-headers`, **`virtual/libcrypt`**,
-    /// python, glibc, **libxcrypt**, … — fixed by pass-2 soft repair.
+    /// Soft+hard cycle: `virtual/libcrypt` → libxcrypt → glibc → … → virtual
+    /// again. Hard graph is acyclic; soft RDEPEND closes the loop, so pass-1
+    /// emits the empty virtual first (hard-indegree 0). Pass-2 soft repair
+    /// must put the provider before the virtual.
     #[test]
     fn empty_virtual_rdepend_orders_after_provider_through_soft_hard_cycle() {
         let mut repo = InMemoryRepository::new();
@@ -1112,10 +1069,8 @@ mod tests {
         }
     }
 
-    /// Live regression (Sonnet 2026-08-07, full clang plan after first B+C):
-    /// pass-2 reordered `sys-devel/gcc` *before* its hard BDEPEND
-    /// `sys-libs/glibc`, tripping pre-flight. Soft repair must never drop a
-    /// hard edge pass-1 already oriented correctly.
+    /// Soft repair must not invert a hard BDEPEND that pass-1 already ordered
+    /// correctly (gcc after glibc).
     #[test]
     fn repair_preserves_pass1_correct_hard_bdepend_with_soft_noise() {
         let mut repo = InMemoryRepository::new();

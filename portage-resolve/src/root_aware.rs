@@ -52,12 +52,9 @@ impl CrossContext {
     /// same-arch offset that never declares them), default to same-arch —
     /// NOT `sysroot != "/"`, which used to treat *any* non-host sysroot
     /// (including a plain same-arch `--root <dir>`) as foreign-arch. Mirrors
-    /// `detect()`'s own `cross_arch` local (which already used `_ => false`),
-    /// an inconsistency this method used to diverge from. Found 2026-07-11:
-    /// that false positive made a same-arch offset build's `DEPEND` stay
-    /// unconditionally pinned to the target sysroot in `solve.rs` instead of
-    /// dropping host-satisfied edges — `em --root <dir> sys-devel/gcc`
-    /// pulled 127 packages where real `ROOT=<dir> emerge` pulls 16.
+    /// `detect()`'s own `cross_arch` local (which already used `_ => false`).
+    /// Treating any non-host sysroot as foreign wrongly pins DEPEND to the
+    /// empty target for same-arch `--root` (huge false plan vs real emerge).
     pub fn is_cross_arch(&self) -> bool {
         match (self.chost.as_deref(), self.cbuild.as_deref()) {
             (Some(c), Some(b)) => c != b,
@@ -229,17 +226,9 @@ mod tests {
         );
     }
 
-    /// `--local`: BROOT == target == the same prefix (structurally the same
-    /// single-root shape as bare, just at a different path) — dual-root
-    /// solver bookkeeping must NOT engage, or `host_copies`' Tier-1
-    /// (already-populated-host) walk fires against the prefix's own,
-    /// initially-empty BROOT and fabricates a parallel `@Host` copy of
-    /// nearly the whole closure (found live 2026-07-16, a fresh `--local`
-    /// prefix's `toolchain --setup` hit dozens of spurious top-level BDEPEND
-    /// gaps and duplicate plan entries preflight then rejected the order
-    /// of). `sysroot`/`target` must still be populated truthfully even
-    /// though inactive, so `-p` still shows ` to <prefix>/`, not the bare
-    /// host's `/`.
+    /// `--local`: BROOT == target (single root). Dual-root bookkeeping must
+    /// not engage against an empty prefix BROOT. `sysroot`/`target` still
+    /// report the real path so `-p` shows ` to <prefix>/`.
     #[test]
     fn local_shaped_roots_are_not_active_but_still_report_the_real_target() {
         let roots = crate::Roots::for_test("/root/local-test");

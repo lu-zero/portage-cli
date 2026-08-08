@@ -43,13 +43,8 @@ pub(crate) async fn resolve_pkgdir(globals: &Cli) -> Utf8PathBuf {
 /// portage's own system-wide install convention, unconditionally
 /// `/var/cache/binpkgs` (confirmed: this repo's own `make.globals` hardcodes
 /// exactly that). For a `--root`/`--target`/`--local`/`--prefix` merge root
-/// (anything other than `/`), consulting that host default is wrong: it's a
-// real, root-owned system path the build has no business writing to, and
-// unprivileged builds can't anyway. Caught live: a stage3 `--buildpkg` run
-// tried to write there, got `EACCES`, and appears to have destabilized the
-// fakeroost ptrace session for several packages.
-// Skip straight to a root-relative default in that case; `$PKGDIR`/
-// config-root `make.conf` (explicit user choices) still apply regardless of root.
+/// (anything other than `/`), the host default is wrong (root-owned path).
+/// Use a root-relative default; explicit `$PKGDIR` / make.conf still win.
 pub(crate) async fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
     if let Ok(v) = std::env::var("PKGDIR")
         && !v.trim().is_empty()

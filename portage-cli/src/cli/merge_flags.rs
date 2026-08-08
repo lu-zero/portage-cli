@@ -22,7 +22,6 @@
 //! (the two-stage cross bootstrap's `--nodeps` libc-headers step) — folding
 //! it into this mixin would lose that per-step distinction.
 //!
-//! Found 2026-07-03 running `em stages --stage1 -j 80 --keep-going`: `-j`/
 //! `--keep-going`/`--autosolve-use`/`--autounmask-write` all parsed only
 //! when placed *before* the subcommand, and `run_staged`'s driver read them
 //! straight off the top-level `Cli` regardless of where the subcommand's own

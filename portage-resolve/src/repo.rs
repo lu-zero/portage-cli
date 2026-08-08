@@ -936,7 +936,6 @@ impl Adapter<'_> {
         // satisfied clause — that gratuitously turns an already-decided flag
         // into a solver-owned virtual choice node, which can fabricate a
         // dependency edge that doesn't reflect the real (settled) USE state.
-        // Found 2026-07-03: util-linux's own `su?(pam)` violation was ceding
         // `python` too, spuriously wiring it to dev-lang/python and creating a
         // fake install-order cycle.
         let mut names = std::collections::BTreeSet::new();
@@ -1771,7 +1770,7 @@ mod tests {
         assert!(!star_reset_without_riscv.accepts(&stable, &foo, None));
     }
 
-    /// Regression test for the bug a design review (Claude Opus 5) found live:
+    /// Regression:
     /// `package.accept_keywords`'s own documented "pin to stable" idiom
     /// (`portage(5)`: `media-video/mplayer -~x86`) needs `-~arch` to withdraw
     /// *only* the testing grant, leaving the stable one intact. An earlier

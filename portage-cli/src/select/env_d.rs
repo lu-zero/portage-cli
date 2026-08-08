@@ -350,17 +350,9 @@ pub(super) fn symlink_force(content: &Utf8Path, link: &Utf8Path) -> Result<()> {
 
 /// Run a list action.
 ///
-/// `outer_roots()`, not `roots()`: found live 2026-07-17 testing `em select
-/// pkgconf` under `--prefix` — clap's derive macro applies a subcommand's
-/// own `--target` value to *both* that local field and the global `Cli`
-/// one (they share the long name "target", even though only the global one
-/// has the `-T` short alias), so `em select <module> ... --target T` was
-/// silently also setting `Cli::target`. `roots()` treats a non-`None`
-/// `Cli::target` as "substitute the sysroot in", which `select` never
-/// wants — it only cares about `T` as "which target's own profile file to
-/// read/write", a config-root-space question, not a merge-root one.
-/// `outer_roots()` never consults `Cli::target` at all, so it's immune to
-/// this collision regardless of whether the collision itself gets fixed.
+/// Use `outer_roots()`, not `roots()` — same clap `--target` collision as
+/// [`crate::select::config_portage_dir`]: select must not trigger sysroot
+/// substitution.
 pub fn run_list<T: EnvDProfile>(globals: &Cli) -> Result<()> {
     let roots = globals.outer_roots();
     let profiles_by_target = list_all_profiles::<T>(&roots)?;

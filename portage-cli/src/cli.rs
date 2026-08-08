@@ -393,7 +393,6 @@ impl Cli {
                 // parity (`PORTAGE_CONFIGROOT` defaults to `/` regardless of
                 // `ROOT`). The 2026-07-09 "own everything" self-contained
                 // default (config following `--root` itself) was reverted
-                // 2026-07-11: it diverged from real `ROOT=` semantics for no
                 // benefit `--root --config-root <same dir>` didn't already
                 // give explicitly, and made a bare `--root DIR` behave unlike
                 // anything a real emerge user would expect.

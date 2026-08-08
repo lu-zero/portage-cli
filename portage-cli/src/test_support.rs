@@ -12,7 +12,6 @@ use std::sync::Mutex;
 /// touches `PATH` too; every test on either side of the mutation must
 /// acquire this same lock.
 ///
-/// Found live: `select::pkgconf`'s tests temporarily replace `PATH` with a
 /// synthetic, deliberately tool-free directory list to exercise "no backend
 /// reachable" (replacing, not prepending, since a real `pkg-config` on the
 /// host/CI machine's ambient `PATH` would otherwise still be found and

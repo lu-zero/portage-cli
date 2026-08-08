@@ -83,16 +83,10 @@ pub async fn run(command: &SelectCommand, globals: &Cli) -> Result<()> {
 /// The configuration root for `etc/portage` operations: `--config-root`
 /// (cross sysroot / offset) when given, else `--prefix`/`--local` overlay, else `/`.
 ///
-/// `outer_roots()`, not `roots()` — found live 2026-07-17: clap's derive
-/// macro applies a `select` subcommand's own `--target` value to *both*
-/// that local field and the global `Cli::target` (same long name, "target",
-/// even though the global one alone has the `-T` short alias), so `em
-/// select <module> ... --target T` was silently also setting `Cli::target`
-/// and triggering `roots()`'s sysroot substitution — completely unwanted
-/// here, since `select` only ever means "which target's own config-root
-/// state", never "merge into this sysroot". `outer_roots()` doesn't consult
-/// `Cli::target` at all, so it's immune regardless of whether the
-/// underlying flag collision itself gets fixed.
+/// Use `outer_roots()`, not `roots()`: clap maps a select subcommand's
+/// `--target` onto global `Cli::target` (shared long name), which would
+/// trigger sysroot substitution. Select only means "which target's
+/// config-root state", never "merge into this sysroot".
 pub(crate) fn config_portage_dir(globals: &Cli) -> Utf8PathBuf {
     config_portage_dir_for(&globals.outer_roots())
 }
@@ -160,15 +154,7 @@ pub fn get_chost(globals: &Cli) -> String {
     // (CHOST-less) make.conf overlay left `get_chost` with nothing to find,
     // so `select compiler show`/`set` with no explicit `--target` silently
     // derived a bogus target (`arm64-unknown-linux-gnu` from `Cli::arch`'s
-    // Gentoo arch name, not the real `aarch64-unknown-linux-gnu` CHOST
-    // tuple). Found live in a real `--prefix` sandbox after a full
-    // `em toolchain --setup` run.
-    //
-    // (This used to also fall back to a legacy `/etc/make.conf` flat-file
-    // path — pre-2006 layout, dropped 2026-07-23: essentially never
-    // populated on a modern system, and a real footgun — any stray file
-    // left over at that exact path with an unrelated `CHOST=` line would
-    // have silently outranked the correct value.)
+    // Gentoo arch name, not the real `aarch64-unknown-linux-gnu` CHOST).
     if is_prefix_context(globals) {
         paths_to_check.push(Utf8PathBuf::from("/etc/portage/make.conf"));
     }
@@ -211,12 +197,7 @@ mod tests {
     /// CHOST by design (`setup.rs`'s generated template: "Profile and base
     /// make.conf come from the host") — `get_chost` must fall back to the
     /// host's real `/etc/portage/make.conf`, not silently derive a bogus
-    /// `<arch>-unknown-linux-gnu` guess. Found live in a real `--prefix`
-    /// sandbox after a full `em toolchain --setup`: without this fallback,
-    /// `select compiler show`/`set` (no explicit `--target`) resolved
-    /// "arm64-unknown-linux-gnu" instead of the real
-    /// "aarch64-unknown-linux-gnu", so neither could find the profile
-    /// `list` correctly showed existed.
+    /// Prefix make.conf without CHOST falls back to the host's real CHOST.
     #[test]
     fn get_chost_under_prefix_falls_back_to_host_make_conf() {
         let Some(expected) = read_chost(std::path::Path::new("/etc/portage/make.conf")) else {

@@ -10,15 +10,10 @@ use portage_metadata::{CacheEntry, IUseDefault as MetaIUseDefault};
 use crate::force_mask::ForceMask;
 use crate::repo::{self, RepoData, ResolvePolicy};
 
-/// Re-apply the solver's ceded (`--autosolve-use`) flag decisions on top of an
-/// already-resolved `UseConfig`, unconditionally — like `use.force`/
-/// `use.mask`, a ceded flag's entire purpose is to repair a `REQUIRED_USE`
-/// violation caused by an env-level `-*`, so it must win over that same `-*`,
-/// not be folded in as a `package.use` entry the layer fold can legitimately
-/// wipe (found live: `--autosolve-use` under `em stages --stage1`'s `USE="-*
-/// build"` reported a fix but the real build still died with the original,
-/// unceded flags — the ceded override was being wiped by the very `-*` that
-/// made ceding necessary).
+/// Re-apply ceded (`--autosolve-use`) flag decisions on a resolved
+/// `UseConfig`. Like `use.force`/`use.mask`, ceded flags must win over an
+/// env-level `-*` that caused the `REQUIRED_USE` violation — not be stored
+/// as wipeable `package.use` entries.
 pub fn apply_ceded(cfg: &mut UseConfig, cpn: Cpn, ceded: &[CededFlag]) {
     for c in ceded.iter().filter(|c| c.cpn == cpn) {
         cfg.set(
@@ -179,11 +174,8 @@ mod tests {
 
     use super::*;
 
-    // The exact shape of the bug found live: `em stages --stage1`'s `USE="-*
-    // build"` (env-level `-*`) wipes a ceded flag that was folded in as a
-    // `package.use` entry, since package.use legitimately loses to an
-    // env-level `-*` (`resolve_effective_use_package_use_wiped_by_env_level_wildcard`,
-    // `portage-solver/src/use_config.rs`). `apply_ceded` must win regardless.
+    // Env-level `-*` would wipe a package.use-folded ceded flag;
+    // `apply_ceded` must win regardless.
     #[test]
     fn apply_ceded_survives_an_env_level_wildcard_reset() {
         let cpv = Cpv::new(Cpn::new("app-alternatives", "lex"), "0-r1".parse().unwrap());

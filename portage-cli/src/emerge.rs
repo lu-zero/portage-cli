@@ -123,65 +123,38 @@ pub(crate) fn expand_sets(
     out
 }
 pub(crate) struct EmergeOpts<'a> {
-    /// USE tokens (emerge syntax: `headers-only`, `-cxx`) forced on top of the
-    /// configured USE, for both the resolve and the build — applied as a
-    /// transient conf-layer override (`DepgraphOpts::extra_use_override`),
-    /// matching where catalyst's own `CATALYST_USE` actually lands
-    /// (`make.conf`, layer 3), NOT the process environment (layer 4, which
-    /// would sit above `package.use` and incorrectly wipe it — found live,
-    /// `em stages --stage1`'s `USE="-* build"` silently defeated
-    /// `--autosolve-use` for exactly this reason until this was fixed
-    /// 2026-07-12).
+    /// USE tokens forced for resolve + build (emerge syntax: `headers-only`,
+    /// `-cxx`). Applied as a transient *conf-layer* override
+    /// (`DepgraphOpts::extra_use_override`, catalyst's `CATALYST_USE` layer),
+    /// not the process environment — env sits above `package.use` and would
+    /// wipe package.use / break `--autosolve-use` under `USE="-* build"`.
     pub use_override: &'a [String],
     /// `--nodeps`: merge only the named atoms, no dependency expansion.
     pub nodeps: bool,
-    /// Override depgraph flags (deep, newuse) for this call. When None, uses
-    /// the values from cli.depgraph_flags.
+    /// Override depgraph flags for this call; `None` → `cli.depgraph_flags`.
     pub depgraph_flags: Option<crate::cli::DepgraphFlags>,
-    /// Override merge-behavior flags (jobs, keep_going, buildpkg, …) for this
-    /// call. When None, uses the values from `cli.merge_flags` — same
-    /// override/fallback shape as `depgraph_flags` above, needed for the same
-    /// reason: the staged driver (`crossdev::run_staged`) must see whichever
-    /// of the subcommand's own flattened `MergeFlags` or the top-level one
-    /// the user actually set (`em -j 80 stages --stage1` vs `em stages
-    /// --stage1 -j 80`), not just the top-level `Cli`'s copy.
+    /// Override merge flags for this call; `None` → `cli.merge_flags`. The
+    /// staged driver merges subcommand + top-level flags so either position
+    /// works (`em -j 80 stages …` vs `em stages … -j 80`).
     pub merge_flags: Option<crate::cli::MergeFlags>,
-    /// Install into the plain `--local`/`--prefix`/`--root` EROOT, ignoring any
-    /// `--target` sysroot substitution. Needed for `cross-<CTARGET>/gcc` steps
-    /// woven into a `--target`-active `stages --stage1` run: that package's
-    /// eclass always installs under the outer EROOT (`crossdev/mod.rs`'s module
-    /// doc), never the target sysroot subdirectory `roots()` would otherwise
-    /// substitute in.
+    /// Install into the plain outer EROOT, ignoring `--target` sysroot
+    /// substitution. Used for host-side `cross-*` toolchain steps.
     pub use_outer_eroot: bool,
-    /// Drop the general `VDB(base) ∪ VDB(target)` installed-view sharing
-    /// (`Roots::with_target_only_installed_view`) for this call. The native
-    /// toolchain bootstrap (`crossdev::mod.rs`'s `toolchain()`) sets this: it
-    /// is unconditionally self-contained regardless of `--root`/`--prefix`
-    /// topology, and must not let the host's already-installed
-    /// `virtual/os-headers`/etc. stand in for a copy actually merged into
-    /// the target.
+    /// Use only the target VDB as the installed view (no host-base sharing).
+    /// Native toolchain bootstrap into an empty `--root`.
     pub target_only_installed_view: bool,
-    /// Add explicitly-named atoms to the world file on a successful,
-    /// non-oneshot/non-buildpkgonly/non-fetchonly/non-onlydeps real run —
-    /// matching real emerge's `_world_atom`. Only the genuine top-level
-    /// `em <atoms>` invocation sets this; internal staged-build steps
-    /// (crossdev/stages) are not a user package selection and must not
-    /// pollute the world file.
+    /// Update world on a successful real user merge (emerge `_world_atom`).
+    /// Staged/internal steps leave this false.
     pub update_world: bool,
-    /// This call is itself replaying a previous `-r`/`--resume` — see
-    /// `maint::resume::save`'s doc: a resumed run's own resume-state save
-    /// must not supersede-with-backup (same logical job, not a new one).
-    /// Only ever `true` from [`resume_atoms`]; every other call site is a
-    /// fresh invocation.
+    /// Replaying `-r`/`--resume` — resume-state save must not rotate backup.
+    /// Only [`resume_atoms`] sets this true.
     pub is_resume: bool,
-    /// Optional activity bus (crossdev-stages / library). When `None`, a
-    /// default bus with a live-FS sink is used for real merges.
+    /// Optional activity bus; `None` → default live-FS sink for real merges.
     pub activity: Option<crate::activity::ActivityBus>,
     /// Session correlation (outer job_id / parent_job_id for staged plans).
     pub activity_session: crate::activity::ActivitySessionOpts,
-    /// In-memory crossdev aliases for this resolve (see
-    /// [`query::depgraph::DepgraphOpts::extra_aliases`]). Empty for normal
-    /// user emerges; staged crossdev `-p` passes the planned alias here.
+    /// In-memory crossdev aliases for this resolve. Empty for normal emerges;
+    /// staged crossdev `-p` passes the planned alias here.
     pub extra_aliases: &'a [portage_repo::RepoEntry],
 }
 
@@ -310,25 +283,11 @@ async fn emerge_atoms_inner(
     } else {
         query::ResolveMode::Error
     };
-    // Root model (docs/root-model.md): config from roots.config (host for a
-    // --prefix overlay), installed view = VDB(base) ∪ VDB(target), and the
-    // plan installs into target. `use_outer_eroot` (woven-in `cross-*`
-    // toolchain steps only) uses the plain outer EROOT instead — that
-    // category always installs there, never into `--target`'s sysroot
-    // substitution (see `crossdev/mod.rs`'s module doc).
-    //
-    // `outer_roots()`, not `base_roots()`: found live 2026-07-09 (independent
-    // review) — `base_roots()`'s `merge_root()` is deliberately the *BROOT*
-    // view (host `/` under `--prefix`, `base.target: None`), not the outer
-    // EROOT this comment already says bypass steps need. Under `--root` the
-    // two happen to coincide (no eprefix, `outer_roots()` returns
-    // `base_roots()` unchanged), which is why this went unnoticed: every
-    // `use_outer_eroot` case tested before today was `--root`. Under
-    // `--prefix P`, `base_roots()` merged every crossdev toolchain step onto
-    // the real host `/` instead of `P` — silently "worked" for binutils
-    // (whose real-arch binaries just landed on host `/usr/bin`, harmless to
-    // notice) but broke `linux-headers`/`glibc[headers-only]`, whose
-    // build-against-sysroot path never saw the merged headers.
+    // Root model (docs/root-model.md): config from roots.config, installed
+    // view = VDB(base) ∪ VDB(target), merge into target. `use_outer_eroot`
+    // skips `--target` sysroot substitution for host-side `cross-*` steps.
+    // Use `outer_roots()`, not `base_roots()`: the latter is BROOT (host `/`
+    // under `--prefix`), not the outer EPREFIX those packages install into.
     let roots = if use_outer_eroot {
         cli.outer_roots()
     } else {
@@ -915,7 +874,7 @@ fn drop_highest_version_per_cpn(
 /// command-line strings: re-parsing the raw strings independently here used
 /// to bypass that disambiguation and reject any bare package name as an
 /// invalid cpn on a real (non-`-p`) merge, even though the exact same atom
-/// had just resolved fine for the depgraph itself (found live 2026-08-04).
+/// had just resolved fine for the depgraph itself.
 fn select_world_atoms(atoms: &[TargetAtom]) -> Vec<portage_atom::Dep> {
     atoms
         .iter()

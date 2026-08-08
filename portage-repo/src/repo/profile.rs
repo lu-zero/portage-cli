@@ -167,11 +167,10 @@ impl Profile {
                 // `*sys-apps/busybox` system add) — the marker doesn't change
                 // what gets removed (`Remove` matches by dep identity
                 // regardless of whether the retained entry was System or
-                // Plain), so strip it too before parsing. Found 2026-07-03
+                // Plain), so strip it too before parsing.
                 // building the riscv profile's stage1 packages.build list for
                 // the first time ever — no prior profile stack this codebase
                 // exercised happened to use this removal form. See
-                // [[stage-build-shakeout]].
                 let rest = rest.strip_prefix('*').unwrap_or(rest);
                 PackageEntry::Remove(Dep::parse(rest.trim())?)
             } else if let Some(rest) = line.strip_prefix('*') {
@@ -1277,7 +1276,7 @@ mod tests {
         // A removal line repeats the *original* text of the addition it
         // cancels, `*` marker and all — e.g. real
         // profiles/arch/riscv/packages has `-*sys-apps/busybox`, removing
-        // `default/linux`'s `*sys-apps/busybox` system add. Found 2026-07-03
+        // `default/linux`'s `*sys-apps/busybox` system add.
         // building the riscv profile's packages.build list for the first
         // time — no prior profile stack this codebase exercised happened to
         // use this removal form.

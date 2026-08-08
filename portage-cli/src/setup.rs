@@ -195,8 +195,7 @@ pub struct Registrable {
 /// matches the active profile — do not reimplement baselayout in mkdir form.
 ///
 /// When `pretend` is true (global `-p`/`--pretend`), print what would be
-/// created and write nothing — same contract as crossdev's config plan under
-/// `-p` (Sonnet 2026-08-06: `Applet::Setup` previously ignored pretend).
+/// created and write nothing — same contract as crossdev's config plan under `-p`.
 pub async fn run(cli: &crate::cli::Cli) -> Result<()> {
     let roots = cli.roots();
     if cli.pretend {
@@ -328,30 +327,15 @@ pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
     std::fs::create_dir_all(portage.as_std_path())
         .with_context(|| format!("creating {portage}"))?;
 
-    // `BASHRC_PREFIX`'s CPPFLAGS/LDFLAGS injection (`-I<EPREFIX>/usr/include`, an
-    // extra high-priority search path) is for a genuine `--prefix DIR`
-    // layered *on top of* a shared host base — the host's own real headers
-    // are already found by the compiler's normal default search, so the
-    // prefix needs an explicit assist to also see its own. A self-contained
-    // `--root DIR` (`roots.build_sysroot()` is `None`: base == target, no
-    // separate host base to layer over) has no such gap — its SYSROOT/CHOST
-    // toolchain wiring already resolves the whole root's own `/usr/include`
-    // through the compiler's normal (or cross) search order. Injecting the
-    // same CPPFLAGS there doesn't just do nothing: it *actively breaks*
-    // builds — it lands ahead of a package's own project-local `-I` flags
-    // (e.g. gcc's `libiberty/../include`) and can shadow a version-matched
-    // local header with an incompatible one from the ROOT's own libc (found
-    // 2026-07-03 doing a from-scratch native+cross toolchain bootstrap: gcc's
-    // `libiberty/obstack.c` failed to compile against the ROOT's own,
-    // ABI-mismatched `obstack.h`). See [[stage-build-shakeout]].
+    // `BASHRC_PREFIX` injects `-I<EPREFIX>/usr/include` for a host-layered
+    // `--prefix`. Self-contained `--root` has no host layer — the same
+    // injection shadows package-local `-I` (e.g. gcc libiberty) with ROOT
+    // headers. Standalone `--local` uses `BASHRC_LOCAL`.
     if self_contained {
         write_if_absent(&portage.join("bashrc"), "")?;
     } else if is_overlay {
-        // --prefix: EPREFIX-based overlay. Host (/) is the build sysroot; the
-        // prefix is layered on top.
         write_if_absent(&portage.join("bashrc"), BASHRC_PREFIX)?;
     } else {
-        // --local standalone: EPREFIX-based in-place prefix recipe.
         write_if_absent(&portage.join("bashrc"), BASHRC_LOCAL)?;
     }
     write_if_absent(
@@ -401,16 +385,10 @@ pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
     })
 }
 
-/// A commented `make.conf` placeholder documenting how the prefix is used.
-///
-/// For `--local`/`--prefix`, profile and base make.conf (including `MAKEOPTS`)
-/// come from the host, so this file is purely commentary. A self-contained
-/// `--root DIR` shares none of that — this is the *only* make.conf ever read
-/// — so it needs a real `MAKEOPTS`, not just a placeholder: without one, every
-/// build in the root defaults to serial (`-j1`), regardless of how many cores
-/// the host has. Found 2026-07-03 doing a from-scratch toolchain bootstrap: a
-/// full gcc bootstrap ran over an hour single-threaded on a 128-core box
-/// because `MAKEOPTS` was silently unset. See [[stage-build-shakeout]].
+/// `make.conf` for a new prefix/root. Overlay/local: commentary only (host
+/// supplies profile + MAKEOPTS). Self-contained `--root`: the only make.conf
+/// read — seed real `MAKEOPTS` / `ACCEPT_KEYWORDS` from the host so builds
+/// are not serial stable-only by default.
 fn make_conf_template(is_local: bool, self_contained: bool, eroot: &Utf8Path) -> String {
     let how = if is_local {
         format!(
@@ -471,15 +449,9 @@ pub(crate) fn host_makeopts() -> String {
         })
 }
 
-/// The host's own `ACCEPT_KEYWORDS`, when set.
-///
-/// Without this, the self-contained root's make.conf leaves `ACCEPT_KEYWORDS`
-/// unset, which portage treats as stable-only. That silently starves any
-/// package whose most recent versions dropped their stable keyword for the
-/// host's arch (e.g. a `cross-<CTARGET>/gcc` host-side cross-compiler build
-/// stuck on a years-old release because every newer one is `~arch`-only) —
-/// found 2026-07-04 chasing a stalled crossdev toolchain bootstrap that
-/// silently never saw newer compiler versions. See [[stage-build-shakeout]].
+/// Host `ACCEPT_KEYWORDS`, when set. Self-contained roots mirror it so
+/// packages are not stuck on stable-only (newer toolchain versions are often
+/// `~arch` only).
 fn host_accept_keywords() -> Option<String> {
     portage_repo::MakeConf::load_default()
         .ok()
@@ -634,7 +606,7 @@ mod tests {
         // A genuinely self-contained `--root DIR` (base == target, no host
         // base to layer over) must NOT get BASHRC_PREFIX's CPPFLAGS/LDFLAGS
         // injection — it actively breaks builds by out-ranking a package's
-        // own project-local `-I` flags (found 2026-07-03).
+        // own project-local `-I` flags.
         let dir = tempfile::tempdir().unwrap();
         let body = bashrc_body("--root", dir.path().to_str().unwrap());
         assert_eq!(body, "", "self-contained --root must get an empty bashrc");
@@ -726,21 +698,9 @@ mod tests {
         );
     }
 
-    /// Regression test for a bug found live 2026-08-04 bootstrapping riscv64
-    /// glibc under `--prefix`: a genuine cross-*target* package (`CTARGET`
-    /// set, no `TARGET_ABI` — matches `crossdev --setup`'s "libc"/"kernel
-    /// headers" steps' own `package.env`) must NOT get the prefix's own
-    /// native `CPPFLAGS`/`LDFLAGS`/`PKG_CONFIG_*`/`CMAKE_PREFIX_PATH`
-    /// injection — glibc's own `sysdeps/unix/sysv/linux/sysdep.h` resolved
-    /// `<endian.h>` to the prefix's native aarch64 headers instead of its
-    /// own riscv64 in-tree copy, tripping its "_LIBC must not be defined by
-    /// applications" guard. `PATH` must still gain the prefix's `usr/bin`
-    /// though — `cross_host_tool_tuple` packages (binutils/gcc, `TARGET_ABI`
-    /// also set) still need it to find `${CTARGET}-gcc`. `CBUILD`/`CHOST`
-    /// are both set to the host's own value here, matching real
-    /// `use_outer_eroot` routing for `crossdev --setup`'s own
-    /// glibc/linux-headers steps — the `CTARGET`-without-`TARGET_ABI` check
-    /// is what excludes this case, not `CBUILD == CHOST` (which holds here).
+    /// Target packages (CTARGET set, no TARGET_ABI) must not get overlay
+    /// host-path injection (CPPFLAGS/LDFLAGS/…); PATH still gains prefix
+    /// usr/bin for cross tools.
     #[tokio::test]
     async fn overlay_bashrc_skips_host_paths_for_a_genuine_target_package() {
         let dir = tempfile::tempdir().unwrap();
@@ -876,7 +836,7 @@ mod tests {
         );
     }
 
-    /// Regression test for the newest bug found live 2026-08-04: an ordinary
+    /// Regression: an ordinary
     /// `--target riscv64-unknown-linux-gnu` package (`sys-libs/zlib`,
     /// `sys-apps/install-xattr`, ...) has `CBUILD != CHOST` (its `CHOST`
     /// correctly resolves from the sysroot's own `make.conf`) and no
@@ -933,7 +893,6 @@ mod tests {
     fn self_contained_root_gets_real_makeopts() {
         // Without this, every build in a self-contained --root defaults to
         // serial (no host make.conf to inherit MAKEOPTS from) — found
-        // 2026-07-03 when a full gcc bootstrap ran single-threaded for over
         // an hour on a 128-core box.
         let dir = tempfile::tempdir().unwrap();
         let cli = Cli::parse_from(["em", "--root", dir.path().to_str().unwrap()]);

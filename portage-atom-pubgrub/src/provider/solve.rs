@@ -360,9 +360,6 @@ impl PortageDependencyProvider {
         // headers/libs", i.e. real cross-compilation). A same-arch offset
         // build falls through to `broot_filtered` below instead, which drops
         // host-satisfied DEPEND the same way BDEPEND/IDEPEND already are.
-        // Found 2026-07-11: without this, `em --root <dir> sys-devel/gcc`
-        // pulled 127 packages (perl, portage, gnupg, eselect, rsync, ...)
-        // where real `ROOT=<dir> emerge sys-devel/gcc` pulls 16.
         if self.cross_active && self.is_cross_arch && package.merge_root() == MergeRoot::Target {
             // A built package's BDEPEND is strictly required to build it, so
             // (mirroring `broot_filtered`'s native equivalent) `--with-bdeps`
@@ -400,7 +397,7 @@ impl PortageDependencyProvider {
         // outright whenever the *host* happens to already have it installed
         // (e.g. `em --root <dir> sys-devel/gcc` on a host that already has
         // gcc) — collapsing the plan to 0 packages instead of adding gcc to
-        // the target. Found 2026-07-11.
+        // the target.
         if !package.is_virtual() && !self.host_installed.is_empty() {
             return Dependencies::Available(broot_filtered(self, vd));
         }
@@ -586,7 +583,6 @@ fn broot_filtered(
 /// DEPEND/BDEPEND/IDEPEND edge routed through an OR-group or a plain
 /// unslotted dep on a multi-slot package (gcc, python, ...) became an
 /// unconditional constraint, bypassing host-satisfaction entirely. Found
-/// 2026-07-11 live-tracing why `em --root <dir> sys-devel/gcc` still pulled
 /// ~123 packages after `broot_filtered` started filtering DEPEND: every
 /// exploding package (`perl`, `os-headers`, `linux-headers`, `elt-patches`,
 /// ...) checked `satisfied=true` on its *direct* edge, yet still ended up in

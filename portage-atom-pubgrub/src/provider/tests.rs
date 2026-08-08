@@ -2854,7 +2854,7 @@ fn cross_target_build_pulls_unsatisfied_bdepend_even_if_target_already_has_it() 
     );
 }
 
-/// Sonnet 2026-08-07 bug #3 (clang world under `--prefix --target`):
+///
 /// `virtual/libcrypt` completed while `sys-libs/libxcrypt` never got
 /// `Emerging`, so pam's configure failed to find libcrypt in the *sysroot*.
 ///

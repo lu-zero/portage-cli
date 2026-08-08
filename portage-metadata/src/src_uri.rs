@@ -841,7 +841,7 @@ mod tests {
     fn go_module_mirror_uri_with_bang_escapes() {
         // go-module.eclass's generated EGO_SUM_SRC_URI escapes uppercase
         // letters in Go import paths as `!lowercase` (pentoo's
-        // dev-go/fetchbot-1.3, live-found 2026-07-27); '!' is an RFC 3986
+        // dev-go/fetchbot-1.3, live
         // sub-delim, legal unencoded in a URI.
         let entries = SrcUriEntry::parse(
             "mirror://goproxy//github.com/!puerkito!bio/goquery/@v/v1.5.1.zip -> github.com%2F!puerkito!bio%2Fgoquery%2F@v%2Fv1.5.1.zip",

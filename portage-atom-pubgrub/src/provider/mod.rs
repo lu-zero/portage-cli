@@ -232,7 +232,6 @@ pub struct PortageDependencyProvider {
     /// the target sysroot unconditionally (`cross_target_runtime_deps`) — a
     /// same-arch offset build's `DEPEND` is satisfied by whatever machine does
     /// the actual compiling, same as `BDEPEND` (`broot_filtered`). Found
-    /// 2026-07-11: `CrossContext::is_cross_arch()`'s CHOST/CBUILD-unreadable
     /// fallback used to treat *any* non-host sysroot as foreign-arch, so a
     /// same-arch `--root` build always took the cross branch and never
     /// dropped host-satisfied `DEPEND` at all.
@@ -1107,21 +1106,11 @@ impl PortageDependencyProvider {
     /// packages. Other virtuals (`UseDecision`, `Root`) are *not* recursed
     /// into: `UseDecision` nodes encode `REQUIRED_USE` Level-C constraints
     /// (e.g. a `^^` group's mutual-exclusion pairs), which reference each
-    /// other symmetrically — recursing into those the same way overflowed the
-    /// stack (found 2026-07-12, `em stages --stage1` on a root with a real
-    /// installed toolchain: `app-alternatives/tar`'s `^^ ( gnu libarchive )`
-    /// only crashed when the `libarchive` alternative's own dependency was
-    /// already installed, which is exactly what gates this function being
-    /// called at all — see `newest_installed_choice_branch`'s
-    /// installed-count-greater-than-zero guard). This heuristic was never
-    /// meant to look inside Level-C encoding in the first place, only at
-    /// genuine provider alternatives.
+    /// other symmetrically — recursing into Level-C overflowed the stack.
+    /// Only provider alternatives belong here.
     ///
-    /// `depth` additionally bounds the recursion (see
-    /// [`Self::branch_best_installed`]'s doc) as defense-in-depth: this is a
-    /// tie-break nicety, not correctness-critical, so a real but unusually
-    /// deep or (despite the above) unexpectedly cyclic `Choice`/`SlotChoice`
-    /// shape degrades to "no preference" instead of a stack overflow.
+    /// `depth` bounds recursion (see [`Self::branch_best_installed`]) so an
+    /// unexpected deep/cyclic shape degrades to "no preference".
     fn branch_installed_ver(&self, vd: &VersionData, depth: u8) -> Option<Version> {
         let Dependencies::Available(ref cs) = vd.merged else {
             return None;

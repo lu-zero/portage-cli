@@ -176,7 +176,7 @@ fn unpack_archive(src: &std::path::Path, cwd: &std::path::Path, eapi: u32) -> Re
     // option cluster as its *first* argument — once a long option precedes
     // it, tar stops treating it as old-style short options at all and reads
     // it as a plain (non-option) filename, dying with "You must specify one
-    // of the '-Acdtrux' ... options" (found live testing this exact fix).
+    // of the '-Acdtrux'... options".
     if ext(".tar.gz") || ext(".tgz") || ext(".tar.Z") {
         unpack_cmd("tar", &["xzf", &src_s, "--no-same-owner"], cwd)
     } else if ext(".tar.bz2") || ext(".tbz2") || ext(".tbz") {

@@ -61,14 +61,11 @@ pub struct StageStep {
     /// headers-only libc step, to break the glibc→newer-gcc cycle before a
     /// compiler exists.
     pub nodeps: bool,
-    /// Merge into `--target`'s **sysroot** even when the staged driver would
-    /// otherwise force the outer EROOT (`use_outer_eroot: true` on
-    /// `crossdev --setup`). Required for sysroot **baselayout**: real
-    /// `sys-apps/baselayout` is not a `cross-*` atom, so without this it lands
-    /// only on the outer prefix while libc/`atom()` steps write into
-    /// `usr/<tuple>/` — leaving a merged-usr **profile** over a split-usr
-    /// **disk** (Sonnet 2026-08-07). Do **not** “fix” that by switching the
-    /// sysroot to a split-usr profile; match disk to the default profile.
+    /// Merge into `--target`'s sysroot even when the plan-wide driver uses
+    /// outer EROOT (`use_outer_eroot` for host-side `cross-*` tools). Needed
+    /// for sysroot baselayout: it is not a `cross-*` atom, so without this it
+    /// only seeds the outer prefix while libc writes under `usr/<tuple>/`.
+    /// Keep the default merged-usr profile; match disk to it.
     pub into_sysroot: bool,
 }
 
@@ -183,17 +180,9 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
     // content into `/bin` vs `/usr/bin`. `link_abi_osdirs` only bridges libdirs
     // and does not create that layout.
     //
-    // Real category always (not `atom()`): baselayout is not in the cross
-    // overlay package set. For **cross**, set `into_sysroot` so the step merges
-    // under `--target`'s sysroot even though `crossdev --setup` runs the plan
-    // with `use_outer_eroot: true` (host tools like binutils/gcc). Without that,
-    // baselayout only seeded the outer prefix while libc wrote split dirs into
-    // `usr/<tuple>/` (Sonnet 2026-08-07). Product rule: keep the default
-    // **merged-usr** profile; make disk match it — do not switch the sysroot to
-    // a split-usr profile to paper over layout.
-    //
-    // LLVM used to `return` before this block entirely (wrappers → headers →
-    // libc → runtimes), so even self-contained LLVM never got baselayout.
+    // Real category (not `atom()`): baselayout is not in the cross overlay.
+    // Cross: `into_sysroot` so it lands under `--target` despite plan-wide
+    // `use_outer_eroot` for host tools. Keep merged-usr profile; match disk.
     let baselayout_into_sysroot = matches!(kind, BootstrapKind::Cross(_));
     steps.push(StageStep {
         label: "baselayout".into(),
@@ -245,22 +234,9 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
     // os-headers for EPREFIX) below — baselayout is no longer one of them.
     let is_self_contained_bootstrap = matches!(kind, BootstrapKind::Native) || self_contained;
 
-    // Native binutils drops `debuginfod`: into the empty ROOT it would pull
-    // elfutils → curl → … → glibc (47 pkgs vs 7) and trip the os-headers
-    // pre-flight. The default cross EPREFIX is host-rooted, so those deps are
-    // satisfied — keep it. A self-contained cross EPREFIX is just as empty as
-    // native's, so it hits the exact same explosion — drop it there too.
-    //
-    // 2026-07-09 correction: this was briefly changed to *always* drop it,
-    // after `em --prefix P --target T crossdev --setup` hit exactly this
-    // explosion for a *non*-self-contained EPREFIX — but the real cause was a
-    // separate bug (`crossdev::setup`'s `run_staged` call still passing
-    // `use_outer_eroot: false` after the `--cross`/`-t` -> `--target`
-    // unification, so `cross-<tuple>/binutils` wrongly resolved DEPEND
-    // against the empty *sysroot* instead of the host). With that fixed,
-    // "the default cross EPREFIX is host-rooted" is true again, and
-    // unconditionally dropping debuginfod was an unnecessary, wrong-reason
-    // workaround layered on top of the real fix — reverted.
+    // Empty ROOT + debuginfod pulls elfutils→curl→…→glibc and trips
+    // os-headers pre-flight. Host-shared cross keeps debuginfod; native and
+    // self-contained cross drop it.
     let binutils_use = if is_self_contained_bootstrap {
         owned(&["-debuginfod"])
     } else {
@@ -274,26 +250,10 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
         into_sysroot: false,
     });
 
-    // Native breaks the glibc ↔ gcc cycle with the seed compiler (`BROOT=/`),
-    // which builds full glibc directly; a single full gcc links against it. No
-    // two-stage split — `toolchain.eclass` gates that on `is_crosscompile`, so a
-    // native gcc is always `--enable-shared` and needs a full in-ROOT libc.
-    //
-    // Unlike cross (which has a real `gcc-stage1` merged into the sysroot
-    // *before* its own full "libc" step, trivially satisfying glibc's
-    // `>=sys-devel/gcc-6.2` COMMON_DEPEND — see glibc.ebuild — from the
-    // already-installed ROOT view), native never installs a ROOT-resident gcc
-    // ahead of libc at all: the seed compiler that actually does the
-    // compiling lives at BROOT, not ROOT. A normal-resolution "libc" step
-    // therefore sees glibc's own DEPEND as unsatisfiable in ROOT and tries to
-    // plan a fresh in-ROOT gcc/libxcrypt build to satisfy it — which in turn
-    // DEPENDs back on glibc, a real, unbreakable-by-ordering cycle confirmed
-    // live (2026-07-11: a real, non-pretend run still hit this after
-    // baselayout/binutils/kernel-headers had genuinely merged). `--nodeps`
-    // here, mirroring cross's analogous "libc headers first (--nodeps)"
-    // break, sidesteps it the same way cross does: rely on what's already
-    // merged (baselayout/binutils/kernel-headers) plus the host's seed
-    // compiler at BROOT, not a fresh in-ROOT one.
+    // Native: seed compiler at BROOT builds full glibc; one full gcc after.
+    // No in-ROOT gcc exists yet, so a normal libc resolve tries to pull gcc
+    // (and libxcrypt) into ROOT and cycles with glibc. `--nodeps` on libc
+    // mirrors cross's headers-first break: use already-merged headers + BROOT.
     if let BootstrapKind::Native = kind {
         if kind.has_kernel() {
             steps.push(StageStep {
@@ -326,16 +286,9 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
     // freestanding C compiler, `--disable-shared` via is_crosscompile) → full
     // libc → gcc-stage2.
     if kind.has_kernel() {
-        // The cross-specific `linux-headers` step below installs the target's
-        // arch-tailored UAPI headers *into the target sysroot subdirectory* —
-        // it does NOT satisfy `virtual/os-headers`, a totally different
-        // any-of dependency (`sys-kernel/linux-headers` et al) that
-        // `cross-<tuple>/glibc`'s BDEPEND checks against the EPREFIX's own
-        // installed view. In host-shared mode that's already satisfied by the
-        // host's real installed headers; a self-contained EPREFIX has nothing
-        // installed at all, so it needs the real virtual merged here too —
-        // found 2026-07-03 doing a from-scratch cross-stage1 test (see
-        // [[stage-build-shakeout]]).
+        // Target `linux-headers` into the sysroot does not satisfy
+        // `virtual/os-headers` on the EPREFIX installed view (glibc BDEPEND).
+        // Host-shared mode already has it; self-contained needs it merged.
         if self_contained {
             steps.push(StageStep {
                 label: "os-headers (EPREFIX)".into(),
@@ -412,11 +365,8 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
 /// `"16.1.1_p20260606"`), via an `=` atom rather than a bare `cross-<CTARGET>
 /// /gcc`. A bare atom resolves like a plain `emerge <atom>` — reinstalling
 /// whatever's already satisfied/installed rather than upgrading — which
-/// silently rebuilds the *same* old major version and defeats the whole
-/// point of this plan (caught live: the woven-in refresh reinstalled
-/// `gcc-15.2.1` unchanged while `sys-devel/gcc-16.1.1` still failed on the
-/// same driver-flag mismatch). Pinning the exact version also keeps the
-/// build tool and the package it builds on the same major release.
+/// silently rebuilds the same old major. Pinning keeps the cross compiler
+/// and the `sys-devel/gcc` it builds on the same major release.
 pub fn gcc_refresh_plan(target: &CrossTarget, version: &str) -> StagePlan {
     let kind = BootstrapKind::Cross(target.clone());
     let atom = |real_cat: &str, pkg: &str| format!("={}-{version}", kind.atom(real_cat, pkg));
@@ -542,9 +492,8 @@ mod tests {
     // `USE="${CATALYST_USE} ${USE} ${BOOTSTRAP_USE} ..."`) — without it,
     // anything gated only on a profile-level default (e.g.
     // `python_targets_python3_14`, per `profiles/base/make.defaults`'s own
-    // comment) gets wiped by `-*` and never comes back, breaking any
-    // stage1 package needing a python impl (found live: `dev-lang/python-exec`
-    // failing `configure: error: Python implementations must be specified`).
+    // comment) gets wiped by `-*` and never comes back, breaking packages
+    // that need a python impl.
     #[test]
     fn stage1_plan_reapplies_bootstrap_use_after_the_wildcard_reset() {
         let dir = tempfile::tempdir().unwrap();
@@ -697,8 +646,7 @@ mod tests {
     #[test]
     fn self_contained_cross_gets_baselayout_and_drops_debuginfod() {
         // A from-scratch `--root DIR` crossdev EPREFIX has no host-shared
-        // merged-usr skeleton or libs — same needs as native, found 2026-07-03
-        // doing a real from-scratch cross-stage1 test.
+        // merged-usr skeleton or libs — same needs as native
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let plan = toolchain_plan(&BootstrapKind::Cross(t), true);
         assert_eq!(labels(&plan)[0], "baselayout");
@@ -726,10 +674,9 @@ mod tests {
 
     #[test]
     fn default_cross_seeds_baselayout_and_keeps_debuginfod() {
-        // Default (host-shared) cross still needs baselayout in the *sysroot*
-        // for merged-usr (2026-08-07); debuginfod stays on because
-        // `use_outer_eroot` routes DEPEND to the host, which already satisfies
-        // the closure. os-headers for EPREFIX remains self-contained-only.
+        // Host-shared cross still needs baselayout in the sysroot (merged-usr);
+        // debuginfod stays on (host satisfies DEPEND). os-headers is
+        // self-contained-only.
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
         assert_eq!(labels(&plan)[0], "baselayout");

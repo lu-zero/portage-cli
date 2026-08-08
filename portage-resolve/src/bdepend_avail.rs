@@ -88,26 +88,10 @@ impl Avail {
         Self(avail_entries_from(broot_vdb_packages(roots)))
     }
 
-    /// `DEPEND` availability at the start of a run:
-    /// `roots.satisfaction_root(DepClass::Depend)`'s VDB, plus the target's
-    /// own VDB whenever it differs from that satisfaction root. This used to
-    /// hardcode `VDB(base) ∪ VDB(target)` directly, bypassing
-    /// `satisfaction_root` entirely — never migrated when that centralized
-    /// the satisfaction-root logic (2026-07-09). For a bare `--root`, `base`
-    /// and `target` used to both be the (possibly empty) offset, so that old
-    /// logic never consulted the host at all: found 2026-07-11 comparing `em
-    /// --root` against real `ROOT=X emerge`'s own (much smaller) plan for
-    /// `sys-devel/gcc`.
-    ///
-    /// Checking `merge_root() != satisfaction_root(Depend)` (not
-    /// `roots.is_overlay()`) is deliberate: a bare `--root` now resolves
-    /// DEPEND against BROOT (the host) for a native build, which differs
-    /// from the target offset just as much as `--prefix`'s overlay does — a
-    /// package already built into a *partially populated* `--root` from an
-    /// earlier run must still count as DEPEND-satisfied even though the host
-    /// lacks it, or a resumed stage build hits a false preflight failure
-    /// (found independently reviewing this same day's fix, before it ever
-    /// shipped).
+    /// `DEPEND` availability: VDB at `satisfaction_root(Depend)`, plus the
+    /// target VDB when it differs. Use `merge_root() != satisfaction_root`
+    /// (not only `is_overlay()`): bare `--root` resolves DEPEND against
+    /// BROOT, so a partially populated target must still count as satisfied.
     pub fn initial_depend(roots: &Roots) -> Self {
         let depend_root = roots.satisfaction_root(DepClass::Depend);
         let mut out = vdb_avail_entries(Some(depend_root));

@@ -52,16 +52,9 @@ pub fn load_target_installed(roots: &crate::Roots) -> Vec<VdbEntry> {
 /// Union of two VDB roots with target shadowing base (prefix / general overlay).
 /// `None` means the host `/var/db/pkg`.
 ///
-/// Dedup key is `(Cpn, slot)`, not `(Cpn, version)` — shadowing must win
-/// regardless of version, or a base-root entry at a different version from
-/// the target's own never gets displaced (found live 2026-08-03: after a
-/// real `--prefix` merge landed `sys-devel/binutils-2.46.1` in the target's
-/// own VDB, a subsequent `-p` still showed `[2.46.0]`, the host's installed
-/// version, as the base to "upgrade" from — the two versions are different
-/// keys under a version-keyed dedup, so both survived the union instead of
-/// the target's newer entry shadowing the base's older one). Same package,
-/// different slots are still both kept (each slot is a genuinely distinct
-/// installed package), since the key includes `slot`.
+/// Dedup key is `(Cpn, slot)`, not `(Cpn, version)`: target must shadow
+/// base even when versions differ. Same package in different slots stays
+/// both (slot is part of the key).
 pub fn load_installed(
     base: Option<&camino::Utf8Path>,
     target: Option<&camino::Utf8Path>,
@@ -331,7 +324,7 @@ mod tests {
     /// Regression test: `load_installed`'s target-shadows-base union must
     /// dedup by `(Cpn, slot)`, not `(Cpn, version)` — a base entry at a
     /// *different* version than the target's own must not survive the
-    /// union. Found live 2026-08-03: a real `--prefix` merge landed
+    /// union.
     /// `sys-devel/binutils-2.46.1` in the target's own VDB, but the host's
     /// VDB still had the older `binutils-2.46.0` — a subsequent `-p` kept
     /// showing `[2.46.0]` (the host's version) as the installed base to

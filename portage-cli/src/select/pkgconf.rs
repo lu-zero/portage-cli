@@ -274,17 +274,11 @@ fn current_backend(roots: &Roots, target: &str) -> Option<(String, Utf8PathBuf)>
 /// already-populated system (`roots.base()` is the host, unlike `--local`'s
 /// `Some(prefix)`), and activating this wrapper for the native/host CHOST
 /// there regresses a `--prefix` build from "transparently uses the real
-/// system pkgconf" (what happens before this ever runs, and what an explicit
-/// `em select pkgconf set` still does — that command's own `run()` never
-/// goes through this function) to isolated-like-`--local`. Found live
-/// 2026-08-03: a `--prefix` build of `sys-devel/binutils` that never ran
-/// `toolchain --setup` found the host's real `libdebuginfod` via the
-/// system's own `pkgconf` symlink; the identical build under a `--prefix`
-/// that HAD run `toolchain --setup` failed, because that run's
-/// `activate_pkgconf` call had shadowed the system symlink with an
-/// `ESYSROOT`-scoped wrapper for the *host's own* CHOST. `is_overlay()`
-/// alone can't gate this: it's also true for a genuine `--prefix --target T
-/// crossdev --setup`'s own (correct, `is_native: false`) activation.
+/// system pkgconf" (and what `em select pkgconf set` still does — that
+/// path never calls this). Shadowing the host CHOST with an ESYSROOT-
+/// scoped wrapper breaks host BDEPEND discovery (e.g. libdebuginfod).
+/// `is_overlay()` alone is not enough: `--prefix --target` crossdev
+/// correctly activates with `is_native: false`.
 pub fn activate_pkgconf(roots: &Roots, target: &str, is_native: bool) -> Result<bool> {
     if is_native && roots.is_overlay() {
         return Ok(false);
@@ -557,7 +551,7 @@ mod tests {
         );
     }
 
-    /// Regression test for the bug found live 2026-08-03: activating the
+    /// Regression: activating the
     /// native/host-CHOST pkg-config wrapper under a `--prefix` overlay
     /// shadows the real system's own `<chost>-pkg-config` (which correctly
     /// finds host-installed packages) with an `ESYSROOT`-only-scoped one

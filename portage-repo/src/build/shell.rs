@@ -772,13 +772,10 @@ impl EbuildShell {
         self.build_broot = broot.map(Utf8Path::to_path_buf);
     }
 
-    /// Whether this `cross-*` / `cross_llvm-*` package is a **host code
-    /// generator** (binutils/gcc/gdb/clang-crossdev-wrappers) that needs
-    /// em-only PATH/EPREFIX/ESYSROOT/`-idirafter` specials.
-    ///
-    /// Distinct from package.env host-vs-target (bash `set_env` letters):
-    /// llvm-runtimes are host-env but **not** host-codegen. See
-    /// `todo/drop-buildclass.md` and `docs/bash-crossdev-matrix.md`.
+    /// Host-side cross code generators (`cross-*`/`cross_llvm-*` binutils,
+    /// gcc, gdb, clang-crossdev-wrappers) that need PATH/EPREFIX/ESYSROOT
+    /// specials. llvm-runtimes use host-env package.env but are not codegen.
+    /// See `docs/bash-crossdev-matrix.md`.
     pub fn is_cross_host_codegen(category: &str, pn: &str) -> bool {
         let is_cross = category.starts_with("cross-") || category.starts_with("cross_llvm-");
         is_cross && matches!(pn, "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers")
@@ -806,27 +803,17 @@ impl EbuildShell {
     /// width once, and carries the answer in. The same split real portage uses
     /// between its Python and bash halves.
     ///
-    /// Three variables go into the phase env, each with real consumers outside
-    /// this crate:
+    /// Phase-env vars with consumers outside this crate:
     ///
-    /// * `COLUMNS` — real portage's `doebuild.py` sets it "in order to prevent
-    ///   unnecessary stty calls" (its own comment). Without it,
-    ///   `gentoo-functions`' tty-capability probe (`rc.sh`'s
-    ///   `_update_tty_level`/`_update_columns`) sees `PORTAGE_BIN_PATH` set
-    ///   (which `em` already exports) and takes its `from_portage` branch,
-    ///   which reads `$COLUMNS` instead of calling `stty size` at all — so with
-    ///   no `COLUMNS`, every `gentoo-functions` consumer a `pkg_postinst` calls
-    ///   (`binutils-config`, `gcc-config`, …) falls back to its non-tty
-    ///   rendering however capable `em`'s own terminal is. Found live
-    ///   2026-08-04 re-emerging `sys-devel/binutils`.
-    /// * `NOCOLOR` — `cargo.eclass` (`CARGO_TERM_COLOR`), `cmake.eclass`
-    ///   (`CMAKE_COLOR_MAKEFILE`) and `ruby-ng.eclass` all read it.
-    /// * `NO_COLOR` — the cross-project convention, read by
-    ///   `python-utils-r1.eclass`, `zig-utils.eclass` and `gentoo-functions`
-    ///   itself. Per the convention any non-empty value disables colour, so
-    ///   the enabled case must set it *empty*, not to a false-ish word.
+    /// * `COLUMNS` — portage sets it to avoid `stty`; with `PORTAGE_BIN_PATH`
+    ///   set, gentoo-functions reads `$COLUMNS` only (no stty fallback), so
+    ///   missing COLUMNS forces non-tty rendering in `binutils-config` etc.
+    /// * `NOCOLOR` — cargo/cmake/ruby-ng eclasses.
+    /// * `NO_COLOR` — cross-project convention (python/zig eclasses,
+    ///   gentoo-functions). Any non-empty value disables colour; enabled =
+    ///   empty string, not a false-ish word.
     ///
-    /// `PORTAGE_COLOR_*` deliberately stays out of the environment: portage
+    /// `PORTAGE_COLOR_*` stays out of the environment: portage
     /// exports it only because its own `e*` helpers are bash, and nothing in
     /// `::gentoo` reads it — checked across every eclass and ebuild.
     pub fn set_terminal(&mut self, terminal: terminal::TerminalConfig) {
@@ -1249,7 +1236,7 @@ impl EbuildShell {
         // nor the process env sets it (make.globals leaves it empty and the PM
         // computes a default in config.py). Without this, emake runs serially
         // on every build — a 128-core box builds gcc one file at a time
-        // (found live: full cross gcc-stage1 ran at load 1.15/128). Apply only
+        //. Apply only
         // if still unset after the env pass-through above so an explicit
         // make.conf or `MAKEOPTS=... em ...` always wins. Conservative: use
         // 2/3 of cores + 1 for `-j` (I/O-bound link steps and memory-heavy
@@ -1295,41 +1282,15 @@ impl EbuildShell {
             self.set_var("CBUILD", &chost);
         }
 
-        // Cross/prefix toolchain selection. When building for a foreign CHOST
-        // (cross: CHOST and CBUILD both set and differing) and the prefixed
-        // compiler is reachable, export the toolchain vars as `${CHOST}-<tool>`
-        // unless the ebuild env already set them. This mirrors `tc-getCC`/
-        // `tc-getPROG` (toolchain-funcs.eclass), but proactively: em sets it up
-        // front so even ebuilds that build with a raw `./configure` (not
-        // `$(tc-getCC)`) — e.g. sys-libs/zlib — pick up the cross compiler
-        // instead of the host `gcc`, which otherwise silently yields a
-        // host-arch artifact.
+        // Toolchain selection: when CHOST≠CBUILD (cross) or a prefix has its
+        // own compiler (`build_eprefix`), export `${tool_tuple}-<tool>` unless
+        // the ebuild already set them — proactive `tc-getPROG` so raw
+        // `./configure` ebuilds don't pick host gcc. Plain `--root` leaves
+        // PATH alone (catalyst seed-compiler model).
         //
-        // Also fires for a **native** `--prefix`/`--local` build
-        // (`self.build_eprefix.is_some()`, even though CHOST == CBUILD) once
-        // that prefix has built and activated its own compiler (`em toolchain
-        // --setup`/`em select compiler set`) — otherwise the build silently
-        // falls through to the host's `gcc` on `$PATH` forever, even though a
-        // real native `${CHOST}-gcc` now exists inside the prefix. A plain
-        // `--root` offset stays untouched (`build_eprefix` is `None` there,
-        // matching the confirmed catalyst seed-compiler default of using the
-        // host's compiler).
-        //
-        // For `--cross` into a `--local` prefix the `<chost>-*` wrappers
-        // (`crossdev --setup`) live in `<broot>/usr/bin`, which is under $HOME
-        // and thus stripped from the sanitised build PATH — and the prefix
-        // bashrc PATH hook does not run (EPREFIX unset under `--cross`).
-        // `build_broot` is `Cli::host_roots()`'s merge root: the prefix itself for
-        // this unprivileged-overlay case (see `build_broot`'s doc comment),
-        // so `<build_broot>/usr/bin` is exactly that toolchain bin dir; expose
-        // it on PATH so the whole toolchain (gcc/g++/ld/as/…) resolves. Host
-        // crossdev (toolchain in `/usr/bin`, `build_broot` == the real host
-        // `/`) is already on PATH, so this is a no-op there. The same
-        // `build_broot` also already resolves correctly for the native-prefix
-        // case above: `Cli::host_roots()` returns the promoted prefix itself for a
-        // `--prefix` overlay (`is_overlay()` → `outer_roots()`), and for
-        // `--local` broot == eprefix == the prefix already — no separate
-        // eprefix-sourced bin dir is needed.
+        // Cross tools under `--local` live in `<build_broot>/usr/bin` (often
+        // under $HOME, stripped from sanitised PATH); prepend that dir.
+        // Host crossdev already has tools on PATH.
         if let (Some(chost), Some(cbuild)) = (
             self.get_var("CHOST").filter(|s| !s.is_empty()),
             self.get_var("CBUILD").filter(|s| !s.is_empty()),
@@ -1357,39 +1318,12 @@ impl EbuildShell {
                 }
             };
 
-            // A genuine cross-*target* package (`cross-<tuple>/glibc`,
-            // `.../linux-headers` — installed by `crossdev --setup`'s "libc"/
-            // "kernel headers" steps) has its own `CTARGET` in `package.env`
-            // but, unlike the host-arch toolchain-*tool* packages
-            // (`binutils`/`gcc`/`gdb`, which `package.env` additionally marks
-            // with `TARGET_ABI` since *their own* compile identity stays the
-            // host's), its own role really is producing CTARGET code — its
-            // toolchain vars must be `${CTARGET}-<tool>`, not `${CHOST}-<tool>`.
-            // `CHOST` here may be the *ambient* value (e.g. under `crossdev
-            // --setup`'s `use_outer_eroot`, which deliberately routes the
-            // libc/headers steps through host config for unrelated reasons —
-            // see `crossdev/mod.rs`'s `run_staged` doc), not this package's own.
-            //
-            // Found live 2026-08-04 bootstrapping riscv64 glibc under
-            // `--prefix`: em proactively exported `CC=<host CHOST>-gcc` before
-            // glibc's own `sanity_prechecks` ran its `tc-getCPP ${CTARGET}`
-            // probe (real `glibc-9999.ebuild`'s `get_kheader_version`) — that
-            // probe is *designed* to self-correct to the right cross tool via
-            // its own explicit `${CTARGET}` argument, but only when `$CC`
-            // starts out unset; `tc-getPROG`'s repair can't recover once it's
-            // already set to something (even something wrong). Predates
-            // `9b9e77a`'s Phase 2, which broadened `chost != cbuild` to also
-            // fire whenever `build_eprefix.is_some()` — correct for its own
-            // target case (native same-arch `--prefix`/`--local` builds), but
-            // incidentally also catches this one, since `use_outer_eroot`
-            // can make `CHOST` equal `CBUILD` here for a reason unrelated to
-            // this actually being a same-arch build.
-            // `tool_tuple`: the triple whose `${tuple}-gcc`/`-ld`/… this
-            // package compiles *with*. Driven solely by the package.env
-            // CTARGET/`TARGET_ABI` marker bash-crossdev writes (`set_env`
-            // `K|L` vs `*`) — not a planner BuildClass stamp
-            // (`todo/drop-buildclass.md`). `produces_target_code` gates
-            // the `BUILD_*` vars.
+            // Target-code packages (`cross-<T>/glibc`, headers) have CTARGET
+            // in package.env without TARGET_ABI → compile with `${CTARGET}-*`.
+            // Host tools (binutils/gcc) set TARGET_ABI and keep host CHOST.
+            // Do not pre-set CC to host CHOST when ambient CHOST==CBUILD under
+            // `use_outer_eroot`: glibc's `tc-getCPP ${CTARGET}` only self-
+            // corrects when CC is unset.
             let target_abi_set = self
                 .get_var("TARGET_ABI")
                 .filter(|s| !s.is_empty())
@@ -1432,11 +1366,8 @@ impl EbuildShell {
                         // here pointed at a file that doesn't exist, which —
                         // unlike an unset var — short-circuits
                         // `tc-getPKG_CONFIG`'s own "already set" fast path and
-                        // skips its real PATH-search/bare-name fallback
-                        // entirely. Found live via `sys-libs/readline` in a
-                        // from-scratch riscv64 cross build. Verify existence per
-                        // tool instead of trusting the gate above, which only
-                        // checked `${tool_tuple}-gcc`.
+                        // skips its real PATH-search/bare-name fallback.
+                        // Require the specific tool to exist, not only gcc.
                         if tool_exists(prefix_bin.as_ref(), &tool_tuple, tool) {
                             self.set_var(
                                 var,
@@ -1708,42 +1639,11 @@ impl EbuildShell {
                 format!("{s}/")
             }
         };
-        // `<root>/usr/bin` on PATH, for the host-side cross-toolchain-building
-        // steps only (`BuildClass::CrossToolHost`: this package is
-        // `cross-<T>/{binutils,gcc,gdb,clang-crossdev-wrappers}` itself, built
-        // to run on CBUILD). A later step in that same sequence genuinely
-        // needs an earlier one's own `<root>/usr/bin/<T>-*` output (e.g.
-        // `cross-<T>/gcc` invoking `cross-<T>/binutils`'s `<T>-as`) that
-        // exists *only* there — no host copy exists to fall back to, since
-        // `<T>` is a foreign target the host was never going to have on its
-        // own PATH. Found 2026-07-03 doing a from-scratch cross-stage1 test,
-        // see [[stage-build-shakeout]].
-        //
-        // NOT applied to a plain self-contained `--root DIR` bootstrap with
-        // no active `--cross` at all (not a `CrossTool` and
-        // `build_config_root.is_none()` both true) — this used to also fire
-        // there, reasoning by analogy that `root_str` is equally
-        // host-arch-executable in that case too. Live-tested for the first
-        // time 2026-07-12 doing a real (non-`-p`) `em stages --stage1 --root`
-        // run and found actively harmful: `dev-util/pkgconf` merges, then the
-        // *next* package's `configure` finds and directly executes the
-        // ROOT-installed `pkg-config` (shadowing the host's own, since it's
-        // prepended first) — which dies loading `libpkgconf.so.8`, because
-        // nothing here chroots or sets `LD_LIBRARY_PATH` for it. Unlike the
-        // cross case above, a plain native bootstrap never actually needed
-        // this: the one motivating check that prompted the original, broader
-        // version of this fix — glibc's `get_kheader_version` doing
-        // `$(tc-getCPP ${CTARGET}) -I "${ESYSROOT}$(alt_headers)"` — already
-        // passes the header search path explicitly, so *any* working,
-        // safely-host-executable `${CTARGET}`-prefixed cpp gives the right
-        // answer; for a plain same-arch bootstrap the host's own toolchain
-        // already provides one under that exact name, reachable via the
-        // untouched PATH, with no need to shadow it with the ROOT's own copy.
-        //
-        // Also not applied to `--prefix`/`--local`: `--prefix` shares the
-        // host base (a working toolchain is already on PATH); `--local` gets
-        // its own EPREFIX-keyed PATH/`LD_LIBRARY_PATH` hook from
-        // `BASHRC_LOCAL` (`setup.rs`).
+        // Prepend `<root>/usr/bin` only for host-side cross codegen so later
+        // steps find earlier ones' `<T>-*` tools (no host copy). Never for
+        // plain `--root` stage1: that would shadow host tools with
+        // ROOT-installed binaries that lack LD_LIBRARY_PATH. Prefix/local
+        // already have working PATH hooks.
         if root_str != "/"
             && self.build_eprefix.is_none()
             && self.build_sysroot.is_none()
@@ -1784,8 +1684,8 @@ impl EbuildShell {
         // `--root DIR` (no `--local`) has `eprefix` empty, so
         // `toolchain.eclass`'s baked-in `--with-sysroot` collapsed to the bare
         // host path `/usr/<tuple>` (the *host's* own unrelated real crossdev
-        // sysroot, if any, not this root's) — found 2026-07-03 doing a
-        // from-scratch cross-stage1 test, see [[stage-build-shakeout]]. Fix:
+        // sysroot, if any, not this root's)
+        // from-scratch cross-stage1 test, Fix:
         // for this package class only, when `eprefix` is otherwise empty,
         // offset it exactly as `--local` would (root_str becomes EPREFIX, ROOT
         // becomes "/") — this reuses the *already-correct*, already-tested
@@ -1874,57 +1774,14 @@ impl EbuildShell {
             // `--sysroot` and the compiler keeps host glibc (features.h). They
             // are equal (no EPREFIX) for host / ROOT-offset `--prefix` builds.
             //
-            // A `cross-<tuple>/*` host toolchain tool (binutils/gcc, which run on
-            // CBUILD and emit code for <tuple>) references the *target* deps in
-            // the cross sysroot `<EROOT>/usr/<tuple>`. toolchain.eclass passes
-            // ESYSROOT through as gcc's `--with-build-sysroot`, so it must be the
-            // cross sysroot or the build-tree `xgcc` looks for the target CRT/libc
-            // under host `<EROOT>/usr/lib` and the gcc-stage2 self-build dies
-            // with `cannot find Scrt1.o` / `GCC_NO_EXECUTABLES` (only bites when
-            // `EROOT` is a real offset path that overrides the configured cross
-            // `--with-sysroot`). The *target* packages (glibc/headers — they
-            // install INTO the sysroot and build their own `${ESYSROOT}$(alt_prefix)`
-            // paths) must keep the standard ESYSROOT=SYSROOT+EPREFIX, else the
-            // alt_prefix doubles the `/usr/<tuple>` offset. SYSROOT stays host so
-            // the host parts build natively.
+            // Host cross tools need ESYSROOT = cross sysroot (`<EROOT>/usr/<T>/`)
+            // for toolchain.eclass `--with-build-sysroot`. Target packages keep
+            // SYSROOT+EPREFIX (else alt_prefix doubles `/usr/<T>`).
             //
-            // Base this on `root_str` (== EROOT) directly, not `eprefix` — even
-            // after the EPREFIX flip above, since `eprefix` may now equal
-            // `root_str` too for this same package class (self-contained
-            // `--root`) and running it through the generic `sysroot_trimmed +
-            // eprefix` formula below would double the offset (`sysroot` is
-            // *also* `root_str` for a plain `--root` build — see the flip's
-            // comment above). Reuses `build_class` computed there —
-            // found 2026-07-03 doing a from-scratch cross-stage1 test, see
-            // [[stage-build-shakeout]].
-            //
-            // `self.build_sysroot.is_none()` catches a second, distinct
-            // doubling case, found live 2026-08-04 testing an ordinary
-            // `-T riscv64-unknown-linux-gnu -b llvm-core/clang` package build
-            // (`sys-libs/zlib` et al. — NOT under `crossdev --setup`, so
-            // `build_class` is not `CrossTool` here either): `Cli::roots()`'s
-            // global `--target` substitution sets `base == target == the
-            // sysroot` (`cli.rs`'s `roots()`), so `Roots::build_sysroot()`
-            // returns `None` (its own doc comment: "`None` means same as the
-            // install target") and `sysroot` above falls back to `root_str`
-            // — already the *fully substituted* sysroot path. `eprefix`,
-            // though, still carries the *outer* prefix (deliberately, so
-            // `relocate_root` anchors distfiles/work trees there — see
-            // `roots()`'s doc comment) — so appending it here doubles the
-            // sysroot exactly like the `CrossTool` case above,
-            // but for an unrelated reason. Real Gentoo Prefix's own
-            // patched gcc reads `ESYSROOT` directly to compute its runtime
-            // `-isysroot` (confirmed live: a bogus doubled `ESYSROOT` env var
-            // alone, with no `--sysroot=` flag anywhere on the command line,
-            // reproduces `cc1`'s doubled `-isysroot` verbatim), so this
-            // doubling broke every ordinary target-arch package's own system
-            // header search (`sys/types.h` and friends "No such file"),
-            // masquerading as a build-system-specific compile failure in
-            // each package. Crossdev `--setup`'s own `glibc`/`linux-headers`
-            // steps are unaffected: `use_outer_eroot` routes them through
-            // `outer_roots()`, where `base` and `target` genuinely differ
-            // (`Some("/")` vs `Some(<outer prefix>)`), so `build_sysroot()`
-            // stays `Some` and this new arm never fires for them.
+            // When `build_sysroot` is None, `sysroot` already is the full
+            // install target (plain `--root` or global `--target` with
+            // base==target); do not append outer eprefix or ESYSROOT doubles
+            // and breaks header search.
             let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple.as_deref()) {
                 format!("{root_str}usr/{triple}/")
             } else if eprefix.is_empty() || self.build_sysroot.is_none() {
@@ -1935,21 +1792,9 @@ impl EbuildShell {
             self.set_var("ESYSROOT", &esysroot);
             self.set_var("BROOT", "/");
 
-            // Host-arch toolchain-tool packages (`cross-<tuple>/{binutils,gcc,
-            // gdb,...}`) compile with the prefix's own native compiler, but a
-            // BDEPEND resolved via `USE=debuginfod` (dev-libs/elfutils) may not
-            // itself be installed as a native prefix package. pkg-config
-            // correctly finds it via the real host system's own .pc file (see
-            // `select/pkgconf.rs`'s `is_native` fix) — but the compiler itself
-            // has no knowledge of the host's `/usr/include`: built with
-            // `--prefix=<prefix>`, its own default system search is confined to
-            // `<prefix>/usr/include`. `-idirafter` (searched only after -I
-            // flags and the compiler's own default dirs) adds the host path as
-            // a last-resort fallback without ever shadowing anything the
-            // prefix itself provides. Found live 2026-08-04 bootstrapping a
-            // riscv64 cross toolchain under `--prefix`: binutils's dwarf.c hit
-            // `elfutils/debuginfod.h: No such file or directory` despite
-            // pkg-config finding `libdebuginfod >= 0.188` on the host.
+            // Host cross tools under a prefix compiler: BDEPENDs like elfutils
+            // may only exist on the host. `-idirafter /usr/include` finds host
+            // headers without shadowing prefix includes.
             if host_codegen && self.build_sysroot.is_some() {
                 let cppflags = self.get_var("CPPFLAGS").unwrap_or_default();
                 let updated = format!("{cppflags} -idirafter /usr/include");

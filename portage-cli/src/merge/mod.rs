@@ -288,7 +288,6 @@ pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
 /// the resolved install target) for everything else. `host_roots` equals
 /// `roots` outside `--target`, so this is a no-op there.
 ///
-/// Found live: the merge loop used a single, plan-wide root for every entry
 // regardless of `PlannedMerge.merge_root`, so a Host BDEPEND (e.g.
 // `dev-python/jinja2`, rebuilt for a python target the real host lacked)
 // silently built into the sysroot instead — the package "succeeded" but
@@ -419,7 +418,6 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // Fail fast: verify PKGDIR is actually writable *before* starting a
     // potentially multi-hour build, rather than discovering it deep into a
     // `--keep-going` run once dozens of packages have already silently died.
-    // Found live during stage build shakeout: a stage3 --buildpkg attempt
     // hit a permission-denied PKGDIR (fixed separately — resolve_pkgdir is now
     // root-aware), and each failure surfaced as an unexplained, silent worker
     // death rather than the single clear error this check now gives instead.
