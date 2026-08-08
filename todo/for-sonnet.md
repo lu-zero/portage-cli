@@ -1617,3 +1617,9 @@ that sandbox, and chased a phantom "brush bug" that was actually an
 artifact of the bad setup. Luca wiped the sandbox; redone correctly via
 `sandbox run` from a fresh one, and the real bug (LD_LIBRARY_PATH) was
 found and fixed cleanly on the second pass.
+
+**`--local` confirmed too:** `em active env`'s LD_LIBRARY_PATH export is
+keyed on the activated path's own `ld.so.conf`, not `--prefix`-specific.
+Pointed `--local` at the same already-bootstrapped `/opt/pfx2` toolchain —
+`clang-22 --version` and a real compile+link+run both worked identically.
+Documented: [`docs/prefix-toolchain.md`](../docs/prefix-toolchain.md).

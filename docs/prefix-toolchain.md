@@ -63,8 +63,17 @@ build-time bits, and the result is the original 2026-08-05 "prefix-confined"
 compiler: builds fine, structurally unusable (no libc of its own to link
 against). Giving `P` its own gcc is what makes the difference.
 
+## `--local` gets the same fix
+
+`em active env`'s `LD_LIBRARY_PATH` export isn't `--prefix`-specific — it's
+keyed purely on the activated path's own `ld.so.conf`. Confirmed live: the
+same already-bootstrapped toolchain, activated via `em --local DIR active
+set` instead of `--prefix`, ran `clang-22 --version` and compiled+linked+ran
+a hello-world identically. See [`local-bootstrap.md`](./local-bootstrap.md)
+for how a `--local` gets its own gcc in the first place (harder than
+`--prefix`: no host `DEPEND` sharing, needs `package.provided` seeding to
+bootstrap from empty).
+
 ## Status
 
-Live-verified 2026-08-08. `--local` (standalone, no host sharing) not yet
-re-verified against this same ladder — see
-[`todo/for-sonnet.md`](../todo/for-sonnet.md) for the pending check.
+Live-verified 2026-08-08, both `--prefix` and `--local`.
