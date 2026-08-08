@@ -987,11 +987,14 @@ pub(crate) async fn run_unmerge_batch(
 
     let repo = crate::crossdev::main_repo(cli)?;
     let mut shell = repo.shell().await.context("creating shell")?;
+    let ld_library_path =
+        ebuild::build_ld_library_path(roots.build_eprefix(), roots.build_sysroot());
     shell.set_build_roots(
         roots.config(),
         roots.build_sysroot(),
         roots.build_eprefix(),
         Some(broot.merge_root()),
+        ld_library_path.as_deref(),
     );
     shell.set_terminal(crate::style::terminal_config());
     if !ebuild::apply_profile_env(&mut shell, roots.config(), roots.config_overlay()).await? {

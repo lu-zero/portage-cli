@@ -197,6 +197,29 @@ pub struct RootContext<'a> {
     pub self_contained_bootstrap: bool,
 }
 
+/// `LD_LIBRARY_PATH` for a build phase: the prefix's own `ld.so.conf`
+/// (`eprefix`), plus the host's own when sharing it for DEPEND (`sysroot`
+/// set — a `--prefix` overlay, not `--local`). See todo/for-sonnet.md
+/// 2026-08-08.
+pub(crate) fn build_ld_library_path(
+    eprefix: Option<&Utf8Path>,
+    sysroot: Option<&Utf8Path>,
+) -> Option<String> {
+    let mut dirs = Vec::new();
+    if let Some(eprefix) = eprefix {
+        let conf = eprefix.join("etc/ld.so.conf");
+        if let Ok(paths) = ldconfig::SearchPaths::from_file(&conf, None) {
+            dirs.extend(paths.iter().map(|p| p.to_string()));
+        }
+    }
+    if sysroot.is_some()
+        && let Ok(paths) = ldconfig::SearchPaths::from_file(Utf8Path::new("/etc/ld.so.conf"), None)
+    {
+        dirs.extend(paths.iter().map(|p| p.to_string()));
+    }
+    (!dirs.is_empty()).then(|| dirs.join(":"))
+}
+
 /// The base directory for build work trees: `<prefix>/var/tmp/portage` under
 /// a prefix; otherwise the system `/var/tmp/portage` when writable, falling
 /// back to the user cache.
@@ -1082,7 +1105,14 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     // NB: in overlay mode (target ≠ base) a package merged into the target is
     // not yet visible to later builds in the run — that needs a merged sysroot,
     // which is shelved (see docs/root-model.md "Overlay support — shelved").
-    shell.set_build_roots(config_root, sysroot, eprefix, broot);
+    let ld_library_path = build_ld_library_path(eprefix, sysroot);
+    shell.set_build_roots(
+        config_root,
+        sysroot,
+        eprefix,
+        broot,
+        ld_library_path.as_deref(),
+    );
     shell.set_terminal(crate::style::terminal_config());
 
     if let Some(flags) = use_flags {

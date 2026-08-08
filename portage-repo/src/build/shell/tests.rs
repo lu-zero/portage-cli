@@ -635,7 +635,13 @@ async fn cross_toolchain_selection_uses_broot_not_config_root() {
     // not from build_config_root the way it used to.
     let decoy_config_root =
         Utf8PathBuf::from_path_buf(dir.path().join("decoy/usr/riscv64-unknown-linux-gnu")).unwrap();
-    shell.set_build_roots(Some(&decoy_config_root), None, None, Some(&broot_utf8));
+    shell.set_build_roots(
+        Some(&decoy_config_root),
+        None,
+        None,
+        Some(&broot_utf8),
+        None,
+    );
 
     shell.set_var("CHOST", "riscv64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
@@ -681,7 +687,7 @@ async fn cross_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     std::fs::write(bin.join("riscv64-unknown-linux-gnu-gcc"), "#!/bin/sh\n:\n").unwrap();
 
     let broot_utf8 = Utf8PathBuf::from_path_buf(broot).unwrap();
-    shell.set_build_roots(None, None, None, Some(&broot_utf8));
+    shell.set_build_roots(None, None, None, Some(&broot_utf8), None);
 
     shell.set_var("CHOST", "riscv64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
@@ -716,7 +722,7 @@ async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
     // `--prefix`/`--local`: broot and eprefix both resolve to the prefix
     // itself (see the gate's own doc comment on `Cli::host_roots()`).
-    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8), None);
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
@@ -747,7 +753,7 @@ async fn cross_target_package_toolchain_uses_ctarget_not_ambient_chost() {
     std::fs::write(&target_gcc, "#!/bin/sh\n:\n").unwrap();
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
-    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8), None);
 
     // Ambient CHOST/CBUILD both aarch64 (matching use_outer_eroot's
     // host-config resolution for this step) — package.env's own CTARGET
@@ -789,7 +795,7 @@ async fn cross_host_tool_package_still_uses_chost_when_target_abi_set() {
     std::fs::write(&target_gcc, "#!/bin/sh\n:\n").unwrap();
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
-    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8), None);
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
@@ -824,7 +830,7 @@ async fn package_env_host_marker_uses_chost_tools() {
     std::fs::write(&target_gcc, "#!/bin/sh\n:\n").unwrap();
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
-    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8), None);
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
@@ -860,7 +866,7 @@ async fn package_env_target_marker_uses_ctarget_tools() {
     std::fs::write(&target_gcc, "#!/bin/sh\n:\n").unwrap();
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
-    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8), None);
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
@@ -910,7 +916,7 @@ async fn native_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     std::fs::write(bin.join("aarch64-unknown-linux-gnu-gcc"), "#!/bin/sh\n:\n").unwrap();
 
     let prefix_utf8 = Utf8PathBuf::from_path_buf(prefix).unwrap();
-    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8));
+    shell.set_build_roots(None, None, Some(&prefix_utf8), Some(&prefix_utf8), None);
 
     shell.set_var("CHOST", "aarch64-unknown-linux-gnu");
     shell.set_var("CBUILD", "aarch64-unknown-linux-gnu");
@@ -1027,7 +1033,7 @@ async fn cross_host_tool_package_gets_a_host_include_fallback_under_prefix() {
     let mut shell = repo.shell().await.unwrap();
 
     let sysroot = Utf8PathBuf::from("/");
-    shell.set_build_roots(None, Some(&sysroot), None, None);
+    shell.set_build_roots(None, Some(&sysroot), None, None, None);
 
     let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
     let work = dir.path().join("work");
@@ -1090,7 +1096,7 @@ async fn ordinary_package_no_host_fallback_even_under_prefix() {
     let mut shell = repo.shell().await.unwrap();
 
     let sysroot = Utf8PathBuf::from("/");
-    shell.set_build_roots(None, Some(&sysroot), None, None);
+    shell.set_build_roots(None, Some(&sysroot), None, None, None);
 
     let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
     let work = dir.path().join("work");
@@ -1129,7 +1135,7 @@ async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
     // `None` (base == target == the already-substituted sysroot); `eprefix`
     // still carries the outer `--prefix` path, exactly as `Cli::roots()`'s
     // `--target` branch leaves it.
-    shell.set_build_roots(None, None, Some(&outer_prefix), None);
+    shell.set_build_roots(None, None, Some(&outer_prefix), None, None);
 
     let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
     let work = dir.path().join("work");
@@ -1144,6 +1150,60 @@ async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
         sysroot_path.as_str().trim_end_matches('/'),
         "ESYSROOT must equal the already-substituted sysroot alone, not sysroot+outer-eprefix doubled: {esysroot}"
     );
+}
+
+/// `set_build_roots`'s `ld_library_path` is exported as-is, no filesystem
+/// read here (the caller resolves it — see todo/for-sonnet.md 2026-08-08).
+#[tokio::test]
+async fn prefix_build_exports_the_given_ld_library_path() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-libs", "zlib");
+    let prefix_dir = dir.path().join("prefix");
+    let eprefix = Utf8PathBuf::from_path_buf(prefix_dir.clone()).unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell.set_build_roots(None, None, Some(&eprefix), None, Some("/prefix/usr/lib64"));
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, prefix_dir.as_path())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        shell.get_var("LD_LIBRARY_PATH").unwrap_or_default(),
+        "/prefix/usr/lib64"
+    );
+}
+
+/// No `ld_library_path` given (a bare host/`--root` build) must not touch
+/// `LD_LIBRARY_PATH` at all.
+#[tokio::test]
+async fn no_ld_library_path_given_leaves_it_unset() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-libs", "zlib");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    assert!(shell.get_var("LD_LIBRARY_PATH").is_none());
 }
 
 /// `set_terminal` must export COLUMNS/NOCOLOR/NO_COLOR for external

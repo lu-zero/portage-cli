@@ -396,6 +396,9 @@ pub struct EbuildShell {
     /// EPREFIX` (== the merge root), and `ED=D+EPREFIX`. `None` ⇒ `EPREFIX=""`
     /// (host / ROOT-offset `--prefix`).
     build_eprefix: Option<Utf8PathBuf>,
+    /// `LD_LIBRARY_PATH` for phases, resolved by the caller (`ebuild.rs`),
+    /// not read from disk here. See todo/for-sonnet.md 2026-08-08.
+    build_ld_library_path: Option<String>,
     /// Where `BDEPEND`-class build tools (a `${CHOST}-*` cross toolchain, its
     /// `pkg-config`, …) actually live for this invocation — `Cli::host_roots()`'s
     /// merge root: the real host `/` for a privileged `--root` offset, the
@@ -726,6 +729,7 @@ impl EbuildShell {
             build_config_root: None,
             build_sysroot: None,
             build_eprefix: None,
+            build_ld_library_path: None,
             build_broot: None,
             bashrc_files: Vec::new(),
             baseline: None,
@@ -752,24 +756,23 @@ impl EbuildShell {
         self.install_paths.snapshot()
     }
 
-    /// Set `PORTAGE_CONFIGROOT` (config source) and `SYSROOT`/`ESYSROOT` (the
-    /// base the build resolves `DEPEND` against) for subsequent phases, plus
-    /// `broot` — where `BDEPEND`-class build tools live (the `build_broot`
-    /// field's own doc comment has the full rationale). `None` keeps the
-    /// defaults: host config, `SYSROOT = ROOT` (the install target), and no
-    /// toolchain-tool bin dir beyond the host's own `$PATH`. See
-    /// docs/root-model.md.
+    /// Set `PORTAGE_CONFIGROOT`, `SYSROOT`/`ESYSROOT`, `broot`, and
+    /// `LD_LIBRARY_PATH` for subsequent phases. All already-resolved values
+    /// from the caller — see docs/root-model.md and todo/for-sonnet.md
+    /// 2026-08-08.
     pub fn set_build_roots(
         &mut self,
         config_root: Option<&Utf8Path>,
         sysroot: Option<&Utf8Path>,
         eprefix: Option<&Utf8Path>,
         broot: Option<&Utf8Path>,
+        ld_library_path: Option<&str>,
     ) {
         self.build_config_root = config_root.map(Utf8Path::to_path_buf);
         self.build_sysroot = sysroot.map(Utf8Path::to_path_buf);
         self.build_eprefix = eprefix.map(Utf8Path::to_path_buf);
         self.build_broot = broot.map(Utf8Path::to_path_buf);
+        self.build_ld_library_path = ld_library_path.map(str::to_string);
     }
 
     /// Host-side cross code generators (`cross-*`/`cross_llvm-*` binutils,
@@ -1720,6 +1723,19 @@ impl EbuildShell {
             eprefix
         };
 
+        // A build-time tool the package compiles and re-executes may need
+        // its own just-built or host-shared libs. See todo/for-sonnet.md
+        // 2026-08-08.
+        if let Some(llp) = self.build_ld_library_path.as_deref() {
+            let existing = self.get_var("LD_LIBRARY_PATH").unwrap_or_default();
+            let combined = if existing.is_empty() {
+                llp.to_string()
+            } else {
+                format!("{llp}:{existing}")
+            };
+            self.set_var("LD_LIBRARY_PATH", &combined);
+        }
+
         let root_var = if eprefix.is_empty() {
             root_str.clone()
         } else {
@@ -1868,7 +1884,8 @@ impl EbuildShell {
         // were already correctly cross-targeted.
         self.run_string(
             "export CATEGORY PN PV PR PVR P PF FILESDIR WORKDIR S T D TMPDIR EAPI EBUILD \
-             HOME ROOT DISTDIR PORTAGE_BIN_PATH PATH EBUILD_PHASE EBUILD_PHASE_FUNC \
+             HOME ROOT DISTDIR PORTAGE_BIN_PATH PATH LD_LIBRARY_PATH EBUILD_PHASE \
+             EBUILD_PHASE_FUNC \
              MERGE_TYPE EPREFIX ED EROOT SYSROOT ESYSROOT BROOT PORTAGE_CONFIGROOT USE \
              PORTAGE_INST_UID PORTAGE_INST_GID \
              REPLACING_VERSIONS REPLACED_BY_VERSION \
@@ -2438,6 +2455,15 @@ fn program_on_path(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Directories listed in an `ld.so.conf`-format file (as written by
+/// `env_update`, `maint/env.rs`, or shipped by glibc itself), `include`
+/// directives correctly glob-expanded. `env_update` writes fully-qualified,
+/// already-prefixed paths (confirmed live: `/opt/pfx2/usr/lib64`, not bare
+/// `/usr/lib64`), so — unlike `maint/env.rs`'s own `refresh_ld_cache`, which
+/// re-roots a *relative* default list under a root — no prefix re-rooting
+/// applies here. Best-effort: an unreadable/missing file (e.g. a fresh
+/// prefix's very first phase, before any `env_update` has run) silently
+/// yields no directories, same spirit as `refresh_ld_cache`.
 /// Bash/brush-internal names [`export_sourced_env`](EbuildShell::export_sourced_env)
 /// must skip: dynamic/magic variables bash manages itself (exporting them is
 /// either a no-op, nonsensical, or — for the readonly ones — a hard error that
