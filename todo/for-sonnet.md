@@ -454,6 +454,103 @@ that has to be extended every time a new ebuild hits this pattern.
 
 ---
 
+### Results — 2026-08-08 (Sonnet), `libtool` fixed for real by `e16561f`; real stage1 reaches 68/97, new distinct EPREFIX bug found (root-caused)
+
+Grok/Luca landed `e16561f` (`fix(setup): oneshot-merge baselayout for EPREFIX layout`)
+overnight — rejected my earlier hand-rolled `bin -> usr/bin` symlink idea
+(correctly; I'd bundled it into an unrelated task without asking first,
+walked it back) in favor of a properly principled fix: `em setup` now
+does a **real `sys-apps/baselayout` oneshot merge** (`USE=build`, nodeps)
+into the outer `--prefix` root, deferring to the actual ebuild's own
+postinst logic (not a guessed layout) to establish `bin -> usr/bin` /
+`lib -> usr/lib` / `lib64 -> usr/lib64`. `crossdev --setup` does the same
+for the outer prefix before its toolchain plan runs. `HOST_BASE_TOOLS`
+also grew `bash`/`sh` (on top of my own `perl`/`install`/`true`/`grep`/
+`env`/`ed` addition from earlier).
+
+**Live-verified in isolation: fully fixed.** Fresh sandbox, `em --prefix
+/root/xp setup` → real `bin -> usr/bin` symlink exists
+(`/root/xp/bin -> usr/bin`, confirmed via `readlink`), `/root/xp/bin/bash
+--version` runs. Rebuilt `dev-build/libtool` for real under `--prefix`:
+`EXIT=0`, `>>> Completed` — the exact package that broke real `stages
+--stage1` in the previous pass now builds cleanly.
+
+**Real `stages --stage1` end-to-end (fresh sandbox, full ladder: `em
+setup` → `crossdev --setup` → real `stages --stage1`, no `-p`): progress
+68/97 — past every previous blocker, but still not complete.** New,
+distinct failure: `dev-lang/python-3.14.7`'s cross-build (`aarch64-
+unknown-linux-gnu-gcc`, the *build*-arch compiler — this is CPython's own
+native "build python" bootstrap step) dies:
+
+```
+fatal error: ffi.h: No such file or directory
+fatal error: uuid.h: No such file or directory
+die: emake failed (make exited 2)
+```
+
+with the actual compiler invocation showing a doubled, nonexistent
+sysroot path:
+
+```
+-I/root/xp/usr/riscv64-unknown-linux-gnu/root/xp/usr/lib64/libffi/include
+```
+
+**Root-caused precisely** (traced to `dev-libs/libffi`'s own installed
+`.pc` file: `prefix=/root/xp/usr` — wrong; should be plain `/usr`, no
+EPREFIX offset at all, since `libffi` is an ordinary target-sysroot
+package, not anchored at the outer `--prefix`). This is a **third,
+distinct symptom of the same EPREFIX-not-root-aware-per-package family**
+as the `libtool`/`bash` bug, but broader and more insidious (silent —
+corrupts a `.pc` file instead of crashing immediately, only surfaces
+later when something downstream reads it).
+
+**Exact location: `portage-cli/src/cli.rs:282`**, inside `Cli::roots()`'s
+`--target` branch:
+```rust
+.with_eprefix(outer.eprefix().map(|p| p.to_owned()))
+```
+When `--target <tuple>` is set, the `Roots` built for the target sysroot
+keeps the **outer** `--prefix` value verbatim as its own `eprefix` — even
+though that `Roots` now represents the sysroot itself, which needs no
+further prefix offset. `Roots::eprefix()` (`portage-resolve/src/
+roots.rs:90`) is overloaded for two incompatible consumers:
+`relocate_root()` (genuinely wants the outer path, so distfiles/
+work-trees stay anchored under the outer prefix) and the per-package
+build context (wants `None`/empty for anything merging straight into the
+sysroot). Its own doc comment ("`EPREFIX` for an in-place prefix build
+(`--local`), else `None`") is stale — it's actually set for `--local`,
+`--prefix` overlay (`cli.rs:386`), *and* this `--target` sysroot case
+(`cli.rs:282`, the bug).
+
+**Trace confirmed:** `entry_roots()` (`portage-cli/src/merge/mod.rs:296-303`)
+picks this sysroot `Roots` for every ordinary plan entry (`merge_root !=
+Host`) → `eprefix` flows through `RootContext` (`merge/mod.rs:691`) →
+`shell.set_build_roots` (`ebuild.rs:1085`) → exported as `EPREFIX`
+(`shell.rs:1741`) → `econf.rs:110` emits `--prefix=${EPREFIX}/usr` =
+`/root/xp/usr` for every autotools package building for the sysroot. The
+physical file placement isn't broken (ED = `image/${EPREFIX}`, and ED
+merges into the sysroot EROOT — the offset cancels out for on-disk
+merge), but anything baking an *absolute* prefix into an installed file
+(`.pc` files confirmed; `.la` files and similar likely too) gets the
+wrong value.
+
+**Blast radius: broad, not `libffi`/LLVM/riscv64-specific.** Any
+autotools-based package built under combined `--prefix P --target T`
+(overlay + cross sysroot) merging normally into the sysroot gets this
+wrong non-empty `EPREFIX=P` — `libffi` was just the first target-sysroot
+package with a `.pc` file that something downstream (`python`'s
+cross-build) actually reads and acts on. This affects `stages --stage1`
+broadly under this combined topology, not a one-off.
+
+**Process note, since I got corrected on it mid-investigation:** don't
+characterize a sub-fix as "fixed" when the overall task (a complete stage1
+build) still fails — `libtool` itself is genuinely, verifiably fixed, but
+`stages --stage1` as a whole is not; it fails on a different package now.
+Progress (68/97, further than any prior pass) is real, but "fixed" only
+applies to the specific thing actually verified end-to-end.
+
+---
+
 ## Prior results (kept for history)
 
 Last full live pass before soft-order fix: **`1ac8067`** — #4/#5 PASS, #3 still broken (virtual Completed, libxcrypt never Emerging, stop on pam). Details below in archived sections.
