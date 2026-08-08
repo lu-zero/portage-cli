@@ -148,13 +148,9 @@ pub(crate) fn merge_merge_flags_fields(base: &MergeFlags, over: &MergeFlags) -> 
 /// entries.
 const OVERLAY_NAME: &str = "crossdev";
 
-/// The per-target overlay/section name (`crossdev.<tuple>`): each cross
-/// target gets its own file/section, so setting up a second target on the
-/// same prefix doesn't silently orphan the first one's alias (found live:
-/// `crossdev --setup` for a second target left the first target's alias
-/// untouched under `--setup`'s `FillGapsOnly` policy, since the fixed
-/// single `crossdev.conf` name made "already present" true regardless of
-/// which target it actually named).
+/// Per-target overlay/section name (`crossdev.<tuple>`). One section per
+/// target so a second `--setup` under `FillGapsOnly` cannot treat a shared
+/// `crossdev.conf` as "already present" and skip a different target's alias.
 fn overlay_name(target: &CrossTarget) -> String {
     format!("{OVERLAY_NAME}.{}", target.tuple)
 }
@@ -235,32 +231,14 @@ async fn setup(
     args: &CrossdevArgs,
     extras: &[Cpn],
 ) -> Result<()> {
-    // A cross target tuple identical to the host's own CHOST can't actually
-    // work: `cross-<tuple>/linux-headers` (and every other cross-* package)
-    // is the *real* upstream ebuild, symlinked into the cross-* category —
-    // it decides where to install purely by comparing CTARGET != CHOST
-    // inside the ebuild itself (the same check real crossdev's own ebuilds
-    // use to redirect into a target-specific path instead of the plain
-    // host `/usr/include`). When the tuple textually equals the host's
-    // CHOST, that check reads as "not cross-compiling" and the ebuild
-    // installs straight into `/usr/include` — colliding with the native
-    // `sys-kernel/linux-headers` already there. Real crossdev has the
-    // identical limitation (it is not an em-specific gap) — found live
-    // 2026-07-20 running `test-scripts/test-crossdev-flavours.sh` for an
-    // aarch64 target on an aarch64 host: 980 file collisions merging
-    // `cross-aarch64-unknown-linux-gnu/linux-headers`. Reject early with a
-    // clear message instead of failing deep inside a confusing collision
-    // dump.
+    // Same-tuple as host CHOST is not cross: ebuilds treat CTARGET==CHOST as
+    // native and install into host paths (collisions with real packages).
+    // Real crossdev has the same limit — reject early.
     reject_same_arch_target(&target.tuple, &host_chost())?;
-    // `init_target` is itself `-p`/`-a`-aware now (see `config_plan`), so
-    // this no longer needs its own `!globals.pretend` gate — under `-p` it
-    // previews the config-plan changes instead of skipping them silently.
-    // `FillGapsOnly`: this is `--setup`'s own *implied* config-laydown step,
-    // not an explicit `--init-target` — only create what's missing, so a
-    // hand edit made between an earlier `--init-target` and this `--setup`
-    // survives. Trade-off: `--setup --ex-pkg X` against an already-
-    // initialized target won't add X either; run `--init-target --ex-pkg X`
-    // first for that (documented in docs/crossdev.md).
+    // `init_target` is `-p`/`-a`-aware. `FillGapsOnly`: implied config for
+    // `--setup` only creates missing files so hand edits survive. Adding
+    // `--ex-pkg` to an already-init'd target needs an explicit `--init-target`
+    // (see docs/crossdev.md).
     init_target(
         target,
         globals,
@@ -293,30 +271,14 @@ async fn setup(
         let target = target.clone();
         move |step: &stages::StageStep| post_step_cross(&target, globals, step)
     };
-    // `--root-deps=rdeps` unconditionally: the whole point of this bootstrap is
-    // building a toolchain (+ glibc) into a target that starts empty, where
-    // plain DEPEND (`virtual/os-headers`, `acct-group/root`, …) genuinely can't
-    // be satisfied yet. Matches crossdev's own `<CTARGET>-emerge` wrapper,
-    // which always implies this flag — not user-togglable here.
+    // Empty-target bootstrap: plain DEPEND is not satisfiable yet. Matches
+    // crossdev's `<CTARGET>-emerge` (always implies `--root-deps=rdeps`).
     let mut merge_flags = merge_merge_flags(globals, &args.merge_flags);
     merge_flags.root_deps = true;
-    // `use_outer_eroot: true` — this is `crossdev --setup <T>`, which since
-    // the `--cross`/`-t` -> `--target` unification (`bcde18a`) always runs
-    // with the global `--target` flag active (that's now the only way to
-    // name the tuple). Before that unification the tuple came via crossdev's
-    // own separate `-t` flag, which never touched `globals.target`, so
-    // `cli.roots()` here was already the unsubstituted outer EROOT and
-    // `false` was harmless; afterwards it silently started resolving every
-    // toolchain-bootstrap step (`cross-<T>/binutils` and its own deps)
-    // against the *sysroot* instead — reading the sysroot's target-arch
-    // make.conf (`CHOST`/`CFLAGS=-march=...`) to build a package that must
-    // compile as a *host*-arch tool. Found live 2026-07-09 actually running
-    // `crossdev --setup` post-unification for the first time (only
-    // `--init-target`, which never reaches `run_staged`, had been
-    // live-tested since).
-    // Under `-p`, init_target only previews config and does not write the
-    // repos.conf alias. Pass it in-memory so staged plan resolution still
-    // sees `cross-*` packages (load_repos injects aliases without disk).
+    // Host-side `cross-*` tools must resolve against the outer EROOT, not the
+    // `--target` sysroot (sysroot make.conf is target-arch). Under `-p`,
+    // init_target only previews config — pass the alias in-memory so the
+    // staged plan still sees `cross-*` packages.
     let pretend_alias;
     let extra_aliases: &[portage_repo::RepoEntry] = if globals.pretend {
         pretend_alias = [alias_repo_entry(target, extras)];
@@ -325,13 +287,15 @@ async fn setup(
         &[]
     };
     run_staged(
-        &plan,
-        globals,
-        merge_depgraph_flags(globals, &args.depgraph_flags),
-        merge_flags,
-        true,
-        false,
-        extra_aliases,
+        RunStagedOpts {
+            plan: &plan,
+            globals,
+            depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+            merge_flags,
+            use_outer_eroot: true,
+            target_only_installed_view: false,
+            extra_aliases,
+        },
         post_step,
     )
     .await?;
@@ -361,37 +325,47 @@ fn post_step_cross(target: &CrossTarget, globals: &Cli, step: &stages::StageStep
     Ok(())
 }
 
-/// Run each step of a staged [`stages::StagePlan`] through the shared merge path
-/// ([`crate::emerge_atoms`]), printing per-step progress. `post_step` fires
-/// after each *built* step (skipped under `-p`) for flavour-specific activation
-/// — cross activates `<CTARGET>-*` wrappers + ABI osdirs; native is a no-op.
-/// This is the shared driver both `--setup` (cross) and `stage1` (native) run.
-///
-/// `use_outer_eroot` forces every step's merge into the plain outer EROOT
-/// even when `globals.target` is set — for `cross-*` toolchain plans woven
-/// into a `--target`-active `stage1` run (see `maybe_weave_in_gcc_update`),
-/// which must never install under `--target`'s sysroot substitution.
-///
-/// Argument count is intentional: the staged driver takes explicit routing
-/// flags rather than a grab-bag options struct (call sites stay readable).
-#[allow(clippy::too_many_arguments)]
-async fn run_staged(
-    plan: &stages::StagePlan,
-    globals: &Cli,
+/// Options for the staged bootstrap driver ([`run_staged`]).
+struct RunStagedOpts<'a> {
+    plan: &'a stages::StagePlan,
+    globals: &'a Cli,
     depgraph_flags: crate::cli::DepgraphFlags,
     merge_flags: MergeFlags,
+    /// Force each step into the plain outer EROOT even when `globals.target`
+    /// is set — required for host-side `cross-*` tools (and woven-in gcc
+    /// refresh under a `--target`-active stage1). Per-step
+    /// [`stages::StageStep::into_sysroot`] can still override this for
+    /// sysroot baselayout.
     use_outer_eroot: bool,
+    /// Restrict the installed view to the target VDB only (native toolchain
+    /// into an empty `--root`).
     target_only_installed_view: bool,
-    // In-memory crossdev aliases (pretend first-time target / no repos.conf yet).
-    extra_aliases: &[portage_repo::RepoEntry],
+    /// In-memory crossdev aliases (pretend / repos.conf not written yet).
+    extra_aliases: &'a [portage_repo::RepoEntry],
+}
+
+/// Run each step of a staged [`stages::StagePlan`] through [`crate::emerge_atoms`],
+/// printing per-step progress. `post_step` fires after each *built* step
+/// (skipped under `-p`) for flavour-specific activation — cross activates
+/// `<CTARGET>-*` wrappers + ABI osdirs; native activates host wrappers.
+/// Shared by `crossdev --setup`, `toolchain --setup`, and stage1 plans.
+async fn run_staged(
+    opts: RunStagedOpts<'_>,
     post_step: impl Fn(&stages::StageStep) -> Result<()>,
 ) -> Result<()> {
+    let RunStagedOpts {
+        plan,
+        globals,
+        depgraph_flags,
+        merge_flags,
+        use_outer_eroot,
+        target_only_installed_view,
+        extra_aliases,
+    } = opts;
     let mut out = anstream::stdout();
     for (i, step) in plan.steps.iter().enumerate() {
-        // Flush the step header before building so progress shows immediately
-        // (and survives the `process::exit` on a step that needs config changes,
-        // which does not flush buffered stdout). The header names the step, so a
-        // failure needs no extra context.
+        // Flush before building so progress survives `process::exit` on a
+        // step that needs config changes (does not flush buffered stdout).
         writeln!(
             out,
             "\n{C_LABEL}[{n}/{total}] {label}{C_LABEL:#}{flags}",
@@ -402,9 +376,8 @@ async fn run_staged(
         )
         .ok();
         out.flush().ok();
-        // Per-step override: sysroot baselayout under crossdev --setup must
-        // honour `--target` even when the plan-wide flag forces outer EROOT
-        // for host-arch cross-* tools (see StageStep::into_sysroot).
+        // Sysroot baselayout must honour `--target` even when the plan-wide
+        // flag forces outer EROOT for host-arch cross-* tools.
         let step_outer = if step.into_sysroot {
             false
         } else {
@@ -420,8 +393,7 @@ async fn run_staged(
                 merge_flags: Some(merge_flags.clone()),
                 use_outer_eroot: step_outer,
                 target_only_installed_view,
-                // Internal staged-build step, not a user package
-                // selection — must not pollute the world file.
+                // Staged step, not a user selection — leave world alone.
                 update_world: false,
                 is_resume: false,
                 activity: None,
@@ -438,35 +410,17 @@ async fn run_staged(
     Ok(())
 }
 
-/// Whether `atom`'s package name is `pkg` — handles both a bare atom
-/// (`cross-<T>/gcc`) and a version-pinned one (`=cross-<T>/gcc-16.1.1...`,
-/// as [`stages::gcc_refresh_plan`] uses to force an exact upgrade rather than
-/// a same-version reinstall). A bare `ends_with("/gcc")` check misses the
-/// pinned form entirely — caught live: it silently skipped activating the
-/// freshly-built compiler, leaving the *old* slot active for the very build
-/// this refresh existed to fix.
+/// Whether `atom`'s package name is `pkg`. Handles bare (`cross-<T>/gcc`) and
+/// version-pinned (`=cross-<T>/gcc-16…`) forms; a suffix check misses the
+/// latter and would skip activating a refreshed compiler.
 fn atom_is_package(atom: &str, pkg: &str) -> bool {
     Dep::parse(atom).is_ok_and(|dep| dep.cpn.package == pkg)
 }
 
-/// Run the prefix-side `binutils-config`/`gcc-config` after the step that built
-/// the tool, creating the `<EROOT>/usr/bin/<CTARGET>-*` wrappers. Keyed off the
-/// step's package so it fires once per toolchain component.
-///
-/// Always activates against `globals.outer_roots()`, never `globals.roots()`:
-/// `cross-<CTARGET>/*` toolchain packages always install into the plain outer
-/// EROOT (see this module's doc comment), regardless of whether the *caller*
-/// (`setup()` vs `stage1()`'s woven-in refresh) has `--target` set on
-/// `globals` for its own, unrelated purposes. For `setup()` the two are the
-/// same root anyway (it never sets `--target`), so this is a no-op change
-/// there.
-///
-/// `outer_roots()`, not `base_roots()`: found live 2026-07-09 alongside the
-/// matching `emerge.rs` fix — `base_roots()`'s `merge_root()` is the BROOT
-/// view (host `/` under `--prefix`), not the outer EROOT the toolchain
-/// actually merges into after that fix. Activating against the wrong root
-/// would look for the just-built binutils/gcc in the wrong place under
-/// `--prefix` specifically (host `/`, not the prefix).
+/// After a toolchain step, run `binutils-config`/`gcc-config` to create
+/// `<EROOT>/usr/bin/<CTARGET>-*` wrappers. Always uses `outer_roots()` (not
+/// `roots()` / `base_roots()`): `cross-*` packages install into the outer
+/// EROOT; `base_roots().merge_root()` is BROOT (host `/` under `--prefix`).
 fn activate_toolchain(target: &CrossTarget, globals: &Cli, step: &stages::StageStep) -> Result<()> {
     let Some(atom) = step.atoms.first() else {
         return Ok(());
@@ -479,13 +433,8 @@ fn activate_toolchain(target: &CrossTarget, globals: &Cli, step: &stages::StageS
         crate::select::activate_binutils(&roots, tuple)?
     } else if atom_is_package(atom, "gcc") {
         let activated = crate::select::activate_compiler(&roots, tuple)?;
-        // Piggyback the pkg-config wrapper on gcc's own activation step: by
-        // this point the toolchain is ready and nothing else in the plan
-        // gates on it (real crossdev's own `cross-pkg-config` has no build
-        // step at all — it's a static script plus a per-target symlink).
-        // See `select/pkgconf.rs`'s module doc for why this needs to exist.
-        // `is_native: false` — a genuine foreign `CTARGET`, never the host's
-        // own CHOST.
+        // pkg-config has no separate plan step (crossdev: static script +
+        // symlink). See `select/pkgconf.rs`. `is_native: false` = foreign CTARGET.
         crate::select::activate_pkgconf(&roots, tuple, false)?;
         activated
     } else {
@@ -497,15 +446,9 @@ fn activate_toolchain(target: &CrossTarget, globals: &Cli, step: &stages::StageS
     Ok(())
 }
 
-/// Native twin of [`activate_toolchain`]: run the `binutils-config`/
-/// `gcc-config` equivalent after each native toolchain step builds, so
-/// `<EROOT>/usr/bin/<CHOST>-*` wrappers actually exist. `em toolchain --setup`
-/// used to pass `|_| Ok(())` as its post_step here. `tuple` is the host's
-/// own CHOST (native means `CHOST == CBUILD`; `--root`/`--prefix`/`--local`
-/// all inherit the host's profile/make.conf for a native build, so
-/// `select::get_chost` already resolves it correctly there — no separate
-/// per-topology CHOST is ever written for native, unlike the cross sysroot's
-/// own `CHOST=<tuple>`).
+/// Native twin of [`activate_toolchain`]: create `<EROOT>/usr/bin/<CHOST>-*`
+/// wrappers after each native toolchain step. CHOST comes from the host
+/// profile/make.conf (`select::get_chost`).
 fn activate_native_toolchain(globals: &Cli, step: &stages::StageStep) -> Result<()> {
     let Some(atom) = step.atoms.first() else {
         return Ok(());
@@ -518,9 +461,7 @@ fn activate_native_toolchain(globals: &Cli, step: &stages::StageStep) -> Result<
         crate::select::activate_binutils(&roots, &tuple)?
     } else if atom_is_package(atom, "gcc") {
         let activated = crate::select::activate_compiler(&roots, &tuple)?;
-        // `is_native: true` — see `activate_pkgconf`'s doc comment for why
-        // this must be an explicit signal, not something the function infers
-        // from `roots` alone (found live 2026-08-03).
+        // `is_native` must be explicit; see `activate_pkgconf`.
         crate::select::activate_pkgconf(&roots, &tuple, true)?;
         activated
     } else {
@@ -590,24 +531,20 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
         plan.steps.len()
     )
     .ok();
-    // `--root-deps=rdeps` unconditionally, same reasoning as `crossdev --setup`
-    // above: this always bootstraps into a self-contained, still-empty ROOT
-    // (`toolchain_plan(..., true)`), where plain DEPEND can't be satisfied yet
-    // either. Without it, `sys-libs/glibc`'s own DEPEND closure
-    // (`virtual/os-headers` → `linux-headers` → `perl` → `virtual/libcrypt` →
-    // `libxcrypt` → `glibc`) is a real tree cycle that pre-flight can never
-    // clear — confirmed live: it fails identically in a real (non-pretend)
-    // run even after steps 1-3 have genuinely merged, not just in isolated `-p`.
+    // Empty-ROOT bootstrap: plain DEPEND is a cycle (glibc ↔ libxcrypt ↔ …).
+    // Same `--root-deps=rdeps` as crossdev --setup.
     let mut merge_flags = merge_merge_flags(globals, &args.merge_flags);
     merge_flags.root_deps = true;
     run_staged(
-        &plan,
-        globals,
-        merge_depgraph_flags(globals, &args.depgraph_flags),
-        merge_flags,
-        false,
-        true,
-        &[],
+        RunStagedOpts {
+            plan: &plan,
+            globals,
+            depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+            merge_flags,
+            use_outer_eroot: false,
+            target_only_installed_view: true,
+            extra_aliases: &[],
+        },
         move |step: &stages::StageStep| activate_native_toolchain(globals, step),
     )
     .await?;
@@ -654,9 +591,8 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     let mut out = anstream::stdout();
     let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
 
-    // The `cross-<CTARGET>/gcc` refresh (if needed) is a separate run: it
-    // always installs into the outer EROOT (`use_outer_eroot: true`),
-    // never `--target`'s sysroot substitution the stage1 packages below use.
+    // Cross-compiler refresh installs into the outer EROOT, never the
+    // `--target` sysroot that stage1 packages below use.
     if let Some((target, refresh_plan)) = &refresh {
         writeln!(
             out,
@@ -670,15 +606,16 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             move |step: &stages::StageStep| post_step_cross(&target, globals, step)
         };
         run_staged(
-            refresh_plan,
-            globals,
-            merge_depgraph_flags(globals, &args.depgraph_flags),
-            // Stages seed PKGDIR for the next re-roll (catalyst/crossdev-stages
-            // always pass `-b`). Explicit CLI `-b` is still honoured the same way.
-            merge_merge_flags_with(globals, &args.merge_flags, true),
-            true,
-            false,
-            &[],
+            RunStagedOpts {
+                plan: refresh_plan,
+                globals,
+                depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+                // Stages seed PKGDIR for the next re-roll (catalyst model).
+                merge_flags: merge_merge_flags_with(globals, &args.merge_flags, true),
+                use_outer_eroot: true,
+                target_only_installed_view: false,
+                extra_aliases: &[],
+            },
             post_step,
         )
         .await?;
@@ -690,20 +627,22 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
         plan.steps.len()
     )
     .ok();
-    // Stage1's conf-layer `USE=-*` wipes IUSE `+` defaults (Portage-identical),
-    // so packages like app-alternatives/* violate REQUIRED_USE until Level-C
-    // cedes those flags. Always enable --autosolve-use for this step; cede
-    // prefers the ebuild's + IUSE default when the config left the flag off.
+    // Conf-layer `USE=-*` wipes IUSE `+` defaults (Portage-identical), so
+    // packages like app-alternatives/* violate REQUIRED_USE until Level-C
+    // cedes those flags. Always enable --autosolve-use; cede prefers the
+    // ebuild's + IUSE default when the config left the flag off.
     let mut stage1_merge = merge_merge_flags_with(globals, &args.merge_flags, true);
     stage1_merge.autosolve_use = true;
     run_staged(
-        &plan,
-        globals,
-        merge_depgraph_flags(globals, &args.depgraph_flags),
-        stage1_merge,
-        false,
-        false,
-        &[],
+        RunStagedOpts {
+            plan: &plan,
+            globals,
+            depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+            merge_flags: stage1_merge,
+            use_outer_eroot: false,
+            target_only_installed_view: false,
+            extra_aliases: &[],
+        },
         |_| Ok(()),
     )
     .await?;
@@ -1195,12 +1134,9 @@ fn alias_repo_entry(target: &CrossTarget, extras: &[Cpn]) -> portage_repo::RepoE
 ///   links the *host's* resolved profile, unlike the cross target sysroot,
 ///   which links the target's own arch profile.
 ///
-/// Without this a self-contained `--root` target has no way to resolve any
-/// ebuild at all — the "stage1 from scratch" gap found 2026-07-03 doing a
-/// real from-scratch native + cross toolchain bootstrap, see
-/// [[stage-build-shakeout]]. `gentoo_path` here is the already-resolved
-/// `::gentoo` repo path (`init_target`'s `setup::bootstrap` call handles the
-/// rest of the EPREFIX skeleton separately, outside the config plan).
+/// Without this a self-contained `--root` cannot resolve ebuilds.
+/// `gentoo_path` is the resolved `::gentoo` path; skeleton dirs come from
+/// `setup::bootstrap` outside the config plan.
 fn self_contained_prefix_entries(
     globals: &Cli,
     gentoo_path: &Utf8Path,
@@ -1368,7 +1304,6 @@ fn sysroot_repos_conf_entries(
 /// reason): without it, every `sys-*` package resolved against this sysroot
 /// (`sys-devel/gcc` included) builds fully serial — this make.conf is the
 /// *only* one they read, so there is no other source for build parallelism.
-/// Caught live: a real stage1 build ran with a single `cc1plus` at a time on a
 /// 128-core host because this was missing.
 fn make_conf_body(target: &CrossTarget, sysroot: &Utf8Path, outer_root: &Utf8Path) -> String {
     let arch = target.gentoo_arch();
@@ -1389,10 +1324,7 @@ fn make_conf_body(target: &CrossTarget, sysroot: &Utf8Path, outer_root: &Utf8Pat
          # `prefix=/usr`, not the host-absolute sysroot path) — PKG_CONFIG_SYSROOT_DIR\n\
          # prepends the real path onto whatever a .pc reports. PKG_CONFIG_LIBDIR\n\
          # (unlike _PATH) *replaces* pkg-config's default search list, so the host's\n\
-         # own .pc files never leak into a foreign-arch cross build (found live:\n\
-         # iproute2's ./configure auto-detected the host's net-libs/libtirpc via\n\
-         # plain pkg-config, linked -ltirpc, then failed since the target sysroot\n\
-         # never had it).\n\
+         # own .pc files never leak into a foreign-arch cross build.\n\
          PKG_CONFIG_SYSROOT_DIR=\"{sysroot}\"\n\
          PKG_CONFIG_LIBDIR=\"{sysroot}/usr/lib64/pkgconfig:{sysroot}/usr/lib/pkgconfig:{sysroot}/usr/share/pkgconfig\"\n\
          # meson.eclass (and any buildsystem following the same convention) reads\n\
@@ -1466,27 +1398,13 @@ fn branch_bound(version: &Version) -> String {
     format!("{major}.{minor}.9999")
 }
 
-/// The `package.accept_keywords` line for a host-arch cross-category package
-/// (`{category}/{pkg}`, aliasing the real `{real_cat}/{real_pkg}`): mirror
-/// what the *host* would already select for the real package instead of
-/// blanket-accepting the whole category regardless of version — which
-/// silently preferred live `9999` ebuilds over perfectly good dated
-/// snapshots/releases (the `dev-vcs/git` finding, and this same overreach
-/// for the toolchain packages themselves —
-/// confirmed live: `sys-devel/binutils`/`sys-devel/gcc` both carry real
-/// `~riscv` keywords on recent non-live snapshots in this environment, so
-/// a blanket `**` was never actually necessary to unblock riscv crossdev).
+/// `package.accept_keywords` for a host-arch cross-category package: mirror
+/// what the host would select for the real package — not a blanket `**`
+/// (which prefers live `9999` ebuilds over dated releases).
 ///
-/// - Host already has a version of the real package installed, and its
-///   exact ebuild still exists in the tree: pin exactly to that version —
-///   the cross-alias tracks the host's own installed toolchain version, so
-///   host and cross compiler don't silently drift apart.
-/// - Installed but that exact ebuild is gone from the tree (or nothing is
-///   installed at all): bound to the release branch of the reference
-///   version (the installed one, or the newest available if none is
-///   installed) via [`branch_bound`] — still `**` within that bound, since
-///   some packages (`sys-devel/rust-std`) are permanently unkeyworded by
-///   Gentoo convention, not "live" in the churning sense, and still need it.
+/// - Installed version still in tree → pin exactly (host/cross stay aligned).
+/// - Else → [`branch_bound`] of installed or newest available, with `**`
+///   only inside that bound (some packages are permanently unkeyworded).
 fn host_arch_keyword_line(
     roots: &portage_resolve::Roots,
     gentoo: &Utf8Path,
@@ -1579,24 +1497,10 @@ fn cross_env_entries(
     let mut entries = Vec::new();
 
     let mut mappings = String::new();
-    // Host-arch tools (binutils/gcc/clang-crossdev-wrappers — see
-    // `PackageArch` on `CrossTarget::packages`) run *on* the build host, not
-    // the target, even though they live in the target-influenced
-    // `cross-<tuple>` category. Their own keyword acceptance must never
-    // depend on whichever arch happens to be active for a given invocation
-    // (the sysroot's target arch, under `--target`, vs the bare host arch
-    // otherwise) — found live 2026-07-09: a newer `cross-<tuple>/gcc`
-    // resolved fine under `--target` (the generated sysroot make.conf's own
-    // `ACCEPT_KEYWORDS="{arch} ~{arch}"` happens to cover it) but failed
-    // outright without `--target` (the bare host's real, normally
-    // stable-only ACCEPT_KEYWORDS does not). A blanket `**` "fixed" that but
-    // overshot: it also silently preferred each package's live `9999` ebuild
-    // over a perfectly good dated snapshot, whenever the solver's own
-    // dual-root expansion or the toolchain packages' own root-atom
-    // resolution had to pick a version at all. `host_arch_keyword_line`
-    // mirrors what the host would already select for the real package
-    // instead — pinned to its installed version, or bounded to its release
-    // branch — using `**` only within that scope, not the whole category.
+    // Host-arch tools (binutils/gcc/…, see `PackageArch`) run on the build
+    // host; keyword them for the *host* arch, not the active `--target` arch.
+    // Prefer the host's installed/release-branch pin over a blanket `**`
+    // (which would also pick live `9999` ebuilds).
     let mut keyword_entries = String::new();
     for (real_cat, pkg, arch) in target.packages() {
         let body = format!(
@@ -1693,28 +1597,9 @@ fn link_abi_osdirs(target: &CrossTarget, globals: &Cli) -> Result<()> {
 /// `cross-<tuple>/linux-headers` (and every other cross-* package) is the
 /// *real* upstream ebuild, symlinked into the cross-* category — it decides
 /// where to install purely by comparing `CTARGET != CHOST` inside the
-/// ebuild itself (the same check real crossdev's own ebuilds use to
-/// redirect into a target-specific path instead of the plain host
-/// `/usr/include`). When the tuple textually equals the host's CHOST, that
-/// check reads as "not cross-compiling" and the ebuild installs straight
-/// into `/usr/include` — colliding with the native `sys-kernel/
-/// linux-headers` already there. Real crossdev has the identical
-/// limitation (not an em-specific gap): every cross-* package keys its own
-/// install/config logic off that same string comparison, so there is no
-/// signal anywhere in the ebuild ecosystem for "a second, separately
-/// configured toolchain instance for my own arch" versus "the native
-/// one" — this isn't a fixable gap, it's a structurally invalid target.
-/// Found live 2026-07-20 running `test-scripts/test-crossdev-flavours.sh`
-/// for an aarch64 target on an aarch64 host: 980 file collisions merging
-/// `cross-aarch64-unknown-linux-gnu/linux-headers`. Reject early with a
-/// clear message instead of failing deep inside a confusing collision
-/// dump — and point at the tool that actually covers "a separate sysroot,
-/// same arch, different settings": `--root`/`--local` (self-contained
-/// mode) builds with the plain native toolchain (`CHOST == CBUILD`, no
-/// `CTARGET` involved at all, so nothing shorts) under its own independent
-/// make.conf — see this module's own doc comment on `run_staged`/`setup`
-/// for why that reuses crossdev's staged-bootstrap machinery safely where
-/// crossdev itself can't.
+/// ebuild itself (same as real crossdev). Same-tuple as host CHOST installs
+/// into host paths and collides with native packages — not a supported
+/// target. For a same-arch separate root, use `--root`/`--local` instead.
 fn reject_same_arch_target(tuple: &str, host: &str) -> Result<()> {
     if tuple == host {
         bail!(
@@ -2140,17 +2025,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), body_before);
     }
 
-    /// Two different cross targets coexist on the same prefix: setting up a
-    /// second target must not orphan the first one's alias. Before
-    /// per-target naming, both targets shared one fixed `crossdev.conf`/
-    /// `[crossdev]` name, so the second `write_alias_repo_conf` call for a
-    /// different target either clobbered the first (`Sync`) or, under
-    /// `--setup`'s `FillGapsOnly` policy, silently no-op'd since the file
-    /// was merely *present* — either way the first target stopped resolving
-    /// (found live: `em crossdev -T aarch64... --local --setup` then `em
-    /// crossdev -T riscv64... --local --setup` left only the aarch64 alias
-    /// on disk, so `cross-riscv64-unknown-linux-gnu/binutils` resolved to
-    /// "no ebuilds found").
+    /// Two targets on one prefix keep separate alias files; a second setup
+    /// must not clobber or skip the first under `FillGapsOnly`.
     #[test]
     fn write_alias_repo_conf_lets_two_targets_coexist() {
         let dir = tempfile::tempdir().unwrap();
@@ -2359,7 +2235,7 @@ mod tests {
     /// (`setup::host_makeopts`'s doc comment), there is no fallback host
     /// config to inherit build parallelism from. Missing this made a real
     /// stage1 build run fully serial (one `cc1plus` at a time on a 128-core
-    /// host) — caught live while chasing an unrelated gcc version-mismatch
+    /// host)
     /// bug, the same class of gap as `self_contained_root_gets_real_makeopts`
     /// in `setup.rs`.
     #[test]

@@ -569,29 +569,29 @@ mod tests {
         )
     }
 
-    /// A single-victim blocker hit, mirroring what `check_blockers_detailed`
-    /// would produce for one owner/atom/victim triple.
-    #[allow(clippy::too_many_arguments)]
-    fn hit(
-        owner_cpn: &str,
-        owner_slot: &str,
-        owner_ver: &str,
+    /// One owner/atom/victim triple, as `check_blockers_detailed` would emit.
+    struct HitSpec {
+        owner_cpn: &'static str,
+        owner_slot: &'static str,
+        owner_ver: &'static str,
         owner_installed: bool,
-        atom: &str,
-        victim_cpn: &str,
-        victim_slot: &str,
-        victim_ver: &str,
+        atom: &'static str,
+        victim_cpn: &'static str,
+        victim_slot: &'static str,
+        victim_ver: &'static str,
         victim_retained_installed: bool,
-    ) -> BlockerHit {
+    }
+
+    fn hit(s: HitSpec) -> BlockerHit {
         BlockerHit {
-            owner: pkg(owner_cpn, owner_slot),
-            owner_version: owner_ver.parse().expect("test version parses"),
-            owner_installed,
-            atom: Dep::parse(atom).expect("test blocker atom parses"),
+            owner: pkg(s.owner_cpn, s.owner_slot),
+            owner_version: s.owner_ver.parse().expect("test version parses"),
+            owner_installed: s.owner_installed,
+            atom: Dep::parse(s.atom).expect("test blocker atom parses"),
             victims: vec![BlockerVictim {
-                package: pkg(victim_cpn, victim_slot),
-                version: victim_ver.parse().expect("test version parses"),
-                retained_installed: victim_retained_installed,
+                package: pkg(s.victim_cpn, s.victim_slot),
+                version: s.victim_ver.parse().expect("test version parses"),
+                retained_installed: s.victim_retained_installed,
             }],
         }
     }
@@ -859,17 +859,17 @@ mod tests {
     /// after the blocking merge.
     #[test]
     fn forward_weak_orphan_would_unmerge_after() {
-        let h = hit(
-            "sys-apps/systemd",
-            "0",
-            "260.2",
-            false,
-            "!net-dns/openresolv",
-            "net-dns/openresolv",
-            "0",
-            "3.17.4",
-            true,
-        );
+        let h = hit(HitSpec {
+            owner_cpn: "sys-apps/systemd",
+            owner_slot: "0",
+            owner_ver: "260.2",
+            owner_installed: false,
+            atom: "!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
         let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
         let classified = classify_blockers(&[h], &installed, &[]);
         assert!(matches!(
@@ -885,17 +885,17 @@ mod tests {
     /// genuine (soft, for a weak blocker) conflict, not auto-removable.
     #[test]
     fn forward_weak_still_needed() {
-        let h = hit(
-            "sys-apps/systemd",
-            "0",
-            "260.2",
-            false,
-            "!net-dns/openresolv",
-            "net-dns/openresolv",
-            "0",
-            "3.17.4",
-            true,
-        );
+        let h = hit(HitSpec {
+            owner_cpn: "sys-apps/systemd",
+            owner_slot: "0",
+            owner_ver: "260.2",
+            owner_installed: false,
+            atom: "!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
         let installed = vec![
             entry("net-dns/openresolv", "0", "3.17.4", &[]),
             entry("app-misc/keeper", "0", "2.0", &["net-dns/openresolv"]),
@@ -912,17 +912,17 @@ mod tests {
     /// equally auto-removed; only the scheduling edge differs).
     #[test]
     fn strong_blocker_orders_unmerge_before() {
-        let h = hit(
-            "sys-apps/systemd",
-            "0",
-            "260.2",
-            false,
-            "!!net-dns/openresolv",
-            "net-dns/openresolv",
-            "0",
-            "3.17.4",
-            true,
-        );
+        let h = hit(HitSpec {
+            owner_cpn: "sys-apps/systemd",
+            owner_slot: "0",
+            owner_ver: "260.2",
+            owner_installed: false,
+            atom: "!!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
         let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
         let classified = classify_blockers(&[h], &installed, &[]);
         assert!(matches!(
@@ -940,17 +940,17 @@ mod tests {
     /// against a planned systemd).
     #[test]
     fn reciprocal_hit_makes_the_owner_the_candidate() {
-        let h = hit(
-            "net-dns/openresolv",
-            "0",
-            "3.17.4",
-            true,
-            "!sys-apps/systemd",
-            "sys-apps/systemd",
-            "0",
-            "260.2",
-            false,
-        );
+        let h = hit(HitSpec {
+            owner_cpn: "net-dns/openresolv",
+            owner_slot: "0",
+            owner_ver: "3.17.4",
+            owner_installed: true,
+            atom: "!sys-apps/systemd",
+            victim_cpn: "sys-apps/systemd",
+            victim_slot: "0",
+            victim_ver: "260.2",
+            victim_retained_installed: false,
+        });
         let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
         let classified = classify_blockers(&[h], &installed, &[]);
         match single_verdict(&classified) {
@@ -966,17 +966,17 @@ mod tests {
     /// overlap, not permanent coexistence).
     #[test]
     fn planned_coexistence_is_a_hard_conflict() {
-        let h = hit(
-            "app-misc/a",
-            "0",
-            "1.0",
-            false,
-            "!app-misc/b",
-            "app-misc/b",
-            "0",
-            "1.0",
-            false,
-        );
+        let h = hit(HitSpec {
+            owner_cpn: "app-misc/a",
+            owner_slot: "0",
+            owner_ver: "1.0",
+            owner_installed: false,
+            atom: "!app-misc/b",
+            victim_cpn: "app-misc/b",
+            victim_slot: "0",
+            victim_ver: "1.0",
+            victim_retained_installed: false,
+        });
         let classified = classify_blockers(&[h], &[], &[]);
         assert!(matches!(
             single_verdict(&classified),
@@ -988,17 +988,17 @@ mod tests {
     /// portage suppresses this as non-actionable ("damage already done").
     #[test]
     fn pre_existing_conflict_between_two_installed_packages() {
-        let h = hit(
-            "app-misc/a",
-            "0",
-            "1.0",
-            true,
-            "!app-misc/b",
-            "app-misc/b",
-            "0",
-            "1.0",
-            true,
-        );
+        let h = hit(HitSpec {
+            owner_cpn: "app-misc/a",
+            owner_slot: "0",
+            owner_ver: "1.0",
+            owner_installed: true,
+            atom: "!app-misc/b",
+            victim_cpn: "app-misc/b",
+            victim_slot: "0",
+            victim_ver: "1.0",
+            victim_retained_installed: true,
+        });
         let installed = vec![
             entry("app-misc/a", "0", "1.0", &[]),
             entry("app-misc/b", "0", "1.0", &[]),
@@ -1018,28 +1018,28 @@ mod tests {
     /// verdict.
     #[test]
     fn systemd_resolvconf_canonical_case_both_edges_agree() {
-        let forward = hit(
-            "sys-apps/systemd",
-            "0",
-            "260.2",
-            false,
-            "!net-dns/openresolv",
-            "net-dns/openresolv",
-            "0",
-            "3.17.4",
-            true,
-        );
-        let reciprocal = hit(
-            "net-dns/openresolv",
-            "0",
-            "3.17.4",
-            true,
-            "!sys-apps/systemd",
-            "sys-apps/systemd",
-            "0",
-            "260.2",
-            false,
-        );
+        let forward = hit(HitSpec {
+            owner_cpn: "sys-apps/systemd",
+            owner_slot: "0",
+            owner_ver: "260.2",
+            owner_installed: false,
+            atom: "!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
+        let reciprocal = hit(HitSpec {
+            owner_cpn: "net-dns/openresolv",
+            owner_slot: "0",
+            owner_ver: "3.17.4",
+            owner_installed: true,
+            atom: "!sys-apps/systemd",
+            victim_cpn: "sys-apps/systemd",
+            victim_slot: "0",
+            victim_ver: "260.2",
+            victim_retained_installed: false,
+        });
         let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
         let classified = classify_blockers(&[forward, reciprocal], &installed, &[]);
         assert_eq!(classified.len(), 2);
