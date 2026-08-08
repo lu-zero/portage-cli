@@ -1537,3 +1537,52 @@ empty)? Nothing today produces that third outcome; would need new
 plumbing if ever wanted — not currently a known need.
 
 385 (portage-cli) + 116 (portage-resolve) tests + clippy clean.
+
+---
+
+### NEXT TEST SCENARIO — re-run the 2026-08-05 `--prefix` clang failure with a real self-hosted gcc first (not yet done)
+
+`--prefix`'s clang was found broken as a compiler on 2026-08-05
+([[prefix-clang-test-2026-08-05]]): built fine, but include search,
+library search, and the ELF interpreter path were all confined to
+`<prefix>/...` with nothing real there to find, because the prefix has
+no libc/gcc of its own by default (ordinary `--prefix` DEPEND resolution
+shares the host base). That test installed `llvm-core/clang` directly,
+with no gcc ever installed *inside* the prefix.
+
+**Corrected understanding this pass (Luca): `--prefix` CAN install its
+own real gcc** (the already-landed "Native `--prefix` toolchain
+bootstrap fix", 2026-07-16/2026-07-23), and `em select gcc set N`
+already correctly wires up clang's toolchain-detection for that case —
+confirmed by reading the code, not yet by a real run:
+`select/compiler.rs`'s `write_clang_gcc_install_cfg` is called from
+`env_d.rs`'s `run_set::<GccProfileType>` (`T::sync_foreign_config`),
+already `EPREFIX`-scoped via `env_d::eprefix(roots)` — `em --prefix P
+select gcc set N` reads `P`'s own gcc env.d profile and writes `P/etc/
+clang/gentoo-gcc-install.cfg` with `P`'s own `LDPATH`, no host-borrowing
+special case needed or wanted. `gentoo-runtimes.cfg`/`gentoo-linker.cfg`
+(the other two files real Gentoo's clang reads, confirmed by inspecting
+this host's own `/etc/clang/`) contain no absolute paths at all — just
+flags (`-fuse-ld=`, `--rtlib=`) — so they're not part of this bug.
+
+**Not yet live-verified — this is the concrete next scenario:**
+1. `em toolchain --setup --prefix P --root B` (or whatever the current
+   correct invocation is post the `ef33154`/`069187d` fixes above) — a
+   real, self-hosted gcc+libc bootstrap *inside* the prefix, not
+   borrowing the host.
+2. `em --prefix P select gcc set <N>` — confirm `P/etc/clang/
+   gentoo-gcc-install.cfg` gets populated with `P`'s own
+   `--gcc-install-dir=`, not left at whatever placeholder `clang-common`
+   ships.
+3. Install/select `llvm-core/clang` under the same `P`.
+4. Re-check the exact three things that failed on 2026-08-05:
+   include search dirs, `-print-search-dirs` library dirs, and the ELF
+   interpreter path baked into a linked binary. All three should now
+   resolve inside `P` (which now genuinely has its own libc/crt/gcc),
+   not point at nothing.
+
+**Cost note:** this is a real native toolchain bootstrap (gcc+glibc from
+scratch under `--prefix`), not a quick check — closer to an hour than a
+minute, same order of magnitude as the riscv64 stage1 runs elsewhere in
+this file. Whoever picks this up should expect to run it in the
+background and check back, not block on it.
