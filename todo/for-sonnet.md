@@ -551,6 +551,115 @@ applies to the specific thing actually verified end-to-end.
 
 ---
 
+### Fable's investigation + proposed fix for the `cli.rs:282` EPREFIX bug
+
+Asked Fable to independently verify the root-cause trace above and
+propose a concrete fix. Confirmed the mechanism, with four refinements
+that change the fix shape:
+
+**(a) The outer-eprefix carry at `cli.rs:282` is deliberate, not an
+oversight** — the comment right above it explains why:
+`relocate_root()` (`portage-resolve/src/roots.rs:181-186`) needs the
+outer path so distfiles/work-trees anchor under `P`, not `P/usr/T`,
+and there's already a regression test pinning this
+(`prefix_plus_target_preserves_overlay_relocate`, `cli.rs:595-620`,
+asserting `eprefix() == Some("/tmp/p")`). So this is a genuine
+**field-overload** problem — one slot serving two purposes that only
+diverge in this one topology — not a simple wrong-value bug.
+
+**(b) `RootContext.eprefix` also derives the config overlay** (ebuild.rs
+lines 999, 1038-1041: `eprefix.join("etc/portage")`) — a naive
+`eprefix: None` for sysroot entries would silently drop `P/etc/portage`
+package.use/bashrc overrides for target builds, a regression the
+`cli.rs:275-281` comment already records happening once before. Any fix
+needs a **separate** `config_overlay` value threaded alongside, not just
+clearing `eprefix`.
+
+**(c) The PMS invariant that pins the correct fix:** `EROOT = ROOT +
+EPREFIX` holds for every legitimate `Roots` constructor (`--local`:
+both = prefix; `--prefix` overlay/`host_roots`: both = P; bare
+`--root`: eprefix None) — the `--target` sysroot `Roots` is the *sole*
+violator (`eprefix=P`, `merge_root=P/usr/T`). This is the basis for the
+recommended fix below.
+
+**(d) Blast radius, additions to what I'd already found:** same wrong
+`EPREFIX` also reaches the **unmerge path** (`emerge.rs:993` —
+`pkg_prerm`/`postrm` for sysroot packages under `--prefix --target` see
+`EPREFIX=P`) and the standalone `em __ebuild` applet (`dispatch.rs:109`).
+**`--local --target` has the identical bug** (a valid combination per
+`cli.rs:238-239`). **`--root --target` and bare `--target` are
+unaffected** (`eprefix` is `None` there, `cli.rs:413`) — confirms why
+none of this session's extensive `--root`-based riscv64 testing ever
+surfaced this; it's specific to combining `--prefix`/`--local` with
+`--target`. A stale comment worth fixing alongside:
+`portage-resolve/src/root_aware.rs:76` claims the sysroot's substituted
+roots have "eprefix … cleared" — not true today.
+
+**Recommended fix (Option 1 — smallest sound change, behavior-preserving
+elsewhere):**
+
+Add a derived accessor rather than restructuring the field:
+```rust
+// portage-resolve/src/roots.rs, next to eprefix()
+/// The EPREFIX the per-package build environment should see for a package
+/// merging into this Roots' merge_root: `eprefix` only when it IS the merge
+/// root (EROOT == ROOT + EPREFIX holds). A `--target` sysroot Roots carries
+/// the *outer* prefix in `eprefix` purely as a relocation/config anchor
+/// (see Cli::roots) — from inside the sysroot no further offset applies.
+pub fn build_eprefix(&self) -> Option<&Utf8Path> {
+    self.eprefix.as_deref().filter(|e| *e == self.merge_root())
+}
+```
+Then: switch `merge/mod.rs:691`, `dispatch.rs:109`, and `emerge.rs:993`
+to call `build_eprefix()` instead of `eprefix()`; add a `config_overlay`
+field to `RootContext` (ebuild.rs:176-198) populated from
+`entry_roots.config_overlay()`, and thread it through the privilege
+worker (new `WorkerArgs` field, new CLI arg, mapping in `dispatch.rs`);
+switch ebuild.rs:999/1038-1041 to use that field directly instead of
+re-deriving from `eprefix`. This aligns build-time config resolution
+with plan-time, which already uses `config_overlay()`
+(`binpkg.rs:308-318`, whose own doc comment worries about exactly this
+drift). Doc-fix `Roots::eprefix()` (roots.rs:89, currently stale) and
+`root_aware.rs:76` alongside.
+
+**A more invasive Option 2** (split into two real fields —
+`eprefix` becomes the true build value, a new `outer_anchor` covers
+relocation) was also sketched — a cleaner long-term data model, but it
+flips `is_self_contained_root()` to `true` for the sysroot `Roots`,
+with real knock-ons in `select/compiler.rs` config-root activation and
+`setup.rs`'s topology classification that would each need their own
+verification. **Not recommended for now**; flagged as a possible
+follow-up refactor, not the fix to land first.
+
+**Testing seams identified** (both real, already-existing test
+harnesses, not hypothetical):
+- `cli.rs` test mod: extend `prefix_plus_target_preserves_overlay_relocate`
+  (line 595) with `assert_eq!(r.build_eprefix(), None)` alongside the
+  existing `eprefix()` assertion — this pair *is* the bug in miniature.
+  Add a `--local --target` twin plus positive assertions that plain
+  `--prefix`/`--local`/`host_roots()` still report
+  `build_eprefix() == Some(prefix)` (guards against over-clearing).
+- `portage-repo/src/build/shell/tests.rs` already has the exact harness
+  (see `esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix`,
+  line 1112) — add a test pinning the corrected input shape (sysroot
+  root, `eprefix=None`) → `EPREFIX == ""`, `ED == D`, confirming what
+  makes `econf` emit `--prefix=/usr` instead of the doubled form.
+
+**Live re-verification checklist** (once a fix lands): re-run the
+`stages --stage1` scenario through `libffi`, confirm its `.pc` now says
+`prefix=/usr` with no `/root/xp` anywhere; sweep
+`grep -rl '/root/xp' <sysroot>/usr/lib*/pkgconfig/` for emptiness; confirm
+python's build-python step gets past the previously-doubled `-I` path.
+**Negative controls, don't skip these:** plain `--prefix` (no `--target`)
+building e.g. `zlib` must *still* bake `prefix=/root/xp/usr` into its
+`.pc` — that's correct there, and would itself be a regression if a fix
+over-applies; `--root R --target T` must be unchanged; a `MergeRoot::Host`
+toolchain package under `--prefix --target` must still see `EPREFIX=P`.
+Confirm distfiles/work-trees still anchor under the outer prefix, not the
+sysroot. Run `regression-matrix.sh` before/after.
+
+---
+
 ## Prior results (kept for history)
 
 Last full live pass before soft-order fix: **`1ac8067`** — #4/#5 PASS, #3 still broken (virtual Completed, libxcrypt never Emerging, stop on pam). Details below in archived sections.
