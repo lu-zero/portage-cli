@@ -6,7 +6,9 @@ context, not a user how-to. For topology tables see
 [`root-topology.md`](./root-topology.md); for crossdev how-to see
 [`crossdev.md`](./crossdev.md); for stage recipes see
 [`stages-and-testing.md`](./stages-and-testing.md); for bash-crossdev env
-letters see [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md).
+letters see [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md); for the
+user how-to (bootstrap + use a `--prefix`'s own compiler) see
+[`prefix-toolchain.md`](./prefix-toolchain.md).
 
 > **Slop warning.** Prefer the code when this disagrees. Status of live
 > findings may lag in [`todo/for-sonnet.md`](../todo/for-sonnet.md).

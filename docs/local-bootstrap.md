@@ -295,5 +295,6 @@ exception, not the default. Full policy:
 
 - [`docs/root-topology.md`](./root-topology.md) — 2b `--local`, lifecycle  
 - [`docs/crossdev.md`](./crossdev.md) — cross after native bootstrap  
+- [`docs/prefix-toolchain.md`](./prefix-toolchain.md) — the `--prefix` equivalent, live-verified 2026-08-08  
 - [`todo/local-bootstrap-provided.md`](../todo/local-bootstrap-provided.md) — implementation plan  
 - [`todo/clang-crossbuild-prefix-local-test-plan.md`](../todo/clang-crossbuild-prefix-local-test-plan.md) — Scenario B blocked on this  
