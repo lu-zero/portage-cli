@@ -1586,3 +1586,34 @@ scratch under `--prefix`), not a quick check — closer to an hour than a
 minute, same order of magnitude as the riscv64 stage1 runs elsewhere in
 this file. Whoever picks this up should expect to run it in the
 background and check back, not block on it.
+
+---
+
+### DONE, commit `2db6198`: ran this scenario, found+fixed the real blocker (LD_LIBRARY_PATH), clang now genuinely usable
+
+Ran the scenario above for real. `toolchain --setup` + `select gcc` worked
+as designed. Building `llvm-core/clang` on top then failed twice, both
+times a build-time tool (`llvm-min-tblgen`, `clang-tidy-confusable-chars-gen`)
+dying with "error while loading shared libraries" — neither the build
+shell nor `em active` ever exported `LD_LIBRARY_PATH`, so binaries using
+the plain host ELF interpreter had nothing but the host's own
+`ld.so.cache` to fall back on. Fixed in both places, using the `ldconfig`
+crate (already a workspace dep) to read `ld.so.conf` — `portage-cli`
+computes the value once (`ebuild.rs::build_ld_library_path`), threaded
+into `portage-repo`'s build shell as a plain resolved value (matching
+`eprefix`/`sysroot`/`broot`), not read from disk there.
+
+**Live-verified end to end:** `llvm`/`clang` now build successfully under
+a `--prefix`'s own self-hosted gcc. After `em active set` + `eval "$(em
+active env)"`, the installed `clang-22` compiles+links+runs a real
+hello-world (`exit 42`). **This reverses the 2026-08-05 finding** —
+`--prefix` was never structurally incapable of hosting a usable compiler,
+it just had no gcc of its own in that run.
+
+Sandbox note: this whole investigation was done twice — the first pass
+used a raw `sudo chroot` instead of `crossdev-stages sandbox run`
+(violating an already-recorded hard rule), corrupted `/dev/null` inside
+that sandbox, and chased a phantom "brush bug" that was actually an
+artifact of the bad setup. Luca wiped the sandbox; redone correctly via
+`sandbox run` from a fresh one, and the real bug (LD_LIBRARY_PATH) was
+found and fixed cleanly on the second pass.
