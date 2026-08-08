@@ -1476,44 +1476,64 @@ point — not re-derived from scratch.
 
 ---
 
-### The `cli.rs:282` EPREFIX/`.pc`-corruption bug — root-caused, NOT yet fixed
+### The `cli.rs:282` EPREFIX/`.pc`-corruption bug — FIXED, commit `069187d`
 
-Still open from the previous pass (`libffi`'s installed `.pc` baking
-`prefix=/root/xp/usr` instead of plain `/usr` under `--prefix P --target
-T`, which doubled a `-I` sysroot path and broke `dev-lang/python`'s
-cross-build — see the earlier section in this file for the full trace
-and Fable's investigation). Re-confirmed this pass, in the current tip,
-that **none** of Fable's recommended fix has landed yet:
-`grep -rn "build_eprefix"` finds nothing under `portage-resolve/src/
-roots.rs`, and all three call sites Fable identified
-(`merge/mod.rs:691`, `dispatch.rs:109`) plus a **third one Fable's
-writeup didn't explicitly call out — `emerge.rs:993`, the *unmerge*
-path** (`pkg_prerm`/`postrm` gets the same wrong `EPREFIX` under
-`--prefix --target`) — still all read the raw, unconditional
-`roots.eprefix()` directly.
+Landed Fable's **Option 1** (see the recap above for why `eprefix`
+couldn't just be removed instead — 8+ other call sites genuinely need
+its raw, unconditional value). `Roots::build_eprefix()`
+(`portage-resolve/src/roots.rs`): `eprefix()` filtered to `Some` only
+when it IS `merge_root()` (the PMS invariant `EROOT = ROOT + EPREFIX`
+actually holds); `None` whenever `--target` or an explicit `--root` has
+moved the destination away from the outer anchor. Switched all
+**three** `RootContext`/`shell.set_build_roots` call sites —
+`merge/mod.rs:691` (normal merge), `emerge.rs:993` (the *unmerge* path,
+the one Fable's original writeup didn't call out — `pkg_prerm`/`postrm`
+had the identical leak), `dispatch.rs:109` (`__ebuild` applet) — to
+`build_eprefix()`. Everything else (`relocate_root()`, `setup.rs`,
+`select/clang.rs`, `privilege.rs`) unchanged, still reads raw
+`eprefix()`, confirmed correct.
 
-Recapped with Luca whether `eprefix` could be eliminated from `Roots`
-entirely instead of patched: **no** — grepped every real call site
-(8+, excluding a stale unrelated `.claude/worktrees/agent-a19dabe358ee97fe1`
-leftover from an unrelated Aug-5 task): `relocate_root()`,
-`privilege.rs:608`, `setup.rs:263,307`, `select/clang.rs:26,47,331` all
-correctly want the raw, unconditional anchor value (where does this
-overlay/local tree live, full stop) and are NOT part of the bug. Only
-the 3 `RootContext`/`shell.set_build_roots` population sites need the
-filtered value. So the fix is still exactly Fable's **Option 1**: add
+**The `config_overlay`-threading half of Fable's writeup was NOT
+needed** — turned out `RootContext` never needed a new field there;
+`emerge.rs:997` was separately found hand-deriving `config_overlay` via
+`roots.eprefix().map(|e| e.join("etc/portage"))` instead of calling the
+already-existing `roots.config_overlay()` accessor (fixed in the earlier
+`ef33154` commit, same pass, as an unrelated one-liner).
 
-```rust
-// portage-resolve/src/roots.rs
-pub fn build_eprefix(&self) -> Option<&Utf8Path> {
-    self.eprefix.as_deref().filter(|e| *e == self.merge_root())
-}
-```
+**Live-verified twice, in a real chroot sandbox, not just `-p`:**
+1. `em --prefix /opt/pfx --root /opt/dest sys-libs/zlib` (plain `--root`
+   redirect, **no** `--target` at all — this is the shape
+   `stages --stage1/--stage3 --prefix P --root B` actually uses).
+   Before: `zlib.pc` installed under `/opt/dest` but baked
+   `prefix=/opt/pfx/usr` — a path with **zero** zlib install on it
+   (confirmed: `/opt/pfx/usr/include/zlib.h` doesn't exist). ED itself
+   built prefixed (`image//opt/pfx/usr/...`). After: `prefix=/usr`, ED
+   builds unprefixed (`image//usr/...`, no `/opt/pfx` subpath at all).
+2. The original `--target` sysroot case (`libffi`-class) — not
+   re-verified against a real riscv64 cross-toolchain this pass (a full
+   crossdev bootstrap is hours of build time, out of scope for a
+   confirmation check) but covered by new unit tests exercising the
+   identical `build_eprefix()` code path:
+   `prefix_plus_target_preserves_overlay_relocate` (extended),
+   `prefix_plus_root_plus_target_sysroot_still_builds_unprefixed` (new
+   — the `--prefix P --root B --target T` triple-combo, `stages`'s exact
+   shape once `--target` is also in play), `plain_prefix_and_local_still_
+   report_build_eprefix` (positive control — ordinary `--prefix`/`--local`
+   with no `--root`/`--target` still correctly gets `build_eprefix() ==
+   Some(prefix)`, guards against over-clearing).
 
-and switch **three** call sites (not two) to it: `merge/mod.rs:691`,
-`emerge.rs:993`, `dispatch.rs:109`. Plus the `config_overlay`-threading
-half of Fable's writeup (new `RootContext.config_overlay` field,
-threaded through the privilege worker) — see the full recommended-fix
-writeup above for the complete shape, still accurate. **Not implemented
-this pass** — ran out of turn before landing it; this is the clear next
-step. Live re-verification checklist (libffi `.pc`, python cross-build)
-is already written up above, still valid.
+**Key finding that simplified the fix:** no `--target`/`is_cross_arch()`
+special-casing turned out to be needed — the plain `eprefix() ==
+merge_root()` comparison already covers the `--root`-only case
+identically to the `--target` sysroot case, confirmed by the live zlib
+test above. An earlier design worry (does `--root` need to *preserve*
+`P`'s identity, Portage-`ROOT=`-style, so a later redeploy at `P` stays
+self-consistent?) was explicitly settled: **no** — `stages` output
+should be unprefixed, matching the sysroot treatment, not
+identity-preserving. `unimplemented` design question flagged but not
+resolved: is there a case where a `--root`-redirected destination
+*should* get its own self-describing `prefix=B/usr` (not `P`, not
+empty)? Nothing today produces that third outcome; would need new
+plumbing if ever wanted — not currently a known need.
+
+385 (portage-cli) + 116 (portage-resolve) tests + clippy clean.
