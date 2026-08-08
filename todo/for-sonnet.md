@@ -1388,3 +1388,132 @@ fixed with no caveats found. The only remaining item blocking
 to `query/depgraph/mod.rs:988-992` in the previous pass — fixing that
 filter (without breaking whatever it was originally added for) is the
 clear next step for whoever picks this up.
+
+---
+
+### `--root` destination-precedence fix landed — 2026-08-08 (Sonnet), commit `ef33154`
+
+**The footgun:** `--root B` was silently discarded the instant `--prefix`/
+`--local` also matched in `topology_source()`'s precedence chain — `em
+--prefix P --root B ...` always merged into `P`, `B` had zero effect.
+Live-verified two ways before the fix (plain `setup` and a real `-p`
+merge): only `P` was ever touched. This made `stages --stage1`/`--stage3`
+under `--prefix` genuinely dangerous — no way to redirect a stage1/stage3
+build away from the shared prefix tree it was supposed to *build for*,
+without going through `--target` (which is a different axis entirely,
+the cross sysroot substitution, not a same-arch offset).
+
+Traced the precedence bug's git history all the way back — **not** a
+recent regression (not the "glm refactor", not `8fdb1a7`/`bcde18a`
+either) — it's an artifact of the very first `if/else` root-resolution
+code, never a deliberate design decision, just never questioned until
+this pass's live testing surfaced it.
+
+**Fix (first pass — narrowly scoped to the merge-destination question
+only, per explicit product direction; a broader per-applet `--root`
+semantics decision is still open, see below):**
+
+- `base_roots()`'s `Local` branch and `outer_roots()`'s `--prefix`
+  overlay-reconstruction branch: an explicit `--root B` now overrides
+  only `target`/`merge_root()`. EPREFIX/BROOT/config-overlay stay
+  anchored to `--prefix`/`--local`'s own path (that's still the build
+  context: host-shared toolchain, relocatable shebangs, overlay config).
+- New `Cli::require_root_distinct_from_host()` (`pub(crate)`), replacing
+  the old crude `merge_root == "/"` checks at the three existing choke
+  points (`toolchain --setup`, `stages --stage1`, `stages --stage3`).
+  Compares the resolved `Roots` against `host_roots()` (the true "where
+  do this topology's own build tools live" anchor) instead of a literal
+  `/` check — correctly rejects bare `--local`/bare `--prefix`/bare host/
+  `--local --root <same path>`, correctly allows `--root DIR` alone,
+  `--prefix P --target T`, and the newly-enabled `--prefix P --root B`.
+  Error text: `"{action} needs an explicit --root that doesn't equal the
+  host install path (…)"`.
+- **Subtlety that cost a round-trip:** `host_roots()` used to just
+  delegate to `self.outer_roots()` for the overlay case — but
+  `outer_roots()` now also applies the `--root` redirect, so under
+  `--prefix P --root B` the two collapsed onto the same value, defeating
+  the guard (it compared `B` against `B`). Split out a new
+  `overlay_anchor()` (the un-redirected anchor, always `prefix` itself)
+  that both `outer_roots()` (redirect applied on top) and `host_roots()`
+  (redirect deliberately NOT applied) build from.
+- 5 new unit tests in `cli.rs` cover the override under `--prefix`/
+  `--local`, combined with `--target`, the degenerate same-path no-op,
+  and the full guard matrix. All 383 tests + clippy clean.
+
+**Live-verified** (scratch dirs, not a full sandbox — this only exercises
+CLI root resolution, no real merge):
+```
+em -p --prefix /tmp/.../pfx --root /tmp/.../dest sys-apps/baselayout
+  → [ebuild R] sys-apps/baselayout-2.18-r1 to /tmp/.../dest/   # was pfx before the fix
+
+em --prefix /tmp/.../pfx stages --stage1
+  → em stages --stage1 needs an explicit --root that doesn't equal
+    the host install path (/tmp/.../pfx)                       # correctly rejected
+
+em --prefix /tmp/.../pfx --root /tmp/.../dest --target riscv64-unknown-linux-gnu stages --stage1
+  → cannot resolve make.profile at /tmp/.../dest/usr/.../etc/portage/make.profile
+    # guard passed; failed later only because the scratch dir has no real profile — expected
+```
+
+**Also fixed in the same commit** (unrelated one-liner found while tracing
+`eprefix()`/`config_overlay()` call sites for a *different*, still-open
+bug — see next section): `emerge.rs`'s unmerge path was hand-deriving
+`config_overlay` via `roots.eprefix().map(|e| e.join("etc/portage"))`
+instead of just calling the already-existing `roots.config_overlay()`
+accessor. Currently value-identical (both happened to be seeded from the
+same prefix path), but duplicate derivation logic that could silently
+drift — not a functional bug on its own, just cleaned up in passing.
+
+**Still open, deliberately deferred (per product direction — "first do
+this as initial pass and then systematically clean up the `--root` usage
+and decide which applets should have it and which should not"):** a full
+per-applet audit of `--root`/`--prefix`/`--local`/`--target` semantics
+across the other ~18 applets that read any `*_roots()` function. An
+Explore agent already produced a categorization this pass (read-only
+query / writes-merges / config-root-only / crossdev-toolchain-stages
+cluster / sandbox-privilege / surprises) that should be the starting
+point — not re-derived from scratch.
+
+---
+
+### The `cli.rs:282` EPREFIX/`.pc`-corruption bug — root-caused, NOT yet fixed
+
+Still open from the previous pass (`libffi`'s installed `.pc` baking
+`prefix=/root/xp/usr` instead of plain `/usr` under `--prefix P --target
+T`, which doubled a `-I` sysroot path and broke `dev-lang/python`'s
+cross-build — see the earlier section in this file for the full trace
+and Fable's investigation). Re-confirmed this pass, in the current tip,
+that **none** of Fable's recommended fix has landed yet:
+`grep -rn "build_eprefix"` finds nothing under `portage-resolve/src/
+roots.rs`, and all three call sites Fable identified
+(`merge/mod.rs:691`, `dispatch.rs:109`) plus a **third one Fable's
+writeup didn't explicitly call out — `emerge.rs:993`, the *unmerge*
+path** (`pkg_prerm`/`postrm` gets the same wrong `EPREFIX` under
+`--prefix --target`) — still all read the raw, unconditional
+`roots.eprefix()` directly.
+
+Recapped with Luca whether `eprefix` could be eliminated from `Roots`
+entirely instead of patched: **no** — grepped every real call site
+(8+, excluding a stale unrelated `.claude/worktrees/agent-a19dabe358ee97fe1`
+leftover from an unrelated Aug-5 task): `relocate_root()`,
+`privilege.rs:608`, `setup.rs:263,307`, `select/clang.rs:26,47,331` all
+correctly want the raw, unconditional anchor value (where does this
+overlay/local tree live, full stop) and are NOT part of the bug. Only
+the 3 `RootContext`/`shell.set_build_roots` population sites need the
+filtered value. So the fix is still exactly Fable's **Option 1**: add
+
+```rust
+// portage-resolve/src/roots.rs
+pub fn build_eprefix(&self) -> Option<&Utf8Path> {
+    self.eprefix.as_deref().filter(|e| *e == self.merge_root())
+}
+```
+
+and switch **three** call sites (not two) to it: `merge/mod.rs:691`,
+`emerge.rs:993`, `dispatch.rs:109`. Plus the `config_overlay`-threading
+half of Fable's writeup (new `RootContext.config_overlay` field,
+threaded through the privilege worker) — see the full recommended-fix
+writeup above for the complete shape, still accurate. **Not implemented
+this pass** — ran out of turn before landing it; this is the clear next
+step. Live re-verification checklist (libffi `.pc`, python cross-build)
+is already written up above, still valid.
