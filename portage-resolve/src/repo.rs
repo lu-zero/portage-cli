@@ -2428,7 +2428,9 @@ mod tests {
         for f in ["busybox", "mawk", "nawk"] {
             match desired.get(Interned::intern(f)) {
                 UseFlagState::SolverDecided { prefer: false } => {}
-                other => panic!("{f} (no +default) must prefer off when wiped by -*; got {other:?}"),
+                other => {
+                    panic!("{f} (no +default) must prefer off when wiped by -*; got {other:?}")
+                }
             }
         }
     }

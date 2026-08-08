@@ -12,6 +12,8 @@ is derived on the fly, how root/config resolution works across `--target`/
 [`root-topology.md`](./root-topology.md). For how **bash-crossdev** assigns
 stage letters and `package.env` (and where `em` still diverges — especially
 LLVM runtimes), see [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md).
+For **EPREFIX / multi-root path assumptions** (baselayout, host-tool links,
+why probes go wrong), see [`em-prefix-experiment.md`](./em-prefix-experiment.md).
 
 ## The model, briefly
 

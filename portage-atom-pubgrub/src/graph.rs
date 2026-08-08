@@ -1158,7 +1158,12 @@ mod tests {
                 ..empty()
             },
         );
-        repo.add_version(Cpv::parse("sys-devel/bison-3.8").unwrap(), None, None, empty());
+        repo.add_version(
+            Cpv::parse("sys-devel/bison-3.8").unwrap(),
+            None,
+            None,
+            empty(),
+        );
         repo.add_version(
             Cpv::parse("virtual/os-headers-0").unwrap(),
             None,

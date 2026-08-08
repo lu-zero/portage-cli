@@ -10,6 +10,7 @@ problem. This doc covers what exists today: toolchain → stage1 → stage3.
 Related:
 
 - Root topology: [`root-topology.md`](./root-topology.md), [`root-model.md`](./root-model.md)
+- Prefix / multi-root path experiment: [`em-prefix-experiment.md`](./em-prefix-experiment.md)
 - Crossdev CLI: [`crossdev.md`](./crossdev.md)
 - Live harness notes: [`test-scripts/README.md`](../test-scripts/README.md), [`testing.md`](./testing.md)
 

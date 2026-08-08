@@ -1124,8 +1124,7 @@ async fn merge_parallel(
     // a workdir path concurrently. Per-root builddirs make dual-ROOT same-CPV
     // keys distinct; this still guards true path collisions (and same-key
     // duplicates).
-    let mut inflight_workdirs: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut inflight_workdirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
         while !stop_new && inflight.len() < jobs {

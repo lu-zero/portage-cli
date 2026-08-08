@@ -834,7 +834,12 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
     let ebuild_obj = Ebuild::with_cpv(cpv.clone(), Utf8Path::new(ebuild_path));
     let pf = format!("{}-{}", ebuild_obj.name(), ebuild_obj.version());
     // `root` is the merge root the parent used when choosing the work tree.
-    let work_dir = package_work_dir(Utf8Path::new(work_base), Utf8Path::new(root), ebuild_obj.category(), &pf);
+    let work_dir = package_work_dir(
+        Utf8Path::new(work_base),
+        Utf8Path::new(root),
+        ebuild_obj.category(),
+        &pf,
+    );
     let log = work_dir.join("build.log");
 
     // LiveFs + optional JSONL re-emit to parent bus; parent owns Session/Pkg*/history.
@@ -3266,7 +3271,10 @@ mod tests {
                 .contains("opt-xp-usr-riscv64-unknown-linux-gnu")
         );
         assert_eq!(work_root_key(Utf8Path::new("/")), "host");
-        assert_eq!(work_root_key(Utf8Path::new("/")), work_root_key(Utf8Path::new("//")));
+        assert_eq!(
+            work_root_key(Utf8Path::new("/")),
+            work_root_key(Utf8Path::new("//"))
+        );
     }
 
     /// Regression test for the gnupg stage1 failure: the Install worker must

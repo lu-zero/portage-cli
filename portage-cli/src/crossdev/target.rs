@@ -393,10 +393,7 @@ mod tests {
             let category = t.category();
             for (_cat, pkg, _arch) in t.packages() {
                 let codegen = EbuildShell::is_cross_host_codegen(&category, pkg);
-                let expect = matches!(
-                    pkg,
-                    "binutils" | "gcc" | "clang-crossdev-wrappers"
-                );
+                let expect = matches!(pkg, "binutils" | "gcc" | "clang-crossdev-wrappers");
                 assert_eq!(
                     codegen, expect,
                     "{category}/{pkg} host_codegen={codegen}, expected {expect}"

@@ -371,6 +371,10 @@ fn post_step_cross(target: &CrossTarget, globals: &Cli, step: &stages::StageStep
 /// even when `globals.target` is set — for `cross-*` toolchain plans woven
 /// into a `--target`-active `stage1` run (see `maybe_weave_in_gcc_update`),
 /// which must never install under `--target`'s sysroot substitution.
+///
+/// Argument count is intentional: the staged driver takes explicit routing
+/// flags rather than a grab-bag options struct (call sites stay readable).
+#[allow(clippy::too_many_arguments)]
 async fn run_staged(
     plan: &stages::StagePlan,
     globals: &Cli,

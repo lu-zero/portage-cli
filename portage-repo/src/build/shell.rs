@@ -10,7 +10,6 @@ use brush_core::{
 };
 use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
 
-
 use super::commands;
 use super::commands::inherit;
 use super::pty;

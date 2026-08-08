@@ -508,10 +508,11 @@ fn link_host_pythons(eroot: &Utf8Path) -> Result<()> {
     Ok(())
 }
 
-/// Host base-system tools that ebuilds reference by prefix-absolute path
-/// (`${EPREFIX}/bin/<tool>` or `${EPREFIX}/usr/bin/<tool>`) rather than PATH.
-/// Linked into `usr/bin`; after baselayout's merged-usr `bin`→`usr/bin`, both
-/// forms resolve. **Layout comes from merging baselayout**, not this list.
+/// Host tools linked into `${EPREFIX}/usr/bin` for **overlay** (`--prefix`)
+/// only. Ebuilds often hardcode prefix-absolute paths; without a full Prefix
+/// userland those must resolve somehow. Layout (`bin`→`usr/bin`) comes from
+/// merging baselayout — this list is host binary content only. See
+/// `docs/em-prefix-experiment.md`.
 const HOST_BASE_TOOLS: &[&str] = &[
     "bash", "sh", "xargs", "find", "perl", "install", "true", "grep", "env", "ed",
 ];
@@ -752,7 +753,10 @@ mod tests {
         // K|L target package: CTARGET set, no TARGET_ABI.
         env.insert("CHOST".to_string(), "aarch64-pc-linux-gnu".to_string());
         env.insert("CBUILD".to_string(), "aarch64-pc-linux-gnu".to_string());
-        env.insert("CTARGET".to_string(), "riscv64-unknown-linux-gnu".to_string());
+        env.insert(
+            "CTARGET".to_string(),
+            "riscv64-unknown-linux-gnu".to_string(),
+        );
         portage_repo::MakeConf::parse(body)
             .unwrap()
             .apply_to(&mut env)
@@ -800,7 +804,10 @@ mod tests {
         // Host tool package.env: TARGET_ABI set alongside CTARGET.
         env.insert("CHOST".to_string(), "aarch64-pc-linux-gnu".to_string());
         env.insert("CBUILD".to_string(), "aarch64-pc-linux-gnu".to_string());
-        env.insert("CTARGET".to_string(), "riscv64-unknown-linux-gnu".to_string());
+        env.insert(
+            "CTARGET".to_string(),
+            "riscv64-unknown-linux-gnu".to_string(),
+        );
         env.insert("TARGET_ABI".to_string(), "lp64d".to_string());
         portage_repo::MakeConf::parse(body)
             .unwrap()

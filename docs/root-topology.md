@@ -5,21 +5,19 @@ Gentoo build touches. It supersedes the scenario narrative in
 [`root-model.md`](./root-model.md) (which stays as the historical, builder-side
 detail reference). Read this first; cross-link into `root-model.md` only for
 the `bashrc`/overlay recipe and the per-phase env (`SYSROOT`/`ESYSROOT`/`BROOT`
-assignment in `run_phase`).
+assignment in `run_phase`). For **EPREFIX leakage / multi-root path
+workarounds** (baselayout, host-tool links, wrong probes) see
+[`em-prefix-experiment.md`](./em-prefix-experiment.md).
 
 > **Slop warning.** Verify any claim here against the code before relying on
-> it. The `RootTopology`/`RootSet` enum this doc once proposed as the target
-> design was **superseded** by a field-based approach: `Roots`
-> (`portage-resolve/src/roots.rs`) carries `satisfaction_root(DepClass)`
-> directly (landed 2026-07-09). Track A then stamped `BuildClass` on plan
-> entries for host-vs-target-vs-cross discrimination; **2026-08-06** re-review
-> against bash-crossdev concluded that for `cross-*` / `cross_llvm-*` packages
-> that stamp is dual authority next to **package.env** and should be dropped
-> (see [`todo/drop-buildclass.md`](../todo/drop-buildclass.md) and
-> [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md)). The `RootSet` enum
-> was removed as vestigial. The "variant enum (target design)" section below
-> stays as historical context; the "Status" section at the bottom tracks what
-> shipped. See `todo/root-topology-refactor.md` for A/B track status.
+> it. `Roots` (`portage-resolve/src/roots.rs`) carries
+> `satisfaction_root(DepClass)` directly. Historical dead ends: `RootSet` /
+> `RootTopology` enums (removed), and **`BuildClass`** (landed then dropped —
+> dual authority next to package.env; see
+> [`todo/drop-buildclass.md`](../todo/drop-buildclass.md) and
+> [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md)). Older "variant enum"
+> sections below are historical; the **Override semantics** table and
+> `cli.rs` `base_roots` are the live contract.
 
 ## The four roles
 
@@ -70,23 +68,23 @@ knob overrides — no more, no less:
   unset (installed scripts use host-absolute paths); `--prefix` keeps base at
   `/` (host seeds the plan → only the delta lands in P) and sets EPREFIX=P
   (installed tree under P is relocatable — scripts shebang to
-  `${EPREFIX}/usr/bin/...`). Both leave config at the host. **Current code
-  diverges:** `cli.rs` makes config follow `--root` (`config: config_root.or(root)`);
-  portage parity requires config to stay at `/`. That is a real divergence to fix
-  as part of this refactor.
+  `${EPREFIX}/usr/bin/...`). **Both leave config at the host** unless
+  `--config-root` is set — matching portage `ROOT=` / `PORTAGE_CONFIGROOT`
+  (`cli.rs` `base_roots`: config does **not** follow `--root`). Pair
+  `--root R --config-root R` for a self-contained config tree under R
+  (what `em setup --root` writes make.conf for).
 - **`--local` is the standalone unprivileged deployment** — a self-contained
   Gentoo-Prefix at `~/.gentoo`: base = target = `~/.gentoo` (full closure, not an
-  overlay), EPREFIX = `~/.gentoo`, config from `~/.gentoo/etc/portage` (where
-  `em setup` places the profile). Unlike `--prefix`, it does **not** assume the
-  host is Gentoo — the prefix carries its own VDB, config, and (after
-  `--setup`) its own toolchain. This is what makes it work on a foreign host
-  (Debian/Arch/Fedora) and what makes `--local --target <T>` build a real BROOT
-  into `~/.gentoo` rather than reading a nonexistent `/`.
-  - **`--prefix` vs `--local`** mirror the `--root` vs `--prefix` distinction:
-  `--prefix P` is the overlay (host stays base, delta only — fast path on a
-  Gentoo host); `--local` is standalone (full closure, self-contained — works
-  anywhere). Current code makes `--local` an overlay (base=`/`); the refactor
-  makes it standalone to match its actual purpose.
+  overlay), EPREFIX = `~/.gentoo`, config from `~/.gentoo/etc/portage` once
+  `make.profile` exists (otherwise host config until setup/select lands one).
+  Unlike `--prefix`, it does **not** assume the host is Gentoo — the prefix
+  carries its own VDB, config, and (after toolchain setup) its own toolchain.
+  - **`--prefix` vs `--local`:** `--prefix P` is the overlay (host stays base,
+  delta only — fast path on a Gentoo host); `--local` is standalone (full
+  closure). That is what the code does today (`TopologySource::Local` vs
+  `Prefix`), not a pending refactor.
+- **Multi-root path assumptions** (EPREFIX leakage, wrong probes, baselayout
+  vs host-tool workarounds): see [`em-prefix-experiment.md`](./em-prefix-experiment.md).
 - **`--target` points config at the sysroot** because crossdev physically writes
   the target profile + `make.conf` there; the host's `etc/portage` remains
   BROOT's config.
@@ -656,35 +654,17 @@ variant refactor's payoff is that both sides ask
   merges into the prefix (never the read-only host) and its satisfaction
   check weaves host ∪ prefix VDB — `Cli::host_roots()` returns `outer_roots()`
   for the overlay case instead of a host-anchored `Roots`.
-  Also resolved, same session: `--root`'s config resolution (this doc's own
-  § "Override semantics" table below now reflects it) — `Roots::config()`
-  keeps its original `--config-root`-or-`--root` default (own everything is
-  `em`'s deliberate self-contained-bootstrap model, not a portage `ROOT=`
-  gap), but `em select` no longer follows that fallback at all — new
-  `Roots::config_root_explicit()` (only ever `--config-root`, matching real
-  eselect's `profile.eselect`, which never derives a config root from `ROOT`
-  alone) replaces `config()` in `select/mod.rs`.
-  The full story includes why the first attempt (making `config()` itself
-  parity-follow `ROOT=`) broke `em select` and was reverted.
-- **`BuildClass` — landed (the root-topology refactor's Track A, 2026-08).**
-  A typed `BuildClass { NativeHost, NativeTarget, CrossTarget{triple},
-  CrossToolHost{triple}, CrossToolTarget{triple} }` (`portage-solver`,
-  re-exported via `portage-atom-pubgrub`) is computed once at plan
-  construction (`BuildClass::classify`) and stamped on every `SelectedPackage`
-  and `PlannedMerge`, then threaded to the build shell (`EbuildShell` field +
-  `set_build_class`, across the `__worker` subprocess via a `--build-class=`
-  flag). The shell reads it instead of re-deriving host-vs-target-vs-cross
-  from shadows: the §4 toolchain-var selection (`tool_tuple`), the four
-  `cross_host_tool_tuple` fixups (PATH/EPREFIX/ESYSROOT/`-idirafter`), and the
-  prefix `bashrc`'s host-path injection (via an exported `EM_BUILD_CLASS`).
-  `CrossTool` is split `Host`/`Target` the way bash crossdev splits its
-  toolchain (`set_env`'s `K|L` vs `*`): code-generating host tools vs
-  target-code sysroot libraries. Live-verified end-to-end in a riscv64
-  crossdev sandbox (full `--setup` + standalone `gcc`/`glibc` rebuilds).
-  `bypass_cross_root` was renamed `use_outer_eroot` for clarity; the solver's
-  two stamp routes share a `DepStampPolicy`. Full A/B track status in
-  [`todo/root-topology-refactor.md`](../todo/root-topology-refactor.md)
-  "Current plan".
+  **`--root` config (current):** profile/make.conf stay at host `/` unless
+  `--config-root` is set (portage `ROOT=` parity). `em setup --root R` still
+  *writes* a make.conf under R for when the user pairs `--config-root R`.
+  `em select` uses `config_root_explicit()` (only ever `--config-root`).
+- **`BuildClass` — landed then dropped (2026-08).** Track A stamped a
+  `BuildClass` on plan entries; re-review against bash-crossdev concluded it
+  was dual authority next to **package.env** and was removed. Host-vs-target
+  for cross packages is package.env + `host_codegen` PN specials (see
+  [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md),
+  [`todo/drop-buildclass.md`](../todo/drop-buildclass.md)).
+  `bypass_cross_root` was renamed `use_outer_eroot`.
 - **Removed (2026-08, was "Not pursued")** — the `RootSet` enum
   (`Single`/`Dual`/`Overlayed`): it was a lossy path-only summary whose
   `Single` collapsed `Local`+`Host` (which `base_roots` must distinguish), so

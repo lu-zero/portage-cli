@@ -2939,9 +2939,9 @@ fn cross_target_virtual_rdepend_provider_is_target_not_host() {
     let cpn_eq = |p: &PortagePackage, cat: &str, pkg: &str| {
         p.cpn().category.as_str() == cat && p.cpn().package.as_str() == pkg
     };
-    let target_xcrypt = solution.iter().find(|(p, _)| {
-        cpn_eq(p, "sys-libs", "libxcrypt") && p.merge_root() == MergeRoot::Target
-    });
+    let target_xcrypt = solution
+        .iter()
+        .find(|(p, _)| cpn_eq(p, "sys-libs", "libxcrypt") && p.merge_root() == MergeRoot::Target);
     assert!(
         target_xcrypt.is_some(),
         "Target sysroot must still get libxcrypt even when host has it; \
