@@ -19,6 +19,10 @@
 //! Idempotent: directories are created if missing; files are written only when
 //! absent, so re-running never clobbers a user's edits.
 
+mod local_profile;
+mod provided;
+mod repo;
+
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -207,12 +211,33 @@ pub async fn run(cli: &crate::cli::Cli) -> Result<()> {
         merge_baselayout(cli).await?;
         return Ok(());
     };
+    // `--local` needs its own resolvable repo + profile + bootstrap
+    // `package.provided` *before* the baselayout merge below — without a
+    // repo, that merge can't resolve `sys-apps/baselayout` at all on a host
+    // with no Gentoo tree of its own (see todo/local-bootstrap-provided.md).
+    if registrable.kind == crate::active::ActiveKind::Local {
+        ensure_config_root(cli, &roots).await?;
+    }
     merge_baselayout(cli).await?;
     // Available only — the active pointer is the user's to move, with
     // `em active set`.
     if let Some(name) = crate::active::register_available(registrable.kind, &registrable.eroot) {
         println!("    registered as:  {name}   (em active list / em active set {name})");
     }
+    Ok(())
+}
+
+/// The `--local` config-root ladder: repo, then profile, then bootstrap
+/// `package.provided` — must land in that order, since profile resolution
+/// needs the repo's `profiles/` and `package.provided` needs both the
+/// profile directory and the synced tree's available versions.
+async fn ensure_config_root(cli: &crate::cli::Cli, roots: &Roots) -> Result<()> {
+    let eroot = roots.merge_root();
+    let repo_path = repo::ensure_repo(cli, eroot).await?;
+    let repo = crate::repo_open::open(repo_path.as_std_path())
+        .context("opening the prefix's ::gentoo repo")?;
+    local_profile::ensure_profile(eroot, &repo)?;
+    provided::ensure_provided(eroot, &repo)?;
     Ok(())
 }
 
@@ -271,12 +296,19 @@ fn preview(roots: &Roots) -> Result<()> {
     };
     println!(">>> would bootstrap layout at {eroot} ({mode})");
     println!(">>> would create skeleton dirs under {eroot} (etc/portage, var/db/pkg, …)");
-    println!(">>> would oneshot-merge sys-apps/baselayout (USE=build) into {eroot}");
     let portage = roots
         .config_overlay()
         .map(Utf8Path::to_path_buf)
         .unwrap_or_else(|| eroot.join("etc/portage"));
     println!(">>> would ensure config files under {portage} (bashrc, make.conf placeholders)");
+    if has_eprefix && base_eq_target {
+        tracing::info!(
+            "would resolve a ::gentoo repo (piggy-back the host's, else write an own-tree \
+             entry and sync it), link make.profile, and write the Tier-1 bootstrap \
+             package.provided block"
+        );
+    }
+    println!(">>> would oneshot-merge sys-apps/baselayout (USE=build) into {eroot}");
     println!(">>> would register available entry for em active (not the active pointer)");
     println!(">>> (pretend — no files written)");
     Ok(())

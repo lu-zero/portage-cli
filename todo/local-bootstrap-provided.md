@@ -1,6 +1,9 @@
 # `--local` bootstrap via `package.provided`
 
-Status: 🟡 design deepened **2026-08-07** (not implemented)  
+Status: 🟢 Phase 1a + 1b landed **2026-08-09** (repo/profile/provided ladder
+for `em --local setup`); `--profile` CLI override, Darwin policy, and
+confirming the provided set actually clears the empty-VDB hard cycle in
+`toolchain --setup` are still open — see those phases' sections below.  
 Companion: [`docs/local-bootstrap.md`](./local-bootstrap.md)  
 Related: [[clang-crossbuild-prefix-local-test-plan]] Scenario B,
 [[em-stages-scenario-matrix]] (`--local` KNOWN-PARTIAL),
@@ -88,8 +91,13 @@ Profile must be a real path under the **chosen** repo’s `profiles/` (from
 **Already implemented pieces**
 
 - `em select profile list|show|set` (cross-aware; any path).
-- Config target for select is **only** explicit `--config-root` today (not
-  `--local`) — footgun; **change planned** (below).
+- **Already fixed (2026-06-23, `7a8c5bc`), not a pending change**: `em select`
+  resolves `--config-root` first, else the `--local`/`--prefix` overlay, else
+  host `/` (`config_portage_dir_for()` in `select/mod.rs`). This section used
+  to describe it as still-planned; corrected 2026-08-09 after live-verifying
+  `em --local DIR select profile show` targets the prefix. Only a bare
+  `--root` (no `--config-root`/`--local`/`--prefix`) still falls back to host,
+  matching real `eselect` on purpose.
 - Host profile symlink for **`--root`** only (`prefix_profile_entries`).
 
 **Gaps**
@@ -98,7 +106,7 @@ Profile must be a real path under the **chosen** repo’s `profiles/` (from
 |-----|----------------|
 | `setup --local` writes **no** `make.profile` | Config stays host; site provided under prefix ignored; or user must invent the select step. |
 | No default profile policy for Linux/macOS foreign hosts | Cannot one-shot setup off Gentoo. |
-| `em --local select profile set` does not target the prefix | Users hit host `/etc/portage` permission errors; must know `--config-root`. **Fix: honour `--local` (and `--prefix`/`--root` when explicit) as the select config target** (decided 2026-08-07). Prefer topology flags over bare host; explicit `--config-root` still wins if both are set. |
+| ~~`em --local select profile set` does not target the prefix~~ | **Already fixed** (2026-06-23, `7a8c5bc`) — see above. The remaining real gap is only that `setup --local` writes no `make.profile` for `select` to find, not that `select` ignores `--local`. |
 | Profile + repo ordering | Cannot set profile until repo path exists and contains `profiles/`. |
 
 **CLI sketch (setup)**
@@ -507,49 +515,89 @@ dev-lang/python-3.13.0
 - [x] Setup ladder: repo + profile + provided
 - [x] Product picks: Linux → prefix profile; select honours `--local`; Darwin newest + warn
 
-### Phase 1a — Repo + profile (config-root readiness)
+### Phase 1a — Repo + profile (config-root readiness) ✅ landed 2026-08-09
 
 **Goal:** after `em setup --local`, the prefix is a complete
 `PORTAGE_CONFIGROOT`: own `repos.conf` + `make.profile`, so the next
 `em --local …` does not silently use host config.
 
-1. Detect main-repo location (piggy-back host tree, else prefix path + sync URI).
-2. Write `etc/portage/repos.conf` (DEFAULT main-repo + gentoo entry).
-3. Optional `--sync` / document `em --local sync` when tree missing.
-4. Default profile policy + `--profile` override; write `make.profile`.
-5. **`em select profile` + topology flags:** when `--local` / `--prefix` /
-   `--root DIR` is set, target that tree’s `etc/portage` (same as setup), not
-   host `/`. Explicit `--config-root` still wins. Keeps eselect parity for
-   *bare* `em select` (host only) without ignoring an explicit topology.
-6. Unit tests: piggy-back path; missing-tree conf; Linux default is a
-   **prefix** profile path; Darwin newest-with-warning; re-run does not
-   clobber existing make.profile without `--profile`; `em --local DIR select
-   profile show` reads the prefix link.
+1. [x] Detect main-repo location (piggy-back host tree, else prefix path +
+   sync URI) — `setup/repo.rs::resolve_repo_path`/`detect_host_gentoo`.
+2. [x] Write `etc/portage/repos.conf` (`gentoo.conf`, `[DEFAULT] main-repo`
+   for the own-tree case).
+3. [x] Auto-sync (not just `--sync`/documented next-step): `em setup --local`
+   runs `em sync gentoo` itself when the resolved tree has no
+   `profiles/repo_name` yet — one command gets a working tree, shallow
+   (`--depth 1`, the git sync backend's existing default).
+4. [x] Default profile policy (ARCH-filtered `.../prefix` leaf, newest
+   release, `split-usr`/`kernel-N+` variants excluded) + host-mirror when a
+   real Gentoo host's own `make.profile` resolves under the synced tree;
+   write `make.profile`. **No `--profile` CLI override yet** — not
+   implemented, still a gap if you need to pick a non-default profile.
+5. ~~**`em select profile` + topology flags**~~ — **already done** (`7a8c5bc`,
+   2026-06-23), no work needed here. `--local`/`--prefix` target that tree's
+   `etc/portage`; bare `--root` still falls back to host, matching `eselect`.
+6. [x] Unit tests: piggy-back vs. own-tree (fixture host `repos.conf`/no
+   `repos.conf`); host-profile-mirror vs. ARCH-default (fixture
+   `profiles.desc`); re-run does not clobber an existing `gentoo.conf` or
+   `make.profile` (including a dangling-symlink idempotency fix found while
+   writing these tests — see `local_profile.rs`'s `ensure_profile` doc
+   comment). **Not done**: Darwin newest-with-warning (macOS profile policy
+   is still Phase 5/later, untouched); a live `em --local DIR select profile
+   show` integration test (verified manually instead, see Acceptance).
 
-**Acceptance:** on a Gentoo host, `em setup --local DIR` alone leaves
-`DIR/etc/portage/{repos.conf,make.profile}` such that
-`em --local DIR -p sys-libs/zlib` resolves against the prefix config (not
-host) and finds `::gentoo`.
+**Acceptance:** live-verified 2026-08-09 on this (Gentoo, arm64) host: a
+fresh `em --local DIR setup` piggy-backs `/var/db/repos/gentoo`, mirrors the
+host's own `default/linux/arm64/23.0` profile, and a re-run is a clean no-op
+(only the baselayout oneshot re-merges, no repo/profile/provided writes) —
+i.e. `DIR/etc/portage/{repos.conf,make.profile}` end up such that later
+`em --local DIR` invocations resolve against the prefix config, not host.
+The "no host `::gentoo`/profile at all" (e.g. Debian) branch is covered by
+the fixture tests above, not live-verified against a real non-Gentoo host.
 
-### Phase 1b — Managed `package.provided` write path
+### Phase 1b — Managed `package.provided` write path ✅ landed 2026-08-09
 
-**Goal:** same setup also seeds bootstrap provided (static Tier-1 floors).
+**Goal:** same setup also seeds bootstrap provided.
 
-1. `mkdir` `etc/portage/profile`.
-2. Write managed provided block from **static Tier-1 floors** (no probe yet).
-3. Idempotent re-run; pretend-safe; `--prefix` does **not** write provided.
-4. Unit tests: provided non-empty in `UseEnv` for setup’d fixture.
+1. [x] `mkdir` `etc/portage/profile`.
+2. [x] Write managed provided block — **not** static Tier-1 floors (Phase
+   2's original scope): folded host-probing straight into this phase per
+   product decision 2026-08-09 (`setup/provided.rs`). Each Tier-1 CPN's
+   version comes from probing the host's own tool (`gcc --version`,
+   `python3 -V`, …, best-effort first-PMS-version-token extraction) and
+   picking the closest tree-present version `<=` that, falling back to the
+   oldest tree version when the probe misses — resolved from the **just-
+   synced** tree (Phase 1a), not a hardcoded table baked into the binary.
+3. [x] Idempotent re-run (block is recomputed and only rewritten on content
+   change; hand-written lines outside the `BEGIN`/`END` markers preserved);
+   pretend-safe (whole ladder is skipped under `-p`, matching the rest of
+   `setup::run`); `--prefix` does **not** write provided (gated on
+   `ActiveKind::Local`, `--prefix` registers as `ActiveKind::Prefix`).
+4. [x] Unit tests: version-token extraction across real-world `--version`
+   banner shapes; closest-`<=`-host vs. oldest-fallback picking; managed-
+   block rewrite preserves surrounding hand-written lines.
 
-**Acceptance:** `em -p --local DIR toolchain --setup` progresses past
-“empty VDB hard cycle” on a Gentoo host (may still need Phase 2/3 for
-versions / exact CPNs).
+**Acceptance:** live-verified 2026-08-09: `em --local DIR setup` on this host
+wrote 24 Tier-1 entries with real probed-then-tree-mapped versions (e.g.
+host `python3` 3.13.12 → tree `dev-lang/python-3.12.9999`, the correct
+closest-`<=`-host match once `9999`-suffixed live-ebuild version ordering is
+accounted for). **Not yet verified**: whether this is actually *enough*
+provided coverage to get `em -p --local DIR toolchain --setup` past the
+empty-VDB hard cycle — that's the real remaining acceptance test for this
+phase, still open.
 
-### Phase 2 — Host CPV probing (any-linux)
+### Phase 2 — Host CPV probing (any-linux) — merged into Phase 1b above
 
-1. Gentoo: read `/var/db/pkg` for each policy CPN (newest matching slot).
-2. Non-Gentoo: version probes + floor table.
-3. Record provenance in comments (`# host-vdb: …` / `# floor: …`).
-4. Integration test with fake host VDB fixture.
+Originally scoped as a separate later phase reading `/var/db/pkg` (Gentoo)
+or version probes + a static floor table (non-Gentoo). Landed 2026-08-09 as
+part of Phase 1b instead, host-tool-probe-only (no `/var/db/pkg` read path —
+`--local` never weaves host VDB into BDEPEND satisfaction in the first
+place, see "Why provided is stronger than break cycles" above, so a VDB
+read wouldn't be authoritative here anyway). Provenance comments
+(`# host-vdb: …` / `# floor: …`) per line were **not** added — the managed
+block is regenerated wholesale each run instead, so provenance would go
+stale immediately; worth reconsidering if per-line provenance turns out to
+matter for debugging a bad pick.
 
 ### Phase 3 — Discovery loop (live, not pure unit)
 
@@ -656,16 +704,20 @@ feat(cli): em provided sync/drop (optional follow-up)
 | Piggy-back host `::gentoo` into prefix repos.conf | Exact Tier-1 provided CPNs |
 | Own-tree repos.conf + sync-uri template | glibc-in-provided exception |
 | Linux → prefix profile default; Darwin → newest + warn | Auto-drop heuristics |
-| `select profile` respects `--local`/`--prefix`/`--root` | |
 | make.profile link once path chosen | |
 | Managed provided block rewrite | |
 | Static floor write path | |
 | Unit tests: config-root flip needs both repo+profile | |
 | `--prefix` does not auto-write provided | |
 
-**Suggested first PR:** Phase **1a** only (repos.conf + make.profile +
-prefix-profile default + select-topology + tests).
-**Second PR:** Phase **1b** provided block. Then live `-p` for Tier-1 freeze.
+(`select profile` respecting `--local`/`--prefix`/`--root` was in this table
+as not-yet-done; it's already shipped, see Step 2/Step 3 sections above.)
+
+~~**Suggested first PR:** Phase **1a** only... **Second PR:** Phase **1b**...~~
+— **superseded**: both landed together 2026-08-09 (`portage-cli/src/setup/{repo,local_profile,provided}.rs`).
+**Next up:** live `-p --local DIR toolchain --setup` against the freshly-provided
+prefix to check whether the current Tier-1 set actually clears the empty-VDB
+hard cycle, or needs another round (Phase 3's original discovery loop).
 
 ---
 
