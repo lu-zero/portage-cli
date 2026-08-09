@@ -9,6 +9,7 @@
 //! See [PMS 12.3](https://projects.gentoo.org/pms/9/pms.html#available-commands).
 
 pub(crate) mod die;
+pub(crate) mod eapply;
 pub(crate) mod econf;
 pub(crate) mod einstall;
 pub(crate) mod emake;
@@ -25,6 +26,7 @@ pub(crate) mod use_flag;
 pub(crate) mod version_query;
 
 pub(crate) use die::DieCommand;
+pub(crate) use eapply::EapplyCommand;
 pub(crate) use econf::EconfCommand;
 pub(crate) use einstall::EinstallCommand;
 pub(crate) use emake::EmakeCommand;

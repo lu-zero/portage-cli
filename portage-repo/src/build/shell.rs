@@ -177,71 +177,7 @@ assert() {
         [[ $# -gt 0 ]] && die "$@" || die "assert: command failed"
     done
 }
-__eapply_patch() {
-    local patch=$1 output
-    shift
-    # -p1 sane default, -f non-interactive, -g0 no VCS, no stray .orig backups.
-    if output=$(LC_ALL= LC_MESSAGES=C patch -p1 -f -g0 --no-backup-if-mismatch "$@" < "${patch}" 2>&1); then
-        # Quiet on a clean apply; surface fuzz so it isn't silently absorbed.
-        # Must end with a success status: the caller uses `|| return`, so a
-        # falsy `[[ ]]` test here would abort the patch loop after one file.
-        [[ ${output} == *[0-9]" with fuzz "[0-9]* ]] && printf '%s\n' "${output}"
-        return 0
-    else
-        printf '%s\n' "${output}" >&2
-        die "eapply: patch failed: ${patch}"
-    fi
-}
-eapply() {
-    # PMS 11.3.3: a `--` separates patch options (left) from operands (right);
-    # absent `--`, options must precede operands. A directory operand applies
-    # its direct *.diff/*.patch children in C-collation order.
-    local LC_ALL LC_COLLATE=C f path i
-    local -a operands=() options=()
-    while (( $# )); do
-        [[ $1 == -- ]] && break
-        options+=("$1")
-        shift
-    done
-    if (( $# )); then
-        shift
-        operands=("$@")
-    else
-        set -- "${options[@]}"
-        options=()
-        while (( $# )); do
-            if [[ $1 == -* ]]; then
-                (( ${#operands[@]} )) && die "eapply: options must precede non-option arguments"
-                options+=("$1")
-            else
-                operands+=("$1")
-            fi
-            shift
-        done
-    fi
-    (( ${#operands[@]} )) || die "eapply: no operands were specified"
-    for path in "${operands[@]}"; do
-        if [[ -d ${path} ]]; then
-            i=0
-            for f in "${path}"/*; do
-                [[ ${f} == *.diff || ${f} == *.patch ]] || continue
-                (( i++ == 0 )) && einfo "Applying patches from ${path} ..."
-                __eapply_patch "${f}" "${options[@]}" || return
-            done
-            (( i == 0 )) && die "No *.{patch,diff} files in directory ${path}"
-        else
-            __eapply_patch "${path}" "${options[@]}" || return
-        fi
-    done
-    # Success: callers may use `eapply … || die`, so don't leak a non-zero
-    # status from the final arithmetic/test above.
-    return 0
-}
 eapply_user() { :; }
-get_libdir() {
-    local libdir_var="LIBDIR_${ABI}"
-    [[ -n ${ABI} && -n ${!libdir_var} ]] && echo "${!libdir_var}" || echo "lib"
-}
 "#;
 
 /// Sandbox path-registration functions as no-ops (real enforcement is M3).
@@ -668,6 +604,13 @@ impl EbuildShell {
         shell.register_builtin(
             "einstall",
             brush_core::builtins::builtin::<commands::EinstallCommand, _>(),
+        );
+        // eapply (PMS 11.3.3, EAPI >= 6): migrated from bash (PHASE_DEFAULT_FUNCTIONS)
+        // to a Rust builtin — PMS's option/operand split around `--` is fragile
+        // arg parsing, the same class of bug the do*/new* helper migration targeted.
+        shell.register_builtin(
+            "eapply",
+            brush_core::builtins::builtin::<commands::EapplyCommand, _>(),
         );
 
         // Install helpers migrated from bash (INSTALL_HELPERS) to Rust builtins
