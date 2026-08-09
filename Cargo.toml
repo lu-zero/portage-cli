@@ -148,6 +148,15 @@ inherits = "release"
 debug = 1
 lto = false
 
+# Thin LTO: real cross-crate optimization (unlike profiling's lto=false)
+# at a fraction of release's full-LTO link cost. Use `--profile quick`
+# while iterating; switch to `--release` for anything you'll benchmark or
+# ship. ~4x faster than release to build (both fresh and incremental) at
+# the 2026-08-09 measurement — see todo/for-sonnet.md that date.
+[profile.quick]
+inherits = "release"
+lto = "thin"
+
 # Workspace crates stay opt-level 0 for fast rebuilds; every dependency
 # (gix-pack, zlib, reqwest, …) is fully optimised. Plain `cargo build` then
 # has usable `em sync` without needing `--release` for the gix stack alone.
