@@ -52,20 +52,10 @@ pub fn env_files_for(portage_dirs: &[PathBuf], cpv: &Cpv, slot: Option<&str>) ->
 /// the point it runs (it builds one flat, atom-keyed override list up front,
 /// matched per candidate later, the same shape `package.use` already uses).
 pub fn load_package_env(path: &Path) -> Vec<(Dep, Vec<String>)> {
-    if !path.exists() {
+    use crate::repo::util::{ConfigFilesMode, list_config_files};
+
+    let Ok(files) = list_config_files(path, ConfigFilesMode::Flat) else {
         return Vec::new();
-    }
-    let files: Vec<PathBuf> = if path.is_dir() {
-        let mut v: Vec<PathBuf> = std::fs::read_dir(path)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_file())
-            .collect();
-        v.sort();
-        v
-    } else {
-        vec![path.to_path_buf()]
     };
 
     let mut result = Vec::new();

@@ -86,6 +86,10 @@ pub use repo::sets::{SetResolver, is_set_ref, set_name};
 /// filename order, dotfiles and `~` backups skipped). Shared with `/etc/portage`
 /// `package.*` consumers so they match the profile stack exactly.
 pub use repo::util::read_lines as read_config_lines;
+/// Expand a Portage config path that may be a file or a directory of fragments.
+pub use repo::util::{
+    ConfigFilesMode, config_basename_included, iter_config_files, list_config_files,
+};
 pub use repo::{
     CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository,
     RepositoryBuilder,

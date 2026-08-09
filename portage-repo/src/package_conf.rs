@@ -9,8 +9,9 @@
 //!
 //! where `atom` is a PMS dependency atom and `value` is any whitespace-free
 //! token (USE flag, keyword, licence, env-file name, etc.).  The path may be
-//! either a single file or a directory; in the directory case every non-hidden
-//! file is loaded in alphabetical order.
+//! either a single file or a directory; in the directory case every regular
+//! file is loaded in alphabetical order (dotfiles and `~` backups skipped —
+//! [`crate::list_config_files`] / [`crate::ConfigFilesMode::Flat`]).
 //!
 //! Inline comments after values are preserved verbatim.  Round-trip
 //! serialisation is byte-identical to the input when no edits are made.
@@ -86,27 +87,18 @@ impl PackageConf {
 
     /// Load a directory, returning one `PackageConf` per file in alphabetical order.
     pub fn load_dir(path: &Utf8Path) -> Result<Vec<(Utf8PathBuf, PackageConf)>> {
-        let mut files: Vec<Utf8PathBuf> = std::fs::read_dir(path)
-            .map_err(|e| Error::Io {
-                path: path.to_path_buf().into_std_path_buf(),
-                source: e,
-            })?
-            .flatten()
-            .filter_map(|e| {
-                let p = Utf8PathBuf::try_from(e.path()).ok()?;
-                let name = p.file_name()?;
-                if !name.starts_with('.') && p.is_file() {
-                    Some(p)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        files.sort();
+        use crate::repo::util::{ConfigFilesMode, list_config_files};
 
-        files
+        list_config_files(path.as_std_path(), ConfigFilesMode::Flat)?
             .into_iter()
             .map(|f| {
+                let f = Utf8PathBuf::try_from(f).map_err(|e| Error::Io {
+                    path: e.into_path_buf(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "non-utf8 config path",
+                    ),
+                })?;
                 let pc = Self::load_file(&f)?;
                 Ok((f, pc))
             })
@@ -115,22 +107,28 @@ impl PackageConf {
 
     /// Load from a file path or a directory of files.
     ///
-    /// Directory entries are read in alphabetical order and concatenated.
+    /// Directory entries are read in alphabetical order and concatenated
+    /// ([`ConfigFilesMode::Flat`](crate::ConfigFilesMode)).
     /// Use `load_dir` when you need per-file identity for editing.
     pub fn load(path: &Utf8Path) -> Result<Self> {
-        if path.is_dir() {
-            let mut combined = String::new();
-            for f in Self::load_dir(path)?.into_iter().map(|(p, _)| p) {
-                let chunk = std::fs::read_to_string(&f).map_err(|e| Error::Io {
-                    path: f.to_path_buf().into_std_path_buf(),
-                    source: e,
-                })?;
-                combined.push_str(&chunk);
-            }
-            Self::parse(combined)
-        } else {
-            Self::load_file(path)
+        use crate::repo::util::{ConfigFilesMode, list_config_files};
+
+        let files = list_config_files(path.as_std_path(), ConfigFilesMode::Flat)?;
+        if files.is_empty() && !path.exists() {
+            return Self::load_file(path); // preserve previous missing-file error
         }
+        if files.len() == 1 && files[0] == path.as_std_path() {
+            return Self::load_file(path);
+        }
+        let mut combined = String::new();
+        for f in files {
+            let chunk = std::fs::read_to_string(&f).map_err(|e| Error::Io {
+                path: f,
+                source: e,
+            })?;
+            combined.push_str(&chunk);
+        }
+        Self::parse(combined)
     }
 
     /// Parse from an owned string.

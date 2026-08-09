@@ -13,28 +13,20 @@ use crate::repo::util;
 
 /// Resolve `path` to the `.conf` files it contributes, in application order:
 /// a single file as itself, or (if a directory) every `*.conf` file within,
-/// sorted by name. Missing paths are silently skipped (empty result) —
-/// callers treat an absent config file/dir as "nothing configured here".
+/// sorted by name (dotfiles and `~` backups skipped). Missing paths are
+/// silently skipped (empty result) — callers treat an absent config file/dir
+/// as "nothing configured here".
 pub fn collect_conf_files(path: &Path) -> Result<Vec<PathBuf>> {
-    let meta = match std::fs::metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(util::io_err(path, e)),
-    };
-    if meta.is_file() {
-        return Ok(vec![path.to_path_buf()]);
+    let files = util::list_config_files(path, util::ConfigFilesMode::Flat)?;
+    // A lone file (e.g. `repos.conf` without a `.conf` suffix) is kept as-is;
+    // directory fragments must end in `.conf`.
+    if files.len() == 1 && files[0] == path {
+        return Ok(files);
     }
-    if !meta.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut files: Vec<PathBuf> = std::fs::read_dir(path)
-        .map_err(|e| util::io_err(path, e))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
+    Ok(files
+        .into_iter()
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("conf"))
-        .collect();
-    files.sort();
-    Ok(files)
+        .collect())
 }
 
 /// Parse one file's contents into `sections` (accumulated across files —

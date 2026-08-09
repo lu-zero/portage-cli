@@ -783,31 +783,10 @@ fn collect_stack(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Vec<Prof
 
 /// Read non-blank, non-comment lines from a profile file or directory.
 ///
-/// If `path` is a directory (profile-file-dirs, PMS 5.2.5), all regular
-/// files inside are read in sorted order and their lines concatenated.
-/// Returns an empty `Vec` if `path` does not exist.
+/// Directory form is PMS 5.2.4 / [`util::read_lines`] (flat, sorted, skip
+/// `.…` / `…~`). Returns an empty `Vec` if `path` does not exist.
 fn read_profile_file(path: &Path) -> Result<Vec<String>> {
-    if path.is_dir() {
-        let mut children: Vec<PathBuf> = std::fs::read_dir(path)
-            .map_err(|e| Error::Io {
-                path: path.to_path_buf(),
-                source: e,
-            })?
-            .filter_map(|e| e.ok())
-            .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-            .map(|e| e.path())
-            .collect();
-        children.sort();
-        let mut lines = Vec::new();
-        for child in children {
-            if child.is_file() {
-                lines.extend(util::read_lines(&child)?);
-            }
-        }
-        Ok(lines)
-    } else {
-        util::read_lines(path)
-    }
+    util::read_lines(path)
 }
 
 /// Merge incremental USE-flag lists from a sequence of profile-file results.
