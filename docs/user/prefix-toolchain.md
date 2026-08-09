@@ -6,11 +6,11 @@ not just install it. Live-verified end to end 2026-08-08 (commit `2db6198`):
 `llvm-core/clang` built successfully under a `--prefix`'s own gcc, and the
 installed `clang-22` compiled, linked, and ran a real hello-world.
 
-Topology background: [`root-topology.md`](./root-topology.md). Design
+Topology background: [`root-topology.md`](../design/root-topology.md). Design
 context for the wider multi-root bug class:
-[`em-prefix-experiment.md`](./em-prefix-experiment.md). For `--local`
+[`em-prefix-experiment.md`](../design/em-prefix-experiment.md). For `--local`
 (standalone, no host sharing) see
-[`local-bootstrap.md`](./local-bootstrap.md).
+[`local-bootstrap.md`](../design/local-bootstrap.md).
 
 ---
 
@@ -52,7 +52,7 @@ The same `LD_LIBRARY_PATH` gap also broke the **build itself**: a build-time
 tool a package compiles and re-executes mid-build (e.g. `llvm-core/llvm`'s
 own `llvm-min-tblgen`) hit the identical error. Fixed the same way, in
 `em`'s own build shell (not `em active`'s concern — see
-[`em-prefix-experiment.md`](./em-prefix-experiment.md)'s "Related code"
+[`em-prefix-experiment.md`](../design/em-prefix-experiment.md)'s "Related code"
 table).
 
 ## Negative control: `em select gcc` isn't optional
@@ -69,7 +69,7 @@ against). Giving `P` its own gcc is what makes the difference.
 keyed purely on the activated path's own `ld.so.conf`. Confirmed live: the
 same already-bootstrapped toolchain, activated via `em --local DIR active
 set` instead of `--prefix`, ran `clang-22 --version` and compiled+linked+ran
-a hello-world identically. See [`local-bootstrap.md`](./local-bootstrap.md)
+a hello-world identically. See [`local-bootstrap.md`](../design/local-bootstrap.md)
 for how a `--local` gets its own gcc in the first place (harder than
 `--prefix`: no host `DEPEND` sharing, needs `package.provided` seeding to
 bootstrap from empty).

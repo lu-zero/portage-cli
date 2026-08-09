@@ -3,7 +3,7 @@
 //! directories, the overlay search-path `bashrc`, and a `make.conf` placeholder
 //! it needs.
 //!
-//! Three modes (docs/root-topology.md § "Lifecycle"):
+//! Three modes (docs/design/root-topology.md § "Lifecycle"):
 //! - `--local` (standalone prefix): EPREFIX set, base == target. Full closure
 //!   into `~/.gentoo`; builds its own python via `toolchain --setup`, so no
 //!   host-python symlinks. The `BASHRC_LOCAL` recipe (EPREFIX-based) covers the
@@ -296,7 +296,7 @@ pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
              (the host / is never bootstrapped)"
         );
     }
-    // Three layout modes (docs/root-topology.md § "Lifecycle"):
+    // Three layout modes (docs/design/root-topology.md § "Lifecycle"):
     // - standalone prefix (--local): eprefix set, base == target. Full closure
     //   into ~/.gentoo; builds its own python, so NO host-python symlinks.
     // - overlay (--prefix): eprefix set, base != target (host is base). Borrows
@@ -484,7 +484,7 @@ fn link_host_pythons(eroot: &Utf8Path) -> Result<()> {
 /// only. Ebuilds often hardcode prefix-absolute paths; without a full Prefix
 /// userland those must resolve somehow. Layout (`bin`→`usr/bin`) comes from
 /// merging baselayout — this list is host binary content only. See
-/// `docs/em-prefix-experiment.md`.
+/// `docs/design/em-prefix-experiment.md`.
 const HOST_BASE_TOOLS: &[&str] = &[
     "bash", "sh", "xargs", "find", "perl", "install", "true", "grep", "env", "ed",
 ];

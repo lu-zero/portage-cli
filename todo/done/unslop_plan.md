@@ -267,8 +267,8 @@ cargo doc --workspace --exclude portage-bench --no-deps  # ✅ PASS (0 warnings)
 
 ## 📚 Related Documentation
 
-- [`docs/architecture.md`](../docs/architecture.md) - Architecture reference
-- [`AGENTS.md`](../AGENTS.md) - Project conventions
+- [`docs/architecture.md`](../../docs/design/architecture.md) - Architecture reference
+- [`AGENTS.md`](../../AGENTS.md) - Project conventions
 - [`todo/`](./) - Other tracking documents
 
 ---

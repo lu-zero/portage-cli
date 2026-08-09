@@ -99,7 +99,7 @@ had, discovered only by reading full `-vp` output line by line).
 
 For the full **toolchain → stage1 → stage3** flow (native and cross) and how
 to drive it through a crossdev-stages sandbox, see the draft
-[`stages-and-testing.md`](./stages-and-testing.md). Below is the shorter
+[`stages-and-testing.md`](../user/stages-and-testing.md). Below is the shorter
 sandbox recipe used by `test-scripts/`.
 
 Some of this project's surface can only be verified by actually building
@@ -127,7 +127,7 @@ not as a gate that runs every time.
 
 #### `crossdev-stages` sandbox recipe
 
-See [`test-scripts/`](../test-scripts/README.md) for ready-to-run,
+See [`test-scripts/`](../../test-scripts/README.md) for ready-to-run,
 self-contained scripts that automate this recipe end-to-end (build `em`,
 fresh sandbox, wire mounts, drive scenarios, tear down) — read on for the
 manual step-by-step this recipe follows, or if you're writing a new script.

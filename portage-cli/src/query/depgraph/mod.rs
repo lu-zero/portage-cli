@@ -105,7 +105,7 @@ pub struct DepgraphOpts<'a> {
     /// when the user pinned a repo with `--repo`.
     pub multi_repo: bool,
     /// The resolved root set (config / base / target / BROOT). See
-    /// docs/root-model.md. `roots.satisfaction_root(DepClass::Bdepend)`
+    /// docs/user/root-model.md. `roots.satisfaction_root(DepClass::Bdepend)`
     /// answers the Host-routed BDEPEND/IDEPEND question directly — `roots`
     /// carries BROOT correctly even under an active `--target` sysroot
     /// substitution, so a separate `host_roots` field is no longer needed

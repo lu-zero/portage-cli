@@ -3,7 +3,7 @@
 Reference for reasoning about `em crossdev` fidelity — especially later
 **clang / LLVM (`-L`)** work. Companion plan: drop the planner-stamped
 `BuildClass` re-classifier for cross-category packages
-([`todo/drop-buildclass.md`](../todo/drop-buildclass.md)).
+([`todo/drop-buildclass.md`](../../todo/drop-buildclass.md)).
 
 > **Names.** **bash-crossdev** = Gentoo’s `/usr/bin/crossdev`. **`em
 > crossdev`** = this project. **host emerge** = ordinary emerge/`em` of
@@ -141,7 +141,7 @@ Planner-stamped `BuildClass` was dual authority next to package.env and has
 been removed. Tool selection uses the package.env CTARGET/`TARGET_ABI` sniff;
 PATH/EPREFIX/ESYSROOT specials use a narrow host-codegen PN allowlist
 (`EbuildShell::is_cross_host_codegen`). See
-[`todo/drop-buildclass.md`](../todo/drop-buildclass.md).
+[`todo/drop-buildclass.md`](../../todo/drop-buildclass.md).
 
 ---
 
@@ -157,7 +157,7 @@ When revisiting LLVM/clang cross under `--prefix` / `--local` / bare host:
    tree on the same tuple if available.
 5. Ordinary `em --target T -b llvm-core/clang` is the **other** job
    (cross-emerge-shaped), not this matrix — keep scenarios separate
-   ([`todo/clang-crossbuild-prefix-local-test-plan.md`](../todo/clang-crossbuild-prefix-local-test-plan.md)).
+   ([`todo/clang-crossbuild-prefix-local-test-plan.md`](../../todo/clang-crossbuild-prefix-local-test-plan.md)).
 
 ---
 
@@ -180,7 +180,7 @@ rg -n 'cross_llvm|cross-\*' /var/db/repos/gentoo/eclass/crossdev.eclass
 
 ## See also
 
-- [`docs/crossdev.md`](./crossdev.md) — user-facing `em crossdev`  
+- [`docs/crossdev.md`](../user/crossdev.md) — user-facing `em crossdev`  
 - [`docs/root-topology.md`](./root-topology.md) — roots / outer EROOT / use_outer_eroot  
-- [`todo/drop-buildclass.md`](../todo/drop-buildclass.md) — removal plan  
-- [`todo/root-topology-refactor.md`](../todo/root-topology-refactor.md) — Track A history  
+- [`todo/drop-buildclass.md`](../../todo/drop-buildclass.md) — removal plan  
+- [`todo/root-topology-refactor.md`](../../todo/root-topology-refactor.md) — Track A history  

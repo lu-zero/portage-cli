@@ -275,7 +275,7 @@ async fn emerge_atoms_inner(
     // command shouldn't silently guess), but that error now names the
     // installed candidate and suggests `-u` — real emerge just dumps the
     // candidate list with no such hint, regardless of any flag. See
-    // docs/architecture.md's "Ambiguity and partial-failure policy" section.
+    // docs/design/architecture.md's "Ambiguity and partial-failure policy" section.
     let mode = if merge_flags.ask {
         query::ResolveMode::Ask
     } else if merge_flags.update {
@@ -283,7 +283,7 @@ async fn emerge_atoms_inner(
     } else {
         query::ResolveMode::Error
     };
-    // Root model (docs/root-model.md): config from roots.config, installed
+    // Root model (docs/user/root-model.md): config from roots.config, installed
     // view = VDB(base) ∪ VDB(target), merge into target. `use_outer_eroot`
     // skips `--target` sysroot substitution for host-side `cross-*` steps.
     // Use `outer_roots()`, not `base_roots()`: the latter is BROOT (host `/`

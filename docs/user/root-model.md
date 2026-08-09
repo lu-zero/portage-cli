@@ -155,7 +155,7 @@ for native `--prefix` within-run visibility).
 
 **Within-run trim (2026-06):** after `install_order`, a post-solve pass drops
 entries only needed for `BDEPEND` already satisfied on BROOT (host/prefix VDB)
-or earlier plan entries — same growth model as [`preflight`](../portage-cli/src/preflight.rs).
+or earlier plan entries — same growth model as [`preflight`](../../portage-cli/src/preflight.rs).
 Runs only with `--with-bdeps`; see `depgraph/bdepend_trim.rs`.
 
 ### Cross (`CBUILD ≠ CHOST`) — why per-edge filtering is not enough

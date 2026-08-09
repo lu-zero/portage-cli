@@ -260,7 +260,7 @@ fn get_current_clang_slot(globals: &Cli) -> Option<String> {
 ///
 /// A bare slot found in both roots resolves to the **prefix's**, matching the
 /// shadowing the planner already applies to `VDB(R) ∪ VDB(P)`
-/// (`docs/root-model.md`). Pass `@host` to override.
+/// (`docs/user/root-model.md`). Pass `@host` to override.
 fn resolve_slot<'a>(slots: &'a [ClangSlot], arg: &str) -> Result<&'a ClangSlot> {
     let (name, origin) = match arg.split_once('@') {
         Some((name, origin)) => {

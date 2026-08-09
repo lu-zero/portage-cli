@@ -238,7 +238,7 @@ async fn setup(
     // `init_target` is `-p`/`-a`-aware. `FillGapsOnly`: implied config for
     // `--setup` only creates missing files so hand edits survive. Adding
     // `--ex-pkg` to an already-init'd target needs an explicit `--init-target`
-    // (see docs/crossdev.md).
+    // (see docs/user/crossdev.md).
     init_target(
         target,
         globals,

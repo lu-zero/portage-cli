@@ -282,7 +282,7 @@ pub(crate) async fn apply_profile_env(
     config_overlay: Option<&Utf8Path>,
 ) -> Result<bool> {
     // PORTAGE_CONFIGROOT: profile/make.conf come from here (host unless --root
-    // / --config-root offsets it). See docs/root-model.md.
+    // / --config-root offsets it). See docs/user/root-model.md.
     let base = config_root.unwrap_or_else(|| Utf8Path::new("/"));
     let Ok(profile_path) =
         std::fs::canonicalize(base.join("etc/portage/make.profile").as_std_path())
@@ -1097,13 +1097,13 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             .context("exporting package.env environment")?;
     }
 
-    // Root model (docs/root-model.md): PORTAGE_CONFIGROOT = config_root, and
+    // Root model (docs/user/root-model.md): PORTAGE_CONFIGROOT = config_root, and
     // SYSROOT/ESYSROOT = the build-against base (only when it differs from the
     // install target, i.e. a --prefix overlay; otherwise SYSROOT = ROOT).
     //
     // NB: in overlay mode (target ≠ base) a package merged into the target is
     // not yet visible to later builds in the run — that needs a merged sysroot,
-    // which is shelved (see docs/root-model.md "Overlay support — shelved").
+    // which is shelved (see docs/user/root-model.md "Overlay support — shelved").
     let ld_library_path = build_ld_library_path(eprefix, sysroot);
     shell.set_build_roots(
         config_root,

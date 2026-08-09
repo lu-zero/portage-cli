@@ -1,7 +1,7 @@
 # Drop `BuildClass` (cross-tool stamp) — plan and post-mortem
 
 Status: 🟡 landed **2026-08-07** — package.env letter-faithful (llvm host); HostCodegen PN allowlist; BuildClass/CrossRole/EM_BUILD_CLASS removed. Live verify (Step 5) still open  
-Companion reference: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md)  
+Companion reference: [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md)  
 Related: Track A in [[root-topology-refactor]] (landed the stamp we now want to unwind)
 
 ---
@@ -215,7 +215,7 @@ Record results under the matrix doc or a dated note.
 
 ### Step 6 (later) — Clang support reasoning
 
-Use [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md) when
+Use [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md) when
 revisiting llvm/clang crossdev: env letter fidelity first, then whether
 HostCodegen for `clang-crossdev-wrappers` is enough under `--prefix` /
 `--local`. Do not reintroduce a full BuildClass to “fix” clang.

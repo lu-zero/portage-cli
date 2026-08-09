@@ -2,7 +2,7 @@
 
 How a fresh **self-contained** unprivileged prefix gets a working toolchain
 without resolving an irreducible hard cycle from absolute zero. Implementation
-tracker: [`todo/local-bootstrap-provided.md`](../todo/local-bootstrap-provided.md).
+tracker: [`todo/local-bootstrap-provided.md`](../../todo/local-bootstrap-provided.md).
 
 Topology background: [`root-topology.md`](./root-topology.md) scenario **2b**.
 
@@ -243,7 +243,7 @@ em --local toolchain --setup  # first real merges
 — works on a generic Linux box and (later) macOS with Xcode CLT, without
 hand-editing CPVs.
 
-Details and step list: [`todo/local-bootstrap-provided.md`](../todo/local-bootstrap-provided.md).
+Details and step list: [`todo/local-bootstrap-provided.md`](../../todo/local-bootstrap-provided.md).
 
 ---
 
@@ -258,7 +258,7 @@ Details and step list: [`todo/local-bootstrap-provided.md`](../todo/local-bootst
 Providing stage-product CPNs (gcc/glibc/binutils) can make those steps
 no-op while PATH still uses the host — fine only as an explicit temporary
 exception, not the default. Full policy:
-[`todo/local-bootstrap-provided.md`](../todo/local-bootstrap-provided.md).
+[`todo/local-bootstrap-provided.md`](../../todo/local-bootstrap-provided.md).
 
 **HostCodegen / cross packages** are a different topic (host emerge of
 `cross-*` after native bootstrap) — see
@@ -294,7 +294,7 @@ exception, not the default. Full policy:
 ## See also
 
 - [`docs/root-topology.md`](./root-topology.md) — 2b `--local`, lifecycle  
-- [`docs/crossdev.md`](./crossdev.md) — cross after native bootstrap  
-- [`docs/prefix-toolchain.md`](./prefix-toolchain.md) — the `--prefix` equivalent, live-verified 2026-08-08  
-- [`todo/local-bootstrap-provided.md`](../todo/local-bootstrap-provided.md) — implementation plan  
-- [`todo/clang-crossbuild-prefix-local-test-plan.md`](../todo/clang-crossbuild-prefix-local-test-plan.md) — Scenario B blocked on this  
+- [`docs/crossdev.md`](../user/crossdev.md) — cross after native bootstrap  
+- [`docs/prefix-toolchain.md`](../user/prefix-toolchain.md) — the `--prefix` equivalent, live-verified 2026-08-08  
+- [`todo/local-bootstrap-provided.md`](../../todo/local-bootstrap-provided.md) — implementation plan  
+- [`todo/clang-crossbuild-prefix-local-test-plan.md`](../../todo/clang-crossbuild-prefix-local-test-plan.md) — Scenario B blocked on this  

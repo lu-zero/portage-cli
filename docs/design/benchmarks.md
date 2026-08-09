@@ -5,8 +5,8 @@ the central cross-crate harness, and ad hoc wall-clock comparisons against
 real `emerge`.
 
 For historical data, tables, and machine-specific reproduction notes, see
-[`benchmarks/BENCHMARKS.md`](../benchmarks/BENCHMARKS.md) (the canonical,
-continuously-updated record) and [`benchmarks/README.md`](../benchmarks/README.md).
+[`benchmarks/BENCHMARKS.md`](../../benchmarks/BENCHMARKS.md) (the canonical,
+continuously-updated record) and [`benchmarks/README.md`](../../benchmarks/README.md).
 This page is the quick-start map of *where* things live and *what to run*;
 it intentionally doesn't duplicate historical numbers.
 

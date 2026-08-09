@@ -27,7 +27,7 @@ pub struct VdbEntry {
 
 /// Installed view for **ROOT** / RDEPEND / merge filtering / action tags.
 ///
-/// See docs/root-model.md: host-config stage uses `VDB(target)` only; prefix
+/// See docs/user/root-model.md: host-config stage uses `VDB(target)` only; prefix
 /// overlay uses `VDB(base) ∪ VDB(target)`; host uses `VDB(/)`.
 ///
 /// `--emptytree` does **not** clear this view — emerge still reads the VDB for

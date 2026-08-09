@@ -203,7 +203,7 @@ impl CrossTarget {
 ///
 /// LLVM runtimes (R/U/A/P) are **host** env in bash-crossdev even though
 /// ebuilds install under `/usr/${CTARGET}` — see
-/// [`docs/bash-crossdev-matrix.md`](../../../docs/bash-crossdev-matrix.md).
+/// [`docs/design/bash-crossdev-matrix.md`](../../../docs/design/bash-crossdev-matrix.md).
 ///
 /// Membership, not order, matters to the lookup.
 const CROSS_PACKAGE_ARCH: &[(&str, &str, PackageArch)] = &[

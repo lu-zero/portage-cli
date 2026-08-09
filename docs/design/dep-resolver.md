@@ -66,7 +66,7 @@ portage (`NS` = new in new slot; em does not yet distinguish slot-update install
    (was 316 → now **182**, exact parity with `emerge --with-bdeps=n` = 182,
    verified 2026-06-18). Crossdev dual-root scheduling (`BDEPEND` merge
    to `/`, `RDEPEND` merge to `ROOT`, same CPV twice) is **not** implemented —
-   see [root-model.md § BDEPEND / crossdev](./root-model.md#bdepend-rdepend-and-with-bdeps).
+   see [root-model.md § BDEPEND / crossdev](../user/root-model.md#bdepend-rdepend-and-with-bdeps).
 
    Without this, even with `InstalledPolicy::Favor`, the solver still tried to
    satisfy the build-time deps of already-installed packages — pulling in old

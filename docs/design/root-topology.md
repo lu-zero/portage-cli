@@ -2,7 +2,7 @@
 
 This is the design reference for how `em` models the filesystem locations a
 Gentoo build touches. It supersedes the scenario narrative in
-[`root-model.md`](./root-model.md) (which stays as the historical, builder-side
+[`root-model.md`](../user/root-model.md) (which stays as the historical, builder-side
 detail reference). Read this first; cross-link into `root-model.md` only for
 the `bashrc`/overlay recipe and the per-phase env (`SYSROOT`/`ESYSROOT`/`BROOT`
 assignment in `run_phase`). For **EPREFIX leakage / multi-root path
@@ -14,7 +14,7 @@ workarounds** (baselayout, host-tool links, wrong probes) see
 > `satisfaction_root(DepClass)` directly. Historical dead ends: `RootSet` /
 > `RootTopology` enums (removed), and **`BuildClass`** (landed then dropped —
 > dual authority next to package.env; see
-> [`todo/drop-buildclass.md`](../todo/drop-buildclass.md) and
+> [`todo/drop-buildclass.md`](../../todo/drop-buildclass.md) and
 > [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md)). Older "variant enum"
 > sections below are historical; the **Override semantics** table and
 > `cli.rs` `base_roots` are the live contract.
@@ -379,7 +379,7 @@ on the topology being bootstrapped.
 
 Creates the directory skeleton, `make.conf`, `bashrc`, and (for self-contained
 roots) `repos.conf` + `make.profile`. Implemented in
-[`setup.rs`](../portage-cli/src/setup.rs); never touches `/`.
+[`setup.rs`](../../portage-cli/src/setup.rs); never touches `/`.
 
 | target | what `em setup` writes |
 |---|---|
@@ -388,7 +388,7 @@ roots) `repos.conf` + `make.profile`. Implemented in
 | `--root R` (self-contained offset) | skeleton + self-contained `make.conf` (with real `MAKEOPTS`/`ACCEPT_KEYWORDS` — this is the *only* make.conf it reads) + `repos.conf` + `make.profile` symlinked to the host's resolved profile |
 
 The `bashrc` distinction is load-bearing
-([`setup.rs:131-157`](../portage-cli/src/setup.rs)): an overlay (`--prefix`,
+([`setup.rs:131-157`](../../portage-cli/src/setup.rs)): an overlay (`--prefix`,
 `--local`-as-overlay) needs CPPFLAGS/LDFLAGS injection so the compiler sees the
 delta layered over the host; a self-contained root (`--root`, `--local`-as-
 standalone) must **not** get that injection — it actively breaks builds by
@@ -407,7 +407,7 @@ em --root /var/tmp/stage1 stages --stage1
 ```
 
 `toolchain --setup` calls `ensure_self_contained_prefix` first
-([`crossdev/mod.rs:710`](../portage-cli/src/crossdev/mod.rs)) — runs `em setup`
+([`crossdev/mod.rs:710`](../../portage-cli/src/crossdev/mod.rs)) — runs `em setup`
 if the root is non-`/`, writes `repos.conf`/`make.profile` — so it is
 self-sufficient: a fresh empty `--root` becomes a buildable toolchain in one
 command. Requires `--root <dir>`; a toolchain into `/` is meaningless (use the
@@ -545,7 +545,7 @@ Cross needs three things the native cases don't: a way to see
 `cross-<tuple>` packages are now **derived on the fly** from `::gentoo` via a
 `Location::Alias` repos.conf entry (no on-disk symlink overlay), written by
 `write_alias_repo_conf` in
-[`crossdev/mod.rs`](../portage-cli/src/crossdev/mod.rs):
+[`crossdev/mod.rs`](../../portage-cli/src/crossdev/mod.rs):
 
 ```
 # Privileged: classic crossdev into /usr/<T>  (config writes to /etc/portage)
@@ -593,7 +593,7 @@ not a structural one.
 
 
 The code calls both "stage1" but they compose
-([`crossdev/stages.rs`](../portage-cli/src/crossdev/stages.rs)):
+([`crossdev/stages.rs`](../../portage-cli/src/crossdev/stages.rs)):
 
 1. **Toolchain stage1** (`toolchain_plan`, `BootstrapKind::Cross`/`Native`) —
    the chicken-and-egg bootstrap of the *compiler itself*: binutils → headers
@@ -663,7 +663,7 @@ variant refactor's payoff is that both sides ask
   was dual authority next to **package.env** and was removed. Host-vs-target
   for cross packages is package.env + `host_codegen` PN specials (see
   [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md),
-  [`todo/drop-buildclass.md`](../todo/drop-buildclass.md)).
+  [`todo/drop-buildclass.md`](../../todo/drop-buildclass.md)).
   `bypass_cross_root` was renamed `use_outer_eroot`.
 - **Removed (2026-08, was "Not pursued")** — the `RootSet` enum
   (`Single`/`Dual`/`Overlayed`): it was a lossy path-only summary whose

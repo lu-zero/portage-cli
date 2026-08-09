@@ -97,4 +97,4 @@ See [`BENCHMARKS.md`](./BENCHMARKS.md) for a consolidated collection of all tabl
 
 ## License
 
-[MIT](LICENSE-MIT)
+[MIT](../LICENSE-MIT)

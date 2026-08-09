@@ -1,6 +1,6 @@
 # Root topology refactor — tracked tasks
 
-Design doc: [`docs/root-topology.md`](../docs/root-topology.md). This file
+Design doc: [`docs/root-topology.md`](../docs/design/root-topology.md). This file
 tracks the implementation work it implies. Status: 🔴 not started · 🟡 partial · ✅ done.
 
 ---
@@ -47,7 +47,7 @@ churn, low payoff now that `satisfaction_root` exists.
 > emerge path), and the stamp is a second authority that can override the
 > env sniff. Plan to drop CrossTool stamps and keep at most a narrow
 > HostCodegen flag: **[[drop-buildclass]]**. Letter/env matrix:
-> [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md). The
+> [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md). The
 > A1–A3 history below stays as the audit trail of what shipped.
 
 The planner already *knows* each entry's class — it has `MergeRoot`

@@ -230,7 +230,7 @@ impl Cli {
 }
 
 impl Cli {
-    /// Resolve the root model (docs/root-topology.md) from the global flags.
+    /// Resolve the root model (docs/design/root-topology.md) from the global flags.
     ///
     /// `--target <tuple>` layers on top of the base model: it targets the crossdev
     /// sysroot `<EROOT>/usr/<tuple>` as both config-root and root (crossdev's
@@ -366,7 +366,7 @@ impl Cli {
             // `--local` (or active local): standalone Gentoo-Prefix, own BROOT.
             // Full closure (base == target == the prefix), self-contained VDB.
             // EPREFIX makes installed scripts relocatable (shebangs reference
-            // ${EPREFIX}/usr/bin/...). See docs/root-topology.md § "Override
+            // ${EPREFIX}/usr/bin/...). See docs/design/root-topology.md § "Override
             // semantics".
             TopologySource::Local(prefix) => {
                 // Prefer the prefix's own make.profile when present so a
@@ -1034,7 +1034,7 @@ mod tests {
     /// `--local` is a standalone prefix: base == target == ~/.gentoo (full
     /// closure, own VDB), not an overlay (base would be the host). Previously
     /// base was None (host) — wrong for cross on a foreign host, where there's
-    /// no host VDB to seed the plan. See docs/root-topology.md § "Override
+    /// no host VDB to seed the plan. See docs/design/root-topology.md § "Override
     /// semantics".
     #[test]
     fn local_is_standalone_not_overlay() {
@@ -1089,7 +1089,7 @@ mod tests {
     /// `--prefix` sets EPREFIX: the installed tree is relocatable, so ebuilds
     /// bake ${EPREFIX}/usr/bin/pythonX.Y into shebangs. The overlay then
     /// symlinks host python there (setup.rs) to satisfy them without building
-    /// a prefix python. See docs/root-topology.md § "Override semantics".
+    /// a prefix python. See docs/design/root-topology.md § "Override semantics".
     #[test]
     fn prefix_sets_eprefix_for_relocatable_overlay() {
         let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
@@ -1108,7 +1108,7 @@ mod tests {
     /// actual install target) is the prefix. These two genuinely differ for an
     /// overlay; conflating them made preflight check jinja2's BDEPEND against
     /// the empty prefix VDB instead of the host, failing the build.
-    /// See docs/root-topology.md § "Override semantics".
+    /// See docs/design/root-topology.md § "Override semantics".
     #[test]
     fn prefix_overlay_broot_is_host_not_prefix() {
         let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);

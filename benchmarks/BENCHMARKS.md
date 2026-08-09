@@ -182,7 +182,7 @@ real `ROOT=<dir> emerge -vp sys-devel/gcc` does not include; post-fix, the
 two plans match exactly (16/16 packages, byte-identical USE flags).
 
 Repro: `cargo build --release -p portage-cli`, then the two-binary
-`hyperfine` recipe in [`docs/benchmarks.md`](../docs/benchmarks.md#before-after-comparisons-for-a-specific-change).
+`hyperfine` recipe in [`docs/benchmarks.md`](../docs/design/benchmarks.md#before-after-comparisons-for-a-specific-change).
 
 ## Locations of Benchmarks
 

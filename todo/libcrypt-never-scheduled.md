@@ -2,7 +2,7 @@
 
 Status: 🟡 reframed **2026-08-07** (not “must always stage1”)  
 Live: Sonnet — pam/libcrypt under setup-only clang world  
-Related: [[for-sonnet]], [`docs/crossdev.md`](../docs/crossdev.md)
+Related: [[for-sonnet]], [`docs/crossdev.md`](../docs/user/crossdev.md)
 
 ## Symptom (setup-only → clang)
 

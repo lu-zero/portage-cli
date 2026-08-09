@@ -9,11 +9,11 @@ separate `crossdev` binary, no on-disk symlink overlay.
 This is the user-facing how-to. For the design rationale (why the category
 is derived on the fly, how root/config resolution works across `--target`/
 `--prefix`/`--local`, the `PackageArch` host/target split) see
-[`root-topology.md`](./root-topology.md). For how **bash-crossdev** assigns
+[`root-topology.md`](../design/root-topology.md). For how **bash-crossdev** assigns
 stage letters and `package.env` (and where `em` still diverges — especially
-LLVM runtimes), see [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md).
+LLVM runtimes), see [`bash-crossdev-matrix.md`](../design/bash-crossdev-matrix.md).
 For **EPREFIX / multi-root path assumptions** (baselayout, host-tool links,
-why probes go wrong), see [`em-prefix-experiment.md`](./em-prefix-experiment.md).
+why probes go wrong), see [`em-prefix-experiment.md`](../design/em-prefix-experiment.md).
 
 ## The model, briefly
 
@@ -41,7 +41,7 @@ why probes go wrong), see [`em-prefix-experiment.md`](./em-prefix-experiment.md)
   (bash-crossdev letters K|L). LLVM runtimes install target code into the
   sysroot via the ebuild but are **host-env** in bash-crossdev (`*` letters
   R/U/A/P) — `em` still marks them target-env today; see the
-  [matrix](./bash-crossdev-matrix.md).
+  [matrix](../design/bash-crossdev-matrix.md).
 - **The sysroot** is `<EROOT>/usr/<tuple>` — `/usr/<tuple>` for a bare/
   privileged setup, `<prefix>/usr/<tuple>` under `--prefix`/`--local`/
   `--root <dir>`.
@@ -301,7 +301,7 @@ clang wrapper + LLVM runtimes (`compiler-rt`/`libunwind`/`libcxxabi`/
 - **`--local` needs a native seed before crossdev.** A fresh `--local` prefix
   has an empty VDB; `toolchain --setup` / `crossdev --setup` hit a genuine
   hard cycle unless `package.provided` declares host-supplied tools. See
-  [`local-bootstrap.md`](./local-bootstrap.md). Prefer `--prefix` on a fat
+  [`local-bootstrap.md`](../design/local-bootstrap.md). Prefer `--prefix` on a fat
   Gentoo host when you only need an overlay.
 - **`--target` alone doesn't imply a config has been set up.** Run
   `--init-target` (or `--setup`, which implies it) at least once before

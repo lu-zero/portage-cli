@@ -9,10 +9,10 @@ problem. This doc covers what exists today: toolchain → stage1 → stage3.
 
 Related:
 
-- Root topology: [`root-topology.md`](./root-topology.md), [`root-model.md`](./root-model.md)
-- Prefix / multi-root path experiment: [`em-prefix-experiment.md`](./em-prefix-experiment.md)
+- Root topology: [`root-topology.md`](../design/root-topology.md), [`root-model.md`](./root-model.md)
+- Prefix / multi-root path experiment: [`em-prefix-experiment.md`](../design/em-prefix-experiment.md)
 - Crossdev CLI: [`crossdev.md`](./crossdev.md)
-- Live harness notes: [`test-scripts/README.md`](../test-scripts/README.md), [`testing.md`](./testing.md)
+- Live harness notes: [`test-scripts/README.md`](../../test-scripts/README.md), [`testing.md`](../design/testing.md)
 
 ---
 
@@ -300,7 +300,7 @@ misleading failures (stale make.conf, half-built trees, wrong
 | `test-scripts/test-crossdev-flavours.sh` | riscv64 matrix wrapper + same-arch cross reject | `./test-scripts/test-crossdev-flavours.sh --full` |
 | `test-scripts/test-binpkg-identity-sandbox.sh` | Multi-`build_env_key` binpkg reuse | `./test-scripts/test-binpkg-identity-sandbox.sh` |
 | `test-scripts/test-crossdev-binpkg-sandbox.sh` | Host/target CHOST dual PKGDIR | `./test-scripts/test-crossdev-binpkg-sandbox.sh` |
-| Unit / CI | solvers, USE, keywords, loadavg, clean FEATURES, … | see [`AGENTS.md`](../AGENTS.md) / [`testing.md`](./testing.md) |
+| Unit / CI | solvers, USE, keywords, loadavg, clean FEATURES, … | see [`AGENTS.md`](../../AGENTS.md) / [`testing.md`](../design/testing.md) |
 
 Env overrides shared by the scripts:
 

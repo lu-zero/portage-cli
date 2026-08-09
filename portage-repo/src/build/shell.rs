@@ -701,7 +701,7 @@ impl EbuildShell {
 
     /// Set `PORTAGE_CONFIGROOT`, `SYSROOT`/`ESYSROOT`, `broot`, and
     /// `LD_LIBRARY_PATH` for subsequent phases. All already-resolved values
-    /// from the caller — see docs/root-model.md and todo/for-sonnet.md
+    /// from the caller — see docs/user/root-model.md and todo/for-sonnet.md
     /// 2026-08-08.
     pub fn set_build_roots(
         &mut self,
@@ -721,7 +721,7 @@ impl EbuildShell {
     /// Host-side cross code generators (`cross-*`/`cross_llvm-*` binutils,
     /// gcc, gdb, clang-crossdev-wrappers) that need PATH/EPREFIX/ESYSROOT
     /// specials. llvm-runtimes use host-env package.env but are not codegen.
-    /// See `docs/bash-crossdev-matrix.md`.
+    /// See `docs/design/bash-crossdev-matrix.md`.
     pub fn is_cross_host_codegen(category: &str, pn: &str) -> bool {
         let is_cross = category.starts_with("cross-") || category.starts_with("cross_llvm-");
         is_cross && matches!(pn, "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers")

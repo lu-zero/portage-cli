@@ -7,8 +7,8 @@ validation, and known divergences from emerge.
 > **Slop warning.** This codebase is largely AI-generated. Verify a claim
 > against the code before relying on it; update this file when it drifts.
 
-Related: [`docs/testing.md`](testing.md) (how correctness is established),
-[`docs/benchmarks.md`](benchmarks.md) (how performance is measured).
+Related: [`docs/testing.md`](./testing.md) (how correctness is established),
+[`docs/benchmarks.md`](./benchmarks.md) (how performance is measured).
 
 ## Crate layering
 
@@ -35,7 +35,7 @@ USE/keyword/mask policy, root-aware post-solve trimming, and plan assembly.
 It depends on `portage-repo` (brush), so it is unpublishable.
 
 `portage-bench` (in `benchmarks/`) depends on both solver bridges plus
-`portage-repo` for benchmarking. See [`docs/benchmarks.md`](benchmarks.md)
+`portage-repo` for benchmarking. See [`docs/benchmarks.md`](./benchmarks.md)
 for how to run benchmarks across the workspace.
 
 ## Crate catalog
@@ -206,6 +206,18 @@ or `.secondary_memory()`.
 - Cache module: `regen_cache(…, Sender<RegenItem>)` → `RegenStats`, `cache_entries_parallel()`, `CacheReadOpts`, `RegenOpts`
 - Source module: `source_single()`, `source_parallel()` → stream of `SourceItem`, `SourceContext`, `SourceOpts`
 - Re-exports from `gentoo_core`: `Arch`, `KnownArch`, `ExoticKey`
+
+**brush fork:** `portage-repo` embeds [brush](https://github.com/lu-zero/brush)
+(the `for-portage-repo` fork branch) — a Rust bash interpreter — for ebuild
+sourcing and `make.conf` parsing. Additions to the fork:
+
+- `Program.comments: Vec<SourceSpan>` — comment spans from the winnow parser,
+  used by `MakeConf` for byte-precise round-trip editing.
+- `ParseContext.comments` accumulator and comment-tracking whitespace parsers
+  (`spaces_tracking`, `linebreak_tracking`, `newline_list_tracking`).
+
+See [`../AGENTS.md`](../../AGENTS.md) § "Bumping the brush fork" for the
+patch/pin workflow.
 
 ### `portage-vdb` (v0.2.1)
 
@@ -436,7 +448,7 @@ package.use and env. The `*.stable.*` sets apply only when the version is
 `effective_use::effective_use` (display / `PlannedMerge` / REQUIRED_USE /
 download-size), so they cannot disagree. The solver itself never recomputes any
 of this; it consumes the resolved `desired` set (see the
-[USE/solver boundary doc](../portage-atom-pubgrub/docs/use-and-solver-boundary.md)).
+[USE/solver boundary doc](../../portage-atom-pubgrub/docs/use-and-solver-boundary.md)).
 
 **Layer 6 (`em`-only, no PMS equivalent): `--autosolve-use` ceded flags.**
 When a package's `REQUIRED_USE` is violated, `cede_required_use` hands its
@@ -498,7 +510,7 @@ package's own facts):
   **off by default**
   so default `em -p` keeps matching `emerge -p` (which does not auto-satisfy
   `REQUIRED_USE`). Concern split, the PubGrub encoding, and remaining phases are
-  in [required-use-level-c.md](../portage-atom-pubgrub/docs/required-use-level-c.md).
+  in [required-use-level-c.md](../../portage-atom-pubgrub/docs/required-use-level-c.md).
 
 Keeping Level A in the cli is deliberate: the `portage-metadata → portage-atom-pubgrub`
 dependency is a Level-C cost, not a Level-A one.
@@ -555,5 +567,5 @@ condensation + lexicographic Kahn) and the `:slot` suffix on autounmask
 fix, Tier 2 is a deliberate "report don't block" stance (some intentional like
 reverse-deps, some pending promotion like blockers and cross-package `[flag]`).
 The running per-item list lives in the
-[`portage-atom-pubgrub` README](../portage-atom-pubgrub/README.md) "Known
+[`portage-atom-pubgrub` README](../../portage-atom-pubgrub/README.md) "Known
 limitations" section and `docs/required-use-level-c.md` (§6, C7).

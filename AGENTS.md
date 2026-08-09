@@ -3,7 +3,7 @@
 ## Build Commands
 
 Match CI (`.github/workflows/ci.yml`) before opening a PR. Locally, prefer
-`cargo nextest` for the unit/integration suite (see [docs/testing.md](./docs/testing.md));
+`cargo nextest` for the unit/integration suite (see [docs/testing.md](./docs/design/testing.md));
 still run plain `cargo test` at least once if you need CI-identical behaviour
 (doctests + default libtest scheduling).
 
@@ -51,7 +51,7 @@ for anything you'll benchmark or ship.
 doc examples fail CI’s `test` job even when nextest is green. Rustdoc warnings
 (broken links, invalid codeblocks, etc.) fail the separate `doc` job.
 
-Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/testing.md).
+Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/design/testing.md).
 
 ## Architecture
 
@@ -61,7 +61,7 @@ Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/testing
 - Business logic is delegated to the library crates (`portage-atom`,
   `portage-metadata`, `portage-solver`, `portage-resolve`, `portage-repo`,
   `portage-atom-pubgrub`, `portage-vdb`, `portage-binpkg`, `portage-distfiles`, …).
-- **Read [`docs/architecture.md`](./docs/architecture.md) first** — it is the
+- **Read [`docs/architecture.md`](./docs/design/architecture.md) first** — it is the
   main architecture reference (crate catalog, the `em -p` resolution pipeline,
   USE stacking precedence, the USE/solver boundary, post-solve validation, and
   known divergences from emerge). Keep it updated as the design changes.
@@ -137,7 +137,7 @@ running official benchmarks:
 6. Restore the local path patch for day-to-day work if you still have a live
    brush worktree.
 
-Full notes and failure modes: [`docs/testing.md`](./docs/testing.md) § "Bumping
+Full notes and failure modes: [`docs/testing.md`](./docs/design/testing.md) § "Bumping
 brush".
 
 ## Coding Style
@@ -184,7 +184,7 @@ When a dependency bump needs a newer compiler, raise `rust-version` in
 
 ## Testing strategy
 
-See [`docs/testing.md`](./docs/testing.md) for the full picture: why
+See [`docs/testing.md`](./docs/design/testing.md) for the full picture: why
 `cargo nextest` is preferred locally over plain `cargo test` (known
 `portage-repo` flakiness), that nextest skips doctests, the
 live-parity-against-real-`emerge` workflow that has caught most of this

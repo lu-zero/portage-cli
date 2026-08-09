@@ -277,7 +277,7 @@ pub async fn configure_shell(
 /// `enabled`/`disabled` set (or a `wildcard_reset` bool derived from it) can't
 /// express it, since the information is *where in the fold order* a `-*`
 /// appeared, not a fact about the final state. See
-/// `docs/architecture.md`'s USE resolution section for the full model.
+/// `docs/design/architecture.md`'s USE resolution section for the full model.
 pub struct ResolvedUse {
     pub enabled: UseFlags,
     pub disabled: Vec<Interned<DefaultInterner>>,

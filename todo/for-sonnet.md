@@ -688,7 +688,7 @@ Plans / matrices:
 - [[local-bootstrap-provided]] open (not this handoff)  
 - [[clang-crossbuild-prefix-local-test-plan]]  
 
-Matrix: [`docs/bash-crossdev-matrix.md`](../docs/bash-crossdev-matrix.md)
+Matrix: [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md)
 
 ---
 
@@ -798,7 +798,7 @@ em -p --prefix "$EMPTY2" --target riscv64-unknown-linux-gnu crossdev --setup
 ### P2 — Optional / only if P0–P1 green
 
 - Hand-seed `package.provided` under `--local` per
-  [`docs/local-bootstrap.md`](../docs/local-bootstrap.md) and try
+  [`docs/local-bootstrap.md`](../docs/design/local-bootstrap.md) and try
   `toolchain --setup` (not automated yet).  
 - Do **not** treat failure as a regression of fad35a3.
 
@@ -1622,7 +1622,7 @@ found and fixed cleanly on the second pass.
 keyed on the activated path's own `ld.so.conf`, not `--prefix`-specific.
 Pointed `--local` at the same already-bootstrapped `/opt/pfx2` toolchain —
 `clang-22 --version` and a real compile+link+run both worked identically.
-Documented: [`docs/prefix-toolchain.md`](../docs/prefix-toolchain.md).
+Documented: [`docs/prefix-toolchain.md`](../docs/user/prefix-toolchain.md).
 
 ---
 

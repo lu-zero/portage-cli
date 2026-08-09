@@ -201,7 +201,7 @@ The `VersionData.desired` lifetime change is the invasive part — the solver
 stores `desired` by value today and reads it in several post-solve loops
 (`post_solve.rs`, `validate.rs`). Threading a `&UseConfig` global through those
 read sites is mechanical but touches the solver/solver-boundary contract
-([USE/solver boundary](../portage-atom-pubgrub/docs/use-and-solver-boundary.md)).
+([USE/solver boundary](../../portage-atom-pubgrub/docs/use-and-solver-boundary.md)).
 If that's unwanted, option 1 (overlay-built flat `UseConfig`, but only the
 overlay entries, looked up as overlay-else-global via a stored global ref) keeps
 `desired` owned but still avoids cloning the global entries.

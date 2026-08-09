@@ -1,12 +1,12 @@
 # `--local` bootstrap via `package.provided`
 
 Status: 🟡 design deepened **2026-08-07** (not implemented)  
-Companion: [`docs/local-bootstrap.md`](../docs/local-bootstrap.md)  
+Companion: [`docs/local-bootstrap.md`](../docs/design/local-bootstrap.md)  
 Related: [[clang-crossbuild-prefix-local-test-plan]] Scenario B,
 [[em-stages-scenario-matrix]] (`--local` KNOWN-PARTIAL),
 `install-order-scc-tiebreak-fix` memory (11-node hard cycle is **expected**),
 [[workdir-dual-root]] (orthogonal),
-[`docs/root-topology.md`](../docs/root-topology.md) § Lifecycle (`--local` config-root footgun)
+[`docs/root-topology.md`](../docs/design/root-topology.md) § Lifecycle (`--local` config-root footgun)
 
 ---
 
@@ -501,7 +501,7 @@ dev-lang/python-3.13.0
 
 ### Phase 0 — Design docs ✅ / 🟡
 
-- [x] Initial plan + [`docs/local-bootstrap.md`](../docs/local-bootstrap.md)
+- [x] Initial plan + [`docs/local-bootstrap.md`](../docs/design/local-bootstrap.md)
 - [x] PENDING.md queue entry
 - [x] Architecture coupling + resolved decisions
 - [x] Setup ladder: repo + profile + provided

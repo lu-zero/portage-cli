@@ -4,7 +4,7 @@ STATUS: **Phases 1/1a/1b/2 landed** (Phase 1: vibe, 2026-07-19; 1a/1b/2:
 Claude/Sonnet + Fable, same day). Scenario design still authoritative. Open:
 live S1 sandbox verification (see Success criteria). Operator-facing docs
 (recipes, `fingerprint`, identity model) now live in
-[`docs/binhost.md`](../docs/binhost.md) — this file stays the design/progress
+[`docs/binhost.md`](../docs/user/binhost.md) — this file stays the design/progress
 record.
 
 Related: [[PENDING]] binhosts section; `portage-binpkg` index; crossdev-stages
@@ -320,7 +320,7 @@ Needs:
 
 > Polished, up-to-date operator version (with the real `fingerprint`
 > command and sample output) lives in
-> [`docs/binhost.md`](../docs/binhost.md). Kept here too for the design
+> [`docs/binhost.md`](../docs/user/binhost.md). Kept here too for the design
 > rationale each recipe was derived from.
 
 ### Recipe 1 — Separate PKGDIR (stages default, zero risk)
@@ -528,7 +528,7 @@ items themselves.
 1. ✅ `em maint binpkg list`: CHOST/KEY(short build_env_key)/CFLAGS(trunc)
    columns added (`IndexRow` extended; `build_env_key_from_fields`/
    `short_build_env_key` helpers in `portage-binpkg::index`).
-2. ✅ Documented — [`docs/binhost.md`](../docs/binhost.md), recipes 1–4
+2. ✅ Documented — [`docs/binhost.md`](../docs/user/binhost.md), recipes 1–4
    (separate PKGDIR, shared multi-instance, cross host tools, remote
    binrepos.conf sections).
 3. ✅ `em maint binpkg fingerprint [--full] [--host]` — done, under the

@@ -4,7 +4,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom_pubgrub::DepClass;
 
-/// The resolved set of roots for a command (see `docs/root-topology.md`):
+/// The resolved set of roots for a command (see `docs/design/root-topology.md`):
 /// config source, the planner's installed base, and the install target.
 /// Built once from `em`'s global flags (`portage-cli`'s `Cli::roots`/
 /// `base_roots`/`outer_roots`/`broot`, via the `with_*` builder methods
@@ -159,7 +159,7 @@ impl Roots {
     }
 
     /// Use only `VDB(target)` as the installed view, dropping base∪target
-    /// sharing (`docs/root-model.md`). Native toolchain bootstrap must merge
+    /// sharing (`docs/user/root-model.md`). Native toolchain bootstrap must merge
     /// compiler/libc into the target rather than treating host VDB as
     /// satisfied (under `--prefix`, host `virtual/os-headers` would otherwise
     /// skip the merge and break glibc `--with-headers`).
@@ -216,7 +216,7 @@ impl Roots {
         Some(self.eprefix().unwrap_or_else(|| self.merge_root()))
     }
 
-    /// Satisfaction root for an unsatisfied dep of `class` (docs/root-topology.md,
+    /// Satisfaction root for an unsatisfied dep of `class` (docs/design/root-topology.md,
     /// PMS table 8.2):
     /// - `BDEPEND` → `broot` (build host; ignores `--target` substitution)
     /// - `IDEPEND` → `broot` when cross, else same as `RDEPEND`
