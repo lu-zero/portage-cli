@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use sokgi::{Dialect, FlagSet, Warning};
+use sokgi::Dialect;
 
 use crate::error::Result;
 use crate::scan::find_gpkg_containers;
@@ -512,14 +512,18 @@ pub fn use_compatible(
 /// `-f*`, generic linker args, Rust opt-level, etc.
 ///
 /// Retained (C/CXX/LD):
-/// - `-march=` / `-mcpu=` / `-mtune=` / `-mabi=` / `-mfpu=` / `-mfloat-abi=`
-/// - a few bare ISA mode toggles (`-mthumb`, `-msoft-float`, …)
+/// - the whole `-m*` namespace (GCC "machine dependent options") — broader than
+///   sokgi's [`FlagSet::abi_key`](https://docs.rs/sokgi/0.3.0/sokgi/struct.FlagSet.html#method.abi_key),
+///   which models only a fixed ABI allowlist. Board caches need Policy B
+///   (stricter, more rebuilds): silent wrong-arch reuse is worse than an
+///   extra rebuild for `-mavx2` / `-mrvv-vector-bits=` / …
 ///
 /// Retained (Rust):
 /// - `-C target-cpu=…` / `-C target-feature=…` (joined or split forms)
 ///
-/// Algorithm per flag set: filter → sokgi parse → MachineDependent check →
-/// `stable_hash_hex`; non-empty hashes sorted and joined.
+/// Algorithm per flag set: filter → sokgi `Dialect::parse` →
+/// [`FlagSet::is_machine_dependent`](https://docs.rs/sokgi/0.3.0/sokgi/struct.FlagSet.html#method.is_machine_dependent)
+/// → `stable_hash_hex`; non-empty hashes sorted and joined.
 pub fn build_env_key(cflags: &str, cxxflags: &str, ldflags: &str, rustflags: &str) -> String {
     let mut all_hashes: Vec<String> = Vec::new();
     let mut has_machine_dependent = false;
@@ -536,12 +540,11 @@ pub fn build_env_key(cflags: &str, cxxflags: &str, ldflags: &str, rustflags: &st
             continue;
         }
 
-        match FlagSet::parse(&flags, dialect) {
-            Ok((set, warnings)) => {
-                if warnings
-                    .iter()
-                    .any(|w| matches!(w, Warning::MachineDependent(_)))
-                {
+        // sokgi 0.3: Dialect::parse is the FlagSet::parse shorthand; native
+        // detection is a first-class FlagSet method (not a Warning scan).
+        match dialect.parse(&flags) {
+            Ok((set, _)) => {
+                if set.is_machine_dependent() {
                     has_machine_dependent = true;
                 }
 

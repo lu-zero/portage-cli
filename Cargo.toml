@@ -47,13 +47,13 @@ camino = "1"
 colorchoice-clap = "1"
 cfg-if = "1.0.4"
 clap = { version = "4", features = ["derive", "env"] }
-criterion = "0.7"
+criterion = "0.8"
 lasso = { version = "0.7", features = ["multi-threaded"] }
-mimalloc = "0.1.50"
+mimalloc = "0.1.52"
 parking_lot = "0.12"
 papaya = "0.2"
 pubgrub = "0.4"
-resolvo = "0.11.1"
+resolvo = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 smallvec = "1"
@@ -71,7 +71,7 @@ miette = { version = "7.6.0", default-features = false, features = ["derive", "f
 # performance bundle (parallel pack, caches) + zlib-rs — without those, fetch
 # "read pack" looks hung even in --release. Always optimised under profile.dev
 # (see [profile.dev.package."*"] below).
-gix = { version = "0.83.0", default-features = false, features = [
+gix = { version = "0.86.0", default-features = false, features = [
     "blocking-http-transport-reqwest-rust-tls",
     "worktree-mutation",
     "revision",
@@ -79,8 +79,8 @@ gix = { version = "0.83.0", default-features = false, features = [
     "sha256",
     "comfort",
     "progress-tree",
+    # gix 0.86 always uses zlib-rs; the old `zlib-rs` feature flag was removed.
     "max-performance-safe",
-    "zlib-rs",
     # `status` (pulls `dirwalk`) backs the two guards `em sync`'s gix backend
     # needs: `Repository::is_dirty` (refuse to clobber a volatile repo's
     # uncommitted work) and `Repository::dirwalk_iter` (the `git clean -d -x`
@@ -88,15 +88,15 @@ gix = { version = "0.83.0", default-features = false, features = [
     "status",
 ] }
 # Sync progress UI: poll prodash tree → indicatif (default).
-indicatif = "0.17"
+indicatif = "0.18"
 # NestedProgress tree always (gix-compatible counters). Line renderer features
 # are enabled by portage-cli feature `rich` only.
 prodash = { version = "31", default-features = false, features = ["progress-tree"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 winnow = { version = "1.0", features = ["ascii"] }
-bzip2 = "0.4"
+bzip2 = "0.6"
 flate2 = "1"
-md5 = "0.7"
+md5 = "0.8"
 memmap2 = "0.9"
 httpdate = "1"
 url = "2"
@@ -109,7 +109,8 @@ anstyle = "1"
 # Already in the tree via clap_builder; taken directly so output can wrap to the
 # real terminal rather than a guess.
 terminal_size = "0.4"
-blake2 = "0.11.0-rc.5"
+# 0.11 still pre-release; pin tip RC until stable ships. 0.10 is the last stable.
+blake2 = "0.11.0-rc.6"
 boxcar = "0.2"
 brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "09fa1325" }
 brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "09fa1325" }
@@ -125,9 +126,9 @@ futures = "0.3"
 futures-util = "0.3"
 hex = "0.4"
 hakoniwa = { git = "https://github.com/lu-zero/hakoniwa.git", rev = "5f77bb1" }
-object = "0.36"
-itertools = "0.14.0"
-jwalk = "0.8.1"
+object = "0.40"
+itertools = "0.15.0"
+jwalk = "0.9"
 ldconfig = "0.1.1"
 pkgcraft = { git = "https://github.com/pkgcraft/pkgcraft.git", rev = "b9fb45eb1995a6b9750f21312cda5e95bfbbe1bb" }
 regex = "1"

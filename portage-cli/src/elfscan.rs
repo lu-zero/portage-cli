@@ -257,9 +257,11 @@ fn extract<Elf: FileHeader<Endian = Endianness>>(data: &[u8]) -> Option<ElfInfo>
     let mut strtab_addr: Option<u64> = None;
     let mut strsz: Option<u64> = None;
     for d in dynamic {
-        match d.tag32(endian) {
-            Some(elf::DT_STRTAB) => strtab_addr = Some(d.d_val(endian).into()),
-            Some(elf::DT_STRSZ) => strsz = Some(d.d_val(endian).into()),
+        // object 0.40: `tag()` returns `DynamicTag` (typed newtype); prefer
+        // it over the legacy `tag32` i32 path.
+        match d.tag(endian) {
+            elf::DT_STRTAB => strtab_addr = Some(d.d_val(endian).into()),
+            elf::DT_STRSZ => strsz = Some(d.d_val(endian).into()),
             _ => {}
         }
     }
@@ -272,7 +274,7 @@ fn extract<Elf: FileHeader<Endian = Endianness>>(data: &[u8]) -> Option<ElfInfo>
     let mut soname = None;
     let mut rpath = None;
     for d in dynamic {
-        let Some(tag) = d.tag32(endian) else { continue };
+        let tag = d.tag(endian);
         // Only string-valued tags we care about — skip address tags so we
         // don't spuriously fail on DT_STRTAB etc. when looking up strings.
         match tag {
@@ -343,7 +345,9 @@ fn dynstr_bytes<'data, Elf: FileHeader<Endian = Endianness>>(
 
 /// `(MACHINE name, portage multilib category)` for an ELF machine + class,
 /// matching portage's `NEEDED.ELF.2` arch field and soname-dep categories.
-fn arch(e_machine: u16, is_64: bool) -> (&'static str, String) {
+///
+/// `object` 0.40 types `e_machine` as [`elf::Machine`] (was a bare `u16`).
+fn arch(e_machine: elf::Machine, is_64: bool) -> (&'static str, String) {
     let (name, cat) = match e_machine {
         elf::EM_AARCH64 => ("AARCH64", "arm_64"),
         elf::EM_ARM => ("ARM", "arm_32"),

@@ -58,7 +58,7 @@ pub fn checksum(path: &Path) -> Result<(String, String, u64, u64)> {
         sha1.update(&buf[..n]);
         size += n as u64;
     }
-    let md5 = format!("{:x}", md5.compute());
+    let md5 = format!("{:x}", md5.finalize());
     let sha1 = hex::encode(sha1.finalize());
 
     let mtime = std::fs::metadata(path)?
