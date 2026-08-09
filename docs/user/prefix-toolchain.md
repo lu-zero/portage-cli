@@ -10,7 +10,7 @@ Topology background: [`root-topology.md`](../design/root-topology.md). Design
 context for the wider multi-root bug class:
 [`em-prefix-experiment.md`](../design/em-prefix-experiment.md). For `--local`
 (standalone, no host sharing) see
-[`local-bootstrap.md`](../design/local-bootstrap.md).
+[`local-bootstrap.md`](../../todo/local-bootstrap.md).
 
 ---
 
@@ -69,7 +69,7 @@ against). Giving `P` its own gcc is what makes the difference.
 keyed purely on the activated path's own `ld.so.conf`. Confirmed live: the
 same already-bootstrapped toolchain, activated via `em --local DIR active
 set` instead of `--prefix`, ran `clang-22 --version` and compiled+linked+ran
-a hello-world identically. See [`local-bootstrap.md`](../design/local-bootstrap.md)
+a hello-world identically. See [`local-bootstrap.md`](../../todo/local-bootstrap.md)
 for how a `--local` gets its own gcc in the first place (harder than
 `--prefix`: no host `DEPEND` sharing, needs `package.provided` seeding to
 bootstrap from empty).

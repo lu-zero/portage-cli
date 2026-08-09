@@ -258,7 +258,7 @@ C=/ (ro)  B=T=<offset>  S=T  BR=/ (ro)    CBUILD==CHOST
 config, and (after bootstrap) its own toolchain. Works on a Gentoo host *and*
 on a foreign host (Debian/Arch/Fedora). Bootstrapping a toolchain into an
 **empty** prefix needs a host-tool seed via `package.provided` (empty VDB
-hard cycle otherwise) — see [`local-bootstrap.md`](./local-bootstrap.md).
+hard cycle otherwise) — see [`local-bootstrap.md`](../../todo/local-bootstrap.md).
 
 ```
 C=~/.gentoo/etc/portage  B=T=~/.gentoo  S=~/.gentoo  EPREFIX=~/.gentoo   CBUILD==CHOST

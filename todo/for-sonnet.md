@@ -798,7 +798,7 @@ em -p --prefix "$EMPTY2" --target riscv64-unknown-linux-gnu crossdev --setup
 ### P2 — Optional / only if P0–P1 green
 
 - Hand-seed `package.provided` under `--local` per
-  [`docs/local-bootstrap.md`](../docs/design/local-bootstrap.md) and try
+  [`docs/local-bootstrap.md`](./local-bootstrap.md) and try
   `toolchain --setup` (not automated yet).  
 - Do **not** treat failure as a regression of fad35a3.
 

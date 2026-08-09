@@ -301,7 +301,7 @@ clang wrapper + LLVM runtimes (`compiler-rt`/`libunwind`/`libcxxabi`/
 - **`--local` needs a native seed before crossdev.** A fresh `--local` prefix
   has an empty VDB; `toolchain --setup` / `crossdev --setup` hit a genuine
   hard cycle unless `package.provided` declares host-supplied tools. See
-  [`local-bootstrap.md`](../design/local-bootstrap.md). Prefer `--prefix` on a fat
+  [`local-bootstrap.md`](../../todo/local-bootstrap.md). Prefer `--prefix` on a fat
   Gentoo host when you only need an overlay.
 - **`--target` alone doesn't imply a config has been set up.** Run
   `--init-target` (or `--setup`, which implies it) at least once before

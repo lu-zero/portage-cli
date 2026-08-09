@@ -340,7 +340,7 @@ cross-compiler itself), exactly like the 2026-08-04 run.
 | # | Scenario | Topology flag | Known state going in |
 |---|---|---|---|
 | A | `--prefix` overlay | `--prefix DIR` | Proven once, informally, 2026-08-04 (commit `ad59ed0`) |
-| B | `--local` standalone prefix | `--local [DIR]` | **Blocked on native bootstrap.** Empty-VDB hard cycle is expected; seed via `package.provided` (plan: [[local-bootstrap-provided]], [`docs/local-bootstrap.md`](../docs/design/local-bootstrap.md)). Crossdev under `--local` fails the same way until that lands. |
+| B | `--local` standalone prefix | `--local [DIR]` | **Blocked on native bootstrap.** Empty-VDB hard cycle is expected; seed via `package.provided` (plan: [[local-bootstrap-provided]], [`docs/local-bootstrap.md`](./local-bootstrap.md)). Crossdev under `--local` fails the same way until that lands. |
 
 ## 0. Sandbox setup (crossdev-stages)
 

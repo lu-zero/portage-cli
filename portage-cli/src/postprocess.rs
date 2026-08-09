@@ -4,7 +4,7 @@
 //! `dostrip`/`RESTRICT=strip`/`FEATURES=nostrip` (PMS 12.3.10).
 //!
 //! Both passes shell out (to `${PORTAGE_COMPRESS}` and `${STRIP}`); see
-//! docs/design/build-roadmap.md for the plan to grow Rust builtins for them.
+//! todo/build-roadmap.md for the plan to grow Rust builtins for them.
 
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};

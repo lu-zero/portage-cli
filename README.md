@@ -72,8 +72,8 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | [`docs/user/stages-and-testing.md`](./docs/user/stages-and-testing.md) | Bootstrapping and validating a ROOT with `em stages` |
 
 There is no dedicated `--local` user guide yet — see
-[`docs/design/local-bootstrap.md`](./docs/design/local-bootstrap.md) below,
-which tracks status rather than walking through usage.
+[`todo/local-bootstrap.md`](./todo/local-bootstrap.md), which tracks status
+rather than walking through usage.
 
 **Design & architecture** (`docs/design/`) — how `em` is built, and why:
 
@@ -81,10 +81,8 @@ which tracks status rather than walking through usage.
 |-----|--------|
 | [`docs/design/architecture.md`](./docs/design/architecture.md) | Crate dependency graph, per-crate API catalog, `em -p` pipeline |
 | [`docs/design/root-topology.md`](./docs/design/root-topology.md) | The root/prefix/sysroot model's implementation reference |
-| [`docs/design/local-bootstrap.md`](./docs/design/local-bootstrap.md) | `--local` setup ladder — status tracker, not a usage guide |
 | [`docs/design/em-prefix-experiment.md`](./docs/design/em-prefix-experiment.md) | Why EPREFIX/multi-root bugs happen |
 | [`docs/design/build-environment.md`](./docs/design/build-environment.md) | How phase env vars are resolved and read |
-| [`docs/design/build-roadmap.md`](./docs/design/build-roadmap.md) | Build/merge pipeline status tracker |
 | [`docs/design/bash-crossdev-matrix.md`](./docs/design/bash-crossdev-matrix.md) | `em crossdev` vs. real bash-crossdev fidelity reference |
 | [`docs/design/worker-build-tree.md`](./docs/design/worker-build-tree.md) | The unprivileged-build worker split |
 | [`docs/design/dep-resolver.md`](./docs/design/dep-resolver.md) | Historical resolver investigation (superseded by architecture.md) |
@@ -92,6 +90,9 @@ which tracks status rather than walking through usage.
 | [`docs/design/testing.md`](./docs/design/testing.md) | Testing strategy, benchmarking, bumping the brush fork |
 | [`docs/design/benchmarks.md`](./docs/design/benchmarks.md) | How to measure performance across the workspace |
 | [`AGENTS.md`](AGENTS.md) | Contributor conventions: build commands, style, commit format |
+
+Status trackers (open work, not reference docs) live under `todo/` — start
+at [`todo/PENDING.md`](./todo/PENDING.md).
 
 ## Installation
 
