@@ -39,6 +39,8 @@ use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
 use std::sync::Mutex;
 
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
+
 use super::bus::ActivitySink;
 use super::event::{ActivityEvent, ActivityMergeRoot, ActivityMode, PkgKind};
 use crate::style::{C_COUNT, C_PKG, C_PKG_BINARY};
@@ -94,6 +96,22 @@ struct JobStatus {
     host_root: String,
     merge_root: String,
     mode: ActivityMode,
+    /// Regen only: an indicatif bar that owns TTY detection, redraw-rate
+    /// limiting, and non-tty suppression for us — see `regen_bar_style`.
+    /// `None` for merge/other modes, and under `--quiet` (no bar to show).
+    regen_bar: Option<ProgressBar>,
+    /// Regen only: the base `regen ::repo` message, so a failure count can
+    /// be appended without losing it (`ProgressBar` has no "get message").
+    regen_banner: String,
+}
+
+fn regen_bar_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "{spinner:.green} {msg} [{bar:32.cyan/blue}] {pos}/{len} (eta {eta})",
+    )
+    .expect("template")
+    .progress_chars("=>-")
+    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
 }
 
 /// Terminal renderer for the activity bus. Attached as a **direct** (inline)
@@ -103,6 +121,13 @@ pub struct HumanStdoutSink {
     quiet: bool,
     verbose: u8,
     is_tty: bool,
+    /// Regen's bar lives on stderr, which can be a terminal independently of
+    /// stdout (`is_tty`) — e.g. `em regen 2>log.txt` with stdout still
+    /// attached. Needed because `ProgressBar::println` silently drops the
+    /// message when its target is hidden (non-tty): a failure line must
+    /// always reach the user, so that path can't be trusted alone and this
+    /// flag picks the direct `eprintln!` fallback instead.
+    stderr_is_tty: bool,
     state: Mutex<HashMap<(String, String), PkgLoc>>,
     jobs: Mutex<HashMap<String, JobStatus>>,
 }
@@ -115,34 +140,35 @@ impl HumanStdoutSink {
             quiet,
             verbose,
             is_tty: std::io::stdout().is_terminal(),
+            stderr_is_tty: std::io::stderr().is_terminal(),
             state: Mutex::new(HashMap::new()),
             jobs: Mutex::new(HashMap::new()),
         }
     }
 
     /// Erase the in-place status line so the next banner does not land on
-    /// top of it — mirrors `JobStatusDisplay._erase`. Regen counters live on
-    /// stderr; merge job status on stdout.
+    /// top of it — mirrors `JobStatusDisplay._erase`. Merge job status only;
+    /// regen's own bar (stderr) manages its own erase/redraw via indicatif.
     fn erase_status(&self, job_id: &str) {
         let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(js) = jobs.get_mut(job_id)
             && js.displayed
+            && js.mode != ActivityMode::Regen
+            && self.is_tty
         {
-            if js.mode == ActivityMode::Regen {
-                // Always clear the counter line (tty or redirected with `\r`).
-                eprint!("\r\x1b[K");
-                let _ = std::io::stderr().flush();
-            } else if self.is_tty {
-                print!("\r\x1b[K");
-            }
+            print!("\r\x1b[K");
             js.displayed = false;
         }
     }
 
     /// Redraw progress for the session.
     ///
-    /// - **Regen:** always `[done/total]` (optionally with a failed count) —
-    ///   the traditional `em regen` / egencache-style counter.
+    /// - **Regen:** delegates entirely to the session's indicatif bar (see
+    ///   [`regen_bar_style`]) — it owns TTY detection, redraw-rate limiting,
+    ///   and (critically) auto-suppression when stderr isn't a terminal, so
+    ///   a piped/logged run doesn't get one `\r`-redraw write per completed
+    ///   ebuild (thousands of them) flooding the log with an unreadable
+    ///   multi-hundred-KB "line".
     /// - **Merge (and friends):** `Jobs: N of M complete…` only when
     ///   `--jobs > 1` (matches real emerge's sequential path, which never
     ///   shows that line).
@@ -158,63 +184,52 @@ impl HumanStdoutSink {
         let Some(js) = jobs.get_mut(job_id) else {
             return;
         };
-        let line = if js.mode == ActivityMode::Regen {
-            if js.failed > 0 {
-                format!(
-                    "[{}/{}] ({} failed)",
-                    js.completed, js.plan_total, js.failed
-                )
-            } else {
-                format!("[{}/{}]", js.completed, js.plan_total)
-            }
-        } else {
-            if js.jobs <= 1 {
-                return;
-            }
-            let mut line = format!("Jobs: {} of {} complete", js.completed, js.plan_total);
-            if running > 0 {
-                line.push_str(&format!(", {running} running"));
-            }
-            if js.failed > 0 {
-                line.push_str(&format!(", {} failed", js.failed));
-            }
-            // Portage pads the jobs column then appends `Load avg: …` so the
-            // load stays right-aligned under a fixed jobs-column width. We
-            // approximate with a small floor pad (emerges's is ~48 cols) then
-            // truncate to the tty width so a huge loadavg never wraps.
-            let load = super::loadavg::load_avg_display();
-            const JOBS_COL: usize = 48;
-            if line.len() < JOBS_COL {
-                line.push_str(&" ".repeat(JOBS_COL - line.len()));
-            } else {
-                line.push(' ');
-            }
-            line.push_str(&load);
-            if self.is_tty
-                && let Some((terminal_size::Width(w), _)) = terminal_size::terminal_size()
-            {
-                let w = w as usize;
-                if w > 0 && line.len() > w {
-                    line.truncate(w);
+        if js.mode == ActivityMode::Regen {
+            if let Some(bar) = &js.regen_bar {
+                bar.set_position(js.completed as u64);
+                if js.failed > 0 {
+                    bar.set_message(format!("{} ({} failed)", js.regen_banner, js.failed));
                 }
             }
-            line
-        };
+            return;
+        }
+        if js.jobs <= 1 {
+            return;
+        }
+        let mut line = format!("Jobs: {} of {} complete", js.completed, js.plan_total);
+        if running > 0 {
+            line.push_str(&format!(", {running} running"));
+        }
+        if js.failed > 0 {
+            line.push_str(&format!(", {} failed", js.failed));
+        }
+        // Portage pads the jobs column then appends `Load avg: …` so the
+        // load stays right-aligned under a fixed jobs-column width. We
+        // approximate with a small floor pad (emerges's is ~48 cols) then
+        // truncate to the tty width so a huge loadavg never wraps.
+        let load = super::loadavg::load_avg_display();
+        const JOBS_COL: usize = 48;
+        if line.len() < JOBS_COL {
+            line.push_str(&" ".repeat(JOBS_COL - line.len()));
+        } else {
+            line.push(' ');
+        }
+        line.push_str(&load);
+        if self.is_tty
+            && let Some((terminal_size::Width(w), _)) = terminal_size::terminal_size()
+        {
+            let w = w as usize;
+            if w > 0 && line.len() > w {
+                line.truncate(w);
+            }
+        }
         if self.is_tty {
             print!("\r\x1b[K{line}");
             js.displayed = true;
         } else {
-            // Non-TTY: regen keeps a single-line counter; merge jobs already
-            // printed per-banner lines.
-            if js.mode == ActivityMode::Regen {
-                eprint!("\r{line}");
-                js.displayed = true;
-            } else {
-                println!("{line}");
-            }
+            println!("{line}");
         }
         let _ = std::io::stdout().flush();
-        let _ = std::io::stderr().flush();
     }
 
     /// `" {preposition} {root}/"`, or empty when the root is `/` — real
@@ -266,6 +281,18 @@ impl ActivitySink for HumanStdoutSink {
                 argv,
                 ..
             } => {
+                // Driver puts `regen ::repo (N ebuilds)` in argv[1] when present.
+                let regen_banner = argv
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| format!("regen ({plan_total} ebuilds)"));
+                let regen_bar = (*mode == ActivityMode::Regen && !self.quiet).then(|| {
+                    let bar = ProgressBar::new(u64::from(*plan_total));
+                    bar.set_draw_target(ProgressDrawTarget::stderr());
+                    bar.set_style(regen_bar_style());
+                    bar.set_message(regen_banner.clone());
+                    bar
+                });
                 self.jobs.lock().unwrap_or_else(|e| e.into_inner()).insert(
                     job_id.clone(),
                     JobStatus {
@@ -277,32 +304,60 @@ impl ActivitySink for HumanStdoutSink {
                         host_root: host_root.clone(),
                         merge_root: merge_root.clone(),
                         mode: *mode,
+                        regen_bar,
+                        regen_banner,
                     },
                 );
-                if self.quiet {
+                if self.quiet || *mode == ActivityMode::Regen {
+                    // Regen's own bar already shows the banner as its
+                    // message; a separate announcement line would be
+                    // redundant clutter above it.
                     return;
-                }
-                if *mode == ActivityMode::Regen {
-                    // Driver puts `regen ::repo (N ebuilds)` in argv[1] when present.
-                    let banner = argv
-                        .get(1)
-                        .cloned()
-                        .unwrap_or_else(|| format!("regen ({plan_total} ebuilds)"));
-                    eprintln!("{banner}");
                 }
                 self.draw_status(job_id);
             }
-            ActivityEvent::SessionEnd { job_id, .. } => {
+            ActivityEvent::SessionEnd {
+                job_id,
+                completed,
+                failed,
+                seconds,
+                ..
+            } => {
                 let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(js) = jobs.remove(job_id)
-                    && js.displayed
-                {
-                    // Regen progress was on stderr; merge jobs status on stdout.
-                    if js.mode == ActivityMode::Regen {
-                        eprintln!();
-                    } else {
-                        println!();
+                let Some(js) = jobs.remove(job_id) else {
+                    return;
+                };
+                if js.mode == ActivityMode::Regen {
+                    if let Some(bar) = js.regen_bar {
+                        bar.finish_and_clear();
                     }
+                    if !self.quiet {
+                        let rate = if *seconds > 0.0 {
+                            f64::from(*completed) / seconds
+                        } else {
+                            0.0
+                        };
+                        let failed_suffix = if *failed > 0 {
+                            format!(", {failed} failed")
+                        } else {
+                            String::new()
+                        };
+                        // "regen ::gentoo (32637 ebuilds)" -> "::gentoo" —
+                        // the ebuild count is already in `completed` below,
+                        // repeating it here would be redundant.
+                        let label = js
+                            .regen_banner
+                            .strip_prefix("regen ")
+                            .unwrap_or(&js.regen_banner)
+                            .split(" (")
+                            .next()
+                            .unwrap_or(&js.regen_banner);
+                        eprintln!(
+                            ">>> {label}: regenerated {completed} ebuild(s) in {seconds:.1}s ({rate:.0}/s){failed_suffix}"
+                        );
+                    }
+                } else if js.displayed {
+                    println!();
                 }
             }
             ActivityEvent::PkgStart {
@@ -439,9 +494,28 @@ impl ActivitySink for HumanStdoutSink {
                     // short line (rich miette frames, if any, are printed by
                     // the regen driver after this event — same bus item).
                     if !*ok {
-                        self.erase_status(job_id);
                         let why = error.as_deref().unwrap_or("(no message)");
-                        eprintln!(">>> failed: {cpv}: {why}");
+                        let line = format!(">>> failed: {cpv}: {why}");
+                        let bar = self.stderr_is_tty.then(|| {
+                            self.jobs
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .get(job_id)
+                                .and_then(|js| js.regen_bar.clone())
+                        });
+                        match bar.flatten() {
+                            // `println` suspends the bar, prints the line
+                            // cleanly above it, then redraws — no manual
+                            // erase/redraw dance needed, unlike the merge
+                            // path below. Only trustworthy on a real
+                            // terminal: on a hidden (non-tty) target it
+                            // silently drops the message instead of falling
+                            // back to a plain write, so a failure must never
+                            // depend on it alone — real emerge never
+                            // silences errors on --quiet, only progress info.
+                            Some(bar) => bar.println(line),
+                            None => eprintln!("{line}"),
+                        }
                     }
                     if !self.quiet {
                         self.draw_status(job_id);

@@ -32,7 +32,7 @@ pseudoroot = ["dep:pseudoroot"]
 hakoniwa = ["dep:hakoniwa"]
 # Optional pure-gix git sync backend (heavy compile). Default is shell `git` +
 # `rsync`. See `maint/sync/`.
-sync-gix = ["dep:gix", "dep:indicatif", "dep:prodash"]
+sync-gix = ["dep:gix", "dep:prodash"]
 # Prodash stderr line renderer for sync-gix progress (default UI is indicatif).
 rich = [
     "sync-gix",
@@ -59,7 +59,7 @@ anstream = { workspace = true }
 anstyle = { workspace = true }
 miette = { workspace = true }
 gix = { workspace = true, optional = true }
-indicatif = { workspace = true, optional = true }
+indicatif = { workspace = true }
 prodash = { workspace = true, optional = true }
 terminal_size = { workspace = true }
 colorchoice-clap = { workspace = true }

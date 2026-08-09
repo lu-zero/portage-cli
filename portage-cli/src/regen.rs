@@ -183,14 +183,9 @@ pub async fn run(
             seconds: ActivityEvent::now() - session_started,
         });
 
-        if stats.errors > 0 {
-            // Per-repo tally only when attributing across multiple targets;
-            // single-target runs already showed each failure + the final bail.
-            if targets.len() > 1 {
-                eprintln!("::{}: {} sourcing errors", repo.name(), stats.errors);
-            }
-            total_errors += stats.errors;
-        }
+        // HumanStdoutSink's SessionEnd handler already printed a per-repo
+        // "regenerated N ebuild(s) ..., M failed" summary; just tally here.
+        total_errors += stats.errors;
     }
 
     if total_errors > 0 {
