@@ -16,6 +16,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 use std::path::PathBuf;
 use std::process;
+use std::time::Instant;
 
 use clap::Parser;
 use portage_repo::{Ebuild, RegenOpts, Repository, SourceOpts, regen_cache};
@@ -141,6 +142,7 @@ async fn main() {
         errors
     });
 
+    let t0 = Instant::now();
     let stats = match regen_cache(&repo, &[], ebuilds, &opts, tx).await {
         Ok(s) => s,
         Err(e) => {
@@ -148,12 +150,18 @@ async fn main() {
             process::exit(1);
         }
     };
+    let elapsed = t0.elapsed();
     let ui_errors = ui.await.unwrap_or(0);
     // Prefer the library counter (always complete); UI may have seen the same.
     let _ = ui_errors;
 
     eprintln!();
-    println!("Total: {}  Errors: {}", stats.total, stats.errors);
+    println!(
+        "Total: {}  Errors: {}  Time: {:.2}s",
+        stats.total,
+        stats.errors,
+        elapsed.as_secs_f64()
+    );
 
     let (hits, misses) = portage_repo::inherit::cache_stats();
     let total_lookups = hits + misses;
