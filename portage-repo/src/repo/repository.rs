@@ -399,6 +399,21 @@ impl Repository {
         &self.path
     }
 
+    /// Directory backing the in-tree primary md5-cache (`metadata/md5-cache`
+    /// under [`Self::path`]), regardless of whether it's currently writable
+    /// — matches [`open_with_secondary`](Self::open_with_secondary)'s own
+    /// construction of `primary`.
+    pub fn primary_cache_dir(&self) -> Utf8PathBuf {
+        self.path.join("metadata").join("md5-cache")
+    }
+
+    /// Directory backing the secondary (user) md5-cache, when it's a durable
+    /// on-disk store — `None` for in-memory/custom stores, same condition
+    /// [`Self::sidecar_path`] uses.
+    pub fn secondary_cache_dir(&self) -> Option<&Utf8Path> {
+        self.secondary_dir.as_deref()
+    }
+
     /// Where a sidecar index for this repo lives, when the secondary store is
     /// durable. `None` for in-memory stores (tests), which must recompute.
     pub fn sidecar_path(&self, name: &str) -> Option<Utf8PathBuf> {

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use portage_metadata::CacheEntry;
 
 use crate::metadata_cache::{DirMetadataCache, MetadataCache};
@@ -105,18 +105,61 @@ pub async fn regen_cache(
     let total = ebuilds.len();
     let write = opts.write.clone();
 
-    // Pre-create category dirs only for an explicit Dir target. Repository
-    // / Memory stores create paths on put; primary Dir does the same.
-    if let RegenWriteTarget::Dir(ref dir) = write {
-        let mut cats: HashSet<&str> = HashSet::new();
-        for e in &ebuilds {
-            cats.insert(e.category());
+    // A Dir target's writes go into a fresh staging directory, swapped into
+    // place only once every entry is written — see `swap_dir_target`'s doc
+    // comment for why. `write` gets pointed at the staging path so the
+    // write closure below needs no further changes for that case;
+    // `dir_swap` remembers the real target for the swap at the end.
+    //
+    // The default Repository target gets the exact same treatment against
+    // whichever of primary/secondary is actually writable — it would
+    // otherwise be the *common* case left paying the full replace-penalty
+    // (an already-synced tree's in-tree cache is never empty), while only
+    // the less-common explicit `-o DIR` runs got faster. `stage_dir_target`
+    // against primary's directory doubles as the writability check: primary
+    // being read-only (an unprivileged `em regen` against the system tree,
+    // exactly the case `write_cache_entry`'s own per-entry fallback exists
+    // for) fails to even create the staging dir, so this falls back to
+    // staging secondary instead. No staging at all (falls through to the
+    // existing per-entry `write_cache_entry`) only when secondary isn't a
+    // durable on-disk store either — in-memory secondary, tests only.
+    let (write, dir_swap) = match write {
+        RegenWriteTarget::Dir(ref dir) => {
+            let cats = ebuilds.iter().map(Ebuild::category);
+            let staging = stage_dir_target(dir, cats)?;
+            (
+                RegenWriteTarget::Dir(staging.clone().into_std_path_buf()),
+                Some((dir.clone(), staging)),
+            )
         }
-        for cat in cats {
-            let p = dir.join(cat);
-            fs::create_dir_all(&p).map_err(|e| crate::Error::Io { path: p, source: e })?;
+        RegenWriteTarget::Repository => {
+            let primary_dir = repo.primary_cache_dir();
+            let staged_primary = stage_dir_target(
+                primary_dir.as_std_path(),
+                ebuilds.iter().map(Ebuild::category),
+            );
+            match staged_primary {
+                Ok(staging) => (
+                    RegenWriteTarget::Dir(staging.clone().into_std_path_buf()),
+                    Some((primary_dir.into_std_path_buf(), staging)),
+                ),
+                Err(_) => match repo.secondary_cache_dir() {
+                    Some(secondary_dir) => {
+                        let staging = stage_dir_target(
+                            secondary_dir.as_std_path(),
+                            ebuilds.iter().map(Ebuild::category),
+                        )?;
+                        (
+                            RegenWriteTarget::Dir(staging.clone().into_std_path_buf()),
+                            Some((secondary_dir.to_path_buf().into_std_path_buf(), staging)),
+                        )
+                    }
+                    None => (RegenWriteTarget::Repository, None),
+                },
+            }
         }
-    }
+        other => (other, None),
+    };
 
     let ctx = SourceContext::new();
     let checksum_cache: ChecksumCache = Arc::new(papaya::HashMap::new());
@@ -173,10 +216,102 @@ pub async fn regen_cache(
     )
     .await?;
 
+    if let Some((dir, staging)) = dir_swap {
+        swap_dir_target(&dir, &staging)?;
+    }
+
     Ok(RegenStats {
         total,
         errors: errors.load(Ordering::Relaxed),
     })
+}
+
+fn utf8_or_err(dir: &Path) -> Result<&Utf8Path> {
+    Utf8Path::from_path(dir).ok_or_else(|| crate::Error::Io {
+        path: dir.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "output dir is not valid UTF-8",
+        ),
+    })
+}
+
+fn io_err(path: &Utf8Path, source: std::io::Error) -> crate::Error {
+    crate::Error::Io {
+        path: path.to_path_buf().into_std_path_buf(),
+        source,
+    }
+}
+
+/// `<dir>` renamed with a `.regen-staging` suffix — where a `Dir` regen
+/// target's writes actually land, before [`swap_dir_target`] moves them
+/// into place.
+fn staging_path_for(dir: &Utf8Path) -> Utf8PathBuf {
+    let file_name = dir.file_name().unwrap_or("regen-output");
+    dir.with_file_name(format!("{file_name}.regen-staging"))
+}
+
+/// `<dir>` renamed with a `.regen-old` suffix — where [`swap_dir_target`]
+/// displaces `dir`'s previous content to during the swap, just long enough
+/// to remove it.
+fn displaced_path_for(dir: &Utf8Path) -> Utf8PathBuf {
+    let file_name = dir.file_name().unwrap_or("regen-output");
+    dir.with_file_name(format!("{file_name}.regen-old"))
+}
+
+/// Set up a fresh staging directory for a `Dir` regen target, with
+/// `categories`' subdirectories pre-created, ready for the write workers to
+/// populate. Every write lands here — a plain create, never a replace, no
+/// matter how populated `dir` itself already is. Call [`swap_dir_target`]
+/// once every write has completed to move it into place.
+fn stage_dir_target<'a>(
+    dir: &Path,
+    categories: impl Iterator<Item = &'a str>,
+) -> Result<Utf8PathBuf> {
+    let staging = staging_path_for(utf8_or_err(dir)?);
+    // Leftover from a previous crashed/interrupted run — never swapped
+    // into `dir`, so nothing of value lives here; clear before reuse.
+    if staging.is_dir() {
+        fs::remove_dir_all(&staging).map_err(|e| io_err(&staging, e))?;
+    }
+    let cats: HashSet<&str> = categories.collect();
+    for cat in cats {
+        let p = staging.join(cat);
+        fs::create_dir_all(&p).map_err(|e| io_err(&p, e))?;
+    }
+    Ok(staging)
+}
+
+/// Atomically replace `dir` with the fully-populated `staging` directory
+/// [`stage_dir_target`] prepared.
+///
+/// `rename()` can't replace a non-empty directory directly (Linux/POSIX:
+/// `ENOTEMPTY`), so this is a rename-away / rename-in / remove-old dance,
+/// not one syscall — a brief window where `dir` doesn't exist between the
+/// first two renames. But at every *other* instant — including for the
+/// entire multi-second write phase before this ever runs — `dir` holds
+/// either the complete old content or the complete new content, never a
+/// partial mix. That's the actual point versus clearing `dir` in place
+/// before writing (this optimization's first attempt, in the same commit
+/// history): `remove_dir_all` up front left `dir` empty/partial for the
+/// whole write phase, so a crash mid-run discarded the previous cache
+/// entirely instead of just leaving it stale.
+fn swap_dir_target(dir: &Path, staging: &Utf8Path) -> Result<()> {
+    let dir = utf8_or_err(dir)?;
+    let displaced = displaced_path_for(dir);
+    // Leftover from a previous crashed swap (rename-in or remove-old never
+    // completed) — clear before reuse.
+    if displaced.is_dir() {
+        fs::remove_dir_all(&displaced).map_err(|e| io_err(&displaced, e))?;
+    }
+    if dir.is_dir() {
+        fs::rename(dir, &displaced).map_err(|e| io_err(dir, e))?;
+    }
+    fs::rename(staging, dir).map_err(|e| io_err(staging, e))?;
+    if displaced.is_dir() {
+        fs::remove_dir_all(&displaced).map_err(|e| io_err(&displaced, e))?;
+    }
+    Ok(())
 }
 
 fn eclass_md5(path: &Utf8Path, cache: &ChecksumCache) -> std::result::Result<md5::Digest, String> {
@@ -392,4 +527,89 @@ where
         }
     }
     all
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn utf8_root(dir: &tempfile::TempDir, rel: &str) -> Utf8PathBuf {
+        Utf8Path::from_path(dir.path()).unwrap().join(rel)
+    }
+
+    #[test]
+    fn stage_dir_target_creates_category_dirs_in_a_sibling_staging_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = utf8_root(&dir, "out");
+
+        let staging =
+            stage_dir_target(root.as_std_path(), ["dev-libs", "sys-apps"].into_iter()).unwrap();
+
+        assert_eq!(staging, utf8_root(&dir, "out.regen-staging"));
+        assert!(staging.join("dev-libs").is_dir());
+        assert!(staging.join("sys-apps").is_dir());
+        assert!(
+            !root.exists(),
+            "swap hasn't happened yet, dir must be untouched"
+        );
+    }
+
+    #[test]
+    fn stage_dir_target_clears_a_leftover_staging_dir_from_a_prior_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = utf8_root(&dir, "out");
+        let stale_staging = utf8_root(&dir, "out.regen-staging");
+        std::fs::create_dir_all(stale_staging.join("old-cat")).unwrap();
+        std::fs::write(stale_staging.join("old-cat/stale-entry"), "stale").unwrap();
+
+        let staging = stage_dir_target(root.as_std_path(), ["dev-libs"].into_iter()).unwrap();
+
+        assert!(!staging.join("old-cat").exists());
+        assert!(staging.join("dev-libs").is_dir());
+    }
+
+    #[test]
+    fn swap_dir_target_replaces_existing_content_with_the_staging_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = utf8_root(&dir, "out");
+        std::fs::create_dir_all(root.join("old-cat")).unwrap();
+        std::fs::write(root.join("old-cat/stale-entry"), "stale").unwrap();
+
+        let staging = stage_dir_target(root.as_std_path(), ["dev-libs"].into_iter()).unwrap();
+        std::fs::write(staging.join("dev-libs/new-entry"), "fresh").unwrap();
+        swap_dir_target(root.as_std_path(), &staging).unwrap();
+
+        assert!(!root.join("old-cat").exists(), "stale content must be gone");
+        assert!(root.join("dev-libs/new-entry").exists());
+        assert!(
+            !staging.exists(),
+            "staging dir must be consumed by the swap"
+        );
+    }
+
+    #[test]
+    fn swap_dir_target_works_when_the_target_never_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = utf8_root(&dir, "does-not-exist-yet");
+
+        let staging = stage_dir_target(root.as_std_path(), ["dev-libs"].into_iter()).unwrap();
+        swap_dir_target(root.as_std_path(), &staging).unwrap();
+
+        assert!(root.join("dev-libs").is_dir());
+    }
+
+    #[test]
+    fn swap_dir_target_clears_a_leftover_displaced_dir_from_a_prior_crashed_swap() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = utf8_root(&dir, "out");
+        std::fs::create_dir_all(&root).unwrap();
+        let stale_displaced = utf8_root(&dir, "out.regen-old");
+        std::fs::create_dir_all(stale_displaced.join("ancient-cat")).unwrap();
+
+        let staging = stage_dir_target(root.as_std_path(), ["dev-libs"].into_iter()).unwrap();
+        swap_dir_target(root.as_std_path(), &staging).unwrap();
+
+        assert!(!stale_displaced.exists());
+        assert!(root.join("dev-libs").is_dir());
+    }
 }
