@@ -79,8 +79,7 @@ fn sync_shallow() -> gix::remote::fetch::Shallow {
 }
 
 fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
-    let url =
-        gix::url::parse(uri).map_err(|e| anyhow::anyhow!("invalid sync-uri {uri}: {e}"))?;
+    let url = gix::url::parse(uri).map_err(|e| anyhow::anyhow!("invalid sync-uri {uri}: {e}"))?;
 
     if path.join(".git").is_dir() || gix::open(path.as_std_path()).is_ok() {
         git_update(path, uri, volatile, quiet)
