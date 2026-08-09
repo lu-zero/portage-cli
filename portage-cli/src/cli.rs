@@ -94,10 +94,17 @@ pub struct Cli {
     pub privilege: Privilege,
 
     /// Search package names (each argument is a pattern).
+    ///
+    /// Deliberately separate from the `em search` applet: this is emerge's
+    /// own `-s` (drives `crate::search::run_emerge_style`, emerge-style
+    /// output), the applet is equery-style (`crate::search::run`, `--all`/
+    /// `--desc`/`--name-only`/`--homepage`). Same split as real Portage's
+    /// `emerge -s` vs `equery`, not accidental duplication.
     #[arg(short = 's', long)]
     pub search: bool,
 
-    /// Search package names and descriptions.
+    /// Search package names and descriptions. See `search`'s doc comment for
+    /// why this is separate from `em search --desc`.
     #[arg(short = 'S', long)]
     pub searchdesc: bool,
 
@@ -115,7 +122,10 @@ pub struct Cli {
     /// atoms, cleans everything unreachable; with atoms, only considers
     /// removing those, protecting everything else). Unlike `-C`, this
     /// walks the installed dependency graph first — matches real emerge's
-    /// safe alternative to `-C`.
+    /// safe alternative to `-C`. Identical implementation to the `em
+    /// depclean [atoms]` applet (`crate::depclean::run` just forwards to
+    /// `crate::depclean::run_with_targets` with `cli.atoms`) — the applet
+    /// form exists for scripting clarity, not a different behavior.
     #[arg(short = 'c', long)]
     pub depclean: bool,
 
@@ -1299,6 +1309,11 @@ pub enum Applet {
     ///
     /// Default backends shell out to `git` / `rsync` (Portage parity). Build
     /// with `--features sync-gix` for the experimental pure-gix git path.
+    ///
+    /// Identical implementation to `em maint sync` (both dispatch to
+    /// `crate::maint::sync::run`) — this top-level form exists only because
+    /// `sync` is common enough to deserve a short invocation, matching real
+    /// Portage having both `emerge --sync` and `emaint sync`.
     #[command(about = "Sync repositories (git, rsync)")]
     Sync {
         /// Repo names from repos.conf (default: auto-sync enabled repos)
@@ -1337,12 +1352,12 @@ pub enum Applet {
         /// Atoms, package sets (`@system`), or VDB paths (`/var/db/pkg/cat/pf`)
         #[arg(required = true)]
         atoms: Vec<String>,
-        /// Include CONFIG_PROTECT files (`y`/`n`, default `n`)
-        #[arg(long, value_name = "y|n", default_value = "n")]
-        include_config: String,
-        /// Include unmodified CONFIG_PROTECT files (`y`/`n`, default `n`)
-        #[arg(long, value_name = "y|n", default_value = "n")]
-        include_unmodified_config: String,
+        /// Include CONFIG_PROTECT files
+        #[arg(long)]
+        include_config: bool,
+        /// Include unmodified CONFIG_PROTECT files
+        #[arg(long)]
+        include_unmodified_config: bool,
     },
 
     #[command(

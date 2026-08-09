@@ -144,22 +144,12 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             include_config,
             include_unmodified_config,
         } => {
-            let yn = |s: &str, flag: &str| -> Result<bool> {
-                match s.trim().to_ascii_lowercase().as_str() {
-                    "y" | "yes" | "true" | "1" => Ok(true),
-                    "n" | "no" | "false" | "0" => Ok(false),
-                    _ => bail!("{flag}: expected y|n, got {s:?}"),
-                }
-            };
             crate::quickpkg::run(
                 globals,
                 &crate::quickpkg::QuickpkgOpts {
                     atoms: atoms.clone(),
-                    include_config: yn(include_config, "--include-config")?,
-                    include_unmodified_config: yn(
-                        include_unmodified_config,
-                        "--include-unmodified-config",
-                    )?,
+                    include_config: *include_config,
+                    include_unmodified_config: *include_unmodified_config,
                 },
             )
             .await
