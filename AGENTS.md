@@ -149,6 +149,33 @@ brush".
 - Keep doctests compiling and green (`cargo test --doc`); rustdoc under
   `RUSTDOCFLAGS=-D warnings` must stay clean
 
+### Logging vs. program output — do not default to `println!`
+
+This codebase has a real logging system (`src/diag.rs`): `tracing::info!`/
+`warn!`/`debug!`/`trace!` events, filtered by a subscriber that honours
+`-q`/`-v`/`-vv`/`-vvv` and `RUST_LOG`, rendered through a custom formatter
+(portage's own `" * "` marker for `WARN`/`ERROR`, matching real emerge's
+style). Read `src/diag.rs`'s module doc comment before adding any new
+user-facing message.
+
+- **New progress/diagnostic narration** ("resolved X", "wrote Y", "would do
+  Z") is a `tracing::info!` event, not `println!`. This is what makes it
+  respect `--quiet` and verbosity for free, and land on stderr instead of
+  mixing into stdout.
+- **`println!`/`print!` is reserved** for genuine emerge-parity protocol
+  output that a script or human pipes/reads as the actual result — the
+  `[ebuild N] pkg-1.0` plan display, `>>> Emerging (1 of N)` build-log
+  passthrough, `config_plan`'s `-p`/`-a` preview-and-confirm prompt. If you
+  are not reproducing something real `emerge`/`equery`/etc. would print,
+  it is very likely a `tracing::info!`, not a `println!`.
+- **Existing `println!` calls are not proof of the right pattern.** Large
+  parts of this codebase (`setup.rs`, `dispatch.rs`, `emerge.rs`,
+  `crossdev/mod.rs`, …) predate this being spelled out and still use
+  `println!` for narration that should be `tracing::info!` — see the Slop
+  Warning below. Don't copy them into new code; fixing them in place is a
+  separate, deliberate cleanup, not something to do incidentally while
+  touching nearby code for an unrelated reason.
+
 ## Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/):
