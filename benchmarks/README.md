@@ -8,10 +8,15 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 
 | Bench file | What it measures |
 |------------|-----------------|
-| `dep_parsing` | Atom/dependency parsing (portage-atom vs pkgcraft) |
-| `realworld_dep_parsing` | Real ebuild RDEPEND strings (portage-atom vs pkgcraft) |
+| `dep_parsing` | Atom/dependency parsing (portage-atom, portage-metadata) |
+| `dep_parsing_pkgcraft` | Same, vs pkgcraft — needs `--features pkgcraft-compare` |
+| `realworld_dep_parsing` | Real ebuild RDEPEND strings, portage-atom vs pkgcraft — needs `--features pkgcraft-compare` |
 | `resolve` | PubGrub dependency resolution on full repo |
 | `dedup` | Deduplication of parsed dep/license/required-use trees |
+
+`pkgcraft-compare` is off by default (it pulls in `gix`, a sizeable compile) —
+enable it explicitly whenever you actually want the pkgcraft comparison
+numbers, e.g. `cargo bench --features pkgcraft-compare`.
 
 ### Wall-clock (CLI)
 
@@ -54,8 +59,11 @@ git clone https://github.com/pkgcraft/pkgcraft ../pkgcraft
 # Single config, quick
 ./scripts/bench-sweep.sh --configs papaya-mimalloc
 
-# Criterion only
+# Criterion only (skips the pkgcraft-comparison benches, see above)
 cargo bench
+
+# Include the pkgcraft comparisons
+cargo bench --features pkgcraft-compare
 
 # Specific bench
 cargo bench --bench resolve

@@ -21,8 +21,11 @@ cargo fmt --all -- --check
 # CI `doc` job (rustdoc warnings are hard errors)
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench --no-deps
 
-# CI `bench-smoke` (compile only)
-cargo check -p portage-bench --benches
+# CI `bench-smoke` (compile only). --features pkgcraft-compare pulls in
+# pkgcraft (and gix) for the comparison benches; those are behind that
+# feature specifically so a plain `cargo build`/`check` elsewhere in the
+# workspace never pays for it. CI always includes it to catch breakage.
+cargo check -p portage-bench --benches --features pkgcraft-compare
 
 # MSRV verification (use the project's cargo-msrv tool)
 cargo install cargo-msrv
@@ -43,7 +46,7 @@ for anything you'll benchmark or ship.
 | `clippy` | `cargo clippy --workspace --exclude portage-bench -- -D warnings` |
 | `fmt` | `cargo fmt --all -- --check` |
 | `doc` | `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench --no-deps` |
-| `bench-smoke` | `cargo check -p portage-bench --benches` |
+| `bench-smoke` | `cargo check -p portage-bench --benches --features pkgcraft-compare` |
 | `msrv` | `cargo msrv verify --rust-version 1.95 --path portage-cli` |
 | `coverage` | optional locally (`cargo llvm-cov …`); uploads to Codecov in CI |
 

@@ -23,6 +23,12 @@ symbol-table = [
 ]
 mimalloc = ["dep:mimalloc"]
 dhat-heap = ["dep:dhat"]
+# Off by default: pkgcraft pulls in gix (a sizeable compile) purely for
+# comparison benchmarks against our own parsers/resolver. Most workspace
+# work (including anything touching portage-cli itself) never needs these
+# comparisons, so keep the default `cargo build`/`check` over this crate
+# lean and opt in explicitly when you actually want the pkgcraft numbers.
+pkgcraft-compare = ["dep:pkgcraft"]
 
 [dependencies]
 portage-atom = { workspace = true }
@@ -35,7 +41,8 @@ pubgrub = { workspace = true }
 resolvo = { workspace = true }
 # Pinned so CI (no sibling pkgcraft worktree) can resolve it; local
 # benchmarking overrides this to the worktree via .cargo/config.toml.
-pkgcraft = { workspace = true }
+# Optional — see the `pkgcraft-compare` feature above.
+pkgcraft = { workspace = true, optional = true }
 clap = { workspace = true }
 camino = { workspace = true }
 mimalloc = { workspace = true, optional = true }
@@ -50,8 +57,14 @@ name = "dep_parsing"
 harness = false
 
 [[bench]]
+name = "dep_parsing_pkgcraft"
+harness = false
+required-features = ["pkgcraft-compare"]
+
+[[bench]]
 name = "realworld_dep_parsing"
 harness = false
+required-features = ["pkgcraft-compare"]
 
 [[bench]]
 name = "resolve"
