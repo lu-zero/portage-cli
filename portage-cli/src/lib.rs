@@ -6,6 +6,7 @@ pub(crate) mod active;
 pub mod activity;
 pub(crate) mod binpkg;
 pub mod cli;
+pub(crate) mod config_plan;
 pub(crate) mod crossdev;
 pub(crate) mod depclean;
 pub mod diag;

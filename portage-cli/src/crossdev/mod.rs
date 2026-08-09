@@ -45,10 +45,11 @@
 //! concern.
 // Pending work: crossdev update and version-mismatch warnings.
 
-mod config_plan;
 mod multilib;
 pub mod stages;
 pub mod target;
+
+use crate::config_plan;
 
 use std::io::Write;
 
@@ -1581,7 +1582,7 @@ fn link_abi_osdirs(target: &CrossTarget, globals: &Cli) -> Result<()> {
             continue;
         }
         let link = dir.join(default_abi);
-        symlink_force(Utf8Path::new("."), &link)?;
+        config_plan::symlink_force(Utf8Path::new("."), &link)?;
         println!("    osdir compat: {link} -> .");
     }
     Ok(())
@@ -1616,17 +1617,6 @@ fn host_chost() -> String {
         .ok()
         .and_then(|m| m.get("CHOST").map(str::to_owned))
         .unwrap_or_else(|| "unknown-host".to_owned())
-}
-
-/// Replace whatever is at `link` with a symlink to `dst` (absolute target, so it
-/// resolves the same from a sysroot offset).
-fn symlink_force(dst: &Utf8Path, link: &Utf8Path) -> Result<()> {
-    match std::fs::symlink_metadata(link) {
-        Ok(_) => std::fs::remove_file(link).with_context(|| format!("removing {link}"))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e).with_context(|| format!("stat {link}")),
-    }
-    std::os::unix::fs::symlink(dst, link).with_context(|| format!("linking {link} -> {dst}"))
 }
 
 #[cfg(test)]

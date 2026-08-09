@@ -1,30 +1,30 @@
-//! Diff-and-apply plan for crossdev's generated config files.
+//! Diff-and-apply plan for `em`-generated config files.
 //!
-//! `--init-target` used to write every file unconditionally and immediately,
-//! with no way to preview or confirm it — unlike every other mutating `em`
-//! path, which honours `-p`/`--pretend` (global on `Cli`) and `-a`/`--ask`
-//! (`MergeFlags`, resolved by the caller via `merge_merge_flags` — not
-//! global, since unlike `--pretend` it has no meaning outside a merge-shaped
-//! command; see `MergeFlags::ask`'s doc comment). This collects the desired
-//! state of each file/symlink/dir as a
-//! [`ConfigEntry`] (no I/O beyond validation), diffs it against what's
-//! actually on disk, and only then previews (`-p`), confirms (`-a`), or
-//! applies — the config-regeneration equivalent of a merge plan.
+//! `crossdev --init-target` used to write every file unconditionally and
+//! immediately, with no way to preview or confirm it — unlike every other
+//! mutating `em` path, which honours `-p`/`--pretend` (global on `Cli`) and
+//! `-a`/`--ask` (`MergeFlags`, resolved by the caller via `merge_merge_flags`
+//! — not global, since unlike `--pretend` it has no meaning outside a
+//! merge-shaped command; see `MergeFlags::ask`'s doc comment). This collects
+//! the desired state of each file/symlink/dir as a [`ConfigEntry`] (no I/O
+//! beyond validation), diffs it against what's actually on disk, and only
+//! then previews (`-p`), confirms (`-a`), or applies — the config-
+//! regeneration equivalent of a merge plan. Shared between `crossdev` (cross
+//! sysroot config) and `setup` (`--local`/`--prefix` repos.conf/make.profile).
 
 use std::io::Write;
 
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
-use super::symlink_force;
 use crate::util::write_if_absent;
 
 /// The full `[crossdev.<tuple>]` `Location::Alias` body for
 /// `name`/`category`/`packages_line` — the single formatter both
 /// `ConfigEntry::Alias`'s `change()` (comparison) and `apply()` (write) use,
 /// so they can never drift apart from each other. `name` is per-target
-/// (`crossdev.<tuple>`, see `super::overlay_name`) so each cross target gets
-/// its own section/file and multiple targets can coexist on one prefix
+/// (`crossdev.<tuple>`, see `crossdev::overlay_name`) so each cross target
+/// gets its own section/file and multiple targets can coexist on one prefix
 /// instead of the last `--setup`/`--init-target` silently orphaning the
 /// previous target's alias.
 fn alias_body(name: &str, category: &str, packages_line: &str) -> String {
@@ -34,9 +34,9 @@ fn alias_body(name: &str, category: &str, packages_line: &str) -> String {
     )
 }
 
-/// One file/dir/symlink `init_target` wants in a particular state.
+/// One file/dir/symlink a caller wants in a particular state.
 #[derive(Debug)]
-pub(super) enum ConfigEntry {
+pub(crate) enum ConfigEntry {
     /// Regenerated every run: em owns the full content, so a rewrite always
     /// wins over whatever is currently on disk.
     File { path: Utf8PathBuf, desired: String },
@@ -49,7 +49,7 @@ pub(super) enum ConfigEntry {
     /// when it's recognisably em's own (has an `alias-target =` key) but
     /// stale, left alone when it's foreign (e.g. a real crossdev/eselect-
     /// managed physical overlay with a `location =` key instead). `name` is
-    /// per-target (see `super::overlay_name`), so it also doubles as the
+    /// per-target (see `crossdev::overlay_name`), so it also doubles as the
     /// filename stem — each target's alias lives in its own file/section.
     Alias {
         path: Utf8PathBuf,
@@ -75,7 +75,7 @@ enum Change {
 /// How aggressively to reconcile a [`ConfigEntry`] plan against what's
 /// already on disk.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum RefreshPolicy {
+pub(crate) enum RefreshPolicy {
     /// Always regenerate to match the freshly-computed desired state.
     /// Explicit `--init-target`: an intentional "make this exactly right"
     /// action, including picking up a changed package set or `--ex-pkg`
@@ -206,12 +206,23 @@ impl ConfigEntry {
     }
 }
 
+/// Replace whatever is at `link` with a symlink to `dst` (absolute target, so it
+/// resolves the same from a sysroot offset).
+pub(crate) fn symlink_force(dst: &Utf8Path, link: &Utf8Path) -> Result<()> {
+    match std::fs::symlink_metadata(link) {
+        Ok(_) => std::fs::remove_file(link).with_context(|| format!("removing {link}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("stat {link}")),
+    }
+    std::os::unix::fs::symlink(dst, link).with_context(|| format!("linking {link} -> {dst}"))
+}
+
 /// Apply every entry unconditionally (`RefreshPolicy::Sync`, no
 /// diff/preview/confirm) — for a caller that is already externally gated by
 /// `!globals.pretend` (the native toolchain `--setup` path, which has its
 /// own, separately-established pretend handling and doesn't need its own
 /// preview here).
-pub(super) fn apply_now(entries: &[ConfigEntry]) -> Result<()> {
+pub(crate) fn apply_now(entries: &[ConfigEntry]) -> Result<()> {
     for e in entries {
         if !matches!(e.change(RefreshPolicy::Sync), Change::Unchanged) {
             e.apply()?;
@@ -221,7 +232,7 @@ pub(super) fn apply_now(entries: &[ConfigEntry]) -> Result<()> {
 }
 
 /// What happened to a collected [`ConfigEntry`] plan.
-pub(super) enum Outcome {
+pub(crate) enum Outcome {
     /// Nothing to do (or `-p`: shown but not written).
     NothingToApply,
     /// `-p`: previewed only.
@@ -236,7 +247,7 @@ impl Outcome {
     /// Whether the caller should go on to print its own "ready" summary —
     /// true only when something was genuinely written (or there was nothing
     /// to do in the first place, i.e. already up to date).
-    pub(super) fn applied(&self) -> bool {
+    pub(crate) fn applied(&self) -> bool {
         matches!(self, Outcome::Applied | Outcome::NothingToApply)
     }
 }
@@ -247,7 +258,7 @@ impl Outcome {
 /// already-merged `MergeFlags::ask` (see `merge_merge_flags`) — not global,
 /// so it has to be resolved by the caller instead of read straight off
 /// `&Cli`.
-pub(super) fn apply(
+pub(crate) fn apply(
     entries: &[ConfigEntry],
     pretend: bool,
     ask: bool,
