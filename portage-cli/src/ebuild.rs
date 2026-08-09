@@ -293,15 +293,14 @@ pub(crate) async fn apply_profile_env(
         .context("building profile stack")?
         .with_user_profile(base.join("etc/portage/profile").into_std_path_buf())
         .context("loading the user profile")?;
-    let conf_candidates = [
-        base.join("etc/portage/make.conf"),
+    // make.conf(5): file or Flat directory of fragments. Legacy first, then
+    // `/etc/portage/make.conf` (later overrides — same order as Portage).
+    let conf_owned = portage_repo::expand_make_conf_paths([
         base.join("etc/make.conf"),
-    ];
-    let confs: Vec<&std::path::Path> = conf_candidates
-        .iter()
-        .map(|p| p.as_std_path())
-        .filter(|p| p.exists())
-        .collect();
+        base.join("etc/portage/make.conf"),
+    ])
+    .context("listing make.conf")?;
+    let confs: Vec<&std::path::Path> = conf_owned.iter().map(|p| p.as_path()).collect();
     stack
         .configure_shell(shell, &confs)
         .await

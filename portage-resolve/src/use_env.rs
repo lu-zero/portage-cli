@@ -107,15 +107,15 @@ async fn compute_use_env(
         .await
         .map_err(|e| anyhow::anyhow!("failed to start ebuild shell: {e}"))?;
 
-    let make_conf_candidates = [
-        root_dir.join("etc/portage/make.conf"),
+    // make.conf(5): path may be a file or a directory of Flat fragments.
+    // Portage sources legacy `/etc/make.conf` first, then `/etc/portage/make.conf`
+    // so the latter overrides (config.py make_conf_paths order).
+    let conf_owned = portage_repo::expand_make_conf_paths([
         root_dir.join("etc/make.conf"),
-    ];
-    let confs: Vec<&std::path::Path> = make_conf_candidates
-        .iter()
-        .filter(|p| p.as_std_path().exists())
-        .map(|p| p.as_std_path())
-        .collect();
+        root_dir.join("etc/portage/make.conf"),
+    ])
+    .map_err(|e| anyhow::anyhow!("listing make.conf: {e}"))?;
+    let confs: Vec<&std::path::Path> = conf_owned.iter().map(|p| p.as_path()).collect();
 
     let resolved = match extra_use_override {
         Some(content) => stack

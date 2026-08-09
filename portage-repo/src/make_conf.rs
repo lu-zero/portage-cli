@@ -5,6 +5,19 @@
 //! winnow parser now records comment byte spans into `Program.comments`, so
 //! we know exactly where each comment lives without gap-filling heuristics.
 //!
+//! # File or directory
+//!
+//! `make.conf(5)` allows `/etc/portage/make.conf` (and the legacy path) to be
+//! either a single file or a directory of fragments. Directory form uses
+//! [`crate::ConfigFilesMode::Flat`]: regular files directly in the directory,
+//! lexical order, skipping `.…` and `…~` (same as other Portage config dirs).
+//! Nested subdirectories are not walked — matching the man page wording; Portage
+//! happens to recurse via a shared helper, but flat is the documented contract.
+//!
+//! [`MakeConf::load`] concatenates directory fragments for reading. For USE
+//! edits against a multi-fragment directory, prefer
+//! [`MakeConf::apply_use_changes_at`], which patches a single fragment.
+//!
 //! # How statement spans are computed
 //!
 //! Each `CompoundListItem` carries an AST span covering its tokens.  For
@@ -17,24 +30,52 @@
 //! `Entry::Opaque` and reproduced verbatim.
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use brush_parser::ast::{
     AssignmentName, AssignmentValue, Command, CommandPrefixOrSuffixItem, SourceLocation,
 };
 use brush_parser::{ParserOptions, SourceInfo};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::{Error, Result};
+use crate::{ConfigFilesMode, Error, Result, list_config_files};
 
 /// Default path to the active make.conf.
 pub const DEFAULT_MAKE_CONF: &str = "/etc/portage/make.conf";
 /// Legacy path, used as a fallback when the default does not exist.
 pub const LEGACY_MAKE_CONF: &str = "/etc/make.conf";
 
+/// Fragment name created when saving USE edits into an empty `make.conf/` dir.
+pub const MAKE_CONF_DIR_FALLBACK_FRAGMENT: &str = "zz-em";
+
 /// A parsed and editable make.conf file.
 pub struct MakeConf {
     src: String,
     entries: Vec<Entry>,
+}
+
+/// Expand make.conf candidate paths (each a file or Flat directory) into the
+/// ordered list of regular files to source.
+///
+/// Missing candidates contribute nothing. Typical call:
+///
+/// ```ignore
+/// // Portage order: legacy first, modern second (later overrides).
+/// let files = expand_make_conf_paths([
+///     root.join("etc/make.conf"),
+///     root.join("etc/portage/make.conf"),
+/// ])?;
+/// ```
+pub fn expand_make_conf_paths<I, P>(candidates: I) -> Result<Vec<PathBuf>>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut out = Vec::new();
+    for c in candidates {
+        out.extend(list_config_files(c.as_ref(), ConfigFilesMode::Flat)?);
+    }
+    Ok(out)
 }
 
 /// One element in the tiled decomposition of the source file.
@@ -70,13 +111,42 @@ struct Var {
 // ---------------------------------------------------------------------------
 
 impl MakeConf {
-    /// Read and parse `path`.
+    /// Read and parse `path` (regular file or Flat directory of fragments).
+    ///
+    /// Directory fragments are concatenated in lexical order. An empty
+    /// directory yields an empty config (no error).
     pub fn load(path: &Utf8Path) -> Result<Self> {
-        let src = std::fs::read_to_string(path).map_err(|e| Error::Io {
-            path: path.to_path_buf().into_std_path_buf(),
-            source: e,
-        })?;
-        Self::parse(src)
+        let files = list_config_files(path.as_std_path(), ConfigFilesMode::Flat)?;
+        if files.is_empty() {
+            if path.is_dir() {
+                return Self::parse(String::new());
+            }
+            // Preserve a real I/O error for a missing/unreadable file.
+            let src = std::fs::read_to_string(path).map_err(|e| Error::Io {
+                path: path.to_path_buf().into_std_path_buf(),
+                source: e,
+            })?;
+            return Self::parse(src);
+        }
+        if files.len() == 1 && files[0] == path.as_std_path() {
+            let src = std::fs::read_to_string(path).map_err(|e| Error::Io {
+                path: path.to_path_buf().into_std_path_buf(),
+                source: e,
+            })?;
+            return Self::parse(src);
+        }
+        let mut combined = String::new();
+        for f in files {
+            let chunk = std::fs::read_to_string(&f).map_err(|e| Error::Io {
+                path: f,
+                source: e,
+            })?;
+            combined.push_str(&chunk);
+            if !combined.is_empty() && !combined.ends_with('\n') {
+                combined.push('\n');
+            }
+        }
+        Self::parse(combined)
     }
 
     /// Load whichever of [`DEFAULT_MAKE_CONF`] / [`LEGACY_MAKE_CONF`] exists.
@@ -273,10 +343,121 @@ impl MakeConf {
         new_use
     }
 
+    /// Apply USE add/remove at `path` (file or Flat directory) and write back.
+    ///
+    /// Multi-fragment directories: edits the **last** fragment that assigns
+    /// `USE` (bash last-wins), or the last fragment if none do; an empty
+    /// directory gets a new [`MAKE_CONF_DIR_FALLBACK_FRAGMENT`]. The effective
+    /// USE after the edit is returned (full fold across all fragments).
+    pub fn apply_use_changes_at(
+        path: &Utf8Path,
+        add: &[String],
+        remove: &[String],
+    ) -> Result<String> {
+        let files = list_config_files(path.as_std_path(), ConfigFilesMode::Flat)?;
+        let target: Utf8PathBuf = if path.is_dir() {
+            if files.is_empty() {
+                path.join(MAKE_CONF_DIR_FALLBACK_FRAGMENT)
+            } else {
+                let mut pick = files.last().cloned().expect("non-empty");
+                for f in &files {
+                    // Load each fragment alone (not the directory) to see who
+                    // assigns USE.
+                    if let Ok(utf) = Utf8PathBuf::try_from(f.clone())
+                        && let Ok(frag) = Self::load(&utf)
+                        && frag.get("USE").is_some()
+                    {
+                        pick = f.clone();
+                    }
+                }
+                Utf8PathBuf::try_from(pick).map_err(|e| Error::Io {
+                    path: e.into_path_buf(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "non-utf8 make.conf fragment path",
+                    ),
+                })?
+            }
+        } else {
+            path.to_owned()
+        };
+
+        // Effective USE for the edit is the full directory/file fold.
+        let current_fold = Self::load(path)
+            .unwrap_or_else(|_| Self::parse(String::new()).expect("empty parse"));
+        let mut current_flags: Vec<String> = current_fold
+            .get("USE")
+            .unwrap_or("")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        for flag in remove {
+            let flag = flag.trim_start_matches('+');
+            current_flags.retain(|f| f != flag && f != &format!("+{flag}"));
+        }
+        for flag in add {
+            let flag = flag.trim_start_matches('+');
+            current_flags.retain(|f| {
+                f != flag && f != &format!("+{flag}") && f != &format!("-{flag}")
+            });
+            current_flags.push(flag.to_string());
+        }
+        let new_use = current_flags.join(" ");
+
+        // Write the resulting USE into a single fragment (last-wins for load).
+        let mut frag = if target.as_std_path().is_file() {
+            Self::load(&target)?
+        } else {
+            Self::parse(String::new())?
+        };
+        frag.set("USE", &new_use);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent.as_std_path()).map_err(|e| Error::Io {
+                path: parent.to_path_buf().into_std_path_buf(),
+                source: e,
+            })?;
+        }
+        frag.save(&target)?;
+        Ok(new_use)
+    }
+
     /// Save to `path`.
+    ///
+    /// If `path` is a directory: write a single fragment when the directory
+    /// has zero or one fragment (empty → [`MAKE_CONF_DIR_FALLBACK_FRAGMENT`]);
+    /// refuse multi-fragment wholesale rewrite (use
+    /// [`Self::apply_use_changes_at`] for USE edits).
     pub fn save(&self, path: &Utf8Path) -> Result<()> {
-        std::fs::write(path, self.to_string()).map_err(|e| Error::Io {
-            path: path.to_path_buf().into_std_path_buf(),
+        let target: Utf8PathBuf = if path.is_dir() {
+            let files = list_config_files(path.as_std_path(), ConfigFilesMode::Flat)?;
+            match files.as_slice() {
+                [] => path.join(MAKE_CONF_DIR_FALLBACK_FRAGMENT),
+                [one] => Utf8PathBuf::try_from(one.clone()).map_err(|e| Error::Io {
+                    path: e.into_path_buf(),
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "non-utf8 make.conf fragment path",
+                    ),
+                })?,
+                _ => {
+                    return Err(Error::Io {
+                        path: path.to_path_buf().into_std_path_buf(),
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "cannot rewrite multi-fragment make.conf directory as a whole; \
+                             edit a fragment or use apply_use_changes_at for USE",
+                        ),
+                    });
+                }
+            }
+        } else {
+            path.to_owned()
+        };
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent.as_std_path());
+        }
+        std::fs::write(target.as_std_path(), self.to_string()).map_err(|e| Error::Io {
+            path: target.into_std_path_buf(),
             source: e,
         })
     }
@@ -640,5 +821,79 @@ mod tests {
         let out = mc.to_string();
         assert_eq!(out.matches("A=").count(), 1);
         assert!(out.contains("A=\"third\""));
+    }
+
+    #[test]
+    fn load_directory_concatenates_fragments_lexical_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mc_dir = dir.path().join("make.conf");
+        std::fs::create_dir(&mc_dir).unwrap();
+        std::fs::write(mc_dir.join("20-b"), "CFLAGS=\"-O3\"\n").unwrap();
+        std::fs::write(mc_dir.join("10-a"), "USE=\"ssl\"\n").unwrap();
+        std::fs::write(mc_dir.join(".hidden"), "USE=\"nope\"\n").unwrap();
+        std::fs::write(mc_dir.join("30~"), "USE=\"backup\"\n").unwrap();
+
+        let path = Utf8Path::from_path(&mc_dir).unwrap();
+        let mc = MakeConf::load(path).unwrap();
+        assert_eq!(mc.get("USE"), Some("ssl"));
+        assert_eq!(mc.get("CFLAGS"), Some("-O3"));
+    }
+
+    #[test]
+    fn expand_make_conf_paths_file_and_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir.path().join("etc/make.conf");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "A=1\n").unwrap();
+        let modern = dir.path().join("etc/portage/make.conf");
+        std::fs::create_dir_all(&modern).unwrap();
+        std::fs::write(modern.join("10"), "B=2\n").unwrap();
+        std::fs::write(modern.join("20"), "C=3\n").unwrap();
+
+        // Portage order: legacy file first, then modern dir fragments.
+        let files = expand_make_conf_paths([
+            dir.path().join("etc/make.conf"),
+            dir.path().join("etc/portage/make.conf"),
+        ])
+        .unwrap();
+        assert_eq!(files.len(), 3);
+        assert!(files[0].ends_with("make.conf"));
+        assert!(files[1].ends_with("10"));
+        assert!(files[2].ends_with("20"));
+    }
+
+    #[test]
+    fn apply_use_changes_at_directory_patches_use_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        let mc_dir = dir.path().join("make.conf");
+        std::fs::create_dir(&mc_dir).unwrap();
+        std::fs::write(mc_dir.join("10-flags"), "CFLAGS=\"-O2\"\n").unwrap();
+        std::fs::write(mc_dir.join("20-use"), "USE=\"ssl\"\n").unwrap();
+
+        let path = Utf8Path::from_path(&mc_dir).unwrap();
+        let new_use =
+            MakeConf::apply_use_changes_at(path, &["nls".to_string()], &[]).unwrap();
+        assert_eq!(new_use, "ssl nls");
+        // USE fragment updated; flags fragment untouched.
+        let use_frag = std::fs::read_to_string(mc_dir.join("20-use")).unwrap();
+        assert!(use_frag.contains("ssl nls"), "{use_frag}");
+        assert_eq!(
+            std::fs::read_to_string(mc_dir.join("10-flags")).unwrap(),
+            "CFLAGS=\"-O2\"\n"
+        );
+    }
+
+    #[test]
+    fn apply_use_changes_at_empty_dir_creates_fallback_fragment() {
+        let dir = tempfile::tempdir().unwrap();
+        let mc_dir = dir.path().join("make.conf");
+        std::fs::create_dir(&mc_dir).unwrap();
+        let path = Utf8Path::from_path(&mc_dir).unwrap();
+        let new_use =
+            MakeConf::apply_use_changes_at(path, &["python".to_string()], &[]).unwrap();
+        assert_eq!(new_use, "python");
+        let frag = mc_dir.join(MAKE_CONF_DIR_FALLBACK_FRAGMENT);
+        assert!(frag.is_file());
+        assert!(std::fs::read_to_string(frag).unwrap().contains("python"));
     }
 }

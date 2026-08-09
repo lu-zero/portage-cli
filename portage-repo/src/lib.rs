@@ -64,7 +64,10 @@ pub use cache::{
 };
 pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};
-pub use make_conf::{DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF, MakeConf};
+pub use make_conf::{
+    DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF, MAKE_CONF_DIR_FALLBACK_FRAGMENT, MakeConf,
+    expand_make_conf_paths,
+};
 pub use metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
 pub use overlay::{gap_entries, overlay_entries, primary_entries};
 pub use package_conf::{PackageConf, Token as PackageToken};

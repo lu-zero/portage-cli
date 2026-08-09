@@ -16,9 +16,9 @@ pub fn run(
         return show(&path);
     }
 
-    let mut mc = MakeConf::load(&path).with_context(|| format!("reading {path}"))?;
-    let new_use = mc.apply_use_changes(add, remove);
-    mc.save(&path).with_context(|| format!("writing {path}"))?;
+    // Directory-form make.conf: patch a single fragment (see MakeConf::apply_use_changes_at).
+    let new_use = MakeConf::apply_use_changes_at(&path, add, remove)
+        .with_context(|| format!("updating USE in {path}"))?;
 
     println!("USE=\"{}\"", new_use);
     Ok(())
