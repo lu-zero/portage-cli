@@ -475,28 +475,31 @@ the `--local` lifecycle silently depends on this.** Confirmed live
   also work on a non-Gentoo host, where auto-symlinking a Gentoo profile
   tree isn't possible) — the documented lifecycle just never says so
   explicitly, nor what to do about it.
-- The actual next step, `em select profile set <profile>`, does **not**
-  accept `--local`/`--prefix`/`--root` as its config target at all — `em
-  select` deliberately only ever honours an explicit `--config-root`
-  (`Roots::config_root_explicit()`, matching real `eselect`'s
-  `profile.eselect`, landed 2026-07-09, see this doc's Status section).
-  Running `em --local DIR select profile set ...` doesn't error usefully —
-  it tries to modify the **host's** `/etc/portage/make.profile` and fails
-  with a permission error that gives no hint the flag was wrong. The
-  correct invocation is `em --config-root DIR select profile set ...`.
-- Only *after* that does `em --local DIR toolchain --setup` read the
-  prefix's own profile; skip the `select profile set` step and it silently
-  falls back to resolving against the host's real `/etc/portage` instead,
-  which is what produced the much larger, more chaotic unresolved-dependency
-  list observed when this was tried without it.
+- **FIXED (was: "does not accept `--local`/`--prefix`")** — `em select
+  profile set <profile>` (and every other `select` module) resolves its
+  config root through `config_portage_dir_for()`
+  ([`select/mod.rs`](../../portage-cli/src/select/mod.rs)): explicit
+  `--config-root` first, else the `--local`/`--prefix` overlay
+  (`Roots::config_overlay()`), else the host's `/etc/portage`. Fixed in
+  `7a8c5bc` (2026-06-23), predating the "confirmed live 2026-07-11" note this
+  section used to carry — that note was already stale when written. Live
+  re-verified 2026-08-09: `em --local DIR select profile show` resolves
+  `DIR/etc/portage`, not the host's. A bare `--root DIR` still does **not**
+  count (only `--config-root`, `--local`, `--prefix` do) — that part matches
+  real `eselect`'s `profile.eselect` on purpose, see `select/mod.rs`'s doc
+  comment on `config_portage_dir_for`.
+- `em --local DIR toolchain --setup` reads the prefix's own profile once
+  `select profile set` has pointed `make.profile` at it (via the same
+  `--local`-aware resolution above); skip that step and it falls back to the
+  host's real `/etc/portage`, which is what produced the much larger, more
+  chaotic unresolved-dependency list observed when this was tried without it.
 
-None of this is one bug — it's three different commands (`setup`, `select`,
-`toolchain`/`stages`) each resolving `--local`'s config root a different way,
-with the lifecycle recipe in this doc (and `setup.rs`'s own doc comment)
-silently depending on the reader doing the right undocumented thing between
-steps. Worth a real fix (making config-root resolution consistent, or at
-least making the lifecycle recipe below explicit about the `select profile
-set` step for `--local`) — not attempted yet.
+This was three different commands (`setup`, `select`, `toolchain`/`stages`)
+resolving `--local`'s config root inconsistently; `select` is now aligned
+with `--local`/`--prefix` like the other two. What's left is `setup` still
+not writing a `make.profile` for `--local` (deliberate, see below) — so the
+`select profile set` step is still a required manual step in the lifecycle,
+just no longer one that needs its own `--config-root` override.
 
 ### `--local` and `--prefix` setup
 
@@ -510,7 +513,7 @@ em --prefix /opt/prefix <pkg>          # host compiler builds into P
 
 # --local (standalone): seed host tools, then bootstrap the prefix toolchain
 em --local setup                             # layout + own config, no python symlinks
-em --config-root ~/.gentoo select profile set <profile>  # required — see below
+em --local select profile set <profile>      # required — see below
 # Empty VDB ⇒ hard cycle unless package.provided seeds host tools
 # (hand-write today; setup automation planned — docs/local-bootstrap.md)
 em --local toolchain --setup                 # build native toolchain INTO ~/.gentoo
@@ -527,15 +530,15 @@ re-diagnose that; it's done.
 What's still real: `em --local setup` writes layout + config but **no
 `make.profile`** — deliberate, since `--local` must also work on a
 non-Gentoo host where auto-symlinking a Gentoo profile isn't possible. The
-`select profile set <profile>` step above is required to give it one, and it
-must be invoked with an explicit `--config-root <dir>` — `em select` never
-infers a config root from `--local`/`--prefix`/`--root` (matching real
-`eselect`). Skipping it doesn't error at the `toolchain --setup` step
-either: it silently falls back to resolving against the host's real
-`/etc/portage`, producing a much larger, more chaotic dependency set than
-intended (confirmed live 2026-07-11 — see "Plain unprivileged toolchain"
-above for the full writeup). This three-command inconsistency
-(`setup`/`select`/`toolchain`) is the real gap, not the symlink logic.
+`select profile set <profile>` step above is required to give it one; a
+plain `em --local select profile set <profile>` now targets the prefix
+correctly (see the "Known gap" writeup above — fixed in `7a8c5bc`, no
+`--config-root` override needed for the common `--local`/`--prefix` case,
+only for targeting a foreign sysroot). Skipping the step entirely still
+doesn't error at the `toolchain --setup` step: it silently falls back to
+resolving against the host's real `/etc/portage`, producing a much larger,
+more chaotic dependency set than intended (confirmed live 2026-07-11 — see
+"Plain unprivileged toolchain" above for the full writeup).
 
 ### Cross setup (`em crossdev`)
 
@@ -657,7 +660,11 @@ variant refactor's payoff is that both sides ask
   **`--root` config (current):** profile/make.conf stay at host `/` unless
   `--config-root` is set (portage `ROOT=` parity). `em setup --root R` still
   *writes* a make.conf under R for when the user pairs `--config-root R`.
-  `em select` uses `config_root_explicit()` (only ever `--config-root`).
+  `em select` resolves via `config_portage_dir_for()`: explicit
+  `--config-root`, else the `--local`/`--prefix` overlay, else host `/` — a
+  bare `--root` alone still doesn't count (matching real `eselect`). Fixed
+  in `7a8c5bc` (2026-06-23); see the "Known gap" writeup above for the
+  `--local`/`select` history.
 - **`BuildClass` — landed then dropped (2026-08).** Track A stamped a
   `BuildClass` on plan entries; re-review against bash-crossdev concluded it
   was dual authority next to **package.env** and was removed. Host-vs-target
