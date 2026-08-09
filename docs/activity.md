@@ -15,10 +15,20 @@ offsets are self-contained:
 ```
 <merge_root>/var/cache/edb/em-activity/
   live/<job_id>/
-    session.json          # one job: argv, pid, plan, flags, heartbeat
+    session.json           # static job meta: argv, pid, plan, blockers — written once, at SessionStart
+    progress.json          # dynamic: completed, failed, heartbeat_at — rewritten per package (O(1))
     inflight/{host,target}/<cat>/<pf>.json   # packages in flight + current phase
   history/merges.jsonl    # one line per finished package action (ETA substrate)
 ```
+
+`session.json` and `progress.json` are split because `plan`/`blockers` can be
+large (one entry per planned package) but never change after `SessionStart`,
+while `completed`/`failed`/`heartbeat_at` change on every package but never
+grow. A single combined file rewritten on every `PkgStart`/`PkgEnd` was O(N)
+per write — O(N²) over a session — and is what made `em regen` hang near the
+end of a 32k-ebuild run. There is no `finished` list on disk at all anymore;
+`em log predict` derives "already finished this session" from
+`history/merges.jsonl` (filtered by `job_id`) instead.
 
 Optional dual-write (off by default):
 
@@ -92,8 +102,8 @@ UI (see `attach_human_stdout`).
 | `em log time [atom]` | `history/merges.jsonl` | Last/median/mean durations for a package (or global median with no atom) |
 | `em log predict` | `live/` + `history/` | ETA for a **running** session's remainder (errors if nothing is active) |
 
-`em log current` drops sessions whose pid is dead and heartbeat is stale, so a
-killed `-9` run does not linger forever.
+`em log current` drops sessions whose pid is dead and there is nothing
+in flight — `heartbeat_at` is recorded but not yet used as a staleness check.
 
 ## ETA
 

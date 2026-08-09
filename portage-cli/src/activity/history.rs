@@ -1,6 +1,6 @@
 //! Append-only JSONL duration history + ETA estimates.
 
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -146,6 +146,11 @@ pub struct DurationStore {
 }
 
 impl DurationStore {
+    #[cfg(test)]
+    pub(crate) fn from_records(records: Vec<HistoryRecord>) -> Self {
+        Self { records }
+    }
+
     pub fn load(merge_root: &Utf8Path) -> Self {
         let path = merge_root.join("var/cache/edb/em-activity/history/merges.jsonl");
         Self::load_path(path.as_std_path())
@@ -174,6 +179,17 @@ impl DurationStore {
 
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
+    }
+
+    /// `(merge_root, cpv)` pairs already recorded (success or failure) for
+    /// `job_id` — the live tree's own `finished` set was dropped (O(N²)
+    /// rewrite, see `todo/for-sonnet.md` 2026-08-09); this is its replacement.
+    pub fn finished_set(&self, job_id: &str) -> HashSet<(ActivityMergeRoot, String)> {
+        self.records
+            .iter()
+            .filter(|r| r.job_id == job_id)
+            .map(|r| (r.merge_root, r.cpv.clone()))
+            .collect()
     }
 
     /// Most recent records first, optional limit.

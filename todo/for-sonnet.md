@@ -1623,3 +1623,88 @@ keyed on the activated path's own `ld.so.conf`, not `--prefix`-specific.
 Pointed `--local` at the same already-bootstrapped `/opt/pfx2` toolchain —
 `clang-22 --version` and a real compile+link+run both worked identically.
 Documented: [`docs/prefix-toolchain.md`](../docs/prefix-toolchain.md).
+
+---
+
+### DONE, 2026-08-09: `em regen` hang fixed — `LiveFsSink` O(N²) rewrite, plus regen dropped from live tracking entirely
+
+`em regen -o DIR /var/db/repos/gentoo` (32,637 ebuilds) hung indefinitely
+right after the last `[N/32637]` progress line, while `cargo run --release
+-p portage-repo --example regen_only` (same underlying `regen_cache`, no
+activity bus) completed fine — isolated the bug to `em`'s activity-bus
+wrapper, not the library.
+
+Root cause: `LiveFsSink::write_session_file` (called on `SessionStart`,
+`SessionHeartbeat`, **and every `PkgStart`/`PkgEnd`**) re-serialized and
+rewrote the *entire* `session.json` on every call, including a `finished:
+Vec<FinishedPkg>` field that only ever grows — classic O(N²) total cost
+across a session. `docs/activity.md`'s original design (and an old
+`todo/activity-status.md` sketch) never had `finished` on disk at all; it
+was added later by a since-unremembered commit and nobody noticed the
+rewrite-everything-every-time cost until regen made it visible (a real
+merge's `plan`/`blockers` are equally O(N) and rewritten per-package too —
+usually the *dominant* term there, since a real merge's `finished` set
+stays small while `plan`/`blockers` are large from the start).
+
+Had Opus review the bug independently and evaluate fix alternatives before
+implementing; user approved the recommended shape ("it sounds good indeed,
+please fix it all properly :)"):
+
+- **Split `live/<job_id>/session.json` (static) from a new
+  `progress.json` (dynamic).** `session.json` now writes once, at
+  `SessionStart` only: `job_id`/`pid`/`argv`/`plan`/`blockers`/etc.
+  `progress.json` is the only file rewritten on `SessionHeartbeat`/
+  `PkgStart`/`PkgEnd`: just `completed`/`failed`/`heartbeat_at` — none of
+  which grow, so each write is genuinely O(1).
+- **Dropped `finished` from the live on-disk tree entirely** (no
+  `FinishedPkg`/`FinishedDisk` anywhere anymore). `LiveSession::
+  remaining_for_eta` (used by `em log predict`'s critical-path ETA) now
+  takes a `&DurationStore` and derives the finished set by filtering
+  `history/merges.jsonl` by `job_id` (`DurationStore::finished_set`) —
+  data that's already loaded there for the ETA calculation anyway.
+- **Freebie 1:** `remove_inflight` now checks the in-memory projection
+  (looked up *before* `state.apply()` removes the entry) before calling
+  `remove_file`, skipping the syscall entirely when there was never an
+  inflight file for that key — regen fires exactly this pattern 32,637
+  times (it never emits `PkgStart`, so every `PkgEnd`'s inflight lookup is
+  a guaranteed miss).
+- **Freebie 2:** `write_json` switched from `serde_json::to_string_pretty`
+  to `to_string` — these files are machine-read only (`em log current`/
+  `predict`, JSONL consumers), pretty-printing was pure waste.
+
+**Further scoped down after Luca's follow-up** ("em regen probably
+shouldn't populate those… we just want to know how and when an ebuild
+fails sourcing"): regen isn't a merge session in any sense that matters
+for live tracking — no phases, no ETA relevance, and its actual
+failure-reporting need (which ebuild failed sourcing, and why) was
+*already* fully served by `PkgEnd.error` + the rich miette frame
+`regen.rs::emit_item` prints directly + the final `bail!("{n} sourcing
+errors")`, none of which go through `LiveFsSink`. Added
+`activity::regen_activity_bus` (history sink only, no `LiveFsSink` at
+all) and switched `regen.rs` to it instead of the shared
+`default_cli_bus` (still used unchanged by the real merge path in
+`emerge.rs`, which does legitimately need live tracking for `em log
+current`/`predict` mid-build).
+
+**Live-verified against the real host repo** (`/var/db/repos/gentoo`,
+32,637 ebuilds): previously hung indefinitely; now completes in ~21-22s,
+every time, both before and after the `regen_activity_bus` change.
+Confirmed post-fix that `~/.local/state/em/activity/…/live/` stays
+completely empty across a regen run (also found and cleaned up 4 stale
+session directories orphaned by earlier hung/killed pre-fix runs — no
+`SessionEnd` ever fired for those, so nothing ever removed them).
+
+New unit test `live_fs_session_file_is_static_progress_file_is_dynamic`
+asserts the split directly (no dynamic field ever lands in
+`session.json`; `completed`/`failed` round-trip correctly through
+`progress.json`). All 33 `activity::` tests green, `cargo fmt`/clippy
+clean. `docs/activity.md` updated for the two-file layout and a
+pre-existing doc-drift fix (the "drops stale heartbeat" claim never
+matched `format_current`'s actual `pid_alive() || !inflight.is_empty()`
+check — corrected to describe reality, not implemented staleness
+detection, which stays open).
+
+Side note from the same session: raised `todo/activity-storage-format.md`
+— `history/merges.jsonl` still never rotates and is fully re-parsed on
+every `em log`/`--eta` query; not measured to be a real problem yet, just
+flagged so it isn't rediscovered as a surprise later.

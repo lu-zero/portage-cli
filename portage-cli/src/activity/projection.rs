@@ -1,11 +1,11 @@
 //! Fold [`ActivityEvent`]s into a live dashboard snapshot.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::event::{
     ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg, PkgKind, SessionFlags,
 };
-use super::history::EtaPkg;
+use super::history::{DurationStore, EtaPkg};
 
 /// One package currently being acted on.
 #[derive(Clone, Debug)]
@@ -42,8 +42,6 @@ pub struct LiveSession {
     pub plan: Vec<ActivityPlanPkg>,
     /// Build-order blockers for [`Self::plan`] (same indices as merge scheduler).
     pub blockers: Vec<Vec<usize>>,
-    /// Successfully or failed packages removed from the remaining ETA set.
-    pub finished: HashSet<(ActivityMergeRoot, String)>,
     pub ended: bool,
     pub ok: Option<bool>,
 }
@@ -58,7 +56,11 @@ impl LiveSession {
     /// Remaining plan packages + remapped blockers for critical-path ETA.
     ///
     /// Falls back to inflight-only (no blockers) when the session has no plan.
-    pub fn remaining_for_eta(&self) -> (Vec<EtaPkg>, Vec<Vec<usize>>) {
+    /// `store` (`history/merges.jsonl`, already loaded by the caller) is the
+    /// source of truth for which plan packages already finished — the live
+    /// tree no longer keeps a `finished` set of its own (see `todo/for-sonnet.md`
+    /// 2026-08-09: it was the O(N²) rewrite behind the `em regen` hang).
+    pub fn remaining_for_eta(&self, store: &DurationStore) -> (Vec<EtaPkg>, Vec<Vec<usize>>) {
         if self.plan.is_empty() {
             let pkgs: Vec<EtaPkg> = self
                 .inflight_sorted()
@@ -72,10 +74,11 @@ impl LiveSession {
             return (pkgs, blockers);
         }
 
+        let finished = store.finished_set(&self.job_id);
         let mut keep_old: Vec<usize> = Vec::new();
         let mut old_to_new: Vec<Option<usize>> = vec![None; self.plan.len()];
         for (i, p) in self.plan.iter().enumerate() {
-            if self.finished.contains(&(p.merge_root, p.cpv.clone())) {
+            if finished.contains(&(p.merge_root, p.cpv.clone())) {
                 continue;
             }
             old_to_new[i] = Some(keep_old.len());
@@ -155,7 +158,6 @@ impl LiveProjection {
                         inflight: HashMap::new(),
                         plan: plan.clone(),
                         blockers: blockers.clone(),
-                        finished: HashSet::new(),
                         ended: false,
                         ok: None,
                     },
@@ -254,7 +256,6 @@ impl LiveProjection {
             } => {
                 if let Some(s) = self.sessions.get_mut(job_id) {
                     s.inflight.remove(&(*merge_root, cpv.clone()));
-                    s.finished.insert((*merge_root, cpv.clone()));
                     if *ok {
                         s.completed += 1;
                     } else {
@@ -280,11 +281,6 @@ impl LiveProjection {
 
     pub fn get(&self, job_id: &str) -> Option<&LiveSession> {
         self.sessions.get(job_id)
-    }
-
-    /// Mutable access for disk-load patches (finished set, etc.).
-    pub fn get_mut(&mut self, job_id: &str) -> Option<&mut LiveSession> {
-        self.sessions.get_mut(job_id)
     }
 
     /// Combine sessions loaded from a second live-fs root (job_ids are

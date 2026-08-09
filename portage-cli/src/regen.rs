@@ -94,7 +94,7 @@ pub async fn run(
     // Not `roots.merge_root()`: regen must stay usable unprivileged (see
     // `xdg::regen_activity_root`'s doc), unlike a real merge's activity bus.
     let activity_root = crate::xdg::regen_activity_root();
-    let activity = crate::activity::default_cli_bus(&activity_root);
+    let activity = crate::activity::regen_activity_bus(&activity_root);
     crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
     let activity_args = cli.effective_activity();
     crate::activity::attach_jsonl_outputs(

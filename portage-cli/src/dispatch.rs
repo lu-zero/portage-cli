@@ -569,7 +569,7 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
                     s.inflight.len()
                 );
                 let jobs = s.flags.jobs.unwrap_or(1);
-                let (remaining, blockers) = s.remaining_for_eta();
+                let (remaining, blockers) = s.remaining_for_eta(&store);
                 let eta = if !s.plan.is_empty() && blockers.len() == remaining.len() {
                     crate::activity::estimate_remaining_with_blockers(
                         &store, &remaining, &blockers, jobs, 15,

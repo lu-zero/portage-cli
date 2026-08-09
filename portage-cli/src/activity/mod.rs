@@ -144,6 +144,22 @@ pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     bus
 }
 
+/// `em regen`'s own bus — no [`LiveFsSink`]. Regen isn't a merge session
+/// (no phases, no ETA relevance, no reason to show up in `em log current`);
+/// its only user-facing needs — the `[N/of]` progress line and knowing which
+/// ebuild failed sourcing and why — are already served by
+/// [`HumanStdoutSink`], `PkgEnd.error`, and the rich miette frame `regen.rs`
+/// prints directly. `HistorySink` is kept for symmetry; it already no-ops on
+/// [`ActivityMode::Regen`](super::event::ActivityMode::Regen) events.
+pub fn regen_activity_bus(activity_root: &Utf8Path) -> ActivityBus {
+    let bus = ActivityBus::new();
+    bus.add_sink(Arc::new(BackgroundSink::new(
+        Arc::new(HistorySink::new(activity_root.to_owned())),
+        "em-activity-history",
+    )));
+    bus
+}
+
 /// Install-worker bus: LiveFs + optional JSONL re-emit path (Unix socket or
 /// pipe write end). Parent owns Session/PkgStart/PkgEnd and history; the child
 /// refreshes phase on the shared live tree and streams the same events back so
@@ -578,8 +594,20 @@ mod tests {
             phases: vec![],
             error: None,
         });
+        let store = DurationStore::from_records(vec![HistoryRecord {
+            ts_end: 2.0,
+            job_id: "j".into(),
+            cpn: "a/a".into(),
+            cpv: "a/a-1".into(),
+            merge_root: ActivityMergeRoot::Target,
+            kind: PkgKind::Source,
+            ok: true,
+            seconds: 1.0,
+            phases: vec![],
+            error: None,
+        }]);
         let s = p.get("j").unwrap();
-        let (pkgs, blockers) = s.remaining_for_eta();
+        let (pkgs, blockers) = s.remaining_for_eta(&store);
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].cpv, "b/b-1");
         assert_eq!(pkgs[1].cpv, "c/c-1");
@@ -658,6 +686,77 @@ mod tests {
         });
         let loaded2 = load_live_from_disk(&root);
         assert!(loaded2.active().is_empty());
+    }
+
+    /// `session.json` is static (written once, at `SessionStart`) and
+    /// `progress.json` is the only file rewritten per package — this is the
+    /// split that replaced the O(N²) `write_session_file` rewrite behind the
+    /// `em regen` hang (`todo/for-sonnet.md` 2026-08-09). Assert the split
+    /// actually holds: no dynamic field ever lands in `session.json`, and
+    /// `completed`/`failed` round-trip correctly through `progress.json`.
+    #[test]
+    fn live_fs_session_file_is_static_progress_file_is_dynamic() {
+        use camino::Utf8PathBuf;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let bus = ActivityBus::new();
+        bus.add_sink(Arc::new(LiveFsSink::new(root.clone())));
+
+        let job = "job-split";
+        bus.emit(ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: job.into(),
+            parent_job_id: None,
+            pid: std::process::id(),
+            started_at: 1.0,
+            argv: vec!["em".into()],
+            merge_root: root.as_str().into(),
+            host_root: "/".into(),
+            mode: ActivityMode::Merge,
+            plan_total: 2,
+            flags: SessionFlags::default(),
+            plan: vec![],
+            blockers: vec![],
+        });
+        for (cpv, ok) in [("app-misc/bar-1", true), ("app-misc/baz-1", false)] {
+            bus.emit(ActivityEvent::PkgEnd {
+                v: ACTIVITY_EVENT_VERSION,
+                job_id: job.into(),
+                parent_job_id: None,
+                cpv: cpv.into(),
+                cpn: cpv.into(),
+                merge_root: ActivityMergeRoot::Target,
+                kind: PkgKind::Source,
+                ok,
+                at: 5.0,
+                seconds: 1.0,
+                phases: vec![],
+                error: None,
+            });
+        }
+
+        let session_path = root
+            .join("var/cache/edb/em-activity/live")
+            .join(job)
+            .join("session.json");
+        let session_text = std::fs::read_to_string(session_path.as_std_path()).unwrap();
+        assert!(!session_text.contains("completed"), "{session_text}");
+        assert!(!session_text.contains("failed"), "{session_text}");
+        assert!(!session_text.contains("finished"), "{session_text}");
+
+        let progress_path = root
+            .join("var/cache/edb/em-activity/live")
+            .join(job)
+            .join("progress.json");
+        let progress_text = std::fs::read_to_string(progress_path.as_std_path()).unwrap();
+        let progress: serde_json::Value = serde_json::from_str(&progress_text).unwrap();
+        assert_eq!(progress["completed"], 1);
+        assert_eq!(progress["failed"], 1);
+
+        let loaded = load_live_from_disk(&root);
+        let s = loaded.get(job).unwrap();
+        assert_eq!(s.completed, 1);
+        assert_eq!(s.failed, 1);
     }
 
     /// An unwritable activity root (e.g. `EROOT` owned by root, running

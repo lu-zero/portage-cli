@@ -51,6 +51,10 @@ impl LiveFsSink {
         self.session_dir(job_id).join("session.json")
     }
 
+    fn progress_path(&self, job_id: &str) -> Utf8PathBuf {
+        self.session_dir(job_id).join("progress.json")
+    }
+
     fn inflight_path(&self, job_id: &str, merge_root: ActivityMergeRoot, cpv: &str) -> Utf8PathBuf {
         let (cat, pf) = cpv.split_once('/').unwrap_or(("_", cpv));
         self.session_dir(job_id)
@@ -65,7 +69,7 @@ impl LiveFsSink {
         if self.disabled.load(Ordering::Relaxed) {
             return;
         }
-        match serde_json::to_string_pretty(value) {
+        match serde_json::to_string(value) {
             Ok(s) => {
                 if let Err(e) = write_atomic(path, s) {
                     self.disabled.store(true, Ordering::Relaxed);
@@ -78,16 +82,15 @@ impl LiveFsSink {
         }
     }
 
+    /// Static job metadata — written once, at `SessionStart` only. `plan` and
+    /// `blockers` can be large, so this must never be rewritten per-package
+    /// (that O(N) reserialize-and-rewrite, once per `PkgStart`/`PkgEnd`, is
+    /// what made `em regen` hang — see `todo/for-sonnet.md` 2026-08-09).
     fn write_session_file(&self, job_id: &str) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let Some(s) = state.get(job_id) else {
             return;
         };
-        #[derive(Serialize)]
-        struct FinishedPkg<'a> {
-            merge_root: ActivityMergeRoot,
-            cpv: &'a str,
-        }
         #[derive(Serialize)]
         struct SessionFile<'a> {
             job_id: &'a str,
@@ -101,24 +104,11 @@ impl LiveFsSink {
             mode: ActivityMode,
             plan_total: u32,
             flags: &'a SessionFlags,
-            completed: u32,
-            failed: u32,
-            heartbeat_at: f64,
             #[serde(skip_serializing_if = "Vec::is_empty")]
             plan: &'a Vec<ActivityPlanPkg>,
             #[serde(skip_serializing_if = "Vec::is_empty")]
             blockers: &'a Vec<Vec<usize>>,
-            #[serde(skip_serializing_if = "Vec::is_empty")]
-            finished: Vec<FinishedPkg<'a>>,
         }
-        let finished: Vec<FinishedPkg<'_>> = s
-            .finished
-            .iter()
-            .map(|(side, cpv)| FinishedPkg {
-                merge_root: *side,
-                cpv: cpv.as_str(),
-            })
-            .collect();
         let path = self.session_path(job_id);
         self.write_json(
             &path,
@@ -133,12 +123,32 @@ impl LiveFsSink {
                 mode: s.mode,
                 plan_total: s.plan_total,
                 flags: &s.flags,
+                plan: &s.plan,
+                blockers: &s.blockers,
+            },
+        );
+    }
+
+    /// Dynamic progress — rewritten on every `SessionHeartbeat`/`PkgStart`/
+    /// `PkgEnd`. Genuinely O(1) per write: none of these three fields grow.
+    fn write_progress_file(&self, job_id: &str) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(s) = state.get(job_id) else {
+            return;
+        };
+        #[derive(Serialize)]
+        struct ProgressFile {
+            completed: u32,
+            failed: u32,
+            heartbeat_at: f64,
+        }
+        let path = self.progress_path(job_id);
+        self.write_json(
+            &path,
+            &ProgressFile {
                 completed: s.completed,
                 failed: s.failed,
                 heartbeat_at: ActivityEvent::now(),
-                plan: &s.plan,
-                blockers: &s.blockers,
-                finished,
             },
         );
     }
@@ -195,6 +205,23 @@ impl LiveFsSink {
 
 impl ActivitySink for LiveFsSink {
     fn on_event(&self, event: &ActivityEvent) {
+        // Look up inflight presence *before* state.apply() removes it, so
+        // remove_inflight can skip the unlink when there was never a file
+        // (e.g. every PkgEnd `em regen` fires — regen never emits PkgStart).
+        let had_inflight = if let ActivityEvent::PkgEnd {
+            job_id,
+            cpv,
+            merge_root,
+            ..
+        } = event
+        {
+            let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state
+                .get(job_id)
+                .is_some_and(|s| s.inflight.contains_key(&(*merge_root, cpv.clone())))
+        } else {
+            false
+        };
         {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.apply(event);
@@ -202,9 +229,10 @@ impl ActivitySink for LiveFsSink {
         match event {
             ActivityEvent::SessionStart { job_id, .. } => {
                 self.write_session_file(job_id);
+                self.write_progress_file(job_id);
             }
             ActivityEvent::SessionHeartbeat { job_id, .. } => {
-                self.write_session_file(job_id);
+                self.write_progress_file(job_id);
             }
             ActivityEvent::SessionEnd { job_id, .. } => {
                 self.remove_session(job_id);
@@ -216,7 +244,7 @@ impl ActivitySink for LiveFsSink {
                 ..
             } => {
                 self.write_inflight(job_id, *merge_root, cpv);
-                self.write_session_file(job_id);
+                self.write_progress_file(job_id);
             }
             ActivityEvent::PhaseEnter {
                 job_id,
@@ -238,8 +266,10 @@ impl ActivitySink for LiveFsSink {
                 merge_root,
                 ..
             } => {
-                self.remove_inflight(job_id, *merge_root, cpv);
-                self.write_session_file(job_id);
+                if had_inflight {
+                    self.remove_inflight(job_id, *merge_root, cpv);
+                }
+                self.write_progress_file(job_id);
             }
             // Diagnostics are transient; not part of the on-disk snapshot.
             ActivityEvent::Diagnostic { .. } => {}
@@ -269,6 +299,11 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
         let Ok(meta) = serde_json::from_str::<SessionDisk>(&text) else {
             continue;
         };
+        let progress: Option<ProgressDisk> =
+            std::fs::read_to_string(ent.path().join("progress.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok());
+
         // Rebuild via SessionStart then synthetic PkgStart/PhaseEnter from inflight files.
         proj.apply(&ActivityEvent::SessionStart {
             v: super::event::ACTIVITY_EVENT_VERSION,
@@ -285,21 +320,19 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
             plan: meta.plan,
             blockers: meta.blockers,
         });
-        // Patch completed/failed by re-applying heartbeat
+        // Patch completed/failed from progress.json (SessionStart alone has none).
+        let (completed, failed, heartbeat_at) = match &progress {
+            Some(p) => (p.completed, p.failed, p.heartbeat_at),
+            None => (0, 0, meta.started_at),
+        };
         proj.apply(&ActivityEvent::SessionHeartbeat {
             v: super::event::ACTIVITY_EVENT_VERSION,
             job_id: meta.job_id.clone(),
             parent_job_id: meta.parent_job_id.clone(),
-            at: meta.heartbeat_at.unwrap_or(meta.started_at),
-            completed: meta.completed.unwrap_or(0),
-            failed: meta.failed.unwrap_or(0),
+            at: heartbeat_at,
+            completed,
+            failed,
         });
-        // Restore finished set for remaining-plan ETA (heartbeat alone only has counts).
-        if let Some(s) = proj.get_mut(&meta.job_id) {
-            for f in &meta.finished {
-                s.finished.insert((f.merge_root, f.cpv.clone()));
-            }
-        }
 
         let inflight_root = ent.path().join("inflight");
         load_inflight_dir(
@@ -319,12 +352,6 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
 }
 
 #[derive(serde::Deserialize)]
-struct FinishedDisk {
-    merge_root: ActivityMergeRoot,
-    cpv: String,
-}
-
-#[derive(serde::Deserialize)]
 struct SessionDisk {
     job_id: String,
     #[serde(default)]
@@ -338,17 +365,19 @@ struct SessionDisk {
     plan_total: u32,
     flags: SessionFlags,
     #[serde(default)]
-    completed: Option<u32>,
-    #[serde(default)]
-    failed: Option<u32>,
-    #[serde(default)]
-    heartbeat_at: Option<f64>,
-    #[serde(default)]
     plan: Vec<ActivityPlanPkg>,
     #[serde(default)]
     blockers: Vec<Vec<usize>>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProgressDisk {
     #[serde(default)]
-    finished: Vec<FinishedDisk>,
+    completed: u32,
+    #[serde(default)]
+    failed: u32,
+    #[serde(default)]
+    heartbeat_at: f64,
 }
 
 #[derive(serde::Deserialize)]
