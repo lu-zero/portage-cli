@@ -18,7 +18,7 @@ mod env_d;
 mod linker;
 mod mirrors;
 mod pkgconf;
-mod profile;
+pub(crate) mod profile;
 mod repos;
 
 use anyhow::Result;

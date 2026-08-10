@@ -44,6 +44,13 @@ pub struct Cli {
     #[arg(short = 'p', long, global = true)]
     pub pretend: bool,
 
+    /// Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with
+    /// USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/
+    /// ACCEPT_LICENSE, and configured repositories — `emerge --info`
+    /// workalike. Takes no atoms.
+    #[arg(long)]
+    pub info: bool,
+
     /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/`--emergelog`)
     /// for the merge path. Flattened (not `global = true`) so they only appear
     /// on commands that drive an activity bus; the merge path reads the

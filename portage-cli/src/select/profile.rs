@@ -81,8 +81,9 @@ fn make_profile_link(globals: &Cli) -> Utf8PathBuf {
 }
 
 /// The profile path the current `make.profile` points at, relative to the repo's
-/// `profiles/` dir (so it can be matched against `profiles.desc`).
-fn current_profile(globals: &Cli, repo: &Repository) -> Option<String> {
+/// `profiles/` dir (so it can be matched against `profiles.desc`). Also used
+/// by `em --info`'s header line.
+pub(crate) fn current_profile(globals: &Cli, repo: &Repository) -> Option<String> {
     let link = make_profile_link(globals);
     // Canonicalize the link itself so a relative symlink (`../../var/db/…`, as
     // eselect writes) resolves against its own directory, not the CWD.

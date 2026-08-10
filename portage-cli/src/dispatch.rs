@@ -20,6 +20,9 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     match &cli.applet {
         Some(applet) => run_applet(applet, cli).await,
         None => {
+            if cli.info {
+                return crate::info::run(cli).await;
+            }
             // `-c`/`--depclean` with no atoms is its primary mode ("clean
             // everything unreachable from @world"); `-r`/`--resume` takes
             // its package list from the saved state, never the command
