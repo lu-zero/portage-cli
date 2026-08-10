@@ -40,13 +40,13 @@ pub(crate) fn path_lock() -> std::sync::MutexGuard<'static, ()> {
 /// indirectly — real `git`/`gix` operations consult `$HOME/.gitconfig` for
 /// config layering even when the calling code never touches `HOME` itself,
 /// so `maint::sync::git_gix`'s and `gix_ext::reset`'s tests hold this too,
-/// not just [`PATH_LOCK`]: without it, `active.rs`'s/`cli.rs`'s
-/// `set_var("HOME", ..)` tests (protected only by this lock, a *different*
-/// mutex from `PATH_LOCK`) can race a concurrent gix fetch/reset reading
-/// `$HOME` on another thread — a real, once-observed CI-only flake
-/// (`cargo llvm-cov`'s instrumented build, 2026-08-10; not reproducible
-/// under a plain `cargo test`, which apparently never interleaves these
-/// particular tests unluckily enough to hit the window).
+/// not just [`PATH_LOCK`]. (Investigated as the cause of a 2026-08-10
+/// Coverage-CI-only `git_gix`/`gix_ext::reset` failure — it wasn't; that
+/// turned out to be [`set_test_git_identity`]'s problem, a deterministic
+/// missing-identity error, not a race. Kept here anyway: a concurrent
+/// `set_var("HOME", ..)` from `active.rs`/`cli.rs`'s tests — a *different*
+/// mutex from `PATH_LOCK` — racing a gix call reading `$HOME` is still a
+/// real, if not-yet-observed, hazard.)
 static HOME_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire [`HOME_LOCK`] for the duration of a test that mutates `HOME`, or
@@ -96,5 +96,47 @@ impl Drop for ActiveStateGuard {
                 None => std::env::remove_var("XDG_STATE_HOME"),
             }
         }
+    }
+}
+
+/// Set `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_NAME`/
+/// `GIT_COMMITTER_EMAIL` to a fixed test identity for the whole process.
+///
+/// Real `git` invocations spawned via `Command` (e.g. `git_gix`'s and
+/// `gix_ext::reset`'s own `git()` test helper) get their identity per-call
+/// via `.env(...)` on the child process. This is for the *other* half: the
+/// direct `gix` API calls those same tests' production code makes
+/// (`gix::open` + fetch/reset), which read process env exactly like real
+/// git does but have no per-call override point available to a caller.
+///
+/// Without an identity from *some* source (env or git config), gix's
+/// ref/reflog-write machinery hard-errors —
+/// `RefEdit("The reflog could not be created or updated")` — where real
+/// git's equivalent operation (`git reset --hard` moving a ref with no new
+/// commit) quietly falls back to `$(whoami)@$(hostname)` and succeeds; gix
+/// does not replicate that fallback. Confirmed deterministic, not a race:
+/// reproduces 100% of the time with no git identity resolvable from any
+/// source (`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+/// GIT_CONFIG_NOSYSTEM=1`, no `GIT_*` env vars), never on a dev machine
+/// with a real `~/.gitconfig` — which is exactly the gap between this
+/// project's CI runner (fresh, no git identity configured anywhere) and
+/// every local dev machine that ever exercised these tests before
+/// 2026-08-10. Also a real product gap, not just a test one: `em`'s
+/// optional `--features sync-gix` backend would hit this identically on
+/// any host that has never run `git config --global user.name` — tracked
+/// separately from this test-only fix.
+///
+/// No restoration needed: the value is a fixed constant no other test
+/// cares about, and every caller sets the same one. Callers must still
+/// hold [`path_lock`] (and typically [`home_lock`]) for the general
+/// environment-variable safety those locks exist for.
+pub(crate) fn set_test_git_identity() {
+    // SAFETY: held under path_lock()/home_lock() by every caller; no other
+    // test reads or writes these GIT_* vars.
+    unsafe {
+        std::env::set_var("GIT_AUTHOR_NAME", "t");
+        std::env::set_var("GIT_AUTHOR_EMAIL", "t@t");
+        std::env::set_var("GIT_COMMITTER_NAME", "t");
+        std::env::set_var("GIT_COMMITTER_EMAIL", "t@t");
     }
 }

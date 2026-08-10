@@ -110,8 +110,15 @@ fn git_clone(path: &Utf8Path, url: gix::Url, quiet: bool) -> Result<()> {
 }
 
 fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool> {
-    let repo = gix::open(path.as_std_path())
+    let mut repo = gix::open(path.as_std_path())
         .map_err(|e| anyhow::anyhow!("opening git repo {path}: {e}"))?;
+    // The fetch below updates remote-tracking refs, which (like
+    // gix_ext::hard_reset_to's own ref move) needs a resolvable committer
+    // identity or gix hard-errors — see hard_reset_to's doc comment for why
+    // this must not be skipped just because a host has no git identity
+    // configured (a normal state for automated sync to run under).
+    repo.committer_or_set_generic_fallback()
+        .map_err(|e| anyhow::anyhow!("resolving committer identity: {e}"))?;
 
     let before = head_id(&repo);
 
@@ -158,7 +165,7 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
     };
     drop(progress);
 
-    let repo =
+    let mut repo =
         gix::open(path.as_std_path()).map_err(|e| anyhow::anyhow!("re-open after fetch: {e}"))?;
     let tip = gix_ext::resolve_upstream_tip(&repo).map_err(|e| anyhow::anyhow!("{e}"))?;
     let head = head_id(&repo);
@@ -203,7 +210,7 @@ fn git_update(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result
         ));
     }
     let progress = ProgressSession::new(quiet);
-    gix_ext::hard_reset_to(&repo, tip, guard, progress.child("hard-reset"))
+    gix_ext::hard_reset_to(&mut repo, tip, guard, progress.child("hard-reset"))
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     drop(progress);
 
@@ -336,6 +343,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         let changed = GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -362,6 +370,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, true, true)
@@ -389,6 +398,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, true, true)
@@ -421,6 +431,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -454,6 +465,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -474,6 +486,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         git(
             f._tmp.path(),
@@ -505,6 +518,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -553,6 +567,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)

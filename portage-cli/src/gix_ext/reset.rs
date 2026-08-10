@@ -234,8 +234,18 @@ pub fn clean_worktree(repo: &gix::Repository) -> Result<usize, HardResetError> {
 ///
 /// `progress` receives the force-checkout counters (files / bytes). Pass
 /// [`gix::progress::Discard`] when the caller does not care.
+///
+/// Takes `repo` by `&mut` (not `&`) so it can call
+/// [`gix::Repository::committer_or_set_generic_fallback`] before moving any
+/// ref: step 5 below writes a reflog entry, which real `git reset --hard`
+/// happily does even with no `user.name`/`user.email` configured anywhere
+/// (falling back to `$(whoami)@$(hostname)`) but gix hard-errors on by
+/// design ("failing to provide a user is fatal", `Repository::identity`'s
+/// own doc) unless an in-memory fallback is set first. A host that's never
+/// run `git config --global user.name` is a completely normal state for
+/// automated Portage sync to run on — match real git's tolerance for it.
 pub fn hard_reset_to<P>(
-    repo: &gix::Repository,
+    repo: &mut gix::Repository,
     target: gix::ObjectId,
     guard: ResetGuard,
     mut progress: P,
@@ -244,6 +254,9 @@ where
     P: gix::NestedProgress,
     P::SubProgress: gix::NestedProgress + 'static,
 {
+    repo.committer_or_set_generic_fallback()
+        .map_err(|e| HardResetError::RefEdit(format!("resolving committer identity: {e}")))?;
+
     let workdir = repo
         .workdir()
         .ok_or(HardResetError::BareRepository)?
@@ -529,11 +542,12 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let tmp = tempfile::tempdir().unwrap();
         let (work, target) = repo_with_two_commits(tmp.path());
 
-        let repo = gix::open(&work).unwrap();
-        hard_reset_to(&repo, target, ResetGuard::Force, gix::progress::Discard).unwrap();
+        let mut repo = gix::open(&work).unwrap();
+        hard_reset_to(&mut repo, target, ResetGuard::Force, gix::progress::Discard).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(work.join("a.txt")).unwrap(),
@@ -562,6 +576,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let tmp = tempfile::tempdir().unwrap();
         let work = tmp.path().join("work");
         git(
@@ -582,7 +597,7 @@ mod tests {
         let unrelated = gix::open(&work).unwrap().head_id().unwrap().detach();
         git(&work, &["checkout", "-q", "-f", "master"]);
 
-        let repo = gix::open(&work).unwrap();
+        let mut repo = gix::open(&work).unwrap();
         assert!(
             repo.merge_base(repo.head_id().unwrap().detach(), unrelated)
                 .is_err(),
@@ -590,7 +605,7 @@ mod tests {
         );
 
         hard_reset_to(
-            &repo,
+            &mut repo,
             unrelated,
             ResetGuard::RefuseIfDirty,
             gix::progress::Discard,
@@ -612,14 +627,15 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let tmp = tempfile::tempdir().unwrap();
         let (work, target) = repo_with_two_commits(tmp.path());
         let head_before = gix::open(&work).unwrap().head_id().unwrap().detach();
         std::fs::write(work.join("a.txt"), "local edit\n").unwrap();
 
-        let repo = gix::open(&work).unwrap();
+        let mut repo = gix::open(&work).unwrap();
         let err = hard_reset_to(
-            &repo,
+            &mut repo,
             target,
             ResetGuard::RefuseIfDirty,
             gix::progress::Discard,
@@ -645,12 +661,13 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let tmp = tempfile::tempdir().unwrap();
         let (work, target) = repo_with_two_commits(tmp.path());
         std::fs::write(work.join("a.txt"), "local edit\n").unwrap();
 
-        let repo = gix::open(&work).unwrap();
-        hard_reset_to(&repo, target, ResetGuard::Force, gix::progress::Discard).unwrap();
+        let mut repo = gix::open(&work).unwrap();
+        hard_reset_to(&mut repo, target, ResetGuard::Force, gix::progress::Discard).unwrap();
         assert_eq!(
             std::fs::read_to_string(work.join("a.txt")).unwrap(),
             "two\n"
@@ -713,6 +730,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         // A test running as root would write through the mode bits and
         // falsify the setup rather than the fix.
         if rustix::process::geteuid().is_root() {
@@ -743,8 +761,8 @@ mod tests {
         let saved = std::fs::metadata(&sub).unwrap().permissions();
         std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o500)).unwrap();
 
-        let repo = gix::open(&work).unwrap();
-        let result = hard_reset_to(&repo, target, ResetGuard::Force, gix::progress::Discard);
+        let mut repo = gix::open(&work).unwrap();
+        let result = hard_reset_to(&mut repo, target, ResetGuard::Force, gix::progress::Discard);
 
         std::fs::set_permissions(&sub, saved).unwrap();
 
@@ -766,6 +784,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let tmp = tempfile::tempdir().unwrap();
         let work = tmp.path().join("work");
         git(
@@ -809,6 +828,7 @@ mod tests {
         // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
         // tests are a *different* mutex). See test_support::home_lock's doc.
         let _home = crate::test_support::home_lock();
+        crate::test_support::set_test_git_identity();
         let tmp = tempfile::tempdir().unwrap();
         let work = tmp.path().join("work");
         git(
