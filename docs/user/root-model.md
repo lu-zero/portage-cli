@@ -15,20 +15,23 @@ unprivileged `.local` overlays, and (eventually) crossdev.
 
 ## The two user-facing flags
 
-- **`--root R`** (default `/`, env `ROOT`): the **base**. It is *both* the
-  config source *and* the root whose VDB the planner reads as "already
-  installed."
+- **`--root R`** (default `/`, env `ROOT`): the **base** — the root whose VDB
+  the planner reads as "already installed." Does **not** move the config
+  source (matches real portage: `ROOT=` never touches `PORTAGE_CONFIGROOT`).
 - **`--prefix P`** (default `= R`): the **install destination** for newly
-  merged packages — the *delta* root.
+  merged packages — the *delta* root. Also does not move the config source.
 
-Two surgical overrides exist: **`--config-root C`** (config only) and
-**`--vdb V`** (base VDB path only). All four are global.
+**`--config-root C`** is the only flag that moves the config source; without
+it, config always comes from host `/` — the one exception is `--local`,
+which prefers an already-bootstrapped prefix's own profile over the host
+(still overridden by an explicit `--config-root`; see the Scenarios table
+below). **`--vdb V`** overrides the base VDB path only. All four are global.
 
 ### Derived values
 
 ```
-config_root   = --config-root || --root || /          # PORTAGE_CONFIGROOT
-base_root  R  = --root || /                            # planner "installed" base + config
+config_root   = --config-root || /                    # PORTAGE_CONFIGROOT — --root/--prefix never move this
+base_root  R  = --root || /                            # planner "installed" base
 target P      = --prefix || --root || /               # ROOT/EROOT: install dest + new VDB
 base_vdb      = --vdb || R/var/db/pkg
 planner installed = VDB(R) ∪ VDB(P)                   # P shadows R; equal ⇒ just one
@@ -58,24 +61,31 @@ satisfy them: the resulting compiler looks for headers, `crt*.o` and its loader
 under `P`, finds none, and cannot build a hello-world. A `--local` prefix, which
 does own its libc, wants the standalone behaviour it already gets.
 
-`--prefix` never changes `config_root` or `base_root` — only the destination.
-That is the whole difference between "full offset" and "overlay":
+Neither `--root` nor `--prefix` ever changes `config_root` — only
+`--config-root` does (see above). `--prefix` additionally leaves `base_root`
+alone too — only the destination moves. That is the whole difference between
+"full offset" and "overlay":
 
-- `--root foo/` alone ⇒ `R = P = foo/`: base *and* destination are `foo/`.
-- `--prefix foo/` alone ⇒ `R = /`, `P = foo/`: base is the host, destination is
-  the prefix.
+- `--root foo/` alone ⇒ `R = P = foo/`, config still `/`: base *and*
+  destination are `foo/`.
+- `--prefix foo/` alone ⇒ `R = /`, `P = foo/`, config still `/`: base is the
+  host, destination is the prefix.
 
 ## Scenarios
 
-| invocation | R (base/config) | P (install) | planner installed | result |
+`R` below is `base_root` only — **not** config; config is always `/` unless
+`--config-root` is given explicitly (or, for `--local`, an already-
+bootstrapped prefix profile — see that row).
+
+| invocation | R (base) | P (install) | planner installed | result |
 |---|---|---|---|---|
 | `em firefox` | / | / | host | normal host install |
-| `em --root foo/ firefox` | foo/ | foo/ | VDB(foo/) (empty ⇒ **full closure**) | install *everything* up to firefox into `foo/` — stage / chroot-less full offset |
-| `em --root stage1/ @system` | stage1/ | stage1/ | empty | **build a stage from scratch** |
+| `em --root foo/ firefox` | foo/ | foo/ | VDB(foo/) (empty ⇒ **full closure**) | install *everything* up to firefox into `foo/` — stage / chroot-less full offset; config still read from host `/` |
+| `em --root stage1/ @system` | stage1/ | stage1/ | empty | **build a stage from scratch**; config still read from host `/` |
 | `em --prefix foo/ firefox` | / | foo/ | host ∪ VDB(foo/) | host is the base; install only the **new** packages into `foo/` — unprivileged `.local` **overlay** |
-| `em --prefix a/ --root b/ firefox` | b/ | a/ | VDB(b/) ∪ VDB(a/) | general overlay: base `b/`, delta into `a/`, config from `b/` |
-| `em --local [DIR]` firefox | DIR (default `~/.gentoo`) | DIR | VDB(DIR) (empty ⇒ **full closure**) | standalone Gentoo-Prefix — like `--root`, but relocatable (`EPREFIX`) and **its own BROOT** (see below), not the host's |
-| `{target}-emerge` (crossdev) | `/` (BROOT) | `/usr/<CHOST>/` or overridden `ROOT` | host VDB + target VDB | cross-compile; see [BDEPEND / crossdev](#bdepend-rdepend-and-with-bdeps) |
+| `em --prefix a/ --root b/ firefox` | b/ | a/ | VDB(b/) ∪ VDB(a/) | general overlay: base `b/`, delta into `a/`, config still from host `/` (pass `--config-root` explicitly for anything else) |
+| `em --local [DIR]` firefox | DIR (default `~/.gentoo`) | DIR | VDB(DIR) (empty ⇒ **full closure**) | standalone Gentoo-Prefix — like `--root`, but relocatable (`EPREFIX`), **its own BROOT** (see below), and config prefers `DIR`'s own profile once bootstrapped (else host `/`) — not the host's VDB either way |
+| `{target}-emerge` (crossdev) | `/` (BROOT) | `/usr/<CHOST>/` or overridden `ROOT` | host VDB + target VDB | cross-compile; config *does* follow the target here (`PORTAGE_CONFIGROOT=${SYSROOT}`, set by the wrapper) — see [BDEPEND / crossdev](#bdepend-rdepend-and-with-bdeps) |
 | `em` crossdev parity (future) | host | target | same model as portage | Stage 3 — dual-root plan entries |
 
 `em --root foo/` and `em --prefix foo/` differ in exactly one thing: whether the
@@ -286,7 +296,7 @@ host scheduling.
 Per phase (`run_phase`) we set:
 
 ```
-PORTAGE_CONFIGROOT = config_root                 # host unless --root/--config-root
+PORTAGE_CONFIGROOT = config_root                 # host unless --config-root (or crossdev's wrapper)
 ROOT = EROOT       = target                       # install destination
 SYSROOT = ESYSROOT = base                          # build-against system; SYSROOT
                                                    #   trailing slash stripped, "/"→""

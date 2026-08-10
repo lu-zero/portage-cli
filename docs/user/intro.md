@@ -146,8 +146,8 @@ em --root /var/tmp/stage1 toolchain --setup
 em --root /var/tmp/stage1 stages --stage1
 
 # All packages install under /var/tmp/stage1
-# - config root: /var/tmp/stage1 (profile/make.conf read from the offset too —
-#   pass --config-root separately if you need to keep reading the host's)
+# - config root: / (still reads the host's profile/make.conf — matches real
+#   portage's ROOT=; pass --config-root separately to read from the offset)
 # - base root: /var/tmp/stage1
 # - target root: /var/tmp/stage1
 # - BROOT: / (build tools from host)
@@ -314,14 +314,16 @@ em --root /var/tmp/stage3 stages --stage3
 1. **Command-line flags** (highest priority) — including the few that double
    as env vars via clap (`ROOT`, `EM_PRIVILEGE`, `EM_EMERGELOG`)
 2. **`/etc/portage/make.conf`** (system-wide; legacy `/etc/make.conf` also
-   read) — resolved from `config_root`, which defaults to `--config-root ||
-   --root || /`, so `--root`/`--local` redirect it along with everything else
+   read) — resolved from `config_root`, which defaults to `--config-root || /`.
+   Neither `--root` nor `--prefix` moves it (matches real portage's `ROOT=`,
+   which never touches `PORTAGE_CONFIGROOT`); `--local` is the one exception,
+   preferring an already-bootstrapped prefix's own profile over the host
 3. **Profile defaults** (from `make.profile` and parent profiles)
 
 There's no per-user `~/.config/portage/make.conf` — the only recognized
 `make.conf` lives under `config_root`. See
 [`root-model.md`](./root-model.md) for the full config/base/target-root
-breakdown, including how each topology flag moves `config_root`.
+breakdown, including the `--local` exception.
 
 ### Key Configuration Files
 
