@@ -410,17 +410,17 @@ fn print_text(info: &Info) -> Result<()> {
         .get("global")
         .map(|v| colorize_flags(v))
         .unwrap_or_default();
-    let mut use_line = format!("USE=\"{global}\"");
+    writeln!(out, "{C_LABEL}USE{C_LABEL:#}=\"{global}\"")?;
     for (group, values) in &info.use_flags {
         if group == "global" {
             continue;
         }
-        use_line.push_str(&format!(
-            " {C_LABEL}{group}{C_LABEL:#}=\"{}\"",
+        writeln!(
+            out,
+            "{C_LABEL}{group}{C_LABEL:#}=\"{}\"",
             colorize_flags(values)
-        ));
+        )?;
     }
-    writeln!(out, "{use_line}")?;
 
     for (name, value) in &info.vars {
         writeln!(out, "{C_LABEL}{name}{C_LABEL:#}=\"{value}\"")?;
