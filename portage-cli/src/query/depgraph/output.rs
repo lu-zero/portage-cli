@@ -10,7 +10,7 @@ use portage_atom_pubgrub::{
 };
 use portage_metadata::CacheEntry;
 
-pub(super) use crate::style::{C_BOLD, C_OLDVERSION, C_PKG};
+pub(super) use crate::style::{C_BOLD, C_OLDVERSION, C_PKG, C_PKG_BINARY, C_PKG_NOMERGE};
 
 // emerge color scheme: bold green for keywords/atoms/tags, bold red/blue for flags
 // Package names use plain green (not bold) to match portage's PKG_MERGE style
@@ -1512,8 +1512,21 @@ fn format_plan_parts(
         ("nomerge", "", " ".repeat(7))
     };
     let bracket = format!("[{C_BRACKET}{kind}{pad}{colored_field}{C_BRACKET:#}]");
-    let rest =
-        format!("{C_PKG}{cpn}-{ver}{slot_repo}{C_PKG:#}{old}{flag_str}{size_str}{dest_suffix}");
+    // Real emerge's `pkgprint` (`_emerge/resolver/output.py`): a row that
+    // isn't actually being (re)built — shown only for `-t`/`--tree` context —
+    // is colored differently from one that is (`PKG_NOMERGE` vs `PKG_MERGE`/
+    // `PKG_BINARY_MERGE`), so the two are visually distinct at a glance
+    // instead of every row in the tree looking like a pending merge.
+    let name_color = if !in_plan {
+        C_PKG_NOMERGE
+    } else if is_binary {
+        C_PKG_BINARY
+    } else {
+        C_PKG
+    };
+    let rest = format!(
+        "{name_color}{cpn}-{ver}{slot_repo}{name_color:#}{old}{flag_str}{size_str}{dest_suffix}"
+    );
     (bracket, rest)
 }
 
