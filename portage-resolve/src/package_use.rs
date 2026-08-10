@@ -15,7 +15,7 @@ pub struct PackageUseEntry {
     /// Filename inside `package.use/`: the bare package name (e.g.
     /// `pygments`), or `category-package` (e.g. `dev-python-pygments`) when
     /// the bare name is ambiguous within this batch — see
-    /// [`assign_filenames`].
+    /// `assign_filenames` (private, in this module).
     pub filename: String,
     /// Lines to add/update in that file.
     pub lines: Vec<PackageUseLine>,

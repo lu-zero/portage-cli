@@ -393,7 +393,8 @@ impl AcceptKeywords {
 
     /// Whether this version is merged on a *stable* keyword path — gates the
     /// `use.stable.{force,mask}` sets. Depends on whether a testing grant is
-    /// also present in the accept set: see [`KeywordAccept::is_stable_for`].
+    /// also present in the accept set: see `KeywordAccept::is_stable_for`
+    /// (private, in this module).
     pub fn is_stable(
         &self,
         keywords: &[Keyword],

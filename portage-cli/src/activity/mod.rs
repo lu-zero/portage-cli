@@ -150,7 +150,7 @@ pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
 /// ebuild failed sourcing and why — are already served by
 /// [`HumanStdoutSink`], `PkgEnd.error`, and the rich miette frame `regen.rs`
 /// prints directly. `HistorySink` is kept for symmetry; it already no-ops on
-/// [`ActivityMode::Regen`](super::event::ActivityMode::Regen) events.
+/// [`ActivityMode::Regen`] events.
 pub fn regen_activity_bus(activity_root: &Utf8Path) -> ActivityBus {
     let bus = ActivityBus::new();
     bus.add_sink(Arc::new(BackgroundSink::new(

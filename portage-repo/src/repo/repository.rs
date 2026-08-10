@@ -401,8 +401,8 @@ impl Repository {
 
     /// Directory backing the in-tree primary md5-cache (`metadata/md5-cache`
     /// under [`Self::path`]), regardless of whether it's currently writable
-    /// — matches [`open_with_secondary`](Self::open_with_secondary)'s own
-    /// construction of `primary`.
+    /// — matches `open_with_secondary`'s own construction of `primary`
+    /// (private, in this module).
     pub fn primary_cache_dir(&self) -> Utf8PathBuf {
         self.path.join("metadata").join("md5-cache")
     }
