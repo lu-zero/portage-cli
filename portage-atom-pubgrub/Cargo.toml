@@ -21,3 +21,17 @@ portage-solver = { workspace = true }
 pubgrub = { workspace = true }
 version-ranges = { workspace = true }
 thiserror = { workspace = true }
+
+# Explicit names (not the file-stem default) so the compiled example
+# binaries don't collide with portage-atom-resolvo's own examples/resolve.rs
+# / examples/resolve_conflicts.rs in the shared target/debug/examples/ dir
+# ("output filename collision" warning building --workspace --examples).
+# File paths/names are unchanged -- READMEs that reference
+# `examples/resolve.rs` by path are still accurate.
+[[example]]
+name = "pubgrub_resolve"
+path = "examples/resolve.rs"
+
+[[example]]
+name = "pubgrub_resolve_conflicts"
+path = "examples/resolve_conflicts.rs"
