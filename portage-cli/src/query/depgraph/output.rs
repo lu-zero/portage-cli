@@ -891,7 +891,12 @@ fn flag_token(
     } else if is_new || (in_old_iuse && !in_old_use && show_unchanged) {
         colorize_on_off(name, false)
     } else if !in_old_iuse {
-        format!("{C_NEW_FLAG}-{name}%{C_NEW_FLAG:#}")
+        // Portage suppresses the `%` here (but not on the enabled `%*` case
+        // above) when the flag is also forced (`_create_use_string:296`:
+        // `if flag not in iuse_forced: flag_str += "%"`) — asymmetric with
+        // the enabled branch, which appends `%*` unconditionally.
+        let pct = if forced { "" } else { "%" };
+        format!("{C_NEW_FLAG}-{name}{pct}{C_NEW_FLAG:#}")
     } else if in_old_use {
         format!("{C_FLIPPED}-{name}*{C_FLIPPED:#}")
     } else {
@@ -1992,6 +1997,14 @@ mod tests {
         assert_eq!(
             plain_forced("doc", false, true, true, false, false, true).as_deref(),
             Some("(-doc)")
+        );
+        // Disabled + absent from the old IUSE + forced: portage suppresses the
+        // `%` here specifically (asymmetric with the enabled `%*` case above,
+        // which stays unconditional) — `_create_use_string`'s
+        // `if flag not in iuse_forced: flag_str += "%"`.
+        assert_eq!(
+            plain_forced("python3_15", false, true, false, false, false, true).as_deref(),
+            Some("(-python3_15)")
         );
     }
 
