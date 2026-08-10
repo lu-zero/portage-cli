@@ -34,12 +34,32 @@ pub enum ResolveMode {
     Ask,
 }
 
+/// Categories real portage's own `cpv_expand` (`portage/dbapi/cpv_expand.py`)
+/// treats as administrative/pseudo, not "real" packages, when disambiguating
+/// a bare name: `acct-group/*`, `acct-user/*`, `virtual/*`. A name that
+/// matches both one of these and a real-category package resolves to the
+/// real one silently — unconditionally, regardless of any flag or install
+/// state. This is why `emerge -u incus` doesn't complain about
+/// `acct-group/incus` (the system group `app-containers/incus` depends on
+/// and installs alongside itself) even though both are genuinely installed:
+/// real portage never considers the account package a candidate once a real
+/// one is present, it's not choosing based on which is installed.
+const PSEUDO_CATEGORIES: &[&str] = &["acct-group", "acct-user", "virtual"];
+
+fn is_pseudo_category(cpn: &portage_atom::Cpn) -> bool {
+    PSEUDO_CATEGORIES.contains(&cpn.category.as_ref())
+}
+
 /// Resolve a raw atom string, expanding bare package names via the repo.
 ///
 /// * `cat/pkg` — parsed as a standard atom.
 /// * bare `name` — looked up in the repository.
 ///
-/// Ambiguity handling depends on [`ResolveMode`]:
+/// Real-vs-pseudo-category disambiguation ([`PSEUDO_CATEGORIES`]) happens
+/// first, unconditionally: if exactly one candidate isn't `acct-group/*`/
+/// `acct-user/*`/`virtual/*`, that one wins silently, matching real
+/// portage. Only once that leaves more than one (or zero) real candidates
+/// does [`ResolveMode`] apply:
 /// - [`Error`](ResolveMode::Error) — error listing candidates (naming the
 ///   installed one and suggesting `-u`, if exactly one is installed).
 /// - [`PreferInstalled`](ResolveMode::PreferInstalled) — if exactly one
@@ -62,7 +82,17 @@ pub fn resolve_atom(
         )),
         [cpn] => portage_atom::Dep::from_str(&cpn.to_string())
             .with_context(|| format!("bad resolved atom '{cpn}'")),
-        candidates => resolve_ambiguous(vdb, mode, raw, candidates),
+        candidates => {
+            let real: Vec<&portage_atom::Cpn> = candidates
+                .iter()
+                .filter(|c| !is_pseudo_category(c))
+                .collect();
+            if let [cpn] = real.as_slice() {
+                return portage_atom::Dep::from_str(&cpn.to_string())
+                    .with_context(|| format!("bad resolved atom '{cpn}'"));
+            }
+            resolve_ambiguous(vdb, mode, raw, candidates)
+        }
     }
 }
 
@@ -306,6 +336,49 @@ mod tests {
     #[test]
     fn resolve_atom_error_mode_ambiguous() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
+        let err = resolve_atom(&repo, None, ResolveMode::Error, "foo").unwrap_err();
+        assert!(err.to_string().contains("ambiguous"));
+        assert!(err.to_string().contains("sys-apps/foo"));
+        assert!(err.to_string().contains("app-misc/foo"));
+    }
+
+    // --- resolve_atom: pseudo-category disambiguation (real portage parity) ---
+
+    /// Regression for `em -vtDuNp incus` hard-erroring as ambiguous even
+    /// though real `emerge` resolves it silently: `acct-group/incus` (the
+    /// system group the real package installs alongside itself) doesn't
+    /// count as a candidate once a real-category match exists, matching
+    /// `portage/dbapi/cpv_expand.py`'s own `acct-group`/`acct-user`/
+    /// `virtual` exclusion — this resolves under *every* `ResolveMode`,
+    /// with no VDB at all, since real portage's own logic is unconditional.
+    #[test]
+    fn resolve_atom_real_category_beats_acct_group() {
+        let (_dir, repo) = make_repo(&[("acct-group", "incus"), ("app-containers", "incus")]);
+        let dep = resolve_atom(&repo, None, ResolveMode::Error, "incus").unwrap();
+        assert_eq!(dep.cpn.category.as_ref(), "app-containers");
+        assert_eq!(dep.cpn.package.as_ref(), "incus");
+    }
+
+    #[test]
+    fn resolve_atom_real_category_beats_acct_user_and_virtual() {
+        let (_dir, repo) = make_repo(&[
+            ("acct-user", "foo"),
+            ("virtual", "foo"),
+            ("sys-apps", "foo"),
+        ]);
+        let dep = resolve_atom(&repo, None, ResolveMode::Error, "foo").unwrap();
+        assert_eq!(dep.cpn.category.as_ref(), "sys-apps");
+    }
+
+    /// Two real-category candidates alongside a pseudo one: genuine
+    /// ambiguity remains between the two real packages, still an error.
+    #[test]
+    fn resolve_atom_pseudo_category_does_not_mask_real_ambiguity() {
+        let (_dir, repo) = make_repo(&[
+            ("acct-group", "foo"),
+            ("sys-apps", "foo"),
+            ("app-misc", "foo"),
+        ]);
         let err = resolve_atom(&repo, None, ResolveMode::Error, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
         assert!(err.to_string().contains("sys-apps/foo"));

@@ -115,7 +115,7 @@ pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
             repo.name(),
             cpvs.len()
         );
-        out.truncate(0);
+        out.clear();
     }
 
     let scan = repo.ebuilds_with_masters(&[]).ok();

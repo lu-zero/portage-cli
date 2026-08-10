@@ -1868,12 +1868,12 @@ impl<'a> WalkState<'a> {
     ) {
         // Don't walk above a target: a root is its own tree root, never grafted
         // under something else (portage's `conf.set_nodes` check).
-        let parent_nodes: Option<&HashSet<&'a PortagePackage>> = if self.root_set.contains(current_node)
-        {
-            None
-        } else {
-            self.parents.get(current_node)
-        };
+        let parent_nodes: Option<&HashSet<&'a PortagePackage>> =
+            if self.root_set.contains(current_node) {
+                None
+            } else {
+                self.parents.get(current_node)
+            };
 
         let mut selected_parent: Option<&'a PortagePackage> = None;
         if let Some(parent_nodes) = parent_nodes {
@@ -1928,7 +1928,10 @@ impl<'a> WalkState<'a> {
 /// Portage's `_prune_tree_display`: strip redundant `[nomerge]` filler now
 /// that the real branch has been drawn. Walks the list backward, dropping a
 /// filler node when it sits at or below the depth of the next real merge.
-fn prune_tree<'a>(display: &[TreeNode<'a>], order_set: &HashSet<&PortagePackage>) -> Vec<TreeNode<'a>> {
+fn prune_tree<'a>(
+    display: &[TreeNode<'a>],
+    order_set: &HashSet<&PortagePackage>,
+) -> Vec<TreeNode<'a>> {
     let mut out: Vec<TreeNode<'a>> = Vec::with_capacity(display.len());
     let mut last_merge_depth = 0usize;
     // Walk backward; emit survivors in reverse, then reverse at the end so the
@@ -1989,9 +1992,14 @@ fn render_tree(
         // (parent/child endpoints), so its version is always in `version_map`.
         let ver = version_map.get(node.pkg).copied().cloned();
         let (bracket, rest) = match ver {
-            Some(v) => {
-                format_plan_parts(ctx, node.pkg, &v, node.pkg.merge_root(), cross, node.ordered)
-            }
+            Some(v) => format_plan_parts(
+                ctx,
+                node.pkg,
+                &v,
+                node.pkg.merge_root(),
+                cross,
+                node.ordered,
+            ),
             None => continue,
         };
         let suffix = if already {
@@ -2347,8 +2355,10 @@ mod tests {
     ) -> Vec<(Cpn, usize, bool)> {
         let (children, parents) = adjacency(edges);
         let root_set: HashSet<&PortagePackage> = roots.iter().copied().collect();
-        let order_owned: Vec<(PortagePackage, Version)> =
-            order.iter().map(|p| ((*p).clone(), Version::parse("1").unwrap())).collect();
+        let order_owned: Vec<(PortagePackage, Version)> = order
+            .iter()
+            .map(|p| ((*p).clone(), Version::parse("1").unwrap()))
+            .collect();
         let display = build_ordered_tree(&children, &parents, &root_set, &order_owned);
         let order_set: HashSet<&PortagePackage> = pkgs.iter().collect();
         let pruned = prune_tree(&display, &order_set);
@@ -2473,7 +2483,10 @@ mod tests {
         let cpns: Vec<Cpn> = got.iter().map(|(c, _, _)| *c).collect();
         assert_eq!(
             cpns,
-            vec![Cpn::parse("app-foo/a").unwrap(), Cpn::parse("app-foo/b").unwrap()]
+            vec![
+                Cpn::parse("app-foo/a").unwrap(),
+                Cpn::parse("app-foo/b").unwrap()
+            ]
         );
         assert_eq!(got[0].1, 0, "root A flush-left");
     }
