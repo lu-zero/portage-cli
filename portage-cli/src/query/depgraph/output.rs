@@ -1015,12 +1015,14 @@ fn format_flags(
             if is_enabled {
                 bucket.0.push(token);
             } else {
-                // Wrap disabled USE_EXPAND flags in parentheses
-                bucket.1.push(if token.starts_with('(') {
-                    token
-                } else {
-                    format!("({token})")
-                });
+                // `token` is already parenthesised by `flag_token` when (and
+                // only when) `forced` (use.force/use.mask) — same rule as
+                // base USE flags. Don't blanket-wrap every disabled
+                // USE_EXPAND value here: most are ordinary, selectable
+                // flags that merely default off (e.g. most VIDEO_CARDS on a
+                // given arch), and wrapping them all makes every one look
+                // masked, hiding which ones actually are.
+                bucket.1.push(token);
             }
         } else if is_enabled {
             base_flags.0.push(token);
