@@ -9,12 +9,45 @@
 use std::collections::BTreeMap;
 use std::io::Write as _;
 
+use anstyle::{AnsiColor, Color, Effects, Style};
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 use portage_repo::UseExpand;
 use serde::Serialize;
 
 use crate::cli::Cli;
+
+// Real `emerge --info` has no coloring at all (verified: zero ANSI escapes
+// even under --color=y) — there's no portage convention to match here, so
+// this reuses `em`'s own established -pv palette instead: bold red/blue for
+// enabled/disabled USE flags (same as query::depgraph::output's C_ON/C_OFF),
+// plain green for package/repo-name-shaped text (matching C_PKG), dimmed for
+// labels. Small local consts rather than reaching into output.rs's
+// `pub(super)` ones, which are private to the query::depgraph tree.
+const C_ON: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Red)))
+    .effects(Effects::BOLD);
+const C_OFF: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Blue)))
+    .effects(Effects::BOLD);
+const C_PKG: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const C_LABEL: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
+const C_BOLD: Style = Style::new().effects(Effects::BOLD);
+const C_DIM: Style = Style::new().effects(Effects::DIMMED);
+
+/// Color each USE token: bold red when enabled, bold blue (with its `-`
+/// prefix) when disabled — the same convention `-pv`'s own USE="..." line
+/// uses, so `--info`'s flags read consistently with the rest of `em`.
+fn colorize_flags(flags: &[String]) -> String {
+    flags
+        .iter()
+        .map(|f| match f.strip_prefix('-') {
+            Some(name) => format!("{C_OFF}-{name}{C_OFF:#}"),
+            None => format!("{C_ON}{f}{C_ON:#}"),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 /// The fixed, non-verbose var list real `emerge --info` prints (its
 /// `myvars` list in `_emerge/actions.py:action_info`, trimmed to what `em`
@@ -181,7 +214,7 @@ fn print_text(info: &Info) -> Result<()> {
 
     writeln!(
         out,
-        "em {} ({}{}{})",
+        "{C_PKG}em {} ({}{}{}){C_PKG:#}",
         info.em_version,
         info.profile.as_deref().unwrap_or("no profile set"),
         info.chost.as_deref().map(|_| ", ").unwrap_or(""),
@@ -191,35 +224,39 @@ fn print_text(info: &Info) -> Result<()> {
     if !info.has_profile {
         writeln!(
             out,
-            "no usable profile at {}/etc/portage/make.profile — showing bare defaults",
+            "{C_OFF}no usable profile at {}/etc/portage/make.profile — showing bare defaults{C_OFF:#}",
             info.vars.get("PORTAGE_CONFIGROOT").map_or("/", |v| v)
         )?;
     }
     if let Some(uname) = &info.system_uname {
-        writeln!(out, "System uname: {uname}")?;
+        writeln!(out, "{C_DIM}System uname:{C_DIM:#} {uname}")?;
     }
     if let Some(mem) = &info.mem {
         match mem.free_kib {
-            Some(free) => writeln!(out, "KiB Mem:   {} total,  {free} free", mem.total_kib)?,
-            None => writeln!(out, "KiB Mem:   {} total", mem.total_kib)?,
+            Some(free) => writeln!(
+                out,
+                "{C_DIM}KiB Mem:{C_DIM:#}   {} total,  {free} free",
+                mem.total_kib
+            )?,
+            None => writeln!(out, "{C_DIM}KiB Mem:{C_DIM:#}   {} total", mem.total_kib)?,
         }
     }
 
-    writeln!(out, "\nRepositories:\n")?;
+    writeln!(out, "\n{C_BOLD}Repositories:{C_BOLD:#}\n")?;
     for r in &info.repositories {
-        writeln!(out, "{}", r.name)?;
-        writeln!(out, "    location: {}", r.location)?;
+        writeln!(out, "{C_PKG}{}{C_PKG:#}", r.name)?;
+        writeln!(out, "    {C_DIM}location:{C_DIM:#} {}", r.location)?;
         if !r.masters.is_empty() {
-            writeln!(out, "    masters: {}", r.masters.join(", "))?;
+            writeln!(out, "    {C_DIM}masters:{C_DIM:#} {}", r.masters.join(", "))?;
         }
         if let Some(t) = &r.sync_type {
-            writeln!(out, "    sync-type: {t}")?;
+            writeln!(out, "    {C_DIM}sync-type:{C_DIM:#} {t}")?;
         }
         if let Some(u) = &r.sync_uri {
-            writeln!(out, "    sync-uri: {u}")?;
+            writeln!(out, "    {C_DIM}sync-uri:{C_DIM:#} {u}")?;
         }
         if let Some(v) = r.volatile {
-            writeln!(out, "    volatile: {v}")?;
+            writeln!(out, "    {C_DIM}volatile:{C_DIM:#} {v}")?;
         }
         writeln!(out)?;
     }
@@ -227,22 +264,25 @@ fn print_text(info: &Info) -> Result<()> {
     let global = info
         .use_flags
         .get("global")
-        .map(|v| v.join(" "))
+        .map(|v| colorize_flags(v))
         .unwrap_or_default();
     let mut use_line = format!("USE=\"{global}\"");
     for (group, values) in &info.use_flags {
         if group == "global" {
             continue;
         }
-        use_line.push_str(&format!(" {group}=\"{}\"", values.join(" ")));
+        use_line.push_str(&format!(
+            " {C_LABEL}{group}{C_LABEL:#}=\"{}\"",
+            colorize_flags(values)
+        ));
     }
     writeln!(out, "{use_line}")?;
 
     for (name, value) in &info.vars {
-        writeln!(out, "{name}=\"{value}\"")?;
+        writeln!(out, "{C_LABEL}{name}{C_LABEL:#}=\"{value}\"")?;
     }
     if !info.unset.is_empty() {
-        writeln!(out, "Unset:  {}", info.unset.join(", "))?;
+        writeln!(out, "{C_DIM}Unset:{C_DIM:#}  {}", info.unset.join(", "))?;
     }
 
     Ok(())
