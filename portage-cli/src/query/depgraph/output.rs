@@ -1685,13 +1685,35 @@ pub(super) fn print_json(
 
 pub(super) const C_DIM: Style = Style::new().effects(Effects::DIMMED);
 
-/// `--tree`: the same emerge-style rows `-p` shows (bracket status, USE, old
-/// version, size), indented by dependency depth with the box-drawing
-/// connectors em's tree already used — annotating the plan, not replacing it
-/// with a bare cpv tree. `order` is the actual merge plan; anything reached
-/// by the walk that isn't in it renders as `[nomerge]` (matching real
-/// emerge's own marker for a graph node shown only to keep the tree
-/// connected — already satisfied, nothing to do here).
+/// `--tree`: a single emerge-style row per node (bracket status, USE, old
+/// version, size), indented by *merge-order depth* (one space per level,
+/// matching real `emerge --tree`).
+///
+/// This mirrors real `emerge --tree`'s algorithm structurally (portage's
+/// `_ordered_tree_display` + `_prune_tree_display`, in
+/// `_emerge/resolver/output_helpers.py`): it walks the actual merge `order`
+/// — the topologically-sorted install sequence — not a plain forward DFS of
+/// the dependency graph. For each package in `order`, it finds the shallowest
+/// already-shown ancestor (via child-edge membership) and extends that
+/// branch; if none exists, it backtracks through **parent** edges to graft
+/// the node onto whatever shown node reconnects to (preferring a parent that
+/// avoids a direct cycle), emitting the grafted filler as `[nomerge]`. Depth
+/// is therefore "where this falls in the build sequence," not "graph
+/// distance from a root," so the tree reshapes correctly when the solver
+/// reorders the plan (SCC tie-breaks, soft-RDEPEND cycle repair).
+///
+/// One deliberate, documented divergence from real emerge's rendering:
+///
+/// - **Bracket column**: stays flush-left as a fixed-width column (like `-p`'s
+///   own table), with the indent placed *after* it — real emerge puts the
+///   whole indent before the bracket.
+///
+/// `order` is the actual merge plan. A node the walk reaches only to keep the
+/// tree connected (grafted filler, or already satisfied and not rebuilding)
+/// renders as `[nomerge]` — matching real emerge's own marker. `roots` are the
+/// explicit targets; like portage's `set_nodes` they stop upward parent
+/// backtracking (a target is its own tree root, not grafted under something
+/// else).
 pub(super) fn print_tree(
     ctx: &PrettyCtx,
     roots: &[(PortagePackage, Version)],
@@ -1699,111 +1721,285 @@ pub(super) fn print_tree(
     order: &[(PortagePackage, Version)],
     cross: &super::root_aware::CrossContext,
 ) {
-    // version map: package -> version (from edges, covers all non-virtual nodes)
+    // version map: package -> version (covers all graph endpoints, since a
+    // node may be reached as a `to` before we walk its own `from` edges, and
+    // grafted filler nodes carry the version they'd merge at).
     let mut version_map: HashMap<&PortagePackage, &Version> = HashMap::new();
     for e in edges {
         version_map.insert(&e.from.0, &e.from.1);
         version_map.insert(&e.to.0, &e.to.1);
     }
-    // also insert roots in case they have no outgoing edges
     for (pkg, ver) in roots {
         version_map.entry(pkg).or_insert(ver);
     }
+    for (pkg, ver) in order {
+        version_map.entry(pkg).or_insert(ver);
+    }
 
-    // children map: package -> ordered list of (package, version) deps
-    let mut children: HashMap<&PortagePackage, Vec<(&PortagePackage, &Version)>> = HashMap::new();
+    // children: package -> set of packages it directly depends on (forward
+    // edges). parents: package -> set of packages that directly depend on it
+    // (reverse edges). Sets, not Vecs: a package can reach another via several
+    // dep classes (DEPEND + RDEPEND) and the membership tests below only care
+    // about connectivity, not multiplicity.
+    let mut children: HashMap<&PortagePackage, HashSet<&PortagePackage>> = HashMap::new();
+    let mut parents: HashMap<&PortagePackage, HashSet<&PortagePackage>> = HashMap::new();
     for e in edges {
-        let ver = version_map.get(&e.to.0).copied().unwrap_or(&e.to.1);
-        children.entry(&e.from.0).or_default().push((&e.to.0, ver));
-    }
-    // deduplicate children (same package may appear via multiple dep classes,
-    // and not necessarily adjacently — DEPEND/BDEPEND edges to the same package
-    // can be interleaved with others, so a positional dedup is insufficient).
-    for kids in children.values_mut() {
-        let mut seen: std::collections::HashSet<&PortagePackage> = Default::default();
-        kids.retain(|(pkg, _)| seen.insert(*pkg));
+        children.entry(&e.from.0).or_default().insert(&e.to.0);
+        parents.entry(&e.to.0).or_default().insert(&e.from.0);
     }
 
-    let in_plan: std::collections::HashSet<(PortagePackage, Version)> =
-        order.iter().cloned().collect();
+    let root_set: HashSet<&PortagePackage> = roots.iter().map(|(p, _)| p).collect();
+    let order_set: HashSet<&PortagePackage> = order.iter().map(|(p, _)| p).collect();
 
-    let mut tree = Tree {
-        out: anstream::stdout(),
+    // Build the display list: one entry per shown node, in walk order.
+    let display = build_ordered_tree(&children, &parents, &root_set, order);
+
+    // Prune redundant `[nomerge]` filler — a direct port of portage's
+    // `_prune_tree_display`, adapted to our (pkg, depth, ordered) triples.
+    let display = prune_tree(&display, &order_set);
+
+    render_tree(ctx, &display, &version_map, cross);
+}
+
+/// One row of the tree walk, prior to pruning.
+struct TreeNode<'a> {
+    pkg: &'a PortagePackage,
+    /// Indent depth — the number of spaces to render before this node.
+    /// `0` means a flush-left tree root.
+    depth: usize,
+    /// `true` for a node taken straight from `order` (a real merge step);
+    /// `false` for grafted filler emitted only to reconnect a branch — the
+    /// latter renders as `[nomerge]` and is a candidate for pruning.
+    ordered: bool,
+}
+
+/// Portage's `_ordered_tree_display`: walk `order` and grow a tree whose depth
+/// tracks the merge sequence. Returns the unpruned display list.
+///
+/// `tree_nodes` is the current rightmost branch (a stack of ancestors); for
+/// each package in `order` we shrink that stack until its top actually
+/// depends on us, then either append (extend the branch) or graft via parent
+/// backtracking (reconnect elsewhere). `shown_edges` records every
+/// (child, parent) edge already drawn so the same link isn't drawn twice.
+fn build_ordered_tree<'a>(
+    children: &'a HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
+    parents: &'a HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
+    root_set: &'a HashSet<&'a PortagePackage>,
+    order: &'a [(PortagePackage, Version)],
+) -> Vec<TreeNode<'a>> {
+    // The mutable walk state, bundled so the graft recursion threads one
+    // borrow instead of five separate `&mut`s.
+    let mut walk = WalkState {
+        display: Vec::new(),
+        shown_edges: HashSet::new(),
+        // The rightmost branch currently open: ancestors of whatever we last
+        // drew.
+        tree_nodes: Vec::new(),
         children,
-        ctx,
-        cross,
-        in_plan: &in_plan,
-        visited: Default::default(),
+        parents,
+        root_set,
     };
-    for (i, (pkg, ver)) in roots.iter().enumerate() {
-        let is_last = i == roots.len() - 1;
-        tree.node(pkg, ver, "", is_last, true);
+
+    // Portage walks `mylist` for `--tree` in the *reverse* of install order
+    // (root first — note real emerge prints "in reverse order"). em's `order`
+    // is install order (deps first), so reverse it here before walking.
+    for (x, _) in order.iter().rev() {
+        let mut depth = walk.tree_nodes.len();
+        // Walk up the open branch until we find an ancestor that actually
+        // depends on `x` (i.e. `x` is one of its children).
+        while depth > 0 && !walk.is_child_of(walk.tree_nodes[depth - 1], x) {
+            depth -= 1;
+        }
+        if depth > 0 {
+            // Extends the current branch: truncate the stack to `depth` and
+            // push `x` as the new tip.
+            walk.tree_nodes.truncate(depth);
+            walk.shown_edges.insert((x, walk.tree_nodes[depth - 1]));
+            walk.tree_nodes.push(x);
+            walk.display.push(TreeNode {
+                pkg: x,
+                depth,
+                ordered: true,
+            });
+        } else {
+            // No open ancestor depends on `x`. Walk *up* through parent edges
+            // to graft `x` onto some already-shown node, emitting each
+            // intermediate as `[nomerge]` filler. `traversed` breaks cycles.
+            let mut traversed: HashSet<&PortagePackage> = HashSet::new();
+            traversed.insert(x);
+            walk.add_parents(x, true, &mut traversed);
+        }
+    }
+
+    walk.display
+}
+
+/// Mutable state threaded through [`build_ordered_tree`] and its graft
+/// recursion: the display list being built, the set of (child, parent) edges
+/// already drawn, the current rightmost-branch stack, plus immutable handles
+/// on the forward/reverse adjacency maps and the target (root) set.
+struct WalkState<'a> {
+    display: Vec<TreeNode<'a>>,
+    shown_edges: HashSet<(&'a PortagePackage, &'a PortagePackage)>,
+    tree_nodes: Vec<&'a PortagePackage>,
+    children: &'a HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
+    parents: &'a HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
+    root_set: &'a HashSet<&'a PortagePackage>,
+}
+
+impl<'a> WalkState<'a> {
+    /// Whether `child` is a direct forward dependency of `parent`.
+    fn is_child_of(&self, parent: &'a PortagePackage, child: &'a PortagePackage) -> bool {
+        self.children.get(parent).is_some_and(|c| c.contains(child))
+    }
+
+    /// Inner recursion of [`build_ordered_tree`] for the "no open ancestor"
+    /// case: walk parent edges upward from `current_node`, emitting each as
+    /// filler until one reconnects to a shown node. Mirrors portage's
+    /// `add_parents`.
+    ///
+    /// `ordered` is `true` only for the originating `order` node; every parent
+    /// walked up to reach it is grafted filler (`ordered = false`).
+    fn add_parents(
+        &mut self,
+        current_node: &'a PortagePackage,
+        ordered: bool,
+        traversed: &mut HashSet<&'a PortagePackage>,
+    ) {
+        // Don't walk above a target: a root is its own tree root, never grafted
+        // under something else (portage's `conf.set_nodes` check).
+        let parent_nodes: Option<&HashSet<&'a PortagePackage>> = if self.root_set.contains(current_node)
+        {
+            None
+        } else {
+            self.parents.get(current_node)
+        };
+
+        let mut selected_parent: Option<&'a PortagePackage> = None;
+        if let Some(parent_nodes) = parent_nodes {
+            let child_nodes = self.children.get(current_node);
+            // First pass: prefer a parent that avoids a direct cycle (isn't
+            // itself a child of `current_node`) and hasn't been traversed or
+            // drawn.
+            for node in parent_nodes {
+                if traversed.contains(node) || child_nodes.is_some_and(|c| c.contains(node)) {
+                    continue;
+                }
+                if self.shown_edges.contains(&(current_node, node)) {
+                    continue;
+                }
+                selected_parent = Some(node);
+                break;
+            }
+            // Failing that, accept a direct cycle (unavoidable) — same
+            // criteria minus the child-membership filter.
+            if selected_parent.is_none() {
+                for node in parent_nodes {
+                    if traversed.contains(node) {
+                        continue;
+                    }
+                    if self.shown_edges.contains(&(current_node, node)) {
+                        continue;
+                    }
+                    selected_parent = Some(node);
+                    break;
+                }
+            }
+            if let Some(parent) = selected_parent {
+                self.shown_edges.insert((current_node, parent));
+                traversed.insert(parent);
+                self.add_parents(parent, false, traversed);
+            }
+        }
+
+        // After (recursively) placing the chosen parent, emit `current_node`
+        // at the depth the recursion left us, and push it onto the open
+        // branch.
+        let depth = self.tree_nodes.len();
+        self.display.push(TreeNode {
+            pkg: current_node,
+            depth,
+            ordered,
+        });
+        self.tree_nodes.push(current_node);
     }
 }
 
-/// Shared state of one `print_tree` walk; `node` renders one package and
-/// recurses into its children.
-struct Tree<'a, W: std::io::Write> {
-    out: W,
-    children: HashMap<&'a PortagePackage, Vec<(&'a PortagePackage, &'a Version)>>,
-    ctx: &'a PrettyCtx<'a>,
-    cross: &'a super::root_aware::CrossContext,
-    in_plan: &'a std::collections::HashSet<(PortagePackage, Version)>,
-    visited: std::collections::HashSet<*const PortagePackage>,
+/// Portage's `_prune_tree_display`: strip redundant `[nomerge]` filler now
+/// that the real branch has been drawn. Walks the list backward, dropping a
+/// filler node when it sits at or below the depth of the next real merge.
+fn prune_tree<'a>(display: &[TreeNode<'a>], order_set: &HashSet<&PortagePackage>) -> Vec<TreeNode<'a>> {
+    let mut out: Vec<TreeNode<'a>> = Vec::with_capacity(display.len());
+    let mut last_merge_depth = 0usize;
+    // Walk backward; emit survivors in reverse, then reverse at the end so the
+    // relative order is preserved without the index gymnastics portage does.
+    for node in display.iter().rev() {
+        let keep;
+        if node.ordered && order_set.contains(node.pkg) {
+            // A real merge step: anchor, never pruned, and resets the depth
+            // ceiling for filler above it.
+            last_merge_depth = node.depth;
+            keep = true;
+        } else {
+            // Filler (`[nomerge]`): keep only if it sits strictly above the
+            // last real merge at its depth — i.e. it still connects something
+            // shallower. portage's `depth >= last_merge_depth or depth >=
+            // next.depth` test, with `next` being whatever we already kept.
+            let next_depth = out.last().map(|n: &TreeNode<'a>| n.depth);
+            let below_next = next_depth.is_some_and(|d| node.depth >= d);
+            keep = !(node.depth >= last_merge_depth || below_next);
+        }
+        if keep {
+            out.push(TreeNode {
+                pkg: node.pkg,
+                depth: node.depth,
+                ordered: node.ordered,
+            });
+        }
+    }
+    out.reverse();
+    out
 }
 
-impl<W: std::io::Write> Tree<'_, W> {
-    fn node(
-        &mut self,
-        pkg: &PortagePackage,
-        ver: &Version,
-        prefix: &str,
-        is_last: bool,
-        is_root: bool,
-    ) {
-        let already = !self.visited.insert(pkg as *const _);
-        let connector = if is_root {
-            ""
-        } else if is_last {
-            "└── "
-        } else {
-            "├── "
+/// Render the pruned display list as emerge-style rows. Indentation is
+/// portage's own `" " * depth` — one space per tree level, no box-drawing
+/// connectors or rails — matching real `emerge --tree` exactly. The bracket
+/// status column stays flush-left (a fixed-width column, like `-p`'s table)
+/// and the indent sits after it, so the bracket doesn't drift right at each
+/// depth.
+///
+/// `(*)` marks a repeat showing of the same package elsewhere in the tree
+/// (emerge doesn't re-expand it). `node.ordered` — whether the node is a real
+/// merge step rather than `[nomerge]` filler — picks the bracket.
+fn render_tree(
+    ctx: &PrettyCtx,
+    display: &[TreeNode<'_>],
+    version_map: &HashMap<&PortagePackage, &Version>,
+    cross: &super::root_aware::CrossContext,
+) {
+    let mut out = anstream::stdout();
+    let mut drawn: HashSet<*const PortagePackage> = HashSet::new();
+
+    for node in display {
+        let depth = node.depth;
+        let indent = " ".repeat(depth);
+
+        let already = !drawn.insert(node.pkg as *const _);
+        // Every node in `display` comes from `order` or from `edges`
+        // (parent/child endpoints), so its version is always in `version_map`.
+        let ver = version_map.get(node.pkg).copied().cloned();
+        let (bracket, rest) = match ver {
+            Some(v) => {
+                format_plan_parts(ctx, node.pkg, &v, node.pkg.merge_root(), cross, node.ordered)
+            }
+            None => continue,
         };
-        let in_plan = self.in_plan.contains(&(pkg.clone(), ver.clone()));
-        let (bracket, rest) =
-            format_plan_parts(self.ctx, pkg, ver, pkg.merge_root(), self.cross, in_plan);
         let suffix = if already {
             format!(" {C_DIM}(*){C_DIM:#}")
         } else {
             String::new()
         };
-        // Bracket status stays flush-left (a fixed-width column, like -p's
-        // own table) with the tree connector placed after it, rather than
-        // the connector pushing the bracket itself further right at each
-        // depth.
-        writeln!(self.out, "{bracket} {prefix}{connector}{rest}{suffix}").ok();
-
-        if already {
-            return;
-        }
-
-        let kids: Vec<(&PortagePackage, &Version)> = self
-            .children
-            .get(pkg)
-            .map(|v| v.to_vec())
-            .unwrap_or_default();
-        let child_prefix = if is_root {
-            prefix.to_string()
-        } else if is_last {
-            format!("{prefix}    ")
-        } else {
-            format!("{prefix}│   ")
-        };
-
-        for (i, (child, child_ver)) in kids.iter().enumerate() {
-            let child_is_last = i == kids.len() - 1;
-            self.node(child, child_ver, &child_prefix, child_is_last, false);
-        }
+        writeln!(out, "{bracket} {indent}{rest}{suffix}").ok();
     }
 }
 
@@ -2101,5 +2297,184 @@ mod tests {
         let foo = slotted("dev-libs/foo", "0");
         let solution = [(&a, &v), (&b, &v), (&foo, &v)];
         assert!(shared_slot_decisions(&ceded, solution).is_empty());
+    }
+
+    // --- order-driven tree (`-t`/`--tree`) ---------------------------------
+    //
+    // These exercise the reshape (`build_ordered_tree` + `prune_tree`) over a
+    // hand-built forward/reverse adjacency, independent of `render_tree`
+    // (which needs a full `PrettyCtx`). `pkg(c)` builds an unslotted package
+    // keyed by category/name; the version is irrelevant to the reshape.
+
+    fn pkg(cpn: &str) -> PortagePackage {
+        PortagePackage::unslotted(Cpn::parse(cpn).unwrap())
+    }
+
+    /// Build `(children, parents)` adjacency from a list of `parent -> child`
+    /// edges, plus a `roots` set. Returns owned maps whose borrowed keys point
+    /// into `pkgs` so they outlive the call.
+    fn adjacency<'a>(
+        edges: &'a [(&'a PortagePackage, &'a PortagePackage)],
+    ) -> (
+        HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
+        HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
+    ) {
+        let mut children: HashMap<&PortagePackage, HashSet<&PortagePackage>> = HashMap::new();
+        let mut parents: HashMap<&PortagePackage, HashSet<&PortagePackage>> = HashMap::new();
+        for (from, to) in edges {
+            children.entry(from).or_default().insert(to);
+            parents.entry(to).or_default().insert(from);
+        }
+        (children, parents)
+    }
+
+    /// `(cpn, depth, ordered)` triples, for readable assertions. `Cpn` is
+    /// `Copy` and interned, so this borrows no heap strings.
+    fn summary(display: &[TreeNode<'_>]) -> Vec<(Cpn, usize, bool)> {
+        display
+            .iter()
+            .map(|n| (*n.pkg.cpn(), n.depth, n.ordered))
+            .collect()
+    }
+
+    /// Run the full reshape (build + prune) over owned packages, returning the
+    /// pruned `(cpn, depth, ordered)` summary.
+    fn reshape(
+        pkgs: &[PortagePackage],
+        edges: &[(&PortagePackage, &PortagePackage)],
+        roots: &[&PortagePackage],
+        order: &[&PortagePackage],
+    ) -> Vec<(Cpn, usize, bool)> {
+        let (children, parents) = adjacency(edges);
+        let root_set: HashSet<&PortagePackage> = roots.iter().copied().collect();
+        let order_owned: Vec<(PortagePackage, Version)> =
+            order.iter().map(|p| ((*p).clone(), Version::parse("1").unwrap())).collect();
+        let display = build_ordered_tree(&children, &parents, &root_set, &order_owned);
+        let order_set: HashSet<&PortagePackage> = pkgs.iter().collect();
+        let pruned = prune_tree(&display, &order_set);
+        // `pkgs` anchors the borrows in `edges`/`roots`/`order`.
+        let _ = pkgs.len();
+        summary(&pruned)
+    }
+
+    /// Linear chain A→B→C. `order` is install order (deps first: C, B, A);
+    /// the walk reverses it (root first) so depth tracks the merge sequence
+    /// top-down. No grafting or pruning needed.
+    #[test]
+    fn tree_linear_chain_depth_tracks_order() {
+        let a = pkg("app-foo/a");
+        let b = pkg("app-foo/b");
+        let c = pkg("app-foo/c");
+        let pkgs = vec![a.clone(), b.clone(), c.clone()];
+        let edges = &[(&a, &b), (&b, &c)];
+        // install order: deps first
+        let got = reshape(&pkgs, edges, &[&a], &[&c, &b, &a]);
+        let cpn = |s: &str| Cpn::parse(s).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                (cpn("app-foo/a"), 0, true),
+                (cpn("app-foo/b"), 1, true),
+                (cpn("app-foo/c"), 2, true),
+            ]
+        );
+    }
+
+    /// Diamond: A→{B,C}, B→D, C→D, install order [D, C, B, A] (the solver
+    /// built D and C before B). Reversed, the walk is A, B, C, D: B extends
+    /// A (depth 1), C is a sibling of B (depth 1, grafted back under A when
+    /// B's branch closed), and D extends whichever of B/C came first (depth
+    /// 2). This is the order-driven reconnection a plain graph DFS wouldn't
+    /// reproduce.
+    #[test]
+    fn tree_diamond_grafts_sibling_back_to_root() {
+        let a = pkg("app-foo/a");
+        let b = pkg("app-foo/b");
+        let c = pkg("app-foo/c");
+        let d = pkg("app-foo/d");
+        let pkgs = vec![a.clone(), b.clone(), c.clone(), d.clone()];
+        let edges = &[(&a, &b), (&a, &c), (&b, &d), (&c, &d)];
+        // install order: deps first
+        let got = reshape(&pkgs, edges, &[&a], &[&d, &c, &b, &a]);
+        let cpn = |s: &str| Cpn::parse(s).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                (cpn("app-foo/a"), 0, true),
+                (cpn("app-foo/b"), 1, true),
+                (cpn("app-foo/c"), 1, true),
+                (cpn("app-foo/d"), 2, true),
+            ]
+        );
+    }
+
+    /// A root that is a target but *not* in the merge plan (already installed,
+    /// not rebuilding) is reached only to reconnect the tree, so it renders as
+    /// `[nomerge]` filler. Install order is just [B]; the walk reverses to
+    /// [B], B has no open ancestor, so `add_parents` grafts it under root A
+    /// (depth 0, filler), then B at depth 1 as the real merge.
+    #[test]
+    fn tree_root_not_in_order_shown_as_nomerge_filler() {
+        let a = pkg("app-foo/a");
+        let b = pkg("app-foo/b");
+        let pkgs = vec![a.clone(), b.clone()];
+        let edges = &[(&a, &b)];
+        // A is a root target but not in the merge plan; B is (install [B]).
+        let got = reshape(&pkgs, edges, &[&a], &[&b]);
+        let cpn = |s: &str| Cpn::parse(s).unwrap();
+        // A: depth 0, filler (not ordered). B: depth 1, real merge.
+        assert_eq!(
+            got,
+            vec![(cpn("app-foo/a"), 0, false), (cpn("app-foo/b"), 1, true),]
+        );
+    }
+
+    /// Pruning drops a filler node the real branch renders redundant. Edges
+    /// A→{B,D}, B→C; install order [C, B, A] (D is never a merge step and
+    /// nothing in order depends on it). D is emitted as filler under A but
+    /// pruned because it sits at the depth of the surviving A→B branch and
+    /// carries no real merge below it.
+    #[test]
+    fn tree_redundant_filler_is_pruned() {
+        let a = pkg("app-foo/a");
+        let b = pkg("app-foo/b");
+        let c = pkg("app-foo/c");
+        let d = pkg("app-foo/d");
+        let pkgs = vec![a.clone(), b.clone(), c.clone(), d.clone()];
+        let edges = &[(&a, &b), (&b, &c), (&a, &d)];
+        // install order: deps first; D is not in the plan.
+        let got = reshape(&pkgs, edges, &[&a], &[&c, &b, &a]);
+        let cpns: Vec<Cpn> = got.iter().map(|(c, _, _)| *c).collect();
+        assert_eq!(
+            cpns,
+            vec![
+                Cpn::parse("app-foo/a").unwrap(),
+                Cpn::parse("app-foo/b").unwrap(),
+                Cpn::parse("app-foo/c").unwrap(),
+            ]
+        );
+        // No filler survives pruning here.
+        assert!(got.iter().all(|(_, _, o)| *o));
+    }
+
+    /// A root is never grafted *under* something else: even if a root has a
+    /// parent edge in the graph, `add_parents` stops walking up at it
+    /// (portage's `set_nodes` rule). Here root A has an incoming edge from X,
+    /// but X must not appear above A in the tree. Install order [B, A].
+    #[test]
+    fn tree_root_is_never_grafted_under_a_parent() {
+        let a = pkg("app-foo/a");
+        let b = pkg("app-foo/b");
+        let x = pkg("app-foo/x");
+        let pkgs = vec![a.clone(), b.clone(), x.clone()];
+        // X→A edge exists, but A is a root: X must not be drawn above it.
+        let edges = &[(&a, &b), (&x, &a)];
+        let got = reshape(&pkgs, edges, &[&a], &[&b, &a]);
+        let cpns: Vec<Cpn> = got.iter().map(|(c, _, _)| *c).collect();
+        assert_eq!(
+            cpns,
+            vec![Cpn::parse("app-foo/a").unwrap(), Cpn::parse("app-foo/b").unwrap()]
+        );
+        assert_eq!(got[0].1, 0, "root A flush-left");
     }
 }
