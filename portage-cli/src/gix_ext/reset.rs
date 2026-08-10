@@ -523,6 +523,12 @@ mod tests {
     #[test]
     fn hard_reset_moves_branch_index_and_worktree() {
         let _path = crate::test_support::path_lock();
+        // gix::open/reset read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let tmp = tempfile::tempdir().unwrap();
         let (work, target) = repo_with_two_commits(tmp.path());
 
@@ -550,6 +556,12 @@ mod tests {
     #[test]
     fn refuse_if_dirty_allows_a_non_fast_forward_when_the_tree_is_clean() {
         let _path = crate::test_support::path_lock();
+        // gix::open/reset read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let tmp = tempfile::tempdir().unwrap();
         let work = tmp.path().join("work");
         git(
@@ -594,6 +606,12 @@ mod tests {
     #[test]
     fn refuse_if_dirty_rejects_uncommitted_changes_and_changes_nothing() {
         let _path = crate::test_support::path_lock();
+        // gix::open/reset read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let tmp = tempfile::tempdir().unwrap();
         let (work, target) = repo_with_two_commits(tmp.path());
         let head_before = gix::open(&work).unwrap().head_id().unwrap().detach();
@@ -621,6 +639,12 @@ mod tests {
     #[test]
     fn force_clobbers_uncommitted_changes() {
         let _path = crate::test_support::path_lock();
+        // gix::open/reset read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let tmp = tempfile::tempdir().unwrap();
         let (work, target) = repo_with_two_commits(tmp.path());
         std::fs::write(work.join("a.txt"), "local edit\n").unwrap();
@@ -683,6 +707,12 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let _path = crate::test_support::path_lock();
+        // gix::open/reset read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         // A test running as root would write through the mode bits and
         // falsify the setup rather than the fix.
         if rustix::process::geteuid().is_root() {
@@ -730,6 +760,12 @@ mod tests {
     #[test]
     fn clean_worktree_removes_untracked_and_ignored_but_keeps_git_and_tracked() {
         let _path = crate::test_support::path_lock();
+        // gix::open/reset read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let tmp = tempfile::tempdir().unwrap();
         let work = tmp.path().join("work");
         git(
@@ -767,6 +803,12 @@ mod tests {
     #[test]
     fn set_remote_url_rewrites_the_url_and_keeps_the_refspec() {
         let _path = crate::test_support::path_lock();
+        // gix::open/reset read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let tmp = tempfile::tempdir().unwrap();
         let work = tmp.path().join("work");
         git(

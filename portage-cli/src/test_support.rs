@@ -36,11 +36,22 @@ pub(crate) fn path_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Same rationale as [`PATH_LOCK`], for tests that mutate the process-wide
-/// `HOME` env var (e.g. `--local`'s `~/.gentoo` derivation).
+/// `HOME` env var (e.g. `--local`'s `~/.gentoo` derivation) **or** read it
+/// indirectly — real `git`/`gix` operations consult `$HOME/.gitconfig` for
+/// config layering even when the calling code never touches `HOME` itself,
+/// so `maint::sync::git_gix`'s and `gix_ext::reset`'s tests hold this too,
+/// not just [`PATH_LOCK`]: without it, `active.rs`'s/`cli.rs`'s
+/// `set_var("HOME", ..)` tests (protected only by this lock, a *different*
+/// mutex from `PATH_LOCK`) can race a concurrent gix fetch/reset reading
+/// `$HOME` on another thread — a real, once-observed CI-only flake
+/// (`cargo llvm-cov`'s instrumented build, 2026-08-10; not reproducible
+/// under a plain `cargo test`, which apparently never interleaves these
+/// particular tests unluckily enough to hit the window).
 static HOME_LOCK: Mutex<()> = Mutex::new(());
 
-/// Acquire [`HOME_LOCK`] for the duration of a test that mutates `HOME` —
-/// hold the returned guard for the whole test body.
+/// Acquire [`HOME_LOCK`] for the duration of a test that mutates `HOME`, or
+/// that (transitively) reads it — hold the returned guard for the whole
+/// test body.
 pub(crate) fn home_lock() -> std::sync::MutexGuard<'static, ()> {
     HOME_LOCK
         .lock()

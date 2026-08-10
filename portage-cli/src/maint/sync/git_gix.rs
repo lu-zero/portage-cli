@@ -330,6 +330,12 @@ mod tests {
         // The fixture spawns `git` via a PATH lookup — serialize against any
         // test elsewhere that temporarily mutates PATH (`crate::test_support`).
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         let changed = GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -350,6 +356,12 @@ mod tests {
     #[test]
     fn volatile_update_survives_unrelated_shallow_history() {
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, true, true)
@@ -371,6 +383,12 @@ mod tests {
     #[test]
     fn volatile_update_refuses_a_dirty_worktree() {
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, true, true)
@@ -397,6 +415,12 @@ mod tests {
     #[test]
     fn nonvolatile_update_cleans_orphans_and_clobbers_local_changes() {
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -424,6 +448,12 @@ mod tests {
     #[test]
     fn update_is_a_no_op_when_already_at_the_upstream_tip() {
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -438,6 +468,12 @@ mod tests {
     #[test]
     fn volatile_update_does_not_shallow_a_full_clone() {
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         git(
             f._tmp.path(),
@@ -463,6 +499,12 @@ mod tests {
     #[test]
     fn nonvolatile_sync_realigns_remote_url_when_sync_uri_changes() {
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
@@ -505,6 +547,12 @@ mod tests {
     #[test]
     fn matching_sync_uri_does_not_rewrite_the_config() {
         let _path = crate::test_support::path_lock();
+        // gix::open/fetch read the ambient $HOME (~/.gitconfig config
+        // layering) even though this test never touches HOME itself --
+        // path_lock alone doesn't exclude a concurrently-running test that
+        // does (active.rs/cli.rs's home_lock-protected `set_var("HOME", ..)`
+        // tests are a *different* mutex). See test_support::home_lock's doc.
+        let _home = crate::test_support::home_lock();
         let f = fixture();
         GixBackend
             .sync(&f.overlay, &f.remote_uri, false, true)
