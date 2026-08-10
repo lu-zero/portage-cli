@@ -1199,15 +1199,41 @@ fn collect_required_use_flags(
     }
 }
 
+/// One position in [`load_repos`]'s priority-ordered merge: either the main
+/// repo (loaded via the cheap [`portage_repo::primary_entries`] bulk path) or
+/// an overlay (the full [`portage_repo::overlay_entries`] digest chain).
+///
+/// Kept as a single ordered sequence — not two separate before/after main
+/// slices — specifically so a caller cannot mis-sequence the two halves:
+/// the merge order in [`load_repos`] is exactly the order of this slice,
+/// full stop.
+#[allow(clippy::large_enum_variant)] // built once per resolve (one entry per
+// configured repo, not per package) -- boxing would add an allocation to
+// every Overlay variant, the common case, to shrink the rare Main variant.
+pub enum RepoSource {
+    /// The main repo (`repo` in [`load_repos`]'s own signature).
+    Main,
+    /// An overlay repo and its masters.
+    Overlay(Repository, Vec<Repository>),
+}
+
 /// Load the main repo's md5-cache plus every overlay's metadata (sourcing
-/// cache-less ebuilds — see `overlay::overlay_entries`). A cpv provided by
-/// the main repo wins over an overlay copy; among overlays, earlier wins.
+/// cache-less ebuilds — see `overlay::overlay_entries`), merged in
+/// **descending** repos.conf-priority order (`sources`, already sorted by
+/// the caller — see `portage-cli`'s `repo_open::overlays_from_conf`):
+/// higher priority wins a duplicate cpv, matching real portage
+/// (`porttree.py`'s `findname2`/`xmatch` `reversed(...)` over the
+/// ascending `(priority, name)` list; `man 5 portage`: "those with higher
+/// priority are preferred"). The main repo defaults to priority `-1000`
+/// when unset (`ReposConf::load_from`), so by default *any* overlay shadows
+/// it — the ordinary "drop an ebuild in a local overlay to override
+/// ::gentoo" workflow, no repos.conf configuration required.
 ///
 /// Overlay secondary caches must already be configured on each
 /// [`Repository`] (via [`Repository::builder`]).
 pub async fn load_repos(
     repo: &Repository,
-    overlays: &[(Repository, Vec<Repository>)],
+    sources: &[RepoSource],
     aliases: &[portage_repo::RepoEntry],
 ) -> RepoData {
     let mut cpns_set: HashSet<Cpn> = HashSet::new();
@@ -1216,23 +1242,29 @@ pub async fn load_repos(
     let mut seen: HashSet<Cpv> = HashSet::new();
     let mut real_cpn_of: HashMap<Cpn, Cpn> = HashMap::new();
 
-    let entries = portage_repo::primary_entries(repo).await;
-
-    for (cpv, entry) in entries {
-        let cpn = cpv.cpn;
-        cpns_set.insert(cpn);
-        seen.insert(cpv.clone());
-        versions.entry(cpn).or_default().push((cpv, entry));
-    }
-
-    for (overlay, masters) in overlays {
-        for (cpv, entry) in portage_repo::overlay_entries(overlay, masters).await {
-            if !seen.insert(cpv.clone()) {
-                continue;
+    for source in sources {
+        match source {
+            RepoSource::Main => {
+                for (cpv, entry) in portage_repo::primary_entries(repo).await {
+                    if !seen.insert(cpv.clone()) {
+                        continue;
+                    }
+                    cpns_set.insert(cpv.cpn);
+                    // No `repo_of` insert: absence means "the main repo",
+                    // per `RepoData::repo_of`'s documented convention.
+                    versions.entry(cpv.cpn).or_default().push((cpv, entry));
+                }
             }
-            cpns_set.insert(cpv.cpn);
-            repo_of.insert(cpv.clone(), overlay.name().to_string());
-            versions.entry(cpv.cpn).or_default().push((cpv, entry));
+            RepoSource::Overlay(overlay, masters) => {
+                for (cpv, entry) in portage_repo::overlay_entries(overlay, masters).await {
+                    if !seen.insert(cpv.clone()) {
+                        continue;
+                    }
+                    cpns_set.insert(cpv.cpn);
+                    repo_of.insert(cpv.clone(), overlay.name().to_string());
+                    versions.entry(cpv.cpn).or_default().push((cpv, entry));
+                }
+            }
         }
     }
 
@@ -2045,6 +2077,111 @@ mod tests {
         (dir, repo)
     }
 
+    /// Like [`disk_repo`], but also writes a real `.ebuild` file with a
+    /// matching `_md5_` in the cache entry. `overlay_entries` (unlike
+    /// `primary_entries`, which trusts the bulk cache read unconditionally
+    /// when there's nothing on disk to cross-check against) only returns an
+    /// entry when a real ebuild file's md5 matches `_md5_` -- needed for any
+    /// test that exercises `RepoSource::Overlay`, not `RepoSource::Main`.
+    fn disk_repo_with_ebuild(cpv: &str, description: &str) -> (tempfile::TempDir, Repository) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+
+        let cpv = Cpv::parse(cpv).unwrap();
+        // `ebuilds_with_masters` (unlike the cache-only bulk read) scans only
+        // the categories listed here -- an empty/missing file means it finds
+        // nothing at all, silently.
+        std::fs::write(
+            dir.path().join("profiles").join("categories"),
+            cpv.cpn.category.as_ref(),
+        )
+        .unwrap();
+        let pf = format!("{}-{}", cpv.cpn.package, cpv.version);
+        let pkg_dir = dir
+            .path()
+            .join(cpv.cpn.category.as_ref())
+            .join(cpv.cpn.package.as_ref());
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_text =
+            format!("EAPI=8\nDESCRIPTION=\"{description}\"\nSLOT=\"0\"\nKEYWORDS=\"~amd64\"\n");
+        std::fs::write(pkg_dir.join(format!("{pf}.ebuild")), &ebuild_text).unwrap();
+        let digest = format!("{:x}", md5::compute(ebuild_text.as_bytes()));
+
+        let cache_dir = dir
+            .path()
+            .join("metadata")
+            .join("md5-cache")
+            .join(cpv.cpn.category.as_ref());
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(
+            cache_dir.join(&pf),
+            format!("EAPI=8\nDESCRIPTION={description}\nSLOT=0\n_md5_={digest}\n"),
+        )
+        .unwrap();
+
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open(dir.path())
+            .unwrap();
+        (dir, repo)
+    }
+
+    /// By default (main listed after the overlay in `sources`, matching
+    /// main's real `-1000` default priority losing to an overlay's unset-
+    /// priority `0`) an overlay's cpv wins over an identical cpv from main
+    /// -- live-verified against real portage 3.0.81.2 (`portdbapi.xmatch`,
+    /// same setup: main priority -1000, overlay priority 0, `bestmatch-
+    /// visible` picks the overlay's ebuild). This is the ordinary "drop an
+    /// ebuild in a local overlay to override ::gentoo" workflow, no
+    /// repos.conf configuration required.
+    #[tokio::test]
+    async fn load_repos_overlay_wins_over_main_for_duplicate_cpv_by_default() {
+        let (_main_dir, main) =
+            disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
+        let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
+        let overlay_name = overlay.name().to_string();
+
+        let sources = [RepoSource::Overlay(overlay, Vec::new()), RepoSource::Main];
+        let data = load_repos(&main, &sources, &[]).await;
+
+        let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
+        let entries = data.versions.get(&cpv.cpn).unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "the duplicate must be deduped, not both kept"
+        );
+        assert_eq!(entries[0].1.metadata.description, "from overlay");
+        assert_eq!(
+            data.repo_of.get(&cpv).map(String::as_str),
+            Some(overlay_name.as_str()),
+            "repo_of must attribute the win to the overlay, not be absent (which means main)"
+        );
+    }
+
+    /// The inverse: when main is listed *before* the overlay in `sources`
+    /// (an overlay with an explicit priority lower than main's -1000 --
+    /// exotic, but real portage supports it, `man 5 portage`'s own
+    /// `priority = 9999`-style examples for the opposite direction), main
+    /// wins instead, and `repo_of` correctly has no entry for that cpv.
+    #[tokio::test]
+    async fn load_repos_main_wins_when_ranked_above_the_overlay() {
+        let (_main_dir, main) =
+            disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
+        let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
+
+        let sources = [RepoSource::Main, RepoSource::Overlay(overlay, Vec::new())];
+        let data = load_repos(&main, &sources, &[]).await;
+
+        let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
+        let entries = data.versions.get(&cpv.cpn).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.metadata.description, "from main");
+        assert_eq!(data.repo_of.get(&cpv), None, "absence means main");
+    }
+
     /// `load_repos` injects `Location::Alias` entries as in-memory `cross-<tuple>/<pkg>`
     /// packages cloned from the source repo, with `real_cpn_of` recording the
     /// derivation — the in-memory equivalent of crossdev's symlink overlay.
@@ -2070,7 +2207,12 @@ mod tests {
             priority: None,
         };
 
-        let data = load_repos(&repo, &[], std::slice::from_ref(&alias_entry)).await;
+        let data = load_repos(
+            &repo,
+            &[RepoSource::Main],
+            std::slice::from_ref(&alias_entry),
+        )
+        .await;
 
         let cross_cpn = Cpn::new(cross_cat, "gcc");
         assert!(data.cpns.contains(&cross_cpn), "cross cpn injected");
@@ -2108,7 +2250,12 @@ mod tests {
             priority: None,
         };
 
-        let data = load_repos(&repo, &[], std::slice::from_ref(&alias_entry)).await;
+        let data = load_repos(
+            &repo,
+            &[RepoSource::Main],
+            std::slice::from_ref(&alias_entry),
+        )
+        .await;
 
         let cross_cpn = Cpn::new(cross_cat, "gcc");
         assert!(!data.cpns.contains(&cross_cpn));

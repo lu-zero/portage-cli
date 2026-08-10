@@ -1494,8 +1494,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         } else {
             overlays
                 .iter()
-                .find(|(o, _)| o.name() == name)
-                .map(|(o, _)| o.path().to_owned())
+                .find_map(|source| match source {
+                    portage_resolve::repo::RepoSource::Overlay(o, _) if o.name() == name => {
+                        Some(o.path().to_owned())
+                    }
+                    _ => None,
+                })
                 .unwrap_or_else(|| repo_path.to_owned())
         }
     };
