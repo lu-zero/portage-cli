@@ -102,6 +102,13 @@ struct RepoInfo {
     sync_uri: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     volatile: Option<bool>,
+    /// Resolution order: `ReposConf::repos()` already returns repos sorted
+    /// ascending by `(priority, name)` (`portage-repo`'s `repos_conf.rs`),
+    /// so this is purely informational here — real `emerge --info` prints
+    /// it the same way (`repository/config.py`'s `"priority: " +
+    /// str(self.priority)`, only when set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -196,6 +203,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
                     sync_type: r.sync_type.clone().filter(|t| !t.is_empty()),
                     sync_uri: r.sync_uri.clone().filter(|u| !u.is_empty()),
                     volatile: Some(volatile),
+                    priority: r.priority,
                 });
             }
             out
@@ -358,6 +366,9 @@ fn print_text(info: &Info) -> Result<()> {
         }
         if let Some(u) = &r.sync_uri {
             writeln!(out, "    {C_DIM}sync-uri:{C_DIM:#} {u}")?;
+        }
+        if let Some(p) = r.priority {
+            writeln!(out, "    {C_DIM}priority:{C_DIM:#} {p}")?;
         }
         if let Some(v) = r.volatile {
             // Python-style capitalization, matching real emerge --info's

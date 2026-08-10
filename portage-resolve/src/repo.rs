@@ -2067,6 +2067,7 @@ mod tests {
             sync_uri: None,
             auto_sync: false,
             volatile: None,
+            priority: None,
         };
 
         let data = load_repos(&repo, &[], std::slice::from_ref(&alias_entry)).await;
@@ -2104,6 +2105,7 @@ mod tests {
             sync_uri: None,
             auto_sync: false,
             volatile: None,
+            priority: None,
         };
 
         let data = load_repos(&repo, &[], std::slice::from_ref(&alias_entry)).await;

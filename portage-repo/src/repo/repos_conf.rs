@@ -57,6 +57,17 @@ pub struct RepoEntry {
     /// changes (`git reset --hard` / `clean`). Unset means “infer from
     /// ownership” at sync time (Portage: volatile if not root/portage-owned).
     pub volatile: Option<bool>,
+    /// `priority` from repos.conf. Determines resolution order: repos are
+    /// searched (and `emerge --info`/`em --info` list them) ascending by
+    /// `(priority, name)`, lower first — a *negative* priority is searched
+    /// **before** the default `0`, e.g. an overlay meant to shadow the main
+    /// repo. Real portage defaults unset to `0` at sort time and forces the
+    /// main repo specifically to `-1000` when *it* has no explicit priority
+    /// (`repository/config.py`'s `RepoConfigLoader.__init__`) — see
+    /// [`ReposConf::load_from`] for where that default is applied; this
+    /// field itself stays `None` until then, distinguishing "explicitly set
+    /// to 0" from "unset".
+    pub priority: Option<i64>,
 }
 
 impl RepoEntry {
@@ -161,6 +172,7 @@ impl ReposConf {
                         sync_uri: None,
                         auto_sync: false,
                         volatile: None,
+                        priority: s.get("priority").and_then(|v| v.trim().parse().ok()),
                     });
                 }
                 let location = s.get("location")?;
@@ -178,22 +190,45 @@ impl ReposConf {
                     volatile: s
                         .get("volatile")
                         .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "yes" | "true")),
+                    // Invalid/non-numeric `priority =` is silently treated as
+                    // unset, matching real portage's own `try: priority =
+                    // int(priority) except ValueError: priority = None`.
+                    priority: s.get("priority").and_then(|v| v.trim().parse().ok()),
                 })
             })
             .collect();
 
+        // Real portage: the main repo defaults to priority -1000 if it has
+        // no explicit `priority =` of its own — searched before everything
+        // else without requiring every other repos.conf section to also
+        // carry an explicit priority just to stay behind it.
         if let Some(main) = main_repo.as_deref()
-            && let Some(pos) = repos.iter().position(|r| r.name == main)
-            && pos != 0
+            && let Some(entry) = repos.iter_mut().find(|r| r.name == main)
+            && entry.priority.is_none()
         {
-            let m = repos.remove(pos);
-            repos.insert(0, m);
+            entry.priority = Some(-1000);
         }
+
+        // Final resolution order: ascending by (priority, name) -- lower
+        // priority first, unset treated as 0, name as a stable tiebreak for
+        // predictable ordering when priorities collide (`config.py`'s own
+        // `sorted(prepos.items(), key=lambda r: (r[1].priority or 0,
+        // r[1].name))`). Replaces the old "just move main-repo to the
+        // front, otherwise keep file-encounter order" logic, which ignored
+        // every other repo's `priority =` entirely.
+        repos.sort_by(|a, b| {
+            (a.priority.unwrap_or(0), a.name.as_str())
+                .cmp(&(b.priority.unwrap_or(0), b.name.as_str()))
+        });
 
         Ok(ReposConf { repos, main_repo })
     }
 
-    /// Every configured repository in resolution order (main first).
+    /// Every configured repository in resolution order: ascending by
+    /// `(priority, name)` — the main repo sorts first in practice (its
+    /// default priority is `-1000` when unset) unless another repo's
+    /// explicit `priority =` is even lower, which is legitimate and matches
+    /// real portage rather than being overridden.
     pub fn repos(&self) -> &[RepoEntry] {
         &self.repos
     }
@@ -310,6 +345,11 @@ auto-sync = no
         assert!(rc.repos().is_empty());
     }
 
+    /// The mechanism changed (was: a hardcoded "move main-repo to position
+    /// 0"; now: the main repo's implicit `priority = -1000` default sorting
+    /// first among unset-priority ({0}) repos) but the observable behavior
+    /// is the same for the common case of no repo setting an explicit
+    /// `priority =`.
     #[test]
     fn main_repo_moves_to_front_even_when_declared_later() {
         let dir = tempfile::tempdir().unwrap();
@@ -329,5 +369,105 @@ main-repo = gentoo
         );
         let rc = ReposConf::load_from(&[&conf]).unwrap();
         assert_eq!(rc.repos()[0].name, "gentoo");
+        assert_eq!(rc.find("gentoo").unwrap().priority, Some(-1000));
+        assert_eq!(rc.find("overlay").unwrap().priority, None);
+    }
+
+    /// An explicit `priority =` reorders repos regardless of file order —
+    /// the actual gap this landed to close: the old code only ever moved
+    /// the main repo to the front and otherwise kept pure file-encounter
+    /// order, ignoring every other repo's `priority =` entirely.
+    #[test]
+    fn explicit_priority_reorders_regardless_of_file_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("repos.conf");
+        write(
+            &conf,
+            r#"
+[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /a
+
+[first]
+location = /b
+priority = -5
+
+[second]
+location = /c
+priority = 10
+"#,
+        );
+        let rc = ReposConf::load_from(&[&conf]).unwrap();
+        let names: Vec<_> = rc.repos().iter().map(|r| r.name.as_str()).collect();
+        // gentoo (-1000, implicit) < first (-5, explicit) < second (10, explicit)
+        assert_eq!(names, vec!["gentoo", "first", "second"]);
+    }
+
+    /// A repo with an explicit priority more negative than the main repo's
+    /// implicit -1000 legitimately sorts *before* it — real portage allows
+    /// this (an overlay meant to shadow the main repo), so it must not be
+    /// clobbered by a "main repo always first" special case.
+    #[test]
+    fn explicit_priority_below_main_repo_default_sorts_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("repos.conf");
+        write(
+            &conf,
+            r#"
+[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /a
+
+[shadow]
+location = /b
+priority = -2000
+"#,
+        );
+        let rc = ReposConf::load_from(&[&conf]).unwrap();
+        assert_eq!(rc.repos()[0].name, "shadow");
+        assert_eq!(rc.repos()[1].name, "gentoo");
+    }
+
+    /// An explicit `priority =` on the main repo itself is respected, not
+    /// silently overwritten by the `-1000` default (that default only
+    /// applies when the main repo's own priority is unset).
+    #[test]
+    fn explicit_main_repo_priority_is_not_overridden_by_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("repos.conf");
+        write(
+            &conf,
+            r#"
+[DEFAULT]
+main-repo = gentoo
+
+[gentoo]
+location = /a
+priority = 5
+
+[other]
+location = /b
+"#,
+        );
+        let rc = ReposConf::load_from(&[&conf]).unwrap();
+        assert_eq!(rc.find("gentoo").unwrap().priority, Some(5));
+        // other (unset -> 0) now sorts before gentoo (explicit 5).
+        assert_eq!(rc.repos()[0].name, "other");
+        assert_eq!(rc.repos()[1].name, "gentoo");
+    }
+
+    /// A non-numeric `priority =` is silently treated as unset, matching
+    /// real portage's own `try: int(priority) except ValueError: None`.
+    #[test]
+    fn non_numeric_priority_is_treated_as_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let conf = dir.path().join("repos.conf");
+        write(&conf, "[weird]\nlocation = /a\npriority = not-a-number\n");
+        let rc = ReposConf::load_from(&[&conf]).unwrap();
+        assert_eq!(rc.find("weird").unwrap().priority, None);
     }
 }

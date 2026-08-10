@@ -1116,6 +1116,7 @@ fn alias_repo_entry(target: &CrossTarget, extras: &[Cpn]) -> portage_repo::RepoE
         sync_uri: None,
         auto_sync: false,
         volatile: None,
+        priority: None,
     }
 }
 
