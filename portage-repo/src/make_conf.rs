@@ -137,10 +137,8 @@ impl MakeConf {
         }
         let mut combined = String::new();
         for f in files {
-            let chunk = std::fs::read_to_string(&f).map_err(|e| Error::Io {
-                path: f,
-                source: e,
-            })?;
+            let chunk =
+                std::fs::read_to_string(&f).map_err(|e| Error::Io { path: f, source: e })?;
             combined.push_str(&chunk);
             if !combined.is_empty() && !combined.ends_with('\n') {
                 combined.push('\n');
@@ -383,8 +381,8 @@ impl MakeConf {
         };
 
         // Effective USE for the edit is the full directory/file fold.
-        let current_fold = Self::load(path)
-            .unwrap_or_else(|_| Self::parse(String::new()).expect("empty parse"));
+        let current_fold =
+            Self::load(path).unwrap_or_else(|_| Self::parse(String::new()).expect("empty parse"));
         let mut current_flags: Vec<String> = current_fold
             .get("USE")
             .unwrap_or("")
@@ -397,9 +395,8 @@ impl MakeConf {
         }
         for flag in add {
             let flag = flag.trim_start_matches('+');
-            current_flags.retain(|f| {
-                f != flag && f != &format!("+{flag}") && f != &format!("-{flag}")
-            });
+            current_flags
+                .retain(|f| f != flag && f != &format!("+{flag}") && f != &format!("-{flag}"));
             current_flags.push(flag.to_string());
         }
         let new_use = current_flags.join(" ");
@@ -871,8 +868,7 @@ mod tests {
         std::fs::write(mc_dir.join("20-use"), "USE=\"ssl\"\n").unwrap();
 
         let path = Utf8Path::from_path(&mc_dir).unwrap();
-        let new_use =
-            MakeConf::apply_use_changes_at(path, &["nls".to_string()], &[]).unwrap();
+        let new_use = MakeConf::apply_use_changes_at(path, &["nls".to_string()], &[]).unwrap();
         assert_eq!(new_use, "ssl nls");
         // USE fragment updated; flags fragment untouched.
         let use_frag = std::fs::read_to_string(mc_dir.join("20-use")).unwrap();
@@ -889,8 +885,7 @@ mod tests {
         let mc_dir = dir.path().join("make.conf");
         std::fs::create_dir(&mc_dir).unwrap();
         let path = Utf8Path::from_path(&mc_dir).unwrap();
-        let new_use =
-            MakeConf::apply_use_changes_at(path, &["python".to_string()], &[]).unwrap();
+        let new_use = MakeConf::apply_use_changes_at(path, &["python".to_string()], &[]).unwrap();
         assert_eq!(new_use, "python");
         let frag = mc_dir.join(MAKE_CONF_DIR_FALLBACK_FRAGMENT);
         assert!(frag.is_file());

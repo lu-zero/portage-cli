@@ -130,10 +130,7 @@ fn list_config_files_recursive(root: &Path) -> Result<Vec<PathBuf>> {
         };
 
         if meta.is_dir() {
-            let fname = fullpath
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
+            let fname = fullpath.file_name().and_then(|n| n.to_str()).unwrap_or("");
             // Root is always entered; children apply basename + VCS filters.
             if fullpath.as_path() != root
                 && (is_vcs_dir_name(fname) || !config_basename_included(fname))

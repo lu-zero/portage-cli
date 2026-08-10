@@ -122,10 +122,8 @@ impl PackageConf {
         }
         let mut combined = String::new();
         for f in files {
-            let chunk = std::fs::read_to_string(&f).map_err(|e| Error::Io {
-                path: f,
-                source: e,
-            })?;
+            let chunk =
+                std::fs::read_to_string(&f).map_err(|e| Error::Io { path: f, source: e })?;
             combined.push_str(&chunk);
         }
         Self::parse(combined)
