@@ -311,15 +311,24 @@ fn print_text(info: &Info) -> Result<()> {
         match mem.free_kib {
             Some(free) => writeln!(
                 out,
-                "{C_DIM}KiB Mem:{C_DIM:#}   {} total,  {free} free",
-                mem.total_kib
+                "{C_DIM}KiB Mem:{C_DIM:#}   {} total ({}),  {free} free ({})",
+                mem.total_kib,
+                human_kib(mem.total_kib),
+                human_kib(free)
             )?,
-            None => writeln!(out, "{C_DIM}KiB Mem:{C_DIM:#}   {} total", mem.total_kib)?,
+            None => writeln!(
+                out,
+                "{C_DIM}KiB Mem:{C_DIM:#}   {} total ({})",
+                mem.total_kib,
+                human_kib(mem.total_kib)
+            )?,
         }
         if let (Some(total), Some(free)) = (mem.swap_total_kib, mem.swap_free_kib) {
             writeln!(
                 out,
-                "{C_DIM}KiB Swap:{C_DIM:#}  {total} total,  {free} free"
+                "{C_DIM}KiB Swap:{C_DIM:#}  {total} total ({}),  {free} free ({})",
+                human_kib(total),
+                human_kib(free)
             )?;
         }
     }
@@ -543,6 +552,25 @@ fn system_uname() -> Option<String> {
         return None;
     };
     Some(format!("{sysname}-{release}-{machine}"))
+}
+
+/// Auto-scale a KiB count to the largest binary unit that keeps the value
+/// readable (KiB/MiB/GiB/TiB, one decimal place). Text-display-only — JSON
+/// output keeps `MemInfo`'s fields as raw KiB integers, matching this
+/// module's existing raw-JSON/human-text split (e.g. `volatile`'s
+/// True/False capitalization).
+fn human_kib(kib: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    let mut value = kib as f64;
+    let mut unit = UNITS[0];
+    for &next in &UNITS[1..] {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = next;
+    }
+    format!("{value:.1} {unit}")
 }
 
 /// `/proc/meminfo` total/available mem *and* swap, in KiB (Linux-only,
