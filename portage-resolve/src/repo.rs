@@ -220,14 +220,22 @@ impl KeywordAccept {
     /// `~arch` on the accept side does **not** satisfy a stable package
     /// `arch` keyword (verified against Portage: missing list stays `['arm64']`
     /// when only `~arm64` is accepted).
-    fn accepts(&self, keywords: &[Keyword]) -> bool {
+    ///
+    /// `downgrade` re-checks with every `Stable` package keyword treated as
+    /// `Testing` first — Portage's `isStable` recheck (see [`Self::is_stable_for`]).
+    fn accepts_inner(&self, keywords: &[Keyword], downgrade: bool) -> bool {
         if self.any {
             return true;
         }
         let mut has_stable = false;
         let mut has_testing = false;
         for kw in keywords {
-            match kw.stability {
+            let stability = if downgrade && kw.stability == Stability::Stable {
+                Stability::Testing
+            } else {
+                kw.stability
+            };
+            match stability {
                 Stability::Stable => {
                     has_stable = true;
                     if self.stable.contains(&kw.arch) {
@@ -246,28 +254,23 @@ impl KeywordAccept {
         (has_stable && self.any_stable) || (has_testing && self.any_testing)
     }
 
+    fn accepts(&self, keywords: &[Keyword]) -> bool {
+        self.accepts_inner(keywords, false)
+    }
+
     /// Whether the package is accepted on a *stable* keyword path (gates
     /// profile `use.stable.{force,mask}`).
     ///
-    /// Depends on the **package** having a stable keyword that this set
-    /// accepts — not on whether the accept set also grants some `~arch`.
-    /// A host with `ACCEPT_KEYWORDS="arm64 ~arm64"` still treats
-    /// `KEYWORDS="arm64"` packages as stable for use.stable.* purposes.
+    /// Portage's `isStable` (`KeywordsManager.py`): accepted, AND *still*
+    /// accepted after downgrading every stable package keyword to testing.
+    /// If the downgraded set is still accepted, the accept set's own testing
+    /// grant is what's really pulling the package in — nothing is being
+    /// "forced" by stability, so it isn't stable for `use.stable.*` purposes.
+    /// Concretely: `ACCEPT_KEYWORDS="arm64 ~arm64"` with `KEYWORDS="arm64"`
+    /// is **not** stable (the `~arm64` grant alone already accepts it) — the
+    /// opposite of what an earlier version of this comment claimed.
     fn is_stable_for(&self, keywords: &[Keyword]) -> bool {
-        if !self.accepts(keywords) {
-            return false;
-        }
-        if self.any {
-            // `**` accepts unkeyworded/live ebuilds too; treat as non-stable
-            // unless a concrete stable keyword is also present and would match.
-            return keywords.iter().any(|kw| {
-                kw.stability == Stability::Stable
-                    && (self.any_stable || self.stable.contains(&kw.arch) || self.any)
-            });
-        }
-        keywords.iter().any(|kw| {
-            kw.stability == Stability::Stable && (self.any_stable || self.stable.contains(&kw.arch))
-        })
+        self.accepts_inner(keywords, false) && !self.accepts_inner(keywords, true)
     }
 }
 
@@ -389,8 +392,8 @@ impl AcceptKeywords {
     }
 
     /// Whether this version is merged on a *stable* keyword path — gates the
-    /// `use.stable.{force,mask}` sets. Independent of whether a testing grant
-    /// is also present in the accept set.
+    /// `use.stable.{force,mask}` sets. Depends on whether a testing grant is
+    /// also present in the accept set: see [`KeywordAccept::is_stable_for`].
     pub fn is_stable(
         &self,
         keywords: &[Keyword],
@@ -1594,16 +1597,33 @@ mod tests {
         let bare = AcceptKeywords::new(&arch, &[tok("arm64")], vec![(dep("dev-libs/foo"), vec![])]);
         assert!(bare.accepts(&testing, &foo, None));
 
-        // use.stable.* gates on a stable *package* keyword path, not on whether
-        // the accept set also happens to grant testing.
+        // use.stable.* gates on whether the package is *only* accepted via a
+        // stable keyword — Portage's `isStable`: accepted, and no longer
+        // accepted once every stable keyword is downgraded to testing.
         assert!(global.is_stable(&stable, &foo, None));
         assert!(!per.is_stable(&testing, &foo, None));
-        // Host accepts both arm64 and ~arm64: a stable-keyworded package is
-        // still "stable" for use.stable.* (the old host-bit `!d.testing` check
-        // wrongly treated every ~arch host as never-stable).
+        // Host accepts both arm64 and ~arm64 (the common `ACCEPT_KEYWORDS=
+        // "arch ~arch"` stack): the ~arm64 grant alone would already accept a
+        // stable-keyworded package, so it is NOT "stable" for use.stable.*
+        // purposes — matches Portage, not the naive "package has a granted
+        // stable keyword" reading an earlier version of this test asserted.
         let both = AcceptKeywords::from_global(&arch, &["arm64", "~arm64"]);
-        assert!(both.is_stable(&stable, &foo, None));
+        assert!(!both.is_stable(&stable, &foo, None));
         assert!(!both.is_stable(&testing, &foo, None));
+
+        // Wildcards: Portage's downgrade recheck is never defeated by `**`
+        // (accepts everything either way) or `~*` (downgraded-to-testing set
+        // is still covered) — only a *specific* stable grant with no
+        // matching testing/wildcard rescue makes a package "stable".
+        let any = AcceptKeywords::from_global(&arch, &["**"]);
+        assert!(!any.is_stable(&stable, &foo, None));
+        // "arm64" alone accepts+downgrade-rescues nothing; adding "~*" makes
+        // the downgraded (all-testing) recheck accepted too, so no longer stable.
+        let any_testing = AcceptKeywords::from_global(&arch, &["arm64", "~*"]);
+        assert!(any_testing.accepts(&stable, &foo, None));
+        assert!(!any_testing.is_stable(&stable, &foo, None));
+        let any_stable = AcceptKeywords::from_global(&arch, &["*"]);
+        assert!(any_stable.is_stable(&stable, &foo, None));
     }
 
     /// Crossdev's usual `package.accept_keywords` shape: grant the *target*
@@ -1651,6 +1671,42 @@ mod tests {
         // Unrelated package keeps the global ~arm64 accept.
         let other = Cpv::parse("sys-fs/btrfs-progs-7.1").unwrap();
         assert!(ak.accepts(&kws("~arm64"), &other, None));
+    }
+
+    /// `is_stable`'s downgrade recheck must run over the *whole* accept set,
+    /// not per-token — a crossdev target line granting both `riscv` and
+    /// `~riscv` isn't stable (the `~riscv` grant alone would already accept
+    /// a downgraded package), but a stable-only target grant is.
+    #[test]
+    fn accept_keywords_stable_gate_respects_crossdev_target_grants() {
+        let host = Arch::intern("arm64");
+        let tok = |s: &str| AcceptToken::parse(s).unwrap();
+        let kws = |s: &str| Keyword::parse_line(s).unwrap();
+        let cpv = Cpv::parse("cross-riscv64-unknown-linux-gnu/linux-headers-7.1").unwrap();
+        // A package keyworded stable on the target arch, testing on host.
+        let keywords = kws("~arm64 riscv");
+
+        let both_grants = AcceptKeywords::new(
+            &host,
+            &[tok("arm64"), tok("~arm64")],
+            vec![(
+                dep("cross-riscv64-unknown-linux-gnu/linux-headers"),
+                vec![tok("riscv"), tok("~riscv"), tok("-arm64"), tok("-~arm64")],
+            )],
+        );
+        assert!(both_grants.accepts(&keywords, &cpv, None));
+        assert!(!both_grants.is_stable(&keywords, &cpv, None));
+
+        let stable_only_grant = AcceptKeywords::new(
+            &host,
+            &[tok("arm64"), tok("~arm64")],
+            vec![(
+                dep("cross-riscv64-unknown-linux-gnu/linux-headers"),
+                vec![tok("riscv"), tok("-arm64"), tok("-~arm64")],
+            )],
+        );
+        assert!(stable_only_grant.accepts(&keywords, &cpv, None));
+        assert!(stable_only_grant.is_stable(&keywords, &cpv, None));
     }
 
     #[test]
