@@ -635,10 +635,12 @@ impl IntoIterator for UseFlags {
 pub struct ProfileEnvLayer {
     /// Absolute path to the `make.defaults` file this layer was read from.
     pub path: PathBuf,
-    /// Variables contributed by this file.
+    /// Variables contributed by this file — always one of the fixed
+    /// portage-incremental names (`build::profile::INCREMENTAL_VARS`), hence
+    /// `&'static str` keys.
     /// Each value is the raw string as seen by the shell after the file ran;
     /// cross-layer accumulation is handled by [`ProfileEnv::merge`].
-    pub(crate) vars: HashMap<String, String>,
+    pub(crate) vars: HashMap<&'static str, String>,
 }
 
 impl ProfileEnvLayer {
@@ -649,7 +651,7 @@ impl ProfileEnvLayer {
 
     /// All variable names set in this layer.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
-        self.vars.keys().map(String::as_str)
+        self.vars.keys().copied()
     }
 }
 

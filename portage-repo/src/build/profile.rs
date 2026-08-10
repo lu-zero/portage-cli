@@ -27,6 +27,36 @@ fn merge_use_var<'a>(var: &str, iter: impl Iterator<Item = &'a str>) -> Vec<Stri
     }
 }
 
+/// The *only* portage-incremental vars (`portage.const.INCREMENTALS`),
+/// reset-and-accumulated across every profile/conf layer by both
+/// [`ProfileStack::profile_env`] and [`source_incremental`]. Individual
+/// USE_EXPAND-listed variables (`VIDEO_CARDS`, `PYTHON_TARGETS`, `ELIBC`, …)
+/// are deliberately **not** here — confirmed against real portage's
+/// `stack_dicts(mygcfg_dlists, incrementals=self.incrementals)` (`config.py`),
+/// called with `incremental=0`, so any key not in `INCREMENTALS` is plain
+/// last-assignment-wins, exactly like any other shell variable sourced
+/// across files in sequence. Their USE-token translation (`elibc_glibc`,
+/// `video_cards_amdgpu`, …) happens once, from the final resolved value, in
+/// [`apply_final_use_expand`] — not accumulated per layer here (that was a
+/// real bug: a later profile's `VIDEO_CARDS="fbdev"` should *replace* an
+/// ancestor's `VIDEO_CARDS="dummy fbdev"`, not add to it, and a still-later
+/// `make.conf` `VIDEO_CARDS="amdgpu"` replaces that too — live-verified
+/// against `portageq envvar VIDEO_CARDS`/`USE`, which show only the final
+/// value's tokens, never an ancestor's).
+const INCREMENTAL_VARS: &[&str] = &[
+    "USE",
+    "USE_EXPAND",
+    "USE_EXPAND_HIDDEN",
+    "USE_EXPAND_IMPLICIT",
+    "USE_EXPAND_UNPREFIXED",
+    "FEATURES",
+    "ACCEPT_KEYWORDS",
+    "ACCEPT_LICENSE",
+    "CONFIG_PROTECT",
+    "CONFIG_PROTECT_MASK",
+    "IUSE_IMPLICIT",
+];
+
 impl Profile {
     /// Source this profile's `make.defaults` into the shell, if present.
     ///
@@ -100,7 +130,8 @@ impl ProfileStack {
     pub async fn profile_env(&self, shell: &mut EbuildShell) -> Result<ProfileEnv> {
         let mut layers: Vec<ProfileEnvLayer> = Vec::new();
         // External accumulator: keeps the merged state per incremental var.
-        let mut acc: HashMap<String, String> = HashMap::new();
+        // Keys are always drawn from INCREMENTAL_VARS, hence &'static str.
+        let mut acc: HashMap<&'static str, String> = HashMap::new();
 
         for profile in self.profiles() {
             let path = profile.path().join("make.defaults");
@@ -108,111 +139,38 @@ impl ProfileStack {
                 continue;
             }
 
-            // Determine which vars to isolate for this layer.
-            // Start with the fixed incremental vars, then add all currently
-            // known USE_EXPAND keys so their values are also captured cleanly.
-            let mut expand_keys: Vec<String> = acc
-                .get("USE_EXPAND")
-                .map(|v| v.split_whitespace().map(str::to_string).collect())
-                .unwrap_or_default();
-            let mut unprefixed_keys: Vec<String> = acc
-                .get("USE_EXPAND_UNPREFIXED")
-                .map(|v| v.split_whitespace().map(str::to_string).collect())
-                .unwrap_or_default();
-            let mut incr: Vec<String> = vec![
-                "USE".into(),
-                "USE_EXPAND".into(),
-                "USE_EXPAND_HIDDEN".into(),
-                "USE_EXPAND_IMPLICIT".into(),
-                "USE_EXPAND_UNPREFIXED".into(),
-                "FEATURES".into(),
-                "ACCEPT_KEYWORDS".into(),
-                "ACCEPT_LICENSE".into(),
-                "CONFIG_PROTECT".into(),
-                "CONFIG_PROTECT_MASK".into(),
-                "IUSE_IMPLICIT".into(),
-            ];
-            for key in expand_keys.iter().chain(&unprefixed_keys) {
-                if !incr.contains(key) {
-                    incr.push(key.clone());
-                }
-            }
-
-            // Reset all incremental vars to empty so this file's assignments
-            // are its pure contribution, not a replacement of accumulated state.
-            let reset: String = incr.iter().map(|v| format!("{}=\"\"\n", v)).collect();
+            // Reset the true incrementals to empty so this file's assignments
+            // are its pure contribution, not a replacement of accumulated
+            // state. Every other variable (including USE_EXPAND-listed ones)
+            // is left alone: unset/untouched-by-this-file means "inherit
+            // whatever an ancestor profile set," matching plain sequential
+            // bash sourcing — which is exactly the non-incremental semantics
+            // real portage uses for them.
+            let reset: String = INCREMENTAL_VARS
+                .iter()
+                .map(|v| format!("{v}=\"\"\n"))
+                .collect();
             shell.run_string(&reset).await?;
 
             // Source the file through brush — all bash features available,
             // cross-file non-incremental vars (set by earlier files) are visible.
             shell.source_make_defaults(&path).await?;
 
-            // Capture this layer's contributions.
-            let mut vars: HashMap<String, String> = HashMap::new();
-
-            // Collect the fixed incremental vars.
-            for var in &incr {
+            // Capture this layer's contribution to the true incrementals only.
+            let mut vars: HashMap<&'static str, String> = HashMap::new();
+            for &var in INCREMENTAL_VARS {
                 if let Some(val) = shell.get_var(var)
                     && !val.is_empty()
                 {
-                    vars.insert(var.clone(), val);
-                }
-            }
-            // Discover any new USE_EXPAND keys this file introduced.
-            let new_expand = shell.get_var("USE_EXPAND").unwrap_or_default();
-            for key in new_expand.split_whitespace() {
-                if !expand_keys.iter().any(|k| k == key) {
-                    expand_keys.push(key.to_string());
-                }
-                if !incr.contains(&key.to_string())
-                    && let Some(val) = shell.get_var(key)
-                    && !val.is_empty()
-                {
-                    vars.insert(key.to_string(), val);
-                }
-            }
-            // Same for USE_EXPAND_UNPREFIXED keys.
-            let new_unprefixed = shell.get_var("USE_EXPAND_UNPREFIXED").unwrap_or_default();
-            for key in new_unprefixed.split_whitespace() {
-                if !unprefixed_keys.iter().any(|k| k == key) {
-                    unprefixed_keys.push(key.to_string());
-                }
-                if !incr.contains(&key.to_string())
-                    && let Some(val) = shell.get_var(key)
-                    && !val.is_empty()
-                {
-                    vars.insert(key.to_string(), val);
+                    vars.insert(var, val);
                 }
             }
 
-            // Translate this layer's USE_EXPAND / USE_EXPAND_UNPREFIXED
-            // values into USE tokens and fold them, together with the layer's
-            // own `USE`, into the accumulator. Portage prepends the expansions
-            // to each make.defaults file's USE (config.py `regenerate()`,
-            // `make_defaults_use`) so profile defaults like `ELIBC="glibc"`
-            // participate in the incremental fold as ordinary flags
-            // (`elibc_glibc`) — this is how they reach `ResolvedUse::pre_env`
-            // and every per-package `resolve_effective_use` fold downstream.
-            let (unpref, pref) =
-                expand_var_tokens(|k| vars.get(k).cloned(), &unprefixed_keys, &expand_keys);
-            let mut layer_use: Vec<String> = unpref;
-            layer_use.extend(pref);
-            layer_use.extend(vars.get("USE").cloned());
-            if !layer_use.is_empty() {
-                let prev = acc.get("USE").cloned().unwrap_or_default();
-                let contrib = layer_use.join(" ");
-                let merged = merge_use_var("USE", [prev.as_str(), contrib.as_str()].into_iter());
-                acc.insert("USE".into(), merged.join(" "));
-            }
-
-            // Merge the remaining per-variable contributions.
-            for (var, val) in &vars {
-                if var == "USE" {
-                    continue;
-                }
-                let prev = acc.get(var.as_str()).cloned().unwrap_or_default();
+            // Merge this layer's incremental contributions into the accumulator.
+            for (&var, val) in &vars {
+                let prev = acc.get(var).cloned().unwrap_or_default();
                 let merged = merge_use_var(var, [prev.as_str(), val.as_str()].into_iter());
-                acc.insert(var.clone(), merged.join(" "));
+                acc.insert(var, merged.join(" "));
             }
 
             // Restore the accumulated state into the shell so the next file
@@ -341,6 +299,16 @@ async fn resolve_use_flags(
         source_incremental(shell, ConfSource::Str(content)).await?;
     }
 
+    // Translate every USE_EXPAND-listed variable's *final* value (profile
+    // stack + all conf layers already folded, per `stack_dicts`'s plain
+    // last-assignment-wins rule for anything outside `INCREMENTALS`) into USE
+    // tokens, once — matching real portage's `_lazy_use_expand` (`config.py`),
+    // which computes these fresh from `self.get(varname)` rather than
+    // accumulating a token from every profile level a variable ever passed
+    // through. Folded into `USE` here (not per-layer in `profile_env`/
+    // `source_incremental` — that was the bug).
+    apply_final_use_expand(shell).await?;
+
     // Snapshot the fold immediately before the environment layer — this is
     // `pkginternal < defaults < conf` in portage's layer order, the state a
     // per-package fold must resume from *before* `package.use`/`env`. See
@@ -444,6 +412,42 @@ fn env_layer_use(shell: &EbuildShell) -> Vec<String> {
     out
 }
 
+/// Translate every USE_EXPAND / USE_EXPAND_UNPREFIXED variable's *current*
+/// shell value into USE tokens and fold them into `USE` — once, using
+/// whatever the profile stack + all conf layers left as each variable's
+/// final value (see [`ProfileStack::profile_env`]'s and
+/// [`source_incremental`]'s doc comments for why those don't do this
+/// per-layer). Mirrors real portage's `_lazy_use_expand`
+/// (`config.py`), which derives `video_cards_amdgpu` etc. fresh from
+/// `self.get("VIDEO_CARDS")` rather than a per-layer accumulation.
+async fn apply_final_use_expand(shell: &mut EbuildShell) -> Result<()> {
+    let expand_keys: Vec<String> = shell
+        .get_var("USE_EXPAND")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let unprefixed_keys: Vec<String> = shell
+        .get_var("USE_EXPAND_UNPREFIXED")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let (unpref, pref) = expand_var_tokens(|k| shell.get_var(k), &unprefixed_keys, &expand_keys);
+    let mut layer_use = unpref;
+    layer_use.extend(pref);
+    if layer_use.is_empty() {
+        return Ok(());
+    }
+    let existing = shell.get_var("USE").unwrap_or_default();
+    let contrib = layer_use.join(" ");
+    let merged = merge_use_var("USE", [existing.as_str(), contrib.as_str()].into_iter());
+    shell
+        .run_string(&format!("USE={}\n", shell_quote(&merged.join(" "))))
+        .await?;
+    Ok(())
+}
+
 /// Merge process-environment USE variables into the shell as a final incremental layer.
 ///
 /// Reads `USE`, all `USE_EXPAND` keys, and all `USE_EXPAND_UNPREFIXED` keys from
@@ -508,40 +512,21 @@ enum ConfSource<'a> {
 }
 
 async fn source_incremental(shell: &mut EbuildShell, source: ConfSource<'_>) -> Result<()> {
-    // Collect the set of incremental vars to isolate.
-    let mut incr: Vec<String> = vec![
-        "USE".into(),
-        "USE_EXPAND".into(),
-        "USE_EXPAND_HIDDEN".into(),
-        "USE_EXPAND_IMPLICIT".into(),
-        "USE_EXPAND_UNPREFIXED".into(),
-        "FEATURES".into(),
-        "ACCEPT_KEYWORDS".into(),
-        "ACCEPT_LICENSE".into(),
-        "CONFIG_PROTECT".into(),
-        "CONFIG_PROTECT_MASK".into(),
-        "IUSE_IMPLICIT".into(),
-    ];
-    let expand = shell.get_var("USE_EXPAND").unwrap_or_default();
-    for key in expand.split_whitespace() {
-        if !incr.contains(&key.to_string()) {
-            incr.push(key.to_string());
-        }
-    }
-    let unprefixed = shell.get_var("USE_EXPAND_UNPREFIXED").unwrap_or_default();
-    for key in unprefixed.split_whitespace() {
-        if !incr.contains(&key.to_string()) {
-            incr.push(key.to_string());
-        }
-    }
+    // Same `INCREMENTAL_VARS` set as `profile_env` — see its doc comment.
+    // Individual USE_EXPAND-listed variables (VIDEO_CARDS, …) are plain
+    // last-assignment-wins here too: `make.conf`'s `VIDEO_CARDS="amdgpu"`
+    // replaces whatever the profile stack computed, it doesn't add to it.
 
     // Save current accumulated values and reset vars to empty.
-    let saved: HashMap<String, String> = incr
+    let saved: HashMap<&'static str, String> = INCREMENTAL_VARS
         .iter()
-        .filter_map(|v| shell.get_var(v).map(|val| (v.clone(), val)))
+        .filter_map(|&v| shell.get_var(v).map(|val| (v, val)))
         .collect();
 
-    let reset: String = incr.iter().map(|v| format!("{}=\"\"\n", v)).collect();
+    let reset: String = INCREMENTAL_VARS
+        .iter()
+        .map(|v| format!("{v}=\"\"\n"))
+        .collect();
     shell.run_string(&reset).await?;
 
     // Source the layer's content through brush.
@@ -550,60 +535,22 @@ async fn source_incremental(shell: &mut EbuildShell, source: ConfSource<'_>) -> 
         ConfSource::Str(content) => shell.run_string(content).await?,
     }
 
-    // Collect this file's contributions.
-    let mut contributed: HashMap<String, String> = HashMap::new();
-    for var in &incr {
+    // Collect this file's contributions to the true incrementals only.
+    let mut contributed: HashMap<&'static str, String> = HashMap::new();
+    for &var in INCREMENTAL_VARS {
         if let Some(val) = shell.get_var(var)
             && !val.is_empty()
         {
-            contributed.insert(var.clone(), val);
+            contributed.insert(var, val);
         }
     }
-    // Pick up any new USE_EXPAND keys the file introduced.
-    let mut expand_keys: Vec<String> = expand.split_whitespace().map(str::to_string).collect();
-    let new_expand = shell.get_var("USE_EXPAND").unwrap_or_default();
-    for key in new_expand.split_whitespace() {
-        if !expand_keys.iter().any(|k| k == key) {
-            expand_keys.push(key.to_string());
-        }
-        if !incr.contains(&key.to_string())
-            && let Some(val) = shell.get_var(key)
-            && !val.is_empty()
-        {
-            contributed.insert(key.to_string(), val);
-        }
-    }
-    let unprefixed_keys: Vec<String> = unprefixed.split_whitespace().map(str::to_string).collect();
-
-    // Translate the file's USE_EXPAND contributions into USE tokens. In a
-    // conf layer portage folds unprefixed values *before* the file's USE and
-    // prefixed expansions *after* it (config.py `regenerate()`'s layer loop),
-    // so `PYTHON_TARGETS=…` in make.conf survives a `USE="-*"` in the same
-    // file.
-    let (unpref, pref) = expand_var_tokens(
-        |k| contributed.get(k).cloned(),
-        &unprefixed_keys,
-        &expand_keys,
-    );
-    let mut layer_use: Vec<String> = unpref;
-    layer_use.extend(contributed.get("USE").cloned());
-    layer_use.extend(pref);
 
     // Merge contributions with saved state and restore.
-    let mut merged_acc: HashMap<String, String> = saved;
-    if !layer_use.is_empty() {
-        let prev = merged_acc.get("USE").cloned().unwrap_or_default();
-        let contrib = layer_use.join(" ");
-        let merged = merge_use_var("USE", [prev.as_str(), contrib.as_str()].into_iter());
-        merged_acc.insert("USE".into(), merged.join(" "));
-    }
-    for (var, new_val) in &contributed {
-        if var == "USE" {
-            continue;
-        }
-        let prev = merged_acc.get(var.as_str()).cloned().unwrap_or_default();
+    let mut merged_acc: HashMap<&'static str, String> = saved;
+    for (&var, new_val) in &contributed {
+        let prev = merged_acc.get(var).cloned().unwrap_or_default();
         let merged = merge_use_var(var, [prev.as_str(), new_val.as_str()].into_iter());
-        merged_acc.insert(var.clone(), merged.join(" "));
+        merged_acc.insert(var, merged.join(" "));
     }
 
     let restore: String = merged_acc
@@ -966,12 +913,16 @@ mod tests {
         assert!(pre_env.contains("foo"), "plain USE kept");
     }
 
-    /// A `-*` in a child profile's USE clears the parent's USE_EXPAND
-    /// expansions too — they are ordinary tokens folded at the parent's layer
-    /// (portage translates each make.defaults' expand values into that file's
-    /// USE, so a later layer's clear-all wipes them like any other flag).
+    /// A `-*` in a child profile's USE does **not** clear an ancestor's
+    /// USE_EXPAND expansions (`ELIBC`, `VIDEO_CARDS`, …): unlike a plain USE
+    /// token, these are translated fresh from each variable's *final*
+    /// resolved value, once, after the whole profile+conf stack — never
+    /// accumulated per layer (see `INCREMENTAL_VARS`'s doc comment, and
+    /// `apply_final_use_expand`). This is why a real `USE="-* somepkg-flag"`
+    /// in package.use doesn't silently break a system's libc/arch/kernel USE
+    /// detection — confirmed against real portage's own `_lazy_use_expand`.
     #[tokio::test]
-    async fn use_expand_expansion_cleared_by_child_wildcard_reset() {
+    async fn use_expand_expansion_survives_a_child_wildcard_reset() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_test_repo(&dir);
         let parent = make_profile(&dir, "parent", &[]);
@@ -994,8 +945,54 @@ mod tests {
         );
         assert!(pre_env.contains(&"build"));
         assert!(
-            !pre_env.contains(&"elibc_glibc"),
-            "parent-layer expansion wiped by the child's -*: {pre_env:?}"
+            pre_env.contains(&"elibc_glibc"),
+            "ELIBC's expansion survives the child's -* (final-value semantics): {pre_env:?}"
+        );
+    }
+
+    /// Regression for the real bug this was found from: a descendant profile
+    /// (or make.conf) re-assigning a USE_EXPAND variable to a *disjoint*
+    /// value must fully replace the ancestor's value, not add to it —
+    /// `VIDEO_CARDS="dummy fbdev"` (base) → `VIDEO_CARDS="fbdev"` (arch) →
+    /// `VIDEO_CARDS="amdgpu"` (make.conf) must end with only
+    /// `video_cards_amdgpu`, matching real `portageq envvar VIDEO_CARDS`/`USE`
+    /// on a `default/linux/arm64` profile with `VIDEO_CARDS="amdgpu"` in
+    /// make.conf (`dummy`/`fbdev` never appear).
+    #[tokio::test]
+    async fn use_expand_final_value_replaces_ancestor_values_not_unions_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let base = make_profile(&dir, "base", &[]);
+        std::fs::write(
+            base.join("make.defaults"),
+            "USE_EXPAND=\"VIDEO_CARDS\"\nVIDEO_CARDS=\"dummy fbdev\"\n",
+        )
+        .unwrap();
+        let arch = make_profile(&dir, "arch", &["../base"]);
+        std::fs::write(arch.join("make.defaults"), "VIDEO_CARDS=\"fbdev\"\n").unwrap();
+
+        let make_conf = dir.path().join("make.conf");
+        std::fs::write(&make_conf, "VIDEO_CARDS=\"amdgpu\"\n").unwrap();
+
+        let stack = ProfileStack::build(arch).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        let resolved = stack
+            .use_flags(&mut shell, &[make_conf.as_path()])
+            .await
+            .unwrap();
+
+        let pre_env: HashSet<&str> = resolved.pre_env.split_whitespace().collect();
+        assert!(
+            pre_env.contains("video_cards_amdgpu"),
+            "final make.conf value present: {pre_env:?}"
+        );
+        assert!(
+            !pre_env.contains("video_cards_dummy"),
+            "base profile's overwritten value must not survive: {pre_env:?}"
+        );
+        assert!(
+            !pre_env.contains("video_cards_fbdev"),
+            "arch profile's overwritten value must not survive: {pre_env:?}"
         );
     }
 
