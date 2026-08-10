@@ -402,6 +402,10 @@ async fn emerge_atoms_inner(
         verbose: cli.verbose,
         empty: merge_flags.emptytree,
         autounmask_write: merge_flags.autounmask_write,
+        // `--pretend` pops `--ask` in real portage; matched here by simply
+        // never treating it as interactive under `-p` — a `-pa` preview must
+        // never prompt.
+        ask: merge_flags.ask && !cli.pretend,
         autosolve_use: merge_flags.autosolve_use,
         multi_repo: cli.repo.is_none(),
         roots: &roots,

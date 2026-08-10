@@ -383,6 +383,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 // (mask/keyword/USE fixes) but must never write them to
                 // /etc/portage — that's `em`'s job, not a query command's.
                 autounmask_write: false,
+                ask: false,
                 autosolve_use: *autosolve_use || globals.merge_flags.autosolve_use,
                 multi_repo: globals.repo.is_none(),
                 roots: &roots,

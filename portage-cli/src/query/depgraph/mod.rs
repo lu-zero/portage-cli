@@ -100,6 +100,14 @@ pub struct DepgraphOpts<'a> {
     pub verbose: u8,
     pub empty: bool,
     pub autounmask_write: bool,
+    /// `--ask`, already gated by the caller so it's only `true` for an
+    /// interactive real merge (never `--pretend`, never a read-only query
+    /// command like `equery depgraph`). When USE changes are required and
+    /// `--autounmask-write` wasn't also given, this prompts to write them to
+    /// `package.use` instead — a deliberate divergence from real emerge,
+    /// which never offers this (only `--autounmask-write` does, non-
+    /// interactively).
+    pub ask: bool,
     pub autosolve_use: bool,
     /// Load every repo from `repos.conf` (overlays sourced as needed). Off
     /// when the user pinned a repo with `--repo`.
@@ -209,6 +217,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         verbose,
         empty,
         autounmask_write,
+        ask,
         autosolve_use,
         multi_repo,
         roots,
@@ -1439,6 +1448,21 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         }
 
         package_use::report(&use_change_entries);
+
+        // Deliberate divergence from real emerge (which only ever writes
+        // package.use via `--autounmask-write`, never interactively): with
+        // `--ask` and no `--autounmask-write`, offer to write these now
+        // instead of making the user re-run with `--autounmask-write` by
+        // hand. Skipped when `--autounmask-write` already wrote them above.
+        if ask && !autounmask_write && !use_change_entries.is_empty() {
+            let write_confirmed =
+                crate::config_plan::confirm_config_write(use_change_entries.len())?;
+            if write_confirmed {
+                package_use::write(&use_change_entries, &portage_dir.join("package.use"))?;
+            } else {
+                println!(">>> Quitting.");
+            }
+        }
 
         // World-family targets nothing acceptable satisfies. Advisory: emerge
         // keeps going and exits 0 for these, so they stay out of `exit_code`.

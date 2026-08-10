@@ -5,14 +5,17 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use camino::Utf8Path;
-use portage_atom::{Cpv, Dep, Version};
+use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     DepEdge, UseFlagRequirement, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
 };
 
 /// Entries to write into `/etc/portage/package.use`.
 pub struct PackageUseEntry {
-    /// Filename inside `package.use/`: category-package (e.g. `dev-python-pygments`).
+    /// Filename inside `package.use/`: the bare package name (e.g.
+    /// `pygments`), or `category-package` (e.g. `dev-python-pygments`) when
+    /// the bare name is ambiguous within this batch — see
+    /// [`assign_filenames`].
     pub filename: String,
     /// Lines to add/update in that file.
     pub lines: Vec<PackageUseLine>,
@@ -20,7 +23,7 @@ pub struct PackageUseEntry {
 
 /// One `package.use` line: an atom, the flags it forces, and the explanatory
 /// comments placed above it.
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PackageUseLine {
     /// Comment lines explaining the requirement, e.g. `# required by firefox`.
     pub comments: Vec<String>,
@@ -44,7 +47,7 @@ pub fn build_entries(
     let adj = build_adjacency(edges);
     let root_cpns = parse_root_cpns(root_atoms);
 
-    let mut by_file: HashMap<String, Vec<PackageUseLine>> = HashMap::new();
+    let mut by_cpn: HashMap<Cpn, Vec<PackageUseLine>> = HashMap::new();
 
     for req in flag_reqs {
         if req.required_enabled.is_empty() && req.required_disabled.is_empty() {
@@ -54,12 +57,7 @@ pub fn build_entries(
             continue;
         }
 
-        let cpn = req.package.cpn();
-        let filename = format!(
-            "{}-{}",
-            cpn.category.as_str().replace('/', "-"),
-            cpn.package.as_str()
-        );
+        let cpn = *req.package.cpn();
 
         let ver = req.upgrade_to.as_ref().unwrap_or(&req.version);
         let slot_suffix = req
@@ -73,7 +71,7 @@ pub fn build_entries(
         // already set it the way the requirement needs.  A flag already enabled
         // (e.g. a PYTHON_TARGETS member in the profile) just triggers a rebuild,
         // shown via the `*` USE marker — it is not an autounmask change.
-        let cpv = Cpv::new(*cpn, ver.clone());
+        let cpv = Cpv::new(cpn, ver.clone());
         let eff = resolve_effective_use(
             &HashMap::new(),
             pre_env,
@@ -106,18 +104,47 @@ pub fn build_entries(
             atom,
             flags,
         };
-        let lines = by_file.entry(filename).or_default();
+        let lines = by_cpn.entry(cpn).or_default();
         if !lines.contains(&line) {
             lines.push(line);
         }
     }
 
-    // by_file is a HashMap; sort by filename so the report/written output is
-    // reproducible across runs.  Lines within a file follow flag_reqs order,
-    // which is already deterministic (use_flag_requirements is sorted).
-    let mut entries: Vec<PackageUseEntry> = by_file
+    assign_filenames(by_cpn)
+}
+
+/// Turn per-package line groups into [`PackageUseEntry`]s, choosing each
+/// one's filename: the bare package name (e.g. `mesa`) when unambiguous,
+/// falling back to `category-package` only for names that collide across
+/// categories in this batch (e.g. both `x11-libs/foo` and `dev-libs/foo`
+/// need an entry) — real portage users keep bare-name package.use files day
+/// to day, and cat-name for everything is only needed to disambiguate.
+/// Sorted by filename so the report/written output is reproducible across
+/// runs; lines within a file keep their caller-given order.
+fn assign_filenames(by_cpn: HashMap<Cpn, Vec<PackageUseLine>>) -> Vec<PackageUseEntry> {
+    let cpns: Vec<Cpn> = by_cpn.keys().copied().collect();
+    let mut names_by_bare: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for cpn in &cpns {
+        names_by_bare
+            .entry(cpn.package.as_str())
+            .or_default()
+            .insert(cpn.category.as_str());
+    }
+
+    let mut entries: Vec<PackageUseEntry> = by_cpn
         .into_iter()
-        .map(|(filename, lines)| PackageUseEntry { filename, lines })
+        .map(|(cpn, lines)| {
+            let filename = if names_by_bare[cpn.package.as_str()].len() > 1 {
+                format!(
+                    "{}-{}",
+                    cpn.category.as_str().replace('/', "-"),
+                    cpn.package.as_str()
+                )
+            } else {
+                cpn.package.as_str().to_string()
+            };
+            PackageUseEntry { filename, lines }
+        })
         .collect();
     entries.sort_by(|a, b| a.filename.cmp(&b.filename));
     entries
@@ -372,15 +399,37 @@ fn build_comments(
     comments
 }
 
-/// Write entries to `/etc/portage/package.use/{filename}`, creating/updating
-/// the file and inserting a block comment pointing to the requesting version.
-pub fn write(entries: &[PackageUseEntry], package_use_dir: &Utf8Path) -> anyhow::Result<()> {
+/// Write `entries` under `package_use_path` (`/etc/portage/package.use`),
+/// creating/updating files and inserting a block comment pointing to the
+/// requesting version.
+///
+/// `package.use` is legitimately either a directory of per-package files
+/// (portage(5)'s usual layout — one file per [`PackageUseEntry::filename`])
+/// or a single flat file. When it already exists as a plain file, merge
+/// every entry's lines into that one file instead of `create_dir_all`-ing
+/// over it (which would just fail).
+pub fn write(entries: &[PackageUseEntry], package_use_path: &Utf8Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
-    std::fs::create_dir_all(package_use_dir)
-        .with_context(|| format!("failed to create {package_use_dir}"))?;
+
+    if package_use_path.is_file() {
+        let existing = std::fs::read_to_string(package_use_path)
+            .with_context(|| format!("failed to read {package_use_path}"))?;
+        let all_lines: Vec<PackageUseLine> = entries
+            .iter()
+            .flat_map(|e| e.lines.iter().cloned())
+            .collect();
+        let new_content = merge_content(&existing, &all_lines);
+        std::fs::write(package_use_path, &new_content)
+            .with_context(|| format!("failed to write {package_use_path}"))?;
+        tracing::info!("Written: {package_use_path}");
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(package_use_path)
+        .with_context(|| format!("failed to create {package_use_path}"))?;
 
     for entry in entries {
-        let path = package_use_dir.join(&entry.filename);
+        let path = package_use_path.join(&entry.filename);
         let existing = if path.exists() {
             std::fs::read_to_string(&path).with_context(|| format!("failed to read {path}"))?
         } else {
@@ -451,4 +500,86 @@ fn merge_content(existing: &str, lines: &[PackageUseLine]) -> String {
     let mut result = output.join("\n");
     result.push('\n');
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cpn(s: &str) -> Cpn {
+        Cpn::parse(s).unwrap()
+    }
+
+    fn line(atom: &str) -> PackageUseLine {
+        PackageUseLine {
+            comments: Vec::new(),
+            atom: atom.to_string(),
+            flags: vec!["X".to_string()],
+        }
+    }
+
+    #[test]
+    fn assign_filenames_prefers_the_bare_name_when_unambiguous() {
+        let mut by_cpn = HashMap::new();
+        by_cpn.insert(cpn("media-libs/mesa"), vec![line(">=media-libs/mesa-26")]);
+        by_cpn.insert(cpn("dev-python/mako"), vec![line(">=dev-python/mako-1")]);
+
+        let mut entries = assign_filenames(by_cpn);
+        entries.sort_by(|a, b| a.filename.cmp(&b.filename));
+        let filenames: Vec<&str> = entries.iter().map(|e| e.filename.as_str()).collect();
+        assert_eq!(filenames, ["mako", "mesa"]);
+    }
+
+    #[test]
+    fn assign_filenames_falls_back_to_cat_name_only_for_a_colliding_bare_name() {
+        let mut by_cpn = HashMap::new();
+        by_cpn.insert(cpn("x11-libs/foo"), vec![line(">=x11-libs/foo-1")]);
+        by_cpn.insert(cpn("dev-libs/foo"), vec![line(">=dev-libs/foo-1")]);
+        by_cpn.insert(cpn("media-libs/mesa"), vec![line(">=media-libs/mesa-26")]);
+
+        let mut entries = assign_filenames(by_cpn);
+        entries.sort_by(|a, b| a.filename.cmp(&b.filename));
+        let filenames: Vec<&str> = entries.iter().map(|e| e.filename.as_str()).collect();
+        // The colliding `foo`s are disambiguated; the unique `mesa` stays bare.
+        assert_eq!(filenames, ["dev-libs-foo", "mesa", "x11-libs-foo"]);
+    }
+
+    #[test]
+    fn write_creates_a_directory_when_the_target_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let package_use = camino::Utf8Path::from_path(dir.path())
+            .unwrap()
+            .join("package.use");
+        let entries = vec![PackageUseEntry {
+            filename: "mesa".to_string(),
+            lines: vec![line(">=media-libs/mesa-26")],
+        }];
+        write(&entries, &package_use).unwrap();
+        assert!(package_use.is_dir());
+        let content = std::fs::read_to_string(package_use.join("mesa")).unwrap();
+        assert!(content.contains(">=media-libs/mesa-26 X"));
+    }
+
+    #[test]
+    fn write_appends_into_an_existing_flat_file_instead_of_replacing_it_with_a_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let package_use = camino::Utf8Path::from_path(dir.path())
+            .unwrap()
+            .join("package.use");
+        std::fs::write(&package_use, "app-misc/existing -doc\n").unwrap();
+
+        let entries = vec![PackageUseEntry {
+            filename: "mesa".to_string(),
+            lines: vec![line(">=media-libs/mesa-26")],
+        }];
+        write(&entries, &package_use).unwrap();
+
+        assert!(
+            package_use.is_file(),
+            "must stay a flat file, not become a dir"
+        );
+        let content = std::fs::read_to_string(&package_use).unwrap();
+        assert!(content.contains("app-misc/existing -doc"));
+        assert!(content.contains(">=media-libs/mesa-26 X"));
+    }
 }

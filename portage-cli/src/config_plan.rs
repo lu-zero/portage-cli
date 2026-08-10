@@ -303,7 +303,11 @@ pub(crate) fn apply(
     Ok(Outcome::Applied)
 }
 
-fn confirm_config_write(count: usize) -> Result<bool> {
+/// `pub(crate)`, not just `apply`'s own private helper: reused by the
+/// `--ask`-triggered `package.use` write prompt in `query::depgraph`, which
+/// wants the exact same "write these N config file(s)?" phrasing/TTY-gate
+/// rather than a second near-identical prompt.
+pub(crate) fn confirm_config_write(count: usize) -> Result<bool> {
     crate::merge::require_ask_tty()?;
     print!("\n>>> Would you like to write these {count} config file(s)? [y/N] ");
     std::io::stdout().flush().ok();

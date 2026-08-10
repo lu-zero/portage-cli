@@ -783,6 +783,9 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         verbose: 0,
         empty: false,
         autounmask_write: false,
+        // Internal `sys-devel/gcc` version probe, not a user-facing merge:
+        // never prompts.
+        ask: false,
         autosolve_use: false,
         multi_repo: globals.repo.is_none(),
         roots: &roots,
