@@ -1210,8 +1210,9 @@ pub(super) fn total_line(
                 .unwrap_or(0)
         })
         .sum();
+    // Portage joins this onto the `Total:` line with a comma, not a newline.
     let downloads = format!(
-        "\nSize of downloads: {C_BOLD}{}{C_BOLD:#}",
+        ", Size of downloads: {C_BOLD}{}{C_BOLD:#}",
         format_kib(total_bytes)
     );
     if parts.is_empty() {
@@ -1533,8 +1534,15 @@ fn print_pretty_with_roots(
     // `Dependency resolution took 1.06 s (backtrack: 0/20).` stats line; we
     // skip the former (redundant right above the plan) and keep the timing,
     // which is the only bit carrying real information. PubGrub exposes no
-    // backtrack count, so no `(backtrack: …)` suffix.
-    writeln!(out, "Dependency resolution took {:.2} s.", ctx.resolve_secs).ok();
+    // backtrack count, so no `(backtrack: …)` suffix. Portage highlights just
+    // the number (plain green, same style as a package name) and follows
+    // with a blank line before the plan.
+    writeln!(
+        out,
+        "Dependency resolution took {C_PKG}{:.2}{C_PKG:#} s.\n",
+        ctx.resolve_secs
+    )
+    .ok();
 
     for ((pkg, ver), merge_root) in order.iter().zip(merge_roots) {
         let (bracket, rest) = format_plan_parts(ctx, pkg, ver, *merge_root, cross, true);

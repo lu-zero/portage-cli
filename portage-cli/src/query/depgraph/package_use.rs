@@ -14,7 +14,7 @@ pub(super) fn report(entries: &[PackageUseEntry]) {
     let mut out = anstream::stderr();
     writeln!(
         out,
-        "\n{C_PKG}The following USE changes are necessary to proceed:{C_PKG:#}"
+        "\nThe following {C_ON}USE changes{C_ON:#} are necessary to proceed:"
     )
     .ok();
     writeln!(
