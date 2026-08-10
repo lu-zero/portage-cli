@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -558,10 +558,33 @@ impl Repository {
     /// Resolve a package pattern to one or more [`Cpn`] values.
     ///
     /// * `cat/pkg` — exact lookup within the named category.
-    /// * bare `name` — scans all categories for packages matching the name.
+    /// * bare `name` — scans all categories *this repo's own*
+    ///   `profiles/categories` lists for packages matching the name.
     ///
     /// Returns an empty `Vec` when no match is found.
+    ///
+    /// For an overlay, prefer [`find_cpns_with_masters`](Self::find_cpns_with_masters):
+    /// an overlay may ship packages in a category only its master lists
+    /// (`profiles/categories` is not required to be self-contained — see
+    /// [`ebuilds_with_masters`](Self::ebuilds_with_masters)'s doc), which
+    /// this plain version would silently miss for the bare-name case (exact
+    /// `cat/pkg` is unaffected — it checks the filesystem directly, not the
+    /// categories list).
     pub fn find_cpns(&self, pattern: &str) -> Vec<Cpn> {
+        self.find_cpns_with_masters(pattern, &[])
+    }
+
+    /// Like [`find_cpns`](Self::find_cpns), but the bare-name scan covers
+    /// the *union* of this repo's own `profiles/categories` and every
+    /// `masters` entry's — the same category-completeness rule
+    /// [`ebuilds_with_masters`](Self::ebuilds_with_masters) already applies
+    /// to the full ebuild walk, needed here for the same reason: an overlay
+    /// routinely ships packages in a category (e.g. `gui-apps`) only its
+    /// master (e.g. `::gentoo`) lists in its own `profiles/categories`.
+    /// Packages are still looked up on `self` (`self.category(..)`), never
+    /// on a master — masters only widen which category *names* are valid
+    /// to check, they are not an alternate source of packages here.
+    pub fn find_cpns_with_masters(&self, pattern: &str, masters: &[Repository]) -> Vec<Cpn> {
         if let Some(slash) = pattern.find('/') {
             let cat_name = &pattern[..slash];
             let pkg_name = &pattern[slash + 1..];
@@ -575,8 +598,24 @@ impl Repository {
             vec![]
         } else {
             let name = pattern;
-            self.categories()
+            // BTreeSet, not HashSet: this feeds directly into the ambiguity
+            // error message and the --ask prompt's *numbered* candidate
+            // list (`query::resolve_ambiguous`/`ask_which_candidate`) — a
+            // HashSet's iteration order is randomized per process, which
+            // would shuffle both on every run (a user retyping the same
+            // "2" across reruns could pick a different package). Sorted,
+            // deterministic order for a plain, single-repo `self` too, not
+            // just the masters-union case, since `find_cpns` now delegates
+            // here.
+            let mut category_names: BTreeSet<String> = BTreeSet::new();
+            for repo in std::iter::once(self).chain(masters.iter()) {
+                if let Ok(lines) = util::read_lines(repo.path.join("profiles").join("categories")) {
+                    category_names.extend(lines.into_iter().filter(|c| !c.is_empty()));
+                }
+            }
+            category_names
                 .into_iter()
+                .filter_map(|cat_name| self.category(&cat_name))
                 .filter_map(|cat| cat.package(name).map(|p| *p.cpn()))
                 .collect()
         }
@@ -1403,6 +1442,80 @@ mod tests {
 
         let cpns = repo.find_cpns("bar");
         assert_eq!(cpns.len(), 2);
+    }
+
+    /// The real-world gap `find_cpns_with_masters` exists for: an overlay
+    /// (e.g. `guru`) routinely ships packages in a category (e.g.
+    /// `gui-apps`) that only its master's (`::gentoo`'s) own
+    /// `profiles/categories` lists — `profiles/categories` is not required
+    /// to be self-contained (same rule `ebuilds_with_masters` already
+    /// applies). Plain `find_cpns` (bare-name) misses it; the
+    /// masters-aware version finds it. Live-verified against this exact
+    /// scenario on a real host: `guru`'s own `gui-apps/1password` didn't
+    /// list `gui-apps` in `guru/profiles/categories` at all.
+    #[test]
+    fn find_cpns_with_masters_finds_a_category_only_the_master_lists() {
+        let master_dir = tempfile::tempdir().unwrap();
+        let master = make_test_repo(&master_dir);
+        std::fs::write(
+            master_dir.path().join("profiles").join("categories"),
+            "gui-apps\n",
+        )
+        .unwrap();
+
+        let overlay_dir = tempfile::tempdir().unwrap();
+        let overlay = make_test_repo(&overlay_dir);
+        // Overlay's own categories file does NOT list gui-apps.
+        std::fs::write(
+            overlay_dir.path().join("profiles").join("categories"),
+            "app-misc\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(overlay_dir.path().join("gui-apps").join("1password")).unwrap();
+
+        assert!(
+            overlay.find_cpns("1password").is_empty(),
+            "plain find_cpns must not see an unlisted category"
+        );
+        let cpns = overlay.find_cpns_with_masters("1password", std::slice::from_ref(&master));
+        assert_eq!(cpns.len(), 1);
+        assert_eq!(cpns[0].category.as_ref(), "gui-apps");
+        assert_eq!(cpns[0].package.as_ref(), "1password");
+    }
+
+    /// A bare-name match across several categories comes back in a
+    /// deterministic (sorted-by-category) order, every call, in one
+    /// process and across repeated processes. The candidate list feeds
+    /// directly into the ambiguity error message and the `--ask` prompt's
+    /// *numbered* list (`query::resolve_ambiguous`/`ask_which_candidate`)
+    /// — a `HashSet`-backed implementation here would shuffle both on every
+    /// run, letting a user who reruns and retypes the same answer (e.g.
+    /// "2") land on a different package. Regression test for exactly that
+    /// (caught in review before it shipped).
+    #[test]
+    fn find_cpns_bare_name_order_is_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        for cat in ["zzz-cat", "app-misc", "mmm-cat", "sys-apps"] {
+            std::fs::create_dir_all(dir.path().join(cat).join("dup")).unwrap();
+        }
+        std::fs::write(
+            dir.path().join("profiles").join("categories"),
+            "zzz-cat\napp-misc\nmmm-cat\nsys-apps\n",
+        )
+        .unwrap();
+
+        let expected: Vec<String> = {
+            let cpns = repo.find_cpns("dup");
+            cpns.iter().map(|c| c.category.to_string()).collect()
+        };
+        // Sorted, not file-declaration order (zzz-cat was declared first).
+        assert_eq!(expected, vec!["app-misc", "mmm-cat", "sys-apps", "zzz-cat"]);
+        for _ in 0..10 {
+            let cpns = repo.find_cpns("dup");
+            let got: Vec<String> = cpns.iter().map(|c| c.category.to_string()).collect();
+            assert_eq!(got, expected, "order must be stable across repeated calls");
+        }
     }
 
     #[test]

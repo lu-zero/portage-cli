@@ -335,13 +335,17 @@ async fn emerge_atoms_inner(
         println!(">>> Nothing to merge; quitting.");
         return Ok(());
     }
+    // So bare-name atoms (not just `cat/pkg`) can resolve to an overlay-only
+    // package, not just the main repo — see `query::resolve_atom`'s doc.
+    let (resolve_overlays, _resolve_aliases) =
+        crate::repo_open::overlays_from_conf(&repo, &roots, cli.repo.is_none());
     // Resolved one at a time (not via `resolve_atoms`) so each atom keeps the
     // provenance `expand_sets` gave it; unresolvable ones are warned about and
     // dropped, exactly as `resolve_atoms` does.
     let atoms: Vec<TargetAtom> = expanded
         .iter()
-        .filter_map(
-            |t| match query::resolve_atom(&repo, vdb.as_ref(), mode, &t.atom) {
+        .filter_map(|t| {
+            match query::resolve_atom(&repo, &resolve_overlays, vdb.as_ref(), mode, &t.atom) {
                 Ok(dep) => Some(TargetAtom {
                     atom: dep.to_string(),
                     origin: t.origin.clone(),
@@ -350,8 +354,8 @@ async fn emerge_atoms_inner(
                     crate::style::warn_line!("{e}");
                     None
                 }
-            },
-        )
+            }
+        })
         .collect();
     if atoms.is_empty() {
         // No extra "!!! no valid atoms" line: each atom that failed already

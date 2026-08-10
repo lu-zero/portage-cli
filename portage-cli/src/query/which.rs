@@ -7,6 +7,7 @@ use portage_vdb::Vdb;
 
 pub fn run(
     repo_path: &Path,
+    overlays: &[portage_resolve::repo::RepoSource],
     vdb: Option<&Vdb>,
     mode: super::ResolveMode,
     atoms: &[String],
@@ -16,7 +17,7 @@ pub fn run(
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
 
     for raw in atoms {
-        let dep = super::resolve_atom(&repo, vdb, mode, raw)?;
+        let dep = super::resolve_atom(&repo, overlays, vdb, mode, raw)?;
 
         let best = ebuilds
             .iter()
