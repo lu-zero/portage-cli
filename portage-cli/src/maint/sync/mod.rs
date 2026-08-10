@@ -233,7 +233,10 @@ fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<b
 }
 
 /// Portage `volatile`: explicit conf wins; else volatile if not root/portage-owned.
-fn resolve_volatile(entry: &RepoEntry, path: &Path) -> bool {
+/// `pub(crate)`: also reused by `em --info` to show the same `volatile:
+/// True/False` real emerge infers from filesystem ownership when a repo
+/// doesn't set it explicitly in `repos.conf`.
+pub(crate) fn resolve_volatile(entry: &RepoEntry, path: &Path) -> bool {
     if let Some(v) = entry.volatile {
         return v;
     }

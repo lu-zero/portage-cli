@@ -3139,7 +3139,13 @@ const MAKE_GLOBALS: &str = "/usr/share/portage/config/make.globals";
 /// that *sets* the variable, empty or not. `PORTAGE_ELOG_SYSTEM=""` in a
 /// make.conf is how elog gets turned off, so an empty value must not fall
 /// through to `make.globals`' non-empty default.
-fn elog_setting(shell: &portage_repo::EbuildShell, name: &str) -> String {
+///
+/// `pub(crate)`, not elog-specific despite the name: also reused by `em
+/// --info` for DISTDIR/PKGDIR/PORTAGE_TMPDIR/GENTOO_MIRRORS, which are real
+/// `make.globals`-only defaults (`ProfileStack` never sources that file —
+/// see [`gentoo_mirrors_list`]'s doc) that a plain `shell.get_var` alone
+/// would wrongly report as unset.
+pub(crate) fn elog_setting(shell: &portage_repo::EbuildShell, name: &str) -> String {
     if let Ok(val) = std::env::var(name) {
         return val;
     }
