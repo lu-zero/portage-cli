@@ -47,7 +47,8 @@ pub struct Cli {
     /// Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with
     /// USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/
     /// ACCEPT_LICENSE, and configured repositories — `emerge --info`
-    /// workalike. Takes no atoms.
+    /// workalike. Takes no atoms. Combine with `--json` for structured
+    /// output (no real-emerge equivalent).
     #[arg(long)]
     pub info: bool,
 
