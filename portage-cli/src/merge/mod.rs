@@ -259,10 +259,27 @@ fn check_pkgdir_writable(pkgdir: &camino::Utf8Path) -> Result<()> {
 /// Prompt before acting on `count` packages (`--ask`) — `verb` is what the
 /// run would do ("merge", "unmerge", "build"). Defaults to no on empty input
 /// or EOF.
+/// Real portage forbids `--ask` outside a terminal (`actions.py`: "forbid
+/// --ask when not in a terminal ... this breaks `emerge --ask | tee logfile`,
+/// but that doesn't work anyway") and exits immediately with this message,
+/// rather than silently reading EOF as "No" once it gets around to asking.
+/// Shared by every `--ask` prompt ([`confirm_action`],
+/// [`crate::config_plan::confirm_config_write`]).
+pub(crate) fn require_ask_tty() -> Result<()> {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        Ok(())
+    } else {
+        bail!("\"--ask\" should only be used in a terminal. Exiting.")
+    }
+}
+
 pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
     use std::io::Write;
 
     use crate::style::{C_CHOICE_DEFAULT, C_CHOICE_OTHER};
+
+    require_ask_tty()?;
     // "N" is the default (empty input / EOF -> no), so it gets
     // PROMPT_CHOICE_DEFAULT's green, matching real portage's own
     // `UserQuery.query` — the color follows which answer is the default,

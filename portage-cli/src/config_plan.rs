@@ -304,6 +304,7 @@ pub(crate) fn apply(
 }
 
 fn confirm_config_write(count: usize) -> Result<bool> {
+    crate::merge::require_ask_tty()?;
     print!("\n>>> Would you like to write these {count} config file(s)? [y/N] ");
     std::io::stdout().flush().ok();
     let mut line = String::new();
