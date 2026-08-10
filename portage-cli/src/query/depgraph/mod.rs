@@ -1,7 +1,7 @@
 mod autounmask;
 
 pub use portage_atom_pubgrub::MergeRoot;
-mod output;
+pub(crate) mod output;
 mod package_use;
 mod targets;
 
@@ -1337,6 +1337,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     } else {
         HashMap::new()
     };
+    let selected: HashSet<PortagePackage> = root_pkgs.iter().cloned().collect();
     let pretty_ctx = output::PrettyCtx {
         data: &data,
         installed: &installed,
@@ -1355,6 +1356,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         accept_keywords: &accept_keywords,
         binpkg_index,
         resolve_secs,
+        selected: &selected,
     };
 
     match format {

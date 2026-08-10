@@ -103,6 +103,25 @@ pub const C_PKG_BINARY: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor
 /// `0x00AAAA`, plain — not bold — ANSI cyan). Distinct from [`C_PKG`]/
 /// [`C_PKG_BINARY`], which are for rows that *are* merging.
 pub const C_PKG_NOMERGE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
+/// `_SELECTED`: a package explicitly named on the command line (`em`'s own
+/// simplification of real emerge's `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/
+/// `PKG_BINARY_MERGE_WORLD` — real portage bolds a row only when it's
+/// actually tracked in `@world`, which needs a live `ProfileStack`/
+/// `SetResolver`; `em` bolds every explicit target unconditionally instead,
+/// installed or not, so a fresh `em mesa` still highlights `mesa` — see
+/// `query::depgraph::output::PrettyCtx::selected`'s doc). Same three hues
+/// real portage's own `_WORLD` variants use (`portage/output.py`: `"green"`
+/// = `0x55FF55` bold, `"fuchsia"` = `0xFF55FF` bold, `"blue"` = `0x5555FF`
+/// bold) — note `_NOMERGE_SELECTED` is bold **blue**, not a bolded teal.
+pub const C_PKG_SELECTED: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Green)))
+    .effects(Effects::BOLD);
+pub const C_PKG_BINARY_SELECTED: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Magenta)))
+    .effects(Effects::BOLD);
+pub const C_PKG_NOMERGE_SELECTED: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::Blue)))
+    .effects(Effects::BOLD);
 /// `(N of M)` progress counters in merge banners (real emerge's
 /// `MERGE_LIST_PROGRESS`, which is yellow — not to be confused with the
 /// testing-keyword yellow below, same colour, different meaning).

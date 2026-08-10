@@ -10,7 +10,10 @@ use portage_atom_pubgrub::{
 };
 use portage_metadata::CacheEntry;
 
-pub(super) use crate::style::{C_BOLD, C_OLDVERSION, C_PKG, C_PKG_BINARY, C_PKG_NOMERGE};
+pub(super) use crate::style::{
+    C_BOLD, C_OLDVERSION, C_PKG, C_PKG_BINARY, C_PKG_BINARY_SELECTED, C_PKG_NOMERGE,
+    C_PKG_NOMERGE_SELECTED, C_PKG_SELECTED,
+};
 
 // emerge color scheme: bold green for keywords/atoms/tags, bold red/blue for flags
 // Package names use plain green (not bold) to match portage's PKG_MERGE style
@@ -32,13 +35,13 @@ pub(super) const C_NEW_FLAG: Style = Style::new()
     .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Yellow)))
     .effects(Effects::BOLD);
 // Portage-style colors for emerge -p output:
-// - BRACKET: blue for [ and ] in [ebuild STATUS]
+// - the [ and ] themselves are never colored (matches real portage); the
+//   bracket's ebuild/binary/nomerge word instead shares format_plan_parts'
+//   own name_color (merge/nomerge/binary), same as the package name.
 // - STATUS_N/S: green for new/new-slot
 // - STATUS_U: cyan for upgrade
 // - STATUS_D: blue for downgrade
 // - STATUS_R: yellow for reinstall
-pub(super) const C_BRACKET: Style =
-    Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Blue)));
 pub(super) const C_STATUS_N: Style = Style::new()
     .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Green)))
     .effects(Effects::BOLD);
@@ -137,8 +140,10 @@ fn colorize_on_off(name: &str, enabled: bool) -> String {
 }
 
 /// Color one USE-dep token via [`colorize_on_off`], reading the leading `-`
-/// (negated use-dep) as "disabled".
-fn colorize_use_flag(tok: &str) -> String {
+/// (negated use-dep) as "disabled". `pub(crate)`: also reused by `em
+/// --info`, so its USE="..." line uses the exact same enabled/disabled
+/// palette as the rest of the CLI instead of a second, duplicated one.
+pub(crate) fn colorize_use_flag(tok: &str) -> String {
     match tok.strip_prefix('-') {
         Some(rest) => colorize_on_off(rest, false),
         None => colorize_on_off(tok, true),
@@ -1321,6 +1326,17 @@ pub(super) struct PrettyCtx<'a> {
     /// line we surface. PubGrub 0.4 doesn't expose a backtrack count, so we
     /// omit the `(backtrack: N/M)` suffix real portage appends.
     pub resolve_secs: f64,
+    /// Packages explicitly named on the command line (or expanded from an
+    /// explicitly named `@set`) — `mod.rs`'s `root_pkgs`. Bolds a row's
+    /// merge/nomerge color (`_SELECTED`): unlike real emerge's own
+    /// `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`, this is *not* gated on actual
+    /// `@world` persistence (that needs a `ProfileStack`/`SetResolver`
+    /// `depgraph()` doesn't have handy, and would leave e.g. a fresh, not-
+    /// yet-installed explicit target looking identical to a transitive
+    /// dependency) — every explicitly requested package is bolded
+    /// unconditionally, whether it's a new install, a reinstall, or already
+    /// tracked in `@world`.
+    pub selected: &'a std::collections::HashSet<PortagePackage>,
 }
 
 /// Print the emerge-style pretty plan, honouring each entry's
@@ -1391,6 +1407,7 @@ fn format_plan_parts(
         accept_keywords,
         binpkg_index,
         resolve_secs: _,
+        selected,
     } = ctx;
 
     let dest_suffix = match super::root_aware::display_root(merge_root, &cross.target, cross) {
@@ -1497,6 +1514,23 @@ fn format_plan_parts(
     } else {
         String::new()
     };
+    // Real emerge's `pkgprint` (`_emerge/resolver/output.py`) colors *both*
+    // the bracket's `ebuild`/`binary`/`nomerge` word and the package name
+    // with the same style — a row that isn't actually being (re)built
+    // (shown only for `-t`/`--tree` context) is `PKG_NOMERGE`, not
+    // `PKG_MERGE`/`PKG_BINARY_MERGE`. Previously only the name got this
+    // treatment; the bracket word used the fixed `C_BRACKET` blue
+    // regardless, so a nomerge row's `[nomerge ...]` didn't visually match
+    // its own (correctly teal) package name.
+    let is_selected = selected.contains(pkg);
+    let name_color = match (in_plan, is_binary, is_selected) {
+        (false, _, false) => C_PKG_NOMERGE,
+        (false, _, true) => C_PKG_NOMERGE_SELECTED,
+        (true, true, false) => C_PKG_BINARY,
+        (true, true, true) => C_PKG_BINARY_SELECTED,
+        (true, false, false) => C_PKG,
+        (true, false, true) => C_PKG_SELECTED,
+    };
     // `[nomerge]` (real emerge's own `-t` marker for a graph node shown only
     // to keep the tree connected) is a fixed-width placeholder, no action
     // letter — padded to the same 14-char bracket width `ebuild `/`binary `
@@ -1511,19 +1545,7 @@ fn format_plan_parts(
     } else {
         ("nomerge", "", " ".repeat(7))
     };
-    let bracket = format!("[{C_BRACKET}{kind}{pad}{colored_field}{C_BRACKET:#}]");
-    // Real emerge's `pkgprint` (`_emerge/resolver/output.py`): a row that
-    // isn't actually being (re)built — shown only for `-t`/`--tree` context —
-    // is colored differently from one that is (`PKG_NOMERGE` vs `PKG_MERGE`/
-    // `PKG_BINARY_MERGE`), so the two are visually distinct at a glance
-    // instead of every row in the tree looking like a pending merge.
-    let name_color = if !in_plan {
-        C_PKG_NOMERGE
-    } else if is_binary {
-        C_PKG_BINARY
-    } else {
-        C_PKG
-    };
+    let bracket = format!("[{name_color}{kind}{name_color:#}{pad}{colored_field}]");
     let rest = format!(
         "{name_color}{cpn}-{ver}{slot_repo}{name_color:#}{old}{flag_str}{size_str}{dest_suffix}"
     );
