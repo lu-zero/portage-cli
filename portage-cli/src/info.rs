@@ -66,6 +66,30 @@ const INFO_VARS: &[&str] = &[
     "SHELL",
 ];
 
+/// Real `emerge --info`'s always-checked toolchain atoms
+/// (`_emerge/actions.py:action_info`'s `myvars`), before folding in
+/// `profiles/info_pkgs`.
+const TOOLCHAIN_ATOMS: &[&str] = &[
+    "dev-build/autoconf",
+    "dev-build/automake",
+    "virtual/os-headers",
+    "sys-devel/binutils",
+    "dev-build/libtool",
+    "dev-lang/python",
+];
+
+/// `em`-specific addition to the real-portage `TOOLCHAIN_ATOMS`/`info_pkgs`
+/// set: `ninja` isn't in any Gentoo profile's `info_pkgs` (verified: absent
+/// from this repo's own copy), but is common enough as a meson/cmake
+/// generator backend to be worth surfacing unconditionally alongside them.
+const EXTRA_TOOLCHAIN_ATOMS: &[&str] = &["dev-build/ninja"];
+
+/// Compilers worth showing even when *not* installed at all — `(not
+/// installed)` instead of silently omitting the line, since "is there a
+/// compiler here at all" is exactly the kind of thing `--info` exists to
+/// answer at a glance, unlike the rest of `TOOLCHAIN_ATOMS`.
+const ALWAYS_SHOW_COMPILERS: &[&str] = &["sys-devel/gcc", "llvm-core/clang"];
+
 #[derive(Serialize)]
 struct RepoInfo {
     name: String,
@@ -78,6 +102,13 @@ struct RepoInfo {
     sync_uri: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     volatile: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct BinaryRepoInfo {
+    name: String,
+    sync_uri: String,
+    verify_signature: bool,
 }
 
 #[derive(Serialize)]
@@ -104,6 +135,17 @@ struct Info {
     #[serde(skip_serializing_if = "Option::is_none")]
     mem: Option<MemInfo>,
     repositories: Vec<RepoInfo>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    binary_repositories: Vec<BinaryRepoInfo>,
+    /// `category/package` → comma-joined `version::repo` list, for the
+    /// fixed toolchain-atom set real `emerge --info` always checks (see
+    /// [`toolchain_versions`]).
+    toolchain: BTreeMap<String, String>,
+    /// `@name` entries from `var/lib/portage/world_sets` — the `@set`
+    /// references the user asked `em`/`emerge` to track, as opposed to
+    /// plain atoms (real emerge's `Installed sets:` line).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    installed_sets: Vec<String>,
     /// `"global"` (the plain, non-USE_EXPAND flags) plus one entry per
     /// USE_EXPAND group, keyed by its uppercase variable name (`VIDEO_CARDS`).
     use_flags: BTreeMap<String, Vec<String>>,
@@ -161,6 +203,28 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
         Err(_) => Vec::new(),
     };
 
+    let toolchain = toolchain_versions(cli, &repo, chost.as_deref()).await;
+
+    let binary_repositories: Vec<BinaryRepoInfo> = crate::binpkg::portage_binhosts(cli)
+        .await
+        .into_iter()
+        .map(|r| BinaryRepoInfo {
+            name: r.name,
+            sync_uri: r.sync_uri,
+            verify_signature: r.verify_signature,
+        })
+        .collect();
+
+    let installed_sets: Vec<String> = std::fs::read_to_string(
+        crate::maint::world::world_sets_path(Some(roots.merge_root())),
+    )
+    .unwrap_or_default()
+    .lines()
+    .map(str::trim)
+    .filter(|l| l.starts_with('@'))
+    .map(str::to_string)
+    .collect();
+
     let use_expand_names = shell.get_var("USE_EXPAND").unwrap_or_default();
     let use_str = shell.get_var("USE").unwrap_or_default();
     let expand = UseExpand::from_var(&use_expand_names);
@@ -204,6 +268,9 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
         system_uname: system_uname(),
         mem: mem_info(),
         repositories,
+        binary_repositories,
+        toolchain,
+        installed_sets,
         use_flags,
         vars,
         unset,
@@ -257,6 +324,19 @@ fn print_text(info: &Info) -> Result<()> {
         }
     }
 
+    if !info.toolchain.is_empty() {
+        writeln!(out)?;
+        let width = info.toolchain.keys().map(String::len).max().unwrap_or(0);
+        for (cp, versions) in &info.toolchain {
+            writeln!(
+                out,
+                "{C_LABEL}{cp}:{C_LABEL:#}{:pad$} {versions}",
+                "",
+                pad = width - cp.len()
+            )?;
+        }
+    }
+
     writeln!(out, "\n{C_BOLD}Repositories:{C_BOLD:#}\n")?;
     for r in &info.repositories {
         writeln!(out, "{C_PKG}{}{C_PKG:#}", r.name)?;
@@ -281,6 +361,28 @@ fn print_text(info: &Info) -> Result<()> {
             )?;
         }
         writeln!(out)?;
+    }
+
+    if !info.binary_repositories.is_empty() {
+        writeln!(out, "{C_BOLD}Binary Repositories:{C_BOLD:#}\n")?;
+        for r in &info.binary_repositories {
+            writeln!(out, "{C_PKG}{}{C_PKG:#}", r.name)?;
+            writeln!(out, "    {C_DIM}sync-uri:{C_DIM:#} {}", r.sync_uri)?;
+            writeln!(
+                out,
+                "    {C_DIM}verify-signature:{C_DIM:#} {}",
+                if r.verify_signature { "True" } else { "False" }
+            )?;
+            writeln!(out)?;
+        }
+    }
+
+    if !info.installed_sets.is_empty() {
+        writeln!(
+            out,
+            "{C_DIM}Installed sets:{C_DIM:#} {}",
+            info.installed_sets.join(", ")
+        )?;
     }
 
     let global = info
@@ -308,6 +410,90 @@ fn print_text(info: &Info) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Installed-version summary for real `emerge --info`'s toolchain-package
+/// block (`TOOLCHAIN_ATOMS` + the repo's own `profiles/info_pkgs`), e.g.
+/// `sys-devel/gcc: 15.2.1_p20260529::gentoo, 16.1.1_p20260613::gentoo`.
+///
+/// Simplification vs real portage: a bare atom (`virtual/os-headers`) is
+/// matched directly against the VDB rather than first resolved through
+/// `expand_new_virt` to whichever real package provides the virtual — em
+/// has no such GLEP-virtual-provider mapping. Most `info_pkgs` entries are
+/// real (non-virtual) packages anyway, so this only affects a couple of
+/// `virtual/*` rows (they'll show as unmatched instead of resolving to
+/// their provider).
+async fn toolchain_versions(
+    cli: &Cli,
+    repo: &portage_repo::Repository,
+    chost: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut atoms: std::collections::HashSet<String> = TOOLCHAIN_ATOMS
+        .iter()
+        .chain(EXTRA_TOOLCHAIN_ATOMS)
+        .chain(ALWAYS_SHOW_COMPILERS)
+        .map(|s| s.to_string())
+        .collect();
+    if let Ok(content) = std::fs::read_to_string(repo.path().join("profiles/info_pkgs")) {
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                atoms.insert(line.to_string());
+            }
+        }
+    }
+
+    let Ok(vdb) = crate::vdb::open_cli_vdb(cli) else {
+        return BTreeMap::new();
+    };
+    let installed: Vec<portage_vdb::InstalledPackage> = vdb.packages().into_iter().collect();
+
+    let mut by_cp: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    for atom_str in &atoms {
+        let Ok(dep) = portage_atom::Dep::parse(atom_str) else {
+            continue;
+        };
+        for pkg in &installed {
+            if !dep.matches_cpv(pkg.cpv(), pkg.slot().ok().as_deref()) {
+                continue;
+            }
+            let repo_name = pkg.field("repository").ok().flatten().unwrap_or_default();
+            by_cp
+                .entry(pkg.cpn().to_string())
+                .or_default()
+                .insert(format!("{}::{repo_name}", pkg.cpv().version));
+        }
+    }
+
+    // `sys-devel/gcc`/`llvm-core/clang`: show explicitly even when absent,
+    // so "is there a compiler here at all" is answered at a glance instead
+    // of the line just quietly not appearing.
+    for &cp in ALWAYS_SHOW_COMPILERS {
+        by_cp.entry(cp.to_string()).or_default();
+    }
+
+    // The active gcc-config slot, appended to sys-devel/gcc's own line —
+    // "which of the installed versions is actually in use."
+    if let Some(chost) = chost
+        && let Some(slot) = crate::select::compiler::current_slot(&cli.roots(), chost)
+    {
+        by_cp
+            .entry("sys-devel/gcc".to_string())
+            .or_default()
+            .insert(format!("(active: {slot})"));
+    }
+
+    by_cp
+        .into_iter()
+        .map(|(cp, vers)| {
+            let joined = if vers.is_empty() {
+                "(not installed)".to_string()
+            } else {
+                vers.into_iter().collect::<Vec<_>>().join(", ")
+            };
+            (cp, joined)
+        })
+        .collect()
 }
 
 /// Resolve one `INFO_VARS` entry the way real `emerge --info` actually would,

@@ -420,7 +420,8 @@ fn world_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     }
 }
 
-fn world_sets_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
+/// `pub(crate)`: also reused by `em --info`'s `Installed sets:` line.
+pub(crate) fn world_sets_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     match root {
         Some(r) => r.join("var/lib/portage/world_sets"),
         None => Utf8PathBuf::from("/var/lib/portage/world_sets"),

@@ -13,7 +13,7 @@
 
 mod binutils;
 mod clang;
-mod compiler;
+pub(crate) mod compiler;
 mod env_d;
 mod linker;
 mod mirrors;
