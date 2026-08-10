@@ -914,6 +914,68 @@ struct FlagCmp<'a> {
     all_flags: bool,
 }
 
+/// A flag's rendered `token` alongside the plain (uncoloured, unprefixed)
+/// name it sorts by — [`natural_cmp`] needs the plain name since tokens
+/// carry colour escapes and `-`/`%`/`*`/paren decoration that would throw
+/// off a naive string sort.
+type SortedToken = (String, String);
+
+/// One group's flags, bucketed the way portage's `_create_use_string`
+/// (`_emerge/resolver/output_helpers.py:262`) does: `ret = enabled +
+/// disabled + removed`. `removed` (flags dropped from IUSE entirely) is
+/// kept separate from `disabled` (flags still in IUSE, just off) because
+/// portage always appends it last, regardless of where it'd fall
+/// alphabetically among the others.
+#[derive(Default)]
+struct FlagBucket {
+    enabled: Vec<SortedToken>,
+    disabled: Vec<SortedToken>,
+    removed: Vec<SortedToken>,
+}
+
+/// Natural/alnum-aware comparison, matching portage's `_alnum_sort_key`
+/// (`_emerge/resolver/output_helpers.py:246`): splits each string into
+/// alternating digit/non-digit runs and compares digit runs numerically,
+/// so `python3_9` sorts before `python3_10` instead of after it.
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    fn chunks(s: &str) -> Vec<Result<u64, &str>> {
+        let bytes = s.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let start = i;
+            if bytes[i].is_ascii_digit() {
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                out.push(Ok(s[start..i].parse().unwrap_or(u64::MAX)));
+            } else {
+                while i < bytes.len() && !bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                out.push(Err(&s[start..i]));
+            }
+        }
+        out
+    }
+    use std::cmp::Ordering;
+    let (ca, cb) = (chunks(a), chunks(b));
+    for pair in ca.iter().zip(cb.iter()) {
+        let ord = match pair {
+            (Ok(x), Ok(y)) => x.cmp(y),
+            (Err(x), Err(y)) => x.cmp(y),
+            // Mixed digit/text at the same position shouldn't happen for
+            // real flag names, but never panic on it: fall back to text.
+            (Ok(x), Err(y)) => x.to_string().as_str().cmp(y),
+            (Err(x), Ok(y)) => (*x).cmp(y.to_string().as_str()),
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    ca.len().cmp(&cb.len())
+}
+
 /// Format USE flags for display, diffed against `previous` — the installed
 /// build portage would compare to (see [`previous_entry`]). `all_flags` (`-v`)
 /// additionally shows flags that did not change.
@@ -931,9 +993,8 @@ fn format_flags(
         all_flags,
     } = cmp;
 
-    // Each entry: (enabled_tokens, disabled_tokens).  BTreeMap keeps groups sorted.
-    let mut base_flags: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
-    let mut expand_groups: std::collections::BTreeMap<&str, (Vec<String>, Vec<String>)> =
+    let mut base_flags = FlagBucket::default();
+    let mut expand_groups: std::collections::BTreeMap<&str, FlagBucket> =
         std::collections::BTreeMap::new();
 
     let cur_iuse: HashSet<Interned<DefaultInterner>> = cache
@@ -958,12 +1019,9 @@ fn format_flags(
         .unwrap_or_default();
     let is_new = previous.is_none();
 
-    // Sort by flag name *before* rendering: the tokens carry colour escapes
-    // now, so sorting rendered strings would order by escape sequence.
-    let mut any_iuse: Vec<_> = cur_iuse.union(&old_iuse).copied().collect();
-    any_iuse.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-
-    for interned in any_iuse {
+    // Iteration order doesn't matter here: each bucket is natural-sorted
+    // (by plain flag name, via `natural_cmp`) right before it's joined.
+    for interned in cur_iuse.union(&old_iuse).copied() {
         let name = interned.as_str();
         let in_cur_iuse = cur_iuse.contains(&interned);
         // `effective_use` already folded this package's IUSE defaults in (via
@@ -1006,14 +1064,21 @@ fn format_flags(
             name.starts_with(prefix.as_str())
         });
 
+        // Dropped-from-IUSE flags (portage's `removed_iuse`) always sort
+        // last within their group, regardless of name — see `FlagBucket`.
+        let removed = !in_cur_iuse;
+
         if let Some(key) = expand_match {
             let prefix = format!("{}_", key.to_lowercase());
             let short = &name[prefix.len()..];
             // Re-render inside the group with the prefix stripped.
             let token = token.replacen(name, short, 1);
             let bucket = expand_groups.entry(key.as_str()).or_default();
-            if is_enabled {
-                bucket.0.push(token);
+            let entry = (short.to_string(), token);
+            if removed {
+                bucket.removed.push(entry);
+            } else if is_enabled {
+                bucket.enabled.push(entry);
             } else {
                 // `token` is already parenthesised by `flag_token` when (and
                 // only when) `forced` (use.force/use.mask) — same rule as
@@ -1022,27 +1087,39 @@ fn format_flags(
                 // flags that merely default off (e.g. most VIDEO_CARDS on a
                 // given arch), and wrapping them all makes every one look
                 // masked, hiding which ones actually are.
-                bucket.1.push(token);
+                bucket.disabled.push(entry);
             }
-        } else if is_enabled {
-            base_flags.0.push(token);
         } else {
-            base_flags.1.push(token);
+            let entry = (name.to_string(), token);
+            if removed {
+                base_flags.removed.push(entry);
+            } else if is_enabled {
+                base_flags.enabled.push(entry);
+            } else {
+                base_flags.disabled.push(entry);
+            }
         }
     }
 
-    let join_bucket = |(on, off): &(Vec<String>, Vec<String>)| -> String {
-        // Already in flag-name order; enabled before disabled, as portage does.
-        on.iter().chain(off).cloned().collect::<Vec<_>>().join(" ")
-    };
+    fn join_bucket(bucket: FlagBucket) -> String {
+        fn sorted(mut v: Vec<SortedToken>) -> impl Iterator<Item = String> {
+            v.sort_by(|(a, _), (b, _)| natural_cmp(a, b));
+            v.into_iter().map(|(_, token)| token)
+        }
+        sorted(bucket.enabled)
+            .chain(sorted(bucket.disabled))
+            .chain(sorted(bucket.removed))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 
     let mut parts = Vec::new();
-    let base_str = join_bucket(&base_flags);
+    let base_str = join_bucket(base_flags);
     if !base_str.is_empty() {
         parts.push(format!("USE=\"{base_str}\""));
     }
-    for (key, bucket) in &expand_groups {
-        if use_expand_hidden.iter().any(|h| h == *key) {
+    for (key, bucket) in expand_groups {
+        if use_expand_hidden.iter().any(|h| h == key) {
             continue;
         }
         parts.push(format!("{}=\"{}\"", key, join_bucket(bucket)));
