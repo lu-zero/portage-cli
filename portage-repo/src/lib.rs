@@ -60,7 +60,7 @@ pub use error::{Error, Result};
 pub use build::{EbuildShell, PortageColors, TerminalConfig, run_helper};
 pub use cache::{
     CacheReadOpts, RegenItem, RegenOpts, RegenStats, RegenWriteTarget, cache_cpvs,
-    cache_entries_parallel, regen_cache,
+    cache_entries_parallel, cache_entries_parallel_with_mtime, regen_cache,
 };
 pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};

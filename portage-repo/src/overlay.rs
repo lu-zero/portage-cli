@@ -25,11 +25,12 @@
 //! and its atom reports as "no ebuilds" rather than masked.
 //!
 //! [`primary_entries`] narrows the digest work to *suspects*: an ebuild with no
-//! entry, or one newer than the last sync (a present-but-stale entry, which the
-//! bulk read would otherwise trust). Everything else is taken from the cache
-//! as-is. Finding suspects still costs a tree walk, so that runs concurrently
-//! with the bulk read and its outcome is memoised in a sidecar keyed on
-//! [`Repository::sync_stamp`] — an unchanged tree skips the walk entirely.
+//! entry, or one newer than the specific cache file serving it (a
+//! present-but-stale entry, which the bulk read would otherwise trust).
+//! Everything else is taken from the cache as-is. Finding suspects still costs
+//! a tree walk, so that runs concurrently with the bulk read and its outcome
+//! is memoised in a sidecar keyed on [`Repository::sync_stamp`] — an unchanged
+//! tree skips the walk entirely.
 //!
 //! Validation is by **md5 of file contents** (`_md5_` plus the `_eclasses_`
 //! digests), never mtime; mtime only selects *which* files to digest. That
@@ -40,7 +41,7 @@ use std::collections::HashMap;
 use portage_atom::Cpv;
 use portage_metadata::CacheEntry;
 
-use crate::cache::{CacheReadOpts, cache_entries_parallel};
+use crate::cache::{CacheReadOpts, cache_entries_parallel, cache_entries_parallel_with_mtime};
 use crate::repo::Repository;
 
 /// Every metadata entry of `repo`: primary bulk walk, layered cache lookup,
@@ -121,7 +122,7 @@ pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let scan = repo.ebuilds().ok();
     let opts = CacheReadOpts::default();
     let (bulk, ebuilds) = tokio::join!(
-        cache_entries_parallel(std::slice::from_ref(repo), &opts, |text| {
+        cache_entries_parallel_with_mtime(std::slice::from_ref(repo), &opts, |text| {
             CacheEntry::parse(text).map_err(crate::Error::from)
         }),
         async {
@@ -143,18 +144,32 @@ pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         }
     );
 
-    let mut out: Vec<(Cpv, CacheEntry)> = bulk
-        .into_iter()
-        .filter_map(|(cpv, e)| e.ok().map(|e| (cpv, e)))
-        .collect();
+    let mut out: Vec<(Cpv, CacheEntry)> = Vec::with_capacity(bulk.len());
+    // The cache file's own mtime, per cpv — the "cache file serving e.cpv"
+    // half of the per-entry suspect rule, gathered in the same pass as the
+    // bulk read (no second directory walk).
+    let mut cache_mtime: HashMap<Cpv, std::time::SystemTime> = HashMap::with_capacity(bulk.len());
+    for (cpv, mtime, entry) in bulk {
+        if let Some(m) = mtime {
+            cache_mtime.insert(cpv.clone(), m);
+        }
+        if let Ok(entry) = entry {
+            out.push((cpv, entry));
+        }
+    }
     let covered: std::collections::HashSet<Cpv> = out.iter().map(|(cpv, _)| cpv.clone()).collect();
-    let since = repo.sync_time();
+    // Per-entry, not repo-wide: an ebuild is suspect only when it is newer
+    // than the specific cache file serving it, not merely newer than some
+    // repo-wide sync marker (`Repository::sync_time`) — which falls back to
+    // the repo root directory's mtime when there is no `timestamp.chk`, a
+    // signal that neither tracks a single edited ebuild nor stays put
+    // across unrelated top-level changes (a new category directory).
     let suspects: Vec<_> = ebuilds
         .into_iter()
         .filter(|(e, modified)| {
             !covered.contains(e.cpv())
-                || match (modified, since) {
-                    (Some(m), Some(s)) => *m > s,
+                || match (modified, cache_mtime.get(e.cpv())) {
+                    (Some(m), Some(c)) => *m > *c,
                     // No mtime either side: the uncached check above is all we
                     // have, so do not treat every ebuild as suspect.
                     _ => false,
@@ -372,4 +387,80 @@ fn master_cache_entry(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    use super::*;
+
+    fn make_repo(dir: &tempfile::TempDir) -> Repository {
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles").join("categories"), "sys-apps\n").unwrap();
+        Repository::builder()
+            .in_memory_cache()
+            .open(dir.path())
+            .unwrap()
+    }
+
+    fn set_mtime(path: &std::path::Path, t: SystemTime) {
+        std::fs::File::open(path).unwrap().set_modified(t).unwrap();
+    }
+
+    /// Regression for the per-entry suspect rule (replacing a repo-wide
+    /// `sync_time` comparison): a hand-edited ebuild must be re-sourced even
+    /// though nothing touched `metadata/timestamp.chk` or the repo root
+    /// directory — the two things a repo-wide "since" marker actually
+    /// watches, and which an in-place edit three directories down never
+    /// moves.
+    #[tokio::test]
+    async fn a_hand_edited_ebuild_is_re_sourced_even_when_the_repo_root_mtime_does_not_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(&dir);
+
+        let pkg_dir = dir.path().join("sys-apps").join("foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("foo-1.0.ebuild");
+        let old_text = "EAPI=8\nDESCRIPTION=\"old\"\nSLOT=\"0\"\n";
+        std::fs::write(&ebuild_path, old_text).unwrap();
+        let old_digest = format!("{:x}", md5::compute(old_text.as_bytes()));
+
+        let cache_dir = dir
+            .path()
+            .join("metadata")
+            .join("md5-cache")
+            .join("sys-apps");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache_file = cache_dir.join("foo-1.0");
+        std::fs::write(
+            &cache_file,
+            format!("EAPI=8\nDESCRIPTION=old\nSLOT=0\n_md5_={old_digest}\n"),
+        )
+        .unwrap();
+
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        set_mtime(&cache_file, base);
+        set_mtime(&ebuild_path, base);
+
+        let entries = primary_entries(&repo).await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.metadata.description, "old");
+
+        // Hand-edit: content changes and the ebuild's own mtime moves past
+        // its cache file's — but `metadata/timestamp.chk` doesn't exist and
+        // the repo root directory's mtime never changes, so the old
+        // repo-wide rule would have kept serving "old" from the cache.
+        std::fs::write(&ebuild_path, "EAPI=8\nDESCRIPTION=\"new\"\nSLOT=\"0\"\n").unwrap();
+        set_mtime(&ebuild_path, base + Duration::from_secs(60));
+
+        let entries = primary_entries(&repo).await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].1.metadata.description, "new",
+            "per-entry suspect rule must catch a hand-edit a repo-wide sync marker misses"
+        );
+    }
 }

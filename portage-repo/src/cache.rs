@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::SystemTime;
 
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_metadata::CacheEntry;
@@ -396,7 +397,24 @@ pub struct CacheReadOpts {
 /// repos — pass [`CacheReadOpts::latest_per_cpn`] to keep only the
 /// highest-version entry per Cpn (across all repos).
 pub fn cache_cpvs(repos: &[Repository], opts: &CacheReadOpts) -> Vec<(portage_atom::Cpv, PathBuf)> {
-    let mut items: Vec<(portage_atom::Cpv, PathBuf)> = Vec::with_capacity(32_768);
+    cache_cpvs_inner(repos, opts, false)
+        .into_iter()
+        .map(|(cpv, path, _)| (cpv, path))
+        .collect()
+}
+
+/// [`cache_cpvs`], optionally also stat-ing each cache file for its mtime —
+/// used by the per-entry suspect rule ([`crate::overlay::primary_entries`]),
+/// which needs "is this ebuild newer than the cache file serving it"
+/// without a second full directory walk. `with_mtime: false` costs nothing
+/// extra over [`cache_cpvs`] (same walk, no added stat per file).
+fn cache_cpvs_inner(
+    repos: &[Repository],
+    opts: &CacheReadOpts,
+    with_mtime: bool,
+) -> Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> {
+    let mut items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> =
+        Vec::with_capacity(32_768);
     for repo in repos {
         let cache_dir = repo.cache_dir();
         let walker = jwalk::WalkDir::new(cache_dir.as_std_path())
@@ -426,23 +444,28 @@ pub fn cache_cpvs(repos: &[Repository], opts: &CacheReadOpts) -> Vec<(portage_at
             let Ok(cpv) = portage_atom::Cpv::parse(&cpv_str) else {
                 continue;
             };
-            items.push((cpv, path));
+            let mtime = with_mtime
+                .then(|| entry.metadata().ok())
+                .flatten()
+                .and_then(|m| m.modified().ok());
+            items.push((cpv, path, mtime));
         }
     }
 
     if opts.latest_per_cpn && !items.is_empty() {
         use std::collections::HashMap;
-        let mut best: HashMap<portage_atom::Cpn, (portage_atom::Cpv, PathBuf)> =
+        let mut best: HashMap<portage_atom::Cpn, (portage_atom::Cpv, PathBuf, Option<SystemTime>)> =
             HashMap::with_capacity(items.len());
-        for (cpv, path) in items.drain(..) {
+        for (cpv, path, mtime) in items.drain(..) {
             best.entry(cpv.cpn)
-                .and_modify(|(prev_cpv, prev_path)| {
+                .and_modify(|(prev_cpv, prev_path, prev_mtime)| {
                     if cpv.version > prev_cpv.version {
                         *prev_cpv = cpv.clone();
                         *prev_path = path.clone();
+                        *prev_mtime = mtime;
                     }
                 })
-                .or_insert((cpv, path));
+                .or_insert((cpv, path, mtime));
         }
         items = best.into_values().collect();
     }
@@ -478,6 +501,40 @@ where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
 {
+    cache_entries_parallel_inner(repos, opts, false, decode)
+        .await
+        .into_iter()
+        .map(|(cpv, _, result)| (cpv, result))
+        .collect()
+}
+
+/// [`cache_entries_parallel`], also returning each cache file's own mtime —
+/// used by the per-entry suspect rule ([`crate::overlay::primary_entries`])
+/// to compare an ebuild's mtime against the cache file actually serving it,
+/// without a second full directory walk (the mtime is stat'd during this
+/// same read+decode pass).
+pub async fn cache_entries_parallel_with_mtime<T, F>(
+    repos: &[Repository],
+    opts: &CacheReadOpts,
+    decode: F,
+) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+where
+    T: Send + 'static,
+    F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
+{
+    cache_entries_parallel_inner(repos, opts, true, decode).await
+}
+
+async fn cache_entries_parallel_inner<T, F>(
+    repos: &[Repository],
+    opts: &CacheReadOpts,
+    with_mtime: bool,
+    decode: F,
+) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+where
+    T: Send + 'static,
+    F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
+{
     let jobs = opts.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -487,7 +544,7 @@ where
     // Phase 1 — discover (and optionally pre-dedupe) every cache file.
     // For ~30k entries that work is ~50-100ms — small enough to keep
     // serial so we can chunk evenly in phase 2.
-    let items = cache_cpvs(repos, opts);
+    let items = cache_cpvs_inner(repos, opts, with_mtime);
     if items.is_empty() {
         return Vec::new();
     }
@@ -500,11 +557,12 @@ where
     let chunk_size = total.div_ceil(jobs);
     let mut handles = Vec::with_capacity(jobs);
     for chunk in items.chunks(chunk_size) {
-        let chunk: Vec<(portage_atom::Cpv, PathBuf)> = chunk.to_vec();
+        let chunk: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> = chunk.to_vec();
         let decode = decode.clone();
         handles.push(tokio::task::spawn_blocking(move || {
-            let mut out: Vec<(portage_atom::Cpv, Result<T>)> = Vec::with_capacity(chunk.len());
-            for (cpv, path) in chunk {
+            let mut out: Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)> =
+                Vec::with_capacity(chunk.len());
+            for (cpv, path, mtime) in chunk {
                 let result = match fs::read_to_string(&path) {
                     Ok(text) => decode(&text),
                     Err(e) => Err(crate::Error::Io {
@@ -512,7 +570,7 @@ where
                         source: e,
                     }),
                 };
-                out.push((cpv, result));
+                out.push((cpv, mtime, result));
             }
             out
         }));
