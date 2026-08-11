@@ -1,17 +1,15 @@
-# strace: Repository::open count per merge, 2026-08-11
+# Corrected strace: both binaries present, warm, 2026-08-11
+# baseline 7dbe9fc / current d47b763, cmd: em -p sys-devel/gcc
 #
-# baseline: 7dbe9fc (pre-19d8fe8)   current: d47b763 (post-19d8fe8)
-# proxy: opens of each repo's repo_name/layout.conf (1 per Repository::open)
-# cmd: strace -f -e trace=openat em -p sys-devel/gcc
-
-==================== BASELINE (7dbe9fc) ====================
-gentoo repo_name opens:    8
-gentoo layout.conf opens:  8
-guru layout.conf opens:    2
-crossdev layout.conf opens:2
-
-==================== CURRENT (d47b763) ====================
-gentoo repo_name opens:    4
-gentoo layout.conf opens:  4
-guru layout.conf opens:    1
-crossdev layout.conf opens:1
+# NOTE: my earlier claim of 'baseline=0 md5-cache reads' was an artifact
+# of the baseline binary having been deleted before that strace ran.
+# Recreated both binaries fresh; both behave identically on the cache.
+#
+file                                 baseline      current
+gentoo gap-index read                       1            1
+gentoo md5-cache files read             32813        32813
+guru md5-cache files read                3854         3854
+gentoo repo_name (Repository::open)            8            4
+gentoo layout.conf                          8            4
+guru layout.conf                            2            1
+crossdev layout.conf                        2            1
