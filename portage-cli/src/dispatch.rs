@@ -383,7 +383,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let binpkg_index =
                 binpkg::open_local_index_for_preview(globals, &globals.merge_flags).await;
             let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
-                repo_path,
+                set,
                 atoms: &atoms,
                 arch: &globals.arch,
                 format: *format,
@@ -395,7 +395,6 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 autounmask_write: false,
                 ask: false,
                 autosolve_use: *autosolve_use || globals.merge_flags.autosolve_use,
-                multi_repo: globals.repo.is_none(),
                 roots: &roots,
                 host_merge_root: host_roots.merge_root(),
                 onlydeps: *onlydeps || globals.merge_flags.onlydeps,
@@ -412,7 +411,6 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 exclude: &globals.merge_flags.exclude,
                 resume_completed: std::collections::HashSet::new(),
                 complete_graph: globals.merge_flags.complete_graph,
-                extra_aliases: &[],
             })
             .await?;
             if outcome.exit_code != 0 {

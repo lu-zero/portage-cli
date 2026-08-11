@@ -91,7 +91,19 @@ pub struct DepgraphOutcome {
 }
 
 pub struct DepgraphOpts<'a> {
-    pub repo_path: &'a Utf8Path,
+    /// The full priority-ordered repo set for this invocation: `main` plus
+    /// every `repos.conf` overlay. Built **once** by the caller (see
+    /// `repo_open::repo_set_from_conf`) and shared with the atom-resolution
+    /// step that runs *before* `depgraph()` — so the solver builds its plan
+    /// against the exact same repo world `resolve_atom` picked atoms from.
+    /// Previously this function took a bare `repo_path` and rebuilt the set
+    /// internally, which double-opened every repo per merge and could diverge
+    /// from the caller's set when an overlay's open failed transiently in one
+    /// build and succeeded in the other.
+    ///
+    /// Caller-supplied aliases (e.g. `crossdev --setup -p`'s in-memory target)
+    /// must already be prepended onto `set` before it is passed in.
+    pub set: portage_repo::RepoSet,
     /// The root targets, each carrying the provenance that decides whether an
     /// unsatisfiable one aborts the run or just warns (see [`TargetOrigin`]).
     pub atoms: &'a [TargetAtom],
@@ -109,9 +121,6 @@ pub struct DepgraphOpts<'a> {
     /// interactively).
     pub ask: bool,
     pub autosolve_use: bool,
-    /// Load every repo from `repos.conf` (overlays sourced as needed). Off
-    /// when the user pinned a repo with `--repo`.
-    pub multi_repo: bool,
     /// The resolved root set (config / base / target / BROOT). See
     /// docs/user/root-model.md. `roots.satisfaction_root(DepClass::Bdepend)`
     /// answers the Host-routed BDEPEND/IDEPEND question directly — `roots`
@@ -200,17 +209,11 @@ pub struct DepgraphOpts<'a> {
     /// against and the policy can revert an upgrade a dependent has no
     /// satisfying version for.
     pub complete_graph: bool,
-    /// In-memory `Location::Alias` repos to inject in addition to any loaded
-    /// from on-disk `repos.conf`. Used by `crossdev --setup -p` so a first-
-    /// time target can plan `cross-*` atoms without writing the alias file
-    /// (aliases are virtual — `load_repos` already materialises them in
-    /// memory). Empty for normal emerges.
-    pub extra_aliases: &'a [portage_repo::RepoEntry],
 }
 
 pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome> {
     let DepgraphOpts {
-        repo_path,
+        set,
         atoms,
         arch,
         format,
@@ -219,7 +222,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         autounmask_write,
         ask,
         autosolve_use,
-        multi_repo,
         roots,
         onlydeps,
         with_bdeps,
@@ -236,7 +238,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         exclude,
         resume_completed,
         complete_graph,
-        extra_aliases,
     } = opts;
     let exclude_atoms: Vec<Dep> = exclude
         .iter()
@@ -259,14 +260,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // satisfies BDEPEND (emerge sets `bdeps=auto` unless overridden).
     let emptytree_native = empty && !host_config_stage && !cross.active;
     let solve_with_bdeps = with_bdeps || emptytree_native;
-    let repo = crate::repo_open::open(repo_path)
-        .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
-
-    let mut set = crate::repo_open::repo_set_from_conf(repo, roots, multi_repo);
-    // Caller-supplied aliases first so a pretend crossdev plan can inject the
-    // target about to be written; on-disk entries with the same name still
-    // apply (load_repos skips already-seen CPVs).
-    set.prepend_aliases(extra_aliases);
+    // `set` is built once by the caller (shared with the atom-resolution step)
+    // and already carries any caller-supplied aliases prepended onto it.
 
     let (data, (target_installed, installed_blockers), host_installed, use_env_result) = tokio::join!(
         repo::load_repos(&set),
@@ -1330,7 +1325,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // Tree — Tree renders the same per-package row, so it needs the same
     // sizes and the same `PrettyCtx`.
     let sizes = if verbose >= 1 {
-        download_size::compute(repo_path, &distdir, &data, &order, &final_policy, &ceded)
+        download_size::compute(
+            set.main().path(),
+            &distdir,
+            &data,
+            &order,
+            &final_policy,
+            &ceded,
+        )
     } else {
         HashMap::new()
     };

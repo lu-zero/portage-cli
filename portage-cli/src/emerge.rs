@@ -337,7 +337,13 @@ async fn emerge_atoms_inner(
     }
     // So bare-name atoms (not just `cat/pkg`) can resolve to an overlay-only
     // package, not just the main repo — see `query::resolve_atom`'s doc.
-    let set = crate::repo_open::repo_set_from_conf(repo, &roots, cli.repo.is_none());
+    let mut set = crate::repo_open::repo_set_from_conf(repo, &roots, cli.repo.is_none());
+    // Caller-supplied aliases first so a pretend crossdev plan can inject the
+    // target about to be written; on-disk entries with the same name still
+    // apply (load_repos skips already-seen CPVs). Prepended here (not inside
+    // `depgraph()`) so the same set is shared with `resolve_atom` below and
+    // the solver — one build, one repo world for the whole invocation.
+    set.prepend_aliases(extra_aliases);
     // Resolved one at a time (not via `resolve_atoms`) so each atom keeps the
     // provenance `expand_sets` gave it; unresolvable ones are warned about and
     // dropped, exactly as `resolve_atoms` does.
@@ -398,7 +404,7 @@ async fn emerge_atoms_inner(
         ));
     let binpkg_index = binpkg::open_local_index_for_preview(cli, merge_flags).await;
     let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
-        repo_path,
+        set,
         atoms: &atoms,
         arch: &cli.arch,
         format,
@@ -410,7 +416,6 @@ async fn emerge_atoms_inner(
         // never prompt.
         ask: merge_flags.ask && !cli.pretend,
         autosolve_use: merge_flags.autosolve_use,
-        multi_repo: cli.repo.is_none(),
         roots: &roots,
         host_merge_root: host_roots.merge_root(),
         onlydeps: merge_flags.onlydeps,
@@ -434,7 +439,6 @@ async fn emerge_atoms_inner(
             std::collections::HashSet::new()
         },
         complete_graph: merge_flags.complete_graph,
-        extra_aliases,
     })
     .await?;
 

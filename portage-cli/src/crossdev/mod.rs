@@ -773,8 +773,10 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
     // See `DepgraphOpts::host_merge_root`: `Cli::host_roots()` stays overlay-aware
     // under `--target` substitution, unlike `roots`.
     let host_roots = globals.host_roots();
+    let repo = crate::repo_open::open(&repo_path_str).ok()?;
+    let set = crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo.is_none());
     let outcome = crate::query::depgraph::depgraph(crate::query::depgraph::DepgraphOpts {
-        repo_path: Utf8Path::new(&repo_path_str),
+        set,
         atoms: &[crate::query::depgraph::TargetAtom::explicit(
             "sys-devel/gcc",
         )],
@@ -787,7 +789,6 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         // never prompts.
         ask: false,
         autosolve_use: false,
-        multi_repo: globals.repo.is_none(),
         roots: &roots,
         host_merge_root: host_roots.merge_root(),
         onlydeps: false,
@@ -805,7 +806,6 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         resume_completed: std::collections::HashSet::new(),
         // Single-atom --nodeps probe: no update, so the gate is off regardless.
         complete_graph: false,
-        extra_aliases: &[],
     })
     .await
     .ok()?;
