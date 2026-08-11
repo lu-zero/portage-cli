@@ -1,13 +1,24 @@
 # Repo/overlay abstraction redesign: fresh anchor + quick-vs-release, 2026-08-11
 
-- **current:** `2b79d47` (HEAD after the full RepoSet redesign — see
+- **current:** `7dbe9fc` (HEAD after the full RepoSet redesign — see
   [[repo-overlay-abstraction-redesign]] / `todo/repo-overlay-abstraction-redesign.md`)
 - **why:** after landing the redesign and its post-landing perf follow-ups
   (`1a01a0f`, `684ad7a`, `7a354eb`), record a fresh criterion anchor point
   and confirm quick vs release show no meaningful difference for the
   actual CLI paths touched by the redesign.
 
-## 1. Criterion `resolve` bench — controlled two-tree A/B, `4ea725c` vs `b1a8bcc`
+> **Note on SHA labels (2026-08-11):** this run was originally recorded
+> against `b1a8bcc`/`2b79d47`. Those commits were rebased away when a
+> doc-link fix was folded into `c816eec` (rewriting `e12cf3e` and its 8
+> descendants); their reachable equivalents are `12c8a98`/`7dbe9fc`. The
+> dangling objects still resolve via `git cat-file` today, and
+> `git diff b1a8bcc 12c8a98 --stat` confirms the only tree difference is
+> the 1-line `repo.rs` doc-link fix (not on the resolve path), so the
+> captured numbers remain valid. The raw filenames below retain the
+> original `b1a8bcc` label deliberately — renaming would sever the link
+> to the captured output.
+
+## 1. Criterion `resolve` bench — controlled two-tree A/B, `4ea725c` vs `12c8a98`
 
 **Correction:** an earlier version of this section relied on criterion's
 own internal delta, which compares against whatever was last saved locally
@@ -38,7 +49,7 @@ It's the project's established "resolve" anchor, not a direct test of
 this session's changes. Section 2 below is the one that actually
 exercises the redesigned code path.
 
-| target | baseline (`4ea725c`) | current (`b1a8bcc`) | delta |
+| target | baseline (`4ea725c`) | current (`12c8a98`) | delta |
 |---|---|---|---|
 | `load_repo` | 1.2479 s | 1.2746 s | +2.14% |
 | `build_provider` | 531.32 ms | 553.91 ms | +4.25% |
@@ -65,9 +76,19 @@ under ~2%.
 
 Same-run interleaved `hyperfine` (`--warmup 2 --runs 8 -i`), real host
 repo (`gentoo` + `guru` + `crossdev` + `exp-llvm-libc` configured), both
-binaries built from the identical `2b79d47` tree, no concurrent cargo
+binaries built from the identical `7dbe9fc` tree (originally `2b79d47`;
+see the SHA-labelling note at the top of this file), no concurrent cargo
 builds (confirmed via `ps aux` before each run — see
 [[never-benchmark-during-a-background-build]]).
+
+> **Raw output not retained.** Unlike section 1 (whose full criterion
+> output is saved alongside this README), the hyperfine run for this
+> section was captured only in the prose/table below — no raw `.txt` was
+> written at the time. The means/stddevs are therefore not independently
+> re-verifiable from this directory; the ratios are internally consistent
+> with the stated deltas, but treat the absolute numbers as transcribed,
+> not as checked-in data. A re-run that saves raw output lives in
+> `results/20260811-depgraph-set-threading-19d8fe8/`.
 
 | target | quick | release | delta |
 |---|---|---|---|
