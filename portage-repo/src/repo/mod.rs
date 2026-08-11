@@ -10,6 +10,7 @@ pub mod pkgmetadata;
 pub mod profile;
 pub mod repos_conf;
 pub mod repository;
+pub mod set;
 pub mod sets;
 pub mod use_expand;
 pub mod usedb;
@@ -29,5 +30,6 @@ pub use repository::{
     CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository,
     RepositoryBuilder,
 };
+pub use set::{EbuildIn, EbuildsAcross, RepoSet};
 pub use use_expand::UseExpand;
 pub use usedb::UseDb;
