@@ -413,10 +413,20 @@ fn cache_cpvs_inner(
     opts: &CacheReadOpts,
     with_mtime: bool,
 ) -> Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> {
+    cache_cpvs_in_dirs(repos.iter().map(Repository::cache_dir), opts, with_mtime)
+}
+
+/// [`cache_cpvs_inner`] over arbitrary directories rather than repos' own
+/// in-tree caches — the shared walk both the primary (in-tree) and
+/// secondary (durable user-cache) bulk reads are built on.
+fn cache_cpvs_in_dirs(
+    dirs: impl Iterator<Item = Utf8PathBuf>,
+    opts: &CacheReadOpts,
+    with_mtime: bool,
+) -> Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> {
     let mut items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> =
         Vec::with_capacity(32_768);
-    for repo in repos {
-        let cache_dir = repo.cache_dir();
+    for cache_dir in dirs {
         let walker = jwalk::WalkDir::new(cache_dir.as_std_path())
             .skip_hidden(true)
             .min_depth(2)
@@ -535,24 +545,67 @@ where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
 {
+    // Phase 1 — discover (and optionally pre-dedupe) every cache file.
+    // For ~30k entries that work is ~50-100ms — small enough to keep
+    // serial so we can chunk evenly in phase 2.
+    let items = cache_cpvs_inner(repos, opts, with_mtime);
+    read_and_decode(items, opts, decode).await
+}
+
+/// The durable secondary (user) cache's own entries — bulk-read the same
+/// way [`cache_entries_parallel_with_mtime`] bulk-reads a repo's in-tree
+/// cache, just pointed at [`Repository::secondary_cache_dir`] instead.
+///
+/// A repo with no in-tree `metadata/md5-cache` at all (crossdev,
+/// pentoo-shaped trees) still accumulates entries in its secondary store
+/// across resolves, one at a time, via [`Repository::put_secondary`] — but
+/// [`crate::entries::repo_entries`]'s bulk read only ever looked at the
+/// in-tree cache, so every one of those repos' ebuilds kept re-entering the
+/// per-entry suspect chain (stat, md5, eclass-freshness) on every call even
+/// once the secondary store already had a fresh answer for it. Folding this
+/// bulk read into `covered` is what lets the per-entry suspect rule actually
+/// narrow the digest work for a cache-less repo the way it already does for
+/// one with an in-tree cache. Empty when the secondary isn't a durable
+/// on-disk store (in-memory secondary, tests).
+pub(crate) async fn secondary_cache_entries_with_mtime<T, F>(
+    repo: &Repository,
+    opts: &CacheReadOpts,
+    decode: F,
+) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+where
+    T: Send + 'static,
+    F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
+{
+    let Some(dir) = repo.secondary_cache_dir() else {
+        return Vec::new();
+    };
+    let items = cache_cpvs_in_dirs(std::iter::once(dir.to_owned()), opts, true);
+    read_and_decode(items, opts, decode).await
+}
+
+/// Phase 2 shared by [`cache_entries_parallel_inner`] and
+/// [`secondary_cache_entries_with_mtime`]: fan `items` out into `jobs`
+/// chunks, one blocking task each does `fs::read` + `decode` for its slice
+/// end-to-end, accumulating into a local `Vec`. Concat at the end. Avoids
+/// shared-mutex contention that would otherwise dominate on many-core boxes.
+async fn read_and_decode<T, F>(
+    items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)>,
+    opts: &CacheReadOpts,
+    decode: F,
+) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
+where
+    T: Send + 'static,
+    F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
+{
+    if items.is_empty() {
+        return Vec::new();
+    }
     let jobs = opts.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4)
     });
 
-    // Phase 1 — discover (and optionally pre-dedupe) every cache file.
-    // For ~30k entries that work is ~50-100ms — small enough to keep
-    // serial so we can chunk evenly in phase 2.
-    let items = cache_cpvs_inner(repos, opts, with_mtime);
-    if items.is_empty() {
-        return Vec::new();
-    }
-
-    // Phase 2 — fan items out into `jobs` chunks, one blocking task each
-    // does fs::read + parse for its slice end-to-end, accumulating into a
-    // local Vec. Concat at the end. Avoids shared-mutex contention that
-    // would otherwise dominate on many-core boxes.
     let total = items.len();
     let chunk_size = total.div_ceil(jobs);
     let mut handles = Vec::with_capacity(jobs);

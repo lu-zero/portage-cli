@@ -51,7 +51,10 @@ use std::collections::HashMap;
 use portage_atom::Cpv;
 use portage_metadata::CacheEntry;
 
-use crate::cache::{CacheReadOpts, cache_entries_parallel, cache_entries_parallel_with_mtime};
+use crate::cache::{
+    CacheReadOpts, cache_entries_parallel, cache_entries_parallel_with_mtime,
+    secondary_cache_entries_with_mtime,
+};
 use crate::repo::Repository;
 
 /// Name of the sidecar listing the CPVs the in-tree cache does not serve.
@@ -116,8 +119,17 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
 
     let scan = repo.ebuilds().ok();
     let opts = CacheReadOpts::default();
-    let (bulk, ebuilds) = tokio::join!(
+    let (bulk, secondary_bulk, ebuilds) = tokio::join!(
         cache_entries_parallel_with_mtime(std::slice::from_ref(repo), &opts, |text| {
+            CacheEntry::parse(text).map_err(crate::Error::from)
+        }),
+        // The durable secondary store's own entries — without this, a repo
+        // with no in-tree cache (crossdev, pentoo-shaped trees) never has
+        // anything in `covered`, so every one of its ebuilds re-enters the
+        // full suspect chain on every call even once the secondary already
+        // holds a fresh answer for it (previously only consulted one cpv at
+        // a time, deep inside that chain).
+        secondary_cache_entries_with_mtime(repo, &opts, |text| {
             CacheEntry::parse(text).map_err(crate::Error::from)
         }),
         async {
@@ -139,20 +151,28 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         }
     );
 
-    let mut out: Vec<(Cpv, CacheEntry)> = Vec::with_capacity(bulk.len());
+    let mut out: Vec<(Cpv, CacheEntry)> = Vec::with_capacity(bulk.len() + secondary_bulk.len());
     // The cache file's own mtime, per cpv — the "cache file serving e.cpv"
     // half of the per-entry suspect rule, gathered in the same pass as the
     // bulk read (no second directory walk).
-    let mut cache_mtime: HashMap<Cpv, std::time::SystemTime> = HashMap::with_capacity(bulk.len());
-    for (cpv, mtime, entry) in bulk {
+    let mut cache_mtime: HashMap<Cpv, std::time::SystemTime> =
+        HashMap::with_capacity(bulk.len() + secondary_bulk.len());
+    let mut covered: std::collections::HashSet<Cpv> =
+        std::collections::HashSet::with_capacity(bulk.len() + secondary_bulk.len());
+    // Primary first, so it wins a cpv present in both — same precedence
+    // `Repository::cache_entry` already gives primary over secondary.
+    for (cpv, mtime, entry) in bulk.into_iter().chain(secondary_bulk) {
+        if covered.contains(&cpv) {
+            continue;
+        }
         if let Some(m) = mtime {
             cache_mtime.insert(cpv.clone(), m);
         }
         if let Ok(entry) = entry {
+            covered.insert(cpv.clone());
             out.push((cpv, entry));
         }
     }
-    let covered: std::collections::HashSet<Cpv> = out.iter().map(|(cpv, _)| cpv.clone()).collect();
     // Per-entry, not repo-wide: an ebuild is suspect only when it is newer
     // than the specific cache file serving it, not merely newer than some
     // repo-wide sync marker (`Repository::sync_time`) — which falls back to
@@ -405,7 +425,7 @@ mod tests {
             .unwrap()
     }
 
-    fn set_mtime(path: &std::path::Path, t: SystemTime) {
+    fn set_mtime(path: impl AsRef<std::path::Path>, t: SystemTime) {
         std::fs::File::open(path).unwrap().set_modified(t).unwrap();
     }
 
@@ -534,6 +554,64 @@ mod tests {
         assert_eq!(
             entries[0].1.metadata.description, "new",
             "trusting the forged sidecar would have skipped the suspect walk and served \"old\""
+        );
+    }
+
+    /// Regression for folding the secondary (durable, cross-invocation)
+    /// cache into the bulk read: a repo with no in-tree md5-cache at all
+    /// (crossdev, pentoo-shaped trees) previously left every ebuild
+    /// uncovered, so each one re-entered the full suspect chain — ebuild
+    /// digest, `Repository::cache_entry` lookup, eclass-freshness check —
+    /// on *every* call, even once the secondary store already held a fresh
+    /// answer. With the secondary folded into `covered`, an unedited entry
+    /// is trusted by mtime alone, the exact per-entry rule the primary
+    /// cache already gets (see the hand-edit test above) — deliberately
+    /// *not* re-validated by md5 when mtime alone already says nothing
+    /// changed since it was cached.
+    #[tokio::test]
+    async fn a_warm_secondary_only_entry_is_trusted_without_re_validating_its_md5() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles").join("categories"), "sys-apps\n").unwrap();
+
+        let repo = Repository::builder()
+            .user_cache_root(
+                camino::Utf8PathBuf::from_path_buf(cache_root.path().to_owned()).unwrap(),
+            )
+            .open(dir.path())
+            .unwrap();
+        assert!(!repo.has_primary_cache(), "no in-tree md5-cache at all");
+
+        let pkg_dir = dir.path().join("sys-apps").join("foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("foo-1.0.ebuild");
+        std::fs::write(&ebuild_path, "EAPI=8\nDESCRIPTION=\"real\"\nSLOT=\"0\"\n").unwrap();
+
+        // A secondary entry with a deliberately *wrong* _md5_ (would fail
+        // per-item validation if that path ran) but a distinct DESCRIPTION
+        // to trace which path actually served it.
+        let secondary_dir = repo.secondary_cache_dir().unwrap().join("sys-apps");
+        std::fs::create_dir_all(&secondary_dir).unwrap();
+        let secondary_file = secondary_dir.join("foo-1.0");
+        std::fs::write(
+            &secondary_file,
+            "EAPI=8\nDESCRIPTION=cached\nSLOT=0\n_md5_=00000000000000000000000000000000\n",
+        )
+        .unwrap();
+
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        // Ebuild mtime at the cache file's own: not suspect.
+        set_mtime(&ebuild_path, base);
+        set_mtime(&secondary_file, base);
+
+        let entries = repo_entries(&repo).await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].1.metadata.description, "cached",
+            "an unedited secondary entry must be trusted by mtime, not re-sourced or re-validated"
         );
     }
 }
