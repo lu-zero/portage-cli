@@ -199,6 +199,7 @@ mod tests {
                 pre_env: empty_layer(),
                 env_use: empty_layer(),
                 package_use: &[],
+                profile_package_use: &[],
                 force_mask: &fm,
             },
             root_cpns: &root_cpns,

@@ -30,6 +30,7 @@ pub struct TreeView {
     pre_env: portage_atom_pubgrub::UseLayer,
     env_use: portage_atom_pubgrub::UseLayer,
     package_use: Vec<(Dep, Vec<portage_atom_pubgrub::UseOverride>)>,
+    profile_package_use: Vec<(Dep, Vec<portage_atom_pubgrub::UseOverride>)>,
     force_mask: portage_resolve::force_mask::ForceMask,
     multi_repo: bool,
 }
@@ -75,6 +76,7 @@ impl TreeView {
             pre_env: env.pre_env,
             env_use: env.env_use,
             package_use: env.package_use,
+            profile_package_use: env.profile_package_use,
             force_mask: env.force_mask,
             multi_repo: set.is_multi(),
         })
@@ -91,6 +93,7 @@ impl TreeView {
             pre_env: &self.pre_env,
             env_use: &self.env_use,
             package_use: &self.package_use,
+            profile_package_use: &self.profile_package_use,
             force_mask: &self.force_mask,
         }
     }

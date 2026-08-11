@@ -113,6 +113,7 @@ fn solve_with(
         pre_env: empty_layer(),
         env_use: empty_layer(),
         package_use: pu,
+        profile_package_use: &[],
         force_mask: &fm,
         autosolve_use: true,
     };
@@ -126,6 +127,7 @@ fn solve_with(
         pre_env: empty_layer(),
         env_use: empty_layer(),
         package_use: pu,
+        profile_package_use: &[],
         force_mask: &fm,
     };
     let mut provider = PortageDependencyProvider::new(adapter);

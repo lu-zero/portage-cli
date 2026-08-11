@@ -343,6 +343,7 @@ fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, boo
 /// not one in the environment (layer 4), and why the ebuild's own
 /// `+`-defaulted IUSE (layer 1) is wiped by a `-*` in *either* — confirmed
 /// against real `emerge` (`em stages --stage1` live-testing, 2026-07-12).
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_effective_use(
     iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
     pre_env: &UseLayer,
@@ -350,6 +351,7 @@ pub fn resolve_effective_use(
     slot: Option<Interned<DefaultInterner>>,
     package_use: &[(Dep, Vec<UseOverride>)],
     env_use: &UseLayer,
+    profile_package_use: &[(Dep, Vec<UseOverride>)],
 ) -> UseConfig {
     // Fast path for the common case (and most `-*` cases that only appear in
     // pre_env/env as whole-layer clears):
@@ -377,6 +379,38 @@ pub fn resolve_effective_use(
         for (flag, def) in iuse_defaults {
             if matches!(def, IUseDefault::Enabled) && !pre_env.frozen.contains_key(flag) {
                 overlay.insert(*flag, UseFlagState::Enabled);
+            }
+        }
+    }
+
+    // Profile `package.use` for this CPV — sits in portage's *defaults* layer
+    // (`config.py`'s `configdict["defaults"]`, populated from `_pkgprofileuse`),
+    // which is BELOW `conf` (make.conf). Since `pre_env` is the already-folded
+    // `defaults < conf` state, a make.conf `USE=` decision lives in
+    // `pre_env.frozen` and must win over a profile `package.use` token — so a
+    // profile line like `media-libs/libwebp -tiff` does NOT override a global
+    // `USE="tiff"` (unlike user `/etc/portage/package.use`, which does). Only
+    // flags pre_env is silent on take the profile's value. `-*` in pre_env
+    // wipes this layer along with IUSE (it cleared the whole defaults fold).
+    if !pre_env.has_clear_all && !profile_package_use.is_empty() {
+        for (dep, overrides) in profile_package_use {
+            if dep.cpn != cpv.cpn {
+                continue;
+            }
+            if !atom_matches_cpv(dep, cpv, slot) {
+                continue;
+            }
+            for ov in overrides {
+                if !pre_env.frozen.contains_key(&ov.flag) {
+                    overlay.insert(
+                        ov.flag,
+                        if ov.enable {
+                            UseFlagState::Enabled
+                        } else {
+                            UseFlagState::Disabled
+                        },
+                    );
+                }
             }
         }
     }
@@ -561,6 +595,7 @@ mod tests {
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer(""),
+            &[],
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
     }
@@ -578,6 +613,7 @@ mod tests {
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer(""),
+            &[],
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -595,6 +631,7 @@ mod tests {
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer("-* build"),
+            &[],
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -611,6 +648,7 @@ mod tests {
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer("build"),
+            &[],
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -628,6 +666,7 @@ mod tests {
             None,
             &[],
             &layer(""),
+            &[],
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Disabled);
     }
@@ -641,6 +680,7 @@ mod tests {
             None,
             &[],
             &layer("-* build"),
+            &[],
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Disabled);
     }
@@ -654,6 +694,7 @@ mod tests {
             None,
             &[],
             &layer(""),
+            &[],
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Enabled);
     }
@@ -671,6 +712,7 @@ mod tests {
             None,
             &[],
             &layer(""),
+            &[],
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
@@ -684,6 +726,7 @@ mod tests {
             None,
             &pkg_use("dev-libs/other", &["ssl"]),
             &layer(""),
+            &[],
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
@@ -697,8 +740,58 @@ mod tests {
             None,
             &pkg_use("dev-libs/openssl", &["-ssl"]),
             &layer(""),
+            &[],
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
+    }
+
+    /// Profile `package.use` sits in portage's *defaults* layer, BELOW
+    /// make.conf (`conf`): a `USE=` set in make.conf (the `pre_env` layer
+    /// here) wins over a profile `package.use -flag`. Contrast
+    /// `resolve_effective_use_package_use_disable_overrides_pre_env_enable`
+    /// above — that's USER `/etc/portage/package.use`, which sits in the
+    /// `pkg` layer above `conf` and DOES override it. Regression for the
+    /// `media-libs/libwebp -tiff` divergence from real emerge (Nathan's
+    /// report, 2026-08-11): `targets/desktop/package.use`'s `-tiff` was
+    /// incorrectly overriding a global `USE="tiff"`.
+    #[test]
+    fn resolve_effective_use_profile_package_use_does_not_override_make_conf() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[]),
+            &layer("ssl"),
+            &cpv(),
+            None,
+            &pkg_use("dev-libs/openssl", &[]),
+            &layer(""),
+            &pkg_use("dev-libs/openssl", &["-ssl"]),
+        );
+        assert_eq!(
+            cfg.get(flag("ssl")),
+            UseFlagState::Enabled,
+            "profile package.use -ssl must NOT override a make.conf USE=ssl"
+        );
+    }
+
+    /// The flip side: when make.conf is silent on a flag, profile
+    /// `package.use` DOES set it (that's its purpose — e.g. a profile
+    /// enabling `pulseaudio` for `media-sound/alsa-plugins` when global
+    /// USE doesn't mention it).
+    #[test]
+    fn resolve_effective_use_profile_package_use_applies_when_make_conf_silent() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[]),
+            &layer(""),
+            &cpv(),
+            None,
+            &pkg_use("dev-libs/openssl", &[]),
+            &layer(""),
+            &pkg_use("dev-libs/openssl", &["-ssl"]),
+        );
+        assert_eq!(
+            cfg.get(flag("ssl")),
+            UseFlagState::Disabled,
+            "profile package.use -ssl must apply when make.conf is silent on ssl"
+        );
     }
 
     #[test]

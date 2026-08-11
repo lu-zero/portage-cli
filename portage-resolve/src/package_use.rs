@@ -34,6 +34,7 @@ pub struct PackageUseLine {
 }
 
 /// Build `package.use` entries for all non-trivial USE flag requirements.
+#[allow(clippy::too_many_arguments)]
 pub fn build_entries(
     flag_reqs: &[UseFlagRequirement],
     root_atoms: &[String],
@@ -42,6 +43,7 @@ pub fn build_entries(
     pre_env: &UseLayer,
     env_use: &UseLayer,
     package_use: &[(Dep, Vec<UseOverride>)],
+    profile_package_use: &[(Dep, Vec<UseOverride>)],
 ) -> Vec<PackageUseEntry> {
     // Pre-compute once for all requirements.
     let adj = build_adjacency(edges);
@@ -79,6 +81,7 @@ pub fn build_entries(
             req.package.slot(),
             package_use,
             env_use,
+            profile_package_use,
         );
         let mut flags: Vec<String> = Vec::new();
         for f in &req.required_enabled {

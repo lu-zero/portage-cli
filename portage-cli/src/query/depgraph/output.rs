@@ -1300,6 +1300,7 @@ pub(super) struct PrettyCtx<'a> {
     pub pre_env: &'a portage_atom_pubgrub::UseLayer,
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
+    pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
     pub use_expand: &'a [String],
     pub use_expand_hidden: &'a [String],
     pub flag_reqs: &'a HashMap<&'a PortagePackage, &'a UseFlagRequirement>,
@@ -1396,6 +1397,7 @@ fn format_plan_parts(
         pre_env,
         env_use,
         package_use,
+        profile_package_use,
         use_expand,
         use_expand_hidden,
         flag_reqs,
@@ -1425,8 +1427,15 @@ fn format_plan_parts(
     let defaults = cache
         .map(super::effective_use::iuse_defaults)
         .unwrap_or_default();
-    let mut effective_use =
-        resolve_effective_use(&defaults, pre_env, &cpv, pkg.slot(), package_use, env_use);
+    let mut effective_use = resolve_effective_use(
+        &defaults,
+        pre_env,
+        &cpv,
+        pkg.slot(),
+        package_use,
+        env_use,
+        profile_package_use,
+    );
     // `use.force`/`use.mask` (global + package + `*.stable.*`): applied to
     // effective USE (forced on, then masked off — mask wins, matching
     // portage), and their union is also the parenthesised-flag set portage

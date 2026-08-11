@@ -289,6 +289,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         expand: use_expand,
         expand_hidden: use_expand_hidden,
         package_use,
+        profile_package_use,
         package_mask,
         package_unmask,
         force_mask,
@@ -397,6 +398,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
+        profile_package_use: &profile_package_use,
         force_mask: &force_mask,
     };
     let mut root_deps = Vec::new();
@@ -480,6 +482,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
+        profile_package_use: &profile_package_use,
         force_mask: &force_mask,
         installed_cpvs: solver_installed_cpvs,
         // Computed later (needs `root_pkgs`, not yet built here); inert
@@ -594,6 +597,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     pre_env: &pre_env,
                     env_use: &env_use,
                     package_use: pkg_use,
+                    profile_package_use: &profile_package_use,
                     force_mask: &force_mask,
                     installed_cpvs: solver_installed_cpvs,
                     rebuilding_cpvs: &rebuilding_installed_cpvs,
@@ -802,6 +806,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 pre_env: &pre_env,
                 env_use: &env_use,
                 package_use: &package_use,
+                profile_package_use: &profile_package_use,
                 force_mask: &force_mask,
             };
 
@@ -1073,6 +1078,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 pre_env: &pre_env,
                 env_use: &env_use,
                 package_use: &package_use,
+                profile_package_use: &profile_package_use,
                 force_mask: &force_mask,
                 installed_cpvs: solver_installed_cpvs,
                 rebuilding_cpvs: &rebuilding_installed_cpvs,
@@ -1218,6 +1224,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
+        profile_package_use: &profile_package_use,
         force_mask: &force_mask,
     };
 
@@ -1293,6 +1300,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             &pre_env,
             &env_use,
             &pristine_package_use,
+            &profile_package_use,
         );
         if autounmask_write && !entries.is_empty() {
             package_use::write(&entries, &portage_dir.join("package.use"))?;
@@ -1311,6 +1319,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
+        profile_package_use: &profile_package_use,
         force_mask: &force_mask,
         installed_cpvs: solver_installed_cpvs,
         rebuilding_cpvs: &rebuilding_installed_cpvs,
@@ -1344,6 +1353,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         pre_env: &pre_env,
         env_use: &env_use,
         package_use: &package_use,
+        profile_package_use: &profile_package_use,
         use_expand: &use_expand,
         use_expand_hidden: &use_expand_hidden,
         flag_reqs: &flag_reqs,
@@ -1517,6 +1527,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     pkg.slot(),
                     &package_use,
                     &env_use,
+                    &profile_package_use,
                 );
                 // No cache ⇒ no IUSE/keywords; still apply global force/mask
                 // and ceded so build USE stays consistent with the solver.

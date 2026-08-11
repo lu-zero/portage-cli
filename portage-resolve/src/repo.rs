@@ -565,6 +565,7 @@ fn effective_use_config(
         slot,
         policy.package_use,
         policy.env_use,
+        policy.profile_package_use,
     );
     if !policy.force_mask.is_empty() {
         let stable = policy.accept_keywords.is_stable(&meta.keywords, cpv, slot);
@@ -781,8 +782,14 @@ pub struct ResolvePolicy<'a> {
     pub pre_env: &'a portage_atom_pubgrub::UseLayer,
     /// Process-environment USE layer — see [`Adapter::env_use`].
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
-    /// Per-version `package.use`/`package.env`-style overrides.
+    /// Per-version `package.use`/`package.env`-style overrides from
+    /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf).
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
+    /// Profile-chain `package.use` — portage's *defaults* layer, BELOW
+    /// `conf` (make.conf): a make.conf `USE=` decision wins over it (see
+    /// `portage_atom_pubgrub::resolve_effective_use`). Contrast
+    /// [`Self::package_use`].
+    pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
     /// Profile USE force/mask policy — see [`Adapter::force_mask`].
     pub force_mask: &'a crate::force_mask::ForceMask,
 }
@@ -813,8 +820,12 @@ pub struct Adapter<'a> {
     /// Process-environment USE layer — highest priority, applied after
     /// `package.use` (see `resolve_effective_use`). Pre-parsed once.
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
-    /// Per-version `package.use`/`package.env`-style overrides.
+    /// Per-version `package.use`/`package.env`-style overrides from
+    /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf).
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
+    /// Profile-chain `package.use` — portage's *defaults* layer, below
+    /// `conf`/make.conf (see [`ResolvePolicy::profile_package_use`]).
+    pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
     /// Profile USE force/mask policy: applied to each version's effective USE and
     /// consulted by the Level-C cede gate (pinned flags are never ceded).
     pub force_mask: &'a crate::force_mask::ForceMask,
@@ -922,8 +933,15 @@ impl Adapter<'_> {
         // base (no IUSE defaults, no pre_env, no env_use) leaves exactly
         // those flags set.
         let empty = portage_atom_pubgrub::UseLayer::default();
-        let pins =
-            resolve_effective_use(&HashMap::new(), &empty, cpv, slot, self.package_use, &empty);
+        let pins = resolve_effective_use(
+            &HashMap::new(),
+            &empty,
+            cpv,
+            slot,
+            self.package_use,
+            &empty,
+            self.profile_package_use,
+        );
         let iuse: std::collections::HashSet<&str> = m.iuse.iter().map(|iu| iu.name()).collect();
         let iuse_flags: std::collections::HashSet<Interned<DefaultInterner>> =
             m.iuse.iter().map(Interned::from).collect();
@@ -980,6 +998,7 @@ impl<'a> Adapter<'a> {
             pre_env: self.pre_env,
             env_use: self.env_use,
             package_use: self.package_use,
+            profile_package_use: self.profile_package_use,
             force_mask: self.force_mask,
         }
     }
@@ -1031,6 +1050,7 @@ impl PackageRepository for Adapter<'_> {
             slot,
             self.package_use,
             self.env_use,
+            self.profile_package_use,
         );
 
         // Profile USE force/mask override package.use and the configured value
@@ -2265,6 +2285,7 @@ mod tests {
                     pre_env: empty_layer(),
                     env_use: empty_layer(),
                     package_use: &[],
+                    profile_package_use: &[],
                     force_mask: &ForceMask::default(),
                 },
             )
@@ -2313,6 +2334,7 @@ mod tests {
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &ForceMask::default(),
         };
         let found = filter_reasons_for(
@@ -2358,6 +2380,7 @@ mod tests {
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &ForceMask::default(),
         };
         let vs = portage_atom_pubgrub::PortageVersionSet::any();
@@ -2392,6 +2415,7 @@ mod tests {
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &ForceMask::default(),
         };
         let cpn = Cpn::try_new("net-misc/thing").expect("cpn parses");
@@ -2415,6 +2439,7 @@ mod tests {
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &ForceMask::default(),
             autosolve_use: true,
         };
@@ -2451,6 +2476,7 @@ mod tests {
             pre_env: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &ForceMask::default(),
         };
         assert!(
@@ -2497,6 +2523,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm, // a is use.force'd
             autosolve_use: true,
         };
@@ -2540,6 +2567,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2587,6 +2615,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2631,6 +2660,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2692,6 +2722,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2749,6 +2780,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2799,6 +2831,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2849,6 +2882,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2900,6 +2934,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
         };
@@ -2956,6 +2991,7 @@ mod tests {
             pre_env: &pre_env,
             env_use: empty_layer(),
             package_use: &[],
+            profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: false,
         };

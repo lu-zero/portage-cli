@@ -94,6 +94,7 @@ pub fn effective_use(
         pkg.slot(),
         policy.package_use,
         policy.env_use,
+        policy.profile_package_use,
     ); // pre_env/env_use are already UseLayer
     let iuse = iuse_set(cache);
     let slot_key = pkg.slot();
@@ -186,6 +187,7 @@ mod tests {
             None,
             &[],
             &UseLayer::parse("-* build"),
+            &[],
         );
         assert!(
             matches!(cfg.get(Interned::intern("reflex")), UseFlagState::Disabled),
@@ -228,6 +230,7 @@ mod tests {
             None,
             &[],
             &UseLayer::parse("-* build"),
+            &[],
         );
 
         let ceded = vec![CededFlag {
@@ -257,6 +260,7 @@ mod tests {
             None,
             &[],
             &UseLayer::parse("-*"),
+            &[],
         );
         assert!(matches!(
             cfg.get(Interned::intern("multilib")),

@@ -30,8 +30,15 @@ pub struct UseEnv {
     pub expand: Vec<String>,
     /// Keys from `USE_EXPAND_HIDDEN` — groups to suppress in display.
     pub expand_hidden: Vec<String>,
-    /// Per-package USE flag overrides from the profile and `/etc/portage/package.use`.
+    /// Per-package USE overrides from `/etc/portage/package.use` and
+    /// `package.env` — portage's `pkg` layer, above `conf`/make.conf.
     pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    /// Per-package USE overrides from the profile chain's `package.use`
+    /// (`stack.package_use()`) — portage's *defaults* layer, BELOW
+    /// `conf`/make.conf: a global `USE=` wins over these (unlike
+    /// [`Self::package_use`]). Matches portage's `_pkgprofileuse` →
+    /// `configdict["defaults"]` routing (`config.py` setcpv).
+    pub profile_package_use: Vec<(Dep, Vec<UseOverride>)>,
     /// Masked packages: repo-global `profiles/package.mask`, the profile
     /// stack, and `/etc/portage/package.mask`.
     pub package_mask: Vec<Dep>,
@@ -266,25 +273,38 @@ async fn compute_use_env(
     let pre_env = UseLayer::parse(&resolved.pre_env);
     let env_use = UseLayer::parse(&resolved.env_use);
 
-    // Per-package USE from the profile, then `/etc/portage`, then the config
-    // overlay. Collected as raw tokens so the USE_EXPAND colon form is expanded
+    // Per-package USE — two tiers, matching portage's layer order:
+    //
+    // 1. Profile `package.use` (`stack.package_use()`) → `profile_package_use`,
+    //    portage's *defaults* layer (below make.conf). A global `USE=` wins
+    //    over these — `_pkgprofileuse` → `configdict["defaults"]` in
+    //    `config.py`'s `setcpv`. Without this split, `targets/desktop/
+    //    package.use: media-libs/libwebp -tiff` would override a global
+    //    `USE="tiff"`, which real portage does not do.
+    // 2. `/etc/portage/package.use` (+ overlay) → `package_use`, the `pkg`
+    //    layer (above make.conf).
+    //
+    // Both collected as raw tokens so the USE_EXPAND colon form is expanded
     // once, against the live keys, before parsing to `UseOverride`.
     let expand_keys = &expand;
     let expand_values = |key: &str| split_var(key);
-    let mut raw_package_use: Vec<(Dep, Vec<String>)> = stack.package_use().unwrap_or_default();
-    raw_package_use.extend(load_package_use(portage_dir.join("package.use").as_str()));
+    let expand_flags = |raw: Vec<(Dep, Vec<String>)>| {
+        raw.into_iter()
+            .map(|(dep, flags)| {
+                (
+                    dep,
+                    expand_use_expand_colon(&flags, expand_keys, &expand_values),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let profile_package_use = expand_flags(stack.package_use().unwrap_or_default());
+    let mut raw_package_use: Vec<(Dep, Vec<String>)> =
+        load_package_use(portage_dir.join("package.use").as_str());
     if let Some(overlay) = config_overlay {
         raw_package_use.extend(load_package_use(overlay.join("package.use").as_str()));
     }
-    let mut package_use: Vec<(Dep, Vec<UseOverride>)> = raw_package_use
-        .into_iter()
-        .map(|(dep, flags)| {
-            (
-                dep,
-                expand_use_expand_colon(&flags, expand_keys, &expand_values),
-            )
-        })
-        .collect();
+    let mut package_use: Vec<(Dep, Vec<UseOverride>)> = expand_flags(raw_package_use);
 
     // `/etc/portage/package.env`'s own USE contribution, folded in as more
     // package_use-style overrides (same `Dep`-keyed shape, matched the same
@@ -341,6 +361,7 @@ async fn compute_use_env(
         expand,
         expand_hidden,
         package_use,
+        profile_package_use,
         package_mask,
         package_unmask,
         force_mask,
