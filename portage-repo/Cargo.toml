@@ -19,6 +19,7 @@ lasso = ["portage-atom/lasso", "portage-metadata/lasso"]
 symbol-table = ["portage-atom/symbol-table", "portage-metadata/symbol-table"]
 
 [dependencies]
+futures-util = { workspace = true }
 portage-atom = { workspace = true }
 portage-metadata = { workspace = true }
 portage-vdb = { workspace = true }

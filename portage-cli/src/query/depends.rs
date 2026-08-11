@@ -1,19 +1,25 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
+use futures_util::StreamExt;
 use portage_atom::{Dep, DepEntry};
 use portage_repo::RepoSet;
 use portage_vdb::Vdb;
 
-pub fn run(
+pub async fn run(
     set: &RepoSet,
     vdb: Option<&Vdb>,
     mode: super::ResolveMode,
     atoms: &[String],
 ) -> Result<()> {
+    // Metadata-cache-backed (the same fast path `resolve`/`load_repos` get),
+    // not a per-ebuild `Repository::cache_entry` lookup. Collected once
+    // since every atom in `atoms` re-scans the same data.
+    let entries: Vec<_> = set.entries().collect().await;
+
     for raw in atoms {
         let target = super::resolve_atom(set, vdb, mode, raw)?;
-        let matches = reverse_deps(set, &target)?;
+        let matches = reverse_deps(&entries, &target);
 
         if atoms.len() > 1 {
             println!("[{raw}]");
@@ -25,23 +31,19 @@ pub fn run(
     Ok(())
 }
 
-/// Every cpn across `set` (every repo, not just main) whose DEPEND/RDEPEND/
-/// BDEPEND/PDEPEND/IDEPEND names `target`.
-fn reverse_deps(set: &RepoSet, target: &Dep) -> Result<BTreeSet<String>> {
+/// Every cpn across `entries` (every repo, not just main) whose DEPEND/
+/// RDEPEND/BDEPEND/PDEPEND/IDEPEND names `target`.
+fn reverse_deps(entries: &[portage_repo::EntryIn<'_>], target: &Dep) -> BTreeSet<String> {
     let mut matches: BTreeSet<String> = BTreeSet::new();
-    for item in set.ebuilds()? {
-        let cpv = item.ebuild.cpv();
-        let Ok(Some(entry)) = item.repo.cache_entry(cpv) else {
-            continue;
-        };
-        let m = &entry.metadata;
+    for item in entries {
+        let m = &item.entry.metadata;
         let dep_trees = [&m.depend, &m.rdepend, &m.bdepend, &m.pdepend, &m.idepend];
 
         if dep_trees.iter().any(|tree| tree_contains(target, tree)) {
-            matches.insert(cpv.cpn.to_string());
+            matches.insert(item.cpv.cpn.to_string());
         }
     }
-    Ok(matches)
+    matches
 }
 
 fn tree_contains(target: &Dep, entries: &[DepEntry]) -> bool {
@@ -104,37 +106,39 @@ mod tests {
             .unwrap()
     }
 
-    /// Before `depends::run` scanned `set.ebuilds()` (every repo) instead of
+    /// Before `depends::run` scanned `set.entries()` (every repo) instead of
     /// just `set.main()`, a reverse-dependency living only in an overlay
     /// (guru, crossdev, a local overlay) was invisible to `em query depends`.
-    #[test]
-    fn finds_a_reverse_dependency_that_lives_only_in_an_overlay() {
+    #[tokio::test]
+    async fn finds_a_reverse_dependency_that_lives_only_in_an_overlay() {
         let main_dir = tempfile::tempdir().unwrap();
         let overlay_dir = tempfile::tempdir().unwrap();
         let main = make_repo(&main_dir, "sys-apps", "foo", "1.0", None);
         let overlay = make_repo(&overlay_dir, "app-misc", "bar", "2.0", Some("sys-apps/foo"));
 
         let set = RepoSet::from_ordered(vec![Arc::new(main), Arc::new(overlay)], 0, Vec::new());
+        let entries: Vec<_> = set.entries().collect().await;
 
         let target = Dep::from_str("sys-apps/foo").unwrap();
-        let matches = reverse_deps(&set, &target).unwrap();
+        let matches = reverse_deps(&entries, &target);
         assert!(
             matches.contains("app-misc/bar"),
             "overlay-only reverse dependency must be found: {matches:?}"
         );
     }
 
-    #[test]
-    fn a_package_with_no_matching_dependents_finds_nothing() {
+    #[tokio::test]
+    async fn a_package_with_no_matching_dependents_finds_nothing() {
         let main_dir = tempfile::tempdir().unwrap();
         let overlay_dir = tempfile::tempdir().unwrap();
         let main = make_repo(&main_dir, "sys-apps", "foo", "1.0", None);
         let overlay = make_repo(&overlay_dir, "app-misc", "bar", "2.0", None);
 
         let set = RepoSet::from_ordered(vec![Arc::new(main), Arc::new(overlay)], 0, Vec::new());
+        let entries: Vec<_> = set.entries().collect().await;
 
         let target = Dep::from_str("sys-apps/foo").unwrap();
-        let matches = reverse_deps(&set, &target).unwrap();
+        let matches = reverse_deps(&entries, &target);
         assert!(matches.is_empty());
     }
 }

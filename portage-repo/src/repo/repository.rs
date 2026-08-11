@@ -578,6 +578,23 @@ impl Repository {
         }
     }
 
+    /// Look up the ebuild for an exact, already-known `Cpv` — three stats
+    /// (category dir, package dir, ebuild file), not a directory walk.
+    ///
+    /// Use this when the cpv already came from somewhere else (a metadata
+    /// cache entry, [`Self::find_cpns`]'s result) — [`Self::ebuilds`] exists
+    /// to *discover* cpvs in the first place, not to re-locate one you
+    /// already have.
+    pub fn ebuild_for_cpv(&self, cpv: &Cpv) -> Result<Option<Ebuild>> {
+        let Some(cat) = self.category(cpv.cpn.category.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(pkg) = cat.package(cpv.cpn.package.as_ref()) else {
+            return Ok(None);
+        };
+        pkg.ebuild(&cpv.version.to_string())
+    }
+
     /// Resolve a package pattern to one or more [`Cpn`] values.
     ///
     /// * `cat/pkg` — exact lookup within the named category.

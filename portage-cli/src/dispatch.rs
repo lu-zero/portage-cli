@@ -344,7 +344,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 &globals.roots(),
                 globals.repo.is_none(),
             );
-            query::depends::run(&set, vdb.as_ref(), query::ResolveMode::Error, atom)
+            query::depends::run(&set, vdb.as_ref(), query::ResolveMode::Error, atom).await
         }
         QueryCommand::Depgraph {
             atom,

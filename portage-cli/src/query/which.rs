@@ -11,9 +11,13 @@ pub fn run(
     mode: super::ResolveMode,
     atoms: &[String],
 ) -> Result<()> {
-    // Shadowed by cpv (`RepoSet::ebuilds`'s own contract), so a cpv present
-    // in more than one repo is the highest-priority repo's file — the exact
-    // file the merge would actually build.
+    // `set.ebuilds()`, not `set.entries()`: which only ever needs a cpv and
+    // a file path (picked by version comparison, which the filename alone
+    // already gives), never cache *content* — `entries()` would pay a full
+    // bulk parse of every cache file in every repo for data this command
+    // never looks at. Shadowed by cpv (`RepoSet::ebuilds`'s own contract),
+    // so a cpv present in more than one repo is the highest-priority
+    // repo's file — the exact file the merge would actually build.
     let ebuilds: Vec<_> = set.ebuilds()?.collect();
 
     for raw in atoms {

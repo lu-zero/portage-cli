@@ -30,6 +30,6 @@ pub use repository::{
     CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository,
     RepositoryBuilder,
 };
-pub use set::{EbuildIn, EbuildsAcross, RepoSet};
+pub use set::{EbuildIn, EbuildsAcross, EntryIn, RepoSet};
 pub use use_expand::UseExpand;
 pub use usedb::UseDb;

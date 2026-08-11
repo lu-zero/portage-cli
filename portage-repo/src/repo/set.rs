@@ -3,6 +3,8 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
+use futures_util::Stream;
+use futures_util::stream;
 use portage_atom::{Cpn, Cpv};
 use portage_metadata::CacheEntry;
 
@@ -170,6 +172,91 @@ impl RepoSet {
         }
         None
     }
+
+    /// Every metadata cache entry across the set, in priority order,
+    /// shadowed by cpv — the memoized counterpart to [`Self::ebuilds`].
+    ///
+    /// Sourced from [`crate::entries::repo_entries`] per repo: bulk read,
+    /// per-entry suspect narrowing, secondary-cache fallback, live-source
+    /// fallback, with the sync-stamp/gap-index memo where the repo supports
+    /// it — the same fast path [`Self::ebuilds`]' raw directory walk does
+    /// *not* get, because it answers a different question ("what ebuild
+    /// files exist" vs. "what does the metadata cache say about them").
+    /// Prefer this over `ebuilds()` whenever what's actually needed is
+    /// metadata (DEPEND, DESCRIPTION, …), not a bare file listing.
+    ///
+    /// A [`Stream`], not a collected `Vec`: `repo_entries` is itself an
+    /// `async fn` per repo, so a later repo's bulk read is only awaited
+    /// once a consumer actually asks for more than an earlier repo alone
+    /// serves — a caller that only needs the first match (or an early
+    /// exit) never pays for the repos behind it. A caller that needs every
+    /// entry more than once (multiple atoms against the same set) collects
+    /// it once itself (`StreamExt::collect`).
+    pub fn entries(&self) -> impl Stream<Item = EntryIn<'_>> + '_ {
+        stream::unfold(
+            EntriesState {
+                index: 0,
+                seen: HashSet::new(),
+                current: None,
+            },
+            move |mut state| async move {
+                loop {
+                    match state.current.as_mut().and_then(Iterator::next) {
+                        Some((cpv, entry)) => {
+                            if !self.is_multi() || state.seen.insert(cpv.clone()) {
+                                let repo = self.get(state.index);
+                                let index = state.index;
+                                return Some((
+                                    EntryIn {
+                                        repo,
+                                        index,
+                                        cpv,
+                                        entry,
+                                    },
+                                    state,
+                                ));
+                            }
+                            // Lower-priority repo's duplicate of an
+                            // already-emitted cpv — shadowed, not returned.
+                        }
+                        None => {
+                            // `current` was never started (index 0) or just
+                            // ran out — either way, move to the next repo.
+                            if state.current.is_some() {
+                                state.index += 1;
+                            }
+                            if state.index >= self.len() {
+                                return None;
+                            }
+                            let fetched = crate::entries::repo_entries(self.get(state.index)).await;
+                            state.current = Some(fetched.into_iter());
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+struct EntriesState {
+    index: usize,
+    seen: HashSet<Cpv>,
+    current: Option<std::vec::IntoIter<(Cpv, CacheEntry)>>,
+}
+
+/// One [`RepoSet::entries`] item: metadata for one cpv, from the repo that
+/// actually served it — carried alongside so a consumer can resolve the
+/// ebuild's file path ([`Repository::ebuild_for_cpv`]) or read further
+/// repo-scoped data without a second priority-ordered search.
+pub struct EntryIn<'a> {
+    /// The repo `entry` was found in.
+    pub repo: &'a Repository,
+    /// `repo`'s index in the set's priority order.
+    pub index: usize,
+    /// The cpv this entry describes.
+    pub cpv: Cpv,
+    /// The metadata cache entry itself.
+    pub entry: CacheEntry,
 }
 
 /// One [`Ebuild`] from [`RepoSet::ebuilds`], carrying the repo it actually
