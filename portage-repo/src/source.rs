@@ -67,29 +67,20 @@ pub struct SourceOpts {
 /// the caller, not a second pipeline stage that re-parks workers.
 pub fn source_parallel(
     repo: &Repository,
-    masters: &[Repository],
     ebuilds: Vec<Ebuild>,
     opts: &SourceOpts,
     ctx: &SourceContext,
 ) -> flume::Receiver<SourceItem> {
     let (out_tx, out_rx) = flume::unbounded::<SourceItem>();
     let repo = repo.clone();
-    let masters = masters.to_vec();
     let opts = opts.clone();
     let ctx = ctx.clone();
 
     tokio::spawn(async move {
-        let _ = source_parallel_join(
-            &repo,
-            &masters,
-            ebuilds,
-            &opts,
-            &ctx,
-            move |ebuild, result| {
-                // Unbounded + sync send: never park a worker on the hand-off.
-                let _ = out_tx.send((ebuild, result));
-            },
-        )
+        let _ = source_parallel_join(&repo, ebuilds, &opts, &ctx, move |ebuild, result| {
+            // Unbounded + sync send: never park a worker on the hand-off.
+            let _ = out_tx.send((ebuild, result));
+        })
         .await;
     });
 
@@ -102,7 +93,6 @@ pub fn source_parallel(
 /// so the stream API does not change the scheduling shape.
 pub(crate) async fn source_parallel_join<F>(
     repo: &Repository,
-    masters: &[Repository],
     ebuilds: Vec<Ebuild>,
     opts: &SourceOpts,
     ctx: &SourceContext,
@@ -118,7 +108,6 @@ where
     });
     let dedup = opts.dedup;
     let repo = Arc::new(repo.clone());
-    let masters: Arc<Vec<Repository>> = Arc::new(masters.to_vec());
     let ctx = ctx.clone();
     let on_result = Arc::new(on_result);
 
@@ -128,12 +117,11 @@ where
     for _ in 0..jobs {
         let work_rx = work_rx.clone();
         let repo = Arc::clone(&repo);
-        let masters = Arc::clone(&masters);
         let ctx = ctx.clone();
         let on_result = Arc::clone(&on_result);
 
         handles.push(tokio::spawn(async move {
-            let master_refs: Vec<&Repository> = masters.iter().collect();
+            let master_refs: Vec<&Repository> = repo.masters().iter().collect();
             while let Ok(ebuild) = work_rx.recv_async().await {
                 let result = source_one(&repo, &master_refs, &ebuild, &ctx, dedup).await;
                 on_result(ebuild, result);

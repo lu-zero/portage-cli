@@ -33,10 +33,7 @@ fn repo_with_one_ebuild() -> (TempDir, Repository) {
 }
 
 fn ebuilds(repo: &Repository) -> Vec<portage_repo::Ebuild> {
-    repo.ebuilds_with_masters(&[])
-        .expect("walk ebuilds")
-        .into_iter()
-        .collect()
+    repo.ebuilds().expect("walk ebuilds").into_iter().collect()
 }
 
 /// The hot path: every ebuild already has an entry, so nothing is sourced.
@@ -49,7 +46,7 @@ async fn a_fully_covered_tree_yields_nothing() {
     assert_eq!(all.len(), 1, "fixture should hold exactly one ebuild");
     let covered: HashSet<Cpv> = all.iter().map(|e| e.cpv().clone()).collect();
 
-    let got = portage_repo::gap_entries(&repo, &[], all, &covered).await;
+    let got = portage_repo::gap_entries(&repo, all, &covered).await;
 
     assert!(got.is_empty(), "nothing is missing, so nothing to source");
 }
@@ -59,7 +56,7 @@ async fn a_fully_covered_tree_yields_nothing() {
 #[tokio::test]
 async fn no_ebuilds_yields_nothing() {
     let (_tmp, repo) = repo_with_one_ebuild();
-    let got = portage_repo::gap_entries(&repo, &[], Vec::new(), &HashSet::new()).await;
+    let got = portage_repo::gap_entries(&repo, Vec::new(), &HashSet::new()).await;
     assert!(got.is_empty());
 }
 
@@ -70,7 +67,7 @@ async fn an_uncovered_ebuild_is_sourced() {
     let (_tmp, repo) = repo_with_one_ebuild();
     let all = ebuilds(&repo);
 
-    let got = portage_repo::gap_entries(&repo, &[], all, &HashSet::new()).await;
+    let got = portage_repo::gap_entries(&repo, all, &HashSet::new()).await;
 
     assert_eq!(got.len(), 1, "the uncached ebuild should be recovered");
     assert_eq!(got[0].0.to_string(), "sys-libs/zlib-1.0");

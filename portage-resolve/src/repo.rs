@@ -1213,8 +1213,9 @@ fn collect_required_use_flags(
 pub enum RepoSource {
     /// The main repo (`repo` in [`load_repos`]'s own signature).
     Main,
-    /// An overlay repo and its masters.
-    Overlay(Repository, Vec<Repository>),
+    /// An overlay repo. Its masters are owned by the `Repository` itself
+    /// (see [`Repository::masters`]), not threaded here as a second field.
+    Overlay(Repository),
 }
 
 /// Load the main repo's md5-cache plus every overlay's metadata (sourcing
@@ -1255,8 +1256,8 @@ pub async fn load_repos(
                     versions.entry(cpv.cpn).or_default().push((cpv, entry));
                 }
             }
-            RepoSource::Overlay(overlay, masters) => {
-                for (cpv, entry) in portage_repo::overlay_entries(overlay, masters).await {
+            RepoSource::Overlay(overlay) => {
+                for (cpv, entry) in portage_repo::overlay_entries(overlay).await {
                     if !seen.insert(cpv.clone()) {
                         continue;
                     }
@@ -2090,8 +2091,8 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
 
         let cpv = Cpv::parse(cpv).unwrap();
-        // `ebuilds_with_masters` (unlike the cache-only bulk read) scans only
-        // the categories listed here -- an empty/missing file means it finds
+        // `ebuilds` (unlike the cache-only bulk read) scans only the
+        // categories listed here -- an empty/missing file means it finds
         // nothing at all, silently.
         std::fs::write(
             dir.path().join("profiles").join("categories"),
@@ -2143,7 +2144,7 @@ mod tests {
         let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
         let overlay_name = overlay.name().to_string();
 
-        let sources = [RepoSource::Overlay(overlay, Vec::new()), RepoSource::Main];
+        let sources = [RepoSource::Overlay(overlay), RepoSource::Main];
         let data = load_repos(&main, &sources, &[]).await;
 
         let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
@@ -2172,7 +2173,7 @@ mod tests {
             disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
         let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
 
-        let sources = [RepoSource::Main, RepoSource::Overlay(overlay, Vec::new())];
+        let sources = [RepoSource::Main, RepoSource::Overlay(overlay)];
         let data = load_repos(&main, &sources, &[]).await;
 
         let cpv = Cpv::parse("dev-libs/foo-1").unwrap();

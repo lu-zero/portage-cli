@@ -144,17 +144,17 @@ async fn main() {
             .unwrap_or(4)
     });
 
-    let (repo, masters) = if let Some(ref dir) = args.repos_dir {
+    let repo = if let Some(ref dir) = args.repos_dir {
         match Repository::builder()
             .in_memory_cache()
             .open_with_masters(&args.repo, dir)
         {
-            Ok((r, m)) => {
-                if !m.is_empty() {
-                    let names: Vec<&str> = m.iter().map(|r| r.name()).collect();
+            Ok(r) => {
+                if !r.masters().is_empty() {
+                    let names: Vec<&str> = r.masters().iter().map(|m| m.name()).collect();
                     eprintln!("Resolved masters: {}", names.join(", "));
                 }
-                (r, m)
+                r
             }
             Err(e) => {
                 eprintln!("Error opening repository with masters: {e}");
@@ -163,7 +163,7 @@ async fn main() {
         }
     } else {
         match Repository::builder().in_memory_cache().open(&args.repo) {
-            Ok(r) => (r, Vec::new()),
+            Ok(r) => r,
             Err(e) => {
                 eprintln!("Error opening repository: {e}");
                 process::exit(1);
@@ -207,7 +207,7 @@ async fn main() {
         dedup: false,
     };
 
-    let source_rx = source_parallel(&repo, &masters, ebuilds, &opts, &ctx);
+    let source_rx = source_parallel(&repo, ebuilds, &opts, &ctx);
     // Drain on several tasks so comparison work stays parallel with sourcing.
     let mut handles = Vec::new();
     for _ in 0..jobs {

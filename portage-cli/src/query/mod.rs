@@ -85,8 +85,8 @@ pub fn resolve_atom(
     }
     let mut cpns = repo.find_cpns(raw);
     for source in overlays {
-        if let RepoSource::Overlay(overlay, masters) = source {
-            for cpn in overlay.find_cpns_with_masters(raw, masters) {
+        if let RepoSource::Overlay(overlay) = source {
+            for cpn in overlay.find_cpns(raw) {
                 if !cpns.contains(&cpn) {
                     cpns.push(cpn);
                 }
@@ -356,7 +356,7 @@ mod tests {
     fn resolve_atom_bare_name_finds_overlay_only_package() {
         let (_main_dir, main) = make_repo(&[("sys-apps", "foo")]);
         let (_overlay_dir, overlay) = make_repo(&[("app-misc", "bar")]);
-        let sources = [RepoSource::Overlay(overlay, Vec::new())];
+        let sources = [RepoSource::Overlay(overlay)];
         let dep = resolve_atom(&main, &sources, None, ResolveMode::Error, "bar").unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "app-misc");
         assert_eq!(dep.cpn.package.as_ref(), "bar");
@@ -369,7 +369,7 @@ mod tests {
     fn resolve_atom_bare_name_ambiguous_across_main_and_overlay() {
         let (_main_dir, main) = make_repo(&[("sys-apps", "foo")]);
         let (_overlay_dir, overlay) = make_repo(&[("app-misc", "foo")]);
-        let sources = [RepoSource::Overlay(overlay, Vec::new())];
+        let sources = [RepoSource::Overlay(overlay)];
         let err = resolve_atom(&main, &sources, None, ResolveMode::Error, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
         assert!(err.to_string().contains("sys-apps/foo"));

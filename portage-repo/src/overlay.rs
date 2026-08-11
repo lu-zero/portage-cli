@@ -45,7 +45,7 @@ use crate::repo::Repository;
 
 /// Every metadata entry of `repo`: primary bulk walk, layered cache lookup,
 /// master-symlink shortcut, then live source into secondary.
-pub async fn overlay_entries(repo: &Repository, masters: &[Repository]) -> Vec<(Cpv, CacheEntry)> {
+pub async fn overlay_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let mut cached: HashMap<Cpv, CacheEntry> = cache_entries_parallel(
         std::slice::from_ref(repo),
         &CacheReadOpts::default(),
@@ -56,11 +56,11 @@ pub async fn overlay_entries(repo: &Repository, masters: &[Repository]) -> Vec<(
     .filter_map(|(cpv, e)| e.ok().map(|e| (cpv, e)))
     .collect();
 
-    let Ok(ebuilds) = repo.ebuilds_with_masters(masters) else {
+    let Ok(ebuilds) = repo.ebuilds() else {
         return cached.into_iter().collect();
     };
 
-    resolve_ebuilds(repo, masters, ebuilds, &mut cached).await
+    resolve_ebuilds(repo, ebuilds, &mut cached).await
 }
 
 /// Name of the sidecar listing the CPVs the in-tree cache does not serve.
@@ -118,7 +118,7 @@ pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         out.clear();
     }
 
-    let scan = repo.ebuilds_with_masters(&[]).ok();
+    let scan = repo.ebuilds().ok();
     let opts = CacheReadOpts::default();
     let (bulk, ebuilds) = tokio::join!(
         cache_entries_parallel(std::slice::from_ref(repo), &opts, |text| {
@@ -172,7 +172,7 @@ pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         .map(|(cpv, e)| (cpv.clone(), e.md5.clone()))
         .collect();
 
-    let gap = gap_entries(repo, &[], suspects, &std::collections::HashSet::new()).await;
+    let gap = gap_entries(repo, suspects, &std::collections::HashSet::new()).await;
 
     // Index only what the in-tree cache cannot serve: absent, or serving a
     // different build than the ebuild on disk. A suspect that merely looked new
@@ -227,7 +227,6 @@ fn write_gap_index<'a>(path: &camino::Utf8Path, stamp: &str, cpvs: impl Iterator
 /// cache entry, so it would otherwise be invisible rather than merely uncached.
 pub async fn gap_entries(
     repo: &Repository,
-    masters: &[Repository],
     ebuilds: Vec<crate::repo::Ebuild>,
     covered: &std::collections::HashSet<Cpv>,
 ) -> Vec<(Cpv, CacheEntry)> {
@@ -243,17 +242,17 @@ pub async fn gap_entries(
         repo.name(),
         missing.len()
     );
-    resolve_ebuilds(repo, masters, missing, &mut HashMap::new()).await
+    resolve_ebuilds(repo, missing, &mut HashMap::new()).await
 }
 
 /// Run the four-step chain over `ebuilds`, consuming matching entries out of
 /// `cached` (the primary bulk walk) as it goes.
 async fn resolve_ebuilds(
     repo: &Repository,
-    masters: &[Repository],
     ebuilds: impl IntoIterator<Item = crate::repo::Ebuild>,
     cached: &mut HashMap<Cpv, CacheEntry>,
 ) -> Vec<(Cpv, CacheEntry)> {
+    let masters = repo.masters();
     let mut out: Vec<(Cpv, CacheEntry)> = Vec::new();
     let mut shell = None;
     // Eclass digests are shared across all entries of this repo — without
@@ -273,7 +272,7 @@ async fn resolve_ebuilds(
                     .md5
                     .as_deref()
                     .is_some_and(|m| m.eq_ignore_ascii_case(&digest))
-                    && repo.is_fresh_cached(entry, masters, digests)
+                    && repo.is_fresh_cached(entry, digests)
             };
 
         // Primary bulk walk (in-tree md5-cache).

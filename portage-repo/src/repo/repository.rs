@@ -232,6 +232,12 @@ pub struct Repository {
     /// `None` for in-memory/custom stores, which have nowhere to keep a
     /// sidecar index.
     secondary_dir: Option<Utf8PathBuf>,
+    /// Resolved master repositories (from `metadata/layout.conf`'s `masters =`),
+    /// set once at open time by [`RepositoryBuilder::open_with_masters`] —
+    /// empty otherwise. Owned here (not threaded as a side parameter through
+    /// every consumer) so `ebuilds`/`find_cpns`/`is_fresh_cached` can't be
+    /// called with a mismatched or stale masters list.
+    masters: Vec<Repository>,
 }
 
 impl std::fmt::Debug for Repository {
@@ -302,14 +308,15 @@ impl RepositoryBuilder {
     /// Open a repository and resolve masters from `repos_dir`.
     ///
     /// Masters share `UserRoot` (same root, per-name dirs) or get a fresh
-    /// in-memory secondary for `Memory` / `Custom`.
+    /// in-memory secondary for `Memory` / `Custom`. The returned `Repository`
+    /// owns its resolved masters (see [`Repository::masters`]).
     pub fn open_with_masters(
         self,
         path: impl Into<PathBuf>,
         repos_dir: impl AsRef<Path>,
-    ) -> Result<(Repository, Vec<Repository>)> {
+    ) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
-        let repo = Repository::open_with_secondary(path, spec.clone())?;
+        let mut repo = Repository::open_with_secondary(path, spec.clone())?;
         let mut masters: Vec<Repository> = Vec::new();
         let mut seen = HashSet::new();
         seen.insert(repo.name().to_string());
@@ -320,7 +327,8 @@ impl RepositoryBuilder {
             &mut seen,
             &spec,
         )?;
-        Ok((repo, masters))
+        repo.masters = masters;
+        Ok(repo)
     }
 }
 
@@ -368,6 +376,7 @@ impl Repository {
             primary,
             secondary,
             secondary_dir,
+            masters: Vec::new(),
         })
     }
 
@@ -397,6 +406,13 @@ impl Repository {
     /// Absolute path to the repository root.
     pub fn path(&self) -> &Utf8Path {
         &self.path
+    }
+
+    /// Resolved master repositories, set by [`RepositoryBuilder::open_with_masters`]
+    /// — empty for a repo opened with the plain [`RepositoryBuilder::open`],
+    /// or one with no `masters =` entry in `metadata/layout.conf`.
+    pub fn masters(&self) -> &[Repository] {
+        &self.masters
     }
 
     /// Directory backing the in-tree primary md5-cache (`metadata/md5-cache`
@@ -488,25 +504,16 @@ impl Repository {
     /// List all ebuilds in the repository using parallel directory walking.
     ///
     /// Uses [`jwalk`] to walk category directories concurrently, collecting
-    /// all `.ebuild` files. Only categories listed in `profiles/categories`
-    /// are visited. Results are sorted by CPV.
+    /// all `.ebuild` files. Valid categories are the *union* of this repo's
+    /// own `profiles/categories` and every [`masters`](Self::masters) entry's
+    /// (portage semantics): an overlay may ship packages in a master's
+    /// category without listing it in its own `profiles/categories`. Results
+    /// are sorted by CPV.
     ///
     /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn ebuilds(&self) -> Result<Ebuilds> {
-        let categories: HashSet<String> =
-            util::read_lines(self.path.join("profiles").join("categories"))?
-                .into_iter()
-                .collect();
-        self.ebuilds_in_categories(categories)
-    }
-
-    /// Like [`ebuilds`](Self::ebuilds), but with the valid categories taken
-    /// as the union across this repo and its masters (portage semantics): an
-    /// overlay may ship packages in a master's category without listing it in
-    /// its own `profiles/categories`.
-    pub fn ebuilds_with_masters(&self, masters: &[Repository]) -> Result<Ebuilds> {
         let mut categories: HashSet<String> = HashSet::new();
-        for repo in std::iter::once(self).chain(masters.iter()) {
+        for repo in std::iter::once(self).chain(self.masters.iter()) {
             if let Ok(lines) = util::read_lines(repo.path().join("profiles").join("categories")) {
                 categories.extend(lines.into_iter().filter(|c| !c.is_empty()));
             }
@@ -558,33 +565,19 @@ impl Repository {
     /// Resolve a package pattern to one or more [`Cpn`] values.
     ///
     /// * `cat/pkg` — exact lookup within the named category.
-    /// * bare `name` — scans all categories *this repo's own*
-    ///   `profiles/categories` lists for packages matching the name.
+    /// * bare `name` — scans the *union* of this repo's own
+    ///   `profiles/categories` and every [`masters`](Self::masters) entry's
+    ///   for packages matching the name — the same category-completeness
+    ///   rule [`ebuilds`](Self::ebuilds) already applies to the full ebuild
+    ///   walk: an overlay routinely ships packages in a category (e.g.
+    ///   `gui-apps`) only its master (e.g. `::gentoo`) lists in its own
+    ///   `profiles/categories`. Packages are still looked up on `self`
+    ///   (`self.category(..)`), never on a master — masters only widen which
+    ///   category *names* are valid to check, they are not an alternate
+    ///   source of packages here.
     ///
     /// Returns an empty `Vec` when no match is found.
-    ///
-    /// For an overlay, prefer [`find_cpns_with_masters`](Self::find_cpns_with_masters):
-    /// an overlay may ship packages in a category only its master lists
-    /// (`profiles/categories` is not required to be self-contained — see
-    /// [`ebuilds_with_masters`](Self::ebuilds_with_masters)'s doc), which
-    /// this plain version would silently miss for the bare-name case (exact
-    /// `cat/pkg` is unaffected — it checks the filesystem directly, not the
-    /// categories list).
     pub fn find_cpns(&self, pattern: &str) -> Vec<Cpn> {
-        self.find_cpns_with_masters(pattern, &[])
-    }
-
-    /// Like [`find_cpns`](Self::find_cpns), but the bare-name scan covers
-    /// the *union* of this repo's own `profiles/categories` and every
-    /// `masters` entry's — the same category-completeness rule
-    /// [`ebuilds_with_masters`](Self::ebuilds_with_masters) already applies
-    /// to the full ebuild walk, needed here for the same reason: an overlay
-    /// routinely ships packages in a category (e.g. `gui-apps`) only its
-    /// master (e.g. `::gentoo`) lists in its own `profiles/categories`.
-    /// Packages are still looked up on `self` (`self.category(..)`), never
-    /// on a master — masters only widen which category *names* are valid
-    /// to check, they are not an alternate source of packages here.
-    pub fn find_cpns_with_masters(&self, pattern: &str, masters: &[Repository]) -> Vec<Cpn> {
         if let Some(slash) = pattern.find('/') {
             let cat_name = &pattern[..slash];
             let pkg_name = &pattern[slash + 1..];
@@ -608,7 +601,7 @@ impl Repository {
             // just the masters-union case, since `find_cpns` now delegates
             // here.
             let mut category_names: BTreeSet<String> = BTreeSet::new();
-            for repo in std::iter::once(self).chain(masters.iter()) {
+            for repo in std::iter::once(self).chain(self.masters.iter()) {
                 if let Ok(lines) = util::read_lines(repo.path.join("profiles").join("categories")) {
                     category_names.extend(lines.into_iter().filter(|c| !c.is_empty()));
                 }
@@ -688,9 +681,10 @@ impl Repository {
     /// Verify that `entry`'s recorded eclass checksums still match the live tree.
     ///
     /// For every `(name, md5)` in `entry.eclasses`, the eclass is located by
-    /// searching this repository's `eclass/` directory and each master's (in
-    /// order), then its current md5 is compared against the recorded one. An
-    /// entry with no `_eclasses_` is trivially fresh.
+    /// searching this repository's `eclass/` directory and each
+    /// [`masters`](Self::masters) entry's (in order), then its current md5 is
+    /// compared against the recorded one. An entry with no `_eclasses_` is
+    /// trivially fresh.
     ///
     /// This does **not** verify `entry.md5` against the ebuild on disk —
     /// callers that want that check should compare it themselves (they
@@ -699,8 +693,8 @@ impl Repository {
     ///
     /// Returns `false` if any eclass cannot be located, cannot be read, or
     /// hashes to a different value than the cache entry records.
-    pub fn is_fresh(&self, entry: &CacheEntry, masters: &[Repository]) -> bool {
-        self.is_fresh_cached(entry, masters, &mut std::collections::HashMap::new())
+    pub fn is_fresh(&self, entry: &CacheEntry) -> bool {
+        self.is_fresh_cached(entry, &mut std::collections::HashMap::new())
     }
 
     /// [`is_fresh`](Self::is_fresh) with a caller-held digest memo, for
@@ -709,14 +703,13 @@ impl Repository {
     pub fn is_fresh_cached(
         &self,
         entry: &CacheEntry,
-        masters: &[Repository],
         digests: &mut std::collections::HashMap<String, Option<String>>,
     ) -> bool {
         if entry.eclasses.is_empty() {
             return true;
         }
         let eclass_dirs: Vec<Utf8PathBuf> = std::iter::once(self.path.join("eclass"))
-            .chain(masters.iter().map(|m| m.path.join("eclass")))
+            .chain(self.masters.iter().map(|m| m.path.join("eclass")))
             .collect();
         for (name, recorded) in &entry.eclasses {
             let actual = digests.entry(name.clone()).or_insert_with(|| {
@@ -1292,8 +1285,11 @@ mod tests {
     fn is_fresh_validates_eclass_md5_across_local_and_masters() {
         let local_dir = tempfile::tempdir().unwrap();
         let master_dir = tempfile::tempdir().unwrap();
-        let local = make_test_repo(&local_dir);
         let master = make_test_repo(&master_dir);
+        let local = Repository {
+            masters: vec![master.clone()],
+            ..make_test_repo(&local_dir)
+        };
 
         // Two eclasses: one in local, one only in master.
         std::fs::create_dir_all(local_dir.path().join("eclass")).unwrap();
@@ -1325,19 +1321,19 @@ mod tests {
 
         // Both eclasses present and matching — fresh.
         let entry = make_entry(&[("local-only", &local_md5), ("master-only", &master_md5)]);
-        assert!(local.is_fresh(&entry, std::slice::from_ref(&master)));
+        assert!(local.is_fresh(&entry));
 
         // Wrong md5 for the master eclass — stale.
         let entry = make_entry(&[("master-only", "00000000000000000000000000000000")]);
-        assert!(!local.is_fresh(&entry, std::slice::from_ref(&master)));
+        assert!(!local.is_fresh(&entry));
 
         // Eclass not findable anywhere — stale.
         let entry = make_entry(&[("ghost", &local_md5)]);
-        assert!(!local.is_fresh(&entry, std::slice::from_ref(&master)));
+        assert!(!local.is_fresh(&entry));
 
         // Empty eclass list — trivially fresh.
         let entry = make_entry(&[]);
-        assert!(local.is_fresh(&entry, &[]));
+        assert!(local.is_fresh(&entry));
     }
 
     #[test]
@@ -1444,15 +1440,15 @@ mod tests {
         assert_eq!(cpns.len(), 2);
     }
 
-    /// The real-world gap `find_cpns_with_masters` exists for: an overlay
+    /// The real-world gap masters-aware `find_cpns` exists for: an overlay
     /// (e.g. `guru`) routinely ships packages in a category (e.g.
     /// `gui-apps`) that only its master's (`::gentoo`'s) own
     /// `profiles/categories` lists — `profiles/categories` is not required
-    /// to be self-contained (same rule `ebuilds_with_masters` already
-    /// applies). Plain `find_cpns` (bare-name) misses it; the
-    /// masters-aware version finds it. Live-verified against this exact
-    /// scenario on a real host: `guru`'s own `gui-apps/1password` didn't
-    /// list `gui-apps` in `guru/profiles/categories` at all.
+    /// to be self-contained (same rule `ebuilds` already applies). An
+    /// overlay opened with no masters misses it; one opened with masters
+    /// finds it. Live-verified against this exact scenario on a real host:
+    /// `guru`'s own `gui-apps/1password` didn't list `gui-apps` in
+    /// `guru/profiles/categories` at all.
     #[test]
     fn find_cpns_with_masters_finds_a_category_only_the_master_lists() {
         let master_dir = tempfile::tempdir().unwrap();
@@ -1477,7 +1473,11 @@ mod tests {
             overlay.find_cpns("1password").is_empty(),
             "plain find_cpns must not see an unlisted category"
         );
-        let cpns = overlay.find_cpns_with_masters("1password", std::slice::from_ref(&master));
+        let overlay_with_master = Repository {
+            masters: vec![master],
+            ..overlay
+        };
+        let cpns = overlay_with_master.find_cpns("1password");
         assert_eq!(cpns.len(), 1);
         assert_eq!(cpns[0].category.as_ref(), "gui-apps");
         assert_eq!(cpns[0].package.as_ref(), "1password");

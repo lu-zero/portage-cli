@@ -92,12 +92,11 @@ pub struct RegenItem {
 ///         /* progress / errors */
 ///     }
 /// });
-/// let stats = regen_cache(repo, masters, ebuilds, &opts, tx).await?;
+/// let stats = regen_cache(repo, ebuilds, &opts, tx).await?;
 /// ui.await?;
 /// ```
 pub async fn regen_cache(
     repo: &Repository,
-    masters: &[Repository],
     ebuilds: Vec<Ebuild>,
     opts: &RegenOpts,
     out: flume::Sender<RegenItem>,
@@ -170,7 +169,6 @@ pub async fn regen_cache(
 
     crate::source::source_parallel_join(
         repo,
-        masters,
         ebuilds,
         &opts.source,
         &ctx,

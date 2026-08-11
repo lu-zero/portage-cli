@@ -71,7 +71,7 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| default_repos_dir(cli));
-    let (repo, masters) = crate::repo_open::open_with_masters(repo_target.clone(), &repos_dir)
+    let repo = crate::repo_open::open_with_masters(repo_target.clone(), &repos_dir)
         .context("open repo")?;
 
     check_layout(&opts.distfiles)?;
@@ -87,14 +87,7 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("loading thirdpartymirrors")?;
 
-    let plan = build_plan(
-        &repo,
-        &masters,
-        &resolver,
-        opts.jobs,
-        opts.gentoo_mirrors_fallback,
-    )
-    .await?;
+    let plan = build_plan(&repo, &resolver, opts.jobs, opts.gentoo_mirrors_fallback).await?;
 
     let whitelist = parse_whitelist(&opts.whitelist_from)?;
     let referenced = plan.referenced();
@@ -393,20 +386,19 @@ fn decode_raw_meta(text: &str) -> portage_repo::Result<RawMeta> {
 /// [`DistfileResolver::resolve_uri_map`]), and fold every referenced
 /// package's `Manifest` into one combined [`DistDigests`] index.
 ///
-/// `ebuilds_with_masters(masters)` only ever walks `repo`'s own tree (masters
-/// widen its *category* filter, not the file walk itself — verified in
-/// `Repository::ebuilds_with_masters`'s own implementation) — so every
-/// ebuild here, and every Manifest it needs, belongs to this one `repo`;
-/// no cross-repo Manifest keying is needed.
+/// `ebuilds()` only ever walks `repo`'s own tree (masters widen its
+/// *category* filter, not the file walk itself — verified in
+/// `Repository::ebuilds`'s own implementation) — so every ebuild here, and
+/// every Manifest it needs, belongs to this one `repo`; no cross-repo
+/// Manifest keying is needed.
 async fn build_plan(
     repo: &Repository,
-    masters: &[Repository],
     resolver: &DistfileResolver,
     jobs: Option<usize>,
     gentoo_mirrors_fallback: bool,
 ) -> Result<MirrorPlan> {
     let ebuilds = repo
-        .ebuilds_with_masters(masters)
+        .ebuilds()
         .map_err(|e| anyhow::anyhow!("{e}"))
         .context("enumerating ebuilds")?
         .collect_vec(); // already sorted by Cpv — deterministic first-owner-wins
@@ -886,9 +878,7 @@ mod tests {
     async fn plan_for(dir: &tempfile::TempDir) -> MirrorPlan {
         let repo = open_repo(dir);
         let resolver = DistfileResolver::new(vec![], vec![]);
-        build_plan(&repo, &[], &resolver, None, false)
-            .await
-            .unwrap()
+        build_plan(&repo, &resolver, None, false).await.unwrap()
     }
 
     #[tokio::test]

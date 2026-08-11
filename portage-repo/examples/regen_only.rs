@@ -143,7 +143,7 @@ async fn main() {
     });
 
     let t0 = Instant::now();
-    let stats = match regen_cache(&repo, &[], ebuilds, &opts, tx).await {
+    let stats = match regen_cache(&repo, ebuilds, &opts, tx).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Fatal error: {e}");

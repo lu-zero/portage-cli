@@ -1495,7 +1495,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             overlays
                 .iter()
                 .find_map(|source| match source {
-                    portage_resolve::repo::RepoSource::Overlay(o, _) if o.name() == name => {
+                    portage_resolve::repo::RepoSource::Overlay(o) if o.name() == name => {
                         Some(o.path().to_owned())
                     }
                     _ => None,

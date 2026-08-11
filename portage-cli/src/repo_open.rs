@@ -15,11 +15,12 @@ pub fn open(path: impl Into<PathBuf>) -> Result<Repository> {
         .open(path)
 }
 
-/// Open a tree and its masters; same user-cache root for every repo name.
+/// Open a tree and its masters (owned by the returned `Repository`, see
+/// [`Repository::masters`]); same user-cache root for every repo name.
 pub fn open_with_masters(
     path: impl Into<PathBuf>,
     repos_dir: impl AsRef<Path>,
-) -> Result<(Repository, Vec<Repository>)> {
+) -> Result<Repository> {
     Repository::builder()
         .user_cache_root(crate::xdg::md5_cache_root())
         .open_with_masters(path, repos_dir)
@@ -80,7 +81,7 @@ pub fn overlays_from_conf(
             }
             let path = e.location.as_path()?.to_path_buf();
             match open_with_masters(path, &repos_dir) {
-                Ok((repo, masters)) => Some(RepoSource::Overlay(repo, masters)),
+                Ok(repo) => Some(RepoSource::Overlay(repo)),
                 Err(err) => {
                     crate::style::warn_line!(
                         "skipping repo '{}' at {}: {err}",

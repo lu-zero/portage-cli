@@ -108,11 +108,11 @@ pub async fn run(
 
     let mut total_errors = 0usize;
     for target in &targets {
-        let (repo, masters) =
+        let repo =
             crate::repo_open::open_with_masters(target.clone(), &repos_dir).context("open repo")?;
 
         let ebuilds: Vec<_> = repo
-            .ebuilds_with_masters(&masters)
+            .ebuilds()
             .context("list ebuilds")?
             .into_iter()
             .collect();
@@ -165,7 +165,7 @@ pub async fn run(
             }
         });
 
-        let stats = regen_cache(&repo, &masters, ebuilds, &opts, tx)
+        let stats = regen_cache(&repo, ebuilds, &opts, tx)
             .await
             .context("regen")?;
         // `tx` dropped inside regen_cache → rx disconnects → ui finishes.
