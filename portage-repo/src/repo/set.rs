@@ -128,12 +128,53 @@ impl RepoSet {
     /// what makes that a property of the type rather than of each caller —
     /// and keeps `--ask`'s numbered candidate list stable across runs, the
     /// contract `Repository::find_cpns` already holds per repo.
+    ///
+    /// For a **bare** name, this also synthesises virtual [`Location::Alias`]
+    /// repos (e.g. crossdev's `cross-<tuple>`): each alias whose source is the
+    /// main repo contributes a `Cpn::new(dest_cat, name)` for every
+    /// destination category it lists — the same synthesis `load_repos` (in
+    /// `portage-resolve`) applies when building `RepoData`, so a bare name
+    /// resolves to the same cross cpn a full `cross-<tuple>/<pkg>` atom would.
+    /// Without this, a crossdev alias for `gcc` was invisible to bare-name
+    /// resolution even though `cross-.../gcc` resolved fine.
+    ///
+    /// [`Location::Alias`]: super::repos_conf::Location::Alias
     pub fn find_cpns(&self, pattern: &str) -> Vec<Cpn> {
         let mut found: BTreeSet<Cpn> = BTreeSet::new();
         for repo in self.iter() {
             found.extend(repo.find_cpns(pattern));
         }
+        // Bare names only: a `cat/pkg` pattern either parsed to a real repo
+        // above or doesn't exist, and an alias never widens a full atom.
+        if pattern.find('/').is_none() {
+            found.extend(self.alias_cpns_for_bare_name(pattern));
+        }
         found.into_iter().collect()
+    }
+
+    /// The virtual cpns an alias repo contributes for a bare `name`: for each
+    /// alias whose source is the main repo, one `Cpn::new(dest_cat, name)` per
+    /// destination category that aliases a source cpn whose package matches.
+    fn alias_cpns_for_bare_name(&self, name: &str) -> BTreeSet<Cpn> {
+        let main_name = self.main().name();
+        let mut out: BTreeSet<Cpn> = BTreeSet::new();
+        for entry in &self.aliases {
+            let super::repos_conf::Location::Alias { source, aliases } = &entry.location else {
+                continue;
+            };
+            if source != main_name {
+                continue;
+            }
+            for (dest_cat, source_cpns) in aliases {
+                // Only when some aliased source package's *package* part
+                // matches — matches `load_repos`'s `Cpn::new(dest_cat,
+                // source_cpn.package)` synthesis exactly.
+                if source_cpns.iter().any(|cpn| cpn.package.as_ref() == name) {
+                    out.insert(Cpn::new(dest_cat, name));
+                }
+            }
+        }
+        out
     }
 
     /// Every ebuild in the set, in priority order, **shadowed by cpv**: at
@@ -412,6 +453,104 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["app-misc/bar", "sys-apps/foo"]);
+    }
+
+    /// A bare name that matches a [`Location::Alias`] repo's source package
+    /// resolves to the synthesised cross cpn (`cross-<tuple>/<pkg>`), matching
+    /// what `load_repos` injects into `RepoData` — previously `find_cpns`
+    /// ignored aliases entirely, so a crossdev alias for e.g. `gcc` was
+    /// invisible to bare-name resolution even though `cross-.../gcc` resolved
+    /// fine as a full atom. Only aliases whose source is the main repo are
+    /// considered (the same gate `load_repos` applies).
+    #[test]
+    fn find_cpns_synthesises_alias_cross_cpns_for_a_bare_name() {
+        use std::collections::{HashMap, HashSet};
+
+        let main_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(main_dir.path().join("sys-devel").join("gcc")).unwrap();
+        let main = make_repo(&main_dir, &["sys-devel"]);
+
+        let real_cpn = Cpn::parse("sys-devel/gcc").unwrap();
+        let cross_cat = "cross-riscv64-unknown-linux-gnu";
+        let mut aliases: HashMap<String, HashSet<Cpn>> = HashMap::new();
+        aliases.insert(cross_cat.to_string(), [real_cpn].into_iter().collect());
+        let alias_entry = super::super::repos_conf::RepoEntry {
+            name: "crossdev".into(),
+            location: super::super::repos_conf::Location::Alias {
+                source: main.name().to_string(),
+                aliases,
+            },
+            masters: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            auto_sync: false,
+            volatile: None,
+            priority: None,
+        };
+
+        let mut set = RepoSet::single(main);
+        set.set_aliases(vec![alias_entry]);
+
+        let found: Vec<String> = set
+            .find_cpns("gcc")
+            .into_iter()
+            .map(|c| c.to_string())
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                "cross-riscv64-unknown-linux-gnu/gcc".to_string(),
+                "sys-devel/gcc".to_string(),
+            ],
+            "bare name must resolve to both the real cpn and the alias's cross cpn"
+        );
+    }
+
+    /// An alias whose source is *not* the main repo is not synthesised — the
+    /// same gate `load_repos` applies (it can't disambiguate a same-named cpn
+    /// coming from a non-main source). The bare name still resolves against
+    /// real repos only.
+    #[test]
+    fn find_cpns_ignores_an_alias_whose_source_is_not_main() {
+        use std::collections::{HashMap, HashSet};
+
+        let main_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(main_dir.path().join("sys-devel").join("gcc")).unwrap();
+        let main = make_repo(&main_dir, &["sys-devel"]);
+
+        let real_cpn = Cpn::parse("sys-devel/gcc").unwrap();
+        let mut aliases: HashMap<String, HashSet<Cpn>> = HashMap::new();
+        aliases.insert(
+            "cross-riscv64-unknown-linux-gnu".to_string(),
+            [real_cpn].into_iter().collect(),
+        );
+        let alias_entry = super::super::repos_conf::RepoEntry {
+            name: "crossdev".into(),
+            location: super::super::repos_conf::Location::Alias {
+                source: "some-other-repo".to_string(),
+                aliases,
+            },
+            masters: Vec::new(),
+            sync_type: None,
+            sync_uri: None,
+            auto_sync: false,
+            volatile: None,
+            priority: None,
+        };
+
+        let mut set = RepoSet::single(main);
+        set.set_aliases(vec![alias_entry]);
+
+        let found: Vec<String> = set
+            .find_cpns("gcc")
+            .into_iter()
+            .map(|c| c.to_string())
+            .collect();
+        assert_eq!(
+            found,
+            vec!["sys-devel/gcc".to_string()],
+            "a non-main-sourced alias must not synthesise a cross cpn"
+        );
     }
 
     #[test]
