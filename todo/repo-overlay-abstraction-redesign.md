@@ -1,30 +1,48 @@
 # Repo/overlay abstraction redesign
 
-**Current pin:** `master` @ `684ad7a`
+**Current pin:** `master` @ `7a354eb`
 
-**Post-landing benchmark finding (2026-08-11):** `em depends`/`which`
-(step 4) are measurably slower than before this redesign — on this host,
-`query which`/`query depends` +16-21% (real: ~+33ms / ~+155ms). Root
-cause, isolated via `--repo`-scoped hyperfine runs against each configured
-repo individually: `which.rs`/`depends.rs` call `RepoSet::ebuilds()`, a
-**raw `jwalk` of every repo's ebuild files** — it shares none of
-`repo_entries()`'s cache-freshness memoization (that machinery is only on
-the metadata-*cache*-loading side, used by `resolve`/`load_repos`). Adding
-overlays means walking more files (~12% more on this host: `guru`
-3717 + `crossdev` 281 + `exp-llvm-libc` 3, alongside `gentoo`'s 32636),
-and `depends` additionally does a per-file `Repository::cache_entry()`
-read for all of them, not just main's. This is the direct, proportional,
-*expected* cost of "scan every repo instead of just main" — not a bug,
-just not quantified until benchmarked post-landing. Two real (but
-tangential) perf bugs were found and fixed along the way and do **not**
-resolve this: `ed05e1b`'s follow-up `1a01a0f` (EbuildsAcross's dedup
-`HashSet` was paying a clone+hash+insert per ebuild even for a
-single-repo set) and `684ad7a` (repo_entries' bulk read never consulted
-the secondary/durable cache, only the in-tree one — real gap, but
-`which`/`depends` don't call `repo_entries` at all, so it doesn't touch
-this specific regression). **Open, undecided:** accept this as the cost
-of step 4's feature, or give `which`/`depends` the same cache-based fast
-path `repo_entries()` already has instead of a raw ebuild-file walk.
+**Post-landing perf investigation, resolved (2026-08-11).** `em depends`/
+`which` (step 4) measured slower than before this redesign after landing
+(+16-21%). Root cause: both called `RepoSet::ebuilds()`, a raw `jwalk` of
+every repo's ebuild files, sharing none of `repo_entries()`'s cache-
+freshness memoization (that machinery lived only on the metadata-cache-
+loading side, used by `resolve`/`load_repos`) — scanning every configured
+repo instead of just main cost proportionally more file-walk work.
+
+Two small, genuinely-unrelated perf bugs were found and fixed along the
+way (`1a01a0f`: `EbuildsAcross`'s dedup `HashSet` paid a clone+hash+insert
+per ebuild even for a single-repo set; `684ad7a`: `repo_entries`'s bulk
+read never consulted the secondary/durable cache, only the in-tree one) —
+neither touches `which`/`depends` at all, since neither called
+`repo_entries` in the first place.
+
+The fix landed in `7a354eb`, and it is **not** "give both the same fast
+path" — that was tried and measured to be wrong for one of the two.
+`RepoSet::entries()` (a lazy `Stream`, `futures_util::stream::unfold`,
+backed by `portage_repo::repo_entries` per repo — bulk read + per-entry
+suspect narrowing + secondary fallback + live-source fallback + the
+sync-stamp/gap-index memo) is the *metadata* fast path `resolve`/
+`load_repos` already had. `depends` switched to it and got faster
+(~601ms vs ~1022-1177ms — needs every entry's DEPEND tree anyway, and
+the parallelized bulk parse beats the old per-file sequential
+`cache_entry()` calls). `which` was switched to it too, measured
+**~531ms — dramatically worse** than its pre-redesign ~154ms, and
+reverted: `which` only ever needs a cpv and a file path (version
+comparison reads straight from the ebuild filename), never cache
+*content* — `repo_entries`'s "warm path" memo only skips the ebuild-mtime
+suspect walk, not the bulk read-and-parse of every cache file in the
+repo, so routing a metadata-free query through it means paying a full
+parse of ~36k files for data the command never looks at. `which` stayed
+on the raw `ebuilds()` walk, which was already correct for its needs (and
+already fast, once `1a01a0f`'s dedup fix landed).
+
+Net result: `which` ~194ms (back to its original fast baseline, within
+noise), `depends` ~601ms (~2x faster than pre-redesign, not just back to
+baseline) — both confirmed via `Repository::ebuild_for_cpv` (a new,
+walk-free cpv→path lookup: three stats, not a directory scan) plus
+correctness checks against the real repo set (`guru`, `crossdev`,
+`exp-llvm-libc`, `gentoo`) on this host.
 
 **Status: implemented and landed (2026-08-11).** Steps 1-4 of the Opus
 plan below are done, each its own commit, tests passing, live-verified
@@ -41,6 +59,12 @@ against the real repo set on this host (including `guru`):
 - `e12cf3e` refactor(query): migrate the repo+overlays call chain to
   RepoSet, delete RepoSource (step 3)
 - `169d445` feat(query): em depends/which now see overlay packages (step 4)
+- `1a01a0f` perf(repo): skip EbuildsAcross's dedup HashSet for a
+  single-repo set (post-landing perf follow-up)
+- `684ad7a` perf(repo): fold the secondary cache into repo_entries' bulk
+  read (post-landing perf follow-up)
+- `7a354eb` perf(query): give em depends the memoized metadata fast path,
+  not em which (post-landing perf follow-up — see the finding above)
 
 **Not done — explicit follow-ups, out of scope for this pass** (plan §5,
 steps 5-6): `DepgraphOpts { repos: &RepoSet }` replacing `repo_path` +
