@@ -11,29 +11,9 @@ pub fn run(
     mode: super::ResolveMode,
     atoms: &[String],
 ) -> Result<()> {
-    // No overlay search here: `set.main()` only — resolving an atom against
-    // set as a whole (via resolve_atom below) can already succeed for an
-    // overlay-only package, but scanning overlay ebuilds for reverse deps
-    // is a separate gap, not fixed here.
-    let repo = set.main();
-
     for raw in atoms {
         let target = super::resolve_atom(set, vdb, mode, raw)?;
-
-        let mut matches: BTreeSet<String> = BTreeSet::new();
-
-        for ebuild in repo.ebuilds()? {
-            let cpv = ebuild.cpv();
-            let Ok(Some(entry)) = repo.cache_entry(cpv) else {
-                continue;
-            };
-            let m = &entry.metadata;
-            let dep_trees = [&m.depend, &m.rdepend, &m.bdepend, &m.pdepend, &m.idepend];
-
-            if dep_trees.iter().any(|tree| tree_contains(&target, tree)) {
-                matches.insert(cpv.cpn.to_string());
-            }
-        }
+        let matches = reverse_deps(set, &target)?;
 
         if atoms.len() > 1 {
             println!("[{raw}]");
@@ -43,6 +23,25 @@ pub fn run(
         }
     }
     Ok(())
+}
+
+/// Every cpn across `set` (every repo, not just main) whose DEPEND/RDEPEND/
+/// BDEPEND/PDEPEND/IDEPEND names `target`.
+fn reverse_deps(set: &RepoSet, target: &Dep) -> Result<BTreeSet<String>> {
+    let mut matches: BTreeSet<String> = BTreeSet::new();
+    for item in set.ebuilds()? {
+        let cpv = item.ebuild.cpv();
+        let Ok(Some(entry)) = item.repo.cache_entry(cpv) else {
+            continue;
+        };
+        let m = &entry.metadata;
+        let dep_trees = [&m.depend, &m.rdepend, &m.bdepend, &m.pdepend, &m.idepend];
+
+        if dep_trees.iter().any(|tree| tree_contains(target, tree)) {
+            matches.insert(cpv.cpn.to_string());
+        }
+    }
+    Ok(matches)
 }
 
 fn tree_contains(target: &Dep, entries: &[DepEntry]) -> bool {
@@ -57,5 +56,85 @@ fn entry_matches(target: &Dep, entry: &DepEntry) -> bool {
         | DepEntry::AnyOf(children)
         | DepEntry::ExactlyOneOf(children)
         | DepEntry::AtMostOneOf(children) => tree_contains(target, children),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use std::sync::Arc;
+
+    use portage_repo::{RepoSet, Repository};
+
+    use super::*;
+
+    /// A repo with one package, whose cache entry's RDEPEND names `rdepend_on`
+    /// (e.g. `"sys-apps/foo"`), or no RDEPEND at all when `None`.
+    fn make_repo(
+        dir: &tempfile::TempDir,
+        cat: &str,
+        pkg: &str,
+        ver: &str,
+        rdepend_on: Option<&str>,
+    ) -> Repository {
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles").join("categories"), cat).unwrap();
+        let pkg_dir = dir.path().join(cat).join(pkg);
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join(format!("{pkg}-{ver}.ebuild")),
+            "EAPI=8\nSLOT=0\n",
+        )
+        .unwrap();
+
+        let cache_dir = dir.path().join("metadata").join("md5-cache").join(cat);
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let rdepend = rdepend_on.unwrap_or("");
+        std::fs::write(
+            cache_dir.join(format!("{pkg}-{ver}")),
+            format!("EAPI=8\nDESCRIPTION=t\nSLOT=0\nRDEPEND={rdepend}\n"),
+        )
+        .unwrap();
+
+        Repository::builder()
+            .in_memory_cache()
+            .open(dir.path())
+            .unwrap()
+    }
+
+    /// Before `depends::run` scanned `set.ebuilds()` (every repo) instead of
+    /// just `set.main()`, a reverse-dependency living only in an overlay
+    /// (guru, crossdev, a local overlay) was invisible to `em query depends`.
+    #[test]
+    fn finds_a_reverse_dependency_that_lives_only_in_an_overlay() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let overlay_dir = tempfile::tempdir().unwrap();
+        let main = make_repo(&main_dir, "sys-apps", "foo", "1.0", None);
+        let overlay = make_repo(&overlay_dir, "app-misc", "bar", "2.0", Some("sys-apps/foo"));
+
+        let set = RepoSet::from_ordered(vec![Arc::new(main), Arc::new(overlay)], 0, Vec::new());
+
+        let target = Dep::from_str("sys-apps/foo").unwrap();
+        let matches = reverse_deps(&set, &target).unwrap();
+        assert!(
+            matches.contains("app-misc/bar"),
+            "overlay-only reverse dependency must be found: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn a_package_with_no_matching_dependents_finds_nothing() {
+        let main_dir = tempfile::tempdir().unwrap();
+        let overlay_dir = tempfile::tempdir().unwrap();
+        let main = make_repo(&main_dir, "sys-apps", "foo", "1.0", None);
+        let overlay = make_repo(&overlay_dir, "app-misc", "bar", "2.0", None);
+
+        let set = RepoSet::from_ordered(vec![Arc::new(main), Arc::new(overlay)], 0, Vec::new());
+
+        let target = Dep::from_str("sys-apps/foo").unwrap();
+        let matches = reverse_deps(&set, &target).unwrap();
+        assert!(matches.is_empty());
     }
 }
