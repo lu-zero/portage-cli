@@ -1,0 +1,68 @@
+# hyperfine A/B: depgraph RepoSet threading, 2026-08-11
+#
+# baseline: 7dbe9fc (pre-19d8fe8, depgraph rebuilt the RepoSet internally)
+# current:  d47b763 (post-19d8fe8 + 41636c4 alias find_cpns + README sync)
+# both: --profile quick, real host repo (gentoo + guru + crossdev)
+# host: load avg 4-7 during the run (contended — see README)
+
+$ hyperfine --warmup 2 --runs 10 -i \
+    -n "firefox-baseline" "<baseline>/em -p www-client/firefox" \
+    -n "firefox-current"  "<current>/em  -p www-client/firefox" \
+    -n "gcc-baseline"     "<baseline>/em -p sys-devel/gcc" \
+    -n "gcc-current"      "<current>/em  -p sys-devel/gcc" \
+    -n "openssh-baseline" "<baseline>/em -p net-misc/openssh" \
+    -n "openssh-current"  "<current>/em  -p net-misc/openssh"
+
+Benchmark 1: firefox-baseline
+  Time (mean ± σ):      1.426 s ±  0.104 s    [User: 2.496 s, System: 26.240 s]
+  Range (min … max):    1.293 s …  1.603 s    10 runs
+
+  Warning: Ignoring non-zero exit code.
+
+Benchmark 2: firefox-current
+  Time (mean ± σ):      1.487 s ±  0.130 s    [User: 2.487 s, System: 27.261 s]
+  Range (min … max):    1.229 s …  1.652 s    10 runs
+
+  Warning: Ignoring non-zero exit code.
+
+Benchmark 3: gcc-baseline
+  Time (mean ± σ):      1.245 s ±  0.101 s    [User: 2.429 s, System: 24.298 s]
+  Range (min … max):    1.072 s …  1.391 s    10 runs
+
+Benchmark 4: gcc-current
+  Time (mean ± σ):      1.331 s ±  0.130 s    [User: 2.395 s, System: 31.989 s]
+  Range (min … max):    1.111 s …  1.559 s    10 runs
+
+Benchmark 5: openssh-baseline
+  Time (mean ± σ):      1.272 s ±  0.109 s    [User: 2.546 s, System: 27.107 s]
+  Range (min … max):    1.105 s …  1.483 s    10 runs
+
+Benchmark 6: openssh-current
+  Time (mean ± σ):      1.213 s ±  0.071 s    [User: 2.469 s, System: 25.046 s]
+  Range (min … max):    1.098 s …  1.333 s    10 runs
+
+Summary
+  openssh-current ran
+    1.03 ± 0.10 times faster than gcc-baseline
+    1.05 ± 0.11 times faster than openssh-baseline
+    1.10 ± 0.12 times faster than gcc-current
+    1.18 ± 0.11 times faster than firefox-baseline
+    1.23 ± 0.13 times faster than firefox-current
+
+# --- focused gcc re-run, more warmup/runs to fight contention ---
+
+$ hyperfine --warmup 5 --runs 15 -i \
+    -n "gcc-baseline" "<baseline>/em -p sys-devel/gcc" \
+    -n "gcc-current"  "<current>/em  -p sys-devel/gcc"
+
+Benchmark 1: gcc-baseline
+  Time (mean ± σ):      1.270 s ±  0.099 s    [User: 2.489 s, System: 26.345 s]
+  Range (min … max):    1.067 s …  1.419 s    15 runs
+
+Benchmark 2: gcc-current
+  Time (mean ± σ):      1.284 s ±  0.107 s    [User: 2.576 s, System: 22.164 s]
+  Range (min … max):    1.094 s …  1.466 s    15 runs
+
+Summary
+  gcc-baseline ran
+    1.01 ± 0.12 times faster than gcc-current

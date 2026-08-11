@@ -1,0 +1,17 @@
+# strace: Repository::open count per merge, 2026-08-11
+#
+# baseline: 7dbe9fc (pre-19d8fe8)   current: d47b763 (post-19d8fe8)
+# proxy: opens of each repo's repo_name/layout.conf (1 per Repository::open)
+# cmd: strace -f -e trace=openat em -p sys-devel/gcc
+
+==================== BASELINE (7dbe9fc) ====================
+gentoo repo_name opens:    8
+gentoo layout.conf opens:  8
+guru layout.conf opens:    2
+crossdev layout.conf opens:2
+
+==================== CURRENT (d47b763) ====================
+gentoo repo_name opens:    4
+gentoo layout.conf opens:  4
+guru layout.conf opens:    1
+crossdev layout.conf opens:1
