@@ -191,6 +191,8 @@ pub struct EbuildsAcross<'a> {
     set: &'a RepoSet,
     index: usize,
     current: Option<EbuildsIter>,
+    /// Stays empty (and unconsulted — see `next`) for a single-repo set: no
+    /// cpv can possibly repeat there, so there's nothing to dedupe against.
     seen: HashSet<Cpv>,
 }
 
@@ -224,7 +226,7 @@ impl<'a> Iterator for EbuildsAcross<'a> {
             let current = self.current.as_mut()?;
             match current.next() {
                 Some(ebuild) => {
-                    if self.seen.insert(ebuild.cpv().clone()) {
+                    if !self.set.is_multi() || self.seen.insert(ebuild.cpv().clone()) {
                         let repo = self.set.get(self.index);
                         let index = self.index;
                         return Some(EbuildIn {
