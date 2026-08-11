@@ -436,6 +436,22 @@ impl Repository {
         self.secondary_dir.as_ref().map(|d| d.join(name))
     }
 
+    /// Whether this tree carries a sync marker (`metadata/timestamp.chk`)
+    /// that gets rewritten whenever the tree's content is replaced wholesale
+    /// by a sync — the main repo and any git/rsync-synced overlay (e.g.
+    /// `guru`) have one; a hand-made local overlay or a symlink overlay like
+    /// `crossdev` does not.
+    ///
+    /// Only when this is `true` is [`Self::sync_stamp`] strong enough to
+    /// memoise a derived index against: without `timestamp.chk`, the stamp
+    /// falls back to the repo root directory's mtime, which does not move
+    /// when an ebuild is edited in place and *can* move for unrelated
+    /// reasons (a new category directory) — invariants a hand-maintained
+    /// overlay routinely violates, but a sync-managed tree does not.
+    pub fn has_sync_marker(&self) -> bool {
+        self.path.join("metadata").join("timestamp.chk").is_file()
+    }
+
     /// A cheap stamp that changes when the tree is synced.
     ///
     /// `metadata/timestamp.chk` is what rsync rewrites on every sync, and a git
@@ -1271,6 +1287,16 @@ mod tests {
         let entries: Vec<_> = repo.cache_entries().into_iter().collect();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].1.is_err());
+    }
+
+    #[test]
+    fn has_sync_marker_reflects_timestamp_chk() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        assert!(!repo.has_sync_marker(), "no timestamp.chk written yet");
+
+        std::fs::write(dir.path().join("metadata").join("timestamp.chk"), "1\n").unwrap();
+        assert!(repo.has_sync_marker());
     }
 
     #[test]

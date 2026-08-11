@@ -86,8 +86,13 @@ pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let index = repo.sidecar_path(GAP_INDEX);
 
     // Unchanged tree: the suspects are known, and their entries are already in
-    // the secondary store from the run that discovered them.
-    if let (Some(stamp), Some(index)) = (&stamp, &index)
+    // the secondary store from the run that discovered them. Gated on
+    // `has_sync_marker`: without a rewritten-on-sync timestamp.chk, `stamp`
+    // degrades to the repo root directory's mtime, which is invariant under
+    // exactly the in-place edits a hand-maintained overlay gets — trusting
+    // the memo there would pin it on a stale answer forever.
+    if repo.has_sync_marker()
+        && let (Some(stamp), Some(index)) = (&stamp, &index)
         && let Some(cpvs) = read_gap_index(index, stamp)
     {
         let opts = CacheReadOpts::default();
@@ -192,8 +197,12 @@ pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     // Index only what the in-tree cache cannot serve: absent, or serving a
     // different build than the ebuild on disk. A suspect that merely looked new
     // and validated fine stays with the bulk read, so the warm path does not
-    // fetch it from the secondary store for nothing.
-    if let (Some(stamp), Some(index)) = (&stamp, &index) {
+    // fetch it from the secondary store for nothing. Same `has_sync_marker`
+    // gate as the read above — no point writing a sidecar this repo can
+    // never safely consult.
+    if repo.has_sync_marker()
+        && let (Some(stamp), Some(index)) = (&stamp, &index)
+    {
         let unserved = gap
             .iter()
             .filter(|(cpv, e)| match before.get(cpv) {
@@ -461,6 +470,80 @@ mod tests {
         assert_eq!(
             entries[0].1.metadata.description, "new",
             "per-entry suspect rule must catch a hand-edit a repo-wide sync marker misses"
+        );
+    }
+
+    /// Regression for the `has_sync_marker` gate. Trusting the gap-index
+    /// memo skips the ebuild-mtime suspect walk entirely and returns
+    /// straight from the bulk cache read — correct only when the memo's
+    /// stamp can actually be trusted to track content, which is exactly
+    /// what a `timestamp.chk`-less repo cannot promise: a hand-edit changes
+    /// neither the (absent) `timestamp.chk` nor the repo root directory's
+    /// own mtime, so a forged-but-stamp-matching sidecar could otherwise
+    /// serve a stale cache entry forever.
+    #[tokio::test]
+    async fn a_repo_without_a_sync_marker_never_trusts_a_forged_gap_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles").join("categories"), "sys-apps\n").unwrap();
+
+        let repo = Repository::builder()
+            .user_cache_root(
+                camino::Utf8PathBuf::from_path_buf(cache_root.path().to_owned()).unwrap(),
+            )
+            .open(dir.path())
+            .unwrap();
+        assert!(!repo.has_sync_marker(), "no timestamp.chk written");
+
+        let pkg_dir = dir.path().join("sys-apps").join("foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("foo-1.0.ebuild");
+        let old_text = "EAPI=8\nDESCRIPTION=\"old\"\nSLOT=\"0\"\n";
+        std::fs::write(&ebuild_path, old_text).unwrap();
+        let old_digest = format!("{:x}", md5::compute(old_text.as_bytes()));
+
+        let cache_dir = dir
+            .path()
+            .join("metadata")
+            .join("md5-cache")
+            .join("sys-apps");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache_file = cache_dir.join("foo-1.0");
+        std::fs::write(
+            &cache_file,
+            format!("EAPI=8\nDESCRIPTION=old\nSLOT=0\n_md5_={old_digest}\n"),
+        )
+        .unwrap();
+
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        set_mtime(&cache_file, base);
+        set_mtime(&ebuild_path, base);
+
+        // Forge a "nothing is a gap" sidecar keyed on the repo's *current*
+        // sync_stamp — a real one would only ever get written by
+        // `has_sync_marker`-gated code, but the forgery stands in for
+        // whatever stale state a prior, differently-gated run left behind.
+        let stamp = repo.sync_stamp().expect("repo root dir always has a stamp");
+        let sidecar = repo.sidecar_path(GAP_INDEX).expect("durable secondary");
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, format!("{stamp}\n")).unwrap();
+
+        // Hand-edit: content changes and the ebuild's own mtime moves past
+        // its cache file's — but nothing touches the (absent) timestamp.chk
+        // or the repo root directory's own mtime, so the forged sidecar's
+        // stamp still matches.
+        std::fs::write(&ebuild_path, "EAPI=8\nDESCRIPTION=\"new\"\nSLOT=\"0\"\n").unwrap();
+        set_mtime(&ebuild_path, base + Duration::from_secs(60));
+        assert_eq!(repo.sync_stamp().as_deref(), Some(stamp.as_str()));
+
+        let entries = primary_entries(&repo).await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].1.metadata.description, "new",
+            "trusting the forged sidecar would have skipped the suspect walk and served \"old\""
         );
     }
 }
