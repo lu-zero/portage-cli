@@ -375,15 +375,26 @@ async fn emerge_atoms_inner(
     // top-level invocation (`update_world`), and only the literal,
     // explicitly-named atoms (not `@set` refs — world_sets tracking isn't
     // implemented yet).
-    // Skipped entirely for the same flag set real portage skips it for.
-    let should_update_world = update_world
-        && !cli.pretend
-        && !merge_flags.oneshot
+    //
+    // Computed once, under the *display* gate — real emerge's
+    // `check_system_world` suppresses "would be added to world" bolding for
+    // `--oneshot` alone, so a `-p` preview still bolds what a real run would
+    // record (see `DepgraphOpts::world_additions`). `select_world_atoms`
+    // warns on unparsable atoms, so it must not run twice.
+    let world_additions: Vec<portage_atom::Dep> = if update_world && !merge_flags.oneshot {
+        select_world_atoms(&atoms)
+    } else {
+        Vec::new()
+    };
+    // What actually gets written to the world file after a successful merge
+    // is narrower still: skipped for the same extra flag set real portage
+    // skips the write for, `--pretend` included.
+    let world_atoms: Vec<portage_atom::Dep> = if !cli.pretend
         && !merge_flags.buildpkgonly
         && !merge_flags.fetchonly
-        && !merge_flags.onlydeps;
-    let world_atoms: Vec<portage_atom::Dep> = if should_update_world {
-        select_world_atoms(&atoms)
+        && !merge_flags.onlydeps
+    {
+        world_additions.clone()
     } else {
         Vec::new()
     };
@@ -406,6 +417,7 @@ async fn emerge_atoms_inner(
     let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
         set,
         atoms: &atoms,
+        world_additions: &world_additions,
         arch: &cli.arch,
         format,
         verbose: cli.verbose,

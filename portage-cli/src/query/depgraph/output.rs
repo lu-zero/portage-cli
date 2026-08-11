@@ -1327,17 +1327,20 @@ pub(super) struct PrettyCtx<'a> {
     /// line we surface. PubGrub 0.4 doesn't expose a backtrack count, so we
     /// omit the `(backtrack: N/M)` suffix real portage appends.
     pub resolve_secs: f64,
-    /// Packages explicitly named on the command line (or expanded from an
-    /// explicitly named `@set`) — `mod.rs`'s `root_pkgs`. Bolds a row's
-    /// merge/nomerge color (`_SELECTED`): unlike real emerge's own
-    /// `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`, this is *not* gated on actual
-    /// `@world` persistence (that needs a `ProfileStack`/`SetResolver`
-    /// `depgraph()` doesn't have handy, and would leave e.g. a fresh, not-
-    /// yet-installed explicit target looking identical to a transitive
-    /// dependency) — every explicitly requested package is bolded
-    /// unconditionally, whether it's a new install, a reinstall, or already
-    /// tracked in `@world`.
-    pub selected: &'a std::collections::HashSet<PortagePackage>,
+    /// The cpns whose rows are bold (`*_SELECTED`), matching real emerge's
+    /// `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/`PKG_BINARY_MERGE_WORLD` and
+    /// built by `mod.rs` from both halves of its
+    /// `resolver/output.py::check_system_world` gate: `@selected` membership
+    /// (already tracked in the world file) ∪ the atoms *this* run would add
+    /// to it (`DepgraphOpts::world_additions`, empty under `--oneshot` and
+    /// for read-only callers).
+    ///
+    /// So `em -p newpkg` bolds `newpkg` — the run would record it — while
+    /// `em -1p newpkg` renders it plain, and an already-tracked package
+    /// stays bold under `-1` either way. `@set`-expanded targets are bold
+    /// only if their cpns are individually in `@selected`: emerge's
+    /// `favorites` half covers literal command-line atoms only.
+    pub selected: &'a std::collections::HashSet<portage_atom::Cpn>,
 }
 
 /// Print the emerge-style pretty plan, honouring each entry's
@@ -1531,7 +1534,7 @@ fn format_plan_parts(
     // treatment; the bracket word used the fixed `C_BRACKET` blue
     // regardless, so a nomerge row's `[nomerge ...]` didn't visually match
     // its own (correctly teal) package name.
-    let is_selected = selected.contains(pkg);
+    let is_selected = selected.contains(pkg.cpn());
     let name_color = match (in_plan, is_binary, is_selected) {
         (false, _, false) => C_PKG_NOMERGE,
         (false, _, true) => C_PKG_NOMERGE_SELECTED,

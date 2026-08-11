@@ -385,6 +385,10 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
                 set,
                 atoms: &atoms,
+                // Read-only query: it never records anything in the world
+                // file, so only literal `@selected` membership bolds a row —
+                // exactly how a `--oneshot` merge renders.
+                world_additions: &[],
                 arch: &globals.arch,
                 format: *format,
                 verbose: globals.verbose,

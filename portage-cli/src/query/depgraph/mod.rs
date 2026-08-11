@@ -107,6 +107,20 @@ pub struct DepgraphOpts<'a> {
     /// The root targets, each carrying the provenance that decides whether an
     /// unsatisfiable one aborts the run or just warns (see [`TargetOrigin`]).
     pub atoms: &'a [TargetAtom],
+    /// The atoms this invocation would record in the world file, i.e. real
+    /// emerge's `favorites` ∩ `create_world_atom` — `emerge.rs`'s
+    /// `select_world_atoms` output, gated on `--oneshot` *only*. Bolds those
+    /// rows on top of the ones already in `@selected`, which is the second
+    /// half of `resolver/output.py::check_system_world`: a plain
+    /// `em -p newpkg` bolds `newpkg` because dropping the `-p` would add it
+    /// to world, while `em -1p newpkg` leaves it plain.
+    ///
+    /// Notably *not* gated on `--pretend` (nor `--buildpkgonly`/`--fetchonly`/
+    /// `--onlydeps`, which only suppress the on-disk write): a preview must
+    /// show what the real run would look like. Empty for callers that never
+    /// touch the world file at all (`equery depgraph`, the internal
+    /// `crossdev` gcc-version probe) — same rendering as `--oneshot`.
+    pub world_additions: &'a [Dep],
     pub arch: &'a Arch,
     pub format: DepgraphFormat,
     pub verbose: u8,
@@ -215,6 +229,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let DepgraphOpts {
         set,
         atoms,
+        world_additions,
         arch,
         format,
         verbose,
@@ -1345,7 +1360,15 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     } else {
         HashMap::new()
     };
-    let selected: HashSet<PortagePackage> = root_pkgs.iter().cloned().collect();
+    // Real emerge's `resolver/output.py::check_system_world`, both halves: a
+    // row is bold when the package is already tracked in `@selected`, *or*
+    // when this run's own targets would add it (`world_additions`, empty
+    // under `--oneshot`). `roots` and not `host_merge_root`: the world file
+    // that matters is the one a real merge would write —
+    // `maint::world::add_atoms(Some(roots.merge_root()), ..)` — the same
+    // config/eroot pair `emerge.rs::expand_sets` reads `@world` from.
+    let selected: HashSet<Cpn> =
+        crate::maint::world::selected_cpns(config_root, roots.merge_root(), world_additions);
     let pretty_ctx = output::PrettyCtx {
         data: &data,
         installed: &installed,

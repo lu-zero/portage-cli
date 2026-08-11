@@ -28,7 +28,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::{Context, Result, bail};
-use camino::Utf8Path;
 
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, Dep, DepEntry};
@@ -225,23 +224,6 @@ fn removal_order(cleanlist: &[InstalledPackage], with_bdeps: bool) -> Vec<Instal
         .collect()
 }
 
-/// Build a `SetResolver` over `config_root`'s profile and `eroot`, then
-/// resolve `@world` (`@selected ∪ @system`) — same construction
-/// `emerge.rs::expand_sets` already uses for `@set` expansion.
-fn resolve_world(config_root: Option<&Utf8Path>, eroot: &Utf8Path) -> Result<Vec<Dep>> {
-    let profile_link = config_root
-        .unwrap_or(Utf8Path::new("/"))
-        .join("etc/portage/make.profile");
-    let canon = std::fs::canonicalize(profile_link.as_std_path())
-        .with_context(|| format!("cannot resolve {profile_link} for depclean"))?;
-    let stack =
-        portage_repo::ProfileStack::build(canon).context("failed to build profile stack")?;
-    let resolver = portage_repo::SetResolver::new(&stack, eroot);
-    resolver
-        .resolve("world")
-        .context("failed to resolve @world")
-}
-
 /// `-c`/`--depclean`: mirrors `emerge.rs::unmerge_atoms`'s own structure
 /// (root/shell setup, `-p`/`--ask` gating, preserve-libs reporting) but
 /// computes its own removal list instead of taking it from the command
@@ -257,7 +239,11 @@ pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<
     let roots = cli.roots();
     let root = roots.merge_root().to_owned();
 
-    let world_atoms = resolve_world(roots.config(), &root)?;
+    // `@world` (`@selected ∪ @system`) — the seed of the required-set walk
+    // above; `@system` is part of it on purpose here, unlike the display-only
+    // `@selected` read in `query::depgraph`.
+    let world_atoms = crate::maint::world::resolve_set(roots.config(), &root, "world")
+        .context("depclean: cannot read @world")?;
     if world_atoms.is_empty() {
         bail!("@world is empty — refusing to depclean (see `man emerge`'s --depclean safety note)");
     }

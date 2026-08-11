@@ -780,6 +780,10 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         atoms: &[crate::query::depgraph::TargetAtom::explicit(
             "sys-devel/gcc",
         )],
+        // Internal probe: nothing is merged and nothing reaches the world
+        // file, so no row is bold for "would be added" (see the `ask: false`
+        // note below).
+        world_additions: &[],
         arch: &globals.arch,
         format: crate::cli::DepgraphFormat::Pretty,
         verbose: 0,

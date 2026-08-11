@@ -423,6 +423,63 @@ fn world_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     }
 }
 
+/// Build a `SetResolver` over `config_root`'s profile (for `@system`/
+/// `@profile`) and `eroot` (for `@world`/`@selected` and user sets), then
+/// resolve `name` to its flat atom list. The one place that construction
+/// lives for a *known* set name — `emerge.rs::expand_sets` does the same
+/// lazily for arbitrary `@set` refs typed on the command line, where the
+/// per-token failure handling has to differ.
+pub(crate) fn resolve_set(
+    config_root: Option<&Utf8Path>,
+    eroot: &Utf8Path,
+    name: &str,
+) -> Result<Vec<Dep>> {
+    let profile_link = config_root
+        .unwrap_or(Utf8Path::new("/"))
+        .join("etc/portage/make.profile");
+    let canon = std::fs::canonicalize(profile_link.as_std_path())
+        .with_context(|| format!("cannot resolve {profile_link}"))?;
+    let stack =
+        portage_repo::ProfileStack::build(canon).context("failed to build profile stack")?;
+    let resolver = portage_repo::SetResolver::new(&stack, eroot);
+    resolver
+        .resolve(name)
+        .with_context(|| format!("failed to resolve @{name}"))
+}
+
+/// The cpns the world file at `eroot` tracks, or is about to: `@selected`
+/// (every atom in `var/lib/portage/world` plus whatever its `world_sets`
+/// refs expand to) union `additions` — the atoms this invocation would
+/// itself record ([`add_atoms`]' input, empty when it won't record any).
+///
+/// Both halves of real emerge's `resolver/output.py::check_system_world`,
+/// which is what gates its bold `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/
+/// `PKG_BINARY_MERGE_WORLD` rows: already in `conf.selected_sets`, *or* a
+/// `favorites` (literal command-line) target of a non-`--oneshot` run that
+/// `create_world_atom` would add. Dropping the second half would render a
+/// plain `em -p newpkg` the same as `em -1p newpkg`, which real emerge does
+/// not do.
+///
+/// `@selected`, deliberately not `@world`: `@world` is `@selected ∪
+/// @system`, and real portage colours system packages with a separate
+/// `PKG_*_SYSTEM` hue `em` doesn't implement — folding it in here would bold
+/// the entire system set instead.
+///
+/// A failed resolve (no `make.profile` under a bare `--root`, an unreadable
+/// or malformed world file) contributes nothing rather than erroring: this
+/// only drives styling, and an otherwise-fine `-p` must not abort over it.
+pub(crate) fn selected_cpns(
+    config_root: Option<&Utf8Path>,
+    eroot: &Utf8Path,
+    additions: &[Dep],
+) -> HashSet<portage_atom::Cpn> {
+    let mut out: HashSet<portage_atom::Cpn> = resolve_set(config_root, eroot, "selected")
+        .map(|atoms| atoms.into_iter().map(|d| d.cpn).collect())
+        .unwrap_or_default();
+    out.extend(additions.iter().map(|d| d.cpn));
+    out
+}
+
 /// `pub(crate)`: also reused by `em --info`'s `Installed sets:` line.
 pub(crate) fn world_sets_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     match root {
@@ -553,5 +610,89 @@ mod tests {
         let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
 
         assert!(remove_atoms(Some(&root), &["not a valid atom!!!".to_owned()]).is_err());
+    }
+
+    /// A root `SetResolver` can resolve `@selected` in: any existing dir is a
+    /// valid (empty) profile, which is all `@selected` needs — it reads the
+    /// world file, not the profile.
+    fn world_root(content: &str) -> (tempfile::TempDir, Utf8PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("etc/portage/make.profile")).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), content).unwrap();
+        (tmp, root)
+    }
+
+    fn sorted(cpns: HashSet<portage_atom::Cpn>) -> Vec<String> {
+        let mut v: Vec<String> = cpns.iter().map(|c| c.to_string()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn selected_cpns_keeps_slotted_use_dep_and_ranged_entries() {
+        // Every shape `select_world_atoms` can write (it takes whatever
+        // `Dep::parse` accepts from the command line) must still be
+        // recognised as world membership — a slot/USE-dep/`>=` entry is not
+        // a bare `cat/pkg`.
+        let (_tmp, root) = world_root(
+            "# a comment\n\n\
+             dev-lang/python:3.11\n\
+             app-misc/foo[bar]\n\
+             >=media-libs/libwebp-1.2\n\
+             =app-editors/nano-8.0\n",
+        );
+
+        assert_eq!(
+            sorted(selected_cpns(Some(&root), &root, &[])),
+            [
+                "app-editors/nano",
+                "app-misc/foo",
+                "dev-lang/python",
+                "media-libs/libwebp"
+            ]
+        );
+    }
+
+    #[test]
+    fn selected_cpns_adds_what_this_run_would_record() {
+        // The `check_system_world` half that keeps a plain `em -p newpkg`
+        // bold: not in world yet, but this run would add it.
+        let (_tmp, root) = world_root("app-shells/bash\n");
+
+        assert_eq!(
+            sorted(selected_cpns(
+                Some(&root),
+                &root,
+                &[Dep::parse("app-editors/nano").unwrap()]
+            )),
+            ["app-editors/nano", "app-shells/bash"]
+        );
+        // `--oneshot` (and every read-only caller) passes no additions, so
+        // the same target stays unbold.
+        assert_eq!(
+            sorted(selected_cpns(Some(&root), &root, &[])),
+            ["app-shells/bash"]
+        );
+    }
+
+    #[test]
+    fn selected_cpns_survives_a_root_with_no_profile() {
+        // A bare `--root` sysroot has no `etc/portage/make.profile`: the
+        // resolve fails, and the display must degrade to "nothing tracked"
+        // rather than losing the run's own additions.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+
+        assert!(selected_cpns(Some(&root), &root, &[]).is_empty());
+        assert_eq!(
+            sorted(selected_cpns(
+                Some(&root),
+                &root,
+                &[Dep::parse("app-editors/nano").unwrap()]
+            )),
+            ["app-editors/nano"]
+        );
     }
 }
