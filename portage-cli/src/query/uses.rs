@@ -13,11 +13,12 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
     let use_db = repo
         .use_db()
         .unwrap_or_else(|_| portage_repo::UseDb::default());
-
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
+    let set = portage_repo::RepoSet::single(repo);
+    let repo = set.main();
 
     for raw in atoms {
-        let matches = super::matching_ebuilds(&repo, vdb, mode, &ebuilds, raw)?;
+        let matches = super::matching_ebuilds(&set, vdb, mode, &ebuilds, raw)?;
 
         let Some(best) = matches.last() else {
             eprintln!("em: no ebuilds found for '{raw}'");

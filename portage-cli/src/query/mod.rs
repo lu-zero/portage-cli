@@ -12,8 +12,7 @@ pub mod which;
 use std::str::FromStr;
 
 use anyhow::{Context, anyhow};
-use portage_repo::Repository;
-use portage_resolve::repo::RepoSource;
+use portage_repo::RepoSet;
 use portage_vdb::Vdb;
 
 use crate::style::{C_BOLD, C_COUNT, C_PKG, C_WARN};
@@ -51,16 +50,13 @@ fn is_pseudo_category(cpn: &portage_atom::Cpn) -> bool {
     PSEUDO_CATEGORIES.contains(&cpn.category.as_ref())
 }
 
-/// Resolve a raw atom string, expanding bare package names via the repo.
+/// Resolve a raw atom string, expanding bare package names via `set`.
 ///
 /// * `cat/pkg` — parsed as a standard atom.
-/// * bare `name` — looked up in `repo`, then every `overlays` entry (in the
-///   same [`portage_resolve::repo::RepoSource`] list `load_repos`'s callers
-///   already build for the full multi-repo resolve — `RepoSource::Main`
-///   entries are skipped, `repo` covers that). Without this, a package that
-///   exists only in an overlay (a local overlay, `guru`, `crossdev`) was
-///   invisible to bare-name resolution even though the full `cat/pkg` atom
-///   resolved it fine — `find_cpns` only ever searched one `Repository`.
+/// * bare `name` — looked up across every repo in `set` ([`RepoSet::find_cpns`],
+///   deduplicated and sorted). Without this, a package that exists only in an
+///   overlay (a local overlay, `guru`, `crossdev`) was invisible to bare-name
+///   resolution even though the full `cat/pkg` atom resolved it fine.
 ///
 /// Real-vs-pseudo-category disambiguation ([`PSEUDO_CATEGORIES`]) happens
 /// first, unconditionally: if exactly one candidate isn't `acct-group/*`/
@@ -74,8 +70,7 @@ fn is_pseudo_category(cpn: &portage_atom::Cpn) -> bool {
 /// - [`Ask`](ResolveMode::Ask) — interactively prompt for a choice; same as
 ///   `Error` if that doesn't resolve it (EOF, invalid answer).
 pub fn resolve_atom(
-    repo: &Repository,
-    overlays: &[RepoSource],
+    set: &RepoSet,
     vdb: Option<&Vdb>,
     mode: ResolveMode,
     raw: &str,
@@ -83,16 +78,7 @@ pub fn resolve_atom(
     if raw.contains('/') {
         return portage_atom::Dep::from_str(raw).with_context(|| format!("bad atom '{raw}'"));
     }
-    let mut cpns = repo.find_cpns(raw);
-    for source in overlays {
-        if let RepoSource::Overlay(overlay) = source {
-            for cpn in overlay.find_cpns(raw) {
-                if !cpns.contains(&cpn) {
-                    cpns.push(cpn);
-                }
-            }
-        }
-    }
+    let cpns = set.find_cpns(raw);
     match cpns.as_slice() {
         [] => Err(anyhow!(
             "no package found for '{raw}' — try specifying the category (e.g. cat/{raw})"
@@ -241,20 +227,19 @@ fn ask_which_candidate(
         .and_then(|n| portage_atom::Dep::from_str(&candidates[n - 1].to_string()).ok())
 }
 
-/// Resolve multiple raw atom strings, expanding bare names via the repo.
+/// Resolve multiple raw atom strings, expanding bare names via `set`.
 ///
 /// Same disambiguation rules as [`resolve_atom`]. Failed resolutions are
 /// printed as warnings and skipped.
 pub fn resolve_atoms(
     raw: &[String],
-    repo: &Repository,
-    overlays: &[RepoSource],
+    set: &RepoSet,
     vdb: Option<&Vdb>,
     mode: ResolveMode,
 ) -> Vec<portage_atom::Dep> {
     let mut out = Vec::with_capacity(raw.len());
     for s in raw {
-        match resolve_atom(repo, overlays, vdb, mode, s) {
+        match resolve_atom(set, vdb, mode, s) {
             Ok(dep) => out.push(dep),
             Err(e) => crate::style::warn_line!("{e}"),
         }
@@ -266,20 +251,21 @@ pub fn resolve_atoms(
 /// sorted oldest-to-newest by version. Shared by the per-package `query`
 /// commands (`keywords`/`meta`/`uses`); each caller reports its own message on
 /// an empty result.
+///
+/// `ebuilds` itself only ever comes from `set.main()` today (`keywords`/
+/// `meta`/`uses` all build it that way) — resolving `raw` against overlay
+/// packages `ebuilds` could never match anyway would just be confusing, not
+/// more correct. Fixing that is a separate, larger gap (those commands would
+/// need their own multi-repo ebuild enumeration, not just name resolution)
+/// — not done here.
 pub fn matching_ebuilds<'a>(
-    repo: &Repository,
+    set: &RepoSet,
     vdb: Option<&Vdb>,
     mode: ResolveMode,
     ebuilds: &'a [portage_repo::Ebuild],
     raw: &str,
 ) -> anyhow::Result<Vec<&'a portage_repo::Ebuild>> {
-    // `overlays: &[]`: `ebuilds` itself only ever comes from the main repo
-    // today (`keywords`/`meta`/`uses` all build it that way) — resolving
-    // `raw` against overlay packages `ebuilds` could never match anyway
-    // would just be confusing, not more correct. Fixing that is a separate,
-    // larger gap (those commands would need their own multi-repo ebuild
-    // enumeration, not just name resolution) — not done here.
-    let dep = resolve_atom(repo, &[], vdb, mode, raw)?;
+    let dep = resolve_atom(set, vdb, mode, raw)?;
     let mut matches: Vec<_> = ebuilds
         .iter()
         .filter(|e| which::dep_matches_cpv(&dep, e.cpv()))
@@ -290,6 +276,8 @@ pub fn matching_ebuilds<'a>(
 
 #[cfg(test)]
 mod tests {
+    use portage_repo::Repository;
+
     use super::*;
 
     /// Build a minimal repo on disk with the given `(category, package)` pairs.
@@ -317,6 +305,22 @@ mod tests {
         (dir, repo)
     }
 
+    /// A single-repo set, for the common non-overlay test case.
+    fn single(repo: Repository) -> RepoSet {
+        RepoSet::single(repo)
+    }
+
+    /// A two-repo set with `main` at index 0 and `overlay` ranked below it —
+    /// `find_cpns`' union is order-independent, so which index is "main"
+    /// only matters for `repo_of`/`main()`, not for what these tests assert.
+    fn with_overlay(main: Repository, overlay: Repository) -> RepoSet {
+        RepoSet::from_ordered(
+            vec![std::sync::Arc::new(main), std::sync::Arc::new(overlay)],
+            0,
+            Vec::new(),
+        )
+    }
+
     /// Build a minimal VDB on disk with the given `(category, package, version)` entries.
     fn make_vdb(packages: &[(&str, &str, &str)]) -> (tempfile::TempDir, Vdb) {
         let dir = tempfile::tempdir().unwrap();
@@ -335,7 +339,8 @@ mod tests {
     #[test]
     fn resolve_atom_cat_pkg() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo")]);
-        let dep = resolve_atom(&repo, &[], None, ResolveMode::Error, "sys-apps/foo").unwrap();
+        let set = single(repo);
+        let dep = resolve_atom(&set, None, ResolveMode::Error, "sys-apps/foo").unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "sys-apps");
         assert_eq!(dep.cpn.package.as_ref(), "foo");
     }
@@ -343,7 +348,8 @@ mod tests {
     #[test]
     fn resolve_atom_bare_name_unique() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo")]);
-        let dep = resolve_atom(&repo, &[], None, ResolveMode::Error, "foo").unwrap();
+        let set = single(repo);
+        let dep = resolve_atom(&set, None, ResolveMode::Error, "foo").unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "sys-apps");
         assert_eq!(dep.cpn.package.as_ref(), "foo");
     }
@@ -356,8 +362,8 @@ mod tests {
     fn resolve_atom_bare_name_finds_overlay_only_package() {
         let (_main_dir, main) = make_repo(&[("sys-apps", "foo")]);
         let (_overlay_dir, overlay) = make_repo(&[("app-misc", "bar")]);
-        let sources = [RepoSource::Overlay(overlay)];
-        let dep = resolve_atom(&main, &sources, None, ResolveMode::Error, "bar").unwrap();
+        let set = with_overlay(main, overlay);
+        let dep = resolve_atom(&set, None, ResolveMode::Error, "bar").unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "app-misc");
         assert_eq!(dep.cpn.package.as_ref(), "bar");
     }
@@ -369,8 +375,8 @@ mod tests {
     fn resolve_atom_bare_name_ambiguous_across_main_and_overlay() {
         let (_main_dir, main) = make_repo(&[("sys-apps", "foo")]);
         let (_overlay_dir, overlay) = make_repo(&[("app-misc", "foo")]);
-        let sources = [RepoSource::Overlay(overlay)];
-        let err = resolve_atom(&main, &sources, None, ResolveMode::Error, "foo").unwrap_err();
+        let set = with_overlay(main, overlay);
+        let err = resolve_atom(&set, None, ResolveMode::Error, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
         assert!(err.to_string().contains("sys-apps/foo"));
         assert!(err.to_string().contains("app-misc/foo"));
@@ -379,7 +385,8 @@ mod tests {
     #[test]
     fn resolve_atom_bare_name_not_found() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo")]);
-        let err = resolve_atom(&repo, &[], None, ResolveMode::Error, "bar").unwrap_err();
+        let set = single(repo);
+        let err = resolve_atom(&set, None, ResolveMode::Error, "bar").unwrap_err();
         assert!(err.to_string().contains("no package found"));
     }
 
@@ -388,7 +395,8 @@ mod tests {
     #[test]
     fn resolve_atom_error_mode_ambiguous() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
-        let err = resolve_atom(&repo, &[], None, ResolveMode::Error, "foo").unwrap_err();
+        let set = single(repo);
+        let err = resolve_atom(&set, None, ResolveMode::Error, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
         assert!(err.to_string().contains("sys-apps/foo"));
         assert!(err.to_string().contains("app-misc/foo"));
@@ -406,7 +414,7 @@ mod tests {
     #[test]
     fn resolve_atom_real_category_beats_acct_group() {
         let (_dir, repo) = make_repo(&[("acct-group", "incus"), ("app-containers", "incus")]);
-        let dep = resolve_atom(&repo, &[], None, ResolveMode::Error, "incus").unwrap();
+        let dep = resolve_atom(&single(repo), None, ResolveMode::Error, "incus").unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "app-containers");
         assert_eq!(dep.cpn.package.as_ref(), "incus");
     }
@@ -418,7 +426,7 @@ mod tests {
             ("virtual", "foo"),
             ("sys-apps", "foo"),
         ]);
-        let dep = resolve_atom(&repo, &[], None, ResolveMode::Error, "foo").unwrap();
+        let dep = resolve_atom(&single(repo), None, ResolveMode::Error, "foo").unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "sys-apps");
     }
 
@@ -431,7 +439,7 @@ mod tests {
             ("sys-apps", "foo"),
             ("app-misc", "foo"),
         ]);
-        let err = resolve_atom(&repo, &[], None, ResolveMode::Error, "foo").unwrap_err();
+        let err = resolve_atom(&single(repo), None, ResolveMode::Error, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
         assert!(err.to_string().contains("sys-apps/foo"));
         assert!(err.to_string().contains("app-misc/foo"));
@@ -444,7 +452,7 @@ mod tests {
         // at -u — regression test for the 2026-08-04 UX request.
         let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
         let (_vdir, vdb) = make_vdb(&[("sys-apps", "foo", "1.0")]);
-        let err = resolve_atom(&repo, &[], Some(&vdb), ResolveMode::Error, "foo").unwrap_err();
+        let err = resolve_atom(&single(repo), Some(&vdb), ResolveMode::Error, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
         assert!(err.to_string().contains("sys-apps/foo"));
         assert!(err.to_string().contains("is installed"));
@@ -454,7 +462,7 @@ mod tests {
     #[test]
     fn resolve_atom_error_mode_no_hint_when_none_installed() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
-        let err = resolve_atom(&repo, &[], None, ResolveMode::Error, "foo").unwrap_err();
+        let err = resolve_atom(&single(repo), None, ResolveMode::Error, "foo").unwrap_err();
         assert!(!err.to_string().contains("is installed"));
     }
 
@@ -462,7 +470,7 @@ mod tests {
     fn resolve_atom_error_mode_ignores_vdb() {
         let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
         let (_vdir, vdb) = make_vdb(&[("sys-apps", "foo", "1.0")]);
-        let err = resolve_atom(&repo, &[], Some(&vdb), ResolveMode::Error, "foo").unwrap_err();
+        let err = resolve_atom(&single(repo), Some(&vdb), ResolveMode::Error, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
     }
 
@@ -473,8 +481,13 @@ mod tests {
         let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
         let (_vdir, vdb) = make_vdb(&[("sys-apps", "foo", "1.0")]);
 
-        let dep =
-            resolve_atom(&repo, &[], Some(&vdb), ResolveMode::PreferInstalled, "foo").unwrap();
+        let dep = resolve_atom(
+            &single(repo),
+            Some(&vdb),
+            ResolveMode::PreferInstalled,
+            "foo",
+        )
+        .unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "sys-apps");
     }
 
@@ -483,8 +496,13 @@ mod tests {
         let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
         let (_vdir, vdb) = make_vdb(&[("sys-apps", "foo", "1.0"), ("app-misc", "foo", "2.0")]);
 
-        let err =
-            resolve_atom(&repo, &[], Some(&vdb), ResolveMode::PreferInstalled, "foo").unwrap_err();
+        let err = resolve_atom(
+            &single(repo),
+            Some(&vdb),
+            ResolveMode::PreferInstalled,
+            "foo",
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
     }
 
@@ -493,8 +511,13 @@ mod tests {
         let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
         let (_vdir, vdb) = make_vdb(&[]);
 
-        let err =
-            resolve_atom(&repo, &[], Some(&vdb), ResolveMode::PreferInstalled, "foo").unwrap_err();
+        let err = resolve_atom(
+            &single(repo),
+            Some(&vdb),
+            ResolveMode::PreferInstalled,
+            "foo",
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
     }
 
@@ -502,7 +525,8 @@ mod tests {
     fn resolve_atom_prefer_installed_no_vdb_falls_back_to_error() {
         let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
 
-        let err = resolve_atom(&repo, &[], None, ResolveMode::PreferInstalled, "foo").unwrap_err();
+        let err =
+            resolve_atom(&single(repo), None, ResolveMode::PreferInstalled, "foo").unwrap_err();
         assert!(err.to_string().contains("ambiguous"));
     }
 
@@ -512,7 +536,7 @@ mod tests {
     fn resolve_atoms_mixed_input() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "bar")]);
         let atoms = vec!["sys-apps/foo".to_string(), "bar".to_string()];
-        let result = resolve_atoms(&atoms, &repo, &[], None, ResolveMode::Error);
+        let result = resolve_atoms(&atoms, &single(repo), None, ResolveMode::Error);
         assert_eq!(result.len(), 2);
     }
 
@@ -520,7 +544,7 @@ mod tests {
     fn resolve_atoms_skips_invalid() {
         let (_dir, repo) = make_repo(&[("sys-apps", "foo")]);
         let atoms = vec!["foo".to_string(), "nonexistent".to_string()];
-        let result = resolve_atoms(&atoms, &repo, &[], None, ResolveMode::Error);
+        let result = resolve_atoms(&atoms, &single(repo), None, ResolveMode::Error);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].cpn.package.as_ref(), "foo");
     }

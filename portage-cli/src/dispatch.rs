@@ -336,24 +336,15 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
         QueryCommand::Depends { atom } => {
             let vdb = open_cli_vdb(globals).ok();
             let repo_path = std::path::PathBuf::from(globals.repo_path());
+            let repo = crate::repo_open::open(&repo_path)?;
             // So bare-name atoms can resolve to an overlay-only package, not
             // just the main repo — see `query::resolve_atom`'s doc.
-            let (resolve_overlays, _resolve_aliases) = crate::repo_open::open(&repo_path)
-                .map(|repo| {
-                    crate::repo_open::overlays_from_conf(
-                        &repo,
-                        &globals.roots(),
-                        globals.repo.is_none(),
-                    )
-                })
-                .unwrap_or_default();
-            query::depends::run(
-                &repo_path,
-                &resolve_overlays,
-                vdb.as_ref(),
-                query::ResolveMode::Error,
-                atom,
-            )
+            let set = crate::repo_open::repo_set_from_conf(
+                repo,
+                &globals.roots(),
+                globals.repo.is_none(),
+            );
+            query::depends::run(&set, vdb.as_ref(), query::ResolveMode::Error, atom)
         }
         QueryCommand::Depgraph {
             atom,
@@ -375,15 +366,8 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let roots = globals.roots();
             // So bare-name atoms can resolve to an overlay-only package, not
             // just the main repo — see `query::resolve_atom`'s doc.
-            let (resolve_overlays, _resolve_aliases) =
-                crate::repo_open::overlays_from_conf(&repo, &roots, globals.repo.is_none());
-            let parsed = query::resolve_atoms(
-                atom,
-                &repo,
-                &resolve_overlays,
-                vdb.as_ref(),
-                query::ResolveMode::Error,
-            );
+            let set = crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo.is_none());
+            let parsed = query::resolve_atoms(atom, &set, vdb.as_ref(), query::ResolveMode::Error);
             let atoms: Vec<query::depgraph::TargetAtom> = parsed
                 .iter()
                 .map(|d| query::depgraph::TargetAtom::explicit(d.to_string()))
@@ -491,24 +475,15 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
         QueryCommand::Which { atom } => {
             let vdb = open_cli_vdb(globals).ok();
             let repo_path = std::path::PathBuf::from(globals.repo_path());
+            let repo = crate::repo_open::open(&repo_path)?;
             // So bare-name atoms can resolve to an overlay-only package, not
             // just the main repo — see `query::resolve_atom`'s doc.
-            let (resolve_overlays, _resolve_aliases) = crate::repo_open::open(&repo_path)
-                .map(|repo| {
-                    crate::repo_open::overlays_from_conf(
-                        &repo,
-                        &globals.roots(),
-                        globals.repo.is_none(),
-                    )
-                })
-                .unwrap_or_default();
-            query::which::run(
-                &repo_path,
-                &resolve_overlays,
-                vdb.as_ref(),
-                query::ResolveMode::Error,
-                atom,
-            )
+            let set = crate::repo_open::repo_set_from_conf(
+                repo,
+                &globals.roots(),
+                globals.repo.is_none(),
+            );
+            query::which::run(&set, vdb.as_ref(), query::ResolveMode::Error, atom)
         }
     }
 }

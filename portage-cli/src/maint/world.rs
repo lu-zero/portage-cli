@@ -45,10 +45,10 @@ impl TreeView {
     ) -> Result<Self> {
         let repo = crate::repo_open::open(repo_path.as_std_path())
             .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
-        let (overlays, aliases) = crate::repo_open::overlays_from_conf(&repo, roots, multi_repo);
+        let set = crate::repo_open::repo_set_from_conf(repo, roots, multi_repo);
         let (data, env) = tokio::join!(
-            portage_resolve::repo::load_repos(&repo, &overlays, &aliases),
-            portage_resolve::use_env::build_use_env(&repo, roots.config(), None, None),
+            portage_resolve::repo::load_repos(&set),
+            portage_resolve::use_env::build_use_env(set.main(), roots.config(), None, None),
         );
         let env = env?;
         Ok(Self {
@@ -76,7 +76,7 @@ impl TreeView {
             env_use: env.env_use,
             package_use: env.package_use,
             force_mask: env.force_mask,
-            multi_repo,
+            multi_repo: set.is_multi(),
         })
     }
 

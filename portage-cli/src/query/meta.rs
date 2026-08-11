@@ -14,11 +14,12 @@ use crate::vdb::find_packages;
 
 pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[String]) -> Result<()> {
     let repo = crate::repo_open::open(repo_path)?;
-
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
+    let set = portage_repo::RepoSet::single(repo);
+    let repo = set.main();
 
     for raw in atoms {
-        let matches = super::matching_ebuilds(&repo, vdb, mode, &ebuilds, raw)?;
+        let matches = super::matching_ebuilds(&set, vdb, mode, &ebuilds, raw)?;
 
         let Some(best) = matches.last() else {
             eprintln!("em: no ebuild found for '{raw}'");

@@ -1,21 +1,24 @@
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use anyhow::Result;
 use portage_atom::{Dep, DepEntry};
+use portage_repo::RepoSet;
 use portage_vdb::Vdb;
 
 pub fn run(
-    repo_path: &Path,
-    overlays: &[portage_resolve::repo::RepoSource],
+    set: &RepoSet,
     vdb: Option<&Vdb>,
     mode: super::ResolveMode,
     atoms: &[String],
 ) -> Result<()> {
-    let repo = crate::repo_open::open(repo_path)?;
+    // No overlay search here: `set.main()` only — resolving an atom against
+    // set as a whole (via resolve_atom below) can already succeed for an
+    // overlay-only package, but scanning overlay ebuilds for reverse deps
+    // is a separate gap, not fixed here.
+    let repo = set.main();
 
     for raw in atoms {
-        let target = super::resolve_atom(&repo, overlays, vdb, mode, raw)?;
+        let target = super::resolve_atom(set, vdb, mode, raw)?;
 
         let mut matches: BTreeSet<String> = BTreeSet::new();
 

@@ -9,7 +9,6 @@ use portage_atom_pubgrub::{
     UseOverride,
 };
 use portage_metadata::{CacheEntry, Keyword, LicenseExpr, RequiredUseExpr, Stability};
-use portage_repo::Repository;
 
 /// A reason a package version was excluded from the solver.
 #[derive(Debug, Clone)]
@@ -1199,57 +1198,26 @@ fn collect_required_use_flags(
     }
 }
 
-/// One position in [`load_repos`]'s priority-ordered merge: either the main
-/// repo or an overlay. Both are loaded through the same
-/// [`portage_repo::repo_entries`] — the only difference in this loop is
-/// whether a duplicate cpv's `repo_of` gets recorded (absence means "the
-/// main repo").
-///
-/// Kept as a single ordered sequence — not two separate before/after main
-/// slices — specifically so a caller cannot mis-sequence the two halves:
-/// the merge order in [`load_repos`] is exactly the order of this slice,
-/// full stop.
-#[allow(clippy::large_enum_variant)] // built once per resolve (one entry per
-// configured repo, not per package) -- boxing would add an allocation to
-// every Overlay variant, the common case, to shrink the rare Main variant.
-pub enum RepoSource {
-    /// The main repo (`repo` in [`load_repos`]'s own signature).
-    Main,
-    /// An overlay repo. Its masters are owned by the `Repository` itself
-    /// (see [`Repository::masters`]), not threaded here as a second field.
-    Overlay(Repository),
-}
-
-/// Load the main repo's md5-cache plus every overlay's metadata (sourcing
-/// cache-less ebuilds — see `portage_repo::repo_entries`), merged in
-/// **descending** repos.conf-priority order (`sources`, already sorted by
-/// the caller — see `portage-cli`'s `repo_open::overlays_from_conf`):
-/// higher priority wins a duplicate cpv, matching real portage
-/// (`porttree.py`'s `findname2`/`xmatch` `reversed(...)` over the
-/// ascending `(priority, name)` list; `man 5 portage`: "those with higher
-/// priority are preferred"). The main repo defaults to priority `-1000`
-/// when unset (`ReposConf::load_from`), so by default *any* overlay shadows
-/// it — the ordinary "drop an ebuild in a local overlay to override
-/// ::gentoo" workflow, no repos.conf configuration required.
+/// Load every repo's metadata (sourcing cache-less ebuilds — see
+/// `portage_repo::repo_entries`), merged in `set`'s priority order: higher
+/// priority wins a duplicate cpv, matching real portage (`porttree.py`'s
+/// `findname2`/`xmatch` `reversed(...)` over the ascending `(priority,
+/// name)` list; `man 5 portage`: "those with higher priority are
+/// preferred"). The main repo defaults to priority `-1000` when unset
+/// (`ReposConf::load_from`), so by default *any* overlay shadows it — the
+/// ordinary "drop an ebuild in a local overlay to override ::gentoo"
+/// workflow, no repos.conf configuration required.
 ///
 /// Overlay secondary caches must already be configured on each
-/// [`Repository`] (via [`Repository::builder`]).
-pub async fn load_repos(
-    repo: &Repository,
-    sources: &[RepoSource],
-    aliases: &[portage_repo::RepoEntry],
-) -> RepoData {
+/// [`portage_repo::Repository`] (via [`portage_repo::RepositoryBuilder`]).
+pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
     let mut cpns_set: HashSet<Cpn> = HashSet::new();
     let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
     let mut repo_of: HashMap<Cpv, String> = HashMap::new();
     let mut seen: HashSet<Cpv> = HashSet::new();
     let mut real_cpn_of: HashMap<Cpn, Cpn> = HashMap::new();
 
-    for source in sources {
-        let source_repo = match source {
-            RepoSource::Main => repo,
-            RepoSource::Overlay(overlay) => overlay,
-        };
+    for (i, source_repo) in set.iter().enumerate() {
         for (cpv, entry) in portage_repo::repo_entries(source_repo).await {
             if !seen.insert(cpv.clone()) {
                 continue;
@@ -1257,7 +1225,7 @@ pub async fn load_repos(
             cpns_set.insert(cpv.cpn);
             // No `repo_of` insert for the main repo: absence means "the
             // main repo", per `RepoData::repo_of`'s documented convention.
-            if matches!(source, RepoSource::Overlay(_)) {
+            if i != set.main_index() {
                 repo_of.insert(cpv.clone(), source_repo.name().to_string());
             }
             versions.entry(cpv.cpn).or_default().push((cpv, entry));
@@ -1271,7 +1239,7 @@ pub async fn load_repos(
     // Collect first, then inject, to avoid borrowing `versions` while mutating.
     type CrossInject = (String, Cpn, Vec<(Cpv, CacheEntry)>);
     let mut cross_inject: Vec<CrossInject> = Vec::new();
-    for entry in aliases {
+    for entry in set.aliases() {
         let portage_repo::Location::Alias { source, aliases } = &entry.location else {
             continue;
         };
@@ -1279,7 +1247,7 @@ pub async fn load_repos(
         // doesn't track per-cpn origin for main-repo entries (only overlays
         // get a `repo_of` entry), so there's no way to disambiguate a
         // same-named cpn coming from elsewhere.
-        if source != repo.name() {
+        if source != set.main().name() {
             continue;
         }
         for (dest_cat, source_cpns) in aliases {
@@ -1320,7 +1288,7 @@ pub async fn load_repos(
     RepoData {
         cpns,
         versions,
-        repo_name: repo.name().to_string(),
+        repo_name: set.main().name().to_string(),
         repo_of,
         real_cpn_of,
     }
@@ -1581,7 +1549,7 @@ mod tests {
     use super::*;
     use crate::force_mask::{ForceMask, index_by_cpn};
     use portage_atom_pubgrub::{PackageRepository, UseFlagState};
-    use portage_repo::{AcceptSet, LicenseGroupRegistry};
+    use portage_repo::{AcceptSet, LicenseGroupRegistry, Repository};
 
     fn accept_all_licenses() -> AcceptSet {
         AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default())
@@ -2139,8 +2107,12 @@ mod tests {
         let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
         let overlay_name = overlay.name().to_string();
 
-        let sources = [RepoSource::Overlay(overlay), RepoSource::Main];
-        let data = load_repos(&main, &sources, &[]).await;
+        let set = portage_repo::RepoSet::from_ordered(
+            vec![std::sync::Arc::new(overlay), std::sync::Arc::new(main)],
+            1,
+            Vec::new(),
+        );
+        let data = load_repos(&set).await;
 
         let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
         let entries = data.versions.get(&cpv.cpn).unwrap();
@@ -2168,8 +2140,12 @@ mod tests {
             disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
         let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
 
-        let sources = [RepoSource::Main, RepoSource::Overlay(overlay)];
-        let data = load_repos(&main, &sources, &[]).await;
+        let set = portage_repo::RepoSet::from_ordered(
+            vec![std::sync::Arc::new(main), std::sync::Arc::new(overlay)],
+            0,
+            Vec::new(),
+        );
+        let data = load_repos(&set).await;
 
         let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
         let entries = data.versions.get(&cpv.cpn).unwrap();
@@ -2203,12 +2179,9 @@ mod tests {
             priority: None,
         };
 
-        let data = load_repos(
-            &repo,
-            &[RepoSource::Main],
-            std::slice::from_ref(&alias_entry),
-        )
-        .await;
+        let mut set = portage_repo::RepoSet::single(repo);
+        set.set_aliases(vec![alias_entry]);
+        let data = load_repos(&set).await;
 
         let cross_cpn = Cpn::new(cross_cat, "gcc");
         assert!(data.cpns.contains(&cross_cpn), "cross cpn injected");
@@ -2246,12 +2219,9 @@ mod tests {
             priority: None,
         };
 
-        let data = load_repos(
-            &repo,
-            &[RepoSource::Main],
-            std::slice::from_ref(&alias_entry),
-        )
-        .await;
+        let mut set = portage_repo::RepoSet::single(repo);
+        set.set_aliases(vec![alias_entry]);
+        let data = load_repos(&set).await;
 
         let cross_cpn = Cpn::new(cross_cat, "gcc");
         assert!(!data.cpns.contains(&cross_cpn));

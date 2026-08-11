@@ -262,19 +262,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let repo = crate::repo_open::open(repo_path)
         .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
 
-    let (overlays, mut alias_repos) =
-        crate::repo_open::overlays_from_conf(&repo, roots, multi_repo);
+    let mut set = crate::repo_open::repo_set_from_conf(repo, roots, multi_repo);
     // Caller-supplied aliases first so a pretend crossdev plan can inject the
     // target about to be written; on-disk entries with the same name still
     // apply (load_repos skips already-seen CPVs).
-    if !extra_aliases.is_empty() {
-        let mut merged = extra_aliases.to_vec();
-        merged.append(&mut alias_repos);
-        alias_repos = merged;
-    }
+    set.prepend_aliases(extra_aliases);
 
     let (data, (target_installed, installed_blockers), host_installed, use_env_result) = tokio::join!(
-        repo::load_repos(&repo, &overlays, &alias_repos),
+        repo::load_repos(&set),
         // Also precompute each installed package's blocker atoms on this task
         // (for `check_blockers`): the walk only needs the VDB, so it overlaps the
         // other concurrent loads instead of running serially before the solve.
@@ -286,7 +281,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         },
         async { installed::load_host_installed(roots) },
         use_env::build_use_env(
-            &repo,
+            set.main(),
             config_root,
             roots.config_overlay(),
             extra_use_override
@@ -455,7 +450,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 targets::RootTargetDecision::DropSilently => continue,
                 targets::RootTargetDecision::Fatal => {
                     anyhow::bail!(output::unsatisfiable_target_message(
-                        &unsat, &data, multi_repo
+                        &unsat,
+                        &data,
+                        set.is_multi()
                     ));
                 }
             }
@@ -1469,7 +1466,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // World-family targets nothing acceptable satisfies. Advisory: emerge
         // keeps going and exits 0 for these, so they stay out of `exit_code`.
         if !unsatisfiable.is_empty() {
-            output::report_unsatisfiable_targets(&unsatisfiable, &data, multi_repo);
+            output::report_unsatisfiable_targets(&unsatisfiable, &data, set.is_multi());
         }
     }
 
@@ -1489,19 +1486,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // displayed plan used.
     let repo_path_of = |cpv: &Cpv| -> camino::Utf8PathBuf {
         let name = repo::repo_name_of(&data, cpv);
-        if name == data.repo_name {
-            repo_path.to_owned()
-        } else {
-            overlays
-                .iter()
-                .find_map(|source| match source {
-                    portage_resolve::repo::RepoSource::Overlay(o) if o.name() == name => {
-                        Some(o.path().to_owned())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| repo_path.to_owned())
-        }
+        set.by_name(name).unwrap_or(set.main()).path().to_owned()
     };
     let plan: Vec<PlannedMerge> = plan_entries
         .iter()

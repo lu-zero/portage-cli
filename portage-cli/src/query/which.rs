@@ -1,23 +1,22 @@
 use std::cmp::Ordering;
-use std::path::Path;
 
 use anyhow::Result;
 use portage_atom::{Cpv, Dep, Operator};
+use portage_repo::RepoSet;
 use portage_vdb::Vdb;
 
 pub fn run(
-    repo_path: &Path,
-    overlays: &[portage_resolve::repo::RepoSource],
+    set: &RepoSet,
     vdb: Option<&Vdb>,
     mode: super::ResolveMode,
     atoms: &[String],
 ) -> Result<()> {
-    let repo = crate::repo_open::open(repo_path)?;
-
+    // No overlay search here — see the matching comment in depends.rs.
+    let repo = set.main();
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
 
     for raw in atoms {
-        let dep = super::resolve_atom(&repo, overlays, vdb, mode, raw)?;
+        let dep = super::resolve_atom(set, vdb, mode, raw)?;
 
         let best = ebuilds
             .iter()
