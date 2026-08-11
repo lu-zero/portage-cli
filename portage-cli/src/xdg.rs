@@ -48,8 +48,8 @@ pub fn em_state_dir() -> Utf8PathBuf {
 /// `$XDG_CACHE_HOME/em/md5-cache` (per-repo dirs live underneath).
 ///
 /// Written by `em regen` (when the tree is not writable) and by
-/// `overlay_entries` after a successful live source; read back on the next
-/// resolve so cache-less overlays are not re-sourced every run.
+/// `portage_repo::repo_entries` after a successful live source; read back on
+/// the next resolve so cache-less overlays are not re-sourced every run.
 pub fn md5_cache_root() -> Utf8PathBuf {
     em_cache_dir().join("md5-cache")
 }

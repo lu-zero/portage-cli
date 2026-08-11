@@ -404,7 +404,7 @@ pub fn cache_cpvs(repos: &[Repository], opts: &CacheReadOpts) -> Vec<(portage_at
 }
 
 /// [`cache_cpvs`], optionally also stat-ing each cache file for its mtime —
-/// used by the per-entry suspect rule ([`crate::overlay::primary_entries`]),
+/// used by the per-entry suspect rule ([`crate::entries::repo_entries`]),
 /// which needs "is this ebuild newer than the cache file serving it"
 /// without a second full directory walk. `with_mtime: false` costs nothing
 /// extra over [`cache_cpvs`] (same walk, no added stat per file).
@@ -509,7 +509,7 @@ where
 }
 
 /// [`cache_entries_parallel`], also returning each cache file's own mtime —
-/// used by the per-entry suspect rule ([`crate::overlay::primary_entries`])
+/// used by the per-entry suspect rule ([`crate::entries::repo_entries`])
 /// to compare an ebuild's mtime against the cache file actually serving it,
 /// without a second full directory walk (the mtime is stat'd during this
 /// same read+decode pass).

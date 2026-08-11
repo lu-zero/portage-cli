@@ -1200,8 +1200,10 @@ fn collect_required_use_flags(
 }
 
 /// One position in [`load_repos`]'s priority-ordered merge: either the main
-/// repo (loaded via the cheap [`portage_repo::primary_entries`] bulk path) or
-/// an overlay (the full [`portage_repo::overlay_entries`] digest chain).
+/// repo or an overlay. Both are loaded through the same
+/// [`portage_repo::repo_entries`] — the only difference in this loop is
+/// whether a duplicate cpv's `repo_of` gets recorded (absence means "the
+/// main repo").
 ///
 /// Kept as a single ordered sequence — not two separate before/after main
 /// slices — specifically so a caller cannot mis-sequence the two halves:
@@ -1219,7 +1221,7 @@ pub enum RepoSource {
 }
 
 /// Load the main repo's md5-cache plus every overlay's metadata (sourcing
-/// cache-less ebuilds — see `overlay::overlay_entries`), merged in
+/// cache-less ebuilds — see `portage_repo::repo_entries`), merged in
 /// **descending** repos.conf-priority order (`sources`, already sorted by
 /// the caller — see `portage-cli`'s `repo_open::overlays_from_conf`):
 /// higher priority wins a duplicate cpv, matching real portage
@@ -1244,28 +1246,21 @@ pub async fn load_repos(
     let mut real_cpn_of: HashMap<Cpn, Cpn> = HashMap::new();
 
     for source in sources {
-        match source {
-            RepoSource::Main => {
-                for (cpv, entry) in portage_repo::primary_entries(repo).await {
-                    if !seen.insert(cpv.clone()) {
-                        continue;
-                    }
-                    cpns_set.insert(cpv.cpn);
-                    // No `repo_of` insert: absence means "the main repo",
-                    // per `RepoData::repo_of`'s documented convention.
-                    versions.entry(cpv.cpn).or_default().push((cpv, entry));
-                }
+        let source_repo = match source {
+            RepoSource::Main => repo,
+            RepoSource::Overlay(overlay) => overlay,
+        };
+        for (cpv, entry) in portage_repo::repo_entries(source_repo).await {
+            if !seen.insert(cpv.clone()) {
+                continue;
             }
-            RepoSource::Overlay(overlay) => {
-                for (cpv, entry) in portage_repo::overlay_entries(overlay).await {
-                    if !seen.insert(cpv.clone()) {
-                        continue;
-                    }
-                    cpns_set.insert(cpv.cpn);
-                    repo_of.insert(cpv.clone(), overlay.name().to_string());
-                    versions.entry(cpv.cpn).or_default().push((cpv, entry));
-                }
+            cpns_set.insert(cpv.cpn);
+            // No `repo_of` insert for the main repo: absence means "the
+            // main repo", per `RepoData::repo_of`'s documented convention.
+            if matches!(source, RepoSource::Overlay(_)) {
+                repo_of.insert(cpv.clone(), source_repo.name().to_string());
             }
+            versions.entry(cpv.cpn).or_default().push((cpv, entry));
         }
     }
 
@@ -2079,11 +2074,11 @@ mod tests {
     }
 
     /// Like [`disk_repo`], but also writes a real `.ebuild` file with a
-    /// matching `_md5_` in the cache entry. `overlay_entries` (unlike
-    /// `primary_entries`, which trusts the bulk cache read unconditionally
-    /// when there's nothing on disk to cross-check against) only returns an
-    /// entry when a real ebuild file's md5 matches `_md5_` -- needed for any
-    /// test that exercises `RepoSource::Overlay`, not `RepoSource::Main`.
+    /// matching `_md5_` in the cache entry. `disk_repo`'s bare cache entry
+    /// is trusted as-is only because it has no on-disk ebuild to contradict
+    /// it (`repo_entries`'s suspect walk has nothing to flag); a test whose
+    /// repo *does* carry a real ebuild tree needs the digest to actually
+    /// match, or the entry is dropped and re-sourced instead.
     fn disk_repo_with_ebuild(cpv: &str, description: &str) -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();

@@ -1,4 +1,5 @@
-//! Metadata loading for ebuilds the in-tree cache does not cover.
+//! Metadata loading for every CPV in a repository, whether or not it ships
+//! an in-tree cache.
 //!
 //! # The chain
 //!
@@ -12,25 +13,34 @@
 //! Secondary cache is always configured on the [`Repository`] (builder);
 //! this module does not take free-floating cache paths.
 //!
-//! # Two entry points, because the main repo cannot afford the full walk
+//! # One entry point, evidence-gated
 //!
-//! [`overlay_entries`] runs the chain over **every** ebuild. Overlays
-//! (crossdev, local) often ship no md5-cache at all, and they are small.
+//! [`repo_entries`] narrows the digest work to *suspects*: an ebuild with no
+//! cache entry, or one newer than the specific cache file serving it (a
+//! present-but-stale entry, which the bulk read would otherwise trust
+//! blindly). Everything else is taken from the cache as-is. This is what
+//! makes the main repo's ~32k-ebuild tree affordable to check on every
+//! resolve — "almost every ebuild has a cache entry" is not "every ebuild
+//! does": a version with no entry is not merely uncached, it is
+//! **invisible** (`RepoData` is built from cache entries alone, so it can
+//! never be selected, and its atom reports as "no ebuilds" rather than
+//! masked).
 //!
-//! The main repo ships a cache covering almost everything, and digesting all
-//! ~32k ebuilds to check it is far too expensive per resolve. But "almost" is
-//! not "all": ~60 ::gentoo ebuilds have no entry at any given time, and a
-//! version with no entry is not merely uncached, it is **invisible** —
-//! `RepoData` is built from cache entries alone, so it can never be selected
-//! and its atom reports as "no ebuilds" rather than masked.
+//! A repo with no in-tree cache at all (a hand-made local overlay,
+//! `crossdev`) is the degenerate case of the same rule: the bulk read finds
+//! nothing, so every ebuild is suspect and takes the digest/source chain —
+//! this is `overlay_entries`' old always-digest-everything behaviour,
+//! falling out of the general rule rather than needing its own code path.
 //!
-//! [`primary_entries`] narrows the digest work to *suspects*: an ebuild with no
-//! entry, or one newer than the specific cache file serving it (a
-//! present-but-stale entry, which the bulk read would otherwise trust).
-//! Everything else is taken from the cache as-is. Finding suspects still costs
-//! a tree walk, so that runs concurrently with the bulk read and its outcome
-//! is memoised in a sidecar keyed on [`Repository::sync_stamp`] — an unchanged
-//! tree skips the walk entirely.
+//! Finding suspects costs a tree walk, which is most of a resolve's
+//! repo-load time on its own. Two things keep that off the common path: the
+//! walk runs concurrently with the bulk read (`Ebuilds` owns its walker, so
+//! it moves onto a blocking thread cleanly), and its result is memoised in a
+//! sidecar keyed on [`Repository::sync_stamp`] — but only for a repo whose
+//! stamp is strong enough to trust ([`Repository::has_sync_marker`]); an
+//! unchanged tree with a real `timestamp.chk` (the main repo, and any
+//! git/rsync-synced overlay like `guru`) skips the walk entirely, while a
+//! `timestamp.chk`-less tree always re-checks.
 //!
 //! Validation is by **md5 of file contents** (`_md5_` plus the `_eclasses_`
 //! digests), never mtime; mtime only selects *which* files to digest. That
@@ -44,44 +54,24 @@ use portage_metadata::CacheEntry;
 use crate::cache::{CacheReadOpts, cache_entries_parallel, cache_entries_parallel_with_mtime};
 use crate::repo::Repository;
 
-/// Every metadata entry of `repo`: primary bulk walk, layered cache lookup,
-/// master-symlink shortcut, then live source into secondary.
-pub async fn overlay_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
-    let mut cached: HashMap<Cpv, CacheEntry> = cache_entries_parallel(
-        std::slice::from_ref(repo),
-        &CacheReadOpts::default(),
-        |text| CacheEntry::parse(text).map_err(crate::Error::from),
-    )
-    .await
-    .into_iter()
-    .filter_map(|(cpv, e)| e.ok().map(|e| (cpv, e)))
-    .collect();
-
-    let Ok(ebuilds) = repo.ebuilds() else {
-        return cached.into_iter().collect();
-    };
-
-    resolve_ebuilds(repo, ebuilds, &mut cached).await
-}
-
 /// Name of the sidecar listing the CPVs the in-tree cache does not serve.
 const GAP_INDEX: &str = "gap-index";
 
-/// Every metadata entry of a cache-backed repo: the in-tree bulk read, plus the
-/// chain over the ebuilds that read cannot serve.
-///
-/// An ebuild is *suspect* when the cache has no entry for it, or when it is
-/// newer than the last sync — the second catches an entry that is present but
-/// stale, which the bulk read would otherwise trust blindly. Only suspects are
-/// digested; the other ~32k are taken from the cache as-is.
+/// Every metadata entry of `repo`: the in-tree bulk read, plus the chain over
+/// the ebuilds that read cannot serve — suspects (no entry, or newer than the
+/// cache file serving it), symlink-into-a-master reuse, then live sourcing.
+/// One function for every repo: a repo with no in-tree cache is this
+/// function's degenerate case (see the module doc).
 ///
 /// Finding suspects costs a tree walk, which is most of a resolve's repo-load
 /// time on its own. Two things keep that off the common path: the walk runs
 /// concurrently with the bulk read (`Ebuilds` owns its walker, so it moves onto
-/// a blocking thread cleanly), and its result is memoised in a sidecar keyed on
-/// [`Repository::sync_stamp`], so an unchanged tree skips the walk entirely and
-/// reads the handful of entries straight from the secondary store.
-pub async fn primary_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
+/// a blocking thread cleanly), and — for a repo with a trustworthy sync marker
+/// ([`Repository::has_sync_marker`]) — its result is memoised in a sidecar
+/// keyed on [`Repository::sync_stamp`], so an unchanged tree skips the walk
+/// entirely and reads the handful of entries straight from the secondary
+/// store.
+pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let stamp = repo.sync_stamp();
     let index = repo.sidecar_path(GAP_INDEX);
 
@@ -454,7 +444,7 @@ mod tests {
         set_mtime(&cache_file, base);
         set_mtime(&ebuild_path, base);
 
-        let entries = primary_entries(&repo).await;
+        let entries = repo_entries(&repo).await;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.metadata.description, "old");
 
@@ -465,7 +455,7 @@ mod tests {
         std::fs::write(&ebuild_path, "EAPI=8\nDESCRIPTION=\"new\"\nSLOT=\"0\"\n").unwrap();
         set_mtime(&ebuild_path, base + Duration::from_secs(60));
 
-        let entries = primary_entries(&repo).await;
+        let entries = repo_entries(&repo).await;
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].1.metadata.description, "new",
@@ -539,7 +529,7 @@ mod tests {
         set_mtime(&ebuild_path, base + Duration::from_secs(60));
         assert_eq!(repo.sync_stamp().as_deref(), Some(stamp.as_str()));
 
-        let entries = primary_entries(&repo).await;
+        let entries = repo_entries(&repo).await;
         assert_eq!(entries.len(), 1);
         assert_eq!(
             entries[0].1.metadata.description, "new",

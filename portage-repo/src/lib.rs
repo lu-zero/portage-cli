@@ -39,11 +39,11 @@
 
 pub(crate) mod build;
 pub mod cache;
+pub mod entries;
 mod error;
 pub mod make_conf;
 /// Abstract md5-cache storage (dir / memory) for [`Repository`].
 pub mod metadata_cache;
-pub mod overlay;
 pub mod package_conf;
 pub mod package_env;
 pub(crate) mod repo;
@@ -62,6 +62,7 @@ pub use cache::{
     CacheReadOpts, RegenItem, RegenOpts, RegenStats, RegenWriteTarget, cache_cpvs,
     cache_entries_parallel, cache_entries_parallel_with_mtime, regen_cache,
 };
+pub use entries::{gap_entries, repo_entries};
 pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};
 pub use make_conf::{
@@ -69,7 +70,6 @@ pub use make_conf::{
     expand_make_conf_paths,
 };
 pub use metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache};
-pub use overlay::{gap_entries, overlay_entries, primary_entries};
 pub use package_conf::{PackageConf, Token as PackageToken};
 pub use package_env::env_files_for;
 pub use portage_metadata::EbuildMetadata;
