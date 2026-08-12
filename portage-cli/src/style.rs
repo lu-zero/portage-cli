@@ -127,6 +127,22 @@ pub const C_PKG_BINARY_SELECTED: Style = Style::new()
 pub const C_PKG_NOMERGE_SELECTED: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Blue)))
     .effects(Effects::BOLD);
+/// `-vv` only (`PrettyCtx::requested`, no real-emerge equivalent): a root
+/// target this run resolved `atoms` into, explicit or `@set`-expanded alike.
+/// Replaces [`C_PKG`]/[`C_PKG_BINARY`]/[`C_PKG_NOMERGE`] for that row's
+/// bracket+name entirely (merge/binary/nomerge status is still legible from
+/// the bracket's own word, just not its color) — a distinct purple rather
+/// than a `*` glyph column, so "you asked for this one" doesn't need extra
+/// width. Bright magenta: close enough to [`C_PKG_BINARY`]'s hue to read as
+/// "the same family, a different shade" but plainly distinguishable next to
+/// it in a mixed ebuild+binary plan.
+pub const C_PKG_REQUESTED: Style =
+    Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightMagenta)));
+/// [`C_PKG_REQUESTED`] `+ _SELECTED`: also `@world`-tracked (or about to
+/// join) — bold, same as every other `_SELECTED` variant.
+pub const C_PKG_REQUESTED_SELECTED: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::BrightMagenta)))
+    .effects(Effects::BOLD);
 /// `(N of M)` progress counters in merge banners (real emerge's
 /// `MERGE_LIST_PROGRESS`, which is yellow — not to be confused with the
 /// testing-keyword yellow below, same colour, different meaning).

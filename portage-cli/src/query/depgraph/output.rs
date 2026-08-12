@@ -12,7 +12,7 @@ use portage_metadata::CacheEntry;
 
 pub(super) use crate::style::{
     C_BOLD, C_OLDVERSION, C_PKG, C_PKG_BINARY, C_PKG_BINARY_SELECTED, C_PKG_NOMERGE,
-    C_PKG_NOMERGE_SELECTED, C_PKG_SELECTED,
+    C_PKG_NOMERGE_SELECTED, C_PKG_REQUESTED, C_PKG_REQUESTED_SELECTED, C_PKG_SELECTED,
 };
 
 // emerge color scheme: bold green for keywords/atoms/tags, bold red/blue for flags
@@ -1341,6 +1341,15 @@ pub(super) struct PrettyCtx<'a> {
     /// only if their cpns are individually in `@selected`: emerge's
     /// `favorites` half covers literal command-line atoms only.
     pub selected: &'a std::collections::HashSet<portage_atom::Cpn>,
+    /// `-vv`: every root target this run resolved `atoms` into (`mod.rs`'s
+    /// `root_cpns`) — explicit command-line atoms *and* `@set` expansions
+    /// alike, unlike [`Self::selected`]'s `@world`-only gate. `format_plan_parts`
+    /// tints a matching row purple (`C_PKG_REQUESTED[_SELECTED]`) instead of
+    /// its usual merge/binary/nomerge color, so "you (or your `@set`) asked
+    /// for this one directly" is visible independently of world/merge status
+    /// without adding a marker column — a dependency pulled in to satisfy
+    /// one of these stays in the ordinary palette.
+    pub requested: &'a std::collections::HashSet<portage_atom::Cpn>,
 }
 
 /// Print the emerge-style pretty plan, honouring each entry's
@@ -1413,6 +1422,7 @@ fn format_plan_parts(
         binpkg_index,
         resolve_secs: _,
         selected,
+        requested,
     } = ctx;
 
     let dest_suffix = match super::root_aware::display_root(merge_root, &cross.target, cross) {
@@ -1535,13 +1545,20 @@ fn format_plan_parts(
     // regardless, so a nomerge row's `[nomerge ...]` didn't visually match
     // its own (correctly teal) package name.
     let is_selected = selected.contains(pkg.cpn());
-    let name_color = match (in_plan, is_binary, is_selected) {
-        (false, _, false) => C_PKG_NOMERGE,
-        (false, _, true) => C_PKG_NOMERGE_SELECTED,
-        (true, true, false) => C_PKG_BINARY,
-        (true, true, true) => C_PKG_BINARY_SELECTED,
-        (true, false, false) => C_PKG,
-        (true, false, true) => C_PKG_SELECTED,
+    // `-vv` only: `is_requested` takes over the color entirely (purple
+    // instead of the merge/binary/nomerge family) rather than adding a `*`
+    // column — merge/binary/nomerge status is still legible from the
+    // bracket's own word, just not its color, for these rows.
+    let is_requested = verbose >= 2 && requested.contains(cpn);
+    let name_color = match (is_requested, in_plan, is_binary, is_selected) {
+        (true, _, _, false) => C_PKG_REQUESTED,
+        (true, _, _, true) => C_PKG_REQUESTED_SELECTED,
+        (false, false, _, false) => C_PKG_NOMERGE,
+        (false, false, _, true) => C_PKG_NOMERGE_SELECTED,
+        (false, true, true, false) => C_PKG_BINARY,
+        (false, true, true, true) => C_PKG_BINARY_SELECTED,
+        (false, true, false, false) => C_PKG,
+        (false, true, false, true) => C_PKG_SELECTED,
     };
     // `[nomerge]` (real emerge's own `-t` marker for a graph node shown only
     // to keep the tree connected) is a fixed-width placeholder, no action

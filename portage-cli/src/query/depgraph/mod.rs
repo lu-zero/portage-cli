@@ -123,6 +123,12 @@ pub struct DepgraphOpts<'a> {
     pub world_additions: &'a [Dep],
     pub arch: &'a Arch,
     pub format: DepgraphFormat,
+    /// `-v`/`-vv`: `>= 1` adds the `:slot/subslot::repo` suffix, download
+    /// size, and full (not just changed) USE flags to each `-p`/`--tree` row;
+    /// `>= 2` additionally tints every root target (`PrettyCtx::requested`)
+    /// purple. Distinct from the top-level `-v`/`-vv` build-phase logging
+    /// verbosity (`Cli::verbose`, see `diag.rs`) — same counter, different
+    /// consumer.
     pub verbose: u8,
     pub empty: bool,
     pub autounmask_write: bool,
@@ -1389,6 +1395,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         binpkg_index,
         resolve_secs,
         selected: &selected,
+        requested: &root_cpns,
     };
 
     match format {
