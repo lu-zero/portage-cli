@@ -59,6 +59,7 @@ anstream = { workspace = true }
 anstyle = { workspace = true }
 miette = { workspace = true }
 gix = { workspace = true, optional = true }
+glob = "0.3"
 indicatif = { workspace = true }
 prodash = { workspace = true, optional = true }
 terminal_size = { workspace = true }

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
+use portage_vdb::{ContentsEntry, InstalledPackage};
 
 /// Names of all known Portage sets, collected from:
 ///
@@ -29,6 +30,8 @@ impl KnownSets {
             "preserved-rebuild",
             "live-rebuild",
             "deprecated-live-rebuild",
+            "module-rebuild",
+            "x11-module-rebuild",
         ] {
             names.insert(name.to_string());
         }
@@ -110,6 +113,10 @@ pub(crate) fn resolve_vdb_set(name: &str, eroot: &Utf8Path) -> Option<Result<Vec
                 "subversion",
             ],
         ),
+        "module-rebuild" => owner_set_atoms(&vdb, &["/lib/modules"], &["/usr/src/linux*"], eroot),
+        "x11-module-rebuild" => {
+            owner_set_atoms(&vdb, &["/usr/lib*/xorg/modules"], &["/usr/bin/Xorg"], eroot)
+        }
         _ => unreachable!("is_vdb_set_name guards the match arms above"),
     })
 }
@@ -119,7 +126,11 @@ pub(crate) fn resolve_vdb_set(name: &str, eroot: &Utf8Path) -> Option<Result<Vec
 fn is_vdb_set_name(name: &str) -> bool {
     matches!(
         name,
-        "preserved-rebuild" | "live-rebuild" | "deprecated-live-rebuild"
+        "preserved-rebuild"
+            | "live-rebuild"
+            | "deprecated-live-rebuild"
+            | "module-rebuild"
+            | "x11-module-rebuild"
     )
 }
 
@@ -150,21 +161,160 @@ fn variable_set_atoms(
 ) -> Result<Vec<Dep>> {
     let mut out = Vec::new();
     for pkg in vdb.packages() {
-        let Some(value) = pkg.field(variable)? else {
+        // A single package's unreadable field (corrupted/mid-removal VDB
+        // entry) skips just that package rather than aborting the whole set
+        // — the same leniency `owner_set_atoms`' `.unwrap_or_default()` on
+        // `pkg.contents()` gives `@module-rebuild`/`@x11-module-rebuild`.
+        let Some(value) = pkg.field(variable).ok().flatten() else {
             continue;
         };
         if !value.split_whitespace().any(|tok| includes.contains(&tok)) {
             continue;
         }
-        let slot = pkg
-            .slot_main()
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "0".to_string());
-        let atom = format!("{}:{slot}", pkg.cpn());
+        let atom = slot_atom_key(&pkg);
         out.push(Dep::parse(&atom).with_context(|| format!("parsing set atom {atom}"))?);
     }
     Ok(out)
+}
+
+/// `@module-rebuild` / `@x11-module-rebuild` core (`OwnerSet`): the set of
+/// packages owning at least one path matched by `files`, minus any package
+/// that also owns a path matched by `exclude_files`.
+///
+/// Matches portage's `OwnerSet` (`portage/_sets/dbapi.py:65`):
+/// `mapPathsToAtoms` first `glob`s each pattern **against the live
+/// filesystem** (so `/usr/lib*/xorg/modules` expands to the concrete
+/// `/usr/lib64/xorg/modules` etc.), then looks up owners of the resulting
+/// paths via `_match_contents` — an **exact CONTENTS-entry match** (any
+/// kind, including `dir`), with symlink-aware parent resolution so that a
+/// `/lib/modules` query matches a `/usr/lib/modules` entry when `/lib` →
+/// `/usr/lib`. `exclude-files` narrows the result: a package owning any
+/// excluded path is dropped entirely.
+///
+/// Verified against a live host: `emerge -p @module-rebuild` returns empty
+/// when no installed package has a CONTENTS entry for `/lib/modules`
+/// (despite the dir being populated with hand-built kernel modules) —
+/// confirming exact-match, not a directory-subtree/prefix match.
+fn owner_set_atoms(
+    vdb: &portage_vdb::Vdb,
+    files: &[&str],
+    exclude_files: &[&str],
+    eroot: &Utf8Path,
+) -> Result<Vec<Dep>> {
+    let paths = expand_glob_patterns(files, eroot);
+    let exclude_paths = expand_glob_patterns(exclude_files, eroot);
+    let has_excludes = !exclude_paths.is_empty();
+
+    // Atom keys ("cat/pkg:{main_slot}") so a package owning multiple matched
+    // paths is counted once, mirroring portage's `rValue` set.
+    let mut result: Vec<String> = Vec::new();
+    let mut excluded: HashSet<String> = HashSet::new();
+
+    for pkg in vdb.packages() {
+        // Parse CONTENTS once per package and test every path against it.
+        let entries = pkg.contents().unwrap_or_default();
+        let owns_include = paths.iter().any(|p| contents_contains(&entries, p, eroot));
+        let owns_exclude = has_excludes
+            && exclude_paths
+                .iter()
+                .any(|p| contents_contains(&entries, p, eroot));
+        if !owns_include && !owns_exclude {
+            continue;
+        }
+        let key = slot_atom_key(&pkg);
+        if owns_include && !result.contains(&key) {
+            result.push(key.clone());
+        }
+        if owns_exclude {
+            excluded.insert(key);
+        }
+    }
+
+    result.retain(|k| !excluded.contains(k));
+    result.sort();
+    result
+        .into_iter()
+        .map(|k| Dep::parse(&k).with_context(|| format!("parsing set atom {k}")))
+        .collect()
+}
+
+/// Expand filesystem glob patterns (portage `files`/`exclude-files`) under
+/// `eroot`, returning concrete absolute paths (ROOT-relative, leading `/`).
+///
+/// Portage joins `EROOT` + pattern and globs the live FS, then strips the
+/// EROOT prefix (`mapPathsToAtoms`, lines 87-101). A literal pattern (no
+/// wildcard) yields itself if it exists; `/usr/lib*/xorg/modules` expands to
+/// each concrete `/usr/lib64/…` directory present.
+fn expand_glob_patterns(patterns: &[&str], eroot: &Utf8Path) -> Vec<Utf8PathBuf> {
+    let mut out = Vec::new();
+    for pat in patterns {
+        let full = eroot.join(pat.trim_start_matches('/'));
+        for matched in glob::glob(full.as_str())
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            // Re-anchor as a leading-`/` ROOT-relative path to match the
+            // absolute paths stored in CONTENTS.
+            let Ok(rel) = matched.strip_prefix(eroot.as_std_path()) else {
+                continue;
+            };
+            let mut abs = std::path::PathBuf::from("/");
+            abs.push(rel);
+            if let Ok(u) = Utf8PathBuf::from_path_buf(abs) {
+                out.push(u);
+            }
+        }
+    }
+    out
+}
+
+/// Whether `entries` (a package's parsed CONTENTS) owns `query`.
+///
+/// Unlike [`InstalledPackage::owns`] (which is restricted to `Obj`/`Sym` for
+/// the `qfile` use case), this matches **any** CONTENTS kind — including
+/// `dir`, which is what `@module-rebuild`'s `/lib/modules` query needs.
+/// Symlink-aware: if no exact string match, fall back to comparing the
+/// canonicalized full path of `query` against each same-basename entry's
+/// canonical path — portage's `_match_contents` does the equivalent via
+/// parent-directory inode comparison, so `/lib/modules` matches a
+/// `/usr/lib/modules` entry when `/lib` → `/usr/lib`.
+///
+/// `query`/`entries[].path` are ROOT-relative (leading `/`, `eroot` already
+/// stripped — see [`expand_glob_patterns`]), so both sides must be
+/// re-anchored under `eroot` before `canonicalize`: canonicalizing the bare
+/// ROOT-relative string instead would resolve symlinks against the *host's*
+/// `/`, not the target root, silently misbehaving under `--root`/`--local`/
+/// `--prefix` (where `eroot != "/"`).
+fn contents_contains(entries: &[ContentsEntry], query: &Utf8Path, eroot: &Utf8Path) -> bool {
+    let q = query.as_str();
+    if entries.iter().any(|e| e.path.as_str() == q) {
+        return true;
+    }
+    let Some(q_base) = query.file_name() else {
+        return false;
+    };
+    let anchor = |p: &Utf8Path| eroot.join(p.as_str().trim_start_matches('/'));
+    let Ok(qc) = std::fs::canonicalize(anchor(query).as_std_path()) else {
+        return false;
+    };
+    entries.iter().any(|e| {
+        e.path.file_name() == Some(q_base)
+            && std::fs::canonicalize(anchor(&e.path).as_std_path()).is_ok_and(|ec| ec == qc)
+    })
+}
+
+/// The `cat/pkg:{main_slot}` atom string for an installed package, defaulting
+/// the slot to `"0"` when unreadable (portage's `slot_invalid` fallback in
+/// `_pkg_str`). Used as the dedup/owner key in [`owner_set_atoms`].
+fn slot_atom_key(pkg: &InstalledPackage) -> String {
+    let slot = pkg
+        .slot_main()
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "0".to_string());
+    format!("{}:{slot}", pkg.cpn())
 }
 
 /// Parse `[section_name]` headers from all `.conf` files in `dir`.
@@ -417,5 +567,123 @@ mod tests {
         assert!(matches!(res, Some(Ok(ref atoms)) if atoms.is_empty()));
         let res = resolve_vdb_set("deprecated-live-rebuild", &eroot);
         assert!(matches!(res, Some(Ok(ref atoms)) if atoms.is_empty()));
+    }
+
+    // --- @module-rebuild / @x11-module-rebuild (OwnerSet) ---
+    //
+    // OwnerSet first globs the *live filesystem* for each pattern, then does
+    // an exact CONTENTS-path match (any kind, incl. `dir`). So a fixture needs
+    // BOTH the live path to exist (glob expands it) AND a package whose
+    // CONTENTS owns it.
+
+    #[test]
+    fn module_rebuild_returns_package_owning_lib_modules_dir_entry() {
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("lib/modules")).unwrap();
+        // Owns the `/lib/modules` directory entry → in @module-rebuild.
+        write_vdb_pkg(
+            &eroot,
+            "sys-kernel/linux-modules-6.18",
+            &[("SLOT", "0"), ("CONTENTS", "dir /lib/modules\n")],
+        );
+        // Owns only a file *under* /lib/modules, not the dir → must be absent.
+        write_vdb_pkg(
+            &eroot,
+            "app-emulation/vm-modules-1.0",
+            &[
+                ("SLOT", "0"),
+                ("CONTENTS", "obj /lib/modules/6.18/vm.ko deadbeef 0\n"),
+            ],
+        );
+
+        let atoms: Vec<String> = resolve_vdb_set("module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["sys-kernel/linux-modules:0"]);
+    }
+
+    #[test]
+    fn module_rebuild_does_not_subtree_match_files_under_lib_modules() {
+        // The headline exact-vs-prefix check: a package owning a kernel
+        // module FILE under /lib/modules but not the /lib/modules dir entry
+        // itself is NOT returned. Confirms exact-path match (mirrors the
+        // empty `emerge -p @module-rebuild` observed on a live host whose
+        // /lib/modules is populated only by hand-built modules).
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("lib/modules/6.18")).unwrap();
+        write_vdb_pkg(
+            &eroot,
+            "x11-drivers/nvidia-drivers-550",
+            &[
+                ("SLOT", "0"),
+                ("CONTENTS", "obj /lib/modules/6.18/nvidia.ko aaaa 0\n"),
+            ],
+        );
+        let atoms = resolve_vdb_set("module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap();
+        assert!(atoms.is_empty(), "subtree/prefix match must not apply");
+    }
+
+    #[test]
+    fn module_rebuild_excludes_package_owning_a_src_linux_exclude_path() {
+        // exclude-files = /usr/src/linux* : a package owning both
+        // /lib/modules and a matched exclude path is dropped entirely.
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("lib/modules")).unwrap();
+        std::fs::create_dir_all(eroot.join("usr/src/linux-6.18")).unwrap();
+        write_vdb_pkg(
+            &eroot,
+            "sys-kernel/gentoo-sources-6.18",
+            &[
+                ("SLOT", "0"),
+                ("CONTENTS", "dir /lib/modules\ndir /usr/src/linux-6.18\n"),
+            ],
+        );
+        let atoms = resolve_vdb_set("module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap();
+        assert!(
+            atoms.is_empty(),
+            "a package owning an excluded path is dropped from the result"
+        );
+    }
+
+    #[test]
+    fn module_rebuild_empty_when_no_package_owns_lib_modules() {
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("lib/modules")).unwrap();
+        write_vdb_pkg(
+            &eroot,
+            "app-misc/unrelated-1.0",
+            &[("SLOT", "0"), ("CONTENTS", "obj /usr/bin/foo aaaa 0\n")],
+        );
+        let atoms = resolve_vdb_set("module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap();
+        assert!(atoms.is_empty());
+    }
+
+    #[test]
+    fn x11_module_rebuild_globs_lib_wildcard_to_concrete_dir() {
+        // files = /usr/lib*/xorg/modules: the `*` must expand against the
+        // live filesystem to e.g. /usr/lib64/xorg/modules.
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("usr/lib64/xorg/modules")).unwrap();
+        write_vdb_pkg(
+            &eroot,
+            "x11-base/xorg-server-21",
+            &[("SLOT", "0"), ("CONTENTS", "dir /usr/lib64/xorg/modules\n")],
+        );
+        let atoms: Vec<String> = resolve_vdb_set("x11-module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["x11-base/xorg-server:0"]);
     }
 }
