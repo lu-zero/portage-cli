@@ -489,11 +489,24 @@ fn world_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
 /// lives for a *known* set name — `emerge.rs::expand_sets` does the same
 /// lazily for arbitrary `@set` refs typed on the command line, where the
 /// per-token failure handling has to differ.
+///
+/// `@preserved-rebuild` is special-cased the same way `expand_sets` special-
+/// cases it: a VDB/preserve-libs-registry query `SetResolver` (profile/
+/// config-only) has no access to, so it never needs (or can use) a profile
+/// stack at all.
 pub(crate) fn resolve_set(
     config_root: Option<&Utf8Path>,
     eroot: &Utf8Path,
     name: &str,
 ) -> Result<Vec<Dep>> {
+    if name == "preserved-rebuild" {
+        let vdb = Vdb::open(eroot.join("var/db/pkg"))
+            .with_context(|| format!("opening VDB under {eroot}"))?;
+        let registry = crate::preserve_libs::PreservedLibsRegistry::load(eroot);
+        return Ok(crate::preserve_libs::preserved_rebuild_atoms(
+            &vdb, &registry, eroot,
+        ));
+    }
     let profile_link = config_root
         .unwrap_or(Utf8Path::new("/"))
         .join("etc/portage/make.profile");

@@ -48,7 +48,8 @@ pub struct Cli {
     /// USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/
     /// ACCEPT_LICENSE, and configured repositories — `emerge --info`
     /// workalike. Takes no atoms. Combine with `--json` for structured
-    /// output (no real-emerge equivalent).
+    /// output, or `-v` to also list every known `@name` set and its
+    /// resolved atoms (neither has a real-emerge equivalent).
     #[arg(long)]
     pub info: bool,
 

@@ -4,7 +4,9 @@
 //! plus the configured repositories. Useful for bug reports and for
 //! comparing against a real `emerge --info` when something like USE_EXPAND
 //! derivation looks wrong. `--json` (real emerge has no equivalent) emits
-//! the same data as structured JSON instead of the text layout.
+//! the same data as structured JSON instead of the text layout. `-v` (also
+//! no real-emerge equivalent) adds every known `@name` set, resolved —
+//! see [`resolve_all_sets`].
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -118,6 +120,20 @@ struct BinaryRepoInfo {
     verify_signature: bool,
 }
 
+/// One `@name` set's resolved atoms, or why it couldn't be resolved —
+/// `em`-specific (`-v`), no real-emerge equivalent: unlike the fixed
+/// `Installed sets:` line (only the ones actually tracked in `world_sets`),
+/// this lists *every* set `KnownSets` can see, whether or not `em` can
+/// resolve it — exactly the "which sets does `em` actually support" question
+/// `todo/package-sets-support.md`'s audit had to answer by hand.
+#[derive(Serialize)]
+struct SetEntry {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    atoms: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 #[derive(Serialize)]
 struct MemInfo {
     total_kib: u64,
@@ -153,6 +169,11 @@ struct Info {
     /// plain atoms (real emerge's `Installed sets:` line).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     installed_sets: Vec<String>,
+    /// `-v`/`-vv`: every set `KnownSets` can see, resolved. `None` (not
+    /// merely empty) when `-v` wasn't passed, so `--json` output omits the
+    /// key entirely rather than an always-empty `{}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sets: Option<BTreeMap<String, SetEntry>>,
     /// `"global"` (the plain, non-USE_EXPAND flags) plus one entry per
     /// USE_EXPAND group, keyed by its uppercase variable name (`VIDEO_CARDS`).
     use_flags: BTreeMap<String, Vec<String>>,
@@ -233,6 +254,8 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
     .map(str::to_string)
     .collect();
 
+    let sets = (cli.verbose > 0).then(|| resolve_all_sets(roots.config(), roots.merge_root()));
+
     let use_expand_names = shell.get_var("USE_EXPAND").unwrap_or_default();
     let use_str = shell.get_var("USE").unwrap_or_default();
     let expand = UseExpand::from_var(&use_expand_names);
@@ -279,6 +302,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
         binary_repositories,
         toolchain,
         installed_sets,
+        sets,
         use_flags,
         vars,
         unset,
@@ -405,6 +429,29 @@ fn print_text(info: &Info) -> Result<()> {
         )?;
     }
 
+    if let Some(sets) = &info.sets {
+        writeln!(out, "\n{C_BOLD}Sets:{C_BOLD:#}\n")?;
+        for (name, entry) in sets {
+            match &entry.error {
+                Some(e) => writeln!(
+                    out,
+                    "{C_PKG}@{name}{C_PKG:#} {C_DIM}(not resolvable: {e}){C_DIM:#}"
+                )?,
+                None => {
+                    writeln!(
+                        out,
+                        "{C_PKG}@{name}{C_PKG:#} {C_DIM}({} atom{}){C_DIM:#}",
+                        entry.atoms.len(),
+                        if entry.atoms.len() == 1 { "" } else { "s" }
+                    )?;
+                    for atom in &entry.atoms {
+                        writeln!(out, "    {atom}")?;
+                    }
+                }
+            }
+        }
+    }
+
     let global = info
         .use_flags
         .get("global")
@@ -430,6 +477,39 @@ fn print_text(info: &Info) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve every set `crate::maint::sets::KnownSets` knows about — real
+/// portage's shipped built-ins (`/usr/share/portage/config/sets/*.conf`,
+/// `@preserved-rebuild` always added since it has no conf-file backing)
+/// plus this root's `sets.conf`/`etc/portage/sets/*` — through the exact
+/// same [`crate::maint::world::resolve_set`] the depgraph and `-W` use, so
+/// this reports what `em` can *actually* resolve today, not just what's
+/// configured. A set `em` doesn't implement yet (`@security`, and friends —
+/// see `todo/package-sets-support.md`) shows up with its resolve error
+/// rather than being silently absent from the list.
+fn resolve_all_sets(
+    config_root: Option<&Utf8Path>,
+    eroot: &Utf8Path,
+) -> BTreeMap<String, SetEntry> {
+    let known = crate::maint::sets::KnownSets::load(Some(eroot));
+    known
+        .iter()
+        .map(|name| {
+            let entry = match crate::maint::world::resolve_set(config_root, eroot, name) {
+                Ok(atoms) => {
+                    let mut atoms: Vec<String> = atoms.iter().map(|d| d.to_string()).collect();
+                    atoms.sort_unstable();
+                    SetEntry { atoms, error: None }
+                }
+                Err(e) => SetEntry {
+                    atoms: Vec::new(),
+                    error: Some(format!("{e:#}")),
+                },
+            };
+            (name.to_string(), entry)
+        })
+        .collect()
 }
 
 /// Installed-version summary for real `emerge --info`'s toolchain-package
@@ -612,4 +692,60 @@ fn mem_info() -> Option<MemInfo> {
         swap_total_kib: swap_total,
         swap_free_kib: swap_free,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal root `resolve_all_sets` can work against: an empty (but
+    /// valid) profile dir, one user-defined set, and an empty VDB so
+    /// `@preserved-rebuild` resolves cleanly instead of erroring on a
+    /// missing `var/db/pkg`.
+    fn scratch_root() -> (tempfile::TempDir, camino::Utf8PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("etc/portage/make.profile")).unwrap();
+        std::fs::create_dir_all(root.join("etc/portage/sets")).unwrap();
+        std::fs::create_dir_all(root.join("var/db/pkg")).unwrap();
+        std::fs::write(root.join("etc/portage/sets/myuserset"), "app-shells/bash\n").unwrap();
+        (tmp, root)
+    }
+
+    #[test]
+    fn resolve_all_sets_reports_both_resolved_and_unresolvable_sets() {
+        let (_tmp, root) = scratch_root();
+        let sets = resolve_all_sets(Some(&root), &root);
+
+        let myset = sets.get("myuserset").expect("user set is known");
+        assert_eq!(myset.atoms, vec!["app-shells/bash".to_string()]);
+        assert!(myset.error.is_none());
+
+        // Always known (`KnownSets`), and now resolvable even with no
+        // profile-based `SetResolver` match arm for it.
+        let preserved = sets.get("preserved-rebuild").expect("always known");
+        assert!(preserved.atoms.is_empty());
+        assert!(preserved.error.is_none());
+    }
+
+    #[test]
+    fn resolve_all_sets_is_none_shaped_correctly_when_unresolvable() {
+        // A set name `KnownSets` only sees via a `usr/share/portage`
+        // built-in conf that this scratch root doesn't have wouldn't even
+        // appear here, so simulate "known but unresolvable" the way a real
+        // host does for @security/@live-rebuild/etc.: a `sets.conf`
+        // section with no backing implementation `SetResolver` recognizes.
+        let (_tmp, root) = scratch_root();
+        std::fs::write(
+            root.join("etc/portage/sets.conf"),
+            "[security]\nclass = portage.sets.security.NewAffectedSet\n",
+        )
+        .unwrap();
+
+        let sets = resolve_all_sets(Some(&root), &root);
+
+        let security = sets.get("security").expect("sets.conf section is known");
+        assert!(security.atoms.is_empty());
+        assert!(security.error.is_some());
+    }
 }

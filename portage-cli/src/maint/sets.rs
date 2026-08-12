@@ -46,6 +46,12 @@ impl KnownSets {
     pub fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
     }
+
+    /// Every known set name (without the `@` prefix), unordered — callers
+    /// that need a stable display order (`em --info -v`) sort it themselves.
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.names.iter().map(String::as_str)
+    }
 }
 
 /// Parse `[section_name]` headers from all `.conf` files in `dir`.
