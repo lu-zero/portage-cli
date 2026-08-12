@@ -2350,14 +2350,13 @@ mod tests {
     /// Build `(children, parents)` adjacency from a list of `parent -> child`
     /// edges, plus a `roots` set. Returns owned maps whose borrowed keys point
     /// into `pkgs` so they outlive the call.
+    type Adjacency<'a> = HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>;
+
     fn adjacency<'a>(
         edges: &'a [(&'a PortagePackage, &'a PortagePackage)],
-    ) -> (
-        HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
-        HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>,
-    ) {
-        let mut children: HashMap<&PortagePackage, HashSet<&PortagePackage>> = HashMap::new();
-        let mut parents: HashMap<&PortagePackage, HashSet<&PortagePackage>> = HashMap::new();
+    ) -> (Adjacency<'a>, Adjacency<'a>) {
+        let mut children: Adjacency<'a> = HashMap::new();
+        let mut parents: Adjacency<'a> = HashMap::new();
         for (from, to) in edges {
             children.entry(from).or_default().insert(to);
             parents.entry(to).or_default().insert(from);

@@ -130,6 +130,13 @@ impl Drop for ActiveStateGuard {
 /// cares about, and every caller sets the same one. Callers must still
 /// hold [`path_lock`] (and typically [`home_lock`]) for the general
 /// environment-variable safety those locks exist for.
+///
+/// Only ever called from `sync-gix`-gated test modules (`gix_ext::reset`,
+/// `maint::sync::git_gix`); the `cfg_attr` keeps it dead-code-clean in the
+/// default (no `sync-gix`) build instead of gating the function itself,
+/// which would break the `[set_test_git_identity]` link in [`HOME_LOCK`]'s
+/// always-compiled doc comment.
+#[cfg_attr(not(feature = "sync-gix"), allow(dead_code))]
 pub(crate) fn set_test_git_identity() {
     // SAFETY: held under path_lock()/home_lock() by every caller; no other
     // test reads or writes these GIT_* vars.
