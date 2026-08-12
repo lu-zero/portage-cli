@@ -21,10 +21,12 @@ pub(crate) mod error;
 /// Only built with feature `sync-gix`.
 #[cfg(feature = "sync-gix")]
 pub(crate) mod gix_ext;
+pub(crate) mod glsa;
 pub(crate) mod info;
 pub(crate) mod maint;
 pub(crate) mod merge;
 pub(crate) mod mirrordist;
+pub(crate) mod news;
 pub(crate) mod pkg;
 pub(crate) mod postprocess;
 pub(crate) mod preflight;

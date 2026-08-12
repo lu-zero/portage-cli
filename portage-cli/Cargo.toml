@@ -75,6 +75,7 @@ portage-repo = { workspace = true }
 portage-resolve = { workspace = true }
 portage-distfiles = { workspace = true }
 portage-vdb = { workspace = true }
+roxmltree = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 portage-binpkg = { workspace = true }

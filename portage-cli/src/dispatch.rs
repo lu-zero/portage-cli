@@ -5,9 +5,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, bail};
 
-use crate::cli::{
-    self, Applet, CleanTarget, GlsaCommand, LogCommand, MaintCommand, NewsCommand, QueryCommand,
-};
+use crate::cli::{self, Applet, CleanTarget, LogCommand, MaintCommand, QueryCommand};
 use crate::crossdev;
 use crate::ebuild;
 use crate::emerge;
@@ -211,8 +209,8 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             limit,
             delete,
         } => crate::elog::run_read(globals, package.as_deref(), *list, *limit, *delete).await,
-        Applet::News { command } => run_news(command),
-        Applet::Glsa { command } => run_glsa(command),
+        Applet::News { command } => crate::news::run(command, globals),
+        Applet::Glsa { command } => crate::glsa::run(command, globals).await,
         Applet::Log { command } => run_log(command, globals),
         Applet::Grep { pattern, paths } => {
             eprintln!("grep: pattern={} paths={:?}", pattern, paths);
@@ -495,34 +493,6 @@ fn run_clean(target: &Option<CleanTarget>) -> Result<()> {
         None => bail!("not implemented: eclean (no target)"),
         Some(CleanTarget::Dist) => bail!("not implemented: eclean dist"),
         Some(CleanTarget::Pkg) => bail!("not implemented: eclean pkg"),
-    }
-}
-
-fn run_news(command: &Option<NewsCommand>) -> Result<()> {
-    match command {
-        None => bail!("not implemented: news (no subcommand)"),
-        Some(NewsCommand::Count) => bail!("not implemented: news count"),
-        Some(NewsCommand::List) => bail!("not implemented: news list"),
-        Some(NewsCommand::Read { id }) => {
-            eprintln!("news: read {:?}", id);
-            bail!("not implemented: news read")
-        }
-        Some(NewsCommand::Purge) => bail!("not implemented: news purge"),
-    }
-}
-
-fn run_glsa(command: &Option<GlsaCommand>) -> Result<()> {
-    match command {
-        None => bail!("not implemented: glsa (no subcommand)"),
-        Some(GlsaCommand::List) => bail!("not implemented: glsa list"),
-        Some(GlsaCommand::Check { ids }) => {
-            eprintln!("glsa: check {:?}", ids);
-            bail!("not implemented: glsa check")
-        }
-        Some(GlsaCommand::Fix { ids }) => {
-            eprintln!("glsa: fix {:?}", ids);
-            bail!("not implemented: glsa fix")
-        }
     }
 }
 

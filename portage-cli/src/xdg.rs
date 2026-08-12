@@ -63,6 +63,30 @@ pub fn md5_cache_dir(repo_name: &str) -> Utf8PathBuf {
     md5_cache_root().join(repo_name)
 }
 
+/// `$XDG_STATE_HOME/em/news` — `em news`'s unread/read/skip tracking when
+/// operating on the bare host (no `--root`/`--prefix`/`--local`).
+///
+/// Real GLEP 42 news state lives at `<EROOT>/var/lib/gentoo/news/`, root-
+/// owned and portage-group-writable. That's fine for a managed
+/// `--root`/`--prefix`/`--local` target (the invoking user owns that tree,
+/// same as `var/lib/portage/world` under it), but `em news list`/`count` is
+/// a read-mostly, unprivileged operation an ordinary user should be able to
+/// run against the real host without root — same reasoning as
+/// [`regen_activity_root`]. Callers pick between this and the real
+/// `<eroot>/var/lib/gentoo/news` based on whether `eroot` is `/`.
+pub fn news_state_dir() -> Utf8PathBuf {
+    em_state_dir().join("news")
+}
+
+/// `$XDG_STATE_HOME/em/glsa` — `em glsa`'s `glsa_injected` tracking on the
+/// bare host. Same reasoning as [`news_state_dir`]: real portage's
+/// `glsa_injected` lives at `<EROOT>/var/lib/portage/glsa_injected`
+/// (`PRIVATE_PATH`), and `em glsa fix` marking a GLSA as applied shouldn't
+/// need root just to remember what it already fixed.
+pub fn glsa_state_dir() -> Utf8PathBuf {
+    em_state_dir().join("glsa")
+}
+
 /// `$XDG_STATE_HOME/em/mirrordist` — `em mirrordist`'s own deletion-grace
 /// state files (one JSON file per repo/distfiles-target pair; see
 /// `mirrordist::DeletionDb`). Deliberately outside `--distfiles` so it's
