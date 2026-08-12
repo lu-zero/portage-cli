@@ -14,19 +14,17 @@
 
 use std::collections::BTreeSet;
 
-use anstyle::{Effects, Style};
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpv, Dep};
-use portage_repo::{MakeConf, ReposConf};
+use portage_repo::ReposConf;
 
+use crate::advisory::{
+    self, effective_arch, installed_packages, print_item_banner, print_list_header, print_sub_line,
+    print_summary, read_line_set, state_dir, status_marker, truncate_to_budget, write_line_set,
+};
 use crate::cli::{Cli, NewsCommand};
-use crate::style::{C_BOLD, C_MARKER_INFO, C_WARN, einfo_line, warn_line};
-
-/// Secondary/annotation text (an item's dim `(name)` tag, `Author:`/
-/// `Posted:` labels) — matches `info.rs`'s local `C_DIM` convention; not
-/// (yet) promoted to `style.rs`'s shared palette.
-const C_DIM: Style = Style::new().effects(Effects::DIMMED);
+use crate::style::{einfo_line, warn_line};
 
 const LANGUAGE_ID: &str = "en";
 
@@ -51,16 +49,6 @@ fn main_repo_and_profile(globals: &Cli) -> Option<(portage_repo::Repository, Opt
     let repo = crate::repo_open::open(entry.location.as_path()?).ok()?;
     let profile = crate::select::profile::current_profile(globals, &repo);
     Some((repo, profile))
-}
-
-fn effective_arch(globals: &Cli) -> String {
-    let make_conf = crate::select::config_portage_dir(globals).join("make.conf");
-    if let Ok(conf) = MakeConf::load(&make_conf)
-        && let Some(arch) = conf.get("ARCH").filter(|a| !a.is_empty())
-    {
-        return arch.to_string();
-    }
-    globals.arch.as_str().to_string()
 }
 
 #[derive(Default)]
@@ -173,42 +161,14 @@ fn is_relevant(r: &Restrictions, ctx: &RelevanceCtx, installed: &[(Cpv, String)]
     true
 }
 
-/// Where unread/read/skip state lives for `eroot`. On the bare host
-/// (`eroot == "/"`, i.e. no `--root`/`--prefix`/`--local`) this is
-/// [`crate::xdg::news_state_dir`] instead of the real
-/// `/var/lib/gentoo/news/` — `em news` is a read-mostly, unprivileged
-/// command and shouldn't need root just to track what's been read, unlike a
-/// real merge. A managed `--root`/`--prefix`/`--local` target is the
-/// invoking user's own tree (same as `var/lib/portage/world` under it), so
-/// it keeps the real GLEP-42 path.
+/// Where unread/read/skip state lives for `eroot` — see
+/// [`advisory::state_dir`] for the bare-host/managed-root split.
 fn news_lib_dir(eroot: &Utf8Path) -> Utf8PathBuf {
-    if eroot.as_str() == "/" {
-        crate::xdg::news_state_dir()
-    } else {
-        eroot.join("var/lib/gentoo/news")
-    }
+    state_dir(eroot, "var/lib/gentoo/news", crate::xdg::news_state_dir)
 }
 
 fn state_path(eroot: &Utf8Path, repo: &str, kind: &str) -> Utf8PathBuf {
     news_lib_dir(eroot).join(format!("news-{repo}.{kind}"))
-}
-
-fn read_state(path: &Utf8Path) -> BTreeSet<String> {
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|s| {
-            s.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn write_state(path: &Utf8Path, items: &BTreeSet<String>) -> Result<()> {
-    let body: String = items.iter().map(|i| format!("{i}\n")).collect();
-    crate::util::write_atomic(path, body.as_bytes()).with_context(|| format!("writing {path}"))
 }
 
 /// A repo's news directory, if it has one on disk.
@@ -232,9 +192,9 @@ fn update_repo(
 
     let unread_path = state_path(eroot, repo, "unread");
     let skip_path = state_path(eroot, repo, "skip");
-    let mut unread = read_state(&unread_path);
+    let mut unread = read_line_set(&unread_path);
     let unread_orig = unread.clone();
-    let mut skip = read_state(&skip_path);
+    let mut skip = read_line_set(&skip_path);
     let skip_orig = skip.clone();
 
     for entry in entries.flatten() {
@@ -264,10 +224,10 @@ fn update_repo(
     std::fs::create_dir_all(news_lib_dir(eroot).as_std_path())
         .with_context(|| format!("creating {}", news_lib_dir(eroot)))?;
     if unread != unread_orig {
-        write_state(&unread_path, &unread)?;
+        write_line_set(&unread_path, &unread)?;
     }
     if skip != skip_orig {
-        write_state(&skip_path, &skip)?;
+        write_line_set(&skip_path, &skip)?;
     }
     Ok(())
 }
@@ -289,14 +249,7 @@ fn collect_items(globals: &Cli, eroot: &Utf8Path, update: bool) -> Result<Vec<It
         .repos_conf()
         .context("reading repos.conf")?;
     let ctx = RelevanceCtx::load(globals);
-    let installed: Vec<(Cpv, String)> = crate::vdb::open_cli_vdb(globals)
-        .map(|vdb| {
-            vdb.packages()
-                .into_iter()
-                .map(|p| (p.cpv().clone(), p.slot_main().unwrap_or_default()))
-                .collect()
-        })
-        .unwrap_or_default();
+    let installed = installed_packages(globals);
 
     let mut items = Vec::new();
     for entry in repos_conf.repos() {
@@ -309,8 +262,8 @@ fn collect_items(globals: &Cli, eroot: &Utf8Path, update: bool) -> Result<Vec<It
         if update {
             update_repo(eroot, &entry.name, &repo_path, &ctx, &installed)?;
         }
-        let unread = read_state(&state_path(eroot, &entry.name, "unread"));
-        let read = read_state(&state_path(eroot, &entry.name, "read"));
+        let unread = read_line_set(&state_path(eroot, &entry.name, "unread"));
+        let read = read_line_set(&state_path(eroot, &entry.name, "read"));
         for name in &unread {
             items.push(load_item(&entry.name, name, &repo_path, true));
         }
@@ -357,9 +310,9 @@ fn run_list(globals: &Cli) -> Result<()> {
         return Ok(());
     }
 
-    println!("{C_BOLD}News items:{C_BOLD:#}\n");
+    print_list_header("News items:");
 
-    let num_width = items.len().to_string().len();
+    let num_width = advisory::num_width(items.len());
     // Room for "<num>  <mark>  " before the line itself, mirroring eselect's
     // own `11 + ${#line} >= cols` budget.
     let budget = crate::style::term_width().saturating_sub(num_width + 5);
@@ -371,26 +324,13 @@ fn run_list(globals: &Cli) -> Result<()> {
         } else {
             format!("[{}] ", item.repo)
         };
-        let line = format!("{posted:<12} {repo_tag}{title}");
-        let line = if budget > 3 && line.chars().count() > budget {
-            format!("{}...", line.chars().take(budget - 3).collect::<String>())
-        } else {
-            line
-        };
-        let mark = if item.unread {
-            format!("{C_WARN}N{C_WARN:#}")
-        } else {
-            " ".to_string()
-        };
+        let line = truncate_to_budget(format!("{posted:<12} {repo_tag}{title}"), budget);
+        let mark = status_marker(item.unread, 'N');
         println!("{:>num_width$}  {mark}  {line}", i + 1);
     }
 
     let unread = items.iter().filter(|i| i.unread).count();
-    println!(
-        "\n{unread} unread of {} news item{}",
-        items.len(),
-        if items.len() == 1 { "" } else { "s" }
-    );
+    print_summary(unread, "unread", items.len(), "news item", "news items");
     Ok(())
 }
 
@@ -454,15 +394,12 @@ fn run_read(globals: &Cli, ids: &[String]) -> Result<()> {
                 }
                 let parsed = parse_item(&text);
                 let title = parsed.title.as_deref().unwrap_or(&item.name);
-                println!(
-                    "{C_MARKER_INFO}*{C_MARKER_INFO:#} {C_BOLD}{title}{C_BOLD:#} {C_DIM}({}){C_DIM:#}",
-                    item.name
-                );
+                print_item_banner(title, &item.name);
                 if let Some(author) = &parsed.author {
-                    println!("  {C_DIM}Author:{C_DIM:#} {author}");
+                    print_sub_line("Author", author);
                 }
                 if let Some(posted) = &parsed.posted {
-                    println!("  {C_DIM}Posted:{C_DIM:#} {posted}");
+                    print_sub_line("Posted", posted);
                 }
                 println!();
                 let body_start = text.find("\n\n").map(|p| p + 2).unwrap_or(0);
@@ -477,12 +414,12 @@ fn run_read(globals: &Cli, ids: &[String]) -> Result<()> {
     }
 
     for (repo, name) in newly_read {
-        let mut unread = read_state(&state_path(&eroot, repo, "unread"));
-        let mut read = read_state(&state_path(&eroot, repo, "read"));
+        let mut unread = read_line_set(&state_path(&eroot, repo, "unread"));
+        let mut read = read_line_set(&state_path(&eroot, repo, "read"));
         unread.remove(name);
         read.insert(name.to_string());
-        write_state(&state_path(&eroot, repo, "unread"), &unread)?;
-        write_state(&state_path(&eroot, repo, "read"), &read)?;
+        write_line_set(&state_path(&eroot, repo, "unread"), &unread)?;
+        write_line_set(&state_path(&eroot, repo, "read"), &read)?;
     }
     Ok(())
 }
@@ -511,10 +448,10 @@ fn run_purge(globals: &Cli) -> Result<()> {
     let mut purged = 0usize;
     for entry in conf.repos() {
         let path = state_path(&eroot, &entry.name, "read");
-        let existing = read_state(&path);
+        let existing = read_line_set(&path);
         if !existing.is_empty() {
             purged += existing.len();
-            write_state(&path, &BTreeSet::new())?;
+            write_line_set(&path, &BTreeSet::new())?;
         }
     }
     einfo_line!("purged {purged} read news item(s)");

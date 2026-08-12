@@ -4,6 +4,8 @@
 /// Persistent active `--prefix`/`--local` registration (`em active`).
 pub(crate) mod active;
 pub mod activity;
+/// Shared helpers/formatters for `em select news` and `em select glsa`.
+pub(crate) mod advisory;
 pub(crate) mod binpkg;
 pub mod cli;
 pub(crate) mod config_plan;

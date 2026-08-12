@@ -28,8 +28,12 @@ use anyhow::{Context, Result, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpn, Cpv, Version};
 
+use crate::advisory::{
+    self, effective_arch, installed_packages, print_item_banner, print_list_header, print_sub_line,
+    print_summary, read_line_set, state_dir, status_marker, truncate_to_budget, write_line_set,
+};
 use crate::cli::{Cli, GlsaCommand};
-use crate::style::{C_ERROR, C_GOOD, C_WARN, einfo_line, warn_line};
+use crate::style::{C_GOOD, einfo_line, warn_line};
 
 #[derive(Clone, Copy)]
 enum RangeOp {
@@ -267,43 +271,27 @@ fn glsa_dir(repo_path: &Utf8Path) -> Utf8PathBuf {
     repo_path.join("metadata/glsa")
 }
 
-/// Where `glsa_injected` lives for `eroot` — same bare-host/managed-root
-/// split as [`crate::news::news_lib_dir`]: real portage's
-/// `<EROOT>/var/lib/portage/glsa_injected` (`PRIVATE_PATH`) under a managed
-/// `--root`/`--prefix`/`--local` target, XDG state on the bare host, so
-/// `em glsa fix` marking a GLSA as applied doesn't need root just to
-/// remember that.
+/// Where `glsa_injected` lives for `eroot` — see [`advisory::state_dir`] for
+/// the bare-host/managed-root split. Real portage's
+/// `<EROOT>/var/lib/portage/glsa_injected` (`PRIVATE_PATH`).
 fn injected_path(eroot: &Utf8Path) -> Utf8PathBuf {
-    if eroot.as_str() == "/" {
+    state_dir(eroot, "var/lib/portage/glsa_injected", || {
         crate::xdg::glsa_state_dir().join("glsa_injected")
-    } else {
-        eroot.join("var/lib/portage/glsa_injected")
-    }
+    })
 }
 
 /// GLSA ids previously marked applied (real portage's `get_applied_glsas`).
 fn read_injected(eroot: &Utf8Path) -> BTreeSet<String> {
-    std::fs::read_to_string(injected_path(eroot))
-        .ok()
-        .map(|s| {
-            s.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    read_line_set(&injected_path(eroot))
 }
 
 /// Mark `ids` as applied, merging with whatever's already recorded (real
 /// portage's `Glsa.inject`, one call per id — batched here since `fix`
 /// always has the whole set up front).
 fn mark_injected(eroot: &Utf8Path, ids: &[String]) -> Result<()> {
-    let path = injected_path(eroot);
     let mut all = read_injected(eroot);
     all.extend(ids.iter().cloned());
-    let body: String = all.iter().map(|i| format!("{i}\n")).collect();
-    crate::util::write_atomic(&path, body.as_bytes()).with_context(|| format!("writing {path}"))
+    write_line_set(&injected_path(eroot), &all)
 }
 
 /// Every GLSA id available in the repo, sorted.
@@ -330,37 +318,26 @@ fn load(repo_path: &Utf8Path, id: &str) -> Result<Glsa> {
     parse_glsa(&xml).with_context(|| format!("parsing {path}"))
 }
 
-fn effective_arch(globals: &Cli) -> String {
-    let make_conf = crate::select::config_portage_dir(globals).join("make.conf");
-    if let Ok(conf) = portage_repo::MakeConf::load(&make_conf)
-        && let Some(arch) = conf.get("ARCH").filter(|a| !a.is_empty())
-    {
-        return arch.to_string();
-    }
-    globals.arch.as_str().to_string()
-}
-
-fn installed_packages(globals: &Cli) -> Vec<(Cpv, String)> {
-    crate::vdb::open_cli_vdb(globals)
-        .map(|vdb| {
-            vdb.packages()
-                .into_iter()
-                .map(|p| (p.cpv().clone(), p.slot_main().unwrap_or_default()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn run_list(globals: &Cli) -> Result<()> {
     let repo_path = Utf8PathBuf::from(globals.repo_path());
     let ids = list_ids(&repo_path)?;
+    if ids.is_empty() {
+        println!("(no known GLSAs)");
+        return Ok(());
+    }
     let arch = effective_arch(globals);
     let installed = installed_packages(globals);
     let eroot = globals.outer_roots().merge_root().to_owned();
     let injected = read_injected(&eroot);
 
+    print_list_header("GLSAs:");
+
+    let num_width = advisory::num_width(ids.len());
+    // Room for "<num>  <mark>  " before the line itself, same budget shape
+    // `news list` uses.
+    let budget = crate::style::term_width().saturating_sub(num_width + 5);
     let mut affected_count = 0usize;
-    for id in &ids {
+    for (i, id) in ids.iter().enumerate() {
         let glsa = match load(&repo_path, id) {
             Ok(g) => g,
             Err(e) => {
@@ -368,18 +345,15 @@ fn run_list(globals: &Cli) -> Result<()> {
                 continue;
             }
         };
-        if is_vulnerable(&glsa, &installed, &arch, &injected) {
+        let affected = is_vulnerable(&glsa, &installed, &arch, &injected);
+        if affected {
             affected_count += 1;
-            println!("{C_WARN}[A]{C_WARN:#} {id} {}", glsa.title);
-        } else {
-            println!("[N] {id} {}", glsa.title);
         }
+        let line = truncate_to_budget(format!("{id}  {}", glsa.title), budget);
+        let mark = status_marker(affected, 'A');
+        println!("{:>num_width$}  {mark}  {line}", i + 1);
     }
-    println!();
-    println!(
-        "{affected_count} of {} GLSA(s) affect this system",
-        ids.len()
-    );
+    print_summary(affected_count, "affected", ids.len(), "GLSA", "GLSAs");
     Ok(())
 }
 
@@ -399,9 +373,12 @@ fn run_check(globals: &Cli, ids: &[String]) -> Result<()> {
     for id in &targets {
         let glsa = load(&repo_path, id)?;
         if is_vulnerable(&glsa, &installed, &arch, &injected) {
+            if affected_count > 0 {
+                println!();
+            }
+            print_item_banner(&glsa.title, id);
+            print_sub_line("Synopsis", &glsa.synopsis);
             affected_count += 1;
-            println!("{C_ERROR}*{C_ERROR:#} {id} ({}) affected", glsa.title);
-            println!("    {}", glsa.synopsis);
         } else if !ids.is_empty() {
             // Explicit id list: report the non-affected ones too.
             println!("{C_GOOD}-{C_GOOD:#} {id} ({}) not affected", glsa.title);
@@ -410,8 +387,7 @@ fn run_check(globals: &Cli, ids: &[String]) -> Result<()> {
     if affected_count == 0 {
         einfo_line!("no affected GLSAs found");
     } else {
-        println!();
-        println!("{affected_count} GLSA(s) affect this system");
+        print_summary(affected_count, "affected", targets.len(), "GLSA", "GLSAs");
     }
     Ok(())
 }
