@@ -499,13 +499,11 @@ pub(crate) fn resolve_set(
     eroot: &Utf8Path,
     name: &str,
 ) -> Result<Vec<Dep>> {
-    if name == "preserved-rebuild" {
-        let vdb = Vdb::open(eroot.join("var/db/pkg"))
-            .with_context(|| format!("opening VDB under {eroot}"))?;
-        let registry = crate::preserve_libs::PreservedLibsRegistry::load(eroot);
-        return Ok(crate::preserve_libs::preserved_rebuild_atoms(
-            &vdb, &registry, eroot,
-        ));
+    // VDB-aware built-ins (@preserved-rebuild, …) can't go through
+    // `SetResolver` (no VDB access); route them through the shared resolver
+    // first. `None` → not a VDB-aware name, fall through to the profile stack.
+    if let Some(res) = super::sets::resolve_vdb_set(name, eroot) {
+        return res.with_context(|| format!("failed to resolve @{name}"));
     }
     let config_root = config_root.unwrap_or(Utf8Path::new("/"));
     let profile_link = config_root.join("etc/portage/make.profile");

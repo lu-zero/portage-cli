@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
+use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
+use portage_atom::Dep;
 
 /// Names of all known Portage sets, collected from:
 ///
@@ -17,10 +19,10 @@ impl KnownSets {
         let root = root.unwrap_or(Utf8Path::new("/"));
         let mut names = HashSet::new();
 
-        // `@preserved-rebuild` is handled directly by `emerge.rs::expand_sets`
-        // (a VDB/registry query, not a config-file-defined set), so it's
-        // always known even on an `em`-only root that never merged
-        // `sys-apps/portage` and so lacks `.../config/sets/portage.conf`.
+        // `@preserved-rebuild` is resolved by `resolve_vdb_set` (a VDB/registry
+        // query, not a config-file-defined set), so it's always known even on
+        // an `em`-only root that never merged `sys-apps/portage` and so lacks
+        // `.../config/sets/portage.conf`.
         names.insert("preserved-rebuild".to_string());
 
         // Built-in sets from /usr/share/portage/config/sets/*.conf
@@ -52,6 +54,56 @@ impl KnownSets {
     pub fn iter(&self) -> impl Iterator<Item = &str> {
         self.names.iter().map(String::as_str)
     }
+}
+
+/// Resolve a VDB-aware built-in set under `eroot`.
+///
+/// `@preserved-rebuild` (and — to follow — `@live-rebuild`,
+/// `@deprecated-live-rebuild`, `@module-rebuild`, `@x11-module-rebuild`)
+/// queries the installed-package database (`var/db/pkg`) and/or related
+/// registries, so it can't go through `portage_repo::SetResolver` (which is
+/// profile/config-only and has no VDB access). Both `emerge::expand_sets`
+/// (root-target expansion) and `maint::world::resolve_set` (display/audit)
+/// route VDB-aware names through here first.
+///
+/// Returns `None` when `name` is not a VDB-aware built-in (caller falls
+/// back to `SetResolver`); `Some(Ok(atoms))` on success; `Some(Err(_))`
+/// when the name is recognized but its VDB query failed. Callers decide
+/// how to handle the error (warn-and-skip vs propagate) — they differ
+/// deliberately between the two call sites.
+pub(crate) fn resolve_vdb_set(name: &str, eroot: &Utf8Path) -> Option<Result<Vec<Dep>>> {
+    // Only open the VDB for names we actually recognize; non-VDB names
+    // (`@system`, `@world`, user sets) must fall through to `SetResolver`
+    // without requiring a readable `var/db/pkg` at all.
+    if !is_vdb_set_name(name) {
+        return None;
+    }
+    let vdb = match portage_vdb::Vdb::open(eroot.join("var/db/pkg")) {
+        Ok(v) => v,
+        Err(e) => {
+            return Some(Err(e).with_context(|| format!("opening VDB under {eroot}")));
+        }
+    };
+    Some(match name {
+        "preserved-rebuild" => preserved_rebuild_atoms(&vdb, eroot),
+        _ => unreachable!("is_vdb_set_name guards the match arms above"),
+    })
+}
+
+/// Whether `name` is a built-in set resolved through [`resolve_vdb_set`]
+/// (rather than `SetResolver`). Kept in sync with the match arms there.
+fn is_vdb_set_name(name: &str) -> bool {
+    matches!(name, "preserved-rebuild")
+}
+
+/// `@preserved-rebuild`: packages owning a shared lib whose last provider was
+/// just unmerged, so they need rebuilding against the surviving provider.
+/// Sourced from the preserve-libs registry + a link scan of the VDB.
+fn preserved_rebuild_atoms(vdb: &portage_vdb::Vdb, eroot: &Utf8Path) -> Result<Vec<Dep>> {
+    let registry = crate::preserve_libs::PreservedLibsRegistry::load(eroot);
+    Ok(crate::preserve_libs::preserved_rebuild_atoms(
+        vdb, &registry, eroot,
+    ))
 }
 
 /// Parse `[section_name]` headers from all `.conf` files in `dir`.
@@ -162,9 +214,37 @@ mod tests {
     fn preserved_rebuild_is_always_known() {
         // Even with no `sys-apps/portage`-installed config/sets directory at
         // all (an `em`-only root), `@preserved-rebuild` must still validate —
-        // it's computed directly by `expand_sets`, not read from disk here.
+        // it's resolved by `resolve_vdb_set`, not read from disk here.
         let dir = make_root("", &[]);
         let sets = KnownSets::load(Some(Utf8Path::from_path(dir.path()).unwrap()));
         assert!(sets.contains("preserved-rebuild"));
+    }
+
+    // --- resolve_vdb_set dispatch ---
+
+    /// A scratch eroot with an (empty) `var/db/pkg`, enough for the
+    /// VDB-aware resolvers to open without error.
+    fn vdb_eroot() -> (tempfile::TempDir, Utf8PathBuf) {
+        let dir = tempdir().unwrap();
+        let eroot = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(eroot.join("var/db/pkg")).unwrap();
+        (dir, eroot)
+    }
+
+    #[test]
+    fn resolve_vdb_set_returns_none_for_non_vdb_names() {
+        let (_keep, eroot) = vdb_eroot();
+        assert!(resolve_vdb_set("system", &eroot).is_none());
+        assert!(resolve_vdb_set("my-user-set", &eroot).is_none());
+    }
+
+    #[test]
+    fn resolve_vdb_set_preserved_rebuild_is_empty_with_empty_vdb() {
+        // No packages installed → no consumers of any preserved lib → empty.
+        // This is the dispatch-level analogue of `expand_sets`' own
+        // `expand_sets_preserved_rebuild_is_empty_with_no_registry`.
+        let (_keep, eroot) = vdb_eroot();
+        let res = resolve_vdb_set("preserved-rebuild", &eroot);
+        assert!(matches!(res, Some(Ok(ref atoms)) if atoms.is_empty()));
     }
 }

@@ -61,20 +61,17 @@ pub(crate) fn expand_sets(
             continue;
         };
 
-        // `@preserved-rebuild` needs the live VDB + preserve-libs registry,
-        // neither of which `SetResolver` (profile/config-only, in
-        // `portage_repo`) has access to — compute it here instead of
-        // through the generic resolver path below.
-        if name == "preserved-rebuild" {
-            match portage_vdb::Vdb::open(eroot.join("var/db/pkg")) {
-                Ok(vdb) => {
-                    let registry = preserve_libs::PreservedLibsRegistry::load(eroot);
-                    let atoms = preserve_libs::preserved_rebuild_atoms(&vdb, &registry, eroot);
-                    out.extend(atoms.iter().map(|d| TargetAtom {
-                        atom: d.to_string(),
-                        origin: TargetOrigin::Set(name.to_string()),
-                    }));
-                }
+        // VDB-aware built-in sets (@preserved-rebuild, …) need the live VDB
+        // and/or related registries, none of which `SetResolver` (profile/
+        // config-only, in `portage_repo`) has access to — route them through
+        // the shared `resolve_vdb_set` instead of the generic resolver below.
+        // `None` means "not a VDB-aware name"; fall through to `SetResolver`.
+        if let Some(res) = maint::sets::resolve_vdb_set(name, eroot) {
+            match res {
+                Ok(atoms) => out.extend(atoms.iter().map(|d| TargetAtom {
+                    atom: d.to_string(),
+                    origin: TargetOrigin::Set(name.to_string()),
+                })),
                 Err(e) => crate::style::warn_line!("skipping @{name}: {e}"),
             }
             continue;
