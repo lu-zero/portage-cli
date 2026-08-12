@@ -89,6 +89,9 @@ exclusion list and `select_world_set_refs`'s gating/dedup.
 
 ## Not implemented at all
 
+Implementation plan for everything in this section (except `@security`,
+deliberately deferred separately): [[for_opencode]].
+
 - `@selected-packages` — real portage's `WorldSelectedPackagesSet`: just the
   world file's packages, no `world_sets` expansion. `em` only has the
   combined `@selected`.
