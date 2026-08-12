@@ -77,6 +77,14 @@ impl<'a> SetResolver<'a> {
                 .map(GroupEntry::Leaf)
                 .collect()),
             "selected" => self.selected_members(),
+            // The two halves of `@selected`, exposed on their own (real
+            // portage's `WorldSelectedPackagesSet` / `WorldSelectedSetsSet`):
+            // `@selected-packages` is just the `world` file atoms;
+            // `@selected-sets` is just the `world_sets` refs, returned
+            // unexpanded as literal `@name` references (real portage returns
+            // them as nonatoms — `GroupEntry::Ref` here — not their members).
+            "selected-packages" => self.selected_packages_members(),
+            "selected-sets" => self.selected_sets_members(),
             "world" => {
                 let mut out = self.selected_members()?;
                 out.extend(
@@ -92,10 +100,28 @@ impl<'a> SetResolver<'a> {
     }
 
     fn selected_members(&self) -> Result<Vec<GroupEntry<Dep>>> {
-        let mut out: Vec<GroupEntry<Dep>> = read_atoms(&self.eroot.join("var/lib/portage/world"))?
+        // `@selected` = `@selected-packages` ∪ `@selected-sets` (real portage's
+        // `WorldSelectedSet` chains its `Packages` and `Sets` halves).
+        let mut out = self.selected_packages_members()?;
+        out.extend(self.selected_sets_members()?);
+        Ok(out)
+    }
+
+    /// The `world` file half of `@selected`: the plain atoms the user has
+    /// explicitly installed. Matches `WorldSelectedPackagesSet`.
+    fn selected_packages_members(&self) -> Result<Vec<GroupEntry<Dep>>> {
+        Ok(read_atoms(&self.eroot.join("var/lib/portage/world"))?
             .into_iter()
             .map(GroupEntry::Leaf)
-            .collect();
+            .collect())
+    }
+
+    /// The `world_sets` half of `@selected`: the `@name` references the user
+    /// has explicitly tracked, returned **unexpanded** (each is a
+    /// [`GroupEntry::Ref`] resolved later by `expand_group`). Matches
+    /// `WorldSelectedSetsSet`, which yields nonatoms.
+    fn selected_sets_members(&self) -> Result<Vec<GroupEntry<Dep>>> {
+        let mut out = Vec::new();
         for set_ref in read_lines(&self.eroot.join("var/lib/portage/world_sets"))? {
             let name = set_ref
                 .trim()
@@ -361,6 +387,85 @@ mod tests {
         let eroot = Utf8Path::from_path(root).unwrap();
         let r = SetResolver::new(&stack, eroot);
         assert!(r.resolve("does-not-exist").is_err());
+    }
+
+    // --- @selected-packages / @selected-sets (the two halves of @selected) ---
+
+    /// Seed a world file, a world_sets file, and a user-defined set that
+    /// world_sets references, under `root` (the eroot).
+    fn seed_world(root: &Path) {
+        write(&root.join("var/lib/portage/world"), "dev-libs/openssl\n");
+        write(&root.join("var/lib/portage/world_sets"), "@extra\n");
+        write(&root.join("etc/portage/sets/extra"), "sys-libs/zlib\n");
+    }
+
+    #[test]
+    fn selected_packages_is_just_the_world_file_atoms() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        seed_world(root);
+        let stack = make_profile_stack(root);
+        let eroot = Utf8Path::from_path(root).unwrap();
+        let r = SetResolver::new(&stack, eroot);
+        let got: Vec<String> = r
+            .resolve("selected-packages")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(got, vec!["dev-libs/openssl"]);
+    }
+
+    #[test]
+    fn selected_sets_is_just_the_expanded_world_sets_refs() {
+        // @selected-sets yields the world_sets refs, which the resolver
+        // expands recursively — so it returns each referenced set's members
+        // (here just @extra → sys-libs/zlib), and crucially NOT the world
+        // file atoms.
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        seed_world(root);
+        let stack = make_profile_stack(root);
+        let eroot = Utf8Path::from_path(root).unwrap();
+        let r = SetResolver::new(&stack, eroot);
+        let got: Vec<String> = r
+            .resolve("selected-sets")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(got, vec!["sys-libs/zlib"]);
+    }
+
+    #[test]
+    fn selected_remains_the_union_of_both_halves() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        seed_world(root);
+        let stack = make_profile_stack(root);
+        let eroot = Utf8Path::from_path(root).unwrap();
+        let r = SetResolver::new(&stack, eroot);
+        let mut got: Vec<String> = r
+            .resolve("selected")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        got.sort();
+        assert_eq!(got, vec!["dev-libs/openssl", "sys-libs/zlib"]);
+    }
+
+    #[test]
+    fn selected_packages_empty_when_no_world_file() {
+        // Missing world file → @selected-packages is empty, not an error
+        // (read_atoms treats NotFound as empty).
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let stack = make_profile_stack(root);
+        let eroot = Utf8Path::from_path(root).unwrap();
+        let r = SetResolver::new(&stack, eroot);
+        assert!(r.resolve("selected-packages").unwrap().is_empty());
+        assert!(r.resolve("selected-sets").unwrap().is_empty());
     }
 
     // --- @profile (profile-set gate) ---
