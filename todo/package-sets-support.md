@@ -7,6 +7,11 @@ portage's actual set registry — `portage/_sets/__init__.py`'s
 vendored locally at `/home/lu_zero/Sources/portage-3.0.79`. Status below;
 pick items up independently, they don't depend on each other.
 
+`em --info -v` now lists every known `@name` set and its resolved atoms
+(or its resolve error) directly — `em`-specific, no real-emerge
+equivalent — so re-checking this list against a live host no longer needs
+the manual grepping this first audit did.
+
 ## Supported today
 
 - `@world` — `portage_repo::SetResolver::direct_members("world")`:
