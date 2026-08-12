@@ -1,5 +1,12 @@
 # Package-set (`@name`) support gaps
 
+STATUS: **✅ done (2026-08-13)** for everything except `@security`. The gaps
+recorded below (`@selected-packages`, `@selected-sets`, `@live-rebuild`,
+`@deprecated-live-rebuild`, `@module-rebuild`, `@x11-module-rebuild`) and the
+`@profile` bug are all implemented; see `done/for_opencode.md` for the commit
+SHAs and implementation notes. `@security` stays open (needs a GLSA
+subsystem). This audit is kept as the historical record of what was found.
+
 Luca asked whether `em` supports the built-in sets documented at
 https://wiki.gentoo.org/wiki/Package_sets. Audited 2026-08-12 against real
 portage's actual set registry — `portage/_sets/__init__.py`'s
@@ -89,31 +96,50 @@ exclusion list and `select_world_set_refs`'s gating/dedup.
 
 ## Not implemented at all
 
-Implementation plan for everything in this section (except `@security`,
-deliberately deferred separately): [[for_opencode]].
+✅ **Done 2026-08-13** except `@security`. Implementation landed in
+`done/for_opencode.md` (commits `b072add`/`35b1ee5`/`059079d`); the bullets
+below are the original audit text, kept for the record.
 
-- `@selected-packages` — real portage's `WorldSelectedPackagesSet`: just the
-  world file's packages, no `world_sets` expansion. `em` only has the
-  combined `@selected`.
-- `@selected-sets` — real portage's `WorldSelectedSetsSet`: just the
+- ✅ `@selected-packages` — real portage's `WorldSelectedPackagesSet`: just the
+  world file's packages, no `world_sets` expansion. (Was: `em` only had the
+  combined `@selected`.)
+- ✅ `@selected-sets` — real portage's `WorldSelectedSetsSet`: just the
   `world_sets` refs (unexpanded set names), no packages.
-- `@security` — GLSA-based (`NewAffectedSet`). Big feature (needs a GLSA
-  data source); lowest priority of this list.
-- `@live-rebuild` / `@deprecated-live-rebuild` — VDB query on
+- ⏳ `@security` — GLSA-based (`NewAffectedSet`). Big feature (needs a GLSA
+  data source); lowest priority of this list. **Still open** — check whether
+  the `em glsa` applet already has reusable GLSA machinery before rescoping.
+- ✅ `@live-rebuild` / `@deprecated-live-rebuild` — VDB query on
   `PROPERTIES=live` / `INHERITED` matching `portage.const.LIVE_ECLASSES`.
-- `@module-rebuild` / `@x11-module-rebuild` — file-ownership sets
+- ✅ `@module-rebuild` / `@x11-module-rebuild` — file-ownership sets
   (`OwnerSet`: packages owning `/lib/modules` / `/usr/lib*/xorg/modules`
-  minus `/usr/bin/Xorg`). Needs a VDB CONTENTS-ownership lookup — check
-  `revdep.rs`/`elfscan` first, they already walk CONTENTS for a related
-  purpose; don't add a second copy of that walk if one's reusable.
+  minus `/usr/bin/Xorg`). Implemented with a dedicated `contents_contains`
+  (any CONTENTS kind, incl. `dir`) rather than reusing `InstalledPackage::owns`
+  (which is `Obj`/`Sym`-only for the `qfile` use case).
 
-## Bug found while auditing (not yet fixed)
+## Bug found while auditing — ✅ fixed 2026-08-13 (`c805c1f`)
 
 `@profile`, as implemented (`portage-repo/src/repo/sets.rs`'s
-`direct_members("profile")` → `ProfileStack::packages()`), returns **every**
+`direct_members("profile")` → `ProfileStack::packages()`), returned **every**
 profile `packages` line — both `*`-prefixed (system) and plain — mapped
 straight to a flat `GroupEntry` list with the system/plain bit discarded.
-That's actually `@system ∪ (real @profile)`, not real portage's `@profile`.
+That was actually `@system ∪ (real @profile)`, not real portage's `@profile`.
+
+Real portage's `@profile` (`ProfilePackageSet`) is *only* the non-`*`
+"advisory" lines (`x[:1] != "*"`), and — critically — **only from profiles
+whose `profile-formats` declares `profile-set`**, a rare, mostly-unused
+profile-format feature; on essentially every real Gentoo profile, real
+`@profile` is empty.
+
+**Fix:** `ProfileStack::profile_set()` returns only `PackageEntry::Plain`
+lines, and only from profile nodes whose enclosing repo (resolved by walking
+up to the nearest `metadata/layout.conf`) declares `profile-set`. The
+site-local `/etc/portage/profile` is hardcoded to `profile-set` (portage's
+`LocationsManager.py:182`), so it still contributes — the one real-world case
+where stock-Gentoo `@profile` is non-empty. The mislabeled `system_set()`
+doc comment is corrected in the same commit. Verified on a live host: `em
+--info -v` shows `@profile` empty, matching `emerge -p @profile`.
+
+The original audit text (kept for context) follows:
 
 Real portage's `@profile` (`ProfilePackageSet`) is *only* the non-`*`
 "advisory" lines (`x[:1] != "*"`), and — critically — **only from profiles

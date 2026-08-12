@@ -125,7 +125,7 @@ struct BinaryRepoInfo {
 /// `Installed sets:` line (only the ones actually tracked in `world_sets`),
 /// this lists *every* set `KnownSets` can see, whether or not `em` can
 /// resolve it — exactly the "which sets does `em` actually support" question
-/// `todo/package-sets-support.md`'s audit had to answer by hand.
+/// `todo/done/package-sets-support.md`'s audit had to answer by hand.
 #[derive(Serialize)]
 struct SetEntry {
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -486,7 +486,7 @@ fn print_text(info: &Info) -> Result<()> {
 /// same [`crate::maint::world::resolve_set`] the depgraph and `-W` use, so
 /// this reports what `em` can *actually* resolve today, not just what's
 /// configured. A set `em` doesn't implement yet (`@security`, and friends —
-/// see `todo/package-sets-support.md`) shows up with its resolve error
+/// see `todo/done/package-sets-support.md`) shows up with its resolve error
 /// rather than being silently absent from the list.
 fn resolve_all_sets(
     config_root: Option<&Utf8Path>,

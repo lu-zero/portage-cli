@@ -1,14 +1,14 @@
 # For opencode — implement the remaining built-in `@name` sets
 
-**Current pin:** `master` @ `e55388f0e7df480f2bfa1b6bffb9d20b93de09fb`
+STATUS: **✅ done (2026-08-13).** All four scope items + the refactor enabler
+landed as six commits (plus a clippy cleanup), split one-per-concern and each
+verified to build + test at its intermediate state. See **Results** at the
+bottom for the commit SHAs, divergences from this plan, and the live-parity
+table. `@security` remains deferred (needs a GLSA subsystem). The research
+and implementation narrative below are kept as the historical record.
 
-Not yet started — this is a design/implementation task. All the research
-below (real portage source, exact matching semantics, what's already
-reusable in this codebase) has been done so it doesn't need redoing; read
-this whole file before touching code.
-
-Companion doc: `todo/package-sets-support.md` — the original audit that
-found these gaps, plus the two things already fixed this session
+Companion doc: `done/package-sets-support.md` — the original audit that
+found these gaps, plus the two things already fixed in that earlier session
 (`world_sets` add/remove, `em --info -v` set listing). This file is the
 implementation plan for what that audit left open.
 
@@ -350,8 +350,22 @@ so. Left as a separate, dedicated task.
 
 Implemented everything in scope (all four items + the refactor enabler), in
 the order `@profile` fix → refactor → `@selected-*` → `@live-rebuild` pair →
-`@module-rebuild` pair. Not yet committed (left for the human to review and
-land).
+`@module-rebuild` pair. Landed on `master` as six commits, split
+one-per-concern (each builds at its intermediate state):
+
+| SHA     | Commit |
+|---------|--------|
+| `3b991d5` | `chore(lint): clear two clippy failures left by the sync-gix handover` |
+| `c805c1f` | `fix(sets): @profile respects the profile-set profile-format gate` |
+| `b072add` | `feat(sets): @selected-packages and @selected-sets` |
+| `349c894` | `refactor(sets): route @preserved-rebuild through a shared resolve_vdb_set` |
+| `35b1ee5` | `feat(sets): @live-rebuild and @deprecated-live-rebuild` |
+| `059079d` | `feat(sets): @module-rebuild and @x11-module-rebuild` |
+
+(`641dace` is the docs commit that first wrote this Results section.) A
+later parallel session then added the `news`/`glsa` applets on top; the two
+streams integrate cleanly (full workspace `clippy`/`fmt`/`test`/`doc` green
+on the combined tree, 1844 tests).
 
 **Files touched:** `portage-repo/src/repo/{profile,sets}.rs`,
 `portage-cli/src/{emerge,maint/sets,maint/world,info}.rs`,
