@@ -19,11 +19,19 @@ impl KnownSets {
         let root = root.unwrap_or(Utf8Path::new("/"));
         let mut names = HashSet::new();
 
-        // `@preserved-rebuild` is resolved by `resolve_vdb_set` (a VDB/registry
-        // query, not a config-file-defined set), so it's always known even on
-        // an `em`-only root that never merged `sys-apps/portage` and so lacks
-        // `.../config/sets/portage.conf`.
-        names.insert("preserved-rebuild".to_string());
+        // VDB-aware built-ins are resolved by `resolve_vdb_set` (a VDB/registry
+        // query, not a config-file-defined set), so they're always known even
+        // on an `em`-only root that never merged `sys-apps/portage` and so
+        // lacks `.../config/sets/portage.conf`. (Other built-ins like
+        // `@security` stay discovered-from-disk only — `em` can't yet resolve
+        // them, so there's no point advertising them on an em-only root.)
+        for name in [
+            "preserved-rebuild",
+            "live-rebuild",
+            "deprecated-live-rebuild",
+        ] {
+            names.insert(name.to_string());
+        }
 
         // Built-in sets from /usr/share/portage/config/sets/*.conf
         let builtin_dir = root.join("usr/share/portage/config/sets");
@@ -58,13 +66,14 @@ impl KnownSets {
 
 /// Resolve a VDB-aware built-in set under `eroot`.
 ///
-/// `@preserved-rebuild` (and — to follow — `@live-rebuild`,
-/// `@deprecated-live-rebuild`, `@module-rebuild`, `@x11-module-rebuild`)
-/// queries the installed-package database (`var/db/pkg`) and/or related
-/// registries, so it can't go through `portage_repo::SetResolver` (which is
-/// profile/config-only and has no VDB access). Both `emerge::expand_sets`
-/// (root-target expansion) and `maint::world::resolve_set` (display/audit)
-/// route VDB-aware names through here first.
+/// These sets (`@preserved-rebuild`, `@live-rebuild`,
+/// `@deprecated-live-rebuild`, and — to follow — `@module-rebuild`/
+/// `@x11-module-rebuild`) query the installed-package database
+/// (`var/db/pkg`) and/or related registries, so they can't go through
+/// `portage_repo::SetResolver` (which is profile/config-only and has no VDB
+/// access). Both `emerge::expand_sets` (root-target expansion) and
+/// `maint::world::resolve_set` (display/audit) route VDB-aware names
+/// through here first.
 ///
 /// Returns `None` when `name` is not a VDB-aware built-in (caller falls
 /// back to `SetResolver`); `Some(Ok(atoms))` on success; `Some(Err(_))`
@@ -86,6 +95,21 @@ pub(crate) fn resolve_vdb_set(name: &str, eroot: &Utf8Path) -> Option<Result<Vec
     };
     Some(match name {
         "preserved-rebuild" => preserved_rebuild_atoms(&vdb, eroot),
+        "live-rebuild" => variable_set_atoms(&vdb, "PROPERTIES", &["live"]),
+        "deprecated-live-rebuild" => variable_set_atoms(
+            &vdb,
+            "INHERITED",
+            &[
+                "bzr",
+                "cvs",
+                "darcs",
+                "git-2",
+                "git-r3",
+                "golang-vcs",
+                "mercurial",
+                "subversion",
+            ],
+        ),
         _ => unreachable!("is_vdb_set_name guards the match arms above"),
     })
 }
@@ -93,7 +117,10 @@ pub(crate) fn resolve_vdb_set(name: &str, eroot: &Utf8Path) -> Option<Result<Vec
 /// Whether `name` is a built-in set resolved through [`resolve_vdb_set`]
 /// (rather than `SetResolver`). Kept in sync with the match arms there.
 fn is_vdb_set_name(name: &str) -> bool {
-    matches!(name, "preserved-rebuild")
+    matches!(
+        name,
+        "preserved-rebuild" | "live-rebuild" | "deprecated-live-rebuild"
+    )
 }
 
 /// `@preserved-rebuild`: packages owning a shared lib whose last provider was
@@ -104,6 +131,40 @@ fn preserved_rebuild_atoms(vdb: &portage_vdb::Vdb, eroot: &Utf8Path) -> Result<V
     Ok(crate::preserve_libs::preserved_rebuild_atoms(
         vdb, &registry, eroot,
     ))
+}
+
+/// `@live-rebuild` / `@deprecated-live-rebuild` core: keep every installed
+/// package whose `variable` field (space-split) intersects `includes`.
+///
+/// Matches portage's `VariableSet` (`portage/_sets/dbapi.py:146`) with
+/// `metadata-source` defaulting to `vartree` (the VDB itself), non-`*DEPEND`
+/// branch (`_filter`, lines 213-219): non-empty `includes ∩ values` → kept.
+/// Atoms are emitted as `cat/pkg:{main_slot}` — portage's `EverythingSet.load`
+/// builds `Atom(f"{pkg.cp}:{pkg.slot}")`, and `_pkg_str.slot` is the main
+/// slot only (subslot kept separate); defaulting to `"0"` mirrors portage's
+/// `slot_invalid` fallback.
+fn variable_set_atoms(
+    vdb: &portage_vdb::Vdb,
+    variable: &str,
+    includes: &[&str],
+) -> Result<Vec<Dep>> {
+    let mut out = Vec::new();
+    for pkg in vdb.packages() {
+        let Some(value) = pkg.field(variable)? else {
+            continue;
+        };
+        if !value.split_whitespace().any(|tok| includes.contains(&tok)) {
+            continue;
+        }
+        let slot = pkg
+            .slot_main()
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "0".to_string());
+        let atom = format!("{}:{slot}", pkg.cpn());
+        out.push(Dep::parse(&atom).with_context(|| format!("parsing set atom {atom}"))?);
+    }
+    Ok(out)
 }
 
 /// Parse `[section_name]` headers from all `.conf` files in `dir`.
@@ -214,7 +275,7 @@ mod tests {
     fn preserved_rebuild_is_always_known() {
         // Even with no `sys-apps/portage`-installed config/sets directory at
         // all (an `em`-only root), `@preserved-rebuild` must still validate —
-        // it's resolved by `resolve_vdb_set`, not read from disk here.
+        // it's computed directly by `expand_sets`, not read from disk here.
         let dir = make_root("", &[]);
         let sets = KnownSets::load(Some(Utf8Path::from_path(dir.path()).unwrap()));
         assert!(sets.contains("preserved-rebuild"));
@@ -245,6 +306,116 @@ mod tests {
         // `expand_sets_preserved_rebuild_is_empty_with_no_registry`.
         let (_keep, eroot) = vdb_eroot();
         let res = resolve_vdb_set("preserved-rebuild", &eroot);
+        assert!(matches!(res, Some(Ok(ref atoms)) if atoms.is_empty()));
+    }
+
+    // --- @live-rebuild / @deprecated-live-rebuild (VariableSet) ---
+
+    /// Write a minimal VDB package dir under `eroot/var/db/pkg/<cat>/<pf>`
+    /// with the given metadata fields. Enumeration only needs the dir + a
+    /// parseable pf, but the variable/slot accessors read files, so callers
+    /// pass the fields they need (`SLOT`, `PROPERTIES`, `INHERITED`, …).
+    fn write_vdb_pkg(eroot: &Utf8Path, cat_pf: &str, fields: &[(&str, &str)]) {
+        let dir = eroot.join("var/db/pkg").join(cat_pf);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (k, v) in fields {
+            std::fs::write(dir.join(k), v).unwrap();
+        }
+    }
+
+    #[test]
+    fn live_rebuild_keeps_only_packages_with_properties_live() {
+        let (_keep, eroot) = vdb_eroot();
+        write_vdb_pkg(
+            &eroot,
+            "app-misc/live-one-1.0",
+            &[("SLOT", "0"), ("PROPERTIES", "live")],
+        );
+        write_vdb_pkg(
+            &eroot,
+            "app-misc/normal-1.0",
+            &[("SLOT", "0"), ("PROPERTIES", "foo bar")],
+        );
+        // No PROPERTIES file at all → field is None → not included.
+        write_vdb_pkg(&eroot, "app-misc/noprops-1.0", &[("SLOT", "0")]);
+
+        let atoms: Vec<String> = resolve_vdb_set("live-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["app-misc/live-one:0"]);
+    }
+
+    #[test]
+    fn live_rebuild_atom_uses_main_slot_not_subslot() {
+        // Portage's `_pkg_str.slot` is the main slot only; the atom emitted
+        // is `cat/pkg:{main}`, not `:{main}/{subslot}`. SLOT="2/5.1" → `:2`.
+        let (_keep, eroot) = vdb_eroot();
+        write_vdb_pkg(
+            &eroot,
+            "sys-libs/foo-1.0",
+            &[("SLOT", "2/5.1"), ("PROPERTIES", "live")],
+        );
+        let atoms: Vec<String> = resolve_vdb_set("live-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["sys-libs/foo:2"]);
+    }
+
+    #[test]
+    fn live_rebuild_matches_live_among_multiple_properties_tokens() {
+        // PROPERTIES is space-split; `live` need only be one of the tokens.
+        let (_keep, eroot) = vdb_eroot();
+        write_vdb_pkg(
+            &eroot,
+            "app-misc/multi-1.0",
+            &[("SLOT", "0"), ("PROPERTIES", "interactive live")],
+        );
+        let atoms: Vec<String> = resolve_vdb_set("live-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["app-misc/multi:0"]);
+    }
+
+    #[test]
+    fn deprecated_live_rebuild_matches_inherited_vcs_eclasses() {
+        // variable=INHERITED, includes the LIVE_ECLASSES set. A package that
+        // inherited any of them is kept; one with unrelated eclasses is not.
+        let (_keep, eroot) = vdb_eroot();
+        write_vdb_pkg(
+            &eroot,
+            "dev-vcs/git-2.45",
+            &[("SLOT", "0"), ("INHERITED", "toolchain git-r3")],
+        );
+        write_vdb_pkg(
+            &eroot,
+            "app-misc/plain-1.0",
+            &[("SLOT", "0"), ("INHERITED", "cmake-utils")],
+        );
+
+        let atoms: Vec<String> = resolve_vdb_set("deprecated-live-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["dev-vcs/git:0"]);
+    }
+
+    #[test]
+    fn live_rebuild_empty_vdb_resolves_to_empty_not_error() {
+        let (_keep, eroot) = vdb_eroot();
+        let res = resolve_vdb_set("live-rebuild", &eroot);
+        assert!(matches!(res, Some(Ok(ref atoms)) if atoms.is_empty()));
+        let res = resolve_vdb_set("deprecated-live-rebuild", &eroot);
         assert!(matches!(res, Some(Ok(ref atoms)) if atoms.is_empty()));
     }
 }

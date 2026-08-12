@@ -733,8 +733,8 @@ mod tests {
         // A set name `KnownSets` only sees via a `usr/share/portage`
         // built-in conf that this scratch root doesn't have wouldn't even
         // appear here, so simulate "known but unresolvable" the way a real
-        // host does for @security/@live-rebuild/etc.: a `sets.conf`
-        // section with no backing implementation `SetResolver` recognizes.
+        // host does for @security: a `sets.conf` section with no backing
+        // implementation `SetResolver` (or `resolve_vdb_set`) recognizes.
         let (_tmp, root) = scratch_root();
         std::fs::write(
             root.join("etc/portage/sets.conf"),
