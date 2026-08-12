@@ -356,7 +356,7 @@ fn run_list(globals: &Cli) -> Result<()> {
     let ids = list_ids(&repo_path)?;
     let arch = effective_arch(globals);
     let installed = installed_packages(globals);
-    let eroot = globals.roots().merge_root().to_owned();
+    let eroot = globals.outer_roots().merge_root().to_owned();
     let injected = read_injected(&eroot);
 
     let mut affected_count = 0usize;
@@ -392,7 +392,7 @@ fn run_check(globals: &Cli, ids: &[String]) -> Result<()> {
     };
     let arch = effective_arch(globals);
     let installed = installed_packages(globals);
-    let eroot = globals.roots().merge_root().to_owned();
+    let eroot = globals.outer_roots().merge_root().to_owned();
     let injected = read_injected(&eroot);
 
     let mut affected_count = 0usize;
@@ -425,7 +425,7 @@ async fn run_fix(globals: &Cli, ids: &[String]) -> Result<()> {
     };
     let arch = effective_arch(globals);
     let installed = installed_packages(globals);
-    let eroot = globals.roots().merge_root().to_owned();
+    let eroot = globals.outer_roots().merge_root().to_owned();
     let injected = read_injected(&eroot);
 
     let mut atoms = BTreeSet::new();

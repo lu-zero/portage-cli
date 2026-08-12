@@ -209,7 +209,6 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             limit,
             delete,
         } => crate::elog::run_read(globals, package.as_deref(), *list, *limit, *delete).await,
-        Applet::Glsa { command } => crate::glsa::run(command, globals).await,
         Applet::Log { command } => run_log(command, globals),
         Applet::Grep { pattern, paths } => {
             eprintln!("grep: pattern={} paths={:?}", pattern, paths);

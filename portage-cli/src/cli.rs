@@ -1481,12 +1481,6 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         delete: bool,
     },
 
-    #[command(about = "Check Gentoo Linux Security Advisories")]
-    Glsa {
-        #[command(subcommand)]
-        command: Option<GlsaCommand>,
-    },
-
     #[command(about = "Analyze emerge.log")]
     Log {
         #[command(subcommand)]
@@ -1840,6 +1834,11 @@ pub enum SelectCommand {
     News {
         #[command(subcommand)]
         command: Option<NewsCommand>,
+    },
+    #[command(about = "Check/fix Gentoo Linux Security Advisories (glsa-check workalike)")]
+    Glsa {
+        #[command(subcommand)]
+        command: Option<GlsaCommand>,
     },
 }
 

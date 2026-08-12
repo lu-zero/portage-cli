@@ -78,6 +78,7 @@ pub async fn run(command: &SelectCommand, globals: &Cli) -> Result<()> {
         SelectCommand::Pkgconf { action } => pkgconf::run(action, globals),
         SelectCommand::Mirrors { action } => mirrors::run(action, globals).await,
         SelectCommand::News { command } => crate::news::run(command, globals),
+        SelectCommand::Glsa { command } => crate::glsa::run(command, globals).await,
     }
 }
 
