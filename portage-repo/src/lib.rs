@@ -84,7 +84,7 @@ pub use repo::UseExpand;
 pub use repo::ini;
 pub use repo::license_groups::{AcceptSet, LicenseGroupRegistry};
 pub use repo::named_groups::{GROUP_PREFIX, group_ref_name, is_group_ref};
-pub use repo::sets::{SetResolver, is_set_ref, set_name};
+pub use repo::sets::{SetResolver, is_set_ref, is_world_candidate, set_name};
 /// Directory-aware config line reader (PMS 5.2.4 dir-form: files concatenated in
 /// filename order, dotfiles and `~` backups skipped). Shared with `/etc/portage`
 /// `package.*` consumers so they match the profile stack exactly.

@@ -154,6 +154,45 @@ pub fn set_name(s: &str) -> Option<&str> {
     named_groups::group_ref_name(s)
 }
 
+/// Whether a `@name` set, typed directly on the command line, should itself
+/// be recorded to `world_sets` (real emerge's `world-candidate` set-config
+/// flag). Real portage's default `sets.conf` (`cnf/sets/portage.conf`) sets
+/// `world-candidate = True` only on `[usersets]` — every file under
+/// `etc/portage/sets/` (or a `sets.conf` `[name]` section); every *named*
+/// built-in set defaults to `world_candidate = False` and is never recorded
+/// no matter how it's invoked. The exclusion list below is every section
+/// name in `cnf/sets/portage.conf` (not just the ones `em` currently
+/// implements — `@security`/`@live-rebuild`/etc. are real portage set names
+/// today even though `SetResolver` can't resolve them yet, and must stay
+/// excluded once they are implemented too, the same as the ones already
+/// live here).
+pub fn is_world_candidate(name: &str) -> bool {
+    !matches!(
+        name,
+        "world"
+            | "profile"
+            | "selected"
+            | "selected-packages"
+            | "selected-sets"
+            | "system"
+            | "security"
+            | "installed"
+            | "preserved-rebuild"
+            | "live-rebuild"
+            | "deprecated-live-rebuild"
+            | "module-rebuild"
+            | "x11-module-rebuild"
+            | "rebuilt-binaries"
+            | "changed-subslot"
+            | "downgrade"
+            | "unavailable"
+            | "unavailable-binaries"
+            | "changed-deps"
+            | "golang-rebuild"
+            | "rust-rebuild"
+    )
+}
+
 fn parse_dep(s: &str) -> Result<Dep> {
     Dep::parse(s).map_err(Error::from)
 }
@@ -252,6 +291,25 @@ mod tests {
         let set = classify_token("@system", parse_dep).unwrap();
         assert!(matches!(set, GroupEntry::Ref(_)));
         assert!(classify_token("@", parse_dep).is_err());
+    }
+
+    #[test]
+    fn world_candidate_excludes_every_named_builtin() {
+        for name in [
+            "world",
+            "selected",
+            "system",
+            "profile",
+            "preserved-rebuild",
+            "selected-packages",
+            "security",
+            "live-rebuild",
+        ] {
+            assert!(!is_world_candidate(name), "@{name} must not be a candidate");
+        }
+        for name in ["mytest", "openwrt-prerequisites"] {
+            assert!(is_world_candidate(name), "@{name} should be a candidate");
+        }
     }
 
     #[test]

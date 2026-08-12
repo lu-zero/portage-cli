@@ -39,6 +39,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 - Whether `history/merges.jsonl`'s unbounded growth (full-file-parse-per-query on the ETA hot path) needs rotation or a different format — not measured yet: [[activity-storage-format]]
 - Cross-emerge `llvm-core/clang` for riscv64 under both `--prefix` and `--local`, `-b`/buildpkg correctness included — plan drafted; Scenario A blocked on workdir race, B on local bootstrap: [[clang-crossbuild-prefix-local-test-plan]]
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
+- Package-set (`@name`) coverage audit 2026-08-12: `@selected-packages`/`@selected-sets`/`@security`/`@live-rebuild`/`@deprecated-live-rebuild`/`@module-rebuild`/`@x11-module-rebuild` all missing; `@profile` implemented but wrong (returns `@system ∪ plain`, not real portage's `profile-set`-gated advisory-only set). `world_sets` read/write fixed same day (add + `-W` remove, world-candidate-gated) — full breakdown: [[package-sets-support]]
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 

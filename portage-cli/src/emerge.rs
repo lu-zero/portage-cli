@@ -373,8 +373,9 @@ async fn emerge_atoms_inner(
 
     // World selection (real emerge's `_world_atom`): only the genuine
     // top-level invocation (`update_world`), and only the literal,
-    // explicitly-named atoms (not `@set` refs — world_sets tracking isn't
-    // implemented yet).
+    // explicitly-named atoms go to `world` — a `@set` ref's *members* never
+    // do (they're recorded as the set reference itself, in `world_sets`,
+    // via `world_set_refs` below).
     //
     // Computed once, under the *display* gate — real emerge's
     // `check_system_world` suppresses "would be added to world" bolding for
@@ -388,13 +389,26 @@ async fn emerge_atoms_inner(
     };
     // What actually gets written to the world file after a successful merge
     // is narrower still: skipped for the same extra flag set real portage
-    // skips the write for, `--pretend` included.
+    // skips the write for, `--pretend` included. `world_set_refs` shares
+    // this same narrower gate directly (no display half): a `@set` ref never
+    // appears as a plan row of its own, so there is nothing for it to bold.
     let world_atoms: Vec<portage_atom::Dep> = if !cli.pretend
         && !merge_flags.buildpkgonly
         && !merge_flags.fetchonly
         && !merge_flags.onlydeps
     {
         world_additions.clone()
+    } else {
+        Vec::new()
+    };
+    let world_set_refs: Vec<String> = if update_world
+        && !merge_flags.oneshot
+        && !cli.pretend
+        && !merge_flags.buildpkgonly
+        && !merge_flags.fetchonly
+        && !merge_flags.onlydeps
+    {
+        select_world_set_refs(&atoms)
     } else {
         Vec::new()
     };
@@ -495,6 +509,7 @@ async fn emerge_atoms_inner(
             maint::resume::clear(roots.merge_root());
         }
         maint::world::add_atoms(Some(roots.merge_root()), &world_atoms);
+        maint::world::add_set_refs(Some(roots.merge_root()), &world_set_refs);
         return Ok(());
     }
 
@@ -686,6 +701,7 @@ async fn emerge_atoms_inner(
         maint::resume::clear(roots.merge_root());
     }
     maint::world::add_atoms(Some(roots.merge_root()), &world_atoms);
+    maint::world::add_set_refs(Some(roots.merge_root()), &world_set_refs);
     Ok(())
 }
 
@@ -909,6 +925,26 @@ fn select_world_atoms(atoms: &[TargetAtom]) -> Vec<portage_atom::Dep> {
                 None
             }
         })
+        .collect()
+}
+
+/// The other half of real emerge's world selection: a `@name` set typed
+/// directly on the command line, when `name` is a `world-candidate` set
+/// (`portage_repo::is_world_candidate` — real portage's `usersets` only, by
+/// default `sets.conf`). Recorded as the literal `@name` reference
+/// (`maint::world::add_set_refs`), never its expanded members — those are
+/// exactly what `select_world_atoms` above excludes by filtering to
+/// `TargetOrigin::Explicit`. Deduplicated: several members of the same set
+/// all carry the same `Set(name)` origin.
+fn select_world_set_refs(atoms: &[TargetAtom]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    atoms
+        .iter()
+        .filter_map(|t| match &t.origin {
+            TargetOrigin::Set(name) if portage_repo::is_world_candidate(name) => Some(name.clone()),
+            _ => None,
+        })
+        .filter(|name| seen.insert(name.clone()))
         .collect()
 }
 
@@ -1230,6 +1266,37 @@ mod tests {
             origin: TargetOrigin::Set("world".to_string()),
         }];
         assert!(select_world_atoms(&atoms).is_empty());
+    }
+
+    #[test]
+    fn select_world_set_refs_keeps_a_world_candidate_set_once() {
+        let atoms = vec![
+            TargetAtom {
+                atom: "app-misc/foo".to_string(),
+                origin: TargetOrigin::Set("myset".to_string()),
+            },
+            TargetAtom {
+                atom: "app-misc/bar".to_string(),
+                origin: TargetOrigin::Set("myset".to_string()),
+            },
+        ];
+        assert_eq!(select_world_set_refs(&atoms), vec!["myset".to_string()]);
+    }
+
+    #[test]
+    fn select_world_set_refs_drops_non_candidate_builtins_and_explicit_atoms() {
+        let atoms = vec![
+            TargetAtom::explicit("sys-devel/gcc"),
+            TargetAtom {
+                atom: "app-misc/foo".to_string(),
+                origin: TargetOrigin::Set("world".to_string()),
+            },
+            TargetAtom {
+                atom: "app-misc/bar".to_string(),
+                origin: TargetOrigin::Set("system".to_string()),
+            },
+        ];
+        assert!(select_world_set_refs(&atoms).is_empty());
     }
 
     #[test]

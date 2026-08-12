@@ -364,13 +364,54 @@ pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
     }
 }
 
-/// Remove `tokens` (plain atoms or `@set` names) from the world file —
-/// `-W`/`--deselect`. An atom removes any existing world line whose `Cpn`
-/// matches (any version-qualified form, same granularity `add_atoms` uses
-/// for replacement); a `@name` token removes the matching `@name` set
-/// entry. Tokens matching nothing are silently no-ops (matches real
-/// emerge: deselecting something not in world isn't an error). Returns the
-/// number of world-file lines actually removed.
+/// Add `@name` set references to `world_sets` — the other half of real
+/// emerge's world-recording, sibling to [`add_atoms`]'s `world` file.
+/// Matches real emerge's `_world_repr`/`world_set.update` behaviour for a
+/// `SetArg` favorite: writes the literal `@name` reference, never the set's
+/// expanded members (those stay off `world` entirely — see
+/// `emerge.rs::select_world_atoms`, which already filters `Set`-origin
+/// atoms out for this exact reason). A name already present is left
+/// untouched. Best-effort, like `add_atoms`: a failure here is reported but
+/// never unwinds a merge that already completed on disk.
+pub fn add_set_refs(root: Option<&Utf8Path>, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    let path = world_sets_path(root);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = existing.lines().map(str::to_owned).collect();
+
+    for name in names {
+        let rendered = format!("@{name}");
+        if !lines.iter().any(|l| l.trim() == rendered) {
+            lines.push(rendered);
+        }
+    }
+
+    let new_content = if lines.is_empty() {
+        String::new()
+    } else {
+        lines.join("\n") + "\n"
+    };
+    if let Err(e) = write_atomic(&path, new_content) {
+        crate::style::warn_line!("could not update {path}: {e:#}");
+    }
+}
+
+/// Remove `tokens` (plain atoms or `@set` names) from the world files —
+/// `-W`/`--deselect`. Mirrors real emerge's `action_deselect`
+/// (`_emerge/actions.py`): a plain-atom token is matched by `Cpn` against
+/// `world` (any version-qualified form, same granularity `add_atoms` uses
+/// for replacement); a `@name` token is matched by exact name against
+/// `world_sets` — the two files, and the two token kinds, are handled
+/// completely independently, never cross-matched. `world` is also checked
+/// for a stray `@name` line for backward compatibility with this file's own
+/// pre-fix leniency (`check_world_file` has long tolerated `@` lines living
+/// directly in `world`, and older data or a hand-edit may still have one
+/// there rather than in `world_sets`). Tokens matching nothing are silently
+/// no-ops (matches real emerge: deselecting something not selected isn't an
+/// error). Returns the total number of lines actually removed across both
+/// files.
 pub fn remove_atoms(root: Option<&Utf8Path>, tokens: &[String]) -> Result<usize> {
     let mut set_names: HashSet<&str> = HashSet::new();
     let mut cpns: HashSet<portage_atom::Cpn> = HashSet::new();
@@ -386,8 +427,28 @@ pub fn remove_atoms(root: Option<&Utf8Path>, tokens: &[String]) -> Result<usize>
         }
     }
 
-    let path = world_path(root);
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let world_removed = remove_matching_lines(&world_path(root), |t| match t.strip_prefix('@') {
+        Some(name) => set_names.contains(name),
+        None => Dep::parse(t).is_ok_and(|d| cpns.contains(&d.cpn)),
+    })?;
+    let sets_removed = if set_names.is_empty() {
+        0
+    } else {
+        remove_matching_lines(&world_sets_path(root), |t| {
+            t.strip_prefix('@')
+                .is_some_and(|name| set_names.contains(name))
+        })?
+    };
+    Ok(world_removed + sets_removed)
+}
+
+/// Drop every non-blank, non-comment line of `path` for which `should_drop`
+/// is true, rewriting the file only when something actually changed — a
+/// missing `world_sets` (very common: most installs never register a
+/// world-candidate set) must not be conjured into existence by a `-W` call
+/// that only ever touched `world`.
+fn remove_matching_lines(path: &Utf8Path, should_drop: impl Fn(&str) -> bool) -> Result<usize> {
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
     let mut removed = 0usize;
     let kept: Vec<&str> = existing
         .lines()
@@ -396,10 +457,7 @@ pub fn remove_atoms(root: Option<&Utf8Path>, tokens: &[String]) -> Result<usize>
             if t.is_empty() || t.starts_with('#') {
                 return true;
             }
-            let drop = match t.strip_prefix('@') {
-                Some(name) => set_names.contains(name),
-                None => Dep::parse(t).is_ok_and(|d| cpns.contains(&d.cpn)),
-            };
+            let drop = should_drop(t);
             if drop {
                 removed += 1;
             }
@@ -407,12 +465,14 @@ pub fn remove_atoms(root: Option<&Utf8Path>, tokens: &[String]) -> Result<usize>
         })
         .collect();
 
-    let new_content = if kept.is_empty() {
-        String::new()
-    } else {
-        kept.join("\n") + "\n"
-    };
-    write_atomic(&path, new_content).with_context(|| format!("writing {path}"))?;
+    if removed > 0 {
+        let new_content = if kept.is_empty() {
+            String::new()
+        } else {
+            kept.join("\n") + "\n"
+        };
+        write_atomic(path, new_content).with_context(|| format!("writing {path}"))?;
+    }
     Ok(removed)
 }
 
@@ -547,6 +607,59 @@ mod tests {
         add_atoms(Some(&root), &[Dep::parse("app-editors/nano").unwrap()]);
 
         assert_eq!(read_world(&root), "app-editors/nano\n");
+    }
+
+    fn read_world_sets(root: &Utf8Path) -> String {
+        std::fs::read_to_string(world_sets_path(Some(root))).unwrap_or_default()
+    }
+
+    #[test]
+    fn add_set_refs_appends_a_new_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+
+        add_set_refs(Some(&root), &["myset".to_owned()]);
+
+        assert_eq!(read_world_sets(&root), "@myset\n");
+    }
+
+    #[test]
+    fn add_set_refs_is_a_no_op_when_already_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_sets_path(Some(&root)), "@myset\n").unwrap();
+
+        add_set_refs(Some(&root), &["myset".to_owned()]);
+
+        assert_eq!(read_world_sets(&root), "@myset\n");
+    }
+
+    #[test]
+    fn deselect_removes_a_name_from_world_sets_not_world() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), "app-shells/bash\n").unwrap();
+        std::fs::write(world_sets_path(Some(&root)), "@myset\n@other-set\n").unwrap();
+
+        let removed = remove_atoms(Some(&root), &["@myset".to_owned()]).unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(read_world(&root), "app-shells/bash\n");
+        assert_eq!(read_world_sets(&root), "@other-set\n");
+    }
+
+    #[test]
+    fn deselect_with_no_set_token_never_touches_a_missing_world_sets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        std::fs::create_dir_all(root.join("var/lib/portage")).unwrap();
+        std::fs::write(world_path(Some(&root)), "app-shells/bash\n").unwrap();
+
+        remove_atoms(Some(&root), &["app-shells/bash".to_owned()]).unwrap();
+
+        assert!(!world_sets_path(Some(&root)).exists());
     }
 
     #[test]
