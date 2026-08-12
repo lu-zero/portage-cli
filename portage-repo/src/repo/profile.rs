@@ -7,6 +7,7 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, Dep};
 use portage_metadata::Eapi;
 
+use super::layout::LayoutConf;
 use super::util;
 use crate::error::{Error, Result};
 
@@ -107,6 +108,20 @@ impl ProfileDesc {
 pub struct Profile {
     path: PathBuf,
     eapi: Eapi,
+    /// Effective `profile-formats` for the repo this profile belongs to (from
+    /// the enclosing repo's `metadata/layout.conf`), used to gate `@profile`-
+    /// set contributions — only profiles whose `profile_formats` contains
+    /// `profile-set` contribute their plain `packages` lines to `@profile`.
+    ///
+    /// Resolved at open time by [`resolve_profile_formats`] (walking up to the
+    /// nearest enclosing repo, matching portage's longest-path-wins
+    /// `intersecting_repos` rule). Defaults to empty when no enclosing repo is
+    /// found — equivalent to portage's `portage-1`/`portage-1-compat` default,
+    /// neither of which enables `profile-set`. The site-local user profile
+    /// (`/etc/portage/profile`) is overridden to `["profile-bashrcs",
+    /// "profile-set"]` by [`ProfileStack::with_user_profile`], mirroring
+    /// portage's `LocationsManager.load_profiles` hardcoded value.
+    profile_formats: Vec<String>,
 }
 
 /// One entry from a profile `packages` file (PMS 5.2.6).
@@ -131,7 +146,12 @@ impl Profile {
                 .map_err(|e| Error::InvalidProfile(format!("bad EAPI: {e}")))?,
             None => Eapi::Zero,
         };
-        Ok(Profile { path, eapi })
+        let profile_formats = resolve_profile_formats(&path);
+        Ok(Profile {
+            path,
+            eapi,
+            profile_formats,
+        })
     }
 
     /// Absolute path to the profile directory.
@@ -142,6 +162,16 @@ impl Profile {
     /// The EAPI declared by this profile (from the `eapi` file).
     pub fn eapi(&self) -> Eapi {
         self.eapi
+    }
+
+    /// The effective `profile-formats` of the repo this profile belongs to.
+    ///
+    /// Used to gate `@profile`-set membership (see
+    /// [`ProfileStack::profile_set`]). Empty for a profile with no enclosing
+    /// repo (no `profile-set`); `["profile-bashrcs", "profile-set"]` for the
+    /// site-local user profile.
+    pub fn profile_formats(&self) -> &[String] {
+        &self.profile_formats
     }
 
     /// Parse the `parent` file to get parent profile paths.
@@ -339,7 +369,14 @@ impl ProfileStack {
     /// followed. A no-op when `dir` does not exist or is not a directory.
     pub fn with_user_profile(mut self, dir: PathBuf) -> Result<Self> {
         if dir.is_dir() {
-            self.profiles.push(Profile::open(dir)?);
+            let mut p = Profile::open(dir)?;
+            // Portage hardcodes the site-local user profile's profile_formats
+            // to `("profile-bashrcs", "profile-set")` regardless of any
+            // enclosing repo (LocationsManager.py:182), so its plain `packages`
+            // lines always contribute to `@profile` — override whatever the
+            // walk-up in `Profile::open` produced.
+            p.profile_formats = vec!["profile-bashrcs".to_string(), "profile-set".to_string()];
+            self.profiles.push(p);
         }
         Ok(self)
     }
@@ -480,13 +517,54 @@ impl ProfileStack {
 
     /// The profile-derived `@system` set: the `*cat/pkg` entries from
     /// [`packages`](Self::packages), with incremental `-` removal applied across
-    /// the stack. Matches portage's `ProfilePackageSet`, which keeps only the
-    /// `*`-marked atoms (the plain ones are advisory `@profile`, not `@system`).
+    /// the stack. Matches portage's `PackagesSystemSet`, which keeps only the
+    /// `*`-marked atoms (the plain ones are advisory `@profile`, not `@system` —
+    /// see [`profile_set`](Self::profile_set)).
     pub fn system_set(&self) -> Result<Vec<Dep>> {
         Ok(self
             .packages()?
             .into_iter()
             .filter_map(|(is_sys, d)| is_sys.then_some(d))
+            .collect())
+    }
+
+    /// The profile-derived `@profile` set: the non-`*` "advisory" `packages`
+    /// lines, accumulated with incremental `-`/`-*` removal — but **only from
+    /// profiles whose enclosing repo declares `profile-set` in
+    /// `profile-formats`** (a portage extension, not PMS).
+    ///
+    /// PMS 5.2.6 specifies that plain (non-`*`) `packages` lines are ignored
+    /// when calculating the *system* set. Portage additionally routes them into
+    /// `@profile` via `portage.sets.ProfilePackageSet`, gated on the
+    /// repo-level `profile-set` profile-format flag. Since the stock Gentoo
+    /// repo does not set `profile-set`, `@profile` is empty on a typical
+    /// install *unless* a site-local user profile (`/etc/portage/profile`)
+    /// contributes plain lines — portage hardcodes that layer to
+    /// `profile-set` (see [`Profile::profile_formats`]).
+    ///
+    /// Matches `portage.sets.ProfilePackageSet.ProfilePackageSet.load`
+    /// (`if "profile-set" in y.profile_formats` … `if x[:1] != "*"`).
+    pub fn profile_set(&self) -> Result<Vec<Dep>> {
+        // Same incremental accumulation as `packages()`, but restricted to the
+        // profile-set-contributing subset (portage's `stack_lists` runs over
+        // that filtered list, then drops `*`-marked entries).
+        let mut acc: Vec<(bool, Dep)> = Vec::new();
+        for p in &self.profiles {
+            if !p.profile_formats.iter().any(|f| f == "profile-set") {
+                continue;
+            }
+            for entry in p.packages_raw()? {
+                match entry {
+                    PackageEntry::System(d) => acc.push((true, d)),
+                    PackageEntry::Plain(d) => acc.push((false, d)),
+                    PackageEntry::Remove(d) => acc.retain(|(_, existing)| existing != &d),
+                    PackageEntry::Clear => acc.clear(),
+                }
+            }
+        }
+        Ok(acc
+            .into_iter()
+            .filter_map(|(is_sys, d)| (!is_sys).then_some(d))
             .collect())
     }
 
@@ -781,6 +859,37 @@ fn collect_stack(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Vec<Prof
     }
     result.push(profile);
     Ok(result)
+}
+
+/// Resolve the effective `profile-formats` for a profile directory by walking
+/// up to the nearest enclosing repository root (the closest ancestor holding
+/// `metadata/layout.conf`) and reading its `profile-formats` key.
+///
+/// Mirrors portage's longest-path-wins `intersecting_repos` rule
+/// (`LocationsManager._addProfile`): of all repos whose root path the profile
+/// path starts with, the most specific (nearest) one wins. Returns an empty
+/// list when no enclosing repo is found — equivalent to portage's
+/// `portage-1`/`portage-1-compat` default, neither of which enables
+/// `profile-set`, so such a profile does not contribute to `@profile`.
+fn resolve_profile_formats(profile_path: &Path) -> Vec<String> {
+    let mut dir = profile_path.parent();
+    while let Some(d) = dir {
+        let layout_path = d.join("metadata").join("layout.conf");
+        if layout_path.is_file() {
+            // Nearest enclosing repo found. A parse failure means the format
+            // info is unusable; treat it as "no profile-set" (portage would
+            // warn and intersect with the valid-format set, which is empty
+            // here) rather than continuing further up the tree.
+            if let Ok(text) = std::fs::read_to_string(&layout_path)
+                && let Ok(parsed) = LayoutConf::parse(&text)
+            {
+                return parsed.profile_formats;
+            }
+            return Vec::new();
+        }
+        dir = d.parent();
+    }
+    Vec::new()
 }
 
 /// Read non-blank, non-comment lines from a profile file or directory.
@@ -1294,5 +1403,159 @@ mod tests {
         let stack = ProfileStack::build(p).unwrap();
         let masked = stack.use_mask().unwrap();
         assert_eq!(masked, vec!["foo", "bar", "baz"]);
+    }
+
+    // --- @profile (profile-set) tests ---
+    //
+    // `@profile` is the plain (non-`*`) `packages` lines, but only from
+    // profiles whose enclosing repo declares `profile-set` in `profile-formats`
+    // — a portage extension (PMS 5.2.6 only says plain lines are ignored for the
+    // *system* set). The temp dir acts as the repo root for the walk-up in
+    // `resolve_profile_formats` (writing `metadata/layout.conf` there).
+
+    /// Write a `metadata/layout.conf` body at `dir` (the repo root).
+    fn write_layout_conf(dir: &TempDir, body: &str) {
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), body).unwrap();
+    }
+
+    #[test]
+    fn profile_set_keeps_plain_lines_drops_system_when_profile_set_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        write_layout_conf(&dir, "profile-formats = portage-2 profile-set\n");
+        let leaf = make_profile(&dir, "leaf", &[]);
+        std::fs::write(
+            leaf.join("packages"),
+            "*sys-libs/glibc\napp-shells/bash\n", // one system, one plain
+        )
+        .unwrap();
+
+        let stack = ProfileStack::build(leaf).unwrap();
+        let got: Vec<String> = stack
+            .profile_set()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(got, vec!["app-shells/bash"]);
+        // And @system still gets the `*` line.
+        let sys: Vec<String> = stack
+            .system_set()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(sys, vec!["sys-libs/glibc"]);
+    }
+
+    #[test]
+    fn profile_set_empty_without_profile_set_flag() {
+        // Repo declares portage-2 only (no profile-set): plain lines do NOT
+        // contribute to @profile, matching real portage on the stock Gentoo
+        // repo. This is the "almost always empty" case.
+        let dir = tempfile::tempdir().unwrap();
+        write_layout_conf(&dir, "profile-formats = portage-2\n");
+        let leaf = make_profile(&dir, "leaf", &[]);
+        std::fs::write(leaf.join("packages"), "*sys-libs/glibc\napp-shells/bash\n").unwrap();
+
+        let stack = ProfileStack::build(leaf).unwrap();
+        assert!(stack.profile_set().unwrap().is_empty());
+        // system_set is unaffected.
+        assert_eq!(stack.system_set().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn profile_set_empty_when_no_enclosing_repo() {
+        // No metadata/layout.conf anywhere up the tree → default has no
+        // profile-set → @profile empty, even with plain lines present.
+        let dir = tempfile::tempdir().unwrap();
+        let leaf = make_profile(&dir, "leaf", &[]);
+        std::fs::write(leaf.join("packages"), "app-shells/bash\n").unwrap();
+
+        let stack = ProfileStack::build(leaf).unwrap();
+        assert!(stack.profile_set().unwrap().is_empty());
+    }
+
+    #[test]
+    fn profile_set_incremental_removal_across_profile_set_profiles() {
+        // Both profiles' repos declare profile-set; the leaf's `-app-shells/bash`
+        // removes the parent's plain add (removal applies within the
+        // profile-set-contributing subset, matching portage's stack_lists).
+        let dir = tempfile::tempdir().unwrap();
+        write_layout_conf(&dir, "profile-formats = profile-set\n");
+        let parent = make_profile(&dir, "parent", &[]);
+        std::fs::write(
+            parent.join("packages"),
+            "app-shells/bash\nsys-apps/coreutils\n",
+        )
+        .unwrap();
+        let leaf = make_profile(&dir, "leaf", &["../parent"]);
+        std::fs::write(leaf.join("packages"), "-app-shells/bash\n").unwrap();
+
+        let stack = ProfileStack::build(leaf).unwrap();
+        let got: Vec<String> = stack
+            .profile_set()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(got, vec!["sys-apps/coreutils"]);
+    }
+
+    #[test]
+    fn profile_set_skips_profiles_in_repos_lacking_profile_set() {
+        // Parent repo lacks profile-set; leaf repo declares it. Only the leaf's
+        // plain lines contribute (and only its own removal context applies).
+        // Build two sibling "repos" under separate temp dirs so their
+        // layout.conf walk-ups resolve independently.
+        let parent_repo = tempfile::tempdir().unwrap();
+        write_layout_conf(&parent_repo, "profile-formats = portage-2\n");
+        let parent = make_profile(&parent_repo, "parent", &[]);
+        std::fs::write(parent.join("packages"), "app-shells/bash\n").unwrap();
+
+        let child_repo = tempfile::tempdir().unwrap();
+        write_layout_conf(&child_repo, "profile-formats = profile-set\n");
+        // Leaf's parent file points at the absolute path of the parent profile.
+        let leaf = make_profile(&child_repo, "leaf", &[]);
+        std::fs::write(leaf.join("parent"), format!("{}\n", parent.display())).unwrap();
+        std::fs::write(leaf.join("packages"), "sys-apps/coreutils\n").unwrap();
+
+        let stack = ProfileStack::build(leaf).unwrap();
+        let got: Vec<String> = stack
+            .profile_set()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        // Only the leaf (profile-set repo) contributes; parent's bash is dropped.
+        assert_eq!(got, vec!["sys-apps/coreutils"]);
+    }
+
+    #[test]
+    fn profile_set_user_profile_always_contributes() {
+        // Portage hardcodes /etc/portage/profile to profile-set, so its plain
+        // `packages` lines feed @profile even with no repo declaring it. This
+        // is the one real-world case where stock-Gentoo @profile is non-empty.
+        let dir = tempfile::tempdir().unwrap();
+        write_layout_conf(&dir, "profile-formats = portage-2\n"); // no profile-set
+        let base = make_profile(&dir, "leaf", &[]);
+        std::fs::write(base.join("packages"), "*sys-libs/glibc\n").unwrap();
+
+        // Site-local user profile with a plain advisory line.
+        let user_dir = dir.path().join("etc/portage/profile");
+        std::fs::create_dir_all(&user_dir).unwrap();
+        std::fs::write(user_dir.join("packages"), "app-shells/dash\n").unwrap();
+
+        let stack = ProfileStack::build(base)
+            .unwrap()
+            .with_user_profile(user_dir)
+            .unwrap();
+        let got: Vec<String> = stack
+            .profile_set()
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(got, vec!["app-shells/dash"]);
     }
 }

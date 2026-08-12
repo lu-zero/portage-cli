@@ -507,13 +507,14 @@ pub(crate) fn resolve_set(
             &vdb, &registry, eroot,
         ));
     }
-    let profile_link = config_root
-        .unwrap_or(Utf8Path::new("/"))
-        .join("etc/portage/make.profile");
+    let config_root = config_root.unwrap_or(Utf8Path::new("/"));
+    let profile_link = config_root.join("etc/portage/make.profile");
     let canon = std::fs::canonicalize(profile_link.as_std_path())
         .with_context(|| format!("cannot resolve {profile_link}"))?;
-    let stack =
-        portage_repo::ProfileStack::build(canon).context("failed to build profile stack")?;
+    let stack = portage_repo::ProfileStack::build(canon)
+        .context("failed to build profile stack")?
+        .with_user_profile(config_root.join("etc/portage/profile").into_std_path_buf())
+        .context("failed to append site-local user profile")?;
     let resolver = portage_repo::SetResolver::new(&stack, eroot);
     resolver
         .resolve(name)

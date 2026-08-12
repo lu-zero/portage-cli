@@ -5,9 +5,11 @@
 //! references. This module resolves a set name to its flat atom list, mirroring
 //! portage's `SetConfig.getSetAtoms`:
 //!
-//! - [`SetResolver::system`] and [`SetResolver::profile`] read the profile
-//!   `packages` file (PMS 5.2.6): `*cat/pkg` lines are `@system`, all lines are
-//!   `@profile`.
+//! - `@system` and `@profile` both read the profile `packages` file
+//!   (PMS 5.2.6): `*cat/pkg` lines are `@system`; plain (non-`*`) lines feed
+//!   `@profile`, but only from profiles whose repo declares `profile-set` in
+//!   `profile-formats` (a portage extension) — so `@profile` is empty on a
+//!   stock Gentoo repo unless a site-local `/etc/portage/profile` contributes.
 //! - [`SetResolver::selected`] reads `/var/lib/portage/world` +
 //!   `world_sets` (the `@set` refs the user asked to track).
 //! - [`SetResolver::world`] is always `@selected ∪ @system`.
@@ -70,9 +72,9 @@ impl<'a> SetResolver<'a> {
                 .collect()),
             "profile" => Ok(self
                 .profile_stack
-                .packages()?
+                .profile_set()?
                 .into_iter()
-                .map(|(_, d)| GroupEntry::Leaf(d))
+                .map(GroupEntry::Leaf)
                 .collect()),
             "selected" => self.selected_members(),
             "world" => {
@@ -359,5 +361,63 @@ mod tests {
         let eroot = Utf8Path::from_path(root).unwrap();
         let r = SetResolver::new(&stack, eroot);
         assert!(r.resolve("does-not-exist").is_err());
+    }
+
+    // --- @profile (profile-set gate) ---
+
+    fn write_layout_conf(repo_root: &Path, body: &str) {
+        std::fs::create_dir_all(repo_root.join("metadata")).unwrap();
+        std::fs::write(repo_root.join("metadata").join("layout.conf"), body).unwrap();
+    }
+
+    #[test]
+    fn profile_set_resolves_only_plain_lines_when_profile_set_enabled() {
+        let dir = tempdir().unwrap();
+        // Repo declares profile-set → plain `packages` lines feed @profile.
+        write_layout_conf(dir.path(), "profile-formats = portage-2 profile-set\n");
+        let profile = dir.path().join("leaf");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("packages"),
+            "*sys-libs/glibc\napp-shells/bash\n",
+        )
+        .unwrap();
+        let stack = ProfileStack::build(profile).unwrap();
+        let eroot = Utf8Path::from_path(dir.path()).unwrap();
+        let r = SetResolver::new(&stack, eroot);
+        let got: Vec<String> = r
+            .resolve("profile")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(got, vec!["app-shells/bash"]);
+        // @system still carries the `*` line.
+        let sys: Vec<String> = r
+            .resolve("system")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(sys, vec!["sys-libs/glibc"]);
+    }
+
+    #[test]
+    fn profile_set_resolves_empty_without_profile_set_flag() {
+        // Stock Gentoo repo shape (portage-2, no profile-set): @profile is
+        // empty even when plain advisory lines are present.
+        let dir = tempdir().unwrap();
+        write_layout_conf(dir.path(), "profile-formats = portage-2\n");
+        let profile = dir.path().join("leaf");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join("packages"),
+            "*sys-libs/glibc\napp-shells/bash\n",
+        )
+        .unwrap();
+        let stack = ProfileStack::build(profile).unwrap();
+        let eroot = Utf8Path::from_path(dir.path()).unwrap();
+        let r = SetResolver::new(&stack, eroot);
+        assert!(r.resolve("profile").unwrap().is_empty());
     }
 }

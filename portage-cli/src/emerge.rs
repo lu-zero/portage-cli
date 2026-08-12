@@ -90,6 +90,12 @@ pub(crate) fn expand_sets(
                 .and_then(|p| {
                     portage_repo::ProfileStack::build(p)
                         .map_err(|e| anyhow::anyhow!("failed to build profile stack: {e}"))
+                })
+                .and_then(|st| {
+                    st.with_user_profile(portage_dir.join("profile").into_std_path_buf())
+                        .map_err(|e| {
+                            anyhow::anyhow!("failed to append site-local user profile: {e}")
+                        })
                 }) {
                 Ok(st) => {
                     // get_or_insert (not `stack_holder = Some(st); ...unwrap()`) hands
