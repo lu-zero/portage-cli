@@ -1481,12 +1481,6 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         delete: bool,
     },
 
-    #[command(about = "Read/manage GLEP 42 news items")]
-    News {
-        #[command(subcommand)]
-        command: Option<NewsCommand>,
-    },
-
     #[command(about = "Check Gentoo Linux Security Advisories")]
     Glsa {
         #[command(subcommand)]
@@ -1841,6 +1835,11 @@ pub enum SelectCommand {
     Mirrors {
         #[command(subcommand)]
         action: MirrorAction,
+    },
+    #[command(about = "Read/manage GLEP 42 news items (eselect news workalike)")]
+    News {
+        #[command(subcommand)]
+        command: Option<NewsCommand>,
     },
 }
 
@@ -2197,8 +2196,14 @@ pub enum NewsCommand {
     Count,
     #[command(about = "List news items")]
     List,
-    #[command(about = "Read a news item")]
-    Read { id: Option<String> },
+    #[command(
+        about = "Read news items (numbers/names from `list`; \"new\"/\"all\", or none for all unread)"
+    )]
+    Read {
+        /// Item numbers/names from `list`, the single keyword "new" (every
+        /// unread item) or "all" (every item), or omit for "new".
+        ids: Vec<String>,
+    },
     #[command(about = "Purge read news items")]
     Purge,
 }

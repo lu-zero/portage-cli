@@ -14,13 +14,19 @@
 
 use std::collections::BTreeSet;
 
+use anstyle::{Effects, Style};
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpv, Dep};
 use portage_repo::{MakeConf, ReposConf};
 
 use crate::cli::{Cli, NewsCommand};
-use crate::style::{C_GOOD, C_WARN, einfo_line, warn_line};
+use crate::style::{C_BOLD, C_MARKER_INFO, C_WARN, einfo_line, warn_line};
+
+/// Secondary/annotation text (an item's dim `(name)` tag, `Author:`/
+/// `Posted:` labels) — matches `info.rs`'s local `C_DIM` convention; not
+/// (yet) promoted to `style.rs`'s shared palette.
+const C_DIM: Style = Style::new().effects(Effects::DIMMED);
 
 const LANGUAGE_ID: &str = "en";
 
@@ -278,7 +284,10 @@ struct Item {
 /// name (which is date-prefixed, so this is also chronological) — the same
 /// sort `eselect news`'s `find_items` uses.
 fn collect_items(globals: &Cli, eroot: &Utf8Path, update: bool) -> Result<Vec<Item>> {
-    let repos_conf = globals.roots().repos_conf().context("reading repos.conf")?;
+    let repos_conf = globals
+        .outer_roots()
+        .repos_conf()
+        .context("reading repos.conf")?;
     let ctx = RelevanceCtx::load(globals);
     let installed: Vec<(Cpv, String)> = crate::vdb::open_cli_vdb(globals)
         .map(|vdb| {
@@ -334,19 +343,26 @@ fn load_item(repo: &str, name: &str, repo_path: &Utf8Path, unread: bool) -> Item
 }
 
 fn run_count(globals: &Cli) -> Result<()> {
-    let eroot = globals.roots().merge_root().to_owned();
+    let eroot = globals.outer_roots().merge_root().to_owned();
     let items = collect_items(globals, &eroot, true)?;
     println!("{}", items.iter().filter(|i| i.unread).count());
     Ok(())
 }
 
 fn run_list(globals: &Cli) -> Result<()> {
-    let eroot = globals.roots().merge_root().to_owned();
+    let eroot = globals.outer_roots().merge_root().to_owned();
     let items = collect_items(globals, &eroot, true)?;
     if items.is_empty() {
         println!("(no news items)");
         return Ok(());
     }
+
+    println!("{C_BOLD}News items:{C_BOLD:#}\n");
+
+    let num_width = items.len().to_string().len();
+    // Room for "<num>  <mark>  " before the line itself, mirroring eselect's
+    // own `11 + ${#line} >= cols` budget.
+    let budget = crate::style::term_width().saturating_sub(num_width + 5);
     for (i, item) in items.iter().enumerate() {
         let title = item.title.as_deref().unwrap_or("(no title)");
         let posted = item.posted.as_deref().unwrap_or("(no date)");
@@ -355,15 +371,26 @@ fn run_list(globals: &Cli) -> Result<()> {
         } else {
             format!("[{}] ", item.repo)
         };
-        if item.unread {
-            println!(
-                "{:3}  {C_WARN}N{C_WARN:#}  {posted:<12} {repo_tag}{title}",
-                i + 1
-            );
+        let line = format!("{posted:<12} {repo_tag}{title}");
+        let line = if budget > 3 && line.chars().count() > budget {
+            format!("{}...", line.chars().take(budget - 3).collect::<String>())
         } else {
-            println!("{:3}     {posted:<12} {repo_tag}{title}", i + 1);
-        }
+            line
+        };
+        let mark = if item.unread {
+            format!("{C_WARN}N{C_WARN:#}")
+        } else {
+            " ".to_string()
+        };
+        println!("{:>num_width$}  {mark}  {line}", i + 1);
     }
+
+    let unread = items.iter().filter(|i| i.unread).count();
+    println!(
+        "\n{unread} unread of {} news item{}",
+        items.len(),
+        if items.len() == 1 { "" } else { "s" }
+    );
     Ok(())
 }
 
@@ -377,24 +404,36 @@ fn find_item_index(items: &[Item], id: &str) -> Option<usize> {
     items.iter().position(|i| i.name == id)
 }
 
-fn run_read(globals: &Cli, id: Option<&str>) -> Result<()> {
-    let eroot = globals.roots().merge_root().to_owned();
+fn run_read(globals: &Cli, ids: &[String]) -> Result<()> {
+    let eroot = globals.outer_roots().merge_root().to_owned();
     let items = collect_items(globals, &eroot, true)?;
 
-    let targets: Vec<usize> = match id {
-        Some(id) => match find_item_index(&items, id) {
-            Some(idx) => vec![idx],
-            None => {
-                warn_line!("news item not found: {id}");
-                return Ok(());
-            }
-        },
-        None => items
+    // No ids, or the single keyword "new"/"all" — real eselect's own
+    // shorthand: "new" (also the no-args default) means every unread item,
+    // "all" means every item regardless of read status.
+    let keyword = match ids {
+        [] => Some("new"),
+        [only] if only == "new" || only == "all" => Some(only.as_str()),
+        _ => None,
+    };
+    let targets: Vec<usize> = match keyword {
+        Some("all") => (0..items.len()).collect(),
+        Some(_) => items
             .iter()
             .enumerate()
             .filter(|(_, i)| i.unread)
             .map(|(idx, _)| idx)
             .collect(),
+        None => {
+            let mut targets = Vec::with_capacity(ids.len());
+            for id in ids {
+                match find_item_index(&items, id) {
+                    Some(idx) => targets.push(idx),
+                    None => warn_line!("news item not found: {id}"),
+                }
+            }
+            targets
+        }
     };
 
     if targets.is_empty() {
@@ -403,26 +442,30 @@ fn run_read(globals: &Cli, id: Option<&str>) -> Result<()> {
     }
 
     let mut newly_read: Vec<(&str, &str)> = Vec::new();
-    for &idx in &targets {
+    for (n, &idx) in targets.iter().enumerate() {
         let item = &items[idx];
         let item_file = repo_news_dir(&repo_path_for(globals, &item.repo)?)
             .join(&item.name)
             .join(format!("{}.{LANGUAGE_ID}.txt", item.name));
         match std::fs::read_to_string(item_file.as_std_path()) {
             Ok(text) => {
-                println!("{C_GOOD}{}{C_GOOD:#}", item.name);
-                let parsed = parse_item(&text);
-                if let Some(title) = &parsed.title {
-                    println!("Title: {title}");
+                if n > 0 {
+                    println!();
                 }
+                let parsed = parse_item(&text);
+                let title = parsed.title.as_deref().unwrap_or(&item.name);
+                println!(
+                    "{C_MARKER_INFO}*{C_MARKER_INFO:#} {C_BOLD}{title}{C_BOLD:#} {C_DIM}({}){C_DIM:#}",
+                    item.name
+                );
                 if let Some(author) = &parsed.author {
-                    println!("Author: {author}");
+                    println!("  {C_DIM}Author:{C_DIM:#} {author}");
                 }
                 if let Some(posted) = &parsed.posted {
-                    println!("Posted: {posted}");
+                    println!("  {C_DIM}Posted:{C_DIM:#} {posted}");
                 }
-                let body_start = text.find("\n\n").map(|p| p + 2).unwrap_or(0);
                 println!();
+                let body_start = text.find("\n\n").map(|p| p + 2).unwrap_or(0);
                 print!("{}", &text[body_start..]);
                 println!();
             }
@@ -445,7 +488,10 @@ fn run_read(globals: &Cli, id: Option<&str>) -> Result<()> {
 }
 
 fn repo_path_for(globals: &Cli, repo: &str) -> Result<Utf8PathBuf> {
-    let conf = globals.roots().repos_conf().context("reading repos.conf")?;
+    let conf = globals
+        .outer_roots()
+        .repos_conf()
+        .context("reading repos.conf")?;
     let entry = conf.find(repo).context("repo no longer configured")?;
     let path = entry
         .location
@@ -457,8 +503,11 @@ fn repo_path_for(globals: &Cli, repo: &str) -> Result<Utf8PathBuf> {
 }
 
 fn run_purge(globals: &Cli) -> Result<()> {
-    let eroot = globals.roots().merge_root().to_owned();
-    let conf = globals.roots().repos_conf().context("reading repos.conf")?;
+    let eroot = globals.outer_roots().merge_root().to_owned();
+    let conf = globals
+        .outer_roots()
+        .repos_conf()
+        .context("reading repos.conf")?;
     let mut purged = 0usize;
     for entry in conf.repos() {
         let path = state_path(&eroot, &entry.name, "read");
@@ -476,7 +525,7 @@ pub(crate) fn run(command: &Option<NewsCommand>, globals: &Cli) -> Result<()> {
     match command {
         None | Some(NewsCommand::Count) => run_count(globals),
         Some(NewsCommand::List) => run_list(globals),
-        Some(NewsCommand::Read { id }) => run_read(globals, id.as_deref()),
+        Some(NewsCommand::Read { ids }) => run_read(globals, ids),
         Some(NewsCommand::Purge) => run_purge(globals),
     }
 }
