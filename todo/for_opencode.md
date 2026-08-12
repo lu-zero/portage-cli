@@ -348,6 +348,94 @@ so. Left as a separate, dedicated task.
 
 ## Results
 
-_(fill in here once implemented — commit(s), what got tested, anything
-that diverged from this plan and why, same shape as `for_maki.md`'s own
-"Results"/"Live parity check" sections)_
+Implemented everything in scope (all four items + the refactor enabler), in
+the order `@profile` fix → refactor → `@selected-*` → `@live-rebuild` pair →
+`@module-rebuild` pair. Not yet committed (left for the human to review and
+land).
+
+**Files touched:** `portage-repo/src/repo/{profile,sets}.rs`,
+`portage-cli/src/{emerge,maint/sets,maint/world,info}.rs`,
+`portage-cli/Cargo.toml` (`glob = "0.3"` — already transitive in `Cargo.lock`,
+needed for `OwnerSet`'s `files`/`exclude-files` FS globbing; no other dep
+added).
+
+**What landed:**
+
+- **`@profile` fix** — `ProfileStack::profile_set()` returns only non-`*`
+  `packages` lines, and only from profile nodes whose enclosing repo declares
+  `profile-set` in `profile-formats`. `profile_formats` is resolved per-profile
+  by walking up to the nearest `metadata/layout.conf` (mirrors portage's
+  longest-path-wins `intersecting_repos`); `with_user_profile` hardcodes
+  `["profile-bashrcs", "profile-set"]` for `/etc/portage/profile` (portage's
+  `LocationsManager.py:182`). Fixed the mislabeled `system_set()` doc comment
+  (it's `PackagesSystemSet`, not `ProfilePackageSet`) and the stale module doc
+  in `sets.rs`. **Correction to this file's own claim:** `@profile` is not
+  unconditionally empty on stock Gentoo — a site-local `/etc/portage/profile`
+  with plain `packages` lines *does* contribute (portage hardcodes that layer
+  to `profile-set`). 8 new tests.
+- **Refactor** — `maint::sets::resolve_vdb_set(name, eroot) -> Option<Result<Vec<Dep>>>`
+  is the single home for all VDB-aware built-ins, called from both
+  `emerge::expand_sets` and `maint::world::resolve_set`. `@preserved-rebuild`
+  (previously duplicated 4 lines × 2 sites) routed through it; VDB opened once
+  per call, guarded by `is_vdb_set_name` so `@system`/`@world`/user sets never
+  require a readable `var/db/pkg`. 2 dispatch tests.
+- **`@selected-packages` / `@selected-sets`** — split `selected_members()` into
+  `selected_packages_members` (world file) + `selected_sets_members`
+  (`world_sets` refs as `GroupEntry::Ref`, expanded by the resolver). 4 tests.
+- **`@live-rebuild` / `@deprecated-live-rebuild`** — `variable_set_atoms(vdb,
+  variable, includes)` over the VDB; `(PROPERTIES, [live])` and `(INHERITED,
+  [LIVE_ECLASSES…])`. Atoms emitted as `cat/pkg:{main_slot}` (portage's
+  `_pkg_str.slot` is main-slot-only; `"0"` fallback). 5 tests.
+- **`@module-rebuild` / `@x11-module-rebuild`** — `owner_set_atoms` via
+  `OwnerSet` semantics. **Live-verified first** (per the plan's emphasis):
+  `emerge -p @module-rebuild` returns empty on this host because no installed
+  package has a CONTENTS entry for `/lib/modules` (despite the dir being
+  populated with hand-built kernel modules) — confirming **exact-path match,
+  not subtree/prefix**. `contents_contains` matches any CONTENTS kind
+  (incl. `dir` — `InstalledPackage::owns` is `Obj`/`Sym`-only, so a dedicated
+  helper was needed) and is symlink-aware via `canonicalize` (so a
+  `/lib/modules` query matches a `/usr/lib/modules` entry when
+  `/lib` → `/usr/lib`). 5 tests.
+
+**KnownSets** now hardcodes all five resolvable VDB sets (not just
+`preserved-rebuild`) so `em --info -v` advertises them on `em`-only roots too.
+
+**Divergences from the plan, all minor:**
+- The `@profile` gate is per-profile (faithful walk-up to the nearest
+  `layout.conf`) rather than a single repo-level value — costs one tiny file
+  read per profile at stack-build, chosen for correctness on multi-repo stacks.
+- `@module-rebuild`'s symlink-aware match uses full-path `canonicalize` rather
+  than portage's exact parent-inode comparison — equivalent for the
+  merged-usr `/lib`↔`/usr/lib` case (the one that matters), simpler to express.
+- Did **not** reuse `InstalledPackage::owns` for `OwnerSet` (it excludes `dir`
+  entries and does no symlink resolution); added `contents_contains` instead
+  rather than change `owns`'s established `qfile`-facing semantics.
+
+**Testing:** 22 new unit tests across `portage-repo` (12) and `portage-cli`
+(10). Full pre-PR checklist green: `cargo fmt --all --check`, `cargo clippy
+--workspace --exclude portage-bench -- -D warnings` (zero new diagnostics —
+the two pre-existing ones, `set_test_git_identity` dead code and
+`depgraph/output.rs` type-complexity, are unrelated and were not touched),
+`cargo nextest run --workspace --exclude portage-bench` (1819 passed, 5
+skipped), `cargo test --workspace --exclude portage-bench --doc`,
+`RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench
+--no-deps`.
+
+**Live parity check** (this Gentoo host, `em` built `--profile quick`):
+
+| set | `em --info -v` | real `emerge -p` |
+|-----|----------------|------------------|
+| `@profile` | 0 atoms | empty (matches — stock gentoo has no `profile-set`) |
+| `@selected-packages` | 113 | = world file line count (emerge itself fails resolve on a masked pkg, unrelated) |
+| `@selected-sets` | 21 | = members of the one `world_sets` ref (`@openwrt-prerequisites`) |
+| `@selected` | 134 | = 113 + 21 (no overlap) |
+| `@live-rebuild` / `@deprecated-live-rebuild` | 0 | empty |
+| `@module-rebuild` / `@x11-module-rebuild` | 0 | empty |
+
+`em -1p @selected-packages` reaches the resolver with `TargetOrigin::Set`
+provenance (the masked-pkg error cites `required by "@selected-packages"`),
+confirming the `expand_sets` wiring end-to-end.
+
+**Still deferred (unchanged):** `@security` (needs a GLSA subsystem — separate
+task; worth checking whether the existing `em glsa` applet already has any
+reusable machinery before scoping it).
