@@ -246,7 +246,11 @@ fn mkdir_p_mode(dir: &Path, mode: u32) -> Result<(), String> {
     let mut acc = PathBuf::new();
     for comp in dir.components() {
         acc.push(comp);
-        if acc.as_os_str().is_empty() {
+        // The root component always exists — `mkdir("/")` on an existing
+        // root returns EEXIST on Linux (silently absorbed below) but EISDIR
+        // on FreeBSD, which isn't; skip it outright rather than relying on
+        // errno parity across platforms.
+        if acc.as_os_str().is_empty() || matches!(comp, std::path::Component::RootDir) {
             continue;
         }
         match mkdir(&acc, Mode::from_bits_truncate(0o777)) {
