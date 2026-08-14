@@ -1,0 +1,4 @@
+<sys-apps/baselayout-9999 **
+<sys-devel/binutils-9999 **
+virtual/os-headers **
+<sys-devel/gcc-9999 **

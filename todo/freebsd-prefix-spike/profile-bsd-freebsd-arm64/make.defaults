@@ -1,0 +1,8 @@
+# Spike: prefix/bsd family defaults (modeled on prefix/darwin).
+# ELIBC/KERNEL="FreeBSD" have no current profiles/desc/*.desc entry (the
+# old Gentoo/FreeBSD project's values were removed from the modern tree) —
+# unregistered USE_EXPAND values are a repoman/QA lint concern, not a
+# runtime one, so this is fine for a local experiment.
+
+ELIBC="FreeBSD"
+KERNEL="FreeBSD"

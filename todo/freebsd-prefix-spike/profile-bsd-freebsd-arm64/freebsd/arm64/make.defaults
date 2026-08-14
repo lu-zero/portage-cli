@@ -1,0 +1,24 @@
+# Spike leaf: prefix/bsd/freebsd/arm64.
+#
+# CHOST convention: rustc's own target-triple naming for FreeBSD
+# (aarch64-unknown-freebsd<version>) — FreeBSD ports itself historically
+# used a "portbld" vendor field instead of "unknown"; picked "unknown" here
+# since it's what our own toolchain (rustc) already recognizes natively,
+# and this is a spike, not an upstream submission.
+#
+# ARCH/ACCEPT_KEYWORDS: real Gentoo Prefix keywords for non-Linux arches are
+# a compound "<arch>-<os>" string (confirmed against sys-apps/baselayout's
+# own KEYWORDS: "~arm64-macos ~x64-macos ~x64-solaris", no plain "~arm64" —
+# that bare form is the Linux arm64 keyword and would silently collide).
+
+ARCH="arm64-freebsd"
+ACCEPT_KEYWORDS="~arm64-freebsd"
+
+# Single ABI, no multilib (mirrors prefix/darwin/macos/arch/arm64).
+ABI="arm64"
+DEFAULT_ABI="arm64"
+MULTILIB_ABIS="arm64"
+LIBDIR_arm64="lib"
+
+CHOST="aarch64-unknown-freebsd14.4"
+CHOST_arm64="${CHOST}"
