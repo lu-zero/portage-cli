@@ -12,7 +12,7 @@ use std::io::Write as _;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
-use portage_repo::{MakeConf, ProfileDesc, ReposConf, Repository};
+use portage_repo::{MakeConf, ProfileDesc, Repository};
 
 use super::config_portage_dir;
 use crate::cli::{Cli, ProfileAction};
@@ -50,9 +50,14 @@ pub fn run(action: &ProfileAction, globals: &Cli) -> Result<()> {
 }
 
 /// The repo whose `profiles/` we list/link from — the configured main repo
-/// (usually `gentoo`).
-fn main_repo() -> Result<Repository> {
-    let conf = ReposConf::load().context("reading repos.conf")?;
+/// (usually `gentoo`). `outer_roots()`, not `roots()` — see
+/// `env_d::run_list`'s doc comment; `select` never wants `roots()`'s sysroot
+/// substitution.
+fn main_repo(globals: &Cli) -> Result<Repository> {
+    let conf = globals
+        .outer_roots()
+        .repos_conf()
+        .context("reading repos.conf")?;
     let entry = conf
         .main_repo()
         .or_else(|| conf.find("gentoo"))
@@ -93,7 +98,7 @@ pub(crate) fn current_profile(globals: &Cli, repo: &Repository) -> Option<String
 }
 
 fn list(globals: &Cli) -> Result<()> {
-    let repo = main_repo()?;
+    let repo = main_repo(globals)?;
     let arch = effective_arch(globals);
     let descs = profiles_for(&repo, &arch)?;
     let current = current_profile(globals, &repo);
@@ -131,7 +136,7 @@ fn list(globals: &Cli) -> Result<()> {
 }
 
 fn show(globals: &Cli) -> Result<()> {
-    let repo = main_repo()?;
+    let repo = main_repo(globals)?;
     match current_profile(globals, &repo) {
         Some(p) => println!("{p}"),
         None => println!("(no profile set at {})", make_profile_link(globals)),
@@ -140,7 +145,7 @@ fn show(globals: &Cli) -> Result<()> {
 }
 
 fn set(globals: &Cli, target: &str) -> Result<()> {
-    let repo = main_repo()?;
+    let repo = main_repo(globals)?;
 
     // Resolve a list number (1-based, against the same arch-filtered list `list`
     // shows) to a profile path; otherwise treat the argument as a profile path
