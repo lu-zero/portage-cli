@@ -39,12 +39,12 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 - Whether `history/merges.jsonl`'s unbounded growth (full-file-parse-per-query on the ETA hot path) needs rotation or a different format — not measured yet: [[activity-storage-format]]
 - Cross-emerge `llvm-core/clang` for riscv64 under both `--prefix` and `--local`, `-b`/buildpkg correctness included — plan drafted; Scenario A blocked on workdir race, B on local bootstrap: [[clang-crossbuild-prefix-local-test-plan]]
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
-- `@security` set — the one remaining package-set gap from the 2026-08-12 audit; needs a GLSA data source (fetch/parse/match `metadata/glsa`). Check whether the `em glsa` applet already has reusable GLSA machinery before rescoping. Everything else from that audit (`@selected-packages`/`@selected-sets`, `@live-rebuild`/`@deprecated-live-rebuild`, `@module-rebuild`/`@x11-module-rebuild`, the `@profile` bug) closed 2026-08-13: [[package-sets-support]] [[for_opencode]]
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 
 | Item | When | Notes |
 |------|------|--------|
+| Package-set (`@name`) coverage — `@selected-*`, `@live-rebuild`, `@deprecated-live-rebuild`, `@module-rebuild`, `@x11-module-rebuild`, `@profile` bug, `@security` | 2026-08-13 | whole 2026-08-12 audit closed; `@security` last, via `em glsa`'s GLSA machinery; [[package-sets-support]] [[for_opencode]] |
 | `cede_required_use` awk-4/stage1 REQUIRED_USE-reconsideration bug | 2026-08-01 | `Adapter::rebuilding_cpvs`, Fable-designed, [[em-stages-scenario-matrix]] |
 | Blocker Tier-1 Step 1 (classify_blockers advisory verdicts) | 2026-08-01 | [[blocker-enforcement]] (Step 2 unmerge still open) |
 | Build-dir clean FEATURES parity (`keepwork`/`keeptemp`/`noclean`) | 2026-07-30 | [[build-clean-env]] |

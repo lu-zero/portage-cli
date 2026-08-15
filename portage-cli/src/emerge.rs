@@ -42,13 +42,11 @@ pub(crate) fn parse_atoms_strict(raw: &[String]) -> Result<Vec<portage_atom::Dep
 /// unsatisfiable target aborts the run or merely warns depends on it (see
 /// [`TargetOrigin`]).
 /// Expand `@set` references; used by emerge and quickpkg.
-pub(crate) fn expand_sets(
-    raw: &[String],
-    config_root: Option<&Utf8Path>,
-    eroot: &Utf8Path,
-) -> Vec<TargetAtom> {
+pub(crate) fn expand_sets(raw: &[String], roots: &portage_resolve::Roots) -> Vec<TargetAtom> {
     // Build the resolver lazily, only when a set ref is actually present, so a
     // plain `em foo` (no sets) pays no profile-build cost.
+    let config_root = roots.config();
+    let eroot = roots.merge_root();
     let mut out = Vec::with_capacity(raw.len());
     #[allow(unused_assignments)]
     // stack_holder's initial None may not be read if no sets are expanded
@@ -60,6 +58,21 @@ pub(crate) fn expand_sets(
             out.push(TargetAtom::explicit(s.clone()));
             continue;
         };
+
+        // `@security` needs the GLSA repo + the configured arch + the VDB —
+        // all derivable from `roots` (a system set should reflect actual
+        // config, not `--repo`/`--arch` CLI overrides, so it deliberately
+        // does NOT go through the `&Cli`-based applet helpers).
+        if name == "security" {
+            match crate::glsa::security_atoms_from_roots(roots) {
+                Ok(atoms) => out.extend(atoms.iter().map(|d| TargetAtom {
+                    atom: d.to_string(),
+                    origin: TargetOrigin::Set(name.to_string()),
+                })),
+                Err(e) => crate::style::warn_line!("skipping @{name}: {e}"),
+            }
+            continue;
+        }
 
         // VDB-aware built-in sets (@preserved-rebuild, …) need the live VDB
         // and/or related registries, none of which `SetResolver` (profile/
@@ -323,7 +336,7 @@ async fn emerge_atoms_inner(
     // Expand @set references (e.g. @system, @world) to concrete atoms before
     // resolution. Sets are read from the config root's profile (@system) and
     // the merge target (@world/@selected, user sets).
-    let expanded = expand_sets(raw_atoms, roots.config(), roots.merge_root());
+    let expanded = expand_sets(raw_atoms, &roots);
     // A set-only request (e.g. `@preserved-rebuild`, `@world` on an
     // up-to-date system) legitimately expanding to nothing is not a typo —
     // unlike a bad literal atom, which always yields at least one
@@ -1182,7 +1195,10 @@ mod tests {
         );
         reg.store();
 
-        let expanded = expand_sets(&["@preserved-rebuild".to_string()], None, &eroot);
+        let expanded = expand_sets(
+            &["@preserved-rebuild".to_string()],
+            &portage_resolve::Roots::for_test(eroot.as_str()),
+        );
         assert_eq!(expanded.len(), 1);
         assert_eq!(expanded[0].atom, "app-misc/consumer:0");
         assert_eq!(
@@ -1197,7 +1213,10 @@ mod tests {
         let eroot = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
         std::fs::create_dir_all(eroot.join("var/db/pkg")).unwrap();
 
-        let expanded = expand_sets(&["@preserved-rebuild".to_string()], None, &eroot);
+        let expanded = expand_sets(
+            &["@preserved-rebuild".to_string()],
+            &portage_resolve::Roots::for_test(eroot.as_str()),
+        );
         assert!(expanded.is_empty());
     }
 

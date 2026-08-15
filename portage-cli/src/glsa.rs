@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
-use portage_atom::{Cpn, Cpv, Version};
+use portage_atom::{Cpn, Cpv, Dep, Version};
 
 use crate::advisory::{
     self, effective_arch, installed_packages, print_item_banner, print_list_header, print_sub_line,
@@ -265,6 +265,93 @@ fn fix_atoms(glsa: &Glsa, installed: &[(Cpv, String)], arch: &str) -> Vec<String
         }
     }
     atoms.into_iter().collect()
+}
+
+/// The `@security` set: the union of every applicable GLSA's fix atoms.
+///
+/// Mirrors real portage's `SecuritySet`/`NewAffectedSet`
+/// (`portage/_sets/security.py:SecuritySet.load`): for each GLSA the repo
+/// ships, if the system is vulnerable to it and it hasn't been marked applied
+/// (`glsa_injected`), collect its merge list. Returns `>=cat/pkg-ver` atoms
+/// (from [`fix_atoms`]) rather than real portage's `=`-prefixed
+/// `getMergeList` output — the solver still lands on a non-vulnerable version
+/// (typically the same one for the common single-`<unaffected>` case), and
+/// `>=` is robust to two GLSAs pinning different versions of the same package
+/// without needing portage's `_reduce` highest-wins dedup.
+pub(crate) fn security_atoms(
+    repo_path: &Utf8Path,
+    installed: &[(Cpv, String)],
+    arch: &str,
+    eroot: &Utf8Path,
+) -> Result<Vec<Dep>> {
+    let injected = read_injected(eroot);
+    let mut atom_strs = BTreeSet::new();
+    for id in list_ids(repo_path)? {
+        let glsa = match load(repo_path, &id) {
+            Ok(g) => g,
+            Err(e) => {
+                warn_line!("{id}: {e:#}");
+                continue;
+            }
+        };
+        if !is_vulnerable(&glsa, installed, arch, &injected) {
+            continue;
+        }
+        atom_strs.extend(fix_atoms(&glsa, installed, arch));
+    }
+    atom_strs
+        .into_iter()
+        .map(|atom| Dep::parse(&atom).with_context(|| format!("parsing GLSA atom {atom}")))
+        .collect()
+}
+
+/// Same as [`security_atoms`] but derives the GLSA repo, the installed
+/// package list, the effective arch, and the injected-GLSA state from a
+/// [`portage_resolve::Roots`] — the shape both `expand_sets`
+/// (`em @security`) and `resolve_all_sets` (`em --info -v`) already hold.
+///
+/// `@security` is the one set that spans the repo/arch and VDB worlds, so it
+/// can't be resolved from `eroot` alone like the other built-ins; `Roots`
+/// carries exactly the topology needed. It deliberately does NOT honour the
+/// `--repo`/`--arch` CLI overrides the `em glsa` applet uses — a system set
+/// should reflect the actual configured repo and arch, not a per-invocation
+/// focus.
+pub(crate) fn security_atoms_from_roots(roots: &portage_resolve::Roots) -> Result<Vec<Dep>> {
+    let eroot = roots.merge_root();
+
+    // Main repo from repos.conf (mirrors `cli.repo_path()` minus its `--repo`
+    // short-circuit), defaulting to the conventional Gentoo location.
+    let repo_path = roots
+        .repos_conf()
+        .ok()
+        .and_then(|rc| {
+            rc.main_repo()
+                .and_then(|m| m.location.as_path())
+                .map(std::path::PathBuf::from)
+        })
+        .and_then(|p| Utf8PathBuf::from_path_buf(p).ok())
+        .unwrap_or_else(|| Utf8PathBuf::from("/var/db/repos/gentoo"));
+
+    // Installed (cpv, main_slot) from the VDB (mirrors
+    // `advisory::installed_packages`); an unreadable VDB just yields empty.
+    let installed = match portage_vdb::Vdb::open(eroot.join("var/db/pkg")) {
+        Ok(vdb) => vdb
+            .packages()
+            .into_iter()
+            .map(|p| (p.cpv().clone(), p.slot_main().unwrap_or_default()))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+
+    // ARCH from make.conf at the config root (mirrors
+    // `advisory::effective_arch` minus its `--arch` CLI fallback).
+    let config_root = roots.config().unwrap_or(Utf8Path::new("/"));
+    let arch = portage_repo::MakeConf::load(&config_root.join("etc/portage/make.conf"))
+        .ok()
+        .and_then(|c| c.get("ARCH").filter(|a| !a.is_empty()).map(str::to_string))
+        .unwrap_or_default();
+
+    security_atoms(&repo_path, &installed, &arch, eroot)
 }
 
 fn glsa_dir(repo_path: &Utf8Path) -> Utf8PathBuf {
@@ -607,5 +694,73 @@ mod tests {
     fn injected_path_uses_the_real_path_under_a_managed_root() {
         let dir = injected_path(Utf8Path::new("/tmp/some-root"));
         assert_eq!(dir.as_str(), "/tmp/some-root/var/lib/portage/glsa_injected");
+    }
+
+    // --- @security (security_atoms) ---
+
+    /// Seed a fake repo with one GLSA xml and return its path.
+    fn glsa_repo(xml: &str) -> (tempfile::TempDir, Utf8PathBuf) {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path().join("metadata/glsa");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("glsa-200310-03.xml"), xml).unwrap();
+        let path = Utf8PathBuf::from_path_buf(repo.path().to_path_buf()).unwrap();
+        (repo, path)
+    }
+
+    #[test]
+    fn security_atoms_returns_fix_atom_for_a_vulnerable_glsa() {
+        let (_repo, repo_path) = glsa_repo(APACHE_GLSA);
+        let eroot = tempfile::tempdir().unwrap();
+        let eroot = Utf8PathBuf::from_path_buf(eroot.path().to_path_buf()).unwrap();
+        let installed = vec![(cpv("www-servers/apache-1.3.27"), "0".to_string())];
+        let atoms = security_atoms(&repo_path, &installed, "amd64", &eroot).unwrap();
+        let s: Vec<String> = atoms.into_iter().map(|d| d.to_string()).collect();
+        assert_eq!(s, vec![">=www-servers/apache-1.3.29"]);
+    }
+
+    #[test]
+    fn security_atoms_empty_when_the_installed_version_is_already_unaffected() {
+        let (_repo, repo_path) = glsa_repo(APACHE_GLSA);
+        let eroot = tempfile::tempdir().unwrap();
+        let eroot = Utf8PathBuf::from_path_buf(eroot.path().to_path_buf()).unwrap();
+        // 1.3.29 matches the <unaffected range="ge">1.3.29</unaffected> entry.
+        let installed = vec![(cpv("www-servers/apache-1.3.29"), "0".to_string())];
+        assert!(
+            security_atoms(&repo_path, &installed, "amd64", &eroot)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn security_atoms_skips_glsas_marked_injected() {
+        let (_repo, repo_path) = glsa_repo(APACHE_GLSA);
+        let eroot = tempfile::tempdir().unwrap();
+        // Mark the GLSA applied (real portage's glsa_injected).
+        std::fs::create_dir_all(eroot.path().join("var/lib/portage")).unwrap();
+        std::fs::write(
+            eroot.path().join("var/lib/portage/glsa_injected"),
+            "200310-03\n",
+        )
+        .unwrap();
+        let eroot = Utf8PathBuf::from_path_buf(eroot.path().to_path_buf()).unwrap();
+        // Vulnerable version, but the GLSA is injected → not in the set.
+        let installed = vec![(cpv("www-servers/apache-1.3.27"), "0".to_string())];
+        assert!(
+            security_atoms(&repo_path, &installed, "amd64", &eroot)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn security_atoms_empty_when_no_glsa_repo() {
+        // No metadata/glsa/ dir at all → list_ids errors → propagated
+        // (callers warn-and-skip at the set layer).
+        let repo = tempfile::tempdir().unwrap();
+        let repo_path = Utf8PathBuf::from_path_buf(repo.path().to_path_buf()).unwrap();
+        let eroot = Utf8PathBuf::from("/nonexistent-eroot");
+        assert!(security_atoms(&repo_path, &[], "amd64", &eroot).is_err());
     }
 }

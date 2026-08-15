@@ -49,7 +49,7 @@ async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
 
     // quickpkg operates on the installed set only — set provenance carries no
     // meaning here, so the expansion is flattened straight back to atoms.
-    let expanded: Vec<String> = expand_sets(&opts.atoms, roots.config(), merge_root)
+    let expanded: Vec<String> = expand_sets(&opts.atoms, &roots)
         .into_iter()
         .map(|t| t.atom)
         .collect();

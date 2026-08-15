@@ -254,7 +254,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
     .map(str::to_string)
     .collect();
 
-    let sets = (cli.verbose > 0).then(|| resolve_all_sets(roots.config(), roots.merge_root()));
+    let sets = (cli.verbose > 0).then(|| resolve_all_sets(&roots));
 
     let use_expand_names = shell.get_var("USE_EXPAND").unwrap_or_default();
     let use_str = shell.get_var("USE").unwrap_or_default();
@@ -481,22 +481,28 @@ fn print_text(info: &Info) -> Result<()> {
 
 /// Resolve every set `crate::maint::sets::KnownSets` knows about — real
 /// portage's shipped built-ins (`/usr/share/portage/config/sets/*.conf`,
-/// `@preserved-rebuild` always added since it has no conf-file backing)
-/// plus this root's `sets.conf`/`etc/portage/sets/*` — through the exact
-/// same [`crate::maint::world::resolve_set`] the depgraph and `-W` use, so
-/// this reports what `em` can *actually* resolve today, not just what's
-/// configured. A set `em` doesn't implement yet (`@security`, and friends —
-/// see `todo/done/package-sets-support.md`) shows up with its resolve error
-/// rather than being silently absent from the list.
-fn resolve_all_sets(
-    config_root: Option<&Utf8Path>,
-    eroot: &Utf8Path,
-) -> BTreeMap<String, SetEntry> {
+/// `@preserved-rebuild`/`@live-rebuild`/`@security` always added since they
+/// have no conf-file backing here) plus this root's `sets.conf`/`sets/*` —
+/// through the same [`crate::maint::world::resolve_set`] the depgraph and
+/// `-W` use, so this reports what `em` can *actually* resolve today, not
+/// just what's configured. `@security` (the one set spanning the GLSA repo,
+/// arch, and VDB worlds) goes through [`crate::glsa::security_atoms_from_roots`]
+/// instead. Any other set `em` doesn't recognise shows up with its resolve
+/// error rather than being silently absent from the list.
+fn resolve_all_sets(roots: &portage_resolve::Roots) -> BTreeMap<String, SetEntry> {
+    let eroot = roots.merge_root();
     let known = crate::maint::sets::KnownSets::load(Some(eroot));
     known
         .iter()
         .map(|name| {
-            let entry = match crate::maint::world::resolve_set(config_root, eroot, name) {
+            // `@security` spans the GLSA repo + arch + VDB worlds, so it goes
+            // through glsa::security_atoms_from_roots, not resolve_set.
+            let result = if name == "security" {
+                crate::glsa::security_atoms_from_roots(roots)
+            } else {
+                crate::maint::world::resolve_set(roots.config(), eroot, name)
+            };
+            let entry = match result {
                 Ok(atoms) => {
                     let mut atoms: Vec<String> = atoms.iter().map(|d| d.to_string()).collect();
                     atoms.sort_unstable();
@@ -715,7 +721,7 @@ mod tests {
     #[test]
     fn resolve_all_sets_reports_both_resolved_and_unresolvable_sets() {
         let (_tmp, root) = scratch_root();
-        let sets = resolve_all_sets(Some(&root), &root);
+        let sets = resolve_all_sets(&portage_resolve::Roots::for_test(root.as_str()));
 
         let myset = sets.get("myuserset").expect("user set is known");
         assert_eq!(myset.atoms, vec!["app-shells/bash".to_string()]);
@@ -730,22 +736,24 @@ mod tests {
 
     #[test]
     fn resolve_all_sets_is_none_shaped_correctly_when_unresolvable() {
-        // A set name `KnownSets` only sees via a `usr/share/portage`
-        // built-in conf that this scratch root doesn't have wouldn't even
-        // appear here, so simulate "known but unresolvable" the way a real
-        // host does for @security: a `sets.conf` section with no backing
-        // implementation `SetResolver` (or `resolve_vdb_set`) recognizes.
+        // A set name `KnownSets` sees via a `sets.conf` section that `em` has
+        // no backing implementation for resolves to an error rather than
+        // vanishing — the shape a real host used to show for `@security`
+        // before it was wired to the GLSA subsystem. Any unimplemented
+        // `@name` `SetResolver`/`resolve_vdb_set` don't recognise behaves
+        // this way; use a clearly-fake one so the test doesn't depend on the
+        // real `@security` resolution (empty when no GLSAs apply).
         let (_tmp, root) = scratch_root();
         std::fs::write(
             root.join("etc/portage/sets.conf"),
-            "[security]\nclass = portage.sets.security.NewAffectedSet\n",
+            "[builtinfake]\nclass = portage.sets.builtin.FakeSet\n",
         )
         .unwrap();
 
-        let sets = resolve_all_sets(Some(&root), &root);
+        let sets = resolve_all_sets(&portage_resolve::Roots::for_test(root.as_str()));
 
-        let security = sets.get("security").expect("sets.conf section is known");
-        assert!(security.atoms.is_empty());
-        assert!(security.error.is_some());
+        let fake = sets.get("builtinfake").expect("sets.conf section is known");
+        assert!(fake.atoms.is_empty());
+        assert!(fake.error.is_some());
     }
 }

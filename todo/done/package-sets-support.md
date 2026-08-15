@@ -1,11 +1,11 @@
 # Package-set (`@name`) support gaps
 
-STATUS: **✅ done (2026-08-13)** for everything except `@security`. The gaps
-recorded below (`@selected-packages`, `@selected-sets`, `@live-rebuild`,
-`@deprecated-live-rebuild`, `@module-rebuild`, `@x11-module-rebuild`) and the
-`@profile` bug are all implemented; see `done/for_opencode.md` for the commit
-SHAs and implementation notes. `@security` stays open (needs a GLSA
-subsystem). This audit is kept as the historical record of what was found.
+STATUS: **✅ done (2026-08-13).** Every gap recorded below —
+`@selected-packages`, `@selected-sets`, `@live-rebuild`, `@deprecated-live-rebuild`,
+`@module-rebuild`, `@x11-module-rebuild`, the `@profile` bug, and `@security`
+— is implemented. See `done/for_opencode.md` for the commit SHAs and
+implementation notes (`@security` landed last, once `em glsa` provided the
+GLSA machinery). This audit is kept as the historical record of what was found.
 
 Luca asked whether `em` supports the built-in sets documented at
 https://wiki.gentoo.org/wiki/Package_sets. Audited 2026-08-12 against real
@@ -105,9 +105,10 @@ below are the original audit text, kept for the record.
   combined `@selected`.)
 - ✅ `@selected-sets` — real portage's `WorldSelectedSetsSet`: just the
   `world_sets` refs (unexpanded set names), no packages.
-- ⏳ `@security` — GLSA-based (`NewAffectedSet`). Big feature (needs a GLSA
-  data source); lowest priority of this list. **Still open** — check whether
-  the `em glsa` applet already has reusable GLSA machinery before rescoping.
+- ✅ `@security` — GLSA-based (`NewAffectedSet`). Resolved through
+  `glsa::security_atoms_from_roots` (union of each applicable GLSA's fix
+  atoms), the last gap to close — landed once `em glsa` provided the GLSA
+  fetch/parse/match machinery.
 - ✅ `@live-rebuild` / `@deprecated-live-rebuild` — VDB query on
   `PROPERTIES=live` / `INHERITED` matching `portage.const.LIVE_ECLASSES`.
 - ✅ `@module-rebuild` / `@x11-module-rebuild` — file-ownership sets

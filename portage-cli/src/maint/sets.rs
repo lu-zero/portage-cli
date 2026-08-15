@@ -32,6 +32,7 @@ impl KnownSets {
             "deprecated-live-rebuild",
             "module-rebuild",
             "x11-module-rebuild",
+            "security",
         ] {
             names.insert(name.to_string());
         }

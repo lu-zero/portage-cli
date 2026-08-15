@@ -2,10 +2,11 @@
 
 STATUS: **✅ done (2026-08-13).** All four scope items + the refactor enabler
 landed as six commits (plus a clippy cleanup), split one-per-concern and each
-verified to build + test at its intermediate state. See **Results** at the
-bottom for the commit SHAs, divergences from this plan, and the live-parity
-table. `@security` remains deferred (needs a GLSA subsystem). The research
-and implementation narrative below are kept as the historical record.
+verified to build + test at its intermediate state. `@security` — left open
+below as needing a GLSA subsystem — landed afterwards once `em glsa` provided
+one; see **Results** at the bottom for the commit SHAs, divergences from this
+plan, and the live-parity table. The research and implementation narrative
+below are kept as the historical record.
 
 Companion doc: `done/package-sets-support.md` — the original audit that
 found these gaps, plus the two things already fixed in that earlier session
@@ -450,6 +451,12 @@ skipped), `cargo test --workspace --exclude portage-bench --doc`,
 provenance (the masked-pkg error cites `required by "@selected-packages"`),
 confirming the `expand_sets` wiring end-to-end.
 
-**Still deferred (unchanged):** `@security` (needs a GLSA subsystem — separate
-task; worth checking whether the existing `em glsa` applet already has any
-reusable machinery before scoping it).
+**Update (2026-08-13, later):** `@security` landed too, once `em glsa`
+provided the GLSA machinery. It's resolved through
+`glsa::security_atoms_from_roots(&Roots)` — the union of each applicable
+GLSA's fix atoms — wired into `expand_sets` (`em @security`) and
+`resolve_all_sets` (`em --info -v`). It's the one set threaded through
+`&Roots` (not `&eroot` like the VDB sets, nor `&Cli`) because it spans the
+repo, arch, and VDB worlds; `@security` deliberately ignores `--repo`/`--arch`
+overrides (a system set should reflect actual config). Live parity: `em
+@security` and `emerge -p @security` both empty on an up-to-date host.
