@@ -65,6 +65,7 @@ prodash = { workspace = true, optional = true }
 terminal_size = { workspace = true }
 colorchoice-clap = { workspace = true }
 camino = { workspace = true }
+memchr = { workspace = true }
 ldconfig = { workspace = true }
 gentoo-core = { workspace = true }
 portage-atom = { workspace = true }

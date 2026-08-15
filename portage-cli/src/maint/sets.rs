@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
+use memchr::memmem;
 use portage_atom::Dep;
 use portage_vdb::{ContentsKind, ContentsRef, InstalledPackage};
 
@@ -352,23 +353,22 @@ fn owns_any(raw: &str, queries: &[Query], eroot: &Utf8Path, symlinks: &LazySymli
 /// be yielded more than once, or without matching (the needle can fall in a
 /// symlink target); the caller re-checks it properly.
 fn candidate_lines<'a>(raw: &'a str, queries: &'a [Query]) -> impl Iterator<Item = &'a str> + 'a {
+    // Byte offsets throughout, but every one lands on a char boundary: the
+    // needle is ASCII, and the bounds below sit on `\n` or the ends of `raw`.
     queries.iter().flat_map(move |q| {
-        raw.match_indices(q.needle.as_str())
-            .filter_map(move |(at, m)| {
-                // `None` covers a final line with no trailing newline; `\r` a
-                // CRLF file, which `parse_line` still handles because it
-                // trims.
-                let end_of_field = at + m.len();
-                let ends_field = raw.as_bytes().get(end_of_field);
-                if !matches!(ends_field, None | Some(b' ') | Some(b'\n') | Some(b'\r')) {
-                    return None;
-                }
-                let start = raw[..at].rfind('\n').map_or(0, |nl| nl + 1);
-                let end = raw[end_of_field..]
-                    .find('\n')
-                    .map_or(raw.len(), |nl| end_of_field + nl);
-                Some(&raw[start..end])
-            })
+        q.finder.find_iter(raw.as_bytes()).filter_map(move |at| {
+            // `None` covers a final line with no trailing newline; `\r` a
+            // CRLF file, which `parse_line` still handles because it trims.
+            let end_of_field = at + q.finder.needle().len();
+            let ends_field = raw.as_bytes().get(end_of_field);
+            if !matches!(ends_field, None | Some(b' ') | Some(b'\n') | Some(b'\r')) {
+                return None;
+            }
+            let start = memchr::memrchr(b'\n', &raw.as_bytes()[..at]).map_or(0, |nl| nl + 1);
+            let end = memchr::memchr(b'\n', &raw.as_bytes()[end_of_field..])
+                .map_or(raw.len(), |nl| end_of_field + nl);
+            Some(&raw[start..end])
+        })
     })
 }
 
@@ -399,9 +399,11 @@ struct Query {
     path: Utf8PathBuf,
     base: Utf8PathBuf,
     real: Utf8PathBuf,
-    /// `/` + [`Self::base`], the text to search raw CONTENTS for — a search
-    /// fragment rather than a path of its own (see [`candidate_lines`]).
-    needle: String,
+    /// Searcher for `/` + [`Self::base`], the text a matching CONTENTS entry
+    /// must contain (see [`candidate_lines`]). Built once and reused across
+    /// every installed package: `str::match_indices` would rebuild Two-Way's
+    /// tables per package and search scalar, where this is SIMD.
+    finder: memmem::Finder<'static>,
 }
 
 impl Query {
@@ -411,7 +413,7 @@ impl Query {
             .map(|p| {
                 let base = base_name(p.as_str());
                 Self {
-                    needle: format!("/{base}"),
+                    finder: memmem::Finder::new(&format!("/{base}")).into_owned(),
                     base: base.into(),
                     real: real_path(p, eroot, symlinks),
                     path: p.clone(),
