@@ -1,0 +1,11 @@
+Benchmark 1: pre-interning 91196a9
+  Time (mean ± σ):      1.699 s ±  0.356 s    [User: 2.857 s, System: 9.936 s]
+  Range (min … max):    1.404 s …  2.878 s    20 runs
+ 
+Benchmark 2: interned 17d2a81
+  Time (mean ± σ):      1.668 s ±  0.121 s    [User: 2.865 s, System: 13.168 s]
+  Range (min … max):    1.487 s …  1.904 s    20 runs
+ 
+Summary
+  interned 17d2a81 ran
+    1.02 ± 0.23 times faster than pre-interning 91196a9

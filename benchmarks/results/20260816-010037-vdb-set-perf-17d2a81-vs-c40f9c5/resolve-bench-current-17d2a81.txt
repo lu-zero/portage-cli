@@ -1,0 +1,124 @@
+   Compiling criterion v0.8.2
+   Compiling brush-core v0.5.0 (https://github.com/lu-zero/brush.git?rev=24443b9d#24443b9d)
+   Compiling brush-builtins v0.2.0 (https://github.com/lu-zero/brush.git?rev=24443b9d#24443b9d)
+   Compiling portage-repo v0.1.0 (/home/lu_zero/Sources/portage-cli/portage-repo)
+   Compiling portage-bench v0.1.0 (/home/lu_zero/Sources/portage-cli/benchmarks)
+    Finished `bench` profile [optimized] target(s) in 2m 47s
+     Running benches/resolve.rs (target/release/deps/resolve-db62f24dc58b35cf)
+Gnuplot not found, using plotters backend
+Benchmarking resolve/load/load_repo
+Benchmarking resolve/load/load_repo: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 12.9s.
+Benchmarking resolve/load/load_repo: Collecting 10 samples in estimated 12.892 s (10 iterations)
+Benchmarking resolve/load/load_repo: Analyzing
+resolve/load/load_repo  time:   [1.2791 s 1.2805 s 1.2825 s]
+                        change: [+0.2883% +0.4600% +0.6466%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking resolve/load/build_provider
+Benchmarking resolve/load/build_provider: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 19.6s.
+Benchmarking resolve/load/build_provider: Collecting 10 samples in estimated 19.648 s (10 iterations)
+Benchmarking resolve/load/build_provider: Analyzing
+resolve/load/build_provider
+                        time:   [538.97 ms 539.42 ms 539.86 ms]
+                        change: [−2.7189% −2.6165% −2.5162%] (p = 0.00 < 0.05)
+                        Performance has improved.
+
+repo loaded in 1.33s
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Collecting 10 samples in estimated 5.2906 s (440 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Analyzing
+resolve/targets/portage-atom-pubgrub/firefox
+                        time:   [11.995 ms 12.000 ms 12.004 ms]
+                        change: [−6.0398% −5.9850% −5.9315%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Collecting 10 samples in estimated 5.0784 s (1155 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Analyzing
+resolve/targets/portage-atom-pubgrub/gcc
+                        time:   [4.3901 ms 4.3911 ms 4.3922 ms]
+                        change: [−4.0783% −4.0109% −3.9383%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking resolve/targets/portage-atom-pubgrub/rust
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Collecting 10 samples in estimated 5.2638 s (660 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Analyzing
+resolve/targets/portage-atom-pubgrub/rust
+                        time:   [8.0212 ms 8.1749 ms 8.3709 ms]
+                        change: [−1.0190% +0.9055% +4.3071%] (p = 0.64 > 0.05)
+                        No change in performance detected.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Collecting 10 samples in estimated 5.0085 s (1210 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Analyzing
+resolve/targets/portage-atom-pubgrub/openssh
+                        time:   [4.1489 ms 4.1503 ms 4.1526 ms]
+                        change: [−2.7152% −2.6148% −2.4961%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+Benchmarking resolve/targets/portage-atom-pubgrub/python
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Collecting 10 samples in estimated 5.0630 s (880 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Analyzing
+resolve/targets/portage-atom-pubgrub/python
+                        time:   [5.7462 ms 5.7483 ms 5.7531 ms]
+                        change: [−3.0439% −2.9506% −2.8509%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+
+ACCEPT_KEYWORDS: ["arm64", "~arm64"]  effective_use: 156  package_mask: 24 atoms  package_use: 67 entries
+  USE contains: pam=true ssl=true static=false
+  installed packages from VDB: 723
+
+=== Solution sizes (keyword+mask filtered, profile USE) ===
+  firefox      → 274 packages
+  wrote /tmp/solver_firefox.txt
+  gcc          → 77 packages
+  wrote /tmp/solver_gcc.txt
+  rust         → 168 packages
+  wrote /tmp/solver_rust.txt
+  openssh: 401 deps dropped total
+    dropped dev-lang/python: 25x
+    dropped app-emulation/wine-gecko: 20x
+    dropped llvm-runtimes/libgcc: 19x
+    dropped llvm-runtimes/libatomic-stub: 17x
+    dropped dev-lang/rust-bin: 15x
+    dropped dev-lang/rust: 15x
+    dropped app-arch/pdlzip: 15x
+    dropped dev-util/mingw64-toolchain: 10x
+    dropped app-emulation/wine-mono: 10x
+    dropped app-misc/getopt: 8x
+    dropped dev-perl/GeoIP2: 6x
+    dropped media-sound/apulse: 6x
+    dropped www-servers/h2o: 5x
+    dropped llvm-core/clang: 5x
+    dropped dev-util/spirv-llvm-translator: 4x
+    dropped dev-lang/php: 4x
+    dropped www-client/fetch: 4x
+    dropped perl-core/Module-CoreList: 4x
+    dropped dev-java/openjdk-jre-bin: 4x
+    dropped sys-devel/native-cctools: 4x
+  openssh 10.5_p1: 24 merged deps | pam=true libcrypt=true openssl=true
+    dep: virtual/libcrypt:0
+    dep: sys-libs/pam:0
+    dep: virtual/libcrypt:0
+    dep: sys-libs/pam:0
+    dep: sys-auth/pambase:0
+  pam packages in provider: [Real { cpn: Cpn { category: Interned(26), package: Interned(252) }, slot: Some(Interned(17)), merge_root: Target }]
+  virtual/libcrypt packages in provider: [Real { cpn: Cpn { category: Interned(31), package: Interned(32) }, slot: Some(Interned(17)), merge_root: Target }]
+  openssh      → 44 packages
+  wrote /tmp/solver_openssh.txt
+  python       → 105 packages
+  wrote /tmp/solver_python.txt

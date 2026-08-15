@@ -1,0 +1,606 @@
+    Updating crates.io index
+    Updating git repository `https://github.com/lu-zero/pseudoroot.git`
+    Updating git repository `https://github.com/lu-zero/fakeroost.git`
+    Updating git repository `https://github.com/lu-zero/hakoniwa.git`
+    Updating git repository `https://github.com/lu-zero/brush.git`
+    Updating git repository `https://github.com/pkgcraft/pkgcraft.git`
+     Locking 745 packages to latest Rust 1.95 compatible versions
+      Adding bzip2 v0.4.4 (available: v0.6.1)
+      Adding criterion v0.7.0 (available: v0.8.2)
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding gix v0.83.0 (available: v0.86.0)
+      Adding indicatif v0.17.11 (available: v0.18.6)
+      Adding itertools v0.14.0 (available: v0.15.0)
+      Adding jwalk v0.8.1 (available: v0.9.0)
+      Adding kstring v2.0.2 (available: v2.0.4, requires Rust 1.96.0)
+      Adding md5 v0.7.0 (available: v0.8.1)
+      Adding object v0.36.7 (available: v0.40.0)
+      Adding rand v0.8.7 (available: v0.10.2)
+      Adding resolvo v0.11.1 (available: v0.12.0)
+      Adding sokgi v0.2.0 (available: v0.3.0)
+      Adding toml v0.8.23 (available: v1.1.4+spec-1.1.0)
+ Downloading crates ...
+  Downloaded moka v0.12.16
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libc v0.2.189
+   Compiling cfg-if v1.0.4
+   Compiling memchr v2.8.3
+   Compiling smallvec v1.15.2
+   Compiling thiserror v2.0.20
+   Compiling scopeguard v1.2.0
+   Compiling parking_lot_core v0.9.12
+   Compiling stable_deref_trait v1.2.1
+   Compiling portable-atomic v1.15.0
+   Compiling critical-section v1.2.0
+   Compiling regex-syntax v0.8.11
+   Compiling rand_core v0.10.1
+   Compiling getrandom v0.4.3
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.1
+   Compiling tinyvec_macros v0.1.1
+   Compiling serde_core v1.0.229
+   Compiling fastrand v2.5.0
+   Compiling version_check v0.9.5
+   Compiling gix-trace v0.1.21
+   Compiling equivalent v1.0.2
+   Compiling typenum v1.20.1
+   Compiling crc32fast v1.5.0
+   Compiling zlib-rs v0.6.7
+   Compiling hashbrown v0.17.1
+   Compiling itoa v1.0.18
+   Compiling same-file v1.0.6
+   Compiling rustix v1.1.4
+   Compiling crossbeam-utils v0.8.22
+   Compiling linux-raw-sys v0.12.1
+   Compiling byteorder v1.5.0
+   Compiling subtle v2.6.1
+   Compiling either v1.17.0
+   Compiling shlex v2.0.1
+   Compiling cmov v0.5.4
+   Compiling find-msvc-tools v0.1.11
+   Compiling const-oid v0.10.2
+   Compiling pin-project-lite v0.2.17
+   Compiling crossbeam-epoch v0.9.20
+   Compiling heapless v0.8.0
+   Compiling const-oid v0.9.6
+   Compiling autocfg v1.5.1
+   Compiling futures-core v0.3.34
+   Compiling crossbeam-deque v0.8.7
+   Compiling jiff-core v0.1.0
+   Compiling libm v0.2.16
+   Compiling futures-sink v0.3.34
+   Compiling rayon-core v1.13.0
+   Compiling serde v1.0.229
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling slab v0.4.12
+   Compiling futures-io v0.3.34
+   Compiling pkg-config v0.3.34
+   Compiling futures-task v0.3.34
+   Compiling utf8_iter v1.0.4
+   Compiling ident_case v1.0.1
+   Compiling strsim v0.11.1
+   Compiling percent-encoding v2.3.2
+   Compiling dunce v1.0.5
+   Compiling fnv v1.0.7
+   Compiling fs_extra v1.3.0
+   Compiling zerocopy v0.8.56
+   Compiling icu_normalizer_data v2.3.0
+   Compiling icu_properties_data v2.3.0
+   Compiling nonempty v0.12.0
+   Compiling allocator-api2 v0.2.21
+   Compiling foldhash v0.2.0
+   Compiling prettyplease v0.2.37
+   Compiling winnow v1.0.4
+   Compiling aws-lc-rs v1.18.0
+   Compiling zmij v1.0.23
+   Compiling log v0.4.33
+   Compiling rustversion v1.0.23
+   Compiling minimal-lexical v0.2.1
+   Compiling rustc-hash v2.1.3
+   Compiling getrandom v0.3.4
+   Compiling heck v0.5.0
+   Compiling unicode-width v0.2.2
+   Compiling cfg_aliases v0.2.2
+   Compiling unicode-bom v2.0.3
+   Compiling rustls v0.23.43
+   Compiling httparse v1.10.1
+   Compiling untrusted v0.9.0
+   Compiling adler2 v2.0.1
+   Compiling utf8parse v0.2.2
+   Compiling simd-adler32 v0.3.10
+   Compiling atomic-waker v1.1.2
+   Compiling boxcar v0.2.14
+   Compiling static_assertions v1.1.0
+   Compiling try-lock v0.2.5
+   Compiling anstyle-query v1.1.5
+   Compiling anstyle v1.0.14
+   Compiling tower-service v0.3.3
+   Compiling colorchoice v1.0.5
+   Compiling shell-words v1.1.1
+   Compiling glob v0.3.4
+   Compiling siphasher v1.0.3
+   Compiling crunchy v0.2.4
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling rand_core v0.6.4
+   Compiling clap_lex v1.1.0
+   Compiling object v0.37.3
+   Compiling data-encoding v2.11.1
+   Compiling tiny-keccak v2.0.2
+   Compiling peg-runtime v0.8.6
+   Compiling gimli v0.32.3
+   Compiling tower-layer v0.3.3
+   Compiling tree-sitter-language v0.1.7
+   Compiling semver v1.0.28
+   Compiling tagptr v0.2.0
+   Compiling arrayvec v0.7.8
+   Compiling smol_str v0.3.6
+   Compiling openssl-probe v0.2.1
+   Compiling icu_locale_fallback_data v2.3.0
+   Compiling base64 v0.22.1
+   Compiling web-time v1.1.0
+   Compiling cached_proc_macro_types v0.1.1
+   Compiling encoding_rs v0.8.35
+   Compiling serde_json v1.0.151
+   Compiling resolv-conf v0.7.6
+   Compiling lock_api v0.4.14
+   Compiling tinyvec v1.12.0
+   Compiling camino v1.2.5
+   Compiling chacha20 v0.10.1
+   Compiling icu_locale_data v2.3.0
+   Compiling bindgen v0.72.1
+   Compiling rustc_version v0.4.1
+   Compiling rustc-demangle v0.1.28
+   Compiling iana-time-zone v0.1.65
+   Compiling itertools v0.14.0
+   Compiling once_cell v1.21.4
+   Compiling owo-colors v4.3.0
+   Compiling itertools v0.13.0
+   Compiling phf_shared v0.11.3
+   Compiling hex v0.4.3
+   Compiling self_cell v1.3.0
+   Compiling is_ci v1.2.0
+   Compiling aho-corasick v1.1.5
+   Compiling shlex v1.3.0
+   Compiling triomphe v0.1.16
+   Compiling mime v0.3.17
+   Compiling nix v0.31.3
+   Compiling unicode-linebreak v0.1.5
+   Compiling radium v0.7.0
+   Compiling bit-vec v0.8.0
+   Compiling generic-array v0.14.7
+   Compiling ahash v0.8.12
+   Compiling unit-prefix v0.5.2
+   Compiling phf v0.11.3
+   Compiling rlimit v0.11.0
+   Compiling anstyle-parse v1.0.0
+   Compiling supports-hyperlinks v3.2.0
+   Compiling hashbrown v0.14.5
+   Compiling indenter v0.3.4
+   Compiling utf8-chars v3.0.7
+   Compiling kstring v2.0.2
+   Compiling tap v1.0.1
+   Compiling supports-unicode v3.0.0
+   Compiling unicode-width v0.1.14
+   Compiling foldhash v0.1.5
+   Compiling uucore v0.8.0
+   Compiling procfs v0.18.0
+   Compiling nom v7.1.3
+   Compiling miniz_oxide v0.8.9
+   Compiling walkdir v2.5.0
+   Compiling num-traits v0.2.19
+   Compiling want v0.3.1
+   Compiling bigdecimal v0.4.10
+   Compiling futures-channel v0.3.34
+   Compiling sync_wrapper v1.0.2
+   Compiling normalize-path v0.2.1
+   Compiling funty v2.0.0
+   Compiling fixedbitset v0.5.7
+   Compiling parking v2.2.1
+   Compiling roxmltree v0.21.1
+   Compiling type-map v0.5.1
+   Compiling version-ranges v0.1.3
+   Compiling elsa v1.11.2
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling humantime v2.4.0
+   Compiling os_display v0.1.4
+   Compiling streaming-iterator v0.1.9
+   Compiling spin v0.9.9
+   Compiling constant_time_eq v0.4.2
+   Compiling ctutils v0.4.2
+   Compiling indexmap v2.14.0
+   Compiling arrayref v0.3.9
+   Compiling annotate-snippets v0.6.1
+   Compiling plotters-backend v0.3.7
+   Compiling hash32 v0.3.1
+   Compiling rand v0.8.7
+   Compiling hash32 v0.2.1
+   Compiling ciborium-io v0.2.2
+   Compiling indoc v2.0.7
+   Compiling libloading v0.8.9
+   Compiling is_executable v1.0.6
+   Compiling cast v0.3.0
+   Compiling md5 v0.7.0
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.5
+   Compiling unicode-normalization v0.1.25
+   Compiling hashbrown v0.16.1
+   Compiling heapless v0.7.17
+   Compiling http v1.5.0
+   Compiling chic v1.2.2
+   Compiling archery v1.2.3
+   Compiling textwrap v0.16.2
+   Compiling wyz v0.5.1
+   Compiling anstream v1.0.0
+   Compiling hashbrown v0.15.5
+   Compiling clang-sys v1.9.1
+   Compiling jiff v0.2.35
+   Compiling event-listener v5.4.2
+   Compiling form_urlencoded v1.2.2
+   Compiling hybrid-array v0.4.14
+   Compiling supports-color v3.0.2
+   Compiling flume v0.12.0
+   Compiling plotters-svg v0.3.7
+   Compiling bit-set v0.8.0
+   Compiling rpds v1.2.1
+   Compiling phf_generator v0.11.3
+   Compiling arc-swap v1.9.2
+   Compiling syn v2.0.119
+   Compiling syn v3.0.3
+   Compiling regex-automata v0.4.18
+   Compiling toml_parser v1.1.3+spec-1.1.0
+   Compiling peg-macros v0.8.6
+   Compiling uucore_procs v0.8.0
+   Compiling phf_codegen v0.11.3
+   Compiling bitvec v1.1.1
+   Compiling terminfo v0.9.0
+   Compiling tracing-core v0.1.36
+   Compiling crossbeam-channel v0.5.16
+   Compiling crossbeam-queue v0.3.13
+   Compiling clru v0.6.3
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling faster-hex v0.10.0
+   Compiling criterion-plot v0.6.0
+   Compiling flate2 v1.1.9
+   Compiling http-body v1.1.0
+   Compiling jobserver v0.1.35
+   Compiling getrandom v0.2.17
+   Compiling num_cpus v1.17.0
+   Compiling http-body-util v0.1.5
+   Compiling cexpr v0.6.0
+   Compiling const-random-macro v0.1.16
+   Compiling cc v1.4.3
+   Compiling crossbeam v0.8.4
+   Compiling num-integer v0.1.47
+   Compiling chrono v0.4.45
+   Compiling plotters v0.3.7
+   Compiling const-random v0.1.18
+   Compiling addr2line v0.25.1
+   Compiling dlv-list v0.5.2
+   Compiling digest v0.11.3
+   Compiling num-bigint v0.4.8
+   Compiling peg v0.8.6
+   Compiling ordered-multimap v0.7.3
+   Compiling blake2 v0.11.0-rc.6
+   Compiling md-5 v0.11.0
+   Compiling rayon v1.12.0
+   Compiling rust-ini v0.21.3
+   Compiling cpufeatures v0.3.0
+   Compiling cpufeatures v0.2.17
+   Compiling mio v1.2.2
+   Compiling errno v0.3.14
+   Compiling socket2 v0.6.5
+   Compiling memmap2 v0.9.11
+   Compiling seize v0.5.1
+   Compiling gix-sec v0.14.2
+   Compiling filetime v0.2.29
+   Compiling hostname v0.4.2
+   Compiling io-close v0.3.7
+   Compiling uzers v0.12.2
+   Compiling console v0.16.4
+   Compiling cmake v0.1.58
+   Compiling sha2 v0.11.0
+   Compiling autotools v0.2.7
+   Compiling signal-hook-registry v1.4.8
+   Compiling gix-utils v0.3.5
+   Compiling rand v0.10.2
+   Compiling uuid v1.24.1
+   Compiling parking_lot v0.12.5
+   Compiling dashmap v6.2.1
+   Compiling tree-sitter-bash v0.25.1
+   Compiling blake3 v1.8.6
+   Compiling papaya v0.2.4
+   Compiling aws-lc-sys v0.44.0
+   Compiling prodash v31.0.0
+   Compiling moka v0.12.16
+   Compiling procfs-core v0.18.0
+   Compiling indicatif v0.18.6
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_spanned v1.1.1
+   Compiling regex v1.13.1
+   Compiling toml v1.1.4+spec-1.1.0
+   Compiling gentoo-interner v0.4.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/gentoo-interner)
+   Compiling tempfile v3.27.0
+   Compiling terminal_size v0.4.4
+   Compiling clap_builder v4.6.6
+   Compiling camino-tempfile v1.4.1
+   Compiling tree-sitter v0.26.12
+   Compiling synstructure v0.13.2
+   Compiling darling_core v0.23.0
+   Compiling darling_core v0.20.11
+   Compiling thiserror-impl v2.0.20
+   Compiling zerovec-derive v0.11.4
+   Compiling displaydoc v0.2.7
+   Compiling serde_derive v1.0.229
+   Compiling futures-macro v0.3.34
+   Compiling tokio-macros v2.7.2
+   Compiling async-trait v0.1.92
+   Compiling clap_derive v4.6.4
+   Compiling inherent v1.0.14
+   Compiling backtrace v0.3.76
+   Compiling bstr v1.13.1
+   Compiling fancy-regex v0.18.0
+   Compiling jwalk v0.8.1
+   Compiling zeroize_derive v1.5.0
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling tracing-attributes v0.1.31
+   Compiling zerocopy-derive v0.8.56
+   Compiling strum_macros v0.28.0
+   Compiling color-print-proc-macro v0.3.7
+   Compiling miette-derive v7.6.0
+   Compiling maybe-async v0.2.11
+   Compiling async-recursion v1.1.1
+   Compiling enum-as-inner v0.7.0
+   Compiling tokio v1.53.1
+   Compiling futures-util v0.3.34
+   Compiling zeroize v1.9.0
+   Compiling backtrace-ext v0.2.1
+   Compiling gix-validate v0.11.3
+   Compiling gix-error v0.2.5
+   Compiling rustls-pki-types v1.15.1
+   Compiling zerofrom v0.1.8
+   Compiling color-print v0.3.7
+   Compiling gix-date v0.15.6
+   Compiling gix-chunk v0.7.3
+   Compiling gix-quote v0.7.2
+   Compiling gix-bitmap v0.3.3
+   Compiling yoke v0.8.3
+   Compiling gix-path v0.12.4
+   Compiling portage-atom v0.11.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/portage-atom)
+   Compiling gix-packetline v0.21.5
+   Compiling fluent-syntax v0.12.0
+   Compiling command-fds v0.3.3
+   Compiling cobs v0.3.0
+   Compiling gentoo-core v0.6.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/gentoo-core)
+   Compiling miette v7.6.0
+   Compiling tracing v0.1.44
+   Compiling rustls-native-certs v0.8.4
+   Compiling zerovec v0.11.7
+   Compiling zerotrie v0.2.5
+   Compiling gix-actor v0.41.2
+   Compiling gix-features v0.48.1
+   Compiling gix-config-value v0.18.1
+   Compiling gix-command v0.9.2
+   Compiling gix-url v0.36.2
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling priority-queue v2.7.0
+   Compiling petgraph v0.8.3
+   Compiling ordermap v1.2.0
+   Compiling digest v0.10.7
+   Compiling darling_macro v0.20.11
+   Compiling darling_macro v0.23.0
+   Compiling gix-fs v0.21.2
+   Compiling gix-glob v0.26.1
+   Compiling gix-prompt v0.15.1
+   Compiling strum v0.28.0
+   Compiling portage-solver v0.2.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/portage-solver)
+   Compiling pubgrub v0.4.0
+   Compiling sha1 v0.10.7
+   Compiling darling v0.20.11
+   Compiling gix-credentials v0.38.2
+   Compiling cached_proc_macro v0.27.0
+   Compiling sha1-checked v0.10.0
+   Compiling darling v0.23.0
+   Compiling bon-macros v3.9.3
+   Compiling serde_with_macros v3.22.0
+   Compiling clap v4.6.6
+   Compiling gix-tempfile v23.0.2
+   Compiling gix-attributes v0.33.2
+   Compiling gix-ignore v0.21.1
+   Compiling portage-metadata v0.9.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/portage-metadata)
+   Compiling gix-hash v0.25.1
+   Compiling gix-lock v23.0.1
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling gix-hashtable v0.15.2
+   Compiling gix-commitgraph v0.37.1
+   Compiling gix-shallow v0.12.1
+   Compiling portage-atom-pubgrub v0.7.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/portage-atom-pubgrub)
+   Compiling gix-pathspec v0.18.1
+   Compiling icu_collections v2.3.0
+   Compiling gix-object v0.60.0
+   Compiling icu_locale_core v2.3.0
+   Compiling unic-langid-impl v0.9.6
+   Compiling serde_with v3.22.0
+   Compiling unic-langid v0.9.6
+   Compiling intl_pluralrules v7.0.2
+   Compiling fluent-langneg v0.13.1
+   Compiling intl-memoizer v0.5.3
+   Compiling portage-vdb v0.2.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/portage-vdb)
+   Compiling ipnet v2.12.1
+   Compiling tinytemplate v1.2.1
+   Compiling fluent-bundle v0.16.0
+   Compiling prefix-trie v0.8.4
+   Compiling gix-revwalk v0.31.0
+   Compiling gix-ref v0.63.0
+   Compiling gix-filter v0.30.0
+   Compiling gix-pack v0.70.0
+   Compiling gix-diff v0.63.0
+   Compiling fluent v0.17.0
+   Compiling postcard v1.1.3
+   Compiling futures-executor v0.3.34
+   Compiling gix-traverse v0.57.0
+   Compiling gix-revision v0.45.0
+   Compiling gix-negotiate v0.31.0
+   Compiling futures v0.3.34
+   Compiling icu_provider v2.3.0
+   Compiling ipc-channel v0.22.0
+   Compiling gix-refspec v0.41.0
+   Compiling gix-index v0.51.0
+   Compiling icu_normalizer v2.3.0
+   Compiling icu_properties v2.3.0
+   Compiling icu_locale_fallback v2.3.0
+   Compiling icu_locale v2.3.0
+   Compiling gix-config v0.56.0
+   Compiling gix-discover v0.51.0
+   Compiling bon v3.9.3
+   Compiling scallop v0.0.30 (https://github.com/pkgcraft/pkgcraft.git?rev=b9fb45eb1995a6b9750f21312cda5e95bfbbe1bb#b9fb45eb)
+   Compiling gix-odb v0.80.0
+   Compiling gix-worktree v0.52.0
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling gix-worktree-state v0.30.0
+   Compiling tokio-util v0.7.19
+   Compiling tower v0.5.3
+   Compiling half v2.7.1
+   Compiling url v2.5.8
+   Compiling cached v0.59.0
+   Compiling resolvo v0.11.1
+   Compiling gix-submodule v0.30.0
+   Compiling ciborium-ll v0.2.2
+   Compiling ciborium v0.2.2
+   Compiling brush-parser v0.4.0 (https://github.com/lu-zero/brush.git?rev=09fa1325#09fa1325)
+   Compiling h2 v0.4.15
+   Compiling hickory-proto v0.26.1
+   Compiling tower-http v0.6.11
+   Compiling criterion v0.7.0
+   Compiling portage-atom-resolvo v0.8.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/portage-atom-resolvo)
+   Compiling hickory-net v0.26.1
+   Compiling hyper v1.11.0
+   Compiling hickory-resolver v0.26.1
+   Compiling brush-core v0.5.0 (https://github.com/lu-zero/brush.git?rev=09fa1325#09fa1325)
+   Compiling hyper-util v0.1.20
+   Compiling brush-builtins v0.2.0 (https://github.com/lu-zero/brush.git?rev=09fa1325#09fa1325)
+   Compiling portage-repo v0.1.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/portage-repo)
+   Compiling rustls-webpki v0.103.14
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling gix-transport v0.57.2
+   Compiling gix-protocol v0.61.0
+   Compiling gix v0.83.0
+   Compiling pkgcraft v0.0.31 (https://github.com/pkgcraft/pkgcraft.git?rev=b9fb45eb1995a6b9750f21312cda5e95bfbbe1bb#b9fb45eb)
+   Compiling portage-bench v0.1.0 (/home/lu_zero/Sources/portage-cli-bench-baseline/benchmarks)
+    Finished `bench` profile [optimized] target(s) in 2m 34s
+     Running benches/resolve.rs (target/release/deps/resolve-81e5e71775012cfc)
+Gnuplot not found, using plotters backend
+Benchmarking resolve/load/load_repo
+Benchmarking resolve/load/load_repo: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 13.0s.
+Benchmarking resolve/load/load_repo: Collecting 10 samples in estimated 13.019 s (10 iterations)
+Benchmarking resolve/load/load_repo: Analyzing
+resolve/load/load_repo  time:   [1.2834 s 1.2851 s 1.2869 s]
+Benchmarking resolve/load/build_provider
+Benchmarking resolve/load/build_provider: Warming up for 3.0000 s
+
+Warning: Unable to complete 10 samples in 5.0s. You may wish to increase target time to 23.0s.
+Benchmarking resolve/load/build_provider: Collecting 10 samples in estimated 22.987 s (10 iterations)
+Benchmarking resolve/load/build_provider: Analyzing
+resolve/load/build_provider
+                        time:   [559.29 ms 571.69 ms 588.67 ms]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+
+repo loaded in 1.36s
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Collecting 10 samples in estimated 5.6857 s (440 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/firefox: Analyzing
+resolve/targets/portage-atom-pubgrub/firefox
+                        time:   [12.599 ms 12.764 ms 12.968 ms]
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Collecting 10 samples in estimated 5.0535 s (1045 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/gcc: Analyzing
+resolve/targets/portage-atom-pubgrub/gcc
+                        time:   [4.5294 ms 4.5594 ms 4.5919 ms]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low mild
+Benchmarking resolve/targets/portage-atom-pubgrub/rust
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Collecting 10 samples in estimated 5.2806 s (660 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/rust: Analyzing
+resolve/targets/portage-atom-pubgrub/rust
+                        time:   [7.9281 ms 7.9345 ms 7.9432 ms]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Collecting 10 samples in estimated 5.0115 s (1210 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/openssh: Analyzing
+resolve/targets/portage-atom-pubgrub/openssh
+                        time:   [4.1508 ms 4.1563 ms 4.1596 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+Benchmarking resolve/targets/portage-atom-pubgrub/python
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Warming up for 3.0000 s
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Collecting 10 samples in estimated 5.0637 s (880 iterations)
+Benchmarking resolve/targets/portage-atom-pubgrub/python: Analyzing
+resolve/targets/portage-atom-pubgrub/python
+                        time:   [5.7767 ms 5.7958 ms 5.8155 ms]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high mild
+
+ACCEPT_KEYWORDS: ["arm64", "~arm64"]  effective_use: 156  package_mask: 24 atoms  package_use: 67 entries
+  USE contains: pam=true ssl=true static=false
+  installed packages from VDB: 723
+
+=== Solution sizes (keyword+mask filtered, profile USE) ===
+  firefox      → 274 packages
+  wrote /tmp/solver_firefox.txt
+  gcc          → 77 packages
+  wrote /tmp/solver_gcc.txt
+  rust         → 168 packages
+  wrote /tmp/solver_rust.txt
+  openssh: 401 deps dropped total
+    dropped dev-lang/python: 25x
+    dropped app-emulation/wine-gecko: 20x
+    dropped llvm-runtimes/libgcc: 19x
+    dropped llvm-runtimes/libatomic-stub: 17x
+    dropped app-arch/pdlzip: 15x
+    dropped dev-lang/rust: 15x
+    dropped dev-lang/rust-bin: 15x
+    dropped dev-util/mingw64-toolchain: 10x
+    dropped app-emulation/wine-mono: 10x
+    dropped app-misc/getopt: 8x
+    dropped dev-perl/GeoIP2: 6x
+    dropped media-sound/apulse: 6x
+    dropped www-servers/h2o: 5x
+    dropped llvm-core/clang: 5x
+    dropped dev-embedded/libjaylink: 4x
+    dropped sys-devel/native-cctools: 4x
+    dropped dev-util/spirv-llvm-translator: 4x
+    dropped www-client/fetch: 4x
+    dropped dev-ruby/faraday-net_http: 4x
+    dropped dev-lang/php: 4x
+  openssh 10.5_p1: 24 merged deps | pam=true libcrypt=true openssl=true
+    dep: virtual/libcrypt:0
+    dep: sys-libs/pam:0
+    dep: virtual/libcrypt:0
+    dep: sys-libs/pam:0
+    dep: sys-auth/pambase:0
+  pam packages in provider: [Real { cpn: Cpn { category: Interned(26), package: Interned(255) }, slot: Some(Interned(17)), merge_root: Target }]
+  virtual/libcrypt packages in provider: [Real { cpn: Cpn { category: Interned(31), package: Interned(32) }, slot: Some(Interned(17)), merge_root: Target }]
+  openssh      → 44 packages
+  wrote /tmp/solver_openssh.txt
+  python       → 105 packages
+  wrote /tmp/solver_python.txt

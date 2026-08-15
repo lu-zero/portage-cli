@@ -1,0 +1,6 @@
+peak RSS, em --info -v, 5 runs each (interleaved):
+  run1  baseline 524352 KB   current 32768 KB
+  run2  baseline 538304 KB   current 32768 KB
+  run3  baseline 659200 KB   current 32768 KB
+  run4  baseline 589312 KB   current 32768 KB
+  run5  baseline 229376 KB   current 32768 KB
