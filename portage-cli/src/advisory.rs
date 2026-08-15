@@ -6,7 +6,7 @@
 //! back to XDG state on the bare host; see [`state_dir`]). They should look
 //! and feel like the same tool family, not two independently-invented UIs:
 //! a numbered list with a single-char status marker and a terminal-width-
-//! aware truncation, a trailing "N <verb> of M <noun>" summary, and a
+//! aware truncation, a trailing "N `<verb>` of M `<noun>`" summary, and a
 //! per-item detail banner (bold title, dim parenthetical tag, dim
 //! `Label: value` sub-lines) for anything worth showing in full.
 
@@ -128,7 +128,7 @@ pub(crate) fn truncate_to_budget(line: String, budget: usize) -> String {
     }
 }
 
-/// A list's trailing "N <verb> of M <noun>(s)" summary line, e.g. "3 unread
+/// A list's trailing "N `<verb>` of M `<noun>`(s)" summary line, e.g. "3 unread
 /// of 10 news items" / "2 affected of 3817 GLSAs".
 pub(crate) fn print_summary(active: usize, verb: &str, total: usize, singular: &str, plural: &str) {
     println!(

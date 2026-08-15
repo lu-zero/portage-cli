@@ -552,13 +552,17 @@ PubGrub core" in *some* way:
 set (`ProfilePackageSet`) reads only the *non-`*`* `packages` entries, and only
 from profiles that opt into the `profile-set` format via `profile_formats` in
 `layout.conf`; its default `@world` is `@profile @selected @system`. em's
-`@profile` is every `packages` line and its `@world` is `@selected ∪ @system`
-(omitting `@profile`). For every standard Gentoo profile these coincide exactly —
-no shipped profile declares `profile-set`, so portage's `@profile` is empty and
-`@world` collapses to `@selected ∪ @system` on both sides. The gap is only
-observable under the niche `profile-set` profile format, which em does not yet
-model; documented here as a known low-severity divergence rather than fixed
-(parser-audit item 4).
+`@profile` (`ProfileStack::profile_set()`) implements this gate correctly —
+only non-`*` lines, only from profiles whose enclosing repo (or the
+hardcoded-`profile-set` site-local `/etc/portage/profile`) declares
+`profile-set`. The one remaining, narrower gap: em's `@world` formula is still
+`@selected ∪ @system` (`SetResolver::direct_members("world")`), omitting the
+`@profile` union real portage's default `@world` has. For every standard
+Gentoo profile these still coincide exactly — no shipped profile declares
+`profile-set`, so `@profile` is empty on both sides and `@world` collapses to
+`@selected ∪ @system` either way. The gap is only observable under the niche
+`profile-set` profile format (or a site-local `/etc/portage/profile` with
+plain `packages` lines) — documented here as a known low-severity divergence.
 
 Plus two **intentional** cosmetic divergences: install-*order* positions (valid
 topological order, different scheduler — emerge: target-driven DFS; here: SCC

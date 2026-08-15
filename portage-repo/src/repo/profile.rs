@@ -871,6 +871,16 @@ fn collect_stack(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Vec<Prof
 /// list when no enclosing repo is found — equivalent to portage's
 /// `portage-1`/`portage-1-compat` default, neither of which enables
 /// `profile-set`, so such a profile does not contribute to `@profile`.
+///
+/// This walk approximates `intersecting_repos` using only the filesystem
+/// (no `repos.conf` registry available at this layer): `metadata/
+/// layout.conf` is the usual repo-root signal, but a repo may legitimately
+/// lack one (defaulting to no `profile-formats`, same as "no enclosing
+/// repo"). `profiles/repo_name` — PMS's own repository-structure marker —
+/// is checked as a hard stop for that case, so a real (layout.conf-less)
+/// repo root doesn't fall through to an unrelated ancestor directory that
+/// happens to have its own `layout.conf` (e.g. nested/co-located repos
+/// sharing a parent directory).
 fn resolve_profile_formats(profile_path: &Path) -> Vec<String> {
     let mut dir = profile_path.parent();
     while let Some(d) = dir {
@@ -885,6 +895,9 @@ fn resolve_profile_formats(profile_path: &Path) -> Vec<String> {
             {
                 return parsed.profile_formats;
             }
+            return Vec::new();
+        }
+        if d.join("profiles").join("repo_name").is_file() {
             return Vec::new();
         }
         dir = d.parent();
@@ -1557,5 +1570,28 @@ mod tests {
             .map(|d| d.to_string())
             .collect();
         assert_eq!(got, vec!["app-shells/dash"]);
+    }
+
+    #[test]
+    fn profile_set_stops_at_repo_name_marker_not_an_outer_ancestors_layout_conf() {
+        // The profile's real enclosing repo (`inner`, marked by
+        // `profiles/repo_name` per PMS) has no `metadata/layout.conf` of its
+        // own. An *outer* ancestor directory happens to have one declaring
+        // `profile-set` — but `inner` must NOT borrow it; the walk should
+        // stop at the confirmed repo boundary and default to empty, the same
+        // as `profile_set_empty_when_no_enclosing_repo`.
+        let outer = tempfile::tempdir().unwrap();
+        write_layout_conf(&outer, "profile-formats = profile-set\n");
+
+        let inner = outer.path().join("inner");
+        std::fs::create_dir_all(inner.join("profiles")).unwrap();
+        std::fs::write(inner.join("profiles").join("repo_name"), "inner\n").unwrap();
+
+        let leaf = inner.join("leaf");
+        std::fs::create_dir_all(&leaf).unwrap();
+        std::fs::write(leaf.join("packages"), "app-shells/bash\n").unwrap();
+
+        let stack = ProfileStack::build(leaf).unwrap();
+        assert!(stack.profile_set().unwrap().is_empty());
     }
 }

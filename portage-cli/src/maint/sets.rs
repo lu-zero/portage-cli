@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
-use portage_vdb::{ContentsEntry, InstalledPackage};
+use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage};
 
 /// Names of all known Portage sets, collected from:
 ///
@@ -68,6 +68,31 @@ impl KnownSets {
     }
 }
 
+/// Which VDB-aware built-in set a name refers to, if any — the single
+/// source of truth for both "is this name VDB-aware" (`vdb_set_kind(name)
+/// .is_some()`) and dispatch ([`resolve_vdb_set`]). Previously these were
+/// two independently hand-synced lists (a `matches!` and a `match` with an
+/// `unreachable!()` fallback); a name added to one and not the other would
+/// have turned a resolvable set into a panic.
+enum VdbSet {
+    Preserved,
+    Live,
+    DeprecatedLive,
+    Module,
+    X11Module,
+}
+
+fn vdb_set_kind(name: &str) -> Option<VdbSet> {
+    Some(match name {
+        "preserved-rebuild" => VdbSet::Preserved,
+        "live-rebuild" => VdbSet::Live,
+        "deprecated-live-rebuild" => VdbSet::DeprecatedLive,
+        "module-rebuild" => VdbSet::Module,
+        "x11-module-rebuild" => VdbSet::X11Module,
+        _ => return None,
+    })
+}
+
 /// Resolve a VDB-aware built-in set under `eroot`.
 ///
 /// These sets (`@preserved-rebuild`, `@live-rebuild`,
@@ -88,19 +113,17 @@ pub(crate) fn resolve_vdb_set(name: &str, eroot: &Utf8Path) -> Option<Result<Vec
     // Only open the VDB for names we actually recognize; non-VDB names
     // (`@system`, `@world`, user sets) must fall through to `SetResolver`
     // without requiring a readable `var/db/pkg` at all.
-    if !is_vdb_set_name(name) {
-        return None;
-    }
+    let kind = vdb_set_kind(name)?;
     let vdb = match portage_vdb::Vdb::open(eroot.join("var/db/pkg")) {
         Ok(v) => v,
         Err(e) => {
             return Some(Err(e).with_context(|| format!("opening VDB under {eroot}")));
         }
     };
-    Some(match name {
-        "preserved-rebuild" => preserved_rebuild_atoms(&vdb, eroot),
-        "live-rebuild" => variable_set_atoms(&vdb, "PROPERTIES", &["live"]),
-        "deprecated-live-rebuild" => variable_set_atoms(
+    Some(match kind {
+        VdbSet::Preserved => preserved_rebuild_atoms(&vdb, eroot),
+        VdbSet::Live => variable_set_atoms(&vdb, "PROPERTIES", &["live"]),
+        VdbSet::DeprecatedLive => variable_set_atoms(
             &vdb,
             "INHERITED",
             &[
@@ -114,25 +137,11 @@ pub(crate) fn resolve_vdb_set(name: &str, eroot: &Utf8Path) -> Option<Result<Vec
                 "subversion",
             ],
         ),
-        "module-rebuild" => owner_set_atoms(&vdb, &["/lib/modules"], &["/usr/src/linux*"], eroot),
-        "x11-module-rebuild" => {
+        VdbSet::Module => owner_set_atoms(&vdb, &["/lib/modules"], &["/usr/src/linux*"], eroot),
+        VdbSet::X11Module => {
             owner_set_atoms(&vdb, &["/usr/lib*/xorg/modules"], &["/usr/bin/Xorg"], eroot)
         }
-        _ => unreachable!("is_vdb_set_name guards the match arms above"),
     })
-}
-
-/// Whether `name` is a built-in set resolved through [`resolve_vdb_set`]
-/// (rather than `SetResolver`). Kept in sync with the match arms there.
-fn is_vdb_set_name(name: &str) -> bool {
-    matches!(
-        name,
-        "preserved-rebuild"
-            | "live-rebuild"
-            | "deprecated-live-rebuild"
-            | "module-rebuild"
-            | "x11-module-rebuild"
-    )
 }
 
 /// `@preserved-rebuild`: packages owning a shared lib whose last provider was
@@ -172,7 +181,12 @@ fn variable_set_atoms(
         if !value.split_whitespace().any(|tok| includes.contains(&tok)) {
             continue;
         }
-        let atom = slot_atom_key(&pkg);
+        // An unreadable/corrupted SLOT is the same VDB-read failure
+        // `preserved_rebuild_atoms` skips the package for; matched here too
+        // (see `slot_atom_key`) rather than fabricating a `:0` atom.
+        let Some(atom) = slot_atom_key(&pkg) else {
+            continue;
+        };
         out.push(Dep::parse(&atom).with_context(|| format!("parsing set atom {atom}"))?);
     }
     Ok(out)
@@ -206,6 +220,14 @@ fn owner_set_atoms(
     let exclude_paths = expand_glob_patterns(exclude_files, eroot);
     let has_excludes = !exclude_paths.is_empty();
 
+    // Every recorded `sym` CONTENTS entry across every installed package
+    // (not just the one currently being checked — a query path like
+    // `/lib/modules` is typically routed through a symlink owned by a
+    // *different* package, e.g. baselayout's `/lib` -> `usr/lib`). Backs
+    // `contents_contains`' fallback when the live filesystem doesn't have
+    // the path materialized yet (see its own doc comment).
+    let symlinks = collect_symlinks(vdb);
+
     // Atom keys ("cat/pkg:{main_slot}") so a package owning multiple matched
     // paths is counted once, mirroring portage's `rValue` set.
     let mut result: Vec<String> = Vec::new();
@@ -214,15 +236,19 @@ fn owner_set_atoms(
     for pkg in vdb.packages() {
         // Parse CONTENTS once per package and test every path against it.
         let entries = pkg.contents().unwrap_or_default();
-        let owns_include = paths.iter().any(|p| contents_contains(&entries, p, eroot));
+        let owns_include = paths
+            .iter()
+            .any(|p| contents_contains(&entries, p, eroot, &symlinks));
         let owns_exclude = has_excludes
             && exclude_paths
                 .iter()
-                .any(|p| contents_contains(&entries, p, eroot));
+                .any(|p| contents_contains(&entries, p, eroot, &symlinks));
         if !owns_include && !owns_exclude {
             continue;
         }
-        let key = slot_atom_key(&pkg);
+        let Some(key) = slot_atom_key(&pkg) else {
+            continue;
+        };
         if owns_include && !result.contains(&key) {
             result.push(key.clone());
         }
@@ -276,19 +302,21 @@ fn expand_glob_patterns(patterns: &[&str], eroot: &Utf8Path) -> Vec<Utf8PathBuf>
 /// Unlike [`InstalledPackage::owns`] (which is restricted to `Obj`/`Sym` for
 /// the `qfile` use case), this matches **any** CONTENTS kind — including
 /// `dir`, which is what `@module-rebuild`'s `/lib/modules` query needs.
-/// Symlink-aware: if no exact string match, fall back to comparing the
-/// canonicalized full path of `query` against each same-basename entry's
-/// canonical path — portage's `_match_contents` does the equivalent via
-/// parent-directory inode comparison, so `/lib/modules` matches a
-/// `/usr/lib/modules` entry when `/lib` → `/usr/lib`.
+/// Symlink-aware: if no exact string match, fall back to comparing each
+/// side's resolved real path — portage's `_match_contents` does the
+/// equivalent via parent-directory inode comparison, so `/lib/modules`
+/// matches a `/usr/lib/modules` entry when `/lib` → `/usr/lib`.
 ///
 /// `query`/`entries[].path` are ROOT-relative (leading `/`, `eroot` already
-/// stripped — see [`expand_glob_patterns`]), so both sides must be
-/// re-anchored under `eroot` before `canonicalize`: canonicalizing the bare
-/// ROOT-relative string instead would resolve symlinks against the *host's*
-/// `/`, not the target root, silently misbehaving under `--root`/`--local`/
-/// `--prefix` (where `eroot != "/"`).
-fn contents_contains(entries: &[ContentsEntry], query: &Utf8Path, eroot: &Utf8Path) -> bool {
+/// stripped — see [`expand_glob_patterns`]); resolution happens in the same
+/// ROOT-relative space regardless of which of the two paths below produced
+/// it, so the two sides stay comparable ([`real_path`]).
+fn contents_contains(
+    entries: &[ContentsEntry],
+    query: &Utf8Path,
+    eroot: &Utf8Path,
+    symlinks: &HashMap<Utf8PathBuf, Utf8PathBuf>,
+) -> bool {
     let q = query.as_str();
     if entries.iter().any(|e| e.path.as_str() == q) {
         return true;
@@ -296,26 +324,107 @@ fn contents_contains(entries: &[ContentsEntry], query: &Utf8Path, eroot: &Utf8Pa
     let Some(q_base) = query.file_name() else {
         return false;
     };
-    let anchor = |p: &Utf8Path| eroot.join(p.as_str().trim_start_matches('/'));
-    let Ok(qc) = std::fs::canonicalize(anchor(query).as_std_path()) else {
-        return false;
-    };
-    entries.iter().any(|e| {
-        e.path.file_name() == Some(q_base)
-            && std::fs::canonicalize(anchor(&e.path).as_std_path()).is_ok_and(|ec| ec == qc)
-    })
+    let qc = real_path(query, eroot, symlinks);
+    entries
+        .iter()
+        .any(|e| e.path.file_name() == Some(q_base) && real_path(&e.path, eroot, symlinks) == qc)
 }
 
-/// The `cat/pkg:{main_slot}` atom string for an installed package, defaulting
-/// the slot to `"0"` when unreadable (portage's `slot_invalid` fallback in
-/// `_pkg_str`). Used as the dedup/owner key in [`owner_set_atoms`].
-fn slot_atom_key(pkg: &InstalledPackage) -> String {
-    let slot = pkg
-        .slot_main()
+/// The real (symlink-resolved) form of a ROOT-relative path, as best as it
+/// can be determined.
+///
+/// Prefers the live filesystem (`eroot`-anchored `canonicalize`, then
+/// re-stripped back to ROOT-relative) — matching real portage's own
+/// inode-comparison approach — since that reflects any symlink regardless
+/// of which package's CONTENTS recorded it. Falls back to
+/// [`resolve_via_recorded_symlinks`] (VDB-only, no filesystem access) when
+/// the path isn't actually materialized on disk yet — e.g. a scratch/
+/// in-progress root such as this codebase's own `walk_image` binpkg-image
+/// assembly, or a stage build mid-merge — where CONTENTS metadata alone is
+/// still enough to resolve a recorded symlink like `/lib` → `usr/lib`.
+fn real_path(
+    p: &Utf8Path,
+    eroot: &Utf8Path,
+    symlinks: &HashMap<Utf8PathBuf, Utf8PathBuf>,
+) -> Utf8PathBuf {
+    let full = eroot.join(p.as_str().trim_start_matches('/'));
+    let live = std::fs::canonicalize(full.as_std_path())
         .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "0".to_string());
-    format!("{}:{slot}", pkg.cpn())
+        .and_then(|c| Utf8PathBuf::from_path_buf(c).ok())
+        .and_then(|c| c.strip_prefix(eroot).ok().map(Utf8Path::to_path_buf));
+    match live {
+        Some(rel) => Utf8Path::new("/").join(rel),
+        None => resolve_via_recorded_symlinks(p, symlinks),
+    }
+}
+
+/// Resolve `path` against VDB-recorded symlinks ([`collect_symlinks`]),
+/// substituting the longest ancestor recorded as a symlink source with its
+/// target, repeatedly (bounded, to guard against a cyclic/self-referential
+/// CONTENTS record). Pure path algebra, no filesystem access.
+fn resolve_via_recorded_symlinks(
+    path: &Utf8Path,
+    symlinks: &HashMap<Utf8PathBuf, Utf8PathBuf>,
+) -> Utf8PathBuf {
+    let mut current = path.to_path_buf();
+    for _ in 0..16 {
+        let hit = current.ancestors().find_map(|a| {
+            symlinks
+                .get(a)
+                .map(|target| (a.to_path_buf(), target.clone()))
+        });
+        let Some((src, target)) = hit else {
+            return current;
+        };
+        let target_abs = if target.is_absolute() {
+            target
+        } else {
+            src.parent().unwrap_or(Utf8Path::new("/")).join(&target)
+        };
+        let Ok(rest) = current.strip_prefix(&src) else {
+            return current;
+        };
+        let next = target_abs.join(rest);
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+    current
+}
+
+/// Every `sym` CONTENTS entry across every installed package, as a
+/// `path -> target` map (ROOT-relative, leading `/`; `target` as recorded,
+/// which may itself be relative). See [`real_path`].
+fn collect_symlinks(vdb: &portage_vdb::Vdb) -> HashMap<Utf8PathBuf, Utf8PathBuf> {
+    let mut map = HashMap::new();
+    for pkg in vdb.packages() {
+        for e in pkg.contents().unwrap_or_default() {
+            if e.kind == ContentsKind::Sym
+                && let Some(target) = e.target
+            {
+                map.insert(e.path, target);
+            }
+        }
+    }
+    map
+}
+
+/// The `cat/pkg:{main_slot}` atom string for an installed package. An empty
+/// (but present) `SLOT` defaults to `"0"` (portage's `slot_invalid` fallback
+/// in `_pkg_str`, for the legitimate old-EAPI-implicit-slot case); an
+/// unreadable/corrupted `SLOT` file returns `None` instead of guessing —
+/// the same handling `preserved_rebuild_atoms` (`preserve_libs.rs`) gives
+/// the identical VDB-read failure, so the two VDB-set families no longer
+/// disagree on how to treat a mid-removal/corrupted package. Used as the
+/// dedup/owner key in [`owner_set_atoms`] and [`variable_set_atoms`].
+fn slot_atom_key(pkg: &InstalledPackage) -> Option<String> {
+    let slot = match pkg.slot_main() {
+        Ok(s) if s.is_empty() => "0".to_string(),
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    Some(format!("{}:{slot}", pkg.cpn()))
 }
 
 /// Parse `[section_name]` headers from all `.conf` files in `dir`.
@@ -686,5 +795,73 @@ mod tests {
             .map(|d| d.to_string())
             .collect();
         assert_eq!(atoms, vec!["x11-base/xorg-server:0"]);
+    }
+
+    #[test]
+    fn live_rebuild_skips_package_with_unreadable_slot_instead_of_defaulting() {
+        // A package dir with no SLOT file at all (corrupted/mid-removal VDB
+        // entry) must be skipped, not folded into a fabricated `:0` atom —
+        // matches `preserved_rebuild_atoms`' handling of the same failure.
+        let (_keep, eroot) = vdb_eroot();
+        write_vdb_pkg(&eroot, "app-misc/noslot-1.0", &[("PROPERTIES", "live")]);
+        let atoms = resolve_vdb_set("live-rebuild", &eroot)
+            .expect("Some")
+            .unwrap();
+        assert!(atoms.is_empty());
+    }
+
+    #[test]
+    fn live_rebuild_empty_slot_file_still_defaults_to_zero() {
+        // Distinct from the unreadable case above: an empty-but-present SLOT
+        // file is the legitimate old-EAPI-implicit-slot case and still
+        // defaults to "0".
+        let (_keep, eroot) = vdb_eroot();
+        write_vdb_pkg(
+            &eroot,
+            "app-misc/emptyslot-1.0",
+            &[("SLOT", ""), ("PROPERTIES", "live")],
+        );
+        let atoms: Vec<String> = resolve_vdb_set("live-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["app-misc/emptyslot:0"]);
+    }
+
+    #[test]
+    fn module_rebuild_resolves_ownership_through_a_recorded_but_unmaterialized_symlink() {
+        // The query path (`/lib/modules`) is a real, plain directory on this
+        // fixture's disk — `expand_glob_patterns` needs *something* to exist
+        // there to yield it as a candidate at all. The owning package,
+        // though, records its CONTENTS via a *different* path
+        // (`/compat/modules`) that only resolves to the same real location
+        // through a symlink (`/compat` -> `lib`) recorded in the VDB but
+        // never actually created on this fixture's disk (a scratch/
+        // in-progress root, e.g. `walk_image`-style binpkg image assembly,
+        // where the CONTENTS record exists before the live symlink does).
+        // The old canonicalize-only comparison would silently drop this
+        // package (its own CONTENTS path fails to canonicalize at all);
+        // the VDB-only fallback still resolves the equivalence.
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("lib/modules")).unwrap();
+        write_vdb_pkg(
+            &eroot,
+            "sys-apps/compat-links-1.0",
+            &[("SLOT", "0"), ("CONTENTS", "sym /compat -> lib 0\n")],
+        );
+        write_vdb_pkg(
+            &eroot,
+            "sys-kernel/linux-modules-6.18",
+            &[("SLOT", "0"), ("CONTENTS", "dir /compat/modules\n")],
+        );
+        let atoms: Vec<String> = resolve_vdb_set("module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["sys-kernel/linux-modules:0"]);
     }
 }
