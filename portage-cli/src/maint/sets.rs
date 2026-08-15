@@ -172,9 +172,8 @@ fn variable_set_atoms(
     let mut out = Vec::new();
     for pkg in vdb.packages() {
         // A single package's unreadable field (corrupted/mid-removal VDB
-        // entry) skips just that package rather than aborting the whole set
-        // — the same leniency `owner_set_atoms`' `.unwrap_or_default()` on
-        // `pkg.contents()` gives `@module-rebuild`/`@x11-module-rebuild`.
+        // entry) skips just that package rather than aborting the whole set —
+        // the same leniency `owner_set_atoms` gives an unreadable CONTENTS.
         let Some(value) = pkg.field(variable).ok().flatten() else {
             continue;
         };
@@ -234,52 +233,36 @@ fn owner_set_atoms(
     let symlinks = LazySymlinks::new(vdb);
 
     // Resolve each query once here rather than once per installed package —
-    // the basename and symlink-resolved form depend only on the query.
+    // the basename, needle and symlink-resolved form depend only on the query.
     let includes = Query::prepare(&paths, eroot, &symlinks);
     let excludes = Query::prepare(&exclude_paths, eroot, &symlinks);
-
-    // Every query basename, deduplicated. Both of `matches_any`'s arms need
-    // the query basename verbatim in the raw text, so a package that never
-    // mentions one cannot own a query path — searching the unparsed string
-    // is an exact reject, not a heuristic, and skips the scan entirely for
-    // the overwhelming majority of packages.
-    let mut bases: Vec<&str> = includes
-        .iter()
-        .chain(&excludes)
-        .map(|q| q.base.as_str())
-        .collect();
-    bases.sort_unstable();
-    bases.dedup();
 
     // Atom keys ("cat/pkg:{main_slot}") so a package owning multiple matched
     // paths is counted once, mirroring portage's `rValue` set.
     let mut result: Vec<String> = Vec::new();
-    let mut excluded: HashSet<String> = HashSet::new();
 
     for pkg in vdb.packages() {
         let Ok(Some(raw)) = pkg.contents_raw() else {
             continue;
         };
-        if !bases.iter().any(|b| raw.contains(b)) {
+        if !owns_any(&raw, &includes, eroot, &symlinks) {
             continue;
         }
-        let (owns_include, owns_exclude) =
-            contents_owns(&raw, &includes, &excludes, eroot, &symlinks);
-        if !owns_include && !owns_exclude {
+        // Excludes are only ever subtractive, so they matter for a package
+        // that already matched and for nobody else. Testing them up front
+        // would scan every installed package for basenames like `linux`,
+        // which most paths in the tree end a component with.
+        if owns_any(&raw, &excludes, eroot, &symlinks) {
             continue;
         }
         let Some(key) = slot_atom_key(&pkg) else {
             continue;
         };
-        if owns_include && !result.contains(&key) {
-            result.push(key.clone());
-        }
-        if owns_exclude {
-            excluded.insert(key);
+        if !result.contains(&key) {
+            result.push(key);
         }
     }
 
-    result.retain(|k| !excluded.contains(k));
     result.sort();
     result
         .into_iter()
@@ -336,28 +319,43 @@ fn expand_glob_patterns(patterns: &[&str], eroot: &Utf8Path) -> Vec<Utf8PathBuf>
 /// stripped — see [`expand_glob_patterns`]); resolution happens in the same
 /// ROOT-relative space regardless of which of the two produced it, so the two
 /// sides stay comparable ([`real_path`]).
-fn contents_owns(
-    raw: &str,
-    includes: &[Query],
-    excludes: &[Query],
-    eroot: &Utf8Path,
-    symlinks: &LazySymlinks<'_>,
-) -> (bool, bool) {
-    let (mut owns_include, mut owns_exclude) = (false, false);
-    for e in ContentsRef::parse(raw) {
-        // Derived once per entry, then tested against every query — the loops
-        // are this way round because entries outnumber queries by orders of
-        // magnitude.
-        let base = base_name(e.path.as_str());
-        owns_include = owns_include || matches_any(includes, e.path, base, eroot, symlinks);
-        owns_exclude = owns_exclude || matches_any(excludes, e.path, base, eroot, symlinks);
-        // An empty exclude list settles its half up front, so a set with no
-        // `exclude-files` still stops at the first hit.
-        if owns_include && (owns_exclude || excludes.is_empty()) {
-            break;
-        }
-    }
-    (owns_include, owns_exclude)
+fn owns_any(raw: &str, queries: &[Query], eroot: &Utf8Path, symlinks: &LazySymlinks<'_>) -> bool {
+    candidate_lines(raw, queries).any(|line| {
+        ContentsRef::parse_line(line).is_some_and(|e| {
+            matches_any(queries, e.path, base_name(e.path.as_str()), eroot, symlinks)
+        })
+    })
+}
+
+/// The CONTENTS lines that could possibly match one of `queries`.
+///
+/// Both of [`matches_any`]'s arms need the entry's last path component to be
+/// a query basename, and a CONTENTS path field ends at a space, a newline or
+/// end of text — so every possible match sits at an occurrence of the query's
+/// `/basename` followed by one of those three. Jumping straight to those
+/// positions is an exact reject, not a heuristic, and skips parsing the
+/// hundreds of thousands of lines per package that cannot match. A line may
+/// be yielded more than once, or without matching (the needle can fall in a
+/// symlink target); the caller re-checks it properly.
+fn candidate_lines<'a>(raw: &'a str, queries: &'a [Query]) -> impl Iterator<Item = &'a str> + 'a {
+    queries.iter().flat_map(move |q| {
+        raw.match_indices(q.needle.as_str())
+            .filter_map(move |(at, m)| {
+                // `None` covers a final line with no trailing newline; `\r` a
+                // CRLF file, which `parse_line` still handles because it
+                // trims.
+                let end_of_field = at + m.len();
+                let ends_field = raw.as_bytes().get(end_of_field);
+                if !matches!(ends_field, None | Some(b' ') | Some(b'\n') | Some(b'\r')) {
+                    return None;
+                }
+                let start = raw[..at].rfind('\n').map_or(0, |nl| nl + 1);
+                let end = raw[end_of_field..]
+                    .find('\n')
+                    .map_or(raw.len(), |nl| end_of_field + nl);
+                Some(&raw[start..end])
+            })
+    })
 }
 
 /// Whether the CONTENTS entry at `path` (basename `base`) matches any query.
@@ -387,16 +385,23 @@ struct Query {
     path: Utf8PathBuf,
     base: Utf8PathBuf,
     real: Utf8PathBuf,
+    /// `/` + [`Self::base`], the text to search raw CONTENTS for — a search
+    /// fragment rather than a path of its own (see [`candidate_lines`]).
+    needle: String,
 }
 
 impl Query {
     fn prepare(paths: &[Utf8PathBuf], eroot: &Utf8Path, symlinks: &LazySymlinks<'_>) -> Vec<Self> {
         paths
             .iter()
-            .map(|p| Self {
-                base: base_name(p.as_str()).into(),
-                real: real_path(p, eroot, symlinks),
-                path: p.clone(),
+            .map(|p| {
+                let base = base_name(p.as_str());
+                Self {
+                    needle: format!("/{base}"),
+                    base: base.into(),
+                    real: real_path(p, eroot, symlinks),
+                    path: p.clone(),
+                }
             })
             .collect()
     }
@@ -838,6 +843,44 @@ mod tests {
             .expect("Some")
             .unwrap();
         assert!(atoms.is_empty(), "subtree/prefix match must not apply");
+    }
+
+    #[test]
+    fn module_rebuild_matches_a_final_line_with_no_trailing_newline() {
+        // `candidate_lines` finds a match by looking at the byte *after* the
+        // query basename, so the last line of a CONTENTS that doesn't end in
+        // a newline is the one place that lookup can fall off the end.
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("lib/modules")).unwrap();
+        write_vdb_pkg(
+            &eroot,
+            "sys-kernel/linux-modules-1",
+            &[("SLOT", "0"), ("CONTENTS", "dir /lib/modules")],
+        );
+        let atoms: Vec<String> = resolve_vdb_set("module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap()
+            .into_iter()
+            .map(|d| d.to_string())
+            .collect();
+        assert_eq!(atoms, vec!["sys-kernel/linux-modules:0"]);
+    }
+
+    #[test]
+    fn module_rebuild_ignores_a_longer_component_sharing_the_query_basename() {
+        // `/modules` occurs in `/lib/modules-backup`, but not as a whole
+        // component — the byte after it is `-`, not a field terminator.
+        let (_keep, eroot) = vdb_eroot();
+        std::fs::create_dir_all(eroot.join("lib/modules")).unwrap();
+        write_vdb_pkg(
+            &eroot,
+            "app-misc/backup-1",
+            &[("SLOT", "0"), ("CONTENTS", "dir /lib/modules-backup\n")],
+        );
+        let atoms = resolve_vdb_set("module-rebuild", &eroot)
+            .expect("Some")
+            .unwrap();
+        assert!(atoms.is_empty(), "a longer component must not match");
     }
 
     #[test]
