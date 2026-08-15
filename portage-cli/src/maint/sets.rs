@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use memchr::memmem;
-use portage_atom::Dep;
+use portage_atom::{Cpn, Dep, Slot, SlotDep};
 use portage_vdb::{ContentsKind, ContentsRef, InstalledPackage};
 
 /// Names of all known Portage sets, collected from:
@@ -197,11 +197,10 @@ fn variable_set_atoms(
         }
         // An unreadable/corrupted SLOT is the same VDB-read failure
         // `preserved_rebuild_atoms` skips the package for; matched here too
-        // (see `slot_atom_key`) rather than fabricating a `:0` atom.
-        let Some(atom) = slot_atom_key(&pkg) else {
-            continue;
-        };
-        out.push(Dep::parse(&atom).with_context(|| format!("parsing set atom {atom}"))?);
+        // (see `slot_member`) rather than fabricating a `:0` atom.
+        if let Some(member) = slot_member(&pkg) {
+            out.push(set_atom(member));
+        }
     }
     Ok(out)
 }
@@ -252,14 +251,15 @@ fn owner_set_atoms(
     let includes = Query::prepare(&paths, eroot, &symlinks);
     let excludes = Query::prepare(&exclude_paths, eroot, &symlinks);
 
-    // Atom keys ("cat/pkg:{main_slot}") so a package owning multiple matched
-    // paths is counted once, mirroring portage's `rValue` set.
-    let mut result: Vec<String> = Vec::new();
-
+    // One buffer for the whole walk: CONTENTS averages a few hundred KB, so a
+    // fresh allocation per package churns the entire VDB through the
+    // allocator to answer a question about one path.
+    let mut raw = String::new();
+    let mut out = Vec::new();
     for pkg in vdb.packages() {
-        let Ok(Some(raw)) = pkg.contents_raw() else {
+        if !pkg.contents_into(&mut raw).unwrap_or(false) {
             continue;
-        };
+        }
         if !owns_any(&raw, &includes, eroot, &symlinks) {
             continue;
         }
@@ -270,19 +270,11 @@ fn owner_set_atoms(
         if owns_any(&raw, &excludes, eroot, &symlinks) {
             continue;
         }
-        let Some(key) = slot_atom_key(&pkg) else {
-            continue;
-        };
-        if !result.contains(&key) {
-            result.push(key);
+        if let Some(member) = slot_member(&pkg) {
+            out.push(set_atom(member));
         }
     }
-
-    result.sort();
-    result
-        .into_iter()
-        .map(|k| Dep::parse(&k).with_context(|| format!("parsing set atom {k}")))
-        .collect()
+    Ok(out)
 }
 
 /// Expand filesystem glob patterns (portage `files`/`exclude-files`) under
@@ -334,7 +326,7 @@ fn expand_glob_patterns(patterns: &[&str], eroot: &Utf8Path) -> Vec<Utf8PathBuf>
 /// stripped — see [`expand_glob_patterns`]); resolution happens in the same
 /// ROOT-relative space regardless of which of the two produced it, so the two
 /// sides stay comparable ([`real_path`]).
-fn owns_any(raw: &str, queries: &[Query], eroot: &Utf8Path, symlinks: &LazySymlinks<'_>) -> bool {
+fn owns_any(raw: &str, queries: &[Query], eroot: &Utf8Path, symlinks: &LazySymlinks) -> bool {
     candidate_lines(raw, queries).any(|line| {
         ContentsRef::parse_line(line).is_some_and(|e| {
             matches_any(queries, e.path, base_name(e.path.as_str()), eroot, symlinks)
@@ -378,7 +370,7 @@ fn matches_any(
     path: &Utf8Path,
     base: &str,
     eroot: &Utf8Path,
-    symlinks: &LazySymlinks<'_>,
+    symlinks: &LazySymlinks,
 ) -> bool {
     queries.iter().any(|q| {
         path.as_str() == q.path.as_str()
@@ -407,7 +399,7 @@ struct Query {
 }
 
 impl Query {
-    fn prepare(paths: &[Utf8PathBuf], eroot: &Utf8Path, symlinks: &LazySymlinks<'_>) -> Vec<Self> {
+    fn prepare(paths: &[Utf8PathBuf], eroot: &Utf8Path, symlinks: &LazySymlinks) -> Vec<Self> {
         paths
             .iter()
             .map(|p| {
@@ -436,21 +428,25 @@ fn base_name(p: &str) -> &str {
 /// path — which on a normal root never happens — and building it parses every
 /// installed package's `CONTENTS`. Deferring keeps that whole pass off the
 /// common path while leaving the scratch-root fallback intact.
-struct LazySymlinks<'a> {
-    vdb: &'a portage_vdb::Vdb,
-    map: std::cell::OnceCell<HashMap<Utf8PathBuf, Utf8PathBuf>>,
+struct LazySymlinks {
+    /// Owned so the whole thing can be shared with [`portage_vdb::Vdb::scan`]'s
+    /// workers, which outlive the call frame. A `Vdb` is a path.
+    vdb: portage_vdb::Vdb,
+    /// `OnceLock`, not `OnceCell`: whichever worker needs the map first builds
+    /// it for all of them.
+    map: std::sync::OnceLock<HashMap<Utf8PathBuf, Utf8PathBuf>>,
 }
 
-impl<'a> LazySymlinks<'a> {
-    fn new(vdb: &'a portage_vdb::Vdb) -> Self {
+impl LazySymlinks {
+    fn new(vdb: &portage_vdb::Vdb) -> Self {
         Self {
-            vdb,
-            map: std::cell::OnceCell::new(),
+            vdb: vdb.clone(),
+            map: std::sync::OnceLock::new(),
         }
     }
 
     fn get(&self) -> &HashMap<Utf8PathBuf, Utf8PathBuf> {
-        self.map.get_or_init(|| collect_symlinks(self.vdb))
+        self.map.get_or_init(|| collect_symlinks(&self.vdb))
     }
 }
 
@@ -466,7 +462,7 @@ impl<'a> LazySymlinks<'a> {
 /// in-progress root such as this codebase's own `walk_image` binpkg-image
 /// assembly, or a stage build mid-merge — where CONTENTS metadata alone is
 /// still enough to resolve a recorded symlink like `/lib` → `usr/lib`.
-fn real_path(p: &Utf8Path, eroot: &Utf8Path, symlinks: &LazySymlinks<'_>) -> Utf8PathBuf {
+fn real_path(p: &Utf8Path, eroot: &Utf8Path, symlinks: &LazySymlinks) -> Utf8PathBuf {
     let full = eroot.join(p.as_str().trim_start_matches('/'));
     let live = std::fs::canonicalize(full.as_std_path())
         .ok()
@@ -533,21 +529,44 @@ fn collect_symlinks(vdb: &portage_vdb::Vdb) -> HashMap<Utf8PathBuf, Utf8PathBuf>
     map
 }
 
-/// The `cat/pkg:{main_slot}` atom string for an installed package. An empty
-/// (but present) `SLOT` defaults to `"0"` (portage's `slot_invalid` fallback
-/// in `_pkg_str`, for the legitimate old-EAPI-implicit-slot case); an
-/// unreadable/corrupted `SLOT` file returns `None` instead of guessing —
-/// the same handling `preserved_rebuild_atoms` (`preserve_libs.rs`) gives
-/// the identical VDB-read failure, so the two VDB-set families no longer
-/// disagree on how to treat a mid-removal/corrupted package. Used as the
-/// dedup/owner key in [`owner_set_atoms`] and [`variable_set_atoms`].
-fn slot_atom_key(pkg: &InstalledPackage) -> Option<String> {
+/// The `cat/pkg:{slot}` dep for a set member.
+///
+/// Built from the parts rather than formatted and re-parsed: both already
+/// come off the VDB entry interned and validated.
+///
+/// Unsorted and undeduplicated on purpose. A set has no order of its own —
+/// `em --info -v` sorts its own display — and each package contributes at
+/// most one member, so with a VDB unable to hold two packages sharing a cpn
+/// *and* a slot the members are distinct already.
+fn set_atom((cpn, slot): (Cpn, Slot)) -> Dep {
+    let mut dep = Dep::new(cpn);
+    dep.slot_dep = Some(SlotDep::Slot {
+        slot: Some(slot),
+        op: None,
+    });
+    dep
+}
+
+/// The `(cpn, main slot)` of an installed package — what these sets emit,
+/// matching portage's `Atom(f"{pkg.cp}:{pkg.slot}")`.
+///
+/// Both halves come straight off the VDB entry, already interned and
+/// validated, so nothing here formats an atom string for [`Dep::parse`] to
+/// take apart again.
+///
+/// An empty (but present) `SLOT` defaults to `"0"` (portage's `slot_invalid`
+/// fallback in `_pkg_str`, for the legitimate old-EAPI-implicit-slot case);
+/// an unreadable/corrupted `SLOT` file returns `None` instead of guessing —
+/// the same handling `preserved_rebuild_atoms` (`preserve_libs.rs`) gives the
+/// identical VDB-read failure, so the two VDB-set families no longer disagree
+/// on how to treat a mid-removal/corrupted package.
+fn slot_member(pkg: &InstalledPackage) -> Option<(Cpn, Slot)> {
     let slot = match pkg.slot_main() {
-        Ok(s) if s.is_empty() => "0".to_string(),
-        Ok(s) => s,
+        Ok(s) if s.is_empty() => Slot::new("0"),
+        Ok(s) => Slot::new(s),
         Err(_) => return None,
     };
-    Some(format!("{}:{slot}", pkg.cpn()))
+    Some((*pkg.cpn(), slot))
 }
 
 /// Parse `[section_name]` headers from all `.conf` files in `dir`.
