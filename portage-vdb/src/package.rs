@@ -1,6 +1,7 @@
 //! Installed package representation.
 
 use camino::{Utf8Path, Utf8PathBuf};
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, DepEntry, Pf};
 use portage_metadata::Eapi;
 
@@ -8,6 +9,13 @@ use crate::Result;
 use crate::contents::ContentsEntry;
 use crate::error::Error;
 use crate::field_cache;
+
+/// An interned SLOT name — the part before any `/`, as stored per package.
+///
+/// Distinct from [`portage_atom::Slot`], which pairs a slot with its subslot;
+/// this is just the name. Interned because a whole VDB draws its slots from a
+/// handful of distinct strings. Derefs to `&str`.
+pub type SlotName = Interned<DefaultInterner>;
 
 /// A package installed in the VDB.
 ///
@@ -106,18 +114,23 @@ impl InstalledPackage {
     }
 
     /// The main slot only (the part before `/`, e.g. `0` from `0/5.1`).
-    pub fn slot_main(&self) -> Result<String> {
+    ///
+    /// Interned rather than owned: a whole VDB draws its slots from a handful
+    /// of distinct strings (`0`, `0/5.1`, `3.12`), so handing back a `String`
+    /// allocates per package for a value every caller that keeps it was
+    /// interning anyway. Derefs to `&str`.
+    pub fn slot_main(&self) -> Result<SlotName> {
         let raw = self.slot()?;
-        Ok(raw
-            .split_once('/')
-            .map(|(s, _)| s.to_string())
-            .unwrap_or(raw))
+        Ok(Interned::intern(
+            raw.split_once('/').map_or(raw.as_str(), |(s, _)| s),
+        ))
     }
 
     /// The subslot if present (the part after `/`, e.g. `5.1` from `0/5.1`).
-    pub fn subslot(&self) -> Result<Option<String>> {
+    /// Interned, for the same reason as [`Self::slot_main`].
+    pub fn subslot(&self) -> Result<Option<SlotName>> {
         let raw = self.slot()?;
-        Ok(raw.split_once('/').map(|(_, sub)| sub.to_string()))
+        Ok(raw.split_once('/').map(|(_, sub)| Interned::intern(sub)))
     }
 
     /// The repository name this package was installed from.

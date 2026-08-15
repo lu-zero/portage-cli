@@ -126,7 +126,11 @@ fn invalid() -> ParsedItem {
     }
 }
 
-fn is_relevant(r: &Restrictions, ctx: &RelevanceCtx, installed: &[(Cpv, String)]) -> bool {
+fn is_relevant(
+    r: &Restrictions,
+    ctx: &RelevanceCtx,
+    installed: &[(Cpv, portage_vdb::SlotName)],
+) -> bool {
     if r.is_empty() {
         return true;
     }
@@ -183,7 +187,7 @@ fn update_repo(
     repo: &str,
     repo_path: &Utf8Path,
     ctx: &RelevanceCtx,
-    installed: &[(Cpv, String)],
+    installed: &[(Cpv, portage_vdb::SlotName)],
 ) -> Result<()> {
     let news_dir = repo_news_dir(repo_path);
     let Ok(entries) = std::fs::read_dir(news_dir.as_std_path()) else {
@@ -571,7 +575,10 @@ The default set of accepted licenses has been changed.
     fn installed_restriction_checks_the_precomputed_set() {
         let text = format!("{HEADER}Display-If-Installed: dev-lang/rust\n");
         let parsed = parse_item(&text);
-        let rust = (Cpv::parse("dev-lang/rust-1.75.0").unwrap(), "0".to_string());
+        let rust = (
+            Cpv::parse("dev-lang/rust-1.75.0").unwrap(),
+            portage_atom::interner::Interned::intern("0"),
+        );
         assert!(is_relevant(
             &parsed.restrictions,
             &ctx(None, "amd64"),

@@ -77,7 +77,7 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
             .push((p.slot, Cpv::new(p.cpn, p.version.clone())));
     }
     for e in installed {
-        let slot = e.slot.as_deref().map(Interned::intern);
+        let slot = e.slot;
         if replaced.contains_key(&(e.cpn, slot)) {
             continue;
         }
@@ -91,7 +91,7 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
     for entry in installed {
         let active_flags: HashSet<Interned<_>> = entry.active_use.iter().copied().collect();
         let evaluated = DepEntry::evaluate_use(&entry.deps, &active_flags);
-        let slot = entry.slot.as_deref().map(Interned::intern);
+        let slot = entry.slot;
         let owner_replaced_by = replaced.get(&(entry.cpn, slot)).map(|v| (*v).clone());
         collect_violations(
             slot,
@@ -307,7 +307,7 @@ fn removal_obstacles_once(
             .push((p.slot, Cpv::new(p.cpn, p.version.clone())));
     }
     for e in installed {
-        let slot = e.slot.as_deref().map(Interned::intern);
+        let slot = e.slot;
         if replaced.contains_key(&(e.cpn, slot)) || removed.contains(&(e.cpn, slot)) {
             continue;
         }
@@ -323,7 +323,7 @@ fn removal_obstacles_once(
 
     let mut out = Vec::new();
     for owner in installed {
-        let slot = owner.slot.as_deref().map(Interned::intern);
+        let slot = owner.slot;
         if replaced.contains_key(&(owner.cpn, slot)) || removed.contains(&(owner.cpn, slot)) {
             // A replaced owner's dep strings die with it; a removed
             // candidate no longer needs to satisfy its own deps.

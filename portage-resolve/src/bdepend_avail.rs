@@ -25,7 +25,7 @@ type InternedUse = (
 #[derive(Debug, Clone)]
 struct AvailEntry {
     cpv: Cpv,
-    slot: Option<String>,
+    slot: Option<Interned<DefaultInterner>>,
     /// The VDB-backed installed package this entry came from, when known —
     /// letting `atom_satisfied` verify USE-dep brackets (PMS 8.3.4) against
     /// its USE/IUSE instead of just CPN/version/slot. `None` for within-run
@@ -113,7 +113,7 @@ impl Avail {
             cpvs.into_iter()
                 .map(|(cpv, slot)| AvailEntry {
                     cpv,
-                    slot,
+                    slot: slot.as_deref().map(Interned::intern),
                     installed: None,
                     interned_use: OnceCell::new(),
                 })
@@ -126,7 +126,7 @@ impl Avail {
     /// authoritative for the match; USE-deps on such an atom are treated as
     /// satisfied (`installed: None`), matching the solver, which counts the
     /// provided package as present regardless of flags.
-    pub fn record_provided(&mut self, cpv: Cpv, slot: Option<String>) {
+    pub fn record_provided(&mut self, cpv: Cpv, slot: Option<Interned<DefaultInterner>>) {
         self.0.push(AvailEntry {
             cpv,
             slot,

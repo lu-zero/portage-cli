@@ -58,7 +58,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpn, Dep, Pf, Version};
 use portage_atom_pubgrub::DepClass;
 use portage_repo::{MakeConf, ProfileStack, ReposConf, Repository};
-use portage_vdb::Vdb;
+use portage_vdb::{SlotName, Vdb};
 
 use crate::cli::{Cli, CrossdevArgs, DepgraphFlags, MergeFlags};
 use crate::style::{C_LABEL, C_PKG};
@@ -1398,7 +1398,7 @@ fn host_installed_versions(
     roots: &portage_resolve::Roots,
     cat: &str,
     pkg: &str,
-) -> Vec<(Version, String)> {
+) -> Vec<(Version, SlotName)> {
     let root = roots.satisfaction_root(DepClass::Bdepend);
     let Ok(vdb) = Vdb::open(root.join("var/db/pkg")) else {
         return Vec::new();
@@ -1406,7 +1406,7 @@ fn host_installed_versions(
     let Some(category) = vdb.category(cat) else {
         return Vec::new();
     };
-    let mut out: Vec<(Version, String)> = category
+    let mut out: Vec<(Version, SlotName)> = category
         .packages()
         .collect_vec()
         .into_iter()
@@ -1905,7 +1905,10 @@ mod tests {
         let installed = host_installed_versions(&roots, "sys-devel", "binutils");
         assert_eq!(
             installed,
-            vec![(Version::parse("2.46.0").unwrap(), "2.46".to_owned())]
+            vec![(
+                Version::parse("2.46.0").unwrap(),
+                portage_atom::interner::Interned::intern("2.46")
+            )]
         );
     }
 

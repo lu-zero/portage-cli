@@ -62,8 +62,11 @@ pub fn check(
 
     // `package.provided` packages are supplied by the system on both roots.
     for (cpv, slot) in provided {
-        depend_avail.record_provided(cpv.clone(), slot.clone());
-        bdepend_avail.record_provided(cpv.clone(), slot.clone());
+        let slot = slot
+            .as_deref()
+            .map(portage_atom::interner::Interned::intern);
+        depend_avail.record_provided(cpv.clone(), slot);
+        bdepend_avail.record_provided(cpv.clone(), slot);
     }
 
     let mut problems: Vec<String> = Vec::new();

@@ -27,7 +27,9 @@ use std::collections::BTreeSet;
 use aho_corasick::AhoCorasick;
 use anyhow::{Context, Result, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
+use portage_atom::interner::Interned;
 use portage_atom::{Cpn, Cpv, Dep, Version};
+use portage_vdb::SlotName;
 
 use crate::advisory::{
     self, effective_arch, installed_packages, print_item_banner, print_list_header, print_sub_line,
@@ -83,9 +85,9 @@ fn parse_range(node: roxmltree::Node<'_, '_>) -> Option<VersionRange> {
 }
 
 /// Does `cpv`/`slot` (an installed package) match this range?
-fn range_matches(range: &VersionRange, cpv: &Cpv, slot: &str) -> bool {
+fn range_matches(range: &VersionRange, cpv: &Cpv, slot: SlotName) -> bool {
     if let Some(want_slot) = &range.slot
-        && want_slot != slot
+        && want_slot.as_str() != &*slot
     {
         return false;
     }
@@ -212,7 +214,7 @@ fn parse_glsa(xml: &str) -> Result<Glsa> {
 /// vulnerable-and-not-unaffected, per PMS-matching `arch`. Real portage's
 /// `v_installed.difference(u_installed)`, grouped by which package/slot it
 /// applies to.
-fn affected(glsa: &Glsa, installed: &[(Cpv, String)], arch: &str) -> Vec<(Cpn, String)> {
+fn affected(glsa: &Glsa, installed: &[(Cpv, SlotName)], arch: &str) -> Vec<(Cpn, SlotName)> {
     let mut out = Vec::new();
     for pkg in &glsa.packages {
         if !arch_matches(&pkg.arch, arch) {
@@ -222,10 +224,10 @@ fn affected(glsa: &Glsa, installed: &[(Cpv, String)], arch: &str) -> Vec<(Cpn, S
             if cpv.cpn != pkg.name {
                 continue;
             }
-            let vulnerable = pkg.vulnerable.iter().any(|r| range_matches(r, cpv, slot));
-            let unaffected = pkg.unaffected.iter().any(|r| range_matches(r, cpv, slot));
+            let vulnerable = pkg.vulnerable.iter().any(|r| range_matches(r, cpv, *slot));
+            let unaffected = pkg.unaffected.iter().any(|r| range_matches(r, cpv, *slot));
             if vulnerable && !unaffected {
-                out.push((pkg.name, slot.clone()));
+                out.push((pkg.name, *slot));
             }
         }
     }
@@ -239,7 +241,7 @@ fn affected(glsa: &Glsa, installed: &[(Cpv, String)], arch: &str) -> Vec<(Cpn, S
 /// gate on top of `isVulnerable`.
 fn is_vulnerable(
     glsa: &Glsa,
-    installed: &[(Cpv, String)],
+    installed: &[(Cpv, SlotName)],
     arch: &str,
     injected: &BTreeSet<String>,
 ) -> bool {
@@ -249,7 +251,7 @@ fn is_vulnerable(
 /// `>=<cpn>-<version>[:slot]` for the first applicable `<unaffected>` entry
 /// per affected `(cpn, slot)` — see the module doc's note on why this isn't
 /// `getMinUpgrade`'s full least-change search.
-fn fix_atoms(glsa: &Glsa, installed: &[(Cpv, String)], arch: &str) -> Vec<String> {
+fn fix_atoms(glsa: &Glsa, installed: &[(Cpv, SlotName)], arch: &str) -> Vec<String> {
     let mut atoms = BTreeSet::new();
     for (cpn, slot) in affected(glsa, installed, arch) {
         let Some(pkg) = glsa.packages.iter().find(|p| p.name == cpn) else {
@@ -258,7 +260,7 @@ fn fix_atoms(glsa: &Glsa, installed: &[(Cpv, String)], arch: &str) -> Vec<String
         let target = pkg
             .unaffected
             .iter()
-            .find(|r| r.slot.as_deref().is_none_or(|s| s == slot));
+            .find(|r| r.slot.as_deref().is_none_or(|s| s == &*slot));
         if let Some(target) = target {
             atoms.insert(format!(">={cpn}-{}", target.version));
         } else {
@@ -281,7 +283,7 @@ fn fix_atoms(glsa: &Glsa, installed: &[(Cpv, String)], arch: &str) -> Vec<String
 /// without needing portage's `_reduce` highest-wins dedup.
 pub(crate) fn security_atoms(
     repo_path: &Utf8Path,
-    installed: &[(Cpv, String)],
+    installed: &[(Cpv, SlotName)],
     arch: &str,
     eroot: &Utf8Path,
 ) -> Result<Vec<Dep>> {
@@ -356,7 +358,12 @@ pub(crate) fn security_atoms_from_roots(roots: &portage_resolve::Roots) -> Resul
         Ok(vdb) => vdb
             .packages()
             .into_iter()
-            .map(|p| (p.cpv().clone(), p.slot_main().unwrap_or_default()))
+            .map(|p| {
+                (
+                    p.cpv().clone(),
+                    p.slot_main().unwrap_or_else(|_| Interned::intern("")),
+                )
+            })
             .collect(),
         Err(_) => Vec::new(),
     };
@@ -427,7 +434,7 @@ fn list_ids(repo_path: &Utf8Path) -> Result<Vec<String>> {
 /// given advisory quotes it.
 ///
 /// `None` when the matcher can't be built, which simply parses everything.
-fn installed_cpn_matcher(installed: &[(Cpv, String)]) -> Option<AhoCorasick> {
+fn installed_cpn_matcher(installed: &[(Cpv, SlotName)]) -> Option<AhoCorasick> {
     let mut cpns: Vec<String> = installed
         .iter()
         .map(|(cpv, _)| cpv.cpn.to_string())
@@ -641,28 +648,28 @@ mod tests {
     #[test]
     fn old_installed_version_is_vulnerable() {
         let glsa = parse_glsa(APACHE_GLSA).unwrap();
-        let installed = vec![(cpv("www-servers/apache-1.3.27"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/apache-1.3.27"), Interned::intern("0"))];
         assert!(is_vulnerable(&glsa, &installed, "amd64", &no_injections()));
     }
 
     #[test]
     fn fixed_installed_version_is_not_vulnerable() {
         let glsa = parse_glsa(APACHE_GLSA).unwrap();
-        let installed = vec![(cpv("www-servers/apache-1.3.29"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/apache-1.3.29"), Interned::intern("0"))];
         assert!(!is_vulnerable(&glsa, &installed, "amd64", &no_injections()));
     }
 
     #[test]
     fn uninstalled_package_is_not_vulnerable() {
         let glsa = parse_glsa(APACHE_GLSA).unwrap();
-        let installed = vec![(cpv("www-servers/nginx-1.20.0"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/nginx-1.20.0"), Interned::intern("0"))];
         assert!(!is_vulnerable(&glsa, &installed, "amd64", &no_injections()));
     }
 
     #[test]
     fn fix_atoms_targets_the_unaffected_version() {
         let glsa = parse_glsa(APACHE_GLSA).unwrap();
-        let installed = vec![(cpv("www-servers/apache-1.3.27"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/apache-1.3.27"), Interned::intern("0"))];
         let atoms = fix_atoms(&glsa, &installed, "amd64");
         assert_eq!(atoms, vec![">=www-servers/apache-1.3.29".to_string()]);
     }
@@ -683,13 +690,13 @@ mod tests {
 </glsa>"#;
         let glsa = parse_glsa(xml).unwrap();
         // Same base version, lower revision: vulnerable.
-        let low_rev = vec![(cpv("app-misc/foo-1.2.3-r2"), "0".to_string())];
+        let low_rev = vec![(cpv("app-misc/foo-1.2.3-r2"), Interned::intern("0"))];
         assert!(is_vulnerable(&glsa, &low_rev, "amd64", &no_injections()));
         // Same base version, revision at the fix: not vulnerable.
-        let fixed = vec![(cpv("app-misc/foo-1.2.3-r5"), "0".to_string())];
+        let fixed = vec![(cpv("app-misc/foo-1.2.3-r5"), Interned::intern("0"))];
         assert!(!is_vulnerable(&glsa, &fixed, "amd64", &no_injections()));
         // Different base version entirely: the r*-range never matches.
-        let other_version = vec![(cpv("app-misc/foo-1.9.0"), "0".to_string())];
+        let other_version = vec![(cpv("app-misc/foo-1.9.0"), Interned::intern("0"))];
         assert!(!is_vulnerable(
             &glsa,
             &other_version,
@@ -713,7 +720,7 @@ mod tests {
   </affected>
 </glsa>"#;
         let glsa = parse_glsa(xml).unwrap();
-        let installed = vec![(cpv("app-misc/foo-1.0"), "0".to_string())];
+        let installed = vec![(cpv("app-misc/foo-1.0"), Interned::intern("0"))];
         assert!(is_vulnerable(&glsa, &installed, "x86", &no_injections()));
         assert!(!is_vulnerable(&glsa, &installed, "amd64", &no_injections()));
     }
@@ -721,7 +728,7 @@ mod tests {
     #[test]
     fn injected_glsa_is_no_longer_reported_vulnerable() {
         let glsa = parse_glsa(APACHE_GLSA).unwrap();
-        let installed = vec![(cpv("www-servers/apache-1.3.27"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/apache-1.3.27"), Interned::intern("0"))];
         assert!(is_vulnerable(&glsa, &installed, "amd64", &no_injections()));
         let mut injected = BTreeSet::new();
         injected.insert(glsa.id.clone());
@@ -760,7 +767,7 @@ mod tests {
         let (_repo, repo_path) = glsa_repo(APACHE_GLSA);
         let eroot = tempfile::tempdir().unwrap();
         let eroot = Utf8PathBuf::from_path_buf(eroot.path().to_path_buf()).unwrap();
-        let installed = vec![(cpv("www-servers/apache-1.3.27"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/apache-1.3.27"), Interned::intern("0"))];
         let atoms = security_atoms(&repo_path, &installed, "amd64", &eroot).unwrap();
         let s: Vec<String> = atoms.into_iter().map(|d| d.to_string()).collect();
         assert_eq!(s, vec![">=www-servers/apache-1.3.29"]);
@@ -772,7 +779,7 @@ mod tests {
         let eroot = tempfile::tempdir().unwrap();
         let eroot = Utf8PathBuf::from_path_buf(eroot.path().to_path_buf()).unwrap();
         // 1.3.29 matches the <unaffected range="ge">1.3.29</unaffected> entry.
-        let installed = vec![(cpv("www-servers/apache-1.3.29"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/apache-1.3.29"), Interned::intern("0"))];
         assert!(
             security_atoms(&repo_path, &installed, "amd64", &eroot)
                 .unwrap()
@@ -793,7 +800,7 @@ mod tests {
         .unwrap();
         let eroot = Utf8PathBuf::from_path_buf(eroot.path().to_path_buf()).unwrap();
         // Vulnerable version, but the GLSA is injected → not in the set.
-        let installed = vec![(cpv("www-servers/apache-1.3.27"), "0".to_string())];
+        let installed = vec![(cpv("www-servers/apache-1.3.27"), Interned::intern("0"))];
         assert!(
             security_atoms(&repo_path, &installed, "amd64", &eroot)
                 .unwrap()

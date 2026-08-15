@@ -29,7 +29,7 @@ pub use category::{Categories, CategoriesIter, Category, Packages, PackagesIter}
 pub use collision::Collision;
 pub use contents::{ContentsEntry, ContentsKind, ContentsRef, format_contents};
 pub use error::Error;
-pub use package::InstalledPackage;
+pub use package::{InstalledPackage, SlotName};
 pub use vdb::{AllPackages, AllPackagesIter, Vdb};
 pub use write::MergeSpec;
 

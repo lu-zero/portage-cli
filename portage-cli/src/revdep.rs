@@ -43,7 +43,7 @@ struct BrokenNeed {
 /// One installed package with at least one [`BrokenNeed`].
 struct BrokenConsumer {
     cpv: Cpv,
-    slot: String,
+    slot: portage_vdb::SlotName,
     broken: Vec<BrokenNeed>,
 }
 

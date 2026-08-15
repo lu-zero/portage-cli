@@ -16,6 +16,8 @@ use anstyle::{Effects, Style};
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Cpv;
+use portage_atom::interner::Interned;
+use portage_vdb::SlotName;
 
 use crate::cli::Cli;
 use crate::style::{C_BOLD, C_MARKER_INFO, C_WARN};
@@ -43,12 +45,17 @@ pub(crate) fn effective_arch(globals: &Cli) -> String {
 /// Every installed package as `(cpv, main_slot)`, or empty if the VDB can't
 /// be opened — news' `Display-If-Installed` and GLSA's affected-version
 /// matching both just need "what's on the system", not full VDB metadata.
-pub(crate) fn installed_packages(globals: &Cli) -> Vec<(Cpv, String)> {
+pub(crate) fn installed_packages(globals: &Cli) -> Vec<(Cpv, SlotName)> {
     crate::vdb::open_cli_vdb(globals)
         .map(|vdb| {
             vdb.packages()
                 .into_iter()
-                .map(|p| (p.cpv().clone(), p.slot_main().unwrap_or_default()))
+                .map(|p| {
+                    (
+                        p.cpv().clone(),
+                        p.slot_main().unwrap_or_else(|_| Interned::intern("")),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default()

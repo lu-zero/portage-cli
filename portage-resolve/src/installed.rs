@@ -110,9 +110,9 @@ pub fn load_host_installed(roots: &crate::Roots) -> Vec<HostInstalledEntry> {
     crate::broot_vdb_packages(roots)
         .into_iter()
         .map(|pkg| {
-            let slot = pkg.slot_main().ok();
-            let package = match slot.as_deref().filter(|s| !s.is_empty()) {
-                Some(s) => PortagePackage::slotted(*pkg.cpn(), Interned::intern(s)),
+            let slot = pkg.slot_main().ok().filter(|s| !s.is_empty());
+            let package = match slot {
+                Some(slot) => PortagePackage::slotted(*pkg.cpn(), slot),
                 None => PortagePackage::unslotted(*pkg.cpn()),
             };
             let active_use = pkg
@@ -173,7 +173,7 @@ fn load_one(root: Option<&camino::Utf8Path>) -> Vec<VdbEntry> {
             }
             VdbEntry {
                 cpn: *pkg.cpn(),
-                slot: pkg.slot_main().ok().map(|s| Interned::intern(&s)),
+                slot: pkg.slot_main().ok(),
                 version: pkg.cpv().version.clone(),
                 active_use,
                 iuse,
