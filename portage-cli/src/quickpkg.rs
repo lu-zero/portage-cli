@@ -373,11 +373,8 @@ fn strip_root_prefix(path: &Utf8Path) -> Utf8PathBuf {
 fn warn_bindist(pkg: &InstalledPackage) {
     let iuse = pkg.iuse().unwrap_or_default();
     let use_flags = pkg.use_flags().unwrap_or_default();
-    let iuse_plain: BTreeSet<_> = iuse
-        .iter()
-        .map(|f| f.trim_start_matches(['+', '-']))
-        .collect();
-    if iuse_plain.contains("bindist") && !use_flags.iter().any(|f| f == "bindist") {
+    let iuse_plain: BTreeSet<_> = iuse.iter().map(|f| f.name()).collect();
+    if iuse_plain.contains("bindist") && !use_flags.iter().any(|f| &**f == "bindist") {
         // Routed through `tracing::warn!` rather than a hand-rolled
         // `eprintln!(" * …")`: `diag::CompactFormatter` then paints the
         // ` * ` marker yellow on a TTY (real portage's `ewarn` colour) and

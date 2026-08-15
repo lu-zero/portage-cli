@@ -124,8 +124,8 @@ pub fn load_host_installed(roots: &crate::Roots) -> Vec<HostInstalledEntry> {
             let iuse = pkg
                 .iuse()
                 .unwrap_or_default()
-                .into_iter()
-                .map(|f| Interned::intern(f.trim_start_matches(['+', '-'])))
+                .iter()
+                .map(Interned::from)
                 .collect();
             HostInstalledEntry {
                 package,
@@ -162,8 +162,8 @@ fn load_one(root: Option<&camino::Utf8Path>) -> Vec<VdbEntry> {
             let iuse = pkg
                 .iuse()
                 .unwrap_or_default()
-                .into_iter()
-                .map(|f| Interned::intern(f.trim_start_matches(['+', '-'])))
+                .iter()
+                .map(Interned::from)
                 .collect();
             let mut deps: Vec<DepEntry> = Vec::new();
             for field in [pkg.rdepend(), pkg.depend()] {

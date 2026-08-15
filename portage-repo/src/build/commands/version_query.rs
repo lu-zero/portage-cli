@@ -6,10 +6,12 @@
 //! installed autoconf) live on the host, while runtime deps live in the
 //! prefix.
 
+use std::collections::HashSet;
 use std::io::Write;
 
 use brush_core::builtins;
 use clap::Parser;
+use portage_atom::interner::{DefaultInterner, Interned};
 
 fn vdb_roots_for<SE: brush_core::ShellExtensions>(
     shell: &brush_core::Shell<SE>,
@@ -89,13 +91,15 @@ fn best_match(
         if let Some(use_deps) = &dep.use_deps
             && !use_deps.is_empty()
         {
-            let installed_use: std::collections::HashSet<String> =
+            let installed_use: HashSet<Interned<DefaultInterner>> =
                 pkg.use_flags().unwrap_or_default().into_iter().collect();
-            let installed_iuse: std::collections::HashSet<String> = pkg
+            // `IUse` already holds the name interned; `From` reuses that key
+            // rather than resolving it to a `&str` and interning it again.
+            let installed_iuse: HashSet<Interned<DefaultInterner>> = pkg
                 .iuse()
                 .unwrap_or_default()
-                .into_iter()
-                .map(|f| f.trim_start_matches(['+', '-']).to_string())
+                .iter()
+                .map(Interned::from)
                 .collect();
             if !use_deps_satisfied(use_deps, &installed_use, &installed_iuse, parent_use) {
                 continue;
@@ -115,16 +119,16 @@ fn best_match(
 /// constraint cannot be satisfied.
 fn use_deps_satisfied(
     use_deps: &[portage_atom::UseDep],
-    installed_use: &std::collections::HashSet<String>,
-    installed_iuse: &std::collections::HashSet<String>,
+    installed_use: &HashSet<Interned<DefaultInterner>>,
+    installed_iuse: &HashSet<Interned<DefaultInterner>>,
     parent_use: &std::collections::HashSet<String>,
 ) -> bool {
     use portage_atom::{UseDefault, UseDepKind};
     use_deps.iter().all(|ud| {
         let flag = ud.flag.as_str();
-        // The dependency flag's state on the installed package.
-        let state = if installed_iuse.contains(flag) {
-            Some(installed_use.contains(flag))
+        // Interned both sides: comparing keys, not hashing flag text.
+        let state = if installed_iuse.contains(&ud.flag) {
+            Some(installed_use.contains(&ud.flag))
         } else {
             match ud.default {
                 Some(UseDefault::Enabled) => Some(true),
@@ -228,7 +232,16 @@ mod tests {
     use portage_atom::UseDep;
     use std::collections::HashSet;
 
-    fn set(flags: &[&str]) -> HashSet<String> {
+    use portage_atom::interner::{DefaultInterner, Interned};
+
+    /// Installed USE/IUSE sets, interned like the real accessors return them.
+    fn set(flags: &[&str]) -> HashSet<Interned<DefaultInterner>> {
+        flags.iter().copied().map(Interned::intern).collect()
+    }
+
+    /// The parent's USE, which comes from the build shell's environment as
+    /// plain text rather than from the VDB.
+    fn parent_set(flags: &[&str]) -> HashSet<String> {
         flags.iter().map(|s| (*s).to_string()).collect()
     }
 
@@ -241,7 +254,7 @@ mod tests {
     #[test]
     fn headers_only_default_disabled_matches_installed_state() {
         let iuse = set(&["headers-only", "multilib", "ssp"]);
-        let parent = set(&[]);
+        let parent = parent_set(&[]);
         // Full glibc: headers-only OFF → `[headers-only(-)]` must NOT match.
         let full = set(&["multilib", "ssp"]);
         assert!(!use_deps_satisfied(
@@ -263,7 +276,7 @@ mod tests {
     #[test]
     fn enabled_and_disabled_kinds() {
         let iuse = set(&["ssl", "debug"]);
-        let parent = set(&[]);
+        let parent = parent_set(&[]);
         let installed = set(&["ssl"]);
         assert!(use_deps_satisfied(&deps("ssl"), &installed, &iuse, &parent));
         assert!(use_deps_satisfied(
@@ -295,7 +308,7 @@ mod tests {
     #[test]
     fn missing_flag_uses_default_else_unsatisfiable() {
         let iuse = set(&["other"]);
-        let parent = set(&[]);
+        let parent = parent_set(&[]);
         let installed = set(&[]);
         // Flag absent from IUSE: (+) → enabled, (-) → disabled.
         assert!(use_deps_satisfied(
@@ -331,12 +344,42 @@ mod tests {
         let on = set(&["x"]);
         let off = set(&[]);
         // [x?]: only constrains when parent has x.
-        assert!(use_deps_satisfied(&deps("x?"), &on, &iuse, &set(&["x"])));
-        assert!(!use_deps_satisfied(&deps("x?"), &off, &iuse, &set(&["x"])));
-        assert!(use_deps_satisfied(&deps("x?"), &off, &iuse, &set(&[])));
+        assert!(use_deps_satisfied(
+            &deps("x?"),
+            &on,
+            &iuse,
+            &parent_set(&["x"])
+        ));
+        assert!(!use_deps_satisfied(
+            &deps("x?"),
+            &off,
+            &iuse,
+            &parent_set(&["x"])
+        ));
+        assert!(use_deps_satisfied(
+            &deps("x?"),
+            &off,
+            &iuse,
+            &parent_set(&[])
+        ));
         // [x=]: dep flag must equal parent flag.
-        assert!(use_deps_satisfied(&deps("x="), &on, &iuse, &set(&["x"])));
-        assert!(use_deps_satisfied(&deps("x="), &off, &iuse, &set(&[])));
-        assert!(!use_deps_satisfied(&deps("x="), &on, &iuse, &set(&[])));
+        assert!(use_deps_satisfied(
+            &deps("x="),
+            &on,
+            &iuse,
+            &parent_set(&["x"])
+        ));
+        assert!(use_deps_satisfied(
+            &deps("x="),
+            &off,
+            &iuse,
+            &parent_set(&[])
+        ));
+        assert!(!use_deps_satisfied(
+            &deps("x="),
+            &on,
+            &iuse,
+            &parent_set(&[])
+        ));
     }
 }

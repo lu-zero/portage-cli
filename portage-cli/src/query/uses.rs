@@ -45,7 +45,7 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
                     let version = pkg.cpv().to_string();
                     pkg.use_flags()
                         .ok()
-                        .map(|flags| (version, flags.into_iter().collect()))
+                        .map(|flags| (version, flags.iter().map(|f| f.to_string()).collect()))
                 })
         });
 

@@ -127,7 +127,7 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
                         writeln!(
                             out,
                             "     {C_LABEL}USE:{C_LABEL:#}       {}",
-                            flags.join(" ")
+                            flags.iter().map(|f| &**f).collect::<Vec<_>>().join(" ")
                         )
                         .ok();
                     }

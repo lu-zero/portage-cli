@@ -221,8 +221,8 @@ fn use_deps_satisfied(dep: &Dep, entry: &AvailEntry) -> bool {
         let iuse = pkg
             .iuse()
             .unwrap_or_default()
-            .into_iter()
-            .map(|f| Interned::intern(f.trim_start_matches(['+', '-'])))
+            .iter()
+            .map(Interned::from)
             .collect();
         (enabled, iuse)
     });

@@ -3,7 +3,7 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, DepEntry, Pf};
-use portage_metadata::Eapi;
+use portage_metadata::{Eapi, IUse};
 
 use crate::Result;
 use crate::contents::ContentsEntry;
@@ -133,21 +133,35 @@ impl InstalledPackage {
         Ok(raw.split_once('/').map(|(_, sub)| Interned::intern(sub)))
     }
 
-    /// The repository name this package was installed from.
-    pub fn repository(&self) -> Result<Option<String>> {
-        self.read_field_opt("repository")
+    /// The repository name this package was installed from. Interned: a
+    /// system draws these from the two or three repos it has configured.
+    pub fn repository(&self) -> Result<Option<Interned<DefaultInterner>>> {
+        Ok(self
+            .read_field_opt("repository")?
+            .map(|r| Interned::intern(&r)))
     }
 
-    /// USE flags active at build time (space-separated).
-    pub fn use_flags(&self) -> Result<Vec<String>> {
+    /// USE flags active at build time.
+    ///
+    /// Interned: flag names are a small vocabulary repeated across the whole
+    /// database (3257 tokens over 275 distinct names on one measured host),
+    /// and every caller that keeps them was interning them anyway.
+    pub fn use_flags(&self) -> Result<Vec<Interned<DefaultInterner>>> {
         let raw = self.read_field("USE")?;
-        Ok(raw.split_whitespace().map(|s| s.to_string()).collect())
+        Ok(raw.split_whitespace().map(Interned::intern).collect())
     }
 
-    /// IUSE flags defined by the package (space-separated).
-    pub fn iuse(&self) -> Result<Vec<String>> {
+    /// IUSE flags declared by the package, with their `+`/`-` defaults.
+    ///
+    /// [`IUse`] keeps the name interned and the default separate, so callers
+    /// stop stripping the prefix and re-interning what it already holds —
+    /// use `Interned::from(&iu)` for the bare name.
+    pub fn iuse(&self) -> Result<Vec<IUse>> {
         let raw = self.read_field("IUSE")?;
-        Ok(raw.split_whitespace().map(|s| s.to_string()).collect())
+        IUse::parse_line(&raw).map_err(|e| Error::MalformedPackage {
+            path: self.path.clone(),
+            reason: format!("invalid IUSE: {e}"),
+        })
     }
 
     /// Build timestamp (Unix epoch).
@@ -186,10 +200,13 @@ impl InstalledPackage {
             .transpose()
     }
 
-    /// Keywords (space-separated). Returns an empty vec if the KEYWORDS file is absent.
-    pub fn keywords(&self) -> Result<Vec<String>> {
+    /// Keywords. Empty if the KEYWORDS file is absent.
+    ///
+    /// Interned: the vocabulary is one entry per arch plus its `~` form, so a
+    /// whole database's keywords resolve to a few dozen distinct strings.
+    pub fn keywords(&self) -> Result<Vec<Interned<DefaultInterner>>> {
         let raw = self.read_field_opt("KEYWORDS")?.unwrap_or_default();
-        Ok(raw.split_whitespace().map(|s| s.to_string()).collect())
+        Ok(raw.split_whitespace().map(Interned::intern).collect())
     }
 
     /// License string.
@@ -364,7 +381,8 @@ mod tests {
         );
         assert_eq!(pkg.slot().unwrap(), "0");
         assert_eq!(pkg.use_flags().unwrap(), vec!["net", "nls", "readline"]);
-        assert_eq!(pkg.iuse().unwrap(), vec!["+net", "+nls", "+readline"]);
+        let iuse: Vec<String> = pkg.iuse().unwrap().iter().map(|i| i.to_string()).collect();
+        assert_eq!(iuse, vec!["+net", "+nls", "+readline"]);
         assert_eq!(pkg.build_time().unwrap(), Some(1778566176));
         assert_eq!(pkg.size().unwrap(), Some(10401340));
         assert_eq!(pkg.counter().unwrap(), Some(992555));
