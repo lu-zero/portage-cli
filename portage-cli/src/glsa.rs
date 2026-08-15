@@ -24,6 +24,7 @@
 
 use std::collections::BTreeSet;
 
+use aho_corasick::AhoCorasick;
 use anyhow::{Context, Result, anyhow};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpn, Cpv, Dep, Version};
@@ -285,9 +286,26 @@ pub(crate) fn security_atoms(
     eroot: &Utf8Path,
 ) -> Result<Vec<Dep>> {
     let injected = read_injected(eroot);
+    let mentions_installed = installed_cpn_matcher(installed);
     let mut atom_strs = BTreeSet::new();
     for id in list_ids(repo_path)? {
-        let glsa = match load(repo_path, &id) {
+        let xml = match read_glsa(repo_path, &id) {
+            Ok(x) => x,
+            Err(e) => {
+                warn_line!("{id}: {e:#}");
+                continue;
+            }
+        };
+        // Most GLSAs concern packages this system doesn't have; skipping the
+        // XML parse for those is the difference between parsing the whole
+        // advisory corpus and parsing a sixth of it.
+        if mentions_installed
+            .as_ref()
+            .is_some_and(|m| !m.is_match(xml.as_str()))
+        {
+            continue;
+        }
+        let glsa = match parse_glsa(&xml) {
             Ok(g) => g,
             Err(e) => {
                 warn_line!("{id}: {e:#}");
@@ -398,11 +416,39 @@ fn list_ids(repo_path: &Utf8Path) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-fn load(repo_path: &Utf8Path, id: &str) -> Result<Glsa> {
+/// Matches any installed package's CPN, for rejecting a GLSA before parsing
+/// it.
+///
+/// [`affected`] only ever reports a package whose `<package name="...">`
+/// equals an installed CPN, and that name appears verbatim in the XML — so a
+/// GLSA whose text contains no installed CPN cannot produce an atom, whatever
+/// parsing it would reveal. An exact reject, not a heuristic; matching the
+/// bare CPN rather than the full attribute keeps it independent of how any
+/// given advisory quotes it.
+///
+/// `None` when the matcher can't be built, which simply parses everything.
+fn installed_cpn_matcher(installed: &[(Cpv, String)]) -> Option<AhoCorasick> {
+    let mut cpns: Vec<String> = installed
+        .iter()
+        .map(|(cpv, _)| cpv.cpn.to_string())
+        .collect();
+    cpns.sort_unstable();
+    cpns.dedup();
+    AhoCorasick::new(&cpns).ok()
+}
+
+fn read_glsa(repo_path: &Utf8Path, id: &str) -> Result<String> {
     let path = glsa_dir(repo_path).join(format!("glsa-{id}.xml"));
-    let xml =
-        std::fs::read_to_string(path.as_std_path()).with_context(|| format!("reading {path}"))?;
-    parse_glsa(&xml).with_context(|| format!("parsing {path}"))
+    std::fs::read_to_string(path.as_std_path()).with_context(|| format!("reading {path}"))
+}
+
+fn load(repo_path: &Utf8Path, id: &str) -> Result<Glsa> {
+    parse_glsa(&read_glsa(repo_path, id)?).with_context(|| {
+        format!(
+            "parsing {}",
+            glsa_dir(repo_path).join(format!("glsa-{id}.xml"))
+        )
+    })
 }
 
 fn run_list(globals: &Cli) -> Result<()> {
