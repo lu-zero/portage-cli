@@ -70,3 +70,6 @@ version without updating `rust-version` in `Cargo.toml` and the CI matrix.
 This codebase was largely AI-generated. Be skeptical of existing code — it may
 contain bugs, incomplete PMS coverage, or surprising edge-case behaviour.
 Do not assume existing patterns are correct; verify against the PMS.
+
+Enforced anti-slop rules (comment length, test quality, scope discipline):
+see root [`AGENTS.md`](../AGENTS.md) § Unslop Rules.

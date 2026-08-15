@@ -70,3 +70,12 @@ Do not use features that require a newer version without updating `rust-version`
 - Error messages should be Gentoo-user friendly
 - Types should work well with Gentoo's package management concepts
 - Consider integration with Portage and other Gentoo tools
+
+## Slop Warning
+
+This codebase was largely AI-generated. Be skeptical of existing code — it may
+contain bugs or surprising edge-case behaviour. Do not assume existing
+patterns are correct.
+
+Enforced anti-slop rules (comment length, test quality, scope discipline):
+see root [`AGENTS.md`](../AGENTS.md) § Unslop Rules.

@@ -204,6 +204,48 @@ something a past pass got wrong and had to clean up later.
 - `#[allow(dead_code)]` is not a way to keep something "just in case" —
   delete it; it's in git history if it turns out to be needed.
 
+**Comment length is not optional-nice, it's enforced**
+- If justifying a change takes more than ~3 sentences, that justification
+  belongs in the commit message, not the doc comment. A doc comment
+  states the current invariant for a future reader; it is not the place
+  to relitigate why a rejected alternative was rejected, walk through the
+  investigation that found the bug, or narrate "found live: ...". One
+  sentence of *why*, tops — cut everything else before committing.
+- This applies doubly to comments written to justify a design decision
+  the human pushed back on — the pushback itself is a signal the
+  reasoning needs to be shorter and more confident, not longer and more
+  defensive.
+- Hard limits, not guidelines: no comment line over **150 characters**,
+  no comment paragraph over **5 lines** (3 is better). Hitting either
+  means cut, don't wrap — a longer paragraph is a sign the explanation
+  needs to be smaller, not that it needs more room.
+
+**Tests must exercise project logic, not the standard library**
+- Don't add a test whose assertions would hold for *any* correct
+  implementation of the underlying primitive — e.g. asserting a spawned
+  `true` exits 0 and `false` exits 1 tests `std::process::Command`, not
+  code this project wrote. If a helper is a thin wrapper with no branch
+  of its own, it's fine to leave it uncovered by a dedicated test; the
+  caller's own test coverage is enough.
+- Prefer one test that exercises the actual decision point (a real
+  branch, a real edge case, a real regression) over a test added purely
+  to make "added a function → added a test" true.
+
+**Scope discipline — stay inside the blast radius you were asked for**
+- When investigating a live bug surfaces a *different*, deeper subsystem
+  than the one you started in (e.g. debugging a config-layer bug leads
+  into the dependency solver), stop and report the finding before editing
+  that subsystem. A conversation agreeing a direction is promising is not
+  the same as authorization to implement it — get an explicit go-ahead
+  for the specific edit, not just agreement that the idea has merit.
+- A signature change that cascades into many call sites and tests is a
+  point to pause and confirm the shape before doing the mechanical
+  propagation, not something to push through in one uninterrupted burst.
+- If a change was explicitly reverted once, re-attempting it later — even
+  with better justification — needs its own fresh explicit confirmation.
+  Prior agreement on the general direction does not carry over to "go
+  implement it now."
+
 ### Logging vs. program output — do not default to `println!`
 
 This codebase has a real logging system (`src/diag.rs`): `tracing::info!`/
@@ -242,6 +284,10 @@ user-facing message.
 - `test:` — adding or updating tests
 - `ci:` — CI/CD changes
 - `chore:` — maintenance (dependencies, tooling)
+
+Same hard limits as comments (see Unslop Rules): no body line over
+**150 characters**, no paragraph over **5 lines** (3 is better). The
+subject line still follows Conventional Commits' own ~50/72 convention.
 
 When a commit was significantly assisted by an AI tool, note it with an
 `Assisted-by:` trailer rather than a `Co-Authored-By:` trailer. Use the kernel's
