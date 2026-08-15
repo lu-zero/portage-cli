@@ -168,7 +168,21 @@ impl BootstrapKind {
 /// self-contained (that's its only use case) and ignores this flag; it only
 /// changes `BootstrapKind::Cross`'s plan — see the two call sites below for
 /// what "self-contained" unlocks (baselayout skeleton, dropping debuginfod).
-pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
+///
+/// `prefix_guest` is `BootstrapKind::Native`-only (`Cross` ignores it — it's
+/// a host-OS concept, not a cross-target one): Gentoo Prefix's own "the
+/// host, not ::gentoo, owns this OS's libc" signal. `virtual/libc`'s and
+/// `virtual/os-headers`'s RDEPEND already collapse to a bare blocker under
+/// it (no real package pulled in), and `toolchain.eclass` gates gcc's own
+/// libc-linking on the same flag — so the *kernel-headers* step (already
+/// `virtual/os-headers`, `nodeps: false`) needs no change at all, it just
+/// resolves to an empty merge automatically. Only the *libc* step needs an
+/// explicit skip: it merges the real `sys-libs/<libc>` atom directly under
+/// `--nodeps` (to break the glibc-needs-gcc cycle a plain resolve would hit
+/// in an empty ROOT), which bypasses `virtual/libc`'s conditional RDEPEND
+/// entirely — there is no virtual to resolve through, so the flag has to be
+/// read explicitly instead.
+pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: bool) -> StagePlan {
     let atom = |real_cat: &str, pkg: &str| kind.atom(real_cat, pkg);
     let owned = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let mut steps = Vec::new();
@@ -264,13 +278,15 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool) -> StagePlan {
                 into_sysroot: false,
             });
         }
-        steps.push(StageStep {
-            label: "libc".into(),
-            atoms: vec![atom("sys-libs", kind.libc_pkg())],
-            use_override: vec![],
-            nodeps: true,
-            into_sysroot: false,
-        });
+        if !prefix_guest {
+            steps.push(StageStep {
+                label: "libc".into(),
+                atoms: vec![atom("sys-libs", kind.libc_pkg())],
+                use_override: vec![],
+                nodeps: true,
+                into_sysroot: false,
+            });
+        }
         steps.push(StageStep {
             label: "gcc".into(),
             atoms: vec![atom("sys-devel", "gcc")],
@@ -517,7 +533,7 @@ mod tests {
     #[test]
     fn gcc_glibc_plan_is_the_two_stage_bootstrap() {
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
         assert_eq!(
             labels(&plan),
             [
@@ -577,7 +593,7 @@ mod tests {
         ] {
             let t = CrossTarget::parse(tuple, false).unwrap();
             let category = t.category();
-            let plan = toolchain_plan(&BootstrapKind::Cross(t.clone()), true);
+            let plan = toolchain_plan(&BootstrapKind::Cross(t.clone()), true, false);
             let packages_set: std::collections::HashSet<(String, String)> = t
                 .packages()
                 .into_iter()
@@ -648,7 +664,7 @@ mod tests {
         // A from-scratch `--root DIR` crossdev EPREFIX has no host-shared
         // merged-usr skeleton or libs — same needs as native
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), true);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), true, false);
         assert_eq!(labels(&plan)[0], "baselayout");
         assert!(plan.steps[0].atoms[0].ends_with("/baselayout"));
         let binutils = plan.steps.iter().find(|s| s.label == "binutils").unwrap();
@@ -678,7 +694,7 @@ mod tests {
         // debuginfod stays on (host satisfies DEPEND). os-headers is
         // self-contained-only.
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
         assert_eq!(labels(&plan)[0], "baselayout");
         assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
         let binutils = plan.steps.iter().find(|s| s.label == "binutils").unwrap();
@@ -689,7 +705,7 @@ mod tests {
     #[test]
     fn llvm_plan_seeds_baselayout_before_wrappers() {
         let t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
         assert_eq!(labels(&plan)[0], "baselayout");
         assert_eq!(plan.steps[0].atoms, ["sys-apps/baselayout"]);
         assert!(
@@ -702,7 +718,7 @@ mod tests {
 
     #[test]
     fn native_baselayout_does_not_force_sysroot() {
-        let plan = toolchain_plan(&BootstrapKind::Native, true);
+        let plan = toolchain_plan(&BootstrapKind::Native, true, false);
         assert_eq!(plan.steps[0].label, "baselayout");
         assert!(
             !plan.steps[0].into_sysroot,
@@ -713,7 +729,7 @@ mod tests {
     #[test]
     fn baremetal_newlib_has_no_kernel_headers() {
         let t = CrossTarget::parse("riscv64-unknown-elf", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
         assert!(!labels(&plan).contains(&"kernel headers"));
         assert!(plan.steps.iter().any(|s| s.atoms[0].ends_with("/newlib")));
     }
@@ -721,7 +737,7 @@ mod tests {
     #[test]
     fn llvm_plan_has_runtimes_not_two_stage_gcc() {
         let t = CrossTarget::parse("aarch64-unknown-linux-musl", true).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
         let l = labels(&plan);
         assert!(l.contains(&"clang wrappers"));
         assert!(l.contains(&"compiler-rt"));
@@ -736,7 +752,7 @@ mod tests {
         // builds full glibc, then a single full gcc links against it.
         // toolchain.eclass gates all stage1 affordances on is_crosscompile, so a
         // native gcc is always --enable-shared and needs a full libc present.
-        let plan = toolchain_plan(&BootstrapKind::Native, true);
+        let plan = toolchain_plan(&BootstrapKind::Native, true, false);
         assert_eq!(
             labels(&plan),
             ["baselayout", "binutils", "kernel headers", "libc", "gcc"]
@@ -776,12 +792,34 @@ mod tests {
     }
 
     #[test]
+    fn native_prefix_guest_skips_the_libc_step() {
+        // FreeBSD/Darwin: ::gentoo has no libc ebuilds for the target OS at
+        // all, but virtual/os-headers already collapses to an empty merge
+        // under prefix-guest via its own RDEPEND conditional (no plan change
+        // needed there) — only the libc step, which bypasses virtual/libc
+        // entirely via --nodeps, needs an explicit skip.
+        let plan = toolchain_plan(&BootstrapKind::Native, true, true);
+        assert_eq!(
+            labels(&plan),
+            ["baselayout", "binutils", "kernel headers", "gcc"]
+        );
+        let atoms: Vec<&str> = plan
+            .steps
+            .iter()
+            .flat_map(|s| s.atoms.iter().map(|a| a.as_str()))
+            .collect();
+        assert!(!atoms.contains(&"sys-libs/glibc"));
+        // gcc step is otherwise unchanged.
+        assert_eq!(atoms.last(), Some(&"sys-devel/gcc"));
+    }
+
+    #[test]
     fn cross_binutils_keeps_debuginfod() {
         // Cross binutils is host-rooted (via crossdev::setup's
         // use_outer_eroot), so its debuginfod deps are host-satisfied —
         // no need to force the flag off (behaviour-preserving).
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let plan = toolchain_plan(&BootstrapKind::Cross(t), false);
+        let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
         let binutils = plan
             .steps
             .iter()

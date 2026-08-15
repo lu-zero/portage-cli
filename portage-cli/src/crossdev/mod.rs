@@ -257,6 +257,7 @@ async fn setup(
     let plan = stages::toolchain_plan(
         &stages::BootstrapKind::Cross(target.clone()),
         self_contained,
+        false,
     );
     let mut out = anstream::stdout();
     let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
@@ -491,6 +492,42 @@ fn step_flags(step: &stages::StageStep) -> String {
     }
 }
 
+/// Whether the active profile has `USE=prefix-guest` set — Gentoo Prefix's
+/// own "the host, not `::gentoo`, owns this OS's libc" signal:
+/// `virtual/libc`/`virtual/os-headers`'s own RDEPEND already collapse to a
+/// bare blocker under it, and `toolchain.eclass` gates gcc's own
+/// libc-linking on the same flag. **Not FreeBSD/Darwin-specific** — real
+/// upstream Gentoo Prefix force-sets it for the entire standard "rpath"
+/// profile family regardless of host OS
+/// (`features/prefix/rpath/use.force`: "prefix-guest USE flag should be
+/// set in prefix rpath profiles"), so this is `true` for essentially every
+/// `--local`/`--prefix` bootstrap, Linux included — confirmed live on both
+/// a real Debian 12 and a real FreeBSD 14.4 host. Read the same way
+/// `info.rs` reads USE for its own display (`main_repo` → `repo.shell()` →
+/// `apply_profile_env` → `shell.get_var`) rather than a second, lighter
+/// parser that could diverge from real profile-inheritance/USE-conditional
+/// semantics. `false` on any failure to open the repo/profile — matches
+/// today's behaviour.
+async fn native_prefix_guest(globals: &Cli, roots: &portage_resolve::Roots) -> bool {
+    let Ok(repo) = main_repo(globals) else {
+        return false;
+    };
+    let Ok(mut shell) = repo.shell().await else {
+        return false;
+    };
+    if crate::ebuild::apply_profile_env(&mut shell, roots.config(), roots.config_overlay())
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    shell
+        .get_var("USE")
+        .unwrap_or_default()
+        .split_whitespace()
+        .any(|f| f == "prefix-guest")
+}
+
 /// `em toolchain --setup`: bootstrap a self-hosting native toolchain into
 /// `--root` (`CHOST == CBUILD`, `SYSROOT == ROOT`). The native twin of the
 /// crossdev `--setup`, sharing its staged driver but with the *native* plan
@@ -499,6 +536,13 @@ fn step_flags(step: &stages::StageStep) -> String {
 /// (that is cross-only — see [`stages`]). Plain `::gentoo` atoms, none of the
 /// cross overlay/wrapper/sysroot-make.conf ceremony — the host profile and
 /// make.conf configure it (`--config-root /` by default).
+///
+/// Under `USE=prefix-guest` (see [`native_prefix_guest`]) the libc step is
+/// skipped: `virtual/libc`/`toolchain.eclass` already expect gcc to link
+/// against the host's own libc/headers instead. `prefix-guest` is on by
+/// default for the whole standard "rpath" Prefix profile family regardless
+/// of host OS (`features/prefix/rpath/use.force`, real upstream Gentoo
+/// Prefix, not FreeBSD/Darwin-specific).
 ///
 /// This is the *toolchain* primitive only — the compiler the stages build
 /// against. The actual stage production (stage1 `packages.build`, stage3
@@ -520,7 +564,8 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     if !globals.pretend {
         ensure_self_contained_prefix(globals)?;
     }
-    let plan = stages::toolchain_plan(&stages::BootstrapKind::Native, true);
+    let prefix_guest = native_prefix_guest(globals, &roots).await;
+    let plan = stages::toolchain_plan(&stages::BootstrapKind::Native, true, prefix_guest);
     let mut out = anstream::stdout();
     let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
     writeln!(
