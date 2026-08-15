@@ -204,6 +204,21 @@ something a past pass got wrong and had to clean up later.
 - `#[allow(dead_code)]` is not a way to keep something "just in case" —
   delete it; it's in git history if it turns out to be needed.
 
+**Never downgrade a domain type to make code fast**
+- `String`/`&str` is for text that is genuinely just text. If a value is a
+  path, a CPV, an atom, or a slot, it keeps its type — `Utf8PathBuf`,
+  `Cpv`, `Dep`, `Cpn` — even in the hottest loop in the workspace.
+- When a typed value shows up hot in a profile, read what the type's impl
+  actually does and use the cheap accessor at the *comparison site*
+  (`as_str()`, `as_bytes()`). Example: `Utf8Path`'s `PartialEq` compares
+  `Components` back-to-front, so `a.as_str() == b.as_str()` is a length
+  check plus `memcmp` while `a == b` walks components. The field stays
+  `Utf8PathBuf`; only the comparison changes.
+- Swapping the field to `String` "for speed" trades away the meaning the
+  type carried and spreads: the next reader cannot tell a path from any
+  other string, and every conversion at the boundary comes back as an
+  allocation.
+
 **Comment length is not optional-nice, it's enforced**
 - If justifying a change takes more than ~3 sentences, that justification
   belongs in the commit message, not the doc comment. A doc comment
