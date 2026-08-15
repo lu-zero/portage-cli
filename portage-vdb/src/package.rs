@@ -230,23 +230,49 @@ impl InstalledPackage {
     }
 
     // -- CONTENTS --
+    //
+    // Deliberately outside `field_cache`. That cache exists for the small
+    // fields a depgraph build re-reads 3-4 times (USE, IUSE, SLOT); CONTENTS
+    // averages ~216 KB and is the whole installed-file list, so memoizing it
+    // retains the entire VDB's file list for the process lifetime and hands
+    // back a full copy per hit. Reading it fresh also keeps it correct
+    // against a VDB another process is writing, which the cache — invalidated
+    // only by this process's own `register`/`unregister` — is not.
 
     /// Parse the CONTENTS file — the list of files installed by this package.
     pub fn contents(&self) -> Result<Vec<ContentsEntry>> {
-        let raw = self.read_field("CONTENTS")?;
-        Ok(ContentsEntry::parse(&raw))
+        Ok(ContentsEntry::parse(&self.contents_required()?))
     }
 
     /// The unparsed CONTENTS text, to scan with [`crate::ContentsRef::parse`]
     /// instead of materializing every entry. `None` when the package has no
     /// CONTENTS file at all.
+    ///
+    /// Returned as read, without the trim the other field accessors apply:
+    /// trimming a string this size is a second full copy, and
+    /// [`crate::ContentsRef::parse`] already skips blank lines and trims each
+    /// line it yields.
     pub fn contents_raw(&self) -> Result<Option<String>> {
-        self.read_field_opt("CONTENTS")
+        let path = self.path.join("CONTENTS");
+        match std::fs::read_to_string(&path) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(Error::Io { path, source }),
+        }
+    }
+
+    /// [`Self::contents_raw`] for the callers that treat an absent CONTENTS
+    /// as an error rather than an empty package.
+    fn contents_required(&self) -> Result<String> {
+        self.contents_raw()?.ok_or_else(|| Error::Io {
+            path: self.path.join("CONTENTS"),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "field file missing"),
+        })
     }
 
     /// Returns `true` if this package owns the given path.
     pub fn owns(&self, file_path: &Utf8Path) -> Result<bool> {
-        let raw = self.read_field("CONTENTS")?;
+        let raw = self.contents_required()?;
         Ok(crate::ContentsRef::parse(&raw).any(|e| {
             matches!(e.kind, crate::ContentsKind::Obj | crate::ContentsKind::Sym)
                 && e.path == file_path

@@ -3,10 +3,12 @@
 //! Before registering a new package, the caller can check whether any files it
 //! would install are already owned by a different package in the VDB.
 
+use std::collections::HashSet;
+
 use camino::Utf8PathBuf;
 use portage_atom::Cpv;
 
-use crate::contents::{ContentsEntry, ContentsKind};
+use crate::contents::{ContentsEntry, ContentsKind, ContentsRef};
 use crate::error::Error;
 use crate::package::InstalledPackage;
 use crate::{Result, Vdb};
@@ -35,11 +37,14 @@ impl Vdb {
         planned: &[ContentsEntry],
         exclude: Option<&Cpv>,
     ) -> Result<Vec<Collision>> {
-        // Collect the paths we care about: only obj and sym entries.
-        let target_paths: Vec<&Utf8PathBuf> = planned
+        // Collect the paths we care about: only obj and sym entries. Keyed by
+        // `&str`, not `Utf8Path`: this is probed once per installed file, and
+        // path equality is component-wise where string equality is a length
+        // check plus `memcmp`. Both sides come from CONTENTS in the same form.
+        let target_paths: HashSet<&str> = planned
             .iter()
             .filter(|e| matches!(e.kind, ContentsKind::Obj | ContentsKind::Sym))
-            .map(|e| &e.path)
+            .map(|e| e.path.as_str())
             .collect();
 
         if target_paths.is_empty() {
@@ -54,20 +59,22 @@ impl Vdb {
                 continue;
             }
 
-            let pkg_contents = match pkg.contents() {
-                Ok(c) => c,
-                // Ignore packages whose CONTENTS can't be read (corrupted VDB).
+            let raw = match pkg.contents_raw() {
+                Ok(Some(raw)) => raw,
+                // Ignore packages with no readable CONTENTS (corrupted VDB).
+                Ok(None) => continue,
                 Err(Error::Io { .. }) => continue,
                 Err(e) => return Err(e),
             };
 
-            for entry in &pkg_contents {
+            // Streamed: only the colliding entries are ever materialized.
+            for entry in ContentsRef::parse(&raw) {
                 if !matches!(entry.kind, ContentsKind::Obj | ContentsKind::Sym) {
                     continue;
                 }
-                if target_paths.contains(&&entry.path) {
+                if target_paths.contains(entry.path.as_str()) {
                     collisions.push(Collision {
-                        path: entry.path.clone(),
+                        path: entry.path.to_path_buf(),
                         owner: pkg.clone(), // clone the package handle
                     });
                 }
