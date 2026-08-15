@@ -12,6 +12,11 @@ use portage_vdb::{ContentsKind, ContentsRef, InstalledPackage};
 /// - `/etc/portage/sets/` — one file per user-defined static set
 pub struct KnownSets {
     names: HashSet<String>,
+    /// The subset declared by a `.conf` section rather than a static set
+    /// file — Portage defines these through a `class = portage.sets.…`, so a
+    /// resolution failure means `em` has no implementation, not that the
+    /// name is bogus. See [`Self::is_declared`].
+    declared: HashSet<String>,
 }
 
 impl KnownSets {
@@ -19,6 +24,7 @@ impl KnownSets {
     pub fn load(root: Option<&Utf8Path>) -> Self {
         let root = root.unwrap_or(Utf8Path::new("/"));
         let mut names = HashSet::new();
+        let mut declared = HashSet::new();
 
         // VDB-aware built-ins are resolved by `resolve_vdb_set` (a VDB/registry
         // query, not a config-file-defined set), so they're always known even
@@ -39,13 +45,15 @@ impl KnownSets {
 
         // Built-in sets from /usr/share/portage/config/sets/*.conf
         let builtin_dir = root.join("usr/share/portage/config/sets");
-        collect_from_conf_dir(&builtin_dir, &mut names);
+        collect_from_conf_dir(&builtin_dir, &mut declared);
 
         // User set config overrides/additions
         let user_conf = root.join("etc/portage/sets.conf");
         if user_conf.is_file() {
-            collect_from_conf_file(&user_conf, &mut names);
+            collect_from_conf_file(&user_conf, &mut declared);
         }
+
+        names.extend(declared.iter().cloned());
 
         // Static set files: each filename is a set name
         let sets_dir = root.join("etc/portage/sets");
@@ -53,12 +61,18 @@ impl KnownSets {
             collect_from_sets_dir(&sets_dir, &mut names);
         }
 
-        Self { names }
+        Self { names, declared }
     }
 
     /// Return `true` if `name` (without the `@` prefix) is a known set.
     pub fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
+    }
+
+    /// Whether a `.conf` section declares `name` — i.e. Portage defines the
+    /// set even though this resolver may have no implementation for it.
+    pub fn is_declared(&self, name: &str) -> bool {
+        self.declared.contains(name)
     }
 
     /// Every known set name (without the `@` prefix), unordered — callers

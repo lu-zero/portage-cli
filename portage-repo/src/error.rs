@@ -39,6 +39,14 @@ pub enum Error {
     #[error("invalid profile: {0}")]
     InvalidProfile(String),
 
+    /// No set of this name is backed by anything this resolver can read: no
+    /// `etc/portage/sets/<name>` file and no `sets.conf` section naming one.
+    /// A caller that knows the name *is* declared somewhere (a `sets.conf`
+    /// section defining a Portage `class`, say) can report it as unimplemented
+    /// rather than unknown.
+    #[error("no set named @{0}")]
+    UnknownSet(String),
+
     /// Error from the embedded bash shell.
     #[error("shell error: {0}")]
     Shell(String),

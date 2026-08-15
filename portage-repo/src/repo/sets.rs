@@ -148,7 +148,7 @@ impl<'a> SetResolver<'a> {
                 })?,
             );
         }
-        Err(Error::InvalidProfile(format!("unknown set @{name}")))
+        Err(Error::UnknownSet(name.to_string()))
     }
 
     fn parse_set_file(&self, path: &Utf8Path) -> Result<Vec<GroupEntry<Dep>>> {

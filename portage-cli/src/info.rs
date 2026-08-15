@@ -433,10 +433,7 @@ fn print_text(info: &Info) -> Result<()> {
         writeln!(out, "\n{C_BOLD}Sets:{C_BOLD:#}\n")?;
         for (name, entry) in sets {
             match &entry.error {
-                Some(e) => writeln!(
-                    out,
-                    "{C_PKG}@{name}{C_PKG:#} {C_DIM}(not resolvable: {e}){C_DIM:#}"
-                )?,
+                Some(e) => writeln!(out, "{C_PKG}@{name}{C_PKG:#} {C_DIM}({e}){C_DIM:#}")?,
                 None => {
                     writeln!(
                         out,
@@ -510,12 +507,34 @@ fn resolve_all_sets(roots: &portage_resolve::Roots) -> BTreeMap<String, SetEntry
                 }
                 Err(e) => SetEntry {
                     atoms: Vec::new(),
-                    error: Some(format!("{e:#}")),
+                    error: Some(describe_set_failure(&e, name, &known)),
                 },
             };
             (name.to_string(), entry)
         })
         .collect()
+}
+
+/// Why a set in the known list didn't resolve, as displayed after its name.
+///
+/// Portage's own `.conf` files declare sets by Python class
+/// (`class = portage.sets.dbapi.ChangedDepsSet`), so `em` advertises names it
+/// has no resolver for. `SetResolver` can only report those as absent —
+/// `KnownSets` is the half that knows Portage declares them, so they read as
+/// unimplemented rather than as a real Portage set being unknown.
+fn describe_set_failure(
+    err: &anyhow::Error,
+    name: &str,
+    known: &crate::maint::sets::KnownSets,
+) -> String {
+    if known.is_declared(name)
+        && err
+            .downcast_ref::<portage_repo::Error>()
+            .is_some_and(|e| matches!(e, portage_repo::Error::UnknownSet(_)))
+    {
+        return "not implemented".to_string();
+    }
+    format!("not resolvable: {err:#}")
 }
 
 /// Installed-version summary for real `emerge --info`'s toolchain-package
