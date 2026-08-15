@@ -9,10 +9,10 @@
 //! dev /path/to/device
 //! ```
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 
 /// Kind of filesystem entry in a CONTENTS file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentsKind {
     /// Regular file (`obj`). Carries an MD5 hash and mtime.
     Obj,
@@ -39,6 +39,116 @@ pub struct ContentsEntry {
     pub mtime: Option<u64>,
     /// Symlink target (only for `Sym` entries).
     pub target: Option<Utf8PathBuf>,
+}
+
+/// A single entry from a `CONTENTS` file, borrowed from the file text.
+///
+/// The scanning counterpart to [`ContentsEntry`]: a package's CONTENTS runs
+/// to hundreds of thousands of lines, and a caller that only asks a question
+/// of each entry — who owns this path, which entries are symlinks — has no
+/// use for the owned `Utf8PathBuf`/`String` per field that [`ContentsEntry`]
+/// allocates. Both come from [`ContentsRef::parse_line`], so Portage's
+/// fields-from-the-right rules have exactly one implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContentsRef<'a> {
+    /// Kind of entry (obj, dir, sym, fif, dev).
+    pub kind: ContentsKind,
+    /// Absolute path of the installed file/directory/symlink.
+    pub path: &'a Utf8Path,
+    /// MD5 digest (only for `Obj` entries).
+    pub md5: Option<&'a str>,
+    /// File size or symlink target mtime as a Unix timestamp.
+    pub mtime: Option<u64>,
+    /// Symlink target (only for `Sym` entries).
+    pub target: Option<&'a Utf8Path>,
+}
+
+impl<'a> ContentsRef<'a> {
+    /// Parse a single CONTENTS line. See [`ContentsEntry::parse_line`] for the
+    /// format; this is the implementation both share.
+    ///
+    /// Returns `None` for blank or unrecognised lines.
+    pub fn parse_line(line: &'a str) -> Option<Self> {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+
+        if let Some(rest) = line.strip_prefix("obj ") {
+            // obj PATH MD5 MTIME — path may contain spaces.
+            let (path_and_md5, mtime_str) = rest.rsplit_once(' ')?;
+            let (path_str, md5) = path_and_md5.rsplit_once(' ')?;
+            if path_str.is_empty() || md5.chars().any(char::is_whitespace) {
+                return None;
+            }
+            return Some(ContentsRef {
+                kind: ContentsKind::Obj,
+                path: Utf8Path::new(path_str),
+                md5: Some(md5),
+                mtime: mtime_str.parse().ok(),
+                target: None,
+            });
+        }
+
+        if let Some(rest) = line.strip_prefix("sym ") {
+            // sym PATH -> TARGET MTIME — path and target may contain spaces;
+            // use the last " -> " so a path that itself contains " -> " still
+            // parses like Portage's greedy first group.
+            let (path_and_target, mtime_str) = rest.rsplit_once(' ')?;
+            let (path_str, target_str) = path_and_target.rsplit_once(" -> ")?;
+            if path_str.is_empty() {
+                return None;
+            }
+            return Some(ContentsRef {
+                kind: ContentsKind::Sym,
+                path: Utf8Path::new(path_str),
+                md5: None,
+                mtime: mtime_str.parse().ok(),
+                target: Some(Utf8Path::new(target_str)),
+            });
+        }
+
+        for (prefix, kind) in [
+            ("dir ", ContentsKind::Dir),
+            ("fif ", ContentsKind::Fifo),
+            ("dev ", ContentsKind::Dev),
+        ] {
+            if let Some(path_str) = line.strip_prefix(prefix) {
+                if path_str.is_empty() {
+                    return None;
+                }
+                return Some(ContentsRef {
+                    kind,
+                    path: Utf8Path::new(path_str),
+                    md5: None,
+                    mtime: None,
+                    target: None,
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Every entry in a full CONTENTS file, borrowed from `contents`.
+    ///
+    /// The lazy counterpart to [`ContentsEntry::parse`] — nothing is
+    /// allocated, and a caller that short-circuits (`any`, `find`) stops
+    /// parsing at the matching line.
+    pub fn parse(contents: &'a str) -> impl Iterator<Item = ContentsRef<'a>> {
+        contents.lines().filter_map(ContentsRef::parse_line)
+    }
+
+    /// Copy into an owned [`ContentsEntry`].
+    pub fn to_entry(&self) -> ContentsEntry {
+        ContentsEntry {
+            kind: self.kind,
+            path: self.path.to_path_buf(),
+            md5: self.md5.map(str::to_string),
+            mtime: self.mtime,
+            target: self.target.map(Utf8Path::to_path_buf),
+        }
+    }
 }
 
 /// Serialize a slice of entries back to a CONTENTS file string.
@@ -84,70 +194,15 @@ impl ContentsEntry {
     ///
     /// Returns `None` for blank or unrecognised lines.
     pub fn parse_line(line: &str) -> Option<Self> {
-        let line = line.trim();
-        if line.is_empty() {
-            return None;
-        }
-
-        if let Some(rest) = line.strip_prefix("obj ") {
-            // obj PATH MD5 MTIME — path may contain spaces.
-            let (path_and_md5, mtime_str) = rest.rsplit_once(' ')?;
-            let (path_str, md5) = path_and_md5.rsplit_once(' ')?;
-            if path_str.is_empty() || md5.chars().any(char::is_whitespace) {
-                return None;
-            }
-            return Some(ContentsEntry {
-                kind: ContentsKind::Obj,
-                path: Utf8PathBuf::from(path_str),
-                md5: Some(md5.to_string()),
-                mtime: mtime_str.parse().ok(),
-                target: None,
-            });
-        }
-
-        if let Some(rest) = line.strip_prefix("sym ") {
-            // sym PATH -> TARGET MTIME — path and target may contain spaces;
-            // use the last " -> " so a path that itself contains " -> " still
-            // parses like Portage's greedy first group.
-            let (path_and_target, mtime_str) = rest.rsplit_once(' ')?;
-            let (path_str, target_str) = path_and_target.rsplit_once(" -> ")?;
-            if path_str.is_empty() {
-                return None;
-            }
-            return Some(ContentsEntry {
-                kind: ContentsKind::Sym,
-                path: Utf8PathBuf::from(path_str),
-                md5: None,
-                mtime: mtime_str.parse().ok(),
-                target: Some(Utf8PathBuf::from(target_str)),
-            });
-        }
-
-        for (prefix, kind) in [
-            ("dir ", ContentsKind::Dir),
-            ("fif ", ContentsKind::Fifo),
-            ("dev ", ContentsKind::Dev),
-        ] {
-            if let Some(path_str) = line.strip_prefix(prefix) {
-                if path_str.is_empty() {
-                    return None;
-                }
-                return Some(ContentsEntry {
-                    kind,
-                    path: Utf8PathBuf::from(path_str),
-                    md5: None,
-                    mtime: None,
-                    target: None,
-                });
-            }
-        }
-
-        None
+        ContentsRef::parse_line(line).map(|e| e.to_entry())
     }
 
     /// Parse a full CONTENTS file into entries.
+    ///
+    /// Allocates one owned entry per line; [`ContentsRef::parse`] is the
+    /// borrowing form for callers that only scan.
     pub fn parse(contents: &str) -> Vec<Self> {
-        contents.lines().filter_map(Self::parse_line).collect()
+        ContentsRef::parse(contents).map(|e| e.to_entry()).collect()
     }
 }
 

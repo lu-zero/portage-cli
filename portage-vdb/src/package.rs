@@ -237,10 +237,17 @@ impl InstalledPackage {
         Ok(ContentsEntry::parse(&raw))
     }
 
+    /// The unparsed CONTENTS text, to scan with [`crate::ContentsRef::parse`]
+    /// instead of materializing every entry. `None` when the package has no
+    /// CONTENTS file at all.
+    pub fn contents_raw(&self) -> Result<Option<String>> {
+        self.read_field_opt("CONTENTS")
+    }
+
     /// Returns `true` if this package owns the given path.
     pub fn owns(&self, file_path: &Utf8Path) -> Result<bool> {
-        let entries = self.contents()?;
-        Ok(entries.iter().any(|e| {
+        let raw = self.read_field("CONTENTS")?;
+        Ok(crate::ContentsRef::parse(&raw).any(|e| {
             matches!(e.kind, crate::ContentsKind::Obj | crate::ContentsKind::Sym)
                 && e.path == file_path
         }))

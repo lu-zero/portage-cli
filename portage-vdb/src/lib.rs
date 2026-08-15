@@ -27,7 +27,7 @@ mod write;
 
 pub use category::{Categories, CategoriesIter, Category, Packages, PackagesIter};
 pub use collision::Collision;
-pub use contents::{ContentsEntry, ContentsKind, format_contents};
+pub use contents::{ContentsEntry, ContentsKind, ContentsRef, format_contents};
 pub use error::Error;
 pub use package::InstalledPackage;
 pub use vdb::{AllPackages, AllPackagesIter, Vdb};

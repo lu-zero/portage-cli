@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
-use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage};
+use portage_vdb::{ContentsKind, ContentsRef, InstalledPackage};
 
 /// Names of all known Portage sets, collected from:
 ///
@@ -216,17 +216,40 @@ fn owner_set_atoms(
     exclude_files: &[&str],
     eroot: &Utf8Path,
 ) -> Result<Vec<Dep>> {
+    // No live path matched the `files` globs, so nothing can own one and the
+    // result is empty whatever the excludes say (they only ever *remove*
+    // packages). Bail before touching the VDB rather than parsing every
+    // installed CONTENTS to prove it — on a host with no X11 this is the
+    // whole of `@x11-module-rebuild`.
     let paths = expand_glob_patterns(files, eroot);
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
     let exclude_paths = expand_glob_patterns(exclude_files, eroot);
-    let has_excludes = !exclude_paths.is_empty();
 
-    // Every recorded `sym` CONTENTS entry across every installed package
-    // (not just the one currently being checked — a query path like
-    // `/lib/modules` is typically routed through a symlink owned by a
-    // *different* package, e.g. baselayout's `/lib` -> `usr/lib`). Backs
-    // `contents_contains`' fallback when the live filesystem doesn't have
-    // the path materialized yet (see its own doc comment).
-    let symlinks = collect_symlinks(vdb);
+    // Recorded `sym` entries across *every* installed package: a query path
+    // like `/lib/modules` is typically routed through a symlink owned by a
+    // different one (baselayout's `/lib` -> `usr/lib`). Lazy — a live root
+    // resolves through the filesystem and never builds it.
+    let symlinks = LazySymlinks::new(vdb);
+
+    // Resolve each query once here rather than once per installed package —
+    // the basename and symlink-resolved form depend only on the query.
+    let includes = Query::prepare(&paths, eroot, &symlinks);
+    let excludes = Query::prepare(&exclude_paths, eroot, &symlinks);
+
+    // Every query basename, deduplicated. Both of `matches_any`'s arms need
+    // the query basename verbatim in the raw text, so a package that never
+    // mentions one cannot own a query path — searching the unparsed string
+    // is an exact reject, not a heuristic, and skips the scan entirely for
+    // the overwhelming majority of packages.
+    let mut bases: Vec<&str> = includes
+        .iter()
+        .chain(&excludes)
+        .map(|q| q.base.as_str())
+        .collect();
+    bases.sort_unstable();
+    bases.dedup();
 
     // Atom keys ("cat/pkg:{main_slot}") so a package owning multiple matched
     // paths is counted once, mirroring portage's `rValue` set.
@@ -234,15 +257,14 @@ fn owner_set_atoms(
     let mut excluded: HashSet<String> = HashSet::new();
 
     for pkg in vdb.packages() {
-        // Parse CONTENTS once per package and test every path against it.
-        let entries = pkg.contents().unwrap_or_default();
-        let owns_include = paths
-            .iter()
-            .any(|p| contents_contains(&entries, p, eroot, &symlinks));
-        let owns_exclude = has_excludes
-            && exclude_paths
-                .iter()
-                .any(|p| contents_contains(&entries, p, eroot, &symlinks));
+        let Ok(Some(raw)) = pkg.contents_raw() else {
+            continue;
+        };
+        if !bases.iter().any(|b| raw.contains(b)) {
+            continue;
+        }
+        let (owns_include, owns_exclude) =
+            contents_owns(&raw, &includes, &excludes, eroot, &symlinks);
         if !owns_include && !owns_exclude {
             continue;
         }
@@ -297,7 +319,10 @@ fn expand_glob_patterns(patterns: &[&str], eroot: &Utf8Path) -> Vec<Utf8PathBuf>
     out
 }
 
-/// Whether `entries` (a package's parsed CONTENTS) owns `query`.
+/// Whether a package's unparsed CONTENTS owns any include path, and whether
+/// it owns any exclude path — both in a single streaming pass, since the
+/// caller always wants both and the text runs to hundreds of thousands of
+/// lines.
 ///
 /// Unlike [`InstalledPackage::owns`] (which is restricted to `Obj`/`Sym` for
 /// the `qfile` use case), this matches **any** CONTENTS kind — including
@@ -307,27 +332,105 @@ fn expand_glob_patterns(patterns: &[&str], eroot: &Utf8Path) -> Vec<Utf8PathBuf>
 /// equivalent via parent-directory inode comparison, so `/lib/modules`
 /// matches a `/usr/lib/modules` entry when `/lib` → `/usr/lib`.
 ///
-/// `query`/`entries[].path` are ROOT-relative (leading `/`, `eroot` already
+/// Queries and CONTENTS paths are ROOT-relative (leading `/`, `eroot` already
 /// stripped — see [`expand_glob_patterns`]); resolution happens in the same
-/// ROOT-relative space regardless of which of the two paths below produced
-/// it, so the two sides stay comparable ([`real_path`]).
-fn contents_contains(
-    entries: &[ContentsEntry],
-    query: &Utf8Path,
+/// ROOT-relative space regardless of which of the two produced it, so the two
+/// sides stay comparable ([`real_path`]).
+fn contents_owns(
+    raw: &str,
+    includes: &[Query],
+    excludes: &[Query],
     eroot: &Utf8Path,
-    symlinks: &HashMap<Utf8PathBuf, Utf8PathBuf>,
-) -> bool {
-    let q = query.as_str();
-    if entries.iter().any(|e| e.path.as_str() == q) {
-        return true;
+    symlinks: &LazySymlinks<'_>,
+) -> (bool, bool) {
+    let (mut owns_include, mut owns_exclude) = (false, false);
+    for e in ContentsRef::parse(raw) {
+        // Derived once per entry, then tested against every query — the loops
+        // are this way round because entries outnumber queries by orders of
+        // magnitude.
+        let base = base_name(e.path.as_str());
+        owns_include = owns_include || matches_any(includes, e.path, base, eroot, symlinks);
+        owns_exclude = owns_exclude || matches_any(excludes, e.path, base, eroot, symlinks);
+        // An empty exclude list settles its half up front, so a set with no
+        // `exclude-files` still stops at the first hit.
+        if owns_include && (owns_exclude || excludes.is_empty()) {
+            break;
+        }
     }
-    let Some(q_base) = query.file_name() else {
-        return false;
-    };
-    let qc = real_path(query, eroot, symlinks);
-    entries
-        .iter()
-        .any(|e| e.path.file_name() == Some(q_base) && real_path(&e.path, eroot, symlinks) == qc)
+    (owns_include, owns_exclude)
+}
+
+/// Whether the CONTENTS entry at `path` (basename `base`) matches any query.
+fn matches_any(
+    queries: &[Query],
+    path: &Utf8Path,
+    base: &str,
+    eroot: &Utf8Path,
+    symlinks: &LazySymlinks<'_>,
+) -> bool {
+    queries.iter().any(|q| {
+        path.as_str() == q.path.as_str()
+            || (base == q.base.as_str()
+                && real_path(path, eroot, symlinks).as_str() == q.real.as_str())
+    })
+}
+
+/// One `files`/`exclude-files` path to test installed packages against, with
+/// the per-query work hoisted out of the per-package loop.
+///
+/// Compare these through [`Utf8Path::as_str`], never `==` on the paths
+/// themselves: `Utf8Path`'s `PartialEq` is component-wise
+/// (`Components::eq_by`) where `str`'s is a length check plus `memcmp`, and
+/// this runs against every CONTENTS entry of every installed package. Both
+/// sides are already absolute and ROOT-relative, so the two agree.
+struct Query {
+    path: Utf8PathBuf,
+    base: Utf8PathBuf,
+    real: Utf8PathBuf,
+}
+
+impl Query {
+    fn prepare(paths: &[Utf8PathBuf], eroot: &Utf8Path, symlinks: &LazySymlinks<'_>) -> Vec<Self> {
+        paths
+            .iter()
+            .map(|p| Self {
+                base: base_name(p.as_str()).into(),
+                real: real_path(p, eroot, symlinks),
+                path: p.clone(),
+            })
+            .collect()
+    }
+}
+
+/// Trailing `/`-separated component of a CONTENTS path. `Utf8Path::file_name`
+/// builds a `Components` iterator per call, which dominates the scan once it
+/// runs over every entry of every installed package.
+fn base_name(p: &str) -> &str {
+    p.rsplit('/').next().unwrap_or(p)
+}
+
+/// Every VDB-recorded symlink, collected on first use and then reused.
+///
+/// [`real_path`] consults it only when the live filesystem can't resolve a
+/// path — which on a normal root never happens — and building it parses every
+/// installed package's `CONTENTS`. Deferring keeps that whole pass off the
+/// common path while leaving the scratch-root fallback intact.
+struct LazySymlinks<'a> {
+    vdb: &'a portage_vdb::Vdb,
+    map: std::cell::OnceCell<HashMap<Utf8PathBuf, Utf8PathBuf>>,
+}
+
+impl<'a> LazySymlinks<'a> {
+    fn new(vdb: &'a portage_vdb::Vdb) -> Self {
+        Self {
+            vdb,
+            map: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn get(&self) -> &HashMap<Utf8PathBuf, Utf8PathBuf> {
+        self.map.get_or_init(|| collect_symlinks(self.vdb))
+    }
 }
 
 /// The real (symlink-resolved) form of a ROOT-relative path, as best as it
@@ -342,11 +445,7 @@ fn contents_contains(
 /// in-progress root such as this codebase's own `walk_image` binpkg-image
 /// assembly, or a stage build mid-merge — where CONTENTS metadata alone is
 /// still enough to resolve a recorded symlink like `/lib` → `usr/lib`.
-fn real_path(
-    p: &Utf8Path,
-    eroot: &Utf8Path,
-    symlinks: &HashMap<Utf8PathBuf, Utf8PathBuf>,
-) -> Utf8PathBuf {
+fn real_path(p: &Utf8Path, eroot: &Utf8Path, symlinks: &LazySymlinks<'_>) -> Utf8PathBuf {
     let full = eroot.join(p.as_str().trim_start_matches('/'));
     let live = std::fs::canonicalize(full.as_std_path())
         .ok()
@@ -354,7 +453,7 @@ fn real_path(
         .and_then(|c| c.strip_prefix(eroot).ok().map(Utf8Path::to_path_buf));
     match live {
         Some(rel) => Utf8Path::new("/").join(rel),
-        None => resolve_via_recorded_symlinks(p, symlinks),
+        None => resolve_via_recorded_symlinks(p, symlinks.get()),
     }
 }
 
@@ -399,11 +498,14 @@ fn resolve_via_recorded_symlinks(
 fn collect_symlinks(vdb: &portage_vdb::Vdb) -> HashMap<Utf8PathBuf, Utf8PathBuf> {
     let mut map = HashMap::new();
     for pkg in vdb.packages() {
-        for e in pkg.contents().unwrap_or_default() {
+        let Ok(Some(raw)) = pkg.contents_raw() else {
+            continue;
+        };
+        for e in ContentsRef::parse(&raw) {
             if e.kind == ContentsKind::Sym
                 && let Some(target) = e.target
             {
-                map.insert(e.path, target);
+                map.insert(e.path.to_path_buf(), target.to_path_buf());
             }
         }
     }

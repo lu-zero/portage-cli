@@ -493,7 +493,7 @@ mod tests {
         entries
             .iter()
             .map(|(kind, path, target)| ContentsEntry {
-                kind: kind.clone(),
+                kind: *kind,
                 path: Utf8PathBuf::from(*path),
                 md5: None,
                 mtime: None,
