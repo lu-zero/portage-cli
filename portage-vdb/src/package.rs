@@ -253,10 +253,29 @@ impl InstalledPackage {
     /// [`crate::ContentsRef::parse`] already skips blank lines and trims each
     /// line it yields.
     pub fn contents_raw(&self) -> Result<Option<String>> {
+        let mut buf = String::new();
+        Ok(self.contents_into(&mut buf)?.then_some(buf))
+    }
+
+    /// [`Self::contents_raw`] into a caller-owned buffer, returning whether a
+    /// CONTENTS file was there at all.
+    ///
+    /// A scan reads one of these per package and they average a few hundred
+    /// KB, so allocating a fresh `String` each time churns the whole VDB's
+    /// worth of bytes through the allocator — and across threads that shows
+    /// up as retained per-thread arenas, not just as work. Reusing one buffer
+    /// per scanner costs the largest CONTENTS seen instead.
+    pub fn contents_into(&self, buf: &mut String) -> Result<bool> {
+        use std::io::Read as _;
+
+        buf.clear();
         let path = self.path.join("CONTENTS");
-        match std::fs::read_to_string(&path) {
-            Ok(s) => Ok(Some(s)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        match std::fs::File::open(&path) {
+            Ok(mut file) => match file.read_to_string(buf) {
+                Ok(_) => Ok(true),
+                Err(source) => Err(Error::Io { path, source }),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(source) => Err(Error::Io { path, source }),
         }
     }

@@ -17,6 +17,7 @@ camino = { workspace = true }
 portage-atom = { workspace = true }
 portage-metadata = { workspace = true }
 thiserror = { workspace = true }
+flume = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

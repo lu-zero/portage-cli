@@ -29,9 +29,20 @@ pub const DEFAULT_VDB_PATH: &str = "/var/db/pkg";
 ///     }
 /// }
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Vdb {
     root: Utf8PathBuf,
+}
+
+/// Cap on [`Vdb::scan`]'s default worker count: past this, parallel opens
+/// spend system time without cutting wall clock.
+const DEFAULT_SCAN_JOBS_CAP: usize = 16;
+
+fn default_scan_jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(1, DEFAULT_SCAN_JOBS_CAP)
 }
 
 impl Vdb {
@@ -84,6 +95,83 @@ impl Vdb {
         self.packages()
             .into_iter()
             .find(|pkg| pkg.owns(file_path).unwrap_or(false))
+    }
+
+    /// Run `f` over every installed package in parallel; return a stream of
+    /// the `Some` results in completion order.
+    ///
+    /// Reading a file per package — CONTENTS for an ownership question, a
+    /// metadata field for a property one — is the part of any VDB query that
+    /// grows with the system, from a few hundred packages on a server to five
+    /// figures on a large desktop. The per-package work is independent, so it
+    /// splits across cores.
+    ///
+    /// Same shape as `portage_repo::source_parallel`: a bounded work channel
+    /// feeding a fixed worker pool, results handed to the caller over an
+    /// unbounded one so a worker never parks on the hand-off. Workers take
+    /// the next package rather than a fixed slice each, which matters here
+    /// because CONTENTS sizes are heavily skewed — a handful of packages hold
+    /// most of a VDB's bytes, so equal chunks would leave one worker running
+    /// long after the rest finished.
+    ///
+    /// Each worker keeps one `S` for the whole run and hands it to `f` — a
+    /// read buffer, typically ([`InstalledPackage::contents_into`]), so a
+    /// scan allocates per worker rather than per package. `()` when a scan
+    /// needs no scratch.
+    ///
+    /// Drain the receiver until it disconnects; dropping it early stops the
+    /// scan. Results arrive as they finish, so a caller needing a stable
+    /// order sorts what it collects. `jobs` is the worker count, `None`
+    /// picking a default from `available_parallelism`; `Some(1)` is the
+    /// serial path, useful for A/B measurement.
+    pub fn scan<T, S, F>(&self, jobs: Option<usize>, f: F) -> flume::Receiver<T>
+    where
+        T: Send + 'static,
+        S: Default + Send + 'static,
+        F: Fn(&mut S, &InstalledPackage) -> Option<T> + Send + Sync + 'static,
+    {
+        let (out_tx, out_rx) = flume::unbounded::<T>();
+        let jobs = jobs.unwrap_or_else(default_scan_jobs).max(1);
+        let vdb = self.clone();
+
+        // Feed and join off-thread so the caller can start draining
+        // immediately rather than after the whole VDB has been walked.
+        std::thread::spawn(move || {
+            let (work_tx, work_rx) = flume::bounded::<InstalledPackage>(jobs * 2);
+            let f = Arc::new(f);
+            let mut workers = Vec::with_capacity(jobs);
+            for _ in 0..jobs {
+                let work_rx = work_rx.clone();
+                let out_tx = out_tx.clone();
+                let f = Arc::clone(&f);
+                workers.push(std::thread::spawn(move || {
+                    let mut scratch = S::default();
+                    while let Ok(pkg) = work_rx.recv() {
+                        if let Some(found) = f(&mut scratch, &pkg) {
+                            // Err means the caller dropped the receiver.
+                            if out_tx.send(found).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }));
+            }
+            drop(work_rx);
+            drop(out_tx);
+
+            for pkg in vdb.packages() {
+                if work_tx.send(pkg).is_err() {
+                    break;
+                }
+            }
+            drop(work_tx);
+
+            for worker in workers {
+                let _ = worker.join();
+            }
+        });
+
+        out_rx
     }
 
     /// Total number of installed packages.
