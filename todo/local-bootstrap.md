@@ -8,6 +8,21 @@ Topology background: [`root-topology.md`](../docs/design/root-topology.md) scena
 
 ---
 
+**Update 2026-08-14 — steps 1–4 landed and live-verified, superseding most
+of this doc's "manual bootstrap" section below** (kept for historical
+context, not as the current recipe). See
+[`todo/local-setup-prereq.md`](./local-setup-prereq.md) for the host-tool
+prereq + `--extra-path` piece specifically, live-verified end-to-end
+(including a real `sys-apps/baselayout` merge) on a Gentoo sandbox, real
+Debian 12, and real FreeBSD 14.4. A single `em setup --local DIR` now:
+syncs/piggybacks `::gentoo` into the prefix, resolves and links
+`make.profile` (falling back to a hard error — not a bad guess — when
+upstream has no registered profile for the host arch, e.g. `arm64-linux`),
+writes a managed `package.provided` bootstrap block, and merges
+`sys-apps/baselayout`. `em --local DIR select profile set <path>` also
+works directly now (was `--config-root`-only; fixed 2026-08-14, `5c90917`).
+Toolchain bootstrap (step 5) is the remaining open piece.
+
 ## Setup ladder (repo → profile → provided → toolchain)
 
 `package.provided` alone is not enough. A usable `--local` needs a complete
@@ -19,10 +34,10 @@ profile — so repo and profile must be established **together**.
 | Step | What | Status today |
 |------|------|----------------|
 | **1. Layout** | dirs, `bashrc`, `make.conf` placeholder | ✅ `em setup --local` |
-| **2. Main repo (`::gentoo`)** | ebuild tree: **piggy-back** host tree if present, else **own** checkout under the prefix + `em sync` | 🟡 host tree often works while config is still host; **no** prefix `repos.conf` written by setup — breaks once config flips |
-| **3. Profile** | `make.profile` → path under that repo’s `profiles/` | 🟡 manual: `em --config-root DIR select profile set …` (note: **not** `em --local select` today); no defaults for Linux/macOS foreign hosts |
-| **4. `package.provided`** | host tools so empty VDB plans are cycle-free | 🔴 hand-write only |
-| **5. Toolchain** | `em --local toolchain --setup` | 🟡 blocked on 2–4 for a true empty prefix |
+| **2. Main repo (`::gentoo`)** | ebuild tree: own checkout under the prefix, synced via `em setup --local` (gix backend available, `--features sync-gix`) | ✅ live-verified 2026-08-14 |
+| **3. Profile** | `make.profile` → path under that repo’s `profiles/` | ✅ auto-resolved when upstream has a matching profile; else hard error naming the gap (not a bad guess) — `em --local DIR select profile set <path>` fixes it manually, then re-running `em setup --local DIR` picks up and completes (idempotent) |
+| **4. `package.provided`** | host tools so empty VDB plans are cycle-free | ✅ `em setup --local` writes a managed block automatically, probing host tool versions |
+| **5. Toolchain** | `em --local toolchain --setup` | 🟡 still the open piece — steps 2–4 no longer block it |
 
 **Target one-shot (planned):**
 

@@ -172,6 +172,9 @@ pub(crate) struct EmergeOpts<'a> {
     /// In-memory crossdev aliases for this resolve. Empty for normal emerges;
     /// staged crossdev `-p` passes the planned alias here.
     pub extra_aliases: &'a [portage_repo::RepoEntry],
+    /// Directories ahead of the sanitised build `PATH`. Empty for every
+    /// merge but `em setup --local`'s own — see `setup::host_tools`.
+    pub extra_path: &'a [camino::Utf8PathBuf],
 }
 
 /// Resolve and (unless `--pretend`) merge `raw_atoms` with the global config in
@@ -194,6 +197,7 @@ struct ResolvedEmergeOpts<'a> {
     activity: Option<crate::activity::ActivityBus>,
     activity_session: crate::activity::ActivitySessionOpts,
     extra_aliases: &'a [portage_repo::RepoEntry],
+    extra_path: &'a [camino::Utf8PathBuf],
 }
 
 pub(crate) async fn emerge_atoms(
@@ -222,6 +226,7 @@ pub(crate) async fn emerge_atoms(
             activity: opts.activity,
             activity_session: opts.activity_session,
             extra_aliases: opts.extra_aliases,
+            extra_path: opts.extra_path,
         },
     )
     .await
@@ -276,6 +281,7 @@ async fn emerge_atoms_inner(
         activity: activity_override,
         activity_session,
         extra_aliases,
+        extra_path,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
     let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
@@ -682,6 +688,7 @@ async fn emerge_atoms_inner(
         distdir: distdir.as_deref(),
         merge_flags,
         globals: cli,
+        extra_path,
         resume_job: resume_job_id.as_deref().map(|id| crate::merge::ResumeJob {
             root: roots.merge_root(),
             job_id: id,
@@ -766,6 +773,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             activity: None,
             activity_session: Default::default(),
             extra_aliases: &[],
+            extra_path: &[],
         },
     )
     .await
@@ -815,6 +823,7 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
                 parent_job_id: None,
             },
             extra_aliases: &[],
+            extra_path: &[],
         },
     )
     .await

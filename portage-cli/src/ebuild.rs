@@ -195,6 +195,11 @@ pub struct RootContext<'a> {
     /// `--root` on 2026-07-03, see `setup.rs`'s `BASHRC_PREFIX`/`self_contained`
     /// doc comment).
     pub self_contained_bootstrap: bool,
+    /// Directories ahead of the sanitised phase `PATH`
+    /// ([`portage_repo::phase_path_dirs`]), resolved by the caller. Empty for
+    /// every build but `em setup --local`'s own, which has to reach the host
+    /// tools a still-empty prefix borrows.
+    pub extra_path: &'a [Utf8PathBuf],
 }
 
 /// `LD_LIBRARY_PATH` for a build phase: the prefix's own `ld.so.conf`
@@ -742,6 +747,13 @@ async fn spawn_install_worker_step(
         .collect::<Vec<_>>()
         .join(" ");
     let cpv_str = step.cpv.to_string();
+    let extra_path = step
+        .roots
+        .extra_path
+        .iter()
+        .map(|d| d.as_str())
+        .collect::<Vec<_>>()
+        .join(":");
     let (act_job, act_parent, act_live, act_side) = worker_activity_cli(step.activity);
     let reemit = step.activity.map(|a| a.bus.clone());
     let code = crate::privilege::spawn_install_worker(
@@ -758,6 +770,7 @@ async fn spawn_install_worker_step(
             eprefix: step.roots.eprefix.map(|e| e.as_str()),
             broot: step.roots.broot.map(|b| b.as_str()),
             self_contained_bootstrap: step.roots.self_contained_bootstrap,
+            extra_path: &extra_path,
             buildpkg: step.buildpkg,
             quiet: step.quiet,
             binpkg: step.binpkg.map(|b| b.as_str()),
@@ -995,6 +1008,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         eprefix,
         broot,
         self_contained_bootstrap,
+        extra_path,
     } = roots;
     let path = Utf8Path::new(ebuild_path);
     let ebuild = match cpv {
@@ -1112,6 +1126,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         broot,
         ld_library_path.as_deref(),
     );
+    shell.set_extra_path(extra_path.to_vec());
     shell.set_terminal(crate::style::terminal_config());
 
     if let Some(flags) = use_flags {

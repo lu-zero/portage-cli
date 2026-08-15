@@ -19,6 +19,7 @@
 //! Idempotent: directories are created if missing; files are written only when
 //! absent, so re-running never clobbers a user's edits.
 
+mod host_tools;
 mod local_profile;
 mod provided;
 mod repo;
@@ -180,10 +181,61 @@ const SKELETON: &[&str] = &[
     "usr/share",
 ];
 
-/// A layout `bootstrap` created that `em active` is able to select between.
-pub struct Registrable {
-    pub kind: crate::active::ActiveKind,
-    pub eroot: Utf8PathBuf,
+/// Which of the three layouts (see this module's doc comment) `setup` is
+/// building, derived once from the resolved roots.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// `--local`: EPREFIX set, base == target.
+    Local,
+    /// `--prefix DIR`: EPREFIX set, host is the base.
+    Overlay,
+    /// `--root DIR`: no EPREFIX, base == target.
+    SelfContained,
+}
+
+impl Mode {
+    fn resolve(roots: &Roots) -> Result<Self> {
+        if roots.merge_root().as_str() == "/" {
+            anyhow::bail!(
+                "em setup needs a target: use --local, --prefix DIR, or --root DIR \
+                 (the host / is never bootstrapped)"
+            );
+        }
+        Ok(
+            match (roots.eprefix().is_some(), roots.base() == roots.target()) {
+                (true, true) => Self::Local,
+                (true, false) => Self::Overlay,
+                (false, _) => Self::SelfContained,
+            },
+        )
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Local => "--local (standalone prefix)",
+            Self::Overlay => "--prefix (overlay)",
+            Self::SelfContained => "--root (self-contained offset)",
+        }
+    }
+
+    fn usage(self, eroot: &Utf8Path) -> String {
+        match self {
+            Self::Local => format!("em --local            (standalone Gentoo-Prefix at {eroot})"),
+            Self::Overlay => format!("em --prefix {eroot}   (ROOT-offset overlay)"),
+            Self::SelfContained => format!("em --root {eroot}     (self-contained offset)"),
+        }
+    }
+
+    /// A self-contained `--root` is not a topology `em active` can select: it
+    /// offsets config too, so it is driven by `--root`, never by a registered
+    /// default.
+    fn registrable(self) -> Option<crate::active::ActiveKind> {
+        match self {
+            Self::Local => Some(crate::active::ActiveKind::Local),
+            Self::Overlay => Some(crate::active::ActiveKind::Prefix),
+            Self::SelfContained => None,
+        }
+    }
 }
 
 /// `em setup` — bootstrap a layout and register it as available.
@@ -200,28 +252,40 @@ pub struct Registrable {
 ///
 /// When `pretend` is true (global `-p`/`--pretend`), print what would be
 /// created and write nothing — same contract as crossdev's config plan under `-p`.
-pub async fn run(cli: &crate::cli::Cli) -> Result<()> {
+pub async fn run(cli: &crate::cli::Cli, args: &crate::cli::SetupArgs) -> Result<()> {
     let roots = cli.roots();
-    if cli.pretend {
-        return preview(&roots);
+    let mode = Mode::resolve(&roots)?;
+    if mode != Mode::Local && !args.extra_path.is_empty() {
+        anyhow::bail!(
+            "--extra-path applies to `em setup --local` only: {} borrows the host's tools \
+             through its own layout, not through the build PATH",
+            mode.label()
+        );
     }
-    let Some(registrable) = bootstrap(&roots)? else {
-        // Self-contained `--root` still needs baselayout; bootstrap always
-        // returns `None` for that topology but did create the tree.
-        merge_baselayout(cli).await?;
-        return Ok(());
+    if cli.pretend {
+        return preview(&roots, mode);
+    }
+    // The host has to supply the tools a still-empty prefix builds with, so
+    // this runs before anything is written: a host that cannot bootstrap one
+    // should not be left holding a half-built prefix.
+    let extra_path = match mode {
+        Mode::Local => host_tools::check(&args.extra_path)?,
+        _ => Vec::new(),
     };
+    bootstrap_mode(&roots, mode)?;
     // `--local` needs its own resolvable repo + profile + bootstrap
     // `package.provided` *before* the baselayout merge below — without a
     // repo, that merge can't resolve `sys-apps/baselayout` at all on a host
     // with no Gentoo tree of its own (see todo/local-bootstrap-provided.md).
-    if registrable.kind == crate::active::ActiveKind::Local {
-        ensure_config_root(cli, &roots).await?;
+    if mode == Mode::Local {
+        ensure_config_root(cli, &roots, &extra_path).await?;
     }
-    merge_baselayout(cli).await?;
+    merge_baselayout(cli, &extra_path).await?;
     // Available only — the active pointer is the user's to move, with
     // `em active set`.
-    if let Some(name) = crate::active::register_available(registrable.kind, &registrable.eroot) {
+    if let Some(kind) = mode.registrable()
+        && let Some(name) = crate::active::register_available(kind, roots.merge_root())
+    {
         println!("    registered as:  {name}   (em active list / em active set {name})");
     }
     Ok(())
@@ -231,20 +295,24 @@ pub async fn run(cli: &crate::cli::Cli) -> Result<()> {
 /// `package.provided` — must land in that order, since profile resolution
 /// needs the repo's `profiles/` and `package.provided` needs both the
 /// profile directory and the synced tree's available versions.
-async fn ensure_config_root(cli: &crate::cli::Cli, roots: &Roots) -> Result<()> {
+async fn ensure_config_root(
+    cli: &crate::cli::Cli,
+    roots: &Roots,
+    extra_path: &[Utf8PathBuf],
+) -> Result<()> {
     let eroot = roots.merge_root();
     let repo_path = repo::ensure_repo(cli, eroot).await?;
     let repo = crate::repo_open::open(repo_path.as_std_path())
         .context("opening the prefix's ::gentoo repo")?;
     local_profile::ensure_profile(eroot, &repo)?;
-    provided::ensure_provided(eroot, &repo)?;
+    provided::ensure_provided(eroot, &repo, extra_path)?;
     Ok(())
 }
 
 /// Oneshot-merge `sys-apps/baselayout` with `USE=build` into the outer EROOT
 /// (`use_outer_eroot`), not the world file. Public so `crossdev --setup` can
 /// seed the same layout under `--prefix` before toolchain steps.
-pub async fn merge_baselayout(cli: &crate::cli::Cli) -> Result<()> {
+pub async fn merge_baselayout(cli: &crate::cli::Cli, extra_path: &[Utf8PathBuf]) -> Result<()> {
     let outer = cli.outer_roots();
     let eroot = outer.merge_root();
     if eroot.as_str() == "/" {
@@ -271,37 +339,24 @@ pub async fn merge_baselayout(cli: &crate::cli::Cli) -> Result<()> {
             activity: None,
             activity_session: Default::default(),
             extra_aliases: &[],
+            extra_path,
         },
     )
     .await
 }
 
 /// `-p` / `--pretend` path for [`run`]: describe the layout without writing.
-fn preview(roots: &Roots) -> Result<()> {
+fn preview(roots: &Roots, mode: Mode) -> Result<()> {
     let eroot = roots.merge_root();
-    if eroot.as_str() == "/" {
-        anyhow::bail!(
-            "em setup needs a target: use --local, --prefix DIR, or --root DIR \
-             (the host / is never bootstrapped)"
-        );
-    }
-    let has_eprefix = roots.eprefix().is_some();
-    let base_eq_target = roots.base() == roots.target();
-    let mode = if has_eprefix && base_eq_target {
-        "--local (standalone prefix)"
-    } else if has_eprefix {
-        "--prefix (overlay)"
-    } else {
-        "--root (self-contained offset)"
-    };
-    println!(">>> would bootstrap layout at {eroot} ({mode})");
+    println!(">>> would bootstrap layout at {eroot} ({})", mode.label());
     println!(">>> would create skeleton dirs under {eroot} (etc/portage, var/db/pkg, …)");
     let portage = roots
         .config_overlay()
         .map(Utf8Path::to_path_buf)
         .unwrap_or_else(|| eroot.join("etc/portage"));
     println!(">>> would ensure config files under {portage} (bashrc, make.conf placeholders)");
-    if has_eprefix && base_eq_target {
+    if mode == Mode::Local {
+        println!(">>> would check the host tools this prefix borrows until it builds its own");
         tracing::info!(
             "would resolve a ::gentoo repo (piggy-back the host's, else write an own-tree \
              entry and sync it), link make.profile, and write the Tier-1 bootstrap \
@@ -317,31 +372,12 @@ fn preview(roots: &Roots) -> Result<()> {
 /// Bootstrap the layout described by `roots`. Needs a target other than the host
 /// `/` — i.e. `--local`, `--prefix DIR`, or `--root DIR` (the cross-sysroot
 /// confdir case; pair with `em select profile` to set its profile).
-///
-/// Returns the topology when it is one `em active` can register; see
-/// [`run`], which is what the applet calls.
-pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
-    let eroot = roots.merge_root();
-    if eroot.as_str() == "/" {
-        anyhow::bail!(
-            "em setup needs a target: use --local, --prefix DIR, or --root DIR \
-             (the host / is never bootstrapped)"
-        );
-    }
-    // Three layout modes (docs/design/root-topology.md § "Lifecycle"):
-    // - standalone prefix (--local): eprefix set, base == target. Full closure
-    //   into ~/.gentoo; builds its own python, so NO host-python symlinks.
-    // - overlay (--prefix): eprefix set, base != target (host is base). Borrows
-    //   host tools, so symlinks host python into ${EPREFIX}/usr/bin to satisfy
-    //   the relocatable shebangs EPREFIX produces.
-    // - self-contained offset (--root): no eprefix, base == target. Own
-    //   everything; no CPPFLAGS injection (actively breaks self-contained roots).
-    let has_eprefix = roots.eprefix().is_some();
-    let base_eq_target = roots.base() == roots.target();
-    let is_standalone_prefix = has_eprefix && base_eq_target; // --local
-    let is_overlay = has_eprefix && !base_eq_target; // --prefix
-    let self_contained = !has_eprefix && base_eq_target; // --root
+pub fn bootstrap(roots: &Roots) -> Result<()> {
+    bootstrap_mode(roots, Mode::resolve(roots)?)
+}
 
+fn bootstrap_mode(roots: &Roots, mode: Mode) -> Result<()> {
+    let eroot = roots.merge_root();
     for dir in SKELETON {
         let p = eroot.join(dir);
         std::fs::create_dir_all(p.as_std_path()).with_context(|| format!("creating {p}"))?;
@@ -363,17 +399,13 @@ pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
     // `--prefix`. Self-contained `--root` has no host layer — the same
     // injection shadows package-local `-I` (e.g. gcc libiberty) with ROOT
     // headers. Standalone `--local` uses `BASHRC_LOCAL`.
-    if self_contained {
-        write_if_absent(&portage.join("bashrc"), "")?;
-    } else if is_overlay {
-        write_if_absent(&portage.join("bashrc"), BASHRC_PREFIX)?;
-    } else {
-        write_if_absent(&portage.join("bashrc"), BASHRC_LOCAL)?;
-    }
-    write_if_absent(
-        &portage.join("make.conf"),
-        &make_conf_template(is_standalone_prefix, self_contained, eroot),
-    )?;
+    let bashrc = match mode {
+        Mode::Local => BASHRC_LOCAL,
+        Mode::Overlay => BASHRC_PREFIX,
+        Mode::SelfContained => "",
+    };
+    write_if_absent(&portage.join("bashrc"), bashrc)?;
+    write_if_absent(&portage.join("make.conf"), &make_conf_template(mode, eroot))?;
 
     // Host-python/host-tool symlinks: overlay only (--prefix). The overlay
     // borrows host tools (base is the host), and EPREFIX makes installed
@@ -381,48 +413,26 @@ pub fn bootstrap(roots: &Roots) -> Result<Option<Registrable>> {
     // those without building a prefix python. A standalone --local builds its
     // own python via `toolchain --setup`; a symlink there would masquerade as
     // a prefix-owned file and violate the self-contained invariant.
-    // (Previously gated on `is_local` — exactly backwards.)
-    if is_overlay {
+    if mode == Mode::Overlay {
         link_host_pythons(eroot)?;
         link_host_base_tools(eroot)?;
     }
 
-    let mode = if is_standalone_prefix {
-        format!("em --local            (standalone Gentoo-Prefix at {eroot})")
-    } else if is_overlay {
-        format!("em --prefix {eroot}   (ROOT-offset overlay)")
-    } else {
-        format!("em --root {eroot}     (self-contained offset)")
-    };
     println!(">>> Prefix ready at {eroot}");
     println!("    config overlay: {portage}");
-    println!("    use it with:    {mode}");
-    if is_standalone_prefix {
+    println!("    use it with:    {}", mode.usage(eroot));
+    if mode == Mode::Local {
         println!("    add to PATH:    {eroot}/usr/bin");
     }
-
-    // A self-contained `--root` is not a topology `em active` can select: it
-    // offsets config too, so it is driven by `--root`, never by a registered
-    // default.
-    Ok(match (is_standalone_prefix, is_overlay) {
-        (true, _) => Some(Registrable {
-            kind: crate::active::ActiveKind::Local,
-            eroot: eroot.to_owned(),
-        }),
-        (false, true) => Some(Registrable {
-            kind: crate::active::ActiveKind::Prefix,
-            eroot: eroot.to_owned(),
-        }),
-        (false, false) => None,
-    })
+    Ok(())
 }
 
 /// `make.conf` for a new prefix/root. Overlay/local: commentary only (host
 /// supplies profile + MAKEOPTS). Self-contained `--root`: the only make.conf
 /// read — seed real `MAKEOPTS` / `ACCEPT_KEYWORDS` from the host so builds
 /// are not serial stable-only by default.
-fn make_conf_template(is_local: bool, self_contained: bool, eroot: &Utf8Path) -> String {
-    let how = if is_local {
+fn make_conf_template(mode: Mode, eroot: &Utf8Path) -> String {
+    let how = if mode == Mode::Local {
         format!(
             "#   em --local <pkg>        # builds in place into {eroot}\n\
              #   (add {eroot}/usr/bin to PATH to run what you install)\n"
@@ -430,7 +440,7 @@ fn make_conf_template(is_local: bool, self_contained: bool, eroot: &Utf8Path) ->
     } else {
         format!("#   em --prefix {eroot} <pkg>   # builds a ROOT-offset tree here\n")
     };
-    if self_contained {
+    if mode == Mode::SelfContained {
         let accept_keywords = match host_accept_keywords() {
             Some(k) => format!("ACCEPT_KEYWORDS=\"{k}\"\n"),
             None => String::new(),
@@ -580,7 +590,9 @@ mod tests {
         let prefix = dir.path().to_str().unwrap();
         let cli =
             crate::cli::Cli::try_parse_from(["em", "-p", "--prefix", prefix, "setup"]).unwrap();
-        super::run(&cli).await.unwrap();
+        super::run(&cli, &crate::cli::SetupArgs::default())
+            .await
+            .unwrap();
         assert!(
             !std::path::Path::new(prefix).join("etc/portage").exists(),
             "pretend must not create etc/portage"
@@ -591,39 +603,51 @@ mod tests {
         );
     }
 
-    /// `bootstrap` reports which topology it built so `em setup` can register
-    /// it, and reports nothing for a self-contained `--root` — that one is
-    /// driven by the flag, not by a registered default. Registration itself
-    /// deliberately lives in `run`, not here: `crossdev` bootstraps prefixes
-    /// internally and tests bootstrap into tempdirs, and neither should touch
-    /// the user's state.
+    /// Relaxing the build `PATH` is a `--local` bootstrap concern only: an
+    /// overlay layers on a host that already supplies the tools, and reaches
+    /// them through its own layout rather than the phase `PATH`.
+    #[tokio::test]
+    async fn extra_path_is_refused_outside_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefix = dir.path().to_str().unwrap();
+        let cli =
+            Cli::try_parse_from(["em", "--prefix", prefix, "setup", "--extra-path", "/opt/b"])
+                .unwrap();
+        let Some(crate::cli::Applet::Setup(args)) = cli.applet.as_ref() else {
+            unreachable!("parsed as `setup`")
+        };
+        let err = super::run(&cli, args).await.unwrap_err();
+        assert!(err.to_string().contains("--extra-path"), "{err}");
+    }
+
+    /// Each flag maps to the topology `em setup` builds, and only two of the
+    /// three are ones `em active` can select — a self-contained `--root` is
+    /// driven by the flag, never by a registered default. Registration itself
+    /// deliberately lives in `run`, not in `bootstrap`: `crossdev` bootstraps
+    /// prefixes internally and tests bootstrap into tempdirs, and neither
+    /// should touch the user's state.
     #[test]
-    fn bootstrap_reports_only_selectable_topologies() {
+    fn mode_maps_flags_to_selectable_topologies() {
+        use super::Mode;
         use crate::active::ActiveKind;
 
-        let dir = tempfile::tempdir().unwrap();
-        let base = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let mode = |args: &[&str]| {
+            let cli = Cli::parse_from([&["em"], args].concat());
+            Mode::resolve(&cli.roots()).unwrap()
+        };
 
-        let overlay = base.join("pfx");
-        let cli = Cli::parse_from(["em", "--prefix", overlay.as_str()]);
-        let got = super::bootstrap(&cli.roots())
-            .unwrap()
-            .expect("registrable");
-        assert_eq!(got.kind, ActiveKind::Prefix);
-        assert_eq!(got.eroot, overlay);
-
-        let local = base.join("loc");
-        let cli = Cli::parse_from(["em", "--local", local.as_str()]);
-        let got = super::bootstrap(&cli.roots())
-            .unwrap()
-            .expect("registrable");
-        assert_eq!(got.kind, ActiveKind::Local);
-
-        let root = base.join("root");
-        let cli = Cli::parse_from(["em", "--root", root.as_str()]);
+        assert_eq!(
+            mode(&["--prefix", "/pfx"]).registrable(),
+            Some(ActiveKind::Prefix)
+        );
+        assert_eq!(
+            mode(&["--local", "/loc"]).registrable(),
+            Some(ActiveKind::Local)
+        );
+        assert_eq!(mode(&["--root", "/root"]).registrable(), None);
         assert!(
-            super::bootstrap(&cli.roots()).unwrap().is_none(),
-            "a self-contained --root is not something `em active` selects"
+            Mode::resolve(&Cli::parse_from(["em", "setup"]).roots()).is_err(),
+            "the host / is never bootstrapped"
         );
     }
 

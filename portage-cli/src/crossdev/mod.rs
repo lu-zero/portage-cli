@@ -400,6 +400,7 @@ async fn run_staged(
                 activity: None,
                 activity_session: Default::default(),
                 extra_aliases,
+                extra_path: &[],
             },
         )
         .await?;
@@ -687,6 +688,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             activity: None,
             activity_session: Default::default(),
             extra_aliases: &[],
+            extra_path: &[],
         },
     )
     .await?;
@@ -993,7 +995,7 @@ async fn init_target(
         // Outer EPREFIX layout via real baselayout (not mkdir), so
         // `${EPREFIX}/bin/bash` etc. work before toolchain packages merge.
         // Sysroot baselayout is a separate step in `toolchain_plan`.
-        crate::setup::merge_baselayout(globals).await?;
+        crate::setup::merge_baselayout(globals, &[]).await?;
     }
     let gentoo_path = main_repo(globals)?.path().to_owned();
     let sysroot = sysroot(target, globals);

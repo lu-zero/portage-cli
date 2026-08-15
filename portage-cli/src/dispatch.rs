@@ -54,6 +54,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             eprefix,
             broot,
             self_contained_bootstrap,
+            extra_path,
             binpkg,
             force_verify_signature,
             buildpkg,
@@ -64,6 +65,11 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             activity_side,
             activity_reemit_path,
         } => {
+            let worker_extra_path: Vec<camino::Utf8PathBuf> = extra_path
+                .iter()
+                .flat_map(|p| p.split(':'))
+                .map(camino::Utf8PathBuf::from)
+                .collect();
             ebuild::run_install_worker(ebuild::InstallWorker {
                 ebuild_path: ebuild,
                 cpv_str: cpv,
@@ -77,6 +83,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
                     eprefix: eprefix.as_deref().map(camino::Utf8Path::new),
                     broot: broot.as_deref().map(camino::Utf8Path::new),
                     self_contained_bootstrap: *self_contained_bootstrap,
+                    extra_path: &worker_extra_path,
                 },
                 binpkg: binpkg.as_deref(),
                 force_verify_signature: *force_verify_signature,
@@ -110,6 +117,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
                     eprefix: roots.build_eprefix(),
                     broot: Some(broot.merge_root()),
                     self_contained_bootstrap: false,
+                    extra_path: &[],
                 },
             )
             .await
@@ -237,7 +245,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         }
         Applet::Select { command } => select::run(command, globals).await,
         Applet::Active { command } => crate::active::run(command.as_ref(), globals),
-        Applet::Setup => setup::run(globals).await,
+        Applet::Setup(args) => setup::run(globals, args).await,
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
         Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
         Applet::Stages(args) => crossdev::stage1(args, globals).await,

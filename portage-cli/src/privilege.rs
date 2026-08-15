@@ -230,6 +230,9 @@ pub struct WorkerArgs<'a> {
     pub broot: Option<&'a str>,
     /// See `ebuild::RootContext::self_contained_bootstrap`.
     pub self_contained_bootstrap: bool,
+    /// See `ebuild::RootContext::extra_path`, `:`-joined. Empty for all but
+    /// `em setup --local`'s own merge.
+    pub extra_path: &'a str,
     pub binpkg: Option<&'a str>,
     /// `binpkg`'s origin forces cryptographic signature verification
     /// (a `binrepos.conf` entry with `verify-signature = yes`), independent
@@ -396,6 +399,9 @@ fn build_worker_command(
     }
     if args.self_contained_bootstrap {
         cmd.arg("--self-contained-bootstrap");
+    }
+    if !args.extra_path.is_empty() {
+        cmd.arg("--extra-path").arg(args.extra_path);
     }
     if let Some(b) = args.binpkg {
         cmd.arg("--binpkg").arg(b);

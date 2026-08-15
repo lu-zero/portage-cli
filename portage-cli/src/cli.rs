@@ -1256,6 +1256,9 @@ pub enum Applet {
         /// See `ebuild::RootContext::self_contained_bootstrap`.
         #[arg(long)]
         self_contained_bootstrap: bool,
+        /// See `ebuild::RootContext::extra_path`, `:`-joined.
+        #[arg(long)]
+        extra_path: Option<String>,
         /// A pre-built GPKG to merge (`-k`/`-g`).
         #[arg(long)]
         binpkg: Option<String>,
@@ -1536,7 +1539,7 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     },
 
     #[command(about = "Bootstrap a prefix layout (use with --local or --prefix)")]
-    Setup,
+    Setup(SetupArgs),
 
     #[command(about = "Set up a cross-compilation target (sysroot + overlay) — crossdev workalike")]
     Crossdev(CrossdevArgs),
@@ -1557,6 +1560,21 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 
     #[command(about = "Regenerate /etc/profile.env and ld.so cache")]
     Env,
+}
+
+/// `em setup` — bootstrap a prefix layout.
+#[derive(clap::Args, Default)]
+pub struct SetupArgs {
+    /// Directory holding host tools this prefix should borrow while it has
+    /// none of its own, put ahead of the sanitised build `PATH`. Repeatable.
+    ///
+    /// `--local` only, and only for the setup itself: builds sanitise `$HOME`
+    /// and `/usr/local` off `PATH` so a local install cannot shadow the
+    /// Gentoo toolchain, which also hides a hand-installed GNU sed/grep from
+    /// the very first merges. `em setup --local` finds the usual locations by
+    /// itself; this is for anywhere else you keep them.
+    #[arg(long, value_name = "DIR")]
+    pub extra_path: Vec<camino::Utf8PathBuf>,
 }
 
 /// `em crossdev` — cross-target setup, mirroring crossdev's option surface (the

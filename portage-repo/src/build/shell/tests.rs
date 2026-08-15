@@ -1545,3 +1545,58 @@ fn a_default_palette_is_plain() {
     };
     assert!(!colors.is_plain());
 }
+
+/// What a build phase gets to see of the caller's `PATH`. `$HOME` and
+/// `/usr/local` come off it so a local install cannot shadow the Gentoo
+/// toolchain; everything else keeps its order.
+#[test]
+fn phase_path_drops_only_home_and_usr_local() {
+    assert_eq!(
+        crate::phase_path_dirs(
+            "/home/u/.local/bin:/usr/bin:/usr/local/bin:/opt/x/bin:/home/u:/bin",
+            "/home/u",
+        ),
+        vec!["/usr/bin", "/opt/x/bin", "/bin"]
+    );
+    // An unset HOME must not turn into a prefix that matches everything.
+    assert_eq!(
+        crate::phase_path_dirs("/usr/bin:/bin", ""),
+        vec!["/usr/bin", "/bin"]
+    );
+    // `/usr/localstuff` is not under `/usr/local`.
+    assert_eq!(
+        crate::phase_path_dirs("/usr/localstuff/bin", ""),
+        vec!["/usr/localstuff/bin"]
+    );
+}
+
+/// `set_extra_path` is the one way back in for a caller that resolved a tool
+/// the sanitising above would otherwise hide.
+#[tokio::test]
+async fn extra_path_dirs_lead_the_phase_path() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().to_path_buf();
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(
+        repo_path.join("metadata").join("layout.conf"),
+        "masters = \ncache-formats = md5-dict\n",
+    )
+    .unwrap();
+    std::fs::write(repo_path.join("profiles").join("repo_name"), "test-repo\n").unwrap();
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+
+    let mut shell = repo.shell().await.unwrap();
+    shell.init_build_env().await.unwrap();
+    let plain = shell.get_var("PATH").unwrap_or_default();
+
+    shell.set_extra_path(vec![Utf8PathBuf::from("/opt/bootstrap-bin")]);
+    shell.init_build_env().await.unwrap();
+    assert_eq!(
+        shell.get_var("PATH").unwrap_or_default(),
+        format!("/opt/bootstrap-bin:{plain}")
+    );
+}

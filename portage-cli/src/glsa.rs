@@ -536,6 +536,7 @@ async fn run_fix(globals: &Cli, ids: &[String]) -> Result<()> {
             activity: None,
             activity_session: Default::default(),
             extra_aliases: &[],
+            extra_path: &[],
         },
     )
     .await?;

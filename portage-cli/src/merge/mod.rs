@@ -30,6 +30,9 @@ pub(crate) struct MergePlanRequest<'a> {
     pub distdir: Option<&'a camino::Utf8Path>,
     pub merge_flags: &'a cli::MergeFlags,
     pub globals: &'a cli::Cli,
+    /// Directories to put ahead of the sanitised build `PATH`, resolved by
+    /// the caller. Only `em setup --local` has any (see its `--extra-path`).
+    pub extra_path: &'a [camino::Utf8PathBuf],
     /// When set, each successful package gets a completion marker under this
     /// job id (see `maint::resume`) so `-r` can skip finished work.
     pub resume_job: Option<ResumeJob<'a>>,
@@ -183,6 +186,7 @@ struct MergeRun<'a> {
     distdir: Option<&'a camino::Utf8Path>,
     quiet: bool,
     merge_flags: &'a cli::MergeFlags,
+    extra_path: &'a [camino::Utf8PathBuf],
     binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
     host_binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
     remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
@@ -235,6 +239,7 @@ struct PackageAction<'a> {
     work_base: &'a camino::Utf8Path,
     distdir: Option<&'a camino::Utf8Path>,
     flags: &'a ActionFlags,
+    extra_path: &'a [camino::Utf8PathBuf],
     merge_gate: Option<&'a tokio::sync::Mutex<()>>,
     binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
     remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
@@ -376,6 +381,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         distdir,
         merge_flags,
         globals,
+        extra_path,
         resume_job,
         activity,
     } = req;
@@ -574,6 +580,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         distdir,
         quiet,
         merge_flags,
+        extra_path,
         binpkg_index: binpkg_index.as_ref(),
         host_binpkg_index,
         remote_indices: &remote_indices,
@@ -649,6 +656,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         work_base,
         distdir,
         flags,
+        extra_path,
         merge_gate,
         binpkg_index,
         remote_indices,
@@ -708,6 +716,7 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
         eprefix: entry_roots.build_eprefix(),
         broot: Some(host_roots.merge_root()),
         self_contained_bootstrap,
+        extra_path,
     };
 
     if fetchonly || fetch_all_uri {
@@ -990,6 +999,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             work_base: run.work_base,
             distdir: run.distdir,
             flags: &flags,
+            extra_path: run.extra_path,
             merge_gate: None,
             binpkg_index: entry_index,
             remote_indices: run.remote_indices,
@@ -1228,6 +1238,7 @@ async fn merge_parallel(
                         work_base: run.work_base,
                         distdir: run.distdir,
                         flags: flags_ref,
+                        extra_path: run.extra_path,
                         merge_gate: Some(gate),
                         binpkg_index: entry_index,
                         remote_indices: run.remote_indices,

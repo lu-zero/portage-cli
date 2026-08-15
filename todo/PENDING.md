@@ -24,7 +24,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; `cede_required_use` awk-4/stage1 bug fixed 2026-08-01; destructive Step 2 **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
 | **8** | **Drop `BuildClass` for cross-*** — package.env + HostCodegen allowlist; type removed 2026-08-07; live verify open | 🟡 | [[drop-buildclass]], matrix: [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md) |
-| **9** | **`--local` bootstrap** — setup ladder: **repo** (piggy-back or own) + **profile** (defaults/override) + **package.provided** seed, then toolchain --setup. Design 2026-08-07 | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md) |
+| **9** | **`--local` bootstrap** — setup ladder: **repo** + **profile** + **package.provided** seed done and live-verified 2026-08-14 on real Debian 12 + FreeBSD 14.4 (5 real bugs found+fixed along the way); **toolchain --setup still open** | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md) |
 | **10** | **Workdir dual-root race (P0)** — per-target builddirs + lock/schedule like Portage; dual plan entries under `--jobs` collide today | 🔴 | [[workdir-dual-root]], clang findings #3/#4 |
 
 ### Smaller / polish (pick opportunistically)

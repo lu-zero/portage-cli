@@ -281,6 +281,29 @@ einstalldocs() {
 }
 "#;
 
+/// The `PATH` entries a build phase gets, given a raw `PATH` and `$HOME`:
+/// everything under `$HOME` or `/usr/local` is expunged, since a non-system
+/// install there shadows the Gentoo toolchain (a `~/.local/bin` uv python
+/// without gpep517 once broke every distutils-r1 wheel build). System dirs
+/// including `/usr/lib/llvm/*/bin` are kept.
+///
+/// Pure so a caller that must reason about what a phase will actually run
+/// resolves it the same way rather than re-implementing the predicate.
+pub fn phase_path_dirs<'a>(raw_path: &'a str, home: &str) -> Vec<&'a str> {
+    let home = home.trim_end_matches('/');
+    let home_prefix = (!home.is_empty()).then(|| format!("{home}/"));
+    raw_path
+        .split(':')
+        .filter(|p| {
+            let under_home = home_prefix
+                .as_deref()
+                .is_some_and(|hp| *p == home || p.starts_with(hp));
+            let under_local = *p == "/usr/local" || p.starts_with("/usr/local/");
+            !under_home && !under_local
+        })
+        .collect()
+}
+
 /// An embedded bash shell for sourcing ebuilds, eclasses, and `make.defaults`.
 ///
 /// The PMS name/version strings a caller reuses after the vars are set.
@@ -347,6 +370,10 @@ pub struct EbuildShell {
     /// unchrooted, unlike a cross-compiler (host-native by construction) or
     /// the real host's own tools.
     build_broot: Option<Utf8PathBuf>,
+    /// Caller-resolved directories placed ahead of the sanitised phase `PATH`
+    /// ([`phase_path_dirs`]) — the one way to reach a tool that sanitising
+    /// would otherwise hide. Empty for an ordinary build.
+    extra_path: Vec<Utf8PathBuf>,
     /// Portage `bashrc` hooks sourced per phase after the environment is set up
     /// (profile `profile.bashrc` files in stack order, then the user's
     /// `${PORTAGE_CONFIGROOT}/etc/portage/bashrc`). Not PMS; matches portage's
@@ -674,6 +701,7 @@ impl EbuildShell {
             build_eprefix: None,
             build_ld_library_path: None,
             build_broot: None,
+            extra_path: Vec::new(),
             bashrc_files: Vec::new(),
             baseline: None,
             phase_sourced_ebuild: None,
@@ -732,6 +760,13 @@ impl EbuildShell {
         category
             .strip_prefix("cross_llvm-")
             .or_else(|| category.strip_prefix("cross-"))
+    }
+
+    /// Put `dirs` ahead of the sanitised `PATH` for every subsequent phase.
+    /// Which directories those are, and whether any are warranted at all, is
+    /// the caller's policy; empty (the default) leaves `PATH` untouched.
+    pub fn set_extra_path(&mut self, dirs: Vec<Utf8PathBuf>) {
+        self.extra_path = dirs;
     }
 
     /// Set the `bashrc` hooks to source per phase (profile `profile.bashrc`
@@ -1112,24 +1147,15 @@ impl EbuildShell {
         // python-any-r1's wrapper setup — keep the system bin dirs instead of
         // expanding ${PATH} to empty and stranding mkdir/cp/ln/chmod.
         //
-        // Sanitise it: expunge non-system install dirs that would shadow the
-        // Gentoo toolchain — everything under $HOME (uv/cargo/pip user installs,
-        // e.g. ~/.local/bin/python3.13, a uv python without gpep517 that broke
-        // distutils-r1 wheel builds) and /usr/local (locally-installed tools).
-        // System dirs including /usr/lib/llvm/*/bin (clang) are kept; a --local
-        // prefix's own bin is re-added deliberately by its bashrc hook.
+        // Sanitised ([`phase_path_dirs`]), behind the caller's own extra dirs:
+        // a --local prefix's own bin is re-added deliberately by its bashrc hook.
         let raw_path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
         let home = std::env::var("HOME").unwrap_or_default();
-        let home_prefix = (!home.is_empty()).then(|| format!("{}/", home.trim_end_matches('/')));
-        let base_path = raw_path
-            .split(':')
-            .filter(|p| {
-                let under_home = home_prefix
-                    .as_deref()
-                    .is_some_and(|hp| *p == home || p.starts_with(hp));
-                let under_local = *p == "/usr/local" || p.starts_with("/usr/local/");
-                !under_home && !under_local
-            })
+        let base_path = self
+            .extra_path
+            .iter()
+            .map(|d| d.as_str())
+            .chain(phase_path_dirs(&raw_path, &home))
             .collect::<Vec<_>>()
             .join(":");
         self.set_var("PATH", &base_path);

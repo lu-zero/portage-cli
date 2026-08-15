@@ -5,11 +5,16 @@
 //! see that doc's "why provided is stronger than break cycles"), so the
 //! version for each Tier-1 cycle-fuel CPN is picked by probing the host's
 //! own tool (`gcc --version`, `python3 -V`, …) and mapping that to the
-//! closest tree-present version, falling back to the oldest tree version
-//! when the host tool is missing or unparseable.
+//! closest tree-present version.
+//!
+//! A tool the host does not have is left out entirely rather than claimed at
+//! some floor version: the entry exists to say "the system already supplies
+//! this", and inventing one turns a missing tool into a `command not found`
+//! deep inside an unrelated package's phase instead of a package the prefix
+//! plans and builds for itself.
 
 use anyhow::Result;
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Version;
 use portage_repo::Repository;
 
@@ -174,12 +179,10 @@ fn first_version_token(s: &str) -> Option<String> {
     })
 }
 
-/// Run `bin args...` and extract a best-guess host version. `None` if the
-/// binary is missing, the run fails, or nothing version-shaped is found —
-/// all treated the same by [`pick_version`] (fall back to oldest tree
-/// version), not an error: a probe miss is expected on hosts missing one of
-/// the Tier-1 tools.
-fn probe_version(bin: &str, args: &[&str]) -> Option<Version> {
+/// Run `bin args...` and extract a best-guess host version. `None` when the
+/// run fails or nothing version-shaped comes out — an unusual banner is not
+/// an error, [`pick_version`] just falls back to the tree's own floor.
+fn probe_version(bin: &Utf8Path, args: &[&str]) -> Option<Version> {
     let output = std::process::Command::new(bin).args(args).output().ok()?;
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push('\n');
@@ -200,10 +203,9 @@ fn tree_versions(repo: &Repository, category: &str, package: &str) -> Vec<Versio
         .collect()
 }
 
-/// Policy from `todo/local-bootstrap-provided.md`'s "Floor versions when
-/// host has no VDB": the closest tree version `<= host` when a host probe
-/// succeeded and the tree has one that qualifies, else the oldest tree
-/// version — never an invented version absent from the tree.
+/// The closest tree version `<= host` when a host probe succeeded and the
+/// tree has one that qualifies, else the oldest tree version — never an
+/// invented version absent from the tree.
 fn pick_version(versions: &[Version], host: Option<&Version>) -> Option<Version> {
     if let Some(host) = host
         && let Some(best) = versions.iter().filter(|v| *v <= host).max()
@@ -235,7 +237,11 @@ fn rewrite_managed_block(existing: &str, block: &str) -> String {
 /// the host's tool versions can legitimately drift between runs, and the
 /// doc's format spec calls for "rewrite only the `BEGIN`…`END` region on
 /// setup re-run", preserving any hand-written lines outside the markers.
-pub(super) fn ensure_provided(eroot: &Utf8Path, repo: &Repository) -> Result<()> {
+pub(super) fn ensure_provided(
+    eroot: &Utf8Path,
+    repo: &Repository,
+    extra_path: &[Utf8PathBuf],
+) -> Result<()> {
     let path = eroot.join("etc/portage/profile/package.provided");
 
     let mut lines = Vec::new();
@@ -244,7 +250,18 @@ pub(super) fn ensure_provided(eroot: &Utf8Path, repo: &Repository) -> Result<()>
         if versions.is_empty() {
             continue;
         }
-        let host_version = pkg.probe.and_then(|(bin, args)| probe_version(bin, args));
+        let mut host_version = None;
+        if let Some((bin, args)) = pkg.probe {
+            let Some(found) = super::host_tools::which(bin, extra_path) else {
+                tracing::info!(
+                    "no host {bin}: the prefix will build {}/{} itself",
+                    pkg.category,
+                    pkg.package
+                );
+                continue;
+            };
+            host_version = probe_version(&found, args);
+        }
         if let Some(v) = pick_version(&versions, host_version.as_ref()) {
             lines.push(format!("{}/{}-{v}", pkg.category, pkg.package));
         }
