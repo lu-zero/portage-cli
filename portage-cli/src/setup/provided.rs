@@ -18,70 +18,125 @@ use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Version;
 use portage_repo::Repository;
 
+/// How to check whether the host already has a Tier-1 package's real-world
+/// equivalent.
+enum Probe {
+    /// Run `bin args...` and parse a PMS-shaped version out of the banner
+    /// (`gcc --version`, `python3 -V`, …) — [`pick_version`] then maps that
+    /// to the closest tree-present version.
+    Command(&'static str, &'static [&'static str]),
+    /// Run `bin args...` and check only the exit status — no version
+    /// banner to parse (`sys-kernel/linux-headers` has none). Used for
+    /// `linux-headers` to compile-check `#include <linux/version.h>`
+    /// through the actual host C preprocessor — the same header real
+    /// portage's own `virtual/os-headers` checks for, but through the
+    /// compiler that will actually consume it rather than a bare
+    /// `stat()`, so a compiler with a narrower search path than the
+    /// filesystem check would expect still gets caught. When it succeeds,
+    /// claim the tree's newest version: the declared CPV is otherwise
+    /// inert for a provided entry — nothing reads it back, and whatever
+    /// actually gets included at build time is the host's real
+    /// `/usr/include`, not this string.
+    CommandSucceeds(&'static str, &'static [&'static str]),
+}
+
 /// One Tier-1 "cycle fuel" package: the bootstrap closure's build-tool
 /// dependencies (never the stage products themselves — `sys-apps/baselayout`,
 /// binutils, headers, libc, gcc must still be *built* into the prefix, see
-/// the design doc's "explicitly out of provided" list). `probe` is the host
-/// command (and args) whose output's first PMS-shaped version token
-/// estimates what the host already has; `None` when there's no real host
-/// equivalent to probe (`elt-patches` is a Gentoo-only eclass-patches
-/// snapshot).
+/// the design doc's "explicitly out of provided" list). `probe` is how to
+/// check the host already has this; `None` when there's no real host
+/// equivalent to probe at all (`elt-patches` is a Gentoo-only eclass-patches
+/// snapshot — unlike [`Probe::CommandSucceeds`], there's nothing to check,
+/// it's simply always claimed).
 struct Tier1Pkg {
     category: &'static str,
     package: &'static str,
-    probe: Option<(&'static str, &'static [&'static str])>,
+    probe: Option<Probe>,
 }
 
 const TIER1: &[Tier1Pkg] = &[
     Tier1Pkg {
         category: "dev-lang",
-        package: "python",
-        probe: Some(("python3", &["--version"])),
-    },
-    Tier1Pkg {
-        category: "dev-lang",
         package: "perl",
-        probe: Some(("perl", &["--version"])),
+        probe: Some(Probe::Command("perl", &["--version"])),
     },
     Tier1Pkg {
         category: "dev-build",
         package: "meson",
-        probe: Some(("meson", &["--version"])),
+        probe: Some(Probe::Command("meson", &["--version"])),
     },
     Tier1Pkg {
         category: "dev-build",
         package: "ninja",
-        probe: Some(("ninja", &["--version"])),
+        probe: Some(Probe::Command("ninja", &["--version"])),
     },
     Tier1Pkg {
         category: "dev-build",
         package: "cmake",
-        probe: Some(("cmake", &["--version"])),
+        probe: Some(Probe::Command("cmake", &["--version"])),
     },
     Tier1Pkg {
         category: "dev-build",
         package: "make",
-        probe: Some(("make", &["--version"])),
+        probe: Some(Probe::Command("make", &["--version"])),
     },
     Tier1Pkg {
         category: "dev-build",
         package: "autoconf",
-        probe: Some(("autoconf", &["--version"])),
+        probe: Some(Probe::Command("autoconf", &["--version"])),
     },
     Tier1Pkg {
         category: "dev-build",
         package: "automake",
-        probe: Some(("automake", &["--version"])),
+        probe: Some(Probe::Command("automake", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-devel",
         package: "m4",
-        probe: Some(("m4", &["--version"])),
+        probe: Some(Probe::Command("m4", &["--version"])),
     },
     Tier1Pkg {
         category: "dev-build",
         package: "libtool",
-        probe: Some(("libtool", &["--version"])),
+        probe: Some(Probe::Command("libtool", &["--version"])),
+    },
+    // `virtual/os-headers`'s own RDEPEND (`!prefix-guest? ( kernel_linux? (
+    // sys-kernel/linux-headers:0 ) )`) already skips this under
+    // `prefix-guest`, but that only covers packages that reach it through
+    // the virtual — anything that BDEPENDs on the concrete CPN directly (or
+    // hits it while the depgraph explores candidates, independent of which
+    // branch the final plan lands on) still needs a real answer. `cc -E
+    // -include linux/version.h` is the actual consumer, so check through it
+    // rather than a bare `stat()` on the marker file.
+    Tier1Pkg {
+        category: "sys-kernel",
+        package: "linux-headers",
+        probe: Some(Probe::CommandSucceeds(
+            "cc",
+            &[
+                "-E",
+                "-x",
+                "c",
+                "-include",
+                "linux/version.h",
+                "-",
+                "-o",
+                "/dev/null",
+            ],
+        )),
+    },
+    // `sys-devel/gcc`'s own RDEPEND is `elibc_glibc? ( sys-libs/glibc[...] )`
+    // — gated on `ELIBC` (which libc family this Linux system uses at all),
+    // not on `prefix-guest` (which only means "don't build one from source
+    // in the prefix"). Skipping the dedicated libc step under prefix-guest
+    // (`toolchain_plan`) does nothing to satisfy this edge by itself; found
+    // live — the "gcc" step still pulled a full from-scratch glibc, hitting
+    // the real bootstrap cycle (glibc BDEPENDs on an existing gcc that
+    // doesn't exist yet in an empty root) that prefix-guest exists to avoid.
+    Tier1Pkg {
+        category: "sys-libs",
+        package: "glibc",
+        probe: Some(Probe::Command("ldd", &["--version"])),
     },
     Tier1Pkg {
         category: "app-portage",
@@ -91,71 +146,71 @@ const TIER1: &[Tier1Pkg] = &[
     Tier1Pkg {
         category: "app-arch",
         package: "xz-utils",
-        probe: Some(("xz", &["--version"])),
+        probe: Some(Probe::Command("xz", &["--version"])),
     },
     Tier1Pkg {
         category: "app-arch",
         package: "zstd",
-        probe: Some(("zstd", &["--version"])),
+        probe: Some(Probe::Command("zstd", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-devel",
         package: "gettext",
-        probe: Some(("gettext", &["--version"])),
+        probe: Some(Probe::Command("gettext", &["--version"])),
     },
     // No single `coreutils`/`findutils` binary reports its own package
     // version; `ls`/`find` do (`ls (GNU coreutils) 9.4`).
     Tier1Pkg {
         category: "sys-apps",
         package: "coreutils",
-        probe: Some(("ls", &["--version"])),
+        probe: Some(Probe::Command("ls", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-apps",
         package: "findutils",
-        probe: Some(("find", &["--version"])),
+        probe: Some(Probe::Command("find", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-apps",
         package: "gawk",
-        probe: Some(("gawk", &["--version"])),
+        probe: Some(Probe::Command("gawk", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-apps",
         package: "grep",
-        probe: Some(("grep", &["--version"])),
+        probe: Some(Probe::Command("grep", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-apps",
         package: "sed",
-        probe: Some(("sed", &["--version"])),
+        probe: Some(Probe::Command("sed", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-apps",
         package: "file",
-        probe: Some(("file", &["--version"])),
+        probe: Some(Probe::Command("file", &["--version"])),
     },
     Tier1Pkg {
         category: "sys-devel",
         package: "patch",
-        probe: Some(("patch", &["--version"])),
+        probe: Some(Probe::Command("patch", &["--version"])),
     },
     // bzip2 historically doesn't reliably support `--version`; `-h` always
     // prints the same version banner.
     Tier1Pkg {
         category: "app-arch",
         package: "bzip2",
-        probe: Some(("bzip2", &["-h"])),
+        probe: Some(Probe::Command("bzip2", &["-h"])),
     },
     Tier1Pkg {
         category: "app-arch",
         package: "gzip",
-        probe: Some(("gzip", &["--version"])),
+        probe: Some(Probe::Command("gzip", &["--version"])),
     },
     Tier1Pkg {
         category: "app-arch",
         package: "tar",
-        probe: Some(("tar", &["--version"])),
+        probe: Some(Probe::Command("tar", &["--version"])),
     },
 ];
 
@@ -190,6 +245,17 @@ fn probe_version(bin: &Utf8Path, args: &[&str]) -> Option<Version> {
     Version::parse(&first_version_token(&combined)?).ok()
 }
 
+/// Run `bin args...` with stdin closed and report only whether it exited
+/// zero — for [`Probe::CommandSucceeds`], where the check *is* the
+/// version's absence (no banner to parse).
+fn command_succeeds(bin: &Utf8Path, args: &[&str]) -> bool {
+    std::process::Command::new(bin)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 /// Every version this CPN has an ebuild for in `repo`, in no particular
 /// order — empty (not an error) if the CPN doesn't exist in this tree
 /// edition, or the category/package lookup fails for any other reason.
@@ -203,14 +269,28 @@ fn tree_versions(repo: &Repository, category: &str, package: &str) -> Vec<Versio
         .collect()
 }
 
-/// The closest tree version `<= host` when a host probe succeeded and the
-/// tree has one that qualifies, else the oldest tree version — never an
-/// invented version absent from the tree.
+/// The tree version that best represents the host's probed one, else the
+/// oldest tree version — never an invented version absent from the tree.
+///
+/// Multi-SLOT packages (`dev-lang/python`'s `SLOT="${PYVER}"`, one SLOT per
+/// `major.minor`) break a plain "closest tree version `<= host`" compare:
+/// the tree's ebuild for the *host's own* `major.minor` line almost always
+/// has a higher micro/patch than whatever shipped with the host years ago
+/// (e.g. host `python3 -V` → `3.11.2`, tree only has `3.11.15`+), so the
+/// naive compare skips straight past the right SLOT into an older, wrong
+/// one (`3.10.9999`) — which then fails to satisfy a `dev-lang/python:3.11`
+/// dependency at all. Prefer a same-`major.minor` tree version (any patch
+/// level) over a strictly-older one from a different line.
 fn pick_version(versions: &[Version], host: Option<&Version>) -> Option<Version> {
-    if let Some(host) = host
-        && let Some(best) = versions.iter().filter(|v| *v <= host).max()
-    {
-        return Some(best.clone());
+    if let Some(host) = host {
+        let n = host.numbers.len().min(2);
+        let same_line = Version::new(&host.numbers[..n]);
+        if let Some(best) = versions.iter().filter(|v| v.glob_matches(&same_line)).max() {
+            return Some(best.clone());
+        }
+        if let Some(best) = versions.iter().filter(|v| *v <= host).max() {
+            return Some(best.clone());
+        }
     }
     versions.iter().min().cloned()
 }
@@ -251,18 +331,46 @@ pub(super) fn ensure_provided(
             continue;
         }
         let mut host_version = None;
-        if let Some((bin, args)) = pkg.probe {
-            let Some(found) = super::host_tools::which(bin, extra_path) else {
-                tracing::info!(
-                    "no host {bin}: the prefix will build {}/{} itself",
-                    pkg.category,
-                    pkg.package
-                );
-                continue;
-            };
-            host_version = probe_version(&found, args);
+        let mut newest_if_present = false;
+        match &pkg.probe {
+            Some(Probe::Command(bin, args)) => {
+                let Some(found) = super::host_tools::which(bin, extra_path) else {
+                    tracing::info!(
+                        "no host {bin}: the prefix will build {}/{} itself",
+                        pkg.category,
+                        pkg.package
+                    );
+                    continue;
+                };
+                host_version = probe_version(&found, args);
+            }
+            Some(Probe::CommandSucceeds(bin, args)) => {
+                let Some(found) = super::host_tools::which(bin, extra_path) else {
+                    tracing::info!(
+                        "no host {bin}: the prefix will build {}/{} itself",
+                        pkg.category,
+                        pkg.package
+                    );
+                    continue;
+                };
+                if !command_succeeds(&found, args) {
+                    tracing::info!(
+                        "host {bin} {args:?} failed: the prefix will build {}/{} itself",
+                        pkg.category,
+                        pkg.package
+                    );
+                    continue;
+                }
+                newest_if_present = true;
+            }
+            None => {}
         }
-        if let Some(v) = pick_version(&versions, host_version.as_ref()) {
+        let picked = if newest_if_present {
+            versions.iter().max().cloned()
+        } else {
+            pick_version(&versions, host_version.as_ref())
+        };
+        if let Some(v) = picked {
             lines.push(format!("{}/{}-{v}", pkg.category, pkg.package));
         }
     }
@@ -341,6 +449,25 @@ mod tests {
         assert_eq!(
             pick_version(&versions, Some(&host)),
             Some(Version::parse("2.0").unwrap())
+        );
+    }
+
+    #[test]
+    fn pick_version_prefers_same_major_minor_line_over_an_older_slot() {
+        // Real dev-lang/python shape: tree's 3.11 line has moved past the
+        // host's old 3.11.2 (patch-level newer), while an unrelated older
+        // SLOT (3.10) happens to sit just below host by raw compare —
+        // picking 3.10.9999 would fail a `dev-lang/python:3.11` dependency.
+        let versions = vec![
+            Version::parse("3.10.9999").unwrap(),
+            Version::parse("3.11.15").unwrap(),
+            Version::parse("3.11.9999").unwrap(),
+            Version::parse("3.14.7").unwrap(),
+        ];
+        let host = Version::parse("3.11.2").unwrap();
+        assert_eq!(
+            pick_version(&versions, Some(&host)),
+            Some(Version::parse("3.11.9999").unwrap())
         );
     }
 

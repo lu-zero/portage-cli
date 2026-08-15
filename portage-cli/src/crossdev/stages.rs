@@ -248,6 +248,27 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
     // os-headers for EPREFIX) below — baselayout is no longer one of them.
     let is_self_contained_bootstrap = matches!(kind, BootstrapKind::Native) || self_contained;
 
+    // A real python merge, not a `package.provided` claim: python.eclass's
+    // own `python_setup`-style checks re-verify against the VDB at build
+    // time, independent of whatever satisfied the depgraph — found live,
+    // `dev-build/ninja` died `No supported Python implementation installed`
+    // even with `dev-lang/python` in `package.provided`, because that only
+    // ever satisfies dependency *resolution*, never writes an actual VDB
+    // entry. Host-shared cross skips this: the host VDB is dual-rooted in,
+    // so a real python is already there. Placed before binutils: on an
+    // empty VDB, binutils's own dependency closure already reaches several
+    // python-consuming build tools (meson, ninja, ...), so python must be
+    // real by the time that step's own resolution runs, not just by gcc's.
+    if is_self_contained_bootstrap {
+        steps.push(StageStep {
+            label: "python".into(),
+            atoms: vec!["dev-lang/python".to_string()],
+            use_override: vec![],
+            nodeps: false,
+            into_sysroot: false,
+        });
+    }
+
     // Empty ROOT + debuginfod pulls elfutils→curl→…→glibc and trips
     // os-headers pre-flight. Host-shared cross keeps debuginfod; native and
     // self-contained cross drop it.
@@ -755,7 +776,14 @@ mod tests {
         let plan = toolchain_plan(&BootstrapKind::Native, true, false);
         assert_eq!(
             labels(&plan),
-            ["baselayout", "binutils", "kernel headers", "libc", "gcc"]
+            [
+                "baselayout",
+                "python",
+                "binutils",
+                "kernel headers",
+                "libc",
+                "gcc"
+            ]
         );
         // Real categories, no `cross-` rewrite.
         let atoms: Vec<&str> = plan
@@ -766,26 +794,30 @@ mod tests {
         // baselayout first: lays down the /usr/lib skeleton for gcc's osdir.
         assert_eq!(atoms[0], "sys-apps/baselayout");
         assert!(plan.steps[0].use_override.contains(&"build".to_string()));
-        assert_eq!(atoms[1], "sys-devel/binutils");
+        // Real python next: an empty VDB means anything binutils's own
+        // closure needs that's python-eclass-based must already be real,
+        // not just depgraph-satisfied.
+        assert_eq!(atoms[1], "dev-lang/python");
+        assert_eq!(atoms[2], "sys-devel/binutils");
         // Native merges the virtual (registers it in the ROOT VDB for glibc's
         // DEPEND), not the bare linux-headers provider.
-        assert_eq!(atoms[2], "virtual/os-headers");
-        assert_eq!(atoms[3], "sys-libs/glibc");
-        assert_eq!(atoms[4], "sys-devel/gcc");
+        assert_eq!(atoms[3], "virtual/os-headers");
+        assert_eq!(atoms[4], "sys-libs/glibc");
+        assert_eq!(atoms[5], "sys-devel/gcc");
         assert!(atoms.iter().all(|a| !a.starts_with("cross-")));
         // The full libc step is a real (non-headers-only) build, but --nodeps:
         // glibc's own COMMON_DEPEND (`>=sys-devel/gcc-6.2`) can't be satisfied
         // from ROOT here (no gcc-stage1 landed first, unlike cross) — the seed
         // compiler at BROOT does the actual compiling instead.
-        assert!(plan.steps[3].nodeps);
-        assert!(plan.steps[3].use_override.is_empty());
+        assert!(plan.steps[4].nodeps);
+        assert!(plan.steps[4].use_override.is_empty());
         // The single gcc is full (keeps cxx — only GCC_DISABLE applies, no STAGE1).
-        assert!(!plan.steps[4].use_override.contains(&"-cxx".to_string()));
-        assert!(plan.steps[4].use_override.contains(&"-vtv".to_string()));
+        assert!(!plan.steps[5].use_override.contains(&"-cxx".to_string()));
+        assert!(plan.steps[5].use_override.contains(&"-vtv".to_string()));
         // Native binutils drops debuginfod (else its elfutils→…→glibc closure
         // explodes the binutils step into the empty ROOT).
         assert!(
-            plan.steps[1]
+            plan.steps[2]
                 .use_override
                 .contains(&"-debuginfod".to_string())
         );
@@ -801,7 +833,7 @@ mod tests {
         let plan = toolchain_plan(&BootstrapKind::Native, true, true);
         assert_eq!(
             labels(&plan),
-            ["baselayout", "binutils", "kernel headers", "gcc"]
+            ["baselayout", "python", "binutils", "kernel headers", "gcc"]
         );
         let atoms: Vec<&str> = plan
             .steps
