@@ -82,6 +82,11 @@ pub struct DepgraphOutcome {
     /// The `--jobs` scheduler uses this to parallelise builds while respecting
     /// order. Empty entry ⇒ no in-plan deps that constrain start.
     pub build_blockers: Vec<Vec<usize>>,
+    /// `(dependent, dependency)` pairs where a hard (`DEPEND`/`BDEPEND`) edge
+    /// is scheduled backwards — proof of a genuine irreducible dependency
+    /// cycle, not a solver bug. Lets a pre-flight failure name the cycle
+    /// instead of just "needs: X".
+    pub hard_cycle_edges: Vec<(Cpv, Cpv)>,
     /// `package.provided` CPVs the system supplies, each with the repo slot it
     /// maps onto (derived from the version's slot series). The pre-flight build
     /// check seeds these as present so a build dep on an externally-provided
@@ -1613,31 +1618,41 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // before this entry may *start*. Include RDEPEND as well as DEPEND/BDEPEND:
     // `virtual/*` packages are empty and only RDEPEND their real providers, so
     // DEPEND-only blockers let consumers race the provider (sed vs acl under
-    // high --jobs, 2026-08-07). Matching is by (MergeRoot, CPN); restricted to
-    // earlier indices so the relation is acyclic — `install_order` already
-    // linearised soft RDEPEND cycles (and drops soft edges that would cycle).
-    // A spurious blocker only costs parallelism; a missing one risks building
-    // before a dep is merged.
-    let index_of: HashMap<(MergeRoot, Cpn), usize> = plan
+    // high --jobs, 2026-08-07). Restricted to earlier indices so the relation
+    // is acyclic — `install_order` already linearised soft RDEPEND cycles (and
+    // drops soft edges that would cycle). A spurious blocker only costs
+    // parallelism; a missing one risks building before a dep is merged.
+    //
+    // Keyed by the full `PortagePackage` (carries slot), not `(MergeRoot,
+    // Cpn)` alone: a CPN present at two slots would otherwise collapse to
+    // "last wins", which can misreport a satisfied edge as backwards.
+    let index_of: HashMap<PortagePackage, usize> = plan_entries
         .iter()
+        .filter(|e| !e.pkg.is_virtual())
         .enumerate()
-        .map(|(i, p)| ((p.merge_root, p.cpv.cpn), i))
+        .map(|(i, entry)| (entry.pkg.clone(), i))
         .collect();
+    // `to > from` on a hard edge means the dependency is scheduled *after*
+    // the dependent — never true for a real DAG edge, so it only fires
+    // inside a genuine hard cycle; recorded into `hard_cycle_edges` below.
     let mut build_blockers: Vec<Vec<usize>> = vec![Vec::new(); plan.len()];
+    let mut hard_cycle_edges: Vec<(Cpv, Cpv)> = Vec::new();
     for e in &edges {
-        if !matches!(
-            e.class,
-            DepClass::Depend | DepClass::Bdepend | DepClass::Rdepend
-        ) {
+        let hard = matches!(e.class, DepClass::Depend | DepClass::Bdepend);
+        if !hard && !matches!(e.class, DepClass::Rdepend) {
             continue;
         }
-        let from_key = (e.from.0.merge_root(), *e.from.0.cpn());
-        let to_key = (e.to.0.merge_root(), *e.to.0.cpn());
-        let (Some(&from), Some(&to)) = (index_of.get(&from_key), index_of.get(&to_key)) else {
+        let (Some(&from), Some(&to)) = (index_of.get(&e.from.0), index_of.get(&e.to.0)) else {
             continue;
         };
         if to < from && !build_blockers[from].contains(&to) {
             build_blockers[from].push(to);
+        }
+        if hard && to > from {
+            let pair = (plan[from].cpv.clone(), plan[to].cpv.clone());
+            if !hard_cycle_edges.contains(&pair) {
+                hard_cycle_edges.push(pair);
+            }
         }
     }
 
@@ -1653,6 +1668,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         },
         plan,
         build_blockers,
+        hard_cycle_edges,
         provided: provided_avail,
     })
 }

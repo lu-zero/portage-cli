@@ -550,7 +550,12 @@ async fn emerge_atoms_inner(
     // gawk, which has no valid dependency order and must be seeded out of
     // order somewhere).
     if !nodeps {
-        preflight::check(&outcome.plan, &roots, &outcome.provided)?;
+        preflight::check(
+            &outcome.plan,
+            &roots,
+            &outcome.provided,
+            &outcome.hard_cycle_edges,
+        )?;
     }
 
     if cli.pretend {

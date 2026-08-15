@@ -45,12 +45,17 @@ use crate::query::depgraph::PlannedMerge;
 /// sysroot substitution, so a separate `host_roots` parameter is no longer
 /// needed (see `Cli::roots`'s doc comment).
 ///
+/// `hard_cycle_edges` names pairs already known to sit in a genuine
+/// irreducible dependency cycle — a failure matching one gets a distinct
+/// note instead of reading like a missing package.
+///
 /// Returns an error listing every unsatisfied requirement (package → missing
 /// atoms) when the check fails; `Ok(())` otherwise.
 pub fn check(
     plan: &[PlannedMerge],
     roots: &Roots,
     provided: &[(Cpv, Option<String>)],
+    hard_cycle_edges: &[(Cpv, Cpv)],
 ) -> Result<()> {
     let mut depend_avail = Avail::initial_depend(roots);
     let mut bdepend_avail = Avail::initial_bdepend(roots);
@@ -85,6 +90,23 @@ pub fn check(
             missing.sort();
             missing.dedup();
             problems.push(format!("  {} needs: {}", planned.cpv, missing.join(", ")));
+            let cycle_partners: Vec<&Cpv> = hard_cycle_edges
+                .iter()
+                .filter(|(dependent, _)| *dependent == planned.cpv)
+                .map(|(_, dependency)| dependency)
+                .collect();
+            if !cycle_partners.is_empty() {
+                let cpv = &planned.cpv;
+                let names = cycle_partners
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                problems.push(format!(
+                    "    (not a missing package — a real hard-dependency cycle: \
+                     {cpv} and {names})"
+                ));
+            }
         }
 
         // Within-run visibility: this entry satisfies later entries' deps once
@@ -158,7 +180,7 @@ mod tests {
                 ">=sys-libs/gdbm-1.8.3:=",
             )?,
         ];
-        assert!(check(&plan, &roots, &[]).is_ok());
+        assert!(check(&plan, &roots, &[], &[]).is_ok());
         Ok(())
     }
 
@@ -177,7 +199,31 @@ mod tests {
                 ">=sys-libs/gdbm-1.8.3:=",
             )?,
         ];
-        assert!(check(&plan, &roots, &[]).is_err());
+        assert!(check(&plan, &roots, &[], &[]).is_err());
+        Ok(())
+    }
+
+    /// A failure caused by a genuine hard-dependency cycle (`hard_cycle_edges`
+    /// names the pair) gets the distinct cycle note appended, not just the
+    /// generic "needs: X".
+    #[test]
+    fn hard_cycle_failure_gets_a_distinct_note() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let roots = roots_at(&tmp)?;
+        let zstd = Cpv::parse("app-arch/zstd-1.5.7")?;
+        let meson = Cpv::parse("dev-build/meson-1.12.0")?;
+        let plan = vec![planned(
+            MergeRoot::Host,
+            zstd.clone(),
+            ">=dev-build/meson-1.2.3",
+        )?];
+        let err = check(&plan, &roots, &[], &[(zstd, meson)])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("real hard-dependency cycle"),
+            "expected the cycle note, got: {err}"
+        );
         Ok(())
     }
 
@@ -194,10 +240,10 @@ mod tests {
             Cpv::parse("dev-python/wheel-0.47.0")?,
             "dev-lang/python:3.14",
         )?];
-        assert!(check(&plan, &roots, &[]).is_err(), "unseeded control");
+        assert!(check(&plan, &roots, &[], &[]).is_err(), "unseeded control");
 
         let provided = vec![(Cpv::parse("dev-lang/python-3.14.0")?, Some("3.14".into()))];
-        assert!(check(&plan, &roots, &provided).is_ok());
+        assert!(check(&plan, &roots, &provided, &[]).is_ok());
         Ok(())
     }
 }

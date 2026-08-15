@@ -4,8 +4,8 @@
 //! `--local`, which never weaves the host VDB into BDEPEND satisfaction —
 //! see that doc's "why provided is stronger than break cycles"), so the
 //! version for each Tier-1 cycle-fuel CPN is picked by probing the host's
-//! own tool (`gcc --version`, `python3 -V`, …) and mapping that to the
-//! closest tree-present version.
+//! own tool (`meson --version`, `perl --version`, …) and mapping that to
+//! the closest tree-present version.
 //!
 //! A tool the host does not have is left out entirely rather than claimed at
 //! some floor version: the entry exists to say "the system already supplies
@@ -22,8 +22,8 @@ use portage_repo::Repository;
 /// equivalent.
 enum Probe {
     /// Run `bin args...` and parse a PMS-shaped version out of the banner
-    /// (`gcc --version`, `python3 -V`, …) — [`pick_version`] then maps that
-    /// to the closest tree-present version.
+    /// (`meson --version`, `perl --version`, …) — [`pick_version`] then
+    /// maps that to the closest tree-present version.
     Command(&'static str, &'static [&'static str]),
     /// Run `bin args...` and check only the exit status — no version
     /// banner to parse (`sys-kernel/linux-headers` has none). Used for
@@ -272,15 +272,11 @@ fn tree_versions(repo: &Repository, category: &str, package: &str) -> Vec<Versio
 /// The tree version that best represents the host's probed one, else the
 /// oldest tree version — never an invented version absent from the tree.
 ///
-/// Multi-SLOT packages (`dev-lang/python`'s `SLOT="${PYVER}"`, one SLOT per
-/// `major.minor`) break a plain "closest tree version `<= host`" compare:
-/// the tree's ebuild for the *host's own* `major.minor` line almost always
-/// has a higher micro/patch than whatever shipped with the host years ago
-/// (e.g. host `python3 -V` → `3.11.2`, tree only has `3.11.15`+), so the
-/// naive compare skips straight past the right SLOT into an older, wrong
-/// one (`3.10.9999`) — which then fails to satisfy a `dev-lang/python:3.11`
-/// dependency at all. Prefer a same-`major.minor` tree version (any patch
-/// level) over a strictly-older one from a different line.
+/// Prefers a tree version sharing the host's `major.minor` line over a
+/// strictly-older one from a different line — guards a multi-SLOT package
+/// (one SLOT per `major.minor`, e.g. `dev-lang/python`) whose tree ebuild
+/// can outrun the host's patch level, which a plain "closest `<= host`"
+/// compare would skip past. No current Tier-1 entry is multi-SLOT.
 fn pick_version(versions: &[Version], host: Option<&Version>) -> Option<Version> {
     if let Some(host) = host {
         let n = host.numbers.len().min(2);
