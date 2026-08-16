@@ -89,7 +89,7 @@ pub(crate) fn find_packages(vdb: &Vdb, pattern: &str) -> Vec<portage_vdb::Instal
         return vdb
             .packages()
             .into_iter()
-            .filter(|p| dep.matches_cpv(p.cpv(), p.slot().ok().as_deref()))
+            .filter(|p| dep.matches_cpv(p.cpv(), p.slot_main().ok().as_deref()))
             .collect();
     }
     // Bare package name or PF (`bash`, `bash-5.2`) — not a valid Dep (needs
@@ -166,5 +166,30 @@ mod tests {
         // Bare name convenience still works.
         let bare = find_packages(&vdb, "foo");
         assert_eq!(bare.len(), 2);
+    }
+
+    #[test]
+    fn slot_atom_matches_an_installed_package_carrying_a_subslot() {
+        // `:0` selects the *slot*; a package installed as `0/1` is in slot 0
+        // and must match (`qlist -I 'app-arch/zstd:0'` and `equery list` both
+        // return the subslotted package). Matching against the raw `SLOT`
+        // file compares `"0"` to `"0/1"` and finds nothing — which is what
+        // `-C app-arch/zstd:0` and `em query files` used to do for the 104 of
+        // this host's 723 installed packages that carry a subslot.
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        write_pkg(&vdb_root, "app-arch", "zstd-1.5.7", "0/1");
+        let vdb = open(tmp.path());
+
+        let by_slot = find_packages(&vdb, "app-arch/zstd:0");
+        assert_eq!(
+            by_slot.len(),
+            1,
+            "a `:0` atom must match an installed SLOT of `0/1`"
+        );
+
+        // The subslot is still addressable, and a wrong one still misses.
+        assert_eq!(find_packages(&vdb, "app-arch/zstd:0/1").len(), 1);
+        assert!(find_packages(&vdb, "app-arch/zstd:1").is_empty());
     }
 }
