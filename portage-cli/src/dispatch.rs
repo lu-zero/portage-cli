@@ -207,9 +207,33 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         Applet::Clean { target } => run_clean(target),
         Applet::Use {
             add,
-            remove,
+            subtract,
+            drop,
+            dry_run,
+            expand,
+            list_expand,
+            info,
+            global,
+            local_desc,
             make_conf,
-        } => use_flags::run(globals, add, remove, make_conf.as_deref()),
+        } => {
+            use_flags::run(
+                globals,
+                &use_flags::UseOpts {
+                    add,
+                    subtract,
+                    drop,
+                    dry_run: *dry_run,
+                    expand: expand.as_deref(),
+                    list_expand: *list_expand,
+                    info,
+                    global: *global,
+                    local_desc: *local_desc,
+                    make_conf: make_conf.as_deref(),
+                },
+            )
+            .await
+        }
         Applet::Revdep { library } => crate::revdep::run(globals, library.as_deref()).await,
         Applet::Read {
             package,

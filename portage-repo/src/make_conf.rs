@@ -341,16 +341,54 @@ impl MakeConf {
         new_use
     }
 
-    /// Apply USE add/remove at `path` (file or Flat directory) and write back.
+    /// Fold `add`/`subtract`/`drop` onto the current effective USE at `path`
+    /// without writing anything — the same trichotomy `em pkg use` already
+    /// applies to `package.use` entries: `add` (positive, e.g. `nls`),
+    /// `subtract` (explicit negative, written as `-flag`), `drop` (removes
+    /// both the `flag` and `-flag` forms, reverting to whatever the profile
+    /// otherwise defaults to). Returns `(old, new)` joined values for `var`,
+    /// so a caller can preview or diff the change before deciding to write
+    /// it.
+    ///
+    /// `var` is any space-separated flag-list variable — `USE` itself, or a
+    /// USE_EXPAND variable such as `VIDEO_CARDS`; both are edited the same
+    /// way in make.conf, just under a different name.
+    pub fn preview_use_changes_at(
+        path: &Utf8Path,
+        var: &str,
+        add: &[String],
+        subtract: &[String],
+        drop: &[String],
+    ) -> Result<(String, String)> {
+        // Effective value for the edit is the full directory/file fold.
+        let current_fold =
+            Self::load(path).unwrap_or_else(|_| Self::parse(String::new()).expect("empty parse"));
+        let current_flags: Vec<String> = current_fold
+            .get(var)
+            .unwrap_or("")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+        let old_value = current_flags.join(" ");
+        let new_flags = apply_use_flag_ops(current_flags, add, subtract, drop);
+        Ok((old_value, new_flags.join(" ")))
+    }
+
+    /// Apply add/subtract/drop to `var` at `path` (file or Flat directory)
+    /// and write back. See [`Self::preview_use_changes_at`] for the edit
+    /// semantics and what `var` may be.
     ///
     /// Multi-fragment directories: edits the **last** fragment that assigns
-    /// `USE` (bash last-wins), or the last fragment if none do; an empty
-    /// directory gets a new [`MAKE_CONF_DIR_FALLBACK_FRAGMENT`]. The effective
-    /// USE after the edit is returned (full fold across all fragments).
+    /// `var` (bash last-wins), or the last fragment if none do; an empty
+    /// directory gets a new [`MAKE_CONF_DIR_FALLBACK_FRAGMENT`]. The
+    /// effective value after the edit is returned (full fold across all
+    /// fragments).
     pub fn apply_use_changes_at(
         path: &Utf8Path,
+        var: &str,
         add: &[String],
-        remove: &[String],
+        subtract: &[String],
+        drop: &[String],
     ) -> Result<String> {
         let files = list_config_files(path.as_std_path(), ConfigFilesMode::Flat)?;
         let target: Utf8PathBuf = if path.is_dir() {
@@ -360,10 +398,10 @@ impl MakeConf {
                 let mut pick = files.last().cloned().expect("non-empty");
                 for f in &files {
                     // Load each fragment alone (not the directory) to see who
-                    // assigns USE.
+                    // assigns `var`.
                     if let Ok(utf) = Utf8PathBuf::try_from(f.clone())
                         && let Ok(frag) = Self::load(&utf)
-                        && frag.get("USE").is_some()
+                        && frag.get(var).is_some()
                     {
                         pick = f.clone();
                     }
@@ -380,34 +418,15 @@ impl MakeConf {
             path.to_owned()
         };
 
-        // Effective USE for the edit is the full directory/file fold.
-        let current_fold =
-            Self::load(path).unwrap_or_else(|_| Self::parse(String::new()).expect("empty parse"));
-        let mut current_flags: Vec<String> = current_fold
-            .get("USE")
-            .unwrap_or("")
-            .split_whitespace()
-            .map(str::to_string)
-            .collect();
-        for flag in remove {
-            let flag = flag.trim_start_matches('+');
-            current_flags.retain(|f| f != flag && f != &format!("+{flag}"));
-        }
-        for flag in add {
-            let flag = flag.trim_start_matches('+');
-            current_flags
-                .retain(|f| f != flag && f != &format!("+{flag}") && f != &format!("-{flag}"));
-            current_flags.push(flag.to_string());
-        }
-        let new_use = current_flags.join(" ");
+        let (_, new_value) = Self::preview_use_changes_at(path, var, add, subtract, drop)?;
 
-        // Write the resulting USE into a single fragment (last-wins for load).
+        // Write the resulting value into a single fragment (last-wins for load).
         let mut frag = if target.as_std_path().is_file() {
             Self::load(&target)?
         } else {
             Self::parse(String::new())?
         };
-        frag.set("USE", &new_use);
+        frag.set(var, &new_value);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent.as_std_path()).map_err(|e| Error::Io {
                 path: parent.to_path_buf().into_std_path_buf(),
@@ -415,7 +434,7 @@ impl MakeConf {
             })?;
         }
         frag.save(&target)?;
-        Ok(new_use)
+        Ok(new_value)
     }
 
     /// Save to `path`.
@@ -465,6 +484,31 @@ impl MakeConf {
             self.entries = build_entries(&self.src, &program);
         }
     }
+}
+
+/// Apply the `add`/`subtract`/`drop` trichotomy to a flat USE token list —
+/// the same rule `em pkg use` already applies to `package.use` entries, kept
+/// here in lockstep so `em use` (this module) and `em pkg use` (`PackageConf`)
+/// never drift onto different semantics for the same three verbs.
+fn apply_use_flag_ops(
+    mut values: Vec<String>,
+    add: &[String],
+    subtract: &[String],
+    drop: &[String],
+) -> Vec<String> {
+    for op in add.iter().chain(subtract).chain(drop) {
+        let base = op.trim_start_matches('-');
+        values.retain(|v| v.trim_start_matches('-') != base);
+    }
+    for flag in add {
+        let base = flag.trim_start_matches('-');
+        values.push(base.to_owned());
+    }
+    for flag in subtract {
+        let base = flag.trim_start_matches('-');
+        values.push(format!("-{base}"));
+    }
+    values
 }
 
 // ---------------------------------------------------------------------------
@@ -868,7 +912,8 @@ mod tests {
         std::fs::write(mc_dir.join("20-use"), "USE=\"ssl\"\n").unwrap();
 
         let path = Utf8Path::from_path(&mc_dir).unwrap();
-        let new_use = MakeConf::apply_use_changes_at(path, &["nls".to_string()], &[]).unwrap();
+        let new_use =
+            MakeConf::apply_use_changes_at(path, "USE", &["nls".to_string()], &[], &[]).unwrap();
         assert_eq!(new_use, "ssl nls");
         // USE fragment updated; flags fragment untouched.
         let use_frag = std::fs::read_to_string(mc_dir.join("20-use")).unwrap();
@@ -885,7 +930,8 @@ mod tests {
         let mc_dir = dir.path().join("make.conf");
         std::fs::create_dir(&mc_dir).unwrap();
         let path = Utf8Path::from_path(&mc_dir).unwrap();
-        let new_use = MakeConf::apply_use_changes_at(path, &["python".to_string()], &[]).unwrap();
+        let new_use =
+            MakeConf::apply_use_changes_at(path, "USE", &["python".to_string()], &[], &[]).unwrap();
         assert_eq!(new_use, "python");
         let frag = mc_dir.join(MAKE_CONF_DIR_FALLBACK_FRAGMENT);
         assert!(frag.is_file());
