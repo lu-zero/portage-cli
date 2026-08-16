@@ -269,12 +269,7 @@ impl Vdb {
             let Ok(pkg_slot) = pkg.slot() else {
                 continue;
             };
-            let pkg_slot_main = pkg_slot
-                .split_once('/')
-                .map(|(s, _)| s)
-                .unwrap_or(&pkg_slot)
-                .to_owned();
-            if pkg_slot_main == slot_main {
+            if &*pkg_slot.slot == slot_main {
                 return Ok(Some(pkg));
             }
         }
@@ -368,7 +363,7 @@ mod tests {
 
         // Read back metadata.
         assert_eq!(pkg.eapi().unwrap().to_string(), "8");
-        assert_eq!(pkg.slot().unwrap(), "0");
+        assert_eq!(pkg.slot().unwrap().to_string(), "0");
         assert_eq!(pkg.use_flags().unwrap(), vec!["readline", "nls"]);
         assert_eq!(pkg.description().unwrap(), "A test shell");
         assert_eq!(pkg.build_time().unwrap(), Some(1_700_000_000));

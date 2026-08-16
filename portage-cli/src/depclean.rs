@@ -99,7 +99,7 @@ fn matching<'a>(
 ) -> impl Iterator<Item = &'a InstalledPackage> {
     installed
         .iter()
-        .filter(move |p| dep.matches_cpv(p.cpv(), p.slot_main().ok().as_deref()))
+        .filter(move |p| dep.matches_cpv(p.cpv(), p.slot().ok().as_ref()))
 }
 
 /// Everything reachable from `world_atoms` (+ `exclude_atoms`), walking
@@ -135,7 +135,7 @@ fn compute_cleanlist(
         for pkg in installed {
             let is_target = target_atoms
                 .iter()
-                .any(|d| d.matches_cpv(pkg.cpv(), pkg.slot_main().ok().as_deref()));
+                .any(|d| d.matches_cpv(pkg.cpv(), pkg.slot().ok().as_ref()));
             if !is_target && kept.insert(pkg.cpv().clone()) {
                 queue.push_back(pkg.cpv().clone());
             }
@@ -180,7 +180,7 @@ fn removal_order(cleanlist: &[InstalledPackage], with_bdeps: bool) -> Vec<Instal
         for dep in own_atoms(pkg, with_bdeps) {
             for other in cleanlist {
                 if other.cpv() != pkg.cpv()
-                    && dep.matches_cpv(other.cpv(), other.slot_main().ok().as_deref())
+                    && dep.matches_cpv(other.cpv(), other.slot().ok().as_ref())
                 {
                     targets.insert(other.cpv().clone());
                 }

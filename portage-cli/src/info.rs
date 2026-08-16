@@ -579,7 +579,7 @@ async fn toolchain_versions(
             continue;
         };
         for pkg in &installed {
-            if !dep.matches_cpv(pkg.cpv(), pkg.slot_main().ok().as_deref()) {
+            if !dep.matches_cpv(pkg.cpv(), pkg.slot().ok().as_ref()) {
                 continue;
             }
             let repo_name = pkg.field("repository").ok().flatten().unwrap_or_default();

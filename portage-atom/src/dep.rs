@@ -10,7 +10,7 @@ use crate::cpn::{Cpn, parse_cpn};
 use crate::cpv::{Cpv, parse_cpv, parse_cpv_with_glob};
 use crate::error::{Error, Result};
 use crate::parsers::has_version_suffix;
-use crate::slot::{SlotDep, parse_slot_dep};
+use crate::slot::{Slot, SlotDep, parse_slot_dep};
 use crate::use_dep::{UseDep, parse_use_deps};
 use crate::version::{Operator, Version};
 
@@ -104,9 +104,19 @@ pub struct Dep {
 }
 
 impl Dep {
-    /// Whether an installed/available `cpv` (with optional main `slot`)
+    /// Whether an installed/available `cpv` (with its `slot`, when known)
     /// satisfies this atom's name, version operator, and named-slot
     /// constraints.
+    ///
+    /// `slot` is the candidate's own [`Slot`], not a raw `SLOT` string: an
+    /// installed `0/1` is in slot `0`, so an atom's `:0` must match it.
+    /// Passing the unsplit text compares `"0"` against `"0/1"` and matches
+    /// nothing, which is the shape of a bug this signature exists to
+    /// prevent.
+    ///
+    /// A caller that knows only the slot name uses [`Slot::from_name`]; its
+    /// `None` sub-slot means *unrecorded*, so a sub-slot constraint is only
+    /// enforced when both sides carry one.
     ///
     /// USE-dep brackets, blockers, and `::repo` are *not* evaluated here —
     /// this answers the `has_version`-style question "does a matching
@@ -114,12 +124,12 @@ impl Dep {
     ///
     /// [PMS 8.3.1]: https://projects.gentoo.org/pms/9/pms.html#operators
     /// [8.3.3]: https://projects.gentoo.org/pms/9/pms.html#slot-deps
-    pub fn matches_cpv(&self, cpv: &Cpv, slot: Option<&str>) -> bool {
+    pub fn matches_cpv(&self, cpv: &Cpv, slot: Option<&Slot>) -> bool {
         if self.cpn != cpv.cpn {
             return false;
         }
         if let Some(crate::SlotDep::Slot { slot: Some(s), .. }) = &self.slot_dep
-            && slot.is_some_and(|cand| s.slot.as_str() != cand)
+            && slot.is_some_and(|cand| s.slot != cand.slot)
         {
             return false;
         }

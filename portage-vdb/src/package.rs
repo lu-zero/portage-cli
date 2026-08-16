@@ -2,7 +2,7 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpv, DepEntry, Pf};
+use portage_atom::{Cpv, DepEntry, Pf, Slot};
 use portage_metadata::{Eapi, IUse};
 
 use crate::Result;
@@ -108,8 +108,30 @@ impl InstalledPackage {
         })
     }
 
-    /// The full SLOT value (may include subslot, e.g. `0/5.1`).
-    pub fn slot(&self) -> Result<String> {
+    /// The package's slot, sub-slot included (e.g. `0/5.1`).
+    ///
+    /// Parsed rather than raw text so callers cannot hand the unsplit
+    /// `"0/5.1"` to something expecting the slot name — see
+    /// [`portage_atom::Dep::matches_cpv`]. Use [`Self::slot_main`] for just
+    /// the name.
+    pub fn slot(&self) -> Result<Slot> {
+        let raw = self.read_field("SLOT")?;
+        // An empty but present SLOT is the legitimate old-EAPI implicit-slot
+        // case, and portage reads it as slot "0" (`_pkg_str`'s
+        // `slot_invalid` fallback). An unreadable one stays an error, so
+        // callers can still tell "no slot recorded" from "cannot read it".
+        if raw.is_empty() {
+            return Ok(Slot::new("0"));
+        }
+        Slot::parse(&raw).map_err(|_| Error::MalformedPackage {
+            path: self.path.clone(),
+            reason: format!("invalid SLOT: {raw}"),
+        })
+    }
+
+    /// The raw `SLOT` file contents, for the rare caller that needs the text
+    /// exactly as recorded rather than its parts.
+    pub fn slot_raw(&self) -> Result<String> {
         self.read_field("SLOT")
     }
 
@@ -120,17 +142,13 @@ impl InstalledPackage {
     /// allocates per package for a value every caller that keeps it was
     /// interning anyway. Derefs to `&str`.
     pub fn slot_main(&self) -> Result<SlotName> {
-        let raw = self.slot()?;
-        Ok(Interned::intern(
-            raw.split_once('/').map_or(raw.as_str(), |(s, _)| s),
-        ))
+        Ok(self.slot()?.slot)
     }
 
     /// The subslot if present (the part after `/`, e.g. `5.1` from `0/5.1`).
     /// Interned, for the same reason as [`Self::slot_main`].
     pub fn subslot(&self) -> Result<Option<SlotName>> {
-        let raw = self.slot()?;
-        Ok(raw.split_once('/').map(|(_, sub)| Interned::intern(sub)))
+        Ok(self.slot()?.subslot)
     }
 
     /// The repository name this package was installed from. Interned: a
@@ -379,7 +397,7 @@ mod tests {
             pkg.description().unwrap(),
             "The standard GNU Bourne again shell"
         );
-        assert_eq!(pkg.slot().unwrap(), "0");
+        assert_eq!(pkg.slot().unwrap().to_string(), "0");
         assert_eq!(pkg.use_flags().unwrap(), vec!["net", "nls", "readline"]);
         let iuse: Vec<String> = pkg.iuse().unwrap().iter().map(|i| i.to_string()).collect();
         assert_eq!(iuse, vec!["+net", "+nls", "+readline"]);

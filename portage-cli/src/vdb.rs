@@ -89,7 +89,7 @@ pub(crate) fn find_packages(vdb: &Vdb, pattern: &str) -> Vec<portage_vdb::Instal
         return vdb
             .packages()
             .into_iter()
-            .filter(|p| dep.matches_cpv(p.cpv(), p.slot_main().ok().as_deref()))
+            .filter(|p| dep.matches_cpv(p.cpv(), p.slot().ok().as_ref()))
             .collect();
     }
     // Bare package name or PF (`bash`, `bash-5.2`) — not a valid Dep (needs

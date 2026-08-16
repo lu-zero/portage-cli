@@ -1458,10 +1458,9 @@ fn format_plan_parts(
     if let Some(c) = cache {
         let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
         let iuse = super::effective_use::iuse_set(c);
-        let slot_key = pkg.slot();
+        let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
         if !force_mask.is_empty() {
-            let (forced, masked) =
-                force_mask.effective(&cpv, slot_key.as_ref().map(|s| s.as_str()), stable, &iuse);
+            let (forced, masked) = force_mask.effective(&cpv, slot_key.as_ref(), stable, &iuse);
             for &f in &forced {
                 effective_use.enable(f);
             }

@@ -561,12 +561,10 @@ fn set_atom((cpn, slot): (Cpn, Slot)) -> Dep {
 /// identical VDB-read failure, so the two VDB-set families no longer disagree
 /// on how to treat a mid-removal/corrupted package.
 fn slot_member(pkg: &InstalledPackage) -> Option<(Cpn, Slot)> {
-    let slot = match pkg.slot_main() {
-        Ok(s) if s.is_empty() => Slot::new("0"),
-        Ok(s) => Slot::new(s),
-        Err(_) => return None,
-    };
-    Some((*pkg.cpn(), slot))
+    // The main slot only, matching portage's `Atom(f"{pkg.cp}:{pkg.slot}")` —
+    // `_pkg_str.slot` keeps the sub-slot separate. `from_name` reuses the
+    // handle the VDB already interned instead of resolving and re-interning.
+    Some((*pkg.cpn(), Slot::from_name(pkg.slot_main().ok()?)))
 }
 
 /// Parse `[section_name]` headers from all `.conf` files in `dir`.

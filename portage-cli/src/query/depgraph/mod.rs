@@ -948,9 +948,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 let before = order.len();
                 order.retain(|(pkg, ver)| {
                     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
-                    let slot = pkg.slot();
-                    let slot = slot.as_ref().map(|s| s.as_str());
-                    !exclude_atoms.iter().any(|d| d.matches_cpv(&cpv, slot))
+                    let slot = pkg.slot().map(portage_atom::Slot::from_name);
+                    !exclude_atoms
+                        .iter()
+                        .any(|d| d.matches_cpv(&cpv, slot.as_ref()))
                 });
                 // Printed once after the repair loop settles (an intermediate round's
                 // count would otherwise be reported and then superseded).
@@ -1567,12 +1568,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // No cache ⇒ no IUSE/keywords; still apply global force/mask
                 // and ceded so build USE stays consistent with the solver.
                 let empty_iuse = HashSet::new();
-                let slot_key = pkg.slot();
+                let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
                 effective_use::apply_force_mask(
                     &mut effective,
                     &force_mask,
                     &cpv,
-                    slot_key.as_ref().map(|s| s.as_str()),
+                    slot_key.as_ref(),
                     false,
                     &empty_iuse,
                 );
@@ -1716,8 +1717,10 @@ fn package_needs_use_reinstall(
         .filter(|f| matches!(cfg.get(*f), UseFlagState::Enabled))
         .collect();
     let cpv = Cpv::new(e.cpn, plan_ver);
-    let slot = e.slot.as_ref().map(|s| s.as_str());
-    let (forced, masked) = policy.force_mask.effective(&cpv, slot, stable, &cur_iuse);
+    let slot = e.slot.map(portage_atom::Slot::from_name);
+    let (forced, masked) = policy
+        .force_mask
+        .effective(&cpv, slot.as_ref(), stable, &cur_iuse);
     let forced: HashSet<_> = forced.into_iter().chain(masked).collect();
     needs_use_reinstall(
         mode,

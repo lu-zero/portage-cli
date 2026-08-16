@@ -6,6 +6,7 @@
 use std::cell::OnceCell;
 
 use camino::Utf8Path;
+use portage_atom::Slot;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, DepEntry, UseDefault, UseDep, UseDepKind};
 use portage_atom_pubgrub::{DepClass, MergeRoot};
@@ -175,9 +176,10 @@ impl Avail {
     /// version, slot, and any USE-dep brackets — see the `use_deps_satisfied`
     /// function).
     pub fn atom_satisfied(&self, dep: &Dep) -> bool {
-        self.0
-            .iter()
-            .any(|e| dep.matches_cpv(&e.cpv, e.slot.as_deref()) && use_deps_satisfied(dep, e))
+        self.0.iter().any(|e| {
+            let slot = e.slot.map(Slot::from_name);
+            dep.matches_cpv(&e.cpv, slot.as_ref()) && use_deps_satisfied(dep, e)
+        })
     }
 
     /// `true` when `entries` contain an unsatisfied atom on `cpn`.

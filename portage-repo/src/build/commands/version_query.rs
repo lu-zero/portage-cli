@@ -79,8 +79,8 @@ fn best_match(
         if cpv.cpn != dep.cpn {
             continue;
         }
-        let slot = pkg.slot_main().ok();
-        if !dep.matches_cpv(cpv, slot.as_deref()) {
+        let slot = pkg.slot().ok();
+        if !dep.matches_cpv(cpv, slot.as_ref()) {
             continue;
         }
         // The atom's USE-dependency (`[headers-only(-)]`, `[ssl,-debug]`, …) must

@@ -125,8 +125,8 @@ pub fn installed_satisfies(
 ) -> bool {
     installed.get(&dep.cpn).is_some_and(|slots| {
         slots.iter().any(|(slot, version)| {
-            let slot = Some(slot.as_str()).filter(|s| !s.is_empty());
-            dep.matches_cpv(&Cpv::new(dep.cpn, version.clone()), slot)
+            let slot = (!slot.as_str().is_empty()).then(|| portage_atom::Slot::from_name(*slot));
+            dep.matches_cpv(&Cpv::new(dep.cpn, version.clone()), slot.as_ref())
         })
     })
 }

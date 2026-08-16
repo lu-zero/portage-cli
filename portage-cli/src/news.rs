@@ -138,7 +138,7 @@ fn is_relevant(
         let any = r.installed.iter().any(|d| {
             installed
                 .iter()
-                .any(|(cpv, slot)| d.matches_cpv(cpv, Some(slot)))
+                .any(|(cpv, slot)| d.matches_cpv(cpv, Some(&portage_atom::Slot::from_name(*slot))))
         });
         if !any {
             return false;

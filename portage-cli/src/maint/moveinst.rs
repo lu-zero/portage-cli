@@ -58,7 +58,7 @@ pub fn run(repo_path: &Utf8Path, vdb: &Vdb) -> Result<()> {
                     .iter()
                     .filter(|pkg| {
                         pkg.cpn().to_string() == *cpn
-                            && pkg.slot().ok().as_deref() == Some(from_slot)
+                            && pkg.slot_main().ok().as_deref() == Some(from_slot.as_str())
                     })
                     .collect();
                 for pkg in affected {

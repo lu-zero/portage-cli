@@ -123,9 +123,10 @@ fn dep_satisfied(dep: &Dep, present: &HashMap<Cpn, Vec<(Slot, Cpv)>>) -> bool {
     let Some(cands) = present.get(&dep.cpn) else {
         return false;
     };
-    cands
-        .iter()
-        .any(|(slot, cpv)| dep.matches_cpv(cpv, slot.as_deref()))
+    cands.iter().any(|(slot, cpv)| {
+        let slot = slot.map(portage_atom::Slot::from_name);
+        dep.matches_cpv(cpv, slot.as_ref())
+    })
 }
 
 fn collect_violations(

@@ -68,6 +68,41 @@ impl Slot {
             subslot: Some(Interned::intern(subslot.as_ref())),
         }
     }
+
+    /// Split a `SLOT` value (`0`, `0/5.1`) into its name and sub-slot.
+    ///
+    /// The form ebuilds and the VDB record. Only the first `/` separates —
+    /// PMS forbids one in either part, so the rest belongs to the sub-slot.
+    pub fn parse(raw: &str) -> Result<Self> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Err(Error::InvalidSlot("empty SLOT".to_string()));
+        }
+        Ok(match raw.split_once('/') {
+            Some((name, sub)) if !name.is_empty() && !sub.is_empty() => {
+                Self::with_subslot(name, sub)
+            }
+            Some(_) => return Err(Error::InvalidSlot(raw.to_string())),
+            None => Self::new(raw),
+        })
+    }
+
+    /// A slot known only by name, from a handle that is already interned.
+    ///
+    /// For callers that identify a package by `(cpn, slot)` and never see its
+    /// sub-slot — the solver, whose package identity is exactly that. Their
+    /// `None` sub-slot means *unrecorded*, not *absent*, which is why
+    /// [`crate::Dep::matches_cpv`] only enforces a sub-slot constraint when
+    /// both sides carry one.
+    ///
+    /// Takes the interned handle rather than a `&str` so it does not resolve
+    /// and re-intern a value the caller already holds.
+    pub fn from_name(slot: Interned<DefaultInterner>) -> Self {
+        Slot {
+            slot,
+            subslot: None,
+        }
+    }
 }
 
 impl fmt::Display for Slot {

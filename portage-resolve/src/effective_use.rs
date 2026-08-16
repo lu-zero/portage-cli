@@ -56,7 +56,7 @@ pub fn apply_force_mask(
     cfg: &mut UseConfig,
     force_mask: &ForceMask,
     cpv: &Cpv,
-    slot: Option<&str>,
+    slot: Option<&portage_atom::Slot>,
     stable: bool,
     iuse: &HashSet<Interned<DefaultInterner>>,
 ) {
@@ -97,12 +97,12 @@ pub fn effective_use(
         policy.profile_package_use,
     ); // pre_env/env_use are already UseLayer
     let iuse = iuse_set(cache);
-    let slot_key = pkg.slot();
+    let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
     apply_force_mask(
         &mut cfg,
         policy.force_mask,
         &cpv,
-        slot_key.as_ref().map(|s| s.as_str()),
+        slot_key.as_ref(),
         stable,
         &iuse,
     );

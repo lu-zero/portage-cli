@@ -21,7 +21,11 @@ use portage_atom::{Cpv, Dep};
 /// directory's entries are applied after — and therefore override — earlier
 /// ones. Within a directory, `package.env` file/line order is preserved so a
 /// later matching entry wins. Only existing `env/<name>` files are returned.
-pub fn env_files_for(portage_dirs: &[PathBuf], cpv: &Cpv, slot: Option<&str>) -> Vec<PathBuf> {
+pub fn env_files_for(
+    portage_dirs: &[PathBuf],
+    cpv: &Cpv,
+    slot: Option<&portage_atom::Slot>,
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for dir in portage_dirs {
         let env_dir = dir.join("env");
@@ -169,10 +173,22 @@ mod tests {
         let td = portage_dir("dev-libs/foo:2  slotted\n", &[("slotted", "X=1\n")]);
         let dirs = vec![td.path().to_path_buf()];
         assert_eq!(
-            env_files_for(&dirs, &cpv("dev-libs/foo-1"), Some("2")).len(),
+            env_files_for(
+                &dirs,
+                &cpv("dev-libs/foo-1"),
+                Some(&portage_atom::Slot::new("2"))
+            )
+            .len(),
             1
         );
-        assert!(env_files_for(&dirs, &cpv("dev-libs/foo-1"), Some("3")).is_empty());
+        assert!(
+            env_files_for(
+                &dirs,
+                &cpv("dev-libs/foo-1"),
+                Some(&portage_atom::Slot::new("3"))
+            )
+            .is_empty()
+        );
     }
 
     #[test]

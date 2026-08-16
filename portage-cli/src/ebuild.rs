@@ -1097,8 +1097,8 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             .cache_entry(ebuild.cpv())
             .ok()
             .flatten()
-            .map(|c| c.metadata.slot.slot.as_str().to_string());
-        for env_file in portage_repo::env_files_for(&portage_dirs, ebuild.cpv(), slot.as_deref()) {
+            .map(|c| c.metadata.slot);
+        for env_file in portage_repo::env_files_for(&portage_dirs, ebuild.cpv(), slot.as_ref()) {
             shell
                 .source_env_file(&env_file)
                 .await
@@ -2298,7 +2298,7 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
     }
     registry.register(
         old_pkg.cpv(),
-        &old_pkg.slot().unwrap_or_default(),
+        &old_pkg.slot_raw().unwrap_or_default(),
         old_pkg.counter().ok().flatten().unwrap_or(0),
         preserve_paths.iter().cloned().collect(),
     );

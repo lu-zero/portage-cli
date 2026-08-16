@@ -364,7 +364,8 @@ impl AcceptKeywords {
         if self.per_package.is_empty() {
             return Cow::Borrowed(&self.global);
         }
-        let slot_str = slot.as_ref().map(|s| s.as_str());
+        let slot = slot.map(portage_atom::Slot::from_name);
+        let slot_str = slot.as_ref();
         let mut acc: Option<KeywordAccept> = None;
         for (dep, toks) in &self.per_package {
             if dep.matches_cpv(cpv, slot_str) {
@@ -463,7 +464,8 @@ impl AcceptOverlay {
         if self.per_package.is_empty() {
             return Cow::Borrowed(&self.global);
         }
-        let slot_str = slot.as_ref().map(|s| s.as_str());
+        let slot = slot.map(portage_atom::Slot::from_name);
+        let slot_str = slot.as_ref();
         let mut merged: Option<portage_repo::AcceptSet> = None;
         for (dep, overlay) in &self.per_package {
             if dep.matches_cpv(cpv, slot_str) {
@@ -571,13 +573,10 @@ fn effective_use_config(
         let stable = policy.accept_keywords.is_stable(&meta.keywords, cpv, slot);
         let iuse: std::collections::HashSet<Interned<DefaultInterner>> =
             meta.iuse.iter().map(Interned::from).collect();
-        policy.force_mask.apply(
-            &mut cfg,
-            cpv,
-            slot.as_ref().map(|s| s.as_str()),
-            stable,
-            &iuse,
-        );
+        let slot_dep = slot.map(portage_atom::Slot::from_name);
+        policy
+            .force_mask
+            .apply(&mut cfg, cpv, slot_dep.as_ref(), stable, &iuse);
     }
     cfg
 }
@@ -947,9 +946,10 @@ impl Adapter<'_> {
             m.iuse.iter().map(Interned::from).collect();
         // Flags pinned by use.force/use.mask (global, package-level and the stable
         // variants): hard profile decisions, never ceded.
-        let forced_masked =
-            self.force_mask
-                .pins(cpv, slot.as_ref().map(|s| s.as_str()), stable, &iuse_flags);
+        let slot_dep = slot.map(portage_atom::Slot::from_name);
+        let forced_masked = self
+            .force_mask
+            .pins(cpv, slot_dep.as_ref(), stable, &iuse_flags);
         // Only flags mentioned in the *violated* clause(s), not the whole
         // REQUIRED_USE tree: a package can have several independent top-level
         // clauses (e.g. util-linux's `python? ( ... ) su? ( pam )`), and one
@@ -1068,13 +1068,9 @@ impl PackageRepository for Adapter<'_> {
             let iuse: std::collections::HashSet<Interned<DefaultInterner>> = meta
                 .map(|m| m.iuse.iter().map(Interned::from).collect())
                 .unwrap_or_default();
-            self.force_mask.apply(
-                &mut cfg,
-                cpv,
-                slot.as_ref().map(|s| s.as_str()),
-                stable,
-                &iuse,
-            );
+            let slot_dep = slot.map(portage_atom::Slot::from_name);
+            self.force_mask
+                .apply(&mut cfg, cpv, slot_dep.as_ref(), stable, &iuse);
         }
 
         // Level-C: cede this package's REQUIRED_USE flags to the solver.
@@ -1333,11 +1329,12 @@ pub fn target_package(
     let target_slot = entries
         .iter()
         .filter(|(cpv, cache)| {
-            let slot = cache.metadata.slot.slot;
-            dep.matches_cpv(cpv, Some(slot.as_str()))
-                && policy
-                    .accept_keywords
-                    .accepts(&cache.metadata.keywords, cpv, Some(slot))
+            dep.matches_cpv(cpv, Some(&cache.metadata.slot))
+                && policy.accept_keywords.accepts(
+                    &cache.metadata.keywords,
+                    cpv,
+                    Some(cache.metadata.slot.slot),
+                )
                 && !is_masked(
                     policy.package_mask,
                     policy.package_unmask,
@@ -1445,7 +1442,10 @@ pub fn filter_reasons_for_atom(
 ) -> Vec<AutounmaskCandidate> {
     filter_reasons_for(data, &dep.cpn, version_set, policy)
         .into_iter()
-        .filter(|c| dep.matches_cpv(&c.cpv, c.slot.as_ref().map(|s| s.as_str())))
+        .filter(|c| {
+            let slot = c.slot.map(portage_atom::Slot::from_name);
+            dep.matches_cpv(&c.cpv, slot.as_ref())
+        })
         .collect()
 }
 

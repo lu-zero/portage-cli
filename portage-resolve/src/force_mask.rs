@@ -88,7 +88,12 @@ pub fn index_by_cpn(entries: Vec<(Dep, Vec<String>)>) -> PkgRules {
 /// [`Dep::matches_cpv`] so version **and** `:slot` constraints on
 /// `package.use.force`/`package.use.mask` atoms are honoured (mask_matches
 /// alone is slot-blind).
-fn accumulate(rules: &PkgRules, cpv: &Cpv, slot: Option<&str>, set: &mut BTreeSet<Flag>) {
+fn accumulate(
+    rules: &PkgRules,
+    cpv: &Cpv,
+    slot: Option<&portage_atom::Slot>,
+    set: &mut BTreeSet<Flag>,
+) {
     let Some(entries) = rules.get(&cpv.cpn) else {
         return;
     };
@@ -128,7 +133,7 @@ impl ForceMask {
     pub fn effective(
         &self,
         cpv: &Cpv,
-        slot: Option<&str>,
+        slot: Option<&portage_atom::Slot>,
         stable: bool,
         iuse: &HashSet<Flag>,
     ) -> (BTreeSet<Flag>, BTreeSet<Flag>) {
@@ -168,7 +173,7 @@ impl ForceMask {
         &self,
         cfg: &mut UseConfig,
         cpv: &Cpv,
-        slot: Option<&str>,
+        slot: Option<&portage_atom::Slot>,
         stable: bool,
         iuse: &HashSet<Flag>,
     ) {
@@ -193,7 +198,7 @@ impl ForceMask {
     pub fn pins(
         &self,
         cpv: &Cpv,
-        slot: Option<&str>,
+        slot: Option<&portage_atom::Slot>,
         stable: bool,
         iuse: &HashSet<Flag>,
     ) -> BTreeSet<Flag> {
@@ -319,9 +324,11 @@ mod tests {
         };
         let c = cpv("sys-devel/gcc-13.2.0");
         let iuse = iuse_of(&["openmp"]);
-        let (forced_match, _) = fm.effective(&c, Some("13"), false, &iuse);
+        let (forced_match, _) =
+            fm.effective(&c, Some(&portage_atom::Slot::new("13")), false, &iuse);
         assert!(forced_match.contains(&flag("openmp")));
-        let (forced_other, _) = fm.effective(&c, Some("14"), false, &iuse);
+        let (forced_other, _) =
+            fm.effective(&c, Some(&portage_atom::Slot::new("14")), false, &iuse);
         assert!(
             !forced_other.contains(&flag("openmp")),
             "slot-scoped force must not apply to a different slot"
