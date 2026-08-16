@@ -740,7 +740,15 @@ mod tests {
     #[test]
     fn resolve_all_sets_reports_both_resolved_and_unresolvable_sets() {
         let (_tmp, root) = scratch_root();
-        let sets = resolve_all_sets(&portage_resolve::Roots::for_test(root.as_str()));
+        // `for_test` alone leaves `config()` unset, which makes
+        // `resolve_set` fall back to the *real* host `/etc/portage` for the
+        // profile stack — on a dev box with Gentoo actually installed that
+        // silently succeeds and masks the bug, but on a bare CI runner (no
+        // `/etc/portage/make.profile` at all) it fails, so every set here
+        // errors instead of resolving against this scratch root's own
+        // (empty but valid) profile dir. `with_config` pins it down.
+        let roots = portage_resolve::Roots::for_test(root.as_str()).with_config(Some(root.clone()));
+        let sets = resolve_all_sets(&roots);
 
         let myset = sets.get("myuserset").expect("user set is known");
         assert_eq!(myset.atoms, vec!["app-shells/bash".to_string()]);
@@ -769,7 +777,10 @@ mod tests {
         )
         .unwrap();
 
-        let sets = resolve_all_sets(&portage_resolve::Roots::for_test(root.as_str()));
+        // See the comment above `with_config` in the previous test — same
+        // host-`/etc/portage` leak, avoided the same way.
+        let roots = portage_resolve::Roots::for_test(root.as_str()).with_config(Some(root.clone()));
+        let sets = resolve_all_sets(&roots);
 
         let fake = sets.get("builtinfake").expect("sets.conf section is known");
         assert!(fake.atoms.is_empty());
