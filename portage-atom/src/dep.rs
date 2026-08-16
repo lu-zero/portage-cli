@@ -129,9 +129,19 @@ impl Dep {
             return false;
         }
         if let Some(crate::SlotDep::Slot { slot: Some(s), .. }) = &self.slot_dep
-            && slot.is_some_and(|cand| s.slot != cand.slot)
+            && let Some(cand) = slot
         {
-            return false;
+            if s.slot != cand.slot {
+                return false;
+            }
+            // Only when both sides name one: a candidate built by
+            // [`Slot::from_name`] has no sub-slot *recorded*, which is not the
+            // same as having none, and must not refute `:0/1`.
+            if let (Some(want), Some(have)) = (s.subslot, cand.subslot)
+                && want != have
+            {
+                return false;
+            }
         }
         let (Some(op), Some(want)) = (self.op, &self.version) else {
             return self.version.is_none();

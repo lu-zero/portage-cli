@@ -192,4 +192,21 @@ mod tests {
         assert_eq!(find_packages(&vdb, "app-arch/zstd:0/1").len(), 1);
         assert!(find_packages(&vdb, "app-arch/zstd:1").is_empty());
     }
+
+    #[test]
+    fn a_wrong_subslot_does_not_match() {
+        // `:0/2` names a sub-slot the installed package does not have, so it
+        // must miss even though the slot matches — `qlist -I 'app-arch/zstd:0/2'`
+        // and `equery list` both return nothing against an installed `0/1`.
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        write_pkg(&vdb_root, "app-arch", "zstd-1.5.7", "0/1");
+        let vdb = open(tmp.path());
+
+        assert!(
+            find_packages(&vdb, "app-arch/zstd:0/2").is_empty(),
+            "a sub-slot constraint must be honoured when the candidate has one"
+        );
+        assert_eq!(find_packages(&vdb, "app-arch/zstd:0/1").len(), 1);
+    }
 }
