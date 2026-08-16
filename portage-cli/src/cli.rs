@@ -2115,15 +2115,46 @@ pub enum PkgCommand {
     Use {
         /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
-        /// Add flags (written verbatim, e.g. truetype)
-        #[arg(short = 'a', long = "add", value_name = "FLAG")]
+        /// Add flags (written verbatim, e.g. truetype) — euse calls this
+        /// --enable/-E
+        #[arg(
+            short = 'a',
+            long = "add",
+            visible_short_alias = 'E',
+            value_name = "FLAG"
+        )]
         add: Vec<String>,
-        /// Subtract flags (written with leading '-', e.g. -themes)
-        #[arg(short = 's', long = "subtract", value_name = "FLAG")]
+        /// Subtract flags (written with leading '-', e.g. -themes) — euse
+        /// calls this --disable/-D
+        #[arg(
+            short = 's',
+            long = "subtract",
+            visible_short_alias = 'D',
+            value_name = "FLAG"
+        )]
         subtract: Vec<String>,
-        /// Drop flags entirely (removes both flag and -flag forms)
-        #[arg(short = 'd', long = "drop", value_name = "FLAG")]
+        /// Drop flags entirely (removes both flag and -flag forms) — euse
+        /// calls this --remove/-R or --prune/-P
+        #[arg(
+            short = 'd',
+            long = "drop",
+            visible_short_aliases = ['R', 'P'],
+            value_name = "FLAG"
+        )]
         drop: Vec<String>,
+        /// Preview the resulting entry without writing package.use
+        #[arg(short = 'n', long = "dry-run")]
+        dry_run: bool,
+        /// Show descriptions for the given USE flags on this package
+        /// (metadata.xml/use.local.desc first, falling back to the global
+        /// profiles/use.desc)
+        #[arg(
+            short = 'i',
+            long = "info",
+            value_name = "FLAG",
+            conflicts_with_all = ["add", "subtract", "drop"]
+        )]
+        info: Vec<String>,
         /// Target file inside package.use/ (default: `<cat>-<pkg>`)
         #[arg(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,

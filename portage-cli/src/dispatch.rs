@@ -202,7 +202,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Pkg { command } => pkg::run(command, globals),
+        Applet::Pkg { command } => pkg::run(command, globals).await,
         Applet::Query { command } => run_query(command, globals).await,
         Applet::Clean { target } => run_clean(target),
         Applet::Use {
