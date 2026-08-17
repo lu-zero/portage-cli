@@ -3007,3 +3007,172 @@ fn cross_target_virtual_rdepend_provider_is_target_not_host() {
             .collect::<Vec<_>>()
     );
 }
+
+/// The `sys-apps/coreutils` shape: RDEPEND nests one USE-conditional group
+/// inside another, `!static? ( acl? ( sys-apps/acl ) )` (LIB_DEPEND folded
+/// into RDEPEND at the ebuild level — PMS doesn't special-case it, it's just
+/// ordinary nested group syntax). `static` is off and `acl` is on, so the
+/// inner atom should convert to a real requirement and pull `sys-apps/acl`
+/// into the solution.
+#[test]
+fn nested_use_conditional_groups_still_pull_the_inner_atom() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/coreutils-9.11").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("!static? ( acl? ( sys-apps/acl ) )").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/acl-2.4.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+
+    let mut config = UseConfig::new();
+    config.enable(Interned::intern("acl"));
+    repo.set_use_config(config);
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    let coreutils = PortagePackage::slotted(
+        Cpn::parse("sys-apps/coreutils").unwrap(),
+        Interned::intern("0"),
+    );
+    let solution = provider
+        .resolve_targets(vec![(coreutils, PortageVersionSet::any())])
+        .unwrap();
+
+    let acl = Cpn::parse("sys-apps/acl").unwrap();
+    assert!(
+        solution.iter().any(|(p, _)| p.cpn() == &acl),
+        "sys-apps/acl must be pulled in via the nested !static?( acl?( ... ) ) \
+         group; solution={:?}",
+        solution
+            .iter()
+            .map(|(p, v)| format!("{p}-{v}"))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The `net-misc/rsync` shape: RDEPEND has a *versioned* atom inside a single
+/// USE-conditional group, `acl? ( >=virtual/acl-2.4.0 )`. The installed
+/// `virtual/acl-0-r2` (Favor policy) does not satisfy `>=2.4.0`, so this
+/// should force a real upgrade requirement, not a silently-dropped edge.
+#[test]
+fn versioned_atom_inside_use_conditional_forces_the_upgrade() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/rsync-3.5.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("acl? ( >=virtual/acl-2.4.0 )").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("virtual/acl-0-r2").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("virtual/acl-2.4.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+
+    let mut config = UseConfig::new();
+    config.enable(Interned::intern("acl"));
+    repo.set_use_config(config);
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    provider.add_installed(InstalledPackage {
+        package: PortagePackage::slotted(Cpn::parse("virtual/acl").unwrap(), Interned::intern("0")),
+        version: Version::parse("0-r2").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+
+    let rsync =
+        PortagePackage::slotted(Cpn::parse("net-misc/rsync").unwrap(), Interned::intern("0"));
+    let solution = provider
+        .resolve_targets(vec![(rsync, PortageVersionSet::any())])
+        .unwrap();
+
+    let virtual_acl = Cpn::parse("virtual/acl").unwrap();
+    let got = solution.iter().find(|(p, _)| p.cpn() == &virtual_acl);
+    assert_eq!(
+        got.map(|(_, v)| v.clone()),
+        Some(Version::parse("2.4.0").unwrap()),
+        "virtual/acl must be upgraded to satisfy >=2.4.0, not silently \
+         dropped or left at the unsatisfying installed 0-r2; solution={:?}",
+        solution
+            .iter()
+            .map(|(p, v)| format!("{p}-{v}"))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The real `virtual/acl-2.4.0` shape: `kernel_linux? ( >=sys-apps/acl-2.4.0[
+/// static-libs?,abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,
+/// abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?] )` — a
+/// versioned atom carrying eight simultaneous conditional USE-deps (the
+/// multilib-build ABI flags), none of which this arm64 fixture's `sys-apps/acl`
+/// declares in IUSE. `kernel_linux` is on (every Linux profile sets it).
+#[test]
+fn many_conditional_use_deps_on_one_atom_still_pull_it_in() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("virtual/acl-2.4.0").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse(
+                "kernel_linux? ( >=sys-apps/acl-2.4.0[static-libs?,abi_x86_32(-)?,\
+                 abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,abi_mips_n64(-)?,\
+                 abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?] )",
+            )
+            .unwrap())
+            .into(),
+            ..empty_deps()
+        },
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/acl-2.4.0-r2").unwrap(),
+        Some(Interned::intern("0")),
+        None,
+        empty_deps(),
+    );
+
+    let mut config = UseConfig::new();
+    config.enable(Interned::intern("kernel_linux"));
+    repo.set_use_config(config);
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    let virtual_acl =
+        PortagePackage::slotted(Cpn::parse("virtual/acl").unwrap(), Interned::intern("0"));
+    let solution = provider
+        .resolve_targets(vec![(virtual_acl, PortageVersionSet::any())])
+        .unwrap();
+
+    let acl = Cpn::parse("sys-apps/acl").unwrap();
+    assert!(
+        solution.iter().any(|(p, _)| p.cpn() == &acl),
+        "sys-apps/acl must be pulled in despite the pile of ABI use-deps on \
+         the atom; solution={:?}",
+        solution
+            .iter()
+            .map(|(p, v)| format!("{p}-{v}"))
+            .collect::<Vec<_>>()
+    );
+}
