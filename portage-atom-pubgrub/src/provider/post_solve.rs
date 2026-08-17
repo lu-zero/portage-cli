@@ -333,7 +333,12 @@ impl PortageDependencyProvider {
     /// Effective state of `flag` on a non-installed package version that will be
     /// freshly built.  Mirrors what the build will actually see: `package.use`
     /// and global USE applied on top of the ebuild's IUSE defaults.  For a flag
-    /// outside the package's IUSE, only the dep's own `(+)`/`(-)` default applies.
+    /// outside the package's IUSE, only the dep's own `(+)`/`(-)` default applies
+    /// — except at the package's already-installed version, where the repo may
+    /// carry no metadata at all for that exact cpv (revbumped or pruned from the
+    /// tree while still installed): there `installed_iuse`/`installed_use` (the
+    /// VDB's own record, kept for exactly this gap) are the ground truth instead
+    /// of the dep's default.
     pub(crate) fn effective_flag_new(
         &self,
         pkg: &PortagePackage,
@@ -343,12 +348,22 @@ impl PortageDependencyProvider {
     ) -> bool {
         let vd = self.package_data(pkg).and_then(|d| d.versions.get(ver));
         let in_iuse = vd.is_some_and(|v| v.iuse.contains(&flag));
-        if !in_iuse {
-            return matches!(dep_default, Some(UseDefault::Enabled));
+        if in_iuse {
+            // `desired` already folds package.use, global USE, and IUSE
+            // defaults, so a single lookup gives the flag's effective state.
+            return vd.is_some_and(|v| v.desired.get(flag) == UseFlagState::Enabled);
         }
-        // `desired` already folds package.use, global USE, and IUSE defaults, so
-        // a single lookup gives the flag's effective state for this build.
-        vd.is_some_and(|v| v.desired.get(flag) == UseFlagState::Enabled)
+        let at_installed_ver = self.installed.get(pkg).is_some_and(|(iv, _)| iv == ver);
+        if at_installed_ver
+            && let Some(iuse) = self.installed_iuse.get(pkg)
+            && iuse.contains(&flag)
+        {
+            return self
+                .installed_use
+                .get(pkg)
+                .is_some_and(|u| u.contains(&flag));
+        }
+        matches!(dep_default, Some(UseDefault::Enabled))
     }
 
     pub(crate) fn use_dep_branch_satisfied(&self, udeps: &[convert::UseDepConstraint]) -> bool {

@@ -941,6 +941,86 @@ mod tests {
         assert!(!hits[0].victims[0].retained_installed);
     }
 
+    // The `app-alternatives/gpg` shape: `reference?` (default-on) RDEPEND pulls
+    // in `app-crypt/gnupg[alternatives(-)]`, positively — the *same* atom whose
+    // negation `!app-crypt/gnupg[-alternatives(-)]` is the blocker guarding
+    // against a gnupg built *without* `alternatives`. gnupg lands in the
+    // solution at its installed version (Favor policy, satisfies both atoms),
+    // and — the regression this guards — that exact installed version has since
+    // been revbumped out of the repo, so only a newer version's metadata is on
+    // hand. The blocker must still be evaluated against the VDB's real
+    // `alternatives` flag, not silently treated as off because the repo has no
+    // IUSE data for the exact installed version.
+    #[test]
+    fn blocker_use_dep_checks_vdb_flags_when_installed_version_is_gone_from_the_repo() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+        repo.add_version(
+            portage_atom::Cpv::parse("app-alternatives/gpg-1").unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            PackageDeps {
+                rdepend: (vec![
+                    DepEntry::Atom(Dep::parse("!app-crypt/gnupg[-alternatives(-)]").unwrap()),
+                    DepEntry::Atom(Dep::parse("app-crypt/gnupg[alternatives(-)]").unwrap()),
+                ])
+                .into(),
+                ..empty()
+            },
+        );
+        // Only a newer gnupg is in the repo; the installed 2.5.20 below is not
+        // — mirrors a revbump/version removal that leaves the VDB pointing at
+        // an ebuild no longer in the tree.
+        repo.add_version(
+            portage_atom::Cpv::parse("app-crypt/gnupg-2.5.21").unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            empty(),
+        );
+
+        repo.set_use_config(UseConfig::new());
+        let mut provider = PortageDependencyProvider::new(repo);
+        provider.add_installed(crate::provider::InstalledPackage {
+            package: PortagePackage::slotted(
+                Cpn::parse("app-crypt/gnupg").unwrap(),
+                Interned::intern("0"),
+            ),
+            version: Version::parse("2.5.20").unwrap(),
+            policy: crate::provider::InstalledPolicy::Favor,
+            active_use: vec![Interned::intern("alternatives")],
+            iuse: vec![Interned::intern("alternatives")],
+        });
+
+        let solution = provider
+            .resolve_targets(vec![(
+                PortagePackage::slotted(
+                    Cpn::parse("app-alternatives/gpg").unwrap(),
+                    Interned::intern("0"),
+                ),
+                PortageVersionSet::any(),
+            )])
+            .unwrap();
+        assert_eq!(
+            solution.get(&PortagePackage::slotted(
+                Cpn::parse("app-crypt/gnupg").unwrap(),
+                Interned::intern("0")
+            )),
+            Some(&Version::parse("2.5.20").unwrap()),
+            "the installed version should be kept, not upgraded"
+        );
+        assert!(
+            provider.check_blockers(&solution).is_empty(),
+            "installed gnupg has `alternatives` on, so the `[-alternatives(-)]` \
+             blocker guard must not fire"
+        );
+    }
+
     #[test]
     fn check_blockers_no_conflict_when_clean() {
         let mut repo = InMemoryRepository::new();
