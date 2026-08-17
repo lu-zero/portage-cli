@@ -278,6 +278,103 @@ fn installed_favored_picks_installed_version() {
     );
 }
 
+/// Regression for the `@system` version-choice-ordering bug (see
+/// `todo/pubgrub-version-choice-heuristic.md`): a dependency with *fewer*
+/// in-range versions than a root target must not get decided (and committed
+/// to its installed version) before that root target's own dependency
+/// bound is even examined.
+///
+/// `sys-libs/libacl` (2 versions, not a root target, installed at the older
+/// one) is under-constrained by `leader` (a bare, unversioned dep) but
+/// strictly constrained by `syncer`'s newest version (`>=libacl-2.0`).
+/// `syncer` has more in-range versions (3) than `libacl` (2), so plain
+/// minimum-remaining-values would decide `libacl` first and lock it to the
+/// installed `1.0` — silently holding both `libacl` and `syncer` back a
+/// version, exactly like `virtual/acl`/`net-misc/rsync` in the real bug.
+/// Both `leader` and `syncer` are root targets (`resolve_targets`); `libacl`
+/// is not.
+#[test]
+fn root_target_priority_avoids_premature_dependency_commitment() {
+    let mut repo = InMemoryRepository::new();
+
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-1.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-libs/libacl-2.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+
+    repo.add_version(
+        portage_atom::Cpv::parse("sys-apps/leader-1.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse("sys-libs/libacl").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.3.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.4.0").unwrap(),
+        None,
+        None,
+        empty_deps(),
+    );
+    repo.add_version(
+        portage_atom::Cpv::parse("net-misc/syncer-3.5.0").unwrap(),
+        None,
+        None,
+        PackageDeps {
+            rdepend: (DepEntry::parse(">=sys-libs/libacl-2.0").unwrap()).into(),
+            ..empty_deps()
+        },
+    );
+
+    let mut provider = PortageDependencyProvider::new(repo);
+    let libacl = PortagePackage::unslotted(Cpn::parse("sys-libs/libacl").unwrap());
+    provider.add_installed(InstalledPackage {
+        package: libacl.clone(),
+        version: Version::parse("1.0").unwrap(),
+        policy: InstalledPolicy::Favor,
+        active_use: vec![],
+        iuse: vec![],
+    });
+
+    let leader = PortagePackage::unslotted(Cpn::parse("sys-apps/leader").unwrap());
+    let syncer = PortagePackage::unslotted(Cpn::parse("net-misc/syncer").unwrap());
+    let solution = provider
+        .resolve_targets(vec![
+            (leader, PortageVersionSet::any()),
+            (syncer.clone(), PortageVersionSet::any()),
+        ])
+        .unwrap();
+
+    assert_eq!(
+        solution.get(&syncer),
+        Some(&Version::parse("3.5.0").unwrap()),
+        "root target syncer should get the newest version, not be held back \
+         by a dependency the solver committed to prematurely"
+    );
+    assert_eq!(
+        solution.get(&libacl),
+        Some(&Version::parse("2.0").unwrap()),
+        "libacl should upgrade to satisfy syncer's real requirement instead \
+         of staying pinned at the installed version"
+    );
+}
+
 /// `-uD` / `prefer_update`: transitive deps upgrade in-slot even when the
 /// installed version still satisfies the atom (emerge deep update).
 #[test]
