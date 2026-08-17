@@ -343,6 +343,37 @@ pub(super) fn report_repo_constraint_violations(violations: &[portage_atom_pubgr
     }
 }
 
+/// Report root targets (`@system`/`@world` members, explicit atoms) the
+/// solver landed below their newest visible version. Advisory only — the
+/// plan is never mutated because of this; it just names a divergence that
+/// used to be silent. See `PortageDependencyProvider::check_held_back_targets`
+/// and `todo/pubgrub-version-choice-heuristic.md` for the underlying
+/// version-choice-ordering cause.
+pub(super) fn report_held_back_targets(held_back: &[portage_atom_pubgrub::HeldBackTarget]) {
+    let mut out = anstream::stderr();
+    writeln!(
+        out,
+        "\n{C_OFF}***{C_OFF:#} Held back below the newest available version:\n"
+    )
+    .ok();
+    for h in held_back {
+        write!(
+            out,
+            "  {C_PKG}{}{C_PKG:#}-{} (newest: {})",
+            h.package, h.selected, h.newest
+        )
+        .ok();
+        match &h.blocked_by {
+            Some((dep_pkg, dep_ver)) => {
+                writeln!(out, " — blocked by {C_PKG}{dep_pkg}{C_PKG:#}-{dep_ver}").ok();
+            }
+            None => {
+                writeln!(out).ok();
+            }
+        }
+    }
+}
+
 /// Report classified blocker (`!`/`!!`) hits: Step 1 of the blocker Tier-1
 /// auto-unmerge plan — analysis and richer
 /// advisory text only, no plan mutation. `PreExisting` verdicts (both sides

@@ -68,7 +68,7 @@ pub use repository::{
 };
 pub use required_use::RequiredUse;
 pub use use_config::{UseConfig, UseFlagState, UseLayer, UseOverride, resolve_effective_use};
-pub use validate::{BlockerHit, BlockerVictim, SlotOperatorBinding};
+pub use validate::{BlockerHit, BlockerVictim, HeldBackTarget, SlotOperatorBinding};
 pub use version_set::PortageVersionSet;
 
 /// Render a pubgrub `NoSolution` derivation tree into a human-readable

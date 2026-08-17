@@ -1473,6 +1473,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             output::report_repo_constraint_violations(&repo_violations);
         }
 
+        let held_back = provider.check_held_back_targets(&solution);
+        if !held_back.is_empty() {
+            output::report_held_back_targets(&held_back);
+        }
+
         let ru_violations = required_use::find_violations(&data, &order, &final_policy, &ceded);
         if !ru_violations.is_empty() {
             output::report_required_use(&ru_violations);

@@ -62,6 +62,23 @@ pub struct BlockerHit {
     pub victims: Vec<BlockerVictim>,
 }
 
+/// A root target held back below its newest visible version — see
+/// [`PortageDependencyProvider::check_held_back_targets`].
+#[derive(Debug, Clone)]
+pub struct HeldBackTarget {
+    /// The held-back root target.
+    pub package: PortagePackage,
+    /// The version the solver actually selected.
+    pub selected: Version,
+    /// The newest version visible to the solver (present in the repo data,
+    /// regardless of whether any constraint currently accepts it).
+    pub newest: Version,
+    /// The dependency edge on `newest` that the current solution violates,
+    /// if one could be identified: `(dependency package, version the
+    /// solution actually picked for it)`.
+    pub blocked_by: Option<(PortagePackage, Version)>,
+}
+
 impl PortageDependencyProvider {
     /// Validate USE-dep constraints against a solution (post-solve check).
     ///
@@ -216,6 +233,56 @@ impl PortageDependencyProvider {
             }
         }
         errors
+    }
+
+    /// Root targets (`@system`/`@world` members, explicit atoms) that landed
+    /// below the newest version visible to the solver, with — best effort —
+    /// the dependency edge on that newest version the current solution
+    /// violates. `solve.rs::prioritize`'s root-target tier decides these
+    /// before their dependencies precisely to avoid this, but a blocking
+    /// edge that sits on an already-committed *transitive* dependency
+    /// (rather than directly on the target) can still defeat it. Advisory
+    /// only — this never changes the plan, it just names the divergence
+    /// instead of leaving it silent. See
+    /// `todo/pubgrub-version-choice-heuristic.md`.
+    pub fn check_held_back_targets(
+        &self,
+        solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
+    ) -> Vec<HeldBackTarget> {
+        let mut out = Vec::new();
+        for target in &self.root_targets {
+            if target.is_virtual() {
+                continue;
+            }
+            let Some(selected) = solution.get(target) else {
+                continue;
+            };
+            let Some(data) = self.package_data(target) else {
+                continue;
+            };
+            let Some(newest) = data.versions.keys().max() else {
+                continue;
+            };
+            if newest <= selected {
+                continue;
+            }
+            let blocked_by = data.versions.get(newest).and_then(|vd| {
+                let pubgrub::Dependencies::Available(ref cs) = vd.merged else {
+                    return None;
+                };
+                cs.iter().find_map(|(dep_pkg, dep_vs)| {
+                    let sol_ver = solution.get(dep_pkg)?;
+                    (!dep_vs.contains(sol_ver)).then(|| (dep_pkg.clone(), sol_ver.clone()))
+                })
+            });
+            out.push(HeldBackTarget {
+                package: target.clone(),
+                selected: selected.clone(),
+                newest: newest.clone(),
+                blocked_by,
+            });
+        }
+        out
     }
 
     /// Validate blockers against a solution (post-solve check).
