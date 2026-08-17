@@ -24,13 +24,10 @@ impl DependencyProvider for PortageDependencyProvider {
     type M = String;
     type Err = Error;
     // `(conflict_count, is_root_target, Reverse(version_count))`: conflict
-    // count still dominates (pubgrub's own backtracking-efficiency signal is
-    // untouched), but among equally-conflicted packages a root target
-    // (`@system`/`@world` member, explicit atom) is decided before its
-    // dependencies — matching emerge's argument semantics (a named atom pulls
-    // the best accepted version, deps bend around it) instead of letting an
-    // under-constrained dependency get committed to its installed version
-    // before a stricter dependent is even examined.
+    // count still dominates pubgrub's own backtracking signal, but among
+    // ties a root target is decided before its dependencies — matching
+    // emerge's argument semantics (a named atom pulls the best version,
+    // deps bend around it).
     type Priority = (u32, bool, Reverse<usize>);
 
     fn prioritize(
@@ -48,7 +45,7 @@ impl DependencyProvider for PortageDependencyProvider {
         }
         (
             stats.conflict_count(),
-            self.root_targets.contains(package),
+            self.root_targets.contains_key(package),
             Reverse(count),
         )
     }
@@ -118,7 +115,7 @@ impl DependencyProvider for PortageDependencyProvider {
                     // fall-through — unless the resolve is selective without
                     // `--update`, where a satisfied target keeps what it has.
                     if !self.prefer_update
-                        && (self.selective_no_update || !self.root_targets.contains(package))
+                        && (self.selective_no_update || !self.root_targets.contains_key(package))
                         && range.contains(installed_ver)
                     {
                         return Ok(Some(installed_ver.clone()));

@@ -27,6 +27,23 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` now resolves cleanly on real Debian 12 (real python step, SLOT-aware provided, linux-headers/glibc provided, a real zstd↔meson↔python cycle root-caused to a missing host `meson`); a full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [`meson-zstd-python-hard-cycle.md`](./meson-zstd-python-hard-cycle.md) |
 | **10** | **Workdir dual-root race (P0)** — per-target builddirs + lock/schedule like Portage; dual plan entries under `--jobs` collide today | 🔴 | [[workdir-dual-root]], clang findings #3/#4 |
 
+### Solver correctness (found 2026-08-17)
+
+- 🟡 **`@system`/`@world` plans could silently pick stale versions — Phases
+  1+2 landed and review-hardened.** pubgrub's `prioritize` decided packages
+  in fewest-in-range-versions order with no Portage-aware tiering, so an
+  under-constrained installed dep (`virtual/acl`) could get committed
+  before a stricter dependent (`net-misc/rsync`) was even examined; both
+  silently held back a version, no error. A root-target priority tier
+  (Phase 1) plus an advisory `check_held_back_targets` detector (Phase 2)
+  fixed the live `rsync`/`virtual/acl` case. A same-day review pass then
+  found and fixed two false-positive classes in the Phase 2 detector
+  itself (spurious reports on `-n`/`-N`/`Lock`-policy resolves and on
+  version-capped atoms — 68 spurious lines on a real `@world` down to 0)
+  and a VDB-fallback correctness bug in `effective_flag_new`. Phases 3-5
+  (benchmark gate, full follower tier, re-solve backstop) still open:
+  [[pubgrub-version-choice-heuristic]]
+
 ### Smaller / polish (pick opportunistically)
 
 - Shallow `-p` package-set can still differ slightly from emerge on some hosts — see `todo/done/nonemptytree-bdeps-gap.md`, `todo/done/deep-in-slot-upgrades.md`
@@ -38,12 +55,32 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 - Review sweep log: [[review-findings-2026-07-24]]; structural cross notes: [[cross-support-self-review]]
 - Whether `history/merges.jsonl`'s unbounded growth (full-file-parse-per-query on the ETA hot path) needs rotation or a different format — not measured yet: [[activity-storage-format]]
 - Cross-emerge `llvm-core/clang` for riscv64 under both `--prefix` and `--local`, `-b`/buildpkg correctness included — plan drafted; Scenario A blocked on workdir race, B on local bootstrap: [[clang-crossbuild-prefix-local-test-plan]]
+- `effective_flag_new`'s VDB fallback (`post_solve.rs`) only fires when the
+  installed cpv's repo IUSE is empty (no metadata, or a synthetic pruned-
+  version stub); an in-place IUSE change with no revbump — same cpv still
+  in the tree, current IUSE just no longer lists the flag — still falls to
+  the dep's own default instead of the VDB record, the same false-positive
+  blocker class `2802c1b` fixed reached through a different metadata path
+- `check_held_back_targets`'s `blocked_by` reads a version's full unfiltered
+  `vd.merged`, not what `get_dependencies` actually fed the solver for that
+  target (`--nodeps`, cross `MergeRoot`-stamped keys, or `broot_filtered`
+  host-satisfied edges dropped) — can name an edge that never constrained
+  the solve, or silently return `None` in cross mode; best-effort field,
+  not yet a bug in practice
+- `report_held_back_targets` renders `pkg:slot-version` (slot spliced in,
+  only the package half colorized) while the sibling reports at
+  `output.rs:184`/`output.rs:621` use plain `pkg-version` — cosmetic
+  inconsistency, not yet fixed
+- `em pkg use`'s bare-atom "Active USE" summary (2026-08-16, `3671d26`) is a fold of IUSE defaults + profile/make.conf USE + the atom's own package.use — no `use.force`/`use.mask`/`REQUIRED_USE` applied, so it can show a flag as active that the real resolved USE would force off or drop
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 
 | Item | When | Notes |
 |------|------|--------|
+| `em use`/`em pkg use` reworked into an euse-compatible USE/USE_EXPAND editor | 2026-08-16 | `em use` gained `-e`/`--expand VAR` (any USE_EXPAND var, not just `USE`), `-L`/`--list-expand`, `-i`/`--info`, euse's own `-E`/`-D`/-`R`/`-P` short letters, `--dry-run` with colorized diff; `em pkg use` matched with the same `-n`/`--dry-run`/`-i`/`--info`, plus a best-effort "Active USE" summary for a bare `em pkg use <atom>` (approximation only — no use.force/use.mask/REQUIRED_USE, fails soft on unresolvable repo/profile). `f096c89`/`3671d26`. |
+| `matches_cpv` takes a typed `Slot`, fixing two live slot-matching bugs (`:0` matched nothing for 104/723 subslotted packages; a wrong sub-slot like `:0/2` still matched an installed `0/1`) | 2026-08-16 | `InstalledPackage::slot()` now returns `Slot`, not raw text; `ea68f85`/`2ee93d7`/`2bc6f59`, memory: `slot-matching-bugs-typed-refactor` |
+| VDB/set read-path perf pass — CONTENTS out of `field_cache`, needle-seek instead of full-line parse, SIMD `memmem`, GLSA prefilter, interned slot/USE/IUSE/KEYWORDS/repository | 2026-08-15–16 | `em --info -v` 7.90x faster / 16x leaner RSS, solver paths flat; bench anchor `559b644`; memory: `benchmark-vdb-set-perf-2026-08-16` |
 | Package-set (`@name`) coverage — `@selected-*`, `@live-rebuild`, `@deprecated-live-rebuild`, `@module-rebuild`, `@x11-module-rebuild`, `@profile` bug, `@security` | 2026-08-13 | whole 2026-08-12 audit closed; `@security` last, via `em glsa`'s GLSA machinery; [[package-sets-support]] [[for_opencode]] |
 | `cede_required_use` awk-4/stage1 REQUIRED_USE-reconsideration bug | 2026-08-01 | `Adapter::rebuilding_cpvs`, Fable-designed, [[em-stages-scenario-matrix]] |
 | Blocker Tier-1 Step 1 (classify_blockers advisory verdicts) | 2026-08-01 | [[blocker-enforcement]] (Step 2 unmerge still open) |

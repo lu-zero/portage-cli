@@ -5,6 +5,7 @@ use crate::error::Error;
 use crate::package::PortagePackage;
 use crate::provider::PortageDependencyProvider;
 use crate::use_config::{UseConfig, UseFlagState};
+use crate::version_set::PortageVersionSet;
 
 /// A resolved slot-operator binding.
 ///
@@ -238,19 +239,21 @@ impl PortageDependencyProvider {
     /// Root targets (`@system`/`@world` members, explicit atoms) that landed
     /// below the newest version visible to the solver, with — best effort —
     /// the dependency edge on that newest version the current solution
-    /// violates. `solve.rs::prioritize`'s root-target tier decides these
-    /// before their dependencies precisely to avoid this, but a blocking
-    /// edge that sits on an already-committed *transitive* dependency
-    /// (rather than directly on the target) can still defeat it. Advisory
-    /// only — this never changes the plan, it just names the divergence
-    /// instead of leaving it silent. See
-    /// `todo/pubgrub-version-choice-heuristic.md`.
+    /// violates. Advisory only: this never changes the plan, it just names
+    /// a divergence that used to be silent.
+    // `solve.rs::prioritize`'s root-target tier decides these before their
+    // dependencies precisely to avoid this, but a blocking edge on an
+    // already-committed *transitive* dependency can still defeat it. See
+    // `todo/pubgrub-version-choice-heuristic.md`.
     pub fn check_held_back_targets(
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
     ) -> Vec<HeldBackTarget> {
+        let mut targets: Vec<(&PortagePackage, &PortageVersionSet)> =
+            self.root_targets.iter().collect();
+        targets.sort_by(|a, b| a.0.cmp(b.0));
         let mut out = Vec::new();
-        for target in &self.root_targets {
+        for (target, requested) in targets {
             if target.is_virtual() {
                 continue;
             }
@@ -260,10 +263,24 @@ impl PortageDependencyProvider {
             let Some(data) = self.package_data(target) else {
                 continue;
             };
-            let Some(newest) = data.versions.keys().max() else {
+            // Newest version the user's own atom actually accepts — a target
+            // capped by its own version constraint (`<foo-2`) isn't held
+            // back just because a later upstream release exists.
+            let Some(newest) = data.versions.keys().filter(|v| requested.contains(v)).max() else {
                 continue;
             };
             if newest <= selected {
+                continue;
+            }
+            // choose_version's own Favor/Lock policy deliberately keeps a
+            // root target at its installed version under a selective resolve
+            // without `--update`, or when it's pinned — that's the requested
+            // behavior, not a divergence to report.
+            if let Some((installed_ver, policy)) = self.installed.get(target)
+                && installed_ver == selected
+                && (self.selective_no_update
+                    || matches!(policy, crate::provider::InstalledPolicy::Lock))
+            {
                 continue;
             }
             let blocked_by = data.versions.get(newest).and_then(|vd| {
@@ -615,7 +632,6 @@ pub(crate) fn resolve_parent_flag(
 mod tests {
     use super::*;
     use crate::repository::{InMemoryRepository, PackageDeps};
-    use crate::version_set::PortageVersionSet;
     use portage_atom::interner::Interned;
     use portage_atom::{Cpn, Dep, DepEntry};
 

@@ -95,6 +95,15 @@ B.**
   the repo-constraint advisory and printed via
   `output::report_held_back_targets` — same non-fatal-advisory pattern as
   the existing blocker/repo-constraint reports, never mutates the plan.
+  **Review-hardened 2026-08-17**: a two-pass review (`/code-review high`
+  + an independent Opus pass) found the detector false-positiving on
+  `-n`/`-N`/`Lock`-policy resolves (a root target legitimately kept at its
+  installed version — 68 spurious lines on a real `@world`) and on
+  version-capped atoms (comparing `selected` against the repo max instead
+  of the max the atom's own version set accepts); both fixed and
+  live-verified down to 0 false positives while the real `rsync`/
+  `virtual/acl` case still fires correctly. `root_targets` is now
+  `HashMap<PortagePackage, PortageVersionSet>`, not a bare `HashSet`.
 - [x] **Regression test.** Add the `sed`+`rsync` / `util-linux`+`rsync`
   two-target fixture to `provider/tests.rs` (near
   `installed_favored_picks_installed_version` :230,

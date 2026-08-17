@@ -346,9 +346,8 @@ pub(super) fn report_repo_constraint_violations(violations: &[portage_atom_pubgr
 /// Report root targets (`@system`/`@world` members, explicit atoms) the
 /// solver landed below their newest visible version. Advisory only — the
 /// plan is never mutated because of this; it just names a divergence that
-/// used to be silent. See `PortageDependencyProvider::check_held_back_targets`
-/// and `todo/pubgrub-version-choice-heuristic.md` for the underlying
-/// version-choice-ordering cause.
+/// used to be silent. See
+/// [`PortageDependencyProvider::check_held_back_targets`](portage_atom_pubgrub::PortageDependencyProvider::check_held_back_targets).
 pub(super) fn report_held_back_targets(held_back: &[portage_atom_pubgrub::HeldBackTarget]) {
     let mut out = anstream::stderr();
     writeln!(

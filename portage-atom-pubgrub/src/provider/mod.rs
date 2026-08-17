@@ -251,11 +251,12 @@ pub struct PortageDependencyProvider {
     /// instead of leaving the upgraded version's deps unaccounted for.  Cleared
     /// at the start of every [`resolve_targets`](Self::resolve_targets) call.
     pub(crate) upgrade_pins: HashMap<PortagePackage, Version>,
-    /// Explicitly requested target packages (set by `resolve_targets`).
-    /// `choose_version` does not favor the installed version for these:
-    /// a named argument selects the best accepted version, as emerge does
-    /// (installed-and-best still resolves to the installed version).
-    pub(crate) root_targets: std::collections::HashSet<PortagePackage>,
+    /// Explicitly requested target packages (set by `resolve_targets`), with
+    /// the version set the caller requested them under. `choose_version` does
+    /// not favor the installed version for these: a named argument selects
+    /// the best accepted version, as emerge does (installed-and-best still
+    /// resolves to the installed version).
+    pub(crate) root_targets: std::collections::HashMap<PortagePackage, PortageVersionSet>,
     /// Whether to include BDEPEND in the resolution (emerge's `--with-bdeps`).
     /// When false (default), BDEPEND are excluded from resolution for packages
     /// being built (assumed provided by BROOT). When true, BDEPEND are included
@@ -662,7 +663,7 @@ impl PortageDependencyProvider {
             dropped_deps,
             use_flag_requirements: Vec::new(),
             upgrade_pins: HashMap::new(),
-            root_targets: std::collections::HashSet::new(),
+            root_targets: std::collections::HashMap::new(),
             with_bdeps,
             rebuild_tree: false,
             prefer_newest_slot: false,
@@ -960,7 +961,7 @@ impl PortageDependencyProvider {
         let root_ver =
             Version::parse("0").expect("version string \"0\" should always parse successfully");
 
-        self.root_targets = targets.iter().map(|(p, _)| p.clone()).collect();
+        self.root_targets = targets.iter().cloned().collect();
 
         // Root targets have no gating flag; merged is derived from by_class.
         let targets_with_flag: Vec<(

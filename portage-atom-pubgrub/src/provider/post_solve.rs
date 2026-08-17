@@ -314,31 +314,12 @@ impl PortageDependencyProvider {
             .collect()
     }
 
-    /// Check whether all USE dep constraints for an OR-group branch are
-    /// consistent with the desired final state of the installed packages.
-    ///
-    /// A flag is treated as "effectively enabled" when it is either:
-    /// - currently active in the installed VDB, OR
-    /// - in the package's IUSE and enabled in the global `use_config`
-    ///   (i.e. the profile / make.conf wants it enabled after the next build).
-    ///
-    /// This means branch selection picks branches that are consistent with the
-    /// *desired* state, not just the *current* installed state.  Branches that
-    /// conflict with the global config are de-prioritised, allowing the
-    /// post-solve violation pass to then flag the specific flags that need to
-    /// change.
-    ///
-    /// Returns `true` when every constraint is either satisfied (under the
-    /// above definition) or refers to a package not yet installed.
     /// Effective state of `flag` on a non-installed package version that will be
-    /// freshly built.  Mirrors what the build will actually see: `package.use`
-    /// and global USE applied on top of the ebuild's IUSE defaults.  For a flag
-    /// outside the package's IUSE, only the dep's own `(+)`/`(-)` default applies
-    /// — except at the package's already-installed version, where the repo may
-    /// carry no metadata at all for that exact cpv (revbumped or pruned from the
-    /// tree while still installed): there `installed_iuse`/`installed_use` (the
-    /// VDB's own record, kept for exactly this gap) are the ground truth instead
-    /// of the dep's default.
+    /// freshly built. Mirrors what the build will see: `package.use` and global
+    /// USE applied on the ebuild's IUSE defaults; outside IUSE, the dep's own
+    /// `(+)`/`(-)` default — except at the installed version when the repo has
+    /// no IUSE for that exact cpv (revbumped or pruned from the tree while
+    /// still installed), where the VDB's own record is ground truth instead.
     pub(crate) fn effective_flag_new(
         &self,
         pkg: &PortagePackage,
@@ -354,7 +335,12 @@ impl PortageDependencyProvider {
             return vd.is_some_and(|v| v.desired.get(flag) == UseFlagState::Enabled);
         }
         let at_installed_ver = self.installed.get(pkg).is_some_and(|(iv, _)| iv == ver);
+        // Empty == absent: a version pruned from the tree gets a synthetic
+        // empty-IUSE stub (see `add_installed`), which must fall back to the
+        // VDB-recorded IUSE just like a version with no repo entry at all.
+        let repo_iuse_absent = vd.is_none_or(|v| v.iuse.is_empty());
         if at_installed_ver
+            && repo_iuse_absent
             && let Some(iuse) = self.installed_iuse.get(pkg)
             && iuse.contains(&flag)
         {
@@ -366,6 +352,16 @@ impl PortageDependencyProvider {
         matches!(dep_default, Some(UseDefault::Enabled))
     }
 
+    /// Check whether all USE dep constraints for an OR-group branch are
+    /// consistent with the desired final state of the installed packages.
+    ///
+    /// A flag is treated as "effectively enabled" when it is either currently
+    /// active in the installed VDB, or in the package's IUSE and enabled in the
+    /// global `use_config` — so branch selection favors branches consistent
+    /// with the desired post-build state, not just the current one.
+    ///
+    /// Returns `true` when every constraint is satisfied or refers to a
+    /// package not yet installed.
     pub(crate) fn use_dep_branch_satisfied(&self, udeps: &[convert::UseDepConstraint]) -> bool {
         for constraint in udeps {
             let (target_pkg, vs) = &constraint.target;
