@@ -312,7 +312,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let use_env::UseEnv {
         pre_env,
         env_use,
-        use_expand: use_expand_matcher,
         expand: use_expand,
         expand_hidden: use_expand_hidden,
         package_use,
@@ -427,7 +426,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
-        use_expand: &use_expand_matcher,
     };
     let mut root_deps = Vec::new();
     let mut root_cpns: std::collections::HashSet<Cpn> = std::collections::HashSet::new();
@@ -512,7 +510,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
-        use_expand: &use_expand_matcher,
         installed_cpvs: solver_installed_cpvs,
         // Computed later (needs `root_pkgs`, not yet built here); inert
         // anyway since `autosolve_use: false` below means `cede_required_use`
@@ -628,7 +625,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     package_use: pkg_use,
                     profile_package_use: &profile_package_use,
                     force_mask: &force_mask,
-                    use_expand: &use_expand_matcher,
                     installed_cpvs: solver_installed_cpvs,
                     rebuilding_cpvs: &rebuilding_installed_cpvs,
                     autosolve_use,
@@ -838,7 +834,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 package_use: &package_use,
                 profile_package_use: &profile_package_use,
                 force_mask: &force_mask,
-                use_expand: &use_expand_matcher,
             };
 
             // Autounmask: detect filtered candidates from dropped deps. Filtered
@@ -1112,7 +1107,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 package_use: &package_use,
                 profile_package_use: &profile_package_use,
                 force_mask: &force_mask,
-                use_expand: &use_expand_matcher,
                 installed_cpvs: solver_installed_cpvs,
                 rebuilding_cpvs: &rebuilding_installed_cpvs,
                 autosolve_use: false,
@@ -1259,7 +1253,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
-        use_expand: &use_expand_matcher,
     };
 
     let flag_reqs: HashMap<&PortagePackage, &UseFlagRequirement> = provider
@@ -1355,7 +1348,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
-        use_expand: &use_expand_matcher,
         installed_cpvs: solver_installed_cpvs,
         rebuilding_cpvs: &rebuilding_installed_cpvs,
         autosolve_use: false,

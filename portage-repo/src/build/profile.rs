@@ -371,6 +371,21 @@ pub struct ResolvedUse {
     /// it must be folded in *after* `package.use`, matching portage's
     /// `pkg < env` layer order.
     pub env_use: String,
+    /// `USE_EXPAND`-listed variables a conf-layer source (`make.conf`,
+    /// `extra_confs`, the in-process override) *explicitly assigned* — even to
+    /// `""` — by name as declared (`L10N`, `VIDEO_CARDS`, …).
+    ///
+    /// [`Self::pre_env`] alone can't express this: a bare `l10n_en-US` token
+    /// says a flag is on, not that the rest of the group was replaced. The
+    /// group replace has to reach the ebuild's own `+`-defaulted IUSE, and
+    /// that is only known per package, long after this string is flat — so
+    /// the assigned names travel separately and become
+    /// `UseLayer::with_group_clears` on the `pre_env` layer.
+    pub conf_expand_assigned: Vec<String>,
+    /// As [`Self::conf_expand_assigned`], for the process-environment layer:
+    /// the `USE_EXPAND` variables present in `std::env`. One layer higher, so
+    /// its replace also wipes `package.use`.
+    pub env_expand_assigned: Vec<String>,
 }
 
 /// Resolve the effective USE flags for a profile stack without setting the
@@ -406,8 +421,10 @@ async fn resolve_use_flags(
 ) -> Result<ResolvedUse> {
     let ProfileEnv { layers: _ } = stack.profile_env(shell).await?;
 
+    let mut conf_expand_assigned: Vec<String> = Vec::new();
     for conf in extra_confs {
-        source_incremental(shell, ConfSource::File(conf)).await?;
+        let assigned = source_incremental(shell, ConfSource::File(conf)).await?;
+        merge_assigned(&mut conf_expand_assigned, assigned);
     }
     // A transient, in-process conf-layer override (e.g. `em stages --stage1`'s
     // `USE="-* build ${BOOTSTRAP_USE}"`) — folded at the exact same position
@@ -415,8 +432,19 @@ async fn resolve_use_flags(
     // rather than the process-environment layer a raw `std::env::set_var`
     // would land at (which would incorrectly wipe `package.use`, layer 5).
     if let Some(content) = extra_use_override {
-        source_incremental(shell, ConfSource::Str(content)).await?;
+        let assigned = source_incremental(shell, ConfSource::Str(content)).await?;
+        merge_assigned(&mut conf_expand_assigned, assigned);
     }
+
+    // The environment layer's own explicit `USE_EXPAND` assignments — same
+    // non-incremental group replace as a conf layer's, one layer higher.
+    let env_expand_assigned: Vec<String> = shell
+        .get_var("USE_EXPAND")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|k| std::env::var(k).is_ok())
+        .map(str::to_string)
+        .collect();
 
     // Snapshot the fold immediately before the environment layer — this is
     // `pkginternal < defaults < conf` in portage's layer order, the state a
@@ -456,7 +484,19 @@ async fn resolve_use_flags(
             .collect(),
         pre_env,
         env_use,
+        conf_expand_assigned,
+        env_expand_assigned,
     })
+}
+
+/// Append `new` to `acc`, skipping names already recorded (a variable assigned
+/// by two conf layers still clears its group exactly once).
+fn merge_assigned(acc: &mut Vec<String>, new: Vec<String>) {
+    for k in new {
+        if !acc.contains(&k) {
+            acc.push(k);
+        }
+    }
 }
 
 /// Translate a single config layer's `USE_EXPAND` / `USE_EXPAND_UNPREFIXED`
@@ -546,29 +586,44 @@ fn strip_expand_tokens(use_str: &str, var: &str) -> String {
 /// Merge process-environment USE variables into the shell as a final incremental layer.
 ///
 /// Reads `USE`, all `USE_EXPAND` keys, and all `USE_EXPAND_UNPREFIXED` keys from
-/// `std::env`.  Any present values are merged with the accumulated shell state using
-/// the same incremental semantics as profile layers (tokens prefixed with `-` remove);
-/// the expand-variable contributions are also translated into USE tokens
-/// ([`env_layer_use`]) so they land in the `USE` fold itself.
+/// `std::env`. `USE` and `USE_EXPAND_UNPREFIXED` values merge with the accumulated
+/// shell state using the same incremental semantics as profile layers (tokens
+/// prefixed with `-` remove); a `USE_EXPAND` variable present in the environment
+/// gets the same **non-incremental replace** [`source_incremental`] applies to a
+/// make.conf assignment (one layer higher, so it also outranks make.conf's own
+/// value): the group's accumulated tokens are stripped from `USE` and the raw
+/// variable is overwritten rather than merged. The expand-variable contributions
+/// are translated into USE tokens ([`env_layer_use`]) so they land in the `USE`
+/// fold itself.
 ///
-/// This is how `PYTHON_TARGETS=python3_15 em cat/pkg` adds a target without
-/// replacing the full flag set, mirroring how `CC=my-cc` is applied in `init_build_env`.
+/// This is how `PYTHON_TARGETS=python3_15 em cat/pkg` selects a target,
+/// mirroring how `CC=my-cc` is applied in `init_build_env`.
 async fn apply_env_layer(shell: &mut EbuildShell) -> Result<()> {
-    let use_expand = shell.get_var("USE_EXPAND").unwrap_or_default();
-    let unprefixed = shell.get_var("USE_EXPAND_UNPREFIXED").unwrap_or_default();
-
-    let mut vars: Vec<String> = Vec::new();
-    for k in use_expand.split_whitespace() {
-        vars.push(k.to_string());
-    }
-    for k in unprefixed.split_whitespace() {
-        if !vars.contains(&k.to_string()) {
-            vars.push(k.to_string());
-        }
-    }
+    let expand_keys: Vec<String> = shell
+        .get_var("USE_EXPAND")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let unprefixed_keys: Vec<String> = shell
+        .get_var("USE_EXPAND_UNPREFIXED")
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
 
     let mut restore = String::new();
-    for var in &vars {
+    let mut use_base = shell.get_var("USE").unwrap_or_default();
+    for var in &expand_keys {
+        if let Ok(env_val) = std::env::var(var) {
+            use_base = strip_expand_tokens(&use_base, var);
+            restore += &format!("{}={}\n", var, shell_quote(env_val.trim()));
+        }
+    }
+    for var in &unprefixed_keys {
+        if expand_keys.contains(var) {
+            continue;
+        }
         if let Ok(env_val) = std::env::var(var) {
             let existing = shell.get_var(var).unwrap_or_default();
             let merged = merge_use_var(var, [existing.as_str(), env_val.as_str()].into_iter());
@@ -576,10 +631,13 @@ async fn apply_env_layer(shell: &mut EbuildShell) -> Result<()> {
         }
     }
     let layer_use = env_layer_use(shell);
-    if !layer_use.is_empty() {
-        let existing = shell.get_var("USE").unwrap_or_default();
+    if layer_use.is_empty() {
+        if use_base != shell.get_var("USE").unwrap_or_default() {
+            restore += &format!("USE={}\n", shell_quote(&use_base));
+        }
+    } else {
         let contrib = layer_use.join(" ");
-        let merged = merge_use_var("USE", [existing.as_str(), contrib.as_str()].into_iter());
+        let merged = merge_use_var("USE", [use_base.as_str(), contrib.as_str()].into_iter());
         restore += &format!("USE={}\n", shell_quote(&merged.join(" ")));
     }
     if !restore.is_empty() {
@@ -631,7 +689,13 @@ enum ConfSource<'a> {
     Str(&'a str),
 }
 
-async fn source_incremental(shell: &mut EbuildShell, source: ConfSource<'_>) -> Result<()> {
+/// Returns the `USE_EXPAND`-listed variables this layer explicitly assigned,
+/// so the caller can surface them as [`ResolvedUse::conf_expand_assigned`] —
+/// the flat `USE` strip below can't reach the per-package IUSE defaults.
+async fn source_incremental(
+    shell: &mut EbuildShell,
+    source: ConfSource<'_>,
+) -> Result<Vec<String>> {
     let expand_keys: Vec<String> = shell
         .get_var("USE_EXPAND")
         .unwrap_or_default()
@@ -686,9 +750,11 @@ async fn source_incremental(shell: &mut EbuildShell, source: ConfSource<'_>) -> 
     // USE before this layer's own combined delta is merged on top.
     let mut use_base = saved.get("USE").cloned().unwrap_or_default();
     let mut merged_expand: HashMap<String, String> = saved_expand;
+    let mut assigned_expand: Vec<String> = Vec::new();
     for key in &expand_keys {
         if let Some(val) = shell.get_var(key) {
             use_base = strip_expand_tokens(&use_base, key);
+            assigned_expand.push(key.clone());
             if val.is_empty() {
                 merged_expand.remove(key);
             } else {
@@ -746,7 +812,7 @@ async fn source_incremental(shell: &mut EbuildShell, source: ConfSource<'_>) -> 
         .collect();
     shell.run_string(&restore).await?;
 
-    Ok(())
+    Ok(assigned_expand)
 }
 
 /// Quote a value for use in a bash assignment (`VAR="..."` form).

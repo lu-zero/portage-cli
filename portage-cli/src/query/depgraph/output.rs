@@ -1467,9 +1467,8 @@ fn format_plan_parts(
     // emerge -p always shows USE flags; -v additionally shows the
     // :slot/subslot::repo suffix and download size.
     let cpv = Cpv::new(*cpn, ver.clone());
-    let use_expand_matcher = portage_repo::UseExpand::new(use_expand);
     let defaults = cache
-        .map(|c| super::effective_use::iuse_defaults(c, &use_expand_matcher))
+        .map(super::effective_use::iuse_defaults)
         .unwrap_or_default();
     let mut effective_use = resolve_effective_use(
         &defaults,

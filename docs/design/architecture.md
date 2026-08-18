@@ -439,6 +439,25 @@ layer's position, exactly as Portage's `config.py` `regenerate()` does. This is
 how the implicit `elibc_*`/`kernel_*` flags and profile defaults like
 `python_targets_*` reach every per-package `resolve_effective_use` fold.
 
+A `USE_EXPAND` variable *explicitly assigned* — even to `""` — by `make.conf`
+or the process environment is **non-incremental**: Portage wipes every
+accumulated flag carrying that group's prefix from the layers below the
+assignment before the new values apply (`config.py` `regenerate()`'s
+`is_not_incremental` branch). Profile `make.defaults` assignments are exempt —
+they keep merging incrementally down the profile chain. The flat `USE` string
+gets that treatment in `source_incremental`/`apply_env_layer`, but the ebuild's
+own `+`-defaulted IUSE (layer 1) is only known per package, so `ResolvedUse`
+also carries the assigned variable *names*
+(`conf_expand_assigned`/`env_expand_assigned`) and each `UseLayer` applies them
+as *group clears* inside `resolve_effective_use`. A variable that is never
+assigned outside `make.defaults` clears nothing, so a package that
+`+`-defaults its whole group (chromium-2.eclass sets `IUSE="+l10n_${lang}"`
+for every bundled locale) keeps every flag on — which is exactly what real
+`emerge` does. Verified against `emerge -pv app-editors/vscode` on portage
+3.0.81.2 (2026-08-19): no `L10N` anywhere → all 55 locales enabled; make.conf
+`L10N="en-GB"` plus `/etc/portage/package.use` `l10n_fr` → `en-GB fr`; env
+`L10N=de` on top of both → `de` alone.
+
 Layer 3 (`package.use`) is applied **per package** at solve/display time.
 Layer 5 force/mask is applied as a true post-fold step by `force_mask.rs`
 (`ForceMask::apply`): force enables, mask disables (mask wins), overriding

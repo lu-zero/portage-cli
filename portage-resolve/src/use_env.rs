@@ -4,9 +4,7 @@ use camino::Utf8Path;
 use portage_atom::Dep;
 use portage_atom::interner::Interned;
 use portage_atom_pubgrub::{UseLayer, UseOverride};
-use portage_repo::{
-    AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository, UseExpand,
-};
+use portage_repo::{AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
 
 use crate::force_mask::{ForceMask, index_by_cpn};
 use crate::repo::AcceptToken;
@@ -30,13 +28,6 @@ pub struct UseEnv {
     pub env_use: UseLayer,
     /// Keys from `USE_EXPAND` — used to group expanded flags in display.
     pub expand: Vec<String>,
-    /// [`Self::expand`], pre-built into a [`UseExpand`] matcher — every
-    /// `ResolvePolicy`/`Adapter` construction site needs this same prefix
-    /// set to decide whether a flag's `+`/`-` IUSE default is governed by
-    /// its own USE_EXPAND variable instead (see
-    /// `portage_resolve::repo::iuse_defaults_map`'s doc), so it's built
-    /// once here rather than re-lowercased at every call site.
-    pub use_expand: UseExpand,
     /// Keys from `USE_EXPAND_HIDDEN` — groups to suppress in display.
     pub expand_hidden: Vec<String>,
     /// Per-package USE overrides from `/etc/portage/package.use` and
@@ -278,9 +269,15 @@ async fn compute_use_env(
     // every per-package `resolve_effective_use` reuses interned layer tokens
     // (USE_EXPAND can put 100+ flags into pre_env — re-splitting that string
     // per CPV is pure waste). Kept as two layers: a `-*` in env must still
-    // wipe package.use while a conf-level `-*` must not.
-    let pre_env = UseLayer::parse(&resolved.pre_env);
-    let env_use = UseLayer::parse(&resolved.env_use);
+    // wipe package.use while a conf-level `-*` must not. Each layer also
+    // carries the USE_EXPAND groups it explicitly assigned, so the per-package
+    // fold can apply portage's non-incremental group replace to the ebuild's
+    // own `+`-defaulted IUSE — `L10N="en-US"` in make.conf must beat
+    // chromium-2.eclass's `IUSE="+l10n_${lang}"` for every bundled locale.
+    let pre_env =
+        UseLayer::parse(&resolved.pre_env).with_group_clears(resolved.conf_expand_assigned);
+    let env_use =
+        UseLayer::parse(&resolved.env_use).with_group_clears(resolved.env_expand_assigned);
 
     // Per-package USE — two tiers, matching portage's layer order:
     //
@@ -367,7 +364,6 @@ async fn compute_use_env(
     Ok(UseEnv {
         pre_env,
         env_use,
-        use_expand: UseExpand::new(&expand),
         expand,
         expand_hidden,
         package_use,

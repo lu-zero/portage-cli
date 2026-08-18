@@ -224,6 +224,17 @@ pub struct UseLayer {
     has_clear_all: bool,
     /// This layer folded alone from empty — shared via [`Arc`].
     frozen: Arc<HashMap<Interned<DefaultInterner>, bool>>,
+    /// Lowercased flag prefixes (`l10n_`, `video_cards_`, …) of the
+    /// `USE_EXPAND` groups this layer *explicitly assigned*.
+    ///
+    /// Portage's `is_not_incremental` branch (`config.py` `regenerate()`):
+    /// assigning a `USE_EXPAND` variable at any non-`defaults` config layer
+    /// wipes every accumulated flag carrying that group's prefix from the
+    /// layers below before the layer's own values apply. The flat USE string
+    /// gets that treatment already (`strip_expand_tokens`), but the ebuild's
+    /// own `+`-defaulted IUSE is only known per package — so the group has to
+    /// travel with the layer and bite inside [`resolve_effective_use`].
+    group_clears: Arc<[String]>,
 }
 
 impl Default for UseLayer {
@@ -232,13 +243,14 @@ impl Default for UseLayer {
             tokens: Vec::new(),
             has_clear_all: false,
             frozen: Arc::new(HashMap::new()),
+            group_clears: Arc::from([]),
         }
     }
 }
 
 impl PartialEq for UseLayer {
     fn eq(&self, other: &Self) -> bool {
-        self.tokens == other.tokens
+        self.tokens == other.tokens && self.group_clears == other.group_clears
     }
 }
 
@@ -278,7 +290,34 @@ impl UseLayer {
             tokens,
             has_clear_all,
             frozen: Arc::new(frozen),
+            group_clears: Arc::from([]),
         }
+    }
+
+    /// Record the `USE_EXPAND` groups this layer explicitly assigned, by
+    /// variable name as declared (`L10N`, `VIDEO_CARDS`, …). See the
+    /// [`Self::group_clears`] field doc.
+    pub fn with_group_clears(mut self, vars: impl IntoIterator<Item = String>) -> Self {
+        self.group_clears = vars
+            .into_iter()
+            .map(|v| format!("{}_", v.to_lowercase()))
+            .collect::<Vec<_>>()
+            .into();
+        self
+    }
+
+    /// Whether `flag` belongs to a `USE_EXPAND` group this layer explicitly
+    /// assigned — i.e. whether the fold must drop `flag` when it came from a
+    /// layer below this one.
+    fn clears_group(&self, flag: Interned<DefaultInterner>) -> bool {
+        if self.group_clears.is_empty() {
+            // Hot path: skip resolving the interned name entirely.
+            return false;
+        }
+        let name = flag.as_str();
+        self.group_clears
+            .iter()
+            .any(|p| name.starts_with(p.as_str()))
     }
 
     /// Whether this layer contributes no tokens.
@@ -343,6 +382,17 @@ fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, boo
 /// not one in the environment (layer 4), and why the ebuild's own
 /// `+`-defaulted IUSE (layer 1) is wiped by a `-*` in *either* — confirmed
 /// against real `emerge` (`em stages --stage1` live-testing, 2026-07-12).
+///
+/// A layer's [`UseLayer::with_group_clears`] entries act as a `-*` scoped to
+/// one USE_EXPAND group, at that layer's position in the same fold: `pre_env`
+/// (make.conf) clears the group from the IUSE defaults and profile
+/// `package.use` below it but leaves user `package.use` alone, while `env_use`
+/// clears it from every lower layer, user `package.use` included. Confirmed
+/// against real `emerge -pv app-editors/vscode` (`IUSE="+l10n_…"` for 55
+/// locales) on portage 3.0.81.2, 2026-08-19: with no `L10N` assignment at all
+/// every locale stays enabled, `L10N="en-GB"` in make.conf plus
+/// `package.use` `l10n_fr` yields exactly `en-GB fr`, and `L10N=de` in the
+/// environment yields exactly `de`.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_effective_use(
     iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
@@ -377,7 +427,10 @@ pub fn resolve_effective_use(
     // only bloated the overlay on every CPV. `-*` in pre_env wipes iuse entirely.
     if !pre_env.has_clear_all {
         for (flag, def) in iuse_defaults {
-            if matches!(def, IUseDefault::Enabled) && !pre_env.frozen.contains_key(flag) {
+            if matches!(def, IUseDefault::Enabled)
+                && !pre_env.frozen.contains_key(flag)
+                && !pre_env.clears_group(*flag)
+            {
                 overlay.insert(*flag, UseFlagState::Enabled);
             }
         }
@@ -401,7 +454,9 @@ pub fn resolve_effective_use(
                 continue;
             }
             for ov in overrides {
-                if !pre_env.frozen.contains_key(&ov.flag) {
+                // Same layer position as the IUSE defaults above, so a
+                // make.conf USE_EXPAND assignment wipes these group tokens too.
+                if !pre_env.frozen.contains_key(&ov.flag) && !pre_env.clears_group(ov.flag) {
                     overlay.insert(
                         ov.flag,
                         if ov.enable {
@@ -434,6 +489,25 @@ pub fn resolve_effective_use(
                         UseFlagState::Disabled
                     },
                 );
+            }
+        }
+    }
+
+    // An environment-level USE_EXPAND assignment wipes the group from *every*
+    // lower layer — IUSE defaults, `pre_env` (make.conf included) and
+    // `package.use` alike — before env's own tokens fold on top. Cleared flags
+    // are written Disabled rather than removed: `pre_env.frozen` stays the
+    // shared base map, so the overlay is what has to mask it, and an unset
+    // flag already reads as Disabled.
+    if !env_use.group_clears.is_empty() {
+        for flag in pre_env.frozen.keys() {
+            if env_use.clears_group(*flag) {
+                overlay.insert(*flag, UseFlagState::Disabled);
+            }
+        }
+        for (flag, state) in overlay.iter_mut() {
+            if env_use.clears_group(*flag) {
+                *state = UseFlagState::Disabled;
             }
         }
     }
@@ -584,20 +658,19 @@ mod tests {
         UseLayer::parse(s)
     }
 
-    /// `resolve_effective_use` itself stays deliberately naive: it trusts
-    /// whatever `iuse_defaults` hands it, with no USE_EXPAND awareness of
-    /// its own. The vscode/L10N override (an ebuild's `+`-defaulted
-    /// USE_EXPAND flag must not auto-enable once its group's variable is
-    /// active) is enforced one layer up, in the `iuse_defaults`/
-    /// `iuse_defaults_map` builders (`portage-resolve`) — see their tests.
-    /// This test pins that division of responsibility: fed an `Enabled`
-    /// default directly, `resolve_effective_use` still honours it exactly
-    /// like any other flag.
+    /// No `L10N` assigned anywhere outside profile `make.defaults`: real
+    /// portage leaves every `+l10n_*` IUSE default enabled (the `defaults`
+    /// layer is exempt from the group replace). Verified 2026-08-19 against
+    /// `emerge -pv app-editors/vscode` on portage 3.0.81.2, which listed all
+    /// 55 locales positive.
     #[test]
-    fn resolve_effective_use_trusts_iuse_defaults_verbatim() {
+    fn unassigned_use_expand_group_keeps_its_iuse_defaults() {
         let cfg = resolve_effective_use(
-            &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
-            &layer("l10n_en-us"),
+            &iuse_defaults(&[
+                ("l10n_af", IUseDefault::Enabled),
+                ("l10n_en-GB", IUseDefault::Enabled),
+            ]),
+            &layer(""),
             &cpv(),
             None,
             &[],
@@ -605,6 +678,99 @@ mod tests {
             &[],
         );
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Enabled);
+        assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
+    }
+
+    /// `L10N="en-GB"` in make.conf against an ebuild that `+`-defaults every
+    /// locale: portage's non-incremental conf-layer replace wipes the group's
+    /// IUSE defaults, so only the assigned value survives. Flags outside any
+    /// assigned group are untouched.
+    #[test]
+    fn conf_use_expand_assignment_wipes_group_iuse_defaults() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[
+                ("l10n_af", IUseDefault::Enabled),
+                ("l10n_en-GB", IUseDefault::Enabled),
+                ("seccomp", IUseDefault::Enabled),
+            ]),
+            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
+            &cpv(),
+            None,
+            &[],
+            &layer(""),
+            &[],
+        );
+        assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
+        assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
+        assert_eq!(cfg.get(flag("seccomp")), UseFlagState::Enabled);
+    }
+
+    /// Profile `package.use` sits in the `defaults` layer, below make.conf, so
+    /// a conf-level assignment wipes its group tokens; user `package.use` is
+    /// the `pkg` layer above conf and survives. Verified live: make.conf
+    /// `L10N="en-GB"` plus `app-editors/vscode l10n_fr` in
+    /// `/etc/portage/package.use` gives `L10N="en-GB fr"`.
+    #[test]
+    fn conf_group_clear_spares_user_package_use() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
+            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
+            &cpv(),
+            None,
+            &pkg_use("dev-libs/openssl", &["l10n_fr"]),
+            &layer(""),
+            &pkg_use("dev-libs/openssl", &["l10n_de"]),
+        );
+        assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
+        assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
+        assert_eq!(
+            cfg.get(flag("l10n_de")),
+            UseFlagState::Disabled,
+            "profile package.use is below conf's L10N assignment"
+        );
+        assert_eq!(
+            cfg.get(flag("l10n_fr")),
+            UseFlagState::Enabled,
+            "user package.use is above conf and must survive"
+        );
+    }
+
+    /// `L10N=de em …`: the env layer's replace reaches every lower layer —
+    /// IUSE defaults, the make.conf value inside `pre_env`, and user
+    /// `package.use` alike. Verified live: the same vscode run yields exactly
+    /// `L10N="de"`.
+    #[test]
+    fn env_use_expand_assignment_wipes_group_from_all_lower_layers() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
+            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
+            &cpv(),
+            None,
+            &pkg_use("dev-libs/openssl", &["l10n_fr"]),
+            &layer("l10n_de").with_group_clears(["L10N".to_string()]),
+            &[],
+        );
+        assert_eq!(cfg.get(flag("l10n_de")), UseFlagState::Enabled);
+        assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
+        assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Disabled);
+        assert_eq!(cfg.get(flag("l10n_fr")), UseFlagState::Disabled);
+    }
+
+    /// `L10N=""` — an explicit empty assignment still clears the group, which
+    /// is how a user turns every locale off (`emerge -pv` shows the whole
+    /// group negative).
+    #[test]
+    fn empty_use_expand_assignment_still_clears_the_group() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
+            &layer("").with_group_clears(["L10N".to_string()]),
+            &cpv(),
+            None,
+            &[],
+            &layer(""),
+            &[],
+        );
+        assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
     }
 
     #[test]

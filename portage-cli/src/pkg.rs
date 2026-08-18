@@ -482,7 +482,6 @@ async fn resolve_active_use(
         env_use: &env.env_use,
         package_use: &env.package_use,
         profile_package_use: &env.profile_package_use,
-        use_expand: &env.use_expand,
         force_mask: &env.force_mask,
     };
 
