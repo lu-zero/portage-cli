@@ -46,11 +46,40 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 
 ### Smaller / polish (pick opportunistically)
 
-- Shallow `-p` package-set can still differ slightly from emerge on some hosts — see `todo/done/nonemptytree-bdeps-gap.md`, `todo/done/deep-in-slot-upgrades.md`
-- Residual provider choice on deep plans (`rust` vs `rust-bin`, tooling set)
-- Numeric `--deep=N` (boolean only today); Resolvo `set_prefer_update` still trait default no-op
-- Slot-operator `r` rebuilds under `@world` still under-detected vs emerge (noted under selective-resolution landing)
-- Cross stage3 file-tree/version diff vs real stage3 tarball never done (VDB package-set only) — `todo/done/stage3-vs-real-comparison.md`
+**2026-08-18 verification pass**: read the current code (not just the notes
+below) for every item still open at the time — two turned out stale, one
+downgraded to unreachable dead code, the rest confirmed accurate and now
+carry an effort estimate.
+
+- ~~Shallow `-p` package-set can still differ slightly from emerge on some hosts~~ —
+  **stale, removed**: both cited gap-docs (`todo/done/nonemptytree-bdeps-gap.md`,
+  `todo/done/deep-in-slot-upgrades.md`) show every concrete diff they tracked
+  fixed (0-3 diff counts); no live repro exists for the residual "some hosts"
+  claim as written. Re-add with a fresh, specific repro if one turns up.
+- Residual provider choice on deep plans (`rust` vs `rust-bin`) — **mostly
+  addressed**: `newest_installed_choice_branch`/`branch_best_installed`
+  (provider/mod.rs) explicitly implement emerge's `dep_zapdeps` tie-break for
+  exactly this `|| ( rust-bin:* rust:* )` shape, doc-commented with this
+  example. Falls back to first-listed only when *no* branch is installed at
+  all — that narrow residual case may still diverge; not otherwise a live gap.
+- Numeric `--deep=N` (`DepgraphFlags::deep` is still a plain `bool`,
+  `cli/depgraph_flags.rs`) — needs design: pubgrub isn't depth-limited the
+  way portage's recursive dep walk is, so "numeric deep" doesn't map onto
+  the current solve model directly.
+- ~~Resolvo `set_prefer_update` still trait default no-op~~ — **downgraded,
+  not a live gap**: pubgrub (the backend `em` actually uses) already has a
+  real `set_prefer_update` impl; resolvo isn't wired into the CLI at all
+  (only appears in `Cargo.toml`/benchmarks), so its no-op is unreachable.
+- Slot-operator `r` rebuilds under `@world` still under-detected vs emerge —
+  **confirmed open, root cause pinpointed**: `subslot::find_rebuilds`'s
+  `planned_slots` (`depgraph/mod.rs`) never gets a trigger because a plain
+  `-pu` plan doesn't include the triggering package (e.g. `dev-lang/perl`)
+  at all, so the ~60-pkg cascade real emerge runs never starts. Same
+  structure as documented 2026-07-26 in [[selective-resolution]]; unfixed.
+- Cross stage3 file-tree/version diff vs real stage3 tarball never done
+  (VDB package-set only, confirmed still true) — a verification/tooling
+  task, not a code bug; no diff tooling exists in `test-scripts/` yet —
+  `todo/done/stage3-vs-real-comparison.md`
 - `PORTAGE_CHECKSUM_FILTER` still unimplemented (orthogonal to ACCEPT_PROPERTIES/RESTRICT, which are done)
 - Review sweep log: [[review-findings-2026-07-24]]; structural cross notes: [[cross-support-self-review]]
 - Whether `history/merges.jsonl`'s unbounded growth (full-file-parse-per-query on the ETA hot path) needs rotation or a different format — not measured yet: [[activity-storage-format]]
@@ -60,8 +89,18 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
   target (`--nodeps`, cross `MergeRoot`-stamped keys, or `broot_filtered`
   host-satisfied edges dropped) — can name an edge that never constrained
   the solve, or silently return `None` in cross mode; best-effort field,
-  not yet a bug in practice
-- `em pkg use`'s bare-atom "Active USE" summary (2026-08-16, `3671d26`) is a fold of IUSE defaults + profile/make.conf USE + the atom's own package.use — no `use.force`/`use.mask`/`REQUIRED_USE` applied, so it can show a flag as active that the real resolved USE would force off or drop
+  **confirmed still accurate 2026-08-18** (untouched by the same-day
+  `f5686e8`/coloring fixes), not yet a bug in practice
+- 🟡 **`em pkg use`'s bare-atom "Active USE" summary** (2026-08-16, `3671d26`)
+  is its own separate hand-rolled fold (IUSE default + package.use + global
+  USE) — no `use.force`/`use.mask`/`REQUIRED_USE` applied, so it can show a
+  flag as active that the real resolved USE would force off or drop.
+  **Confirmed 2026-08-18, medium effort**: not a one-line swap to an
+  existing shared helper — even `portage-solver`'s own `resolve_effective_use`
+  doesn't apply use.mask/use.force/REQUIRED_USE either (that lives deeper in
+  the real solve pipeline's `post_solve`/`UseConfig`); a real fix means
+  threading actual profile/mask data into what's currently a lightweight
+  display command. **Picked up next.**
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
