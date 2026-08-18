@@ -205,6 +205,25 @@ pub(crate) fn read_single_line(path: impl AsRef<Path>) -> Result<Option<String>>
     }
 }
 
+/// A repo's name: `profiles/repo_name`, or `x-<basename>` when that file is
+/// missing — matches real portage's own fallback (`RepoConfig.
+/// _read_repo_name`), used both when opening a repo and when synthesizing a
+/// `RepoEntry` for a `PORTDIR_OVERLAY` directory that has no `repos.conf`
+/// section of its own.
+pub(crate) fn resolve_repo_name(repo_path: &Path) -> Result<String> {
+    Ok(
+        read_single_line(repo_path.join("profiles").join("repo_name"))?.unwrap_or_else(|| {
+            format!(
+                "x-{}",
+                repo_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_default()
+            )
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

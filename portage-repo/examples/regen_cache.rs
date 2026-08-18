@@ -147,7 +147,7 @@ async fn main() {
     let repo = if let Some(ref dir) = args.repos_dir {
         match Repository::builder()
             .in_memory_cache()
-            .open_with_masters(&args.repo, dir, None)
+            .open_with_masters(&args.repo, dir, None, None)
         {
             Ok(r) => {
                 if !r.masters().is_empty() {

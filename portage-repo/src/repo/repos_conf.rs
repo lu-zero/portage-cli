@@ -265,6 +265,49 @@ impl ReposConf {
             .map(|p| Repository::builder().in_memory_cache().open(p))
             .collect()
     }
+
+    /// Fold legacy `PORTDIR_OVERLAY` directories in as synthetic entries,
+    /// then re-sort ascending `(priority, name)` together with everything
+    /// `repos.conf` already declared — matches real portage folding both
+    /// sources into one `prepos` dict before its own final sort
+    /// (`RepoConfigLoader._add_repositories`). Each directory gets a name
+    /// from its own `profiles/repo_name` (`x-<basename>` fallback, see
+    /// [`super::util::resolve_repo_name`]) and ascending priority
+    /// `0, 1, ...` in listed order. A directory that isn't a real
+    /// directory, or whose path already matches an existing entry,
+    /// contributes nothing. Reading `PORTDIR_OVERLAY` itself from
+    /// make.conf isn't this module's concern — see
+    /// `portage_resolve::Roots::portdir_overlay`.
+    pub fn with_portdir_overlay(mut self, portdir_overlay: &[Utf8PathBuf]) -> Self {
+        let existing: std::collections::HashSet<PathBuf> = self
+            .repos
+            .iter()
+            .filter_map(|e| e.location.as_path().map(Path::to_path_buf))
+            .collect();
+        for (i, dir) in portdir_overlay.iter().enumerate() {
+            if !dir.is_dir() || existing.contains(dir.as_std_path()) {
+                continue;
+            }
+            let Ok(name) = super::util::resolve_repo_name(dir.as_std_path()) else {
+                continue;
+            };
+            self.repos.push(RepoEntry {
+                name,
+                location: Location::Path(dir.clone().into_std_path_buf()),
+                masters: None,
+                sync_type: None,
+                sync_uri: None,
+                auto_sync: false,
+                volatile: None,
+                priority: Some(i as i64),
+            });
+        }
+        self.repos.sort_by(|a, b| {
+            (a.priority.unwrap_or(0), a.name.as_str())
+                .cmp(&(b.priority.unwrap_or(0), b.name.as_str()))
+        });
+        self
+    }
 }
 
 #[cfg(test)]
@@ -278,6 +321,65 @@ mod tests {
         }
         let mut f = std::fs::File::create(path).unwrap();
         f.write_all(body.as_bytes()).unwrap();
+    }
+
+    /// Bare directory, no `repos.conf` section at all: name falls back to
+    /// its own `profiles/repo_name` (or `x-<basename>`, tested separately
+    /// in `portage-repo/src/repo/util.rs`), priority `0` (first/only entry).
+    #[test]
+    fn with_portdir_overlay_adds_a_dir_not_in_repos_conf() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            &dir.path().join("x-portage/profiles/repo_name"),
+            "x-portage\n",
+        );
+        let overlay = Utf8PathBuf::from_path_buf(dir.path().join("x-portage")).unwrap();
+
+        let rc = ReposConf::default().with_portdir_overlay(std::slice::from_ref(&overlay));
+        assert_eq!(rc.repos().len(), 1);
+        assert_eq!(rc.repos()[0].name, "x-portage");
+        assert_eq!(rc.repos()[0].priority, Some(0));
+        assert_eq!(
+            rc.repos()[0].location.as_path(),
+            Some(overlay.as_std_path())
+        );
+    }
+
+    /// A `PORTDIR_OVERLAY` directory whose path already matches an
+    /// existing `repos.conf` entry contributes nothing — no duplicate.
+    #[test]
+    fn with_portdir_overlay_skips_a_dir_already_in_repos_conf() {
+        let dir = tempfile::tempdir().unwrap();
+        let gentoo = dir.path().join("gentoo");
+        std::fs::create_dir_all(&gentoo).unwrap();
+        let conf = dir.path().join("repos.conf");
+        write(
+            &conf,
+            &format!("[gentoo]\nlocation = {}\n", gentoo.display()),
+        );
+        let rc = ReposConf::load_from(&[&conf]).unwrap();
+        assert_eq!(rc.repos().len(), 1);
+
+        let rc = rc.with_portdir_overlay(&[Utf8PathBuf::from_path_buf(gentoo).unwrap()]);
+        assert_eq!(rc.repos().len(), 1, "no duplicate entry for the same path");
+    }
+
+    /// Later-listed directories outrank earlier ones (ascending priority
+    /// `0, 1, ...` in listed order), independent of name.
+    #[test]
+    fn with_portdir_overlay_assigns_ascending_priority_by_listed_order() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("zzz/profiles/repo_name"), "zzz\n");
+        write(&dir.path().join("aaa/profiles/repo_name"), "aaa\n");
+        let first = Utf8PathBuf::from_path_buf(dir.path().join("zzz")).unwrap();
+        let second = Utf8PathBuf::from_path_buf(dir.path().join("aaa")).unwrap();
+
+        let rc = ReposConf::default().with_portdir_overlay(&[first, second]);
+        assert_eq!(rc.repos().len(), 2);
+        assert_eq!(rc.repos()[0].name, "zzz");
+        assert_eq!(rc.repos()[0].priority, Some(0));
+        assert_eq!(rc.repos()[1].name, "aaa");
+        assert_eq!(rc.repos()[1].priority, Some(1));
     }
 
     #[test]

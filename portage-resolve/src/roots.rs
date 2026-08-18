@@ -254,11 +254,40 @@ impl Roots {
 
     /// Load `repos.conf` portage-style for this invocation: global defaults +
     /// confdir under the config root, plus the `--local`/`--prefix` overlay
-    /// confdir. The single source of truth for repo discovery.
+    /// confdir, plus any legacy `PORTDIR_OVERLAY` directories from
+    /// make.conf ([`portdir_overlay`](Self::portdir_overlay)). The single
+    /// source of truth for repo discovery — every caller gets both sources
+    /// merged and sorted together for free.
     pub fn repos_conf(&self) -> portage_repo::Result<portage_repo::ReposConf> {
         let cfg = self.config().unwrap_or_else(|| Utf8Path::new("/"));
         let extra: Vec<&Utf8Path> = self.config_overlay().into_iter().collect();
-        portage_repo::ReposConf::load_rooted(cfg, &extra)
+        let conf = portage_repo::ReposConf::load_rooted(cfg, &extra)?;
+        Ok(conf.with_portdir_overlay(&self.portdir_overlay()))
+    }
+
+    /// `PORTDIR_OVERLAY` from make.conf: the legacy, pre-repos.conf way of
+    /// declaring extra overlay directories (`repository/config.py`'s
+    /// `RepoConfigLoader._add_repositories`), still honored by real
+    /// portage. Whitespace-split paths, in listed order; the overlay
+    /// confdir wins over the base config root when both set it (unlike
+    /// [`repos_conf`](Self::repos_conf), the two aren't merged — a single
+    /// bash assignment, not a directory of stackable fragments). Read via
+    /// [`portage_repo::MakeConf::get`], a static parse rather than a real
+    /// shell, so `${VAR}` expansion and `NAME+=VALUE` append aren't
+    /// honored (same limitation as `read_chost_cbuild` elsewhere).
+    pub fn portdir_overlay(&self) -> Vec<Utf8PathBuf> {
+        // `config_overlay` is always set to `<prefix>/etc/portage` directly
+        // (`Cli`'s `with_config_overlay` call sites), so its make.conf is a
+        // direct child — unlike `config()`, a root that still needs
+        // `etc/portage/`/`etc/` joined on.
+        if let Some(overlay) = self.config_overlay()
+            && let Ok(mc) = portage_repo::MakeConf::load(&overlay.join("make.conf"))
+            && let Some(raw) = mc.get("PORTDIR_OVERLAY")
+        {
+            return raw.split_whitespace().map(Utf8PathBuf::from).collect();
+        }
+        let cfg = self.config().unwrap_or_else(|| Utf8Path::new("/"));
+        read_portdir_overlay(cfg).unwrap_or_default()
     }
 
     // -----------------------------------------------------------------
@@ -380,5 +409,107 @@ impl Roots {
             relocate: true,
             ..Default::default()
         }
+    }
+}
+
+/// `PORTDIR_OVERLAY` under `root`, checking `etc/portage/make.conf` then the
+/// legacy `etc/make.conf` — same order and early-return-on-first-set
+/// precedence as `root_aware.rs`'s own `read_chost_cbuild` (not full shell
+/// last-wins semantics, a deliberate, already-established simplification in
+/// this codebase). `None` when neither file sets the var at all (distinct
+/// from `Some(vec![])`, an explicit empty assignment).
+fn read_portdir_overlay(root: &Utf8Path) -> Option<Vec<Utf8PathBuf>> {
+    for rel in ["etc/portage/make.conf", "etc/make.conf"] {
+        if let Ok(mc) = portage_repo::MakeConf::load(&root.join(rel))
+            && let Some(raw) = mc.get("PORTDIR_OVERLAY")
+        {
+            return Some(raw.split_whitespace().map(Utf8PathBuf::from).collect());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod portdir_overlay_tests {
+    use super::*;
+
+    fn utf8_tempdir() -> (tempfile::TempDir, Utf8PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        (dir, path)
+    }
+
+    fn write(path: &Utf8Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap().as_std_path()).unwrap();
+        std::fs::write(path.as_std_path(), body).unwrap();
+    }
+
+    #[test]
+    fn absent_yields_empty() {
+        let (_dir, path) = utf8_tempdir();
+        let roots = Roots {
+            config: Some(path),
+            ..Default::default()
+        };
+        assert!(roots.portdir_overlay().is_empty());
+    }
+
+    #[test]
+    fn single_directory() {
+        let (_dir, path) = utf8_tempdir();
+        write(
+            &path.join("etc/portage/make.conf"),
+            "PORTDIR_OVERLAY=\"/usr/local/portage\"\n",
+        );
+        let roots = Roots {
+            config: Some(path),
+            ..Default::default()
+        };
+        assert_eq!(
+            roots.portdir_overlay(),
+            vec![Utf8PathBuf::from("/usr/local/portage")]
+        );
+    }
+
+    #[test]
+    fn multiple_whitespace_separated_directories() {
+        let (_dir, path) = utf8_tempdir();
+        write(
+            &path.join("etc/portage/make.conf"),
+            "PORTDIR_OVERLAY=\"/opt/a /opt/b\"\n",
+        );
+        let roots = Roots {
+            config: Some(path),
+            ..Default::default()
+        };
+        assert_eq!(
+            roots.portdir_overlay(),
+            vec![Utf8PathBuf::from("/opt/a"), Utf8PathBuf::from("/opt/b")]
+        );
+    }
+
+    /// `--local`/`--prefix`'s overlay confdir wins over the base config
+    /// root when both declare `PORTDIR_OVERLAY` — same precedence as other
+    /// `config_overlay` consumers.
+    #[test]
+    fn overlay_confdir_wins_over_base() {
+        let (_dir, path) = utf8_tempdir();
+        write(
+            &path.join("etc/portage/make.conf"),
+            "PORTDIR_OVERLAY=\"/opt/base\"\n",
+        );
+        write(
+            &path.join("prefix/etc/portage/make.conf"),
+            "PORTDIR_OVERLAY=\"/opt/prefix\"\n",
+        );
+        let roots = Roots {
+            config: Some(path.clone()),
+            config_overlay: Some(path.join("prefix/etc/portage")),
+            ..Default::default()
+        };
+        assert_eq!(
+            roots.portdir_overlay(),
+            vec![Utf8PathBuf::from("/opt/prefix")]
+        );
     }
 }

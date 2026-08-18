@@ -319,6 +319,14 @@ impl RepositoryBuilder {
     /// master's own masters — those fall back to *that* repo's
     /// layout.conf, since repos.conf only describes top-level entries).
     ///
+    /// `default_master`: if neither `masters_override` nor layout.conf
+    /// declares anything at all, fall back to this name — real portage
+    /// defaults every non-main repo with zero declared masters to the main
+    /// repo (`RepoConfigLoader.__init__`: `if repo.masters is None: ...
+    /// repo.masters = (self.mainRepo(),)`), not to no masters at all. Pass
+    /// `None` for the main repo itself, and for a nested master's own
+    /// masters (this default is not re-applied recursively).
+    ///
     /// Masters share `UserRoot` (same root, per-name dirs) or get a fresh
     /// in-memory secondary for `Memory` / `Custom`. The returned `Repository`
     /// owns its resolved masters (see [`Repository::masters`]).
@@ -327,6 +335,7 @@ impl RepositoryBuilder {
         path: impl Into<PathBuf>,
         repos_dir: impl AsRef<Path>,
         masters_override: Option<&[String]>,
+        default_master: Option<&str>,
     ) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
         let mut repo = Repository::open_with_secondary(path, spec.clone())?;
@@ -340,6 +349,7 @@ impl RepositoryBuilder {
             &mut seen,
             &spec,
             masters_override,
+            default_master,
         )?;
         repo.masters = masters;
         Ok(repo)
@@ -364,8 +374,7 @@ impl Repository {
 
         let layout = LayoutConf::from_repo(path.as_std_path())?;
 
-        let name = util::read_single_line(path.join("profiles").join("repo_name"))?
-            .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string());
+        let name = util::resolve_repo_name(path.as_std_path())?;
 
         let arch_cache: Vec<Arch> = util::read_lines(path.join("profiles").join("arch.list"))
             .unwrap_or_default()
@@ -401,17 +410,27 @@ impl Repository {
         seen: &mut HashSet<String>,
         spec: &SecondarySpec,
         masters_override: Option<&[String]>,
+        default_master: Option<&str>,
     ) -> Result<()> {
         // repos.conf wins whenever it declares `masters =` at all (even
         // empty, to explicitly opt out); layout.conf is only a fallback
         // for repos with no repos.conf entry to override it — see
-        // `RepositoryBuilder::open_with_masters`.
-        let layout_masters;
+        // `RepositoryBuilder::open_with_masters`. If neither declares
+        // anything, `default_master` (the main repo) is what's left.
+        let owned_names;
         let master_names: &[String] = match masters_override {
             Some(names) => names,
             None => {
-                layout_masters = repo.layout().masters.clone();
-                &layout_masters
+                let layout_masters = repo.layout().masters.clone();
+                if layout_masters.is_empty()
+                    && let Some(dm) = default_master
+                {
+                    owned_names = vec![dm.to_string()];
+                    &owned_names
+                } else {
+                    owned_names = layout_masters;
+                    &owned_names
+                }
             }
         };
         for master_name in master_names {
@@ -424,7 +443,7 @@ impl Repository {
                 SecondarySpec::Memory | SecondarySpec::Custom(_) => SecondarySpec::Memory,
             };
             let master = Self::open_with_secondary(master_path, master_spec)?;
-            Self::resolve_masters_with_spec(&master, repos_dir, out, seen, spec, None)?;
+            Self::resolve_masters_with_spec(&master, repos_dir, out, seen, spec, None, None)?;
             out.push(master);
         }
         Ok(())
@@ -1132,6 +1151,22 @@ mod tests {
             .unwrap()
     }
 
+    /// A repo with no `profiles/repo_name` is named `x-<basename>`, not
+    /// the bare basename — matches real portage's own fallback
+    /// (`RepoConfig._read_repo_name`) and is where names like
+    /// `x-portage` (from a `/usr/local/portage` tree) actually come from.
+    #[test]
+    fn missing_repo_name_falls_back_to_x_prefixed_basename() {
+        let parent = tempfile::tempdir().unwrap();
+        let dir = parent.path().join("portage");
+        std::fs::create_dir_all(dir.join("metadata")).unwrap();
+        std::fs::write(dir.join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.join("profiles")).unwrap();
+
+        let repo = Repository::builder().in_memory_cache().open(&dir).unwrap();
+        assert_eq!(repo.name(), "x-portage");
+    }
+
     #[test]
     fn profiles_eapi_absent_returns_none() {
         let dir = tempfile::tempdir().unwrap();
@@ -1577,16 +1612,19 @@ mod tests {
         let masters_override = vec!["gentoo".to_string()];
         let repo = Repository::builder()
             .in_memory_cache()
-            .open_with_masters(overlay_dir.path(), repos_dir.path(), Some(&masters_override))
+            .open_with_masters(
+                overlay_dir.path(),
+                repos_dir.path(),
+                Some(&masters_override),
+                None,
+            )
             .unwrap();
         assert_eq!(repo.masters().len(), 1);
         assert_eq!(repo.masters()[0].path(), master_dir);
     }
 
-    /// Without a repos.conf override and with no `masters =` in
-    /// `layout.conf` either, an overlay opens with zero masters — the
-    /// baseline `open_with_masters_honors_a_repos_conf_only_masters_override`
-    /// fixes a gap in.
+    /// With no repos.conf override, no `masters =` in `layout.conf`, and no
+    /// `default_master` given, an overlay opens with zero masters.
     #[test]
     fn open_with_masters_none_declared_anywhere_resolves_no_masters() {
         let repos_dir = tempfile::tempdir().unwrap();
@@ -1595,9 +1633,33 @@ mod tests {
 
         let repo = Repository::builder()
             .in_memory_cache()
-            .open_with_masters(overlay_dir.path(), repos_dir.path(), None)
+            .open_with_masters(overlay_dir.path(), repos_dir.path(), None, None)
             .unwrap();
         assert!(repo.masters().is_empty());
+    }
+
+    /// Real portage defaults *every* non-main repo with zero declared
+    /// masters (neither repos.conf nor layout.conf) to the main repo
+    /// (`RepoConfigLoader.__init__`) — not to no masters at all. A plain
+    /// overlay with an empty layout.conf and no override must still pick
+    /// up `default_master` as its sole master.
+    #[test]
+    fn open_with_masters_falls_back_to_default_master_when_nothing_declared() {
+        let repos_dir = tempfile::tempdir().unwrap();
+        let master_dir = repos_dir.path().join("gentoo");
+        std::fs::create_dir_all(master_dir.join("metadata")).unwrap();
+        std::fs::write(master_dir.join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(master_dir.join("profiles")).unwrap();
+
+        let overlay_dir = tempfile::tempdir().unwrap();
+        make_test_repo(&overlay_dir);
+
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open_with_masters(overlay_dir.path(), repos_dir.path(), None, Some("gentoo"))
+            .unwrap();
+        assert_eq!(repo.masters().len(), 1);
+        assert_eq!(repo.masters()[0].path(), master_dir);
     }
 
     /// A bare-name match across several categories comes back in a

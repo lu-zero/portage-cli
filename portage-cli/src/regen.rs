@@ -118,6 +118,7 @@ pub async fn run(
             target.clone(),
             &repos_dir,
             masters_override.as_deref(),
+            None,
         )
         .context("open repo")?;
 

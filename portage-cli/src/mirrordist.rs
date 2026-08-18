@@ -75,6 +75,7 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
         repo_target.clone(),
         &repos_dir,
         masters_override.as_deref(),
+        None,
     )
     .context("open repo")?;
 
