@@ -317,9 +317,13 @@ impl PortageDependencyProvider {
     /// Effective state of `flag` on a non-installed package version that will be
     /// freshly built. Mirrors what the build will see: `package.use` and global
     /// USE applied on the ebuild's IUSE defaults; outside IUSE, the dep's own
-    /// `(+)`/`(-)` default — except at the installed version when the repo has
-    /// no IUSE for that exact cpv (revbumped or pruned from the tree while
-    /// still installed), where the VDB's own record is ground truth instead.
+    /// `(+)`/`(-)` default — except at the installed version, where the VDB's
+    /// own record is ground truth instead. That covers both an installed
+    /// version dropped from the tree entirely (revbumped/pruned, a synthetic
+    /// empty-IUSE stub per `add_installed`) and one still in the tree whose
+    /// ebuild was edited in place to drop just this flag from IUSE (no
+    /// revbump): either way, the already-built package has whatever the VDB
+    /// recorded, independent of what the current tree metadata says.
     pub(crate) fn effective_flag_new(
         &self,
         pkg: &PortagePackage,
@@ -335,12 +339,7 @@ impl PortageDependencyProvider {
             return vd.is_some_and(|v| v.desired.get(flag) == UseFlagState::Enabled);
         }
         let at_installed_ver = self.installed.get(pkg).is_some_and(|(iv, _)| iv == ver);
-        // Empty == absent: a version pruned from the tree gets a synthetic
-        // empty-IUSE stub (see `add_installed`), which must fall back to the
-        // VDB-recorded IUSE just like a version with no repo entry at all.
-        let repo_iuse_absent = vd.is_none_or(|v| v.iuse.is_empty());
         if at_installed_ver
-            && repo_iuse_absent
             && let Some(iuse) = self.installed_iuse.get(pkg)
             && iuse.contains(&flag)
         {

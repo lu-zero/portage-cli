@@ -1104,6 +1104,86 @@ mod tests {
         );
     }
 
+    // Same shape as the revbump/pruned-version case above, but the installed
+    // cpv is still in the tree unchanged — its ebuild was just edited in
+    // place to drop `alternatives` from IUSE (no revbump), leaving some
+    // *other* flag in IUSE so the repo metadata isn't empty. Confirms
+    // whether `effective_flag_new`'s VDB fallback (gated on
+    // `repo_iuse_absent`, i.e. the repo IUSE being fully empty) also covers
+    // this narrower "still non-empty IUSE, this one flag just missing" case,
+    // or whether it falls through to the dep's own `(-)` default instead —
+    // the gap `todo/PENDING.md`'s "Smaller / polish" section flagged.
+    #[test]
+    fn blocker_use_dep_checks_vdb_flags_when_flag_dropped_from_iuse_in_place() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+        repo.add_version(
+            portage_atom::Cpv::parse("app-alternatives/gpg-1").unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            PackageDeps {
+                rdepend: (vec![
+                    DepEntry::Atom(Dep::parse("!app-crypt/gnupg[-alternatives(-)]").unwrap()),
+                    DepEntry::Atom(Dep::parse("app-crypt/gnupg[alternatives(-)]").unwrap()),
+                ])
+                .into(),
+                ..empty()
+            },
+        );
+        // Same version as installed (no revbump) -- IUSE still non-empty,
+        // just no longer lists `alternatives`.
+        repo.add_version_with_iuse(
+            portage_atom::Cpv::parse("app-crypt/gnupg-2.5.20").unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            vec![Interned::intern("nls")],
+            empty(),
+        );
+
+        repo.set_use_config(UseConfig::new());
+        let mut provider = PortageDependencyProvider::new(repo);
+        provider.add_installed(crate::provider::InstalledPackage {
+            package: PortagePackage::slotted(
+                Cpn::parse("app-crypt/gnupg").unwrap(),
+                Interned::intern("0"),
+            ),
+            version: Version::parse("2.5.20").unwrap(),
+            policy: crate::provider::InstalledPolicy::Favor,
+            active_use: vec![Interned::intern("alternatives")],
+            iuse: vec![Interned::intern("alternatives")],
+        });
+
+        let solution = provider
+            .resolve_targets(vec![(
+                PortagePackage::slotted(
+                    Cpn::parse("app-alternatives/gpg").unwrap(),
+                    Interned::intern("0"),
+                ),
+                PortageVersionSet::any(),
+            )])
+            .unwrap();
+        assert_eq!(
+            solution.get(&PortagePackage::slotted(
+                Cpn::parse("app-crypt/gnupg").unwrap(),
+                Interned::intern("0")
+            )),
+            Some(&Version::parse("2.5.20").unwrap()),
+            "the installed version should be kept, not upgraded"
+        );
+        assert!(
+            provider.check_blockers(&solution).is_empty(),
+            "installed gnupg has `alternatives` on, so the `[-alternatives(-)]` \
+             blocker guard must not fire even though the current tree's IUSE \
+             no longer lists the flag"
+        );
+    }
+
     #[test]
     fn check_blockers_no_conflict_when_clean() {
         let mut repo = InMemoryRepository::new();
