@@ -3,8 +3,10 @@ use std::io::Write as _;
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_metadata::IUseDefault;
-use portage_repo::{PackageConf, UseExpand};
+use portage_repo::{PackageConf, ProfileStack, UseExpand};
+use portage_resolve::force_mask::{ForceMask, index_by_cpn};
 
 use crate::cli::{Cli, PkgCommand};
 use crate::query::depgraph::output::colorize_use_flag;
@@ -402,11 +404,14 @@ fn show_flag_info(cli: &Cli, atom_str: &str, flags: &[String]) -> Result<()> {
 /// themselves): the best-effort resolved USE for `atom`'s best-matching
 /// candidate ebuild — IUSE defaults folded with the profile/make.conf global
 /// USE (the same `EbuildShell` resolution `em use`'s bare summary and
-/// `em --info` use), then this atom's own package.use entries on top.
+/// `em --info` use), then this atom's own package.use entries, then profile
+/// `use.force`/`use.mask` (global and per-package) on top.
 ///
-/// Approximate: unlike the real solver this applies no use.force/use.mask or
-/// REQUIRED_USE, so a force/masked flag may show the "wrong" state here —
-/// good enough for a quick glance, not a substitute for a real `-p` resolve.
+/// Approximate: unlike the real solver this applies no `REQUIRED_USE`, and
+/// treats the candidate as merged on a non-stable keyword path (skips the
+/// `use.stable.{force,mask}` sets, which need a resolved `ACCEPT_KEYWORDS`
+/// decision this quick-glance command doesn't otherwise build) — good
+/// enough for a quick glance, not a substitute for a real `-p` resolve.
 async fn show_active_use(cli: &Cli, confdir: &Utf8Path, atom_str: &str) -> Result<()> {
     let atom = Dep::parse(atom_str).with_context(|| format!("invalid atom {atom_str:?}"))?;
 
@@ -455,13 +460,31 @@ async fn show_active_use(cli: &Cli, confdir: &Utf8Path, atom_str: &str) -> Resul
 
     let package_use = package_use_values(confdir, &atom);
 
+    let iuse_set: std::collections::HashSet<Interned<DefaultInterner>> = entry
+        .metadata
+        .iuse
+        .iter()
+        .map(|flag| Interned::intern(flag.name()))
+        .collect();
+    let (forced, masked) = build_force_mask(roots.config())
+        .map(|fm| fm.effective(cpv, Some(&entry.metadata.slot), false, &iuse_set))
+        .unwrap_or_default();
+
     let active: Vec<String> = entry
         .metadata
         .iuse
         .iter()
         .map(|flag| {
             let name = flag.name();
-            if use_state(name, &package_use, &global_use, flag.default) {
+            let interned = Interned::intern(name);
+            let state = if masked.contains(&interned) {
+                false
+            } else if forced.contains(&interned) {
+                true
+            } else {
+                use_state(name, &package_use, &global_use, flag.default)
+            };
+            if state {
                 name.to_string()
             } else {
                 format!("-{name}")
@@ -495,6 +518,42 @@ async fn show_active_use(cli: &Cli, confdir: &Utf8Path, atom_str: &str) -> Resul
         .ok();
     }
     Ok(())
+}
+
+/// The profile chain's `use.force`/`use.mask` (global and per-package),
+/// for [`show_active_use`]'s post-fold layer — same recipe `use_env.rs`
+/// uses to build a full `UseEnv`, minus the `*.stable.*` sets (this
+/// quick-glance command doesn't resolve `ACCEPT_KEYWORDS`, so it can't tell
+/// whether a candidate is merged on a stable path). `None` when no profile
+/// is resolvable, matching `apply_profile_env`'s own soft-fail. Config-root
+/// only, matching `apply_profile_env`'s own `.with_user_profile` call —
+/// `--local`/`--prefix`'s config overlay carries per-invocation
+/// `package.use`/`bashrc`, not its own profile chain.
+fn build_force_mask(config_root: Option<&Utf8Path>) -> Option<ForceMask> {
+    let base = config_root.unwrap_or(Utf8Path::new("/"));
+    let profile_path =
+        std::fs::canonicalize(base.join("etc/portage/make.profile").as_std_path()).ok()?;
+    let stack = ProfileStack::build(profile_path)
+        .ok()?
+        .with_user_profile(base.join("etc/portage/profile").into_std_path_buf())
+        .ok()?;
+    Some(ForceMask {
+        use_force: stack
+            .use_force()
+            .unwrap_or_default()
+            .iter()
+            .map(|s| Interned::intern(s))
+            .collect(),
+        use_mask: stack
+            .use_mask()
+            .unwrap_or_default()
+            .iter()
+            .map(|s| Interned::intern(s))
+            .collect(),
+        pkg_force: index_by_cpn(stack.package_use_force().unwrap_or_default()),
+        pkg_mask: index_by_cpn(stack.package_use_mask().unwrap_or_default()),
+        ..Default::default()
+    })
 }
 
 /// Fold order for [`show_active_use`]: this atom's own package.use entries
@@ -780,5 +839,45 @@ mod tests {
 
         let written = std::fs::read_to_string(conf.join("package.mask")).expect("file written");
         assert!(written.contains("sys-libs/zlib"), "{written}");
+    }
+
+    /// `build_force_mask` must pick up both global `use.force`/`use.mask`
+    /// and per-package `package.use.force`/`package.use.mask` from the
+    /// profile at `<config_root>/etc/portage/make.profile` — the gap
+    /// `show_active_use` previously had no coverage for at all.
+    #[test]
+    fn build_force_mask_reads_global_and_per_package_entries() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = confdir(&tmp);
+        let profile = root.join("etc/portage/make.profile");
+        std::fs::create_dir_all(profile.as_std_path()).unwrap();
+        std::fs::write(profile.join("use.force").as_std_path(), "forced\n").unwrap();
+        std::fs::write(profile.join("use.mask").as_std_path(), "masked\n").unwrap();
+        std::fs::write(
+            profile.join("package.use.force").as_std_path(),
+            "app-misc/foo pkg-forced\n",
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join("package.use.mask").as_std_path(),
+            "app-misc/foo pkg-masked\n",
+        )
+        .unwrap();
+
+        let fm = build_force_mask(Some(&root)).expect("profile builds");
+        let iuse: std::collections::HashSet<Interned<DefaultInterner>> =
+            ["forced", "masked", "pkg-forced", "pkg-masked", "other"]
+                .iter()
+                .map(|s| Interned::intern(s))
+                .collect();
+        let cpv = portage_atom::Cpv::parse("app-misc/foo-1").unwrap();
+        let (forced, masked) = fm.effective(&cpv, None, false, &iuse);
+
+        assert!(forced.contains(&Interned::intern("forced")));
+        assert!(forced.contains(&Interned::intern("pkg-forced")));
+        assert!(masked.contains(&Interned::intern("masked")));
+        assert!(masked.contains(&Interned::intern("pkg-masked")));
+        assert!(!forced.contains(&Interned::intern("other")));
+        assert!(!masked.contains(&Interned::intern("other")));
     }
 }
