@@ -358,13 +358,13 @@ pub(super) fn report_held_back_targets(held_back: &[portage_atom_pubgrub::HeldBa
     for h in held_back {
         write!(
             out,
-            "  {C_PKG}{}{C_PKG:#}-{} (newest: {})",
+            "  {C_PKG}{}-{}{C_PKG:#} (newest: {})",
             h.package, h.selected, h.newest
         )
         .ok();
         match &h.blocked_by {
             Some((dep_pkg, dep_ver)) => {
-                writeln!(out, " — blocked by {C_PKG}{dep_pkg}{C_PKG:#}-{dep_ver}").ok();
+                writeln!(out, " — blocked by {C_PKG}{dep_pkg}-{dep_ver}{C_PKG:#}").ok();
             }
             None => {
                 writeln!(out).ok();
