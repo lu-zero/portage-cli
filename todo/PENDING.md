@@ -91,23 +91,13 @@ carry an effort estimate.
   the solve, or silently return `None` in cross mode; best-effort field,
   **confirmed still accurate 2026-08-18** (untouched by the same-day
   `f5686e8`/coloring fixes), not yet a bug in practice
-- ~~`em pkg use`'s bare-atom "Active USE" summary applies no use.force/use.mask~~ —
-  **use.force/use.mask landed 2026-08-18** (`1d82526`): layers
-  `ForceMask::effective` (portage-resolve, the same helper the real solver's
-  `UseEnv`/`effective_use` use) on top of the existing fold via a small
-  local profile-stack build. Live-verified: `package.use` explicitly
-  enabling a use.masked flag (`multilib`, arm64 profile) on `dev-debug/rr`
-  still shows it disabled. Still not applied, and still a real gap:
-  `use.stable.{force,mask}` (needs a resolved `ACCEPT_KEYWORDS` decision
-  this quick-glance command doesn't build) and `REQUIRED_USE` (lives
-  deeper in the real solve pipeline's `post_solve`/`UseConfig` — not a
-  one-line swap to any existing shared helper).
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 
 | Item | When | Notes |
 |------|------|--------|
+| `em pkg use`'s Active USE summary applied no use.force/use.mask/REQUIRED_USE/`*.stable.*` | 2026-08-18 | Turned out cheap to do properly: `build_use_env`+`ResolvePolicy`+`effective_use` (portage-resolve) already bundle every policy input in one call, the same one `TreeView` uses outside a full depgraph — no custom plumbing needed. Live-verified: use.mask still beats package.use (`dev-debug/rr`/`multilib`), and `package.use` enabling `app-misc/ddcutil`'s `drm` without `X` reports "REQUIRED_USE not satisfied". `1d82526`/`84cc408`. |
 | `report_held_back_targets` colored only `pkg:slot`, leaving `-version` outside the span unlike every sibling report | 2026-08-18 | `68a6df6` |
 | `effective_flag_new`'s VDB fallback only fired when the tree IUSE was fully empty; an in-place IUSE edit (same cpv, flag just dropped, no revbump) still fell through to the dep's own default | 2026-08-18 | Same false-positive blocker class `2802c1b` fixed, different metadata path — confirmed with a failing test first. `f5686e8`. |
 | `masters =` only in `repos.conf` (no `metadata/layout.conf` of its own) was silently ignored, resolving zero masters; separately, legacy `PORTDIR_OVERLAY` (make.conf) had zero support at all | 2026-08-18 | Root cause of a reported "repo priority" discrepancy — the overlay couldn't see a category it didn't duplicate in its own `profiles/categories`, so a locally-overridden package vanished entirely rather than shadowing main. `1ceea7d`/`6e9ace1` (history rewritten/squashed same day; see memory `repos-conf-masters-fallback-bug-fixed`). |
