@@ -115,6 +115,7 @@ fn solve_with(
         package_use: pu,
         profile_package_use: &[],
         force_mask: &fm,
+        use_expand: portage_repo::UseExpand::empty(),
         autosolve_use: true,
     };
     let policy = ResolvePolicy {
@@ -129,6 +130,7 @@ fn solve_with(
         package_use: pu,
         profile_package_use: &[],
         force_mask: &fm,
+        use_expand: portage_repo::UseExpand::empty(),
     };
     let mut provider = PortageDependencyProvider::new(adapter);
     let roots: Vec<_> = targets

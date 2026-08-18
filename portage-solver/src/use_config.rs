@@ -584,6 +584,29 @@ mod tests {
         UseLayer::parse(s)
     }
 
+    /// `resolve_effective_use` itself stays deliberately naive: it trusts
+    /// whatever `iuse_defaults` hands it, with no USE_EXPAND awareness of
+    /// its own. The vscode/L10N override (an ebuild's `+`-defaulted
+    /// USE_EXPAND flag must not auto-enable once its group's variable is
+    /// active) is enforced one layer up, in the `iuse_defaults`/
+    /// `iuse_defaults_map` builders (`portage-resolve`) — see their tests.
+    /// This test pins that division of responsibility: fed an `Enabled`
+    /// default directly, `resolve_effective_use` still honours it exactly
+    /// like any other flag.
+    #[test]
+    fn resolve_effective_use_trusts_iuse_defaults_verbatim() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
+            &layer("l10n_en-us"),
+            &cpv(),
+            None,
+            &[],
+            &layer(""),
+            &[],
+        );
+        assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Enabled);
+    }
+
     #[test]
     fn resolve_effective_use_baseline_no_wildcard() {
         // No -* anywhere: package.use applies normally, matching real emerge's

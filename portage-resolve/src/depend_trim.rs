@@ -201,6 +201,7 @@ mod tests {
                 package_use: &[],
                 profile_package_use: &[],
                 force_mask: &fm,
+                use_expand: portage_repo::UseExpand::empty(),
             },
             root_cpns: &root_cpns,
             reinstall_cpns: &reinstall,

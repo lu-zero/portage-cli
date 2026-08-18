@@ -4,7 +4,9 @@ use camino::Utf8Path;
 use portage_atom::Dep;
 use portage_atom::interner::Interned;
 use portage_atom_pubgrub::{UseLayer, UseOverride};
-use portage_repo::{AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
+use portage_repo::{
+    AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository, UseExpand,
+};
 
 use crate::force_mask::{ForceMask, index_by_cpn};
 use crate::repo::AcceptToken;
@@ -28,6 +30,13 @@ pub struct UseEnv {
     pub env_use: UseLayer,
     /// Keys from `USE_EXPAND` — used to group expanded flags in display.
     pub expand: Vec<String>,
+    /// [`Self::expand`], pre-built into a [`UseExpand`] matcher — every
+    /// `ResolvePolicy`/`Adapter` construction site needs this same prefix
+    /// set to decide whether a flag's `+`/`-` IUSE default is governed by
+    /// its own USE_EXPAND variable instead (see
+    /// `portage_resolve::repo::iuse_defaults_map`'s doc), so it's built
+    /// once here rather than re-lowercased at every call site.
+    pub use_expand: UseExpand,
     /// Keys from `USE_EXPAND_HIDDEN` — groups to suppress in display.
     pub expand_hidden: Vec<String>,
     /// Per-package USE overrides from `/etc/portage/package.use` and
@@ -358,6 +367,7 @@ async fn compute_use_env(
     Ok(UseEnv {
         pre_env,
         env_use,
+        use_expand: UseExpand::new(&expand),
         expand,
         expand_hidden,
         package_use,

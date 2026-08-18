@@ -9,6 +9,7 @@ use portage_atom_pubgrub::{
     UseOverride,
 };
 use portage_metadata::{CacheEntry, Keyword, LicenseExpr, RequiredUseExpr, Stability};
+use portage_repo::UseExpand;
 
 /// A reason a package version was excluded from the solver.
 #[derive(Debug, Clone)]
@@ -532,13 +533,26 @@ fn license_has_conditional(expr: &LicenseExpr) -> bool {
 /// Only **`+flag` / enabled** defaults are collected: disabled defaults match
 /// `UseConfig::get`'s unset→Disabled, and `resolve_effective_use` only
 /// overlays enabled IUSE flags not already set by `pre_env`.
+///
+/// A flag matching an active `USE_EXPAND` group (`l10n_af`, `video_cards_*`,
+/// …) is excluded even when `+`-defaulted: PMS's USE_EXPAND rule makes
+/// membership in the group's own variable authoritative, overriding the
+/// ebuild's own IUSE default entirely. `chromium-2.eclass`'s
+/// `_chromium_set_l10n_IUSE` sets `IUSE="+l10n_${lang}"` for every locale it
+/// bundles, deliberately relying on this: "Default to enabled since we
+/// bundle them anyway. USE-expansion will take care of disabling the langs
+/// the user has not selected via L10N." Before this exclusion, `em` enabled
+/// every locale the package shipped except the user's actual selection.
 fn iuse_defaults_map(
     meta: &portage_metadata::EbuildMetadata,
+    use_expand: &portage_repo::UseExpand,
 ) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
     meta.iuse
         .iter()
         .filter_map(|iu| match iu.default {
-            Some(portage_metadata::IUseDefault::Enabled) => {
+            Some(portage_metadata::IUseDefault::Enabled)
+                if use_expand.split(iu.name()).0 == "global" =>
+            {
                 Some((Interned::from(iu), IUseDefault::Enabled))
             }
             _ => None,
@@ -559,7 +573,7 @@ fn effective_use_config(
 ) -> portage_atom_pubgrub::UseConfig {
     use portage_atom_pubgrub::resolve_effective_use;
 
-    let iuse_defaults = iuse_defaults_map(meta);
+    let iuse_defaults = iuse_defaults_map(meta, policy.use_expand);
     let mut cfg = resolve_effective_use(
         &iuse_defaults,
         policy.pre_env,
@@ -791,6 +805,9 @@ pub struct ResolvePolicy<'a> {
     pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
     /// Profile USE force/mask policy — see [`Adapter::force_mask`].
     pub force_mask: &'a crate::force_mask::ForceMask,
+    /// The profile's declared `USE_EXPAND` group names (`L10N`,
+    /// `VIDEO_CARDS`, …) — see [`Adapter::use_expand`].
+    pub use_expand: &'a UseExpand,
 }
 
 /// The [`portage_atom_pubgrub::PackageRepository`] impl the solver bridge
@@ -828,6 +845,11 @@ pub struct Adapter<'a> {
     /// Profile USE force/mask policy: applied to each version's effective USE and
     /// consulted by the Level-C cede gate (pinned flags are never ceded).
     pub force_mask: &'a crate::force_mask::ForceMask,
+    /// The profile's declared `USE_EXPAND` group names (`L10N`,
+    /// `VIDEO_CARDS`, …). A flag matching one of these prefixes is governed
+    /// by its group's own variable, not by the ebuild's `+`/`-` IUSE
+    /// default — see [`iuse_defaults_map`]'s doc for why.
+    pub use_expand: &'a UseExpand,
     /// Exact installed cpvs. A version that is installed and staying installed
     /// never has its `REQUIRED_USE` flags ceded — its USE was decided at build
     /// time, and only packages being built get theirs auto-satisfied (emerge
@@ -997,6 +1019,7 @@ impl<'a> Adapter<'a> {
             accept_restrict: self.accept_restrict,
             pre_env: self.pre_env,
             env_use: self.env_use,
+            use_expand: self.use_expand,
             package_use: self.package_use,
             profile_package_use: self.profile_package_use,
             force_mask: self.force_mask,
@@ -1042,7 +1065,9 @@ impl PackageRepository for Adapter<'_> {
         // Caller-resolved policy: the full ordered fold (IUSE defaults, then
         // pre_env, then package.use, then env_use) → the authoritative
         // desired set.
-        let iuse_defaults = meta.map(iuse_defaults_map).unwrap_or_default();
+        let iuse_defaults = meta
+            .map(|m| iuse_defaults_map(m, self.use_expand))
+            .unwrap_or_default();
         let mut cfg = resolve_effective_use(
             &iuse_defaults,
             self.pre_env,
@@ -1133,7 +1158,7 @@ impl PackageRepository for Adapter<'_> {
                         // already in hand.
                         let iuse: Vec<Interned<DefaultInterner>> =
                             meta.iuse.iter().map(Interned::from).collect();
-                        let iuse_defaults = iuse_defaults_map(meta);
+                        let iuse_defaults = iuse_defaults_map(meta, self.use_expand);
                         let deps = package_deps_from_metadata(meta);
                         // Translate the parsed metadata grammar into the solver's
                         // interned-flag fact vocabulary (the crate stays free of
@@ -1577,6 +1602,32 @@ mod tests {
 
     fn dep(s: &str) -> Dep {
         Dep::parse(s).unwrap()
+    }
+
+    /// vscode-shaped (`chromium-2.eclass`'s `_chromium_set_l10n_IUSE`):
+    /// `IUSE="+l10n_af +normal"`, `l10n_af` deliberately `+`-defaulted per
+    /// the eclass's own comment ("Default to enabled since we bundle them
+    /// anyway. USE-expansion will take care of disabling the langs the
+    /// user has not selected via L10N"). Once `L10N` is an active
+    /// USE_EXPAND group, PMS makes membership in its own expansion
+    /// authoritative for every `l10n_*` flag — the ebuild's own `+`
+    /// default must not auto-enable it. An ordinary (non-USE_EXPAND)
+    /// `+`-defaulted flag is unaffected.
+    #[test]
+    fn iuse_defaults_map_excludes_use_expand_governed_enabled_defaults() {
+        let entry =
+            CacheEntry::parse("EAPI=8\nDESCRIPTION=t\nSLOT=0\nIUSE=+l10n_af +normal\n").unwrap();
+        let use_expand = portage_repo::UseExpand::new(["l10n"]);
+        let defaults = iuse_defaults_map(&entry.metadata, &use_expand);
+        assert!(
+            !defaults.contains_key(&Interned::intern("l10n_af")),
+            "a USE_EXPAND-governed +default must not auto-enable, got {defaults:?}"
+        );
+        assert_eq!(
+            defaults.get(&Interned::intern("normal")),
+            Some(&IUseDefault::Enabled),
+            "an ordinary +default flag must still enable"
+        );
     }
 
     #[test]
@@ -2287,6 +2338,7 @@ mod tests {
                     package_use: &[],
                     profile_package_use: &[],
                     force_mask: &ForceMask::default(),
+                    use_expand: UseExpand::empty(),
                 },
             )
             .slot()
@@ -2336,6 +2388,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            use_expand: UseExpand::empty(),
         };
         let found = filter_reasons_for(
             &data,
@@ -2382,6 +2435,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            use_expand: UseExpand::empty(),
         };
         let vs = portage_atom_pubgrub::PortageVersionSet::any();
         let cpn = Cpn::try_new("app-misc/thing").expect("cpn parses");
@@ -2417,6 +2471,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            use_expand: UseExpand::empty(),
         };
         let cpn = Cpn::try_new("net-misc/thing").expect("cpn parses");
         let vs = portage_atom_pubgrub::PortageVersionSet::any();
@@ -2441,6 +2496,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
         let entry = &data.versions[&cpn][0].1;
@@ -2478,6 +2534,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            use_expand: UseExpand::empty(),
         };
         assert!(
             target_package(&data, &dep("app-misc/thing"), &policy)
@@ -2525,6 +2582,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm, // a is use.force'd
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2569,6 +2627,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2617,6 +2676,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2662,6 +2722,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2724,6 +2785,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2782,6 +2844,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2833,6 +2896,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2884,6 +2948,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2936,6 +3001,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: true,
         };
 
@@ -2993,6 +3059,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            use_expand: UseExpand::empty(),
             autosolve_use: false,
         };
 

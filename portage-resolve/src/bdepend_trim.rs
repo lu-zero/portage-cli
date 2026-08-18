@@ -187,7 +187,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use portage_metadata::CacheEntry;
-    use portage_repo::{AcceptSet, LicenseGroupRegistry};
+    use portage_repo::{AcceptSet, LicenseGroupRegistry, UseExpand};
 
     use super::*;
     use crate::Roots;
@@ -216,6 +216,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask,
+            use_expand: UseExpand::empty(),
         }
     }
 

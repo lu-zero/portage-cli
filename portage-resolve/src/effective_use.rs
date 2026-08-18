@@ -29,20 +29,35 @@ pub fn apply_ceded(cfg: &mut UseConfig, cpn: Cpn, ceded: &[CededFlag]) {
 
 /// Build the `iuse_defaults` map `resolve_effective_use` needs from a cache
 /// entry's parsed `IUSE` list (`+flag`/`-flag` → enabled/disabled default).
-pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
+///
+/// A flag matching an active `USE_EXPAND` group (`l10n_af`, `video_cards_*`,
+/// …) never gets an *enabled* default from here, even when `+`-defaulted:
+/// PMS's USE_EXPAND rule makes membership in the group's own variable
+/// authoritative over the ebuild's own IUSE default — see
+/// `portage_resolve::repo::iuse_defaults_map`'s doc for the full rationale
+/// (this is that function's twin; the two aren't merged into one because
+/// this one takes a `CacheEntry`, that one an already-unwrapped
+/// `EbuildMetadata`).
+pub fn iuse_defaults(
+    cache: &CacheEntry,
+    use_expand: &portage_repo::UseExpand,
+) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
     cache
         .metadata
         .iuse
         .iter()
         .filter_map(|iuse| {
-            iuse.default.map(|def| {
-                (
+            iuse.default.and_then(|def| {
+                if def == MetaIUseDefault::Enabled && use_expand.split(iuse.name()).0 != "global" {
+                    return None;
+                }
+                Some((
                     iuse.into(),
                     match def {
                         MetaIUseDefault::Enabled => IUseDefault::Enabled,
                         MetaIUseDefault::Disabled => IUseDefault::Disabled,
                     },
-                )
+                ))
             })
         })
         .collect()
@@ -86,7 +101,7 @@ pub fn effective_use(
     ceded: &[CededFlag],
 ) -> UseConfig {
     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
-    let defaults = iuse_defaults(cache);
+    let defaults = iuse_defaults(cache, policy.use_expand);
     let mut cfg = portage_atom_pubgrub::resolve_effective_use(
         &defaults,
         policy.pre_env,
@@ -174,6 +189,23 @@ mod tests {
     use portage_atom_pubgrub::{UseLayer, resolve_effective_use};
 
     use super::*;
+
+    /// `iuse_defaults`'s own copy of the USE_EXPAND exclusion (see
+    /// `portage_resolve::repo::iuse_defaults_map`'s twin test for the full
+    /// vscode/L10N rationale): a `+`-defaulted `l10n_af` must not surface
+    /// as an enabled default once `L10N` is an active USE_EXPAND group.
+    #[test]
+    fn iuse_defaults_excludes_use_expand_governed_enabled_defaults() {
+        let entry =
+            CacheEntry::parse("EAPI=8\nDESCRIPTION=t\nSLOT=0\nIUSE=+l10n_af +normal\n").unwrap();
+        let use_expand = portage_repo::UseExpand::new(["l10n"]);
+        let defaults = iuse_defaults(&entry, &use_expand);
+        assert!(!defaults.contains_key(&Interned::intern("l10n_af")));
+        assert_eq!(
+            defaults.get(&Interned::intern("normal")),
+            Some(&IUseDefault::Enabled)
+        );
+    }
 
     // Env-level `-*` would wipe a package.use-folded ceded flag;
     // `apply_ceded` must win regardless.

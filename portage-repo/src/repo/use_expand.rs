@@ -27,6 +27,15 @@ pub struct UseExpand {
 }
 
 impl UseExpand {
+    /// A shared, empty instance (no `USE_EXPAND` groups known) — every flag
+    /// falls into `"global"`. For call sites that need a `&UseExpand` but
+    /// have no real profile context (tests, narrow synthetic policies).
+    pub fn empty() -> &'static UseExpand {
+        use std::sync::OnceLock;
+        static E: OnceLock<UseExpand> = OnceLock::new();
+        E.get_or_init(UseExpand::default)
+    }
+
     /// Create from an iterator of group names (case-insensitive).
     ///
     /// Accepts the output of `Repository::use_expand_names` directly.
