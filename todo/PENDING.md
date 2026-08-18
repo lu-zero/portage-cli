@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-03**.
+here briefly for context). Updated **2026-08-18**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -24,7 +24,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; `cede_required_use` awk-4/stage1 bug fixed 2026-08-01; destructive Step 2 **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
 | **8** | **Drop `BuildClass` for cross-*** — package.env + HostCodegen allowlist; type removed 2026-08-07; live verify open | 🟡 | [[drop-buildclass]], matrix: [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md) |
-| **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` now resolves cleanly on real Debian 12 (real python step, SLOT-aware provided, linux-headers/glibc provided, a real zstd↔meson↔python cycle root-caused to a missing host `meson`); a full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [`meson-zstd-python-hard-cycle.md`](./meson-zstd-python-hard-cycle.md) |
+| **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` now resolves cleanly on real Debian 12 (real python step, SLOT-aware provided, linux-headers/glibc provided, a real zstd↔meson↔python cycle root-caused to a missing host `meson`); a full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [[meson-zstd-python-hard-cycle]] (resolved — real hard cycle, not an em bug) |
 | **10** | **Workdir dual-root race (P0)** — per-target builddirs + lock/schedule like Portage; dual plan entries under `--jobs` collide today | 🔴 | [[workdir-dual-root]], clang findings #3/#4 |
 
 ### Solver correctness (found 2026-08-17)
@@ -78,6 +78,9 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 
 | Item | When | Notes |
 |------|------|--------|
+| `masters =` only in `repos.conf` (no `metadata/layout.conf` of its own) was silently ignored, resolving zero masters | 2026-08-18 | Root cause of a reported "repo priority" discrepancy — the overlay couldn't see a category it didn't duplicate in its own `profiles/categories`, so a locally-overridden package vanished entirely rather than shadowing main. `ca053dd`. |
+| Full-codebase review sweep (unwrap/panic/dup-block audit) | 2026-07-24 | 4 real bugs fixed, dup clusters consolidated or deliberately left (documented); `[[review-findings-2026-07-24]]` |
+| `zstd ↔ meson ↔ python` hard-cycle investigation | 2026-08-07 | Not an `em` bug — genuine irreducible `::gentoo` cycle; root cause was a missing host `meson` probe target, not `toolchain_plan`; `[[meson-zstd-python-hard-cycle]]` |
 | `em use`/`em pkg use` reworked into an euse-compatible USE/USE_EXPAND editor | 2026-08-16 | `em use` gained `-e`/`--expand VAR` (any USE_EXPAND var, not just `USE`), `-L`/`--list-expand`, `-i`/`--info`, euse's own `-E`/`-D`/-`R`/`-P` short letters, `--dry-run` with colorized diff; `em pkg use` matched with the same `-n`/`--dry-run`/`-i`/`--info`, plus a best-effort "Active USE" summary for a bare `em pkg use <atom>` (approximation only — no use.force/use.mask/REQUIRED_USE, fails soft on unresolvable repo/profile). `f096c89`/`3671d26`. |
 | `matches_cpv` takes a typed `Slot`, fixing two live slot-matching bugs (`:0` matched nothing for 104/723 subslotted packages; a wrong sub-slot like `:0/2` still matched an installed `0/1`) | 2026-08-16 | `InstalledPackage::slot()` now returns `Slot`, not raw text; `ea68f85`/`2ee93d7`/`2bc6f59`, memory: `slot-matching-bugs-typed-refactor` |
 | VDB/set read-path perf pass — CONTENTS out of `field_cache`, needle-seek instead of full-line parse, SIMD `memmem`, GLSA prefilter, interned slot/USE/IUSE/KEYWORDS/repository | 2026-08-15–16 | `em --info -v` 7.90x faster / 16x leaner RSS, solver paths flat; bench anchor `559b644`; memory: `benchmark-vdb-set-perf-2026-08-16` |
@@ -103,6 +106,16 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | `portage-resolve` extraction | 2026-07-16 | stages 1–7 done |
 | inherit / `E_IUSE` (#36) | verified 2026-07-18 | brush_compat `inherit_*` |
 | `em quickpkg`, `-f`/`--fetchonly` | 2026-07-18 | |
+
+**2026-08-18 prune pass:** moved fully-closed notes to `todo/done/`:
+`meson-zstd-python-hard-cycle` (resolved — genuine `::gentoo` hard cycle, not
+an `em` bug), `review-findings-2026-07-24` (full audit sweep, all findings
+fixed or explicitly decided/left). Left in place despite looking tempting:
+`repo-overlay-abstraction-redesign` (still has real, code-verified follow-ups
+— `masters: Vec<Repository>` is still deep-owned/duplicated per overlay,
+`RepoData.repo_of` is still a string-keyed second encoding of what `RepoSet`
+already knows) and `local-setup-prereq` (macOS half unexercised, two
+follow-ups recorded, one known limitation).
 
 **2026-07-30 prune pass:** moved fully-closed notes to `todo/done/`:
 `accept-properties-restrict`, `deep-in-slot-upgrades`, `md5-cache-blind-spot`,
