@@ -91,16 +91,17 @@ carry an effort estimate.
   the solve, or silently return `None` in cross mode; best-effort field,
   **confirmed still accurate 2026-08-18** (untouched by the same-day
   `f5686e8`/coloring fixes), not yet a bug in practice
-- 🟡 **`em pkg use`'s bare-atom "Active USE" summary** (2026-08-16, `3671d26`)
-  is its own separate hand-rolled fold (IUSE default + package.use + global
-  USE) — no `use.force`/`use.mask`/`REQUIRED_USE` applied, so it can show a
-  flag as active that the real resolved USE would force off or drop.
-  **Confirmed 2026-08-18, medium effort**: not a one-line swap to an
-  existing shared helper — even `portage-solver`'s own `resolve_effective_use`
-  doesn't apply use.mask/use.force/REQUIRED_USE either (that lives deeper in
-  the real solve pipeline's `post_solve`/`UseConfig`); a real fix means
-  threading actual profile/mask data into what's currently a lightweight
-  display command. **Picked up next.**
+- ~~`em pkg use`'s bare-atom "Active USE" summary applies no use.force/use.mask~~ —
+  **use.force/use.mask landed 2026-08-18** (`1d82526`): layers
+  `ForceMask::effective` (portage-resolve, the same helper the real solver's
+  `UseEnv`/`effective_use` use) on top of the existing fold via a small
+  local profile-stack build. Live-verified: `package.use` explicitly
+  enabling a use.masked flag (`multilib`, arm64 profile) on `dev-debug/rr`
+  still shows it disabled. Still not applied, and still a real gap:
+  `use.stable.{force,mask}` (needs a resolved `ACCEPT_KEYWORDS` decision
+  this quick-glance command doesn't build) and `REQUIRED_USE` (lives
+  deeper in the real solve pipeline's `post_solve`/`UseConfig` — not a
+  one-line swap to any existing shared helper).
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
