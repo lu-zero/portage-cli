@@ -55,22 +55,12 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 - Review sweep log: [[review-findings-2026-07-24]]; structural cross notes: [[cross-support-self-review]]
 - Whether `history/merges.jsonl`'s unbounded growth (full-file-parse-per-query on the ETA hot path) needs rotation or a different format — not measured yet: [[activity-storage-format]]
 - Cross-emerge `llvm-core/clang` for riscv64 under both `--prefix` and `--local`, `-b`/buildpkg correctness included — plan drafted; Scenario A blocked on workdir race, B on local bootstrap: [[clang-crossbuild-prefix-local-test-plan]]
-- `effective_flag_new`'s VDB fallback (`post_solve.rs`) only fires when the
-  installed cpv's repo IUSE is empty (no metadata, or a synthetic pruned-
-  version stub); an in-place IUSE change with no revbump — same cpv still
-  in the tree, current IUSE just no longer lists the flag — still falls to
-  the dep's own default instead of the VDB record, the same false-positive
-  blocker class `2802c1b` fixed reached through a different metadata path
 - `check_held_back_targets`'s `blocked_by` reads a version's full unfiltered
   `vd.merged`, not what `get_dependencies` actually fed the solver for that
   target (`--nodeps`, cross `MergeRoot`-stamped keys, or `broot_filtered`
   host-satisfied edges dropped) — can name an edge that never constrained
   the solve, or silently return `None` in cross mode; best-effort field,
   not yet a bug in practice
-- `report_held_back_targets` renders `pkg:slot-version` (slot spliced in,
-  only the package half colorized) while the sibling reports at
-  `output.rs:184`/`output.rs:621` use plain `pkg-version` — cosmetic
-  inconsistency, not yet fixed
 - `em pkg use`'s bare-atom "Active USE" summary (2026-08-16, `3671d26`) is a fold of IUSE defaults + profile/make.conf USE + the atom's own package.use — no `use.force`/`use.mask`/`REQUIRED_USE` applied, so it can show a flag as active that the real resolved USE would force off or drop
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
 
@@ -78,7 +68,9 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 
 | Item | When | Notes |
 |------|------|--------|
-| `masters =` only in `repos.conf` (no `metadata/layout.conf` of its own) was silently ignored, resolving zero masters | 2026-08-18 | Root cause of a reported "repo priority" discrepancy — the overlay couldn't see a category it didn't duplicate in its own `profiles/categories`, so a locally-overridden package vanished entirely rather than shadowing main. `ca053dd`. |
+| `report_held_back_targets` colored only `pkg:slot`, leaving `-version` outside the span unlike every sibling report | 2026-08-18 | `68a6df6` |
+| `effective_flag_new`'s VDB fallback only fired when the tree IUSE was fully empty; an in-place IUSE edit (same cpv, flag just dropped, no revbump) still fell through to the dep's own default | 2026-08-18 | Same false-positive blocker class `2802c1b` fixed, different metadata path — confirmed with a failing test first. `f5686e8`. |
+| `masters =` only in `repos.conf` (no `metadata/layout.conf` of its own) was silently ignored, resolving zero masters; separately, legacy `PORTDIR_OVERLAY` (make.conf) had zero support at all | 2026-08-18 | Root cause of a reported "repo priority" discrepancy — the overlay couldn't see a category it didn't duplicate in its own `profiles/categories`, so a locally-overridden package vanished entirely rather than shadowing main. `1ceea7d`/`6e9ace1` (history rewritten/squashed same day; see memory `repos-conf-masters-fallback-bug-fixed`). |
 | Full-codebase review sweep (unwrap/panic/dup-block audit) | 2026-07-24 | 4 real bugs fixed, dup clusters consolidated or deliberately left (documented); `[[review-findings-2026-07-24]]` |
 | `zstd ↔ meson ↔ python` hard-cycle investigation | 2026-08-07 | Not an `em` bug — genuine irreducible `::gentoo` cycle; root cause was a missing host `meson` probe target, not `toolchain_plan`; `[[meson-zstd-python-hard-cycle]]` |
 | `em use`/`em pkg use` reworked into an euse-compatible USE/USE_EXPAND editor | 2026-08-16 | `em use` gained `-e`/`--expand VAR` (any USE_EXPAND var, not just `USE`), `-L`/`--list-expand`, `-i`/`--info`, euse's own `-E`/`-D`/-`R`/`-P` short letters, `--dry-run` with colorized diff; `em pkg use` matched with the same `-n`/`--dry-run`/`-i`/`--info`, plus a best-effort "Active USE" summary for a bare `em pkg use <atom>` (approximation only — no use.force/use.mask/REQUIRED_USE, fails soft on unresolvable repo/profile). `f096c89`/`3671d26`. |
