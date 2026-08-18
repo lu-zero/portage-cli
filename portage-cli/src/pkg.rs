@@ -3,14 +3,18 @@ use std::io::Write as _;
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Dep;
-use portage_atom::interner::{DefaultInterner, Interned};
-use portage_metadata::IUseDefault;
-use portage_repo::{PackageConf, ProfileStack, UseExpand};
-use portage_resolve::force_mask::{ForceMask, index_by_cpn};
+use portage_atom::interner::Interned;
+use portage_atom_pubgrub::{PortagePackage, UseFlagState};
+use portage_repo::{PackageConf, UseExpand};
+use portage_resolve::effective_use::effective_use;
+use portage_resolve::repo::{
+    AcceptKeywords, AcceptLicenses, AcceptProperties, AcceptRestrict, ResolvePolicy,
+};
+use portage_resolve::use_env::build_use_env;
 
 use crate::cli::{Cli, PkgCommand};
 use crate::query::depgraph::output::colorize_use_flag;
-use crate::style::{C_DISABLED, C_LABEL, C_PKG, C_STABLE, C_TESTING};
+use crate::style::{C_DISABLED, C_LABEL, C_PKG, C_STABLE, C_TESTING, C_WARN};
 
 /// The add/subtract/drop trichotomy, bundled so `edit_valued`/
 /// `update_valued_entry`/`apply_flags` don't each carry three separate slice
@@ -64,7 +68,7 @@ pub async fn run(command: &PkgCommand, globals: &Cli) -> Result<()> {
             // package.use show/edit this command has always supported.
             if no_edit
                 && !*dry_run
-                && let Err(e) = show_active_use(globals, &confdir, atom).await
+                && let Err(e) = show_active_use(globals, atom).await
             {
                 crate::style::warn_line!("could not resolve active USE for {atom}: {e}");
             }
@@ -400,22 +404,37 @@ fn show_flag_info(cli: &Cli, atom_str: &str, flags: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Bare `em pkg use <atom>` addendum (printed after the package.use entries
-/// themselves): the best-effort resolved USE for `atom`'s best-matching
-/// candidate ebuild — IUSE defaults folded with the profile/make.conf global
-/// USE (the same `EbuildShell` resolution `em use`'s bare summary and
-/// `em --info` use), then this atom's own package.use entries, then profile
-/// `use.force`/`use.mask` (global and per-package) on top.
-///
-/// Approximate: unlike the real solver this applies no `REQUIRED_USE`, and
-/// treats the candidate as merged on a non-stable keyword path (skips the
-/// `use.stable.{force,mask}` sets, which need a resolved `ACCEPT_KEYWORDS`
-/// decision this quick-glance command doesn't otherwise build) — good
-/// enough for a quick glance, not a substitute for a real `-p` resolve.
-async fn show_active_use(cli: &Cli, confdir: &Utf8Path, atom_str: &str) -> Result<()> {
-    let atom = Dep::parse(atom_str).with_context(|| format!("invalid atom {atom_str:?}"))?;
+/// `atom`'s best-matching candidate ebuild, fully resolved: USE (`flags`,
+/// `-`-prefixed when disabled, in the ebuild's own IUSE order) and any
+/// unsatisfied `REQUIRED_USE` clauses (rendered, empty when satisfied or
+/// absent).
+struct ActiveUse {
+    cpv: portage_atom::Cpv,
+    flags: Vec<String>,
+    expand: Vec<String>,
+    required_use_violations: Vec<String>,
+}
 
-    let repo = crate::crossdev::main_repo(cli).context("opening main repo")?;
+/// The [`effective_use`] fold the real solver's `Adapter` runs per package
+/// (IUSE defaults, profile/make.conf, package.use, env, then profile
+/// `use.force`/`use.mask` — global, per-package, and the `*.stable.*`
+/// variants when the candidate is merged on a stable keyword path), built
+/// from the same [`build_use_env`] the real solver reads, applied to
+/// `atom`'s best-matching candidate in `repo`.
+///
+/// Not a substitute for a real `-p` resolve: this resolves a single
+/// standalone candidate's USE, not what a full graph resolve of every
+/// dependency would settle on. `REQUIRED_USE` is checked but not
+/// auto-corrected the way `--autosolve-use` would flip flags to satisfy it.
+///
+/// `None` when `atom` has no matching ebuild in `repo` or no cached
+/// metadata for it.
+async fn resolve_active_use(
+    repo: portage_repo::Repository,
+    roots: &portage_resolve::Roots,
+    arch: &gentoo_core::Arch,
+    atom_str: &str,
+) -> Result<Option<ActiveUse>> {
     let ebuilds: Vec<_> = repo.ebuilds()?.into_iter().collect();
     let set = portage_repo::RepoSet::single(repo);
     let repo = set.main();
@@ -428,63 +447,59 @@ async fn show_active_use(cli: &Cli, confdir: &Utf8Path, atom_str: &str) -> Resul
         atom_str,
     )?;
     let Some(best) = matches.last() else {
-        return Ok(());
+        return Ok(None);
     };
-    let cpv = best.cpv();
-    let Some(entry) = repo.cache_entry(cpv)? else {
-        return Ok(());
+    let cpv = best.cpv().clone();
+    let Some(entry) = repo.cache_entry(&cpv)? else {
+        return Ok(None);
     };
 
-    let roots = cli.roots();
-    let mut shell = repo.shell().await.context("creating shell")?;
-    let has_profile =
-        crate::ebuild::apply_profile_env(&mut shell, roots.config(), roots.config_overlay())
-            .await
-            .context("resolving active profile")?;
-    if !has_profile {
-        return Ok(());
-    }
+    let env = build_use_env(repo, roots.config(), roots.config_overlay(), None)
+        .await
+        .context("resolving active profile")?;
 
-    let global_use: Vec<String> = shell
-        .get_var("USE")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_string)
-        .collect();
-    let expand_names: Vec<String> = shell
-        .get_var("USE_EXPAND")
-        .unwrap_or_default()
-        .split_whitespace()
-        .map(str::to_lowercase)
-        .collect();
+    let accept_keywords = AcceptKeywords::new(
+        arch,
+        &env.accept_keywords,
+        env.package_accept_keywords.clone(),
+    );
+    let accept_licenses =
+        AcceptLicenses::new(env.accept_license.clone(), env.package_license.clone());
+    let accept_properties = AcceptProperties::new(
+        env.accept_properties.clone(),
+        env.package_properties.clone(),
+    );
+    let accept_restrict =
+        AcceptRestrict::new(env.accept_restrict.clone(), env.package_restrict.clone());
+    let policy = ResolvePolicy {
+        accept_keywords: &accept_keywords,
+        package_mask: &env.package_mask,
+        package_unmask: &env.package_unmask,
+        accept_licenses: &accept_licenses,
+        accept_properties: &accept_properties,
+        accept_restrict: &accept_restrict,
+        pre_env: &env.pre_env,
+        env_use: &env.env_use,
+        package_use: &env.package_use,
+        profile_package_use: &env.profile_package_use,
+        force_mask: &env.force_mask,
+    };
 
-    let package_use = package_use_values(confdir, &atom);
+    let stable = accept_keywords.is_stable(
+        &entry.metadata.keywords,
+        &cpv,
+        Some(entry.metadata.slot.slot),
+    );
+    let pkg = PortagePackage::slotted(cpv.cpn, entry.metadata.slot.slot);
+    let cfg = effective_use(&policy, &pkg, &cpv.version, &entry, stable, &[]);
 
-    let iuse_set: std::collections::HashSet<Interned<DefaultInterner>> = entry
-        .metadata
-        .iuse
-        .iter()
-        .map(|flag| Interned::intern(flag.name()))
-        .collect();
-    let (forced, masked) = build_force_mask(roots.config())
-        .map(|fm| fm.effective(cpv, Some(&entry.metadata.slot), false, &iuse_set))
-        .unwrap_or_default();
-
-    let active: Vec<String> = entry
+    let flags: Vec<String> = entry
         .metadata
         .iuse
         .iter()
         .map(|flag| {
             let name = flag.name();
-            let interned = Interned::intern(name);
-            let state = if masked.contains(&interned) {
-                false
-            } else if forced.contains(&interned) {
-                true
-            } else {
-                use_state(name, &package_use, &global_use, flag.default)
-            };
-            if state {
+            if cfg.get(Interned::intern(name)) == UseFlagState::Enabled {
                 name.to_string()
             } else {
                 format!("-{name}")
@@ -492,8 +507,59 @@ async fn show_active_use(cli: &Cli, confdir: &Utf8Path, atom_str: &str) -> Resul
         })
         .collect();
 
-    let expand = UseExpand::new(&expand_names);
-    let mut groups = expand.group(active.iter().map(String::as_str));
+    let required_use_violations = entry
+        .metadata
+        .required_use
+        .as_ref()
+        .map(|ru| {
+            let is_enabled = |flag: &str| cfg.get(Interned::intern(flag)) == UseFlagState::Enabled;
+            ru.unsatisfied(&is_enabled)
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Some(ActiveUse {
+        cpv,
+        flags,
+        expand: env.expand,
+        required_use_violations,
+    }))
+}
+
+/// Bare `em pkg use <atom>` addendum, printed after the package.use entries
+/// themselves — see [`resolve_active_use`] for how the USE state itself is
+/// computed.
+async fn show_active_use(cli: &Cli, atom_str: &str) -> Result<()> {
+    Dep::parse(atom_str).with_context(|| format!("invalid atom {atom_str:?}"))?;
+
+    let repo = crate::crossdev::main_repo(cli).context("opening main repo")?;
+    let roots = cli.roots();
+    let Some(result) = resolve_active_use(repo, &roots, &cli.arch, atom_str).await? else {
+        return Ok(());
+    };
+    let ActiveUse {
+        cpv,
+        flags,
+        expand,
+        required_use_violations,
+    } = result;
+
+    if !required_use_violations.is_empty() {
+        let mut out = anstream::stderr();
+        writeln!(
+            out,
+            "{C_WARN}REQUIRED_USE not satisfied{C_WARN:#} for {C_PKG}{cpv}{C_PKG:#}:"
+        )
+        .ok();
+        for clause in &required_use_violations {
+            writeln!(out, "  {clause}").ok();
+        }
+    }
+
+    let use_expand = UseExpand::new(&expand);
+    let mut groups = use_expand.group(flags.iter().map(String::as_str));
     let mut base: Vec<&str> = groups.remove("global").unwrap_or_default();
     base.sort_unstable();
 
@@ -518,92 +584,6 @@ async fn show_active_use(cli: &Cli, confdir: &Utf8Path, atom_str: &str) -> Resul
         .ok();
     }
     Ok(())
-}
-
-/// The profile chain's `use.force`/`use.mask` (global and per-package),
-/// for [`show_active_use`]'s post-fold layer — same recipe `use_env.rs`
-/// uses to build a full `UseEnv`, minus the `*.stable.*` sets (this
-/// quick-glance command doesn't resolve `ACCEPT_KEYWORDS`, so it can't tell
-/// whether a candidate is merged on a stable path). `None` when no profile
-/// is resolvable, matching `apply_profile_env`'s own soft-fail. Config-root
-/// only, matching `apply_profile_env`'s own `.with_user_profile` call —
-/// `--local`/`--prefix`'s config overlay carries per-invocation
-/// `package.use`/`bashrc`, not its own profile chain.
-fn build_force_mask(config_root: Option<&Utf8Path>) -> Option<ForceMask> {
-    let base = config_root.unwrap_or(Utf8Path::new("/"));
-    let profile_path =
-        std::fs::canonicalize(base.join("etc/portage/make.profile").as_std_path()).ok()?;
-    let stack = ProfileStack::build(profile_path)
-        .ok()?
-        .with_user_profile(base.join("etc/portage/profile").into_std_path_buf())
-        .ok()?;
-    Some(ForceMask {
-        use_force: stack
-            .use_force()
-            .unwrap_or_default()
-            .iter()
-            .map(|s| Interned::intern(s))
-            .collect(),
-        use_mask: stack
-            .use_mask()
-            .unwrap_or_default()
-            .iter()
-            .map(|s| Interned::intern(s))
-            .collect(),
-        pkg_force: index_by_cpn(stack.package_use_force().unwrap_or_default()),
-        pkg_mask: index_by_cpn(stack.package_use_mask().unwrap_or_default()),
-        ..Default::default()
-    })
-}
-
-/// Fold order for [`show_active_use`]: this atom's own package.use entries
-/// win, then global (profile+make.conf) USE, then the ebuild's own IUSE
-/// default.
-fn use_state(
-    flag: &str,
-    package_use: &[String],
-    global_use: &[String],
-    default: Option<IUseDefault>,
-) -> bool {
-    for tok in package_use {
-        if tok == flag {
-            return true;
-        }
-        if tok.strip_prefix('-') == Some(flag) {
-            return false;
-        }
-    }
-    for tok in global_use {
-        if tok == flag {
-            return true;
-        }
-        if tok.strip_prefix('-') == Some(flag) {
-            return false;
-        }
-    }
-    matches!(default, Some(IUseDefault::Enabled))
-}
-
-/// This atom's current package.use values, unioned across every matching
-/// entry — ambiguity is tolerated here (unlike `update_valued_entry`'s
-/// strict single-entry requirement) since this is a read-only best-effort
-/// fold for [`show_active_use`], not an edit.
-fn package_use_values(confdir: &Utf8Path, atom: &Dep) -> Vec<String> {
-    let base = confdir.join("package.use");
-    let entries: Vec<(Utf8PathBuf, PackageConf)> = if base.is_dir() {
-        PackageConf::load_dir(&base).unwrap_or_default()
-    } else if base.exists() {
-        PackageConf::load_file(&base)
-            .map(|pc| vec![(base.clone(), pc)])
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    entries
-        .iter()
-        .flat_map(|(_, pc)| pc.find_all(atom))
-        .flat_map(|e| e.values().map(str::to_owned).collect::<Vec<_>>())
-        .collect()
 }
 
 fn edit_mask(
@@ -841,43 +821,153 @@ mod tests {
         assert!(written.contains("sys-libs/zlib"), "{written}");
     }
 
-    /// `build_force_mask` must pick up both global `use.force`/`use.mask`
-    /// and per-package `package.use.force`/`package.use.mask` from the
-    /// profile at `<config_root>/etc/portage/make.profile` — the gap
-    /// `show_active_use` previously had no coverage for at all.
-    #[test]
-    fn build_force_mask_reads_global_and_per_package_entries() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let root = confdir(&tmp);
-        let profile = root.join("etc/portage/make.profile");
-        std::fs::create_dir_all(profile.as_std_path()).unwrap();
-        std::fs::write(profile.join("use.force").as_std_path(), "forced\n").unwrap();
-        std::fs::write(profile.join("use.mask").as_std_path(), "masked\n").unwrap();
+    /// Shared fixture for [`resolve_active_use`] tests: a repo with one
+    /// ebuild `app-misc/foo-1` (`cache_extra` appended to a minimal
+    /// EAPI/SLOT/KEYWORDS md5-cache entry — IUSE, REQUIRED_USE, etc.) and a
+    /// config root whose profile at `etc/portage/make.profile` gets
+    /// `profile_files` written into it verbatim (e.g. `use.mask`,
+    /// `package.use.force`). Returns the repo and roots ready to pass
+    /// straight to `resolve_active_use`; the two `TempDir`s must outlive
+    /// that call.
+    fn active_use_fixture(
+        cache_extra: &str,
+        profile_files: &[(&str, &str)],
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        portage_repo::Repository,
+        portage_resolve::Roots,
+    ) {
+        let repo_tmp = tempfile::tempdir().expect("tempdir");
+        let repo_root = Utf8Path::from_path(repo_tmp.path())
+            .expect("utf8")
+            .to_owned();
+        std::fs::create_dir_all(repo_root.join("metadata").as_std_path()).unwrap();
+        std::fs::write(repo_root.join("metadata/layout.conf").as_std_path(), "").unwrap();
+        std::fs::create_dir_all(repo_root.join("profiles").as_std_path()).unwrap();
+        std::fs::write(repo_root.join("profiles/repo_name").as_std_path(), "test\n").unwrap();
         std::fs::write(
-            profile.join("package.use.force").as_std_path(),
-            "app-misc/foo pkg-forced\n",
+            repo_root.join("profiles/categories").as_std_path(),
+            "app-misc\n",
         )
         .unwrap();
+        std::fs::create_dir_all(repo_root.join("app-misc/foo").as_std_path()).unwrap();
         std::fs::write(
-            profile.join("package.use.mask").as_std_path(),
-            "app-misc/foo pkg-masked\n",
+            repo_root.join("app-misc/foo/foo-1.ebuild").as_std_path(),
+            "EAPI=8\nSLOT=0\n",
         )
         .unwrap();
 
-        let fm = build_force_mask(Some(&root)).expect("profile builds");
-        let iuse: std::collections::HashSet<Interned<DefaultInterner>> =
-            ["forced", "masked", "pkg-forced", "pkg-masked", "other"]
-                .iter()
-                .map(|s| Interned::intern(s))
-                .collect();
+        let repo = portage_repo::Repository::builder()
+            .in_memory_cache()
+            .open(repo_root.as_std_path())
+            .expect("repo opens");
+        let cache_text = format!("EAPI=8\nDESCRIPTION=test\nSLOT=0\nKEYWORDS=amd64\n{cache_extra}");
+        let entry = portage_metadata::CacheEntry::parse(&cache_text).expect("cache parses");
         let cpv = portage_atom::Cpv::parse("app-misc/foo-1").unwrap();
-        let (forced, masked) = fm.effective(&cpv, None, false, &iuse);
+        repo.write_cache_entry(&cpv, &entry).expect("cache written");
 
-        assert!(forced.contains(&Interned::intern("forced")));
-        assert!(forced.contains(&Interned::intern("pkg-forced")));
-        assert!(masked.contains(&Interned::intern("masked")));
-        assert!(masked.contains(&Interned::intern("pkg-masked")));
-        assert!(!forced.contains(&Interned::intern("other")));
-        assert!(!masked.contains(&Interned::intern("other")));
+        let config_tmp = tempfile::tempdir().expect("tempdir");
+        let config_root = confdir(&config_tmp);
+        let profile = config_root.join("etc/portage/make.profile");
+        std::fs::create_dir_all(profile.as_std_path()).unwrap();
+        for (name, content) in profile_files {
+            std::fs::write(profile.join(name).as_std_path(), content).unwrap();
+        }
+
+        let roots = portage_resolve::Roots::default().with_config(Some(config_root));
+        (repo_tmp, config_tmp, repo, roots)
+    }
+
+    fn amd64() -> gentoo_core::Arch {
+        gentoo_core::Arch::intern("amd64")
+    }
+
+    /// `use.mask` must win over an explicit `package.use` override — the
+    /// exact scenario live-verified against the real host (arm64 profile,
+    /// `multilib` masked) when this landed.
+    #[tokio::test]
+    async fn resolve_active_use_mask_wins_over_package_use() {
+        let (_repo_tmp, config_tmp, repo, roots) =
+            active_use_fixture("IUSE=flag_a\n", &[("use.mask", "flag_a\n")]);
+        std::fs::write(
+            confdir(&config_tmp)
+                .join("etc/portage/package.use")
+                .as_std_path(),
+            "app-misc/foo flag_a\n",
+        )
+        .unwrap();
+
+        let result = resolve_active_use(repo, &roots, &amd64(), "app-misc/foo")
+            .await
+            .expect("resolves")
+            .expect("candidate found");
+        assert!(
+            result.flags.contains(&"-flag_a".to_string()),
+            "use.mask must override package.use, got {:?}",
+            result.flags
+        );
+    }
+
+    /// `use.force` must enable a flag with no other source turning it on.
+    #[tokio::test]
+    async fn resolve_active_use_force_enables_a_flag() {
+        let (_repo_tmp, _config_tmp, repo, roots) =
+            active_use_fixture("IUSE=flag_a\n", &[("use.force", "flag_a\n")]);
+
+        let result = resolve_active_use(repo, &roots, &amd64(), "app-misc/foo")
+            .await
+            .expect("resolves")
+            .expect("candidate found");
+        assert!(
+            result.flags.contains(&"flag_a".to_string()),
+            "use.force must enable the flag, got {:?}",
+            result.flags
+        );
+    }
+
+    /// An unsatisfied `REQUIRED_USE` must be reported, not silently ignored.
+    #[tokio::test]
+    async fn resolve_active_use_reports_a_required_use_violation() {
+        let (_repo_tmp, config_tmp, repo, roots) =
+            active_use_fixture("IUSE=flag_a flag_b\nREQUIRED_USE=flag_a? ( flag_b )\n", &[]);
+        std::fs::write(
+            confdir(&config_tmp)
+                .join("etc/portage/package.use")
+                .as_std_path(),
+            "app-misc/foo flag_a\n",
+        )
+        .unwrap();
+
+        let result = resolve_active_use(repo, &roots, &amd64(), "app-misc/foo")
+            .await
+            .expect("resolves")
+            .expect("candidate found");
+        assert!(
+            result.flags.contains(&"flag_a".to_string()),
+            "flag_a should be enabled via package.use, got {:?}",
+            result.flags
+        );
+        assert!(
+            !result.required_use_violations.is_empty(),
+            "flag_a enabled without flag_b must violate REQUIRED_USE"
+        );
+    }
+
+    /// A satisfied `REQUIRED_USE` reports no violation.
+    #[tokio::test]
+    async fn resolve_active_use_no_violation_when_required_use_is_satisfied() {
+        let (_repo_tmp, _config_tmp, repo, roots) =
+            active_use_fixture("IUSE=flag_a flag_b\nREQUIRED_USE=flag_a? ( flag_b )\n", &[]);
+
+        let result = resolve_active_use(repo, &roots, &amd64(), "app-misc/foo")
+            .await
+            .expect("resolves")
+            .expect("candidate found");
+        assert!(
+            result.required_use_violations.is_empty(),
+            "flag_a disabled by default should satisfy REQUIRED_USE trivially, got {:?}",
+            result.required_use_violations
+        );
     }
 }
