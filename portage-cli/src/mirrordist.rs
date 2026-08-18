@@ -65,14 +65,18 @@ pub struct MirrorDistOpts {
 /// `em mirrordist`: detect and fetch every distfile a repo's ebuilds
 /// reference, then (optionally) prune what's no longer referenced.
 pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
-    let repo_target = resolve_repo_target(opts.repo.as_deref(), cli)?;
+    let (repo_target, masters_override) = resolve_repo_target(opts.repo.as_deref(), cli)?;
     let repos_dir = opts
         .repos_dir
         .as_deref()
         .map(PathBuf::from)
         .unwrap_or_else(|| default_repos_dir(cli));
-    let repo = crate::repo_open::open_with_masters(repo_target.clone(), &repos_dir)
-        .context("open repo")?;
+    let repo = crate::repo_open::open_with_masters(
+        repo_target.clone(),
+        &repos_dir,
+        masters_override.as_deref(),
+    )
+    .context("open repo")?;
 
     check_layout(&opts.distfiles)?;
     std::fs::create_dir_all(opts.distfiles.as_std_path())
@@ -243,18 +247,27 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
 /// path, same shape `em regen` uses per target — but singular, and
 /// defaulting to the main repo (via [`cli::Cli::repo_path`]) rather than
 /// requiring an explicit name.
-fn resolve_repo_target(repo_arg: Option<&str>, cli: &cli::Cli) -> Result<PathBuf> {
+fn resolve_repo_target(
+    repo_arg: Option<&str>,
+    cli: &cli::Cli,
+) -> Result<(PathBuf, Option<Vec<String>>)> {
     let Some(arg) = repo_arg else {
-        return Ok(PathBuf::from(cli.repo_path()));
+        return Ok((PathBuf::from(cli.repo_path()), None));
     };
     let path = Path::new(arg);
     if path.is_dir() {
-        return Ok(path.to_path_buf());
+        let masters = ReposConf::load().ok().and_then(|c| {
+            c.repos()
+                .iter()
+                .find(|e| e.location.as_path() == Some(path))
+                .and_then(|e| e.masters.clone())
+        });
+        return Ok((path.to_path_buf(), masters));
     }
     if let Some(entry) = ReposConf::load().ok().and_then(|c| c.find(arg).cloned())
         && let Some(p) = entry.location.as_path()
     {
-        return Ok(p.to_path_buf());
+        return Ok((p.to_path_buf(), entry.masters.clone()));
     }
     bail!("'{arg}' is neither a directory nor a repos.conf repo name")
 }

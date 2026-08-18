@@ -1162,7 +1162,7 @@ fn alias_repo_entry(target: &CrossTarget, extras: &[Cpn]) -> portage_repo::RepoE
             source: "gentoo".to_string(),
             aliases,
         },
-        masters: Vec::new(),
+        masters: None,
         sync_type: None,
         sync_uri: None,
         auto_sync: false,

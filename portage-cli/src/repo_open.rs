@@ -21,10 +21,11 @@ pub fn open(path: impl Into<PathBuf>) -> Result<Repository> {
 pub fn open_with_masters(
     path: impl Into<PathBuf>,
     repos_dir: impl AsRef<Path>,
+    masters_override: Option<&[String]>,
 ) -> Result<Repository> {
     Repository::builder()
         .user_cache_root(crate::xdg::md5_cache_root())
-        .open_with_masters(path, repos_dir)
+        .open_with_masters(path, repos_dir, masters_override)
 }
 
 /// The full priority-ordered [`RepoSet`] for this invocation: `main` plus
@@ -82,7 +83,7 @@ pub fn repo_set_from_conf(
         let Some(path) = e.location.as_path() else {
             continue; // alias: no on-disk tree, handled by `aliases` below
         };
-        match open_with_masters(path.to_path_buf(), &repos_dir) {
+        match open_with_masters(path.to_path_buf(), &repos_dir, e.masters.as_deref()) {
             Ok(r) => repos.push(Arc::new(r)),
             Err(err) => {
                 crate::style::warn_line!("skipping repo '{}' at {}: {err}", e.name, path.display());

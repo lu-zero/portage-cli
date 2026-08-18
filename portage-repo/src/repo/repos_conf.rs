@@ -45,8 +45,18 @@ pub struct RepoEntry {
     pub name: String,
     /// Where the repository's packages live: a real path or a virtual alias.
     pub location: Location,
-    /// Names of master repositories (often empty; layout.conf normally wins).
-    pub masters: Vec<String>,
+    /// `masters` from repos.conf. `None` means the key is absent from every
+    /// `repos.conf` file for this repo — real portage then falls back to
+    /// `metadata/layout.conf`'s `masters =`. `Some(vec![])` means the key
+    /// was present but empty, which explicitly opts out of that fallback
+    /// (`repository/config.py`'s `RepoConfigLoader.__init__`: `self.masters
+    /// = repo_opts.get("masters")`, then `if self.masters is None:
+    /// self.masters = layout_data["masters"]`). repos.conf wins over
+    /// layout.conf whenever it declares anything at all, even `masters =`
+    /// on its own — many hand-maintained overlays (e.g. a plain
+    /// `/usr/local/portage` tree) declare masters only in repos.conf and
+    /// ship no `metadata/layout.conf` of their own.
+    pub masters: Option<Vec<String>>,
     /// `sync-type` from repos.conf (`git`, `rsync`, …). Empty means unsyncable.
     pub sync_type: Option<String>,
     /// `sync-uri` from repos.conf (remote URL for the sync module).
@@ -142,10 +152,9 @@ impl ReposConf {
             .iter()
             .filter_map(|name| {
                 let s = sections.get(name)?;
-                let masters = s
+                let masters: Option<Vec<String>> = s
                     .get("masters")
-                    .map(|v| v.split_whitespace().map(String::from).collect())
-                    .unwrap_or_default();
+                    .map(|v| v.split_whitespace().map(String::from).collect());
                 // A real repo has a `location = /path`. A virtual alias repo
                 // has `alias-source = <repo>` + `alias-target = <dest-cat>`
                 // (+ optional `alias-packages`). See `Location::Alias`.
@@ -296,7 +305,7 @@ auto-sync = no
         assert_eq!(rc.repos().len(), 2);
         assert_eq!(rc.repos()[0].name, "gentoo");
         assert_eq!(rc.repos()[1].name, "crossdev");
-        assert_eq!(rc.repos()[1].masters, vec!["gentoo"]);
+        assert_eq!(rc.repos()[1].masters, Some(vec!["gentoo".to_string()]));
         assert_eq!(rc.main_repo().map(|r| r.name.as_str()), Some("gentoo"));
         let gentoo = rc.find("gentoo").unwrap();
         assert_eq!(gentoo.sync_type.as_deref(), Some("git"));

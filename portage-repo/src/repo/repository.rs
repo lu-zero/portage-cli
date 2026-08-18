@@ -232,8 +232,9 @@ pub struct Repository {
     /// `None` for in-memory/custom stores, which have nowhere to keep a
     /// sidecar index.
     secondary_dir: Option<Utf8PathBuf>,
-    /// Resolved master repositories (from `metadata/layout.conf`'s `masters =`),
-    /// set once at open time by [`RepositoryBuilder::open_with_masters`] —
+    /// Resolved master repositories (from repos.conf's `masters =`, or
+    /// `metadata/layout.conf`'s own `masters =` as a fallback), set once at
+    /// open time by [`RepositoryBuilder::open_with_masters`] —
     /// empty otherwise. Owned here (not threaded as a side parameter through
     /// every consumer) so `ebuilds`/`find_cpns`/`is_fresh_cached` can't be
     /// called with a mismatched or stale masters list.
@@ -307,6 +308,17 @@ impl RepositoryBuilder {
 
     /// Open a repository and resolve masters from `repos_dir`.
     ///
+    /// `masters_override` is the repos.conf-parsed `masters =` for this
+    /// repo (`RepoEntry::masters`), if any. repos.conf wins over
+    /// `metadata/layout.conf`'s own `masters =` whenever it declares
+    /// anything at all — matching real portage (`RepoConfigLoader.
+    /// __init__`) — since many hand-maintained overlays (e.g. a plain
+    /// `/usr/local/portage` tree) set masters only in repos.conf and never
+    /// declare it in their own layout.conf. Pass `None` when the caller
+    /// has no repos.conf entry to consult (e.g. resolving a nested
+    /// master's own masters — those fall back to *that* repo's
+    /// layout.conf, since repos.conf only describes top-level entries).
+    ///
     /// Masters share `UserRoot` (same root, per-name dirs) or get a fresh
     /// in-memory secondary for `Memory` / `Custom`. The returned `Repository`
     /// owns its resolved masters (see [`Repository::masters`]).
@@ -314,6 +326,7 @@ impl RepositoryBuilder {
         self,
         path: impl Into<PathBuf>,
         repos_dir: impl AsRef<Path>,
+        masters_override: Option<&[String]>,
     ) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
         let mut repo = Repository::open_with_secondary(path, spec.clone())?;
@@ -326,6 +339,7 @@ impl RepositoryBuilder {
             &mut masters,
             &mut seen,
             &spec,
+            masters_override,
         )?;
         repo.masters = masters;
         Ok(repo)
@@ -386,8 +400,21 @@ impl Repository {
         out: &mut Vec<Repository>,
         seen: &mut HashSet<String>,
         spec: &SecondarySpec,
+        masters_override: Option<&[String]>,
     ) -> Result<()> {
-        for master_name in &repo.layout().masters {
+        // repos.conf wins whenever it declares `masters =` at all (even
+        // empty, to explicitly opt out); layout.conf is only a fallback
+        // for repos with no repos.conf entry to override it — see
+        // `RepositoryBuilder::open_with_masters`.
+        let layout_masters;
+        let master_names: &[String] = match masters_override {
+            Some(names) => names,
+            None => {
+                layout_masters = repo.layout().masters.clone();
+                &layout_masters
+            }
+        };
+        for master_name in master_names {
             if !seen.insert(master_name.clone()) {
                 continue;
             }
@@ -397,7 +424,7 @@ impl Repository {
                 SecondarySpec::Memory | SecondarySpec::Custom(_) => SecondarySpec::Memory,
             };
             let master = Self::open_with_secondary(master_path, master_spec)?;
-            Self::resolve_masters_with_spec(&master, repos_dir, out, seen, spec)?;
+            Self::resolve_masters_with_spec(&master, repos_dir, out, seen, spec, None)?;
             out.push(master);
         }
         Ok(())
@@ -1524,6 +1551,53 @@ mod tests {
         assert_eq!(cpns.len(), 1);
         assert_eq!(cpns[0].category.as_ref(), "gui-apps");
         assert_eq!(cpns[0].package.as_ref(), "1password");
+    }
+
+    /// A hand-maintained overlay (e.g. a plain `/usr/local/portage` tree)
+    /// commonly declares `masters = gentoo` only in repos.conf and ships no
+    /// `metadata/layout.conf` `masters =` line of its own. `open_with_masters`
+    /// must still resolve the master from the repos.conf-parsed override —
+    /// previously it consulted only `layout.conf`, silently leaving such an
+    /// overlay masterless (and, by extension, unable to see any category it
+    /// doesn't list in its own `profiles/categories`, exactly like the
+    /// scenario `find_cpns_with_masters_finds_a_category_only_the_master_lists`
+    /// covers above).
+    #[test]
+    fn open_with_masters_honors_a_repos_conf_only_masters_override() {
+        let repos_dir = tempfile::tempdir().unwrap();
+        let master_dir = repos_dir.path().join("gentoo");
+        std::fs::create_dir_all(master_dir.join("metadata")).unwrap();
+        std::fs::write(master_dir.join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(master_dir.join("profiles")).unwrap();
+
+        let overlay_dir = tempfile::tempdir().unwrap();
+        // No `masters =` in this overlay's own layout.conf.
+        make_test_repo(&overlay_dir);
+
+        let masters_override = vec!["gentoo".to_string()];
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open_with_masters(overlay_dir.path(), repos_dir.path(), Some(&masters_override))
+            .unwrap();
+        assert_eq!(repo.masters().len(), 1);
+        assert_eq!(repo.masters()[0].path(), master_dir);
+    }
+
+    /// Without a repos.conf override and with no `masters =` in
+    /// `layout.conf` either, an overlay opens with zero masters — the
+    /// baseline `open_with_masters_honors_a_repos_conf_only_masters_override`
+    /// fixes a gap in.
+    #[test]
+    fn open_with_masters_none_declared_anywhere_resolves_no_masters() {
+        let repos_dir = tempfile::tempdir().unwrap();
+        let overlay_dir = tempfile::tempdir().unwrap();
+        make_test_repo(&overlay_dir);
+
+        let repo = Repository::builder()
+            .in_memory_cache()
+            .open_with_masters(overlay_dir.path(), repos_dir.path(), None)
+            .unwrap();
+        assert!(repo.masters().is_empty());
     }
 
     /// A bare-name match across several categories comes back in a

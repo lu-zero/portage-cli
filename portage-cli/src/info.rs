@@ -201,19 +201,23 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
             let mut out = Vec::new();
             for r in conf.repos() {
                 let path = r.location.as_path();
-                // `RepoEntry.masters`/`.volatile` are repos.conf-only and
-                // almost always empty in practice — masters normally comes
-                // from the repo's own metadata/layout.conf, and volatile
-                // (when not set explicitly) is inferred from filesystem
-                // ownership. Both need the repo actually opened; fall back
-                // to the repos.conf-only fields if that fails (e.g. a
-                // virtual/alias location).
+                // repos.conf's `masters =` wins over the repo's own
+                // metadata/layout.conf when set (matches real portage);
+                // `.volatile` (when not set explicitly) is inferred from
+                // filesystem ownership, which needs the repo actually
+                // opened. Fall back to the repos.conf-only fields if that
+                // fails (e.g. a virtual/alias location).
                 let (masters, volatile) = match path.and_then(|p| crate::repo_open::open(p).ok()) {
                     Some(opened) => (
-                        opened.layout().masters.clone(),
+                        r.masters
+                            .clone()
+                            .unwrap_or_else(|| opened.layout().masters.clone()),
                         crate::maint::sync::resolve_volatile(r, opened.path().as_std_path()),
                     ),
-                    None => (r.masters.clone(), r.volatile.unwrap_or(false)),
+                    None => (
+                        r.masters.clone().unwrap_or_default(),
+                        r.volatile.unwrap_or(false),
+                    ),
                 };
                 out.push(RepoInfo {
                     name: r.name.clone(),

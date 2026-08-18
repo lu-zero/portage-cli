@@ -42,7 +42,7 @@ pub async fn run(
     let conf = ReposConf::load().ok();
 
     // Resolve targets: explicit names/paths, or every non-main conf repo.
-    let mut targets: Vec<PathBuf> = Vec::new();
+    let mut targets: Vec<(PathBuf, Option<Vec<String>>)> = Vec::new();
     if repos_args.is_empty() {
         let Some(conf) = &conf else {
             bail!("no repos named and no repos.conf found");
@@ -55,7 +55,7 @@ pub async fn run(
                 continue; // virtual/alias repo — no cache to regenerate
             };
             if Some(&loc) != main.as_ref() {
-                targets.push(loc);
+                targets.push((loc, entry.masters.clone()));
             }
         }
         if targets.is_empty() {
@@ -66,10 +66,16 @@ pub async fn run(
         for arg in repos_args {
             let path = Path::new(arg);
             if path.is_dir() {
-                targets.push(path.to_path_buf());
+                let masters = conf.as_ref().and_then(|c| {
+                    c.repos()
+                        .iter()
+                        .find(|e| e.location.as_path() == Some(path))
+                        .and_then(|e| e.masters.clone())
+                });
+                targets.push((path.to_path_buf(), masters));
             } else if let Some(entry) = conf.as_ref().and_then(|c| c.find(arg)) {
                 if let Some(p) = entry.location.as_path() {
-                    targets.push(p.to_path_buf());
+                    targets.push((p.to_path_buf(), entry.masters.clone()));
                 } else {
                     bail!("'{arg}' is a virtual repo (no on-disk path to regenerate)");
                 }
@@ -107,9 +113,13 @@ pub async fn run(
     }
 
     let mut total_errors = 0usize;
-    for target in &targets {
-        let repo =
-            crate::repo_open::open_with_masters(target.clone(), &repos_dir).context("open repo")?;
+    for (target, masters_override) in &targets {
+        let repo = crate::repo_open::open_with_masters(
+            target.clone(),
+            &repos_dir,
+            masters_override.as_deref(),
+        )
+        .context("open repo")?;
 
         let ebuilds: Vec<_> = repo
             .ebuilds()
