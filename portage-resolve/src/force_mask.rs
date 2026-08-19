@@ -85,7 +85,9 @@ pub fn index_by_cpn(entries: Vec<(Dep, Vec<String>)>) -> PkgRules {
     map
 }
 
-/// Accumulate per-atom tokens matching `cpv` (+ optional slot) into `set`, honouring `-flag` removal (incremental, in list order)
+/// Accumulate per-atom tokens matching `cpv` (+ optional slot) into `set`
+///
+/// Honours `-flag` removal (incremental, in list order).
 ///
 /// Uses [`Dep::matches_cpv`] so version **and** `:slot` constraints on
 /// `package.use.force`/`package.use.mask` atoms are honoured (mask_matches
@@ -114,7 +116,10 @@ fn accumulate(
 }
 
 impl ForceMask {
-    /// The net forced and masked flag names for `cpv` — global `use.force`/ `use.mask` plus package-level force/mask always, plus the `*.stable.*` sets when `stable`
+    /// The net forced and masked flag names for `cpv`
+    ///
+    /// Global `use.force`/`use.mask` plus package-level force/mask always,
+    /// plus the `*.stable.*` sets when `stable`.
     ///
     /// Mask wins over force. Applied strictly *after* the rest of USE resolution
     /// (profile/`make.conf`/ `package.use`/environment) — this is that final step,
@@ -159,7 +164,9 @@ impl ForceMask {
         (forced, masked)
     }
 
-    /// Apply force/mask to a package's effective USE: enable forced flags, then disable masked ones (mask wins)
+    /// Apply force/mask to a package's effective USE
+    ///
+    /// Enables forced flags, then disables masked ones (mask wins).
     ///
     /// Overrides `package.use` and the configured value, matching Portage. Flags
     /// are already interned.

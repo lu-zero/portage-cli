@@ -30,7 +30,10 @@ pub struct TrimCtx<'a> {
     pub reinstall_cpns: &'a HashSet<Cpn>,
 }
 
-/// Drop entries that are only needed for `BDEPEND` edges already satisfied by the host/prefix VDB or earlier kept plan entries
+/// Drop entries only needed for already-satisfied `BDEPEND` edges
+///
+/// "Already satisfied" means by the host/prefix VDB or earlier kept plan
+/// entries.
 ///
 /// No-op when the solver did not include `BDEPEND` (`with_bdeps=false`).
 ///

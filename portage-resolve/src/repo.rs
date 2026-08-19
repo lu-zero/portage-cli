@@ -62,7 +62,9 @@ pub enum AcceptToken {
     ///
     /// Does not touch `~arch` / `*` / `~*` / `**`.
     Negate(Interned<DefaultInterner>),
-    /// `-~arch` — withdraw only the testing grant (portage(5) pin-to-stable idiom `media-video/mplayer -~x86`)
+    /// `-~arch` — withdraw only the testing grant
+    ///
+    /// The portage(5) pin-to-stable idiom `media-video/mplayer -~x86`.
     ///
     /// Must stay distinct from [`Self::Negate`].
     NegateTesting(Interned<DefaultInterner>),
@@ -256,7 +258,10 @@ pub struct AcceptKeywords {
 }
 
 impl AcceptKeywords {
-    /// Build from pre-parsed tokens: the global `ACCEPT_KEYWORDS` list and the per-package `(atom, tokens)` entries from `package.accept_keywords`
+    /// Build from pre-parsed tokens
+    ///
+    /// The global `ACCEPT_KEYWORDS` list and the per-package `(atom,
+    /// tokens)` entries from `package.accept_keywords`.
     ///
     /// Tokens are already interned (parsed at config-read time); a bare per-package
     /// atom arrives as an empty token list and is expanded here to "accept this
@@ -307,7 +312,10 @@ impl AcceptKeywords {
         Self::new(arch, &toks, Vec::new())
     }
 
-    /// The accept decision for one package version, folding any matching per-package overrides into the precomputed global decision
+    /// The accept decision for one package version
+    ///
+    /// Folds any matching per-package overrides into the precomputed
+    /// global decision.
     ///
     /// Borrows the global set when nothing matches (the common path).
     fn decision(
@@ -345,7 +353,9 @@ impl AcceptKeywords {
         self.decision(cpv, slot).accepts(keywords)
     }
 
-    /// Whether this version is merged on a *stable* keyword path — gates the `use.stable.{force,mask}` sets
+    /// Whether this version is merged on a *stable* keyword path
+    ///
+    /// Gates the `use.stable.{force,mask}` sets.
     ///
     /// Depends on whether a testing grant is also present in the accept set: see
     /// `KeywordAccept::is_stable_for` (private, in this module).
@@ -447,7 +457,10 @@ pub type AcceptProperties = AcceptOverlay;
 /// `ACCEPT_RESTRICT` + `package.accept_restrict` — see [`AcceptProperties`]
 pub type AcceptRestrict = AcceptOverlay;
 
-/// Returns true if the license expression is fully covered by `accept`, evaluating `use? ( … )` branches against `enabled` (a package's effective USE)
+/// Returns true if the license expression is fully covered by `accept`
+///
+/// Evaluates `use? ( … )` branches against `enabled` (a package's
+/// effective USE).
 ///
 /// For an expression with no conditionals, `enabled` is never consulted.
 pub fn license_accepted(
@@ -502,7 +515,11 @@ fn iuse_defaults_map(
         .collect()
 }
 
-/// Build the effective USE config for `cpv` from the resolved global USE, per-version `package.use`, the ebuild's IUSE defaults and the profile force/mask sets — the same layering `Adapter::desired_use` does, minus the Level-C cede
+/// Build the effective USE config for `cpv`
+///
+/// From the resolved global USE, per-version `package.use`, the ebuild's
+/// IUSE defaults and the profile force/mask sets — the same layering
+/// `Adapter::desired_use` does, minus the Level-C cede.
 ///
 /// Used to evaluate USE-conditional `LICENSE` expressions both in the version
 /// filter and the autounmask reasons (which have no `Adapter`).
@@ -542,7 +559,9 @@ fn use_predicate(cfg: &portage_atom_pubgrub::UseConfig) -> impl Fn(&str) -> bool
     move |flag: &str| matches!(cfg.get(Interned::intern(flag)), UseFlagState::Enabled)
 }
 
-/// Whether `meta`'s `LICENSE` is accepted for version `cpv`, evaluating any `use? ( … )` branch against the version's effective USE
+/// Whether `meta`'s `LICENSE` is accepted for version `cpv`
+///
+/// Evaluates any `use? ( … )` branch against the version's effective USE.
 ///
 /// Effective USE is computed only when the expression has conditionals.
 fn license_ok_for(
@@ -691,7 +710,10 @@ pub struct RepoData {
     pub repo_name: String,
     /// Source repo of overlay-provided versions (absent ⇒ the main repo)
     pub repo_of: HashMap<Cpv, String>,
-    /// Cross-derivation reverse map: `cross-<tuple>/<pkg>` → real `<cat>/<pkg>` Populated by `load_repos` from `Location::Alias` entries; empty for non-cross solves
+    /// Cross-derivation reverse map: `cross-<tuple>/<pkg>` → real `<cat>/<pkg>`
+    ///
+    /// Populated by `load_repos` from `Location::Alias` entries; empty for
+    /// non-cross solves.
     ///
     /// Used by `PlannedMerge.ebuild_path` to find the real on-disk file for a
     /// derived cross cpv — but `Ebuild::from_path` still re-derives CATEGORY from
@@ -707,7 +729,10 @@ pub fn repo_name_of<'a>(data: &'a RepoData, cpv: &Cpv) -> &'a str {
         .map_or(data.repo_name.as_str(), String::as_str)
 }
 
-/// The resolved keyword/mask/license/USE policy, shared by every version filter and USE-config computation so each takes one reference instead of re-listing the same fields
+/// The resolved keyword/mask/license/USE policy
+///
+/// Shared by every version filter and USE-config computation so each takes
+/// one reference instead of re-listing the same fields.
 ///
 /// The solver-specific remainder of [`Adapter`] (`data`, `installed_cpvs`,
 /// `autosolve_use`) isn't part of this — those vary by call site in ways this
@@ -738,7 +763,10 @@ pub struct ResolvePolicy<'a> {
     /// Per-version `package.use`/`package.env`-style overrides from
     /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf)
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
-    /// Profile-chain `package.use` — portage's *defaults* layer, BELOW `conf` (make.conf): a make.conf `USE=` decision wins over it (see `portage_atom_pubgrub::resolve_effective_use`)
+    /// Profile-chain `package.use` — portage's *defaults* layer, BELOW `conf` (make.conf)
+    ///
+    /// A make.conf `USE=` decision wins over it (see
+    /// `portage_atom_pubgrub::resolve_effective_use`).
     ///
     /// Contrast [`Self::package_use`].
     pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
@@ -764,12 +792,17 @@ pub struct Adapter<'a> {
     pub accept_properties: &'a AcceptProperties,
     /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision
     pub accept_restrict: &'a AcceptRestrict,
-    /// USE folded up through `make.conf` (profile make.defaults + extra confs) — everything below the `package.use`/`env` layers in portage's real fold order
+    /// USE folded up through `make.conf` (profile make.defaults + extra confs)
+    ///
+    /// Everything below the `package.use`/`env` layers in portage's real
+    /// fold order.
     ///
     /// Pre-parsed [`portage_atom_pubgrub::UseLayer`]; combined with `env_use` and
     /// per-version `package.use` + IUSE defaults by `desired_use`.
     pub pre_env: &'a portage_atom_pubgrub::UseLayer,
-    /// Process-environment USE layer — highest priority, applied after `package.use` (see `resolve_effective_use`)
+    /// Process-environment USE layer — highest priority
+    ///
+    /// Applied after `package.use` (see `resolve_effective_use`).
     ///
     /// Pre-parsed once.
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
@@ -790,7 +823,10 @@ pub struct Adapter<'a> {
     /// [`Self::rebuilding_cpvs`] for the exception: an installed cpv nonetheless
     /// being rebuilt this run.
     pub installed_cpvs: &'a std::collections::HashSet<Cpv>,
-    /// Installed cpvs this run rebuilds anyway — non-selective explicit root targets (reinstalled `[R]`) and `-N`/`-U` USE-drift rebuilds
+    /// Installed cpvs this run rebuilds anyway
+    ///
+    /// Non-selective explicit root targets (reinstalled `[R]`) and
+    /// `-N`/`-U` USE-drift rebuilds.
     ///
     /// Level-C treats these as "being built": `REQUIRED_USE` is re-decided for the
     /// new build's USE context, unlike a package staying installed untouched (see
@@ -800,7 +836,9 @@ pub struct Adapter<'a> {
     /// aren't known yet when this set is built, so those stay Level-A
     /// advisory only — a documented limitation, not a bug.
     pub rebuilding_cpvs: &'a std::collections::HashSet<Cpv>,
-    /// Level-C: when set, cede each package's non-pinned `REQUIRED_USE` flags to the solver (`SolverDecided`) instead of fixing them
+    /// Level-C: when set, cede each package's non-pinned `REQUIRED_USE` flags
+    ///
+    /// Handed to the solver (`SolverDecided`) instead of fixing them.
     ///
     /// See `portage-atom-pubgrub/docs/required-use-level-c.md`.
     pub autosolve_use: bool,
@@ -843,7 +881,13 @@ impl Adapter<'_> {
         license_ok_for(cpv, meta, &self.policy())
     }
 
-    /// Level-C cede: when `--autosolve-use` is on and the package's REQUIRED_USE is *violated* by the resolved config, hand its REQUIRED_USE flags to the solver as preferences (`solver_decide`) — a ceded flag keeps its resolved value as the preference (greedy keep-config) and the solver only flips it to satisfy REQUIRED_USE
+    /// Level-C cede: hand REQUIRED_USE flags to the solver as preferences
+    ///
+    /// When `--autosolve-use` is on and the package's REQUIRED_USE is
+    /// *violated* by the resolved config, hand its REQUIRED_USE flags to
+    /// the solver as preferences (`solver_decide`) — a ceded flag keeps its
+    /// resolved value as the preference (greedy keep-config) and the
+    /// solver only flips it to satisfy REQUIRED_USE.
     ///
     /// Flags the user pinned via package.use, or the profile forced/masked, are
     /// left fixed (hard choices we must not override).
@@ -1166,7 +1210,10 @@ fn collect_required_use_flags(
     }
 }
 
-/// Load every repo's metadata (sourcing cache-less ebuilds), merged in `set`'s priority order: higher priority wins a duplicate cpv, matching real portage's ascending `(priority, name)` list ("those with higher priority are preferred")
+/// Load every repo's metadata (sourcing cache-less ebuilds), merged in `set`'s priority order
+///
+/// Higher priority wins a duplicate cpv, matching real portage's ascending
+/// `(priority, name)` list ("those with higher priority are preferred").
 ///
 /// The main repo defaults to priority `-1000` when unset, so by default *any*
 /// overlay shadows it — the ordinary "drop an ebuild in a local overlay to
@@ -1397,7 +1444,9 @@ pub fn filter_reasons_for_atom(
         .collect()
 }
 
-/// Every version of `cpn` within `version_set` that the policy excludes, with the reasons (keyword / mask / license)
+/// Every version of `cpn` within `version_set` that the policy excludes
+///
+/// With the reasons (keyword / mask / license).
 ///
 /// Versions that pass every filter are absent, so an empty result means the
 /// atom is satisfiable.

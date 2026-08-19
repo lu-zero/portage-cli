@@ -27,7 +27,10 @@ type InternedUse = (
 struct AvailEntry {
     cpv: Cpv,
     slot: Option<Interned<DefaultInterner>>,
-    /// The VDB-backed installed package this entry came from, when known — letting `atom_satisfied` verify USE-dep brackets (PMS 8.3.4) against its USE/IUSE instead of just CPN/version/slot
+    /// The VDB-backed installed package this entry came from, when known
+    ///
+    /// Lets `atom_satisfied` verify USE-dep brackets (PMS 8.3.4) against its
+    /// USE/IUSE instead of just CPN/version/slot.
     ///
     /// `None` for within-run solved-plan merges: the solver's own `check_use_deps`
     /// already validates USE-dep constraints among those, so re-checking here would
@@ -69,7 +72,9 @@ impl Avail {
         Self(avail_entries_from(broot_vdb_packages(roots)))
     }
 
-    /// `DEPEND` availability: VDB at `satisfaction_root(Depend)`, plus the target VDB when it differs
+    /// `DEPEND` availability
+    ///
+    /// VDB at `satisfaction_root(Depend)`, plus the target VDB when it differs.
     ///
     /// Use `merge_root() != satisfaction_root` (not only `is_overlay()`): bare
     /// `--root` resolves DEPEND against BROOT, so a partially populated target must
@@ -104,7 +109,10 @@ impl Avail {
         )
     }
 
-    /// Record a `package.provided` entry (a system-supplied package) as present with its slot, so a build dep on it is satisfied without a merge
+    /// Record a `package.provided` entry as present with its slot
+    ///
+    /// A system-supplied package, so a build dep on it is satisfied without
+    /// a merge.
     ///
     /// Slot is authoritative for the match; USE-deps on such an atom are treated as
     /// satisfied (`installed: None`), matching the solver, which counts the
@@ -239,7 +247,10 @@ fn use_dep_satisfied(
     }
 }
 
-/// Like [`Avail::from_cpvs`], but keeps each installed package around so [`Avail::atom_satisfied`] can verify USE-dep brackets against them (see [`AvailEntry::installed`])
+/// Like [`Avail::from_cpvs`], but keeps each installed package around
+///
+/// Lets [`Avail::atom_satisfied`] verify USE-dep brackets against them (see
+/// [`AvailEntry::installed`]).
 ///
 /// `None` = host `/var/db/pkg`.
 fn vdb_avail_entries(root: Option<&Utf8Path>) -> Vec<AvailEntry> {

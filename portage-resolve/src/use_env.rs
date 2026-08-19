@@ -13,13 +13,18 @@ type Result<T> = anyhow::Result<T>;
 
 /// Resolved USE environment for the solver and display
 pub struct UseEnv {
-    /// The fold of profile `make.defaults` + `make.conf` (`extra_confs`) — portage's `defaults`/`conf` layers, from `ResolvedUse::pre_env`, **parsed once** into a [`UseLayer`]
+    /// The fold of profile `make.defaults` + `make.conf` (`extra_confs`)
+    ///
+    /// Portage's `defaults`/`conf` layers, from `ResolvedUse::pre_env`,
+    /// **parsed once** into a [`UseLayer`].
     ///
     /// Feed this into `portage_solver::resolve_effective_use` *before*
     /// `package_use` and *before* `env_use`, per package — do not re-tokenize the
     /// profile string on every CPV.
     pub pre_env: UseLayer,
-    /// Process-environment USE layer (`ResolvedUse::env_use`), **parsed once** Portage's `env` layer, folded in *after* `package_use`
+    /// Process-environment USE layer (`ResolvedUse::env_use`), **parsed once**
+    ///
+    /// Portage's `env` layer, folded in *after* `package_use`.
     ///
     /// See `resolve_effective_use`'s doc for why this can't be pre-merged into
     /// `pre_env`: whether a `-*` here wipes `package_use` depends on it staying a
@@ -32,7 +37,10 @@ pub struct UseEnv {
     /// Per-package USE overrides from `/etc/portage/package.use` and
     /// `package.env` — portage's `pkg` layer, above `conf`/make.conf
     pub package_use: Vec<(Dep, Vec<UseOverride>)>,
-    /// Per-package USE overrides from the profile chain's `package.use` (`stack.package_use()`) — portage's *defaults* layer, BELOW `conf`/make.conf: a global `USE=` wins over these (unlike [`Self::package_use`])
+    /// Per-package USE overrides from the profile chain's `package.use` (`stack.package_use()`)
+    ///
+    /// Portage's *defaults* layer, BELOW `conf`/make.conf: a global `USE=`
+    /// wins over these (unlike [`Self::package_use`]).
     ///
     /// Matches portage's `_pkgprofileuse` → `configdict["defaults"]` routing
     /// (`config.py` setcpv).
@@ -48,7 +56,9 @@ pub struct UseEnv {
     pub force_mask: ForceMask,
     /// Effective global `ACCEPT_KEYWORDS`, parsed to interned tokens
     pub accept_keywords: Vec<AcceptToken>,
-    /// Per-package `package.accept_keywords` (and legacy `package.keywords`) entries: `(atom, [tokens])`, tokens interned
+    /// Per-package `package.accept_keywords` (and legacy `package.keywords`) entries
+    ///
+    /// `(atom, [tokens])`, tokens interned.
     ///
     /// A bare atom carries an empty token list (expanded to `~arch` when the host
     /// arch is known).
@@ -71,7 +81,10 @@ pub struct UseEnv {
     pub package_restrict: Vec<(Dep, AcceptSet)>,
     /// Resolved `DISTDIR` (where fetched distfiles live), for download-size accounting
     pub distdir: String,
-    /// `package.provided` CPVs from the profile stack: packages the system supplies externally (e.g. a host interpreter in a Gentoo Prefix)
+    /// `package.provided` CPVs from the profile stack
+    ///
+    /// Packages the system supplies externally (e.g. a host interpreter in
+    /// a Gentoo Prefix).
     ///
     /// They satisfy matching deps and are never built or shown for merge.
     pub provided: Vec<portage_atom::Cpv>,
@@ -405,7 +418,10 @@ fn effective_accept_keywords(
     parse(&[arch, testing])
 }
 
-/// Load `package.use` as raw `(atom, [token])` lines: `#` comments, optionally a directory (children summed in lexical order)
+/// Load `package.use` as raw `(atom, [token])` lines
+///
+/// `#` comments, optionally a directory (children summed in lexical
+/// order).
 ///
 /// Tokens stay verbatim — USE_EXPAND `KEY:` groups are expanded later by
 /// [`expand_use_expand_colon`].
@@ -464,11 +480,13 @@ async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseOverri
     out
 }
 
-/// Expand the `USE_EXPAND:` colon form in `package.use` tokens to interned overrides (a USE_EXPAND name followed by `:` makes every subsequent value a member of that group, e.g
+/// Expand the `USE_EXPAND:` colon form in `package.use` tokens to interned overrides
 ///
-/// `cat/pkg L10N: de en` ⇒ `l10n_de l10n_en`). A bare `-*` inside a group
-/// clears its live values before the trailing values rebuild it
-/// (`PYTHON_TARGETS: -* python2_7` ⇒ only `python_targets_python2_7`).
+/// A USE_EXPAND name followed by `:` makes every subsequent value a member
+/// of that group, e.g. `cat/pkg L10N: de en` ⇒ `l10n_de l10n_en`. A bare
+/// `-*` inside a group clears its live values before the trailing values
+/// rebuild it (`PYTHON_TARGETS: -* python2_7` ⇒ only
+/// `python_targets_python2_7`).
 ///
 /// Only keys present in `use_expand` start a group; any other token — including
 /// one that merely ends in `:` — is parsed as an ordinary flag, so plain flags
@@ -514,7 +532,9 @@ fn expand_use_expand_colon(
     out
 }
 
-/// Load `package.accept_keywords` / `package.keywords`: `(atom, [tokens])` per line, `#` comments, optionally a directory
+/// Load `package.accept_keywords` / `package.keywords`
+///
+/// `(atom, [tokens])` per line, `#` comments, optionally a directory.
 ///
 /// Tokens are parsed to interned [`AcceptToken`]s at read time. Unlike
 /// [`load_package_use`], a bare atom (no tokens) is *kept* with an empty token

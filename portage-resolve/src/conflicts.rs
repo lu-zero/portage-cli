@@ -106,7 +106,10 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
     conflicts
 }
 
-/// Conflicts whose owner is *retained* — genuine breakage, not a stale constraint that will disappear because its owner is itself replaced this run (see [`Conflict::owner_replaced_by`])
+/// Conflicts whose owner is *retained*
+///
+/// Genuine breakage, not a stale constraint that will disappear because its
+/// owner is itself replaced this run (see [`Conflict::owner_replaced_by`]).
 ///
 /// The set a chain-completion repair loop should act on: each names an
 /// installed package worth pulling into the plan as an upgrade/rebuild target
@@ -237,7 +240,9 @@ pub struct RemovalObstacle {
     pub dep: Dep,
 }
 
-/// Simulate unmerging `candidates` (retained installed packages a blocker names) from the post-plan world [`find_conflicts`] builds
+/// Simulate unmerging `candidates` from the post-plan world [`find_conflicts`] builds
+///
+/// `candidates` are retained installed packages a blocker names.
 ///
 /// Returns the obstacles; a candidate with no obstacle is safe to auto-remove —
 /// what emerge schedules as an uninstall for an orphaned blocked package.
@@ -398,9 +403,14 @@ pub fn dep_to_version_set(dep: &Dep) -> PortageVersionSet {
     }
 }
 
-/// When an auto-removed victim would be unmerged, relative to the merge of the package that blocks it — real portage's `BlockerDepPriority` edge direction: a strong `!!` blocker cannot tolerate any overlap, so its unmerge is ordered *before* the blocking merge; a weak `!` blocker tolerates transient overlap, ordered *after*
+/// When an auto-removed victim would be unmerged, relative to the merge of
+/// the package that blocks it
 ///
-/// Both are equally auto-removed either way — this only affects scheduling.
+/// Real portage's `BlockerDepPriority` edge direction: a strong `!!`
+/// blocker cannot tolerate any overlap, so its unmerge is ordered *before*
+/// the blocking merge; a weak `!` blocker tolerates transient overlap,
+/// ordered *after*. Both are equally auto-removed either way — this only
+/// affects scheduling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnmergeOrder {
     /// Weak `!`: unmerge after the blocking package merges
@@ -412,7 +422,9 @@ pub enum UnmergeOrder {
 /// The classification outcome for one blocker/victim pair
 #[derive(Debug, Clone)]
 pub enum BlockerVerdict {
-    /// Nothing retained still needs the blocked installed package — real emerge would schedule it for unmerge
+    /// Nothing retained still needs the blocked installed package
+    ///
+    /// Real emerge would schedule it for unmerge.
     ///
     /// Advisory-only until Step 2 threads this into the actual plan.
     WouldUnmerge {

@@ -4,8 +4,10 @@
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom_pubgrub::DepClass;
 
-/// The resolved set of roots for a command (see `docs/design/root-topology.md`): config source, the planner's installed base, and the install target
+/// The resolved set of roots for a command: config source, the planner's
+/// installed base, and the install target
 ///
+/// See [docs/design/root-topology.md](../../docs/design/root-topology.md).
 /// Built once from `em`'s global flags (`portage-cli`'s `Cli::roots`/
 /// `base_roots`/`outer_roots`/`broot`, via the `with_*` builder methods below —
 /// the fields are private, so construction always goes through them) and passed
@@ -15,7 +17,9 @@ pub struct Roots {
     config: Option<Utf8PathBuf>,
     base: Option<Utf8PathBuf>,
     target: Option<Utf8PathBuf>,
-    /// Where `BDEPEND`/`IDEPEND` (cross) resolve — always the true build host, independent of any `--target` sysroot substitution
+    /// Where `BDEPEND`/`IDEPEND` (cross) resolve — always the true build host
+    ///
+    /// Independent of any `--target` sysroot substitution.
     ///
     /// `None` only where it trivially equals `merge_root()` (bare, `--local`). See
     /// [`satisfaction_root`](Self::satisfaction_root).
@@ -23,18 +27,21 @@ pub struct Roots {
     /// `CHOST != CBUILD` for the currently active topology — the one cell
     /// `satisfaction_root` needs it for (`IDEPEND`)
     is_cross_arch: bool,
-    /// `EPREFIX`: when set (`--local`), packages are configured for and installed in place at this offset (`target == eprefix`, so `EROOT == target` and `ROOT == /`)
+    /// `EPREFIX`: when set (`--local`), packages are configured for and
+    /// installed in place at this offset
     ///
-    /// `None` for ROOT-offset / host builds.
+    /// `target == eprefix`, so `EROOT == target` and `ROOT == /`. `None`
+    /// for ROOT-offset / host builds.
     eprefix: Option<Utf8PathBuf>,
     /// A user-writable config dir overlaid on the host config for
     /// `package.use`/`bashrc` (the `~/.gentoo/etc/portage` of `--local`),
     /// so an unprivileged user can override without touching `/etc/portage`
     config_overlay: Option<Utf8PathBuf>,
     relocate: bool,
-    /// The literal `--config-root` value, if the user gave one — unlike [`config`](Self::config), never derived from `--root`
+    /// The literal `--config-root` value, if the user gave one
     ///
-    /// See [`config_root_explicit`](Self::config_root_explicit).
+    /// Unlike [`config`](Self::config), never derived from `--root`. See
+    /// [`config_root_explicit`](Self::config_root_explicit).
     config_root_explicit: Option<Utf8PathBuf>,
     /// See [`with_target_only_installed_view`](Self::with_target_only_installed_view)
     installed_view_target_only: bool,
@@ -46,7 +53,9 @@ impl Roots {
         self.config.as_deref()
     }
 
-    /// The literal `--config-root` value, if given — unlike [`config`](Self::config), never derived from `--root`
+    /// The literal `--config-root` value, if given
+    ///
+    /// Unlike [`config`](Self::config), never derived from `--root`.
     ///
     /// `em select` uses this instead of `config()`, matching real eselect's own
     /// behavior — so a bare `em --root R select ...` operates on the host's config
@@ -97,9 +106,14 @@ impl Roots {
         self.eprefix.as_deref()
     }
 
-    /// The `EPREFIX` a package merging into `merge_root()` should actually build against: `eprefix()` only when it IS `merge_root()` (the PMS invariant `EROOT = ROOT + EPREFIX` holds), `None` whenever a moved `merge_root()` means this package installs into a self-contained, unprefixed tree instead
+    /// The `EPREFIX` a package merging into `merge_root()` should actually build against
     ///
-    /// `RootContext.eprefix`'s three callers must read this, never raw `eprefix()`.
+    /// `eprefix()` only when it IS `merge_root()` (the PMS invariant
+    /// `EROOT = ROOT + EPREFIX` holds), `None` whenever a moved
+    /// `merge_root()` means this package installs into a self-contained,
+    /// unprefixed tree instead. `RootContext.eprefix`'s three callers must
+    /// read this, never raw `eprefix()`.
+    ///
     /// See [`build_eprefix` vs
     /// `eprefix`](../../docs/design/em-prefix-experiment.md) for the live-verified
     /// `libffi`/`zlib` leak this fixed.
@@ -107,7 +121,10 @@ impl Roots {
         self.eprefix.as_deref().filter(|e| *e == self.merge_root())
     }
 
-    /// Whether this is an overlay view (EPREFIX set, base is the host): the `--prefix` case where `base_roots()`'s merge_root is the host but the actual install target is the prefix
+    /// Whether this is an overlay view (EPREFIX set, base is the host)
+    ///
+    /// The `--prefix` case where `base_roots()`'s merge_root is the host
+    /// but the actual install target is the prefix.
     ///
     /// `roots()` uses this to reconstruct the prefix-target view on top of
     /// `base_roots()`.
@@ -115,7 +132,9 @@ impl Roots {
         self.eprefix.is_some() && self.base.is_none()
     }
 
-    /// Whether this is a self-contained `--root DIR` topology (own config, own everything): no EPREFIX, base == target, and not the bare host
+    /// Whether this is a self-contained `--root DIR` topology (own config, own everything)
+    ///
+    /// No EPREFIX, base == target, and not the bare host.
     ///
     /// Topology-only — a robust replacement for the old `config().is_some()` proxy,
     /// which no longer reflects the *reason* to detect it (see
@@ -124,7 +143,12 @@ impl Roots {
         self.eprefix.is_none() && self.base == self.target && self.merge_root().as_str() != "/"
     }
 
-    /// For internal orchestration only: a self-contained `--root` build's own `gcc-config`/`binutils-config` slot files must live under *its own* `etc/env.d`, not the host's — unlike `em select`'s user-facing `config_root_explicit`, which deliberately does NOT infer this from `--root` alone
+    /// For internal orchestration only
+    ///
+    /// A self-contained `--root` build's own `gcc-config`/`binutils-config`
+    /// slot files must live under *its own* `etc/env.d`, not the host's —
+    /// unlike `em select`'s user-facing `config_root_explicit`, which
+    /// deliberately does NOT infer this from `--root` alone.
     ///
     /// Forces its own config root rather than requiring `--config-root` on every
     /// crossdev invocation.
@@ -135,7 +159,9 @@ impl Roots {
         self
     }
 
-    /// Use only `VDB(target)` as the installed view, dropping base∪target sharing (`docs/user/root-model.md`)
+    /// Use only `VDB(target)` as the installed view, dropping base∪target sharing
+    ///
+    /// See `docs/user/root-model.md`.
     ///
     /// Native toolchain bootstrap must merge compiler/libc into the target rather
     /// than treating host VDB as satisfied (under `--prefix`, host
@@ -160,7 +186,10 @@ impl Roots {
         self.config_overlay.as_deref()
     }
 
-    /// The build-against sysroot (`SYSROOT`/`ESYSROOT`) to hand the shell: `None` means "same as the install target" (full offset / host), so the shell defaults `SYSROOT = ROOT`
+    /// The build-against sysroot (`SYSROOT`/`ESYSROOT`) to hand the shell
+    ///
+    /// `None` means "same as the install target" (full offset / host), so
+    /// the shell defaults `SYSROOT = ROOT`.
     ///
     /// `Some` only for an overlay where the base differs from the target
     /// (`--prefix`), where the base is the system to build against and the target
@@ -232,7 +261,12 @@ impl Roots {
         self.config.as_deref().or(self.base.as_deref())
     }
 
-    /// Load `repos.conf` portage-style for this invocation: global defaults + confdir under the config root, plus the `--local`/`--prefix` overlay confdir, plus any legacy `PORTDIR_OVERLAY` directories from make.conf ([`portdir_overlay`](Self::portdir_overlay))
+    /// Load `repos.conf` portage-style for this invocation
+    ///
+    /// Global defaults + confdir under the config root, plus the
+    /// `--local`/`--prefix` overlay confdir, plus any legacy
+    /// `PORTDIR_OVERLAY` directories from make.conf
+    /// ([`portdir_overlay`](Self::portdir_overlay)).
     ///
     /// The single source of truth for repo discovery — every caller gets both
     /// sources merged and sorted together for free.
@@ -243,7 +277,10 @@ impl Roots {
         Ok(conf.with_portdir_overlay(&self.portdir_overlay()))
     }
 
-    /// `PORTDIR_OVERLAY` from make.conf: the legacy, pre-repos.conf way of declaring extra overlay directories, still honored by real portage
+    /// `PORTDIR_OVERLAY` from make.conf
+    ///
+    /// The legacy, pre-repos.conf way of declaring extra overlay
+    /// directories, still honored by real portage.
     ///
     /// Whitespace-split paths, in listed order; the overlay confdir wins over the
     /// base config root when both set it (unlike [`repos_conf`](Self::repos_conf),
@@ -354,7 +391,11 @@ impl Roots {
         }
     }
 
-    /// Test-only: a bare `--root DIR` shaped `Roots` with BROOT a genuinely separate directory from the offset (`base`/`target`) — matching real `Dual { broot: host, target: offset }`, `eprefix: None`, `is_cross_arch: false`
+    /// Test-only: a bare `--root DIR` shaped `Roots` with BROOT genuinely separate from the offset
+    ///
+    /// BROOT is a separate directory from the offset (`base`/`target`) —
+    /// matching real `Dual { broot: host, target: offset }`, `eprefix:
+    /// None`, `is_cross_arch: false`.
     ///
     /// `for_test` collapses all three roles to one path, which can't exercise
     /// `initial_depend`'s host-vs-target weave (they're the same directory there);
@@ -389,7 +430,12 @@ impl Roots {
     }
 }
 
-/// `PORTDIR_OVERLAY` under `root`, checking `etc/portage/make.conf` then the legacy `etc/make.conf` — same order and early-return-on-first-set precedence as `root_aware.rs`'s own `read_chost_cbuild` (not full shell last-wins semantics, a deliberate, already-established simplification in this codebase)
+/// `PORTDIR_OVERLAY` under `root`, checking `etc/portage/make.conf` then the legacy `etc/make.conf`
+///
+/// Same order and early-return-on-first-set precedence as
+/// `root_aware.rs`'s own `read_chost_cbuild` (not full shell last-wins
+/// semantics, a deliberate, already-established simplification in this
+/// codebase).
 ///
 /// `None` when neither file sets the var at all (distinct from `Some(vec![])`,
 /// an explicit empty assignment).

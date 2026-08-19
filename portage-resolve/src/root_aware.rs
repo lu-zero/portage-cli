@@ -38,7 +38,10 @@ pub struct CrossContext {
     /// `riscv`), when `active` and the `CHOST` maps to a known arch. Derived once;
     /// drives keyword acceptance for the target.
     target_arch: Option<Arch>,
-    /// Where a `MergeRoot::Host` entry actually lands (mirrors `Cli::host_roots()`): the prefix under `--prefix` (an unprivileged overlay can't write the real host `/`), else the real host `/`
+    /// Where a `MergeRoot::Host` entry actually lands (mirrors `Cli::host_roots()`)
+    ///
+    /// The prefix under `--prefix` (an unprivileged overlay can't write the
+    /// real host `/`), else the real host `/`.
     ///
     /// Used by [`display_root`] so the `-p` merge list matches where the merge
     /// actually goes.
@@ -59,7 +62,9 @@ impl CrossContext {
         }
     }
 
-    /// The target keyword arch (from `CHOST`), if this is an active cross build to a recognised arch
+    /// The target keyword arch, if this is an active cross build to a recognised arch
+    ///
+    /// From `CHOST`.
     ///
     /// Used to accept the target's keywords instead of the host `--arch`.
     pub fn target_arch(&self) -> Option<&Arch> {

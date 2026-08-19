@@ -12,10 +12,11 @@ use portage_atom_pubgrub::{
 
 /// Entries to write into `/etc/portage/package.use`
 pub struct PackageUseEntry {
-    /// Filename inside `package.use/`: the bare package name (e.g `pygments`), or `category-package` (e.g
+    /// Filename inside `package.use/`
     ///
-    /// `dev-python-pygments`) when the bare name is ambiguous within this batch —
-    /// see `assign_filenames` (private, in this module).
+    /// The bare package name (e.g `pygments`), or `category-package` (e.g
+    /// `dev-python-pygments`) when the bare name is ambiguous within this
+    /// batch — see `assign_filenames` (private, in this module).
     pub filename: String,
     /// Lines to add/update in that file
     pub lines: Vec<PackageUseLine>,
@@ -116,12 +117,13 @@ pub fn build_entries(
     assign_filenames(by_cpn)
 }
 
-/// Turn per-package line groups into [`PackageUseEntry`]s, choosing each one's filename: the bare package name (e.g
+/// Turn per-package line groups into [`PackageUseEntry`]s, choosing each one's filename
 ///
-/// `mesa`) when unambiguous, falling back to `category-package` only for names
-/// that collide across categories in this batch — real portage users keep
-/// bare-name package.use files day to day. Sorted by filename for reproducible
-/// output; lines within a file keep their caller-given order.
+/// The bare package name (e.g `mesa`) when unambiguous, falling back to
+/// `category-package` only for names that collide across categories in
+/// this batch — real portage users keep bare-name package.use files day to
+/// day. Sorted by filename for reproducible output; lines within a file
+/// keep their caller-given order.
 fn assign_filenames(by_cpn: HashMap<Cpn, Vec<PackageUseLine>>) -> Vec<PackageUseEntry> {
     let cpns: Vec<Cpn> = by_cpn.keys().copied().collect();
     let mut names_by_bare: HashMap<&str, HashSet<&str>> = HashMap::new();
@@ -241,7 +243,11 @@ where
     (package_use, applied_reqs, None) // bound hit — additions not yet solved
 }
 
-/// The `(target cpn, flag, enable)` triples one requirement demands, filtered to flags that are **real IUSE** of the target's selected/upgrade version (a `[bar]` on a target without `bar` cannot be applied — CC7)
+/// The `(target cpn, flag, enable)` triples one requirement demands
+///
+/// Filtered to flags that are **real IUSE** of the target's
+/// selected/upgrade version (a `[bar]` on a target without `bar` cannot be
+/// applied — CC7).
 ///
 /// Used by the co-solve to auto-apply USE-deps via synthetic `package.use` and
 /// re-solve, instead of only suggesting them.

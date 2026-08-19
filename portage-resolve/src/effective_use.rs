@@ -49,7 +49,9 @@ pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, I
         .collect()
 }
 
-/// Apply profile force/mask as the unconditional post-fold step (Portage's `use.force`/`use.mask` outside the USE_ORDER stack)
+/// Apply profile force/mask as the unconditional post-fold step
+///
+/// Portage's `use.force`/`use.mask` outside the USE_ORDER stack.
 ///
 /// Must run **after** `resolve_effective_use` and **before** [`apply_ceded`] so
 /// env-level `-*` cannot wipe forced flags (and ceded decisions still win
@@ -112,7 +114,11 @@ pub fn effective_use(
     cfg
 }
 
-/// A `(pkg, ver)`'s cache entry plus its effective USE, with each dep class evaluated against that USE on demand — the `find_cache` + [`effective_use`] + `DepEntry::evaluate_use` triple shared by `host_copies`, `bdepend_trim`, and `depend_trim`
+/// A `(pkg, ver)`'s cache entry plus its effective USE
+///
+/// Each dep class is evaluated against that USE on demand — the
+/// `find_cache` + [`effective_use`] + `DepEntry::evaluate_use` triple
+/// shared by `host_copies`, `bdepend_trim`, and `depend_trim`.
 ///
 /// `None` when the CPV isn't in `data` at all (a within-run merge whose cache
 /// entry vanished, e.g. across a repo reload — every caller already treats this

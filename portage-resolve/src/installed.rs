@@ -76,7 +76,10 @@ pub fn load_installed(
     out
 }
 
-/// A package present on the build host (BROOT): the host instance's slot-resolved package, version, and VDB-recorded active USE / IUSE
+/// A package present on the build host (BROOT)
+///
+/// The host instance's slot-resolved package, version, and VDB-recorded
+/// active USE/IUSE.
 ///
 /// The USE/IUSE let the solver check an edge's atom USE-deps against the host,
 /// so a `[flag]` the host lacks triggers a rebuild rather than being pruned as
@@ -92,7 +95,11 @@ pub struct HostInstalledEntry {
     pub iuse: Vec<Interned<DefaultInterner>>,
 }
 
-/// Packages present on the **build host** (BROOT) for `host_installed` — a BDEPEND already present there is satisfied without building it, unless a USE-dep on that edge demands a flag the host lacks (in which case the package is rebuilt)
+/// Packages present on the **build host** (BROOT), for `host_installed`
+///
+/// A BDEPEND already present there is satisfied without building it,
+/// unless a USE-dep on that edge demands a flag the host lacks (in which
+/// case the package is rebuilt).
 ///
 /// Duplicates across slots of the same package are kept (each slot is a
 /// distinct `PortagePackage`).

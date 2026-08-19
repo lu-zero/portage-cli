@@ -144,7 +144,11 @@ pub fn compute(
     order
 }
 
-/// Recurse into `pkg`'s unsatisfied-on-host `DEPEND`/`BDEPEND`/`IDEPEND` edges, appending each resolved host copy to `order` only *after* its own edges have been visited — deps-first, so a copy never lands before something it needs
+/// Recurse into `pkg`'s unsatisfied-on-host `DEPEND`/`BDEPEND`/`IDEPEND` edges
+///
+/// Appends each resolved host copy to `order` only *after* its own edges
+/// have been visited — deps-first, so a copy never lands before something
+/// it needs.
 ///
 /// Called just before `pkg` itself is pushed to `order`, so every copy
 /// discovered here also ends up immediately before `pkg` — its first (and
@@ -198,7 +202,10 @@ fn visit_unsatisfied(
     }
 }
 
-/// Resolve `(version, package)` for a host copy of `cpn`: the Target plan's version when the CPN is also built for Target, else the newest keyword/mask/license-accepted repo version
+/// Resolve `(version, package)` for a host copy of `cpn`
+///
+/// The Target plan's version when the CPN is also built for Target, else
+/// the newest keyword/mask/license-accepted repo version.
 ///
 /// `None` when the CPN is absent from the repo or has no accepted version.
 fn resolve(cpn: Cpn, ctx: &Ctx<'_>) -> Option<(Version, PortagePackage)> {
