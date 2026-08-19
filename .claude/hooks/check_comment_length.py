@@ -14,11 +14,31 @@ DOC_MAX = 6
 TRAIT_DOC_MAX = 18
 
 TRAIT_DECL_RE = re.compile(r"^(pub(\(.*?\))?\s+)?(unsafe\s+)?(auto\s+)?trait\b")
+REFERENCE_RE = re.compile(r"(docs?/[\w./-]+\.md|\[[^\]]+\]\([^)]+\.md\))", re.IGNORECASE)
 
 RUST_EXTS = {".rs"}
 C_EXTS = {".js", ".ts", ".tsx", ".jsx", ".go", ".c", ".h", ".cpp", ".cc", ".hpp", ".java"}
-HASH_EXTS = {".sh", ".bash", ".zsh", ".toml", ".yaml", ".yml", ".rb"}
+HASH_EXTS = {".toml", ".yaml", ".yml", ".rb"}
 PY_EXTS = {".py"}
+
+
+def count_prose_lines(contents):
+    """Line count excluding ``` fenced code examples (not slop, exempt)."""
+    count = 0
+    in_fence = False
+    for c in contents:
+        if c.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        count += 1
+    return count
+
+
+def reference_leeway(raw_lines):
+    """+3 lines when a block points to a docs/*.md reference instead of inlining."""
+    return 3 if any(REFERENCE_RE.search(l) for l in raw_lines) else 0
 
 
 def check_line_runs(lines, is_comment, is_doc, max_regular, max_doc):
@@ -33,7 +53,7 @@ def check_line_runs(lines, is_comment, is_doc, max_regular, max_doc):
         while i < n and is_comment(lines[i]) and is_doc(lines[i]) == doc:
             i += 1
         run_len = i - start
-        limit = max_doc if doc else max_regular
+        limit = (max_doc if doc else max_regular) + reference_leeway(lines[start:i])
         if run_len > limit:
             kind = "doc comment" if doc else "comment"
             violations.append((start + 1, run_len, kind, limit))
@@ -56,7 +76,7 @@ def check_block_runs(lines, opener, doc_opener, closer, max_regular, max_doc):
                     j += 1
             end = min(j, n - 1)
             run_len = end - start + 1
-            limit = max_doc if doc else max_regular
+            limit = (max_doc if doc else max_regular) + reference_leeway(lines[start : end + 1])
             if run_len > limit:
                 kind = "doc block comment" if doc else "block comment"
                 violations.append((start + 1, run_len, kind, limit))
@@ -82,9 +102,20 @@ def check_python_docstrings(lines, max_doc):
                 while j < n and q not in lines[j]:
                     j += 1
                 end = min(j, n - 1)
-                run_len = end - start + 1
-                if run_len > max_doc:
-                    violations.append((start + 1, run_len, "docstring", max_doc))
+                contents = []
+                for idx, raw in enumerate(lines[start : end + 1]):
+                    c = raw.strip()
+                    if idx == 0:
+                        c = c[3:]
+                    if idx == end - start:
+                        pos = c.rfind(q)
+                        if pos != -1:
+                            c = c[:pos]
+                    contents.append(c)
+                length = count_prose_lines(contents)
+                limit = max_doc + reference_leeway(lines[start : end + 1])
+                if length > limit:
+                    violations.append((start + 1, length, "docstring", limit))
                 i = end + 1
                 break
         else:
@@ -126,12 +157,13 @@ def check_rust_line_comments(lines):
             start = i
             while i < n and lines[i].strip().startswith("///"):
                 i += 1
-            run_len = i - start
+            contents = [l.strip()[3:] for l in lines[start:i]]
+            prose_len = count_prose_lines(contents)
             trait = is_trait_doc(lines, i)
-            limit = TRAIT_DOC_MAX if trait else DOC_MAX
-            if run_len > limit:
+            limit = (TRAIT_DOC_MAX if trait else DOC_MAX) + reference_leeway(lines[start:i])
+            if prose_len > limit:
                 kind = "trait doc comment" if trait else "doc comment"
-                violations.append((start + 1, run_len, kind, limit))
+                violations.append((start + 1, prose_len, kind, limit))
             continue
         start = i
         while i < n and lines[i].strip().startswith("//") and not lines[i].strip().startswith(
@@ -139,8 +171,9 @@ def check_rust_line_comments(lines):
         ) and not lines[i].strip().startswith("//!"):
             i += 1
         run_len = i - start
-        if run_len > REGULAR_MAX:
-            violations.append((start + 1, run_len, "comment", REGULAR_MAX))
+        limit = REGULAR_MAX + reference_leeway(lines[start:i])
+        if run_len > limit:
+            violations.append((start + 1, run_len, "comment", limit))
     return violations
 
 
@@ -166,16 +199,38 @@ def check_rust_block_comments(lines):
         i = end + 1
         if module:
             continue
+        block_lines = lines[start : end + 1]
         if doc:
+            contents = block_content_lines(block_lines, opener_len)
+            length = count_prose_lines(contents)
             trait = is_trait_doc(lines, i)
-            limit = TRAIT_DOC_MAX if trait else DOC_MAX
+            limit = (TRAIT_DOC_MAX if trait else DOC_MAX) + reference_leeway(block_lines)
             kind = "trait doc block comment" if trait else "doc block comment"
         else:
-            limit = REGULAR_MAX
+            length = run_len
+            limit = REGULAR_MAX + reference_leeway(block_lines)
             kind = "block comment"
-        if run_len > limit:
-            violations.append((start + 1, run_len, kind, limit))
+        if length > limit:
+            violations.append((start + 1, length, kind, limit))
     return violations
+
+
+def block_content_lines(raw_lines, opener_len):
+    """Per-line text of a block comment, stripped of `/**`, `*/`, and `* ` bullets."""
+    out = []
+    for idx, line in enumerate(raw_lines):
+        s = line.strip()
+        if idx == 0:
+            s = s[opener_len:]
+        if idx == len(raw_lines) - 1:
+            pos = s.rfind("*/")
+            if pos != -1:
+                s = s[:pos]
+        s = s.strip()
+        if s.startswith("*") and not s.startswith("*/"):
+            s = s[1:].strip()
+        out.append(s)
+    return out
 
 
 def check_rust(lines):

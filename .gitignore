@@ -4,6 +4,7 @@ Cargo.lock
 *.orig
 .DS_Store
 .maki
+__pycache__/
 # Machine-specific local dep overrides (brush/pkgcraft worktree paths); the
 # committed manifests resolve these from git. Keep these untracked.
 **/.cargo/config.toml
