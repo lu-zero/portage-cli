@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/check_commit_message.py",
+            "if": "Bash(git commit*)"
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/check_rustdoc.py",
+            "if": "Bash(git commit*)",
+            "timeout": 600,
+            "statusMessage": "Checking rustdoc (cargo doc + doctests)..."
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/check_comment_length.py"
+          }
+        ]
+      }
+    ]
+  }
+}
