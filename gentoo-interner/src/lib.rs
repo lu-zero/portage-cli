@@ -81,9 +81,10 @@ impl Interner for NoInterner {
     }
 }
 
-/// Global process-wide interner. Zero-sized type; all state lives in a
-/// process-wide static. Keys are stable `u32` values, making
-/// `Interned<GlobalInterner>` `Copy`.
+/// Global process-wide interner.
+///
+/// Zero-sized type; all state lives in a process-wide static. Keys are
+/// stable `u32` values, making `Interned<GlobalInterner>` `Copy`.
 ///
 /// The backing store is selected by feature flags:
 /// - `interner` (default): lock-free [`papaya::HashMap`] for lookups +
@@ -435,9 +436,9 @@ mod tests {
         assert_ne!(a, "other");
     }
 
-    /// Roundtrip stress test: intern many unique strings, resolve them
-    /// all back, verify every one round-trips. Runs across every backend
-    /// since it uses `DefaultInterner`.
+    // Roundtrip stress test: intern many unique strings, resolve them
+    // all back, verify every one round-trips. Runs across every backend
+    // since it uses `DefaultInterner`.
     #[test]
     fn test_roundtrip_many() {
         // Use a salted prefix so concurrent tests don't collide with
@@ -451,8 +452,8 @@ mod tests {
         }
     }
 
-    /// Same string interned multiple times must always yield the same key,
-    /// regardless of interleaving with other interns.
+    // Same string interned multiple times must always yield the same key,
+    // regardless of interleaving with other interns.
     #[test]
     fn test_intern_stable() {
         let s = format!("stable_{}", std::process::id());
@@ -464,9 +465,9 @@ mod tests {
         }
     }
 
-    /// Multi-threaded roundtrip: many threads each intern a private set
-    /// of strings and a shared set. All resolves must round-trip and the
-    /// shared strings must produce the same key across threads.
+    // Multi-threaded roundtrip: many threads each intern a private set
+    // of strings and a shared set. All resolves must round-trip and the
+    // shared strings must produce the same key across threads.
     #[test]
     fn test_concurrent_roundtrip() {
         use std::sync::Arc;
@@ -518,8 +519,8 @@ mod tests {
         }
     }
 
-    /// Cheap pseudo-random helper for `test_intern_stable` noise — no
-    /// dependency on `rand`.
+    // Cheap pseudo-random helper for `test_intern_stable` noise — no
+    // dependency on `rand`.
     fn rand_like() -> u64 {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
