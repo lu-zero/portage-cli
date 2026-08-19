@@ -1,5 +1,5 @@
 //! The PubGrub `DependencyProvider` implementation: version prioritisation,
-//! version choice (installed-preference heuristics), and dependency lookup.
+//! version choice (installed-preference heuristics), and dependency lookup
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -295,9 +295,10 @@ impl DependencyProvider for PortageDependencyProvider {
 }
 
 impl PortageDependencyProvider {
-    /// The unfiltered dependency computation for a `(package, version)` node.
-    /// [`get_dependencies`](DependencyProvider::get_dependencies) wraps this to
-    /// drop `package.provided` edges.
+    /// The unfiltered dependency computation for a `(package, version)` node
+    ///
+    /// [`get_dependencies`](DependencyProvider::get_dependencies) wraps this
+    /// to drop `package.provided` edges.
     fn compute_dependencies(
         &self,
         package: &PortagePackage,
@@ -413,7 +414,9 @@ impl PortageDependencyProvider {
 }
 
 /// Rebuild a version's merged constraints with host-satisfied BDEPEND edges
-/// dropped. `host_installed` maps a package to a present-on-BROOT version; a
+/// dropped
+///
+/// `host_installed` maps a package to a present-on-BROOT version; a
 /// BDEPEND edge `(pkg, vset)` is dropped when `pkg` is present and `vset`
 /// accepts that version. Per-edge (not per-package): a package that is both a
 /// BDEPEND of A and an RDEPEND of B is still built when B needs it.
@@ -421,7 +424,7 @@ fn stamp_root(p: &PortagePackage, root: MergeRoot) -> PortagePackage {
     p.at_merge_root(root)
 }
 
-/// Whether this Target node drops its `DEPEND` under `--root-deps=rdeps`.
+/// Whether this Target node drops its `DEPEND` under `--root-deps=rdeps`
 ///
 /// Guards the footgun: the synthetic solver root also reports
 /// [`MergeRoot::Target`] (the enum default for non-real nodes) and carries the
@@ -432,26 +435,30 @@ fn target_drops_depend(rdeps: bool, package: &PortagePackage) -> bool {
     rdeps && !package.is_virtual()
 }
 
-/// How [`stamped_deps`] routes a package's dependency classes — the two axes
-/// the stamp routes ([`cross_target_runtime_deps`] / [`host_native_deps`])
-/// differ along, kept in one place so they can't drift apart on the next
-/// IDEPEND/BDEPEND shift. [`broot_filtered`] is a host-satisfaction *filter*,
-/// not a stamp, and deliberately does not share this.
+/// How [`stamped_deps`] routes a package's dependency classes
+///
+/// The two axes the stamp routes ([`cross_target_runtime_deps`] /
+/// [`host_native_deps`]) differ along, kept in one place so they can't
+/// drift apart on the next IDEPEND/BDEPEND shift. [`broot_filtered`] is a
+/// host-satisfaction *filter*, not a stamp, and deliberately does not
+/// share this.
 struct DepStampPolicy {
-    /// Stamp applied to DEPEND/RDEPEND/PDEPEND (the runtime classes).
+    /// Stamp applied to DEPEND/RDEPEND/PDEPEND (the runtime classes)
     runtime_stamp: MergeRoot,
-    /// Stamp applied to an *unsatisfied* BDEPEND/IDEPEND edge — it merges there.
+    /// Stamp applied to an *unsatisfied* BDEPEND/IDEPEND edge — it merges there
     broot_unsatisfied_stamp: MergeRoot,
-    /// Include DEPEND at all (cross `--root-deps=rdeps` drops it).
+    /// Include DEPEND at all (cross `--root-deps=rdeps` drops it)
     include_depend: bool,
-    /// Include BDEPEND (cross gates it on the caller's `--with-bdeps`-shaped flag).
+    /// Include BDEPEND (cross gates it on the caller's `--with-bdeps`-shaped flag)
     include_bdepend: bool,
 }
 
 /// Shared body of the two "stamp every runtime dep + schedule unsatisfied
-/// build/install deps onto BROOT" routes. Runtime classes (DEPEND/RDEPEND/
-/// PDEPEND) stamp to [`DepStampPolicy::runtime_stamp`]; an unsatisfied BDEPEND
-/// (when `include_bdepend`) or IDEPEND merges to
+/// build/install deps onto BROOT" routes
+///
+/// Runtime classes (DEPEND/RDEPEND/PDEPEND) stamp to
+/// [`DepStampPolicy::runtime_stamp`]; an unsatisfied BDEPEND (when
+/// `include_bdepend`) or IDEPEND merges to
 /// [`DepStampPolicy::broot_unsatisfied_stamp`].
 ///
 /// BDEPEND resolves on BROOT (the host), never the target sysroot — kept
@@ -495,7 +502,9 @@ fn stamped_deps(
 
 /// Cross-arch target build: runtime deps stamp to the target sysroot;
 /// `--root-deps=rdeps` drops DEPEND; unsatisfied BDEPEND/IDEPEND schedule onto
-/// the host (BROOT). See [`stamped_deps`] for the BDEPEND-on-BROOT rationale.
+/// the host (BROOT)
+///
+/// See [`stamped_deps`] for the BDEPEND-on-BROOT rationale.
 fn cross_target_runtime_deps(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
@@ -516,7 +525,7 @@ fn cross_target_runtime_deps(
 }
 
 /// Host-root native build (BDEPEND front-matter): all deps target the host
-/// instance; unsatisfied BDEPEND/IDEPEND also schedule onto the host.
+/// instance; unsatisfied BDEPEND/IDEPEND also schedule onto the host
 fn host_native_deps(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
@@ -536,9 +545,11 @@ fn host_native_deps(
 /// Native build: keep RDEPEND/PDEPEND; drop host-satisfied DEPEND, BDEPEND,
 /// and IDEPEND — for a native (same-arch) build there's no build sysroot
 /// distinct from the host when `CBUILD==CHOST`, so DEPEND is satisfied by
-/// whatever machine does the actual compiling, same as BDEPEND. See [the
-/// gcc→perl→rsync explosion this closed](../../docs/design/root-topology.md)
-/// for why DEPEND had to join BDEPEND/IDEPEND's host-satisfied filtering.
+/// whatever machine does the actual compiling, same as BDEPEND
+///
+/// See [the gcc→perl→rsync explosion this
+/// closed](../../docs/design/root-topology.md) for why DEPEND had to join
+/// BDEPEND/IDEPEND's host-satisfied filtering.
 fn broot_filtered(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
@@ -567,10 +578,12 @@ fn broot_filtered(
 
 /// Whether the host (BROOT) satisfies a dependency edge `(p, vs)`: the host
 /// instance must accept the version **and** its current USE must satisfy
-/// every atom USE-dependency on that edge. A `[flag]` the host lacks is not
-/// satisfied — portage rebuilds the package with the new USE, pulling its
-/// re-evaluated USE-conditional closure (PMS §8.3 atom USE-deps). The parent
-/// (`vd`) supplies the parent-flag state for `[flag?]`/`[flag=]` kinds.
+/// every atom USE-dependency on that edge
+///
+/// A `[flag]` the host lacks is not satisfied — portage rebuilds the
+/// package with the new USE, pulling its re-evaluated USE-conditional
+/// closure (PMS §8.3 atom USE-deps). The parent (`vd`) supplies the
+/// parent-flag state for `[flag?]`/`[flag=]` kinds.
 ///
 /// `p` a `Choice`/`SlotChoice` virtual node (an `||`/`^^`/`??` OR-group or a
 /// `:*` slot-star group) delegates to [`virtual_satisfied_on_broot`]: the
@@ -628,8 +641,10 @@ fn host_satisfied_on_broot_inner(
 /// host-satisfied: every one of that branch's own dependency edges (all
 /// classes collapse into one list, see `register_virtual_choices`) is
 /// itself `host_satisfied_on_broot_inner`, recursing for a nested
-/// Choice/SlotChoice. `seen` guards against a pathological self-referential
-/// choice graph — a revisited node is conservatively unsatisfied.
+/// Choice/SlotChoice
+///
+/// `seen` guards against a pathological self-referential choice graph — a
+/// revisited node is conservatively unsatisfied.
 fn virtual_satisfied_on_broot(
     provider: &PortageDependencyProvider,
     choice: &PortagePackage,
@@ -651,8 +666,10 @@ fn virtual_satisfied_on_broot(
 
 /// Whether a single atom USE-dep is satisfied by the host instance's current
 /// USE (the host is not rebuilt, so only its active USE — plus the atom's
-/// `(+)`/`(-)` default for flags absent from IUSE — counts). Reuses the solver's
-/// own violation predicate so the host check matches post-solve validation.
+/// `(+)`/`(-)` default for flags absent from IUSE — counts)
+///
+/// Reuses the solver's own violation predicate so the host check matches
+/// post-solve validation.
 fn host_use_dep_satisfied(vd: &VersionData, entry: &HostEntry, ud: &portage_atom::UseDep) -> bool {
     let flag_in_host_iuse = entry.iuse.contains(&ud.flag);
     let dep_effective_enabled = if flag_in_host_iuse {

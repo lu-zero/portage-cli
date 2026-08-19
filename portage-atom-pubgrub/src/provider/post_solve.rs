@@ -1,6 +1,6 @@
 //! Post-solve USE analysis: from a solved graph, compute the USE flag changes
 //! the solution implies (the "needed" set) — autounmask suggestions for new
-//! packages and rebuild requirements for installed ones.
+//! packages and rebuild requirements for installed ones
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -15,7 +15,7 @@ use crate::use_config::UseFlagState;
 use super::{PortageDependencyProvider, UseFlagRequirement};
 
 /// Per-target accumulator in the post-solve fixpoint: the resolved version, the
-/// flags that must be enabled / disabled, and the requiring packages' CPNs.
+/// flags that must be enabled / disabled, and the requiring packages' CPNs
 type TargetAcc = (
     Version,
     BTreeSet<Interned<DefaultInterner>>,
@@ -52,11 +52,13 @@ pub(crate) fn eval_violated_use_dep(
 
 impl PortageDependencyProvider {
     /// Evaluate one parent's USE-dep constraints against the current
-    /// solution and accumulate any violations into `by_target`. Shared by
-    /// the two passes of the [`compute_use_flag_requirements`] fixpoint:
-    /// main-solution (parent = a solved package at its solution version)
-    /// and upgrade-expansion (parent = an installed package at its pending
-    /// upgrade version). `parent_ver` is the version being expanded.
+    /// solution and accumulate any violations into `by_target`
+    ///
+    /// Shared by the two passes of the [`compute_use_flag_requirements`]
+    /// fixpoint: main-solution (parent = a solved package at its solution
+    /// version) and upgrade-expansion (parent = an installed package at
+    /// its pending upgrade version). `parent_ver` is the version being
+    /// expanded.
     fn accumulate_use_dep_violations(
         &self,
         parent: &PortagePackage,
@@ -169,10 +171,12 @@ impl PortageDependencyProvider {
 
     /// Walk the full PubGrub solution (including virtual choice packages)
     /// and collect USE flag requirements for every package with at least
-    /// one violated or unsatisfied USE dep constraint. Installed packages
-    /// are checked against their VDB-recorded active USE (only violations
-    /// collected); non-installed packages are checked against the global
-    /// `use_config` (unset-by-config requirements collected as annotations).
+    /// one violated or unsatisfied USE dep constraint
+    ///
+    /// Installed packages are checked against their VDB-recorded active
+    /// USE (only violations collected); non-installed packages are checked
+    /// against the global `use_config` (unset-by-config requirements
+    /// collected as annotations).
     pub(crate) fn compute_use_flag_requirements(
         &self,
         solution: &SelectedDependencies<PortagePackage, Version>,
@@ -289,7 +293,7 @@ impl PortageDependencyProvider {
         reqs
     }
 
-    /// Return all USE flag requirements collected by the post-solve validation pass.
+    /// Return all USE flag requirements collected by the post-solve validation pass
     ///
     /// Includes both reinstall candidates (`R`) and informational annotations
     /// for newly-installed packages.  Populated by `resolve_targets`.
@@ -299,7 +303,7 @@ impl PortageDependencyProvider {
 
     /// Return only the requirements that correspond to reinstalls: installed
     /// packages whose current USE flags violate at least one constraint from the
-    /// resolved set.
+    /// resolved set
     pub fn reinstall_deps(&self) -> Vec<&UseFlagRequirement> {
         self.use_flag_requirements
             .iter()
@@ -308,9 +312,11 @@ impl PortageDependencyProvider {
     }
 
     /// Effective state of `flag` on a non-installed package version that
-    /// will be freshly built. Mirrors what the build will see: `package.use`
-    /// and global USE applied on the ebuild's IUSE defaults; outside IUSE,
-    /// the dep's own `(+)`/`(-)` default.
+    /// will be freshly built
+    ///
+    /// Mirrors what the build will see: `package.use` and global USE
+    /// applied on the ebuild's IUSE defaults; outside IUSE, the dep's own
+    /// `(+)`/`(-)` default.
     ///
     /// Except at the installed version, where the VDB's own record is
     /// ground truth instead — whatever the already-built package has,
@@ -344,7 +350,7 @@ impl PortageDependencyProvider {
     }
 
     /// Check whether all USE dep constraints for an OR-group branch are
-    /// consistent with the desired final state of the installed packages.
+    /// consistent with the desired final state of the installed packages
     ///
     /// A flag is treated as "effectively enabled" when it is either currently
     /// active in the installed VDB, or in the package's IUSE and enabled in the
@@ -393,11 +399,11 @@ mod tests {
     use super::eval_violated_use_dep;
     use portage_atom::UseDepKind;
 
-    /// PMS 8.2.6.4 six-form table, evaluated directly. `Some(true)` = violated,
-    /// flag must be enabled; `Some(false)` = violated, flag must be disabled;
-    /// `None` = satisfied. Both conditional-inverse rows are the pre-fix trap:
-    /// `!flag?` with parent OFF requires the dep flag *disabled*
-    /// (`!flag? ( dep[-flag] )`), so parent-off/dep-off is satisfied and
+    // PMS 8.2.6.4 six-form table, evaluated directly. `Some(true)` = violated,
+    // flag must be enabled; `Some(false)` = violated, flag must be disabled;
+    // `None` = satisfied. Both conditional-inverse rows are the pre-fix trap:
+    // `!flag?` with parent OFF requires the dep flag *disabled*
+    // (`!flag? ( dep[-flag] )`), so parent-off/dep-off is satisfied and
     /// parent-off/dep-on is the violation (must disable), not the reverse.
     #[test]
     fn eval_violated_use_dep_matches_pms_table() {

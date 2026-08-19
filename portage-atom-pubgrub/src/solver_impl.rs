@@ -1,4 +1,4 @@
-//! [`portage_solver::Solver`] implementation for the PubGrub bridge.
+//! [`portage_solver::Solver`] implementation for the PubGrub bridge
 //!
 //! The bridge already solves natively via
 //! [`PortageDependencyProvider::resolve_targets`] (which internally computes the
@@ -156,9 +156,11 @@ impl Solver for PortageDependencyProvider {
     }
 }
 
-/// A PubGrub package identity from a CPN + optional slot. Targets/installs fed
-/// through the trait are always native (target-root); cross host/sysroot sets
-/// are added via the bridge's own concrete methods, not the trait.
+/// A PubGrub package identity from a CPN + optional slot
+///
+/// Targets/installs fed through the trait are always native (target-root);
+/// cross host/sysroot sets are added via the bridge's own concrete methods,
+/// not the trait.
 fn to_portage_package(
     cpn: portage_atom::Cpn,
     slot: Option<portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>>,
@@ -171,11 +173,13 @@ fn to_portage_package(
 
 impl PortageDependencyProvider {
     /// Expand a solver [`TargetSpec`] into the PubGrub `(package, version-set)`
-    /// targets to feed `resolve_targets`. A slot-pinned spec maps to that one
-    /// slotted node; a slotless spec expands to every real slot node the
-    /// provider holds for the CPN, since the solver keys nodes by `(cpn,
-    /// slot)` and has no slotless "any slot" node. Consumers that need a
-    /// single slot pin it in the `TargetSpec` (keyword/mask-aware selection).
+    /// targets to feed `resolve_targets`
+    ///
+    /// A slot-pinned spec maps to that one slotted node; a slotless spec
+    /// expands to every real slot node the provider holds for the CPN,
+    /// since the solver keys nodes by `(cpn, slot)` and has no slotless
+    /// "any slot" node. Consumers that need a single slot pin it in the
+    /// `TargetSpec` (keyword/mask-aware selection).
     fn to_portage_targets(&self, spec: &TargetSpec) -> Vec<(PortagePackage, PortageVersionSet)> {
         let vs = match (spec.op, &spec.version) {
             (Some(op), Some(v)) => PortageVersionSet::from_operator(op, spec.glob, v.clone()),
@@ -199,8 +203,9 @@ impl PortageDependencyProvider {
 }
 
 /// Map a PubGrub solution entry to a [`SelectedPackage`], dropping the
-/// solver-internal virtual nodes. `merge_root` is a shared vocabulary type
-/// (no mapping).
+/// solver-internal virtual nodes
+///
+/// `merge_root` is a shared vocabulary type (no mapping).
 ///
 /// Deliberately does **not** stamp a `BuildClass`: the `cross-<tuple>/`
 /// host-vs-target split is declared by `CrossTarget::packages()` in
@@ -218,9 +223,11 @@ fn to_selected(pkg: &PortagePackage, ver: &portage_atom::Version) -> Option<Sele
     })
 }
 
-/// Translate a PubGrub `DepEdge` (keyed on `(PortagePackage, Version)`) into the
-/// plain form keyed on [`SelectedPackage`]. `None` if either endpoint is a
-/// virtual node (defensive: graph edges are real-only).
+/// Translate a PubGrub `DepEdge` (keyed on `(PortagePackage, Version)`) into
+/// the plain form keyed on [`SelectedPackage`]
+///
+/// `None` if either endpoint is a virtual node (defensive: graph edges are
+/// real-only).
 fn map_dep_edge(edge: &PgDepEdge) -> Option<DepEdge> {
     Some(DepEdge {
         from: to_selected(&edge.from.0, &edge.from.1)?,
@@ -238,7 +245,7 @@ fn map_installed_policy(policy: portage_solver::InstalledPolicy) -> InstalledPol
     }
 }
 
-/// Map a PubGrub advisory [`PgError`] into the solver-agnostic [`Violation`].
+/// Map a PubGrub advisory [`PgError`] into the solver-agnostic [`Violation`]
 fn map_violation(error: PgError) -> Violation {
     match error {
         PgError::BlockerConflict {
@@ -279,10 +286,10 @@ mod tests {
         }
     }
 
-    /// Drive a resolve entirely through the `portage_solver::Solver` trait and
-    /// confirm the owned `Plan` is correct: both packages selected, the dep
-    /// before its dependent in install order — proving the boundary translation
-    /// (TargetSpec → pubgrub, solution → SelectedPackage) round-trips.
+    // Drive a resolve entirely through the `portage_solver::Solver` trait and
+    // confirm the owned `Plan` is correct: both packages selected, the dep
+    // before its dependent in install order — proving the boundary translation
+    // (TargetSpec → pubgrub, solution → SelectedPackage) round-trips.
     #[test]
     fn solver_trait_round_trips_a_simple_plan() {
         let slot0 = Some(Interned::intern("0"));
@@ -328,10 +335,10 @@ mod tests {
         );
     }
 
-    /// Cross config + resolve driven entirely through the `Solver` trait:
-    /// `set_cross_active` + `set_root_deps_rdeps` make a target package's
-    /// build-only `DEPEND` drop from the sysroot plan while its `RDEPEND` stays.
-    /// Proves the cross knobs are usable via the trait, not just the concrete API.
+    // Cross config + resolve driven entirely through the `Solver` trait:
+    // `set_cross_active` + `set_root_deps_rdeps` make a target package's
+    // build-only `DEPEND` drop from the sysroot plan while its `RDEPEND` stays.
+    // Proves the cross knobs are usable via the trait, not just the concrete API.
     #[test]
     fn solver_trait_cross_rdeps_drops_target_depend() {
         let slot0 = Some(Interned::intern("0"));

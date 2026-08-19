@@ -1,4 +1,4 @@
-//! `REQUIRED_USE` as a *fact* in the solver's own vocabulary.
+//! `REQUIRED_USE` as a *fact* in the solver's own vocabulary
 //!
 //! The type lives in `portage-solver` (the layer this crate encodes for) and is
 //! re-exported here so pubgrub consumers keep a single `RequiredUse` type across

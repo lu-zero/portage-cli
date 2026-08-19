@@ -11,22 +11,22 @@ use crate::version_set::PortageVersionSet;
 pub use portage_solver::DepClass;
 
 /// A labeled edge in the dependency graph: (from_pkg, from_version) depends on
-/// (to_pkg, to_version) via the given class.
+/// (to_pkg, to_version) via the given class
 #[derive(Debug, Clone)]
 pub struct DepEdge {
-    /// The package that declares the dependency.
+    /// The package that declares the dependency
     pub from: (PortagePackage, Version),
-    /// The package that is depended upon.
+    /// The package that is depended upon
     pub to: (PortagePackage, Version),
-    /// Which dependency class this edge belongs to.
+    /// Which dependency class this edge belongs to
     pub class: DepClass,
-    /// The USE flag in `from` that gates this dep, if it was inside `flag? ( dep )`.
+    /// The USE flag in `from` that gates this dep, if it was inside `flag? ( dep )`
     pub via_use_flag:
         Option<portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>>,
 }
 
 impl PortageDependencyProvider {
-    /// Build the labeled dependency graph from a solution.
+    /// Build the labeled dependency graph from a solution
     ///
     /// Returns edges labeled with the dependency class (DEPEND, RDEPEND, etc.).
     /// Only edges where both endpoints are in the solution are included.
@@ -122,7 +122,7 @@ impl PortageDependencyProvider {
         edges
     }
 
-    /// Compute an installation order from a solution.
+    /// Compute an installation order from a solution
     ///
     /// Returns packages in topological order: a dependency is merged before
     /// the package that needs it. Both build-time (DEPEND/BDEPEND) and
@@ -254,8 +254,10 @@ impl PortageDependencyProvider {
     }
 }
 
-/// Iterative Tarjan SCC.  Returns the component id of each node; ids are dense
-/// `0..num_components`.  `succ[u]` lists nodes that must come *after* `u`.
+/// Iterative Tarjan SCC
+///
+/// Returns the component id of each node; ids are dense
+/// `0..num_components`. `succ[u]` lists nodes that must come *after* `u`.
 fn tarjan_scc(succ: &[Vec<usize>]) -> Vec<usize> {
     let n = succ.len();
     let mut index = vec![usize::MAX; n];
@@ -313,7 +315,7 @@ fn tarjan_scc(succ: &[Vec<usize>]) -> Vec<usize> {
     comp_of
 }
 
-/// Order the members of a single `succ_all` (hard+soft) component.
+/// Order the members of a single `succ_all` (hard+soft) component
 ///
 /// A soft (RDEPEND) cycle folds many packages into one component even when
 /// most have acyclic hard chains (e.g. tools → elt-patches ↔ xz-utils). Hard
@@ -441,7 +443,7 @@ fn order_cycle(
     out
 }
 
-/// Pass-2 repair after the soft-cycle walk (bug #3).
+/// Pass-2 repair after the soft-cycle walk (bug #3)
 ///
 /// Pass-1 may emit a consumer before its RDEPEND provider when the provider is
 /// still hard-blocked inside a soft SCC (empty `virtual/libcrypt` before
@@ -580,7 +582,7 @@ fn repair_soft_inversions(
     out
 }
 
-/// Whether `start` can reach `target` following `succ` edges.
+/// Whether `start` can reach `target` following `succ` edges
 fn reaches(start: usize, target: usize, succ: &[Vec<usize>]) -> bool {
     if start == target {
         return true;
@@ -667,17 +669,15 @@ mod tests {
         );
     }
 
-    /// Regression test for the riscv64 stage3 shakeout: `dependency_graph`
-    /// did a raw `self.packages.get(pkg)` lookup instead of the alias-resolving
-    /// `self.package_data(pkg)` — so a `Host`-flavored solved package (whose
-    //
-    // See issue #33.
-    /// data lives under its `Target`-flavored alias, see `ensure_host_instances`)
-    /// always missed, silently producing zero outgoing edges for it. A `Host`
-    /// package's own BDEPEND on *another* `Host` package (e.g. one Host-routed
-    /// perl module needing Host-routed perl itself) then got no ordering edge
-    /// at all, so `install_order` could place the dependency *after* its own
-    /// consumer instead of before it.
+    // Regression test for the riscv64 stage3 shakeout: `dependency_graph`
+    // did a raw `self.packages.get(pkg)` lookup instead of the alias-resolving
+    // `self.package_data(pkg)` — so a `Host`-flavored solved package (whose
+    // data lives under its `Target`-flavored alias, see `ensure_host_instances`)
+    // always missed, silently producing zero outgoing edges for it. A `Host`
+    // package's own BDEPEND on *another* `Host` package (e.g. one Host-routed
+    // perl module needing Host-routed perl itself) then got no ordering edge
+    // at all, so `install_order` could place the dependency *after* its own
+    // consumer instead of before it.
     #[test]
     fn host_package_bdepend_on_another_host_package_orders_correctly() {
         let mut repo = InMemoryRepository::new();
@@ -808,7 +808,7 @@ mod tests {
     // acyclic hard (BDEPEND) dependent of a genuine hard-cycle member must
     // still be ordered *after* it, even when an unrelated soft (RDEPEND)
     // cycle elsewhere folds both into the same `succ_all` component.
-    ///
+    //
     // Shape: `dev-util/elt` <-> `dev-util/xz` is a genuine hard (BDEPEND)
     // cycle. `sys-apps/sweep` has an ordinary hard BDEPEND on `elt` — no
     // cyclic relationship with it. `dev-util/fn` RDEPENDs on `sweep`, and
@@ -900,10 +900,10 @@ mod tests {
         );
     }
 
-    /// Soft+hard cycle: `virtual/libcrypt` → libxcrypt → glibc → … → virtual
-    /// again. Hard graph is acyclic; soft RDEPEND closes the loop, so pass-1
-    /// emits the empty virtual first (hard-indegree 0). Pass-2 soft repair
-    /// must put the provider before the virtual.
+    // Soft+hard cycle: `virtual/libcrypt` → libxcrypt → glibc → … → virtual
+    // again. Hard graph is acyclic; soft RDEPEND closes the loop, so pass-1
+    // emits the empty virtual first (hard-indegree 0). Pass-2 soft repair
+    // must put the provider before the virtual.
     #[test]
     fn empty_virtual_rdepend_orders_after_provider_through_soft_hard_cycle() {
         let mut repo = InMemoryRepository::new();
@@ -1067,8 +1067,8 @@ mod tests {
         }
     }
 
-    /// Soft repair must not invert a hard BDEPEND that pass-1 already ordered
-    /// correctly (gcc after glibc).
+    // Soft repair must not invert a hard BDEPEND that pass-1 already ordered
+    // correctly (gcc after glibc).
     #[test]
     fn repair_preserves_pass1_correct_hard_bdepend_with_soft_noise() {
         let mut repo = InMemoryRepository::new();
@@ -1194,9 +1194,9 @@ mod tests {
         );
     }
 
-    /// Full-graph #3 limitation: hard path virtual → python → glibc → libxcrypt
-    /// makes soft provider-before-virtual promote impossible. Document that
-    /// repair does not invent a hard-illegal order (and may leave virtual early).
+    // Full-graph #3 limitation: hard path virtual → python → glibc → libxcrypt
+    // makes soft provider-before-virtual promote impossible. Document that
+    // repair does not invent a hard-illegal order (and may leave virtual early).
     #[test]
     fn hard_path_through_python_blocks_soft_libcrypt_promote() {
         let mut repo = InMemoryRepository::new();
@@ -1290,11 +1290,11 @@ mod tests {
         );
     }
 
-    /// Guard against regressing the case `order_cycle`'s original heuristic
-    /// exists for: a component with NO genuine hard cycle (only an ordinary
-    /// soft/RDEPEND cycle, e.g. `gtk+` <-> its icon-theme runtime deps) must
-    /// still resolve — the hard-group gate added above is a no-op when every
-    /// hard-group is a singleton, so this is unaffected by the 2026-07-16 fix.
+    // Guard against regressing the case `order_cycle`'s original heuristic
+    // exists for: a component with NO genuine hard cycle (only an ordinary
+    // soft/RDEPEND cycle, e.g. `gtk+` <-> its icon-theme runtime deps) must
+    // still resolve — the hard-group gate added above is a no-op when every
+    // hard-group is a singleton, so this is unaffected by the 2026-07-16 fix.
     #[test]
     fn pure_soft_cycle_still_orders_a_hard_dependent_after_it() {
         let mut repo = InMemoryRepository::new();

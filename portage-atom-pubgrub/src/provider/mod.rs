@@ -11,36 +11,37 @@ use crate::repository::PackageRepository;
 use crate::use_config::{UseConfig, UseFlagState};
 use crate::version_set::PortageVersionSet;
 
-/// Post-solve USE-requirement analysis.
+/// Post-solve USE-requirement analysis
 mod post_solve;
 /// The PubGrub `DependencyProvider` impl (prioritise / choose_version /
-/// get_dependencies).
+/// get_dependencies)
 mod solve;
 
-/// Whether an installed package should be favored or locked during resolution.
+/// Whether an installed package should be favored or locked during resolution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstalledPolicy {
     /// Prefer the installed version when multiple candidates exist,
-    /// but allow upgrades if required by dependencies.
+    /// but allow upgrades if required by dependencies
     Favor,
     /// The installed version must not change — only that exact version
-    /// is acceptable.
+    /// is acceptable
     Lock,
     /// Present in the VDB for action tags and post-solve checks, but must be
     /// rebuilt from the repository: never favored in version selection and
-    /// always expanded with full build-time deps (`emerge --emptytree`).
+    /// always expanded with full build-time deps (`emerge --emptytree`)
     Rebuild,
 }
 
-/// All solver-relevant data for one package version.
+/// All solver-relevant data for one package version
 ///
 /// Previously this was eight parallel `BTreeMap<Version, _>` fields on
 /// `PackageData`; collapsing them into one struct keeps a version's data
 /// cohesive and removes the hand-synced map inserts.
 pub(crate) struct VersionData {
-    /// Merged deps for PubGrub's DependencyProvider trait.
+    /// Merged deps for PubGrub's DependencyProvider trait
     pub(crate) merged: Dependencies<PortagePackage, PortageVersionSet, String>,
-    /// Per-class converted deps with optional gating USE flag.
+    /// Per-class converted deps with optional gating USE flag
+    ///
     /// Index: 0=DEPEND, 1=RDEPEND, 2=BDEPEND, 3=PDEPEND, 4=IDEPEND
     pub(crate) by_class: Vec<Vec<convert::Req>>,
     pub(crate) blockers: Vec<Dep>,
@@ -51,38 +52,42 @@ pub(crate) struct VersionData {
     pub(crate) repo_constraints: Vec<convert::RepoConstraint>,
     pub(crate) slot_operator_deps: Vec<convert::SlotOperatorDep>,
     /// The resolved **desired** USE state for this version: `package.use` and
-    /// global USE applied on top of the ebuild's IUSE defaults.  This is the
-    /// single source of truth for "is flag F on for this version" during both
-    /// branch conversion and the post-solve passes.
+    /// global USE applied on top of the ebuild's IUSE defaults
+    ///
+    /// This is the single source of truth for "is flag F on for this
+    /// version" during both branch conversion and the post-solve passes.
     pub(crate) desired: UseConfig,
 }
 
 impl VersionData {
-    /// `DEPEND` — build-time (target) deps. Named accessors over the positional
-    /// `by_class` layout (0=DEPEND 1=RDEPEND 2=BDEPEND 3=PDEPEND 4=IDEPEND) so
-    /// the root-routing in `solve.rs` reads by name, not magic index.
+    /// `DEPEND` — build-time (target) deps
+    ///
+    /// Named accessors over the positional `by_class` layout (0=DEPEND
+    /// 1=RDEPEND 2=BDEPEND 3=PDEPEND 4=IDEPEND) so the root-routing in
+    /// `solve.rs` reads by name, not magic index.
     pub(crate) fn depend(&self) -> &[convert::Req] {
         &self.by_class[0]
     }
-    /// `RDEPEND` — run-time deps.
+    /// `RDEPEND` — run-time deps
     pub(crate) fn rdepend(&self) -> &[convert::Req] {
         &self.by_class[1]
     }
-    /// `BDEPEND` — build-host deps (EAPI 7+).
+    /// `BDEPEND` — build-host deps (EAPI 7+)
     pub(crate) fn bdepend(&self) -> &[convert::Req] {
         &self.by_class[2]
     }
-    /// `PDEPEND` — post-merge deps.
+    /// `PDEPEND` — post-merge deps
     pub(crate) fn pdepend(&self) -> &[convert::Req] {
         &self.by_class[3]
     }
-    /// `IDEPEND` — install-time deps (EAPI 8+).
+    /// `IDEPEND` — install-time deps (EAPI 8+)
     pub(crate) fn idepend(&self) -> &[convert::Req] {
         &self.by_class[4]
     }
 
     /// Build a deps-only version (no blockers/use-deps/etc.), used for synthetic
-    /// solver nodes: the root target set and OR-group / USE-decision branches.
+    /// solver nodes: the root target set and OR-group / USE-decision branches
+    ///
     /// `merged` is collected from a flattened view of `by_class` (flag stripped).
     fn from_by_class(by_class: Vec<Vec<convert::Req>>) -> Self {
         let merged = Dependencies::Available(
@@ -111,21 +116,21 @@ pub(crate) struct PackageData {
     pub(crate) versions: BTreeMap<Version, VersionData>,
 }
 
-/// A package that is already installed, with its version and policy.
+/// A package that is already installed, with its version and policy
 #[derive(Debug, Clone)]
 pub struct InstalledPackage {
-    /// The installed package identity.
+    /// The installed package identity
     pub package: PortagePackage,
-    /// The installed version.
+    /// The installed version
     pub version: Version,
-    /// How to treat this package during resolution.
+    /// How to treat this package during resolution
     pub policy: InstalledPolicy,
-    /// USE flags that were active (enabled) when this package was built.
+    /// USE flags that were active (enabled) when this package was built
     ///
     /// Used to evaluate USE dep constraints on OR-group branches so the solver
     /// can prefer branches that are already satisfied without a rebuild.
     pub active_use: Vec<Interned<DefaultInterner>>,
-    /// IUSE flags declared by this installed package (flag names without `+`/`-` prefix).
+    /// IUSE flags declared by this installed package (flag names without `+`/`-` prefix)
     ///
     /// Required because the repository may not carry the exact installed version
     /// any more (e.g. glib-2.84.4-r2 installed while the repo only has r5).  In
@@ -134,25 +139,27 @@ pub struct InstalledPackage {
     pub iuse: Vec<Interned<DefaultInterner>>,
 }
 
-/// A dependency that was dropped because no versions were available.
+/// A dependency that was dropped because no versions were available
 ///
 /// Dropped deps are always alternatives inside an `||` dep group — a
 /// successful resolution means the other branch was chosen instead.
 #[derive(Debug, Clone)]
 pub struct DroppedDep {
-    /// The package that was dropped.
+    /// The package that was dropped
     pub package: PortagePackage,
-    /// The version range that was requested.
+    /// The version range that was requested
     pub version_set: PortageVersionSet,
     /// Sibling branches in the same `||` group that are available (a real
     /// package, or a `SlotChoice`/`Choice` virtual when the sibling branch is
-    /// multi-slot or itself a nested group). Empty when the dep was not inside a
-    /// `||`, or when every sibling is also unavailable — only then is the dropped
-    /// dep a genuine autounmask candidate.
+    /// multi-slot or itself a nested group)
+    ///
+    /// Empty when the dep was not inside a `||`, or when every sibling is
+    /// also unavailable — only then is the dropped dep a genuine autounmask
+    /// candidate.
     pub alternatives: Vec<PortagePackage>,
 }
 
-/// USE flag changes required on a package by the resolved dependency set.
+/// USE flag changes required on a package by the resolved dependency set
 ///
 /// Produced by the post-solve validation pass in
 /// [`PortageDependencyProvider::resolve_targets`].
@@ -165,36 +172,40 @@ pub struct DroppedDep {
 /// time, these are reported as informational annotations.
 #[derive(Debug, Clone)]
 pub struct UseFlagRequirement {
-    /// The package the requirements apply to.
+    /// The package the requirements apply to
     pub package: PortagePackage,
-    /// The currently-installed (or selected) version.
+    /// The currently-installed (or selected) version
     pub version: Version,
     /// If set, the package should be **upgraded** to this version rather than
-    /// rebuilt at `version`.  Present when the installed version is superseded
-    /// by a newer repo version whose constraints drove the requirement.
+    /// rebuilt at `version`
+    ///
+    /// Present when the installed version is superseded by a newer repo
+    /// version whose constraints drove the requirement.
     pub upgrade_to: Option<Version>,
     /// USE flags that must be **enabled** — required by at least one constraint
-    /// but not yet active (installed: violated now; new: may not be set by config).
+    /// but not yet active (installed: violated now; new: may not be set by config)
     pub required_enabled: Vec<Interned<DefaultInterner>>,
     /// USE flags that must be **disabled** — forbidden by at least one constraint
-    /// but currently active.
+    /// but currently active
     pub required_disabled: Vec<Interned<DefaultInterner>>,
-    /// The package(s) that imposed the USE dep constraints (CPN strings).
+    /// The package(s) that imposed the USE dep constraints (CPN strings)
+    ///
     /// Used to generate `package.use` comments.
     pub required_by: Vec<String>,
 }
 
-/// A PubGrub `DependencyProvider` backed by a portage package repository.
+/// A PubGrub `DependencyProvider` backed by a portage package repository
 ///
 /// Pre-computes all dependency information at construction time, then serves
 /// it to the PubGrub solver.
 pub struct PortageDependencyProvider {
     /// Keyed by the `Target`-flavored identity only — a `Host`-flavored
-    /// package's data lives under its alias (see `host_aliases`). Private
-    /// so `package_data()`/`package_data_key()` are the only lookup path —
-    /// a raw `.get()` on a possibly-Host-flavored key silently misses
-    /// instead of resolving the alias (a recurring bug class, hit in
-    /// `graph.rs`, `validate.rs`, and `post_solve.rs` alike).
+    /// package's data lives under its alias (see `host_aliases`)
+    ///
+    /// Private so `package_data()`/`package_data_key()` are the only lookup
+    /// path — a raw `.get()` on a possibly-Host-flavored key silently
+    /// misses instead of resolving the alias (a recurring bug class, hit
+    /// in `graph.rs`, `validate.rs`, and `post_solve.rs` alike).
     packages: HashMap<PortagePackage, PackageData>,
     pub(crate) installed: HashMap<PortagePackage, (Version, InstalledPolicy)>,
     pub(crate) installed_cpns: HashSet<Cpn>,
@@ -202,143 +213,168 @@ pub struct PortageDependencyProvider {
     pub(crate) installed_iuse: HashMap<PortagePackage, Vec<Interned<DefaultInterner>>>,
     /// Blocker atoms declared by installed packages (pre-USE-evaluated), so
     /// [`check_blockers`](Self::check_blockers) can report ones a retained
-    /// installed owner points at the plan — the owner is never in the solve.
+    /// installed owner points at the plan — the owner is never in the solve
     pub(crate) installed_blockers: HashMap<PortagePackage, Vec<Dep>>,
     /// Packages present on the **build host** (BROOT), used only to satisfy
     /// `BDEPEND` edges — a BDEPEND the host already provides is dropped in
     /// [`get_dependencies`](crate::DependencyProvider::get_dependencies), so
     /// an offset build (`--root <empty>`) doesn't pull host-provided build
-    /// tools into the plan.
+    /// tools into the plan
     ///
     /// A flat atom set fed by the caller (policy layer); the solver is
     /// root-agnostic. Always "present" (Lock-equivalent): never re-chosen.
     pub(crate) host_installed: HashMap<PortagePackage, HostEntry>,
     /// Packages present in the cross **sysroot** (`ESYSROOT`), used to satisfy
-    /// `DEPEND` edges for target-root instances when [`cross_active`](Self::cross_active).
+    /// `DEPEND` edges for target-root instances when [`cross_active`](Self::cross_active)
     pub(crate) sysroot_installed: HashMap<PortagePackage, Version>,
     /// Dual-root solver mode: stamp dependency targets with [`MergeRoot`] and
-    /// register host-side package instances. Set for both a genuine foreign-
-    /// arch cross build *and* a same-arch offset build (`--root <dir>`) — see
-    /// [`is_cross_arch`](Self::is_cross_arch) for the distinction the two
-    /// need at the `DEPEND`-filtering branch in `solve.rs`.
+    /// register host-side package instances
+    ///
+    /// Set for both a genuine foreign-arch cross build *and* a same-arch
+    /// offset build (`--root <dir>`) — see [`is_cross_arch`](Self::is_cross_arch)
+    /// for the distinction the two need at the `DEPEND`-filtering branch in
+    /// `solve.rs`.
     pub(crate) cross_active: bool,
     /// Whether this is a genuine foreign-arch build (`CHOST != CBUILD`), not
     /// just a same-arch offset (`--root <dir>`) — `cross_active` alone
-    /// doesn't distinguish them. Only a genuine cross build keeps `DEPEND`
-    /// pinned to the target sysroot unconditionally.
+    /// doesn't distinguish them
+    ///
+    /// Only a genuine cross build keeps `DEPEND` pinned to the target
+    /// sysroot unconditionally.
     ///
     /// A same-arch offset build's `DEPEND` is satisfied by whatever machine
     /// compiles, same as `BDEPEND` — the old fallback treated any non-host
     /// sysroot as foreign-arch, so `--root` never dropped it.
     pub(crate) is_cross_arch: bool,
-    /// Host `@host` instances alias target package data (no duplicate ingest).
+    /// Host `@host` instances alias target package data (no duplicate ingest)
     pub(crate) host_aliases: HashMap<PortagePackage, PortagePackage>,
     pub(crate) dropped_deps: Vec<DroppedDep>,
-    /// USE flag requirements collected by the post-solve validation pass.
+    /// USE flag requirements collected by the post-solve validation pass
     ///
     /// Covers both reinstall cases (`R`: installed packages with violated
     /// constraints) and informational cases (`N`/`U`: new packages whose
     /// required flags may not be set by the current global config).
     pub(crate) use_flag_requirements: Vec<UseFlagRequirement>,
     /// Installed packages that a previous solve iteration decided to upgrade to a
-    /// newer repo version (`upgrade_to`).  On the next iteration the solver pins
-    /// these to the new version so its full dependency closure is re-solved,
-    /// instead of leaving the upgraded version's deps unaccounted for.  Cleared
-    /// at the start of every [`resolve_targets`](Self::resolve_targets) call.
+    /// newer repo version (`upgrade_to`)
+    ///
+    /// On the next iteration the solver pins these to the new version so
+    /// its full dependency closure is re-solved, instead of leaving the
+    /// upgraded version's deps unaccounted for. Cleared at the start of
+    /// every [`resolve_targets`](Self::resolve_targets) call.
     pub(crate) upgrade_pins: HashMap<PortagePackage, Version>,
     /// Explicitly requested target packages (set by `resolve_targets`), with
-    /// the version set the caller requested them under. `choose_version` does
-    /// not favor the installed version for these: a named argument selects
-    /// the best accepted version, as emerge does (installed-and-best still
-    /// resolves to the installed version).
+    /// the version set the caller requested them under
+    ///
+    /// `choose_version` does not favor the installed version for these: a
+    /// named argument selects the best accepted version, as emerge does
+    /// (installed-and-best still resolves to the installed version).
     pub(crate) root_targets: std::collections::HashMap<PortagePackage, PortageVersionSet>,
-    /// Whether to include BDEPEND in the resolution (emerge's `--with-bdeps`).
-    /// When false (default), BDEPEND are excluded from resolution for packages
-    /// being built (assumed provided by BROOT). When true, BDEPEND are included
-    /// but filtered by `host_installed`.
+    /// Whether to include BDEPEND in the resolution (emerge's `--with-bdeps`)
+    ///
+    /// When false (default), BDEPEND are excluded from resolution for
+    /// packages being built (assumed provided by BROOT). When true,
+    /// BDEPEND are included but filtered by `host_installed`.
     pub(crate) with_bdeps: bool,
     /// `--emptytree`: do not prefer installed virtual/OR branches; full deep
-    /// closure from repository candidates.
+    /// closure from repository candidates
     pub(crate) rebuild_tree: bool,
     /// `--deep` (and native `--emptytree`): for a `:*` any-slot dep
     /// (`SlotChoice`), bump to the newest slot instead of keeping the installed
-    /// slot that already satisfies `>=MIN` — matching `emerge -uD`/`-e`. `max()`
-    /// over a `SlotChoice` picks the newest-*version* slot (slots are ranked by
-    /// version, see `rank_slots_by_version`). Off by default so plain `-p`/`-up`
-    /// stays minimal.
+    /// slot that already satisfies `>=MIN` — matching `emerge -uD`/`-e`
+    ///
+    /// `max()` over a `SlotChoice` picks the newest-*version* slot (slots
+    /// are ranked by version, see `rank_slots_by_version`). Off by default
+    /// so plain `-p`/`-up` stays minimal.
     pub(crate) prefer_newest_slot: bool,
     /// `--update --deep` (not emptytree): do not Favour installed versions for
     /// packages that appear in the solve — pick the newest accepted in-slot
-    /// version in range (emerge `-uD` in-slot upgrades). Distinct from
-    /// [`Self::prefer_newest_slot`] (cross-slot `:*` bumps) and from
-    /// [`InstalledPolicy::Rebuild`] (emptytree full build-closure expansion).
+    /// version in range (emerge `-uD` in-slot upgrades)
+    ///
+    /// Distinct from [`Self::prefer_newest_slot`] (cross-slot `:*` bumps)
+    /// and from [`InstalledPolicy::Rebuild`] (emptytree full build-closure
+    /// expansion).
     pub(crate) prefer_update: bool,
     /// Selective resolution without `--update`: an installed version that
     /// satisfies a root target is kept rather than replaced by the newest
-    /// accepted one. `--noreplace`/`--newuse`/`--changed-use` mean "leave a
-    /// satisfied target alone"; `--update` means the opposite, so the caller
-    /// clears this when it is set. Off by default, which keeps the plain
+    /// accepted one
+    ///
+    /// `--noreplace`/`--newuse`/`--changed-use` mean "leave a satisfied
+    /// target alone"; `--update` means the opposite, so the caller clears
+    /// this when it is set. Off by default, which keeps the plain
     /// `em <atom>` reinstall.
     pub(crate) selective_no_update: bool,
 
     /// `--root-deps=rdeps` (crossdev cross builds): discard a target package's
-    /// `DEPEND` from the target-root graph. Only `RDEPEND`/`PDEPEND` install into
-    /// the sysroot; build-time deps resolve against the build host (`/`), where
-    /// the cross toolchain lives. Off by default, and gated to true cross-arch
-    /// invocations by the caller (never native offset/same-arch stage builds,
-    /// which keep `DEPEND` → target ROOT).
+    /// `DEPEND` from the target-root graph
+    ///
+    /// Only `RDEPEND`/`PDEPEND` install into the sysroot; build-time deps
+    /// resolve against the build host (`/`), where the cross toolchain
+    /// lives. Off by default, and gated to true cross-arch invocations by
+    /// the caller (never native offset/same-arch stage builds, which keep
+    /// `DEPEND` → target ROOT).
     pub(crate) root_deps_rdeps: bool,
     /// `--nodeps` (emerge `-O`): merge only the explicitly named targets, with no
-    /// dependency expansion. Real packages report no dependencies, so the solve
-    /// resolves the requested atoms to versions and nothing else. Used by the
-    /// staged toolchain bootstrap to break the glibc-headers→newer-gcc cycle
+    /// dependency expansion
+    ///
+    /// Real packages report no dependencies, so the solve resolves the
+    /// requested atoms to versions and nothing else. Used by the staged
+    /// toolchain bootstrap to break the glibc-headers→newer-gcc cycle
     /// before a compiler exists. Off by default.
     pub(crate) nodeps: bool,
     /// Preferred version (`0`/`1`) for each `UseDecision` node, i.e. the value
-    /// the caller's policy would have given the ceded flag.  `choose_version`
-    /// biases toward it so a `SolverDecided` flag only flips when a constraint
-    /// forces it (greedy keep-configured — see `docs/required-use-level-c.md`).
+    /// the caller's policy would have given the ceded flag
+    ///
+    /// `choose_version` biases toward it so a `SolverDecided` flag only
+    /// flips when a constraint forces it (greedy keep-configured — see
+    /// `docs/required-use-level-c.md`).
     pub(crate) use_decision_prefer: HashMap<PortagePackage, Version>,
     /// Reverse map from a `UseDecision` node to the `(cpn, flag)` it decides,
-    /// so the chosen values can be reported back to the caller by name.
+    /// so the chosen values can be reported back to the caller by name
     pub(crate) use_decision_meta: HashMap<PortagePackage, (Cpn, Interned<DefaultInterner>)>,
     /// The value the solver chose for each `UseDecision` node in the last solve
-    /// (`true` = on). Captured before virtual nodes are stripped from the result.
+    /// (`true` = on)
+    ///
+    /// Captured before virtual nodes are stripped from the result.
     pub(crate) solved_use_decisions: HashMap<PortagePackage, bool>,
-    /// `package.provided` versions, keyed by CPN. A dependency edge whose target
-    /// CPN is listed and whose version set accepts one of these versions is
-    /// dropped before it becomes a solver constraint — the system supplies that
-    /// package externally, so it is neither built nor reported as a dropped dep.
+    /// `package.provided` versions, keyed by CPN
+    ///
+    /// A dependency edge whose target CPN is listed and whose version set
+    /// accepts one of these versions is dropped before it becomes a solver
+    /// constraint — the system supplies that package externally, so it is
+    /// neither built nor reported as a dropped dep.
     pub(crate) provided: HashMap<Cpn, Vec<Version>>,
 }
 
-/// A USE flag the caller ceded to the solver, with the value the solver chose.
+/// A USE flag the caller ceded to the solver, with the value the solver chose
 #[derive(Debug, Clone)]
 pub struct CededFlag {
-    /// The package the flag belongs to.
+    /// The package the flag belongs to
     pub cpn: Cpn,
-    /// The ceded flag.
+    /// The ceded flag
     pub flag: Interned<DefaultInterner>,
-    /// The value the solver chose (`true` = enabled).
+    /// The value the solver chose (`true` = enabled)
     pub value: bool,
-    /// `true` when the chosen value differs from the caller's preference, i.e.
-    /// the solver flipped it to satisfy a constraint.
+    /// `true` when the chosen value differs from the caller's preference, i.e
+    /// the solver flipped it to satisfy a constraint
     pub flipped: bool,
 }
 
-/// A package present on the build host (BROOT). Used to satisfy `BDEPEND` /
-/// `IDEPEND` edges without building them into the plan. Carries the host
-/// instance's active USE and IUSE so a host-satisfied edge can be checked
-/// against its atom USE-dependencies: a `[flag]` the host lacks is **not**
-/// satisfied — the package must be rebuilt, pulling its re-evaluated
-/// USE-conditional closure (PMS §8.3/§8.2.2).
+/// A package present on the build host (BROOT)
+///
+/// Used to satisfy `BDEPEND`/`IDEPEND` edges without building them into
+/// the plan. Carries the host instance's active USE and IUSE so a
+/// host-satisfied edge can be checked against its atom USE-dependencies: a
+/// `[flag]` the host lacks is **not** satisfied — the package must be
+/// rebuilt, pulling its re-evaluated USE-conditional closure (PMS
+/// §8.3/§8.2.2).
 #[derive(Debug, Clone)]
 pub(crate) struct HostEntry {
-    /// Installed version on BROOT.
+    /// Installed version on BROOT
     pub version: Version,
-    /// The host instance's active USE flags (VDB `USE`).
+    /// The host instance's active USE flags (VDB `USE`)
     pub active_use: Vec<Interned<DefaultInterner>>,
-    /// The host instance's `IUSE` (VDB `IUSE`), stripped of `+`/`-` defaults.
+    /// The host instance's `IUSE` (VDB `IUSE`), stripped of `+`/`-` defaults
     pub iuse: Vec<Interned<DefaultInterner>>,
 }
 
@@ -347,7 +383,7 @@ pub(crate) struct HostEntry {
 /// projection (no dependency conversion) covering every CPN in the
 /// repository — not just the resolve's seeded closure — so an unslotted dep
 /// on a multi-slot package resolves correctly no matter which package
-/// references it.
+/// references it
 ///
 /// Expensive to redo per solve: for a real Gentoo tree this filters
 /// `slots_for`'s ~32k cached versions through keyword/mask/license
@@ -376,7 +412,7 @@ pub fn build_slot_map<R: PackageRepository>(repo: &R) -> convert::SlotMap {
 }
 
 impl PortageDependencyProvider {
-    /// Build the provider from a repository.
+    /// Build the provider from a repository
     ///
     /// All USE policy is the repository's concern: each version's effective
     /// desired USE is obtained via [`PackageRepository::desired_use`] (which
@@ -389,7 +425,8 @@ impl PortageDependencyProvider {
     }
 
     /// Like [`new`](Self::new), but converts only the packages *reachable*
-    /// from `seeds` (typically the resolve targets plus the installed set).
+    /// from `seeds` (typically the resolve targets plus the installed set)
+    ///
     /// References are followed transitively, so after ingestion a missing
     /// referenced package is genuinely absent — dropped-dependency filtering
     /// stays sound. Converts a few hundred packages instead of the whole tree.
@@ -399,7 +436,7 @@ impl PortageDependencyProvider {
     }
 
     /// Like [`new_for_targets`](Self::new_for_targets), but with explicit
-    /// control over whether BDEPEND are included in the resolution.
+    /// control over whether BDEPEND are included in the resolution
     pub fn new_for_targets_with_bdeps<R: PackageRepository>(
         repo: R,
         seeds: Vec<Cpn>,
@@ -411,7 +448,7 @@ impl PortageDependencyProvider {
 
     /// Like [`new_for_targets_with_bdeps`](Self::new_for_targets_with_bdeps),
     /// but takes an already-computed slot map (see [`build_slot_map`])
-    /// instead of recomputing it internally.
+    /// instead of recomputing it internally
     ///
     /// For callers that rebuild the provider repeatedly against the same
     /// repository view — e.g. the USE-dep co-solve fixpoint, which reruns
@@ -666,10 +703,12 @@ impl PortageDependencyProvider {
     }
 
     /// Register `package.provided` CPVs: packages the system supplies externally
-    /// (e.g. a host interpreter in a Gentoo Prefix). A dependency edge matching
-    /// one (same CPN, version in the edge's set) is dropped in
-    /// [`pubgrub::DependencyProvider::get_dependencies`], so the
-    /// package is neither pulled into the plan nor flagged as a dropped dep.
+    /// (e.g. a host interpreter in a Gentoo Prefix)
+    ///
+    /// A dependency edge matching one (same CPN, version in the edge's
+    /// set) is dropped in [`pubgrub::DependencyProvider::get_dependencies`],
+    /// so the package is neither pulled into the plan nor flagged as a
+    /// dropped dep.
     pub fn set_provided(&mut self, provided: &[Cpv]) {
         self.provided.clear();
         for cpv in provided {
@@ -692,7 +731,9 @@ impl PortageDependencyProvider {
 
     /// Whether a dependency edge `(target, version_set)` is satisfied by a
     /// `package.provided` entry — the target's CPN is provided at a version the
-    /// edge accepts. Slot is not considered (provided entries name a CPV).
+    /// edge accepts
+    ///
+    /// Slot is not considered (provided entries name a CPV).
     pub(crate) fn edge_is_provided(&self, target: &PortagePackage, vs: &PortageVersionSet) -> bool {
         // Solver-internal nodes (Choice/SlotChoice/UseDecision/…) have no CPN.
         // Gentoo `virtual/*` packages are Real and can be provided normally.
@@ -705,7 +746,9 @@ impl PortageDependencyProvider {
     }
 
     /// Record an installed package's pre-evaluated blocker atoms for
-    /// [`check_blockers`](Self::check_blockers)' reciprocal pass. No-op when empty.
+    /// [`check_blockers`](Self::check_blockers)' reciprocal pass
+    ///
+    /// No-op when empty.
     pub fn add_installed_blockers(&mut self, package: &PortagePackage, blockers: &[Dep]) {
         if !blockers.is_empty() {
             self.installed_blockers
@@ -713,7 +756,7 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Register an installed package.
+    /// Register an installed package
     ///
     /// **Favored** packages are preferred during version selection but may be
     /// upgraded if a dependency requires it. **Locked** packages are pinned to
@@ -754,8 +797,10 @@ impl PortageDependencyProvider {
 
     /// Record a package as present on the build host (BROOT), so host-routed
     /// `BDEPEND` and `IDEPEND` edges can be satisfied without building it into
-    /// the plan. Always "present" — there is no policy to re-choose it; this
-    /// only feeds the host-satisfaction check in `get_dependencies`.
+    /// the plan
+    ///
+    /// Always "present" — there is no policy to re-choose it; this only
+    /// feeds the host-satisfaction check in `get_dependencies`.
     ///
     /// `active_use` / `iuse` are the host instance's VDB USE / IUSE, used to
     /// check an edge's atom USE-deps: a `[flag]` the host lacks is unsatisfied
@@ -779,13 +824,13 @@ impl PortageDependencyProvider {
     }
 
     /// Record a package as present in the cross sysroot (`ESYSROOT`) for `DEPEND`
-    /// satisfaction when [`set_cross_active`](Self::set_cross_active) is on.
+    /// satisfaction when [`set_cross_active`](Self::set_cross_active) is on
     pub fn add_sysroot_installed(&mut self, package: PortagePackage, version: Version) {
         self.sysroot_installed
             .insert(package.at_merge_root(MergeRoot::Target), version);
     }
 
-    /// Enable dual-root `(package, merge_root)` solver nodes for crossdev.
+    /// Enable dual-root `(package, merge_root)` solver nodes for crossdev
     pub fn set_cross_active(&mut self, active: bool) {
         self.cross_active = active;
         if active {
@@ -796,52 +841,52 @@ impl PortageDependencyProvider {
     /// Mark this as a genuine foreign-arch build (`CHOST != CBUILD`), not
     /// just a same-arch offset (`--root <dir>`) — see the `is_cross_arch` field
     /// documentation for why `solve.rs` needs this distinct from
-    /// `cross_active`.
+    /// `cross_active`
     pub fn set_is_cross_arch(&mut self, is_cross_arch: bool) {
         self.is_cross_arch = is_cross_arch;
     }
 
     /// `--emptytree`: rebuild the full deep closure; skip installed-branch
-    /// heuristics and never favor target VDB versions during selection.
+    /// heuristics and never favor target VDB versions during selection
     pub fn set_rebuild_tree(&mut self, active: bool) {
         self.rebuild_tree = active;
     }
 
     /// `--deep` / native `--emptytree`: bump `:*` any-slot deps (`SlotChoice`)
-    /// to the newest slot rather than keeping a satisfying installed slot.
+    /// to the newest slot rather than keeping a satisfying installed slot
     pub fn set_prefer_newest_slot(&mut self, active: bool) {
         self.prefer_newest_slot = active;
     }
 
     /// `--update --deep`: prefer newest in-slot versions for every package in
-    /// the solve (disable the Favor early-return for non-root packages).
+    /// the solve (disable the Favor early-return for non-root packages)
     pub fn set_prefer_update(&mut self, active: bool) {
         self.prefer_update = active;
     }
 
     /// Selective resolution without `--update`: keep an installed version that
     /// already satisfies a root target instead of pulling the newest accepted
-    /// one.
+    /// one
     pub fn set_selective_no_update(&mut self, active: bool) {
         self.selective_no_update = active;
     }
 
     /// Policy registered for an installed package, if any (`-N`/`-U` mark USE
-    /// drift as [`InstalledPolicy::Rebuild`]).
+    /// drift as [`InstalledPolicy::Rebuild`])
     pub fn installed_policy(&self, package: &PortagePackage) -> Option<InstalledPolicy> {
         self.installed.get(package).map(|(_, p)| *p)
     }
 
     /// `--root-deps=rdeps`: drop a target package's `DEPEND` from the sysroot
     /// graph (crossdev cross-build semantics). The caller gates this to genuine
-    /// cross-arch builds; same-arch offset/stage builds leave it off.
+    /// cross-arch builds; same-arch offset/stage builds leave it off
     pub fn set_root_deps_rdeps(&mut self, active: bool) {
         self.root_deps_rdeps = active;
     }
 
     /// `--nodeps` (emerge `-O`): merge only the named targets, no dependency
     /// expansion. A real package then reports no dependencies, so the solve
-    /// resolves the requested atoms to versions and nothing else.
+    /// resolves the requested atoms to versions and nothing else
     pub fn set_nodeps(&mut self, active: bool) {
         self.nodeps = active;
     }
@@ -870,7 +915,7 @@ impl PortageDependencyProvider {
         self.packages.get(self.package_data_key(package))
     }
 
-    /// Set whether to include BDEPEND in the resolution.
+    /// Set whether to include BDEPEND in the resolution
     ///
     /// When `false` (default), BDEPEND are excluded from resolution entirely,
     /// matching emerge's `--with-bdeps=n` default. When `true`, BDEPEND are
@@ -880,7 +925,7 @@ impl PortageDependencyProvider {
     }
 
     /// Returns the list of dependencies that were dropped during construction
-    /// because their target package was not present in the repository.
+    /// because their target package was not present in the repository
     ///
     /// Each entry is the `(package, version_set)` that could not be resolved.
     /// Callers should inspect this list to detect typos or genuinely missing
@@ -890,7 +935,7 @@ impl PortageDependencyProvider {
     }
 
     /// Return all real (non-virtual, non-synthetic) packages in the provider
-    /// whose CPN matches `cpn`.
+    /// whose CPN matches `cpn`
     ///
     /// For packages with a single slot this returns one entry; for multi-slot
     /// packages (e.g. `dev-lang/python:3.11`, `dev-lang/python:3.12`) it
@@ -904,7 +949,7 @@ impl PortageDependencyProvider {
             .collect()
     }
 
-    /// Return all versions registered for a given package, sorted ascending.
+    /// Return all versions registered for a given package, sorted ascending
     pub fn versions_for_pkg(&self, pkg: &PortagePackage) -> Vec<Version> {
         self.package_data(pkg)
             .map(|d| d.versions.keys().cloned().collect())
@@ -912,7 +957,7 @@ impl PortageDependencyProvider {
     }
 
     /// Return the merged dependency requirements for a specific package version,
-    /// or `None` if the package/version is not registered.
+    /// or `None` if the package/version is not registered
     pub fn deps_for(
         &self,
         pkg: &PortagePackage,
@@ -927,7 +972,7 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Resolve a set of target packages using PubGrub.
+    /// Resolve a set of target packages using PubGrub
     ///
     /// Creates an `__internal__/root` node whose dependencies are the given
     /// `targets`, runs the solver, then strips all `__internal__/` bookkeeping
@@ -1030,7 +1075,7 @@ impl PortageDependencyProvider {
             .collect())
     }
 
-    /// The flags the caller ceded to the solver, with the values it chose.
+    /// The flags the caller ceded to the solver, with the values it chose
     ///
     /// Empty unless the caller emitted `SolverDecided` flags (Level-C). Lets the
     /// caller fold the chosen values back into its effective-USE display and
@@ -1062,7 +1107,7 @@ impl PortageDependencyProvider {
     }
 
     /// Returns true if the deps of `vd` transitively reach any installed CPN,
-    /// descending up to `depth` levels through `__internal__/*` virtual packages.
+    /// descending up to `depth` levels through `__internal__/*` virtual packages
     pub(crate) fn deps_reach_installed(&self, vd: &VersionData, depth: u8) -> bool {
         let Dependencies::Available(ref constraints) = vd.merged else {
             return false;
@@ -1088,7 +1133,7 @@ impl PortageDependencyProvider {
     /// Newest installed version reachable one level out of a single version's
     /// merged constraints: a direct dep is looked up in `self.installed`, a
     /// nested `Choice`/`SlotChoice` branch (e.g. a `:*` SlotChoice) is resolved
-    /// via [`Self::branch_best_installed`]. `None` when nothing is installed.
+    /// via [`Self::branch_best_installed`]. `None` when nothing is installed
     ///
     /// Only recurses into `Choice`/`SlotChoice` virtuals — real `||`/`:*`
     /// provider alternatives, which form an acyclic tree down to concrete
@@ -1121,9 +1166,11 @@ impl PortageDependencyProvider {
 
     /// The newest installed version reachable (one level) through a virtual
     /// `||`-Choice branch — the newest version of the branch's target
-    /// package present in `self.installed`, `None` if none is. Breaks ties
-    /// when every branch of a provider `||` group is installed: the branch
-    /// with the newer version wins (matching emerge's `dep_zapdeps`).
+    /// package present in `self.installed`, `None` if none is
+    ///
+    /// Breaks ties when every branch of a provider `||` group is
+    /// installed: the branch with the newer version wins (matching
+    /// emerge's `dep_zapdeps`).
     ///
     /// `depth` is the remaining recursion budget shared with
     /// [`Self::branch_installed_ver`]; the public entry point
@@ -1138,17 +1185,21 @@ impl PortageDependencyProvider {
     }
 
     /// Recursion budget for [`Self::branch_installed_ver`]/
-    /// [`Self::branch_best_installed`]. Real `||`/`:*` provider trees are a
-    /// handful of levels deep at most; this is generous headroom for that
-    /// while still bounding a pathological or unexpectedly cyclic shape.
+    /// [`Self::branch_best_installed`]
+    ///
+    /// Real `||`/`:*` provider trees are a handful of levels deep at most;
+    /// this is generous headroom for that while still bounding a
+    /// pathological or unexpectedly cyclic shape.
     const BRANCH_DEPTH_LIMIT: u8 = 16;
 
     /// For an all-branches-installed provider `||` Choice, return the
     /// candidate branch whose reachable installed version is newest —
     /// emerge's `dep_zapdeps` tie-break (e.g. `|| ( rust-bin:* rust:* )`
     /// with installed source rust-1.95.0 > rust-bin-1.93.1 keeps source
-    /// rust). Branches may be nested `:*` SlotChoice virtuals or direct
-    /// real packages.
+    /// rust)
+    ///
+    /// Branches may be nested `:*` SlotChoice virtuals or direct real
+    /// packages.
     ///
     /// Returns `None` when no candidate exposes an installed version, so
     /// the caller falls back to the default `max()` (= first-listed) pick.
@@ -1183,7 +1234,7 @@ impl PortageDependencyProvider {
 }
 
 /// Evaluate a single USE dep given the dep's effective state and the parent's
-/// flag state (for Conditional/Equal kinds).
+/// flag state (for Conditional/Equal kinds)
 ///
 /// Returns `Some(requires_enabled)` when the constraint fires and is violated,
 /// `None` when it is satisfied or the condition does not apply.

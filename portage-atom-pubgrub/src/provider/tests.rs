@@ -283,7 +283,7 @@ fn installed_favored_picks_installed_version() {
 // in-range versions than a root target must not get decided (and committed
 // to its installed version) before that root target's own dependency
 // bound is even examined.
-///
+//
 // `sys-libs/libacl` (2 versions, not a root target, installed at the older
 // one) is under-constrained by `leader` (a bare, unversioned dep) but
 // strictly constrained by `syncer`'s newest version (`>=libacl-2.0`).
@@ -2951,10 +2951,10 @@ fn cross_target_build_pulls_unsatisfied_bdepend_even_if_target_already_has_it() 
     );
 }
 
-///
+//
 // `virtual/libcrypt` completed while `sys-libs/libxcrypt` never got
 // `Emerging`, so pam's configure failed to find libcrypt in the *sysroot*.
-///
+//
 // Host often has `libxcrypt` (and even `virtual/libcrypt`) installed. Those
 // must satisfy BDEPEND on BROOT only — they must **not** suppress a Target
 // RDEPEND of the virtual. The provider must select Target `libxcrypt`,

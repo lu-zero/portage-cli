@@ -1,4 +1,4 @@
-//! Package identity types for the PubGrub solver.
+//! Package identity types for the PubGrub solver
 //!
 //! ## Solver-internal bookkeeping nodes
 //!
@@ -29,7 +29,7 @@ use portage_atom::interner::{DefaultInterner, Interned};
 // (native host tool + cross target runtime).
 pub use portage_solver::MergeRoot;
 
-/// A PubGrub-compatible package identifier.
+/// A PubGrub-compatible package identifier
 ///
 /// Real packages carry a CPN and optional slot.  Virtual variants
 /// (`Root`, `UseDecision`, `Choice`, `SlotChoice`) are solver-internal
@@ -41,42 +41,45 @@ pub use portage_solver::MergeRoot;
 /// See [PMS 8.3.3](https://projects.gentoo.org/pms/9/pms.html#slot_deps).
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum PortagePackage {
-    /// A real Gentoo package, identified by CPN + optional slot.
+    /// A real Gentoo package, identified by CPN + optional slot
     Real {
-        /// Category/package name.
+        /// Category/package name
         cpn: Cpn,
-        /// Bound slot, or `None` for a slot-agnostic node.
+        /// Bound slot, or `None` for a slot-agnostic node
         slot: Option<Interned<DefaultInterner>>,
-        /// Merge destination; defaults to [`MergeRoot::Target`].
+        /// Merge destination; defaults to [`MergeRoot::Target`]
         merge_root: MergeRoot,
     },
-    /// Synthetic root node for the solver.
+    /// Synthetic root node for the solver
     Root,
-    /// USE-flag decision node.  Version 1 = enabled, 0 = disabled.
+    /// USE-flag decision node.  Version 1 = enabled, 0 = disabled
     UseDecision {
-        /// Interned identifier of the decision node (`cpn` + flag).
+        /// Interned identifier of the decision node (`cpn` + flag)
         name: Interned<DefaultInterner>,
     },
-    /// OR-group choice node.  Each version is one alternative.
+    /// OR-group choice node.  Each version is one alternative
     Choice {
-        /// Unique id of the synthetic choice group (from a process-global
-        /// counter — never repeats, so it's never interned: unlike
-        /// `UseDecision`'s name, which recurs identically every USE-dep
-        /// co-solve fixpoint iteration for the same (cpn, flag), a `Choice`
-        /// id is minted once and never looked up again — interning it would
-        /// only leak process memory for zero reuse benefit.
+        /// Unique id of the synthetic choice group
+        ///
+        /// From a process-global counter — never repeats, so it's never
+        /// interned: unlike `UseDecision`'s name, which recurs identically
+        /// every USE-dep co-solve fixpoint iteration for the same (cpn,
+        /// flag), a `Choice` id is minted once and never looked up again —
+        /// interning it would only leak process memory for zero reuse
+        /// benefit.
         id: u64,
     },
-    /// Slot-choice node.  Each version selects one slot candidate.
+    /// Slot-choice node.  Each version selects one slot candidate
     SlotChoice {
-        /// Unique id of the synthetic slot-choice group. Same rationale as
-        /// [`Choice::id`](Self::Choice) for not interning it.
+        /// Unique id of the synthetic slot-choice group
+        ///
+        /// Same rationale as [`Choice::id`](Self::Choice) for not interning it.
         id: u64,
     },
 }
 
 impl PortagePackage {
-    /// Create a real package from a CPN and optional slot.
+    /// Create a real package from a CPN and optional slot
     pub fn new(cpn: Cpn, slot: Option<Interned<DefaultInterner>>) -> Self {
         Self::Real {
             cpn,
@@ -85,12 +88,12 @@ impl PortagePackage {
         }
     }
 
-    /// Create an unslotted real package at `merge_root`.
+    /// Create an unslotted real package at `merge_root`
     pub fn unslotted(cpn: Cpn) -> Self {
         Self::unslotted_at(cpn, MergeRoot::Target)
     }
 
-    /// Create an unslotted real package at `merge_root`.
+    /// Create an unslotted real package at `merge_root`
     pub fn unslotted_at(cpn: Cpn, merge_root: MergeRoot) -> Self {
         Self::Real {
             cpn,
@@ -99,12 +102,12 @@ impl PortagePackage {
         }
     }
 
-    /// Create a slotted real package at the target root.
+    /// Create a slotted real package at the target root
     pub fn slotted(cpn: Cpn, slot: Interned<DefaultInterner>) -> Self {
         Self::slotted_at(cpn, slot, MergeRoot::Target)
     }
 
-    /// Create a slotted real package at `merge_root`.
+    /// Create a slotted real package at `merge_root`
     pub fn slotted_at(cpn: Cpn, slot: Interned<DefaultInterner>, merge_root: MergeRoot) -> Self {
         Self::Real {
             cpn,
@@ -113,7 +116,7 @@ impl PortagePackage {
         }
     }
 
-    /// Returns the merge root for real packages (target when virtual).
+    /// Returns the merge root for real packages (target when virtual)
     pub fn merge_root(&self) -> MergeRoot {
         match self {
             Self::Real { merge_root, .. } => *merge_root,
@@ -121,7 +124,7 @@ impl PortagePackage {
         }
     }
 
-    /// Clone a real package at another merge root; virtual nodes are unchanged.
+    /// Clone a real package at another merge root; virtual nodes are unchanged
     pub fn at_merge_root(&self, merge_root: MergeRoot) -> Self {
         match self {
             Self::Real { cpn, slot, .. } => Self::Real {
@@ -133,29 +136,29 @@ impl PortagePackage {
         }
     }
 
-    /// Create the solver-internal root node.
+    /// Create the solver-internal root node
     pub(crate) fn synthetic_root() -> Self {
         Self::Root
     }
 
-    /// Create a USE-flag decision node.
+    /// Create a USE-flag decision node
     pub(crate) fn use_decision(name: Interned<DefaultInterner>) -> Self {
         Self::UseDecision { name }
     }
 
-    /// Create an OR-group choice node.
+    /// Create an OR-group choice node
     pub(crate) fn choice(id: u64) -> Self {
         Self::Choice { id }
     }
 
-    /// Create a slot-choice node.
+    /// Create a slot-choice node
     pub(crate) fn slot_choice(id: u64) -> Self {
         Self::SlotChoice { id }
     }
 
     /// `true` for **solver-internal** bookkeeping nodes only
     /// ([`Root`](Self::Root), [`UseDecision`](Self::UseDecision),
-    /// [`Choice`](Self::Choice), [`SlotChoice`](Self::SlotChoice)).
+    /// [`Choice`](Self::Choice), [`SlotChoice`](Self::SlotChoice))
     ///
     /// **Not** Gentoo category `virtual/*` packages (`virtual/libcrypt`, …):
     /// those are ordinary [`Real`](Self::Real) nodes and return `false`.
@@ -165,7 +168,7 @@ impl PortagePackage {
         !matches!(self, Self::Real { .. })
     }
 
-    /// Returns the CPN for real packages.
+    /// Returns the CPN for real packages
     ///
     /// # Panics
     /// Panics if called on a virtual variant. Use [`Self::is_virtual`] to check first,
@@ -180,7 +183,7 @@ impl PortagePackage {
         }
     }
 
-    /// Returns the CPN for real packages, or None for virtual packages.
+    /// Returns the CPN for real packages, or None for virtual packages
     ///
     /// This is the non-panicking version of [`Self::cpn`].
     pub fn cpn_opt(&self) -> Option<&Cpn> {
@@ -190,7 +193,7 @@ impl PortagePackage {
         }
     }
 
-    /// Returns the slot for real packages.
+    /// Returns the slot for real packages
     pub fn slot(&self) -> Option<Interned<DefaultInterner>> {
         match self {
             Self::Real { slot, .. } => *slot,
@@ -198,7 +201,7 @@ impl PortagePackage {
         }
     }
 
-    /// Returns the CPN as a string for real packages.
+    /// Returns the CPN as a string for real packages
     ///
     /// # Panics
     /// Panics if called on a virtual variant. Use [`Self::is_virtual`] to check first.
@@ -206,7 +209,7 @@ impl PortagePackage {
         self.cpn().to_string()
     }
 
-    /// Returns the CPN as a string for real packages, or None for virtual packages.
+    /// Returns the CPN as a string for real packages, or None for virtual packages
     pub fn cpn_str_opt(&self) -> Option<String> {
         self.cpn_opt().map(|c| c.to_string())
     }

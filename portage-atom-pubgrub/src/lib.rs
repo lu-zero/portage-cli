@@ -1,5 +1,5 @@
 //! Bridge between [portage-atom](https://crates.io/crates/portage-atom) and the
-//! [PubGrub](https://crates.io/crates/pubgrub) dependency solver.
+//! [PubGrub](https://crates.io/crates/pubgrub) dependency solver
 //!
 //! Maps PMS package atoms to PubGrub's `Package`, `Version`, and `VersionSet`
 //! traits, and provides a `DependencyProvider` implementation backed by a
@@ -72,7 +72,7 @@ pub use validate::{BlockerHit, BlockerVictim, HeldBackTarget, SlotOperatorBindin
 pub use version_set::PortageVersionSet;
 
 /// Render a pubgrub `NoSolution` derivation tree into a human-readable
-/// explanation.
+/// explanation
 ///
 /// The raw [`pubgrub::DerivationTree`] `Debug` output prints package names
 /// as their internal interned string keys, which is unreadable. This routes
@@ -93,8 +93,10 @@ pub fn format_no_solution(
 }
 
 /// Replace the synthetic root package's identity in a rendered derivation tree
-/// with what it stands for. `PortagePackage::Root`'s own `Display` is left
-/// alone — debug and tracing output name it by its real identity on purpose.
+/// with what it stands for
+///
+/// `PortagePackage::Root`'s own `Display` is left alone — debug and tracing
+/// output name it by its real identity on purpose.
 fn humanize_root(report: String) -> String {
     // The root is a single synthetic version, so the reporter always prints it
     // with the version suffix; strip that too rather than leaving a stray `0`.
@@ -104,9 +106,11 @@ fn humanize_root(report: String) -> String {
 }
 
 /// Render any [`pubgrub::PubGrubError`] from a resolve into a human-readable
-/// string. `NoSolution` is explained via [`format_no_solution`]; other variants
-/// fall back to `Debug`. Lets callers report resolver failures without pulling
-/// in pubgrub types themselves.
+/// string
+///
+/// `NoSolution` is explained via [`format_no_solution`]; other variants fall
+/// back to `Debug`. Lets callers report resolver failures without pulling in
+/// pubgrub types themselves.
 pub fn format_solve_error(err: pubgrub::PubGrubError<PortageDependencyProvider>) -> String {
     match err {
         pubgrub::PubGrubError::NoSolution(tree) => format_no_solution(tree),

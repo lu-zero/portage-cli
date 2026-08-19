@@ -1,4 +1,4 @@
-//! USE-flag evaluation vocabulary, shared from `portage-solver`.
+//! USE-flag evaluation vocabulary, shared from `portage-solver`
 //!
 //! `UseConfig`/`UseFlagState`/`UseOverride` and the caller-side
 //! `resolve_effective_use` resolver are the single source of truth in

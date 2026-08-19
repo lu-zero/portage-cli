@@ -10,7 +10,7 @@ use crate::use_config::{UseConfig, UseFlagState};
 use crate::version_set::PortageVersionSet;
 
 /// One dependency requirement: target package, version range, and the
-/// outermost eagerly-evaluated USE flag gating it (if any).
+/// outermost eagerly-evaluated USE flag gating it (if any)
 pub(crate) type Req = (
     PortagePackage,
     PortageVersionSet,
@@ -23,22 +23,22 @@ fn next_choice_id() -> u64 {
     CHOICE_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A virtual choice package encoding an OR group (`||`, `^^`, `??`).
+/// A virtual choice package encoding an OR group (`||`, `^^`, `??`)
 ///
 /// The solver picks exactly one version of this package, and each version's
 /// dependencies are one alternative from the group.
 #[derive(Clone)]
 pub(crate) struct VirtualChoice {
-    /// The virtual package to register in the provider.
+    /// The virtual package to register in the provider
     pub package: PortagePackage,
-    /// (version, dependencies for that version with optional gating flag).
+    /// (version, dependencies for that version with optional gating flag)
     pub versions: Vec<(Version, Vec<Req>)>,
-    /// Per-branch USE dep constraints, indexed parallel to `versions`.
+    /// Per-branch USE dep constraints, indexed parallel to `versions`
     ///
     /// Stored separately so `choose_version` can check USE dep satisfiability
     /// per branch without those constraints leaking into the parent's dep list.
     pub branch_use_deps: Vec<(Version, Vec<UseDepConstraint>)>,
-    /// Per-branch blockers, parallel to `versions`.
+    /// Per-branch blockers, parallel to `versions`
     ///
     /// Attached to the virtual package's chosen version so post-solve
     /// `check_blockers` only fires blockers from the selected OR/`UseDecision`
@@ -46,24 +46,24 @@ pub(crate) struct VirtualChoice {
     pub branch_blockers: Vec<(Version, Vec<Dep>)>,
 }
 
-/// Result of converting a dependency tree.
+/// Result of converting a dependency tree
 #[derive(Clone)]
 pub(crate) struct ConversionResult {
-    /// Direct dependency constraints with the outermost gating USE flag, if any.
+    /// Direct dependency constraints with the outermost gating USE flag, if any
     pub requirements: Vec<Req>,
-    /// Blocker atoms for post-solve validation.
+    /// Blocker atoms for post-solve validation
     pub blockers: Vec<Dep>,
-    /// Virtual choice packages to register in the provider.
+    /// Virtual choice packages to register in the provider
     pub virtual_choices: Vec<VirtualChoice>,
-    /// USE-dep constraints for post-solve validation.
+    /// USE-dep constraints for post-solve validation
     pub use_deps: Vec<UseDepConstraint>,
-    /// Repo-constrained deps for post-solve validation.
+    /// Repo-constrained deps for post-solve validation
     pub repo_constraints: Vec<RepoConstraint>,
-    /// Slot-operator deps (`:=` / `:0=`) for post-solve slot binding.
+    /// Slot-operator deps (`:=` / `:0=`) for post-solve slot binding
     pub slot_operator_deps: Vec<SlotOperatorDep>,
 }
 
-/// A slot-operator dependency extracted during conversion.
+/// A slot-operator dependency extracted during conversion
 ///
 /// Records `:=` and `:slot=` dependencies so that, after resolution,
 /// the solver's slot assignment can be bound for rebuild tracking.
@@ -74,47 +74,48 @@ pub(crate) struct ConversionResult {
 /// See [PMS 8.3.3](https://projects.gentoo.org/pms/9/pms.html#slot_deps).
 #[derive(Debug, Clone)]
 pub(crate) struct SlotOperatorDep {
-    /// The target package and version range.
+    /// The target package and version range
     pub target: (PortagePackage, PortageVersionSet),
-    /// The slot operator (`Equal` for `:=` / `:0=`).
+    /// The slot operator (`Equal` for `:=` / `:0=`)
     pub operator: SlotOperator,
     /// The declared slot name, if the atom specified one (`:0=` → `Some("0")`,
-    /// `:=` → `None`).
+    /// `:=` → `None`)
     pub slot: Option<Interned<DefaultInterner>>,
 }
 
-/// A repository constraint extracted from a dependency atom.
+/// A repository constraint extracted from a dependency atom
 ///
 /// See [PMS 8.3.5](https://projects.gentoo.org/pms/9/pms.html#repository).
 #[derive(Debug, Clone)]
 pub(crate) struct RepoConstraint {
-    /// The target package that must come from a specific repo.
+    /// The target package that must come from a specific repo
     pub target: (PortagePackage, PortageVersionSet),
-    /// The required repository name.
+    /// The required repository name
     pub repo: Interned<DefaultInterner>,
 }
 
-/// A USE-dep constraint extracted from a dependency atom.
+/// A USE-dep constraint extracted from a dependency atom
 ///
 /// See [PMS 8.3.4](https://projects.gentoo.org/pms/9/pms.html#style-and-style-use-dependencies).
 #[derive(Debug, Clone)]
 pub(crate) struct UseDepConstraint {
-    /// The package that must satisfy the USE constraints.
+    /// The package that must satisfy the USE constraints
     pub target: (PortagePackage, PortageVersionSet),
-    /// The USE flag constraints on that package.
+    /// The USE flag constraints on that package
     pub use_deps: Vec<UseDep>,
     /// The parent package's CPN string (e.g. "dev-libs/openssl"),
-    /// used to look up solver-decided USE virtuals for `[flag?]`/`[flag=]`.
+    /// used to look up solver-decided USE virtuals for `[flag?]`/`[flag=]`
+    ///
     /// Interned: this is allocated once per USE-dep atom per provider
     /// rebuild (up to ~8x per invocation during the USE-dep co-solve
     /// fixpoint), then carried through a `BTreeSet` in `post_solve.rs`.
     pub parent_cpn_str: Interned<DefaultInterner>,
 }
 
-/// Slot info for a CPN: pre-computed `(slot_interned, slotted_package)` pairs.
+/// Slot info for a CPN: pre-computed `(slot_interned, slotted_package)` pairs
 pub type SlotMap = HashMap<Cpn, Vec<(Interned<DefaultInterner>, PortagePackage)>>;
 
-/// The `UseDecision` virtual package for a given package's USE flag.
+/// The `UseDecision` virtual package for a given package's USE flag
 ///
 /// USE flags are package-scoped, so the node name embeds the CPN: the *same*
 /// node is shared by the conditional-dep encoding and the `REQUIRED_USE`
@@ -130,7 +131,7 @@ pub(crate) fn use_decision_package(
     )))
 }
 
-/// Convert a `DepEntry` tree into PubGrub dependency constraints.
+/// Convert a `DepEntry` tree into PubGrub dependency constraints
 ///
 /// USE conditionals are handled according to the `UseConfig`:
 /// - `Enabled`/`Disabled` flags are eagerly evaluated
@@ -183,7 +184,7 @@ struct ConvertCtx<'a> {
     use_deps: Vec<UseDepConstraint>,
     repo_constraints: Vec<RepoConstraint>,
     slot_operator_deps: Vec<SlotOperatorDep>,
-    /// The outermost eagerly-evaluated USE flag currently gating deps, if any.
+    /// The outermost eagerly-evaluated USE flag currently gating deps, if any
     gating_flag: Option<Interned<DefaultInterner>>,
 }
 
@@ -517,29 +518,32 @@ impl ConvertCtx<'_> {
 // Level-C REQUIRED_USE encoding  (docs/required-use-level-c.md)
 // ===========================================================================
 
-/// Result of encoding a package's `REQUIRED_USE` into solver constraints.
+/// Result of encoding a package's `REQUIRED_USE` into solver constraints
 pub(crate) struct RequiredUseEncoding {
     /// Requirements to add to the package version: pulls/forces the relevant
-    /// `UseDecision` nodes and references the at-least-one `Choice` nodes.
+    /// `UseDecision` nodes and references the at-least-one `Choice` nodes
     pub requirements: Vec<Req>,
     /// `UseDecision` nodes (with implication / pairwise-exclusion deps) and
-    /// `Choice` nodes (at-least-one).  Merged with the conditional-dep nodes by
-    /// `register_virtual_choices`.
+    /// `Choice` nodes (at-least-one)
+    ///
+    /// Merged with the conditional-dep nodes by `register_virtual_choices`.
     pub virtual_choices: Vec<VirtualChoice>,
 }
 
 /// One operand of a `REQUIRED_USE` group/clause, after classifying its flag
-/// against the desired config. Doubles as a clause *literal* for the guarded
-/// (nested) encoding (`emit_guarded`).
+/// against the desired config
+///
+/// Doubles as a clause *literal* for the guarded (nested) encoding
+/// (`emit_guarded`).
 #[derive(Clone)]
 enum Operand {
     /// A flag whose value is fixed by policy; `satisfied` is whether the operand
-    /// (respecting its `!`) already holds.
+    /// (respecting its `!`) already holds
     Fixed { satisfied: bool },
     /// A ceded flag: `node` is its `UseDecision`, `sat_ver` the version (`0`/`1`)
     /// at which the operand (respecting its `!`) is satisfied, and `prefer_ver`
     /// the version the keep-config preference would pick (used to order choice
-    /// branches toward a no-flip solution).
+    /// branches toward a no-flip solution)
     Free {
         node: PortagePackage,
         sat_ver: u64,
@@ -547,11 +551,11 @@ enum Operand {
     },
 }
 
-/// A ceded clause literal: `(node, required_ver, prefer_ver)`.
+/// A ceded clause literal: `(node, required_ver, prefer_ver)`
 type FreeLit = (PortagePackage, u64, u64);
 
 /// The ceded literals among a list of classified operands; `Fixed` operands
-/// have no node and are dropped.
+/// have no node and are dropped
 fn free_operands(ops: &[Operand]) -> Vec<FreeLit> {
     ops.iter()
         .filter_map(|o| match o {
@@ -565,7 +569,7 @@ fn free_operands(ops: &[Operand]) -> Vec<FreeLit> {
         .collect()
 }
 
-/// Encode a package's `REQUIRED_USE` into `UseDecision`/`Choice` constraints.
+/// Encode a package's `REQUIRED_USE` into `UseDecision`/`Choice` constraints
 ///
 /// Fixed flags are partially evaluated; ceded (`SolverDecided`) flags are
 /// constrained. The one construct the encoder does not handle (group operands
@@ -592,11 +596,11 @@ pub(crate) fn encode_required_use(
 struct RuBuilder<'a> {
     cpn_str: &'a str,
     desired: &'a UseConfig,
-    /// Extra deps for each node's version-1 (flag ON).
+    /// Extra deps for each node's version-1 (flag ON)
     node_on: HashMap<PortagePackage, Vec<Req>>,
-    /// Extra deps for each node's version-0 (flag OFF).
+    /// Extra deps for each node's version-0 (flag OFF)
     node_off: HashMap<PortagePackage, Vec<Req>>,
-    /// Nodes that must exist (both versions registered) and be pulled in.
+    /// Nodes that must exist (both versions registered) and be pulled in
     touched: std::collections::BTreeSet<PortagePackage>,
     requirements: Vec<Req>,
     virtual_choices: Vec<VirtualChoice>,
@@ -618,7 +622,7 @@ impl RuBuilder<'_> {
         )
     }
 
-    /// Classify a `Flag { name, negated }` operand against the desired config.
+    /// Classify a `Flag { name, negated }` operand against the desired config
     fn operand(&self, name: &Interned<DefaultInterner>, negated: bool) -> Operand {
         match self.desired.get(*name) {
             UseFlagState::SolverDecided { prefer } => Operand::Free {
@@ -637,7 +641,9 @@ impl RuBuilder<'_> {
 
     /// Order ceded literals so those the keep-config preference already satisfies
     /// come first (highest choice versions), so the solver can satisfy a clause
-    /// without flipping a flag when it already can. Returns `(node, required_ver)`.
+    /// without flipping a flag when it already can
+    ///
+    /// Returns `(node, required_ver)`.
     fn order_by_preference(lits: &[FreeLit]) -> Vec<(PortagePackage, u64)> {
         let mut v: Vec<&FreeLit> = lits.iter().collect();
         // `false` (preference already satisfies the literal) sorts before `true`;
@@ -646,13 +652,13 @@ impl RuBuilder<'_> {
         v.into_iter().map(|(n, req, _)| (n.clone(), *req)).collect()
     }
 
-    /// Force a ceded node to a specific version on the package itself.
+    /// Force a ceded node to a specific version on the package itself
     fn force(&mut self, node: &PortagePackage, v: u64) {
         self.touched.insert(node.clone());
         self.requirements.push(Self::singleton(node, v));
     }
 
-    /// When `src` is at `src_ver`, require `dst` at `dst_ver`.
+    /// When `src` is at `src_ver`, require `dst` at `dst_ver`
     fn imply(&mut self, src: &PortagePackage, src_ver: u64, dst: &PortagePackage, dst_ver: u64) {
         self.touched.insert(src.clone());
         self.touched.insert(dst.clone());
@@ -664,7 +670,8 @@ impl RuBuilder<'_> {
         bucket.push(Self::singleton(dst, dst_ver));
     }
 
-    /// At least one of the ceded operands must be satisfied (a `Choice` node).
+    /// At least one of the ceded operands must be satisfied (a `Choice` node)
+    ///
     /// Branches are ordered preference-satisfied-first so the solver picks an
     /// already-met operand (no flip) when one exists.
     fn at_least_one(&mut self, free: &[FreeLit]) {
@@ -691,7 +698,7 @@ impl RuBuilder<'_> {
             .push((pkg, PortageVersionSet::any(), None));
     }
 
-    /// At most one of the ceded operands may be satisfied (pairwise exclusion).
+    /// At most one of the ceded operands may be satisfied (pairwise exclusion)
     fn at_most_one(&mut self, free: &[FreeLit]) {
         for (i, (ni, svi, _)) in free.iter().enumerate() {
             for (j, (nj, svj, _)) in free.iter().enumerate() {
@@ -703,7 +710,7 @@ impl RuBuilder<'_> {
         }
     }
 
-    /// Encode one clause (recursing through top-level `All`).
+    /// Encode one clause (recursing through top-level `All`)
     fn clause(&mut self, c: &RequiredUse) {
         match c {
             RequiredUse::All(children) => {
@@ -817,7 +824,7 @@ impl RuBuilder<'_> {
     }
 
     /// Classify a list of children as bare-flag operands, or `None` if any child
-    /// is not a bare `Flag` (a deeper nested group — still deferred).
+    /// is not a bare `Flag` (a deeper nested group — still deferred)
     fn flag_operands(&self, children: &[RequiredUse]) -> Option<Vec<Operand>> {
         children
             .iter()
@@ -828,17 +835,18 @@ impl RuBuilder<'_> {
             .collect()
     }
 
-    /// Negate a ceded literal (the preference stays the flag's own).
+    /// Negate a ceded literal (the preference stays the flag's own)
     fn negate(l: &FreeLit) -> FreeLit {
         (l.0.clone(), Self::ON + Self::OFF - l.1, l.2)
     }
 
     /// Emit `(⋁ ctx) ∨ (⋁ body)` — the clause form of "all guards active ⇒
     /// body", where each `ctx` literal is a guard's *inactive* value (its
-    /// escape). A single guard keeps the cheaper directional bucket form.
+    /// escape)
     ///
-    /// Two or more guards — a Horn-style dependency edge can't express this
-    /// — become a preference-ordered `Choice` over body-then-guard literals,
+    /// A single guard keeps the cheaper directional bucket form. Two or
+    /// more guards — a Horn-style dependency edge can't express this —
+    /// become a preference-ordered `Choice` over body-then-guard literals,
     /// so the solver tries satisfying the consequent before flipping a guard.
     fn emit_clause(&mut self, ctx: &[FreeLit], body: &[FreeLit]) {
         match (ctx, body) {
@@ -860,10 +868,12 @@ impl RuBuilder<'_> {
     }
 
     /// Gate `expr`'s constraints behind the guard context `ctx` (one negated
-    /// literal per enclosing ceded conditional). Constraints bind only when
-    /// every guard takes its active value, so an inactive guard leaves the
-    /// body's flags free — no gratuitous flips. Nested ceded guards push their
-    /// own literal, turning `a? ( b? ( c ) )` into the clause `¬a ∨ ¬b ∨ c`.
+    /// literal per enclosing ceded conditional)
+    ///
+    /// Constraints bind only when every guard takes its active value, so an
+    /// inactive guard leaves the body's flags free — no gratuitous flips.
+    /// Nested ceded guards push their own literal, turning `a? ( b? ( c )
+    /// )` into the clause `¬a ∨ ¬b ∨ c`.
     fn guarded(&mut self, expr: &RequiredUse, ctx: &mut Vec<FreeLit>) {
         match expr {
             RequiredUse::All(children) => {
@@ -914,7 +924,7 @@ impl RuBuilder<'_> {
         }
     }
 
-    /// `all guards active ⇒ at least one of the bare-flag operands satisfied`.
+    /// `all guards active ⇒ at least one of the bare-flag operands satisfied`
     fn guarded_any(&mut self, children: &[RequiredUse], ctx: &[FreeLit]) {
         let Some(ops) = self.flag_operands(children) else {
             return; // non-flag operands deferred
@@ -929,7 +939,7 @@ impl RuBuilder<'_> {
         self.emit_clause(ctx, &free);
     }
 
-    /// `all guards active ⇒ at most one of the bare-flag operands satisfied`.
+    /// `all guards active ⇒ at most one of the bare-flag operands satisfied`
     fn guarded_at_most(&mut self, children: &[RequiredUse], ctx: &[FreeLit]) {
         let Some(ops) = self.flag_operands(children) else {
             return;
@@ -963,8 +973,9 @@ impl RuBuilder<'_> {
 
     /// Register a `Choice` node (one branch per operand) that is pulled into the
     /// solve *only* when `guard@gv` is selected, by attaching it to the guard's
-    /// version bucket rather than the package's always-on requirements. Branches
-    /// are ordered preference-satisfied-first (as in `at_least_one`).
+    /// version bucket rather than the package's always-on requirements
+    ///
+    /// Branches are ordered preference-satisfied-first (as in `at_least_one`).
     fn imply_choice(&mut self, guard: &PortagePackage, gv: u64, ops: &[FreeLit]) {
         let ordered = Self::order_by_preference(ops);
         let id = next_choice_id();

@@ -10,32 +10,32 @@ use crate::use_config::UseConfig;
 // once in `portage-solver`.
 pub use portage_solver::IUseDefault;
 
-/// Metadata for a single ebuild version, including its dependency trees.
+/// Metadata for a single ebuild version, including its dependency trees
 #[derive(Clone)]
 pub struct PackageVersions {
-    /// Slot name for this version.
+    /// Slot name for this version
     pub slot: Option<Interned<DefaultInterner>>,
-    /// Subslot name for this version.
+    /// Subslot name for this version
     pub subslot: Option<Interned<DefaultInterner>>,
-    /// Repository this version comes from.
+    /// Repository this version comes from
     pub repo: Option<Interned<DefaultInterner>>,
-    /// IUSE flags for this version (USE flags the package defines).
+    /// IUSE flags for this version (USE flags the package defines)
     pub iuse: Vec<Interned<DefaultInterner>>,
-    /// IUSE default states — flags prefixed with `+` in IUSE default to enabled.
+    /// IUSE default states — flags prefixed with `+` in IUSE default to enabled
     pub iuse_defaults: HashMap<Interned<DefaultInterner>, IUseDefault>,
-    /// Dependency trees by class.
+    /// Dependency trees by class
     pub deps: PackageDeps,
     /// `REQUIRED_USE` constraint, translated by the caller into the solver's
-    /// interned-flag vocabulary ([`RequiredUse`]).  `None` when the ebuild
-    /// declares no `REQUIRED_USE`.
+    /// interned-flag vocabulary ([`RequiredUse`])
     ///
-    /// This is an intrinsic ebuild **fact**, not policy.  As of Phase 0 it is
-    /// stored but not yet consumed by the solver (Level-C auto-satisfaction is
-    /// the future consumer — see `docs/required-use-level-c.md`).
+    /// `None` when the ebuild declares no `REQUIRED_USE`. This is an
+    /// intrinsic ebuild **fact**, not policy — as of Phase 0 it is stored
+    /// but not yet consumed by the solver (Level-C auto-satisfaction is the
+    /// future consumer — see `docs/required-use-level-c.md`).
     pub required_use: Option<RequiredUse>,
 }
 
-/// Structured dependency trees separated by PMS class.
+/// Structured dependency trees separated by PMS class
 ///
 /// Each class is a [`DepList`] (`Arc`-wrapped): a caller whose own
 /// dependency-tree source is already a `DepList` can hand these off as a
@@ -45,23 +45,25 @@ pub struct PackageVersions {
 /// so hundreds of parsed atoms were being deep-cloned needlessly each time.
 #[derive(Clone, Default)]
 pub struct PackageDeps {
-    /// DEPEND — build-time dependencies.
+    /// DEPEND — build-time dependencies
     pub depend: DepList,
-    /// RDEPEND — runtime dependencies.
+    /// RDEPEND — runtime dependencies
     pub rdepend: DepList,
-    /// BDEPEND — build-host dependencies (EAPI 7+).
+    /// BDEPEND — build-host dependencies (EAPI 7+)
     pub bdepend: DepList,
-    /// PDEPEND — post-merge dependencies.
+    /// PDEPEND — post-merge dependencies
     pub pdepend: DepList,
-    /// IDEPEND — install-time dependencies (EAPI 8+).
+    /// IDEPEND — install-time dependencies (EAPI 8+)
     pub idepend: DepList,
 }
 
 impl PackageDeps {
     /// Build from five dependency lists, converting each into a [`DepList`]
     /// (accepts a plain `Vec<DepEntry>`, an existing `DepList`, or anything
-    /// else `Into<DepList>`) — the ergonomic equivalent of the struct
-    /// literal without repeating `.into()` on every field.
+    /// else `Into<DepList>`)
+    ///
+    /// The ergonomic equivalent of the struct literal without repeating
+    /// `.into()` on every field.
     pub fn new(
         depend: impl Into<DepList>,
         rdepend: impl Into<DepList>,
@@ -79,21 +81,22 @@ impl PackageDeps {
     }
 }
 
-/// Trait for a package repository that the solver can query.
+/// Trait for a package repository that the solver can query
 ///
 /// Implementations provide package metadata sourced from ebuild caches,
 /// as described in [PMS 7](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
 pub trait PackageRepository {
-    /// Return all packages in the repository.
+    /// Return all packages in the repository
     fn all_packages(&self) -> Vec<Cpn>;
 
-    /// Return all versions for a given CPN, with their metadata.
+    /// Return all versions for a given CPN, with their metadata
     fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, PackageVersions)>;
 
     /// The slots of `cpn`'s (filtered) versions, **ordered by each slot's
     /// best (newest) available version, ascending** — so the slot with the
     /// newest version sorts last, and `SlotChoice` numbering gives it the
-    /// highest synthetic version so the solver's `max()` lands there.
+    /// highest synthetic version so the solver's `max()` lands there
+    ///
     /// Ordering by slot *name* instead would pick an older compat slot
     /// (mirrors portage's version-descending `:*` selection).
     ///
@@ -115,7 +118,7 @@ pub trait PackageRepository {
         rank_slots_by_version(best)
     }
 
-    /// The resolved **desired** USE state for a specific version.
+    /// The resolved **desired** USE state for a specific version
     ///
     /// This is the caller's policy fully resolved — global USE (profile +
     /// `make.conf`), `package.use` overrides, and the ebuild's IUSE defaults all
@@ -124,11 +127,13 @@ pub trait PackageRepository {
     fn desired_use(&self, cpv: &Cpv) -> UseConfig;
 }
 
-/// Order slots by their best version (ascending; the newest-version slot sorts
-/// last). Shared by `slots_for` impls so the `SlotChoice` numbering ranks slots
-/// by version rather than slot name. The comparison is total without a
-/// tie-break: each cpv is unique and lives in exactly one slot, so two distinct
-/// slots can never share a best `Version`.
+/// Order slots by their best version (ascending; the newest-version slot
+/// sorts last)
+///
+/// Shared by `slots_for` impls so the `SlotChoice` numbering ranks slots by
+/// version rather than slot name. The comparison is total without a
+/// tie-break: each cpv is unique and lives in exactly one slot, so two
+/// distinct slots can never share a best `Version`.
 pub fn rank_slots_by_version(
     best: HashMap<Interned<DefaultInterner>, Version>,
 ) -> Vec<Interned<DefaultInterner>> {
@@ -137,13 +142,15 @@ pub fn rank_slots_by_version(
     slots.into_iter().map(|(s, _)| s).collect()
 }
 
-/// A simple in-memory repository for testing.
+/// A simple in-memory repository for testing
 #[derive(Clone)]
 pub struct InMemoryRepository {
     packages: HashMap<Cpn, Vec<(Cpv, PackageVersions)>>,
     /// Global desired USE, used by `desired_use` (folded with each version's
-    /// IUSE defaults).  Tests set this instead of passing a config to the
-    /// provider's constructor.
+    /// IUSE defaults)
+    ///
+    /// Tests set this instead of passing a config to the provider's
+    /// constructor.
     use_config: UseConfig,
 }
 
@@ -154,7 +161,7 @@ impl Default for InMemoryRepository {
 }
 
 impl InMemoryRepository {
-    /// Create an empty repository with a default (empty) USE configuration.
+    /// Create an empty repository with a default (empty) USE configuration
     pub fn new() -> Self {
         Self {
             packages: HashMap::new(),
@@ -168,7 +175,7 @@ impl InMemoryRepository {
         self.use_config = config;
     }
 
-    /// Add a package version with the given slot/subslot and dependencies.
+    /// Add a package version with the given slot/subslot and dependencies
     ///
     /// Convenience wrapper over [`Self::add_version_full`] with no IUSE and no
     /// `REQUIRED_USE`.
@@ -182,7 +189,7 @@ impl InMemoryRepository {
         self.add_version_full(cpv, slot, subslot, None, vec![], deps);
     }
 
-    /// Add a package version that also declares an IUSE set.
+    /// Add a package version that also declares an IUSE set
     ///
     /// Like [`Self::add_version`] but records the version's `IUSE` flags.
     pub fn add_version_with_iuse(
@@ -196,7 +203,7 @@ impl InMemoryRepository {
         self.add_version_full(cpv, slot, subslot, None, iuse, deps);
     }
 
-    /// Insert a fully-constructed [`PackageVersions`] for the given CPV.
+    /// Insert a fully-constructed [`PackageVersions`] for the given CPV
     ///
     /// Use this when you already have slot, subslot, repo, iuse, iuse_defaults,
     /// and deps assembled — e.g. when bridging from an external metadata cache.
@@ -205,7 +212,7 @@ impl InMemoryRepository {
         self.packages.entry(cpn).or_default().push((cpv, versions));
     }
 
-    /// Insert a version using the full set of fields (slot/subslot/repo/iuse/deps).
+    /// Insert a version using the full set of fields (slot/subslot/repo/iuse/deps)
     ///
     /// Internal helper used by `add_version*` shims and by `InMemoryRepository`
     /// test fixtures. Callers that already have a `PackageVersions` should use
@@ -234,7 +241,7 @@ impl InMemoryRepository {
         ));
     }
 
-    /// Insert a version carrying a `REQUIRED_USE` fact (for Level-C tests).
+    /// Insert a version carrying a `REQUIRED_USE` fact (for Level-C tests)
     pub fn add_version_with_required_use(
         &mut self,
         cpv: Cpv,

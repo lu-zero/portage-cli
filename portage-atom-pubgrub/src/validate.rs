@@ -7,7 +7,7 @@ use crate::provider::PortageDependencyProvider;
 use crate::use_config::{UseConfig, UseFlagState};
 use crate::version_set::PortageVersionSet;
 
-/// A resolved slot-operator binding.
+/// A resolved slot-operator binding
 ///
 /// After resolution, maps each `:=` / `:0=` dependency to the actual slot
 /// chosen by the solver, for rebuild tracking.
@@ -16,72 +16,74 @@ use crate::version_set::PortageVersionSet;
 #[derive(Debug, Clone)]
 pub struct SlotOperatorBinding {
     /// The package that declared the slot-operator dependency
-    /// (e.g. `"app-misc/app-1.0"`).
+    /// (e.g. `"app-misc/app-1.0"`)
     pub parent: String,
-    /// The CPN of the target dependency (e.g. `"dev-libs/lib"`).
+    /// The CPN of the target dependency (e.g. `"dev-libs/lib"`)
     pub target_cpn: String,
-    /// The slot the solver assigned to the target (e.g. `Some("0")`).
+    /// The slot the solver assigned to the target (e.g. `Some("0")`)
     pub slot: Option<Interned<DefaultInterner>>,
     /// The slot name declared in the atom, if any (`:0=` → `Some("0")`,
-    /// `:=` → `None`).
+    /// `:=` → `None`)
     pub declared_slot: Option<Interned<DefaultInterner>>,
-    /// The operator string (`"="` for `:=` / `:0=`).
+    /// The operator string (`"="` for `:=` / `:0=`)
     pub operator: &'static str,
 }
 
-/// One package satisfied by a blocker's atom after the plan.
+/// One package satisfied by a blocker's atom after the plan
 #[derive(Debug, Clone)]
 pub struct BlockerVictim {
-    /// The package satisfying the blocker atom.
+    /// The package satisfying the blocker atom
     pub package: PortagePackage,
-    /// Its version.
+    /// Its version
     pub version: Version,
-    /// `true`: an installed package the plan retains (a removal candidate).
+    /// `true`: an installed package the plan retains (a removal candidate)
     /// `false`: a solution member (the plan installs/keeps it — this
     /// package's own end-state coexists with the blocker, a hard conflict
-    /// regardless of blocker strength).
+    /// regardless of blocker strength)
     pub retained_installed: bool,
 }
 
 /// One blocker atom satisfied by at least one package present after the
-/// plan, with full victim identity — the input to blocker classification
-/// (auto-removable vs. genuine conflict), unlike [`Error::BlockerConflict`]'s
-/// flattened advisory strings.
+/// plan, with full victim identity
+///
+/// The input to blocker classification (auto-removable vs. genuine
+/// conflict), unlike [`Error::BlockerConflict`]'s flattened advisory
+/// strings.
 #[derive(Debug, Clone)]
 pub struct BlockerHit {
-    /// The package declaring the blocker.
+    /// The package declaring the blocker
     pub owner: PortagePackage,
-    /// The owner's version.
+    /// The owner's version
     pub owner_version: Version,
     /// `true` when `owner` is a retained installed package (the reciprocal
     /// loop, e.g. an installed package blocking something in the plan)
-    /// rather than a solution member.
+    /// rather than a solution member
     pub owner_installed: bool,
-    /// The blocker atom; `atom.blocker` carries the weak/strong strength.
+    /// The blocker atom; `atom.blocker` carries the weak/strong strength
     pub atom: Dep,
-    /// Every package the atom matched, post-plan.
+    /// Every package the atom matched, post-plan
     pub victims: Vec<BlockerVictim>,
 }
 
 /// A root target held back below its newest visible version — see
-/// [`PortageDependencyProvider::check_held_back_targets`].
+/// [`PortageDependencyProvider::check_held_back_targets`]
 #[derive(Debug, Clone)]
 pub struct HeldBackTarget {
-    /// The held-back root target.
+    /// The held-back root target
     pub package: PortagePackage,
-    /// The version the solver actually selected.
+    /// The version the solver actually selected
     pub selected: Version,
     /// The newest version visible to the solver (present in the repo data,
-    /// regardless of whether any constraint currently accepts it).
+    /// regardless of whether any constraint currently accepts it)
     pub newest: Version,
     /// The dependency edge on `newest` that the current solution violates,
     /// if one could be identified: `(dependency package, version the
-    /// solution actually picked for it)`.
+    /// solution actually picked for it)`
     pub blocked_by: Option<(PortagePackage, Version)>,
 }
 
 impl PortageDependencyProvider {
-    /// Validate USE-dep constraints against a solution (post-solve check).
+    /// Validate USE-dep constraints against a solution (post-solve check)
     ///
     /// For each package in the solution that declares USE-dep constraints,
     /// verify that the target package satisfies them according to
@@ -190,7 +192,7 @@ impl PortageDependencyProvider {
         errors
     }
 
-    /// Validate repository constraints against a solution (post-solve check).
+    /// Validate repository constraints against a solution (post-solve check)
     ///
     /// For each package in the solution that declares `::repo` constraints,
     /// verify the target package comes from the required repository.
@@ -239,8 +241,10 @@ impl PortageDependencyProvider {
     /// Root targets (`@system`/`@world` members, explicit atoms) that landed
     /// below the newest version visible to the solver, with — best effort —
     /// the dependency edge on that newest version the current solution
-    /// violates. Advisory only: this never changes the plan, it just names
-    /// a divergence that used to be silent.
+    /// violates
+    ///
+    /// Advisory only: this never changes the plan, it just names a
+    /// divergence that used to be silent.
     // `solve.rs::prioritize`'s root-target tier decides these before their
     // dependencies precisely to avoid this, but a blocking edge on an
     // already-committed *transitive* dependency can still defeat it. See
@@ -302,7 +306,7 @@ impl PortageDependencyProvider {
         out
     }
 
-    /// Validate blockers against a solution (post-solve check).
+    /// Validate blockers against a solution (post-solve check)
     ///
     /// A blocker `!dev-libs/foo` means that if this package is installed,
     /// `dev-libs/foo` (with matching version/slot constraints if any) must
@@ -331,7 +335,7 @@ impl PortageDependencyProvider {
 
     /// Validate blockers against a solution (post-solve check), keeping full
     /// victim identity for classification (auto-removable vs. genuine
-    /// conflict) rather than collapsing to an advisory string.
+    /// conflict) rather than collapsing to an advisory string
     ///
     /// A blocker `!dev-libs/foo` means that if this package is installed,
     /// `dev-libs/foo` (with matching version/slot constraints if any) must
@@ -397,7 +401,7 @@ impl PortageDependencyProvider {
 
     /// Every package present after the plan (a solution member, or an
     /// installed one `retained` keeps in place) that satisfies `blocker`'s
-    /// atom.
+    /// atom
     fn blocker_victims(
         &self,
         blocker: &Dep,
@@ -427,10 +431,12 @@ impl PortageDependencyProvider {
     }
 
     /// Whether `blocker`'s atom (cpn/slot, version, and any USE-dep) is satisfied
-    /// by `(cand_pkg, cand_ver)`. `from_installed` picks the USE source: VDB
-    /// flags for an installed candidate, freshly-resolved USE otherwise. A
-    /// `!foo[bar]` blocker fires only when the candidate has the flag (so
-    /// `!glibc[crypt(-)]` ignores a glibc built without `crypt`).
+    /// by `(cand_pkg, cand_ver)`
+    ///
+    /// `from_installed` picks the USE source: VDB flags for an installed
+    /// candidate, freshly-resolved USE otherwise. A `!foo[bar]` blocker
+    /// fires only when the candidate has the flag (so `!glibc[crypt(-)]`
+    /// ignores a glibc built without `crypt`).
     fn blocker_satisfied_by(
         &self,
         blocker: &Dep,
@@ -468,7 +474,7 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Resolve slot-operator bindings from a solution.
+    /// Resolve slot-operator bindings from a solution
     ///
     /// For each package in the solution that declared `:=` / `:0=` dependencies,
     /// look up the actual slot the solver assigned to each target and return
@@ -514,7 +520,7 @@ impl PortageDependencyProvider {
     }
 }
 
-/// Push a deduplicated blocker conflict; `owner` is the cpv string declaring it.
+/// Push a deduplicated blocker conflict; `owner` is the cpv string declaring it
 fn record_blocker(
     conflicts: &mut Vec<Error>,
     seen: &mut std::collections::HashSet<(String, String)>,
@@ -594,7 +600,7 @@ pub(crate) fn resolve_flag_state(
     }
 }
 
-/// Read a USE-flag decision from the solved solution.
+/// Read a USE-flag decision from the solved solution
 ///
 /// `virtual_name` is the interned name of a `UseDecision` node
 /// (e.g. `"USE_test_pkg_ssl"`). Returns the flag state from the USE config

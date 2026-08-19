@@ -4,7 +4,7 @@ use portage_atom::{Operator, Revision, Suffix, SuffixKind, Version};
 use pubgrub::VersionSet;
 use version_ranges::Ranges;
 
-/// A PubGrub `VersionSet` backed by PMS version ranges.
+/// A PubGrub `VersionSet` backed by PMS version ranges
 ///
 /// Maps PMS dependency operators (`>=`, `~`, `=*`, etc.) to `Ranges<Version>`,
 /// enabling set algebra (intersection, complement, union) on version constraints.
@@ -14,28 +14,28 @@ use version_ranges::Ranges;
 pub struct PortageVersionSet(Ranges<Version>);
 
 impl PortageVersionSet {
-    /// Create a version set matching all versions.
+    /// Create a version set matching all versions
     pub fn any() -> Self {
         Self(Ranges::full())
     }
 
-    /// Returns `true` if this set matches all versions.
+    /// Returns `true` if this set matches all versions
     pub fn is_full(&self) -> bool {
         self.0 == Ranges::full()
     }
 
-    /// Returns the inner ranges.
+    /// Returns the inner ranges
     pub fn ranges(&self) -> &Ranges<Version> {
         &self.0
     }
 
-    /// Returns `true` if the given version is in this set.
+    /// Returns `true` if the given version is in this set
     pub fn contains(&self, v: &Version) -> bool {
         use pubgrub::VersionSet;
         <Self as VersionSet>::contains(self, v)
     }
 
-    /// Convert a PMS operator, glob flag, and version to a version set.
+    /// Convert a PMS operator, glob flag, and version to a version set
     ///
     /// See [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#version_specs).
     pub fn from_operator(op: Operator, glob: bool, v: Version) -> Self {
@@ -103,7 +103,7 @@ impl fmt::Display for PortageVersionSet {
     }
 }
 
-/// Compute the lower and upper bounds for the `~` (approximate) operator.
+/// Compute the lower and upper bounds for the `~` (approximate) operator
 ///
 /// PMS 8.3.1: "~ V" matches versions identical to V when revision is ignored.
 ///
@@ -134,7 +134,7 @@ fn approximate_bounds(v: &Version) -> (Version, Version) {
     (base, upper)
 }
 
-/// Compute the first version NOT matched by a glob pattern.
+/// Compute the first version NOT matched by a glob pattern
 ///
 /// PMS 8.3.1: "=V*" compares only the version components present before `*`.
 /// The exclusive upper bound is computed by bumping the last specified numeric
