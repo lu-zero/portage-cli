@@ -534,12 +534,13 @@ fn effective_use_config(
     let iuse_defaults = iuse_defaults_map(meta);
     let mut cfg = resolve_effective_use(
         &iuse_defaults,
-        policy.pre_env,
+        policy.defaults,
         cpv,
         slot,
         policy.package_use,
         policy.env_use,
         policy.profile_package_use,
+        policy.conf,
     );
     if !policy.force_mask.is_empty() {
         let stable = policy.accept_keywords.is_stable(&meta.keywords, cpv, slot);
@@ -756,20 +757,17 @@ pub struct ResolvePolicy<'a> {
     pub accept_properties: &'a AcceptProperties,
     /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision
     pub accept_restrict: &'a AcceptRestrict,
-    /// USE folded up through `make.conf` — see [`Adapter::pre_env`]
-    pub pre_env: &'a portage_atom_pubgrub::UseLayer,
+    /// Folded profile `make.defaults` — see [`Adapter::defaults`]
+    pub defaults: &'a portage_atom_pubgrub::UseLayer,
+    /// `make.conf` USE delta — see [`Adapter::conf`]
+    pub conf: &'a portage_atom_pubgrub::UseLayer,
     /// Process-environment USE layer — see [`Adapter::env_use`]
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides from
     /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf)
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
-    /// Profile-chain `package.use` — portage's *defaults* layer, BELOW `conf` (make.conf)
-    ///
-    /// A make.conf `USE=` decision wins over it (see
-    /// `portage_atom_pubgrub::resolve_effective_use`).
-    ///
-    /// Contrast [`Self::package_use`].
-    pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
+    /// Per-profile-node `package.use` (Portage `setcpv` interleave)
+    pub profile_package_use: &'a [portage_atom_pubgrub::ProfileUseNode],
     /// Profile USE force/mask policy — see [`Adapter::force_mask`]
     pub force_mask: &'a crate::force_mask::ForceMask,
 }
@@ -792,14 +790,13 @@ pub struct Adapter<'a> {
     pub accept_properties: &'a AcceptProperties,
     /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision
     pub accept_restrict: &'a AcceptRestrict,
-    /// USE folded up through `make.conf` (profile make.defaults + extra confs)
+    /// Folded profile `make.defaults` (Portage `defaults` layer, minus
+    /// per-package `package.use`)
     ///
-    /// Everything below the `package.use`/`env` layers in portage's real
-    /// fold order.
-    ///
-    /// Pre-parsed [`portage_atom_pubgrub::UseLayer`]; combined with `env_use` and
-    /// per-version `package.use` + IUSE defaults by `desired_use`.
-    pub pre_env: &'a portage_atom_pubgrub::UseLayer,
+    /// Shared Arc base for `desired_use`.
+    pub defaults: &'a portage_atom_pubgrub::UseLayer,
+    /// `make.conf` USE delta (Portage `conf` layer), above profile `package.use`
+    pub conf: &'a portage_atom_pubgrub::UseLayer,
     /// Process-environment USE layer — highest priority
     ///
     /// Applied after `package.use` (see `resolve_effective_use`).
@@ -809,9 +806,8 @@ pub struct Adapter<'a> {
     /// Per-version `package.use`/`package.env`-style overrides from
     /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf)
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
-    /// Profile-chain `package.use` — portage's *defaults* layer, below
-    /// `conf`/make.conf (see [`ResolvePolicy::profile_package_use`])
-    pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
+    /// Per-profile-node `package.use` (see [`ResolvePolicy::profile_package_use`])
+    pub profile_package_use: &'a [portage_atom_pubgrub::ProfileUseNode],
     /// Profile USE force/mask policy: applied to each version's effective USE and
     /// consulted by the Level-C cede gate (pinned flags are never ceded)
     pub force_mask: &'a crate::force_mask::ForceMask,
@@ -936,6 +932,7 @@ impl Adapter<'_> {
             self.package_use,
             &empty,
             self.profile_package_use,
+            &empty,
         );
         let iuse: std::collections::HashSet<&str> = m.iuse.iter().map(|iu| iu.name()).collect();
         let iuse_flags: std::collections::HashSet<Interned<DefaultInterner>> =
@@ -991,7 +988,8 @@ impl<'a> Adapter<'a> {
             accept_licenses: self.accept_licenses,
             accept_properties: self.accept_properties,
             accept_restrict: self.accept_restrict,
-            pre_env: self.pre_env,
+            defaults: self.defaults,
+            conf: self.conf,
             env_use: self.env_use,
             package_use: self.package_use,
             profile_package_use: self.profile_package_use,
@@ -1041,12 +1039,13 @@ impl PackageRepository for Adapter<'_> {
         let iuse_defaults = meta.map(iuse_defaults_map).unwrap_or_default();
         let mut cfg = resolve_effective_use(
             &iuse_defaults,
-            self.pre_env,
+            self.defaults,
             cpv,
             slot,
             self.package_use,
             self.env_use,
             self.profile_package_use,
+            self.conf,
         );
 
         // Profile USE force/mask override package.use and the configured value
@@ -2277,7 +2276,8 @@ mod tests {
                     accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
                     accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
                     accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-                    pre_env: empty_layer(),
+                    defaults: empty_layer(),
+                    conf: empty_layer(),
                     env_use: empty_layer(),
                     package_use: &[],
                     profile_package_use: &[],
@@ -2326,7 +2326,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: empty_layer(),
+            defaults: empty_layer(),
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2372,7 +2373,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: empty_layer(),
+            defaults: empty_layer(),
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2407,7 +2409,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &deny_bindist,
-            pre_env: empty_layer(),
+            defaults: empty_layer(),
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2431,7 +2434,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &deny_bindist,
-            pre_env: empty_layer(),
+            defaults: empty_layer(),
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2468,7 +2472,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: empty_layer(),
+            defaults: empty_layer(),
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2515,7 +2520,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2559,7 +2565,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2608,7 +2615,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2653,7 +2661,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2712,7 +2721,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2767,7 +2777,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2818,7 +2829,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2869,7 +2881,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2921,7 +2934,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],
@@ -2978,7 +2992,8 @@ mod tests {
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
-            pre_env: &pre_env,
+            defaults: &pre_env,
+            conf: empty_layer(),
             env_use: empty_layer(),
             package_use: &[],
             profile_package_use: &[],

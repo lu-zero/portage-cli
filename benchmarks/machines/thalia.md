@@ -372,3 +372,13 @@ they're CLI-layer (activity bus, `--eta`, `-r`/`--resume`). Criterion
 (`dep_parsing`/`realworld_dep_parsing`/`resolve`/`dedup`) numbers are also
 consistent with prior runs and `MEMORY.md`'s tables — no per-benchmark
 regression flagged by `bench-eval.sh`'s winner column beyond normal noise.
+
+## `em -p` wall-clock anchor (2026-08-19, `deb4c81`)
+
+USE defaults/conf split vs that commit: no measurable `em -p` cost (error
+bars span 1.0 on firefox / libreoffice / qtwebengine). Before binary is
+the existing 00:11 `--release` `em` at `deb4c81`, not a same-session
+rebuild — hashes and methodology in
+[`results/20260819-use-fold-defaults-conf-deb4c81/`](../results/20260819-use-fold-defaults-conf-deb4c81/).
+New `em -p` wall-clock anchor: `deb4c81` /
+`em_before` sha256 `c43dbacd4695b7aefac91ecacaa91ab6bdbf456f9325e880cbfff285532a4427`.

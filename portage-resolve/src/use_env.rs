@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use camino::Utf8Path;
 use portage_atom::Dep;
 use portage_atom::interner::Interned;
-use portage_atom_pubgrub::{UseLayer, UseOverride};
+use portage_atom_pubgrub::{ProfileUseNode, UseLayer, UseOverride};
 use portage_repo::{AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
 
 use crate::force_mask::{ForceMask, index_by_cpn};
@@ -13,22 +13,17 @@ type Result<T> = anyhow::Result<T>;
 
 /// Resolved USE environment for the solver and display
 pub struct UseEnv {
-    /// The fold of profile `make.defaults` + `make.conf` (`extra_confs`)
+    /// Folded profile `make.defaults` (Portage's `defaults` layer, minus
+    /// per-package `package.use`)
     ///
-    /// Portage's `defaults`/`conf` layers, from `ResolvedUse::pre_env`,
-    /// **parsed once** into a [`UseLayer`].
-    ///
-    /// Feed this into `portage_solver::resolve_effective_use` *before*
-    /// `package_use` and *before* `env_use`, per package — do not re-tokenize the
-    /// profile string on every CPV.
-    pub pre_env: UseLayer,
+    /// Shared Arc base for every CPV.
+    pub defaults: UseLayer,
+    /// `make.conf` / extra_confs USE delta (Portage's `conf` layer)
+    pub conf: UseLayer,
     /// Process-environment USE layer (`ResolvedUse::env_use`), **parsed once**
     ///
-    /// Portage's `env` layer, folded in *after* `package_use`.
-    ///
-    /// See `resolve_effective_use`'s doc for why this can't be pre-merged into
-    /// `pre_env`: whether a `-*` here wipes `package_use` depends on it staying a
-    /// separate, later layer.
+    /// Portage's `env` layer, folded in *after* `package_use`. A `-*` here
+    /// wipes `package_use`; a conf-level `-*` must not.
     pub env_use: UseLayer,
     /// Keys from `USE_EXPAND` — used to group expanded flags in display
     pub expand: Vec<String>,
@@ -37,14 +32,10 @@ pub struct UseEnv {
     /// Per-package USE overrides from `/etc/portage/package.use` and
     /// `package.env` — portage's `pkg` layer, above `conf`/make.conf
     pub package_use: Vec<(Dep, Vec<UseOverride>)>,
-    /// Per-package USE overrides from the profile chain's `package.use` (`stack.package_use()`)
+    /// Per-profile-node `package.use` plus that node's make.defaults flags
     ///
-    /// Portage's *defaults* layer, BELOW `conf`/make.conf: a global `USE=`
-    /// wins over these (unlike [`Self::package_use`]).
-    ///
-    /// Matches portage's `_pkgprofileuse` → `configdict["defaults"]` routing
-    /// (`config.py` setcpv).
-    pub profile_package_use: Vec<(Dep, Vec<UseOverride>)>,
+    /// Parent first — Portage `setcpv` interleave inside `defaults`.
+    pub profile_package_use: Vec<ProfileUseNode>,
     /// Masked packages: repo-global `profiles/package.mask`, the profile
     /// stack, and `/etc/portage/package.mask`
     pub package_mask: Vec<Dep>,
@@ -288,24 +279,14 @@ async fn compute_use_env(
     // fold can apply portage's non-incremental group replace to the ebuild's
     // own `+`-defaulted IUSE — `L10N="en-US"` in make.conf must beat
     // chromium-2.eclass's `IUSE="+l10n_${lang}"` for every bundled locale.
-    let pre_env =
-        UseLayer::parse(&resolved.pre_env).with_group_clears(resolved.conf_expand_assigned);
+    let defaults = UseLayer::parse(&resolved.defaults_use);
+    let conf = UseLayer::parse(&resolved.conf_use).with_group_clears(resolved.conf_expand_assigned);
     let env_use =
         UseLayer::parse(&resolved.env_use).with_group_clears(resolved.env_expand_assigned);
 
-    // Per-package USE — two tiers, matching portage's layer order:
-    //
-    // 1. Profile `package.use` (`stack.package_use()`) → `profile_package_use`,
-    //    portage's *defaults* layer (below make.conf). A global `USE=` wins
-    //    over these — `_pkgprofileuse` → `configdict["defaults"]` in
-    //    `config.py`'s `setcpv`. Without this split, `targets/desktop/
-    //    package.use: media-libs/libwebp -tiff` would override a global
-    //    `USE="tiff"`, which real portage does not do.
-    // 2. `/etc/portage/package.use` (+ overlay) → `package_use`, the `pkg`
-    //    layer (above make.conf).
-    //
-    // Both collected as raw tokens so the USE_EXPAND colon form is expanded
-    // once, against the live keys, before parsing to `UseOverride`.
+    // Profile `package.use` is inside Portage's `defaults` layer, after that
+    // node's make.defaults and below make.conf. Per-node so a child
+    // make.defaults can restate a flag a parent package.use turned off.
     let expand_keys = &expand;
     let expand_values = |key: &str| split_var(key);
     let expand_flags = |raw: Vec<(Dep, Vec<String>)>| {
@@ -318,7 +299,28 @@ async fn compute_use_env(
             })
             .collect::<Vec<_>>()
     };
-    let profile_package_use = expand_flags(stack.package_use().unwrap_or_default());
+    let mut defaults_by_path: HashMap<std::path::PathBuf, String> =
+        resolved.profile_defaults.into_iter().collect();
+    let profile_package_use: Vec<ProfileUseNode> = stack
+        .profiles()
+        .iter()
+        .map(|p| {
+            let md = p.path().join("make.defaults");
+            let layer_defaults = defaults_by_path
+                .remove(&md)
+                .map(|s| UseLayer::parse(&s))
+                .unwrap_or_else(UseLayer::empty);
+            let raw = p.package_use().unwrap_or_default();
+            let puse_clear_all = raw
+                .iter()
+                .any(|(_, flags)| flags_have_use_clear_all(flags, expand_keys));
+            ProfileUseNode {
+                defaults: layer_defaults,
+                package_use: expand_flags(raw),
+                puse_clear_all,
+            }
+        })
+        .collect();
     let mut raw_package_use: Vec<(Dep, Vec<String>)> =
         load_package_use(portage_dir.join("package.use").as_str());
     if let Some(overlay) = config_overlay {
@@ -373,7 +375,8 @@ async fn compute_use_env(
     };
 
     Ok(UseEnv {
-        pre_env,
+        defaults,
+        conf,
         env_use,
         expand,
         expand_hidden,
@@ -491,6 +494,23 @@ async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseOverri
 /// Only keys present in `use_expand` start a group; any other token — including
 /// one that merely ends in `:` — is parsed as an ordinary flag, so plain flags
 /// and a bare `-*` keep working.
+/// A bare `-*` (not inside a `KEY:` group) is a whole-USE clear-all.
+fn flags_have_use_clear_all(flags: &[String], use_expand: &[String]) -> bool {
+    let mut in_group = false;
+    for tok in flags {
+        if let Some(key) = tok.strip_suffix(':')
+            && use_expand.iter().any(|k| k == key)
+        {
+            in_group = true;
+            continue;
+        }
+        if !in_group && tok == "-*" {
+            return true;
+        }
+    }
+    false
+}
+
 fn expand_use_expand_colon(
     tokens: &[String],
     use_expand: &[String],
@@ -595,7 +615,8 @@ fn load_dep_list(path: &str) -> Vec<Dep> {
 #[cfg(test)]
 mod tests {
     use super::{
-        expand_use_expand_colon, load_package_env_use, load_package_keywords, load_package_use,
+        expand_use_expand_colon, flags_have_use_clear_all, load_package_env_use,
+        load_package_keywords, load_package_use,
     };
     use portage_atom::Dep;
     use portage_atom_pubgrub::UseOverride;
@@ -739,6 +760,19 @@ mod tests {
         let none = |_: &str| Vec::new();
         let out = expand_use_expand_colon(&["nls".into(), "-debug".into()], &keys, &none);
         assert_eq!(out, vec![ov("nls"), ov("-debug")]);
+    }
+
+    #[test]
+    fn bare_star_is_a_use_clear_all_colon_star_is_not() {
+        let keys = ["PYTHON_TARGETS".to_string()];
+        assert!(flags_have_use_clear_all(
+            &["-*".into(), "build".into()],
+            &keys
+        ));
+        assert!(!flags_have_use_clear_all(
+            &["PYTHON_TARGETS:".into(), "-*".into(), "python3_13".into()],
+            &keys
+        ));
     }
 
     // PMS 5.2.4 dir-form: a `/etc/portage/package.use` *directory*'s regular files are concatenated in filename order — and, matching real portage's `_recursive_basename_filter`, dotfiles and `~` editor backups are skipped

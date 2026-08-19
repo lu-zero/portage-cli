@@ -90,16 +90,17 @@ pub fn effective_use(
     ceded: &[CededFlag],
 ) -> UseConfig {
     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
-    let defaults = iuse_defaults(cache);
+    let iuse_map = iuse_defaults(cache);
     let mut cfg = portage_atom_pubgrub::resolve_effective_use(
-        &defaults,
-        policy.pre_env,
+        &iuse_map,
+        policy.defaults,
         &cpv,
         pkg.slot(),
         policy.package_use,
         policy.env_use,
         policy.profile_package_use,
-    ); // pre_env/env_use are already UseLayer
+        policy.conf,
+    );
     let iuse = iuse_set(cache);
     let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
     apply_force_mask(
@@ -195,6 +196,7 @@ mod tests {
             &[],
             &UseLayer::parse("-* build"),
             &[],
+            &UseLayer::default(),
         );
         assert!(
             matches!(cfg.get(Interned::intern("reflex")), UseFlagState::Disabled),
@@ -238,6 +240,7 @@ mod tests {
             &[],
             &UseLayer::parse("-* build"),
             &[],
+            &UseLayer::default(),
         );
 
         let ceded = vec![CededFlag {
@@ -268,6 +271,7 @@ mod tests {
             &[],
             &UseLayer::parse("-*"),
             &[],
+            &UseLayer::default(),
         );
         assert!(matches!(
             cfg.get(Interned::intern("multilib")),

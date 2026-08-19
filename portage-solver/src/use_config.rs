@@ -337,6 +337,27 @@ impl UseLayer {
     pub fn has_clear_all(&self) -> bool {
         self.has_clear_all
     }
+
+    /// Whether this layer assigned `flag` (enabled or disabled).
+    pub fn mentions(&self, flag: Interned<DefaultInterner>) -> bool {
+        self.frozen.contains_key(&flag)
+    }
+}
+
+/// One profile-chain node in Portage's `defaults` layer (`setcpv` interleave).
+///
+/// Walked parent-first: this node's `make.defaults` then matching `package.use`.
+/// [`resolve_effective_use`] keeps folded make.defaults as the shared Arc base
+/// and only overlays `package_use`; `defaults` is the per-node delta used to
+/// skip a parent `package.use` token a later node's make.defaults restates.
+#[derive(Debug, Clone, Default)]
+pub struct ProfileUseNode {
+    /// This node's translated `make.defaults` USE (empty if the file is absent).
+    pub defaults: UseLayer,
+    /// This node's `package.use` lines.
+    pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    /// A matching line in [`Self::package_use`] contained `-*`.
+    pub puse_clear_all: bool,
 }
 
 /// Fold tokens from empty into a map; report whether any `-*` appeared
@@ -366,139 +387,151 @@ fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, boo
 /// precedence](../../docs/design/architecture.md) for the full fold order,
 /// the `-*` group-clear semantics, and the live-verified vscode/L10N case.
 ///
-/// Folds four token groups, in exactly portage's own USE-resolution order
-/// (`pkginternal < defaults/conf < pkg < env`):
+/// Folds Portage's `USE_ORDER` stack (`pkginternal < defaults < conf < pkg < env`):
 ///
 /// 1. `iuse_defaults` — the ebuild's own `+`/`-` IUSE defaults (`pkginternal`).
-/// 2. `pre_env` — the profile/`make.conf` fold, already computed by
-///    `portage_repo`'s `ResolvedUse::pre_env`, parsed into a [`UseLayer`].
-/// 3. This package's matching `package_use` entries (`pkg`).
-/// 4. `env_use` — the process-environment USE layer ([`UseLayer`]), unmerged.
+/// 2. `defaults` — folded profile `make.defaults` (shared Arc base).
+/// 3. `profile_package_use` — per-node profile `package.use`, same `defaults`
+///    layer, after that node's make.defaults (a later node's make.defaults
+///    wins over an earlier node's `package.use`).
+/// 4. `conf` — `make.conf` only, above profile `package.use`.
+/// 5. `package_use` — `/etc/portage/package.use` (`pkg`).
+/// 6. `env_use` — process-environment USE ([`UseLayer`]), unmerged.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_effective_use(
     iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
-    pre_env: &UseLayer,
+    defaults: &UseLayer,
     cpv: &Cpv,
     slot: Option<Interned<DefaultInterner>>,
     package_use: &[(Dep, Vec<UseOverride>)],
     env_use: &UseLayer,
-    profile_package_use: &[(Dep, Vec<UseOverride>)],
+    profile_package_use: &[ProfileUseNode],
+    conf: &UseLayer,
 ) -> UseConfig {
-    // Fast path for the common case (and most `-*` cases that only appear in
-    // pre_env/env as whole-layer clears):
-    //
-    // Fold order is iuse < pre_env < package_use < env. When `env` contains
-    // `-*`, everything below is wiped — result is env folded alone (already
-    // frozen on the layer). When `pre_env` contains `-*`, iuse is wiped but
-    // package_use/env still apply on top of the frozen pre_env map.
-    //
-    // Without those clears: share pre_env's Arc map as UseConfig.base; put
-    // only IUSE flags *not* in that map, package_use, and env into a small
-    // overlay. No per-CPV re-insertion of ~100 USE_EXPAND flags.
-
-    // Env-level `-*` wipes package.use and pre_env — frozen env is the answer.
+    // Env-level `-*` wipes everything below — frozen env is the answer.
     if env_use.has_clear_all {
         return UseConfig::from_base_map(Arc::clone(&env_use.frozen));
     }
 
+    let conf_wipes_below = conf.has_clear_all;
+    let replay = !conf_wipes_below
+        && profile_package_use
+            .iter()
+            .any(|n| n.puse_clear_all && node_matches(n, cpv, slot));
+
     let mut overlay: HashMap<Interned<DefaultInterner>, UseFlagState> = HashMap::new();
 
-    // IUSE (pkginternal): only **enabled** defaults that pre_env does not already
-    // set. Disabled defaults match `get()`'s unset→Disabled, so inserting them
-    // only bloated the overlay on every CPV. `-*` in pre_env wipes iuse entirely.
-    if !pre_env.has_clear_all {
-        for (flag, def) in iuse_defaults {
-            if matches!(def, IUseDefault::Enabled)
-                && !pre_env.frozen.contains_key(flag)
-                && !pre_env.clears_group(*flag)
-            {
-                overlay.insert(*flag, UseFlagState::Enabled);
-            }
-        }
-    }
-
-    // Profile `package.use` for this CPV — sits in portage's *defaults* layer
-    // (`config.py`'s `configdict["defaults"]`, populated from `_pkgprofileuse`),
-    // which is BELOW `conf` (make.conf). Since `pre_env` is the already-folded
-    // `defaults < conf` state, a make.conf `USE=` decision lives in
-    // `pre_env.frozen` and must win over a profile `package.use` token — so a
-    // profile line like `media-libs/libwebp -tiff` does NOT override a global
-    // `USE="tiff"` (unlike user `/etc/portage/package.use`, which does). Only
-    // flags pre_env is silent on take the profile's value. `-*` in pre_env
-    // wipes this layer along with IUSE (it cleared the whole defaults fold).
-    if !pre_env.has_clear_all && !profile_package_use.is_empty() {
-        for (dep, overrides) in profile_package_use {
-            if dep.cpn != cpv.cpn {
-                continue;
-            }
-            if !atom_matches_cpv(dep, cpv, slot) {
-                continue;
-            }
-            for ov in overrides {
-                // Same layer position as the IUSE defaults above, so a
-                // make.conf USE_EXPAND assignment wipes these group tokens too.
-                if !pre_env.frozen.contains_key(&ov.flag) && !pre_env.clears_group(ov.flag) {
-                    overlay.insert(
-                        ov.flag,
-                        if ov.enable {
-                            UseFlagState::Enabled
-                        } else {
-                            UseFlagState::Disabled
-                        },
-                    );
+    if replay {
+        apply_iuse(&mut overlay, iuse_defaults, defaults);
+        for node in profile_package_use {
+            apply_layer_delta(&mut overlay, &node.defaults);
+            if node_matches(node, cpv, slot) {
+                if node.puse_clear_all {
+                    overlay.clear();
                 }
+                apply_overrides(&mut overlay, &node.package_use, cpv, slot, |_| false);
             }
         }
+    } else if !conf_wipes_below {
+        apply_iuse(&mut overlay, iuse_defaults, defaults);
+        apply_profile_package_use(&mut overlay, profile_package_use, cpv, slot);
     }
 
-    // package.use / package.env for this CPV (above pre_env).
-    // Cheap Cpn prefilter before full atom match (version/slot ops).
-    if !package_use.is_empty() {
-        for (dep, overrides) in package_use {
-            if dep.cpn != cpv.cpn {
+    if !conf_wipes_below {
+        apply_group_clears(&mut overlay, conf, defaults);
+        apply_layer_tokens(&mut overlay, conf);
+    }
+
+    apply_overrides(&mut overlay, package_use, cpv, slot, |_| false);
+
+    apply_group_clears(
+        &mut overlay,
+        env_use,
+        if conf_wipes_below { conf } else { defaults },
+    );
+    apply_layer_tokens(&mut overlay, env_use);
+
+    let base = if conf_wipes_below {
+        if conf.frozen.is_empty() {
+            None
+        } else {
+            Some(Arc::clone(&conf.frozen))
+        }
+    } else if replay || defaults.frozen.is_empty() {
+        None
+    } else {
+        Some(Arc::clone(&defaults.frozen))
+    };
+
+    UseConfig { base, overlay }
+}
+
+fn node_matches(node: &ProfileUseNode, cpv: &Cpv, slot: Option<Interned<DefaultInterner>>) -> bool {
+    node.package_use
+        .iter()
+        .any(|(dep, _)| dep.cpn == cpv.cpn && atom_matches_cpv(dep, cpv, slot))
+}
+
+fn apply_iuse(
+    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
+    iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
+    defaults: &UseLayer,
+) {
+    if defaults.has_clear_all {
+        return;
+    }
+    for (flag, def) in iuse_defaults {
+        if matches!(def, IUseDefault::Enabled)
+            && !defaults.frozen.contains_key(flag)
+            && !defaults.clears_group(*flag)
+        {
+            overlay.insert(*flag, UseFlagState::Enabled);
+        }
+    }
+}
+
+fn apply_profile_package_use(
+    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
+    nodes: &[ProfileUseNode],
+    cpv: &Cpv,
+    slot: Option<Interned<DefaultInterner>>,
+) {
+    if nodes.is_empty() {
+        return;
+    }
+    for (i, node) in nodes.iter().enumerate() {
+        if !node_matches(node, cpv, slot) {
+            continue;
+        }
+        apply_overrides(overlay, &node.package_use, cpv, slot, |flag| {
+            nodes[i + 1..]
+                .iter()
+                .any(|later| later.defaults.has_clear_all || later.defaults.mentions(flag))
+        });
+    }
+}
+
+fn apply_overrides(
+    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
+    entries: &[(Dep, Vec<UseOverride>)],
+    cpv: &Cpv,
+    slot: Option<Interned<DefaultInterner>>,
+    skip: impl Fn(Interned<DefaultInterner>) -> bool,
+) {
+    for (dep, overrides) in entries {
+        if dep.cpn != cpv.cpn {
+            continue;
+        }
+        if !atom_matches_cpv(dep, cpv, slot) {
+            continue;
+        }
+        for ov in overrides {
+            if skip(ov.flag) {
                 continue;
             }
-            if !atom_matches_cpv(dep, cpv, slot) {
-                continue;
-            }
-            for ov in overrides {
-                overlay.insert(
-                    ov.flag,
-                    if ov.enable {
-                        UseFlagState::Enabled
-                    } else {
-                        UseFlagState::Disabled
-                    },
-                );
-            }
-        }
-    }
-
-    // An environment-level USE_EXPAND assignment wipes the group from *every*
-    // lower layer — IUSE defaults, `pre_env` (make.conf included) and
-    // `package.use` alike — before env's own tokens fold on top. Cleared flags
-    // are written Disabled rather than removed: `pre_env.frozen` stays the
-    // shared base map, so the overlay is what has to mask it, and an unset
-    // flag already reads as Disabled.
-    if !env_use.group_clears.is_empty() {
-        for flag in pre_env.frozen.keys() {
-            if env_use.clears_group(*flag) {
-                overlay.insert(*flag, UseFlagState::Disabled);
-            }
-        }
-        for (flag, state) in overlay.iter_mut() {
-            if env_use.clears_group(*flag) {
-                *state = UseFlagState::Disabled;
-            }
-        }
-    }
-
-    // env (no `-*` — that case returned above); overrides package.use
-    if !env_use.frozen.is_empty() {
-        for (&flag, &enable) in env_use.frozen.iter() {
             overlay.insert(
-                flag,
-                if enable {
+                ov.flag,
+                if ov.enable {
                     UseFlagState::Enabled
                 } else {
                     UseFlagState::Disabled
@@ -506,14 +539,52 @@ pub fn resolve_effective_use(
             );
         }
     }
+}
 
-    let base = if pre_env.frozen.is_empty() {
-        None
-    } else {
-        Some(Arc::clone(&pre_env.frozen))
-    };
+fn apply_layer_delta(
+    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
+    layer: &UseLayer,
+) {
+    if layer.has_clear_all {
+        overlay.clear();
+    }
+    apply_layer_tokens(overlay, layer);
+}
 
-    UseConfig { base, overlay }
+fn apply_layer_tokens(
+    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
+    layer: &UseLayer,
+) {
+    for (&flag, &enable) in layer.frozen.iter() {
+        overlay.insert(
+            flag,
+            if enable {
+                UseFlagState::Enabled
+            } else {
+                UseFlagState::Disabled
+            },
+        );
+    }
+}
+
+fn apply_group_clears(
+    overlay: &mut HashMap<Interned<DefaultInterner>, UseFlagState>,
+    layer: &UseLayer,
+    below: &UseLayer,
+) {
+    if layer.group_clears.is_empty() {
+        return;
+    }
+    for flag in below.frozen.keys() {
+        if layer.clears_group(*flag) {
+            overlay.insert(*flag, UseFlagState::Disabled);
+        }
+    }
+    for (flag, state) in overlay.iter_mut() {
+        if layer.clears_group(*flag) {
+            *state = UseFlagState::Disabled;
+        }
+    }
 }
 
 /// Whether a dependency atom matches a given `cpv` (+ optional slot)
@@ -639,6 +710,18 @@ mod tests {
         UseLayer::parse(s)
     }
 
+    fn pnodes(atom: &str, overrides: &[&str]) -> Vec<ProfileUseNode> {
+        vec![ProfileUseNode {
+            defaults: UseLayer::empty(),
+            package_use: pkg_use(atom, overrides),
+            puse_clear_all: false,
+        }]
+    }
+
+    fn none() -> UseLayer {
+        UseLayer::empty()
+    }
+
     // No `L10N` assigned anywhere outside profile `make.defaults`: real
     // portage leaves every `+l10n_*` IUSE default enabled (the `defaults`
     // layer is exempt from the group replace). Verified 2026-08-19 against
@@ -657,6 +740,7 @@ mod tests {
             &[],
             &layer(""),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
@@ -674,12 +758,13 @@ mod tests {
                 ("l10n_en-GB", IUseDefault::Enabled),
                 ("seccomp", IUseDefault::Enabled),
             ]),
-            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
+            &layer(""),
             &cpv(),
             None,
             &[],
             &layer(""),
             &[],
+            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
         );
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
         assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
@@ -695,12 +780,13 @@ mod tests {
     fn conf_group_clear_spares_user_package_use() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
-            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
+            &layer(""),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["l10n_fr"]),
             &layer(""),
-            &pkg_use("dev-libs/openssl", &["l10n_de"]),
+            &pnodes("dev-libs/openssl", &["l10n_de"]),
+            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
         );
         assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
@@ -724,12 +810,13 @@ mod tests {
     fn env_use_expand_assignment_wipes_group_from_all_lower_layers() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
-            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
+            &layer(""),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["l10n_fr"]),
             &layer("l10n_de").with_group_clears(["L10N".to_string()]),
             &[],
+            &layer("l10n_en-GB").with_group_clears(["L10N".to_string()]),
         );
         assert_eq!(cfg.get(flag("l10n_de")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
@@ -744,12 +831,13 @@ mod tests {
     fn empty_use_expand_assignment_still_clears_the_group() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("l10n_af", IUseDefault::Enabled)]),
-            &layer("").with_group_clears(["L10N".to_string()]),
+            &layer(""),
             &cpv(),
             None,
             &[],
             &layer(""),
             &[],
+            &layer("").with_group_clears(["L10N".to_string()]),
         );
         assert_eq!(cfg.get(flag("l10n_af")), UseFlagState::Disabled);
     }
@@ -766,24 +854,25 @@ mod tests {
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer(""),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
     }
 
     #[test]
     fn resolve_effective_use_package_use_survives_conf_level_wildcard() {
-        // A `-*` in `pre_env` (i.e. from profile make.defaults or make.conf)
-        // does NOT wipe package.use — confirmed against real emerge: adding
-        // `USE="-* build"` to make.conf still let `package.use: sys-devel/m4
-        // nls` apply.
+        // A `-*` in make.conf does NOT wipe user package.use — confirmed
+        // against real emerge: `USE="-* build"` in make.conf still let
+        // `package.use: sys-devel/m4 nls` apply.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            &layer("-* build"),
+            &layer(""),
             &cpv(),
             None,
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer(""),
             &[],
+            &layer("-* build"),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -802,6 +891,7 @@ mod tests {
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer("-* build"),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -819,6 +909,7 @@ mod tests {
             &pkg_use("dev-libs/openssl", &["ssl"]),
             &layer("build"),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
         assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
@@ -826,17 +917,18 @@ mod tests {
 
     #[test]
     fn resolve_effective_use_iuse_default_suppressed_by_conf_level_wildcard() {
-        // pkginternal sits *below* both conf and env, so a `-*` in `pre_env`
-        // wipes a `+`-defaulted IUSE flag too — confirmed against real
-        // emerge's app-alternatives/awk `+gawk` default.
+        // pkginternal sits *below* conf, so a `-*` in make.conf wipes a
+        // `+`-defaulted IUSE flag too — confirmed against real emerge's
+        // app-alternatives/awk `+gawk` default.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("quic", IUseDefault::Enabled)]),
-            &layer("-* build"),
+            &layer(""),
             &cpv(),
             None,
             &[],
             &layer(""),
             &[],
+            &layer("-* build"),
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Disabled);
     }
@@ -851,6 +943,7 @@ mod tests {
             &[],
             &layer("-* build"),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Disabled);
     }
@@ -865,16 +958,15 @@ mod tests {
             &[],
             &layer(""),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("quic")), UseFlagState::Enabled);
     }
 
     #[test]
     fn resolve_effective_use_explicit_config_beats_iuse_default() {
-        // pre_env explicitly disabling a flag must survive even though the
-        // ebuild's own IUSE default is `+` (portage's USE-over-IUSE-default
-        // precedence) — pkginternal is folded first, so a later explicit
-        // -flag in pre_env/pkg/env always overrides it.
+        // make.defaults explicitly disabling a flag must survive even though
+        // the ebuild's own IUSE default is `+` — pkginternal is folded first.
         let cfg = resolve_effective_use(
             &iuse_defaults(&[("ssl", IUseDefault::Enabled)]),
             &layer("-ssl"),
@@ -883,6 +975,7 @@ mod tests {
             &[],
             &layer(""),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
@@ -897,6 +990,7 @@ mod tests {
             &pkg_use("dev-libs/other", &["ssl"]),
             &layer(""),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
@@ -911,29 +1005,24 @@ mod tests {
             &pkg_use("dev-libs/openssl", &["-ssl"]),
             &layer(""),
             &[],
+            &none(),
         );
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
 
-    // Profile `package.use` sits in portage's *defaults* layer, BELOW
-    // make.conf (`conf`): a `USE=` set in make.conf (the `pre_env` layer
-    // here) wins over a profile `package.use -flag`. Contrast
-    // `resolve_effective_use_package_use_disable_overrides_pre_env_enable`
-    // above — that's USER `/etc/portage/package.use`, which sits in the
-    // `pkg` layer above `conf` and DOES override it. Regression for the
-    // `media-libs/libwebp -tiff` divergence from real emerge (Nathan's
-    // report, 2026-08-11): `targets/desktop/package.use`'s `-tiff` was
-    // incorrectly overriding a global `USE="tiff"`.
+    // Profile `package.use` sits in portage's `defaults` layer, below
+    // make.conf: a `USE=` set in make.conf wins over a profile `-flag`.
     #[test]
     fn resolve_effective_use_profile_package_use_does_not_override_make_conf() {
         let cfg = resolve_effective_use(
             &iuse_defaults(&[]),
-            &layer("ssl"),
+            &layer(""),
             &cpv(),
             None,
-            &pkg_use("dev-libs/openssl", &[]),
+            &[],
             &layer(""),
-            &pkg_use("dev-libs/openssl", &["-ssl"]),
+            &pnodes("dev-libs/openssl", &["-ssl"]),
+            &layer("ssl"),
         );
         assert_eq!(
             cfg.get(flag("ssl")),
@@ -942,10 +1031,29 @@ mod tests {
         );
     }
 
-    // The flip side: when make.conf is silent on a flag, profile
-    // `package.use` DOES set it (that's its purpose — e.g. a profile
-    // enabling `pulseaudio` for `media-sound/alsa-plugins` when global
-    // USE doesn't mention it).
+    // Same-node desktop case: make.defaults enables the flag, profile
+    // `package.use` turns it off, make.conf is silent → off.
+    #[test]
+    fn resolve_effective_use_profile_package_use_overrides_make_defaults() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[]),
+            &layer("ssl"),
+            &cpv(),
+            None,
+            &[],
+            &layer(""),
+            &pnodes("dev-libs/openssl", &["-ssl"]),
+            &none(),
+        );
+        assert_eq!(
+            cfg.get(flag("ssl")),
+            UseFlagState::Disabled,
+            "profile package.use -ssl must override make.defaults USE=ssl"
+        );
+    }
+
+    // When make.conf is silent and make.defaults is too, profile
+    // `package.use` still sets the flag.
     #[test]
     fn resolve_effective_use_profile_package_use_applies_when_make_conf_silent() {
         let cfg = resolve_effective_use(
@@ -953,15 +1061,67 @@ mod tests {
             &layer(""),
             &cpv(),
             None,
-            &pkg_use("dev-libs/openssl", &[]),
+            &[],
             &layer(""),
-            &pkg_use("dev-libs/openssl", &["-ssl"]),
+            &pnodes("dev-libs/openssl", &["-ssl"]),
+            &none(),
         );
         assert_eq!(
             cfg.get(flag("ssl")),
             UseFlagState::Disabled,
             "profile package.use -ssl must apply when make.conf is silent on ssl"
         );
+    }
+
+    // Parent package.use disables; child make.defaults restates the flag
+    // (already in the folded defaults base) → child wins.
+    #[test]
+    fn child_make_defaults_beats_parent_package_use() {
+        let nodes = vec![
+            ProfileUseNode {
+                defaults: layer("ssl"),
+                package_use: pkg_use("dev-libs/openssl", &["-ssl"]),
+                puse_clear_all: false,
+            },
+            ProfileUseNode {
+                defaults: layer("ssl"),
+                package_use: vec![],
+                puse_clear_all: false,
+            },
+        ];
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[]),
+            &layer("ssl"),
+            &cpv(),
+            None,
+            &[],
+            &layer(""),
+            &nodes,
+            &none(),
+        );
+        assert_eq!(
+            cfg.get(flag("ssl")),
+            UseFlagState::Enabled,
+            "child make.defaults restating ssl beats parent package.use -ssl"
+        );
+    }
+
+    #[test]
+    fn conf_wildcard_wipes_profile_package_use_not_user() {
+        let cfg = resolve_effective_use(
+            &iuse_defaults(&[]),
+            &layer("foo"),
+            &cpv(),
+            None,
+            &pkg_use("dev-libs/openssl", &["ssl"]),
+            &layer(""),
+            &pnodes("dev-libs/openssl", &["bar"]),
+            &layer("-* build"),
+        );
+        assert_eq!(cfg.get(flag("foo")), UseFlagState::Disabled);
+        assert_eq!(cfg.get(flag("bar")), UseFlagState::Disabled);
+        assert_eq!(cfg.get(flag("ssl")), UseFlagState::Enabled);
+        assert_eq!(cfg.get(flag("build")), UseFlagState::Enabled);
     }
 
     #[test]

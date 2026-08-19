@@ -1,0 +1,50 @@
+=== firefox ===
+Benchmark 1: before
+  Time (mean ± σ):      1.435 s ±  0.107 s    [User: 2.507 s, System: 28.673 s]
+  Range (min … max):    1.278 s …  1.596 s    10 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: after
+  Time (mean ± σ):      1.560 s ±  0.148 s    [User: 2.519 s, System: 30.806 s]
+  Range (min … max):    1.316 s …  1.866 s    10 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  before ran
+    1.09 ± 0.13 times faster than after
+
+=== libreoffice ===
+Benchmark 1: before
+  Time (mean ± σ):      1.646 s ±  0.074 s    [User: 2.675 s, System: 26.629 s]
+  Range (min … max):    1.520 s …  1.736 s    10 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: after
+  Time (mean ± σ):      1.667 s ±  0.137 s    [User: 2.819 s, System: 25.948 s]
+  Range (min … max):    1.504 s …  1.953 s    10 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  before ran
+    1.01 ± 0.09 times faster than after
+
+=== qtwebengine ===
+Benchmark 1: before
+  Time (mean ± σ):      1.528 s ±  0.152 s    [User: 2.565 s, System: 28.503 s]
+  Range (min … max):    1.306 s …  1.745 s    10 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: after
+  Time (mean ± σ):      1.486 s ±  0.091 s    [User: 2.625 s, System: 21.363 s]
+  Range (min … max):    1.307 s …  1.582 s    10 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  after ran
+    1.03 ± 0.12 times faster than before

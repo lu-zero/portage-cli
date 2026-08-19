@@ -716,6 +716,9 @@ pub struct ProfileEnvLayer {
     /// Each value is the raw string as seen by the shell after the file ran;
     /// cross-layer accumulation is handled by [`ProfileEnv::merge`].
     pub(crate) vars: HashMap<&'static str, String>,
+    /// This layer's translated USE contribution (USE + USE_EXPAND tokens),
+    /// not yet merged with ancestors.
+    pub use_tokens: String,
 }
 
 impl ProfileEnvLayer {

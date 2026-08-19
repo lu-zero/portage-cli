@@ -41,10 +41,11 @@ pub fn build_entries(
     root_atoms: &[String],
     root_labels: &[String],
     edges: &[DepEdge],
-    pre_env: &UseLayer,
+    defaults: &UseLayer,
     env_use: &UseLayer,
     package_use: &[(Dep, Vec<UseOverride>)],
-    profile_package_use: &[(Dep, Vec<UseOverride>)],
+    profile_package_use: &[portage_atom_pubgrub::ProfileUseNode],
+    conf: &UseLayer,
 ) -> Vec<PackageUseEntry> {
     // Pre-compute once for all requirements.
     let adj = build_adjacency(edges);
@@ -77,12 +78,13 @@ pub fn build_entries(
         let cpv = Cpv::new(cpn, ver.clone());
         let eff = resolve_effective_use(
             &HashMap::new(),
-            pre_env,
+            defaults,
             &cpv,
             req.package.slot(),
             package_use,
             env_use,
             profile_package_use,
+            conf,
         );
         let mut flags: Vec<String> = Vec::new();
         for f in &req.required_enabled {

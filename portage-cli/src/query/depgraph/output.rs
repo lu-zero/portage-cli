@@ -1327,10 +1327,11 @@ pub(super) struct PrettyCtx<'a> {
     pub data: &'a RepoData,
     pub installed: &'a HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
     pub installed_entries: &'a [super::installed::VdbEntry],
-    pub pre_env: &'a portage_atom_pubgrub::UseLayer,
+    pub defaults: &'a portage_atom_pubgrub::UseLayer,
+    pub conf: &'a portage_atom_pubgrub::UseLayer,
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
-    pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
+    pub profile_package_use: &'a [portage_atom_pubgrub::ProfileUseNode],
     pub use_expand: &'a [String],
     pub use_expand_hidden: &'a [String],
     pub flag_reqs: &'a HashMap<&'a PortagePackage, &'a UseFlagRequirement>,
@@ -1432,7 +1433,8 @@ fn format_plan_parts(
         data,
         installed,
         installed_entries,
-        pre_env,
+        defaults: defaults_layer,
+        conf,
         env_use,
         package_use,
         profile_package_use,
@@ -1468,12 +1470,13 @@ fn format_plan_parts(
         .unwrap_or_default();
     let mut effective_use = resolve_effective_use(
         &defaults,
-        pre_env,
+        defaults_layer,
         &cpv,
         pkg.slot(),
         package_use,
         env_use,
         profile_package_use,
+        conf,
     );
     // `use.force`/`use.mask` (global + package + `*.stable.*`): applied to
     // effective USE (forced on, then masked off — mask wins, matching

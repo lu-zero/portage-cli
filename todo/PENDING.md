@@ -92,6 +92,11 @@ carry an effort estimate.
   **confirmed still accurate 2026-08-18** (untouched by the same-day
   `f5686e8`/coloring fixes), not yet a bug in practice
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
+- USE fold residuals after the 2026-08-19 defaults/conf split (no live
+  canary on stock gentoo — both file types are empty in gentoo/guru/pentoo
+  today): `use.stable`/`package.use.stable` inside defaults
+  ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
+  ([[use-order-repo-layer]])
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 
