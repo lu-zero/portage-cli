@@ -1,4 +1,4 @@
-//! Bridge between [`portage_atom`] and the [`resolvo`] dependency solver.
+//! Bridge between [`portage_atom`] and the [`resolvo`] dependency solver
 //!
 //! This crate maps Portage package atoms, versions, and dependency trees onto
 //! resolvo's generic solver interface, enabling SAT-based dependency resolution

@@ -1,4 +1,4 @@
-//! Arena-based pool mapping resolvo IDs to portage-atom types.
+//! Arena-based pool mapping resolvo IDs to portage-atom types
 //!
 //! [`PortagePool`] provides the storage that backs every resolvo identifier
 //! ([`NameId`], [`SolvableId`], [`VersionSetId`], etc.) with a concrete
@@ -13,7 +13,7 @@ use resolvo::{
     ConditionId, DenseIndex, NameId, SolvableId, StringId, VersionSetId, VersionSetUnionId,
 };
 
-/// A labeled dependency edge between two solvables in a solution.
+/// A labeled dependency edge between two solvables in a solution
 ///
 /// Produced by
 /// [`PortageDependencyProvider::dependency_graph`](crate::PortageDependencyProvider::dependency_graph)
@@ -21,15 +21,15 @@ use resolvo::{
 /// ordering and cycle analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepEdge {
-    /// The depending solvable.
+    /// The depending solvable
     pub from: SolvableId,
-    /// The dependency target.
+    /// The dependency target
     pub to: SolvableId,
-    /// Which dependency class this edge comes from.
+    /// Which dependency class this edge comes from
     pub class: DepClass,
 }
 
-/// Configuration for USE flag evaluation.
+/// Configuration for USE flag evaluation
 ///
 /// Controls how USE-conditional dependency groups (`use? ( deps )`) are
 /// handled during provider construction:
@@ -46,11 +46,11 @@ pub struct DepEdge {
 ///   resolvo conditions have no NOT operator).
 #[derive(Debug, Clone, Default)]
 pub struct UseConfig {
-    /// Flags forced ON: `use? ( deps )` active, `!use? ( deps )` skipped.
+    /// Flags forced ON: `use? ( deps )` active, `!use? ( deps )` skipped
     pub enabled: HashSet<Interned<DefaultInterner>>,
-    /// Flags forced OFF: `use? ( deps )` skipped, `!use? ( deps )` active.
+    /// Flags forced OFF: `use? ( deps )` skipped, `!use? ( deps )` active
     pub disabled: HashSet<Interned<DefaultInterner>>,
-    /// Flags left for the SAT solver to decide (via a `virtual/USE_<flag>`).
+    /// Flags left for the SAT solver to decide (via a `virtual/USE_<flag>`)
     pub solver_decided: HashSet<Interned<DefaultInterner>>,
 }
 
@@ -64,16 +64,16 @@ impl From<HashSet<Interned<DefaultInterner>>> for UseConfig {
     }
 }
 
-/// Package name used as the resolvo name axis.
+/// Package name used as the resolvo name axis
 ///
 /// Slots are encoded into the name so that packages in different slots
 /// (e.g. `dev-lang/python:3.11` vs `dev-lang/python:3.12`) are treated
 /// as independent names by the solver.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PackageName {
-    /// Category/package name.
+    /// Category/package name
     pub cpn: Cpn,
-    /// Slot encoded into the name axis, or `None` when slot-agnostic.
+    /// Slot encoded into the name axis, or `None` when slot-agnostic
     pub slot: Option<Interned<DefaultInterner>>,
 }
 
@@ -87,26 +87,26 @@ impl std::fmt::Display for PackageName {
     }
 }
 
-/// A single candidate version and the metadata resolvo needs to solve it.
+/// A single candidate version and the metadata resolvo needs to solve it
 #[derive(Debug, Clone)]
 pub struct PackageMetadata {
-    /// Category/package/version of this candidate.
+    /// Category/package/version of this candidate
     pub cpv: Cpv,
-    /// Declared slot, if any.
+    /// Declared slot, if any
     pub slot: Option<Interned<DefaultInterner>>,
-    /// Declared subslot, if any.
+    /// Declared subslot, if any
     pub subslot: Option<Interned<DefaultInterner>>,
-    /// Flags declared in `IUSE`.
+    /// Flags declared in `IUSE`
     pub iuse: Vec<Interned<DefaultInterner>>,
-    /// Flags effectively enabled for this candidate.
+    /// Flags effectively enabled for this candidate
     pub use_flags: HashSet<Interned<DefaultInterner>>,
-    /// Originating repository, if known.
+    /// Originating repository, if known
     pub repo: Option<Interned<DefaultInterner>>,
-    /// Dependencies separated by PMS dependency class.
+    /// Dependencies separated by PMS dependency class
     pub dependencies: PackageDeps,
 }
 
-/// Dependency trees separated by PMS dependency class.
+/// Dependency trees separated by PMS dependency class
 ///
 /// Each field corresponds to one ebuild variable:
 /// - `depend` — `DEPEND`: build-time dependencies
@@ -120,20 +120,20 @@ pub struct PackageMetadata {
 /// dependent package.
 #[derive(Debug, Clone, Default)]
 pub struct PackageDeps {
-    /// Build-time dependencies (`DEPEND`).
+    /// Build-time dependencies (`DEPEND`)
     pub depend: Vec<DepEntry>,
-    /// Runtime dependencies (`RDEPEND`).
+    /// Runtime dependencies (`RDEPEND`)
     pub rdepend: Vec<DepEntry>,
-    /// Build host dependencies for cross-compilation (`BDEPEND`).
+    /// Build host dependencies for cross-compilation (`BDEPEND`)
     pub bdepend: Vec<DepEntry>,
-    /// Post-merge dependencies (`PDEPEND`).
+    /// Post-merge dependencies (`PDEPEND`)
     pub pdepend: Vec<DepEntry>,
-    /// Install-time dependencies (`IDEPEND`).
+    /// Install-time dependencies (`IDEPEND`)
     pub idepend: Vec<DepEntry>,
 }
 
 impl PackageDeps {
-    /// Iterate over all dependency classes and their entries.
+    /// Iterate over all dependency classes and their entries
     pub fn iter_classes(&self) -> impl Iterator<Item = (DepClass, &[DepEntry])> {
         [
             (DepClass::Depend, self.depend.as_slice()),
@@ -147,18 +147,18 @@ impl PackageDeps {
     }
 }
 
-/// PMS dependency class.
+/// PMS dependency class
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DepClass {
-    /// `DEPEND` — build-time.
+    /// `DEPEND` — build-time
     Depend,
-    /// `RDEPEND` — runtime.
+    /// `RDEPEND` — runtime
     Rdepend,
-    /// `BDEPEND` — build host (cross-compilation).
+    /// `BDEPEND` — build host (cross-compilation)
     Bdepend,
-    /// `PDEPEND` — post-merge.
+    /// `PDEPEND` — post-merge
     Pdepend,
-    /// `IDEPEND` — install-time.
+    /// `IDEPEND` — install-time
     Idepend,
 }
 
@@ -174,7 +174,7 @@ impl std::fmt::Display for DepClass {
     }
 }
 
-/// Version constraint derived from a [`DepEntry`].
+/// Version constraint derived from a [`DepEntry`]
 ///
 /// For normal (non-blocker) dependencies the constraint is used directly:
 /// `filter_candidates` returns candidates whose version **matches**
@@ -197,21 +197,21 @@ impl std::fmt::Display for DepClass {
 /// evaluation logic.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct VersionConstraint {
-    /// Category/package the constraint applies to.
+    /// Category/package the constraint applies to
     pub cpn: Cpn,
-    /// Comparison operator (`=`, `>=`, `~`, …).
+    /// Comparison operator (`=`, `>=`, `~`, …)
     pub operator: Operator,
-    /// Version operand the operator compares against.
+    /// Version operand the operator compares against
     pub version: Version,
-    /// Whether the version operand is a `=*` glob (`=foo-1.2*`).
+    /// Whether the version operand is a `=*` glob (`=foo-1.2*`)
     pub glob: bool,
-    /// Required slot, if the atom pins one.
+    /// Required slot, if the atom pins one
     pub slot: Option<Interned<DefaultInterner>>,
-    /// Required subslot, if the atom pins one.
+    /// Required subslot, if the atom pins one
     pub subslot: Option<Interned<DefaultInterner>>,
-    /// Required `::repo`, if the atom pins one.
+    /// Required `::repo`, if the atom pins one
     pub repo: Option<Interned<DefaultInterner>>,
-    /// USE constraints `[flag]`/`[-flag]` as `(flag, enabled)` pairs.
+    /// USE constraints `[flag]`/`[-flag]` as `(flag, enabled)` pairs
     pub use_constraints: Vec<(Interned<DefaultInterner>, bool)>,
     /// When `true`, the match result is flipped before resolvo applies its own
     /// `inverse` flag — used to express blockers (see the type docs).
@@ -254,7 +254,7 @@ impl std::fmt::Display for VersionConstraint {
     }
 }
 
-/// Arena-based storage for all resolvo-interned objects.
+/// Arena-based storage for all resolvo-interned objects
 ///
 /// Every resolvo ID type is backed by a `Vec` here, indexed by the ID's
 /// inner `usize`. Reverse-lookup `HashMap`s prevent duplicate interning.
@@ -283,7 +283,7 @@ pub struct PortagePool {
 }
 
 impl PortagePool {
-    /// Create an empty pool.
+    /// Create an empty pool
     pub fn new() -> Self {
         Self {
             names: Vec::new(),
@@ -301,7 +301,7 @@ impl PortagePool {
 
     // --- NameId ---
 
-    /// Intern a package name, returning the existing ID if already interned.
+    /// Intern a package name, returning the existing ID if already interned
     pub fn intern_name(&mut self, name: PackageName) -> NameId {
         if let Some(&id) = self.names_rev.get(&name) {
             return id;
@@ -312,14 +312,14 @@ impl PortagePool {
         id
     }
 
-    /// Look up the [`PackageName`] for a [`NameId`].
+    /// Look up the [`PackageName`] for a [`NameId`]
     pub fn resolve_name(&self, id: NameId) -> &PackageName {
         &self.names[id.to_index()]
     }
 
     // --- SolvableId ---
 
-    /// Add a solvable (concrete package version) to the pool.
+    /// Add a solvable (concrete package version) to the pool
     pub fn intern_solvable(&mut self, name_id: NameId, meta: PackageMetadata) -> SolvableId {
         let id = SolvableId::from_index(self.solvables.len());
         self.solvables.push(meta);
@@ -327,19 +327,19 @@ impl PortagePool {
         id
     }
 
-    /// Look up the metadata for a [`SolvableId`].
+    /// Look up the metadata for a [`SolvableId`]
     pub fn resolve_solvable(&self, id: SolvableId) -> &PackageMetadata {
         &self.solvables[id.to_index()]
     }
 
-    /// Look up the [`NameId`] for a [`SolvableId`].
+    /// Look up the [`NameId`] for a [`SolvableId`]
     pub fn solvable_name(&self, id: SolvableId) -> NameId {
         self.solvable_names[id.to_index()]
     }
 
     // --- VersionSetId ---
 
-    /// Intern a version constraint, deduplicating by value.
+    /// Intern a version constraint, deduplicating by value
     pub fn intern_version_set(
         &mut self,
         name_id: NameId,
@@ -356,59 +356,59 @@ impl PortagePool {
         id
     }
 
-    /// Look up the constraint for a [`VersionSetId`].
+    /// Look up the constraint for a [`VersionSetId`]
     pub fn resolve_version_set(&self, id: VersionSetId) -> &VersionConstraint {
         &self.version_sets[id.to_index()]
     }
 
-    /// Look up the [`NameId`] for a [`VersionSetId`].
+    /// Look up the [`NameId`] for a [`VersionSetId`]
     pub fn version_set_name(&self, id: VersionSetId) -> NameId {
         self.version_set_names[id.to_index()]
     }
 
-    /// Return the number of interned version sets.
+    /// Return the number of interned version sets
     pub fn version_set_count(&self) -> usize {
         self.version_sets.len()
     }
 
     // --- VersionSetUnionId ---
 
-    /// Intern a union (OR) of version sets.
+    /// Intern a union (OR) of version sets
     pub fn intern_version_set_union(&mut self, sets: Vec<VersionSetId>) -> VersionSetUnionId {
         let id = VersionSetUnionId::from_index(self.version_set_unions.len());
         self.version_set_unions.push(sets);
         id
     }
 
-    /// Look up the version sets in a union.
+    /// Look up the version sets in a union
     pub fn resolve_version_set_union(&self, id: VersionSetUnionId) -> &[VersionSetId] {
         &self.version_set_unions[id.to_index()]
     }
 
     // --- ConditionId ---
 
-    /// Intern a condition.
+    /// Intern a condition
     pub fn intern_condition(&mut self, condition: resolvo::Condition) -> ConditionId {
         let id = ConditionId::from_index(self.conditions.len());
         self.conditions.push(condition);
         id
     }
 
-    /// Look up a condition.
+    /// Look up a condition
     pub fn resolve_condition(&self, id: ConditionId) -> &resolvo::Condition {
         &self.conditions[id.to_index()]
     }
 
     // --- StringId ---
 
-    /// Intern a string (used for solver error messages).
+    /// Intern a string (used for solver error messages)
     pub fn intern_string(&mut self, s: String) -> StringId {
         let id = StringId::from_index(self.strings.len());
         self.strings.push(s);
         id
     }
 
-    /// Look up an interned string.
+    /// Look up an interned string
     pub fn resolve_string(&self, id: StringId) -> &str {
         &self.strings[id.to_index()]
     }
@@ -420,18 +420,18 @@ impl Default for PortagePool {
     }
 }
 
-/// Policy for how the solver treats an installed package.
+/// Policy for how the solver treats an installed package
 ///
 /// See [`InstalledSet`] for usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InstalledPolicy {
-    /// Solver prefers this version but may choose a different one.
+    /// Solver prefers this version but may choose a different one
     Favored,
-    /// Solver MUST keep this exact version; solve fails if impossible.
+    /// Solver MUST keep this exact version; solve fails if impossible
     Locked,
 }
 
-/// Packages currently installed on the system.
+/// Packages currently installed on the system
 ///
 /// Installed packages not found in the repository are injected into the
 /// candidate pool automatically so the solver can reference them.
@@ -450,22 +450,22 @@ pub struct InstalledSet {
 }
 
 impl InstalledSet {
-    /// Create an empty installed set.
+    /// Create an empty installed set
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Add a package with an explicit policy.
+    /// Add a package with an explicit policy
     pub fn add(&mut self, meta: PackageMetadata, policy: InstalledPolicy) {
         self.packages.push((meta, policy));
     }
 
-    /// Add a package as [`InstalledPolicy::Favored`] (soft preference).
+    /// Add a package as [`InstalledPolicy::Favored`] (soft preference)
     pub fn add_favored(&mut self, meta: PackageMetadata) {
         self.packages.push((meta, InstalledPolicy::Favored));
     }
 
-    /// Add a package as [`InstalledPolicy::Locked`] (hard constraint).
+    /// Add a package as [`InstalledPolicy::Locked`] (hard constraint)
     pub fn add_locked(&mut self, meta: PackageMetadata) {
         self.packages.push((meta, InstalledPolicy::Locked));
     }

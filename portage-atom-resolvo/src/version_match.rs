@@ -1,4 +1,4 @@
-//! PMS version matching operators.
+//! PMS version matching operators
 //!
 //! Implements [PMS 8.3.2](https://projects.gentoo.org/pms/9/pms.html#block-operator):
 //! given a candidate version, an operator, and a constraint version, determine

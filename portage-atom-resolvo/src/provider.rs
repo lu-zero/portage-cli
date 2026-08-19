@@ -1,4 +1,4 @@
-//! Bridge between portage-atom and resolvo's [`DependencyProvider`] trait.
+//! Bridge between portage-atom and resolvo's [`DependencyProvider`] trait
 //!
 //! [`PortageDependencyProvider`] pre-populates a [`PortagePool`] from a
 //! [`PackageRepository`] and implements both [`Interner`] and
@@ -25,7 +25,7 @@ use crate::pool::{
 use crate::repository::PackageRepository;
 use crate::version_match::version_matches;
 
-/// Internal data for a solver-decided USE flag.
+/// Internal data for a solver-decided USE flag
 ///
 /// Each solver-decided flag is modelled as a complementary pair of virtual
 /// solvables (`virtual/USE_<flag>` and `virtual/NotUSE_<flag>`) with mutual
@@ -33,9 +33,9 @@ use crate::version_match::version_matches;
 /// `|| ( NotUSE_<flag> USE_<flag> )` requirement so the solver is forced to
 /// pick exactly one.
 struct FlagVirtuals {
-    /// Condition true when the flag is ON (`virtual/USE_<flag>` selected).
+    /// Condition true when the flag is ON (`virtual/USE_<flag>` selected)
     on_condition: ConditionId,
-    /// Condition true when the flag is OFF (`virtual/NotUSE_<flag>` selected).
+    /// Condition true when the flag is OFF (`virtual/NotUSE_<flag>` selected)
     off_condition: ConditionId,
     /// Pre-computed union `|| ( NotUSE_<flag> USE_<flag> )` — injected into
     /// every solvable that references the flag.  `NotUSE` is listed first
@@ -43,7 +43,7 @@ struct FlagVirtuals {
     choice_union: VersionSetUnionId,
 }
 
-/// Mutable state threaded through dependency tree conversion.
+/// Mutable state threaded through dependency tree conversion
 struct ConvertContext<'a> {
     pool: &'a mut PortagePool,
     cpn_slots: &'a mut HashMap<Cpn, Vec<NameId>>,
@@ -57,7 +57,7 @@ struct ConvertContext<'a> {
     xof_counter: &'a mut usize,
 }
 
-/// Dependency provider bridging portage-atom types to the resolvo solver.
+/// Dependency provider bridging portage-atom types to the resolvo solver
 ///
 /// Construction eagerly walks every package in the repository, interns all
 /// solvables and dependency trees into the pool, and pre-computes
@@ -65,29 +65,29 @@ struct ConvertContext<'a> {
 /// read-only and suitable for passing to [`resolvo::Solver::new`].
 pub struct PortageDependencyProvider {
     pub(crate) pool: PortagePool,
-    /// Pre-computed candidates per name.
+    /// Pre-computed candidates per name
     candidates: HashMap<NameId, Vec<SolvableId>>,
-    /// Pre-computed dependencies per solvable.
+    /// Pre-computed dependencies per solvable
     dependencies: HashMap<SolvableId, KnownDependencies>,
-    /// Map from unversioned CPN to all slotted NameIds known for that CPN.
+    /// Map from unversioned CPN to all slotted NameIds known for that CPN
     cpn_slots: HashMap<Cpn, Vec<NameId>>,
-    /// Blocker type for each version set that came from a blocker dep.
+    /// Blocker type for each version set that came from a blocker dep
     /// Only populated for `constrains` entries; absent means not a blocker.
     blocker_types: HashMap<VersionSetId, Blocker>,
-    /// Version sets that carry a `:=` slot operator (rebuild trigger).
+    /// Version sets that carry a `:=` slot operator (rebuild trigger)
     /// When the dependency's slot or sub-slot changes, the dependent
     /// package must be rebuilt.
     rebuild_triggers: HashSet<VersionSetId>,
     flag_virtuals: HashMap<Interned<DefaultInterner>, FlagVirtuals>,
     use_config: UseConfig,
-    /// SolvableId to favor per NameId (installed, soft preference).
+    /// SolvableId to favor per NameId (installed, soft preference)
     favored: HashMap<NameId, SolvableId>,
-    /// SolvableId to lock per NameId (installed, hard constraint).
+    /// SolvableId to lock per NameId (installed, hard constraint)
     locked: HashMap<NameId, SolvableId>,
 }
 
 impl PortageDependencyProvider {
-    /// Build a provider from a repository and a [`UseConfig`].
+    /// Build a provider from a repository and a [`UseConfig`]
     ///
     /// Flags listed in [`UseConfig::enabled`] / [`UseConfig::disabled`] are
     /// eagerly evaluated at construction time (same as the old behaviour).
@@ -573,7 +573,7 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Convert a single dependency atom into requirements/constrains.
+    /// Convert a single dependency atom into requirements/constrains
     ///
     /// When a dep specifies a slot, the requirement targets a single slotted
     /// [`NameId`]. When no slot is specified, the requirement becomes a union
@@ -716,7 +716,7 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Convert an `|| ( ... )` group into a `Requirement::Union`.
+    /// Convert an `|| ( ... )` group into a `Requirement::Union`
     fn convert_any_of(
         alternatives: &[DepEntry],
         ctx: &mut ConvertContext<'_>,
@@ -879,7 +879,7 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Intern a root requirement for use in [`resolvo::Problem`].
+    /// Intern a root requirement for use in [`resolvo::Problem`]
     ///
     /// Call this for every top-level package the user wants installed,
     /// then pass the resulting [`ConditionalRequirement`]s to
@@ -987,12 +987,12 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Access the underlying pool (for inspecting solution results).
+    /// Access the underlying pool (for inspecting solution results)
     pub fn pool(&self) -> &PortagePool {
         &self.pool
     }
 
-    /// Debug: return display names for all NameIds that have no candidates.
+    /// Debug: return display names for all NameIds that have no candidates
     pub fn debug_empty_candidates(&self) -> Vec<String> {
         let mut empty = Vec::new();
         for (name_id, solvables) in &self.candidates {
@@ -1005,7 +1005,7 @@ impl PortageDependencyProvider {
         empty
     }
 
-    /// Look up the [`PackageMetadata`] for a solved [`SolvableId`].
+    /// Look up the [`PackageMetadata`] for a solved [`SolvableId`]
     pub fn package_metadata(&self, solvable: SolvableId) -> &PackageMetadata {
         self.pool.resolve_solvable(solvable)
     }
@@ -1037,7 +1037,7 @@ impl PortageDependencyProvider {
         self.flag_virtuals.get(&flag).map(|fv| fv.off_condition)
     }
 
-    /// Build a labeled dependency graph from a solver solution.
+    /// Build a labeled dependency graph from a solver solution
     ///
     /// For each solvable in `solution`, walks its structured dependency
     /// tree and emits a [`DepEdge`] for every non-blocker atom that
@@ -1056,7 +1056,7 @@ impl PortageDependencyProvider {
         edges
     }
 
-    /// Recursively walk dep entries and emit edges.
+    /// Recursively walk dep entries and emit edges
     fn collect_dep_edges(
         &self,
         from: SolvableId,
@@ -1104,7 +1104,7 @@ impl PortageDependencyProvider {
         }
     }
 
-    /// Compute an install order from a solver solution.
+    /// Compute an install order from a solver solution
     ///
     /// Returns `Ok(ordered)` with solvables in installation order
     /// (dependencies before dependents), or `Err(cycle_members)` if
@@ -1387,7 +1387,7 @@ impl resolvo::DependencyProvider for PortageDependencyProvider {
 
 // --- helpers ---
 
-/// Extract the slot and sub-slot from a [`Dep`]'s slot dependency.
+/// Extract the slot and sub-slot from a [`Dep`]'s slot dependency
 ///
 /// Returns `(slot, subslot)`. `:*` and `:=` return `(None, None)`,
 /// which makes `slot_matches` accept all candidates regardless of
@@ -1409,7 +1409,7 @@ fn extract_slot(
     }
 }
 
-/// Check whether a dep carries a `:=` slot operator (rebuild trigger).
+/// Check whether a dep carries a `:=` slot operator (rebuild trigger)
 ///
 /// This matches both bare `:=` and named-slot `:SLOT=` forms.
 fn has_slot_equal_op(dep: &Dep) -> bool {
@@ -1423,7 +1423,7 @@ fn has_slot_equal_op(dep: &Dep) -> bool {
     )
 }
 
-/// Extract operator and bare version from a dep (defaults to `>=0` for unversioned).
+/// Extract operator and bare version from a dep (defaults to `>=0` for unversioned)
 fn dep_op_version(dep: &Dep) -> (Operator, Version) {
     match &dep.version {
         Some(v) => {
@@ -1434,7 +1434,7 @@ fn dep_op_version(dep: &Dep) -> (Operator, Version) {
     }
 }
 
-/// Check whether a candidate's slot, sub-slot, and repository match the constraint.
+/// Check whether a candidate's slot, sub-slot, and repository match the constraint
 ///
 /// USE-dep constraints are **not** enforced here — they require profile
 /// context (enabled/disabled flags) that isn't available at solve time.
@@ -1458,7 +1458,7 @@ fn slot_matches(meta: &PackageMetadata, constraint: &VersionConstraint) -> bool 
     true
 }
 
-/// Check whether a dependency atom matches a concrete package version.
+/// Check whether a dependency atom matches a concrete package version
 ///
 /// This is the post-solve counterpart of `filter_candidates`: it tests
 /// CPN, version operator, slot, sub-slot, repository, and USE dep

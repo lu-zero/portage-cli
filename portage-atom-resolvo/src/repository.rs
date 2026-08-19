@@ -1,4 +1,4 @@
-//! Package repository abstraction.
+//! Package repository abstraction
 //!
 //! [`PackageRepository`] provides read-only access to a package database.
 //! [`InMemoryRepository`] is a simple implementation for testing.
@@ -9,29 +9,29 @@ use portage_atom::Cpn;
 
 use crate::pool::PackageMetadata;
 
-/// Read-only package database.
+/// Read-only package database
 pub trait PackageRepository {
-    /// Return all distinct category/package names in the repository.
+    /// Return all distinct category/package names in the repository
     fn all_packages(&self) -> Vec<Cpn>;
 
-    /// Return every version available for the given category/package.
+    /// Return every version available for the given category/package
     fn versions_for(&self, cpn: &Cpn) -> Vec<PackageMetadata>;
 }
 
-/// In-memory repository backed by a `HashMap`, useful for tests.
+/// In-memory repository backed by a `HashMap`, useful for tests
 pub struct InMemoryRepository {
     packages: HashMap<Cpn, Vec<PackageMetadata>>,
 }
 
 impl InMemoryRepository {
-    /// Create an empty repository.
+    /// Create an empty repository
     pub fn new() -> Self {
         Self {
             packages: HashMap::new(),
         }
     }
 
-    /// Add a package version to the repository.
+    /// Add a package version to the repository
     pub fn add(&mut self, meta: PackageMetadata) {
         self.packages.entry(meta.cpv.cpn).or_default().push(meta);
     }
