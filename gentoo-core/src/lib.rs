@@ -1,4 +1,4 @@
-//! Core Gentoo types and utilities.
+//! Core Gentoo types and utilities
 //!
 //! This crate provides efficient types for working with Gentoo architecture
 //! keywords and release media variants. It is designed for use in tools that
@@ -31,7 +31,7 @@
 pub mod arch;
 mod error;
 pub mod interner {
-    //! String interning for efficient string storage.
+    //! String interning for efficient string storage
     pub use gentoo_interner::*;
 }
 pub mod variant;
@@ -40,10 +40,10 @@ pub use error::Error;
 
 pub use arch::KnownArch;
 
-/// A Gentoo architecture, either well-known or overlay-defined.
+/// A Gentoo architecture, either well-known or overlay-defined
 pub type Arch = arch::Arch<interner::DefaultInterner>;
 
-/// A Gentoo release media variant (e.g., `amd64-openrc`, `arm64-systemd`).
+/// A Gentoo release media variant (e.g., `amd64-openrc`, `arm64-systemd`)
 pub type Variant = variant::Variant<interner::DefaultInterner>;
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! Gentoo architecture types.
+//! Gentoo architecture types
 //!
 //! This module provides types for representing CPU architectures as they
 //! appear in Gentoo's keyword system:
@@ -22,7 +22,7 @@ use std::str::FromStr;
 use crate::Error;
 use gentoo_interner::{DefaultInterner, Interned, Interner};
 
-/// A CPU architecture officially supported by Gentoo Linux.
+/// A CPU architecture officially supported by Gentoo Linux
 ///
 /// Represents the 18 architectures with stable or testing keywords in the
 /// Gentoo ebuild repository. Each variant maps to a canonical Gentoo keyword
@@ -50,46 +50,46 @@ use gentoo_interner::{DefaultInterner, Interned, Interner};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KnownArch {
-    /// 32-bit ARM (keyword `arm`).
+    /// 32-bit ARM (keyword `arm`)
     Arm,
-    /// 64-bit ARM / AArch64 (keyword `arm64`).
+    /// 64-bit ARM / AArch64 (keyword `arm64`)
     AArch64,
-    /// 32-bit x86 (keyword `x86`).
+    /// 32-bit x86 (keyword `x86`)
     X86,
-    /// 64-bit x86 / x86-64 (keyword `amd64`).
+    /// 64-bit x86 / x86-64 (keyword `amd64`)
     X86_64,
-    /// 32-bit RISC-V (keyword `riscv`).
+    /// 32-bit RISC-V (keyword `riscv`)
     Riscv32,
-    /// 64-bit RISC-V (keyword `riscv`).
+    /// 64-bit RISC-V (keyword `riscv`)
     Riscv64,
-    /// 32-bit PowerPC (keyword `ppc`).
+    /// 32-bit PowerPC (keyword `ppc`)
     Powerpc,
-    /// 64-bit PowerPC (keyword `ppc64`).
+    /// 64-bit PowerPC (keyword `ppc64`)
     Powerpc64,
-    /// 32-bit MIPS (keyword `mips`).
+    /// 32-bit MIPS (keyword `mips`)
     Mips,
-    /// 64-bit MIPS (keyword `mips`).
+    /// 64-bit MIPS (keyword `mips`)
     Mips64,
-    /// 32-bit SPARC (keyword `sparc`).
+    /// 32-bit SPARC (keyword `sparc`)
     Sparc,
-    /// 64-bit SPARC (keyword `sparc`).
+    /// 64-bit SPARC (keyword `sparc`)
     Sparc64,
-    /// 64-bit IBM Z / s390x (keyword `s390`).
+    /// 64-bit IBM Z / s390x (keyword `s390`)
     S390x,
-    /// Motorola 68000 series (keyword `m68k`).
+    /// Motorola 68000 series (keyword `m68k`)
     M68k,
-    /// 64-bit LoongArch (keyword `loong`).
+    /// 64-bit LoongArch (keyword `loong`)
     LoongArch64,
-    /// DEC Alpha (keyword `alpha`).
+    /// DEC Alpha (keyword `alpha`)
     Alpha,
-    /// HP PA-RISC (keyword `hppa`).
+    /// HP PA-RISC (keyword `hppa`)
     Hppa,
-    /// Intel Itanium / IA-64 (keyword `ia64`).
+    /// Intel Itanium / IA-64 (keyword `ia64`)
     Ia64,
 }
 
 impl KnownArch {
-    /// Gentoo keyword string for this architecture (e.g. `"amd64"`).
+    /// Gentoo keyword string for this architecture (e.g. `"amd64"`)
     pub fn as_keyword(&self) -> &'static str {
         match self {
             KnownArch::Arm => "arm",
@@ -110,7 +110,7 @@ impl KnownArch {
         }
     }
 
-    /// Parse from a keyword or common alias string (case-insensitive).
+    /// Parse from a keyword or common alias string (case-insensitive)
     pub fn parse(arch: &str) -> Result<Self, Error> {
         match arch.to_lowercase().as_str() {
             "arm" | "armv7" | "armv7a" | "armv7l" | "armv7hl" => Ok(KnownArch::Arm),
@@ -135,7 +135,7 @@ impl KnownArch {
         }
     }
 
-    /// Bitness (32 or 64) of this architecture.
+    /// Bitness (32 or 64) of this architecture
     pub fn bitness(&self) -> u32 {
         match self {
             KnownArch::Arm
@@ -159,7 +159,7 @@ impl KnownArch {
         }
     }
 
-    /// Current system architecture from [`std::env::consts::ARCH`].
+    /// Current system architecture from [`std::env::consts::ARCH`]
     pub fn current() -> Result<Self, Error> {
         Self::parse(std::env::consts::ARCH)
     }
@@ -200,13 +200,13 @@ impl FromStr for KnownArch {
 
 // ── Arch<I> ───────────────────────────────────────────────────────────────────
 
-/// Opaque key for an overlay-defined keyword string.
+/// Opaque key for an overlay-defined keyword string
 ///
 /// Type alias for [`Interned<I>`](crate::interner::Interned).
 /// See that type for the full API and serde behaviour.
 pub type ExoticKey<I> = Interned<I>;
 
-/// A Gentoo architecture keyword.
+/// A Gentoo architecture keyword
 ///
 /// Represents either a well-known Gentoo architecture or an overlay-specific
 /// keyword string. This type is used when parsing ebuild `KEYWORDS` or other
@@ -241,9 +241,9 @@ pub enum Arch<I = DefaultInterner>
 where
     I: Interner,
 {
-    /// A well-known Gentoo architecture keyword.
+    /// A well-known Gentoo architecture keyword
     Known(KnownArch),
-    /// An overlay-defined keyword string interned via `I`.
+    /// An overlay-defined keyword string interned via `I`
     Exotic(ExoticKey<I>),
 }
 
@@ -259,7 +259,7 @@ impl<I: Interner> Clone for Arch<I> {
 impl<I: Interner> Copy for Arch<I> where Interned<I>: Copy {}
 
 impl<I: Interner> Arch<I> {
-    /// Intern `keyword` using the interner `I`.
+    /// Intern `keyword` using the interner `I`
     pub fn intern(keyword: &str) -> Self {
         if let Ok(known) = KnownArch::parse(keyword) {
             Self::Known(known)
@@ -268,7 +268,7 @@ impl<I: Interner> Arch<I> {
         }
     }
 
-    /// Current system architecture as its Gentoo keyword.
+    /// Current system architecture as its Gentoo keyword
     ///
     /// Returns `Known` for recognized architectures, `Exotic` otherwise.
     ///
@@ -281,7 +281,7 @@ impl<I: Interner> Arch<I> {
         Self::intern(current_keyword())
     }
 
-    /// Extract the CPU arch from a GNU CHOST triple using the interner `I`.
+    /// Extract the CPU arch from a GNU CHOST triple using the interner `I`
     ///
     /// Returns `None` only when `chost` is empty.
     pub fn from_chost(chost: &str) -> Option<Self> {
@@ -289,7 +289,7 @@ impl<I: Interner> Arch<I> {
         Some(Self::intern(&normalize_chost_cpu(cpu)))
     }
 
-    /// Resolve to the Gentoo keyword string using the interner `I`.
+    /// Resolve to the Gentoo keyword string using the interner `I`
     pub fn as_str(&self) -> &str {
         match self {
             Self::Known(arch) => arch.as_keyword(),
@@ -297,7 +297,7 @@ impl<I: Interner> Arch<I> {
         }
     }
 
-    /// The Gentoo keyword for this architecture.
+    /// The Gentoo keyword for this architecture
     ///
     /// For known architectures, returns the canonical keyword (e.g., `"amd64"`).
     /// For exotic architectures, returns the interned string directly.
@@ -306,7 +306,7 @@ impl<I: Interner> Arch<I> {
     }
 }
 
-/// The Gentoo keyword for the platform this binary runs on.
+/// The Gentoo keyword for the platform this binary runs on
 ///
 /// Gentoo Prefix on macOS keys keywords by an OS-suffixed arch (`arm64-macos`,
 /// `x64-macos`, `x86-macos`, `ppc-macos`, `ppc64-macos`) whose CPU spelling also
@@ -365,7 +365,7 @@ impl<I: Interner> FromStr for Arch<I> {
     }
 }
 
-/// Normalise the CPU field of a GNU CHOST triple before matching known arches.
+/// Normalise the CPU field of a GNU CHOST triple before matching known arches
 fn normalize_chost_cpu(cpu: &str) -> String {
     let s = cpu.to_lowercase();
 
@@ -416,7 +416,7 @@ impl<I: Interner> serde::Serialize for Arch<I> {
     }
 }
 
-/// Deserializes from the keyword string, interning via `I`.
+/// Deserializes from the keyword string, interning via `I`
 #[cfg(feature = "serde")]
 impl<'de, I: Interner> serde::Deserialize<'de> for Arch<I> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {

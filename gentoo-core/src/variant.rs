@@ -1,4 +1,4 @@
-//! Gentoo release media variants.
+//! Gentoo release media variants
 //!
 //! This module provides [`Variant`], a type representing the `{arch}-{tag}`
 //! format used for Gentoo release media (stage3 tarballs, ISO images, and
@@ -35,7 +35,7 @@ use gentoo_interner::{DefaultInterner, Interned, Interner};
 use std::fmt;
 use std::str::FromStr;
 
-/// A Gentoo release media variant.
+/// A Gentoo release media variant
 ///
 /// Represents the `{arch}-{tag}` format used for stage3 tarballs, ISO images,
 /// and profile selections. The tag encodes the init system and profile variant
@@ -63,9 +63,9 @@ pub struct Variant<I = DefaultInterner>
 where
     I: Interner,
 {
-    /// Variant architecture.
+    /// Variant architecture
     pub arch: Arch<I>,
-    /// Interned flavor/profile string (e.g. `"openrc"`, `"systemd"`).
+    /// Interned flavor/profile string (e.g. `"openrc"`, `"systemd"`)
     flavor: Interned<I>,
 }
 
@@ -81,7 +81,7 @@ impl<I: Interner> Clone for Variant<I> {
 impl<I: Interner> Copy for Variant<I> where Interned<I>: Copy {}
 
 impl<I: Interner> Variant<I> {
-    /// Create a variant from an arch and a flavor string using interner `I`.
+    /// Create a variant from an arch and a flavor string using interner `I`
     pub(crate) fn new(arch: Arch<I>, flavor: &str) -> Self {
         Self {
             arch,
@@ -89,18 +89,18 @@ impl<I: Interner> Variant<I> {
         }
     }
 
-    /// Parse arch + flavor strings using the interner `I`.
+    /// Parse arch + flavor strings using the interner `I`
     pub fn parse(arch: &str, flavor: &str) -> Result<Self, Error> {
         let arch = Arch::intern(arch);
         Ok(Self::new(arch, flavor))
     }
 
-    /// Resolve the flavor string using the interner `I`.
+    /// Resolve the flavor string using the interner `I`
     pub fn flavor(&self) -> &str {
         self.flavor.resolve()
     }
 
-    /// The Gentoo keyword for this variant's architecture.
+    /// The Gentoo keyword for this variant's architecture
     pub fn keyword(&self) -> &str {
         self.arch.as_str()
     }
