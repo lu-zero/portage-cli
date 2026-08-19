@@ -8,19 +8,19 @@ use super::ini;
 use super::repository::Repository;
 use crate::error::Result;
 
-/// Where a configured repository's packages live.
+/// Where a configured repository's packages live
 #[derive(Debug, Clone)]
 pub enum Location {
-    /// A real on-disk repository at this path.
+    /// A real on-disk repository at this path
     Path(PathBuf),
     /// A virtual repository: no on-disk tree. Packages are derived from a
     /// source repo, re-categorized under one or more destination categories.
     /// Used by `crossdev` to present `cross-<tuple>/<pkg>` packages without a
     /// symlink overlay.
     Alias {
-        /// The source repo name (e.g. `"gentoo"`) whose packages are aliased.
+        /// The source repo name (e.g. `"gentoo"`) whose packages are aliased
         source: String,
-        /// Destination category → source cpns within [`source`](Self::Alias::source).
+        /// Destination category → source cpns within [`source`](Self::Alias::source)
         /// Key: the category the packages appear under in this virtual repo
         /// (e.g. `cross-riscv64-unknown-linux-gnu`). Value: the real cpns
         /// (e.g. `sys-devel/gcc`) whose versions + metadata are cloned.
@@ -29,7 +29,7 @@ pub enum Location {
 }
 
 impl Location {
-    /// The on-disk path, if this is a real [`Location::Path`].
+    /// The on-disk path, if this is a real [`Location::Path`]
     pub fn as_path(&self) -> Option<&Path> {
         match self {
             Location::Path(p) => Some(p.as_path()),
@@ -38,12 +38,12 @@ impl Location {
     }
 }
 
-/// A single repository entry parsed from `repos.conf`.
+/// A single repository entry parsed from `repos.conf`
 #[derive(Debug, Clone)]
 pub struct RepoEntry {
-    /// Section name (e.g. `gentoo`, `crossdev`).
+    /// Section name (e.g. `gentoo`, `crossdev`)
     pub name: String,
-    /// Where the repository's packages live: a real path or a virtual alias.
+    /// Where the repository's packages live: a real path or a virtual alias
     pub location: Location,
     /// `masters` from repos.conf. `None` means the key is absent from every
     /// `repos.conf` file for this repo — real portage then falls back to
@@ -54,11 +54,11 @@ pub struct RepoEntry {
     /// all, even `masters =` on its own — many hand-maintained overlays
     /// declare masters only in repos.conf and ship no layout.conf.
     pub masters: Option<Vec<String>>,
-    /// `sync-type` from repos.conf (`git`, `rsync`, …). Empty means unsyncable.
+    /// `sync-type` from repos.conf (`git`, `rsync`, …). Empty means unsyncable
     pub sync_type: Option<String>,
-    /// `sync-uri` from repos.conf (remote URL for the sync module).
+    /// `sync-uri` from repos.conf (remote URL for the sync module)
     pub sync_uri: Option<String>,
-    /// `auto-sync` from repos.conf. Defaults to `true` when unset (Portage).
+    /// `auto-sync` from repos.conf. Defaults to `true` when unset (Portage)
     pub auto_sync: bool,
     /// `volatile` from repos.conf. When `true`, sync must not clobber local
     /// changes (`git reset --hard` / `clean`). Unset means “infer from
@@ -77,7 +77,7 @@ pub struct RepoEntry {
 }
 
 impl RepoEntry {
-    /// Whether this entry can be synced (has both type and URI, on-disk path).
+    /// Whether this entry can be synced (has both type and URI, on-disk path)
     pub fn is_syncable(&self) -> bool {
         self.location.as_path().is_some()
             && self.sync_type.as_ref().is_some_and(|t| !t.is_empty())
@@ -85,7 +85,7 @@ impl RepoEntry {
     }
 }
 
-/// Parsed `repos.conf` describing every configured repository.
+/// Parsed `repos.conf` describing every configured repository
 ///
 /// The Gentoo `repos.conf` format is read from multiple locations in
 /// override order. Sections sharing a `[name]` are merged key-by-key,
@@ -238,13 +238,13 @@ impl ReposConf {
         &self.repos
     }
 
-    /// The main repo, if a `[DEFAULT] main-repo` is set and resolves.
+    /// The main repo, if a `[DEFAULT] main-repo` is set and resolves
     pub fn main_repo(&self) -> Option<&RepoEntry> {
         let name = self.main_repo.as_deref()?;
         self.repos.iter().find(|r| r.name == name)
     }
 
-    /// Look up an entry by repository name.
+    /// Look up an entry by repository name
     pub fn find(&self, name: &str) -> Option<&RepoEntry> {
         self.repos.iter().find(|r| r.name == name)
     }

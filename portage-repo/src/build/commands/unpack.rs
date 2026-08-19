@@ -109,12 +109,13 @@ impl builtins::Command for UnpackCommand {
     }
 }
 
-/// Resolve an `unpack` argument to the on-disk distfile it names, per PMS
-/// 12.3.11: a bare filename (no path separator) is looked up in `$DISTDIR`
-/// (or its read-only fallbacks); anything containing a path separator is
-/// used as given — absolute as-is, `./`-relative resolved against `cwd`
-/// (the file the ebuild itself just created there, e.g. a `cp foo.whl
-/// foo.whl.zip` before re-unpacking it as a zip).
+/// Resolve an `unpack` argument to the on-disk distfile it names
+///
+/// Per PMS 12.3.11: a bare filename (no path separator) is looked up in
+/// `$DISTDIR` (or its read-only fallbacks); anything containing a path
+/// separator is used as given — absolute as-is, `./`-relative resolved
+/// against `cwd` (the file the ebuild itself just created there, e.g. a
+/// `cp foo.whl foo.whl.zip` before re-unpacking it as a zip).
 fn resolve_src_path(
     archive: &str,
     cwd: &std::path::Path,
@@ -153,7 +154,7 @@ fn resolve_src_path(
     }
 }
 
-/// Dispatch extraction of `src` into `cwd` based on file extension.
+/// Dispatch extraction of `src` into `cwd` based on file extension
 fn unpack_archive(src: &std::path::Path, cwd: &std::path::Path, eapi: u32) -> Result<u8, String> {
     let name = src
         .file_name()

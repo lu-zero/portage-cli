@@ -1,4 +1,4 @@
-//! Parallel ebuild sourcing.
+//! Parallel ebuild sourcing
 //!
 //! - [`source_parallel`] — worker pool; results as a stream (completion order)
 //! - [`source_single`] — source one ebuild (emerge cache-miss path)
@@ -14,7 +14,7 @@ use portage_metadata::EbuildMetadata;
 
 use crate::{Ebuild, Repository, Result};
 
-/// Result of sourcing an ebuild.
+/// Result of sourcing an ebuild
 ///
 /// Bundles the extracted metadata with the resolved file paths of every
 /// eclass that was sourced (in inheritance order). The paths come from the
@@ -23,18 +23,18 @@ use crate::{Ebuild, Repository, Result};
 /// than the local repo — which a name-based lookup at write time cannot.
 #[derive(Debug, Clone)]
 pub struct SourcedEbuild {
-    /// Parsed metadata variables (DEPEND, IUSE, EAPI, …).
+    /// Parsed metadata variables (DEPEND, IUSE, EAPI, …)
     pub metadata: EbuildMetadata,
-    /// Eclasses sourced for this ebuild, paired `(name, file path)`.
+    /// Eclasses sourced for this ebuild, paired `(name, file path)`
     pub eclasses: Vec<(String, Utf8PathBuf)>,
 }
 
-/// One finished source attempt, in completion order.
+/// One finished source attempt, in completion order
 pub type SourceItem = (Ebuild, Result<SourcedEbuild>);
 
 type AstCache = Arc<papaya::HashMap<String, brush_parser::ast::Program>>;
 
-/// Shared eclass AST cache.
+/// Shared eclass AST cache
 ///
 /// Create once per run and pass the same instance to every sourcing call.
 /// The internal brush AST types are not part of the public API.
@@ -42,22 +42,22 @@ type AstCache = Arc<papaya::HashMap<String, brush_parser::ast::Program>>;
 pub struct SourceContext(pub(crate) AstCache);
 
 impl SourceContext {
-    /// Create a fresh (empty) sourcing context.
+    /// Create a fresh (empty) sourcing context
     pub fn new() -> Self {
         Self(Arc::new(papaya::HashMap::new()))
     }
 }
 
-/// Options for sourcing operations.
+/// Options for sourcing operations
 #[derive(Debug, Clone, Default)]
 pub struct SourceOpts {
-    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`].
+    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`]
     pub jobs: Option<usize>,
-    /// Deduplicate top-level dep tokens before returning metadata.
+    /// Deduplicate top-level dep tokens before returning metadata
     pub dedup: bool,
 }
 
-/// Source `ebuilds` in parallel; return a stream of outcomes in completion order.
+/// Source `ebuilds` in parallel; return a stream of outcomes in completion order
 ///
 /// Must be called from a Tokio runtime. Drain the receiver until it
 /// disconnects. Per-ebuild failures are `Err` items; the pool keeps going.
@@ -87,7 +87,7 @@ pub fn source_parallel(
     out_rx
 }
 
-/// Classic worker pool: feed work, run `on_result` on the worker task, join.
+/// Classic worker pool: feed work, run `on_result` on the worker task, join
 ///
 /// Kept as the shared engine for [`source_parallel`] and [`crate::cache::regen_cache`]
 /// so the stream API does not change the scheduling shape.
@@ -144,7 +144,7 @@ where
     Ok(())
 }
 
-/// Source a single ebuild and return its metadata.
+/// Source a single ebuild and return its metadata
 ///
 /// Use this for the emerge cache-miss path where spawning a full worker pool
 /// would be wasteful. Reuse the same `ctx` across multiple calls in one run.

@@ -1,4 +1,4 @@
-//! Parser and editor for `/etc/portage/make.conf`.
+//! Parser and editor for `/etc/portage/make.conf`
 //!
 //! Uses `brush-parser`'s winnow-based parser for syntactic analysis of
 //! variable assignments.  Comments are preserved precisely: brush-parser's
@@ -40,15 +40,15 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::{ConfigFilesMode, Error, Result, list_config_files};
 
-/// Default path to the active make.conf.
+/// Default path to the active make.conf
 pub const DEFAULT_MAKE_CONF: &str = "/etc/portage/make.conf";
-/// Legacy path, used as a fallback when the default does not exist.
+/// Legacy path, used as a fallback when the default does not exist
 pub const LEGACY_MAKE_CONF: &str = "/etc/make.conf";
 
-/// Fragment name created when saving USE edits into an empty `make.conf/` dir.
+/// Fragment name created when saving USE edits into an empty `make.conf/` dir
 pub const MAKE_CONF_DIR_FALLBACK_FRAGMENT: &str = "zz-em";
 
-/// A parsed and editable make.conf file.
+/// A parsed and editable make.conf file
 pub struct MakeConf {
     src: String,
     entries: Vec<Entry>,
@@ -78,30 +78,34 @@ where
     Ok(out)
 }
 
-/// One element in the tiled decomposition of the source file.
+/// One element in the tiled decomposition of the source file
 enum Entry {
-    /// Raw bytes not covered by the AST: comments, blank lines, leading /
-    /// trailing whitespace between statements.  Reproduced verbatim on
-    /// serialisation.
+    /// Raw bytes not covered by the AST
+    ///
+    /// Comments, blank lines, leading / trailing whitespace between
+    /// statements. Reproduced verbatim on serialisation.
     Opaque(Range<usize>),
 
     /// A bash statement that consists entirely of variable assignments
-    /// (no command name).  Covers from the first token of the statement to
-    /// the end of the `\n`-terminated logical line (including any trailing
-    /// inline comment).
+    /// (no command name)
+    ///
+    /// Covers from the first token of the statement to the end of the
+    /// `\n`-terminated logical line (including any trailing inline
+    /// comment).
     Statement {
-        /// Byte span in `src` for the full logical line.
+        /// Byte span in `src` for the full logical line
         span: Range<usize>,
         vars: Vec<Var>,
     },
 }
 
-/// A single variable assignment within a statement.
+/// A single variable assignment within a statement
 struct Var {
     name: String,
-    /// `true` for `NAME+=VALUE` (append), `false` for `NAME=VALUE` (assign).
+    /// `true` for `NAME+=VALUE` (append), `false` for `NAME=VALUE` (assign)
     append: bool,
-    /// Byte range of the raw value in `src`, **excluding** surrounding quotes.
+    /// Byte range of the raw value in `src`, **excluding** surrounding quotes
+    ///
     /// Empty range for `FOO=` (no value).
     value: Range<usize>,
 }
@@ -111,7 +115,7 @@ struct Var {
 // ---------------------------------------------------------------------------
 
 impl MakeConf {
-    /// Read and parse `path` (regular file or Flat directory of fragments).
+    /// Read and parse `path` (regular file or Flat directory of fragments)
     ///
     /// Directory fragments are concatenated in lexical order. An empty
     /// directory yields an empty config (no error).
@@ -147,7 +151,7 @@ impl MakeConf {
         Self::parse(combined)
     }
 
-    /// Load whichever of [`DEFAULT_MAKE_CONF`] / [`LEGACY_MAKE_CONF`] exists.
+    /// Load whichever of [`DEFAULT_MAKE_CONF`] / [`LEGACY_MAKE_CONF`] exists
     pub fn load_default() -> Result<Self> {
         for path in [DEFAULT_MAKE_CONF, LEGACY_MAKE_CONF] {
             let p = Utf8Path::new(path);
@@ -163,7 +167,7 @@ impl MakeConf {
         })
     }
 
-    /// Parse from an owned string (useful for testing).
+    /// Parse from an owned string (useful for testing)
     pub fn parse(src: String) -> Result<Self> {
         let program = parse_program(&src)?;
         let entries = build_entries(&src, &program);
@@ -189,8 +193,9 @@ impl MakeConf {
         None
     }
 
-    /// Apply this file's assignments to `env` the way `bash source` would:
-    /// sources the raw file text through a minimal, non-interactive
+    /// Apply this file's assignments to `env` the way `bash source` would
+    ///
+    /// Sources the raw file text through a minimal, non-interactive
     /// [`brush_core::Shell`] (bash's standard builtins only — no
     /// ebuild-specific ones, no [`crate::Repository`] dependency, since
     /// make.conf is never ebuild content), then overlays every variable
@@ -252,9 +257,11 @@ impl MakeConf {
         Ok(())
     }
 
-    /// Update `name` to `value`, preserving surrounding quotes and trailing
-    /// comments.  Updates the first occurrence and removes any later
-    /// duplicates (first occurrence wins after the edit).
+    /// Update `name` to `value`, preserving surrounding quotes and
+    /// trailing comments
+    ///
+    /// Updates the first occurrence and removes any later duplicates
+    /// (first occurrence wins after the edit).
     ///
     /// If `name` is not present, appends `NAME="value"\n` at the end.
     pub fn set(&mut self, name: &str, value: &str) {
@@ -315,11 +322,12 @@ impl MakeConf {
         }
     }
 
-    /// Add/remove USE flags in `USE`, portage's simple bare-flag model (no
-    /// separate profile-level `+`/`-` handling here — a leading `+` on an
-    /// `add`/`remove` token is stripped and ignored, matching `em useflags`'s
-    /// own single-string USE editor). Returns the new `USE` value for the
-    /// caller to report.
+    /// Add/remove USE flags in `USE`, portage's simple bare-flag model
+    ///
+    /// No separate profile-level `+`/`-` handling here — a leading `+` on
+    /// an `add`/`remove` token is stripped and ignored, matching
+    /// `em useflags`'s own single-string USE editor. Returns the new
+    /// `USE` value for the caller to report.
     pub fn apply_use_changes(&mut self, add: &[String], remove: &[String]) -> String {
         let current = self.get("USE").unwrap_or("").to_string();
         let mut flags: Vec<String> = current.split_whitespace().map(str::to_string).collect();
@@ -339,12 +347,14 @@ impl MakeConf {
         new_use
     }
 
-    /// Fold `add`/`subtract`/`drop` onto the current effective USE at `path`
-    /// without writing anything — the same trichotomy `em pkg use` applies
-    /// to `package.use` entries: `add` (positive), `subtract` (explicit
-    /// negative, `-flag`), `drop` (removes both forms, reverting to the
-    /// profile default). Returns `(old, new)` joined values for `var`, so a
-    /// caller can preview or diff the change before deciding to write it.
+    /// Fold `add`/`subtract`/`drop` onto the current effective USE at
+    /// `path` without writing anything
+    ///
+    /// The same trichotomy `em pkg use` applies to `package.use` entries:
+    /// `add` (positive), `subtract` (explicit negative, `-flag`), `drop`
+    /// (removes both forms, reverting to the profile default). Returns
+    /// `(old, new)` joined values for `var`, so a caller can preview or
+    /// diff the change before deciding to write it.
     ///
     /// `var` is any space-separated flag-list variable — `USE` itself, or a
     /// USE_EXPAND variable such as `VIDEO_CARDS`; both are edited the same
@@ -433,7 +443,7 @@ impl MakeConf {
         Ok(new_value)
     }
 
-    /// Save to `path`.
+    /// Save to `path`
     ///
     /// If `path` is a directory: write a single fragment when the directory
     /// has zero or one fragment (empty → [`MAKE_CONF_DIR_FALLBACK_FRAGMENT`]);
@@ -474,7 +484,7 @@ impl MakeConf {
         })
     }
 
-    /// Reparse `self.src` after an in-place mutation.
+    /// Reparse `self.src` after an in-place mutation
     fn rebuild(&mut self) {
         if let Ok(program) = parse_program(&self.src) {
             self.entries = build_entries(&self.src, &program);
@@ -482,10 +492,12 @@ impl MakeConf {
     }
 }
 
-/// Apply the `add`/`subtract`/`drop` trichotomy to a flat USE token list —
-/// the same rule `em pkg use` already applies to `package.use` entries, kept
-/// here in lockstep so `em use` (this module) and `em pkg use` (`PackageConf`)
-/// never drift onto different semantics for the same three verbs.
+/// Apply the `add`/`subtract`/`drop` trichotomy to a flat USE token list
+///
+/// The same rule `em pkg use` already applies to `package.use` entries,
+/// kept here in lockstep so `em use` (this module) and `em pkg use`
+/// (`PackageConf`) never drift onto different semantics for the same
+/// three verbs.
 fn apply_use_flag_ops(
     mut values: Vec<String>,
     add: &[String],
@@ -517,7 +529,7 @@ fn parse_program(src: &str) -> Result<brush_parser::ast::Program> {
         .map_err(|e| Error::Shell(e.to_string()))
 }
 
-/// Build the tiled [`Entry`] list for `src` given its parsed `program`.
+/// Build the tiled [`Entry`] list for `src` given its parsed `program`
 ///
 /// Comment spans from `program.comments` are used to precisely extend each
 /// statement span past any trailing inline comment before the final `\n`.
@@ -618,9 +630,10 @@ fn extend_to_newline(src: &str, end: usize) -> usize {
     }
 }
 
-/// Derive a [`Var`] from an AST `Assignment`, computing the value span from
-/// `assignment.loc` and the name length (avoids relying on `Word.loc` which
-/// may not always be populated).
+/// Derive a [`Var`] from an AST `Assignment`
+///
+/// Computes the value span from `assignment.loc` and the name length
+/// (avoids relying on `Word.loc` which may not always be populated).
 fn var_from_assignment(src: &str, a: &brush_parser::ast::Assignment) -> Option<Var> {
     // Skip array assignments (uncommon in make.conf, hard to edit safely).
     if matches!(a.value, AssignmentValue::Array(_)) {

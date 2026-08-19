@@ -5,7 +5,7 @@ use clap::Parser;
 
 use super::die::DieFlag;
 
-/// `einstall [args...]` — pre-EAPI-6 install helper (banned in EAPI 6+).
+/// `einstall [args...]` — pre-EAPI-6 install helper (banned in EAPI 6+)
 ///
 /// Runs `${MAKE:-make}` with GNU-style install path overrides pointing into
 /// `${ED}`, for legacy build systems that ignore `DESTDIR`. Mirrors portage's

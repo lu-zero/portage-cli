@@ -1,4 +1,4 @@
-//! Abstract md5-cache storage for a [`crate::Repository`].
+//! Abstract md5-cache storage for a [`crate::Repository`]
 //!
 //! The PMS tree layout stays file-backed; **metadata cache** is a separate
 //! store that may be a directory (primary in-tree or user-side secondary) or
@@ -16,22 +16,22 @@ use portage_metadata::CacheEntry;
 use crate::error::{Error, Result};
 use crate::repo::util;
 
-/// Per-CPV md5-cache store.
+/// Per-CPV md5-cache store
 ///
 /// Directory backends use the PMS on-disk layout under a root; memory
 /// backends key by [`Cpv`] directly.
 pub trait MetadataCache: Send + Sync {
-    /// Read a cache entry, or `Ok(None)` if missing.
+    /// Read a cache entry, or `Ok(None)` if missing
     fn get(&self, cpv: &Cpv) -> Result<Option<CacheEntry>>;
 
-    /// Write (or replace) a cache entry.
+    /// Write (or replace) a cache entry
     fn put(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()>;
 
-    /// Whether this store might contain entries (dir exists / map non-empty).
+    /// Whether this store might contain entries (dir exists / map non-empty)
     fn is_populated(&self) -> bool;
 }
 
-/// Directory-backed cache: `<root>/<category>/<PN>-<PVR>`.
+/// Directory-backed cache: `<root>/<category>/<PN>-<PVR>`
 ///
 /// [`MetadataCache::is_populated`] is sticky: an empty secondary is probed
 /// once (one `read_dir`), then skipped for the rest of the process so
@@ -41,7 +41,7 @@ pub trait MetadataCache: Send + Sync {
 #[derive(Debug)]
 pub struct DirMetadataCache {
     root: Utf8PathBuf,
-    /// `-1` unknown, `0` empty/missing, `1` has at least one entry (or a put).
+    /// `-1` unknown, `0` empty/missing, `1` has at least one entry (or a put)
     populated: AtomicI8,
 }
 
@@ -57,7 +57,7 @@ impl Clone for DirMetadataCache {
 }
 
 impl DirMetadataCache {
-    /// Create a cache rooted at `root` (created on first `put` if needed).
+    /// Create a cache rooted at `root` (created on first `put` if needed)
     pub fn new(root: impl Into<Utf8PathBuf>) -> Self {
         Self {
             root: root.into(),
@@ -65,12 +65,12 @@ impl DirMetadataCache {
         }
     }
 
-    /// Filesystem root of this cache.
+    /// Filesystem root of this cache
     pub fn root(&self) -> &Utf8Path {
         &self.root
     }
 
-    /// On-disk path for `cpv` under this root.
+    /// On-disk path for `cpv` under this root
     pub fn entry_path(&self, cpv: &Cpv) -> Utf8PathBuf {
         entry_under(&self.root, cpv)
     }
@@ -125,19 +125,19 @@ impl MetadataCache for DirMetadataCache {
     }
 }
 
-/// In-memory cache for tests and ephemeral secondary stores.
+/// In-memory cache for tests and ephemeral secondary stores
 #[derive(Debug, Default)]
 pub struct MemoryMetadataCache {
     map: Mutex<HashMap<Cpv, CacheEntry>>,
 }
 
 impl MemoryMetadataCache {
-    /// Empty in-memory cache.
+    /// Empty in-memory cache
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Wrap as an [`Arc`] for builder / `Repository` fields.
+    /// Wrap as an [`Arc`] for builder / `Repository` fields
     pub fn shared(self) -> Arc<Self> {
         Arc::new(self)
     }
@@ -170,7 +170,7 @@ impl MetadataCache for MemoryMetadataCache {
     }
 }
 
-/// PMS md5-cache relative path: `<category>/<PN>-<PVR>`.
+/// PMS md5-cache relative path: `<category>/<PN>-<PVR>`
 fn entry_under(root: &Utf8Path, cpv: &Cpv) -> Utf8PathBuf {
     root.join(cpv.cpn.category.as_str())
         .join(format!("{}-{}", cpv.cpn.package, cpv.version))

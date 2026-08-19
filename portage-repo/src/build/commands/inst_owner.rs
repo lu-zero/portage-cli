@@ -1,4 +1,4 @@
-//! `PORTAGE_INST_UID` / `PORTAGE_INST_GID` resolution for install helpers.
+//! `PORTAGE_INST_UID` / `PORTAGE_INST_GID` resolution for install helpers
 //!
 //! Portage defaults these to `0`/`0` for privileged merges and to the owner of
 //! the merge root (`EROOT`) in [unprivileged mode](https://github.com/gentoo/portage/blob/master/lib/portage/data.py).
@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use brush_core::ShellExtensions;
 
-/// Cross-subshell install ownership defaults (`dobin`/`dosbin`/`newbin`/`newsbin`).
+/// Cross-subshell install ownership defaults (`dobin`/`dosbin`/`newbin`/`newsbin`)
 #[derive(Clone, Default)]
 pub(crate) struct InstOwnerDefaults(Arc<Mutex<State>>);
 
@@ -24,7 +24,7 @@ struct State {
 }
 
 impl InstOwnerDefaults {
-    /// Return the stored uid/gid pair, falling back to the current process ids.
+    /// Return the stored uid/gid pair, falling back to the current process ids
     pub(crate) fn resolved_pair(&self) -> (String, String) {
         if let Some(pair) = self.stored() {
             return pair;
@@ -32,7 +32,7 @@ impl InstOwnerDefaults {
         (process_uid(), process_gid())
     }
 
-    /// Seed shared state from the helper subprocess environment (PATH shims).
+    /// Seed shared state from the helper subprocess environment (PATH shims)
     ///
     /// Uses `PORTAGE_INST_*` when exported by the active phase; otherwise falls
     /// back to the current process ids so `install -o <self>` succeeds for
@@ -52,9 +52,11 @@ impl InstOwnerDefaults {
         guard.resolved = true;
     }
 
-    /// `-o <uid> -g <gid>` arguments for coreutils `install`, matching portage's
-    /// `dobin`/`dosbin`. Shell overrides win, then shared defaults, then the
-    /// current process ids.
+    /// `-o <uid> -g <gid>` arguments for coreutils `install`, matching
+    /// portage's `dobin`/`dosbin`
+    ///
+    /// Shell overrides win, then shared defaults, then the current
+    /// process ids.
     pub(crate) fn install_opts<SE: ShellExtensions>(
         &self,
         shell: &brush_core::Shell<SE>,
@@ -96,7 +98,7 @@ impl InstOwnerDefaults {
     }
 }
 
-/// Resolve install ownership for a phase and return the canonical uid/gid pair.
+/// Resolve install ownership for a phase and return the canonical uid/gid pair
 ///
 /// Non-empty `PORTAGE_INST_*` shell variables (e.g. from `make.conf`) override
 /// computed defaults. The result is stored in `defaults` for builtins and PATH
@@ -128,7 +130,7 @@ pub(crate) fn resolve_inst_owner<SE: ShellExtensions>(
     (uid, gid)
 }
 
-/// Portage `config.reset()` defaults for `PORTAGE_INST_UID`/`PORTAGE_INST_GID`.
+/// Portage `config.reset()` defaults for `PORTAGE_INST_UID`/`PORTAGE_INST_GID`
 fn portage_default_inst_ids(merge_root: &Path) -> (String, String) {
     let mut uid = "0".to_string();
     let mut gid = "0".to_string();
@@ -159,7 +161,7 @@ fn unprivileged_mode(eroot: &Path) -> bool {
     rustix::fs::access(eroot, rustix::fs::Access::WRITE_OK).is_ok()
 }
 
-/// First existing path along `merge_root` (portage `first_existing(eroot)`).
+/// First existing path along `merge_root` (portage `first_existing(eroot)`)
 fn eroot_or_parent(merge_root: &Path) -> PathBuf {
     if merge_root.exists() {
         return merge_root.to_path_buf();

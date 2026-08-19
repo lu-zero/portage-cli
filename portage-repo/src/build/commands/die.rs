@@ -6,7 +6,7 @@ use clap::Parser;
 
 // ── die ───────────────────────────────────────────────────────────────────────
 
-/// Cross-subshell `die` signal.
+/// Cross-subshell `die` signal
 ///
 /// `die` may run inside `$(...)` substitutions or helper-script pipelines
 /// where its non-zero exit cannot abort the phase (bash semantics). Portage
@@ -18,7 +18,7 @@ use clap::Parser;
 pub(crate) struct DieFlag(pub(crate) Arc<Mutex<Option<String>>>);
 
 impl DieFlag {
-    /// Record a die (the first message wins).
+    /// Record a die (the first message wins)
     pub(crate) fn raise(&self, msg: &str) {
         let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if guard.is_none() {
@@ -26,7 +26,7 @@ impl DieFlag {
         }
     }
 
-    /// Clear and return any recorded die.
+    /// Clear and return any recorded die
     pub(crate) fn take(&self) -> Option<String> {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).take()
     }
@@ -40,8 +40,10 @@ impl DieFlag {
 /// `inherit` error paths to distinguish portage die output from other stderr.
 #[derive(Parser)]
 pub(crate) struct DieCommand {
-    /// Honour `nonfatal` (PMS 12.3.1): in a `nonfatal` context return non-zero
-    /// instead of aborting the build. Used e.g. by ninja-utils' `eninja`.
+    /// Honour `nonfatal` (PMS 12.3.1)
+    ///
+    /// In a `nonfatal` context return non-zero instead of aborting the
+    /// build. Used e.g. by ninja-utils' `eninja`.
     #[arg(short = 'n')]
     nonfatal: bool,
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

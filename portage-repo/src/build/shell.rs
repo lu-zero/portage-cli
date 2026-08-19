@@ -21,7 +21,7 @@ use crate::repo::ebuild::Ebuild;
 use crate::repo::repository::Repository;
 use crate::source::SourceContext;
 
-/// Metadata variables extracted from a sourced ebuild.
+/// Metadata variables extracted from a sourced ebuild
 ///
 /// These correspond to the PMS-defined metadata variables that an ebuild
 /// is expected to define after being sourced.
@@ -45,7 +45,7 @@ const METADATA_VARS: &[&str] = &[
     "INHERITED",
 ];
 
-/// Maps a portage phase name to (EBUILD_PHASE value, function name).
+/// Maps a portage phase name to (EBUILD_PHASE value, function name)
 fn phase_to_func(phase: &str) -> (&str, &str) {
     match phase {
         "pretend" => ("pretend", "pkg_pretend"),
@@ -68,7 +68,7 @@ fn phase_to_func(phase: &str) -> (&str, &str) {
     }
 }
 
-/// PMS phase function names mapped to their [`Phase`] variants.
+/// PMS phase function names mapped to their [`Phase`] variants
 ///
 /// Used to compute `DEFINED_PHASES` by inspecting which functions are
 /// defined in the shell after sourcing an ebuild.
@@ -92,7 +92,7 @@ const PHASE_FUNCTIONS: &[(&str, Phase)] = &[
     ("pkg_nofetch", Phase::PkgNofetch),
 ];
 
-/// Per-EAPI default phase implementations loaded by `init_build_env`.
+/// Per-EAPI default phase implementations loaded by `init_build_env`
 ///
 /// These bash functions are called by `__ebuild_phase_funcs` (a Rust builtin)
 /// when wiring up `default()` and `default_<phase>()`.  The functions call
@@ -180,7 +180,7 @@ assert() {
 eapply_user() { :; }
 "#;
 
-/// Sandbox path-registration functions as no-ops (real enforcement is M3).
+/// Sandbox path-registration functions as no-ops (real enforcement is M3)
 /// Defined so eclasses/ebuilds that call them don't abort with "command not
 /// found"; each portage equivalent only appends to a `SANDBOX_*` colon list.
 const SANDBOX_STUBS: &str = r#"
@@ -190,11 +190,12 @@ addpredict() { :; }
 adddeny()    { :; }
 "#;
 
-/// P3 install helpers loaded by `init_build_env` (PMS §12.3.x).
+/// P3 install helpers loaded by `init_build_env` (PMS §12.3.x)
 ///
 /// These bash functions replace the no-op stubs from `builtins.rs` during
-/// build phases.  They install files into `${ED}` (= `${D}${EPREFIX}`) using the standard `install`
-/// utility and track destination-directory state in shell variables.
+/// build phases. They install files into `${ED}` (= `${D}${EPREFIX}`)
+/// using the standard `install` utility and track destination-directory
+/// state in shell variables.
 const INSTALL_HELPERS: &str = r#"
 # Destination-directory state — reset to defaults by this sourcing.
 # _into_dir mirrors portage's DESTTREE (set both so eclasses reading either win).
@@ -304,7 +305,7 @@ pub fn phase_path_dirs<'a>(raw_path: &'a str, home: &str) -> Vec<&'a str> {
         .collect()
 }
 
-/// An embedded bash shell for sourcing ebuilds, eclasses, and `make.defaults`.
+/// An embedded bash shell for sourcing ebuilds, eclasses, and `make.defaults`
 ///
 /// The PMS name/version strings a caller reuses after the vars are set.
 struct PmsNames {
@@ -312,7 +313,7 @@ struct PmsNames {
     pf: String,
 }
 
-/// Wraps [`brush_core::Shell`] configured for Gentoo ebuild evaluation.
+/// Wraps [`brush_core::Shell`] configured for Gentoo ebuild evaluation
 /// The shell has standard bash builtins registered and eclass directories
 /// set up for the repository.
 ///
@@ -320,7 +321,7 @@ struct PmsNames {
 /// for the metadata variables extracted after sourcing an ebuild.
 pub struct EbuildShell {
     shell: Shell,
-    /// Caller-chosen writable distfiles dir (e.g. `<prefix>/var/cache/distfiles`).
+    /// Caller-chosen writable distfiles dir (e.g. `<prefix>/var/cache/distfiles`)
     /// The auto-resolved primary joins the read-only fallbacks so shared
     /// caches keep being found.
     distdir_override: Option<Utf8PathBuf>,
@@ -392,7 +393,7 @@ pub struct EbuildShell {
     phase_sourced_ebuild: Option<Utf8PathBuf>,
     repo_path: Utf8PathBuf,
     eclass_dirs: Vec<Utf8PathBuf>,
-    /// Active USE flags for this shell session.
+    /// Active USE flags for this shell session
     /// Used by the `use()`, `usev()`, `usex()` functions.
     use_flags: HashSet<String>,
 }
@@ -457,7 +458,7 @@ pub async fn run_helper(name: &str, args: &[String]) -> i32 {
 }
 
 impl EbuildShell {
-    /// Create a new shell configured for the given repository.
+    /// Create a new shell configured for the given repository
     ///
     /// Registers Portage-specific bash functions (`inherit`, `die`,
     /// `EXPORT_FUNCTIONS`, etc.) and sets up eclass directories from
@@ -466,7 +467,7 @@ impl EbuildShell {
         Self::new_with_cache(repo, &SourceContext::new()).await
     }
 
-    /// Create a new shell with a shared eclass AST cache.
+    /// Create a new shell with a shared eclass AST cache
     ///
     /// When processing many ebuilds, pass the same [`SourceContext`] to every
     /// shell so that each eclass is parsed at most once. The cache contents
@@ -705,7 +706,7 @@ impl EbuildShell {
         Ok(ebuild_shell)
     }
 
-    /// Set a variable that persists across subsequent phases (e.g.
+    /// Set a variable that persists across subsequent phases (e.g
     /// `REPLACING_VERSIONS`, computed by the merge driver). Exported to
     /// child processes by the per-phase export list.
     pub fn preset_var(&mut self, name: &str, value: &str) {
@@ -746,14 +747,14 @@ impl EbuildShell {
         is_cross && matches!(pn, "binutils" | "gcc" | "gdb" | "clang-crossdev-wrappers")
     }
 
-    /// CTARGET triple from a cross category (`cross-<T>` or `cross_llvm-<T>`).
+    /// CTARGET triple from a cross category (`cross-<T>` or `cross_llvm-<T>`)
     pub fn cross_category_triple(category: &str) -> Option<&str> {
         category
             .strip_prefix("cross_llvm-")
             .or_else(|| category.strip_prefix("cross-"))
     }
 
-    /// Put `dirs` ahead of the sanitised `PATH` for every subsequent phase.
+    /// Put `dirs` ahead of the sanitised `PATH` for every subsequent phase
     /// Which directories those are, and whether any are warranted at all, is
     /// the caller's policy; empty (the default) leaves `PATH` untouched.
     pub fn set_extra_path(&mut self, dirs: Vec<Utf8PathBuf>) {
@@ -861,7 +862,7 @@ impl EbuildShell {
         self.phase_sourced_ebuild = Some(ebuild.path().to_path_buf());
     }
 
-    /// Append an eclass directory (searched after existing dirs).
+    /// Append an eclass directory (searched after existing dirs)
     pub fn add_eclass_dir(&mut self, dir: Utf8PathBuf) {
         self.invalidate_baseline();
         self.eclass_dirs.push(dir);
@@ -914,7 +915,7 @@ impl EbuildShell {
         PmsNames { p, pf }
     }
 
-    /// Source an ebuild file and extract its metadata.
+    /// Source an ebuild file and extract its metadata
     ///
     /// This performs the following steps:
     /// 1. Set PM-provided variables (`CATEGORY`, `PN`, `PV`, `PVR`, `PF`, `P`,
@@ -1083,7 +1084,7 @@ impl EbuildShell {
         Ok(crate::source::SourcedEbuild { metadata, eclasses })
     }
 
-    /// Locate portage's script directory under `/usr/lib/portage`.
+    /// Locate portage's script directory under `/usr/lib/portage`
     ///
     /// Scans for a subdirectory (typically `pythonX.Y`) that contains
     /// `isolated-functions.sh`, and returns the highest-sorted match.
@@ -1104,7 +1105,7 @@ impl EbuildShell {
         dirs.pop()
     }
 
-    /// Set up the build environment.
+    /// Set up the build environment
     ///
     /// Exports `PORTAGE_BIN_PATH` (when portage is installed; some eclasses
     /// reference it) but relies on our own self-contained `do*`/`new*`
@@ -1441,7 +1442,7 @@ impl EbuildShell {
         }
     }
 
-    /// Source an ebuild and run a single phase function.
+    /// Source an ebuild and run a single phase function
     ///
     /// Creates the standard build directories under `work_root` if they don't
     /// exist, sets all PMS environment variables, sources the ebuild (which
@@ -1986,7 +1987,7 @@ impl EbuildShell {
         Err(Error::Shell(format!("eclass not found: {name}")))
     }
 
-    /// Source a `make.defaults` file.
+    /// Source a `make.defaults` file
     ///
     /// Variable assignments (with `${VAR}` expansion) are evaluated in the
     /// shell environment.
@@ -2052,7 +2053,7 @@ impl EbuildShell {
         Ok(())
     }
 
-    /// Resolve the path of a named eclass by searching the configured eclass directories.
+    /// Resolve the path of a named eclass by searching the configured eclass directories
     pub fn eclass_path(&self, name: &str) -> Option<Utf8PathBuf> {
         let filename = format!("{name}.eclass");
         self.eclass_dirs
@@ -2061,12 +2062,12 @@ impl EbuildShell {
             .find(|p| p.is_file())
     }
 
-    /// Read a variable from the shell environment.
+    /// Read a variable from the shell environment
     pub fn get_var(&self, name: &str) -> Option<String> {
         self.shell.env_str(name).map(|cow| cow.into_owned())
     }
 
-    /// Snapshot all ebuild metadata variables into an `EbuildEnv`.
+    /// Snapshot all ebuild metadata variables into an `EbuildEnv`
     ///
     /// Call this after [`source_ebuild`](Self::source_ebuild) to capture the
     /// stable per-package metadata before running any build phases.
@@ -2127,7 +2128,7 @@ impl EbuildShell {
         }
     }
 
-    /// Set a variable in the shell environment.
+    /// Set a variable in the shell environment
     fn set_var(&mut self, name: &str, value: &str) {
         let _ = self.shell.set_env_global(
             name,
@@ -2135,7 +2136,7 @@ impl EbuildShell {
         );
     }
 
-    /// Run a bash script string directly in the shell without writing a temporary file.
+    /// Run a bash script string directly in the shell without writing a temporary file
     pub async fn run_string(&mut self, script: &str) -> Result<()> {
         let params = self.shell.default_exec_params();
         let source_info = SourceInfo::from("inline");
@@ -2146,7 +2147,7 @@ impl EbuildShell {
         Ok(())
     }
 
-    /// Set the active USE flags for this shell session.
+    /// Set the active USE flags for this shell session
     ///
     /// These flags will be used by the `use()`, `usev()`, `usex()` functions
     /// when sourcing ebuilds and eclasses.
@@ -2199,7 +2200,7 @@ impl EbuildShell {
         Ok(())
     }
 
-    /// Get the current USE flags as a space-separated string.
+    /// Get the current USE flags as a space-separated string
     ///
     /// This can be used to set the `USE` environment variable in the shell.
     pub fn use_flags_string(&self) -> String {
@@ -2249,7 +2250,7 @@ impl EbuildShell {
         (primary, ro)
     }
 
-    /// Compute `$A` from `$SRC_URI` and inject it into the shell environment.
+    /// Compute `$A` from `$SRC_URI` and inject it into the shell environment
     ///
     /// `$A` is a PM-provided variable containing the space-separated list of
     /// distfile names required by the ebuild for the currently active USE flags.
@@ -2321,7 +2322,7 @@ impl EbuildShell {
     }
 }
 
-/// Recursively collect distfile names from a parsed `SRC_URI` tree.
+/// Recursively collect distfile names from a parsed `SRC_URI` tree
 /// Remove GNU make jobserver tokens from a MAKEFLAGS string.
 ///
 /// `--jobserver-auth=R,W` (make ≥ 4.2) and `--jobserver-fds=R,W` (older
@@ -2401,12 +2402,12 @@ fn collect_src_filenames(
 // ---------------------------------------------------------------------------
 
 impl Repository {
-    /// Create an [`EbuildShell`] configured for this repository.
+    /// Create an [`EbuildShell`] configured for this repository
     pub async fn shell(&self) -> Result<EbuildShell> {
         EbuildShell::new(self).await
     }
 
-    /// Create an [`EbuildShell`] with master repository eclass directories.
+    /// Create an [`EbuildShell`] with master repository eclass directories
     ///
     /// The repo's own `eclass/` is searched first; masters follow as fallback,
     /// in reverse `masters` order. This matches portage, where a repo's own
@@ -2441,7 +2442,7 @@ impl Repository {
         Ok(shell)
     }
 
-    /// Create an [`EbuildShell`] with a profile's USE configuration applied.
+    /// Create an [`EbuildShell`] with a profile's USE configuration applied
     ///
     /// `profile_rel_path` is relative to the repository's `profiles/` directory.
     /// `make_conf` is an optional `make.conf`-style script sourced after the

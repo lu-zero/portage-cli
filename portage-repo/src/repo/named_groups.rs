@@ -1,4 +1,4 @@
-//! Generic `@name` group expansion with portage cycle-breaking semantics.
+//! Generic `@name` group expansion with portage cycle-breaking semantics
 //!
 //! Shared by atom sets ([`super::sets`]) and license groups
 //! ([`super::license_groups`]).
@@ -7,29 +7,29 @@ use std::collections::HashSet;
 
 use crate::error::{Error, Result};
 
-/// The `@` prefix that marks a nested group reference (portage `SETPREFIX`).
+/// The `@` prefix that marks a nested group reference (portage `SETPREFIX`)
 pub const GROUP_PREFIX: char = '@';
 
-/// One member of a named group: a leaf value or a reference to another group.
+/// One member of a named group: a leaf value or a reference to another group
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupEntry<M> {
-    /// A concrete member (atom, license id, …).
+    /// A concrete member (atom, license id, …)
     Leaf(M),
-    /// Nested group name **without** the leading `@`.
+    /// Nested group name **without** the leading `@`
     Ref(String),
 }
 
-/// True iff `s` is a group reference (starts with `@` and has a name).
+/// True iff `s` is a group reference (starts with `@` and has a name)
 pub fn is_group_ref(s: &str) -> bool {
     group_ref_name(s).is_some()
 }
 
-/// Strip the leading `@` from a group reference, or `None` if `s` is not one.
+/// Strip the leading `@` from a group reference, or `None` if `s` is not one
 pub fn group_ref_name(s: &str) -> Option<&str> {
     s.strip_prefix(GROUP_PREFIX).filter(|n| !n.is_empty())
 }
 
-/// Expand a named group to a flat leaf list.
+/// Expand a named group to a flat leaf list
 ///
 /// `lookup` returns the direct members of `name`; [`GroupEntry::Ref`] members
 /// are expanded recursively. Revisiting a name on the expansion stack yields an
@@ -59,7 +59,7 @@ where
     Ok(out)
 }
 
-/// Classify a whitespace token as leaf or `@ref` using `parse_leaf`.
+/// Classify a whitespace token as leaf or `@ref` using `parse_leaf`
 pub fn classify_token<M, F>(token: &str, parse_leaf: F) -> Result<GroupEntry<M>>
 where
     F: FnOnce(&str) -> Result<M>,

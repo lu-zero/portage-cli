@@ -1,4 +1,4 @@
-//! `has_version` / `best_version` builtins (PMS 12.3.13 / 12.3.4).
+//! `has_version` / `best_version` builtins (PMS 12.3.13 / 12.3.4)
 //!
 //! Query the installed-package database for an atom. `-r` (default) queries
 //! `ROOT`'s VDB, `-d` `ESYSROOT`'s, `-b` `BROOT`'s — under a `--prefix` run
@@ -51,7 +51,7 @@ fn vdb_roots_for<SE: brush_core::ShellExtensions>(
         .collect()
 }
 
-/// Best installed cpv matching `atom` across any of `vdb_paths`.
+/// Best installed cpv matching `atom` across any of `vdb_paths`
 fn best_match_any(
     vdb_paths: &[std::path::PathBuf],
     atom: &str,
@@ -63,7 +63,7 @@ fn best_match_any(
         .max_by(|a, b| a.version.cmp(&b.version))
 }
 
-/// Best installed cpv matching `atom` in the VDB at `vdb_path`, if any.
+/// Best installed cpv matching `atom` in the VDB at `vdb_path`, if any
 fn best_match(
     vdb_path: &std::path::Path,
     atom: &str,
@@ -112,11 +112,13 @@ fn best_match(
     best
 }
 
-/// Whether every USE-dependency in `use_deps` holds for an installed package
-/// with the given active `installed_use` / declared `installed_iuse`, relative
-/// to the querying package's `parent_use` (PMS 8.3.4). A flag absent from IUSE
-/// resolves through its `(+)`/`(-)` default; absent and undefaulted means the
-/// constraint cannot be satisfied.
+/// Whether every USE-dependency in `use_deps` holds for an installed
+/// package (PMS 8.3.4)
+///
+/// Checked against the given active `installed_use` / declared
+/// `installed_iuse`, relative to the querying package's `parent_use`. A
+/// flag absent from IUSE resolves through its `(+)`/`(-)` default; absent
+/// and undefaulted means the constraint cannot be satisfied.
 fn use_deps_satisfied(
     use_deps: &[portage_atom::UseDep],
     installed_use: &HashSet<Interned<DefaultInterner>>,
@@ -163,13 +165,13 @@ fn parent_use<SE: brush_core::ShellExtensions>(
 /// matches.
 #[derive(Parser)]
 pub(crate) struct HasVersionCommand {
-    /// Query BROOT (build tools).
+    /// Query BROOT (build tools)
     #[arg(short = 'b')]
     broot: bool,
-    /// Query ESYSROOT.
+    /// Query ESYSROOT
     #[arg(short = 'd')]
     sysroot: bool,
-    /// Query ROOT (the default).
+    /// Query ROOT (the default)
     #[arg(short = 'r')]
     root: bool,
     atom: String,
@@ -190,16 +192,16 @@ impl builtins::Command for HasVersionCommand {
     }
 }
 
-/// `best_version [-b|-d|-r] <atom>` — print the best matching installed cpv.
+/// `best_version [-b|-d|-r] <atom>` — print the best matching installed cpv
 #[derive(Parser)]
 pub(crate) struct BestVersionCommand {
-    /// Query BROOT (build tools).
+    /// Query BROOT (build tools)
     #[arg(short = 'b')]
     broot: bool,
-    /// Query ESYSROOT.
+    /// Query ESYSROOT
     #[arg(short = 'd')]
     sysroot: bool,
-    /// Query ROOT (the default).
+    /// Query ROOT (the default)
     #[arg(short = 'r')]
     root: bool,
     atom: String,
@@ -234,7 +236,7 @@ mod tests {
 
     use portage_atom::interner::{DefaultInterner, Interned};
 
-    /// Installed USE/IUSE sets, interned like the real accessors return them.
+    /// Installed USE/IUSE sets, interned like the real accessors return them
     fn set(flags: &[&str]) -> HashSet<Interned<DefaultInterner>> {
         flags.iter().copied().map(Interned::intern).collect()
     }

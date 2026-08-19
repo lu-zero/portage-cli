@@ -141,14 +141,14 @@ impl PhasePty {
         })
     }
 
-    /// The path the phase's output should be redirected to.
+    /// The path the phase's output should be redirected to
     pub(crate) fn slave_path(&self) -> &str {
         &self.slave_path
     }
 }
 
 impl Drop for PhasePty {
-    /// Close this side of the pty and wait for the reader to finish draining.
+    /// Close this side of the pty and wait for the reader to finish draining
     ///
     /// In `Drop` rather than an explicit `finish()` so that an early return
     /// from the phase — a `die`, an I/O error, a cancelled future — still
@@ -166,7 +166,7 @@ impl Drop for PhasePty {
     }
 }
 
-/// Copy the master to the console and the build log until the pty is closed.
+/// Copy the master to the console and the build log until the pty is closed
 ///
 /// Reads are written straight through with no interpretation: what the phase
 /// emitted is what the terminal and the log get, escape sequences included —
@@ -312,7 +312,7 @@ mod tests {
         );
     }
 
-    /// A phase that leaves something holding fd 1 must not hang the merge.
+    /// A phase that leaves something holding fd 1 must not hang the merge
     /// The straggler here never closes its end, so nothing will ever close the
     /// pty on its own — dropping still has to return, and still has to have
     /// written what was actually produced.

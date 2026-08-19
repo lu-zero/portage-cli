@@ -1,4 +1,4 @@
-//! `docompress` / `dostrip` install-phase helpers (PMS 12.3.9 / 12.3.10).
+//! `docompress` / `dostrip` install-phase helpers (PMS 12.3.9 / 12.3.10)
 //!
 //! These record which installed paths the post-`src_install` pass should
 //! compress or strip (and which to exclude). Rather than round-tripping the
@@ -19,7 +19,7 @@ struct Lists {
     strip_exclude: Vec<String>,
 }
 
-/// Cross-subshell accumulator for the ecompress/estrip path lists.
+/// Cross-subshell accumulator for the ecompress/estrip path lists
 ///
 /// Shared (`Arc`) with every clone of the shell, so `docompress`/`dostrip`
 /// calls made inside `src_install` — even from a subshell or helper
@@ -27,7 +27,7 @@ struct Lists {
 #[derive(Clone, Default)]
 pub(crate) struct InstallPaths(Arc<Mutex<Lists>>);
 
-/// Snapshot of the four path lists, handed to the post-install pass.
+/// Snapshot of the four path lists, handed to the post-install pass
 #[derive(Default)]
 pub struct InstallPathLists {
     pub compress: Vec<String>,
@@ -42,7 +42,7 @@ impl InstallPaths {
         f(&mut guard)
     }
 
-    /// Copy out the accumulated lists for the post-install pass.
+    /// Copy out the accumulated lists for the post-install pass
     pub(crate) fn snapshot(&self) -> InstallPathLists {
         self.with(|l| InstallPathLists {
             compress: l.compress.clone(),
@@ -58,7 +58,7 @@ impl InstallPaths {
 /// Without `-x`, marks paths for compression; with `-x`, exempts them.
 #[derive(Parser)]
 pub(crate) struct DocompressCommand {
-    /// Add to the exclusion list instead of the inclusion list.
+    /// Add to the exclusion list instead of the inclusion list
     #[arg(short = 'x')]
     exclude: bool,
     #[arg(trailing_var_arg = true)]
@@ -93,7 +93,7 @@ impl builtins::Command for DocompressCommand {
 /// Without `-x`, marks paths for stripping; with `-x`, exempts them.
 #[derive(Parser)]
 pub(crate) struct DostripCommand {
-    /// Add to the exclusion list instead of the inclusion list.
+    /// Add to the exclusion list instead of the inclusion list
     #[arg(short = 'x')]
     exclude: bool,
     #[arg(trailing_var_arg = true)]

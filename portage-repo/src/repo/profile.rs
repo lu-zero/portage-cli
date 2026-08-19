@@ -11,7 +11,7 @@ use super::layout::LayoutConf;
 use super::util;
 use crate::error::{Error, Result};
 
-/// Stability status of a profile.
+/// Stability status of a profile
 ///
 /// PMS allows repositories to define arbitrary status values beyond the
 /// well-known `stable`, `dev`, and `exp`.
@@ -19,13 +19,13 @@ use crate::error::{Error, Result};
 /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProfileStatus {
-    /// Stable profile.
+    /// Stable profile
     Stable,
-    /// Development profile.
+    /// Development profile
     Dev,
-    /// Experimental profile.
+    /// Experimental profile
     Exp,
-    /// A repository-defined status value not covered by the well-known variants.
+    /// A repository-defined status value not covered by the well-known variants
     Other(String),
 }
 
@@ -51,21 +51,21 @@ impl std::fmt::Display for ProfileStatus {
     }
 }
 
-/// A profile entry from `profiles/profiles.desc`.
+/// A profile entry from `profiles/profiles.desc`
 ///
 /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
 #[derive(Debug, Clone)]
 pub struct ProfileDesc {
-    /// Typed architecture keyword.
+    /// Typed architecture keyword
     arch: Arch,
-    /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`).
+    /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`)
     path: String,
-    /// Stability status.
+    /// Stability status
     status: ProfileStatus,
 }
 
 impl ProfileDesc {
-    /// Parse a single line from `profiles.desc`.
+    /// Parse a single line from `profiles.desc`
     ///
     /// Format: `arch path status`
     pub fn parse(line: &str) -> Result<Self> {
@@ -82,23 +82,23 @@ impl ProfileDesc {
         })
     }
 
-    /// Typed architecture keyword.
+    /// Typed architecture keyword
     pub fn arch(&self) -> &Arch {
         &self.arch
     }
 
-    /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`).
+    /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`)
     pub fn path(&self) -> &str {
         &self.path
     }
 
-    /// Stability status.
+    /// Stability status
     pub fn status(&self) -> &ProfileStatus {
         &self.status
     }
 }
 
-/// A profile directory.
+/// A profile directory
 ///
 /// Profiles contain stacked configuration files that control default
 /// USE flags, package masking, keywords, and more.
@@ -125,7 +125,7 @@ pub struct Profile {
     profile_formats: Vec<String>,
 }
 
-/// One entry from a profile `packages` file (PMS 5.2.6).
+/// One entry from a profile `packages` file (PMS 5.2.6)
 ///
 /// `*cat/pkg` is a system-package add; `cat/pkg` an advisory (`@profile`) add;
 /// `-cat/pkg` removes a prior add across the stack; `-*` clears all accumulated.
@@ -138,7 +138,7 @@ enum PackageEntry {
 }
 
 impl Profile {
-    /// Open a profile at the given directory path.
+    /// Open a profile at the given directory path
     pub fn open(path: PathBuf) -> Result<Self> {
         let eapi_str = util::read_single_line(path.join("eapi"))?;
         let eapi = match eapi_str {
@@ -155,17 +155,17 @@ impl Profile {
         })
     }
 
-    /// Absolute path to the profile directory.
+    /// Absolute path to the profile directory
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// The EAPI declared by this profile (from the `eapi` file).
+    /// The EAPI declared by this profile (from the `eapi` file)
     pub fn eapi(&self) -> Eapi {
         self.eapi
     }
 
-    /// The effective `profile-formats` of the repo this profile belongs to.
+    /// The effective `profile-formats` of the repo this profile belongs to
     ///
     /// Used to gate `@profile`-set membership (see
     /// [`ProfileStack::profile_set`]). Empty for a profile with no enclosing
@@ -175,7 +175,7 @@ impl Profile {
         &self.profile_formats
     }
 
-    /// Parse the `parent` file to get parent profile paths.
+    /// Parse the `parent` file to get parent profile paths
     ///
     /// Paths are relative to this profile directory and resolved to absolute paths.
     pub fn parents(&self) -> Result<Vec<PathBuf>> {
@@ -236,7 +236,7 @@ impl Profile {
         Ok(result)
     }
 
-    /// Parse `package.mask`.
+    /// Parse `package.mask`
     ///
     /// Lines prefixed with `-` remove a previously masked atom (PMS 5.2.8
     /// incremental semantics). Since this is a single-profile view, removals
@@ -257,14 +257,14 @@ impl Profile {
         Ok(result)
     }
 
-    /// Parse `package.use`.
+    /// Parse `package.use`
     ///
     /// Returns `(dep, [flags...])` pairs.
     pub fn package_use(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         parse_atom_flags_list(&self.path.join("package.use"))
     }
 
-    /// Parse `package.accept_keywords` (and legacy `package.keywords`).
+    /// Parse `package.accept_keywords` (and legacy `package.keywords`)
     ///
     /// Returns `(dep, [keyword tokens...])` pairs; a bare atom (no tokens) is
     /// kept with an empty token list, meaning "accept this package's testing
@@ -275,7 +275,7 @@ impl Profile {
         Ok(out)
     }
 
-    /// Parse `package.license`.
+    /// Parse `package.license`
     ///
     /// Returns `(dep, [license tokens...])` pairs — the tokens extend
     /// `ACCEPT_LICENSE` for matching packages (`@GROUP`, `-deny`, `*`).
@@ -283,42 +283,42 @@ impl Profile {
         parse_atom_flags_list(&self.path.join("package.license"))
     }
 
-    /// Parse `use.force`.
+    /// Parse `use.force`
     pub fn use_force(&self) -> Result<Vec<String>> {
         util::read_lines(self.path.join("use.force"))
     }
 
-    /// Parse `use.mask`.
+    /// Parse `use.mask`
     pub fn use_mask(&self) -> Result<Vec<String>> {
         util::read_lines(self.path.join("use.mask"))
     }
 
-    /// Parse `use.stable.force`.
+    /// Parse `use.stable.force`
     pub fn use_stable_force(&self) -> Result<Vec<String>> {
         util::read_lines(self.path.join("use.stable.force"))
     }
 
-    /// Parse `use.stable.mask`.
+    /// Parse `use.stable.mask`
     pub fn use_stable_mask(&self) -> Result<Vec<String>> {
         util::read_lines(self.path.join("use.stable.mask"))
     }
 
-    /// Parse `package.use.force`.
+    /// Parse `package.use.force`
     pub fn package_use_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         parse_atom_flags_list(&self.path.join("package.use.force"))
     }
 
-    /// Parse `package.use.mask`.
+    /// Parse `package.use.mask`
     pub fn package_use_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         parse_atom_flags_list(&self.path.join("package.use.mask"))
     }
 
-    /// Parse `package.use.stable.force`.
+    /// Parse `package.use.stable.force`
     pub fn package_use_stable_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         parse_atom_flags_list(&self.path.join("package.use.stable.force"))
     }
 
-    /// Parse `package.use.stable.mask`.
+    /// Parse `package.use.stable.mask`
     pub fn package_use_stable_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         parse_atom_flags_list(&self.path.join("package.use.stable.mask"))
     }
@@ -340,12 +340,12 @@ impl Profile {
 /// [PMS 5.2.5](https://projects.gentoo.org/pms/9/pms.html#profile-inheritance).
 #[derive(Debug, Clone)]
 pub struct ProfileStack {
-    /// Profiles in resolution order: root ancestors first, leaf last.
+    /// Profiles in resolution order: root ancestors first, leaf last
     profiles: Vec<Profile>,
 }
 
 impl ProfileStack {
-    /// Build the full profile stack for the directory at `path`.
+    /// Build the full profile stack for the directory at `path`
     ///
     /// Follows `parent` files recursively (depth-first).  Each unique profile
     /// directory is included at most once even in diamond-shaped inheritance.
@@ -382,12 +382,12 @@ impl ProfileStack {
         Ok(self)
     }
 
-    /// All profiles in resolution order: root ancestors first, leaf last.
+    /// All profiles in resolution order: root ancestors first, leaf last
     pub fn profiles(&self) -> &[Profile] {
         &self.profiles
     }
 
-    /// The active (leaf) profile — last in the stack.
+    /// The active (leaf) profile — last in the stack
     ///
     /// # Panics
     ///
@@ -400,14 +400,14 @@ impl ProfileStack {
         self.profiles.last().expect("stack is never empty")
     }
 
-    /// Whether the leaf profile has a `deprecated` file.
+    /// Whether the leaf profile has a `deprecated` file
     ///
     /// See [PMS 5.2.3](https://projects.gentoo.org/pms/9/pms.html#deprecated).
     pub fn is_deprecated(&self) -> bool {
         self.leaf().path().join("deprecated").exists()
     }
 
-    /// Merged `use.force` across the full stack (incremental, `-` removes).
+    /// Merged `use.force` across the full stack (incremental, `-` removes)
     ///
     /// See [PMS 5.2.9](https://projects.gentoo.org/pms/9/pms.html#use-flags).
     pub fn use_force(&self) -> Result<Vec<String>> {
@@ -418,7 +418,7 @@ impl ProfileStack {
         )
     }
 
-    /// Merged `use.mask` across the full stack (incremental, `-` removes).
+    /// Merged `use.mask` across the full stack (incremental, `-` removes)
     pub fn use_mask(&self) -> Result<Vec<String>> {
         merge_use_flags(
             self.profiles
@@ -427,7 +427,7 @@ impl ProfileStack {
         )
     }
 
-    /// Merged `use.stable.force` across the full stack (incremental, `-` removes).
+    /// Merged `use.stable.force` across the full stack (incremental, `-` removes)
     pub fn use_stable_force(&self) -> Result<Vec<String>> {
         merge_use_flags(
             self.profiles
@@ -436,7 +436,7 @@ impl ProfileStack {
         )
     }
 
-    /// Merged `use.stable.mask` across the full stack (incremental, `-` removes).
+    /// Merged `use.stable.mask` across the full stack (incremental, `-` removes)
     pub fn use_stable_mask(&self) -> Result<Vec<String>> {
         merge_use_flags(
             self.profiles
@@ -445,7 +445,7 @@ impl ProfileStack {
         )
     }
 
-    /// Merged `package.mask` across the full stack (incremental, `-atom` unmasks).
+    /// Merged `package.mask` across the full stack (incremental, `-atom` unmasks)
     ///
     /// See [PMS 5.2.8](https://projects.gentoo.org/pms/9/pms.html#package-mask).
     pub fn package_mask(&self) -> Result<Vec<Dep>> {
@@ -612,7 +612,7 @@ impl ProfileStack {
         Ok(result)
     }
 
-    /// Accumulated `package.use` entries from the full stack, ancestors first.
+    /// Accumulated `package.use` entries from the full stack, ancestors first
     ///
     /// Entries should be applied in order; a later entry for the same atom
     /// takes precedence.
@@ -626,27 +626,27 @@ impl ProfileStack {
         collect_atom_flags(self.profiles.iter().map(|p| p.package_accept_keywords()))
     }
 
-    /// Accumulated `package.license` entries from the full stack, ancestors first.
+    /// Accumulated `package.license` entries from the full stack, ancestors first
     pub fn package_license(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         collect_atom_flags(self.profiles.iter().map(|p| p.package_license()))
     }
 
-    /// Accumulated `package.use.force` entries from the full stack.
+    /// Accumulated `package.use.force` entries from the full stack
     pub fn package_use_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         collect_atom_flags(self.profiles.iter().map(|p| p.package_use_force()))
     }
 
-    /// Accumulated `package.use.mask` entries from the full stack.
+    /// Accumulated `package.use.mask` entries from the full stack
     pub fn package_use_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         collect_atom_flags(self.profiles.iter().map(|p| p.package_use_mask()))
     }
 
-    /// Accumulated `package.use.stable.force` entries from the full stack.
+    /// Accumulated `package.use.stable.force` entries from the full stack
     pub fn package_use_stable_force(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         collect_atom_flags(self.profiles.iter().map(|p| p.package_use_stable_force()))
     }
 
-    /// Accumulated `package.use.stable.mask` entries from the full stack.
+    /// Accumulated `package.use.stable.mask` entries from the full stack
     pub fn package_use_stable_mask(&self) -> Result<Vec<(Dep, Vec<String>)>> {
         collect_atom_flags(self.profiles.iter().map(|p| p.package_use_stable_mask()))
     }
@@ -656,7 +656,7 @@ impl ProfileStack {
 // UseFlags
 // ---------------------------------------------------------------------------
 
-/// The effective resolved USE flags for a package build environment.
+/// The effective resolved USE flags for a package build environment
 ///
 /// Contains only enabled flags — USE_EXPAND expansions applied,
 /// `use.force` added, `use.mask` removed, environment layer applied.
@@ -667,17 +667,17 @@ impl ProfileStack {
 pub struct UseFlags(pub(crate) Vec<Interned<DefaultInterner>>);
 
 impl UseFlags {
-    /// Iterate over the enabled flag names.
+    /// Iterate over the enabled flag names
     pub fn iter(&self) -> impl Iterator<Item = &Interned<DefaultInterner>> {
         self.0.iter()
     }
 
-    /// Whether the effective USE set is empty.
+    /// Whether the effective USE set is empty
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Number of effective USE flags in this set.
+    /// Number of effective USE flags in this set
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -708,7 +708,7 @@ impl IntoIterator for UseFlags {
 /// `portage_repo::build::profile`, which has access to `EbuildShell`).
 #[derive(Debug, Clone)]
 pub struct ProfileEnvLayer {
-    /// Absolute path to the `make.defaults` file this layer was read from.
+    /// Absolute path to the `make.defaults` file this layer was read from
     pub path: PathBuf,
     /// Variables contributed by this file — always one of the fixed
     /// portage-incremental names (`build::profile::INCREMENTAL_VARS`), hence
@@ -722,18 +722,18 @@ pub struct ProfileEnvLayer {
 }
 
 impl ProfileEnvLayer {
-    /// Get the value of a variable from this layer.
+    /// Get the value of a variable from this layer
     pub fn get(&self, name: &str) -> Option<&str> {
         self.vars.get(name).map(String::as_str)
     }
 
-    /// All variable names set in this layer.
+    /// All variable names set in this layer
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.vars.keys().copied()
     }
 }
 
-/// The stacked profile environment across all layers of a [`ProfileStack`].
+/// The stacked profile environment across all layers of a [`ProfileStack`]
 ///
 /// Each [`ProfileEnvLayer`] corresponds to one `make.defaults` file.
 /// Variables are not yet merged; call [`merge`](Self::merge) or the
@@ -741,7 +741,7 @@ impl ProfileEnvLayer {
 /// semantics.
 #[derive(Debug, Clone, Default)]
 pub struct ProfileEnv {
-    /// Layers in resolution order: root ancestors first, leaf last.
+    /// Layers in resolution order: root ancestors first, leaf last
     pub layers: Vec<ProfileEnvLayer>,
 }
 
@@ -756,7 +756,7 @@ impl ProfileEnv {
     }
 }
 
-/// Merge space-separated flag lists with incremental semantics.
+/// Merge space-separated flag lists with incremental semantics
 ///
 /// Tokens prefixed with `-` remove previously accumulated tokens. The special
 /// token `-*` is the incremental *clear-all* (make.conf(5): "Clearing these
@@ -838,7 +838,7 @@ pub(crate) fn merge_flag_lists_signed<'a>(iter: impl Iterator<Item = &'a str>) -
     out
 }
 
-/// Recursively collect profiles depth-first, ancestors before self.
+/// Recursively collect profiles depth-first, ancestors before self
 ///
 /// `visited` is a set of canonicalized paths already added; a profile seen a
 /// second time (diamond inheritance or cycle) is silently skipped.
@@ -899,7 +899,7 @@ fn resolve_profile_formats(profile_path: &Path) -> Vec<String> {
     Vec::new()
 }
 
-/// Read non-blank, non-comment lines from a profile file or directory.
+/// Read non-blank, non-comment lines from a profile file or directory
 ///
 /// Directory form is PMS 5.2.4 / [`util::read_lines`] (flat, sorted, skip
 /// `.…` / `…~`). Returns an empty `Vec` if `path` does not exist.
@@ -907,7 +907,7 @@ fn read_profile_file(path: &Path) -> Result<Vec<String>> {
     util::read_lines(path)
 }
 
-/// Merge incremental USE-flag lists from a sequence of profile-file results.
+/// Merge incremental USE-flag lists from a sequence of profile-file results
 ///
 /// A flag prefixed with `-` removes any previously accumulated occurrence.
 fn merge_use_flags<I>(iter: I) -> Result<Vec<String>>
@@ -930,13 +930,13 @@ where
     Ok(acc)
 }
 
-/// Parse one `package.provided` entry into a [`Cpv`], tolerating a leading `=`.
+/// Parse one `package.provided` entry into a [`Cpv`], tolerating a leading `=`
 fn parse_provided_cpv(s: &str) -> Result<Cpv> {
     let s = s.strip_prefix('=').unwrap_or(s);
     Ok(Cpv::parse(s)?)
 }
 
-/// Merge incremental atom lists (`package.mask` format).
+/// Merge incremental atom lists (`package.mask` format)
 ///
 /// A line prefixed with `-` causes that atom to be removed from the
 /// accumulated set.
@@ -961,7 +961,7 @@ where
     Ok(acc)
 }
 
-/// Concatenate `(atom, flags)` lists from a sequence of profiles.
+/// Concatenate `(atom, flags)` lists from a sequence of profiles
 fn collect_atom_flags<I>(iter: I) -> Result<Vec<(Dep, Vec<String>)>>
 where
     I: Iterator<Item = Result<Vec<(Dep, Vec<String>)>>>,
@@ -977,7 +977,7 @@ where
 // Existing per-profile helpers
 // ---------------------------------------------------------------------------
 
-/// Parse a file containing one dependency atom per line.
+/// Parse a file containing one dependency atom per line
 /// Parse a file containing `atom flag1 flag2 ...` per line.
 fn parse_atom_flags_list(path: &Path) -> Result<Vec<(Dep, Vec<String>)>> {
     let lines = util::read_lines(path)?;
@@ -1420,7 +1420,7 @@ mod tests {
     // *system* set). The temp dir acts as the repo root for the walk-up in
     // `resolve_profile_formats` (writing `metadata/layout.conf` there).
 
-    /// Write a `metadata/layout.conf` body at `dir` (the repo root).
+    /// Write a `metadata/layout.conf` body at `dir` (the repo root)
     fn write_layout_conf(dir: &TempDir, body: &str) {
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
         std::fs::write(dir.path().join("metadata").join("layout.conf"), body).unwrap();

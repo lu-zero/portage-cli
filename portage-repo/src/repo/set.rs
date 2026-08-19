@@ -1,4 +1,4 @@
-//! Every repository one invocation searches or merges across, as one type.
+//! Every repository one invocation searches or merges across, as one type
 
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
@@ -21,21 +21,27 @@ use crate::error::Result;
 /// `overlays`/`sources` list takes one `&RepoSet` instead.
 #[derive(Clone)]
 pub struct RepoSet {
-    /// **Descending** `(priority, name)`: index 0 wins a duplicate cpv over
-    /// index 1. [`Self::ebuilds`]/callers merge in exactly this order.
+    /// **Descending** `(priority, name)`: index 0 wins a duplicate cpv
+    /// over index 1
+    ///
+    /// [`Self::ebuilds`]/callers merge in exactly this order.
     repos: Vec<Arc<Repository>>,
-    /// Index into `repos` of the repo that names `RepoData::repo_name` and
-    /// that alias entries resolve their `source` against. Always in range.
+    /// Index into `repos` of the repo that names `RepoData::repo_name`
+    ///
+    /// Alias entries resolve their `source` against this repo. Always in
+    /// range.
     main: usize,
-    /// [`super::repos_conf::Location::Alias`] entries — virtual, no on-disk
-    /// tree. Part of "the repo world this command sees", so they travel
-    /// with the set instead of being a second return value nobody can
+    /// [`super::repos_conf::Location::Alias`] entries — virtual, no
+    /// on-disk tree
+    ///
+    /// Part of "the repo world this command sees", so they travel with
+    /// the set instead of being a second return value nobody can
     /// mis-pair with it.
     aliases: Vec<RepoEntry>,
 }
 
 impl RepoSet {
-    /// One tree, no repos.conf: `--repo`, and the single-repo query applets.
+    /// One tree, no repos.conf: `--repo`, and the single-repo query applets
     pub fn single(main: Repository) -> Self {
         Self {
             repos: vec![Arc::new(main)],
@@ -55,14 +61,15 @@ impl RepoSet {
         }
     }
 
-    /// Replace the alias set.
+    /// Replace the alias set
     pub fn set_aliases(&mut self, aliases: Vec<RepoEntry>) {
         self.aliases = aliases;
     }
 
-    /// Prepend caller-supplied aliases ahead of any already present (e.g.
-    /// `crossdev --setup -p`'s in-memory target, injected before whatever
-    /// repos.conf itself already lists).
+    /// Prepend caller-supplied aliases ahead of any already present
+    ///
+    /// E.g. `crossdev --setup -p`'s in-memory target, injected before
+    /// whatever repos.conf itself already lists.
     pub fn prepend_aliases(&mut self, extra: &[RepoEntry]) {
         if extra.is_empty() {
             return;
@@ -72,24 +79,26 @@ impl RepoSet {
         self.aliases = merged;
     }
 
-    /// The main repo. Every *deliberately* main-only use goes through this
-    /// and is greppable: profiles, make.conf, `use_env::build_use_env`,
+    /// The main repo
+    ///
+    /// Every *deliberately* main-only use goes through this and is
+    /// greppable: profiles, make.conf, `use_env::build_use_env`,
     /// arch.list, `RepoData::repo_name`, alias sources.
     pub fn main(&self) -> &Repository {
         &self.repos[self.main]
     }
 
-    /// Index of [`Self::main`] within [`Self::iter`]'s order.
+    /// Index of [`Self::main`] within [`Self::iter`]'s order
     pub fn main_index(&self) -> usize {
         self.main
     }
 
-    /// Number of repos in the set (always `>= 1`).
+    /// Number of repos in the set (always `>= 1`)
     pub fn len(&self) -> usize {
         self.repos.len()
     }
 
-    /// Never empty — a `RepoSet` always has at least its main repo.
+    /// Never empty — a `RepoSet` always has at least its main repo
     pub fn is_empty(&self) -> bool {
         false
     }
@@ -100,22 +109,22 @@ impl RepoSet {
         self.repos.len() > 1
     }
 
-    /// Priority order (index 0 is highest-priority).
+    /// Priority order (index 0 is highest-priority)
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &Repository> + '_ {
         self.repos.iter().map(Arc::as_ref)
     }
 
-    /// The repo at priority-order `index`.
+    /// The repo at priority-order `index`
     pub fn get(&self, index: usize) -> &Repository {
         &self.repos[index]
     }
 
-    /// First (highest-priority) repo with this name; `None` if unknown.
+    /// First (highest-priority) repo with this name; `None` if unknown
     pub fn by_name(&self, name: &str) -> Option<&Repository> {
         self.iter().find(|r| r.name() == name)
     }
 
-    /// `Location::Alias` entries configured alongside this set.
+    /// `Location::Alias` entries configured alongside this set
     pub fn aliases(&self) -> &[RepoEntry] {
         &self.aliases
     }
@@ -284,31 +293,33 @@ struct EntriesState {
 /// ebuild's file path ([`Repository::ebuild_for_cpv`]) or read further
 /// repo-scoped data without a second priority-ordered search.
 pub struct EntryIn<'a> {
-    /// The repo `entry` was found in.
+    /// The repo `entry` was found in
     pub repo: &'a Repository,
-    /// `repo`'s index in the set's priority order.
+    /// `repo`'s index in the set's priority order
     pub index: usize,
-    /// The cpv this entry describes.
+    /// The cpv this entry describes
     pub cpv: Cpv,
-    /// The metadata cache entry itself.
+    /// The metadata cache entry itself
     pub entry: CacheEntry,
 }
 
-/// One [`Ebuild`] from [`RepoSet::ebuilds`], carrying the repo it actually
-/// came from — so a consumer reads metadata from the repo that owns the
-/// file (`item.repo.cache_entry(item.ebuild.cpv())`) instead of doing a
-/// second priority-ordered search that could answer from a different repo
-/// than the one the path came from.
+/// One [`Ebuild`] from [`RepoSet::ebuilds`], carrying the repo it
+/// actually came from
+///
+/// So a consumer reads metadata from the repo that owns the file
+/// (`item.repo.cache_entry(item.ebuild.cpv())`) instead of doing a second
+/// priority-ordered search that could answer from a different repo than
+/// the one the path came from.
 pub struct EbuildIn<'a> {
-    /// The repo `ebuild` was found in.
+    /// The repo `ebuild` was found in
     pub repo: &'a Repository,
-    /// `repo`'s index in the set's priority order.
+    /// `repo`'s index in the set's priority order
     pub index: usize,
-    /// The ebuild itself.
+    /// The ebuild itself
     pub ebuild: Ebuild,
 }
 
-/// Iterator produced by [`RepoSet::ebuilds`].
+/// Iterator produced by [`RepoSet::ebuilds`]
 pub struct EbuildsAcross<'a> {
     set: &'a RepoSet,
     index: usize,

@@ -1,4 +1,4 @@
-//! `/etc/portage/package.env` — per-package build environment.
+//! `/etc/portage/package.env` — per-package build environment
 //!
 //! Maps atoms to environment files under `/etc/portage/env/`; the matching
 //! files are sourced on top of `make.conf` for the package being built, so
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use portage_atom::{Cpv, Dep};
 
-/// Resolve the ordered list of env-file paths to source for `cpv` (in `slot`).
+/// Resolve the ordered list of env-file paths to source for `cpv` (in `slot`)
 ///
 /// `portage_dirs` are the `etc/portage` directories in precedence order (e.g.
 /// the host config, then a `--local` overlay's `etc/portage`); a later
@@ -98,7 +98,7 @@ mod tests {
         Cpv::parse(s).unwrap()
     }
 
-    /// Build an `etc/portage` dir with a `package.env` and named env files.
+    /// Build an `etc/portage` dir with a `package.env` and named env files
     fn portage_dir(package_env: &str, env_files: &[(&str, &str)]) -> TempDir {
         let td = TempDir::new().unwrap();
         let pd = td.path();

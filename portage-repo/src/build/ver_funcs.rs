@@ -1,4 +1,4 @@
-//! PMS 12.3.14 version manipulation builtins: `ver_cut`, `ver_rs`, `ver_test`.
+//! PMS 12.3.14 version manipulation builtins: `ver_cut`, `ver_rs`, `ver_test`
 //!
 //! Implements these as Rust builtins rather than bash functions to avoid
 //! issues with bash arithmetic evaluation in array slicing expressions.
@@ -15,7 +15,7 @@ use regex::Regex;
 
 // ── Version splitting ──────────────────────────────────────────────────────
 
-/// Split a version string into alternating (separator, component) pairs.
+/// Split a version string into alternating (separator, component) pairs
 ///
 /// Returns a flat `Vec<String>` where:
 /// - Even indices (0, 2, 4, ...) are separators: non-ASCII-alphanumeric runs,
@@ -60,7 +60,7 @@ fn ver_split(v: &str) -> Vec<String> {
 
 // ── Range parsing ──────────────────────────────────────────────────────────
 
-/// Parse a version range string into `(start, end)` indices (1-indexed, inclusive).
+/// Parse a version range string into `(start, end)` indices (1-indexed, inclusive)
 ///
 /// Formats:
 /// - `"M"` → `(M, M)`
@@ -101,7 +101,7 @@ fn parse_range(range: &str, max: usize) -> Result<(usize, usize), String> {
 
 // ── ver_rs ─────────────────────────────────────────────────────────────────
 
-/// `ver_rs <range> <repl> [<range> <repl>]... [<version>]` — replace version separators.
+/// `ver_rs <range> <repl> [<range> <repl>]... [<version>]` — replace version separators
 ///
 /// See [PMS 12.3.14](https://projects.gentoo.org/pms/9/pms.html#ver-funcs).
 #[derive(Parser)]
@@ -179,7 +179,7 @@ impl builtins::Command for VerRsCommand {
 
 // ── ver_cut ────────────────────────────────────────────────────────────────
 
-/// `ver_cut <range> [<version>]` — extract version components.
+/// `ver_cut <range> [<version>]` — extract version components
 ///
 /// Splits the version into (separator, component) pairs and concatenates
 /// the pairs in the given 1-indexed range (inclusive).
@@ -257,7 +257,7 @@ impl builtins::Command for VerCutCommand {
 
 // ── Version comparison ─────────────────────────────────────────────────────
 
-/// Compare two non-negative decimal integer strings of arbitrary length.
+/// Compare two non-negative decimal integer strings of arbitrary length
 ///
 /// Uses zero-padding to equalize lengths so that lexicographic order
 /// matches numeric order (`"10"` > `"9"`, `""` == `"0"`).
@@ -280,7 +280,7 @@ fn compare_int(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Compiled regex for PMS version format.
+/// Compiled regex for PMS version format
 fn ver_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
@@ -289,7 +289,7 @@ fn ver_re() -> &'static Regex {
     })
 }
 
-/// Compare two Gentoo version strings per PMS algorithm 3.1.
+/// Compare two Gentoo version strings per PMS algorithm 3.1
 ///
 /// Returns `Some(Ordering)`, or `None` if either version is invalid.
 fn ver_compare(va: &str, vb: &str) -> Option<Ordering> {
@@ -441,7 +441,7 @@ fn ver_compare(va: &str, vb: &str) -> Option<Ordering> {
     Some(Ordering::Equal)
 }
 
-/// Extract the word (non-digit prefix) from the first suffix in a sentinel string.
+/// Extract the word (non-digit prefix) from the first suffix in a sentinel string
 ///
 /// E.g. `"p10_"` → `"p"`, `"alpha_"` → `"alpha"`.
 fn suffix_word(s: &str) -> &str {
@@ -451,7 +451,7 @@ fn suffix_word(s: &str) -> &str {
 
 // ── ver_test ───────────────────────────────────────────────────────────────
 
-/// `ver_test [<v1>] <op> <v2>` — compare version strings.
+/// `ver_test [<v1>] <op> <v2>` — compare version strings
 ///
 /// Compares versions using PMS algorithm 3.1. The operator is one of
 /// `-eq`, `-ne`, `-lt`, `-le`, `-gt`, `-ge`.

@@ -11,20 +11,20 @@ use crate::error::{Error, Result};
 use crate::repo::named_groups::{GroupEntry, expand_group, group_ref_name};
 use crate::repo::repository::Repository;
 
-/// Parsed `profiles/license_groups`: group name → direct members.
+/// Parsed `profiles/license_groups`: group name → direct members
 #[derive(Debug, Clone, Default)]
 pub struct LicenseGroupRegistry {
     groups: HashMap<String, Vec<GroupEntry<Interned<DefaultInterner>>>>,
 }
 
 impl LicenseGroupRegistry {
-    /// Load group definitions from `repo/profiles/license_groups`.
+    /// Load group definitions from `repo/profiles/license_groups`
     pub fn from_repo(repo: &Repository) -> Result<Self> {
         let path = repo.path().join("profiles/license_groups");
         Self::from_file(path.as_std_path())
     }
 
-    /// Parse a `license_groups` file (tolerates absence → empty registry).
+    /// Parse a `license_groups` file (tolerates absence → empty registry)
     pub fn from_file(path: &Path) -> Result<Self> {
         let Ok(content) = std::fs::read_to_string(path) else {
             return Ok(Self::default());
@@ -32,7 +32,7 @@ impl LicenseGroupRegistry {
         Ok(Self::parse(&content))
     }
 
-    /// Parse `profiles/license_groups` content.
+    /// Parse `profiles/license_groups` content
     pub fn parse(content: &str) -> Self {
         let mut groups: HashMap<String, Vec<GroupEntry<Interned<DefaultInterner>>>> =
             HashMap::new();
@@ -55,14 +55,14 @@ impl LicenseGroupRegistry {
         Self { groups }
     }
 
-    /// Expand a group name to interned license identifiers (cycle-safe).
+    /// Expand a group name to interned license identifiers (cycle-safe)
     pub fn expand(&self, name: &str) -> Vec<Interned<DefaultInterner>> {
         let mut visited = HashSet::new();
         let mut lookup = |n: &str| Ok(self.groups.get(n).cloned().unwrap_or_default());
         expand_group(name, &mut visited, &mut lookup).unwrap_or_default()
     }
 
-    /// Whether `name` is a defined license group.
+    /// Whether `name` is a defined license group
     pub fn contains(&self, name: &str) -> bool {
         self.groups.contains_key(name)
     }
@@ -82,18 +82,19 @@ fn classify_license_token(token: &str) -> Result<GroupEntry<Interned<DefaultInte
 /// `-` denials (portage `accept_license` semantics).
 #[derive(Debug, Clone, Default)]
 pub struct AcceptSet {
-    /// `*` was present among allow tokens.
+    /// `*` was present among allow tokens
     pub allow_all: bool,
-    /// This list encountered `-*` (incremental clear-all). Used by
-    /// [`AcceptSet::merge`] so a package.license line of `-* @FREE` can
-    /// replace a global `ACCEPT_LICENSE=*`, not OR onto it.
+    /// This list encountered `-*` (incremental clear-all)
+    ///
+    /// Used by [`AcceptSet::merge`] so a package.license line of `-* @FREE`
+    /// can replace a global `ACCEPT_LICENSE=*`, not OR onto it.
     pub cleared: bool,
     allowed: HashSet<Interned<DefaultInterner>>,
     denied: HashSet<Interned<DefaultInterner>>,
 }
 
 impl AcceptSet {
-    /// Build from raw `ACCEPT_LICENSE` tokens and a loaded group registry.
+    /// Build from raw `ACCEPT_LICENSE` tokens and a loaded group registry
     pub fn from_tokens(tokens: &[String], groups: &LicenseGroupRegistry) -> Self {
         let mut out = Self::default();
         for token in tokens {
@@ -126,12 +127,14 @@ impl AcceptSet {
         out
     }
 
-    /// Build from raw tokens with no `@GROUP` support — for `ACCEPT_PROPERTIES`/
-    /// `ACCEPT_RESTRICT`, which share `ACCEPT_LICENSE`'s token grammar
-    /// (`*`, `-token`, `-*`) but have no license-group concept. A `@name`
-    /// token here (nonsensical for these variables) resolves against an
-    /// empty registry and so contributes nothing, rather than being taken
-    /// literally as a token named `@name`.
+    /// Build from raw tokens with no `@GROUP` support
+    ///
+    /// For `ACCEPT_PROPERTIES`/`ACCEPT_RESTRICT`, which share
+    /// `ACCEPT_LICENSE`'s token grammar (`*`, `-token`, `-*`) but have no
+    /// license-group concept. A `@name` token here (nonsensical for these
+    /// variables) resolves against an empty registry and so contributes
+    /// nothing, rather than being taken literally as a token named
+    /// `@name`.
     pub fn from_tokens_plain(tokens: &[String]) -> Self {
         Self::from_tokens(tokens, &LicenseGroupRegistry::default())
     }
@@ -144,11 +147,14 @@ impl AcceptSet {
         }
     }
 
-    /// Layer `other` on top of this list for a per-package `package.license`
-    /// overlay. When `other` was built from a token list that included `-*`
+    /// Layer `other` on top of this list for a per-package
+    /// `package.license` overlay
+    ///
+    /// When `other` was built from a token list that included `-*`
     /// ([`AcceptSet::cleared`]), replace allow_all/allowed with other's
-    /// post-clear state (so `-* @FREE` can restrict a global `*`). Otherwise
-    /// union sets and OR `allow_all` (additive package.license lines).
+    /// post-clear state (so `-* @FREE` can restrict a global `*`).
+    /// Otherwise union sets and OR `allow_all` (additive package.license
+    /// lines).
     pub fn merge(&mut self, other: &AcceptSet) {
         if other.cleared {
             self.allow_all = other.allow_all;
@@ -162,7 +168,7 @@ impl AcceptSet {
         self.denied.extend(other.denied.iter().copied());
     }
 
-    /// Whether a single license identifier is accepted.
+    /// Whether a single license identifier is accepted
     pub fn accepts(&self, name: &str) -> bool {
         if self.denied.contains(&Interned::intern(name)) {
             return false;
@@ -173,7 +179,7 @@ impl AcceptSet {
         self.allowed.contains(&Interned::intern(name))
     }
 
-    /// Whether a `LICENSE` expression is fully covered by this accept list.
+    /// Whether a `LICENSE` expression is fully covered by this accept list
     ///
     /// `enabled` reports whether a USE flag is active for the package: a
     /// `flag? ( … )` / `!flag? ( … )` branch only contributes licenses when it
@@ -199,7 +205,7 @@ impl AcceptSet {
         }
     }
 
-    /// Collect license names from `expr` not covered by this accept list.
+    /// Collect license names from `expr` not covered by this accept list
     /// Conditional branches are evaluated against `enabled` (see `accepts_expr`).
     pub fn licenses_needed(
         &self,
@@ -248,7 +254,8 @@ impl AcceptSet {
         }
     }
 
-    /// Whether every top-level `RESTRICT`/`PROPERTIES` entry is accepted.
+    /// Whether every top-level `RESTRICT`/`PROPERTIES` entry is accepted
+    ///
     /// `enabled` reports whether a USE flag is active (see `accepts_expr`'s
     /// doc — same conditional-branch handling). Unlike [`LicenseExpr`],
     /// [`RestrictExpr`] has no `||` any-of group: a value is a flat entry
@@ -274,7 +281,7 @@ impl AcceptSet {
         }
     }
 
-    /// Collect entries not covered by this accept list (mirrors `licenses_needed`).
+    /// Collect entries not covered by this accept list (mirrors `licenses_needed`)
     pub fn restrict_needed(
         &self,
         entries: &[RestrictExpr],
@@ -383,11 +390,11 @@ OSI Apache-2.0
         assert!(!acc.accepts("GPL-2"), "nothing else is accepted after -*");
     }
 
-    /// Regression: a conditional `LICENSE` must be evaluated with the package's
-    /// effective USE. ffmpeg's `gpl? ( GPL-2+ fdk? ( all-rights-reserved ) )
-    /// !gpl? ( LGPL-2.1+ )` is FREE with `gpl` on / `fdk` off, even though the
-    /// disabled `fdk` branch names a non-FREE license. Walking every branch
-    /// (USE-blind) wrongly rejected it under ACCEPT_LICENSE="@FREE".
+    // Regression: a conditional `LICENSE` must be evaluated with the package's
+    // effective USE. ffmpeg's `gpl? ( GPL-2+ fdk? ( all-rights-reserved ) )
+    // !gpl? ( LGPL-2.1+ )` is FREE with `gpl` on / `fdk` off, even though the
+    // disabled `fdk` branch names a non-FREE license. Walking every branch
+    // (USE-blind) wrongly rejected it under ACCEPT_LICENSE="@FREE".
     #[test]
     fn conditional_license_respects_use() {
         let reg = LicenseGroupRegistry::default();

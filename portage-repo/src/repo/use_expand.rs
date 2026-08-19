@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-/// A set of USE_EXPAND group names that can bucket USE flag lists.
+/// A set of USE_EXPAND group names that can bucket USE flag lists
 ///
 /// USE_EXPAND groups (e.g. `CPU_FLAGS_X86`, `VIDEO_CARDS`) are stored as
 /// lowercase prefixes sorted longest-first so that a longer prefix like
@@ -22,12 +22,12 @@ use std::collections::BTreeMap;
 /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone, Default)]
 pub struct UseExpand {
-    /// Lowercase group names sorted longest-first for unambiguous prefix matching.
+    /// Lowercase group names sorted longest-first for unambiguous prefix matching
     prefixes: Vec<String>,
 }
 
 impl UseExpand {
-    /// Create from an iterator of group names (case-insensitive).
+    /// Create from an iterator of group names (case-insensitive)
     ///
     /// Accepts the output of `Repository::use_expand_names` directly.
     pub fn new(group_names: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
@@ -40,7 +40,7 @@ impl UseExpand {
         Self { prefixes }
     }
 
-    /// Parse from a space-separated `$USE_EXPAND` variable value.
+    /// Parse from a space-separated `$USE_EXPAND` variable value
     ///
     /// This is the variable set by `make.defaults` in the profile stack.
     /// After `ProfileStack::configure_shell` you can read it with
@@ -49,7 +49,7 @@ impl UseExpand {
         Self::new(use_expand.split_whitespace())
     }
 
-    /// Group USE flags by their USE_EXPAND prefix.
+    /// Group USE flags by their USE_EXPAND prefix
     ///
     /// Each flag is matched against the known prefixes (longest first).  On a
     /// match the prefix and the separating `_` are stripped, leaving the value
@@ -71,12 +71,12 @@ impl UseExpand {
         groups
     }
 
-    /// The known lowercase group prefixes, sorted longest-first.
+    /// The known lowercase group prefixes, sorted longest-first
     pub fn prefixes(&self) -> &[String] {
         &self.prefixes
     }
 
-    /// Split one flag into `(group, value)` without allocating.
+    /// Split one flag into `(group, value)` without allocating
     ///
     /// Both returned slices borrow from their respective inputs:
     /// `group` from `self.prefixes` (or `"global"`), `value` from `flag`.

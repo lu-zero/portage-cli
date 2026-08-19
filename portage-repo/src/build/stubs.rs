@@ -1,4 +1,4 @@
-//! Portage-specific bash function definitions for the embedded shell.
+//! Portage-specific bash function definitions for the embedded shell
 //!
 //! Real ebuilds and eclasses expect a set of Portage-provided functions
 //! (`inherit`, `die`, `EXPORT_FUNCTIONS`, etc.) to exist at source time.
@@ -13,7 +13,7 @@ use brush_core::{Shell, SourceInfo};
 
 use crate::error::{Error, Result};
 
-/// Register all Portage-specific shell functions in the given shell.
+/// Register all Portage-specific shell functions in the given shell
 ///
 /// This must be called once during [`crate::EbuildShell::new`] before
 /// any ebuild or eclass is sourced.
@@ -27,8 +27,10 @@ pub(crate) async fn register(shell: &mut Shell) -> Result<()> {
     Ok(())
 }
 
-/// All Portage-specific bash function definitions, concatenated into a
-/// single script that is evaluated once at shell init time.
+/// All Portage-specific bash function definitions
+///
+/// Concatenated into a single script that is evaluated once at shell init
+/// time.
 const PORTAGE_FUNCTIONS: &str = r#"
 # ── Bash options required by PMS / Portage ───────────────────────────
 # Portage's ebuild.sh enables these before sourcing any ebuild or eclass.

@@ -4,30 +4,30 @@ use itertools::Itertools as _;
 
 use crate::error::{Error, Result};
 
-/// Type of a package maintainer.
+/// Type of a package maintainer
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaintainerKind {
-    /// Individual maintainer (`<maintainer type="person">`).
+    /// Individual maintainer (`<maintainer type="person">`)
     Person,
-    /// Project or herd maintainer (`<maintainer type="project">`).
+    /// Project or herd maintainer (`<maintainer type="project">`)
     Project,
-    /// Maintainer type missing or not recognised in `metadata.xml`.
+    /// Maintainer type missing or not recognised in `metadata.xml`
     Unknown,
 }
 
-/// A single `<maintainer>` entry from `metadata.xml`.
+/// A single `<maintainer>` entry from `metadata.xml`
 #[derive(Debug, Clone)]
 pub struct Maintainer {
-    /// Contact e-mail address.
+    /// Contact e-mail address
     pub email: String,
-    /// Display name, if present.
+    /// Display name, if present
     pub name: Option<String>,
-    /// Whether this is a person or project maintainer.
+    /// Whether this is a person or project maintainer
     pub kind: MaintainerKind,
 }
 
 impl Maintainer {
-    /// Return a compact `"Name <email>"` or `"<email>"` string.
+    /// Return a compact `"Name <email>"` or `"<email>"` string
     pub fn display(&self) -> String {
         match &self.name {
             Some(n) => format!("{n} <{}>", self.email),
@@ -36,7 +36,7 @@ impl Maintainer {
     }
 }
 
-/// Package-level metadata from `metadata.xml`.
+/// Package-level metadata from `metadata.xml`
 ///
 /// Contains maintainer contacts, an optional long description, and per-flag
 /// USE descriptions extracted from the `<use>` block.
@@ -48,22 +48,22 @@ impl Maintainer {
 /// See also [PMS Appendix A](https://projects.gentoo.org/pms/9/pms.html#metadata-xml).
 #[derive(Debug, Clone, Default)]
 pub struct PkgMetadata {
-    /// Maintainers, in document order.
+    /// Maintainers, in document order
     pub maintainers: Vec<Maintainer>,
 
-    /// Long description (`<longdescription lang="en">`), if present.
+    /// Long description (`<longdescription lang="en">`), if present
     ///
     /// Whitespace is normalised to single spaces.
     pub longdescription: Option<String>,
 
-    /// USE flag descriptions, keyed by flag name, sorted alphabetically.
+    /// USE flag descriptions, keyed by flag name, sorted alphabetically
     ///
     /// Inner XML elements (e.g. `<pkg>`, `<b>`) are flattened to plain text.
     use_flags: BTreeMap<String, String>,
 }
 
 impl PkgMetadata {
-    /// Parse the contents of a `metadata.xml` file.
+    /// Parse the contents of a `metadata.xml` file
     pub fn parse(xml: &str) -> Result<Self> {
         let opts = roxmltree::ParsingOptions {
             allow_dtd: true,
@@ -127,20 +127,20 @@ impl PkgMetadata {
         })
     }
 
-    /// USE flag descriptions keyed by flag name, in alphabetical order.
+    /// USE flag descriptions keyed by flag name, in alphabetical order
     ///
     /// Inner XML elements (e.g. `<pkg>`, `<b>`) are flattened to plain text.
     pub fn use_flags(&self) -> &BTreeMap<String, String> {
         &self.use_flags
     }
 
-    /// Consume `self` and return the USE flag map.
+    /// Consume `self` and return the USE flag map
     pub fn into_use_flags(self) -> BTreeMap<String, String> {
         self.use_flags
     }
 }
 
-/// Recursively collect all text content from an XML node, stripping element tags.
+/// Recursively collect all text content from an XML node, stripping element tags
 ///
 /// Runs of whitespace (spaces, tabs, newlines) are collapsed to a single space
 /// so that multi-line descriptions come out as a clean single line.

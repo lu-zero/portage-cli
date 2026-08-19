@@ -15,7 +15,7 @@ use crate::metadata_cache::{DirMetadataCache, MemoryMetadataCache, MetadataCache
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 
-/// Lazy, composable ebuild discovery over a repository tree.
+/// Lazy, composable ebuild discovery over a repository tree
 ///
 /// Wraps a [`jwalk::WalkDir`] builder and an optional filter closure.
 /// Nothing is walked until [`IntoIterator::into_iter`] or a collecting
@@ -41,7 +41,7 @@ pub struct Ebuilds {
     filter: Option<Arc<EbuildFilter>>,
 }
 
-/// Concrete iterator produced by [`Ebuilds::into_iter`].
+/// Concrete iterator produced by [`Ebuilds::into_iter`]
 ///
 /// Holds the jwalk `DirEntryIter` and converts each entry
 /// to an [`Ebuild`] on the fly, applying the optional filter.
@@ -58,7 +58,7 @@ impl Ebuilds {
         }
     }
 
-    /// Retain only ebuilds matching the predicate.
+    /// Retain only ebuilds matching the predicate
     ///
     /// Consuming: call `.filter(...)` repeatedly to chain predicates.
     pub fn filter<F>(mut self, f: F) -> Self
@@ -69,7 +69,7 @@ impl Ebuilds {
         self
     }
 
-    /// Collect all matching ebuilds into a sorted `Vec`.
+    /// Collect all matching ebuilds into a sorted `Vec`
     pub fn collect_vec(self) -> Vec<Ebuild> {
         let mut v: Vec<Ebuild> = self.into_iter().collect();
         v.sort_by(|a, b| a.cpv().cmp(b.cpv()));
@@ -117,7 +117,7 @@ impl Iterator for EbuildsIter {
     }
 }
 
-/// Lazy iterator over every `metadata/md5-cache/{cat}/{name-version}` file.
+/// Lazy iterator over every `metadata/md5-cache/{cat}/{name-version}` file
 ///
 /// Produced by [`Repository::cache_entries`]. Each item is a `(Cpv, …)`
 /// tuple; the second element is the parsed entry or the I/O / parse error
@@ -126,7 +126,7 @@ pub struct CacheEntries {
     walker: WalkDir,
 }
 
-/// Concrete iterator produced by [`CacheEntries::into_iter`].
+/// Concrete iterator produced by [`CacheEntries::into_iter`]
 pub struct CacheEntriesIter {
     inner: jwalk::DirEntryIter<((), ())>,
 }
@@ -178,26 +178,27 @@ impl Iterator for CacheEntriesIter {
     }
 }
 
-/// A single package-move or slot-move entry from `profiles/updates/`.
+/// A single package-move or slot-move entry from `profiles/updates/`
 ///
 /// See [PMS 4.4.4](https://projects.gentoo.org/pms/9/pms.html#profiles-updates).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileUpdate {
-    /// `move <old> <new>` — package renamed.
+    /// `move <old> <new>` — package renamed
     Move {
-        /// Old category/package name.
+        /// Old category/package name
         old: Cpn,
-        /// New category/package name.
+        /// New category/package name
         new: Cpn,
     },
-    /// `slotmove <dep> <old_slot> <new_slot>` — slot renamed.
+    /// `slotmove <dep> <old_slot> <new_slot>` — slot renamed
     SlotMove {
-        /// Atom (possibly versioned) identifying affected packages.
+        /// Atom (possibly versioned) identifying affected packages
+        ///
         /// Boxed to keep the enum near [`ProfileUpdate::Move`]'s size.
         dep: Box<Dep>,
-        /// Old slot value.
+        /// Old slot value
         old_slot: String,
-        /// New slot value.
+        /// New slot value
         new_slot: String,
     },
 }
@@ -209,7 +210,7 @@ use super::use_expand::UseExpand;
 use super::util;
 use crate::error::{Error, Result};
 
-/// A Gentoo ebuild repository.
+/// A Gentoo ebuild repository
 ///
 /// This is the main entry point for the crate. It eagerly loads `layout.conf`
 /// and the repository name, while category/package enumeration is lazy.
@@ -224,11 +225,11 @@ pub struct Repository {
     layout: LayoutConf,
     name: String,
     arch_cache: Vec<Arch>,
-    /// In-tree `metadata/md5-cache` (usually a [`DirMetadataCache`]).
+    /// In-tree `metadata/md5-cache` (usually a [`DirMetadataCache`])
     primary: Arc<dyn MetadataCache>,
-    /// Always-present writable store for lazy overlay metadata / unprivileged writes.
+    /// Always-present writable store for lazy overlay metadata / unprivileged writes
     secondary: Arc<dyn MetadataCache>,
-    /// Directory backing `secondary`, when it is a durable on-disk store.
+    /// Directory backing `secondary`, when it is a durable on-disk store
     /// `None` for in-memory/custom stores, which have nowhere to keep a
     /// sidecar index.
     secondary_dir: Option<Utf8PathBuf>,
@@ -250,18 +251,18 @@ impl std::fmt::Debug for Repository {
     }
 }
 
-/// How the builder materialises the writable secondary metadata cache.
+/// How the builder materialises the writable secondary metadata cache
 #[derive(Clone)]
 enum SecondarySpec {
-    /// Ephemeral (tests).
+    /// Ephemeral (tests)
     Memory,
-    /// Durable disk: `root.join(repo.name())` after the tree name is known.
+    /// Durable disk: `root.join(repo.name())` after the tree name is known
     UserRoot(Utf8PathBuf),
-    /// Pre-built store.
+    /// Pre-built store
     Custom(Arc<dyn MetadataCache>),
 }
 
-/// Builder for [`Repository`]: requires a secondary metadata cache before open.
+/// Builder for [`Repository`]: requires a secondary metadata cache before open
 ///
 /// ```no_run
 /// use portage_repo::Repository;
@@ -278,13 +279,13 @@ pub struct RepositoryBuilder {
 }
 
 impl RepositoryBuilder {
-    /// In-memory secondary (tests / ephemeral). Always writable, not durable.
+    /// In-memory secondary (tests / ephemeral). Always writable, not durable
     pub fn in_memory_cache(mut self) -> Self {
         self.secondary = Some(SecondarySpec::Memory);
         self
     }
 
-    /// Durable secondary at `root/<repo-name>/` (name from the tree).
+    /// Durable secondary at `root/<repo-name>/` (name from the tree)
     ///
     /// Pass only the app-level root (e.g. `$XDG_CACHE_HOME/em/md5-cache`).
     /// [`Repository::write_cache_entry`] prefers in-tree primary, then this
@@ -294,19 +295,19 @@ impl RepositoryBuilder {
         self
     }
 
-    /// Pre-built secondary (exact dir via [`DirMetadataCache`], custom, …).
+    /// Pre-built secondary (exact dir via [`DirMetadataCache`], custom, …)
     pub fn cache(mut self, cache: impl MetadataCache + 'static) -> Self {
         self.secondary = Some(SecondarySpec::Custom(Arc::new(cache)));
         self
     }
 
-    /// Open an ebuild repository at `path`.
+    /// Open an ebuild repository at `path`
     pub fn open(self, path: impl Into<PathBuf>) -> Result<Repository> {
         let spec = self.secondary.ok_or(Error::BuilderMissingSecondary)?;
         Repository::open_with_secondary(path, spec)
     }
 
-    /// Open a repository and resolve masters from `repos_dir`.
+    /// Open a repository and resolve masters from `repos_dir`
     ///
     /// `masters_override` is the repos.conf-parsed `masters =` for this
     /// repo, if any: repos.conf wins over `layout.conf`'s own `masters =`
@@ -351,7 +352,7 @@ impl RepositoryBuilder {
 }
 
 impl Repository {
-    /// Start a builder (secondary cache is required before [`RepositoryBuilder::open`]).
+    /// Start a builder (secondary cache is required before [`RepositoryBuilder::open`])
     pub fn builder() -> RepositoryBuilder {
         RepositoryBuilder::default()
     }
@@ -443,7 +444,7 @@ impl Repository {
         Ok(())
     }
 
-    /// Absolute path to the repository root.
+    /// Absolute path to the repository root
     pub fn path(&self) -> &Utf8Path {
         &self.path
     }
@@ -492,7 +493,7 @@ impl Repository {
         self.path.join("metadata").join("timestamp.chk").is_file()
     }
 
-    /// A cheap stamp that changes when the tree is synced.
+    /// A cheap stamp that changes when the tree is synced
     ///
     /// `metadata/timestamp.chk` is what rsync rewrites on every sync, and a git
     /// checkout moves the repo directory's own mtime. Both are consulted, so a
@@ -534,17 +535,17 @@ impl Repository {
             .ok()
     }
 
-    /// Repository name (from `profiles/repo_name`).
+    /// Repository name (from `profiles/repo_name`)
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// The parsed `metadata/layout.conf`.
+    /// The parsed `metadata/layout.conf`
     pub fn layout(&self) -> &LayoutConf {
         &self.layout
     }
 
-    /// Lazy iterator over all categories declared in `profiles/categories`.
+    /// Lazy iterator over all categories declared in `profiles/categories`
     ///
     /// Returns a [`Categories`] builder; nothing is read until the iterator
     /// is driven. Use `.filter()` to restrict and `.collect_vec()` to materialise.
@@ -557,7 +558,7 @@ impl Repository {
         )
     }
 
-    /// List all ebuilds in the repository using parallel directory walking.
+    /// List all ebuilds in the repository using parallel directory walking
     ///
     /// Uses [`jwalk`] to walk category directories concurrently, collecting
     /// all `.ebuild` files. Valid categories are the *union* of this repo's
@@ -577,7 +578,7 @@ impl Repository {
         self.ebuilds_in_categories(categories)
     }
 
-    /// Like [`ebuilds`](Self::ebuilds), but with an explicit category set.
+    /// Like [`ebuilds`](Self::ebuilds), but with an explicit category set
     ///
     /// Portage treats the valid categories as the *union* across a repo and
     /// its masters, so an overlay may ship packages in a master's category
@@ -608,7 +609,7 @@ impl Repository {
         Ok(Ebuilds::new(walker))
     }
 
-    /// Look up a single category by name.
+    /// Look up a single category by name
     pub fn category(&self, name: &str) -> Option<Category> {
         let cat_path: Utf8PathBuf = self.path.join(name);
         if cat_path.is_dir() {
@@ -635,7 +636,7 @@ impl Repository {
         pkg.ebuild(&cpv.version.to_string())
     }
 
-    /// Resolve a package pattern to one or more [`Cpn`] values.
+    /// Resolve a package pattern to one or more [`Cpn`] values
     ///
     /// * `cat/pkg` — exact lookup within the named category.
     /// * bare `name` — scans the union of this repo's own
@@ -682,7 +683,7 @@ impl Repository {
         }
     }
 
-    /// Read a metadata cache entry for the given `Cpv`.
+    /// Read a metadata cache entry for the given `Cpv`
     ///
     /// Looks up the **primary** (in-tree) store first, then the **secondary**
     /// (always-present writable store). Returns `Ok(None)` when neither has
@@ -702,12 +703,12 @@ impl Repository {
         self.secondary.get(cpv)
     }
 
-    /// Persist `entry` to the secondary (always-writable) store.
+    /// Persist `entry` to the secondary (always-writable) store
     pub fn put_secondary(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
         self.secondary.put(cpv, entry)
     }
 
-    /// Prefer primary if it accepts a write; otherwise write secondary.
+    /// Prefer primary if it accepts a write; otherwise write secondary
     ///
     /// Used by `em regen` when the in-tree cache may be unwritable.
     pub fn write_cache_entry(&self, cpv: &Cpv, entry: &CacheEntry) -> Result<()> {
@@ -717,19 +718,19 @@ impl Repository {
         }
     }
 
-    /// Whether the primary (in-tree) cache directory exists.
+    /// Whether the primary (in-tree) cache directory exists
     pub fn has_primary_cache(&self) -> bool {
         self.primary.is_populated()
     }
 
-    /// `{repo}/metadata/md5-cache/` — the directory PMS 14 places the cache in.
+    /// `{repo}/metadata/md5-cache/` — the directory PMS 14 places the cache in
     ///
     /// Prefer [`Self::cache_entry`] / [`Self::write_cache_entry`] for entry I/O.
     pub(crate) fn cache_dir(&self) -> Utf8PathBuf {
         self.path.join("metadata").join("md5-cache")
     }
 
-    /// Walk `metadata/md5-cache/` yielding every entry as `(Cpv, Result<CacheEntry>)`.
+    /// Walk `metadata/md5-cache/` yielding every entry as `(Cpv, Result<CacheEntry>)`
     ///
     /// The walk is parallel (via [`jwalk`]); parsing happens on demand as
     /// the iterator is consumed. Files whose name does not parse as a Cpv
@@ -746,7 +747,7 @@ impl Repository {
         CacheEntries { walker }
     }
 
-    /// Verify that `entry`'s recorded eclass checksums still match the live tree.
+    /// Verify that `entry`'s recorded eclass checksums still match the live tree
     ///
     /// For every `(name, md5)` in `entry.eclasses`, the eclass is located by
     /// searching this repository's `eclass/` directory and each
@@ -793,7 +794,7 @@ impl Repository {
         true
     }
 
-    /// Parse `profiles/profiles.desc` to get available profile descriptions.
+    /// Parse `profiles/profiles.desc` to get available profile descriptions
     ///
     /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
     pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc>> {
@@ -805,7 +806,7 @@ impl Repository {
         Ok(descs)
     }
 
-    /// Read the default EAPI for profiles in this repository.
+    /// Read the default EAPI for profiles in this repository
     ///
     /// Returns `None` if `profiles/eapi` is absent (EAPI 0 is implied).
     ///
@@ -822,7 +823,7 @@ impl Repository {
         }
     }
 
-    /// Parse the repository-level `profiles/package.mask`.
+    /// Parse the repository-level `profiles/package.mask`
     ///
     /// These masks apply across all profiles in the repository and should
     /// be merged before any profile-stack masks.  Returns an empty `Vec`
@@ -837,7 +838,7 @@ impl Repository {
             .collect()
     }
 
-    /// Build a [`UseExpand`] grouper from this repository's `profiles/desc/` names.
+    /// Build a [`UseExpand`] grouper from this repository's `profiles/desc/` names
     ///
     /// This is a convenience wrapper around [`Repository::use_expand_names`] that
     /// constructs the grouper ready for [`UseExpand::group`] calls.
@@ -845,7 +846,7 @@ impl Repository {
         Ok(UseExpand::new(self.use_expand_names()?))
     }
 
-    /// List available USE_EXPAND variable names from `profiles/desc/`.
+    /// List available USE_EXPAND variable names from `profiles/desc/`
     ///
     /// Returns the stem of each `.desc` file (e.g. `"cpu_flags_x86"`),
     /// sorted alphabetically.
@@ -876,7 +877,7 @@ impl Repository {
         Ok(names)
     }
 
-    /// Parse USE_EXPAND flag descriptions from `profiles/desc/{name}.desc`.
+    /// Parse USE_EXPAND flag descriptions from `profiles/desc/{name}.desc`
     ///
     /// Returns `(flag_name, description)` pairs.  Returns an empty `Vec`
     /// if the file does not exist.
@@ -891,7 +892,7 @@ impl Repository {
         )
     }
 
-    /// Parse all package-move and slot-move entries from `profiles/updates/`.
+    /// Parse all package-move and slot-move entries from `profiles/updates/`
     ///
     /// Files are read in sorted order (oldest first by filename convention).
     /// Lines with unrecognised tags or parse errors are silently skipped.
@@ -951,13 +952,13 @@ impl Repository {
         Ok(updates)
     }
 
-    /// Open a profile directory relative to `profiles/`.
+    /// Open a profile directory relative to `profiles/`
     pub fn profile(&self, relative_path: &str) -> Result<Profile> {
         let profile_path = self.path.join("profiles").join(relative_path);
         Profile::open(profile_path.into())
     }
 
-    /// Build the full profile stack for a profile relative to `profiles/`.
+    /// Build the full profile stack for a profile relative to `profiles/`
     ///
     /// Follows `parent` files recursively and returns a [`ProfileStack`] with
     /// all ancestor profiles in resolution order.
@@ -968,7 +969,7 @@ impl Repository {
         ProfileStack::build(profile_path.into())
     }
 
-    /// List available eclass names (without the `.eclass` extension).
+    /// List available eclass names (without the `.eclass` extension)
     pub fn eclasses(&self) -> Result<Vec<String>> {
         let eclass_dir: Utf8PathBuf = self.path.join("eclass");
         let entries = match std::fs::read_dir(&eclass_dir) {
@@ -992,12 +993,12 @@ impl Repository {
         Ok(names)
     }
 
-    /// List available license names from `licenses/`.
+    /// List available license names from `licenses/`
     pub fn licenses(&self) -> Result<Vec<String>> {
         list_dir_names(self.path.join("licenses"))
     }
 
-    /// Architectures declared in `profiles/arch.list` (typed).
+    /// Architectures declared in `profiles/arch.list` (typed)
     ///
     /// Populated eagerly at `open()`. See
     /// [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
@@ -1005,26 +1006,26 @@ impl Repository {
         &self.arch_cache
     }
 
-    /// Resolve an [`Arch`] to its Gentoo keyword string.
+    /// Resolve an [`Arch`] to its Gentoo keyword string
     pub fn arch_keyword<'a>(&self, arch: &'a Arch) -> &'a str {
         arch.as_str()
     }
 
-    /// Extract the CPU architecture from a GNU CHOST triple.
+    /// Extract the CPU architecture from a GNU CHOST triple
     ///
     /// Returns `None` only when `chost` is empty.
     pub fn arch_from_chost(&self, chost: &str) -> Option<Arch> {
         Arch::from_chost(chost)
     }
 
-    /// Parse global USE flag descriptions from `profiles/use.desc`.
+    /// Parse global USE flag descriptions from `profiles/use.desc`
     ///
     /// Returns `(flag_name, description)` pairs.
     pub fn use_desc(&self) -> Result<Vec<(String, String)>> {
         parse_desc_file(self.path.join("profiles").join("use.desc"))
     }
 
-    /// Build a [`crate::UseDb`] for this repository.
+    /// Build a [`crate::UseDb`] for this repository
     ///
     /// Combines global (`use.desc`) and package-local (`use.local.desc`)
     /// USE flag descriptions into an indexed structure with O(log n) lookup.
@@ -1032,7 +1033,7 @@ impl Repository {
         crate::UseDb::load(&self.path)
     }
 
-    /// Parse per-package USE flag descriptions from `profiles/use.local.desc`.
+    /// Parse per-package USE flag descriptions from `profiles/use.local.desc`
     ///
     /// Returns `(Cpn, flag_name, description)` tuples.
     pub fn use_local_desc(&self) -> Result<Vec<(Cpn, String, String)>> {
@@ -1054,7 +1055,7 @@ impl Repository {
         Ok(result)
     }
 
-    /// Parse `profiles/thirdpartymirrors`.
+    /// Parse `profiles/thirdpartymirrors`
     ///
     /// Returns `(mirror_name, [urls...])` pairs.
     pub fn thirdpartymirrors(&self) -> Result<Vec<(String, Vec<String>)>> {
@@ -1079,7 +1080,7 @@ fn materialise_secondary(repo_name: &str, spec: SecondarySpec) -> Arc<dyn Metada
     }
 }
 
-/// Locate `{name}.eclass` by searching `dirs` in order (first hit wins).
+/// Locate `{name}.eclass` by searching `dirs` in order (first hit wins)
 fn find_eclass_in(dirs: &[Utf8PathBuf], name: &str) -> Option<Utf8PathBuf> {
     let filename = format!("{name}.eclass");
     for dir in dirs {
@@ -1091,7 +1092,7 @@ fn find_eclass_in(dirs: &[Utf8PathBuf], name: &str) -> Option<Utf8PathBuf> {
     None
 }
 
-/// List file/directory names in a directory (sorted, skipping dotfiles).
+/// List file/directory names in a directory (sorted, skipping dotfiles)
 fn list_dir_names(dir: impl AsRef<Path>) -> Result<Vec<String>> {
     let dir = dir.as_ref();
     let entries = match std::fs::read_dir(dir) {
@@ -1113,7 +1114,7 @@ fn list_dir_names(dir: impl AsRef<Path>) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// Parse a `flag - description` file format used by `use.desc` etc.
+/// Parse a `flag - description` file format (`use.desc` and similar)
 fn parse_desc_file(path: impl AsRef<Path>) -> Result<Vec<(String, String)>> {
     let lines = util::read_lines(path)?;
     let mut result = Vec::new();

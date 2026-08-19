@@ -1,4 +1,4 @@
-//! Portage's P1 output helpers, following `isolated-functions.sh`.
+//! Portage's P1 output helpers, following `isolated-functions.sh`
 //!
 //! The palette and the width come from [`TerminalState`] rather than from
 //! `PORTAGE_COLOR_*`/`COLS` shell variables: portage exports those only because
@@ -14,7 +14,7 @@ use clap::Parser;
 
 use crate::build::terminal::{PortageColors, TerminalState};
 
-/// The current palette, or a plain one if the shell has no terminal state.
+/// The current palette, or a plain one if the shell has no terminal state
 fn colors<SE: brush_core::ShellExtensions>(
     context: &brush_core::ExecutionContext<'_, SE>,
 ) -> PortageColors {
@@ -24,14 +24,15 @@ fn colors<SE: brush_core::ShellExtensions>(
         .unwrap_or_default()
 }
 
-/// Portage's message prefix: a space, the coloured `*`, a space. Only the `*`
-/// is painted — the surrounding spaces are not, matching
+/// Portage's message prefix: a space, the coloured `*`, a space
+///
+/// Only the `*` is painted — the surrounding spaces are not, matching
 /// `echo " ${PORTAGE_COLOR_INFO}*${PORTAGE_COLOR_NORMAL} ${REPLY}"`.
 fn marker(style: Style) -> String {
     format!(" {style}*{style:#} ")
 }
 
-/// Expand backslash escapes the way `echo -e` does.
+/// Expand backslash escapes the way `echo -e` does
 ///
 /// Every one of portage's `e*` helpers renders its message through
 /// `echo -e "$@"` (and records it through the same), so `ewarn "a\nb"` is two

@@ -1,4 +1,4 @@
-//! Metadata cache operations — regeneration and (future) bulk reading.
+//! Metadata cache operations — regeneration and (future) bulk reading
 //!
 //! [`regen_cache`] sources all ebuilds and writes `md5-cache` files, sending
 //! one [`RegenItem`] per finished ebuild on a caller-supplied channel.
@@ -20,62 +20,62 @@ use crate::metadata_cache::{DirMetadataCache, MetadataCache};
 use crate::source::{SourceContext, SourceOpts, SourcedEbuild};
 use crate::{Ebuild, Repository, Result};
 
-/// Shared eclass file → md5 cache used across all regen workers.
+/// Shared eclass file → md5 cache used across all regen workers
 ///
 /// `papaya::HashMap` gives lock-free reads; the first-miss race where two
 /// workers concurrently read and hash the same eclass is benign because
 /// `insert` is atomic and the digests are identical.
 type ChecksumCache = Arc<papaya::HashMap<PathBuf, md5::Digest>>;
 
-/// Where [`regen_cache`] writes sourced metadata.
+/// Where [`regen_cache`] writes sourced metadata
 #[derive(Debug, Clone, Default)]
 pub enum RegenWriteTarget {
-    /// Source only; do not write cache files.
+    /// Source only; do not write cache files
     #[default]
     None,
     /// Prefer the repository's primary (in-tree) store, else its secondary
     /// (user cache). Same policy as [`Repository::write_cache_entry`].
     Repository,
-    /// Force writes into this directory (PMS entry layout).
+    /// Force writes into this directory (PMS entry layout)
     Dir(PathBuf),
 }
 
-/// Options for [`regen_cache`].
+/// Options for [`regen_cache`]
 #[derive(Debug, Clone, Default)]
 pub struct RegenOpts {
-    /// Ebuild sourcing options passed to [`crate::source::source_parallel`].
+    /// Ebuild sourcing options passed to [`crate::source::source_parallel`]
     pub source: SourceOpts,
-    /// Where to persist sourced metadata.
+    /// Where to persist sourced metadata
     pub write: RegenWriteTarget,
 }
 
-/// Result counters returned by [`regen_cache`].
+/// Result counters returned by [`regen_cache`]
 #[derive(Debug, Clone, Default)]
 pub struct RegenStats {
-    /// Number of ebuilds processed.
+    /// Number of ebuilds processed
     pub total: usize,
-    /// Number of ebuilds that failed to source or write.
+    /// Number of ebuilds that failed to source or write
     pub errors: usize,
 }
 
-/// One finished regen attempt (source + optional cache write), completion order.
+/// One finished regen attempt (source + optional cache write), completion order
 ///
 /// This library does **not** print or own a UI channel — the application
 /// maps items onto its activity bus / terminal.
 #[derive(Debug)]
 pub struct RegenItem {
-    /// The ebuild that was processed.
+    /// The ebuild that was processed
     pub ebuild: Ebuild,
-    /// 1-based completion ordinal (not submission order).
+    /// 1-based completion ordinal (not submission order)
     pub index: usize,
-    /// Total ebuilds submitted for this run.
+    /// Total ebuilds submitted for this run
     pub total: usize,
     /// `Ok(())` on success; structured [`crate::Error`] on source or write failure
     /// (including [`crate::Error::CacheWrite`]).
     pub result: std::result::Result<(), crate::Error>,
 }
 
-/// Source all `ebuilds` and optionally write `md5-cache` files.
+/// Source all `ebuilds` and optionally write `md5-cache` files
 ///
 /// Finished items are sent on `out` in completion order. The worker pool is
 /// driven on the **caller's** task (feed + join) — the same scheduling shape
@@ -254,11 +254,13 @@ fn displaced_path_for(dir: &Utf8Path) -> Utf8PathBuf {
     dir.with_file_name(format!("{file_name}.regen-old"))
 }
 
-/// Set up a fresh staging directory for a `Dir` regen target, with
-/// `categories`' subdirectories pre-created, ready for the write workers to
-/// populate. Every write lands here — a plain create, never a replace, no
-/// matter how populated `dir` itself already is. Call [`swap_dir_target`]
-/// once every write has completed to move it into place.
+/// Set up a fresh staging directory for a `Dir` regen target
+///
+/// `categories`' subdirectories are pre-created, ready for the write
+/// workers to populate. Every write lands here — a plain create, never a
+/// replace, no matter how populated `dir` itself already is. Call
+/// [`swap_dir_target`] once every write has completed to move it into
+/// place.
 fn stage_dir_target<'a>(
     dir: &Path,
     categories: impl Iterator<Item = &'a str>,
@@ -362,16 +364,18 @@ fn write_entry_to_dir(
     Ok(())
 }
 
-/// Options for [`cache_entries_parallel`].
+/// Options for [`cache_entries_parallel`]
 #[derive(Debug, Clone, Default)]
 pub struct CacheReadOpts {
-    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`].
+    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`]
     pub jobs: Option<usize>,
-    /// When `true`, only the highest-cpv entry per Cpn (across all repos) is
-    /// parsed; older versions and duplicates from overlays are skipped before
-    /// any file is read. Use this when only the latest version matters
-    /// (e.g. description search) — avoids both the wasted parse work *and*
-    /// the drop spike from discarding parsed-but-deduped entries.
+    /// When `true`, only the highest-cpv entry per Cpn is parsed
+    ///
+    /// Across all repos; older versions and duplicates from overlays are
+    /// skipped before any file is read. Use this when only the latest
+    /// version matters (e.g. description search) — avoids both the wasted
+    /// parse work *and* the drop spike from discarding parsed-but-deduped
+    /// entries.
     pub latest_per_cpn: bool,
 }
 
@@ -398,8 +402,9 @@ pub fn cache_cpvs(repos: &[Repository], opts: &CacheReadOpts) -> Vec<(portage_at
         .collect()
 }
 
-/// [`cache_cpvs`], optionally also stat-ing each cache file for its mtime —
-/// used by the per-entry suspect rule ([`crate::entries::repo_entries`]),
+/// [`cache_cpvs`], optionally also stat-ing each cache file for its mtime
+///
+/// Used by the per-entry suspect rule ([`crate::entries::repo_entries`]),
 /// which needs "is this ebuild newer than the cache file serving it"
 /// without a second full directory walk. `with_mtime: false` costs nothing
 /// extra over [`cache_cpvs`] (same walk, no added stat per file).
@@ -513,11 +518,12 @@ where
         .collect()
 }
 
-/// [`cache_entries_parallel`], also returning each cache file's own mtime —
-/// used by the per-entry suspect rule ([`crate::entries::repo_entries`])
-/// to compare an ebuild's mtime against the cache file actually serving it,
-/// without a second full directory walk (the mtime is stat'd during this
-/// same read+decode pass).
+/// [`cache_entries_parallel`], also returning each cache file's own mtime
+///
+/// Used by the per-entry suspect rule ([`crate::entries::repo_entries`])
+/// to compare an ebuild's mtime against the cache file actually serving
+/// it, without a second full directory walk (the mtime is stat'd during
+/// this same read+decode pass).
 pub async fn cache_entries_parallel_with_mtime<T, F>(
     repos: &[Repository],
     opts: &CacheReadOpts,
@@ -574,10 +580,12 @@ where
 }
 
 /// Phase 2 shared by [`cache_entries_parallel_inner`] and
-/// [`secondary_cache_entries_with_mtime`]: fan `items` out into `jobs`
-/// chunks, one blocking task each does `fs::read` + `decode` for its slice
-/// end-to-end, accumulating into a local `Vec`. Concat at the end. Avoids
-/// shared-mutex contention that would otherwise dominate on many-core boxes.
+/// [`secondary_cache_entries_with_mtime`]
+///
+/// Fans `items` out into `jobs` chunks; one blocking task each does
+/// `fs::read` + `decode` for its slice end-to-end, accumulating into a
+/// local `Vec`. Concat at the end. Avoids shared-mutex contention that
+/// would otherwise dominate on many-core boxes.
 async fn read_and_decode<T, F>(
     items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)>,
     opts: &CacheReadOpts,

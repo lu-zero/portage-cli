@@ -4,7 +4,7 @@ use std::path::Path;
 use super::util;
 use crate::error::{Error, Result};
 
-/// Parsed representation of `metadata/layout.conf`.
+/// Parsed representation of `metadata/layout.conf`
 ///
 /// This file describes repository-level metadata such as master repositories,
 /// cache format, and profile format preferences.
@@ -13,28 +13,28 @@ use crate::error::{Error, Result};
 /// and [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
 pub struct LayoutConf {
-    /// Master repositories this repository depends on (space-separated in file).
+    /// Master repositories this repository depends on (space-separated in file)
     pub masters: Vec<String>,
-    /// Whether thin manifests are used.
+    /// Whether thin manifests are used
     pub thin_manifests: bool,
-    /// Whether manifests are signed.
+    /// Whether manifests are signed
     pub sign_manifests: bool,
-    /// Cache formats used (e.g. `md5-dict`).
+    /// Cache formats used (e.g. `md5-dict`)
     pub cache_formats: Vec<String>,
-    /// Profile formats (e.g. `portage-2`).
+    /// Profile formats (e.g. `portage-2`)
     pub profile_formats: Vec<String>,
-    /// Banned EAPIs.
+    /// Banned EAPIs
     pub eapis_banned: Vec<String>,
-    /// Deprecated EAPIs.
+    /// Deprecated EAPIs
     pub eapis_deprecated: Vec<String>,
-    /// Repository aliases.
+    /// Repository aliases
     pub aliases: Vec<String>,
-    /// All raw key-value pairs from the file.
+    /// All raw key-value pairs from the file
     pub properties: HashMap<String, String>,
 }
 
 impl LayoutConf {
-    /// Parse a `layout.conf` from its text content.
+    /// Parse a `layout.conf` from its text content
     pub fn parse(input: &str) -> Result<Self> {
         let mut properties = HashMap::new();
 
@@ -72,7 +72,7 @@ impl LayoutConf {
         })
     }
 
-    /// Read and parse `metadata/layout.conf` from a repository root.
+    /// Read and parse `metadata/layout.conf` from a repository root
     pub fn from_repo(repo_root: &Path) -> Result<Self> {
         let path = repo_root.join("metadata").join("layout.conf");
         match std::fs::read_to_string(&path) {

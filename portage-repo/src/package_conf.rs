@@ -1,4 +1,4 @@
-//! Parser and editor for `/etc/portage/package.*` configuration files.
+//! Parser and editor for `/etc/portage/package.*` configuration files
 //!
 //! These files share a common line-oriented format:
 //!
@@ -34,40 +34,42 @@ use crate::{Error, Result};
 // Public types
 // ---------------------------------------------------------------------------
 
-/// A parsed `/etc/portage/package.*` file (or directory of files).
+/// A parsed `/etc/portage/package.*` file (or directory of files)
 pub struct PackageConf {
-    /// Source text — all files concatenated if loaded from a directory.
+    /// Source text — all files concatenated if loaded from a directory
     src: String,
     entries: Vec<Entry>,
 }
 
-/// One entry in the tiled decomposition of the source text.
+/// One entry in the tiled decomposition of the source text
 enum Entry {
-    /// Comment, blank line, or any line we can't parse as a data line.
-    /// Reproduced verbatim on serialisation.
-    /// A comment, blank, or unparseable line (preserved verbatim in `src`).
+    /// A comment, blank, or unparseable line
+    ///
+    /// Preserved verbatim in `src` on serialisation.
     Opaque(Range<usize>),
-    /// A `atom [value ...]` line.
+    /// A `atom [value ...]` line
     Data {
-        /// Full byte span in `src` including the trailing `\n`.
+        /// Full byte span in `src` including the trailing `\n`
         span: Range<usize>,
-        /// Byte span of the atom token within `src`.
+        /// Byte span of the atom token within `src`
         atom_span: Range<usize>,
-        /// Parsed atom. Boxed: `Dep` carries a `Version` (grown by the
-        /// `SmallVec`/`SmolStr` perf changes), which otherwise made this
-        /// variant far larger than `Opaque` (clippy's `large_enum_variant`).
+        /// Parsed atom
+        ///
+        /// Boxed: `Dep` carries a `Version` (grown by the `SmallVec`/
+        /// `SmolStr` perf changes), which otherwise made this variant far
+        /// larger than `Opaque` (clippy's `large_enum_variant`).
         atom: Box<Dep>,
-        /// Each value token (byte span + text).
+        /// Each value token (byte span + text)
         values: Vec<Token>,
     },
 }
 
-/// A single whitespace-delimited token in a data line.
+/// A single whitespace-delimited token in a data line
 #[derive(Debug, Clone)]
 pub struct Token {
-    /// Byte span in the owning `PackageConf::src`.
+    /// Byte span in the owning `PackageConf::src`
     pub span: Range<usize>,
-    /// Token text (borrowed from source).
+    /// Token text (borrowed from source)
     pub text: String,
 }
 
@@ -76,7 +78,7 @@ pub struct Token {
 // ---------------------------------------------------------------------------
 
 impl PackageConf {
-    /// Load a single file.
+    /// Load a single file
     pub fn load_file(path: &Utf8Path) -> Result<Self> {
         let src = std::fs::read_to_string(path).map_err(|e| Error::Io {
             path: path.to_path_buf().into_std_path_buf(),
@@ -85,7 +87,7 @@ impl PackageConf {
         Self::parse(src)
     }
 
-    /// Load a directory, returning one `PackageConf` per file in alphabetical order.
+    /// Load a directory, returning one `PackageConf` per file in alphabetical order
     pub fn load_dir(path: &Utf8Path) -> Result<Vec<(Utf8PathBuf, PackageConf)>> {
         use crate::repo::util::{ConfigFilesMode, list_config_files};
 
@@ -105,7 +107,7 @@ impl PackageConf {
             .collect()
     }
 
-    /// Load from a file path or a directory of files.
+    /// Load from a file path or a directory of files
     ///
     /// Directory entries are read in alphabetical order and concatenated
     /// ([`ConfigFilesMode::Flat`](crate::ConfigFilesMode)).
@@ -129,13 +131,13 @@ impl PackageConf {
         Self::parse(combined)
     }
 
-    /// Parse from an owned string.
+    /// Parse from an owned string
     pub fn parse(src: String) -> Result<Self> {
         let entries = parse_entries(&src);
         Ok(Self { src, entries })
     }
 
-    /// Iterate over all data entries — skips comments and blank lines.
+    /// Iterate over all data entries — skips comments and blank lines
     pub fn entries(&self) -> impl Iterator<Item = EntryRef<'_>> {
         self.entries.iter().filter_map(|e| {
             if let Entry::Data {
@@ -157,12 +159,12 @@ impl PackageConf {
         })
     }
 
-    /// Find the first data entry whose CPN matches `atom`.
+    /// Find the first data entry whose CPN matches `atom`
     pub fn find(&self, atom: &Dep) -> Option<EntryRef<'_>> {
         self.entries().find(|e| e.atom.cpn == atom.cpn)
     }
 
-    /// Return all data entries whose CPN matches `atom`.
+    /// Return all data entries whose CPN matches `atom`
     ///
     /// Use this instead of `find` when a package may appear multiple times
     /// with different version constraints (e.g. slot-pinned keyword entries).
@@ -170,7 +172,7 @@ impl PackageConf {
         self.entries().filter(move |e| e.atom.cpn == atom.cpn)
     }
 
-    /// Add or update a data line for `atom`.
+    /// Add or update a data line for `atom`
     ///
     /// If an entry for `atom` (by CPN) already exists, its value list is
     /// replaced.  Otherwise a new line is appended.
@@ -201,7 +203,7 @@ impl PackageConf {
         }
     }
 
-    /// Remove the data line for `atom` (matched by CPN).
+    /// Remove the data line for `atom` (matched by CPN)
     pub fn remove(&mut self, atom: &Dep) -> bool {
         let existing = self
             .entries
@@ -220,7 +222,7 @@ impl PackageConf {
         }
     }
 
-    /// Save to a file.
+    /// Save to a file
     pub fn save(&self, path: &Utf8Path) -> Result<()> {
         std::fs::write(path, &self.src).map_err(|e| Error::Io {
             path: path.to_path_buf().into_std_path_buf(),
@@ -233,22 +235,22 @@ impl PackageConf {
     }
 }
 
-/// A view of a single data entry within a [`PackageConf`].
+/// A view of a single data entry within a [`PackageConf`]
 pub struct EntryRef<'a> {
     src: &'a str,
-    /// The parsed atom.
+    /// The parsed atom
     pub atom: &'a Dep,
     atom_span: Range<usize>,
     values: &'a [Token],
 }
 
 impl<'a> EntryRef<'a> {
-    /// The atom as it appears in the source text.
+    /// The atom as it appears in the source text
     pub fn atom_raw(&self) -> &'a str {
         &self.src[self.atom_span.clone()]
     }
 
-    /// Iterate over value tokens.
+    /// Iterate over value tokens
     pub fn values(&self) -> impl Iterator<Item = &'a str> {
         self.values.iter().map(|t| t.text.as_str())
     }

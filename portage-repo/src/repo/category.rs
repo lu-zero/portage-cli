@@ -8,7 +8,7 @@ use super::util;
 type CategoryFilter = dyn Fn(&Category) -> bool + Send + Sync;
 type PackageFilter = dyn Fn(&Package) -> bool + Send + Sync;
 
-/// A category directory within an ebuild repository.
+/// A category directory within an ebuild repository
 ///
 /// Represents a directory such as `dev-lang/` containing package directories.
 ///
@@ -24,27 +24,27 @@ impl Category {
         Self { name, path }
     }
 
-    /// The category name (e.g. `dev-lang`).
+    /// The category name (e.g. `dev-lang`)
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Absolute path to the category directory.
+    /// Absolute path to the category directory
     pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 
-    /// Whether the category directory exists on disk.
+    /// Whether the category directory exists on disk
     pub fn exists(&self) -> bool {
         self.path.is_dir()
     }
 
-    /// Lazy iterator over all packages in this category.
+    /// Lazy iterator over all packages in this category
     pub fn packages(&self) -> Packages {
         Packages::new(self.path.clone(), self.name.clone())
     }
 
-    /// Look up a specific package by name.
+    /// Look up a specific package by name
     pub fn package(&self, name: &str) -> Option<Package> {
         let path = self.path.join(name);
         if path.is_dir() {
@@ -55,7 +55,7 @@ impl Category {
     }
 }
 
-/// Lazy, composable package discovery within a category directory.
+/// Lazy, composable package discovery within a category directory
 ///
 /// Produced by [`Category::packages`]. Nothing is read until the iterator
 /// is driven. Use `.filter()` to restrict and `.collect_vec()` to materialise.
@@ -65,7 +65,7 @@ pub struct Packages {
     filter: Option<Arc<PackageFilter>>,
 }
 
-/// Concrete iterator produced by [`Packages::into_iter`].
+/// Concrete iterator produced by [`Packages::into_iter`]
 pub struct PackagesIter {
     entries: std::vec::IntoIter<Package>,
     filter: Option<Arc<PackageFilter>>,
@@ -80,7 +80,7 @@ impl Packages {
         }
     }
 
-    /// Retain only packages matching the predicate.
+    /// Retain only packages matching the predicate
     pub fn filter<F>(mut self, f: F) -> Self
     where
         F: Fn(&Package) -> bool + Send + Sync + 'static,
@@ -89,7 +89,7 @@ impl Packages {
         self
     }
 
-    /// Collect all matching packages into a sorted `Vec`.
+    /// Collect all matching packages into a sorted `Vec`
     pub fn collect_vec(self) -> Vec<Package> {
         self.into_iter().collect()
     }
@@ -161,7 +161,7 @@ impl Iterator for PackagesIter {
 
 // --- Categories ---
 
-/// Lazy, composable category discovery over an ebuild repository.
+/// Lazy, composable category discovery over an ebuild repository
 ///
 /// Produced by [`Repository::categories`](crate::Repository::categories).
 /// Nothing is read until the iterator is driven.
@@ -171,7 +171,7 @@ pub struct Categories {
     filter: Option<Arc<CategoryFilter>>,
 }
 
-/// Concrete iterator produced by [`Categories::into_iter`].
+/// Concrete iterator produced by [`Categories::into_iter`]
 pub struct CategoriesIter {
     lines: std::vec::IntoIter<String>,
     repo: Utf8PathBuf,
@@ -187,7 +187,7 @@ impl Categories {
         }
     }
 
-    /// Retain only categories matching the predicate.
+    /// Retain only categories matching the predicate
     pub fn filter<F>(mut self, f: F) -> Self
     where
         F: Fn(&Category) -> bool + Send + Sync + 'static,
@@ -196,7 +196,7 @@ impl Categories {
         self
     }
 
-    /// Collect all matching categories into a `Vec`.
+    /// Collect all matching categories into a `Vec`
     pub fn collect_vec(self) -> Vec<Category> {
         self.into_iter().collect()
     }

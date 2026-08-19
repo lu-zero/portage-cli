@@ -4,52 +4,52 @@ use std::path::Path;
 use crate::error::{Error, Result};
 use sha2::Digest;
 
-/// A single entry in a `Manifest` file (GLEP 74).
+/// A single entry in a `Manifest` file (GLEP 74)
 ///
 /// See [GLEP 74](https://www.gentoo.org/glep/glep-0074.html).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ManifestEntry {
-    /// `DIST` — a distfile (downloaded source archive).
+    /// `DIST` — a distfile (downloaded source archive)
     Dist {
-        /// Basename of the distfile.
+        /// Basename of the distfile
         filename: String,
-        /// Expected file size in bytes.
+        /// Expected file size in bytes
         size: u64,
-        /// `(algorithm, hex-digest)` pairs (e.g. `BLAKE2B`, `SHA512`).
+        /// `(algorithm, hex-digest)` pairs (e.g. `BLAKE2B`, `SHA512`)
         hashes: Vec<(String, String)>,
     },
-    /// `DATA` / `EBUILD` / `MISC` / `AUX` — a tracked repo file.
+    /// `DATA` / `EBUILD` / `MISC` / `AUX` — a tracked repo file
     Data {
-        /// Repository-relative path to the file.
+        /// Repository-relative path to the file
         path: String,
-        /// Expected file size in bytes.
+        /// Expected file size in bytes
         size: u64,
-        /// `(algorithm, hex-digest)` pairs (e.g. `BLAKE2B`, `SHA512`).
+        /// `(algorithm, hex-digest)` pairs (e.g. `BLAKE2B`, `SHA512`)
         hashes: Vec<(String, String)>,
     },
-    /// `MANIFEST` — a sub-manifest reference.
+    /// `MANIFEST` — a sub-manifest reference
     SubManifest {
-        /// Repository-relative path to the nested `Manifest` file.
+        /// Repository-relative path to the nested `Manifest` file
         path: String,
-        /// Expected file size in bytes.
+        /// Expected file size in bytes
         size: u64,
-        /// `(algorithm, hex-digest)` pairs (e.g. `BLAKE2B`, `SHA512`).
+        /// `(algorithm, hex-digest)` pairs (e.g. `BLAKE2B`, `SHA512`)
         hashes: Vec<(String, String)>,
     },
-    /// `IGNORE` — path excluded from manifest checks.
+    /// `IGNORE` — path excluded from manifest checks
     Ignore {
-        /// Repository-relative path prefix or file to skip.
+        /// Repository-relative path prefix or file to skip
         path: String,
     },
-    /// `TIMESTAMP` — last-updated RFC 3339 timestamp.
+    /// `TIMESTAMP` — last-updated RFC 3339 timestamp
     Timestamp {
-        /// RFC 3339 timestamp string from the manifest line.
+        /// RFC 3339 timestamp string from the manifest line
         value: String,
     },
 }
 
 impl ManifestEntry {
-    /// Verify that `path` matches this Manifest entry's recorded size and hashes.
+    /// Verify that `path` matches this Manifest entry's recorded size and hashes
     ///
     /// `Ignore` and `Timestamp` entries always return `Ok(())`.
     /// For all other variants the file is read once and checked.
@@ -63,7 +63,7 @@ impl ManifestEntry {
     }
 }
 
-/// Single-pass size + multi-hash verification.
+/// Single-pass size + multi-hash verification
 fn verify_hashes(path: &Path, expected_size: u64, hashes: &[(String, String)]) -> Result<()> {
     // --- size check (cheap, no I/O beyond stat) ---
     let actual_size = std::fs::metadata(path)
@@ -151,18 +151,18 @@ fn verify_hashes(path: &Path, expected_size: u64, hashes: &[(String, String)]) -
     Ok(())
 }
 
-/// Parsed representation of a `Manifest` file (GLEP 74).
+/// Parsed representation of a `Manifest` file (GLEP 74)
 ///
 /// In practice, the Gentoo repository uses `thin-manifests = true`, so only
 /// `DIST` entries appear.
 #[derive(Debug, Clone)]
 pub struct Manifest {
-    /// Parsed manifest lines in file order.
+    /// Parsed manifest lines in file order
     pub entries: Vec<ManifestEntry>,
 }
 
 impl Manifest {
-    /// Parse a `Manifest` from its text content.
+    /// Parse a `Manifest` from its text content
     ///
     /// Blank lines and lines starting with `#` are silently skipped.
     /// Unknown type tags are also silently skipped for forward compatibility.
@@ -231,7 +231,7 @@ impl Manifest {
         Ok(Manifest { entries })
     }
 
-    /// Iterate over `DIST` entries only.
+    /// Iterate over `DIST` entries only
     pub fn dist_entries(&self) -> impl Iterator<Item = &ManifestEntry> {
         self.entries
             .iter()
@@ -239,7 +239,7 @@ impl Manifest {
     }
 }
 
-/// Parse `tag path size [algo hex ...]` from a whitespace-split line.
+/// Parse `tag path size [algo hex ...]` from a whitespace-split line
 #[allow(clippy::type_complexity)]
 fn parse_path_size_hashes(
     tag: &str,
@@ -421,7 +421,7 @@ TIMESTAMP 2024-06-01T00:00:00Z
 
     // --- verify_file tests ---
 
-    /// Pre-computed hashes for the 5-byte content b"hello".
+    /// Pre-computed hashes for the 5-byte content b"hello"
     fn hello_hashes() -> Vec<(String, String)> {
         use sha2::Digest;
         let blake2b = hex::encode(blake2::Blake2b512::digest(b"hello"));

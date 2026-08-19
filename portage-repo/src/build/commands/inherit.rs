@@ -1,4 +1,4 @@
-//! Rust builtin implementation of `inherit` for eclass sourcing.
+//! Rust builtin implementation of `inherit` for eclass sourcing
 //!
 //! Reimplements the bash `inherit()` function as a Rust builtin to avoid
 //! brush-core's variable scoping bug where arrays defined in a sourced file
@@ -22,7 +22,7 @@ use brush_core::builtins;
 use brush_parser::ast::Program;
 use clap::Parser;
 
-/// Accumulating metadata variables (PMS 10.2) for EAPI < 8.
+/// Accumulating metadata variables (PMS 10.2) for EAPI < 8
 const ACCUM_VARS_BASE: &[&str] = &[
     "IUSE",
     "REQUIRED_USE",
@@ -33,7 +33,7 @@ const ACCUM_VARS_BASE: &[&str] = &[
     "IDEPEND",
 ];
 
-/// All accumulating metadata variables for EAPI >= 8 (base + PROPERTIES + RESTRICT).
+/// All accumulating metadata variables for EAPI >= 8 (base + PROPERTIES + RESTRICT)
 const ACCUM_VARS_ALL: &[&str] = &[
     "IUSE",
     "REQUIRED_USE",
@@ -46,7 +46,7 @@ const ACCUM_VARS_ALL: &[&str] = &[
     "RESTRICT",
 ];
 
-/// Precomputed `E_*` variable names parallel to `ACCUM_VARS_BASE`.
+/// Precomputed `E_*` variable names parallel to `ACCUM_VARS_BASE`
 pub(crate) const E_VARS_BASE: &[&str] = &[
     "E_IUSE",
     "E_REQUIRED_USE",
@@ -57,7 +57,7 @@ pub(crate) const E_VARS_BASE: &[&str] = &[
     "E_IDEPEND",
 ];
 
-/// Precomputed `E_*` variable names parallel to `ACCUM_VARS_ALL`.
+/// Precomputed `E_*` variable names parallel to `ACCUM_VARS_ALL`
 pub(crate) const E_VARS_ALL: &[&str] = &[
     "E_IUSE",
     "E_REQUIRED_USE",
@@ -70,7 +70,7 @@ pub(crate) const E_VARS_ALL: &[&str] = &[
     "E_RESTRICT",
 ];
 
-/// One sourced eclass: its name and the resolved file path it was loaded from.
+/// One sourced eclass: its name and the resolved file path it was loaded from
 ///
 /// Tracking the path is essential for cache writing/validation: an eclass may
 /// come from a master repo's `eclass/` directory rather than the local repo,
@@ -82,7 +82,7 @@ pub(crate) struct InheritedEclass {
     pub(crate) path: Utf8PathBuf,
 }
 
-/// Persistent state for the `inherit` builtin.
+/// Persistent state for the `inherit` builtin
 ///
 /// - `inherited`: transitive list of eclasses sourced in this shell instance,
 ///   used for dedup within a single ebuild and for emitting `_eclasses_` in
@@ -92,9 +92,9 @@ pub(crate) struct InheritedEclass {
 ///   once.
 #[derive(Clone)]
 pub(crate) struct InheritState {
-    /// Transitive eclasses sourced so far in this shell, in inheritance order.
+    /// Transitive eclasses sourced so far in this shell, in inheritance order
     pub(crate) inherited: Vec<InheritedEclass>,
-    /// Shared AST cache keyed by eclass name.
+    /// Shared AST cache keyed by eclass name
     pub(crate) cache: Arc<papaya::HashMap<String, Program>>,
 }
 
@@ -107,14 +107,14 @@ impl Default for InheritState {
     }
 }
 
-/// Global counters for cache effectiveness diagnostics.
+/// Global counters for cache effectiveness diagnostics
 static CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
 
-/// Source eclasses and manage metadata variable accumulation per PMS 10.
+/// Source eclasses and manage metadata variable accumulation per PMS 10
 #[derive(Parser)]
 pub(crate) struct InheritCommand {
-    /// Eclass names to inherit.
+    /// Eclass names to inherit
     #[arg(required = true)]
     eclasses: Vec<String>,
 }
@@ -259,7 +259,7 @@ impl builtins::Command for InheritCommand {
     }
 }
 
-/// Return (hits, misses) since process start.
+/// Return (hits, misses) since process start
 pub fn cache_stats() -> (u64, u64) {
     (
         CACHE_HITS.load(Ordering::Relaxed),
@@ -267,7 +267,7 @@ pub fn cache_stats() -> (u64, u64) {
     )
 }
 
-/// Parse an eclass file into a `Program`.
+/// Parse an eclass file into a `Program`
 pub(crate) fn parse_eclass_file(
     path: &Utf8PathBuf,
     options: &brush_parser::ParserOptions,

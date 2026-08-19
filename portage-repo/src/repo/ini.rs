@@ -11,11 +11,12 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::repo::util;
 
-/// Resolve `path` to the `.conf` files it contributes, in application order:
-/// a single file as itself, or (if a directory) every `*.conf` file within,
-/// sorted by name (dotfiles and `~` backups skipped). Missing paths are
-/// silently skipped (empty result) — callers treat an absent config file/dir
-/// as "nothing configured here".
+/// Resolve `path` to the `.conf` files it contributes, in application order
+///
+/// A single file as itself, or (if a directory) every `*.conf` file
+/// within, sorted by name (dotfiles and `~` backups skipped). Missing
+/// paths are silently skipped (empty result) — callers treat an absent
+/// config file/dir as "nothing configured here".
 pub fn collect_conf_files(path: &Path) -> Result<Vec<PathBuf>> {
     let files = util::list_config_files(path, util::ConfigFilesMode::Flat)?;
     // A lone file (e.g. `repos.conf` without a `.conf` suffix) is kept as-is;

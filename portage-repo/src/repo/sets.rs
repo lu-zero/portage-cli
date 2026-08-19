@@ -1,4 +1,4 @@
-//! Portage set resolution: expand `@name` references into concrete atoms.
+//! Portage set resolution: expand `@name` references into concrete atoms
 //!
 //! Sets are *not* PMS-defined — they are a portage-config concept (`man emerge`,
 //! §SETS). A set is a named collection of atoms and (recursively) other `@set`
@@ -30,14 +30,16 @@ use crate::repo::ProfileStack;
 use crate::repo::ini;
 use crate::repo::named_groups::{self, GroupEntry, classify_token, expand_group};
 
-/// The `@` prefix that marks a set reference (portage `SETPREFIX`).
+/// The `@` prefix that marks a set reference (portage `SETPREFIX`)
 pub(crate) const SET_PREFIX: char = named_groups::GROUP_PREFIX;
 
-/// Resolve portage set references to flat atom lists.
+/// Resolve portage set references to flat atom lists
 pub struct SetResolver<'a> {
     profile_stack: &'a ProfileStack,
     /// `EROOT` — the root holding `var/lib/portage/world[_sets]` and
-    /// `etc/portage/sets[.conf]`. Usually the install target.
+    /// `etc/portage/sets[.conf]`
+    ///
+    /// Usually the install target.
     eroot: &'a Utf8Path,
 }
 
@@ -51,7 +53,7 @@ impl<'a> SetResolver<'a> {
         }
     }
 
-    /// Resolve any `@name` to its flat atom list.
+    /// Resolve any `@name` to its flat atom list
     pub fn resolve(&self, name: &str) -> Result<Vec<Dep>> {
         let mut visited = HashSet::new();
         self.resolve_named(name, &mut visited)
@@ -108,7 +110,9 @@ impl<'a> SetResolver<'a> {
     }
 
     /// The `world` file half of `@selected`: the plain atoms the user has
-    /// explicitly installed. Matches `WorldSelectedPackagesSet`.
+    /// explicitly installed
+    ///
+    /// Matches `WorldSelectedPackagesSet`.
     fn selected_packages_members(&self) -> Result<Vec<GroupEntry<Dep>>> {
         Ok(read_atoms(&self.eroot.join("var/lib/portage/world"))?
             .into_iter()
@@ -116,10 +120,11 @@ impl<'a> SetResolver<'a> {
             .collect())
     }
 
-    /// The `world_sets` half of `@selected`: the `@name` references the user
-    /// has explicitly tracked, returned **unexpanded** (each is a
-    /// [`GroupEntry::Ref`] resolved later by `expand_group`). Matches
-    /// `WorldSelectedSetsSet`, which yields nonatoms.
+    /// The `world_sets` half of `@selected`: the `@name` references the
+    /// user has explicitly tracked, returned **unexpanded**
+    ///
+    /// Each is a [`GroupEntry::Ref`] resolved later by `expand_group`.
+    /// Matches `WorldSelectedSetsSet`, which yields nonatoms.
     fn selected_sets_members(&self) -> Result<Vec<GroupEntry<Dep>>> {
         let mut out = Vec::new();
         for set_ref in read_lines(&self.eroot.join("var/lib/portage/world_sets"))? {
@@ -172,18 +177,20 @@ impl<'a> SetResolver<'a> {
     }
 }
 
-/// True iff `s` is a set reference (starts with `@`).
+/// True iff `s` is a set reference (starts with `@`)
 pub fn is_set_ref(s: &str) -> bool {
     named_groups::is_group_ref(s)
 }
 
-/// Strip the leading `@` from a set reference, or `None` if `s` is not one.
+/// Strip the leading `@` from a set reference, or `None` if `s` is not one
 pub fn set_name(s: &str) -> Option<&str> {
     named_groups::group_ref_name(s)
 }
 
-/// Whether a `@name` set, typed directly on the command line, should itself
-/// be recorded to `world_sets` (real emerge's `world-candidate` flag).
+/// Whether a `@name` set, typed directly on the command line, should
+/// itself be recorded to `world_sets` (real emerge's `world-candidate`
+/// flag)
+///
 /// Real portage's default `sets.conf` sets `world-candidate = True` only
 /// on `[usersets]`; every *named* built-in set defaults to `False` and is
 /// never recorded no matter how it's invoked.

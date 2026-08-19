@@ -40,8 +40,10 @@ pub(crate) use unpack::UnpackCommand;
 pub(crate) use use_flag::{UseCommand, UseEnableCommand, UseWithCommand, UsevCommand, UsexCommand};
 
 /// `(stdout, stderr)` Stdio handles honouring the shell context's current
-/// redirections. A Rust builtin's spawned children otherwise inherit the
-/// host process stdio and escape e.g. `src_compile > build.log 2>&1`.
+/// redirections
+///
+/// A Rust builtin's spawned children otherwise inherit the host process
+/// stdio and escape e.g. `src_compile > build.log 2>&1`.
 pub(crate) fn context_stdio<SE: brush_core::ShellExtensions>(
     context: &brush_core::ExecutionContext<'_, SE>,
 ) -> (std::process::Stdio, std::process::Stdio) {
@@ -64,10 +66,12 @@ pub(crate) fn context_stdio<SE: brush_core::ShellExtensions>(
 }
 
 /// Stdio handle for a builtin's spawned child stdin, honouring the shell
-/// context's redirections. Needed for `emake -f -` (read makefile from a pipe):
-/// without forwarding the pipeline's read end, the child `make` sees the host
-/// stdin and reads no makefile (`No targets. Stop.`). A non-redirected stdin
-/// (the real terminal) is inherited.
+/// context's redirections
+///
+/// Needed for `emake -f -` (read makefile from a pipe): without
+/// forwarding the pipeline's read end, the child `make` sees the host
+/// stdin and reads no makefile (`No targets. Stop.`). A non-redirected
+/// stdin (the real terminal) is inherited.
 pub(crate) fn context_stdin<SE: brush_core::ShellExtensions>(
     context: &brush_core::ExecutionContext<'_, SE>,
 ) -> std::process::Stdio {
@@ -80,12 +84,14 @@ pub(crate) fn context_stdin<SE: brush_core::ShellExtensions>(
     }
 }
 
-/// The shell's exported environment as `(name, value)` pairs. A Rust builtin's
-/// spawned child (`configure`, `make`, …) otherwise inherits only em's host
-/// process environment, missing the build env the shell carries: make.conf
-/// flags, USE-driven vars, and — crucially for `--prefix` overlay builds — the
-/// `PKG_CONFIG_*`/`CPPFLAGS`/`LDFLAGS` a `bashrc` hook exports to expose
-/// already-merged deps. Mirrors how brush builds the env for external commands.
+/// The shell's exported environment as `(name, value)` pairs
+///
+/// A Rust builtin's spawned child (`configure`, `make`, …) otherwise
+/// inherits only em's host process environment, missing the build env the
+/// shell carries: make.conf flags, USE-driven vars, and — crucially for
+/// `--prefix` overlay builds — the `PKG_CONFIG_*`/`CPPFLAGS`/`LDFLAGS` a
+/// `bashrc` hook exports to expose already-merged deps. Mirrors how brush
+/// builds the env for external commands.
 pub(crate) fn context_env<SE: brush_core::ShellExtensions>(
     context: &brush_core::ExecutionContext<'_, SE>,
 ) -> Vec<(String, String)> {

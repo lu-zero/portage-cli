@@ -9,7 +9,7 @@ use regex::Regex;
 use super::util;
 use crate::error::{Error, Result};
 
-/// PMS 7.3.1 regex for detecting EAPI before sourcing.
+/// PMS 7.3.1 regex for detecting EAPI before sourcing
 ///
 /// Matches lines of the form `EAPI=value`, `EAPI='value'`, or `EAPI="value"`,
 /// with optional leading whitespace and optional trailing comment.
@@ -21,7 +21,7 @@ static EAPI_RE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-/// A single ebuild file within a package directory.
+/// A single ebuild file within a package directory
 ///
 /// This is intentionally thin — it represents the `.ebuild` file on disk.
 /// Metadata extraction goes through [`EbuildShell`](crate::EbuildShell).
@@ -38,32 +38,32 @@ impl Ebuild {
         Self { cpv, path }
     }
 
-    /// The full category/package-version atom.
+    /// The full category/package-version atom
     pub fn cpv(&self) -> &Cpv {
         &self.cpv
     }
 
-    /// The category name.
+    /// The category name
     pub fn category(&self) -> &str {
         &self.cpv.cpn.category
     }
 
-    /// The package name (without version).
+    /// The package name (without version)
     pub fn name(&self) -> &str {
         &self.cpv.cpn.package
     }
 
-    /// The version.
+    /// The version
     pub fn version(&self) -> &portage_atom::Version {
         &self.cpv.version
     }
 
-    /// Absolute path to the `.ebuild` file.
+    /// Absolute path to the `.ebuild` file
     pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 
-    /// Read the raw ebuild file content.
+    /// Read the raw ebuild file content
     pub fn read_raw(&self) -> Result<String> {
         util::read_to_string(&self.path)
     }
@@ -85,7 +85,7 @@ impl Ebuild {
         Self::new(cpv, real_path)
     }
 
-    /// Construct an [`Ebuild`] directly from a `.ebuild` file path.
+    /// Construct an [`Ebuild`] directly from a `.ebuild` file path
     ///
     /// The CPV is derived from the directory structure:
     /// `<repo>/<category>/<pkg>/<pkg>-<ver>.ebuild`
@@ -121,7 +121,7 @@ impl Ebuild {
         Ok(Self::new(cpv, real_path))
     }
 
-    /// Repository root inferred from the ebuild path.
+    /// Repository root inferred from the ebuild path
     ///
     /// The structure is `<repo>/<cat>/<pkg>/<pkg>-<ver>.ebuild`, so the root
     /// is three levels above the ebuild file.
@@ -129,7 +129,7 @@ impl Ebuild {
         self.path.parent()?.parent()?.parent()
     }
 
-    /// Detect the EAPI by regex-matching the ebuild text before sourcing.
+    /// Detect the EAPI by regex-matching the ebuild text before sourcing
     ///
     /// Skips blank and comment lines, then checks whether the first
     /// non-blank non-comment line is an `EAPI=` assignment. If matched,
@@ -142,7 +142,7 @@ impl Ebuild {
     }
 }
 
-/// Parse EAPI from ebuild file content per PMS 7.3.1.
+/// Parse EAPI from ebuild file content per PMS 7.3.1
 ///
 /// Extracted as a free function for testability without filesystem access.
 fn detect_eapi_from_str(content: &str) -> Eapi {
@@ -180,12 +180,12 @@ mod tests {
         }
     }
 
+    /// The CPV/CATEGORY-preservation invariant ("the merge-path decoupling")
+    ///
     /// The whole point of [`Ebuild::with_cpv`]: a cross-derived package's
     /// virtual identity (category `cross-riscv64-unknown-linux-gnu`) must
     /// win over whatever category the real on-disk ebuild's path implies
-    /// (`sys-devel`, from the real `gcc` ebuild it's aliased to) — this is
-    /// the CPV/CATEGORY-preservation invariant known as "the merge-path
-    /// decoupling".
+    /// (`sys-devel`, from the real `gcc` ebuild it's aliased to).
     #[test]
     fn with_cpv_keeps_the_given_identity_not_the_paths() -> Result<()> {
         let dir = tempfile::tempdir().map_err(io_err(std::path::Path::new("tempdir")))?;

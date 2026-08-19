@@ -3,7 +3,7 @@ use clap::Parser;
 
 // ── ___eapi_* predicates ──────────────────────────────────────────────────────
 
-/// All 74 `___eapi_*` EAPI predicate functions from portage's `eapi.sh`.
+/// All 74 `___eapi_*` EAPI predicate functions from portage's `eapi.sh`
 ///
 /// Each checks whether a given EAPI has a specific feature.  Takes an
 /// optional first argument to override `$EAPI`.
@@ -117,7 +117,7 @@ fn eapi_predicate(name: &str, eapi: u32) -> bool {
     }
 }
 
-/// All `___eapi_*` predicate names; used during builtin registration.
+/// All `___eapi_*` predicate names; used during builtin registration
 pub(crate) const EAPI_PREDICATE_NAMES: &[&str] = &[
     "___eapi_default_src_test_disables_parallel_jobs",
     "___eapi_has_S_WORKDIR_fallback",

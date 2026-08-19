@@ -106,7 +106,7 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// PMS 11.3.3's option/operand split — see the type doc comment.
+/// PMS 11.3.3's option/operand split — see the type doc comment
 fn split_options_operands(args: &[String]) -> Result<(Vec<String>, Vec<String>), String> {
     if let Some(sep) = args.iter().position(|a| a == "--") {
         Ok((args[..sep].to_vec(), args[sep + 1..].to_vec()))
@@ -130,9 +130,9 @@ fn split_options_operands(args: &[String]) -> Result<(Vec<String>, Vec<String>),
 /// kept separate from the actual writes so the blocking task never needs
 /// shell/context access (see `execute`'s doc comment).
 enum Event {
-    /// A directory operand had matching patches — needs a real `einfo` call.
+    /// A directory operand had matching patches — needs a real `einfo` call
     ApplyingFrom(String),
-    /// Raw `patch` output (a fuzz warning on success, or the failure text).
+    /// Raw `patch` output (a fuzz warning on success, or the failure text)
     PatchOutput(String),
 }
 
@@ -177,8 +177,10 @@ fn apply_all(
 }
 
 /// Whether `output` contains patch's "N with fuzz N" fuzz-warning marker
-/// anywhere (PMS: surfaced even on an otherwise-successful apply). Matches
-/// bash's `*[0-9]" with fuzz "[0-9]*` glob: a digit, the literal text, a digit.
+/// anywhere (PMS: surfaced even on an otherwise-successful apply)
+///
+/// Matches bash's `*[0-9]" with fuzz "[0-9]*` glob: a digit, the literal
+/// text, a digit.
 fn has_fuzz_marker(output: &str) -> bool {
     let marker = " with fuzz ";
     let bytes = output.as_bytes();

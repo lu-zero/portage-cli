@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
-/// Create an `Error::Io` from a path and an `io::Error`.
+/// Create an `Error::Io` from a path and an `io::Error`
 pub(crate) fn io_err(path: impl AsRef<Path>, source: std::io::Error) -> Error {
     Error::Io {
         path: path.as_ref().to_path_buf(),
@@ -10,13 +10,13 @@ pub(crate) fn io_err(path: impl AsRef<Path>, source: std::io::Error) -> Error {
     }
 }
 
-/// Read a file to a string, mapping I/O errors to `Error::Io`.
+/// Read a file to a string, mapping I/O errors to `Error::Io`
 pub(crate) fn read_to_string(path: impl AsRef<Path>) -> Result<String> {
     let path = path.as_ref();
     std::fs::read_to_string(path).map_err(|e| io_err(path, e))
 }
 
-/// How to expand a Portage-style config path that may be a file or a directory.
+/// How to expand a Portage-style config path that may be a file or a directory
 ///
 /// Portage accepts many `/etc/portage/*` (and profile) paths as either a
 /// single regular file or a directory of fragments. Fragment selection and
@@ -30,10 +30,10 @@ pub(crate) fn read_to_string(path: impl AsRef<Path>) -> Result<String> {
 ///   `make.conf` and other `getconfig(..., recursive=True)` paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConfigFilesMode {
-    /// Direct children only (PMS 5.2.4 directory-form config files).
+    /// Direct children only (PMS 5.2.4 directory-form config files)
     #[default]
     Flat,
-    /// Nested walk matching Portage `_recursive_file_list`.
+    /// Nested walk matching Portage `_recursive_file_list`
     Recursive,
 }
 
@@ -58,7 +58,7 @@ fn is_vcs_dir_name(name: &str) -> bool {
     VCS_DIRS.contains(&name)
 }
 
-/// Expand a config path to the ordered list of regular files it contributes.
+/// Expand a config path to the ordered list of regular files it contributes
 ///
 /// | `path` | result |
 /// |--------|--------|
@@ -91,7 +91,7 @@ pub fn list_config_files(path: impl AsRef<Path>, mode: ConfigFilesMode) -> Resul
     }
 }
 
-/// Same as [`list_config_files`] as an owned iterator (application order).
+/// Same as [`list_config_files`] as an owned iterator (application order)
 ///
 /// The directory is fully listed and sorted up front so order matches Portage;
 /// the iterator is a thin adapter over that list (not a live `read_dir` stream).
@@ -156,7 +156,7 @@ fn list_config_files_recursive(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Read non-blank, non-comment lines from a file or directory of files.
+/// Read non-blank, non-comment lines from a file or directory of files
 ///
 /// Lines starting with `#` (after trimming) are treated as comments.
 /// Returns an empty `Vec` if the path does not exist.
@@ -173,7 +173,7 @@ pub fn read_lines(path: impl AsRef<Path>) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Read a single regular file as trimmed, comment-stripped, non-blank lines.
+/// Read a single regular file as trimmed, comment-stripped, non-blank lines
 fn read_file_lines(path: &Path) -> Result<Vec<String>> {
     match std::fs::read_to_string(path) {
         Ok(contents) => Ok(contents
@@ -187,7 +187,7 @@ fn read_file_lines(path: &Path) -> Result<Vec<String>> {
     }
 }
 
-/// Read the first non-blank, non-comment line from a file.
+/// Read the first non-blank, non-comment line from a file
 ///
 /// Returns `None` if the file does not exist.
 pub(crate) fn read_single_line(path: impl AsRef<Path>) -> Result<Option<String>> {
@@ -203,11 +203,13 @@ pub(crate) fn read_single_line(path: impl AsRef<Path>) -> Result<Option<String>>
     }
 }
 
-/// A repo's name: `profiles/repo_name`, or `x-<basename>` when that file is
-/// missing — matches real portage's own fallback (`RepoConfig.
-/// _read_repo_name`), used both when opening a repo and when synthesizing a
-/// `RepoEntry` for a `PORTDIR_OVERLAY` directory that has no `repos.conf`
-/// section of its own.
+/// A repo's name: `profiles/repo_name`, or `x-<basename>` when that file
+/// is missing
+///
+/// Matches real portage's own fallback (`RepoConfig._read_repo_name`),
+/// used both when opening a repo and when synthesizing a `RepoEntry` for
+/// a `PORTDIR_OVERLAY` directory that has no `repos.conf` section of its
+/// own.
 pub fn resolve_repo_name(repo_path: &Path) -> Result<String> {
     Ok(
         read_single_line(repo_path.join("profiles").join("repo_name"))?.unwrap_or_else(|| {

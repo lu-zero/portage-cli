@@ -57,13 +57,15 @@ use crate::cache::{
 };
 use crate::repo::Repository;
 
-/// Name of the sidecar listing the CPVs the in-tree cache does not serve.
+/// Name of the sidecar listing the CPVs the in-tree cache does not serve
 const GAP_INDEX: &str = "gap-index";
 
-/// Every metadata entry of `repo`: the in-tree bulk read, plus the chain
-/// over ebuilds that read cannot serve — suspects, symlink-into-a-master
-/// reuse, then live sourcing. One function for every repo: a repo with no
-/// in-tree cache is this function's degenerate case (see the module doc).
+/// Every metadata entry of `repo`
+///
+/// The in-tree bulk read, plus the chain over ebuilds that read cannot
+/// serve — suspects, symlink-into-a-master reuse, then live sourcing. One
+/// function for every repo: a repo with no in-tree cache is this
+/// function's degenerate case (see the module doc).
 ///
 /// Finding suspects costs a tree walk, most of a resolve's repo-load time
 /// on its own. Two things keep that off the common path: the walk runs
@@ -226,9 +228,11 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     out
 }
 
-/// The CPVs a previous run found the cache could not serve, when `stamp` still
-/// matches the tree. `None` on any mismatch or read failure — the caller then
-/// rescans, so a corrupt or partial sidecar costs time, never correctness.
+/// The CPVs a previous run found the cache could not serve, if `stamp`
+/// still matches the tree
+///
+/// `None` on any mismatch or read failure — the caller then rescans, so a
+/// corrupt or partial sidecar costs time, never correctness.
 fn read_gap_index(path: &camino::Utf8Path, stamp: &str) -> Option<Vec<Cpv>> {
     let text = std::fs::read_to_string(path.as_std_path()).ok()?;
     let mut lines = text.lines();
@@ -253,9 +257,11 @@ fn write_gap_index<'a>(path: &camino::Utf8Path, stamp: &str, cpvs: impl Iterator
     }
 }
 
-/// The same chain over only the CPVs `covered` does not already contain — the
-/// cache's gap. Every ebuild reaching the chain here is one with no in-tree
-/// cache entry, so it would otherwise be invisible rather than merely uncached.
+/// The same chain over only the CPVs `covered` does not already contain
+///
+/// The cache's gap. Every ebuild reaching the chain here is one with no
+/// in-tree cache entry, so it would otherwise be invisible rather than
+/// merely uncached.
 pub async fn gap_entries(
     repo: &Repository,
     ebuilds: Vec<crate::repo::Ebuild>,

@@ -5,7 +5,7 @@ use camino::Utf8Path;
 use crate::repo::repository::Repository;
 use crate::{Error, Result};
 
-/// Database of USE flag descriptions for a Gentoo repository.
+/// Database of USE flag descriptions for a Gentoo repository
 ///
 /// Combines two profile-level files:
 /// - `profiles/use.desc` — global flags available to all packages
@@ -18,15 +18,16 @@ use crate::{Error, Result};
 /// callers can fall back to `crate::PkgMetadata::load` directly.
 #[derive(Default)]
 pub struct UseDb {
-    /// Global flag descriptions from `profiles/use.desc`.
+    /// Global flag descriptions from `profiles/use.desc`
     global: BTreeMap<String, String>,
-    /// Package-local flag descriptions from `profiles/use.local.desc`.
+    /// Package-local flag descriptions from `profiles/use.local.desc`
+    ///
     /// Key: `cat/pkg` (no version), Value: flag → description.
     local: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl UseDb {
-    /// Load from a repository root directory.
+    /// Load from a repository root directory
     pub fn load(repo_path: &Utf8Path) -> Result<Self> {
         let profiles = repo_path.join("profiles");
         let global = parse_use_desc(&profiles.join("use.desc"))?;
@@ -34,27 +35,28 @@ impl UseDb {
         Ok(Self { global, local })
     }
 
-    /// All global USE flags with their descriptions.
+    /// All global USE flags with their descriptions
     pub fn global(&self) -> &BTreeMap<String, String> {
         &self.global
     }
 
-    /// Look up a global flag's description.
+    /// Look up a global flag's description
     pub fn describe_global(&self, flag: &str) -> Option<&str> {
         self.global.get(flag).map(String::as_str)
     }
 
-    /// All packages that declare custom USE flags in `use.local.desc`.
+    /// All packages that declare custom USE flags in `use.local.desc`
     pub fn packages_with_local_flags(&self) -> impl Iterator<Item = &str> {
         self.local.keys().map(String::as_str)
     }
 
-    /// The local flag map for `cpn` (e.g. `"dev-libs/openssl"`), if any.
+    /// The local flag map for `cpn` (e.g. `"dev-libs/openssl"`), if any
     pub fn local_flags(&self, cpn: &str) -> Option<&BTreeMap<String, String>> {
         self.local.get(cpn)
     }
 
-    /// Look up a flag description for `flag` on package `cpn`.
+    /// Look up a flag description for `flag` on package `cpn`
+    ///
     /// Checks local flags first, then falls back to the global table.
     pub fn describe(&self, cpn: &str, flag: &str) -> Option<&str> {
         self.local
@@ -64,7 +66,7 @@ impl UseDb {
             .or_else(|| self.describe_global(flag))
     }
 
-    /// Build the local USE flag table by scanning every package's `metadata.xml`.
+    /// Build the local USE flag table by scanning every package's `metadata.xml`
     ///
     /// Walks the entire repository and collects `<use><flag>` entries from each
     /// package that has a `metadata.xml`.  The global table is left unchanged.
@@ -109,7 +111,7 @@ impl UseDb {
         Ok(())
     }
 
-    /// Serialise the local USE flag table to `profiles/use.local.desc`.
+    /// Serialise the local USE flag table to `profiles/use.local.desc`
     pub fn write_use_local_desc(&self, path: &Utf8Path) -> Result<()> {
         let f = std::fs::File::create(path).map_err(|e| Error::Io {
             path: path.to_path_buf().into_std_path_buf(),
@@ -123,7 +125,7 @@ impl UseDb {
     }
 }
 
-/// Parse `profiles/use.desc`.  Each non-comment line is `flag - description`.
+/// Parse `profiles/use.desc`.  Each non-comment line is `flag - description`
 fn parse_use_desc(path: &Utf8Path) -> Result<BTreeMap<String, String>> {
     let mut map = BTreeMap::new();
     if !path.exists() {
@@ -145,8 +147,9 @@ fn parse_use_desc(path: &Utf8Path) -> Result<BTreeMap<String, String>> {
     Ok(map)
 }
 
-/// Parse `profiles/use.local.desc`.  Each non-comment line is
-/// `cat/pkg:flag - description`.
+/// Parse `profiles/use.local.desc`
+///
+/// Each non-comment line is `cat/pkg:flag - description`.
 fn parse_use_local_desc(path: &Utf8Path) -> Result<BTreeMap<String, BTreeMap<String, String>>> {
     let mut map: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     if !path.exists() {

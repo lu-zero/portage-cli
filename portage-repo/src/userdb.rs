@@ -1,4 +1,4 @@
-//! Reading the `passwd`/`group` account databases.
+//! Reading the `passwd`/`group` account databases
 //!
 //! Both are colon-separated text with the name first and a numeric id in field
 //! 2 (`name:pw:uid:gid:…` and `name:pw:gid:…`), so one parser serves both.
@@ -25,17 +25,18 @@ pub fn id_in(db: &str, name: &str) -> Option<u32> {
     })
 }
 
-/// [`id_in`] against a database file. A missing or unreadable file is simply
-/// "not found".
+/// [`id_in`] against a database file
+///
+/// A missing or unreadable file is simply "not found".
 pub fn id_in_file(db: &Path, name: &str) -> Option<u32> {
     id_in(&std::fs::read_to_string(db).ok()?, name)
 }
 
-/// Look up `name`, returning the requested 0-based fields — for callers that
-/// need more than the id (a `passwd` row's uid *and* primary gid, say).
+/// Look up `name`, returning the requested 0-based fields
 ///
-/// `None` if the file is missing, the name is absent, or any requested field is
-/// past the end of its row.
+/// For callers that need more than the id (a `passwd` row's uid *and*
+/// primary gid, say). `None` if the file is missing, the name is absent,
+/// or any requested field is past the end of its row.
 pub fn lookup(db: &Path, name: &str, fields: &[usize]) -> Option<Vec<String>> {
     let content = std::fs::read_to_string(db).ok()?;
     // The first row for `name` decides, exactly as a duplicate entry in a real
@@ -51,7 +52,7 @@ pub fn lookup(db: &Path, name: &str, fields: &[usize]) -> Option<Vec<String>> {
         .collect()
 }
 
-/// Whether `db` exists and holds at least one real entry.
+/// Whether `db` exists and holds at least one real entry
 ///
 /// Distinguishes "this root has no account database yet" (a pre-baselayout
 /// stage build, where falling back to the host's ids is the only way forward)

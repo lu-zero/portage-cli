@@ -8,7 +8,7 @@ use super::pkgmetadata::PkgMetadata;
 use super::util;
 use crate::error::Result;
 
-/// A package directory within a category.
+/// A package directory within a category
 ///
 /// For example, `dev-lang/rust/` contains ebuild files like `rust-1.75.0.ebuild`.
 ///
@@ -27,27 +27,27 @@ impl Package {
         }
     }
 
-    /// The category/package name atom.
+    /// The category/package name atom
     pub fn cpn(&self) -> &Cpn {
         &self.cpn
     }
 
-    /// The category name.
+    /// The category name
     pub fn category(&self) -> &str {
         &self.cpn.category
     }
 
-    /// The package name.
+    /// The package name
     pub fn name(&self) -> &str {
         &self.cpn.package
     }
 
-    /// Absolute path to the package directory.
+    /// Absolute path to the package directory
     pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 
-    /// List all ebuilds in this package directory, sorted by version.
+    /// List all ebuilds in this package directory, sorted by version
     ///
     /// Parses each `*.ebuild` filename into a [`Cpv`] by stripping the `.ebuild`
     /// extension and parsing `category/stem` as a versioned package atom.
@@ -81,7 +81,7 @@ impl Package {
         Ok(ebuilds)
     }
 
-    /// Look up a specific ebuild by version string.
+    /// Look up a specific ebuild by version string
     ///
     /// The `version` parameter is the version portion only (e.g. `"1.75.0"`),
     /// not the full filename.
@@ -97,12 +97,12 @@ impl Package {
         }
     }
 
-    /// Whether a `Manifest` file exists (cheap existence check).
+    /// Whether a `Manifest` file exists (cheap existence check)
     pub fn has_manifest(&self) -> bool {
         self.path.join("Manifest").is_file()
     }
 
-    /// Parse the `Manifest` file for this package.
+    /// Parse the `Manifest` file for this package
     ///
     /// Returns `Ok(None)` if no `Manifest` file exists.
     pub fn manifest(&self) -> Result<Option<Manifest>> {
@@ -114,12 +114,12 @@ impl Package {
         }
     }
 
-    /// Whether a `metadata.xml` file exists (cheap existence check).
+    /// Whether a `metadata.xml` file exists (cheap existence check)
     pub fn has_metadata_xml(&self) -> bool {
         self.path.join("metadata.xml").is_file()
     }
 
-    /// Parse the `metadata.xml` file for this package.
+    /// Parse the `metadata.xml` file for this package
     ///
     /// Returns `Ok(None)` if no `metadata.xml` file exists.
     ///

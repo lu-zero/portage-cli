@@ -1,4 +1,4 @@
-//! `do*`/`new*` install helpers as Rust builtins (PMS 12.3.x).
+//! `do*`/`new*` install helpers as Rust builtins (PMS 12.3.x)
 //!
 //! These replace the hand-parsed bash versions in `INSTALL_HELPERS`: real clap
 //! arg parsing (`-r`, `-x`), `${ED}`/dest-tree awareness, and the shared
@@ -148,7 +148,7 @@ fn resolve_owner(owner: &str, pwdb_etc: &Path) -> Result<String, String> {
     Ok(format!("{uid}{gid}"))
 }
 
-/// PMS `get_libdir`: `LIBDIR_${ABI}` if multilib, else `CONF_LIBDIR`, else `lib`.
+/// PMS `get_libdir`: `LIBDIR_${ABI}` if multilib, else `CONF_LIBDIR`, else `lib`
 fn get_libdir<SE: brush_core::ShellExtensions>(shell: &brush_core::Shell<SE>) -> String {
     let abi = var(shell, "ABI", "");
     if !abi.is_empty() {
@@ -164,7 +164,7 @@ fn get_libdir<SE: brush_core::ShellExtensions>(shell: &brush_core::Shell<SE>) ->
     "lib".to_string()
 }
 
-/// `-o <uid> -g <gid>` install args for `dobin`/`dosbin`/`newbin`/`newsbin`.
+/// `-o <uid> -g <gid>` install args for `dobin`/`dosbin`/`newbin`/`newsbin`
 fn inst_owner_install_opts<SE: brush_core::ShellExtensions>(
     context: &brush_core::ExecutionContext<'_, SE>,
 ) -> Vec<String> {
@@ -439,7 +439,7 @@ macro_rules! require_files {
 
 // ---- destination-directory helpers ----
 
-/// `dodir <dir>...` (PMS 12.3.1): create directories under `${ED}`.
+/// `dodir <dir>...` (PMS 12.3.1): create directories under `${ED}`
 #[derive(Parser)]
 pub(crate) struct DodirCommand {
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -1095,7 +1095,7 @@ impl builtins::Command for DosymCommand {
     }
 }
 
-/// `fperms <mode> <file>...` (PMS 12.3.5): `chmod` paths relative to `${ED}`.
+/// `fperms <mode> <file>...` (PMS 12.3.5): `chmod` paths relative to `${ED}`
 #[derive(Parser)]
 pub(crate) struct FpermsCommand {
     #[arg(allow_hyphen_values = true)]
@@ -1262,7 +1262,7 @@ enum NewKind {
 }
 
 impl NewKind {
-    /// Map a registered builtin name to its kind.
+    /// Map a registered builtin name to its kind
     fn from_name(name: &str) -> Option<Self> {
         Some(match name {
             "newbin" => Self::Bin,
@@ -1281,7 +1281,7 @@ impl NewKind {
         })
     }
 
-    /// `(dest_dir, install_opts)` for this helper, computed from the shell env.
+    /// `(dest_dir, install_opts)` for this helper, computed from the shell env
     /// `name` is the target filename — only `newman` inspects it (for the
     /// section, which it takes from the *name* since the source may be stdin).
     fn target<SE: brush_core::ShellExtensions>(

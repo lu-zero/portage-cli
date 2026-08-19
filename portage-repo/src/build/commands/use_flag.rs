@@ -203,7 +203,7 @@ impl builtins::Command for UseWithCommand {
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
-/// Returns true if `flag` appears as a whole word in the shell's `$USE`.
+/// Returns true if `flag` appears as a whole word in the shell's `$USE`
 pub(crate) fn use_flag_enabled<SE: brush_core::ShellExtensions>(
     shell: &brush_core::Shell<SE>,
     flag: &str,
@@ -211,7 +211,7 @@ pub(crate) fn use_flag_enabled<SE: brush_core::ShellExtensions>(
     flag_in_use(shell.env_str("USE").as_deref().unwrap_or(""), flag)
 }
 
-/// Whether `flag` is satisfied by the space-separated `use_str`.
+/// Whether `flag` is satisfied by the space-separated `use_str`
 ///
 /// PMS 12.3.5/6/7: a leading `!` negates — `use !foo` is true when `foo` is
 /// *disabled*. Without this, e.g. coreutils' `$(usev !caps --disable-libcap)`

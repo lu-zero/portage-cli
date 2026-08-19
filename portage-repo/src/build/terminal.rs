@@ -1,4 +1,4 @@
-//! The terminal description `em` hands down to a build phase.
+//! The terminal description `em` hands down to a build phase
 //!
 //! Portage's `isolated-functions.sh` decides nothing about the terminal on its
 //! own: the Python side resolves the palette and the width and pushes both into
@@ -13,9 +13,10 @@ use std::sync::{Arc, Mutex};
 
 use anstyle::Style;
 
-/// Portage's `PORTAGE_COLOR_*` palette (`isolated-functions.sh`'s
-/// `__set_colors`), carried as [`Style`] values rather than pre-rendered escape
-/// strings so the caller's palette stays the single definition of each colour.
+/// Portage's `PORTAGE_COLOR_*` palette (`isolated-functions.sh`'s `__set_colors`)
+///
+/// Carried as [`Style`] values rather than pre-rendered escape strings so
+/// the caller's palette stays the single definition of each colour.
 ///
 /// [`Default`] is portage's `__unset_colors`: every style empty, which anstyle
 /// renders as the empty string at both ends — the same "leave the variables
@@ -25,40 +26,42 @@ use anstyle::Style;
 /// output functions use it.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct PortageColors {
-    /// `einfo`'s marker.
+    /// `einfo`'s marker
     pub info: Style,
-    /// `elog`'s marker.
+    /// `elog`'s marker
     pub log: Style,
-    /// `ewarn`'s marker.
+    /// `ewarn`'s marker
     pub warn: Style,
-    /// `eqawarn`'s marker.
+    /// `eqawarn`'s marker
     pub qawarn: Style,
-    /// `eerror`'s marker.
+    /// `eerror`'s marker
     pub err: Style,
-    /// `eend`'s `[ … ]` frame.
+    /// `eend`'s `[ … ]` frame
     pub bracket: Style,
-    /// `eend`'s `ok` indicator.
+    /// `eend`'s `ok` indicator
     pub good: Style,
-    /// `eend`'s `!!` indicator. Portage paints this the same as [`err`], but
-    /// keeps the two separately overridable; so do we.
+    /// `eend`'s `!!` indicator
+    ///
+    /// Portage paints this the same as [`err`], but keeps the two
+    /// separately overridable; so do we.
     ///
     /// [`err`]: Self::err
     pub bad: Style,
 }
 
 impl PortageColors {
-    /// Whether this palette paints nothing at all.
+    /// Whether this palette paints nothing at all
     pub fn is_plain(&self) -> bool {
         *self == Self::default()
     }
 }
 
-/// The terminal a build phase should believe it is writing to.
+/// The terminal a build phase should believe it is writing to
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerminalConfig {
-    /// Usable width, exported as `COLUMNS`.
+    /// Usable width, exported as `COLUMNS`
     pub columns: usize,
-    /// Palette for the `e*` output builtins.
+    /// Palette for the `e*` output builtins
     pub colors: PortageColors,
 }
 
@@ -73,7 +76,7 @@ impl Default for TerminalConfig {
     }
 }
 
-/// Cross-subshell handle to the live [`TerminalConfig`].
+/// Cross-subshell handle to the live [`TerminalConfig`]
 ///
 /// Shared (`Arc`) with every clone of the inner shell, like
 /// [`DieFlag`](crate::build::commands::die::DieFlag): an `ebegin` that runs

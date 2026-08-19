@@ -190,9 +190,12 @@ impl builtins::Command for EconfCommand {
     }
 }
 
-/// Returns true if `flag` appears in `text` followed by a non-identifier character
-/// (space, newline, `=`, end-of-string), matching portage's word-boundary guard.
-/// Prevents `--disable-dependency-tracking` from matching `--disable-dependency-tracking-fast`.
+/// Whether `flag` appears in `text` at a word boundary
+///
+/// Matches portage's word-boundary guard: `flag` must be followed by a
+/// non-identifier character (space, newline, `=`, end-of-string).
+/// Prevents `--disable-dependency-tracking` from matching
+/// `--disable-dependency-tracking-fast`.
 fn contains_flag(text: &str, flag: &str) -> bool {
     let mut rest = text;
     while let Some(pos) = rest.find(flag) {

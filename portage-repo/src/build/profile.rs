@@ -1,4 +1,4 @@
-//! Shell-dependent profile operations.
+//! Shell-dependent profile operations
 //!
 //! Methods that source bash files (make.defaults) or read shell state (USE
 //! flags) cannot live in `repo/profile.rs` without creating an upward
@@ -51,7 +51,7 @@ const INCREMENTAL_VARS: &[&str] = &[
 ];
 
 impl Profile {
-    /// Source this profile's `make.defaults` into the shell, if present.
+    /// Source this profile's `make.defaults` into the shell, if present
     ///
     /// See [PMS 5.2.4](https://projects.gentoo.org/pms/9/pms.html#makedefaults).
     pub async fn make_defaults(&self, shell: &mut EbuildShell) -> Result<()> {
@@ -64,7 +64,7 @@ impl Profile {
 }
 
 impl ProfileStack {
-    /// Source `make.defaults` from every profile in stack order.
+    /// Source `make.defaults` from every profile in stack order
     ///
     /// Variables set by ancestor profiles are visible to child profiles.
     ///
@@ -76,7 +76,7 @@ impl ProfileStack {
         Ok(())
     }
 
-    /// Resolve the effective USE flags for this profile stack.
+    /// Resolve the effective USE flags for this profile stack
     ///
     /// Sources profile `make.defaults`, extra confs (e.g. `/etc/portage/make.conf`),
     /// then applies the process-environment layer, `use.force`, and `use.mask`.
@@ -268,7 +268,7 @@ impl ProfileStack {
         Ok(ProfileEnv { layers })
     }
 
-    /// Configure a shell with this profile stack's effective USE flags.
+    /// Configure a shell with this profile stack's effective USE flags
     ///
     /// See `configure_shell` for the full description.
     pub async fn configure_shell(
@@ -280,7 +280,7 @@ impl ProfileStack {
     }
 }
 
-/// Configure a shell with the effective USE flags from a profile stack.
+/// Configure a shell with the effective USE flags from a profile stack
 ///
 /// Calls [`resolve_use_flags`] then sets the Rust-side `use_flags` HashSet so
 /// the `use()` / `usev()` / `usex()` builtins work correctly during phase execution.
@@ -601,7 +601,7 @@ async fn apply_env_layer(shell: &mut EbuildShell) -> Result<()> {
     Ok(())
 }
 
-/// Source a single config file (e.g. `make.conf`) with incremental USE semantics.
+/// Source a single config file (e.g. `make.conf`) with incremental USE semantics
 ///
 /// `INCREMENTAL_VARS` are reset to empty before sourcing so the file's own
 /// assignments represent its pure contribution, then merged back in via
@@ -758,12 +758,12 @@ async fn source_incremental(
     })
 }
 
-/// Quote a value for use in a bash assignment (`VAR="..."` form).
+/// Quote a value for use in a bash assignment (`VAR="..."` form)
 fn shell_quote(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// Enabled and explicitly-disabled USE flags resolved from the shell state.
+/// Enabled and explicitly-disabled USE flags resolved from the shell state
 ///
 /// `disabled` carries flags a `-flag` token turned off (from the signed `USE`
 /// merge), kept so the per-package step can override a `+flag` IUSE default.
