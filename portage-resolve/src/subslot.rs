@@ -1,4 +1,4 @@
-//! Slot-operator (`:=`) rebuild detection.
+//! Slot-operator (`:=`) rebuild detection
 //!
 //! When a package is merged, portage rewrites each `:=` dependency in its VDB
 //! entry to the *bound* form `:slot/subslot=`. If a later plan moves that
@@ -17,20 +17,20 @@ use crate::conflicts::dep_to_version_set;
 use crate::installed::VdbEntry;
 
 /// An installed package needing a rebuild because a planned dependency's
-/// subslot no longer matches the `:slot/subslot=` binding recorded in the VDB.
+/// subslot no longer matches the `:slot/subslot=` binding recorded in the VDB
 pub struct SubslotRebuild {
-    /// The installed package that needs rebuilding.
+    /// The installed package that needs rebuilding
     pub cpn: Cpn,
-    /// Its installed slot.
+    /// Its installed slot
     pub slot: Option<Interned<DefaultInterner>>,
-    /// Its installed version.
+    /// Its installed version
     pub version: Version,
-    /// The planned packages whose subslot change triggers the rebuild.
+    /// The planned packages whose subslot change triggers the rebuild
     pub triggers: Vec<Cpn>,
 }
 
 /// The effective subslot of a planned version: PMS defaults the subslot to the
-/// slot itself when the ebuild declares none.
+/// slot itself when the ebuild declares none
 fn effective_subslot(slot: &Slot) -> Interned<DefaultInterner> {
     slot.subslot.unwrap_or(slot.slot)
 }
@@ -61,10 +61,11 @@ fn collect_bound_atoms<'a>(entries: &'a [DepEntry], out: &mut Vec<&'a portage_at
     }
 }
 
-/// Find installed packages whose recorded `:=` bindings are invalidated by the
-/// plan. `planned_slots` maps each in-plan CPN to its planned versions and
-/// their tree slots; owners already in the plan are skipped (they are being
-/// upgraded or rebuilt anyway).
+/// Find installed packages whose recorded `:=` bindings are invalidated by the plan
+///
+/// `planned_slots` maps each in-plan CPN to its planned versions and their tree
+/// slots; owners already in the plan are skipped (they are being upgraded or
+/// rebuilt anyway).
 pub fn find_rebuilds(
     installed: &[VdbEntry],
     planned_slots: &HashMap<Cpn, Vec<(Version, Slot)>>,

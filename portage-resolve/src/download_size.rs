@@ -11,7 +11,7 @@ use crate::repo::{RepoData, ResolvePolicy, find_cache};
 
 /// Per-package download size, in **bytes**, of the distfiles that are not
 /// already present in `DISTDIR` — matching what `emerge -pv` totals as
-/// "Size of downloads".
+/// "Size of downloads"
 ///
 /// Distfiles are resolved from `SRC_URI` evaluated against each package's
 /// effective USE (so USE-conditional sources are only counted when active) and
@@ -84,7 +84,7 @@ pub fn compute(
     sizes
 }
 
-/// Parse `<repo>/<cat>/<pkg>/Manifest` into a `filename -> size` map.
+/// Parse `<repo>/<cat>/<pkg>/Manifest` into a `filename -> size` map
 fn load_manifest_sizes(repo_path: &Utf8Path, cpn: &Cpn) -> HashMap<String, u64> {
     let path = repo_path
         .join(cpn.category.as_str())

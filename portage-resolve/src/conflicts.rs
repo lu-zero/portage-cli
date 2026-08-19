@@ -6,46 +6,49 @@ use portage_atom_pubgrub::{BlockerHit, PortageVersionSet};
 
 use crate::installed::VdbEntry;
 
-/// An interned slot name (`None` = unslotted). Interned handles are cheap to
-/// copy and compare, so the whole conflict check stays handle-based.
+/// An interned slot name (`None` = unslotted)
+///
+/// Interned handles are cheap to copy and compare, so the whole conflict check
+/// stays handle-based.
 pub type Slot = Option<Interned<DefaultInterner>>;
 
-/// A constraint violated by the proposed solution.
+/// A constraint violated by the proposed solution
 pub struct Conflict {
-    /// The installed package whose dep is violated.
+    /// The installed package whose dep is violated
     pub installed_cpn: Cpn,
     /// The installed package's slot — needed to re-target it as a
     /// [`portage_atom_pubgrub::PortagePackage`] root dep when repairing a
-    /// broken chain (see [`retained_owners`]).
+    /// broken chain (see [`retained_owners`])
     pub slot: Slot,
-    /// The installed package's version.
+    /// The installed package's version
     pub installed_ver: Version,
-    /// The dep atom that is not satisfied.
+    /// The dep atom that is not satisfied
     pub dep: Dep,
-    /// The version the solver chose (which violates the dep).
+    /// The version the solver chose (which violates the dep)
     pub proposed_ver: Version,
-    /// The version the plan installs over this same installed package, when
-    /// it does. `Some` means the constraint is stale rather than broken: the
-    /// package that carries it is itself being replaced this run, so the dep
-    /// string evaluated here belongs to a build that won't survive the plan
-    /// (lockstep families — `~`-pinned llvm/clang/lldb, perl virtuals — are
-    /// entirely this case), reported apart from real breakage, not dropped.
+    /// The version the plan installs over this same installed package, when it does
+    ///
+    /// `Some` means the constraint is stale rather than broken: the package that
+    /// carries it is itself being replaced this run, so the dep string evaluated
+    /// here belongs to a build that won't survive the plan (lockstep families —
+    /// `~`-pinned llvm/clang/lldb, perl virtuals — are entirely this case),
+    /// reported apart from real breakage, not dropped.
     pub owner_replaced_by: Option<Version>,
 }
 
 /// A package the plan installs or upgrades, carrying its slot so the conflict
 /// check can reason per-slot rather than collapsing every slot of a name into
-/// one version.
+/// one version
 pub struct ProposedPkg {
-    /// The package name.
+    /// The package name
     pub cpn: Cpn,
-    /// Its slot, if any.
+    /// Its slot, if any
     pub slot: Slot,
-    /// The version the plan installs.
+    /// The version the plan installs
     pub version: Version,
 }
 
-/// Check all installed packages' dep strings against the proposed solution.
+/// Check all installed packages' dep strings against the proposed solution
 ///
 /// Returns one `Conflict` per violated constraint: no package present after
 /// the plan (a proposed package plus every installed package the plan
@@ -103,17 +106,17 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
     conflicts
 }
 
-/// Conflicts whose owner is *retained* — genuine breakage, not a stale
-/// constraint that will disappear because its owner is itself replaced this
-/// run (see [`Conflict::owner_replaced_by`]). The set a chain-completion
-/// repair loop should act on: each names an installed package worth pulling
-/// into the plan as an upgrade/rebuild target instead of merely reported.
+/// Conflicts whose owner is *retained* — genuine breakage, not a stale constraint that will disappear because its owner is itself replaced this run (see [`Conflict::owner_replaced_by`])
+///
+/// The set a chain-completion repair loop should act on: each names an
+/// installed package worth pulling into the plan as an upgrade/rebuild target
+/// instead of merely reported.
 pub fn retained_owners(conflicts: &[Conflict]) -> impl Iterator<Item = &Conflict> {
     conflicts.iter().filter(|c| c.owner_replaced_by.is_none())
 }
 
 /// True if any package present after the plan satisfies `dep` (name, slot and
-/// version all considered).
+/// version all considered)
 fn dep_satisfied(dep: &Dep, present: &HashMap<Cpn, Vec<(Slot, Cpv)>>) -> bool {
     let Some(cands) = present.get(&dep.cpn) else {
         return false;
@@ -157,7 +160,7 @@ fn collect_violations(
 /// [`removal_obstacles`] need identical group semantics — `AllOf`/`^^`/`??`
 /// report any unsatisfied branch naming a touched package; `AnyOf` (`||`)
 /// only reports when *every* alternative is violated — so this is one
-/// function, not two copies that could drift apart.
+/// function, not two copies that could drift apart
 ///
 /// `on_violation` decides both whether an unsatisfied atom counts (`None`
 /// skips it) and what to record (`Some(t)` pushes `t`); it can look up
@@ -221,23 +224,23 @@ fn walk_unsatisfied_deps<T>(
 }
 
 /// A retained package that still needs one of the removal candidates a
-/// blocker names — the reason that candidate cannot be auto-removed.
+/// blocker names — the reason that candidate cannot be auto-removed
 #[derive(Debug, Clone)]
 pub struct RemovalObstacle {
-    /// The candidate cpn that is still needed.
+    /// The candidate cpn that is still needed
     pub needed: Cpn,
-    /// The candidate's slot.
+    /// The candidate's slot
     pub needed_slot: Slot,
-    /// The retained installed package whose dep still needs it.
+    /// The retained installed package whose dep still needs it
     pub needed_by: Cpv,
-    /// The dep atom that needs it.
+    /// The dep atom that needs it
     pub dep: Dep,
 }
 
-/// Simulate unmerging `candidates` (retained installed packages a blocker
-/// names) from the post-plan world [`find_conflicts`] builds. Returns the
-/// obstacles; a candidate with no obstacle is safe to auto-remove — what
-/// emerge schedules as an uninstall for an orphaned blocked package.
+/// Simulate unmerging `candidates` (retained installed packages a blocker names) from the post-plan world [`find_conflicts`] builds
+///
+/// Returns the obstacles; a candidate with no obstacle is safe to auto-remove —
+/// what emerge schedules as an uninstall for an orphaned blocked package.
 ///
 /// Candidates are removed *jointly*, with a fixpoint: a candidate found
 /// still-needed is put back into the world and the rest re-checked, so a
@@ -341,10 +344,11 @@ fn removal_obstacles_once(
     out
 }
 
-/// An installed package's active blocker atoms (USE conditionals resolved
-/// against its VDB flags). Fed to the solver so `check_blockers` can report a
-/// blocker a retained installed owner points at the plan — the owner is never
-/// in the solve graph, so its blockers are otherwise invisible.
+/// An installed package's active blocker atoms (USE conditionals resolved against its VDB flags)
+///
+/// Fed to the solver so `check_blockers` can report a blocker a retained
+/// installed owner points at the plan — the owner is never in the solve graph,
+/// so its blockers are otherwise invisible.
 pub fn installed_blocker_atoms(entry: &VdbEntry) -> Vec<Dep> {
     // Most installed packages declare no blockers; a cheap structural pre-scan
     // skips the evaluate_use + clone for them, keeping this whole-VDB walk cheap.
@@ -358,7 +362,7 @@ pub fn installed_blocker_atoms(entry: &VdbEntry) -> Vec<Dep> {
     out
 }
 
-/// Whether any atom anywhere in the (unevaluated) dep tree is a blocker.
+/// Whether any atom anywhere in the (unevaluated) dep tree is a blocker
 fn has_blocker_atom(entries: &[DepEntry]) -> bool {
     entries.iter().any(|entry| match entry {
         DepEntry::Atom(dep) => dep.blocker.is_some(),
@@ -383,7 +387,7 @@ fn collect_blocker_atoms(entries: &[DepEntry], out: &mut Vec<Dep>) {
 }
 
 /// Translate a dep atom's version constraint into the solver's
-/// [`PortageVersionSet`] (a bare atom with no version op accepts any version).
+/// [`PortageVersionSet`] (a bare atom with no version op accepts any version)
 pub fn dep_to_version_set(dep: &Dep) -> PortageVersionSet {
     match &dep.version {
         None => PortageVersionSet::any(),
@@ -394,74 +398,71 @@ pub fn dep_to_version_set(dep: &Dep) -> PortageVersionSet {
     }
 }
 
-/// When an auto-removed victim would be unmerged, relative to the merge of
-/// the package that blocks it — real portage's `BlockerDepPriority` edge
-/// direction: a strong `!!` blocker cannot tolerate any overlap, so its
-/// unmerge is ordered *before* the blocking merge; a weak `!` blocker
-/// tolerates transient overlap, ordered *after*. Both are equally
-/// auto-removed either way — this only affects scheduling.
+/// When an auto-removed victim would be unmerged, relative to the merge of the package that blocks it — real portage's `BlockerDepPriority` edge direction: a strong `!!` blocker cannot tolerate any overlap, so its unmerge is ordered *before* the blocking merge; a weak `!` blocker tolerates transient overlap, ordered *after*
+///
+/// Both are equally auto-removed either way — this only affects scheduling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnmergeOrder {
-    /// Weak `!`: unmerge after the blocking package merges.
+    /// Weak `!`: unmerge after the blocking package merges
     AfterBlocker,
-    /// Strong `!!`: unmerge before the blocking package merges.
+    /// Strong `!!`: unmerge before the blocking package merges
     BeforeBlocker,
 }
 
-/// The classification outcome for one blocker/victim pair.
+/// The classification outcome for one blocker/victim pair
 #[derive(Debug, Clone)]
 pub enum BlockerVerdict {
-    /// Nothing retained still needs the blocked installed package — real
-    /// emerge would schedule it for unmerge. Advisory-only until Step 2
-    /// threads this into the actual plan.
+    /// Nothing retained still needs the blocked installed package — real emerge would schedule it for unmerge
+    ///
+    /// Advisory-only until Step 2 threads this into the actual plan.
     WouldUnmerge {
-        /// The blocked installed package that would be removed.
+        /// The blocked installed package that would be removed
         cpv: Cpv,
-        /// Scheduling relative to the blocking merge (display/Step-2 only).
+        /// Scheduling relative to the blocking merge (display/Step-2 only)
         order: UnmergeOrder,
     },
     /// The blocked installed package is still needed: a genuine,
     /// unresolvable conflict (for a strong blocker) or an unresolved soft
     /// block (for a weak one) — the caller decides the display severity
-    /// from the originating hit's blocker strength.
+    /// from the originating hit's blocker strength
     StillNeeded {
-        /// The blocked installed package that cannot safely be removed.
+        /// The blocked installed package that cannot safely be removed
         cpv: Cpv,
-        /// Why it can't: every remaining reason something still needs it.
+        /// Why it can't: every remaining reason something still needs it
         obstacles: Vec<RemovalObstacle>,
     },
-    /// The blocked package is itself in the plan — both end-states coexist.
+    /// The blocked package is itself in the plan — both end-states coexist
     /// A hard conflict regardless of blocker strength: final-state
-    /// coexistence, not transient overlap, is what weak `!` tolerates.
+    /// coexistence, not transient overlap, is what weak `!` tolerates
     PlannedCoexistence {
-        /// The package coexisting with the blocker in the final plan.
+        /// The package coexisting with the blocker in the final plan
         cpv: Cpv,
     },
-    /// Both the owner and the victim are already-installed, retained
-    /// packages. Real portage suppresses these ("two currently installed
-    /// packages conflict with each other... the damage is already done",
-    /// `depgraph.py`'s `_validate_blockers`) rather than reporting them as
-    /// actionable.
+    /// Both the owner and the victim are already-installed, retained packages
+    ///
+    /// Real portage suppresses these ("two currently installed packages conflict
+    /// with each other... the damage is already done", `depgraph.py`'s
+    /// `_validate_blockers`) rather than reporting them as actionable.
     PreExisting {
-        /// The other already-installed package in the pre-existing conflict.
+        /// The other already-installed package in the pre-existing conflict
         cpv: Cpv,
     },
 }
 
-/// One blocker hit, classified per victim.
+/// One blocker hit, classified per victim
 #[derive(Debug, Clone)]
 pub struct ClassifiedBlocker {
-    /// The underlying detected blocker hit.
+    /// The underlying detected blocker hit
     pub hit: BlockerHit,
     /// One verdict per victim (or, for a reciprocal hit whose victim is a
     /// solution member, per the owner-as-removal-candidate case — see
-    /// [`classify_blockers`]).
+    /// [`classify_blockers`])
     pub verdicts: Vec<BlockerVerdict>,
 }
 
 /// Classify every blocker hit as auto-removable, a genuine conflict, or a
 /// case portage itself treats as non-actionable — Step 1 of the blocker
-/// Tier-1 auto-unmerge plan: analysis only, no plan mutation.
+/// Tier-1 auto-unmerge plan: analysis only, no plan mutation
 ///
 /// The removal candidates from every hit are simulated *jointly* in one
 /// [`removal_obstacles`] call (not per-hit), so a mutually-dependent pair of
@@ -560,7 +561,7 @@ mod tests {
         )
     }
 
-    /// One owner/atom/victim triple, as `check_blockers_detailed` would emit.
+    // One owner/atom/victim triple, as `check_blockers_detailed` would emit
     struct HitSpec {
         owner_cpn: &'static str,
         owner_slot: &'static str,
@@ -609,9 +610,10 @@ mod tests {
         }
     }
 
-    /// The llvm/clang/lldb shape: a `~`-pinned family moving in lockstep. The
-    /// pin is violated in isolation, but its owner is upgraded in the same run,
-    /// so it is stale rather than broken.
+    // The llvm/clang/lldb shape: a `~`-pinned family moving in lockstep
+    //
+    // The pin is violated in isolation, but its owner is upgraded in the same run,
+    // so it is stale rather than broken.
     #[test]
     fn a_replaced_owners_violated_pin_is_marked_stale() {
         let installed = vec![entry(
@@ -632,7 +634,7 @@ mod tests {
         );
     }
 
-    /// The same pin, but its owner stays installed: real breakage.
+    // The same pin, but its owner stays installed: real breakage
     #[test]
     fn a_retained_owners_violated_pin_is_a_real_conflict() {
         let installed = vec![entry(
@@ -647,8 +649,8 @@ mod tests {
         assert!(got[0].owner_replaced_by.is_none());
     }
 
-    /// Replacement is per `(cpn, slot)`: upgrading another slot of the same
-    /// name leaves this owner in place.
+    // Replacement is per `(cpn, slot)`: upgrading another slot of the same
+    // name leaves this owner in place
     #[test]
     fn replacement_is_slot_specific() {
         let installed = vec![entry(
@@ -666,7 +668,7 @@ mod tests {
         assert!(got[0].owner_replaced_by.is_none());
     }
 
-    /// A retained slot still satisfying the pin is not a conflict at all.
+    // A retained slot still satisfying the pin is not a conflict at all
     #[test]
     fn a_retained_slot_that_satisfies_the_pin_reports_nothing() {
         let installed = vec![
@@ -682,9 +684,9 @@ mod tests {
         assert!(find_conflicts(&installed, &plan).is_empty());
     }
 
-    /// `retained_owners` is the repair-loop trigger: a stale (owner-replaced)
-    /// conflict must not appear, but a genuinely retained owner must, carrying
-    /// its slot so the loop can re-target it.
+    // `retained_owners` is the repair-loop trigger: a stale (owner-replaced)
+    // conflict must not appear, but a genuinely retained owner must, carrying
+    // its slot so the loop can re-target it
     #[test]
     fn retained_owners_filters_out_stale_conflicts_and_keeps_the_slot() {
         let installed = vec![
@@ -723,8 +725,8 @@ mod tests {
         )
     }
 
-    /// An installed package nothing else depends on is safe to auto-remove:
-    /// no obstacle.
+    // An installed package nothing else depends on is safe to auto-remove:
+    // no obstacle
     #[test]
     fn orphaned_candidate_has_no_obstacle() {
         let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
@@ -735,12 +737,13 @@ mod tests {
         );
     }
 
-    /// A retained installed package still depending on the candidate blocks
-    /// removal. This is also the blame-lookup regression case Fable's plan
-    /// flagged: after the candidate is removed, `present` has *no* entries
-    /// left at all for its cpn (nothing else provides that name), which is
-    /// exactly the shape the old inline `present.get(...).and_then(|c|
-    /// c.first())` blame silently dropped instead of reporting.
+    // A retained installed package still depending on the candidate blocks removal
+    //
+    // This is also the blame-lookup regression case Fable's plan flagged: after
+    // the candidate is removed, `present` has *no* entries left at all for its cpn
+    // (nothing else provides that name), which is exactly the shape the old inline
+    // `present.get(...).and_then(|c| c.first())` blame silently dropped instead of
+    // reporting.
     #[test]
     fn still_needed_candidate_reports_an_obstacle() {
         let installed = vec![
@@ -762,12 +765,12 @@ mod tests {
         );
     }
 
-    /// The canonical `virtual/resolvconf` shape: `|| ( net-dns/openresolv
-    /// sys-apps/systemd )` survives openresolv's removal because the
-    /// systemd branch (proposed, i.e. being installed) is still present —
-    /// the `AnyOf` group is not violated just because one alternative is
-    /// gone, matching real portage's actual auto-removal of an orphaned
-    /// blocked package in this exact scenario.
+    // The canonical `virtual/resolvconf` shape: `|| ( net-dns/openresolv
+    // sys-apps/systemd )` survives openresolv's removal because the
+    // systemd branch (proposed, i.e. being installed) is still present —
+    // the `AnyOf` group is not violated just because one alternative is
+    // gone, matching real portage's actual auto-removal of an orphaned
+    // blocked package in this exact scenario
     #[test]
     fn any_of_group_survives_removal_via_the_other_branch() {
         // entry()'s helper only builds flat Atom entries; a real `||` group
@@ -845,9 +848,9 @@ mod tests {
         &classified[0].verdicts[0]
     }
 
-    /// Forward hit (owner is a planned/solution package), weak blocker,
-    /// orphaned installed victim: emerge would auto-unmerge it, ordered
-    /// after the blocking merge.
+    // Forward hit (owner is a planned/solution package), weak blocker,
+    // orphaned installed victim: emerge would auto-unmerge it, ordered
+    // after the blocking merge
     #[test]
     fn forward_weak_orphan_would_unmerge_after() {
         let h = hit(HitSpec {
@@ -872,8 +875,8 @@ mod tests {
         ));
     }
 
-    /// Same shape, but a retained consumer still needs the victim: a
-    /// genuine (soft, for a weak blocker) conflict, not auto-removable.
+    // Same shape, but a retained consumer still needs the victim: a
+    // genuine (soft, for a weak blocker) conflict, not auto-removable
     #[test]
     fn forward_weak_still_needed() {
         let h = hit(HitSpec {
@@ -898,9 +901,9 @@ mod tests {
         ));
     }
 
-    /// A strong `!!` blocker orders the auto-unmerge *before* the blocking
-    /// merge instead of after — the real weak/strong asymmetry (both are
-    /// equally auto-removed; only the scheduling edge differs).
+    // A strong `!!` blocker orders the auto-unmerge *before* the blocking
+    // merge instead of after — the real weak/strong asymmetry (both are
+    // equally auto-removed; only the scheduling edge differs)
     #[test]
     fn strong_blocker_orders_unmerge_before() {
         let h = hit(HitSpec {
@@ -925,10 +928,10 @@ mod tests {
         ));
     }
 
-    /// Reciprocal hit: an installed owner's blocker fires against a planned
-    /// (solution-member) victim — the *owner*, not the immovable victim, is
-    /// the removal candidate (mirrors installed openresolv's `!systemd`
-    /// against a planned systemd).
+    // Reciprocal hit: an installed owner's blocker fires against a planned
+    // (solution-member) victim — the *owner*, not the immovable victim, is
+    // the removal candidate (mirrors installed openresolv's `!systemd`
+    // against a planned systemd)
     #[test]
     fn reciprocal_hit_makes_the_owner_the_candidate() {
         let h = hit(HitSpec {
@@ -952,9 +955,9 @@ mod tests {
         }
     }
 
-    /// Both owner and victim are in the final plan: a hard conflict
-    /// regardless of blocker strength (weak `!` tolerates transient
-    /// overlap, not permanent coexistence).
+    // Both owner and victim are in the final plan: a hard conflict
+    // regardless of blocker strength (weak `!` tolerates transient
+    // overlap, not permanent coexistence)
     #[test]
     fn planned_coexistence_is_a_hard_conflict() {
         let h = hit(HitSpec {
@@ -975,8 +978,8 @@ mod tests {
         ));
     }
 
-    /// Owner and victim are both already-installed, retained packages: real
-    /// portage suppresses this as non-actionable ("damage already done").
+    // Owner and victim are both already-installed, retained packages: real
+    // portage suppresses this as non-actionable ("damage already done")
     #[test]
     fn pre_existing_conflict_between_two_installed_packages() {
         let h = hit(HitSpec {
@@ -1001,12 +1004,12 @@ mod tests {
         ));
     }
 
-    /// The canonical `virtual/resolvconf` scenario end-to-end through
-    /// classify_blockers: both the forward hit (systemd blocks installed
-    /// openresolv) and the reciprocal hit (installed openresolv blocks
-    /// planned systemd) collapse onto the *same* removal candidate
-    /// (openresolv) via the joint simulation, and both get a consistent
-    /// verdict.
+    // The canonical `virtual/resolvconf` scenario end-to-end through
+    // classify_blockers: both the forward hit (systemd blocks installed
+    // openresolv) and the reciprocal hit (installed openresolv blocks
+    // planned systemd) collapse onto the *same* removal candidate
+    // (openresolv) via the joint simulation, and both get a consistent
+    // verdict
     #[test]
     fn systemd_resolvconf_canonical_case_both_edges_agree() {
         let forward = hit(HitSpec {

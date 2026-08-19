@@ -11,75 +11,76 @@ use crate::repo::AcceptToken;
 
 type Result<T> = anyhow::Result<T>;
 
-/// Resolved USE environment for the solver and display.
+/// Resolved USE environment for the solver and display
 pub struct UseEnv {
-    /// The fold of profile `make.defaults` + `make.conf` (`extra_confs`) —
-    /// portage's `defaults`/`conf` layers, from `ResolvedUse::pre_env`,
-    /// **parsed once** into a [`UseLayer`]. Feed this into
-    /// `portage_solver::resolve_effective_use` *before* `package_use` and
-    /// *before* `env_use`, per package — do not re-tokenize the profile string
-    /// on every CPV.
+    /// The fold of profile `make.defaults` + `make.conf` (`extra_confs`) — portage's `defaults`/`conf` layers, from `ResolvedUse::pre_env`, **parsed once** into a [`UseLayer`]
+    ///
+    /// Feed this into `portage_solver::resolve_effective_use` *before*
+    /// `package_use` and *before* `env_use`, per package — do not re-tokenize the
+    /// profile string on every CPV.
     pub pre_env: UseLayer,
-    /// Process-environment USE layer (`ResolvedUse::env_use`), **parsed once**.
-    /// Portage's `env` layer, folded in *after* `package_use`. See
-    /// `resolve_effective_use`'s doc for why this can't be pre-merged into
-    /// `pre_env`: whether a `-*` here wipes `package_use` depends on it
-    /// staying a separate, later layer.
+    /// Process-environment USE layer (`ResolvedUse::env_use`), **parsed once** Portage's `env` layer, folded in *after* `package_use`
+    ///
+    /// See `resolve_effective_use`'s doc for why this can't be pre-merged into
+    /// `pre_env`: whether a `-*` here wipes `package_use` depends on it staying a
+    /// separate, later layer.
     pub env_use: UseLayer,
-    /// Keys from `USE_EXPAND` — used to group expanded flags in display.
+    /// Keys from `USE_EXPAND` — used to group expanded flags in display
     pub expand: Vec<String>,
-    /// Keys from `USE_EXPAND_HIDDEN` — groups to suppress in display.
+    /// Keys from `USE_EXPAND_HIDDEN` — groups to suppress in display
     pub expand_hidden: Vec<String>,
     /// Per-package USE overrides from `/etc/portage/package.use` and
-    /// `package.env` — portage's `pkg` layer, above `conf`/make.conf.
+    /// `package.env` — portage's `pkg` layer, above `conf`/make.conf
     pub package_use: Vec<(Dep, Vec<UseOverride>)>,
-    /// Per-package USE overrides from the profile chain's `package.use`
-    /// (`stack.package_use()`) — portage's *defaults* layer, BELOW
-    /// `conf`/make.conf: a global `USE=` wins over these (unlike
-    /// [`Self::package_use`]). Matches portage's `_pkgprofileuse` →
-    /// `configdict["defaults"]` routing (`config.py` setcpv).
+    /// Per-package USE overrides from the profile chain's `package.use` (`stack.package_use()`) — portage's *defaults* layer, BELOW `conf`/make.conf: a global `USE=` wins over these (unlike [`Self::package_use`])
+    ///
+    /// Matches portage's `_pkgprofileuse` → `configdict["defaults"]` routing
+    /// (`config.py` setcpv).
     pub profile_package_use: Vec<(Dep, Vec<UseOverride>)>,
     /// Masked packages: repo-global `profiles/package.mask`, the profile
-    /// stack, and `/etc/portage/package.mask`.
+    /// stack, and `/etc/portage/package.mask`
     pub package_mask: Vec<Dep>,
     /// Site unmasks from `/etc/portage/package.unmask` — a matching entry
-    /// cancels any mask for that package.
+    /// cancels any mask for that package
     pub package_unmask: Vec<Dep>,
     /// Profile USE force/mask policy (global + per-package + stable variants),
-    /// applied per package to effective USE and consulted by the Level-C cede gate.
+    /// applied per package to effective USE and consulted by the Level-C cede gate
     pub force_mask: ForceMask,
-    /// Effective global `ACCEPT_KEYWORDS`, parsed to interned tokens.
+    /// Effective global `ACCEPT_KEYWORDS`, parsed to interned tokens
     pub accept_keywords: Vec<AcceptToken>,
-    /// Per-package `package.accept_keywords` (and legacy `package.keywords`)
-    /// entries: `(atom, [tokens])`, tokens interned. A bare atom carries an
-    /// empty token list (expanded to `~arch` when the host arch is known).
+    /// Per-package `package.accept_keywords` (and legacy `package.keywords`) entries: `(atom, [tokens])`, tokens interned
+    ///
+    /// A bare atom carries an empty token list (expanded to `~arch` when the host
+    /// arch is known).
     pub package_accept_keywords: Vec<(Dep, Vec<AcceptToken>)>,
-    /// Effective global `ACCEPT_LICENSE` after `@GROUP` expansion and `-` denials.
+    /// Effective global `ACCEPT_LICENSE` after `@GROUP` expansion and `-` denials
     pub accept_license: AcceptSet,
     /// Per-package `package.license` entries: `(atom, overlay)`, each overlay
-    /// already parsed/expanded against the license groups.
+    /// already parsed/expanded against the license groups
     pub package_license: Vec<(Dep, AcceptSet)>,
-    /// Effective global `ACCEPT_PROPERTIES`. Same token grammar as
-    /// `ACCEPT_LICENSE` minus `@GROUP` (`AcceptSet::from_tokens_plain`).
+    /// Effective global `ACCEPT_PROPERTIES`
+    ///
+    /// Same token grammar as `ACCEPT_LICENSE` minus `@GROUP`
+    /// (`AcceptSet::from_tokens_plain`).
     pub accept_properties: AcceptSet,
-    /// Per-package `package.properties` entries — see `package_license`.
+    /// Per-package `package.properties` entries — see `package_license`
     pub package_properties: Vec<(Dep, AcceptSet)>,
-    /// Effective global `ACCEPT_RESTRICT`. See `accept_properties`.
+    /// Effective global `ACCEPT_RESTRICT`. See `accept_properties`
     pub accept_restrict: AcceptSet,
-    /// Per-package `package.accept_restrict` entries — see `package_license`.
+    /// Per-package `package.accept_restrict` entries — see `package_license`
     pub package_restrict: Vec<(Dep, AcceptSet)>,
-    /// Resolved `DISTDIR` (where fetched distfiles live), for download-size accounting.
+    /// Resolved `DISTDIR` (where fetched distfiles live), for download-size accounting
     pub distdir: String,
-    /// `package.provided` CPVs from the profile stack: packages the system
-    /// supplies externally (e.g. a host interpreter in a Gentoo Prefix). They
-    /// satisfy matching deps and are never built or shown for merge.
+    /// `package.provided` CPVs from the profile stack: packages the system supplies externally (e.g. a host interpreter in a Gentoo Prefix)
+    ///
+    /// They satisfy matching deps and are never built or shown for merge.
     pub provided: Vec<portage_atom::Cpv>,
 }
 
 /// Read the config/profile/environment sources (profile stack, `make.conf`,
 /// `package.use`/`.mask`/`.unmask`/`.license`/`.accept_keywords`, USE force/
 /// mask) into a resolved [`UseEnv`], the shared input every per-package
-/// policy fold in this crate runs on.
+/// policy fold in this crate runs on
 pub async fn build_use_env(
     repo: &Repository,
     root: Option<&Utf8Path>,
@@ -381,9 +382,10 @@ async fn compute_use_env(
     })
 }
 
-/// `make.conf` often sets `ACCEPT_KEYWORDS="${ARCH} ~${ARCH}"`. When `ARCH` is
-/// not yet visible at source time, brush leaves `~` only — rebuild from `ARCH`
-/// once the profile stack has settled.
+/// `make.conf` often sets `ACCEPT_KEYWORDS="${ARCH} ~${ARCH}"`
+///
+/// When `ARCH` is not yet visible at source time, brush leaves `~` only —
+/// rebuild from `ARCH` once the profile stack has settled.
 fn effective_accept_keywords(
     split_var: &dyn Fn(&str) -> Vec<String>,
     shell: &portage_repo::EbuildShell,
@@ -403,9 +405,10 @@ fn effective_accept_keywords(
     parse(&[arch, testing])
 }
 
-/// Load `package.use` as raw `(atom, [token])` lines: `#` comments, optionally
-/// a directory (children summed in lexical order). Tokens stay verbatim —
-/// USE_EXPAND `KEY:` groups are expanded later by [`expand_use_expand_colon`].
+/// Load `package.use` as raw `(atom, [token])` lines: `#` comments, optionally a directory (children summed in lexical order)
+///
+/// Tokens stay verbatim — USE_EXPAND `KEY:` groups are expanded later by
+/// [`expand_use_expand_colon`].
 fn load_package_use(path: &str) -> Vec<(Dep, Vec<String>)> {
     let mut result = Vec::new();
     for line in portage_repo::read_config_lines(path).unwrap_or_default() {
@@ -429,7 +432,7 @@ fn load_package_use(path: &str) -> Vec<(Dep, Vec<String>)> {
 /// each on top of the last, seeded empty) via a real shell via
 /// [`MakeConf::apply_to`] — so `USE="${USE} -flag"` self-reference
 /// evaluates correctly — and take the resulting tokens as this atom's
-/// override list, [`UseOverride::parse`]d like a `package.use` line.
+/// override list, [`UseOverride::parse`]d like a `package.use` line
 ///
 /// Seeded empty (not the profile's USE) because this collects *this atom's
 /// own* contribution, independent of any candidate's baseline — that folds
@@ -461,12 +464,11 @@ async fn load_package_env_use(portage_dir: &Utf8Path) -> Vec<(Dep, Vec<UseOverri
     out
 }
 
-/// Expand the `USE_EXPAND:` colon form in `package.use` tokens to interned
-/// overrides (a USE_EXPAND name followed by `:` makes every subsequent
-/// value a member of that group, e.g. `cat/pkg L10N: de en` ⇒ `l10n_de
-/// l10n_en`). A bare `-*` inside a group clears its live values before the
-/// trailing values rebuild it (`PYTHON_TARGETS: -* python2_7` ⇒ only
-/// `python_targets_python2_7`).
+/// Expand the `USE_EXPAND:` colon form in `package.use` tokens to interned overrides (a USE_EXPAND name followed by `:` makes every subsequent value a member of that group, e.g
+///
+/// `cat/pkg L10N: de en` ⇒ `l10n_de l10n_en`). A bare `-*` inside a group
+/// clears its live values before the trailing values rebuild it
+/// (`PYTHON_TARGETS: -* python2_7` ⇒ only `python_targets_python2_7`).
 ///
 /// Only keys present in `use_expand` start a group; any other token — including
 /// one that merely ends in `:` — is parsed as an ordinary flag, so plain flags
@@ -512,11 +514,12 @@ fn expand_use_expand_colon(
     out
 }
 
-/// Load `package.accept_keywords` / `package.keywords`: `(atom, [tokens])` per
-/// line, `#` comments, optionally a directory. Tokens are parsed to interned
-/// [`AcceptToken`]s at read time. Unlike [`load_package_use`], a bare atom (no
-/// tokens) is *kept* with an empty token list — portage reads it as "accept
-/// this package's `~arch`" (expanded once the host arch is known).
+/// Load `package.accept_keywords` / `package.keywords`: `(atom, [tokens])` per line, `#` comments, optionally a directory
+///
+/// Tokens are parsed to interned [`AcceptToken`]s at read time. Unlike
+/// [`load_package_use`], a bare atom (no tokens) is *kept* with an empty token
+/// list — portage reads it as "accept this package's `~arch`" (expanded once
+/// the host arch is known).
 fn load_package_keywords(path: &str) -> Vec<(Dep, Vec<AcceptToken>)> {
     let mut result = Vec::new();
     for line in portage_repo::read_config_lines(path).unwrap_or_default() {
@@ -533,10 +536,11 @@ fn load_package_keywords(path: &str) -> Vec<(Dep, Vec<AcceptToken>)> {
     result
 }
 
-/// Load `package.license`: `(atom, overlay)` per line, `#` comments, optionally a
-/// directory. Each line's license tokens (`@GROUP`, `-deny`, `*`, names) are
-/// expanded against `groups` into a per-package [`AcceptSet`] overlay now,
-/// so resolution never re-parses them.
+/// Load `package.license`: `(atom, overlay)` per line, `#` comments, optionally a directory
+///
+/// Each line's license tokens (`@GROUP`, `-deny`, `*`, names) are expanded
+/// against `groups` into a per-package [`AcceptSet`] overlay now, so resolution
+/// never re-parses them.
 fn load_package_license(path: &str, groups: &LicenseGroupRegistry) -> Vec<(Dep, AcceptSet)> {
     let mut result = Vec::new();
     for line in portage_repo::read_config_lines(path).unwrap_or_default() {
@@ -553,7 +557,7 @@ fn load_package_license(path: &str, groups: &LicenseGroupRegistry) -> Vec<(Dep, 
     result
 }
 
-/// Load a simple atom list (one dep per line, `#` comments, optionally a directory).
+/// Load a simple atom list (one dep per line, `#` comments, optionally a directory)
 fn load_dep_list(path: &str) -> Vec<Dep> {
     let mut result = Vec::new();
     for line in portage_repo::read_config_lines(path).unwrap_or_default() {
@@ -576,13 +580,13 @@ mod tests {
     use portage_atom::Dep;
     use portage_atom_pubgrub::UseOverride;
 
-    /// Expected override shorthand.
+    // Expected override shorthand
     fn ov(s: &str) -> UseOverride {
         UseOverride::parse(s)
     }
 
-    /// Build an `etc/portage` dir with a `package.env` and named env files,
-    /// matching `portage_repo::package_env`'s own test fixture shape.
+    // Build an `etc/portage` dir with a `package.env` and named env files,
+    // matching `portage_repo::package_env`'s own test fixture shape
     fn portage_dir(package_env: &str, env_files: &[(&str, &str)]) -> tempfile::TempDir {
         let td = tempfile::TempDir::new().unwrap();
         let pd = td.path();
@@ -717,12 +721,11 @@ mod tests {
         assert_eq!(out, vec![ov("nls"), ov("-debug")]);
     }
 
-    /// PMS 5.2.4 dir-form: a `/etc/portage/package.use` *directory*'s regular
-    /// files are concatenated in filename order — and, matching real portage's
-    /// `_recursive_basename_filter`, dotfiles and `~` editor backups are skipped.
-    /// Before the shared-`read_config_lines` fix these loaders read every regular
-    /// file, so a stray `.swp`/`foo~` that happened to parse as `atom flag` leaked
-    /// in as real data that real portage ignores.
+    // PMS 5.2.4 dir-form: a `/etc/portage/package.use` *directory*'s regular files are concatenated in filename order — and, matching real portage's `_recursive_basename_filter`, dotfiles and `~` editor backups are skipped
+    //
+    // Before the shared-`read_config_lines` fix these loaders read every regular
+    // file, so a stray `.swp`/`foo~` that happened to parse as `atom flag` leaked
+    // in as real data that real portage ignores.
     #[test]
     fn package_use_dir_skips_dotfiles_and_backups() {
         let td = tempfile::TempDir::new().unwrap();
@@ -742,8 +745,8 @@ mod tests {
         assert_eq!(out[1].1, vec!["second".to_string()]);
     }
 
-    /// The same dir-form dotfile/backup skip must hold for the keyword reader,
-    /// which shares the reader but keeps bare atoms (empty token list).
+    // The same dir-form dotfile/backup skip must hold for the keyword reader,
+    // which shares the reader but keeps bare atoms (empty token list)
     #[test]
     fn package_keywords_dir_skips_dotfiles_and_backups() {
         let td = tempfile::TempDir::new().unwrap();

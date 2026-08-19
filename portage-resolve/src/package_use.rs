@@ -1,6 +1,6 @@
 //! `package.use` entry synthesis: turning cross-package `[flag]` USE-dep
 //! requirements into concrete `package.use` lines, and the co-solve fixpoint
-//! that auto-applies them (emerge's autounmask-preview behaviour).
+//! that auto-applies them (emerge's autounmask-preview behaviour)
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -10,30 +10,30 @@ use portage_atom_pubgrub::{
     DepEdge, UseFlagRequirement, UseFlagState, UseLayer, UseOverride, resolve_effective_use,
 };
 
-/// Entries to write into `/etc/portage/package.use`.
+/// Entries to write into `/etc/portage/package.use`
 pub struct PackageUseEntry {
-    /// Filename inside `package.use/`: the bare package name (e.g.
-    /// `pygments`), or `category-package` (e.g. `dev-python-pygments`) when
-    /// the bare name is ambiguous within this batch — see
-    /// `assign_filenames` (private, in this module).
+    /// Filename inside `package.use/`: the bare package name (e.g `pygments`), or `category-package` (e.g
+    ///
+    /// `dev-python-pygments`) when the bare name is ambiguous within this batch —
+    /// see `assign_filenames` (private, in this module).
     pub filename: String,
-    /// Lines to add/update in that file.
+    /// Lines to add/update in that file
     pub lines: Vec<PackageUseLine>,
 }
 
 /// One `package.use` line: an atom, the flags it forces, and the explanatory
-/// comments placed above it.
+/// comments placed above it
 #[derive(Clone, PartialEq, Eq)]
 pub struct PackageUseLine {
-    /// Comment lines explaining the requirement, e.g. `# required by firefox`.
+    /// Comment lines explaining the requirement, e.g. `# required by firefox`
     pub comments: Vec<String>,
-    /// The atom spec, e.g. `>=dev-python/pygments-2.19.2`.
+    /// The atom spec, e.g. `>=dev-python/pygments-2.19.2`
     pub atom: String,
-    /// Flags to enable (no prefix) and disable (`-` prefix).
+    /// Flags to enable (no prefix) and disable (`-` prefix)
     pub flags: Vec<String>,
 }
 
-/// Build `package.use` entries for all non-trivial USE flag requirements.
+/// Build `package.use` entries for all non-trivial USE flag requirements
 #[allow(clippy::too_many_arguments)]
 pub fn build_entries(
     flag_reqs: &[UseFlagRequirement],
@@ -116,11 +116,11 @@ pub fn build_entries(
     assign_filenames(by_cpn)
 }
 
-/// Turn per-package line groups into [`PackageUseEntry`]s, choosing each
-/// one's filename: the bare package name (e.g. `mesa`) when unambiguous,
-/// falling back to `category-package` only for names that collide across
-/// categories in this batch — real portage users keep bare-name
-/// package.use files day to day. Sorted by filename for reproducible
+/// Turn per-package line groups into [`PackageUseEntry`]s, choosing each one's filename: the bare package name (e.g
+///
+/// `mesa`) when unambiguous, falling back to `category-package` only for names
+/// that collide across categories in this batch — real portage users keep
+/// bare-name package.use files day to day. Sorted by filename for reproducible
 /// output; lines within a file keep their caller-given order.
 fn assign_filenames(by_cpn: HashMap<Cpn, Vec<PackageUseLine>>) -> Vec<PackageUseEntry> {
     let cpns: Vec<Cpn> = by_cpn.keys().copied().collect();
@@ -157,7 +157,7 @@ fn ver_str(v: &Version) -> String {
 
 /// Result of [`cosolve_use_deps`]: the augmented `package.use`, the
 /// requirements that drove at least one applied flag, and the converged solve
-/// (if the fixpoint ended on a solve of the returned `package.use`).
+/// (if the fixpoint ended on a solve of the returned `package.use`)
 pub type CosolveOutcome<T> = (
     Vec<(Dep, Vec<UseOverride>)>,
     Vec<UseFlagRequirement>,
@@ -165,7 +165,7 @@ pub type CosolveOutcome<T> = (
 );
 
 /// Auto-apply cross-package `[flag]` USE-deps to a fixpoint (emerge's
-/// autounmask-preview dependency calculation).
+/// autounmask-preview dependency calculation)
 ///
 /// Starting from `package_use`, repeatedly: solve, read the in-plan
 /// USE-flag requirements via `reqs_of`, force every demanded flag that is
@@ -241,11 +241,10 @@ where
     (package_use, applied_reqs, None) // bound hit — additions not yet solved
 }
 
-/// The `(target cpn, flag, enable)` triples one requirement demands, filtered
-/// to flags that are **real IUSE** of the target's selected/upgrade version
-/// (a `[bar]` on a target without `bar` cannot be applied — CC7). Used by the
-/// co-solve to auto-apply USE-deps via synthetic `package.use` and re-solve,
-/// instead of only suggesting them.
+/// The `(target cpn, flag, enable)` triples one requirement demands, filtered to flags that are **real IUSE** of the target's selected/upgrade version (a `[bar]` on a target without `bar` cannot be applied — CC7)
+///
+/// Used by the co-solve to auto-apply USE-deps via synthetic `package.use` and
+/// re-solve, instead of only suggesting them.
 fn req_targets(
     req: &UseFlagRequirement,
     data: &crate::repo::RepoData,
@@ -286,8 +285,8 @@ fn req_targets(
     out
 }
 
-/// Adjacency map: CPN → Vec<(to_CPN, annotation)>.
-/// annotation = "from-cpv\[flag\]" when gated, "from-cpv" otherwise.
+/// Adjacency map: CPN → Vec<(to_CPN, annotation)>
+/// annotation = "from-cpv\[flag\]" when gated, "from-cpv" otherwise
 type Adjacency = HashMap<String, Vec<(String, String)>>;
 
 fn build_adjacency(edges: &[DepEdge]) -> Adjacency {
@@ -308,7 +307,7 @@ fn build_adjacency(edges: &[DepEdge]) -> Adjacency {
     adj
 }
 
-/// Strip operators and version suffix from a root atom to get "cat/pkg".
+/// Strip operators and version suffix from a root atom to get "cat/pkg"
 fn parse_root_cpns(root_atoms: &[String]) -> HashSet<String> {
     root_atoms
         .iter()
@@ -333,7 +332,7 @@ fn parse_root_cpns(root_atoms: &[String]) -> HashSet<String> {
 
 /// `root_labels` names what the user actually asked for — an explicit atom by
 /// its own text, a set by `@name` — so a `@world` run attributes the change to
-/// the set rather than reprinting every atom the set expanded to.
+/// the set rather than reprinting every atom the set expanded to
 fn build_comments(
     req: &UseFlagRequirement,
     root_labels: &[String],
@@ -399,7 +398,7 @@ fn build_comments(
 
 /// Write `entries` under `package_use_path` (`/etc/portage/package.use`),
 /// creating/updating files and inserting a block comment pointing to the
-/// requesting version.
+/// requesting version
 ///
 /// `package.use` is legitimately either a directory of per-package files
 /// (portage(5)'s usual layout — one file per [`PackageUseEntry::filename`])
@@ -443,7 +442,7 @@ pub fn write(entries: &[PackageUseEntry], package_use_path: &Utf8Path) -> anyhow
     Ok(())
 }
 
-/// Merge new lines into existing file content.
+/// Merge new lines into existing file content
 ///
 /// Atoms already present in the file are updated in-place (flags and comments
 /// both replaced); new ones are appended.  Existing lines unrelated to the

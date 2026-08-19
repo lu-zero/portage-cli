@@ -10,33 +10,33 @@ use portage_atom_pubgrub::{
 };
 use portage_metadata::{CacheEntry, Keyword, LicenseExpr, RequiredUseExpr, Stability};
 
-/// A reason a package version was excluded from the solver.
+/// A reason a package version was excluded from the solver
 #[derive(Debug, Clone)]
 pub enum FilterReason {
-    /// Needs a keyword the system doesn't accept (e.g. `~arm64`).
+    /// Needs a keyword the system doesn't accept (e.g. `~arm64`)
     Keyword(String),
-    /// Masked by the profile or user `package.mask`.
+    /// Masked by the profile or user `package.mask`
     Masked,
-    /// One or more licenses not in ACCEPT_LICENSE.
+    /// One or more licenses not in ACCEPT_LICENSE
     License(Vec<String>),
-    /// One or more `PROPERTIES` tokens not in ACCEPT_PROPERTIES.
+    /// One or more `PROPERTIES` tokens not in ACCEPT_PROPERTIES
     Properties(Vec<String>),
-    /// One or more `RESTRICT` tokens not in ACCEPT_RESTRICT.
+    /// One or more `RESTRICT` tokens not in ACCEPT_RESTRICT
     Restrict(Vec<String>),
 }
 
-/// A package version that was excluded and could resolve a dropped dep.
+/// A package version that was excluded and could resolve a dropped dep
 #[derive(Debug, Clone)]
 pub struct AutounmaskCandidate {
-    /// The excluded version.
+    /// The excluded version
     pub cpv: Cpv,
-    /// Its slot, if known.
+    /// Its slot, if known
     pub slot: Option<Interned<DefaultInterner>>,
-    /// Every reason this version was excluded.
+    /// Every reason this version was excluded
     pub reasons: Vec<FilterReason>,
 }
 
-/// One parsed `ACCEPT_KEYWORDS` / `package.accept_keywords` token.
+/// One parsed `ACCEPT_KEYWORDS` / `package.accept_keywords` token
 ///
 /// Each token sets or clears **exactly its own** grant in the folded accept
 /// set — never a lattice join — so e.g. `-arch` and `-~arch` stay
@@ -45,33 +45,35 @@ pub struct AutounmaskCandidate {
 /// for the PMS-vs-Portage spec split and the bugs this shape fixes.
 #[derive(Clone, Copy)]
 pub enum AcceptToken {
-    /// `arch` — accept the stable package keyword for this arch (any arch name).
+    /// `arch` — accept the stable package keyword for this arch (any arch name)
     Stable(Interned<DefaultInterner>),
-    /// `~arch` — accept the testing package keyword for this arch.
+    /// `~arch` — accept the testing package keyword for this arch
     Testing(Interned<DefaultInterner>),
-    /// `*` — package visible if stable on any architecture (`portage(5)`).
+    /// `*` — package visible if stable on any architecture (`portage(5)`)
     AnyStable,
-    /// `~*` — package visible if testing on any architecture (`portage(5)`).
+    /// `~*` — package visible if testing on any architecture (`portage(5)`)
     AnyTesting,
-    /// `**` — always visible; package `KEYWORDS` ignored (`portage(5)`).
+    /// `**` — always visible; package `KEYWORDS` ignored (`portage(5)`)
     Any,
     /// `-*` — incremental clear-all of the accept set so later tokens rebuild
-    /// it (make.conf(5) incremental variables; same idea as ebuild `KEYWORDS=-*`).
+    /// it (make.conf(5) incremental variables; same idea as ebuild `KEYWORDS=-*`)
     ClearAll,
-    /// `-arch` — withdraw only the stable grant for this arch (literal token
-    /// discard). Does not touch `~arch` / `*` / `~*` / `**`.
+    /// `-arch` — withdraw only the stable grant for this arch (literal token discard)
+    ///
+    /// Does not touch `~arch` / `*` / `~*` / `**`.
     Negate(Interned<DefaultInterner>),
-    /// `-~arch` — withdraw only the testing grant (portage(5) pin-to-stable
-    /// idiom `media-video/mplayer -~x86`). Must stay distinct from [`Self::Negate`].
+    /// `-~arch` — withdraw only the testing grant (portage(5) pin-to-stable idiom `media-video/mplayer -~x86`)
+    ///
+    /// Must stay distinct from [`Self::Negate`].
     NegateTesting(Interned<DefaultInterner>),
-    /// `-~*` — withdraw the `~*` grant specifically.
+    /// `-~*` — withdraw the `~*` grant specifically
     NegateAnyTesting,
-    /// `-**` — withdraw the `**` grant specifically.
+    /// `-**` — withdraw the `**` grant specifically
     NegateAny,
 }
 
 impl AcceptToken {
-    /// Parse one token.
+    /// Parse one token
     pub fn parse(tok: &str) -> Option<Self> {
         match tok {
             "**" => Some(Self::Any),
@@ -94,7 +96,7 @@ impl AcceptToken {
     }
 }
 
-/// Folded accept set: multi-arch literal tokens plus wildcards.
+/// Folded accept set: multi-arch literal tokens plus wildcards
 ///
 /// This is Portage’s `pgroups` set after incremental stacking
 /// (`KeywordsManager._getEgroups` for env/package lines,
@@ -125,20 +127,20 @@ impl AcceptToken {
 /// `negate_arch_does_not_retract_a_wildcard_grant`).
 #[derive(Clone, Default)]
 struct KeywordAccept {
-    /// Arches granted via a bare `arch` token (any architecture name).
+    /// Arches granted via a bare `arch` token (any architecture name)
     stable: HashSet<Interned<DefaultInterner>>,
-    /// Arches granted via a `~arch` token.
+    /// Arches granted via a `~arch` token
     testing: HashSet<Interned<DefaultInterner>>,
-    /// `*` is granted.
+    /// `*` is granted
     any_stable: bool,
-    /// `~*` is granted.
+    /// `~*` is granted
     any_testing: bool,
-    /// `**` — accept even with no matching keyword.
+    /// `**` — accept even with no matching keyword
     any: bool,
 }
 
 impl KeywordAccept {
-    /// Fold one token — plain insert/remove of the named grant, never a join.
+    /// Fold one token — plain insert/remove of the named grant, never a join
     ///
     /// Order matters the same way as Portage incremental lists: a later grant
     /// after a veto re-adds; `-*` clears everything so subsequent tokens rebuild.
@@ -166,7 +168,7 @@ impl KeywordAccept {
     }
 
     /// Portage `_getMissingKeywords` match: accept when some package keyword’s
-    /// exact token is in the set, or a covering wildcard is granted.
+    /// exact token is in the set, or a covering wildcard is granted
     ///
     /// `~arch` on the accept side does **not** satisfy a stable package
     /// `arch` keyword (verified against Portage: missing list stays `['arm64']`
@@ -210,7 +212,7 @@ impl KeywordAccept {
     }
 
     /// Whether the package is accepted on a *stable* keyword path (gates
-    /// profile `use.stable.{force,mask}`).
+    /// profile `use.stable.{force,mask}`)
     ///
     /// Portage's `isStable`: accepted, AND *still* accepted after
     /// downgrading every stable package keyword to testing — if so, the
@@ -223,7 +225,7 @@ impl KeywordAccept {
     }
 }
 
-/// Global `ACCEPT_KEYWORDS` plus per-package `package.accept_keywords`.
+/// Global `ACCEPT_KEYWORDS` plus per-package `package.accept_keywords`
 ///
 /// # Layering (Portage)
 ///
@@ -242,21 +244,23 @@ impl KeywordAccept {
 /// bare-atom expansion and autounmask `~arch` suggestions. All arch names in
 /// tokens are stored in `KeywordAccept`.
 pub struct AcceptKeywords {
-    /// Host arch, interned — bare-atom expansion and autounmask `~arch` only.
+    /// Host arch, interned — bare-atom expansion and autounmask `~arch` only
     arch: Interned<DefaultInterner>,
-    /// Precomputed decision from the global `ACCEPT_KEYWORDS` tokens.
+    /// Precomputed decision from the global `ACCEPT_KEYWORDS` tokens
     global: KeywordAccept,
-    /// Per-package overrides: `(atom, [tokens])`. A bare atom is pre-expanded to
-    /// `~arch` (portage(5)). Empty ⇒ no per-package work in the hot path.
+    /// Per-package overrides: `(atom, [tokens])`
+    ///
+    /// A bare atom is pre-expanded to `~arch` (portage(5)). Empty ⇒ no per-package
+    /// work in the hot path.
     per_package: Vec<(Dep, Vec<AcceptToken>)>,
 }
 
 impl AcceptKeywords {
-    /// Build from pre-parsed tokens: the global `ACCEPT_KEYWORDS` list and the
-    /// per-package `(atom, tokens)` entries from `package.accept_keywords`.
-    /// Tokens are already interned (parsed at config-read time); a bare
-    /// per-package atom arrives as an empty token list and is expanded here to
-    /// "accept this arch's `~arch`" (portage's rule).
+    /// Build from pre-parsed tokens: the global `ACCEPT_KEYWORDS` list and the per-package `(atom, tokens)` entries from `package.accept_keywords`
+    ///
+    /// Tokens are already interned (parsed at config-read time); a bare per-package
+    /// atom arrives as an empty token list and is expanded here to "accept this
+    /// arch's `~arch`" (portage's rule).
     pub fn new(
         arch: &Arch,
         global: &[AcceptToken],
@@ -288,12 +292,12 @@ impl AcceptKeywords {
         }
     }
 
-    /// Test-only constructor from a global token list (no per-package entries).
+    /// Test-only constructor from a global token list (no per-package entries)
     /// `#[doc(hidden)] pub`, not `#[cfg(test)]`: this is also called from
     /// `portage-cli`'s own tests (`c7.rs`, `host_copies.rs`), and `#[cfg(test)]`
     /// doesn't survive a crate boundary — it's only `true` while
     /// `portage-resolve` itself is under test, not for a downstream crate's
-    /// tests that merely depend on it normally.
+    /// tests that merely depend on it normally
     #[doc(hidden)]
     pub fn from_global(arch: &Arch, global: &[&str]) -> Self {
         let toks: Vec<AcceptToken> = global
@@ -303,9 +307,9 @@ impl AcceptKeywords {
         Self::new(arch, &toks, Vec::new())
     }
 
-    /// The accept decision for one package version, folding any matching
-    /// per-package overrides into the precomputed global decision. Borrows the
-    /// global set when nothing matches (the common path).
+    /// The accept decision for one package version, folding any matching per-package overrides into the precomputed global decision
+    ///
+    /// Borrows the global set when nothing matches (the common path).
     fn decision(
         &self,
         cpv: &Cpv,
@@ -331,7 +335,7 @@ impl AcceptKeywords {
         }
     }
 
-    /// Whether `keywords` is accepted for this version.
+    /// Whether `keywords` is accepted for this version
     pub fn accepts(
         &self,
         keywords: &[Keyword],
@@ -341,10 +345,10 @@ impl AcceptKeywords {
         self.decision(cpv, slot).accepts(keywords)
     }
 
-    /// Whether this version is merged on a *stable* keyword path — gates the
-    /// `use.stable.{force,mask}` sets. Depends on whether a testing grant is
-    /// also present in the accept set: see `KeywordAccept::is_stable_for`
-    /// (private, in this module).
+    /// Whether this version is merged on a *stable* keyword path — gates the `use.stable.{force,mask}` sets
+    ///
+    /// Depends on whether a testing grant is also present in the accept set: see
+    /// `KeywordAccept::is_stable_for` (private, in this module).
     pub fn is_stable(
         &self,
         keywords: &[Keyword],
@@ -354,10 +358,10 @@ impl AcceptKeywords {
         self.decision(cpv, slot).is_stable_for(keywords)
     }
 
-    /// The keyword token an autounmask would need: the version is not accepted.
+    /// The keyword token an autounmask would need: the version is not accepted
     /// Returns `~arch` when a testing keyword for the host arch is present,
     /// otherwise `**` for fully unkeyworded / foreign-arch-only versions so
-    /// autounmask always has a concrete suggestion for a dropped hard dep.
+    /// autounmask always has a concrete suggestion for a dropped hard dep
     pub fn keyword_needed(
         &self,
         keywords: &[Keyword],
@@ -378,7 +382,7 @@ impl AcceptKeywords {
     }
 }
 
-/// Global `ACCEPT_LICENSE` plus per-package `package.license`.
+/// Global `ACCEPT_LICENSE` plus per-package `package.license`
 ///
 /// The global list applies to every package; per-package entries extend it
 /// (allow more, or `-deny`) for versions whose atom matches. The common
@@ -386,13 +390,13 @@ impl AcceptKeywords {
 pub struct AcceptOverlay {
     global: portage_repo::AcceptSet,
     /// `(atom, overlay)` — each overlay is the per-line tokens parsed into an
-    /// `AcceptSet`, merged onto the global decision for matching versions.
+    /// `AcceptSet`, merged onto the global decision for matching versions
     per_package: Vec<(Dep, portage_repo::AcceptSet)>,
 }
 
 impl AcceptOverlay {
     /// Build from the global `ACCEPT_LICENSE` decision plus per-package
-    /// `package.license` overlays.
+    /// `package.license` overlays
     pub fn new(
         global: portage_repo::AcceptSet,
         per_package: Vec<(Dep, portage_repo::AcceptSet)>,
@@ -403,9 +407,9 @@ impl AcceptOverlay {
         }
     }
 
-    /// The license-acceptance decision in effect for one package version.
+    /// The license-acceptance decision in effect for one package version
     /// Returns the global decision *borrowed* when no per-package entry matches
-    /// (the common case); otherwise a merged clone (global + matched overlays).
+    /// (the common case); otherwise a merged clone (global + matched overlays)
     fn effective_for(
         &self,
         cpv: &Cpv,
@@ -430,21 +434,22 @@ impl AcceptOverlay {
 
 /// `ACCEPT_LICENSE` + `package.license` — the license-family name for
 /// [`AcceptOverlay`] (three equally-named aliases of the same generic
-/// engine; see [`AcceptProperties`]/[`AcceptRestrict`]).
+/// engine; see [`AcceptProperties`]/[`AcceptRestrict`])
 pub type AcceptLicenses = AcceptOverlay;
-/// `ACCEPT_PROPERTIES` + `package.properties`. Same shape as [`AcceptOverlay`],
-/// reused verbatim rather than a hand-rolled third manager: both are "global
-/// accept-list + per-package atom-matched overlay" over the identical
-/// [`portage_repo::AcceptSet`] engine, constructed group-free via
-/// [`portage_repo::AcceptSet::from_tokens_plain`] (`PROPERTIES`/`RESTRICT`
-/// have no `@GROUP` concept).
+/// `ACCEPT_PROPERTIES` + `package.properties`
+///
+/// Same shape as [`AcceptOverlay`], reused verbatim rather than a hand-rolled
+/// third manager: both are "global accept-list + per-package atom-matched
+/// overlay" over the identical [`portage_repo::AcceptSet`] engine, constructed
+/// group-free via [`portage_repo::AcceptSet::from_tokens_plain`]
+/// (`PROPERTIES`/`RESTRICT` have no `@GROUP` concept).
 pub type AcceptProperties = AcceptOverlay;
-/// `ACCEPT_RESTRICT` + `package.accept_restrict` — see [`AcceptProperties`].
+/// `ACCEPT_RESTRICT` + `package.accept_restrict` — see [`AcceptProperties`]
 pub type AcceptRestrict = AcceptOverlay;
 
-/// Returns true if the license expression is fully covered by `accept`,
-/// evaluating `use? ( … )` branches against `enabled` (a package's effective
-/// USE). For an expression with no conditionals, `enabled` is never consulted.
+/// Returns true if the license expression is fully covered by `accept`, evaluating `use? ( … )` branches against `enabled` (a package's effective USE)
+///
+/// For an expression with no conditionals, `enabled` is never consulted.
 pub fn license_accepted(
     expr: &LicenseExpr,
     accept: &portage_repo::AcceptSet,
@@ -454,7 +459,7 @@ pub fn license_accepted(
 }
 
 /// Collects the license names NOT covered by `accept`, evaluating conditionals
-/// against `enabled` (see [`license_accepted`]).
+/// against `enabled` (see [`license_accepted`])
 fn licenses_needed(
     expr: &LicenseExpr,
     accept: &portage_repo::AcceptSet,
@@ -463,9 +468,10 @@ fn licenses_needed(
     accept.licenses_needed(expr, enabled)
 }
 
-/// True if a `LICENSE` expression contains any `use? ( … )` conditional. When
-/// false, license acceptance is USE-independent and the effective USE need not
-/// be computed (a hot-path shortcut for the common non-conditional case).
+/// True if a `LICENSE` expression contains any `use? ( … )` conditional
+///
+/// When false, license acceptance is USE-independent and the effective USE need
+/// not be computed (a hot-path shortcut for the common non-conditional case).
 fn license_has_conditional(expr: &LicenseExpr) -> bool {
     match expr {
         LicenseExpr::License(_) => false,
@@ -477,7 +483,7 @@ fn license_has_conditional(expr: &LicenseExpr) -> bool {
 /// Build the `iuse_defaults` map `resolve_effective_use`/`PackageVersions`
 /// need from an ebuild's parsed `IUSE` list — shared by every call site that
 /// resolves a package's effective USE, so the `+`/`-` default conversion
-/// lives in exactly one place.
+/// lives in exactly one place
 ///
 /// Only **`+flag` / enabled** defaults are collected: disabled defaults match
 /// `UseConfig::get`'s unset→Disabled, and `resolve_effective_use` only
@@ -496,11 +502,10 @@ fn iuse_defaults_map(
         .collect()
 }
 
-/// Build the effective USE config for `cpv` from the resolved global USE,
-/// per-version `package.use`, the ebuild's IUSE defaults and the profile
-/// force/mask sets — the same layering `Adapter::desired_use` does, minus the
-/// Level-C cede. Used to evaluate USE-conditional `LICENSE` expressions both in
-/// the version filter and the autounmask reasons (which have no `Adapter`).
+/// Build the effective USE config for `cpv` from the resolved global USE, per-version `package.use`, the ebuild's IUSE defaults and the profile force/mask sets — the same layering `Adapter::desired_use` does, minus the Level-C cede
+///
+/// Used to evaluate USE-conditional `LICENSE` expressions both in the version
+/// filter and the autounmask reasons (which have no `Adapter`).
 fn effective_use_config(
     policy: &ResolvePolicy,
     cpv: &Cpv,
@@ -531,15 +536,15 @@ fn effective_use_config(
     cfg
 }
 
-/// A USE-flag predicate (`enabled`) over an effective `UseConfig`.
+/// A USE-flag predicate (`enabled`) over an effective `UseConfig`
 fn use_predicate(cfg: &portage_atom_pubgrub::UseConfig) -> impl Fn(&str) -> bool + '_ {
     use portage_atom_pubgrub::UseFlagState;
     move |flag: &str| matches!(cfg.get(Interned::intern(flag)), UseFlagState::Enabled)
 }
 
-/// Whether `meta`'s `LICENSE` is accepted for version `cpv`, evaluating any
-/// `use? ( … )` branch against the version's effective USE. Effective USE is
-/// computed only when the expression has conditionals.
+/// Whether `meta`'s `LICENSE` is accepted for version `cpv`, evaluating any `use? ( … )` branch against the version's effective USE
+///
+/// Effective USE is computed only when the expression has conditionals.
 fn license_ok_for(
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
@@ -557,9 +562,10 @@ fn license_ok_for(
     license_accepted(lic, &accept, &use_predicate(&cfg))
 }
 
-/// True if a `RESTRICT`/`PROPERTIES` value contains any `flag? ( … )`
-/// conditional. Mirrors [`license_has_conditional`] for [`RestrictExpr`]'s
-/// flatter shape (top level is an implicit AND-list, no `||` group).
+/// True if a `RESTRICT`/`PROPERTIES` value contains any `flag? ( … )` conditional
+///
+/// Mirrors [`license_has_conditional`] for [`RestrictExpr`]'s flatter shape
+/// (top level is an implicit AND-list, no `||` group).
 fn restrict_has_conditional(entries: &[portage_metadata::RestrictExpr]) -> bool {
     use portage_metadata::RestrictExpr;
     entries.iter().any(|e| match e {
@@ -570,7 +576,7 @@ fn restrict_has_conditional(entries: &[portage_metadata::RestrictExpr]) -> bool 
 
 /// Whether every entry of a `RESTRICT`/`PROPERTIES` value is accepted under
 /// `accept`, evaluating conditionals against the version's effective USE only
-/// when the value actually has any (same hot-path shortcut as `license_ok_for`).
+/// when the value actually has any (same hot-path shortcut as `license_ok_for`)
 fn restrict_family_ok_for(
     entries: &[portage_metadata::RestrictExpr],
     accept: &AcceptOverlay,
@@ -591,7 +597,7 @@ fn restrict_family_ok_for(
 }
 
 /// Whether `meta`'s `PROPERTIES` is accepted for version `cpv` — see
-/// [`restrict_family_ok_for`].
+/// [`restrict_family_ok_for`]
 fn properties_ok_for(
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
@@ -607,7 +613,7 @@ fn properties_ok_for(
 }
 
 /// Whether `meta`'s `RESTRICT` is accepted for version `cpv` — see
-/// [`restrict_family_ok_for`].
+/// [`restrict_family_ok_for`]
 fn restrict_ok_for(
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
@@ -616,18 +622,19 @@ fn restrict_ok_for(
     restrict_family_ok_for(&meta.restrict, policy.accept_restrict, cpv, meta, policy)
 }
 
-/// Check whether `mask_dep` matches the given `cpv` (version + CPN, no slot check).
+/// Check whether `mask_dep` matches the given `cpv` (version + CPN, no slot check)
 /// Whether `cpv` (in `slot`) is masked: some mask atom matches and no unmask
 /// atom does (`/etc/portage/package.unmask` cancels masks per package,
-/// portage(5)).
+/// portage(5))
 pub fn is_masked(masks: &[Dep], unmasks: &[Dep], cpv: &Cpv, slot: &portage_atom::Slot) -> bool {
     let hit = |m: &Dep| mask_matches(m, cpv) && mask_slot_matches(m, slot);
     masks.iter().any(hit) && !unmasks.iter().any(hit)
 }
 
-/// Whether a mask atom's `:slot[/subslot]` component (if any) matches the
-/// candidate's slot. A versionless slot-scoped mask like
-/// `dev-qt/qttranslations:5` must not mask other slots.
+/// Whether a mask atom's `:slot[/subslot]` component (if any) matches the candidate's slot
+///
+/// A versionless slot-scoped mask like `dev-qt/qttranslations:5` must not mask
+/// other slots.
 fn mask_slot_matches(mask_dep: &Dep, slot: &portage_atom::Slot) -> bool {
     match &mask_dep.slot_dep {
         Some(portage_atom::SlotDep::Slot { slot: Some(s), .. }) => {
@@ -642,7 +649,7 @@ fn mask_slot_matches(mask_dep: &Dep, slot: &portage_atom::Slot) -> bool {
 }
 
 /// Whether `mask_dep`'s version constraint matches `cpv` (CPN + version op;
-/// no slot check — see [`is_masked`] for the slot-aware caller).
+/// no slot check — see [`is_masked`] for the slot-aware caller)
 pub fn mask_matches(mask_dep: &Dep, cpv: &Cpv) -> bool {
     if mask_dep.cpn != cpv.cpn {
         return false;
@@ -674,37 +681,37 @@ pub fn mask_matches(mask_dep: &Dep, cpv: &Cpv) -> bool {
 }
 
 /// Every loaded package fact: the main repo's md5-cache plus overlay/alias
-/// entries, ready for the solver bridge's [`Adapter`] to read.
+/// entries, ready for the solver bridge's [`Adapter`] to read
 pub struct RepoData {
-    /// Every known `Cpn`, sorted.
+    /// Every known `Cpn`, sorted
     pub cpns: Vec<Cpn>,
-    /// Every known version per `Cpn`, with its parsed cache entry.
+    /// Every known version per `Cpn`, with its parsed cache entry
     pub versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>>,
-    /// The main repo's name; versions from overlays are recorded in `repo_of`.
+    /// The main repo's name; versions from overlays are recorded in `repo_of`
     pub repo_name: String,
-    /// Source repo of overlay-provided versions (absent ⇒ the main repo).
+    /// Source repo of overlay-provided versions (absent ⇒ the main repo)
     pub repo_of: HashMap<Cpv, String>,
-    /// Cross-derivation reverse map: `cross-<tuple>/<pkg>` → real `<cat>/<pkg>`.
-    /// Populated by `load_repos` from `Location::Alias` entries; empty for
-    /// non-cross solves. Used by `PlannedMerge.ebuild_path` to find the real
-    /// on-disk file for a derived cross cpv — but `Ebuild::from_path` still
-    /// re-derives CATEGORY from that path's text, losing the cross category
-    /// on an actual merge; resolve before wiring a real `Location::Alias` producer.
+    /// Cross-derivation reverse map: `cross-<tuple>/<pkg>` → real `<cat>/<pkg>` Populated by `load_repos` from `Location::Alias` entries; empty for non-cross solves
+    ///
+    /// Used by `PlannedMerge.ebuild_path` to find the real on-disk file for a
+    /// derived cross cpv — but `Ebuild::from_path` still re-derives CATEGORY from
+    /// that path's text, losing the cross category on an actual merge; resolve
+    /// before wiring a real `Location::Alias` producer.
     pub real_cpn_of: HashMap<Cpn, Cpn>,
 }
 
-/// The repo a version comes from (for `::repo` display and constraints).
+/// The repo a version comes from (for `::repo` display and constraints)
 pub fn repo_name_of<'a>(data: &'a RepoData, cpv: &Cpv) -> &'a str {
     data.repo_of
         .get(cpv)
         .map_or(data.repo_name.as_str(), String::as_str)
 }
 
-/// The resolved keyword/mask/license/USE policy, shared by every version
-/// filter and USE-config computation so each takes one reference instead of
-/// re-listing the same fields. The solver-specific remainder of [`Adapter`]
-/// (`data`, `installed_cpvs`, `autosolve_use`) isn't part of this — those
-/// vary by call site in ways this shared policy doesn't.
+/// The resolved keyword/mask/license/USE policy, shared by every version filter and USE-config computation so each takes one reference instead of re-listing the same fields
+///
+/// The solver-specific remainder of [`Adapter`] (`data`, `installed_cpvs`,
+/// `autosolve_use`) isn't part of this — those vary by call site in ways this
+/// shared policy doesn't.
 ///
 /// `Copy` so a caller can build one base value and override just
 /// `package_use` per call site (the one field that legitimately varies
@@ -712,95 +719,97 @@ pub fn repo_name_of<'a>(data: &'a RepoData, cpv: &Cpv) -> &'a str {
 /// `ResolvePolicy { package_use: X, ..base }`.
 #[derive(Clone, Copy)]
 pub struct ResolvePolicy<'a> {
-    /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision.
+    /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision
     pub accept_keywords: &'a AcceptKeywords,
-    /// `package.mask` atoms.
+    /// `package.mask` atoms
     pub package_mask: &'a [Dep],
-    /// `package.unmask` atoms (cancel a mask per package).
+    /// `package.unmask` atoms (cancel a mask per package)
     pub package_unmask: &'a [Dep],
-    /// Resolved `ACCEPT_LICENSE`/`package.license` decision.
+    /// Resolved `ACCEPT_LICENSE`/`package.license` decision
     pub accept_licenses: &'a AcceptOverlay,
-    /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision.
+    /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision
     pub accept_properties: &'a AcceptProperties,
-    /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision.
+    /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision
     pub accept_restrict: &'a AcceptRestrict,
-    /// USE folded up through `make.conf` — see [`Adapter::pre_env`].
+    /// USE folded up through `make.conf` — see [`Adapter::pre_env`]
     pub pre_env: &'a portage_atom_pubgrub::UseLayer,
-    /// Process-environment USE layer — see [`Adapter::env_use`].
+    /// Process-environment USE layer — see [`Adapter::env_use`]
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides from
-    /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf).
+    /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf)
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
-    /// Profile-chain `package.use` — portage's *defaults* layer, BELOW
-    /// `conf` (make.conf): a make.conf `USE=` decision wins over it (see
-    /// `portage_atom_pubgrub::resolve_effective_use`). Contrast
-    /// [`Self::package_use`].
+    /// Profile-chain `package.use` — portage's *defaults* layer, BELOW `conf` (make.conf): a make.conf `USE=` decision wins over it (see `portage_atom_pubgrub::resolve_effective_use`)
+    ///
+    /// Contrast [`Self::package_use`].
     pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
-    /// Profile USE force/mask policy — see [`Adapter::force_mask`].
+    /// Profile USE force/mask policy — see [`Adapter::force_mask`]
     pub force_mask: &'a crate::force_mask::ForceMask,
 }
 
 /// The [`portage_atom_pubgrub::PackageRepository`] impl the solver bridge
 /// reads from — a borrowed view over [`RepoData`] plus every resolved policy
-/// input (accept keywords/mask/license, USE layers, force/mask, Level-C).
+/// input (accept keywords/mask/license, USE layers, force/mask, Level-C)
 pub struct Adapter<'a> {
-    /// The loaded repository facts.
+    /// The loaded repository facts
     pub data: &'a RepoData,
-    /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision.
+    /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision
     pub accept_keywords: &'a AcceptKeywords,
-    /// `package.mask` atoms.
+    /// `package.mask` atoms
     pub package_mask: &'a [Dep],
-    /// `package.unmask` atoms (cancel a mask per package).
+    /// `package.unmask` atoms (cancel a mask per package)
     pub package_unmask: &'a [Dep],
-    /// Resolved `ACCEPT_LICENSE`/`package.license` decision.
+    /// Resolved `ACCEPT_LICENSE`/`package.license` decision
     pub accept_licenses: &'a AcceptOverlay,
-    /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision.
+    /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision
     pub accept_properties: &'a AcceptProperties,
-    /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision.
+    /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision
     pub accept_restrict: &'a AcceptRestrict,
-    /// USE folded up through `make.conf` (profile make.defaults + extra
-    /// confs) — everything below the `package.use`/`env` layers in portage's
-    /// real fold order. Pre-parsed [`portage_atom_pubgrub::UseLayer`]; combined with `env_use` and
+    /// USE folded up through `make.conf` (profile make.defaults + extra confs) — everything below the `package.use`/`env` layers in portage's real fold order
+    ///
+    /// Pre-parsed [`portage_atom_pubgrub::UseLayer`]; combined with `env_use` and
     /// per-version `package.use` + IUSE defaults by `desired_use`.
     pub pre_env: &'a portage_atom_pubgrub::UseLayer,
-    /// Process-environment USE layer — highest priority, applied after
-    /// `package.use` (see `resolve_effective_use`). Pre-parsed once.
+    /// Process-environment USE layer — highest priority, applied after `package.use` (see `resolve_effective_use`)
+    ///
+    /// Pre-parsed once.
     pub env_use: &'a portage_atom_pubgrub::UseLayer,
     /// Per-version `package.use`/`package.env`-style overrides from
-    /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf).
+    /// `/etc/portage` (the `pkg` layer, above `conf`/make.conf)
     pub package_use: &'a [(Dep, Vec<UseOverride>)],
     /// Profile-chain `package.use` — portage's *defaults* layer, below
-    /// `conf`/make.conf (see [`ResolvePolicy::profile_package_use`]).
+    /// `conf`/make.conf (see [`ResolvePolicy::profile_package_use`])
     pub profile_package_use: &'a [(Dep, Vec<UseOverride>)],
     /// Profile USE force/mask policy: applied to each version's effective USE and
-    /// consulted by the Level-C cede gate (pinned flags are never ceded).
+    /// consulted by the Level-C cede gate (pinned flags are never ceded)
     pub force_mask: &'a crate::force_mask::ForceMask,
-    /// Exact installed cpvs. A version that is installed and staying installed
-    /// never has its `REQUIRED_USE` flags ceded — its USE was decided at
-    /// build time, only packages being built get theirs auto-satisfied. See
-    /// [`Self::rebuilding_cpvs`] for the exception: an installed cpv
-    /// nonetheless being rebuilt this run.
+    /// Exact installed cpvs
+    ///
+    /// A version that is installed and staying installed never has its
+    /// `REQUIRED_USE` flags ceded — its USE was decided at build time, only
+    /// packages being built get theirs auto-satisfied. See
+    /// [`Self::rebuilding_cpvs`] for the exception: an installed cpv nonetheless
+    /// being rebuilt this run.
     pub installed_cpvs: &'a std::collections::HashSet<Cpv>,
-    /// Installed cpvs this run rebuilds anyway — non-selective explicit root
-    /// targets (reinstalled `[R]`) and `-N`/`-U` USE-drift rebuilds. Level-C
-    /// treats these as "being built": `REQUIRED_USE` is re-decided for the
-    /// new build's USE context, unlike a package staying installed
-    /// untouched (see [`Self::installed_cpvs`], `b919014`).
+    /// Installed cpvs this run rebuilds anyway — non-selective explicit root targets (reinstalled `[R]`) and `-N`/`-U` USE-drift rebuilds
+    ///
+    /// Level-C treats these as "being built": `REQUIRED_USE` is re-decided for the
+    /// new build's USE context, unlike a package staying installed untouched (see
+    /// [`Self::installed_cpvs`], `b919014`).
     ///
     /// Mid-solve USE-dep-forced reinstalls and post-solve subslot rebuilds
     /// aren't known yet when this set is built, so those stay Level-A
     /// advisory only — a documented limitation, not a bug.
     pub rebuilding_cpvs: &'a std::collections::HashSet<Cpv>,
-    /// Level-C: when set, cede each package's non-pinned `REQUIRED_USE` flags to
-    /// the solver (`SolverDecided`) instead of fixing them. See
-    /// `portage-atom-pubgrub/docs/required-use-level-c.md`.
+    /// Level-C: when set, cede each package's non-pinned `REQUIRED_USE` flags to the solver (`SolverDecided`) instead of fixing them
+    ///
+    /// See `portage-atom-pubgrub/docs/required-use-level-c.md`.
     pub autosolve_use: bool,
 }
 
 impl Adapter<'_> {
-    /// The shared version filter: keywords, package.mask/unmask, license.
+    /// The shared version filter: keywords, package.mask/unmask, license
     /// `versions_for` and `slots_for` must agree, or the slot map would carry
-    /// phantom slots for versions the solver can never select.
+    /// phantom slots for versions the solver can never select
     pub fn version_accepted(&self, cpv: &Cpv, cache: &portage_metadata::CacheEntry) -> bool {
         let meta = &cache.metadata;
         self.accept_keywords
@@ -811,11 +820,12 @@ impl Adapter<'_> {
             && restrict_ok_for(cpv, meta, &self.policy())
     }
 
-    /// The newest keyword/mask/license-accepted version of `cpn`, with its
-    /// cache entry. `None` when the CPN is absent from the repo or has no
-    /// accepted version. Centralizes the "newest accepted version" pick so a
-    /// caller can't drift from `version_accepted` the way `host_copies`'s own
-    /// inline copy once did (the `dev-vcs/git-9999` selection bug).
+    /// The newest keyword/mask/license-accepted version of `cpn`, with its cache entry
+    ///
+    /// `None` when the CPN is absent from the repo or has no accepted version.
+    /// Centralizes the "newest accepted version" pick so a caller can't drift from
+    /// `version_accepted` the way `host_copies`'s own inline copy once did (the
+    /// `dev-vcs/git-9999` selection bug).
     pub fn newest_accepted(&self, cpn: Cpn) -> Option<(&Cpv, &CacheEntry)> {
         self.data
             .versions
@@ -828,17 +838,15 @@ impl Adapter<'_> {
 
     /// License acceptance for a version, evaluating any `use? ( … )` LICENSE
     /// branch against the version's effective USE (computed only when the
-    /// expression actually has conditionals).
+    /// expression actually has conditionals)
     fn license_ok(&self, cpv: &Cpv, meta: &portage_metadata::EbuildMetadata) -> bool {
         license_ok_for(cpv, meta, &self.policy())
     }
 
-    /// Level-C cede: when `--autosolve-use` is on and the package's REQUIRED_USE
-    /// is *violated* by the resolved config, hand its REQUIRED_USE flags to the
-    /// solver as preferences (`solver_decide`) — a ceded flag keeps its resolved
-    /// value as the preference (greedy keep-config) and the solver only flips it
-    /// to satisfy REQUIRED_USE. Flags the user pinned via package.use, or the
-    /// profile forced/masked, are left fixed (hard choices we must not override).
+    /// Level-C cede: when `--autosolve-use` is on and the package's REQUIRED_USE is *violated* by the resolved config, hand its REQUIRED_USE flags to the solver as preferences (`solver_decide`) — a ceded flag keeps its resolved value as the preference (greedy keep-config) and the solver only flips it to satisfy REQUIRED_USE
+    ///
+    /// Flags the user pinned via package.use, or the profile forced/masked, are
+    /// left fixed (hard choices we must not override).
     ///
     /// When the resolved config has the flag **off**, but the ebuild's IUSE
     /// carries a `+` default (wiped by conf-level `USE=-*`, as stage1 does),
@@ -930,7 +938,7 @@ impl Adapter<'_> {
 
 impl<'a> Adapter<'a> {
     /// Borrow out the policy fields, for the free functions that don't need
-    /// the rest of `Adapter` (`data`/`installed_cpvs`/`autosolve_use`).
+    /// the rest of `Adapter` (`data`/`installed_cpvs`/`autosolve_use`)
     pub fn policy(&self) -> ResolvePolicy<'a> {
         ResolvePolicy {
             accept_keywords: self.accept_keywords,
@@ -948,7 +956,7 @@ impl<'a> Adapter<'a> {
     }
 }
 
-/// `EbuildMetadata`'s five dependency classes, straight into `PackageDeps`.
+/// `EbuildMetadata`'s five dependency classes, straight into `PackageDeps`
 ///
 /// Each field on both sides is a `DepList` (`Arc`-wrapped), so this is five
 /// refcount bumps, not a deep clone — cannot be a `From` impl on either
@@ -1103,7 +1111,7 @@ impl PackageRepository for Adapter<'_> {
 }
 
 /// Translate `portage_metadata::RequiredUseExpr` (string flags) into the
-/// solver's `RequiredUse` fact (interned flags).
+/// solver's `RequiredUse` fact (interned flags)
 ///
 /// This is the caller's adaptation step — it keeps `portage-atom-pubgrub`
 /// decoupled from the md5-cache parser, mirroring how dep strings become
@@ -1132,7 +1140,7 @@ fn translate_required_use(expr: &RequiredUseExpr) -> RequiredUse {
 }
 
 /// Collect every flag name mentioned in a `REQUIRED_USE` expression (guards and
-/// operands, ignoring `!`), for deciding which flags to cede.
+/// operands, ignoring `!`), for deciding which flags to cede
 fn collect_required_use_flags(
     expr: &RequiredUseExpr,
     out: &mut std::collections::BTreeSet<String>,
@@ -1158,12 +1166,11 @@ fn collect_required_use_flags(
     }
 }
 
-/// Load every repo's metadata (sourcing cache-less ebuilds), merged in
-/// `set`'s priority order: higher priority wins a duplicate cpv, matching
-/// real portage's ascending `(priority, name)` list ("those with higher
-/// priority are preferred"). The main repo defaults to priority `-1000`
-/// when unset, so by default *any* overlay shadows it — the ordinary "drop
-/// an ebuild in a local overlay to override ::gentoo" workflow.
+/// Load every repo's metadata (sourcing cache-less ebuilds), merged in `set`'s priority order: higher priority wins a duplicate cpv, matching real portage's ascending `(priority, name)` list ("those with higher priority are preferred")
+///
+/// The main repo defaults to priority `-1000` when unset, so by default *any*
+/// overlay shadows it — the ordinary "drop an ebuild in a local overlay to
+/// override ::gentoo" workflow.
 ///
 /// Overlay secondary caches must already be configured on each
 /// [`portage_repo::Repository`] (via [`portage_repo::RepositoryBuilder`]).
@@ -1251,7 +1258,7 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
     }
 }
 
-/// Map a dep atom to a `PortagePackage` for the solver.
+/// Map a dep atom to a `PortagePackage` for the solver
 pub fn target_package(
     data: &RepoData,
     dep: &Dep,
@@ -1296,7 +1303,7 @@ pub fn target_package(
     }
 }
 
-/// Collect all dependency CPNs referenced in a package version's raw dep data.
+/// Collect all dependency CPNs referenced in a package version's raw dep data
 ///
 /// Walks the full dep tree (across all dep classes, through all conditional and
 /// group nodes) so that masked transitive deps are captured regardless of USE
@@ -1338,7 +1345,7 @@ pub fn cpns_for(data: &RepoData, cpn: &Cpn, ver: &Version) -> Vec<Cpn> {
     out
 }
 
-/// Look up `(pkg, ver)`'s parsed cache entry in `data`, if present.
+/// Look up `(pkg, ver)`'s parsed cache entry in `data`, if present
 pub fn find_cache<'a>(
     data: &'a RepoData,
     pkg: &portage_atom_pubgrub::PortagePackage,
@@ -1351,7 +1358,7 @@ pub fn find_cache<'a>(
         .map(|(_, e)| e)
 }
 
-/// Why a version was filtered, as displayed text — one phrase per reason.
+/// Why a version was filtered, as displayed text — one phrase per reason
 pub fn filter_reason_text(reasons: &[FilterReason]) -> String {
     reasons
         .iter()
@@ -1368,7 +1375,7 @@ pub fn filter_reason_text(reasons: &[FilterReason]) -> String {
         .join(", ")
 }
 
-/// [`filter_reasons_for`] narrowed to the versions `dep` itself matches.
+/// [`filter_reasons_for`] narrowed to the versions `dep` itself matches
 ///
 /// `filter_reasons_for` applies the version range only, so a slot-qualified
 /// atom like `cat/pkg:6.18.12` would otherwise report unrelated slots' versions
@@ -1390,9 +1397,10 @@ pub fn filter_reasons_for_atom(
         .collect()
 }
 
-/// Every version of `cpn` within `version_set` that the policy excludes, with
-/// the reasons (keyword / mask / license). Versions that pass every filter are
-/// absent, so an empty result means the atom is satisfiable.
+/// Every version of `cpn` within `version_set` that the policy excludes, with the reasons (keyword / mask / license)
+///
+/// Versions that pass every filter are absent, so an empty result means the
+/// atom is satisfiable.
 pub fn filter_reasons_for(
     data: &RepoData,
     cpn: &Cpn,
@@ -1472,7 +1480,7 @@ pub fn filter_reasons_for(
 }
 
 /// For each dropped dep, find versions in the unfiltered repo that match its
-/// version range and determine why they were excluded.
+/// version range and determine why they were excluded
 pub fn find_autounmask_candidates(
     data: &RepoData,
     dropped: &[DroppedDep],
@@ -1584,13 +1592,13 @@ mod tests {
         assert!(any_stable.is_stable(&stable, &foo, None));
     }
 
-    /// Crossdev's usual `package.accept_keywords` shape: grant the *target*
-    /// arch and withdraw the host arch so a package keyworded `~riscv` (and
-    /// often also `~arm64` from the mirrored ebuild) is accepted via riscv,
-    /// not rejected after `-arm64 -~arm64` clears the host grants.
-    ///
-    /// Regression for the host-arch-only `ArchAccept` bitfield, which dropped
-    /// foreign-arch tokens as no-ops and left only the host vetoes.
+    // Crossdev's usual `package.accept_keywords` shape: grant the *target*
+    // arch and withdraw the host arch so a package keyworded `~riscv` (and
+    // often also `~arm64` from the mirrored ebuild) is accepted via riscv,
+    // not rejected after `-arm64 -~arm64` clears the host grants
+    //
+    // Regression for the host-arch-only `ArchAccept` bitfield, which dropped
+    // foreign-arch tokens as no-ops and left only the host vetoes.
     #[test]
     fn accept_keywords_foreign_arch_crossdev_idiom() {
         let host = Arch::intern("arm64");
@@ -1631,10 +1639,10 @@ mod tests {
         assert!(ak.accepts(&kws("~arm64"), &other, None));
     }
 
-    /// `is_stable`'s downgrade recheck must run over the *whole* accept set,
-    /// not per-token — a crossdev target line granting both `riscv` and
-    /// `~riscv` isn't stable (the `~riscv` grant alone would already accept
-    /// a downgraded package), but a stable-only target grant is.
+    // `is_stable`'s downgrade recheck must run over the *whole* accept set,
+    // not per-token — a crossdev target line granting both `riscv` and
+    // `~riscv` isn't stable (the `~riscv` grant alone would already accept
+    // a downgraded package), but a stable-only target grant is
     #[test]
     fn accept_keywords_stable_gate_respects_crossdev_target_grants() {
         let host = Arch::intern("arm64");
@@ -1823,9 +1831,9 @@ mod tests {
         assert!(ak.accepts(&testing, &bar, None), "bar keeps testing");
     }
 
-    /// `-~*` and `-**` are their own tokens, not swallowed by the generic
-    /// `-arch` branch (which previously interned "*"/"**' as bogus arch names,
-    /// making them permanently inert since no real arch is ever named "*").
+    // `-~*` and `-**` are their own tokens, not swallowed by the generic
+    // `-arch` branch (which previously interned "*"/"**' as bogus arch names,
+    // making them permanently inert since no real arch is ever named "*")
     #[test]
     fn negate_any_testing_and_negate_any_are_not_inert() {
         let arch = Arch::intern("amd64");
@@ -1880,9 +1888,9 @@ mod tests {
         assert!(plain.effective_for(&foo, None).accepts("MIT"));
     }
 
-    /// `AcceptProperties`/`AcceptRestrict` are the same engine as
-    /// `AcceptOverlay` (type aliases) — group-free construction, same
-    /// per-package overlay fold, `RestrictExpr`'s USE-conditional evaluation.
+    // `AcceptProperties`/`AcceptRestrict` are the same engine as
+    // `AcceptOverlay` (type aliases) — group-free construction, same
+    // per-package overlay fold, `RestrictExpr`'s USE-conditional evaluation
     #[test]
     fn accept_properties_and_restrict_reuse_the_license_engine() {
         // Global accepts only `mirror`; per-package `dev-libs/foo interactive`
@@ -1934,7 +1942,7 @@ mod tests {
         );
     }
 
-    /// Build a one-package `RepoData` from md5-cache text.
+    // Build a one-package `RepoData` from md5-cache text
     fn repo_with(cpv: &str, cache_text: &str) -> (RepoData, Cpv) {
         let cpv = Cpv::parse(cpv).unwrap();
         let entry = CacheEntry::parse(cache_text).unwrap();
@@ -1952,7 +1960,7 @@ mod tests {
         )
     }
 
-    /// Build a multi-version `RepoData` from `(cpv, cache_text)` pairs (one CPN).
+    // Build a multi-version `RepoData` from `(cpv, cache_text)` pairs (one CPN)
     fn repo_with_many(entries: &[(&str, &str)]) -> RepoData {
         let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
         let mut cpn = None;
@@ -1971,8 +1979,8 @@ mod tests {
         }
     }
 
-    /// Build a minimal on-disk repo with one ebuild's md5-cache entry, so
-    /// `load_repos` can be exercised against a real `Repository`.
+    // Build a minimal on-disk repo with one ebuild's md5-cache entry, so
+    // `load_repos` can be exercised against a real `Repository`
     fn disk_repo(cpv: &str, cache_text: &str) -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
@@ -1999,12 +2007,12 @@ mod tests {
         (dir, repo)
     }
 
-    /// Like [`disk_repo`], but also writes a real `.ebuild` file with a
-    /// matching `_md5_` in the cache entry. `disk_repo`'s bare cache entry
-    /// is trusted as-is only because it has no on-disk ebuild to contradict
-    /// it (`repo_entries`'s suspect walk has nothing to flag); a test whose
-    /// repo *does* carry a real ebuild tree needs the digest to actually
-    /// match, or the entry is dropped and re-sourced instead.
+    // Like [`disk_repo`], but also writes a real `.ebuild` file with a matching `_md5_` in the cache entry
+    //
+    // `disk_repo`'s bare cache entry is trusted as-is only because it has no
+    // on-disk ebuild to contradict it (`repo_entries`'s suspect walk has nothing
+    // to flag); a test whose repo *does* carry a real ebuild tree needs the digest
+    // to actually match, or the entry is dropped and re-sourced instead.
     fn disk_repo_with_ebuild(cpv: &str, description: &str) -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
@@ -2087,11 +2095,11 @@ mod tests {
         );
     }
 
-    /// The inverse: when main is listed *before* the overlay in `sources`
-    /// (an overlay with an explicit priority lower than main's -1000 --
-    /// exotic, but real portage supports it, `man 5 portage`'s own
-    /// `priority = 9999`-style examples for the opposite direction), main
-    /// wins instead, and `repo_of` correctly has no entry for that cpv.
+    // The inverse: when main is listed *before* the overlay in `sources`
+    // (an overlay with an explicit priority lower than main's -1000 --
+    // exotic, but real portage supports it, `man 5 portage`'s own
+    // `priority = 9999`-style examples for the opposite direction), main
+    // wins instead, and `repo_of` correctly has no entry for that cpv
     #[tokio::test]
     async fn load_repos_main_wins_when_ranked_above_the_overlay() {
         let (_main_dir, main) =
@@ -2112,9 +2120,9 @@ mod tests {
         assert_eq!(data.repo_of.get(&cpv), None, "absence means main");
     }
 
-    /// `load_repos` injects `Location::Alias` entries as in-memory `cross-<tuple>/<pkg>`
-    /// packages cloned from the source repo, with `real_cpn_of` recording the
-    /// derivation — the in-memory equivalent of crossdev's symlink overlay.
+    // `load_repos` injects `Location::Alias` entries as in-memory `cross-<tuple>/<pkg>`
+    // packages cloned from the source repo, with `real_cpn_of` recording the
+    // derivation — the in-memory equivalent of crossdev's symlink overlay
     #[tokio::test]
     async fn load_repos_injects_alias_cross_packages() {
         let (_dir, repo) = disk_repo("sys-devel/gcc-15.2.1", "EAPI=8\nDESCRIPTION=t\nSLOT=0\n");
@@ -2153,8 +2161,8 @@ mod tests {
         assert_eq!(data.real_cpn_of.get(&cross_cpn), Some(&real_cpn));
     }
 
-    /// An alias entry whose declared `source` doesn't match the repo being
-    /// loaded is skipped rather than silently pulling from the wrong repo.
+    // An alias entry whose declared `source` doesn't match the repo being
+    // loaded is skipped rather than silently pulling from the wrong repo
     #[tokio::test]
     async fn load_repos_alias_from_unknown_source_is_ignored() {
         let (_dir, repo) = disk_repo("sys-devel/gcc-15.2.1", "EAPI=8\nDESCRIPTION=t\nSLOT=0\n");
@@ -2329,8 +2337,8 @@ mod tests {
         assert!(filter_reasons_for(&data, &absent, &vs, &policy).is_empty());
     }
 
-    /// End-to-end: an ebuild's `RESTRICT` token not in `ACCEPT_RESTRICT` filters
-    /// it out with `FilterReason::Restrict`, and `version_accepted` agrees.
+    // End-to-end: an ebuild's `RESTRICT` token not in `ACCEPT_RESTRICT` filters
+    // it out with `FilterReason::Restrict`, and `version_accepted` agrees
     #[test]
     fn restrict_not_accepted_filters_the_version() {
         let (data, cpv) = repo_with(
@@ -2393,9 +2401,9 @@ mod tests {
         assert!(adapter_allow.version_accepted(&cpv, entry));
     }
 
-    /// `target_package`'s unslotted return is the caller's signal that nothing
-    /// acceptable satisfies the atom — for a filtered-out candidate and for a
-    /// CPN absent from the tree alike.
+    // `target_package`'s unslotted return is the caller's signal that nothing
+    // acceptable satisfies the atom — for a filtered-out candidate and for a
+    // CPN absent from the tree alike
     #[test]
     fn target_package_is_unslotted_when_nothing_is_accepted() {
         let data = repo_with_many(&[(
@@ -2522,10 +2530,11 @@ mod tests {
         }
     }
 
-    /// Stage1 `USE=-*` wipes IUSE `+` defaults so `^^ ( gawk busybox … )` has
-    /// every option off. Cede must prefer the ebuild's `+` default (`gawk`) so
-    /// the solver restores the app-alternatives.eclass first provider, not an
-    /// arbitrary member of the exclusive group.
+    // Stage1 `USE=-*` wipes IUSE `+` defaults so `^^ ( gawk busybox … )` has every option off
+    //
+    // Cede must prefer the ebuild's `+` default (`gawk`) so the solver restores
+    // the app-alternatives.eclass first provider, not an arbitrary member of the
+    // exclusive group.
     #[test]
     fn cede_prefers_iuse_plus_default_when_config_has_flag_off() {
         let (data, cpv) = repo_with(

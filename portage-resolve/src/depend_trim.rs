@@ -1,5 +1,5 @@
 //! Post-solve trim: drop plan entries only pulled for `DEPEND` already
-//! satisfied on the sysroot (`ESYSROOT`).
+//! satisfied on the sysroot (`ESYSROOT`)
 //!
 //! Host-config stage (`--config-root / --root <empty>`) and prefix overlays
 //! (`--prefix`) stamp `DEPEND` onto the target merge root in the solver, which
@@ -16,8 +16,9 @@ use crate::Avail;
 use crate::bdepend_trim::TrimCtx;
 use crate::effective_use;
 
-/// Drop entries only needed for `DEPEND` edges already satisfied on the
-/// sysroot. No-op when `sysroot == target` (full offset / crossdev sysroot).
+/// Drop entries only needed for `DEPEND` edges already satisfied on the sysroot
+///
+/// No-op when `sysroot == target` (full offset / crossdev sysroot).
 pub fn trim_sysroot_satisfied_depend(
     order: Vec<(PortagePackage, Version)>,
     sysroot: Option<&camino::Utf8Path>,

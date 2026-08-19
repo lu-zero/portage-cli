@@ -6,26 +6,26 @@ use portage_atom::{Cpn, Version};
 use portage_atom_pubgrub::PortagePackage;
 use portage_vdb::Vdb;
 
-/// One VDB-installed package, as the depgraph's post-solve passes need it.
+/// One VDB-installed package, as the depgraph's post-solve passes need it
 pub struct VdbEntry {
-    /// The package name.
+    /// The package name
     pub cpn: Cpn,
     /// Interned at load time — this entry is re-registered with the solver
     /// on every USE-dep co-solve fixpoint iteration (`mod.rs`'s
     /// `build_and_solve`), so this avoids re-interning the same slot string
-    /// on every one of those calls.
+    /// on every one of those calls
     pub slot: Option<Interned<DefaultInterner>>,
-    /// The installed version.
+    /// The installed version
     pub version: Version,
-    /// USE flags active at build time.
+    /// USE flags active at build time
     pub active_use: Vec<Interned<DefaultInterner>>,
-    /// The package's declared `IUSE`, prefix-stripped.
+    /// The package's declared `IUSE`, prefix-stripped
     pub iuse: Vec<Interned<DefaultInterner>>,
-    /// RDEPEND + DEPEND as stored in the VDB (pre-USE evaluation).
+    /// RDEPEND + DEPEND as stored in the VDB (pre-USE evaluation)
     pub deps: Vec<DepEntry>,
 }
 
-/// Installed view for **ROOT** / RDEPEND / merge filtering / action tags.
+/// Installed view for **ROOT** / RDEPEND / merge filtering / action tags
 ///
 /// See docs/user/root-model.md: host-config stage uses `VDB(target)` only; prefix
 /// overlay uses `VDB(base) ∪ VDB(target)`; host uses `VDB(/)`.
@@ -49,8 +49,8 @@ pub fn load_target_installed(roots: &crate::Roots) -> Vec<VdbEntry> {
     load_one(target.or(base))
 }
 
-/// Union of two VDB roots with target shadowing base (prefix / general overlay).
-/// `None` means the host `/var/db/pkg`.
+/// Union of two VDB roots with target shadowing base (prefix / general overlay)
+/// `None` means the host `/var/db/pkg`
 ///
 /// Dedup key is `(Cpn, slot)`, not `(Cpn, version)`: target must shadow
 /// base even when versions differ. Same package in different slots stays
@@ -76,26 +76,26 @@ pub fn load_installed(
     out
 }
 
-/// A package present on the build host (BROOT): the host instance's slot-resolved
-/// package, version, and VDB-recorded active USE / IUSE. The USE/IUSE let the
-/// solver check an edge's atom USE-deps against the host, so a `[flag]` the host
-/// lacks triggers a rebuild rather than being pruned as host-satisfied.
+/// A package present on the build host (BROOT): the host instance's slot-resolved package, version, and VDB-recorded active USE / IUSE
+///
+/// The USE/IUSE let the solver check an edge's atom USE-deps against the host,
+/// so a `[flag]` the host lacks triggers a rebuild rather than being pruned as
+/// host-satisfied.
 pub struct HostInstalledEntry {
-    /// The slot-resolved package identity.
+    /// The slot-resolved package identity
     pub package: PortagePackage,
-    /// The installed version.
+    /// The installed version
     pub version: Version,
-    /// USE flags active at build time.
+    /// USE flags active at build time
     pub active_use: Vec<Interned<DefaultInterner>>,
-    /// The package's declared `IUSE`, prefix-stripped.
+    /// The package's declared `IUSE`, prefix-stripped
     pub iuse: Vec<Interned<DefaultInterner>>,
 }
 
-/// Packages present on the **build host** (BROOT) for `host_installed` — a
-/// BDEPEND already present there is satisfied without building it, unless a
-/// USE-dep on that edge demands a flag the host lacks (in which case the
-/// package is rebuilt). Duplicates across slots of the same package are kept
-/// (each slot is a distinct `PortagePackage`).
+/// Packages present on the **build host** (BROOT) for `host_installed` — a BDEPEND already present there is satisfied without building it, unless a USE-dep on that edge demands a flag the host lacks (in which case the package is rebuilt)
+///
+/// Duplicates across slots of the same package are kept (each slot is a
+/// distinct `PortagePackage`).
 ///
 /// The root selection (BROOT, plus the prefix's own VDB under `--prefix`) is
 /// `crate::broot_vdb_packages` — shared with `Avail::initial_bdepend`,
@@ -136,7 +136,7 @@ pub fn load_host_installed(roots: &crate::Roots) -> Vec<HostInstalledEntry> {
         .collect()
 }
 
-/// VDB entries from a cross sysroot (`ESYSROOT`) for `DEPEND` satisfaction.
+/// VDB entries from a cross sysroot (`ESYSROOT`) for `DEPEND` satisfaction
 pub fn load_sysroot_entries(sysroot: &camino::Utf8Path) -> Vec<VdbEntry> {
     load_one(Some(sysroot))
 }
@@ -183,7 +183,7 @@ fn load_one(root: Option<&camino::Utf8Path>) -> Vec<VdbEntry> {
 }
 
 /// Determine the emerge-style action tag and the currently-installed version
-/// for a given (package, candidate version) pair.
+/// for a given (package, candidate version) pair
 ///
 /// - `("N",  None)`     — not installed at all
 /// - `("NS", None)`     — not in this slot, but other slots are installed
@@ -218,9 +218,9 @@ pub fn action_tag<'a>(
 mod tests {
     use super::*;
 
-    /// Regression test for the riscv64 stage3 shakeout (#28/#30): a Host
-    /// BDEPEND rebuilt into `base_roots()` must be recognized as satisfied
-    /// by reading *that* root's VDB, not the bare host `/var/db/pkg`.
+    // Regression test for the riscv64 stage3 shakeout (#28/#30): a Host
+    // BDEPEND rebuilt into `base_roots()` must be recognized as satisfied
+    // by reading *that* root's VDB, not the bare host `/var/db/pkg`
     #[test]
     fn load_host_installed_reads_the_given_root_not_the_bare_host() {
         let tmp = tempfile::tempdir().unwrap();
@@ -262,10 +262,10 @@ mod tests {
         std::fs::write(pkg_dir.join("USE"), use_flags).unwrap();
     }
 
-    /// `--prefix`: `load_host_installed` must weave in the prefix's own VDB
-    /// (not just the host's), and the prefix's entry must win when both
-    /// have the package — matching "what is in the prefix drives", since an
-    /// unsatisfied BDEPEND now merges into the prefix, never the real host.
+    // `--prefix`: `load_host_installed` must weave in the prefix's own VDB
+    // (not just the host's), and the prefix's entry must win when both
+    // have the package — matching "what is in the prefix drives", since an
+    // unsatisfied BDEPEND now merges into the prefix, never the real host
     #[test]
     fn load_host_installed_weaves_prefix_over_host_under_overlay() {
         let host = tempfile::tempdir().unwrap();
@@ -302,9 +302,9 @@ mod tests {
         );
     }
 
-    /// A package present only on the host (never built into the prefix)
-    /// must still be found — the overlay weave adds the prefix, it doesn't
-    /// replace the host.
+    // A package present only on the host (never built into the prefix)
+    // must still be found — the overlay weave adds the prefix, it doesn't
+    // replace the host
     #[test]
     fn load_host_installed_still_finds_host_only_entry_under_overlay() {
         let host = tempfile::tempdir().unwrap();
@@ -349,8 +349,8 @@ mod tests {
         assert_eq!(entries[0].version.to_string(), "2.46.1");
     }
 
-    /// Same package, genuinely different slots (e.g. two active `gcc` slots)
-    /// must both survive — the fix must not over-collapse by `Cpn` alone.
+    // Same package, genuinely different slots (e.g. two active `gcc` slots)
+    // must both survive — the fix must not over-collapse by `Cpn` alone
     #[test]
     fn load_installed_keeps_distinct_slots_of_the_same_package() {
         let host = tempfile::tempdir().unwrap();

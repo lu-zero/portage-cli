@@ -1,4 +1,4 @@
-//! Root-aware merge planning for cross-compilation (crossdev / `{target}-emerge`).
+//! Root-aware merge planning for cross-compilation (crossdev / `{target}-emerge`)
 //!
 //! Stage 3b: dual `(package, merge_root)` solver nodes live in
 //! `portage-atom-pubgrub`; this module handles cross-context detection and
@@ -11,7 +11,7 @@ use portage_atom_pubgrub::{MergeRoot, PortagePackage};
 
 use crate::Roots;
 
-/// Cross-compilation context derived from CLI roots.
+/// Cross-compilation context derived from CLI roots
 ///
 /// The single owner of "is this a cross build, and how" for the resolver:
 /// [`is_cross_arch`](Self::is_cross_arch)/[`target_arch`](Self::target_arch)
@@ -23,34 +23,35 @@ pub struct CrossContext {
     /// Whether dual-root cross planning is active for this invocation
     /// (config≠install root, foreign target arch, or BROOT genuinely
     /// differing from the target) — true for `--root`/`--prefix`/cross,
-    /// false for bare and `--local`.
+    /// false for bare and `--local`
     pub active: bool,
-    /// `ESYSROOT` / `PORTAGE_CONFIGROOT`: where `DEPEND` is resolved.
+    /// `ESYSROOT` / `PORTAGE_CONFIGROOT`: where `DEPEND` is resolved
     pub sysroot: Utf8PathBuf,
-    /// `ROOT` / `EROOT`: where target packages install.
+    /// `ROOT` / `EROOT`: where target packages install
     pub target: Utf8PathBuf,
-    /// Target `CHOST` from the profile `make.conf` (if readable).
+    /// Target `CHOST` from the profile `make.conf` (if readable)
     pub chost: Option<String>,
-    /// Host `CBUILD` from the profile `make.conf` (if readable).
+    /// Host `CBUILD` from the profile `make.conf` (if readable)
     pub cbuild: Option<String>,
-    /// Gentoo keyword `ARCH` of the target `CHOST` (e.g. `riscv`), when `active`
-    /// and the `CHOST` maps to a known arch. Derived once; drives keyword
-    /// acceptance for the target.
+    /// Gentoo keyword `ARCH` of the target `CHOST` (e.g
+    ///
+    /// `riscv`), when `active` and the `CHOST` maps to a known arch. Derived once;
+    /// drives keyword acceptance for the target.
     target_arch: Option<Arch>,
-    /// Where a `MergeRoot::Host` entry actually lands (mirrors `Cli::host_roots()`):
-    /// the prefix under `--prefix` (an unprivileged overlay can't write the
-    /// real host `/`), else the real host `/`. Used by [`display_root`] so
-    /// the `-p` merge list matches where the merge actually goes.
+    /// Where a `MergeRoot::Host` entry actually lands (mirrors `Cli::host_roots()`): the prefix under `--prefix` (an unprivileged overlay can't write the real host `/`), else the real host `/`
+    ///
+    /// Used by [`display_root`] so the `-p` merge list matches where the merge
+    /// actually goes.
     host_target: Utf8PathBuf,
 }
 
 impl CrossContext {
-    /// `true` when the target profile declares a different machine than the
-    /// host. When CHOST/CBUILD can't be read, default to same-arch — NOT
-    /// `sysroot != "/"`, which used to treat *any* non-host sysroot
-    /// (including a plain same-arch `--root <dir>`) as foreign-arch,
-    /// wrongly pinning DEPEND to the empty target (huge false plan vs real
-    /// emerge).
+    /// `true` when the target profile declares a different machine than the host
+    ///
+    /// When CHOST/CBUILD can't be read, default to same-arch — NOT `sysroot !=
+    /// "/"`, which used to treat *any* non-host sysroot (including a plain
+    /// same-arch `--root <dir>`) as foreign-arch, wrongly pinning DEPEND to the
+    /// empty target (huge false plan vs real emerge).
     pub fn is_cross_arch(&self) -> bool {
         match (self.chost.as_deref(), self.cbuild.as_deref()) {
             (Some(c), Some(b)) => c != b,
@@ -58,19 +59,20 @@ impl CrossContext {
         }
     }
 
-    /// The target keyword arch (from `CHOST`), if this is an active cross build
-    /// to a recognised arch. Used to accept the target's keywords instead of the
-    /// host `--arch`.
+    /// The target keyword arch (from `CHOST`), if this is an active cross build to a recognised arch
+    ///
+    /// Used to accept the target's keywords instead of the host `--arch`.
     pub fn target_arch(&self) -> Option<&Arch> {
         self.target_arch.as_ref()
     }
 }
 
-/// Detect cross context from CLI roots (no flag required). `host_merge_root`
-/// is `Cli::host_roots()`'s `merge_root()` — passed in rather than derived
-/// here, because `roots` can be `--target`-substituted (its overlay-ness
-/// cleared), wrongly reporting the real host as the destination for a
-/// `MergeRoot::Host` entry under an unprivileged `--prefix` overlay.
+/// Detect cross context from CLI roots (no flag required)
+///
+/// `host_merge_root` is `Cli::host_roots()`'s `merge_root()` — passed in rather
+/// than derived here, because `roots` can be `--target`-substituted (its
+/// overlay-ness cleared), wrongly reporting the real host as the destination
+/// for a `MergeRoot::Host` entry under an unprivileged `--prefix` overlay.
 pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     let sysroot = roots
         .sysroot()
@@ -128,18 +130,18 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     }
 }
 
-/// One line of the merge list with an explicit merge destination.
+/// One line of the merge list with an explicit merge destination
 #[derive(Debug, Clone)]
 pub struct PlanEntry {
-    /// The solved package identity.
+    /// The solved package identity
     pub pkg: PortagePackage,
-    /// The version to merge.
+    /// The version to merge
     pub version: Version,
-    /// Where it merges (host BROOT or the target).
+    /// Where it merges (host BROOT or the target)
     pub merge_root: MergeRoot,
 }
 
-/// Map solver install order to plan entries (merge root from solver identity).
+/// Map solver install order to plan entries (merge root from solver identity)
 pub fn build_plan(target_order: Vec<(PortagePackage, Version)>) -> Vec<PlanEntry> {
     target_order
         .into_iter()
@@ -151,10 +153,11 @@ pub fn build_plan(target_order: Vec<(PortagePackage, Version)>) -> Vec<PlanEntry
         .collect()
 }
 
-/// Display path for emerge-style ` to <path>/` annotations. `target` is
-/// truthful (the real merge destination) regardless of `cross.active` now —
-/// see `detect()`'s doc comment on why the inactive case (bare host,
-/// `--local`) still needs a real path here, not a hardcoded `/`.
+/// Display path for emerge-style ` to <path>/` annotations
+///
+/// `target` is truthful (the real merge destination) regardless of
+/// `cross.active` now — see `detect()`'s doc comment on why the inactive case
+/// (bare host, `--local`) still needs a real path here, not a hardcoded `/`.
 pub fn display_root<'a>(
     merge_root: MergeRoot,
     target: &'a Utf8Path,
@@ -184,11 +187,11 @@ fn read_chost_cbuild(root: &Utf8Path) -> (Option<String>, Option<String>) {
 mod tests {
     use super::*;
 
-    /// `--prefix`: a `MergeRoot::Host` entry must display as landing in the
-    /// prefix, not the real host — matching `Cli::host_roots()`'s merge
-    /// destination fix. Before that fix `display_root` hardcoded `/` here,
-    /// which stayed silently correct only because `Cli::host_roots()` itself
-    /// used to be host-anchored for every topology.
+    // `--prefix`: a `MergeRoot::Host` entry must display as landing in the prefix, not the real host — matching `Cli::host_roots()`'s merge destination fix
+    //
+    // Before that fix `display_root` hardcoded `/` here, which stayed silently
+    // correct only because `Cli::host_roots()` itself used to be host-anchored for
+    // every topology.
     #[test]
     fn host_entry_displays_as_landing_in_the_prefix_under_overlay() {
         let roots = crate::Roots::for_test_overlay("/", "/opt/p");
@@ -200,11 +203,11 @@ mod tests {
         );
     }
 
-    /// `--root`: a `MergeRoot::Host` entry still displays as landing on the
-    /// real host `/` — unaffected by the overlay-only display fix. Uses
-    /// `for_test_root_with_broot` (BROOT genuinely separate from the
-    /// offset) — `for_test` alone is `--local`-shaped (BROOT == target),
-    /// not `--root`-shaped; see the tests below for that distinction.
+    // `--root`: a `MergeRoot::Host` entry still displays as landing on the real host `/` — unaffected by the overlay-only display fix
+    //
+    // Uses `for_test_root_with_broot` (BROOT genuinely separate from the offset) —
+    // `for_test` alone is `--local`-shaped (BROOT == target), not `--root`-shaped;
+    // see the tests below for that distinction.
     #[test]
     fn host_entry_displays_as_landing_on_the_real_host_under_offset() {
         let roots = crate::Roots::for_test_root_with_broot("/srv/x", "/");
@@ -216,9 +219,10 @@ mod tests {
         );
     }
 
-    /// `--local`: BROOT == target (single root). Dual-root bookkeeping must
-    /// not engage against an empty prefix BROOT. `sysroot`/`target` still
-    /// report the real path so `-p` shows ` to <prefix>/`.
+    // `--local`: BROOT == target (single root)
+    //
+    // Dual-root bookkeeping must not engage against an empty prefix BROOT.
+    // `sysroot`/`target` still report the real path so `-p` shows ` to <prefix>/`.
     #[test]
     fn local_shaped_roots_are_not_active_but_still_report_the_real_target() {
         let roots = crate::Roots::for_test("/root/local-test");
@@ -228,8 +232,8 @@ mod tests {
         assert_eq!(cross.sysroot.as_str(), "/root/local-test");
     }
 
-    /// The bare invocation (broot == target == `/`) stays inactive, as
-    /// before — the new `broot_differs` predicate must not regress it.
+    // The bare invocation (broot == target == `/`) stays inactive, as
+    // before — the new `broot_differs` predicate must not regress it
     #[test]
     fn bare_invocation_is_not_active() {
         let roots = crate::Roots::default();
@@ -237,11 +241,11 @@ mod tests {
         assert!(!cross.active);
     }
 
-    /// The combined `--prefix --target` case: `roots` here would be
-    /// `--target`-substituted (eprefix cleared), but `host_merge_root` is
-    /// passed independently (from `Cli::host_roots()`, unaffected by that
-    /// substitution) — the whole point of not deriving `host_target` from
-    /// `roots.is_overlay()` inside `detect`.
+    // The combined `--prefix --target` case: `roots` here would be
+    // `--target`-substituted (eprefix cleared), but `host_merge_root` is
+    // passed independently (from `Cli::host_roots()`, unaffected by that
+    // substitution) — the whole point of not deriving `host_target` from
+    // `roots.is_overlay()` inside `detect`
     #[test]
     fn host_entry_displays_as_landing_in_the_prefix_even_when_roots_is_target_substituted() {
         let sysroot_roots = crate::Roots::for_test("/opt/p/usr/riscv64-unknown-linux-gnu");

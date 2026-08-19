@@ -1,4 +1,4 @@
-//! Effective per-package USE after profile/env overrides and IUSE defaults.
+//! Effective per-package USE after profile/env overrides and IUSE defaults
 
 use std::collections::{HashMap, HashSet};
 
@@ -10,10 +10,11 @@ use portage_metadata::{CacheEntry, IUseDefault as MetaIUseDefault};
 use crate::force_mask::ForceMask;
 use crate::repo::{self, RepoData, ResolvePolicy};
 
-/// Re-apply ceded (`--autosolve-use`) flag decisions on a resolved
-/// `UseConfig`. Like `use.force`/`use.mask`, ceded flags must win over an
-/// env-level `-*` that caused the `REQUIRED_USE` violation — not be stored
-/// as wipeable `package.use` entries.
+/// Re-apply ceded (`--autosolve-use`) flag decisions on a resolved `UseConfig`
+///
+/// Like `use.force`/`use.mask`, ceded flags must win over an env-level `-*`
+/// that caused the `REQUIRED_USE` violation — not be stored as wipeable
+/// `package.use` entries.
 pub fn apply_ceded(cfg: &mut UseConfig, cpn: Cpn, ceded: &[CededFlag]) {
     for c in ceded.iter().filter(|c| c.cpn == cpn) {
         cfg.set(
@@ -28,7 +29,7 @@ pub fn apply_ceded(cfg: &mut UseConfig, cpn: Cpn, ceded: &[CededFlag]) {
 }
 
 /// Build the `iuse_defaults` map `resolve_effective_use` needs from a cache
-/// entry's parsed `IUSE` list (`+flag`/`-flag` → enabled/disabled default).
+/// entry's parsed `IUSE` list (`+flag`/`-flag` → enabled/disabled default)
 pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
     cache
         .metadata
@@ -48,10 +49,11 @@ pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, I
         .collect()
 }
 
-/// Apply profile force/mask as the unconditional post-fold step (Portage's
-/// `use.force`/`use.mask` outside the USE_ORDER stack). Must run **after**
-/// `resolve_effective_use` and **before** [`apply_ceded`] so env-level `-*`
-/// cannot wipe forced flags (and ceded decisions still win last).
+/// Apply profile force/mask as the unconditional post-fold step (Portage's `use.force`/`use.mask` outside the USE_ORDER stack)
+///
+/// Must run **after** `resolve_effective_use` and **before** [`apply_ceded`] so
+/// env-level `-*` cannot wipe forced flags (and ceded decisions still win
+/// last).
 pub fn apply_force_mask(
     cfg: &mut UseConfig,
     force_mask: &ForceMask,
@@ -65,14 +67,14 @@ pub fn apply_force_mask(
     }
 }
 
-/// IUSE set as interned flags for force/mask filtering.
+/// IUSE set as interned flags for force/mask filtering
 pub fn iuse_set(cache: &CacheEntry) -> HashSet<Interned<DefaultInterner>> {
     cache.metadata.iuse.iter().map(Interned::from).collect()
 }
 
 /// The full effective USE fold for one `(pkg, ver)`: IUSE defaults, `pre_env`,
 /// `package_use`, `env_use`, then profile force/mask, then any
-/// `--autosolve-use` ceded flags on top.
+/// `--autosolve-use` ceded flags on top
 ///
 /// Force/mask is applied post-fold (not as synthetic `package.use`) so a
 /// process-env `USE="-* …"` cannot clear forced flags — matching
@@ -110,41 +112,40 @@ pub fn effective_use(
     cfg
 }
 
-/// A `(pkg, ver)`'s cache entry plus its effective USE, with each dep class
-/// evaluated against that USE on demand — the `find_cache` +
-/// [`effective_use`] + `DepEntry::evaluate_use` triple shared by
-/// `host_copies`, `bdepend_trim`, and `depend_trim`. `None` when the CPV
-/// isn't in `data` at all (a within-run merge whose cache entry vanished,
-/// e.g. across a repo reload — every caller already treats this as "skip").
+/// A `(pkg, ver)`'s cache entry plus its effective USE, with each dep class evaluated against that USE on demand — the `find_cache` + [`effective_use`] + `DepEntry::evaluate_use` triple shared by `host_copies`, `bdepend_trim`, and `depend_trim`
+///
+/// `None` when the CPV isn't in `data` at all (a within-run merge whose cache
+/// entry vanished, e.g. across a repo reload — every caller already treats this
+/// as "skip").
 pub struct EvaluatedDeps<'a> {
     cache: &'a CacheEntry,
     effective: UseConfig,
 }
 
 /// One USE-evaluated dep-class accessor per PMS dep class; each just picks
-/// the field and hands it to `DepEntry::evaluate_use`.
+/// the field and hands it to `DepEntry::evaluate_use`
 impl EvaluatedDeps<'_> {
-    /// `DEPEND` edges.
+    /// `DEPEND` edges
     pub fn depend(&self) -> Vec<DepEntry> {
         DepEntry::evaluate_use(&self.cache.metadata.depend, &self.effective)
     }
 
-    /// `BDEPEND` edges.
+    /// `BDEPEND` edges
     pub fn bdepend(&self) -> Vec<DepEntry> {
         DepEntry::evaluate_use(&self.cache.metadata.bdepend, &self.effective)
     }
 
-    /// `RDEPEND` edges.
+    /// `RDEPEND` edges
     pub fn rdepend(&self) -> Vec<DepEntry> {
         DepEntry::evaluate_use(&self.cache.metadata.rdepend, &self.effective)
     }
 
-    /// `PDEPEND` edges.
+    /// `PDEPEND` edges
     pub fn pdepend(&self) -> Vec<DepEntry> {
         DepEntry::evaluate_use(&self.cache.metadata.pdepend, &self.effective)
     }
 
-    /// `IDEPEND` edges.
+    /// `IDEPEND` edges
     pub fn idepend(&self) -> Vec<DepEntry> {
         DepEntry::evaluate_use(&self.cache.metadata.idepend, &self.effective)
     }
@@ -152,7 +153,7 @@ impl EvaluatedDeps<'_> {
 
 /// Look up `(pkg, ver)`'s cache entry and compute its [`EvaluatedDeps`] in one
 /// step; `None` when the cpv has no cache entry (see [`EvaluatedDeps`]'s doc
-/// comment).
+/// comment)
 pub fn evaluated_deps<'a>(
     data: &'a RepoData,
     policy: &ResolvePolicy,
@@ -247,7 +248,7 @@ mod tests {
         ));
     }
 
-    /// Critical: force must survive env-level `-*`, same shape as the ceded fix.
+    // Critical: force must survive env-level `-*`, same shape as the ceded fix
     #[test]
     fn apply_force_mask_survives_an_env_level_wildcard_reset() {
         use crate::force_mask::ForceMask;

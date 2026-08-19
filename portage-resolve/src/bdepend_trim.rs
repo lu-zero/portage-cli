@@ -1,5 +1,5 @@
 //! Post-solve trim: drop plan entries only pulled for `BDEPEND` already
-//! satisfied on BROOT or by earlier within-run merges.
+//! satisfied on BROOT or by earlier within-run merges
 
 use std::collections::HashSet;
 
@@ -12,27 +12,27 @@ use crate::Roots;
 use crate::effective_use;
 use crate::repo::{RepoData, ResolvePolicy};
 
-/// Context for [`trim_within_run_bdepend`].
+/// Context for [`trim_within_run_bdepend`]
 pub struct TrimCtx<'a> {
     /// See [`crate::Avail::initial_bdepend`] — carries BROOT
     /// via `satisfaction_root(DepClass::Bdepend)` even under an active
     /// `--target` sysroot substitution, so this is the same `Roots` the
-    /// caller already has for `DEPEND`, not a separately-picked one.
+    /// caller already has for `DEPEND`, not a separately-picked one
     pub roots: &'a Roots,
-    /// The loaded repository facts.
+    /// The loaded repository facts
     pub data: &'a RepoData,
     /// The run's keyword/mask/license/USE policy (the trim only reads its
-    /// USE-fold fields, via [`effective_use::evaluated_deps`]).
+    /// USE-fold fields, via [`effective_use::evaluated_deps`])
     pub policy: ResolvePolicy<'a>,
-    /// CPNs explicitly requested on the command line — never trimmed.
+    /// CPNs explicitly requested on the command line — never trimmed
     pub root_cpns: &'a HashSet<Cpn>,
-    /// CPNs the solver kept for a same-version USE rebuild — never trimmed.
+    /// CPNs the solver kept for a same-version USE rebuild — never trimmed
     pub reinstall_cpns: &'a HashSet<Cpn>,
 }
 
-/// Drop entries that are only needed for `BDEPEND` edges already satisfied by
-/// the host/prefix VDB or earlier kept plan entries. No-op when the solver did
-/// not include `BDEPEND` (`with_bdeps=false`).
+/// Drop entries that are only needed for `BDEPEND` edges already satisfied by the host/prefix VDB or earlier kept plan entries
+///
+/// No-op when the solver did not include `BDEPEND` (`with_bdeps=false`).
 ///
 /// `full_solution_order` is every real package the solver selected, *before*
 /// the caller's "already installed, nothing to display" filter drops entries
@@ -196,7 +196,7 @@ mod tests {
         Roots::default()
     }
 
-    /// The permissive keyword/license policy the trim tests fold USE under.
+    // The permissive keyword/license policy the trim tests fold USE under
     fn test_policy<'a>(
         accept_keywords: &'a AcceptKeywords,
         accept_licenses: &'a AcceptOverlay,
@@ -229,7 +229,7 @@ mod tests {
         AcceptKeywords::from_global(&arch, &["amd64"])
     }
 
-    /// Build a `RepoData` from `(cpv, md5-cache-text)` pairs, one version per CPN.
+    // Build a `RepoData` from `(cpv, md5-cache-text)` pairs, one version per CPN
     fn repo_from(entries: &[(&str, &str)]) -> RepoData {
         let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
         let mut cpns = Vec::new();

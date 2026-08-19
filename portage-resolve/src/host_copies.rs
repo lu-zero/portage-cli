@@ -1,4 +1,4 @@
-//! Native-offset host build-copies (Tier 1 `--root` for a Gentoo host).
+//! Native-offset host build-copies (Tier 1 `--root` for a Gentoo host)
 //!
 //! When building into an offset ROOT with the host (`/`) as `BROOT`/`ESYSROOT`,
 //! a target package's build-time edges (`DEPEND`, `BDEPEND`, `IDEPEND`) that
@@ -62,14 +62,14 @@ use crate::effective_use;
 use crate::repo::Adapter;
 use crate::root_aware::CrossContext;
 
-/// Static inputs shared across the walk.
+/// Static inputs shared across the walk
 struct Ctx<'a> {
     adapter: &'a Adapter<'a>,
     target_ver: &'a HashMap<Cpn, (Version, PortagePackage)>,
 }
 
 /// Mutable walk state: host availability (VDB + already-planned Host entries
-/// + emitted copies) and the seen-set (also breaks dependency cycles).
+/// + emitted copies) and the seen-set (also breaks dependency cycles)
 struct Walk {
     avail: Avail,
     seen: HashSet<Cpn>,
@@ -77,7 +77,7 @@ struct Walk {
 
 /// Compute the finalized plan order for a native offset (`--root`/`--prefix`,
 /// same arch), inserting host (`MergeRoot::Host`) build-copies immediately
-/// before whichever Target entry first needs each one.
+/// before whichever Target entry first needs each one
 ///
 /// Returns `target_order` unchanged for non-native-offset builds (plain
 /// native, cross-arch, host) — cross-arch uses the solver's own dual-root
@@ -144,12 +144,11 @@ pub fn compute(
     order
 }
 
-/// Recurse into `pkg`'s unsatisfied-on-host `DEPEND`/`BDEPEND`/`IDEPEND`
-/// edges, appending each resolved host copy to `order` only *after* its own
-/// edges have been visited — deps-first, so a copy never lands before
-/// something it needs. Called just before `pkg` itself is pushed to
-/// `order`, so every copy discovered here also ends up immediately before
-/// `pkg` — its first (and closure-wide) consumer.
+/// Recurse into `pkg`'s unsatisfied-on-host `DEPEND`/`BDEPEND`/`IDEPEND` edges, appending each resolved host copy to `order` only *after* its own edges have been visited — deps-first, so a copy never lands before something it needs
+///
+/// Called just before `pkg` itself is pushed to `order`, so every copy
+/// discovered here also ends up immediately before `pkg` — its first (and
+/// closure-wide) consumer.
 ///
 /// `top_level` is `true` only for direct per-Target-package calls, not
 /// edges found recursing into an already-found copy. Under `cross.active`
@@ -199,10 +198,9 @@ fn visit_unsatisfied(
     }
 }
 
-/// Resolve `(version, package)` for a host copy of `cpn`: the Target plan's
-/// version when the CPN is also built for Target, else the newest
-/// keyword/mask/license-accepted repo version. `None` when the CPN is absent
-/// from the repo or has no accepted version.
+/// Resolve `(version, package)` for a host copy of `cpn`: the Target plan's version when the CPN is also built for Target, else the newest keyword/mask/license-accepted repo version
+///
+/// `None` when the CPN is absent from the repo or has no accepted version.
 fn resolve(cpn: Cpn, ctx: &Ctx<'_>) -> Option<(Version, PortagePackage)> {
     if let Some((v, p)) = ctx.target_ver.get(&cpn) {
         return Some((v.clone(), p.clone()));
@@ -237,9 +235,9 @@ mod tests {
         AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default())
     }
 
-    /// Build a `RepoData` from `(cpv, md5-cache-text)` pairs, one version per CPN
-    /// (mirrors the same-shaped helper in `bdepend_trim`'s and `depend_trim`'s
-    /// own test modules).
+    // Build a `RepoData` from `(cpv, md5-cache-text)` pairs, one version per CPN
+    // (mirrors the same-shaped helper in `bdepend_trim`'s and `depend_trim`'s
+    // own test modules)
     fn repo_from(entries: &[(&str, &str)]) -> repo::RepoData {
         let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
         let mut cpns = Vec::new();
@@ -258,9 +256,9 @@ mod tests {
         }
     }
 
-    /// A `--prefix`-shaped `CrossContext`: `active` (target != host), not
-    /// cross-arch (no make.conf to read a foreign `CHOST` from) — the native
-    /// offset case `host_copies::compute` exists for.
+    // A `--prefix`-shaped `CrossContext`: `active` (target != host), not
+    // cross-arch (no make.conf to read a foreign `CHOST` from) — the native
+    // offset case `host_copies::compute` exists for
     fn native_offset_cross(roots: &Roots) -> CrossContext {
         root_aware::detect(roots, roots.merge_root())
     }

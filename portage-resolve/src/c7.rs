@@ -1,4 +1,4 @@
-//! Corner-case spec for **C7 — cross-package `[flag]` USE-dep co-solve**.
+//! Corner-case spec for **C7 — cross-package `[flag]` USE-dep co-solve**
 //!
 //! These are minimal package sets that exercise the scenarios C7 must handle.
 //! Today a cross-package `[flag]` dep is **Tier 2**: the solver *detects* the
@@ -39,7 +39,7 @@ use crate::repo::{
     AcceptKeywords, AcceptOverlay, Adapter, RepoData, ResolvePolicy, target_package,
 };
 
-/// Build a `RepoData` from `(cpv, md5-cache-text)` pairs.
+/// Build a `RepoData` from `(cpv, md5-cache-text)` pairs
 fn repo_from(entries: &[(&str, &str)]) -> RepoData {
     let mut versions: HashMap<portage_atom::Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
     let mut cpns = Vec::new();
@@ -61,7 +61,7 @@ fn repo_from(entries: &[(&str, &str)]) -> RepoData {
 }
 
 /// The outcome of a solve: the cross-package USE-flag requirements the solver
-/// detected, and the real (non-virtual) packages in the plan as `cat/pkg-ver`.
+/// detected, and the real (non-virtual) packages in the plan as `cat/pkg-ver`
 struct Outcome {
     reqs: Vec<UseFlagRequirement>,
     plan: Vec<String>,
@@ -86,8 +86,9 @@ impl Outcome {
     }
 }
 
-/// Solve `targets` against `data` with the given `package_use`. Returns `None`
-/// for an unsatisfiable problem.
+/// Solve `targets` against `data` with the given `package_use`
+///
+/// Returns `None` for an unsatisfiable problem.
 fn solve_with(
     data: &RepoData,
     targets: &[&str],
@@ -151,13 +152,13 @@ fn solve_with(
     })
 }
 
-/// A single (default, no-autosolve) solve — shows the Tier-2 behaviour.
+/// A single (default, no-autosolve) solve — shows the Tier-2 behaviour
 fn solve(data: &RepoData, targets: &[&str]) -> Outcome {
     solve_with(data, targets, &[]).expect("solve")
 }
 
 /// Run the C7 co-solve fixpoint (as `depgraph` does under `--autosolve-use`):
-/// returns the augmented `package_use` and the final outcome.
+/// returns the augmented `package_use` and the final outcome
 fn cosolve(data: &RepoData, targets: &[&str]) -> (Vec<(Dep, Vec<UseOverride>)>, Outcome) {
     let (pu, _applied, solved) = crate::package_use::cosolve_use_deps(
         Vec::new(),
@@ -170,7 +171,7 @@ fn cosolve(data: &RepoData, targets: &[&str]) -> (Vec<(Dep, Vec<UseOverride>)>, 
     (pu, out)
 }
 
-/// Whether `pu` forces `token` (e.g. `bar` / `-bar`) on `cpn`.
+/// Whether `pu` forces `token` (e.g. `bar` / `-bar`) on `cpn`
 fn pu_forces(pu: &[(Dep, Vec<UseOverride>)], cpn: &str, token: &str) -> bool {
     let want = UseOverride::parse(token);
     pu.iter()
@@ -179,7 +180,7 @@ fn pu_forces(pu: &[(Dep, Vec<UseOverride>)], cpn: &str, token: &str) -> bool {
 
 // md5-cache helpers ---------------------------------------------------------
 
-/// A leaf package with the given IUSE (space-separated, `+` for default-on).
+/// A leaf package with the given IUSE (space-separated, `+` for default-on)
 fn leaf(iuse: &str, required_use: &str) -> String {
     let ru = if required_use.is_empty() {
         String::new()
@@ -189,7 +190,7 @@ fn leaf(iuse: &str, required_use: &str) -> String {
     format!("EAPI=8\nSLOT=0\nIUSE={iuse}\nKEYWORDS=amd64\nDESCRIPTION=t\n{ru}")
 }
 
-/// A package whose RDEPEND is `rdepend`, with optional own IUSE.
+/// A package whose RDEPEND is `rdepend`, with optional own IUSE
 fn parent(iuse: &str, rdepend: &str) -> String {
     format!("EAPI=8\nSLOT=0\nIUSE={iuse}\nKEYWORDS=amd64\nDESCRIPTION=t\nRDEPEND={rdepend}\n")
 }

@@ -1,4 +1,4 @@
-//! Profile USE *force* and *mask*, resolved per package.
+//! Profile USE *force* and *mask*, resolved per package
 //!
 //! Real portage applies `use.force`/`use.mask` as unconditional post-filters
 //! *outside* the 8-layer USE fold (`config.py`'s `_getUseMask`/`_getUseForce`,
@@ -26,48 +26,50 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_atom_pubgrub::UseConfig;
 
-/// An interned USE flag.
+/// An interned USE flag
 type Flag = Interned<DefaultInterner>;
 
 /// A parsed per-atom force/mask token: the interned flag and whether it is the
-/// incremental removal form (`-flag`, i.e. unforce/unmask).
+/// incremental removal form (`-flag`, i.e. unforce/unmask)
 type ForceTok = (Flag, bool);
 
-/// Per-atom force/mask entries grouped by `Cpn`. The profile chain contributes
-/// hundreds of `package.use.{force,mask}` atoms; grouping by `Cpn` turns a
-/// package's lookup into O(1) (a miss costs nothing) instead of a scan over the
-/// whole list for every package the solver evaluates. Per-`Cpn` insertion order
-/// is preserved so the incremental `-flag` (unforce/unmask) resolution is exact.
+/// Per-atom force/mask entries grouped by `Cpn`
+///
+/// The profile chain contributes hundreds of `package.use.{force,mask}` atoms;
+/// grouping by `Cpn` turns a package's lookup into O(1) (a miss costs nothing)
+/// instead of a scan over the whole list for every package the solver
+/// evaluates. Per-`Cpn` insertion order is preserved so the incremental `-flag`
+/// (unforce/unmask) resolution is exact.
 pub type PkgRules = HashMap<Cpn, Vec<(Dep, Vec<ForceTok>)>>;
 
-/// Resolved profile force/mask policy, flags interned once at config-read time.
+/// Resolved profile force/mask policy, flags interned once at config-read time
 /// The globals are already `-`-resolved (`merge_use_flags`); the per-atom sets
 /// keep the removal bit so a `-flag` (unforce/unmask) is resolved against the
-/// accumulated set per package.
+/// accumulated set per package
 #[derive(Default)]
 pub struct ForceMask {
-    /// Global `use.force` flags.
+    /// Global `use.force` flags
     pub use_force: Vec<Flag>,
-    /// Global `use.mask` flags.
+    /// Global `use.mask` flags
     pub use_mask: Vec<Flag>,
     /// Global `use.stable.force` flags (only applied when merging on a stable
-    /// keyword).
+    /// keyword)
     pub use_stable_force: Vec<Flag>,
     /// Global `use.stable.mask` flags (only applied when merging on a stable
-    /// keyword).
+    /// keyword)
     pub use_stable_mask: Vec<Flag>,
-    /// Per-package `package.use.force` entries.
+    /// Per-package `package.use.force` entries
     pub pkg_force: PkgRules,
-    /// Per-package `package.use.mask` entries.
+    /// Per-package `package.use.mask` entries
     pub pkg_mask: PkgRules,
-    /// Per-package `package.use.stable.force` entries.
+    /// Per-package `package.use.stable.force` entries
     pub pkg_stable_force: PkgRules,
-    /// Per-package `package.use.stable.mask` entries.
+    /// Per-package `package.use.stable.mask` entries
     pub pkg_stable_mask: PkgRules,
 }
 
 /// Group flat per-atom entries by `Cpn` (see [`PkgRules`]), parsing each token
-/// to interned form (`-flag` → removal) once.
+/// to interned form (`-flag` → removal) once
 pub fn index_by_cpn(entries: Vec<(Dep, Vec<String>)>) -> PkgRules {
     let mut map = PkgRules::new();
     for (dep, flags) in entries {
@@ -83,9 +85,9 @@ pub fn index_by_cpn(entries: Vec<(Dep, Vec<String>)>) -> PkgRules {
     map
 }
 
-/// Accumulate per-atom tokens matching `cpv` (+ optional slot) into `set`,
-/// honouring `-flag` removal (incremental, in list order). Uses
-/// [`Dep::matches_cpv`] so version **and** `:slot` constraints on
+/// Accumulate per-atom tokens matching `cpv` (+ optional slot) into `set`, honouring `-flag` removal (incremental, in list order)
+///
+/// Uses [`Dep::matches_cpv`] so version **and** `:slot` constraints on
 /// `package.use.force`/`package.use.mask` atoms are honoured (mask_matches
 /// alone is slot-blind).
 fn accumulate(
@@ -112,12 +114,11 @@ fn accumulate(
 }
 
 impl ForceMask {
-    /// The net forced and masked flag names for `cpv` — global `use.force`/
-    /// `use.mask` plus package-level force/mask always, plus the
-    /// `*.stable.*` sets when `stable`. Mask wins over force. Applied
-    /// strictly *after* the rest of USE resolution (profile/`make.conf`/
-    /// `package.use`/environment) — this is that final step, not folded
-    /// into any earlier layer.
+    /// The net forced and masked flag names for `cpv` — global `use.force`/ `use.mask` plus package-level force/mask always, plus the `*.stable.*` sets when `stable`
+    ///
+    /// Mask wins over force. Applied strictly *after* the rest of USE resolution
+    /// (profile/`make.conf`/ `package.use`/environment) — this is that final step,
+    /// not folded into any earlier layer.
     ///
     /// `iuse` restricts which global flags are even considered: one the
     /// package doesn't declare in `IUSE` can never affect it, so it costs
@@ -158,9 +159,10 @@ impl ForceMask {
         (forced, masked)
     }
 
-    /// Apply force/mask to a package's effective USE: enable forced flags, then
-    /// disable masked ones (mask wins). Overrides `package.use` and the
-    /// configured value, matching Portage. Flags are already interned.
+    /// Apply force/mask to a package's effective USE: enable forced flags, then disable masked ones (mask wins)
+    ///
+    /// Overrides `package.use` and the configured value, matching Portage. Flags
+    /// are already interned.
     ///
     /// `iuse` is the package's own declared `IUSE` flags — see [`Self::effective`].
     /// `slot` is the package's main slot (for `:slot`-scoped force/mask atoms).
@@ -182,7 +184,7 @@ impl ForceMask {
     }
 
     /// Every flag pinned for `cpv` (global force/mask + the package-level and
-    /// stable sets) — the Level-C cede gate must never cede any of these.
+    /// stable sets) — the Level-C cede gate must never cede any of these
     ///
     /// Unlike [`Self::apply`], this always includes the *full* global
     /// `use.force`/`use.mask` sets regardless of `iuse` — a flag outside the
@@ -205,7 +207,7 @@ impl ForceMask {
     }
 
     /// Whether `cpv` carries any force/mask entries at all (cheap skip for the
-    /// common no-policy case).
+    /// common no-policy case)
     pub fn is_empty(&self) -> bool {
         self.use_force.is_empty()
             && self.use_mask.is_empty()

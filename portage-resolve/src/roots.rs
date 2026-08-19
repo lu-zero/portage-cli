@@ -1,89 +1,91 @@
 //! The resolved root model (`ROOT`/`EROOT`/`BROOT`/`ESYSROOT` topology) that
-//! every resolution/policy decision in this crate is parameterized over.
+//! every resolution/policy decision in this crate is parameterized over
 
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom_pubgrub::DepClass;
 
-/// The resolved set of roots for a command (see `docs/design/root-topology.md`):
-/// config source, the planner's installed base, and the install target.
+/// The resolved set of roots for a command (see `docs/design/root-topology.md`): config source, the planner's installed base, and the install target
+///
 /// Built once from `em`'s global flags (`portage-cli`'s `Cli::roots`/
-/// `base_roots`/`outer_roots`/`broot`, via the `with_*` builder methods
-/// below — the fields are private, so construction always goes through
-/// them) and passed around as a unit.
+/// `base_roots`/`outer_roots`/`broot`, via the `with_*` builder methods below —
+/// the fields are private, so construction always goes through them) and passed
+/// around as a unit.
 #[derive(Debug, Clone, Default)]
 pub struct Roots {
     config: Option<Utf8PathBuf>,
     base: Option<Utf8PathBuf>,
     target: Option<Utf8PathBuf>,
-    /// Where `BDEPEND`/`IDEPEND` (cross) resolve — always the true build
-    /// host, independent of any `--target` sysroot substitution. `None`
-    /// only where it trivially equals `merge_root()` (bare, `--local`).
-    /// See [`satisfaction_root`](Self::satisfaction_root).
+    /// Where `BDEPEND`/`IDEPEND` (cross) resolve — always the true build host, independent of any `--target` sysroot substitution
+    ///
+    /// `None` only where it trivially equals `merge_root()` (bare, `--local`). See
+    /// [`satisfaction_root`](Self::satisfaction_root).
     broot: Option<Utf8PathBuf>,
     /// `CHOST != CBUILD` for the currently active topology — the one cell
-    /// `satisfaction_root` needs it for (`IDEPEND`).
+    /// `satisfaction_root` needs it for (`IDEPEND`)
     is_cross_arch: bool,
-    /// `EPREFIX`: when set (`--local`), packages are configured for and
-    /// installed in place at this offset (`target == eprefix`, so `EROOT ==
-    /// target` and `ROOT == /`). `None` for ROOT-offset / host builds.
+    /// `EPREFIX`: when set (`--local`), packages are configured for and installed in place at this offset (`target == eprefix`, so `EROOT == target` and `ROOT == /`)
+    ///
+    /// `None` for ROOT-offset / host builds.
     eprefix: Option<Utf8PathBuf>,
     /// A user-writable config dir overlaid on the host config for
     /// `package.use`/`bashrc` (the `~/.gentoo/etc/portage` of `--local`),
-    /// so an unprivileged user can override without touching `/etc/portage`.
+    /// so an unprivileged user can override without touching `/etc/portage`
     config_overlay: Option<Utf8PathBuf>,
     relocate: bool,
-    /// The literal `--config-root` value, if the user gave one — unlike
-    /// [`config`](Self::config), never derived from `--root`. See
-    /// [`config_root_explicit`](Self::config_root_explicit).
+    /// The literal `--config-root` value, if the user gave one — unlike [`config`](Self::config), never derived from `--root`
+    ///
+    /// See [`config_root_explicit`](Self::config_root_explicit).
     config_root_explicit: Option<Utf8PathBuf>,
-    /// See [`with_target_only_installed_view`](Self::with_target_only_installed_view).
+    /// See [`with_target_only_installed_view`](Self::with_target_only_installed_view)
     installed_view_target_only: bool,
 }
 
 impl Roots {
-    /// `PORTAGE_CONFIGROOT`: where profile and make.conf are read.
+    /// `PORTAGE_CONFIGROOT`: where profile and make.conf are read
     pub fn config(&self) -> Option<&Utf8Path> {
         self.config.as_deref()
     }
 
-    /// The literal `--config-root` value, if given — unlike
-    /// [`config`](Self::config), never derived from `--root`. `em select`
-    /// uses this instead of `config()`, matching real eselect's own
-    /// behavior — so a bare `em --root R select ...` operates on the host's
-    /// config unless `--config-root R` is also given, instead of silently
-    /// picking up whatever `--root`'s bootstrap default resolved `config()` to.
+    /// The literal `--config-root` value, if given — unlike [`config`](Self::config), never derived from `--root`
+    ///
+    /// `em select` uses this instead of `config()`, matching real eselect's own
+    /// behavior — so a bare `em --root R select ...` operates on the host's config
+    /// unless `--config-root R` is also given, instead of silently picking up
+    /// whatever `--root`'s bootstrap default resolved `config()` to.
     pub fn config_root_explicit(&self) -> Option<&Utf8Path> {
         self.config_root_explicit.as_deref()
     }
 
-    /// The base root whose VDB seeds the planner's "installed" view.
+    /// The base root whose VDB seeds the planner's "installed" view
     pub fn base(&self) -> Option<&Utf8Path> {
         self.base.as_deref()
     }
 
-    /// The install target: where new packages land and the delta VDB lives.
+    /// The install target: where new packages land and the delta VDB lives
     pub fn target(&self) -> Option<&Utf8Path> {
         self.target.as_deref()
     }
 
-    /// The install/merge root (`EROOT`), defaulting to `/`. With `--local`
-    /// this is the prefix (`target == eprefix`); files and the VDB land here.
+    /// The install/merge root (`EROOT`), defaulting to `/`
+    ///
+    /// With `--local` this is the prefix (`target == eprefix`); files and the VDB
+    /// land here.
     pub fn merge_root(&self) -> &Utf8Path {
         self.target.as_deref().unwrap_or(Utf8Path::new("/"))
     }
 
     /// Where `BDEPEND`/`IDEPEND` (cross) resolve — the true build host,
-    /// independent of any `--target` sysroot substitution.
+    /// independent of any `--target` sysroot substitution
     pub fn broot(&self) -> Option<&Utf8Path> {
         self.broot.as_deref()
     }
 
-    /// Whether `CHOST != CBUILD` for the currently active topology.
+    /// Whether `CHOST != CBUILD` for the currently active topology
     pub fn is_cross_arch(&self) -> bool {
         self.is_cross_arch
     }
 
-    /// `EPREFIX` for an in-place prefix build (`--local`), else `None`.
+    /// `EPREFIX` for an in-place prefix build (`--local`), else `None`
     ///
     /// This is an anchor, not always a build-time offset: `--target`
     /// substitution and an explicit `--root` override both carry the
@@ -95,41 +97,37 @@ impl Roots {
         self.eprefix.as_deref()
     }
 
-    /// The `EPREFIX` a package merging into `merge_root()` should actually
-    /// build against: `eprefix()` only when it IS `merge_root()` (the PMS
-    /// invariant `EROOT = ROOT + EPREFIX` holds), `None` whenever a moved
-    /// `merge_root()` means this package installs into a self-contained,
-    /// unprefixed tree instead. `RootContext.eprefix`'s three callers must
-    /// read this, never raw `eprefix()`. See [`build_eprefix` vs
-    /// `eprefix`](../../docs/design/em-prefix-experiment.md) for the
-    /// live-verified `libffi`/`zlib` leak this fixed.
+    /// The `EPREFIX` a package merging into `merge_root()` should actually build against: `eprefix()` only when it IS `merge_root()` (the PMS invariant `EROOT = ROOT + EPREFIX` holds), `None` whenever a moved `merge_root()` means this package installs into a self-contained, unprefixed tree instead
+    ///
+    /// `RootContext.eprefix`'s three callers must read this, never raw `eprefix()`.
+    /// See [`build_eprefix` vs
+    /// `eprefix`](../../docs/design/em-prefix-experiment.md) for the live-verified
+    /// `libffi`/`zlib` leak this fixed.
     pub fn build_eprefix(&self) -> Option<&Utf8Path> {
         self.eprefix.as_deref().filter(|e| *e == self.merge_root())
     }
 
-    /// Whether this is an overlay view (EPREFIX set, base is the host): the
-    /// `--prefix` case where `base_roots()`'s merge_root is the host but
-    /// the actual install target is the prefix. `roots()` uses this to
-    /// reconstruct the prefix-target view on top of `base_roots()`.
+    /// Whether this is an overlay view (EPREFIX set, base is the host): the `--prefix` case where `base_roots()`'s merge_root is the host but the actual install target is the prefix
+    ///
+    /// `roots()` uses this to reconstruct the prefix-target view on top of
+    /// `base_roots()`.
     pub fn is_overlay(&self) -> bool {
         self.eprefix.is_some() && self.base.is_none()
     }
 
-    /// Whether this is a self-contained `--root DIR` topology (own config,
-    /// own everything): no EPREFIX, base == target, and not the bare host.
-    /// Topology-only — a robust replacement for the old
-    /// `config().is_some()` proxy, which no longer reflects the *reason*
-    /// to detect it (see `config_root_explicit`).
+    /// Whether this is a self-contained `--root DIR` topology (own config, own everything): no EPREFIX, base == target, and not the bare host
+    ///
+    /// Topology-only — a robust replacement for the old `config().is_some()` proxy,
+    /// which no longer reflects the *reason* to detect it (see
+    /// `config_root_explicit`).
     pub fn is_self_contained_root(&self) -> bool {
         self.eprefix.is_none() && self.base == self.target && self.merge_root().as_str() != "/"
     }
 
-    /// For internal orchestration only: a self-contained `--root` build's
-    /// own `gcc-config`/`binutils-config` slot files must live under *its
-    /// own* `etc/env.d`, not the host's — unlike `em select`'s user-facing
-    /// `config_root_explicit`, which deliberately does NOT infer this from
-    /// `--root` alone. Forces its own config root rather than requiring
-    /// `--config-root` on every crossdev invocation.
+    /// For internal orchestration only: a self-contained `--root` build's own `gcc-config`/`binutils-config` slot files must live under *its own* `etc/env.d`, not the host's — unlike `em select`'s user-facing `config_root_explicit`, which deliberately does NOT infer this from `--root` alone
+    ///
+    /// Forces its own config root rather than requiring `--config-root` on every
+    /// crossdev invocation.
     pub fn with_own_config_root_if_self_contained(mut self) -> Self {
         if self.is_self_contained_root() {
             self.config_root_explicit = Some(self.merge_root().to_owned());
@@ -137,11 +135,12 @@ impl Roots {
         self
     }
 
-    /// Use only `VDB(target)` as the installed view, dropping base∪target
-    /// sharing (`docs/user/root-model.md`). Native toolchain bootstrap must merge
-    /// compiler/libc into the target rather than treating host VDB as
-    /// satisfied (under `--prefix`, host `virtual/os-headers` would otherwise
-    /// skip the merge and break glibc `--with-headers`).
+    /// Use only `VDB(target)` as the installed view, dropping base∪target sharing (`docs/user/root-model.md`)
+    ///
+    /// Native toolchain bootstrap must merge compiler/libc into the target rather
+    /// than treating host VDB as satisfied (under `--prefix`, host
+    /// `virtual/os-headers` would otherwise skip the merge and break glibc
+    /// `--with-headers`).
     ///
     /// Does not rewrite `base`: that also drives [`Self::build_sysroot`] and
     /// DEPEND's satisfaction root. Forcing `base == target` doubled ESYSROOT
@@ -151,21 +150,21 @@ impl Roots {
         self
     }
 
-    /// See [`with_target_only_installed_view`](Self::with_target_only_installed_view).
+    /// See [`with_target_only_installed_view`](Self::with_target_only_installed_view)
     pub fn installed_view_target_only(&self) -> bool {
         self.installed_view_target_only
     }
 
-    /// User config overlay dir (`package.use`/`bashrc` layered on host config).
+    /// User config overlay dir (`package.use`/`bashrc` layered on host config)
     pub fn config_overlay(&self) -> Option<&Utf8Path> {
         self.config_overlay.as_deref()
     }
 
-    /// The build-against sysroot (`SYSROOT`/`ESYSROOT`) to hand the shell:
-    /// `None` means "same as the install target" (full offset / host), so the
-    /// shell defaults `SYSROOT = ROOT`. `Some` only for an overlay where the
-    /// base differs from the target (`--prefix`), where the base is the system
-    /// to build against and the target is layered on top.
+    /// The build-against sysroot (`SYSROOT`/`ESYSROOT`) to hand the shell: `None` means "same as the install target" (full offset / host), so the shell defaults `SYSROOT = ROOT`
+    ///
+    /// `Some` only for an overlay where the base differs from the target
+    /// (`--prefix`), where the base is the system to build against and the target
+    /// is layered on top.
     pub fn build_sysroot(&self) -> Option<&Utf8Path> {
         if self.base.as_deref() != self.target.as_deref() {
             Some(self.base.as_deref().unwrap_or(Utf8Path::new("/")))
@@ -175,13 +174,13 @@ impl Roots {
     }
 
     /// Whether `--prefix` relocates distfiles and the build trees under the
-    /// target (a self-contained tree).
+    /// target (a self-contained tree)
     pub fn relocate(&self) -> bool {
         self.relocate
     }
 
     /// Directory under which relocated distfiles / work trees live when
-    /// [`relocate`](Self::relocate) is true.
+    /// [`relocate`](Self::relocate) is true
     ///
     /// Prefer [`eprefix`](Self::eprefix) when set so that under
     /// `--prefix P --target T` (or `--local` + `--target`) trees stay under
@@ -195,8 +194,10 @@ impl Roots {
         Some(self.eprefix().unwrap_or_else(|| self.merge_root()))
     }
 
-    /// Satisfaction root for an unsatisfied dep of `class` (docs/design/root-topology.md,
-    /// PMS table 8.2):
+    /// Satisfaction root for an unsatisfied dep of `class`
+    ///
+    /// See [docs/design/root-topology.md](../../docs/design/root-topology.md)
+    /// and PMS table 8.2:
     /// - `BDEPEND` → `broot` (build host; ignores `--target` substitution)
     /// - `IDEPEND` → `broot` when cross, else same as `RDEPEND`
     /// - `DEPEND` → `base` when it differs from target (overlay); else `broot`
@@ -226,17 +227,15 @@ impl Roots {
         }
     }
 
-    /// `ESYSROOT` / cross sysroot: `PORTAGE_CONFIGROOT` when set, else base.
+    /// `ESYSROOT` / cross sysroot: `PORTAGE_CONFIGROOT` when set, else base
     pub fn sysroot(&self) -> Option<&Utf8Path> {
         self.config.as_deref().or(self.base.as_deref())
     }
 
-    /// Load `repos.conf` portage-style for this invocation: global defaults +
-    /// confdir under the config root, plus the `--local`/`--prefix` overlay
-    /// confdir, plus any legacy `PORTDIR_OVERLAY` directories from
-    /// make.conf ([`portdir_overlay`](Self::portdir_overlay)). The single
-    /// source of truth for repo discovery — every caller gets both sources
-    /// merged and sorted together for free.
+    /// Load `repos.conf` portage-style for this invocation: global defaults + confdir under the config root, plus the `--local`/`--prefix` overlay confdir, plus any legacy `PORTDIR_OVERLAY` directories from make.conf ([`portdir_overlay`](Self::portdir_overlay))
+    ///
+    /// The single source of truth for repo discovery — every caller gets both
+    /// sources merged and sorted together for free.
     pub fn repos_conf(&self) -> portage_repo::Result<portage_repo::ReposConf> {
         let cfg = self.config().unwrap_or_else(|| Utf8Path::new("/"));
         let extra: Vec<&Utf8Path> = self.config_overlay().into_iter().collect();
@@ -244,12 +243,12 @@ impl Roots {
         Ok(conf.with_portdir_overlay(&self.portdir_overlay()))
     }
 
-    /// `PORTDIR_OVERLAY` from make.conf: the legacy, pre-repos.conf way of
-    /// declaring extra overlay directories, still honored by real portage.
-    /// Whitespace-split paths, in listed order; the overlay confdir wins
-    /// over the base config root when both set it (unlike
-    /// [`repos_conf`](Self::repos_conf), not merged — a single bash
-    /// assignment, not a directory of stackable fragments).
+    /// `PORTDIR_OVERLAY` from make.conf: the legacy, pre-repos.conf way of declaring extra overlay directories, still honored by real portage
+    ///
+    /// Whitespace-split paths, in listed order; the overlay confdir wins over the
+    /// base config root when both set it (unlike [`repos_conf`](Self::repos_conf),
+    /// not merged — a single bash assignment, not a directory of stackable
+    /// fragments).
     ///
     /// Read via [`portage_repo::MakeConf::get`], a static parse, so `${VAR}`
     /// expansion and `NAME+=VALUE` append aren't
@@ -276,55 +275,55 @@ impl Roots {
     // `with_own_config_root_if_self_contained` shape already established.
     // -----------------------------------------------------------------
 
-    /// Set `config` (`PORTAGE_CONFIGROOT`).
+    /// Set `config` (`PORTAGE_CONFIGROOT`)
     pub fn with_config(mut self, config: Option<Utf8PathBuf>) -> Self {
         self.config = config;
         self
     }
 
-    /// Set `base` (the planner's installed-view root).
+    /// Set `base` (the planner's installed-view root)
     pub fn with_base(mut self, base: Option<Utf8PathBuf>) -> Self {
         self.base = base;
         self
     }
 
-    /// Set `target` (the install/merge root).
+    /// Set `target` (the install/merge root)
     pub fn with_target(mut self, target: Option<Utf8PathBuf>) -> Self {
         self.target = target;
         self
     }
 
-    /// Set `broot` (where BDEPEND/IDEPEND resolve).
+    /// Set `broot` (where BDEPEND/IDEPEND resolve)
     pub fn with_broot(mut self, broot: Option<Utf8PathBuf>) -> Self {
         self.broot = broot;
         self
     }
 
-    /// Set `is_cross_arch` (`CHOST != CBUILD`).
+    /// Set `is_cross_arch` (`CHOST != CBUILD`)
     pub fn with_cross_arch(mut self, is_cross_arch: bool) -> Self {
         self.is_cross_arch = is_cross_arch;
         self
     }
 
-    /// Set `eprefix` (`EPREFIX` for an in-place prefix build).
+    /// Set `eprefix` (`EPREFIX` for an in-place prefix build)
     pub fn with_eprefix(mut self, eprefix: Option<Utf8PathBuf>) -> Self {
         self.eprefix = eprefix;
         self
     }
 
-    /// Set `config_overlay` (the user config-overlay dir).
+    /// Set `config_overlay` (the user config-overlay dir)
     pub fn with_config_overlay(mut self, config_overlay: Option<Utf8PathBuf>) -> Self {
         self.config_overlay = config_overlay;
         self
     }
 
-    /// Set `relocate` (whether distfiles/build trees relocate under target).
+    /// Set `relocate` (whether distfiles/build trees relocate under target)
     pub fn with_relocate(mut self, relocate: bool) -> Self {
         self.relocate = relocate;
         self
     }
 
-    /// Set `config_root_explicit` (the literal `--config-root` value).
+    /// Set `config_root_explicit` (the literal `--config-root` value)
     pub fn with_config_root_explicit(mut self, config_root_explicit: Option<Utf8PathBuf>) -> Self {
         self.config_root_explicit = config_root_explicit;
         self
@@ -343,7 +342,7 @@ impl Roots {
     /// included, so BDEPEND-satisfaction tests see the same root without a
     /// separate `host_roots` value), for exercising root-selection logic
     /// without a full CLI parse and without any VDB lookup silently falling
-    /// through to the real bare host's.
+    /// through to the real bare host's
     #[doc(hidden)]
     pub fn for_test(target: &str) -> Self {
         let path = Utf8PathBuf::from(target);
@@ -355,12 +354,11 @@ impl Roots {
         }
     }
 
-    /// Test-only: a bare `--root DIR` shaped `Roots` with BROOT a genuinely
-    /// separate directory from the offset (`base`/`target`) — matching real
-    /// `Dual { broot: host, target: offset }`, `eprefix: None`,
-    /// `is_cross_arch: false`. `for_test` collapses all three roles to one
-    /// path, which can't exercise `initial_depend`'s host-vs-target weave
-    /// (they're the same directory there); this can.
+    /// Test-only: a bare `--root DIR` shaped `Roots` with BROOT a genuinely separate directory from the offset (`base`/`target`) — matching real `Dual { broot: host, target: offset }`, `eprefix: None`, `is_cross_arch: false`
+    ///
+    /// `for_test` collapses all three roles to one path, which can't exercise
+    /// `initial_depend`'s host-vs-target weave (they're the same directory there);
+    /// this can.
     #[doc(hidden)]
     pub fn for_test_root_with_broot(target: &str, broot: &str) -> Self {
         let path = Utf8PathBuf::from(target);
@@ -375,7 +373,7 @@ impl Roots {
     /// Test-only: a `Roots` shaped like `--prefix`'s overlay — `base: None`,
     /// `target`/`eprefix` the prefix, `broot` a separate host path — so
     /// `is_overlay()`/BDEPEND-weave tests can use two independent fake VDB
-    /// dirs instead of the real host `/`.
+    /// dirs instead of the real host `/`
     #[doc(hidden)]
     pub fn for_test_overlay(host: &str, prefix: &str) -> Self {
         let prefix = Utf8PathBuf::from(prefix);
@@ -391,12 +389,10 @@ impl Roots {
     }
 }
 
-/// `PORTDIR_OVERLAY` under `root`, checking `etc/portage/make.conf` then the
-/// legacy `etc/make.conf` — same order and early-return-on-first-set
-/// precedence as `root_aware.rs`'s own `read_chost_cbuild` (not full shell
-/// last-wins semantics, a deliberate, already-established simplification in
-/// this codebase). `None` when neither file sets the var at all (distinct
-/// from `Some(vec![])`, an explicit empty assignment).
+/// `PORTDIR_OVERLAY` under `root`, checking `etc/portage/make.conf` then the legacy `etc/make.conf` — same order and early-return-on-first-set precedence as `root_aware.rs`'s own `read_chost_cbuild` (not full shell last-wins semantics, a deliberate, already-established simplification in this codebase)
+///
+/// `None` when neither file sets the var at all (distinct from `Some(vec![])`,
+/// an explicit empty assignment).
 fn read_portdir_overlay(root: &Utf8Path) -> Option<Vec<Utf8PathBuf>> {
     for rel in ["etc/portage/make.conf", "etc/make.conf"] {
         if let Ok(mc) = portage_repo::MakeConf::load(&root.join(rel))
@@ -467,9 +463,9 @@ mod portdir_overlay_tests {
         );
     }
 
-    /// `--local`/`--prefix`'s overlay confdir wins over the base config
-    /// root when both declare `PORTDIR_OVERLAY` — same precedence as other
-    /// `config_overlay` consumers.
+    // `--local`/`--prefix`'s overlay confdir wins over the base config
+    // root when both declare `PORTDIR_OVERLAY` — same precedence as other
+    // `config_overlay` consumers
     #[test]
     fn overlay_confdir_wins_over_base() {
         let (_dir, path) = utf8_tempdir();

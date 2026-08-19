@@ -5,16 +5,16 @@ use crate::effective_use::effective_use;
 use crate::repo::{RepoData, ResolvePolicy, find_cache};
 
 /// A `REQUIRED_USE` constraint left unsatisfied by a planned package's
-/// effective USE.
+/// effective USE
 pub struct RequiredUseViolation {
-    /// The package whose constraint is violated.
+    /// The package whose constraint is violated
     pub cpv: Cpv,
-    /// The failing sub-constraints, rendered (e.g. `^^ ( llvm_slot_20 llvm_slot_21 )`).
+    /// The failing sub-constraints, rendered (e.g. `^^ ( llvm_slot_20 llvm_slot_21 )`)
     pub unsatisfied: Vec<String>,
 }
 
 /// Evaluate each planned package's `REQUIRED_USE` against the USE it would be
-/// built with.
+/// built with
 ///
 /// This is a post-solve, per-package check (it needs only a package's own
 /// effective USE, not the solution graph). Portage hard-errors on an unsatisfied

@@ -1,4 +1,4 @@
-//! BROOT / within-run package availability for `BDEPEND` checks.
+//! BROOT / within-run package availability for `BDEPEND` checks
 //!
 //! Shared by `em`'s `preflight` module (validate) and the depgraph post-solve
 //! `BDEPEND` trim pass.
@@ -14,7 +14,7 @@ use portage_vdb::{InstalledPackage, Vdb};
 
 use crate::Roots;
 
-/// Interned `(enabled, iuse)` USE state — see `AvailEntry::interned_use`.
+/// Interned `(enabled, iuse)` USE state — see `AvailEntry::interned_use`
 type InternedUse = (
     Vec<Interned<DefaultInterner>>,
     Vec<Interned<DefaultInterner>>,
@@ -22,16 +22,15 @@ type InternedUse = (
 
 /// One entry in an [`Avail`] set: an installed/available `(cpv, main-slot)`,
 /// plus the installed package itself when it's an authoritative source of
-/// USE info.
+/// USE info
 #[derive(Debug, Clone)]
 struct AvailEntry {
     cpv: Cpv,
     slot: Option<Interned<DefaultInterner>>,
-    /// The VDB-backed installed package this entry came from, when known —
-    /// letting `atom_satisfied` verify USE-dep brackets (PMS 8.3.4) against
-    /// its USE/IUSE instead of just CPN/version/slot. `None` for within-run
-    /// solved-plan merges: the solver's own `check_use_deps` already
-    /// validates USE-dep constraints among those, so re-checking here would
+    /// The VDB-backed installed package this entry came from, when known — letting `atom_satisfied` verify USE-dep brackets (PMS 8.3.4) against its USE/IUSE instead of just CPN/version/slot
+    ///
+    /// `None` for within-run solved-plan merges: the solver's own `check_use_deps`
+    /// already validates USE-dep constraints among those, so re-checking here would
     /// duplicate that without the parent-flag context it needs.
     ///
     /// Deliberately *not* read eagerly: most `AvailEntry`s built for a whole
@@ -44,11 +43,11 @@ struct AvailEntry {
     /// a single pass can check the same entry against several atoms, and
     /// `use_flags()`/`iuse()` each allocate a fresh `Vec<String>` per call
     /// even though the file read itself is cached — this cell avoids
-    /// redoing that allocation+parse per repeat check.
+    /// redoing that allocation+parse per repeat check
     interned_use: OnceCell<InternedUse>,
 }
 
-/// Installed `(cpv, main-slot)` pairs visible for dependency presence checks.
+/// Installed `(cpv, main-slot)` pairs visible for dependency presence checks
 #[derive(Debug, Clone, Default)]
 pub struct Avail(Vec<AvailEntry>);
 
@@ -58,7 +57,7 @@ impl Avail {
     /// correctly on `roots` even under an active `--target` sysroot
     /// substitution, so the *same* `Roots` value passed for `DEPEND` checks
     /// answers this too (mirrors `load_host_installed`'s fix for the same
-    /// bug in the solver's own host-installed view).
+    /// bug in the solver's own host-installed view)
     ///
     /// `--prefix` (an unprivileged overlay) additionally weaves in the
     /// prefix's own VDB: `Cli::host_roots()` sends an unsatisfied BDEPEND
@@ -70,10 +69,11 @@ impl Avail {
         Self(avail_entries_from(broot_vdb_packages(roots)))
     }
 
-    /// `DEPEND` availability: VDB at `satisfaction_root(Depend)`, plus the
-    /// target VDB when it differs. Use `merge_root() != satisfaction_root`
-    /// (not only `is_overlay()`): bare `--root` resolves DEPEND against
-    /// BROOT, so a partially populated target must still count as satisfied.
+    /// `DEPEND` availability: VDB at `satisfaction_root(Depend)`, plus the target VDB when it differs
+    ///
+    /// Use `merge_root() != satisfaction_root` (not only `is_overlay()`): bare
+    /// `--root` resolves DEPEND against BROOT, so a partially populated target must
+    /// still count as satisfied.
     pub fn initial_depend(roots: &Roots) -> Self {
         let depend_root = roots.satisfaction_root(DepClass::Depend);
         let mut out = vdb_avail_entries(Some(depend_root));
@@ -83,13 +83,14 @@ impl Avail {
         Self(out)
     }
 
-    /// `DEPEND` availability against a fixed sysroot (`ESYSROOT`). `None` is
-    /// the host `/var/db/pkg`.
+    /// `DEPEND` availability against a fixed sysroot (`ESYSROOT`)
+    ///
+    /// `None` is the host `/var/db/pkg`.
     pub fn initial_sysroot_depend(sysroot: Option<&camino::Utf8Path>) -> Self {
         Self(vdb_avail_entries(sysroot))
     }
 
-    /// Target `ROOT` visibility from an explicit set of installed CPVs.
+    /// Target `ROOT` visibility from an explicit set of installed CPVs
     pub fn from_cpvs(cpvs: Vec<(Cpv, Option<String>)>) -> Self {
         Self(
             cpvs.into_iter()
@@ -103,9 +104,9 @@ impl Avail {
         )
     }
 
-    /// Record a `package.provided` entry (a system-supplied package) as present
-    /// with its slot, so a build dep on it is satisfied without a merge. Slot is
-    /// authoritative for the match; USE-deps on such an atom are treated as
+    /// Record a `package.provided` entry (a system-supplied package) as present with its slot, so a build dep on it is satisfied without a merge
+    ///
+    /// Slot is authoritative for the match; USE-deps on such an atom are treated as
     /// satisfied (`installed: None`), matching the solver, which counts the
     /// provided package as present regardless of flags.
     pub fn record_provided(&mut self, cpv: Cpv, slot: Option<Interned<DefaultInterner>>) {
@@ -117,7 +118,7 @@ impl Avail {
         });
     }
 
-    /// Record a host merge visible to later `BDEPEND` checks.
+    /// Record a host merge visible to later `BDEPEND` checks
     pub fn record_merge_bdepend(&mut self, cpv: Cpv) {
         self.0.push(AvailEntry {
             cpv,
@@ -127,7 +128,7 @@ impl Avail {
         });
     }
 
-    /// Record a target merge for both DEPEND and BDEPEND views (preflight).
+    /// Record a target merge for both DEPEND and BDEPEND views (preflight)
     pub fn record_target_merge(&mut self, depend: &mut Self, cpv: Cpv) {
         depend.0.push(AvailEntry {
             cpv: cpv.clone(),
@@ -143,7 +144,7 @@ impl Avail {
         });
     }
 
-    /// Record a merge for within-run `BDEPEND` trim (host or target).
+    /// Record a merge for within-run `BDEPEND` trim (host or target)
     pub fn record_merge(&mut self, cpv: Cpv, _merge_root: MergeRoot) {
         self.0.push(AvailEntry {
             cpv,
@@ -155,7 +156,7 @@ impl Avail {
 
     /// Whether `dep` is already satisfied by this availability set (CPN,
     /// version, slot, and any USE-dep brackets — see the `use_deps_satisfied`
-    /// function).
+    /// function)
     pub fn atom_satisfied(&self, dep: &Dep) -> bool {
         self.0.iter().any(|e| {
             let slot = e.slot.map(Slot::from_name);
@@ -163,7 +164,7 @@ impl Avail {
         })
     }
 
-    /// `true` when `entries` contain an unsatisfied atom on `cpn`.
+    /// `true` when `entries` contain an unsatisfied atom on `cpn`
     pub fn has_unsatisfied_atom_for_cpn(&self, entries: &[DepEntry], cpn: Cpn) -> bool {
         entries
             .iter()
@@ -171,7 +172,7 @@ impl Avail {
     }
 }
 
-/// Whether `dep`'s USE-dep brackets (if any) are satisfied by `entry`.
+/// Whether `dep`'s USE-dep brackets (if any) are satisfied by `entry`
 ///
 /// `entry.installed: None` means "no authoritative USE data" (a within-run
 /// solved merge already validated by the solver) — always satisfied here.
@@ -238,9 +239,9 @@ fn use_dep_satisfied(
     }
 }
 
-/// Like [`Avail::from_cpvs`], but keeps each installed package around so
-/// [`Avail::atom_satisfied`] can verify USE-dep brackets against them (see
-/// [`AvailEntry::installed`]). `None` = host `/var/db/pkg`.
+/// Like [`Avail::from_cpvs`], but keeps each installed package around so [`Avail::atom_satisfied`] can verify USE-dep brackets against them (see [`AvailEntry::installed`])
+///
+/// `None` = host `/var/db/pkg`.
 fn vdb_avail_entries(root: Option<&Utf8Path>) -> Vec<AvailEntry> {
     let vdb = match root {
         Some(r) => Vdb::open(r.join("var/db/pkg")),
@@ -266,7 +267,7 @@ fn avail_entries_from(pkgs: Vec<InstalledPackage>) -> Vec<AvailEntry> {
 /// Raw installed-package rows for the BROOT-availability seed shared by
 /// [`Avail::initial_bdepend`] and the solver's `host_installed` view — both
 /// need the same root selection (see [`Avail::initial_bdepend`]), only
-/// converting the resulting rows differently.
+/// converting the resulting rows differently
 ///
 /// Read once here; each caller keeps its own merge semantics (union for
 /// `Avail`, last-wins insert for `add_host_installed`) — host entries come
@@ -286,9 +287,10 @@ fn vdb_packages_at(root: &Utf8Path) -> Vec<InstalledPackage> {
     vdb.packages().collect_vec()
 }
 
-/// The CPNs of every unsatisfied (non-blocker) atom in `entries`. An `AnyOf`
-/// (`||`) group contributes its branch CPNs only when the whole group is
-/// unsatisfied. `UseConditional`s are assumed already resolved by
+/// The CPNs of every unsatisfied (non-blocker) atom in `entries`
+///
+/// An `AnyOf` (`||`) group contributes its branch CPNs only when the whole
+/// group is unsatisfied. `UseConditional`s are assumed already resolved by
 /// `evaluate_use`. Used to find build-dep edges a root lacks (e.g. the native
 /// offset host build-closure walk).
 pub fn unsatisfied_cpns(entries: &[DepEntry], avail: &Avail) -> Vec<Cpn> {
@@ -315,7 +317,7 @@ fn unsat_cpns_rec(entries: &[DepEntry], avail: &Avail, out: &mut Vec<Cpn>) {
 }
 
 /// Collect every non-blocker atom CPN mentioned in `e` (for an unsatisfied
-/// `||`-group's branches).
+/// `||`-group's branches)
 fn cpns_of(e: &DepEntry, out: &mut Vec<Cpn>) {
     match e {
         DepEntry::Atom(dep) if dep.blocker.is_none() => out.push(dep.cpn),
@@ -324,8 +326,9 @@ fn cpns_of(e: &DepEntry, out: &mut Vec<Cpn>) {
     }
 }
 
-/// Append the display form of each unsatisfied requirement in `entries` to
-/// `out`. `UseConditional`s are assumed already resolved by `evaluate_use`.
+/// Append the display form of each unsatisfied requirement in `entries` to `out`
+///
+/// `UseConditional`s are assumed already resolved by `evaluate_use`.
 pub fn collect_unsatisfied(entries: &[DepEntry], avail: &Avail, out: &mut Vec<String>) {
     for e in entries {
         match e {
@@ -351,7 +354,7 @@ fn group_satisfied(entries: &[DepEntry], avail: &Avail) -> bool {
     entries.iter().any(|e| entry_satisfied(e, avail))
 }
 
-/// Whether `e` is satisfied on `avail` (blockers count as satisfied).
+/// Whether `e` is satisfied on `avail` (blockers count as satisfied)
 fn entry_satisfied(e: &DepEntry, avail: &Avail) -> bool {
     match e {
         DepEntry::Atom(dep) => dep.blocker.is_some() || avail.atom_satisfied(dep),
@@ -447,8 +450,8 @@ mod tests {
     // `python_targets_python3_13`, not the `_14` this run actually needs.
     // The old CPN/version/slot-only check treated the atom as satisfied
     // regardless of the `[python_targets_python3_14(-)]` USE-dep bracket, so
-    /// `em` never scheduled a jinja2 rebuild and the target package's
-    /// `meson` configure failed with "python3 is missing modules: jinja2".
+    // `em` never scheduled a jinja2 rebuild and the target package's
+    // `meson` configure failed with "python3 is missing modules: jinja2"
     #[test]
     fn use_dep_not_satisfied_by_installed_flag_mismatch() {
         let avail = atom_with_use(
@@ -494,10 +497,10 @@ mod tests {
         assert!(avail.atom_satisfied(dep));
     }
 
-    /// Within-run solved-plan entries (no `use_info`) keep the old,
-    /// USE-dep-blind behaviour — the solver's own `check_use_deps` already
-    /// validated those, so `atom_satisfied` shouldn't re-check and risk a
-    /// false negative without the parent-flag context that requires.
+    // Within-run solved-plan entries (no `use_info`) keep the old,
+    // USE-dep-blind behaviour — the solver's own `check_use_deps` already
+    // validated those, so `atom_satisfied` shouldn't re-check and risk a
+    // false negative without the parent-flag context that requires
     #[test]
     fn use_dep_ignored_when_use_info_unknown() {
         let avail = atoms(&["dev-python/jinja2-3.1.6"]);
@@ -583,9 +586,9 @@ mod tests {
         assert!(cpns.is_empty());
     }
 
-    /// Regression test for the riscv64 stage3 shakeout (#28/#30): the same
-    /// bug class as `load_host_installed` (installed.rs) — `initial_bdepend`
-    /// must read `host_roots`'s VDB, not unconditionally the bare host's.
+    // Regression test for the riscv64 stage3 shakeout (#28/#30): the same
+    // bug class as `load_host_installed` (installed.rs) — `initial_bdepend`
+    // must read `host_roots`'s VDB, not unconditionally the bare host's
     #[test]
     fn initial_bdepend_reads_the_given_root_not_the_bare_host() {
         let tmp = tempfile::tempdir().unwrap();
@@ -619,9 +622,9 @@ mod tests {
         std::fs::write(pkg_dir.join("USE"), "").unwrap();
     }
 
-    /// `--prefix`: a BDEPEND satisfied only by the prefix's own VDB (never
-    /// built into the real host) must still count as satisfied — the weave
-    /// this fixes, since `Cli::host_roots()` sends an unsatisfied one there.
+    // `--prefix`: a BDEPEND satisfied only by the prefix's own VDB (never
+    // built into the real host) must still count as satisfied — the weave
+    // this fixes, since `Cli::host_roots()` sends an unsatisfied one there
     #[test]
     fn initial_bdepend_weaves_in_the_prefix_vdb_under_overlay() {
         let host = tempfile::tempdir().unwrap();
@@ -676,8 +679,8 @@ mod tests {
         );
     }
 
-    /// The same weave also still finds a BROOT-only entry — the target weave
-    /// adds the offset's VDB, it doesn't replace BROOT's.
+    // The same weave also still finds a BROOT-only entry — the target weave
+    // adds the offset's VDB, it doesn't replace BROOT's
     #[test]
     fn initial_depend_still_finds_broot_only_entry_for_a_bare_root() {
         let broot = tempfile::tempdir().unwrap();
@@ -700,8 +703,8 @@ mod tests {
         );
     }
 
-    /// The same weave also still finds a host-only entry — the overlay adds
-    /// the prefix's VDB, it doesn't replace the host's.
+    // The same weave also still finds a host-only entry — the overlay adds
+    // the prefix's VDB, it doesn't replace the host's
     #[test]
     fn initial_bdepend_still_finds_host_only_entry_under_overlay() {
         let host = tempfile::tempdir().unwrap();

@@ -1,22 +1,22 @@
 //! Detect whether an installed package must be rebuilt for USE / IUSE drift
-//! (`--newuse` / `--changed-use`), matching Portage's `_reinstall_for_flags`.
+//! (`--newuse` / `--changed-use`), matching Portage's `_reinstall_for_flags`
 
 use std::collections::HashSet;
 
 use portage_atom::interner::{DefaultInterner, Interned};
 
-/// How to compare installed USE against the planned configuration.
+/// How to compare installed USE against the planned configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UseReinstallMode {
     /// `--newuse` / `-N`: IUSE set change **or** enabled-flag change (within
-    /// IUSE), ignoring profile-forced flags.
+    /// IUSE), ignoring profile-forced flags
     Newuse,
     /// `--changed-use` / `-U`: only enabled-flag change among flags that
-    /// exist in both installed and current IUSE (ignore pure IUSE add/drop).
+    /// exist in both installed and current IUSE (ignore pure IUSE add/drop)
     ChangedUse,
 }
 
-/// Return `true` when Portage would reinstall for USE/IUSE drift.
+/// Return `true` when Portage would reinstall for USE/IUSE drift
 ///
 /// Portage reference (`_emerge/depgraph.py` `_reinstall_for_flags`), with one
 /// practical filter for multi-impl noise:
