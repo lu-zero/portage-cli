@@ -90,26 +90,22 @@ pub struct FetchConfig {
     /// Maximum number of distfiles fetched concurrently.  Defaults to 4.
     pub max_concurrent: usize,
     /// Accept an already-present file on **size alone**, skipping the full
-    /// hash. Default `false` — every present file is always fully
-    /// re-verified, exactly today's behavior. Set `true` for a repo-wide
-    /// mirror tool: re-hashing a multi-hundred-GB mirror on every run would
-    /// turn a "nothing to do" pass into a full-disk scan. Matches real
-    /// `emirrordist`'s own default (size-trust; `--verify-existing-digest`
-    /// opts into hashing).
+    /// hash. Default `false` — every present file is fully re-verified.
+    /// Set `true` for a repo-wide mirror tool: re-hashing a multi-hundred-GB
+    /// mirror on every run would turn a "nothing to do" pass into a
+    /// full-disk scan. Matches real `emirrordist`'s own default.
     pub trust_existing_size: bool,
     /// Download to a temporary path in the distdir, verify, then rename over
-    /// the final path — instead of streaming straight to the final path and
-    /// only removing it on failed verification. Default `false` (today's
-    /// behavior, fine for a private build-box DISTDIR). Set `true` when the
-    /// distdir is being served live (a mirror): otherwise a client fetching
-    /// mid-download sees a partial or briefly-corrupt file under its real
-    /// name. **No cross-run resume of an atomic-mode download** — a leftover
-    /// temp file from an interrupted attempt is discarded and the file is
-    /// fetched fresh, never appended to (deliberately simpler than the
-    /// direct-to-dest path's `Range`-resume support). Only affects
-    /// [`FetchStrategy::Builtin`] — a [`FetchStrategy::Command`] template
-    /// (real portage's own `FETCHCOMMAND`) writes directly to `${DISTDIR}`
-    /// by its own construction and isn't wrapped.
+    /// the final path — instead of streaming straight to the final path.
+    /// Default `false` (fine for a private build-box DISTDIR). Set `true`
+    /// when the distdir is served live: otherwise a client fetching
+    /// mid-download sees a partial or briefly-corrupt file.
+    ///
+    /// **No cross-run resume of an atomic-mode download** — a leftover temp
+    /// file from an interrupted attempt is discarded and refetched fresh,
+    /// never appended to. Only affects [`FetchStrategy::Builtin`] — a
+    /// [`FetchStrategy::Command`] template writes directly to `${DISTDIR}`
+    /// and isn't wrapped.
     pub atomic_write: bool,
 }
 

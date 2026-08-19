@@ -302,6 +302,7 @@ fn is_use_conditional(input: &str) -> bool {
 /// - `|` → any-of group (`|| ( ... )`)
 /// - `^` → exactly-one-of group (`^^ ( ... )`)
 /// - `?` → at-most-one-of group (`?? ( ... )`)
+///
 /// - `(` → all-of group (`( ... )`)
 /// - `>`, `<`, `~`, `=` → versioned atom
 /// - anything else → lookahead to distinguish USE-conditional from atom

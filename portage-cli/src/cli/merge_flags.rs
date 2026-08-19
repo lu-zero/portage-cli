@@ -37,10 +37,10 @@ pub struct MergeFlags {
     /// — a config-only command like `em use`/`em pkg use add` never reads
     /// it. Making it global inherited that meaninglessness into every
     /// subcommand's args, which is also what caused `-a` to collide with
-    /// `use`'s own `-a`/`--add` — a real crash (`em use --help` panicked in
-    /// debug builds; release only skips the check). See `merge_merge_flags`
-    /// for how this still works before or after the subcommand name, same
-    /// as every other field here.
+    /// `use`'s own `-a`/`--add` (a real crash — `em use --help` panicked).
+    ///
+    /// See `merge_merge_flags` for how this still works before or after the
+    /// subcommand name, same as every other field here.
     #[arg(short = 'a', long)]
     pub ask: bool,
 
@@ -156,11 +156,10 @@ pub struct MergeFlags {
 
     /// With `-u`/`--update` `-D`/`--deep`: when moving a version-pinned
     /// family (e.g. upgrading `llvm` pulls `clang` along) would leave a
-    /// retained installed package's pin broken (e.g. `lldb` still pinned to
-    /// the old `llvm`), pull that package into the plan too instead of
-    /// stopping the chain halfway. Off by default: this can revert the
-    /// upgrade instead if the retained package has no version satisfying the
-    /// new pin, which is a policy call worth opting into deliberately.
+    /// retained package's pin broken (e.g. `lldb` still pinned to the old
+    /// `llvm`), pull that package into the plan too instead of stopping
+    /// halfway. Off by default: this can revert the upgrade instead if the
+    /// retained package has no version satisfying the new pin.
     #[arg(long)]
     pub complete_graph: bool,
 

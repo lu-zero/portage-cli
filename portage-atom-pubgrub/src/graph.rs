@@ -124,27 +124,24 @@ impl PortageDependencyProvider {
 
     /// Compute an installation order from a solution.
     ///
-    /// Returns packages in topological order: a dependency is merged before the
-    /// package that needs it.  Both build-time (DEPEND/BDEPEND) and runtime
-    /// (RDEPEND) edges constrain the order, so e.g. the requested target lands
-    /// after the libraries it links and runs against.  PDEPEND (merged *after*
+    /// Returns packages in topological order: a dependency is merged before
+    /// the package that needs it. Both build-time (DEPEND/BDEPEND) and
+    /// runtime (RDEPEND) edges constrain the order. PDEPEND (merged *after*
     /// the parent) and IDEPEND (install-time only) do not constrain it.
     ///
     /// RDEPEND introduces cycles far more often than build deps alone (e.g.
-    /// `gtk+` ↔ its icon-theme/at-spi runtime deps).  Portage resolves these by
-    /// treating runtime edges as *soft*: when the graph stalls in a cycle, soft
-    /// edges are dropped to break it while hard build-time edges are preserved.
-    /// We do the same — only if a genuine hard (build-time) cycle remains, as
-    /// with bootstrap cycles (`xz-utils` ↔ `elt-patches`), do we fall back to a
-    /// deterministic lexicographic tie-break.
+    /// `gtk+` ↔ its icon-theme/at-spi runtime deps). Portage treats runtime
+    /// edges as *soft*: when the graph stalls in a cycle, soft edges are
+    /// dropped to break it while hard build-time edges are preserved. We do
+    /// the same — only a genuine hard cycle (`xz-utils` ↔ `elt-patches`)
+    /// falls back to a deterministic lexicographic tie-break.
     ///
     /// Refinements on the Portage-shaped walk:
     /// - **B:** inside a soft SCC, prefer soft-ready among hard-ready nodes.
-    /// - **C:** after the walk, re-linearise promoting soft edges still acyclic
-    ///   w.r.t. hard (+ already-promoted soft) constraints (pass-1 orientation
-    ///   first, then inverted; pass-1 order as tie-break). Fixes empty
-    ///   `virtual/*` providers emitted before their real RDEPEND provider
-    ///   (e.g. `virtual/libcrypt` before `libxcrypt` via the glibc cycle).
+    /// - **C:** after the walk, re-linearise promoting soft edges still
+    ///   acyclic w.r.t. hard (+ already-promoted soft) constraints (pass-1
+    ///   orientation first, then inverted; pass-1 order as tie-break). Fixes
+    ///   empty `virtual/*` providers emitted before their real provider.
     pub fn install_order(
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
@@ -325,13 +322,14 @@ fn tarjan_scc(succ: &[Vec<usize>]) -> Vec<usize> {
 ///
 /// 1. Isolate irreducible hard cycles (Tarjan over `succ_hard` on `members`).
 /// 2. Never emit a member with an unmet hard predecessor outside its
-///    hard-group while an eligible member remains. The hard-group DAG
+///    hard-group while an eligible member remains — the hard-group DAG
 ///    guarantees progress.
+///
 /// 3. Inside a hard-group: emit closest-to-ready (fewest pending hard, then
 ///    prefer no pending soft (**B**), then fewest soft+hard, then key).
-///    Singleton groups behave like topo-sort when soft edges are acyclic;
-///    soft cycles still break; pass-2 (`repair_soft_inversions`) may
-///    restore inverted soft edges that remain acyclic with hard constraints.
+///    Singleton groups topo-sort when soft edges are acyclic; pass-2
+///    (`repair_soft_inversions`) may restore inverted soft edges that
+///    remain acyclic with hard constraints.
 fn order_cycle(
     members: &[usize],
     succ_hard: &[Vec<usize>],
@@ -450,13 +448,14 @@ fn order_cycle(
 /// `sys-libs/libxcrypt`).  Rebuild a total order from constraints, carefully:
 ///
 /// 1. **Lock pass-1-forward hard + soft edges** (`pos(dep) < pos(consumer)`).
-///    These form a subgraph of the pass-1 total order → always acyclic. Never
-///    drop a hard edge pass-1 already got right (live regression: pass-2 used
-///    to add hard edges in arbitrary order, skip some on a hard-SCC false
-///    path, then soft promotions reordered `gcc` before its BDEPEND `glibc`).
+///    These form a subgraph of the pass-1 total order → always acyclic.
+///    Never drop a hard edge pass-1 already got right (live regression:
+///    pass-2 used to skip some on a hard-SCC false path, then soft
+///    promotions reordered `gcc` before its BDEPEND `glibc`).
 /// 2. **Try inverted hard edges** (pass-1 violated a DEPEND/BDEPEND) if acyclic.
-/// 3. **Try inverted soft edges** (earliest pass-1 consumer first) if acyclic —
-///    this is the empty-virtual-before-provider fix when no hard path
+///
+/// 3. **Try inverted soft edges** (earliest pass-1 consumer first) if
+///    acyclic — the empty-virtual-before-provider fix when no hard path
 ///    `virtual →* provider` blocks the promote.
 /// 4. Kahn topo with pass-1 index as ready-queue tie-break.
 ///
@@ -805,22 +804,21 @@ mod tests {
         );
     }
 
-    /// Regression test for the 2026-07-16 `order_cycle` bug: an ordinary,
-    /// acyclic hard (BDEPEND) dependent of a genuine hard-cycle member must
-    /// still be ordered *after* it, even when an unrelated soft (RDEPEND)
-    /// cycle elsewhere folds both into the same `succ_all` component.
+    // Regression test for the 2026-07-16 `order_cycle` bug: an ordinary,
+    // acyclic hard (BDEPEND) dependent of a genuine hard-cycle member must
+    // still be ordered *after* it, even when an unrelated soft (RDEPEND)
+    // cycle elsewhere folds both into the same `succ_all` component.
     ///
-    /// Shape: `dev-util/elt` <-> `dev-util/xz` is a genuine hard (BDEPEND)
-    /// cycle. `sys-apps/sweep` has an ordinary hard BDEPEND on `elt` — no
-    /// cyclic relationship with it at all. `dev-util/fn` RDEPENDs on
-    /// `sweep`, and `elt` RDEPENDs on `fn` — a soft back-path that pulls
-    /// `sweep` into the same `succ_all` component as the `elt`/`xz` hard
-    /// cycle. `sweep`'s name is deliberately picked with a *larger* sort key
-    /// than `elt`'s, so the old, ungated indeg tie-break picked it first
-    /// (traced by hand against the pre-fix code): `fn` reaches `indeg_hard
-    /// == 0` first and is emitted, then `elt` and `sweep` tie at
-    /// `indeg_hard == 1` / `indeg_all == 1`, and the largest-key tie-break
-    /// picked `sweep` — before its own real hard dependency `elt`.
+    // Shape: `dev-util/elt` <-> `dev-util/xz` is a genuine hard (BDEPEND)
+    // cycle. `sys-apps/sweep` has an ordinary hard BDEPEND on `elt` — no
+    // cyclic relationship with it. `dev-util/fn` RDEPENDs on `sweep`, and
+    // `elt` RDEPENDs on `fn` — a soft back-path that pulls `sweep` into the
+    // same `succ_all` component as the `elt`/`xz` hard cycle. `sweep`'s name
+    // is picked with a *larger* sort key than `elt`'s, so the old, ungated
+    // indeg tie-break picked it first: `fn` reaches `indeg_hard == 0` first
+    // and is emitted, then `elt`/`sweep` tie at `indeg_hard == 1` /
+    // `indeg_all == 1`, and the largest-key tie-break picked `sweep` —
+    // before its own real hard dependency `elt`.
     #[test]
     fn ordinary_hard_dependent_of_a_cycle_member_still_orders_after_it() {
         let mut repo = InMemoryRepository::new();

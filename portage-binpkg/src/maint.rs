@@ -190,12 +190,10 @@ impl VerifyReport {
     }
 }
 
-/// Check each indexed container's size/MD5/SHA1 against the file on disk,
-/// and (when `require_signature` or `keyring` is given) its OpenPGP
-/// signature. `fix`: quarantine corrupt containers (rename to `.corrupt`)
-/// and regenerate the index afterward, so missing/corrupt entries are
-/// dropped. Signature problems are reported but never trigger
-/// quarantine/`fix` on their own — a validly-built, correctly-indexed
+/// Check each indexed container's size/MD5/SHA1 against disk, and (when
+/// `require_signature` or `keyring` is given) its OpenPGP signature. `fix`:
+/// quarantine corrupt containers and regenerate the index. Signature
+/// problems are reported but never trigger quarantine — a correctly-indexed
 /// container with a bad signature is a trust problem, not a corrupt one.
 pub fn verify(
     pkgdir: &Utf8Path,

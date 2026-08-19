@@ -358,17 +358,15 @@ pub struct EbuildShell {
     /// `LD_LIBRARY_PATH` for phases, resolved by the caller (`ebuild.rs`),
     /// not read from disk here. See todo/for-sonnet.md 2026-08-08.
     build_ld_library_path: Option<String>,
-    /// Where `BDEPEND`-class build tools (a `${CHOST}-*` cross toolchain, its
-    /// `pkg-config`, …) actually live for this invocation — `Cli::host_roots()`'s
-    /// merge root: the real host `/` for a privileged `--root` offset, the
-    /// prefix itself for an unprivileged `--prefix` overlay (which cannot
-    /// write the real host). `None` when unknown (the standalone `em ebuild`
-    /// debug path). Deliberately NOT the package's own merge root — using
-    /// that for a plain same-arch `--root` offset was tried (2026-07-12) and
-    /// reverted (see [`init_build_env`]'s toolchain-selection comment): a
-    /// same-arch binary built into an offset is not safely runnable
-    /// unchrooted, unlike a cross-compiler (host-native by construction) or
-    /// the real host's own tools.
+    /// Where `BDEPEND`-class build tools actually live for this invocation
+    /// — `Cli::host_roots()`'s merge root: real host `/` for a privileged
+    /// `--root` offset, the prefix itself for `--prefix`. `None` when
+    /// unknown (standalone `em ebuild` debug path).
+    ///
+    /// Deliberately NOT the package's own merge root: tried for a same-arch
+    /// `--root` offset (2026-07-12) and reverted, see [`init_build_env`]'s
+    /// toolchain-selection comment — a same-arch binary built into an
+    /// offset isn't safely runnable unchrooted, unlike a cross-compiler.
     build_broot: Option<Utf8PathBuf>,
     /// Caller-resolved directories placed ahead of the sanitised phase `PATH`
     /// ([`phase_path_dirs`]) — the one way to reach a tool that sanitising
@@ -380,20 +378,17 @@ pub struct EbuildShell {
     /// `__source_all_bashrcs`. The user hook is where overlay search paths can
     /// be wired without build-system knowledge in our code.
     bashrc_files: Vec<Utf8PathBuf>,
-    /// Snapshot of the fully-configured shell, captured at the first sourcing
-    /// and restored before every subsequent one, so that nothing a previously
-    /// sourced ebuild defined — variables, eclass functions, aliases, shell
-    /// options — leaks into the next (`brush_core::Shell` is a deep `Clone`).
-    /// Configuration mutators reset it to `None` for re-capture.
+    /// Snapshot of the fully-configured shell, captured at the first
+    /// sourcing and restored before every subsequent one, so nothing a
+    /// previous ebuild defined leaks into the next (`Shell` is a deep
+    /// `Clone`). Configuration mutators reset it to `None` for re-capture.
     baseline: Option<Box<Shell>>,
-    /// Path of the ebuild already sourced into the live (carried-forward) shell
-    /// for the current package's phase run. Phases of one package reuse a single
-    /// sourcing: the ebuild + eclass global scope runs once, and later phases run
-    /// against the carried environment (matching portage's saved-env model)
-    /// rather than re-sourcing — which would re-assert raw ebuild variables while
-    /// `inherit` skips the eclass that mutates them (e.g. distutils-r1 converting
-    /// `DISTUTILS_USE_PEP517=flit` → `flit-core`). `None` until the first phase
-    /// sources it; reset when a different ebuild is run.
+    /// Path of the ebuild already sourced into the live (carried-forward)
+    /// shell for the current package's phase run: the ebuild + eclass
+    /// global scope runs once, later phases reuse it (portage's saved-env
+    /// model) rather than re-sourcing, which would re-assert raw ebuild
+    /// vars while `inherit` skips the eclass mutating them. `None` until
+    /// the first phase sources it; reset when a different ebuild runs.
     phase_sourced_ebuild: Option<Utf8PathBuf>,
     repo_path: Utf8PathBuf,
     eclass_dirs: Vec<Utf8PathBuf>,
@@ -483,18 +478,14 @@ impl EbuildShell {
             .profile(ProfileLoadBehavior::Skip)
             .rc(RcLoadBehavior::Skip)
             .parser(ParserImpl::Winnow)
-            // Pinned rather than left to default to the process's ambient
-            // cwd (brush falls back to `std::env::current_dir()` when this
-            // is unset): `run_phase` later anchors the process cwd to the
-            // real build's `work_root` via `std::env::set_current_dir`
-            // (below), which is itself process-global — a concurrently
-            // running test/shell in the same process can observe a stale or
-            // just-deleted cwd between one test's build finishing (its
-            // tempdir dropped) and another's shell construction, surfacing
-            // as a bare `Shell("... No such file or directory")` from
-            // `getcwd()`. The repo root always exists and is a more
-            // meaningful starting point than whatever the caller's process
-            // cwd happened to be anyway.
+            // Pinned rather than left to the process's ambient cwd (brush
+            // falls back to `std::env::current_dir()` when unset):
+            // `run_phase` later anchors the process cwd to `work_root`,
+            // process-global, so a concurrently running test/shell can
+            // observe a stale or just-deleted cwd between one test's
+            // tempdir dropping and another's shell construction, surfacing
+            // as `Shell("... No such file or directory")` from `getcwd()`.
+            // The repo root always exists.
             .working_dir(repo.path().as_std_path().to_path_buf())
             .build()
             .await
@@ -780,23 +771,21 @@ impl EbuildShell {
     /// external helper script reads for itself.
     ///
     /// This crate has no business querying a terminal — the caller
-    /// (`portage-cli`) resolves `--color`/`NO_COLOR`/TTY-detection and its own
-    /// width once, and carries the answer in. The same split real portage uses
-    /// between its Python and bash halves.
+    /// (`portage-cli`) resolves `--color`/`NO_COLOR`/TTY-detection once and
+    /// carries the answer in, the same split real portage uses between its
+    /// Python and bash halves.
     ///
     /// Phase-env vars with consumers outside this crate:
     ///
-    /// * `COLUMNS` — portage sets it to avoid `stty`; with `PORTAGE_BIN_PATH`
-    ///   set, gentoo-functions reads `$COLUMNS` only (no stty fallback), so
-    ///   missing COLUMNS forces non-tty rendering in `binutils-config` etc.
+    /// * `COLUMNS` — portage sets it to avoid `stty`; missing it forces
+    ///   non-tty rendering in gentoo-functions consumers (`binutils-config`).
     /// * `NOCOLOR` — cargo/cmake/ruby-ng eclasses.
     /// * `NO_COLOR` — cross-project convention (python/zig eclasses,
-    ///   gentoo-functions). Any non-empty value disables colour; enabled =
-    ///   empty string, not a false-ish word.
+    ///   gentoo-functions); any non-empty value disables colour.
     ///
-    /// `PORTAGE_COLOR_*` stays out of the environment: portage
-    /// exports it only because its own `e*` helpers are bash, and nothing in
-    /// `::gentoo` reads it — checked across every eclass and ebuild.
+    /// `PORTAGE_COLOR_*` stays out of the environment: portage exports it
+    /// only because its own `e*` helpers are bash, and nothing in
+    /// `::gentoo` reads it.
     pub fn set_terminal(&mut self, terminal: terminal::TerminalConfig) {
         self.terminal.set(terminal);
         self.set_var("COLUMNS", &terminal.columns.to_string());
@@ -1118,29 +1107,26 @@ impl EbuildShell {
     /// Set up the build environment.
     ///
     /// Exports `PORTAGE_BIN_PATH` (when portage is installed; some eclasses
-    /// reference it) but relies on our own self-contained `do*`/`new*` install
-    /// helpers rather than portage's `ebuild-helpers/`,
-    /// configures a writable `DISTDIR`, passes through build-tool variables
-    /// (`CFLAGS`, `MAKEOPTS`, …) from the caller's environment, and defines
-    /// the per-EAPI default phase implementation bash functions
-    /// (`__eapi0_src_unpack`, `__eapi2_src_compile`, …) that `__ebuild_phase_funcs`
-    /// wires together.
+    /// reference it) but relies on our own self-contained `do*`/`new*`
+    /// install helpers rather than portage's `ebuild-helpers/`, configures a
+    /// writable `DISTDIR`, passes through build-tool variables (`CFLAGS`,
+    /// `MAKEOPTS`, …), and defines the per-EAPI default phase bash functions
+    /// that `__ebuild_phase_funcs` wires together.
     ///
     /// The output helpers (`einfo`, `ewarn`, …), predicates (`___eapi_*`),
     /// `emake`, `econf`, and `__ebuild_phase_funcs` are registered as Rust
     /// builtins in `new_with_cache` and therefore never sourced from portage.
     pub async fn init_build_env(&mut self) -> Result<()> {
         // Invalidate at the start of every phase. With restore_baseline()'s
-        // capture-on-first-use, this is what yields phase-to-phase state
-        // persistence within a package: once this phase mutates the shell the
-        // baseline stays None, so the *next* run_phase's restore_baseline()
-        // re-captures the then-current shell — exported vars and other state
-        // set in one phase are visible in the next (portage gets the same
-        // effect by saving/restoring the ebuild environment between phases,
-        // and REPLACING_VERSIONS / USE rely on it here). Package isolation
-        // comes from a fresh EbuildShell per package in the merge driver, NOT
-        // from the baseline; do not hoist this invalidation out expecting
-        // stricter hermeticity — it would drop inter-phase state.
+        // capture-on-first-use, this yields phase-to-phase state persistence
+        // within a package: once this phase mutates the shell the baseline
+        // stays None, so the *next* run_phase's restore_baseline() re-
+        // captures the then-current shell — state set in one phase is
+        // visible in the next (portage's own save/restore between phases).
+        //
+        // Package isolation comes from a fresh EbuildShell per package in
+        // the merge driver, NOT from the baseline; don't hoist this
+        // invalidation out expecting stricter hermeticity.
         self.invalidate_baseline();
         // Establish PATH as a real shell variable (not just the inherited
         // process env) so eclasses that do `export PATH="...:${PATH}"` — e.g.
@@ -1204,18 +1190,15 @@ impl EbuildShell {
             }
         }
 
-        // MAKEOPTS default: portage derives `-j<nproc>` when neither make.conf
-        // nor the process env sets it (make.globals leaves it empty and the PM
-        // computes a default in config.py). Without this, emake runs serially
-        // on every build — a 128-core box builds gcc one file at a time
-        //. Apply only
-        // if still unset after the env pass-through above so an explicit
-        // make.conf or `MAKEOPTS=... em ...` always wins. Conservative: use
-        // 2/3 of cores + 1 for `-j` (I/O-bound link steps and memory-heavy
-        // compiles like gcc/lto should not fully saturate; mirrors the heuristic
-        // Portage itself recommends), plus `-l<cores>` so make throttles new
-        // jobs once the load average reaches the core count (avoids thrash on
-        // memory-heavy link steps).
+        // MAKEOPTS default: portage derives `-j<nproc>` when neither
+        // make.conf nor the process env sets it. Without this, emake runs
+        // serially — a 128-core box builds gcc one file at a time. Applied
+        // only if still unset after the env pass-through above.
+        //
+        // Conservative: 2/3 of cores + 1 for `-j` (I/O-bound link steps and
+        // memory-heavy compiles like gcc/lto shouldn't fully saturate,
+        // mirroring Portage's own heuristic), plus `-l<cores>` so make
+        // throttles new jobs once the load average reaches the core count.
         if self
             .get_var("MAKEOPTS")
             .map(|v| v.trim().is_empty())
@@ -1330,16 +1313,13 @@ impl EbuildShell {
                 ] {
                     if self.get_var(var).filter(|s| !s.is_empty()).is_none() {
                         // Unlike the other 11 (built by crossdev's own toolchain
-                        // steps alongside gcc, so they exist whenever gcc does),
-                        // `${tool_tuple}-pkg-config` is never created by anything
-                        // em builds — real crossdev relies on a
-                        // separately-installed `cross-pkg-config` wrapper this
-                        // project doesn't reproduce. Blindly setting PKG_CONFIG
-                        // here pointed at a file that doesn't exist, which —
-                        // unlike an unset var — short-circuits
-                        // `tc-getPKG_CONFIG`'s own "already set" fast path and
-                        // skips its real PATH-search/bare-name fallback.
-                        // Require the specific tool to exist, not only gcc.
+                        // steps alongside gcc), `${tool_tuple}-pkg-config` is
+                        // never created by anything em builds — real crossdev
+                        // relies on a separately-installed wrapper this project
+                        // doesn't reproduce. Blindly setting PKG_CONFIG to a
+                        // nonexistent file short-circuits `tc-getPKG_CONFIG`'s
+                        // "already set" fast path, skipping its real fallback —
+                        // so require the specific tool to exist, not only gcc.
                         if tool_exists(prefix_bin.as_ref(), &tool_tuple, tool) {
                             self.set_var(
                                 var,
@@ -1435,12 +1415,11 @@ impl EbuildShell {
     }
 
     /// Set each prefixed `USE_EXPAND` group variable to the values of its
-    /// enabled flags (the reverse of profile expansion): for group `FOO`, every
-    /// enabled `foo_<value>` flag contributes `<value>` to `FOO`. Eclasses read
-    /// these variables directly (`LLVM_SLOT`, `PYTHON_TARGETS`, …). Only groups
-    /// with at least one enabled flag are written, so a group set by other means
-    /// is never blanked. `USE_EXPAND_UNPREFIXED` groups are left alone (their
-    /// flags are indistinguishable from plain USE without the value list).
+    /// enabled flags (the reverse of profile expansion): group `FOO` gets
+    /// `<value>` for every enabled `foo_<value>` flag, read by eclasses
+    /// directly (`LLVM_SLOT`, `PYTHON_TARGETS`, …). Only groups with at
+    /// least one enabled flag are written. `USE_EXPAND_UNPREFIXED` groups
+    /// are left alone (indistinguishable from plain USE without the list).
     fn populate_use_expand_vars(&mut self) {
         let use_str = self.get_var("USE").unwrap_or_default();
         let use_expand = self.get_var("USE_EXPAND").unwrap_or_default();
@@ -1639,52 +1618,19 @@ impl EbuildShell {
             .unwrap_or_default();
 
         // A `cross-<tuple>/*` host toolchain tool (binutils/gcc/gdb/
-        // clang-crossdev-wrappers — see the ESYSROOT block below for the same
-        // filter) needs an EPREFIX-style offset regardless of `--local`, for a
-        // reason distinct from ESYSROOT: `toolchain.eclass` computes its own
-        // `PREFIX=${EPREFIX}/usr` and passes `--prefix=${PREFIX}` to the
-        // package's own `./configure` — and DESTDIR+prefix is a *physical*
-        // install-path convention (`make install DESTDIR=${D}` literally
-        // writes under `${D}${prefix}/...`), so unlike ESYSROOT (a pure
-        // DEPEND-resolution hint) this one is NOT just cosmetic: whatever
-        // `PREFIX`/`--with-sysroot` bakes in also determines where the built
-        // files actually land inside `${D}`, and our own `ED` must match it
-        // for the merge step to find them.
+        // clang-crossdev-wrappers, `host_codegen`) needs an EPREFIX-style
+        // offset regardless of `--local`. See [the EPREFIX-flip
+        // rationale](../../docs/design/em-prefix-experiment.md) for why
+        // this isn't just cosmetic (unlike ESYSROOT below) and why
+        // SYSROOT/ESYSROOT stay untouched by it.
         //
-        // `--local` already supplies this correctly (root_str == eprefix
-        // there, by construction of the root model). A self-contained
-        // `--root DIR` (no `--local`) has `eprefix` empty, so
-        // `toolchain.eclass`'s baked-in `--with-sysroot` collapsed to the bare
-        // host path `/usr/<tuple>` (the *host's* own unrelated real crossdev
-        // sysroot, if any, not this root's)
-        // from-scratch cross-stage1 test, Fix:
-        // for this package class only, when `eprefix` is otherwise empty,
-        // offset it exactly as `--local` would (root_str becomes EPREFIX, ROOT
-        // becomes "/") — this reuses the *already-correct*, already-tested
-        // EPREFIX-subtree merge logic (`ebuild.rs::ed_image_dir`) generically,
-        // rather than inventing a new merge path for this one package class.
-        //
-        // SYSROOT/ESYSROOT are untouched by this flip and must stay so:
-        // SYSROOT already equals `root_str` for a plain `--root` build (unlike
-        // `--local`, where it's host `/`) — which is *already* correct for a
-        // self-contained host toolchain (it must link against the root's own,
-        // not the real host's, native libc — that's the native toolchain this
-        // same root just bootstrapped). ESYSROOT for this package class is
-        // computed straight from `root_str` below, independent of `eprefix` —
-        // so flipping `eprefix` here does not double-count either.
-        //
-        // NOTE for future refactoring: this function derives `ROOT`, `EPREFIX`,
-        // `ED`, `EROOT`, `SYSROOT`, `ESYSROOT` — six PMS location variables —
-        // through a chain of local variables computed in sequence. `PATH`
-        // above and `EPREFIX`/`ESYSROOT` here all key off the same
-        // `build_class` signal (computed once, near `category`/`pn`,
-        // above). If a further package-class special-case shows up, this
-        // whole block deserves extracting into a small `RootVars { root,
-        // eprefix, ed, eroot, sysroot, esysroot }` value type built by one
-        // function that takes `(build_class, root_str, build_sysroot,
-        // build_eprefix)` and returns all six together — so the invariants
-        // connecting them (ED must track EPREFIX; ESYSROOT must NOT
-        // double-count a flipped EPREFIX) are enforced in one place instead
+        // NOTE for future refactoring: this function derives `ROOT`,
+        // `EPREFIX`, `ED`, `EROOT`, `SYSROOT`, `ESYSROOT` through a chain of
+        // local variables computed in sequence, all keyed off the same
+        // `build_class` signal. If a further package-class special-case
+        // shows up, extract this into a `RootVars { root, eprefix, ed,
+        // eroot, sysroot, esysroot }` value type built by one function, so
+        // the invariants connecting them are enforced in one place instead
         // of by convention across a 100-line function.
         let eprefix = if host_codegen && eprefix.is_empty() && root_str != "/" {
             root_str.trim_end_matches('/').to_string()
@@ -1832,25 +1778,12 @@ impl EbuildShell {
         }
 
         // Export all PM-provided variables so external processes (make,
-        // ./configure, …) inherit them as environment variables. Our do*/new*
-        // install helpers run in-shell and read these directly.
-        // Bash `export` on an unset/empty name is harmless — it just marks it for export.
-        //
-        // CHOST/CBUILD/CTARGET must be here: real portage's config object
-        // exports its whole settings dict as the ebuild process's real OS
-        // environment from the start, so every real subprocess a plain
-        // ebuild/eclass command spawns (e.g. openssl's `bash
-        // "${FILESDIR}/gentoo.config"`) inherits them transparently. em instead
-        // sources make.conf/profile into an already-running brush shell as
-        // plain (non-exported) assignments — fine for our own Rust builtins
-        // (econf/emake read brush's variable table directly, bypassing export
-        // entirely) but invisible to a real child process unless listed here.
-        // Omitting CHOST specifically meant `gentoo.config` saw no CHOST at
-        // all, so openssl's `Configure` fell back to autodetecting the *build
-        // host's* kernel arch via `uname` — silently producing a host-arch
-        // Configure target (and ARM-only assembly files) under `--cross`,
-        // even though CC/CFLAGS (which real Rust builtins forward explicitly)
-        // were already correctly cross-targeted.
+        // ./configure, …) inherit them; our do*/new* install helpers read
+        // these in-shell directly. Bash `export` on an unset/empty name is
+        // harmless. CHOST/CBUILD/CTARGET must be here: see [the sourced-env
+        // sweep doc](../../docs/design/build-environment.md) for why em's
+        // `source`d (non-exported) assignments need this and the openssl
+        // `gentoo.config` host-arch-autodetect breakage omitting CHOST caused.
         self.run_string(
             "export CATEGORY PN PV PR PVR P PF FILESDIR WORKDIR S T D TMPDIR EAPI EBUILD \
              HOME ROOT DISTDIR PORTAGE_BIN_PATH PATH LD_LIBRARY_PATH EBUILD_PHASE \
@@ -2412,19 +2345,10 @@ fn program_on_path(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Directories listed in an `ld.so.conf`-format file (as written by
-/// `env_update`, `maint/env.rs`, or shipped by glibc itself), `include`
-/// directives correctly glob-expanded. `env_update` writes fully-qualified,
-/// already-prefixed paths (confirmed live: `/opt/pfx2/usr/lib64`, not bare
-/// `/usr/lib64`), so — unlike `maint/env.rs`'s own `refresh_ld_cache`, which
-/// re-roots a *relative* default list under a root — no prefix re-rooting
-/// applies here. Best-effort: an unreadable/missing file (e.g. a fresh
-/// prefix's very first phase, before any `env_update` has run) silently
-/// yields no directories, same spirit as `refresh_ld_cache`.
 /// Bash/brush-internal names [`export_sourced_env`](EbuildShell::export_sourced_env)
-/// must skip: dynamic/magic variables bash manages itself (exporting them is
-/// either a no-op, nonsensical, or — for the readonly ones — a hard error that
-/// would abort the whole `export` statement).
+/// must skip: dynamic/magic variables bash manages itself (exporting them
+/// is either a no-op, nonsensical, or — for the readonly ones — a hard
+/// error that would abort the whole `export` statement).
 pub(crate) fn is_bash_internal_var(name: &str) -> bool {
     matches!(
         name,

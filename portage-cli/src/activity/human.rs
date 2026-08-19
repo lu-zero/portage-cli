@@ -167,8 +167,8 @@ impl HumanStdoutSink {
     ///   [`regen_bar_style`]) — it owns TTY detection, redraw-rate limiting,
     ///   and (critically) auto-suppression when stderr isn't a terminal, so
     ///   a piped/logged run doesn't get one `\r`-redraw write per completed
-    ///   ebuild (thousands of them) flooding the log with an unreadable
-    ///   multi-hundred-KB "line".
+    ///   ebuild flooding the log with an unreadable multi-hundred-KB "line".
+    ///
     /// - **Merge (and friends):** `Jobs: N of M complete…` only when
     ///   `--jobs > 1` (matches real emerge's sequential path, which never
     ///   shows that line).

@@ -61,12 +61,10 @@ pub enum PortagePackage {
     Choice {
         /// Unique id of the synthetic choice group (from a process-global
         /// counter — never repeats, so it's never interned: unlike
-        /// `UseDecision`'s name, which recurs identically across every
-        /// USE-dep co-solve fixpoint iteration for the same (cpn, flag) and
-        /// so benefits from interning, a `Choice` id is minted once and
-        /// never looked up again — interning it would only leak process
-        /// memory and bloat the shared interner table for every other
-        /// lookup, for zero reuse benefit.
+        /// `UseDecision`'s name, which recurs identically every USE-dep
+        /// co-solve fixpoint iteration for the same (cpn, flag), a `Choice`
+        /// id is minted once and never looked up again — interning it would
+        /// only leak process memory for zero reuse benefit.
         id: u64,
     },
     /// Slot-choice node.  Each version selects one slot candidate.

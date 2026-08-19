@@ -74,13 +74,12 @@ pub use version_set::PortageVersionSet;
 /// Render a pubgrub `NoSolution` derivation tree into a human-readable
 /// explanation.
 ///
-/// The raw [`pubgrub::DerivationTree`] `Debug` output prints package names as
-/// their internal interned string keys (e.g. `Cpn { category: Interned(3),
-/// package: Interned(4) }`), which is unreadable. This routes the tree through
-/// pubgrub's [`pubgrub::DefaultStringReporter`], which renders packages and version sets
-/// via their [`Display`](std::fmt::Display) impls — producing real atoms like
-/// `dev-lang/python:3.14`. It also collapses "no versions" derivations into
-/// cleaner external messages first.
+/// The raw [`pubgrub::DerivationTree`] `Debug` output prints package names
+/// as their internal interned string keys, which is unreadable. This routes
+/// the tree through pubgrub's [`pubgrub::DefaultStringReporter`], which
+/// renders packages/version sets via their [`Display`](std::fmt::Display)
+/// impls — real atoms like `dev-lang/python:3.14` — and collapses "no
+/// versions" derivations into cleaner external messages first.
 pub fn format_no_solution(
     mut tree: pubgrub::DerivationTree<
         PortagePackage,

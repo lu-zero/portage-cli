@@ -821,14 +821,14 @@ mod tests {
         assert!(written.contains("sys-libs/zlib"), "{written}");
     }
 
-    /// Shared fixture for [`resolve_active_use`] tests: a repo with one
-    /// ebuild `app-misc/foo-1` (`cache_extra` appended to a minimal
-    /// EAPI/SLOT/KEYWORDS md5-cache entry — IUSE, REQUIRED_USE, etc.) and a
-    /// config root whose profile at `etc/portage/make.profile` gets
-    /// `profile_files` written into it verbatim (e.g. `use.mask`,
-    /// `package.use.force`). Returns the repo and roots ready to pass
-    /// straight to `resolve_active_use`; the two `TempDir`s must outlive
-    /// that call.
+    // Shared fixture for [`resolve_active_use`] tests: a repo with one
+    // ebuild `app-misc/foo-1` (`cache_extra` appended to a minimal
+    // EAPI/SLOT/KEYWORDS md5-cache entry — IUSE, REQUIRED_USE, etc.) and a
+    // config root whose profile at `etc/portage/make.profile` gets
+    // `profile_files` written into it verbatim (e.g. `use.mask`,
+    // `package.use.force`). Returns the repo and roots ready to pass
+    // straight to `resolve_active_use`; the two `TempDir`s must outlive
+    // that call.
     fn active_use_fixture(
         cache_extra: &str,
         profile_files: &[(&str, &str)],

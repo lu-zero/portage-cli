@@ -12,12 +12,11 @@ use portage_repo::{ProfileDesc, Repository};
 use crate::config_plan::{self, ConfigEntry};
 
 /// The profile path (relative to `profiles/`) `host_root`'s own
-/// `make.profile` resolves to, if that link exists and lands inside `repo`'s
-/// own tree — the same canonicalize-and-strip-prefix check
-/// `select::profile::current_profile` uses, just against the host link
-/// instead of the prefix's. `host_root` is `/` in production; tests pass a
-/// fixture dir so both branches (mirror vs. ARCH-default) are exercised
-/// without touching the real host.
+/// `make.profile` resolves to, if that link exists and lands inside
+/// `repo`'s own tree — the same canonicalize-and-strip-prefix check
+/// `select::profile::current_profile` uses, against the host link instead
+/// of the prefix's. `host_root` is `/` in production; tests pass a fixture
+/// dir so both branches (mirror vs. ARCH-default) are exercised.
 fn host_profile_under_repo(repo: &Repository, host_root: &Utf8Path) -> Option<String> {
     let target = std::fs::canonicalize(host_root.join("etc/portage/make.profile")).ok()?;
     let target = Utf8PathBuf::from_path_buf(target).ok()?;
@@ -61,12 +60,11 @@ fn default_profile_for_arch(repo: &Repository) -> Result<String> {
 }
 
 /// Symlink `<eroot>/etc/portage/make.profile` to the resolved profile.
-/// Idempotent: a profile already linked (this prefix's own earlier run, or
-/// `em select profile set`) is left untouched — checked by link presence
-/// (`symlink_metadata`, matching `config_plan::ConfigEntry::Symlink`'s own
-/// idempotency check), not `exists()`, which follows the link and would
-/// treat a dangling symlink (e.g. its host profile target since removed) as
-/// absent and silently relink it instead of leaving it for the user to fix.
+/// Idempotent: a profile already linked is left untouched — checked by
+/// link presence (`symlink_metadata`), not `exists()`, which follows the
+/// link and would treat a dangling symlink (e.g. its host profile target
+/// since removed) as absent and silently relink instead of leaving it for
+/// the user to fix.
 pub(super) fn ensure_profile(eroot: &Utf8Path, repo: &Repository) -> Result<()> {
     ensure_profile_from(eroot, repo, Utf8Path::new("/"))
 }

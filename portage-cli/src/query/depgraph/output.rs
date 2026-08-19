@@ -61,20 +61,11 @@ pub(super) const C_STATUS_R: Style = Style::new()
 use super::installed::action_tag;
 use super::repo::{FilterReason, RepoData, find_cache};
 
-/// Report the installed packages whose dependencies the plan would violate.
-///
-/// Aggregated rather than listed one row per violated atom. A requirer commonly
-/// contributes many atoms differing solely in one USE dep
-/// (`~llvm-core/llvm-22.1.6[llvm_targets_AArch64]`, `…[llvm_targets_AMDGPU]`,
-/// …), each of which would repeat the requirer and the proposed version.
-/// Grouped target → proposed version → requirer → version constraint, so each
-/// is stated once and the USE deps collapse into one flat list beneath the
-/// constraint they all qualify.
 /// One USE-flag group produced by [`group_use_flags`]: either the base
-/// (non-`USE_EXPAND`) flags (`var == None`, rendered as `USE="…"`) or a single
-/// `USE_EXPAND` variable (`var == Some("LLVM_TARGETS")`). Returned structured
-/// so the caller can wrap each variable's value list under its own opening
-/// quote.
+/// (non-`USE_EXPAND`) flags (`var == None`, rendered as `USE="…"`) or a
+/// single `USE_EXPAND` variable (`var == Some("LLVM_TARGETS")`). Returned
+/// structured so the caller can wrap each variable's value list under its
+/// own opening quote.
 struct GroupedUse {
     /// `None` = base flags (the `USE=` group).
     var: Option<String>,
@@ -161,6 +152,13 @@ fn colorize_use_flags_chunk(chunk: &str) -> String {
         .join(" ")
 }
 
+/// Report the installed packages whose dependencies the plan would violate.
+///
+/// Aggregated rather than listed one row per violated atom. A requirer
+/// commonly contributes many atoms differing solely in one USE dep, each
+/// of which would repeat the requirer and the proposed version. Grouped
+/// target → proposed version → requirer → version constraint, so each is
+/// stated once and the USE deps collapse into one flat list beneath it.
 pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_expand: &[String]) {
     use std::collections::{BTreeMap, BTreeSet};
     // A constraint carried by a package the plan itself replaces is stale, not
@@ -858,25 +856,6 @@ fn installed_versions_col(
     )
 }
 
-/// How one flag renders, relative to the installed build it is compared against.
-///
-/// Ports portage's `_create_use_string`
-/// (`_emerge/resolver/output_helpers.py:262`), which decides both *which* flags
-/// appear and how each is marked:
-///
-/// | Flag | Rendered |
-/// |---|---|
-/// | on, unchanged | `flag` (red) — only when `all_flags` or required |
-/// | on, absent from the old IUSE | `flag%*` (yellow) |
-/// | on, previously off | `flag*` (green) |
-/// | off, unchanged | `-flag` (blue) — only when `all_flags` or required |
-/// | off, absent from the old IUSE | `-flag%` (yellow) |
-/// | off, previously on | `-flag*` (green) |
-/// | dropped from IUSE entirely | `(-flag%)`/`(-flag%*)` (yellow), only when `all_flags` or required |
-///
-/// Anything not listed is omitted, which is why a plain `em -p` on an installed
-/// package shows only what actually changes. When nothing comparable is
-/// installed every flag is shown, unmarked.
 /// Per-flag comparison inputs for [`flag_token`]: the slice of "old build"
 /// state (current/old IUSE membership, old USE membership, newness) plus
 /// whether the flag is force/masked, which together decide the token's marker
@@ -890,6 +869,27 @@ struct FlagState {
     forced: bool,
 }
 
+/// How one flag renders, relative to the installed build it is compared against.
+///
+/// Ports portage's `_create_use_string`, which decides both *which* flags
+/// appear and how each is marked:
+///
+/// | Flag (on) | Rendered |
+/// |---|---|
+/// | unchanged | `flag` (red) — only when `all_flags` or required |
+/// | absent from the old IUSE | `flag%*` (yellow) |
+/// | previously off | `flag*` (green) |
+///
+/// | Flag (off) | Rendered |
+/// |---|---|
+/// | unchanged | `-flag` (blue) — only when `all_flags` or required |
+/// | absent from the old IUSE | `-flag%` (yellow) |
+/// | previously on | `-flag*` (green) |
+/// | dropped from IUSE entirely | `(-flag%)`/`(-flag%*)` (yellow), only when `all_flags` or required |
+///
+/// Anything not listed is omitted, which is why a plain `em -p` on an
+/// installed package shows only what actually changes. When nothing
+/// comparable is installed every flag is shown, unmarked.
 fn flag_token(
     name: &str,
     enabled: bool,
@@ -1344,12 +1344,12 @@ pub(super) struct PrettyCtx<'a> {
     pub accept_keywords: &'a portage_resolve::repo::AcceptKeywords,
     /// Local binpkg index, when `-k`/`-K` (usepkg/usepkgonly) is active —
     /// used to show `[binary ...]` instead of `[ebuild ...]` for an entry
-    /// whose USE matches an available binpkg, matching real emerge's `-p`.
-    /// `None` when neither flag is set, or for callers with no binpkg-reuse
-    /// concept at all (`equery depgraph`, the crossdev gcc probe). Remote
-    /// binhosts (`-g`/`-G`) are deliberately not checked here — that would
-    /// add a network fetch to a plain `-p` preview; the merge itself still
-    /// checks them via `run_merge_plan`'s own index.
+    /// whose USE matches an available binpkg. `None` when neither flag is
+    /// set, or for callers with no binpkg-reuse concept at all.
+    ///
+    /// Remote binhosts (`-g`/`-G`) are deliberately not checked here — that
+    /// would add a network fetch to a plain `-p` preview; the merge itself
+    /// still checks them via `run_merge_plan`'s own index.
     pub binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
     /// Wall-clock time spent in the resolution phase (initial solve + any
     /// `--complete-graph` repair rounds), shown on the Pretty plan as
@@ -1359,11 +1359,9 @@ pub(super) struct PrettyCtx<'a> {
     pub resolve_secs: f64,
     /// The cpns whose rows are bold (`*_SELECTED`), matching real emerge's
     /// `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/`PKG_BINARY_MERGE_WORLD` and
-    /// built by `mod.rs` from both halves of its
-    /// `resolver/output.py::check_system_world` gate: `@selected` membership
-    /// (already tracked in the world file) ∪ the atoms *this* run would add
-    /// to it (`DepgraphOpts::world_additions`, empty under `--oneshot` and
-    /// for read-only callers).
+    /// built by `mod.rs` from both halves of its `check_system_world` gate:
+    /// `@selected` membership ∪ the atoms *this* run would add to it
+    /// (`DepgraphOpts::world_additions`, empty under `--oneshot`).
     ///
     /// So `em -p newpkg` bolds `newpkg` — the run would record it — while
     /// `em -1p newpkg` renders it plain, and an already-tracked package
@@ -1371,14 +1369,14 @@ pub(super) struct PrettyCtx<'a> {
     /// only if their cpns are individually in `@selected`: emerge's
     /// `favorites` half covers literal command-line atoms only.
     pub selected: &'a std::collections::HashSet<portage_atom::Cpn>,
-    /// `-vv`: every root target this run resolved `atoms` into (`mod.rs`'s
-    /// `root_cpns`) — explicit command-line atoms *and* `@set` expansions
-    /// alike, unlike [`Self::selected`]'s `@world`-only gate. `format_plan_parts`
-    /// tints a matching row purple (`C_PKG_REQUESTED[_SELECTED]`) instead of
-    /// its usual merge/binary/nomerge color, so "you (or your `@set`) asked
-    /// for this one directly" is visible independently of world/merge status
-    /// without adding a marker column — a dependency pulled in to satisfy
-    /// one of these stays in the ordinary palette.
+    /// `-vv`: every root target this run resolved `atoms` into — explicit
+    /// command-line atoms *and* `@set` expansions alike, unlike
+    /// [`Self::selected`]'s `@world`-only gate. `format_plan_parts` tints a
+    /// matching row purple instead of its usual merge/binary/nomerge color.
+    ///
+    /// So "you (or your `@set`) asked for this one directly" is visible
+    /// without a marker column — a dependency pulled in to satisfy one of
+    /// these stays in the ordinary palette.
     pub requested: &'a std::collections::HashSet<portage_atom::Cpn>,
 }
 
@@ -1411,19 +1409,17 @@ pub(super) fn print_pretty_rooted(
 /// Builds the two halves of one row of the emerge-style plan display: the
 /// bracket status column (`"[ebuild  U  ]"`), and everything after it
 /// (`cpn-ver`, old-version column, USE flags, size, destination suffix).
-/// Returned separately rather than joined so callers can put other content
-/// (`--tree`'s indent) between the two, the way real emerge's own tables
-/// keep the status column flush-left regardless of tree depth. Shared by the
-/// flat `-p` list and `--tree`'s depth-first walk, so a package looks
-/// identical everywhere it's shown.
+/// Returned separately so callers can put other content (`--tree`'s
+/// indent) between the two, keeping the status column flush-left. Shared
+/// by the flat `-p` list and `--tree`'s depth-first walk.
 ///
 /// `in_plan` picks the bracket: the real computed action (`[ebuild U]`,
 /// `[binary N]`, ...) for a package the plan actually merges, or a
-/// fixed-width `[nomerge]` placeholder — matching real emerge's tree
-/// display — for a dependency-graph node shown only to connect the tree
-/// (already satisfied at this version, nothing to do here). Everything else
-/// (USE, old-version, size) is computed identically either way: emerge's own
-/// `-t` still shows a `[nomerge]` row's full USE/old-version detail.
+/// fixed-width `[nomerge]` placeholder for a dependency-graph node shown
+/// only to connect the tree (already satisfied, nothing to do here).
+///
+/// Everything else (USE, old-version, size) is computed identically either
+/// way: emerge's own `-t` still shows a `[nomerge]` row's full detail.
 fn format_plan_parts(
     ctx: &PrettyCtx,
     pkg: &PortagePackage,
@@ -1747,18 +1743,16 @@ pub(super) const C_DIM: Style = Style::new().effects(Effects::DIMMED);
 /// version, size), indented by *merge-order depth* (one space per level,
 /// matching real `emerge --tree`).
 ///
-/// This mirrors real `emerge --tree`'s algorithm structurally (portage's
-/// `_ordered_tree_display` + `_prune_tree_display`, in
-/// `_emerge/resolver/output_helpers.py`): it walks the actual merge `order`
-/// — the topologically-sorted install sequence — not a plain forward DFS of
-/// the dependency graph. For each package in `order`, it finds the shallowest
-/// already-shown ancestor (via child-edge membership) and extends that
-/// branch; if none exists, it backtracks through **parent** edges to graft
-/// the node onto whatever shown node reconnects to (preferring a parent that
-/// avoids a direct cycle), emitting the grafted filler as `[nomerge]`. Depth
-/// is therefore "where this falls in the build sequence," not "graph
-/// distance from a root," so the tree reshapes correctly when the solver
-/// reorders the plan (SCC tie-breaks, soft-RDEPEND cycle repair).
+/// This mirrors real `emerge --tree`'s algorithm structurally: it walks
+/// the actual merge `order`, not a plain forward DFS. For each package it
+/// finds the shallowest already-shown ancestor and extends that branch; if
+/// none exists, it backtracks through **parent** edges to graft the node
+/// onto whatever shown node reconnects to, emitting the filler as
+/// `[nomerge]`.
+///
+/// Depth is therefore "where this falls in the build sequence," not
+/// "graph distance from a root," so the tree reshapes correctly when the
+/// solver reorders the plan (SCC tie-breaks, soft-RDEPEND cycle repair).
 ///
 /// One deliberate, documented divergence from real emerge's rendering:
 ///

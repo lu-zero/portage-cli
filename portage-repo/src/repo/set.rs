@@ -130,13 +130,11 @@ impl RepoSet {
     /// contract `Repository::find_cpns` already holds per repo.
     ///
     /// For a **bare** name, this also synthesises virtual [`Location::Alias`]
-    /// repos (e.g. crossdev's `cross-<tuple>`): each alias whose source is the
-    /// main repo contributes a `Cpn::new(dest_cat, name)` for every
-    /// destination category it lists — the same synthesis `load_repos` (in
-    /// `portage-resolve`) applies when building `RepoData`, so a bare name
-    /// resolves to the same cross cpn a full `cross-<tuple>/<pkg>` atom would.
-    /// Without this, a crossdev alias for `gcc` was invisible to bare-name
-    /// resolution even though `cross-.../gcc` resolved fine.
+    /// repos (e.g. crossdev's `cross-<tuple>`): each alias whose source is
+    /// the main repo contributes a `Cpn::new(dest_cat, name)` for every
+    /// destination category it lists, the same synthesis `load_repos`
+    /// applies building `RepoData`. Without this, a crossdev alias for
+    /// `gcc` was invisible to bare-name resolution.
     ///
     /// [`Location::Alias`]: super::repos_conf::Location::Alias
     pub fn find_cpns(&self, pattern: &str) -> Vec<Cpn> {
@@ -218,21 +216,17 @@ impl RepoSet {
     /// shadowed by cpv — the memoized counterpart to [`Self::ebuilds`].
     ///
     /// Sourced from [`crate::entries::repo_entries`] per repo: bulk read,
-    /// per-entry suspect narrowing, secondary-cache fallback, live-source
-    /// fallback, with the sync-stamp/gap-index memo where the repo supports
-    /// it — the same fast path [`Self::ebuilds`]' raw directory walk does
-    /// *not* get, because it answers a different question ("what ebuild
-    /// files exist" vs. "what does the metadata cache say about them").
-    /// Prefer this over `ebuilds()` whenever what's actually needed is
-    /// metadata (DEPEND, DESCRIPTION, …), not a bare file listing.
+    /// per-entry suspect narrowing, secondary-cache and live-source
+    /// fallback, with the sync-stamp/gap-index memo where supported — the
+    /// fast path [`Self::ebuilds`]'s raw directory walk doesn't get, since
+    /// it answers a different question. Prefer this whenever what's needed
+    /// is metadata (DEPEND, DESCRIPTION, …), not a bare file listing.
     ///
-    /// A [`Stream`], not a collected `Vec`: `repo_entries` is itself an
-    /// `async fn` per repo, so a later repo's bulk read is only awaited
-    /// once a consumer actually asks for more than an earlier repo alone
-    /// serves — a caller that only needs the first match (or an early
-    /// exit) never pays for the repos behind it. A caller that needs every
-    /// entry more than once (multiple atoms against the same set) collects
-    /// it once itself (`StreamExt::collect`).
+    /// A [`Stream`], not a collected `Vec`: a later repo's bulk read is
+    /// only awaited once a consumer asks for more than an earlier repo
+    /// alone serves, so a first-match/early-exit caller never pays for the
+    /// repos behind it. A caller needing every entry more than once
+    /// collects it once itself (`StreamExt::collect`).
     pub fn entries(&self) -> impl Stream<Item = EntryIn<'_>> + '_ {
         stream::unfold(
             EntriesState {
@@ -455,13 +449,13 @@ mod tests {
         assert_eq!(names, vec!["app-misc/bar", "sys-apps/foo"]);
     }
 
-    /// A bare name that matches a [`Location::Alias`] repo's source package
-    /// resolves to the synthesised cross cpn (`cross-<tuple>/<pkg>`), matching
-    /// what `load_repos` injects into `RepoData` — previously `find_cpns`
-    /// ignored aliases entirely, so a crossdev alias for e.g. `gcc` was
-    /// invisible to bare-name resolution even though `cross-.../gcc` resolved
-    /// fine as a full atom. Only aliases whose source is the main repo are
-    /// considered (the same gate `load_repos` applies).
+    // A bare name that matches a [`Location::Alias`] repo's source package
+    // resolves to the synthesised cross cpn (`cross-<tuple>/<pkg>`), matching
+    // what `load_repos` injects into `RepoData` — previously `find_cpns`
+    // ignored aliases entirely, so a crossdev alias for e.g. `gcc` was
+    // invisible to bare-name resolution even though `cross-.../gcc` resolved
+    // fine as a full atom. Only aliases whose source is the main repo are
+    // considered (the same gate `load_repos` applies).
     #[test]
     fn find_cpns_synthesises_alias_cross_cpns_for_a_bare_name() {
         use std::collections::{HashMap, HashSet};
@@ -506,10 +500,10 @@ mod tests {
         );
     }
 
-    /// An alias whose source is *not* the main repo is not synthesised — the
-    /// same gate `load_repos` applies (it can't disambiguate a same-named cpn
-    /// coming from a non-main source). The bare name still resolves against
-    /// real repos only.
+    // An alias whose source is *not* the main repo is not synthesised — the
+    // same gate `load_repos` applies (it can't disambiguate a same-named cpn
+    // coming from a non-main source). The bare name still resolves against
+    // real repos only.
     #[test]
     fn find_cpns_ignores_an_alias_whose_source_is_not_main() {
         use std::collections::{HashMap, HashSet};

@@ -116,16 +116,17 @@ pub enum ResetGuard {
     ///
     /// ### Deviation from `git reset --merge`
     ///
-    /// Real `reset --merge` is finer-grained: it keeps local modifications to
-    /// files whose content does not differ between `HEAD` and the target, and
-    /// only aborts when a *conflicting* path would be lost. Reproducing that
-    /// needs a full three-way index/worktree merge, which gix has no porcelain
-    /// for. We refuse on *any* dirty worktree instead. That is strictly more
-    /// conservative — it never loses data `reset --merge` would have kept, it
-    /// only declines some resets `reset --merge` would have performed. For an
-    /// ebuild repository (which nobody is expected to hand-edit) declining
-    /// with an actionable message is the right trade; the default `git_cmd`
-    /// backend still gets the exact `reset --merge` behaviour.
+    /// Real `reset --merge` is finer-grained: it keeps local modifications
+    /// to files whose content does not differ between `HEAD` and the
+    /// target, only aborting when a *conflicting* path would be lost.
+    /// Reproducing that needs a full three-way index/worktree merge, which
+    /// gix has no porcelain for, so we refuse on *any* dirty worktree
+    /// instead — strictly more conservative, never losing data.
+    ///
+    /// For an ebuild repository (nobody is expected to hand-edit it),
+    /// declining with an actionable message is the right trade; the
+    /// default `git_cmd` backend still gets the exact `reset --merge`
+    /// behaviour.
     RefuseIfDirty,
 }
 
@@ -235,15 +236,12 @@ pub fn clean_worktree(repo: &gix::Repository) -> Result<usize, HardResetError> {
 /// `progress` receives the force-checkout counters (files / bytes). Pass
 /// [`gix::progress::Discard`] when the caller does not care.
 ///
-/// Takes `repo` by `&mut` (not `&`) so it can call
+/// Takes `repo` by `&mut` so it can call
 /// [`gix::Repository::committer_or_set_generic_fallback`] before moving any
-/// ref: step 5 below writes a reflog entry, which real `git reset --hard`
-/// happily does even with no `user.name`/`user.email` configured anywhere
-/// (falling back to `$(whoami)@$(hostname)`) but gix hard-errors on by
-/// design ("failing to provide a user is fatal", `Repository::identity`'s
-/// own doc) unless an in-memory fallback is set first. A host that's never
-/// run `git config --global user.name` is a completely normal state for
-/// automated Portage sync to run on — match real git's tolerance for it.
+/// ref: step 5 writes a reflog entry, which real `git reset --hard` allows
+/// even with no `user.name`/`user.email` configured (falling back to
+/// `$(whoami)@$(hostname)`) but gix hard-errors on unless a fallback is set
+/// first — a host with no `git config --global user.name` is normal.
 pub fn hard_reset_to<P>(
     repo: &mut gix::Repository,
     target: gix::ObjectId,
@@ -458,13 +456,10 @@ fn update_head_to(repo: &gix::Repository, target: gix::ObjectId) -> Result<(), H
 /// or collide with the worktree root:
 ///
 /// - an empty path — `workdir.join("")` compares **equal to `workdir`**, so
-///   the "tracked file vanished" loop would have handed the whole repository,
-///   `.git` and all, to `remove_dir_all`. This is not hypothetical: the
-///   previous `to_str().unwrap_or("")` produced exactly that for any
-///   non-UTF-8 entry.
-/// - an absolute path, or one containing `..`/`.`/a root or prefix
-///   component — a real index never holds these, so a path that does is
-///   either corrupt or hostile, and either way not something to delete.
+///   this would hand the whole repo, `.git` and all, to `remove_dir_all`
+///   (the previous `to_str().unwrap_or("")` did exactly that).
+/// - an absolute path, or one with `..`/`.`/a root or prefix component — a
+///   real index never holds these, so treat it as corrupt or hostile.
 ///
 /// Anything surviving the filter has at least one `Normal` component, so the
 /// result is always strictly below `workdir`.

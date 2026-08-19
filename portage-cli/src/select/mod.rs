@@ -99,16 +99,13 @@ pub(crate) fn config_portage_dir(globals: &Cli) -> Utf8PathBuf {
 /// `Cli::base_roots` instead of the `--target`-substituted `Cli::roots`.
 ///
 /// Deliberately uses [`Roots::config_root_explicit`], not
-/// [`Roots::config`]: the latter also follows a bare `--root` (`em`'s own
-/// self-contained-bootstrap default), but real eselect never derives a
-/// config root from `ROOT` alone (its `profile.eselect` module only honours
-/// an explicit `PORTAGE_CONFIGROOT`/`EROOT`) — so a plain `em --root R
-/// select ...` operates on the host's config unless `--config-root R` is
-/// also given, matching that. `crossdev`'s own internal activation
-/// (`activate_toolchain`) is unaffected: it passes `Cli::base_roots()`
-/// straight to `env_d_dir`/[`config_portage_dir_for`] too, but crossdev
-/// always runs under a topology it just bootstrapped itself, not through
-/// this config-root guess.
+/// [`Roots::config`]: the latter also follows a bare `--root`, but real
+/// eselect never derives a config root from `ROOT` alone (only an explicit
+/// `PORTAGE_CONFIGROOT`/`EROOT`) — so a plain `em --root R select ...`
+/// operates on the host's config unless `--config-root R` is also given.
+///
+/// `crossdev`'s own internal activation is unaffected: it always runs
+/// under a topology it just bootstrapped itself, not through this guess.
 pub(super) fn config_portage_dir_for(roots: &Roots) -> Utf8PathBuf {
     // If config root is explicitly set (--config-root), use it
     if let Some(config) = roots.config_root_explicit() {

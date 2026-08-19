@@ -90,10 +90,9 @@ impl Libc {
 /// The flavour of staged toolchain bootstrap: **cross** or **native**. The
 /// ordered step sequence ([`toolchain_plan`]) is identical; only how each
 /// component is named as an atom differs — cross rewrites the category to
-/// `cross-<tuple>`, native keeps the real `::gentoo` category. This is the
-/// single typed decision point for "build a toolchain into a fresh root": the
-/// cross-vs-native split that the driver previously re-derived at each call
-/// site.
+/// `cross-<tuple>`, native keeps the real `::gentoo` category. Single typed
+/// decision point for "build a toolchain into a fresh root", replacing a
+/// cross-vs-native split the driver used to re-derive at each call site.
 #[derive(Debug, Clone)]
 pub enum BootstrapKind {
     /// Cross-compilation into a `<CTARGET>` sysroot (`CBUILD ≠ CHOST`): atoms
@@ -161,27 +160,22 @@ impl BootstrapKind {
 /// libc step lands, so the toolchain and the (stage1) libc are one intertwined
 /// bootstrap.
 ///
-/// `self_contained` distinguishes a from-scratch `--root DIR` EPREFIX (its own
-/// empty VDB, no host-shared libs/merged-usr skeleton) from the default
-/// `--local`/`--prefix` crossdev EPREFIX, which shares the host's already-
-/// merged-usr, already-populated system. `BootstrapKind::Native` is always
-/// self-contained (that's its only use case) and ignores this flag; it only
-/// changes `BootstrapKind::Cross`'s plan — see the two call sites below for
-/// what "self-contained" unlocks (baselayout skeleton, dropping debuginfod).
+/// `self_contained` distinguishes a from-scratch `--root DIR` EPREFIX (own
+/// empty VDB, no host-shared merged-usr skeleton) from the default
+/// `--local`/`--prefix` crossdev EPREFIX, which shares the host's
+/// already-populated system. `BootstrapKind::Native` is always
+/// self-contained and ignores this flag; it only changes
+/// `BootstrapKind::Cross`'s plan (baselayout skeleton, dropping debuginfod).
 ///
-/// `prefix_guest` is `BootstrapKind::Native`-only (`Cross` ignores it — it's
-/// a host-OS concept, not a cross-target one): Gentoo Prefix's own "the
-/// host, not ::gentoo, owns this OS's libc" signal. `virtual/libc`'s and
-/// `virtual/os-headers`'s RDEPEND already collapse to a bare blocker under
-/// it (no real package pulled in), and `toolchain.eclass` gates gcc's own
-/// libc-linking on the same flag — so the *kernel-headers* step (already
-/// `virtual/os-headers`, `nodeps: false`) needs no change at all, it just
-/// resolves to an empty merge automatically. Only the *libc* step needs an
-/// explicit skip: it merges the real `sys-libs/<libc>` atom directly under
-/// `--nodeps` (to break the glibc-needs-gcc cycle a plain resolve would hit
-/// in an empty ROOT), which bypasses `virtual/libc`'s conditional RDEPEND
-/// entirely — there is no virtual to resolve through, so the flag has to be
-/// read explicitly instead.
+/// `prefix_guest` is `BootstrapKind::Native`-only (`Cross` ignores it — a
+/// host-OS concept, not a cross-target one). `virtual/libc`'s RDEPEND
+/// already collapses to a bare blocker under it, so the *kernel-headers*
+/// step needs no change — it just resolves to an empty merge. Only the
+/// *libc* step needs an explicit skip: it merges `sys-libs/<libc>` directly
+/// under `--nodeps` (to break the glibc-needs-gcc cycle), bypassing
+/// `virtual/libc`'s conditional RDEPEND entirely, so the flag must be read
+/// explicitly instead. See [prefix-guest is
+/// host-OS-agnostic](../../docs/user/root-model.md) for the flag itself.
 pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: bool) -> StagePlan {
     let atom = |real_cat: &str, pkg: &str| kind.atom(real_cat, pkg);
     let owned = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -249,16 +243,16 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
     let is_self_contained_bootstrap = matches!(kind, BootstrapKind::Native) || self_contained;
 
     // A real python merge, not a `package.provided` claim: python.eclass's
-    // own `python_setup`-style checks re-verify against the VDB at build
-    // time, independent of whatever satisfied the depgraph — found live,
-    // `dev-build/ninja` died `No supported Python implementation installed`
-    // even with `dev-lang/python` in `package.provided`, because that only
-    // ever satisfies dependency *resolution*, never writes an actual VDB
-    // entry. Host-shared cross skips this: the host VDB is dual-rooted in,
-    // so a real python is already there. Placed before binutils: on an
-    // empty VDB, binutils's own dependency closure already reaches several
-    // python-consuming build tools (meson, ninja, ...), so python must be
-    // real by the time that step's own resolution runs, not just by gcc's.
+    // own checks re-verify against the VDB at build time, independent of
+    // whatever satisfied the depgraph — found live, `dev-build/ninja` died
+    // `No supported Python implementation installed` even with
+    // `dev-lang/python` in `package.provided` (that only ever satisfies
+    // dependency *resolution*, never writes a VDB entry). Host-shared cross
+    // skips this: the host VDB is dual-rooted in already.
+    //
+    // Placed before binutils: on an empty VDB, binutils's own dependency
+    // closure already reaches python-consuming build tools (meson, ninja),
+    // so python must be real by the time that step resolves, not just gcc's.
     if is_self_contained_bootstrap {
         steps.push(StageStep {
             label: "python".into(),
@@ -387,12 +381,12 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
 /// includes the unconditional-reinstall `libc headers` `--nodeps` step to
 /// break the empty-sysroot cycle) — rerunning that against an
 /// already-bootstrapped sysroot would blindly reinstall the headers-only
-/// variant on top of the real, full glibc already there. A version-only gcc
-/// refresh needs neither that nor the full "libc" rebuild step
-/// `toolchain_plan` does between its own gcc-stage1/gcc-stage2 (that step
-/// exists there because, mid-*bootstrap*, only libc *headers* exist before
-/// it runs; here the full libc is already in place from the original
-/// bootstrap and gcc-stage2 just links against it).
+/// variant on top of the real, full glibc already there.
+///
+/// A version-only gcc refresh needs neither that nor the full "libc"
+/// rebuild step between gcc-stage1/gcc-stage2 (that step exists there
+/// because, mid-*bootstrap*, only libc *headers* exist before it runs; here
+/// the full libc is already in place and gcc-stage2 just links against it).
 ///
 /// Used when `sys-devel/gcc`'s resolved version needs a newer
 /// `cross-<CTARGET>/gcc` than what `gcc-config` currently has active — see

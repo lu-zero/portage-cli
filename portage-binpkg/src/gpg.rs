@@ -208,11 +208,10 @@ pub fn verify_clearsign(armored: &str) -> Result<CleartextSignedMessage> {
 
 /// Verify `msg` (from [`verify_clearsign`]) against every key in `keyring` —
 /// each cert's primary key, then each of its subkeys (a signature's
-/// issuer-fingerprint subpacket doesn't uniquely identify *which*
-/// certificate in a multi-cert keyring signed it without a scan like this;
-/// `SignedPublicKey`'s own `VerifyingKey` impl only ever checks its primary
-/// key, never its subkeys). Returns the recovered plaintext and the
-/// fingerprint of whichever key verified; `Err` if none did.
+/// issuer-fingerprint subpacket doesn't uniquely identify *which* cert in a
+/// multi-cert keyring signed it; `SignedPublicKey`'s own `VerifyingKey` impl
+/// only ever checks its primary key, never subkeys). Returns the plaintext
+/// and fingerprint of whichever key verified; `Err` if none did.
 pub fn verify_against_keyring(
     msg: &CleartextSignedMessage,
     keyring: &Keyring,

@@ -75,11 +75,10 @@ pub(crate) async fn resolve_pkgdir_for_roots(roots: &Roots) -> Utf8PathBuf {
 
 /// Resolve the GPG verify keyring directory (`BINPKG_GPG_VERIFY_GPG_HOME`):
 /// `$BINPKG_GPG_VERIFY_GPG_HOME` env → make.conf → `<config root>/etc/portage/gnupg`.
-/// Root-aware via `roots.config()` (never the real host's `/etc/portage/gnupg`
-/// for a non-host `--root`/`--target`/`--prefix` — the same class of bug this
-/// project already fixed once for `PKGDIR`, see `resolve_pkgdir_for_roots`'s
-/// doc comment) — a flat directory of armored public-key files, not a real
-/// gpg keybox (see `portage_binpkg::gpg`'s module doc for why).
+/// Root-aware via `roots.config()` (never the real host's path for a
+/// non-host `--root`/`--target`/`--prefix` — same bug class already fixed
+/// once for `PKGDIR`) — a flat directory of armored public-key files, not a
+/// real gpg keybox (see `portage_binpkg::gpg`'s module doc for why).
 pub(crate) async fn resolve_gpg_verify_home_for_roots(roots: &Roots) -> Utf8PathBuf {
     if let Ok(v) = std::env::var("BINPKG_GPG_VERIFY_GPG_HOME")
         && !v.trim().is_empty()
@@ -99,14 +98,10 @@ pub(crate) async fn resolve_gpg_verify_home_for_roots(roots: &Roots) -> Utf8Path
 
 /// Open the local `PKGDIR` binpkg index if `-k`/`--usepkg` or
 /// `-K`/`--usepkgonly` is active, for the `-p` display to check binary
-/// reuse against (see `query::depgraph::output::PrettyCtx::binpkg_index`).
-/// `None` when neither flag is set — matching `run_merge_plan`'s own
-/// `want_local` condition, minus the remote (`-g`/`-G`) half: checking a
-/// binhost here would add a network fetch to a plain preview, so `-p`
-/// under `-g`/`-G` alone still shows `[ebuild ...]` even though the real
-/// merge may reuse a remote binpkg. Silent on error (unlike
-/// `run_merge_plan`'s own open, which warns) — this is a best-effort
-/// preview hint, not the path that actually performs the reuse.
+/// reuse against. `None` when neither flag is set — matching
+/// `run_merge_plan`'s `want_local` minus the remote (`-g`/`-G`) half: a
+/// binhost check here would add a network fetch to a plain preview. Silent
+/// on error (unlike `run_merge_plan`'s own open) — best-effort hint only.
 ///
 /// Also single-index only, unlike the real merge path's per-entry host/target
 /// `dual_pkgdir` split (`run_merge_plan`): under `--target -k`, a `MergeRoot::Host`
@@ -135,16 +130,12 @@ pub(crate) async fn read_make_conf_var(globals: &Cli, var: &str) -> Option<Strin
 /// Evaluates the file via [`MakeConf::apply_to`] (a real, minimal
 /// `brush_core::Shell` sourcing the file) rather than a plain
 /// [`MakeConf::get`], so `${VAR}` self-references expand — the stock Gentoo
-/// stage3 pattern `COMMON_FLAGS="-O2 -march=…"` + `CFLAGS="${COMMON_FLAGS}"`
-/// used to make every reader of this function see a literal, `-m*`-token-free
-/// `${COMMON_FLAGS}` string instead of the real flags. That silently starved
-/// the binpkg `build_env_key` gate (every desired key came out empty on such
-/// a host, which the asymmetric gate then rejects against any binpkg that
-/// *does* have a recorded key — a permanent rebuild loop on stock configs).
-/// References to a name this file never assigns (e.g. an ambient `${EPREFIX}`
-/// some other subsystem sets) now expand to empty rather than staying
-/// literal — also more correct than before, since that literal string was
-/// never a usable value either.
+/// `COMMON_FLAGS="-O2 -march=…"` + `CFLAGS="${COMMON_FLAGS}"` pattern used to
+/// leave every reader seeing a literal, `-m*`-free `${COMMON_FLAGS}` string,
+/// silently starving the binpkg `build_env_key` gate (rebuild loop).
+///
+/// A name this file never assigns now expands to empty rather than staying
+/// literal — more correct, since that literal string was never usable.
 pub(crate) async fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Option<String> {
     let cfg_root = roots
         .config()
@@ -166,14 +157,11 @@ pub(crate) async fn read_make_conf_var_for_roots(roots: &Roots, var: &str) -> Op
 }
 
 /// Evaluate whichever of `roots`' two candidate make.conf paths exists first
-/// (`etc/portage/make.conf`, then `etc/make.conf` — same fallback rule
-/// [`read_make_conf_var_for_roots`] uses per-variable) into a flat
-/// `NAME -> value` map via [`MakeConf::apply_to`]. Empty map if neither
-/// exists or fails to parse. Unlike `read_make_conf_var_for_roots`, this
-/// picks one file and returns its whole map rather than falling back to the
-/// second path per-variable — a split make.conf across both paths is not a
-/// real configuration this repo needs to support, and evaluating once
-/// instead of once-per-variable is also the point (see [`DesiredBuildEnv`]).
+/// (`etc/portage/make.conf`, then `etc/make.conf`) into a flat `NAME ->
+/// value` map via [`MakeConf::apply_to`]. Empty map if neither exists or
+/// fails to parse. Unlike `read_make_conf_var_for_roots`, this picks one
+/// file and returns its whole map rather than falling back per-variable — a
+/// split make.conf across both paths isn't a real config this repo supports.
 async fn evaluated_make_conf_env(roots: &Roots) -> std::collections::BTreeMap<String, String> {
     let cfg_root = roots
         .config()
@@ -261,12 +249,10 @@ impl DesiredBuildEnv {
     ///
     /// This overlays each env file onto the make.conf baseline via
     /// [`MakeConf::apply_to`] again — a real shell sourcing round-trip, so
-    /// `CFLAGS="${CFLAGS} -foo"` appends, `CFLAGS="-bar"` overrides, and
-    /// arbitrary shell logic (conditionals, command substitution) in an env
+    /// `CFLAGS="${CFLAGS} -foo"` appends and arbitrary shell logic in an env
     /// file is evaluated for real rather than silently ignored. A wrong
-    /// *desired* key here only risks an extra rebuild or a missed reuse
-    /// (this repo's established safe direction), never wrong-arch reuse —
-    /// the binpkg side's own recorded key is always shell-accurate.
+    /// *desired* key here only risks an extra rebuild or a missed reuse,
+    /// never wrong-arch reuse — the binpkg side's key is always accurate.
     ///
     /// `slot: None` limitation: slot-qualified `package.env` atoms won't
     /// match here (a plan entry doesn't carry a slot at this point) — the
@@ -389,12 +375,10 @@ pub(crate) async fn portage_binhosts(globals: &Cli) -> Vec<BinRepoEntry> {
 
 /// The pure core of [`portage_binhosts`]: combine parsed `binrepos.conf`
 /// sections with a legacy `PORTAGE_BINHOST` value into the final,
-/// priority-ordered list. Split out from the I/O (file reads, env var,
-/// `make.conf`) so the priority/reversal algorithm — the part most worth
-/// getting exactly right — is unit-testable without mutating the real
-/// process environment (`PORTAGE_BINHOST` is process-global; tests run
-/// threaded within one process, so setting it in a test would race any
-/// other test touching the same var).
+/// priority-ordered list. Split out from the I/O so the priority/reversal
+/// algorithm is unit-testable without mutating the real process environment
+/// (`PORTAGE_BINHOST` is process-global; tests run threaded, so setting it
+/// would race any other test touching the same var).
 fn combine_binhosts(
     sections: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
     order: &[String],
@@ -460,6 +444,8 @@ fn parse_binrepo_bool(v: Option<&String>) -> bool {
     matches!(v.map(|s| s.to_lowercase()), Some(s) if s == "true" || s == "yes")
 }
 
+/// The next free GPKG build-id for `<cat>/<pf>` in `pkgdir` (portage numbers
+/// rebuilds `<pf>-1`, `<pf>-2`, …); 1 when none exist.
 pub(crate) fn next_build_id(pkgdir: &Utf8Path, cat: &str, pf: &str) -> u32 {
     let dir = pkgdir.join(cat);
     let prefix = format!("{pf}-");

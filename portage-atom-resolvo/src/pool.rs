@@ -34,15 +34,16 @@ pub struct DepEdge {
 /// Controls how USE-conditional dependency groups (`use? ( deps )`) are
 /// handled during provider construction:
 ///
-/// - **`enabled`** — flags eagerly included (normal `use?` includes children,
-///   `!use?` skips them).
-/// - **`disabled`** — flags eagerly excluded (`use?` skips children, `!use?`
-///   includes them). This is the implicit default for any flag not listed.
-/// - **`solver_decided`** — the SAT solver decides whether the flag is active.
-///   A virtual solvable `virtual/USE_<flag>` is created; when the solver
-///   selects it the corresponding `use? ( deps )` become active.  Negated
-///   `!use? ( deps )` on solver-decided flags are included **unconditionally**
-///   (conservative: resolvo conditions have no NOT operator).
+/// - **`enabled`** — flags eagerly included (normal `use?` includes
+///   children, `!use?` skips them).
+/// - **`disabled`** — flags eagerly excluded (`use?` skips children,
+///   `!use?` includes them); the implicit default for any unlisted flag.
+///
+/// - **`solver_decided`** — the SAT solver decides: a virtual solvable
+///   `virtual/USE_<flag>` is created, and selecting it activates the
+///   corresponding `use? ( deps )`. Negated `!use? ( deps )` on
+///   solver-decided flags are included **unconditionally** (conservative:
+///   resolvo conditions have no NOT operator).
 #[derive(Debug, Clone, Default)]
 pub struct UseConfig {
     /// Flags forced ON: `use? ( deps )` active, `!use? ( deps )` skipped.

@@ -25,13 +25,13 @@ pub(crate) fn parse_atoms_strict(raw: &[String]) -> Result<Vec<portage_atom::Dep
 }
 
 /// Expand `@set` references in `raw` to concrete atoms, leaving plain atoms
-/// untouched. Sets are a portage-config concept (not PMS); resolution lives in
-/// `portage_repo::SetResolver`. The profile stack comes from
-/// `<config_root>/etc/portage/make.profile` (for `@system`/`@profile`); user
-/// sets, `@world`, and `@selected` are read from `eroot` (the install target).
-/// `@preserved-rebuild` is handled separately, inline below — it's a
-/// VDB/preserve-libs-registry query (real portage's
-/// `PreservedLibraryConsumerSet`), which `SetResolver` has no access to.
+/// untouched. Sets are a portage-config concept (not PMS); resolution lives
+/// in `portage_repo::SetResolver`. The profile stack comes from
+/// `<config_root>/etc/portage/make.profile` (for `@system`/`@profile`);
+/// user sets, `@world`, and `@selected` are read from `eroot`.
+///
+/// `@preserved-rebuild` is handled separately, inline below — a
+/// VDB/preserve-libs-registry query `SetResolver` has no access to.
 ///
 /// Failures (unknown set, bad profile link) are reported and the offending
 /// token dropped, matching `parse_atoms`' tolerance of bad atoms — a typo
@@ -177,10 +177,6 @@ pub(crate) struct EmergeOpts<'a> {
     pub extra_path: &'a [camino::Utf8PathBuf],
 }
 
-/// Resolve and (unless `--pretend`) merge `raw_atoms` with the global config in
-/// `cli`, plus the per-call [`EmergeOpts`]. Factored out of [`run_emerge`] so the
-/// crossdev staged-build driver can run each toolchain step through the very
-/// same path.
 /// [`EmergeOpts`] minus its borrowed `use_override` (already folded into
 /// `extra_use_override` by the time [`emerge_atoms_inner`] needs it) — keeps
 /// that function to a single options argument instead of one parameter per
@@ -264,6 +260,10 @@ fn eta_message(
     crate::activity::format_eta(&eta)
 }
 
+/// Resolve and (unless `--pretend`) merge `raw_atoms` with the global
+/// config in `cli`, plus the per-call [`EmergeOpts`]. Factored out of
+/// [`run_emerge`] so the crossdev staged-build driver can run each
+/// toolchain step through the very same path.
 async fn emerge_atoms_inner(
     cli: &cli::Cli,
     raw_atoms: &[String],
@@ -537,18 +537,16 @@ async fn emerge_atoms_inner(
 
     // Pre-flight: fail fast with a clear message if any plan entry's build
     // dependencies won't be present when it builds, rather than mid-build.
-    // Run before the `--pretend` return (not just for a real run), so `-p`/
-    // `-a` surface whether the plan is preflight-clean, the same way the
-    // merge plan itself is already shown under `-p` — a preview could
-    // otherwise never reveal a plan that would fail preflight during a real
-    // run. Skipped under `--nodeps` regardless of `--pretend`: that flag
-    // already means "merge only the named atoms, no dependency expansion or
-    // verification" (matching emerge's own `--nodeps`) — the guard-rail
-    // would otherwise still block on real, unconditional BDEPEND that
-    // --nodeps deliberately opted out of checking (e.g. a genuine bootstrap
-    // cycle like gawk -> bison -> gettext -> libxml2 -> meson -> python ->
-    // gawk, which has no valid dependency order and must be seeded out of
-    // order somewhere).
+    // Run before the `--pretend` return, so `-p`/`-a` surface whether the
+    // plan is preflight-clean, same as the merge plan itself under `-p` —
+    // a preview could otherwise never reveal a plan that would fail
+    // preflight during a real run.
+    //
+    // Skipped under `--nodeps` regardless of `--pretend`: that flag already
+    // means "no dependency expansion or verification" (matching emerge's
+    // own `--nodeps`) — the guard-rail would otherwise still block on real
+    // BDEPEND that `--nodeps` opted out of (a genuine bootstrap cycle with
+    // no valid dependency order that must be seeded out of order somewhere).
     if !nodeps {
         preflight::check(
             &outcome.plan,
@@ -836,13 +834,13 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
 
 /// Match `atoms` against `vdb`, deduping by Cpv identity (the same installed
 /// package can match two atoms given on the command line, e.g. "foo" and
-/// "cat/foo" — Hash + Eq already, no need to stringify, and this preserves
-/// the natural match order a sort+dedup by Display would scramble for no
-/// reason). `label` prefixes the "no atom matched anything" error (e.g.
-/// "-C/--unmerge", "-P/--prune"). Shared by both: their own match set differs
-/// downstream (`-C` keeps every match, `-P` drops each Cpn's highest), but
-/// "find installed packages for these atoms, report unmatched ones, bail if
-/// nothing matched at all" is identical.
+/// "cat/foo" — Hash + Eq already, preserving natural match order instead of
+/// scrambling it with a sort+dedup by Display). `label` prefixes the "no
+/// atom matched anything" error (e.g. "-C/--unmerge", "-P/--prune").
+///
+/// Shared by both: their match set differs downstream (`-C` keeps every
+/// match, `-P` drops each Cpn's highest), but "find installed packages for
+/// these atoms, report unmatched ones, bail if nothing matched" is identical.
 fn match_installed_atoms(
     vdb: &portage_vdb::Vdb,
     atoms: &[String],
@@ -881,11 +879,9 @@ fn match_installed_atoms(
 /// `-C`/`--unmerge`: remove the installed packages matching `atoms`
 /// directly, without any dependency graph at all — matches real emerge's
 /// `-C` semantics (a dangerous removal with zero dependency checking;
-/// `depclean` is the safe "and clean up what's no longer needed"
-/// alternative). Every installed slot/version matching any given atom is
-/// removed; there is no plan to preview beyond the match list itself, so
-/// `--pretend` just prints what would be removed and `--ask` confirms
-/// against that same list.
+/// `depclean` is the safe alternative). Every installed slot/version
+/// matching any given atom is removed; there is no plan to preview beyond
+/// the match list, so `--pretend` prints it and `--ask` confirms against it.
 async fn unmerge_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
     let vdb = open_cli_vdb(cli)?;
     let matched = match_installed_atoms(&vdb, atoms, "-C/--unmerge")?;
@@ -938,12 +934,10 @@ fn drop_highest_version_per_cpn(
 
 /// Real emerge's world-atom selection (`_world_atom`): only the literal,
 /// explicitly-named atoms make it onto the world set, never `@set`
-/// expansions. Takes the already-*resolved* `atoms` — bare names like `gcc`
-/// disambiguated via `query::resolve_atom` upstream — not the raw
-/// command-line strings: re-parsing the raw strings independently here used
-/// to bypass that disambiguation and reject any bare package name as an
-/// invalid cpn on a real (non-`-p`) merge, even though the exact same atom
-/// had just resolved fine for the depgraph itself.
+/// expansions. Takes the already-*resolved* `atoms` — disambiguated via
+/// `query::resolve_atom` upstream — not the raw command-line strings:
+/// re-parsing them independently here used to reject any bare package name
+/// as an invalid cpn even though the same atom had resolved fine already.
 fn select_world_atoms(atoms: &[TargetAtom]) -> Vec<portage_atom::Dep> {
     atoms
         .iter()
@@ -960,12 +954,10 @@ fn select_world_atoms(atoms: &[TargetAtom]) -> Vec<portage_atom::Dep> {
 
 /// The other half of real emerge's world selection: a `@name` set typed
 /// directly on the command line, when `name` is a `world-candidate` set
-/// (`portage_repo::is_world_candidate` — real portage's `usersets` only, by
-/// default `sets.conf`). Recorded as the literal `@name` reference
-/// (`maint::world::add_set_refs`), never its expanded members — those are
-/// exactly what `select_world_atoms` above excludes by filtering to
-/// `TargetOrigin::Explicit`. Deduplicated: several members of the same set
-/// all carry the same `Set(name)` origin.
+/// (real portage's `usersets` only). Recorded as the literal `@name`
+/// reference, never its expanded members — those are exactly what
+/// `select_world_atoms` above excludes. Deduplicated: several members of
+/// the same set all carry the same `Set(name)` origin.
 fn select_world_set_refs(atoms: &[TargetAtom]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     atoms
@@ -997,10 +989,9 @@ fn deselect_atoms(cli: &cli::Cli, atoms: &[String]) -> Result<()> {
 /// Shared removal core for `-C`/`--unmerge` and `-P`/`--prune`: given an
 /// already-computed, non-empty set of installed packages to remove, run the
 /// identical preview / `--pretend` / `--ask` / preserve-libs / removal /
-/// env-update sequence. `verb`/`past` name the action in user-facing output
-/// (`confirm_action`, error/progress messages) — the only thing that differs
-/// between the two callers. Both verbs end in "e" ("unmerge"/"prune"), so the
-/// gerund is derived rather than passed separately.
+/// env-update sequence. `verb`/`past` name the action in user-facing
+/// output — the only thing that differs between the two callers. Both end
+/// in "e" ("unmerge"/"prune"), so the gerund is derived, not passed.
 async fn remove_matched_packages(
     cli: &cli::Cli,
     vdb: portage_vdb::Vdb,

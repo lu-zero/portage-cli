@@ -112,12 +112,10 @@ fn vdb_set_kind(name: &str) -> Option<VdbSet> {
 ///
 /// These sets (`@preserved-rebuild`, `@live-rebuild`,
 /// `@deprecated-live-rebuild`, and — to follow — `@module-rebuild`/
-/// `@x11-module-rebuild`) query the installed-package database
-/// (`var/db/pkg`) and/or related registries, so they can't go through
-/// `portage_repo::SetResolver` (which is profile/config-only and has no VDB
-/// access). Both `emerge::expand_sets` (root-target expansion) and
-/// `maint::world::resolve_set` (display/audit) route VDB-aware names
-/// through here first.
+/// `@x11-module-rebuild`) query the installed-package database and/or
+/// related registries, so they can't go through `portage_repo::SetResolver`
+/// (profile/config-only, no VDB access). Both `emerge::expand_sets` and
+/// `maint::world::resolve_set` route VDB-aware names through here first.
 ///
 /// Returns `None` when `name` is not a VDB-aware built-in (caller falls
 /// back to `SetResolver`); `Some(Ok(atoms))` on success; `Some(Err(_))`
@@ -172,9 +170,10 @@ fn preserved_rebuild_atoms(vdb: &portage_vdb::Vdb, eroot: &Utf8Path) -> Result<V
 /// `@live-rebuild` / `@deprecated-live-rebuild` core: keep every installed
 /// package whose `variable` field (space-split) intersects `includes`.
 ///
-/// Matches portage's `VariableSet` (`portage/_sets/dbapi.py:146`) with
-/// `metadata-source` defaulting to `vartree` (the VDB itself), non-`*DEPEND`
-/// branch (`_filter`, lines 213-219): non-empty `includes ∩ values` → kept.
+/// Matches portage's `VariableSet` with `metadata-source` defaulting to
+/// `vartree` (the VDB itself), non-`*DEPEND` branch: non-empty
+/// `includes ∩ values` → kept.
+///
 /// Atoms are emitted as `cat/pkg:{main_slot}` — portage's `EverythingSet.load`
 /// builds `Atom(f"{pkg.cp}:{pkg.slot}")`, and `_pkg_str.slot` is the main
 /// slot only (subslot kept separate); defaulting to `"0"` mirrors portage's
@@ -209,15 +208,15 @@ fn variable_set_atoms(
 /// packages owning at least one path matched by `files`, minus any package
 /// that also owns a path matched by `exclude_files`.
 ///
-/// Matches portage's `OwnerSet` (`portage/_sets/dbapi.py:65`):
-/// `mapPathsToAtoms` first `glob`s each pattern **against the live
-/// filesystem** (so `/usr/lib*/xorg/modules` expands to the concrete
-/// `/usr/lib64/xorg/modules` etc.), then looks up owners of the resulting
-/// paths via `_match_contents` — an **exact CONTENTS-entry match** (any
-/// kind, including `dir`), with symlink-aware parent resolution so that a
-/// `/lib/modules` query matches a `/usr/lib/modules` entry when `/lib` →
-/// `/usr/lib`. `exclude-files` narrows the result: a package owning any
-/// excluded path is dropped entirely.
+/// Matches portage's `OwnerSet`: `mapPathsToAtoms` first `glob`s each
+/// pattern **against the live filesystem** (so `/usr/lib*/xorg/modules`
+/// expands to the concrete `/usr/lib64/xorg/modules`), then looks up
+/// owners via `_match_contents` — an **exact CONTENTS-entry match**, with
+/// symlink-aware parent resolution so `/lib/modules` matches a
+/// `/usr/lib/modules` entry when `/lib` → `/usr/lib`.
+///
+/// `exclude-files` narrows the result: a package owning any excluded path
+/// is dropped entirely.
 ///
 /// Verified against a live host: `emerge -p @module-rebuild` returns empty
 /// when no installed package has a CONTENTS entry for `/lib/modules`
@@ -314,13 +313,13 @@ fn expand_glob_patterns(patterns: &[&str], eroot: &Utf8Path) -> Vec<Utf8PathBuf>
 /// caller always wants both and the text runs to hundreds of thousands of
 /// lines.
 ///
-/// Unlike [`InstalledPackage::owns`] (which is restricted to `Obj`/`Sym` for
-/// the `qfile` use case), this matches **any** CONTENTS kind — including
+/// Unlike [`InstalledPackage::owns`] (restricted to `Obj`/`Sym` for the
+/// `qfile` use case), this matches **any** CONTENTS kind — including
 /// `dir`, which is what `@module-rebuild`'s `/lib/modules` query needs.
+///
 /// Symlink-aware: if no exact string match, fall back to comparing each
-/// side's resolved real path — portage's `_match_contents` does the
-/// equivalent via parent-directory inode comparison, so `/lib/modules`
-/// matches a `/usr/lib/modules` entry when `/lib` → `/usr/lib`.
+/// side's resolved real path, so `/lib/modules` matches a
+/// `/usr/lib/modules` entry when `/lib` → `/usr/lib`.
 ///
 /// Queries and CONTENTS paths are ROOT-relative (leading `/`, `eroot` already
 /// stripped — see [`expand_glob_patterns`]); resolution happens in the same
@@ -336,14 +335,15 @@ fn owns_any(raw: &str, queries: &[Query], eroot: &Utf8Path, symlinks: &LazySymli
 
 /// The CONTENTS lines that could possibly match one of `queries`.
 ///
-/// Both of [`matches_any`]'s arms need the entry's last path component to be
-/// a query basename, and a CONTENTS path field ends at a space, a newline or
-/// end of text — so every possible match sits at an occurrence of the query's
-/// `/basename` followed by one of those three. Jumping straight to those
-/// positions is an exact reject, not a heuristic, and skips parsing the
-/// hundreds of thousands of lines per package that cannot match. A line may
-/// be yielded more than once, or without matching (the needle can fall in a
-/// symlink target); the caller re-checks it properly.
+/// Both of [`matches_any`]'s arms need the entry's last path component to
+/// be a query basename, and a CONTENTS path field ends at a space, newline
+/// or end of text — so every possible match sits at an occurrence of the
+/// query's `/basename` followed by one of those three. Jumping straight to
+/// those positions is an exact reject, skipping the hundreds of thousands
+/// of lines per package that cannot match.
+///
+/// A line may be yielded more than once, or without matching (the needle
+/// can fall in a symlink target); the caller re-checks it properly.
 fn candidate_lines<'a>(raw: &'a str, queries: &'a [Query]) -> impl Iterator<Item = &'a str> + 'a {
     // Byte offsets throughout, but every one lands on a char boundary: the
     // needle is ASCII, and the bounds below sit on `\n` or the ends of `raw`.
@@ -454,14 +454,14 @@ impl LazySymlinks {
 /// can be determined.
 ///
 /// Prefers the live filesystem (`eroot`-anchored `canonicalize`, then
-/// re-stripped back to ROOT-relative) — matching real portage's own
-/// inode-comparison approach — since that reflects any symlink regardless
-/// of which package's CONTENTS recorded it. Falls back to
-/// [`resolve_via_recorded_symlinks`] (VDB-only, no filesystem access) when
-/// the path isn't actually materialized on disk yet — e.g. a scratch/
-/// in-progress root such as this codebase's own `walk_image` binpkg-image
-/// assembly, or a stage build mid-merge — where CONTENTS metadata alone is
-/// still enough to resolve a recorded symlink like `/lib` → `usr/lib`.
+/// re-stripped back to ROOT-relative) since that reflects any symlink
+/// regardless of which package's CONTENTS recorded it.
+///
+/// Falls back to [`resolve_via_recorded_symlinks`] (VDB-only, no
+/// filesystem access) when the path isn't materialized on disk yet — e.g.
+/// this codebase's own `walk_image` binpkg-image assembly, or a stage
+/// build mid-merge — where CONTENTS metadata alone still resolves a
+/// recorded symlink like `/lib` → `usr/lib`.
 fn real_path(p: &Utf8Path, eroot: &Utf8Path, symlinks: &LazySymlinks) -> Utf8PathBuf {
     let full = eroot.join(p.as_str().trim_start_matches('/'));
     let live = std::fs::canonicalize(full.as_std_path())
@@ -1012,13 +1012,13 @@ mod tests {
     fn module_rebuild_resolves_ownership_through_a_recorded_but_unmaterialized_symlink() {
         // The query path (`/lib/modules`) is a real, plain directory on this
         // fixture's disk — `expand_glob_patterns` needs *something* to exist
-        // there to yield it as a candidate at all. The owning package,
-        // though, records its CONTENTS via a *different* path
-        // (`/compat/modules`) that only resolves to the same real location
-        // through a symlink (`/compat` -> `lib`) recorded in the VDB but
-        // never actually created on this fixture's disk (a scratch/
-        // in-progress root, e.g. `walk_image`-style binpkg image assembly,
-        // where the CONTENTS record exists before the live symlink does).
+        // there to yield it as a candidate at all. The owning package
+        // records its CONTENTS via a *different* path (`/compat/modules`)
+        // that only resolves to the same real location through a symlink
+        // (`/compat` -> `lib`) recorded in the VDB but never actually
+        // created on disk (the CONTENTS record exists before the live
+        // symlink does, as in `walk_image`-style binpkg image assembly).
+        //
         // The old canonicalize-only comparison would silently drop this
         // package (its own CONTENTS path fails to canonicalize at all);
         // the VDB-only fallback still resolves the equivalence.

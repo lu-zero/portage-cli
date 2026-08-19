@@ -539,12 +539,12 @@ struct DistdirState {
 }
 
 /// Skips directories and `layout.conf` itself (real emirrordist's flat
-/// layout happily treats it as an ordinary file and will schedule it for
-/// deletion — a known real-world quirk, not inherited here). A leftover
-/// atomic-write temp file (`is_atomic_temp_name`) is removed when
-/// `remove_stale_partials` is set (real fetch runs; never under `-p`, which
-/// must leave the filesystem untouched) and always excluded from
-/// `present`/`orphans` either way — it is never a legitimate distfile.
+/// layout happily treats it as an ordinary file and schedules it for
+/// deletion — a known quirk, not inherited here).
+///
+/// A leftover atomic-write temp file (`is_atomic_temp_name`) is removed
+/// when `remove_stale_partials` is set (real fetch runs; never under
+/// `-p`) and always excluded from `present`/`orphans` either way.
 fn scan_distdir(
     distfiles: &Utf8Path,
     referenced: &HashSet<&str>,

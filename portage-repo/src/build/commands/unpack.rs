@@ -129,10 +129,11 @@ fn resolve_src_path(
         Ok(std::path::PathBuf::from(archive))
     } else if archive.starts_with("./") {
         // A `./`-relative archive refers to a file the ebuild itself just
-        // created in the work directory (e.g. `dev-python/installer`'s
-        // `cp foo.whl foo.whl.zip && unpack "./foo.whl.zip"`, to route a
-        // wheel through the generic zip unpacker — the same pattern
-        // `eclass/rpm.eclass` independently uses via `unpack "./${a}"`).
+        // created in the work dir (e.g. `dev-python/installer`'s `cp
+        // foo.whl foo.whl.zip && unpack "./foo.whl.zip"`, routing a wheel
+        // through the generic zip unpacker — same pattern `rpm.eclass`
+        // independently uses via `unpack "./${a}"`).
+        //
         // Must resolve against the shell's *tracked* working directory
         // (`cwd`), not whatever the Rust process's own OS-level CWD happens
         // to be — those can diverge, since brush tracks `$PWD` independently
@@ -271,14 +272,14 @@ fn unpack_piped(
 mod tests {
     use super::*;
 
-    /// Regression test for the riscv64 stage3 shakeout: `dev-build/meson`'s
-    /// real ebuild lists `meson-reference.3` (a bare man page, fetched via
-    /// SRC_URI's `->` rename) alongside its real `.tar.gz` source, and its
-    /// `src_unpack` is just `default` — which calls `unpack ${A}`
-    /// unconditionally on *every* distfile, including the man page. Real
-    /// Portage's `unpack` leaves a file with an unrecognized suffix
-    /// untouched rather than failing the phase; `em` was `die`-ing instead,
-    /// breaking every ebuild with a non-archive SRC_URI entry.
+    // Regression test for the riscv64 stage3 shakeout: `dev-build/meson`'s
+    // real ebuild lists `meson-reference.3` (a bare man page, fetched via
+    // SRC_URI's `->` rename) alongside its real `.tar.gz` source, and its
+    // `src_unpack` is just `default` — which calls `unpack ${A}`
+    // unconditionally on *every* distfile, including the man page. Real
+    // Portage's `unpack` leaves a file with an unrecognized suffix
+    // untouched rather than failing the phase; `em` was `die`-ing instead,
+    // breaking every ebuild with a non-archive SRC_URI entry.
     #[test]
     fn unrecognized_extension_is_a_no_op_not_an_error() {
         let tmp = tempfile::tempdir().unwrap();
@@ -301,16 +302,16 @@ mod tests {
         assert!(result.is_err() || result != Ok(0));
     }
 
-    /// Regression test for the riscv64 stage3 shakeout: `dev-python/installer`'s
-    /// `src_unpack` does `cp foo.whl foo.whl.zip && unpack "./foo.whl.zip"`
-    /// (a real, PMS-legitimate pattern — `eclass/rpm.eclass` independently
-    /// does the same `unpack "./${a}"` thing) to route a wheel through the
-    /// generic zip unpacker. A `./`-relative archive must resolve against
-    /// the shell's tracked working directory, not DISTDIR and not whatever
-    /// the Rust process's own OS-level CWD happens to be at the time —
-    /// those can diverge from brush's `$PWD` tracking. The bare
-    /// `PathBuf::from(archive)` this replaces always reported "not found"
-    /// for a file that demonstrably existed in `cwd`.
+    // Regression test for the riscv64 stage3 shakeout: `dev-python/installer`'s
+    // `src_unpack` does `cp foo.whl foo.whl.zip && unpack "./foo.whl.zip"`
+    // (a real, PMS-legitimate pattern — `eclass/rpm.eclass` independently
+    // does the same `unpack "./${a}"` thing) to route a wheel through the
+    // generic zip unpacker. A `./`-relative archive must resolve against
+    // the shell's tracked working directory, not DISTDIR and not whatever
+    // the Rust process's own OS-level CWD happens to be at the time —
+    // those can diverge from brush's `$PWD` tracking. The bare
+    // `PathBuf::from(archive)` this replaces always reported "not found"
+    // for a file that demonstrably existed in `cwd`.
     #[test]
     fn relative_archive_resolves_against_tracked_cwd_not_distdir() {
         let cwd = tempfile::tempdir().unwrap();

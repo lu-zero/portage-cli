@@ -176,7 +176,8 @@ pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
 }
 
 /// Whether this invocation has no per-package `__worker` seam to delegate
-/// privileged work to, so the *whole* process needs wrapping instead:
+/// privileged work to, so the *whole* process needs wrapping instead.
+///
 /// `em ebuild … install/qmerge` (the debug applet runs phases in-process),
 /// `-C`/`--unmerge` and `-c`/`--depclean` (pure removal, no install to
 /// attach a worker to), and `-B`/`--buildpkgonly` (single-process by

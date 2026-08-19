@@ -113,23 +113,18 @@ fn accumulate(
 
 impl ForceMask {
     /// The net forced and masked flag names for `cpv` — global `use.force`/
-    /// `use.mask` (both, as of 2026-07-12; see below) plus package-level
-    /// force/mask always, plus the `*.stable.*` sets when `stable`. Mask wins
-    /// over force. Portage applies force/mask strictly *after* the rest of
-    /// USE resolution (profile/`make.conf`/`package.use`/environment,
-    /// `portage_solver::resolve_effective_use`'s fold) — this is that final
-    /// step, not folded into any earlier layer.
+    /// `use.mask` plus package-level force/mask always, plus the
+    /// `*.stable.*` sets when `stable`. Mask wins over force. Applied
+    /// strictly *after* the rest of USE resolution (profile/`make.conf`/
+    /// `package.use`/environment) — this is that final step, not folded
+    /// into any earlier layer.
     ///
-    /// `iuse` restricts which global `use.force`/`use.mask` flags are even
-    /// considered: a forced/masked flag the package doesn't declare in `IUSE`
-    /// can never affect that package (there's no `+flag` IUSE default to
-    /// resurrect, and forcing on a flag outside `IUSE` is a no-op — the
-    /// package's own dependencies can't reference it), so it costs nothing to
-    /// skip. Global `use.force`/`use.mask` commonly have hundreds of entries
-    /// while a package's own IUSE is a few dozen at most, so this turns a
-    /// per-package O(global set) cost into O(package IUSE ∩ global set) — the
-    /// dominant cost of `apply()` before this filter, since it ran for every
-    /// version the solver instantiated.
+    /// `iuse` restricts which global flags are even considered: one the
+    /// package doesn't declare in `IUSE` can never affect it, so it costs
+    /// nothing to skip. Global sets commonly have hundreds of entries while
+    /// a package's own IUSE is a few dozen at most, turning a per-package
+    /// O(global set) cost into O(package IUSE ∩ global set) — the dominant
+    /// cost of `apply()` before this filter.
     pub fn effective(
         &self,
         cpv: &Cpv,

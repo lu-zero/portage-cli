@@ -146,10 +146,10 @@ cache-formats = md5-dict
         second.metadata.keywords
     );
 }
-/// `has_version`/`best_version` builtins query the VDB under the root the
-/// -b/-d/-r flag names; phase shells unset the metadata-sourcing stubs so
-/// the builtins take over (the stub shadowed them and made
-/// autotools.eclass's autoconf probe die in every build).
+// `has_version`/`best_version` builtins query the VDB under the root the
+// -b/-d/-r flag names; phase shells unset the metadata-sourcing stubs so
+// the builtins take over (the stub shadowed them and made
+// autotools.eclass's autoconf probe die in every build).
 #[tokio::test]
 async fn version_query_builtins_query_the_flagged_root() {
     let dir = tempdir().unwrap();
@@ -230,8 +230,8 @@ async fn bashrc_files_are_sourced_during_a_phase() {
     );
 }
 
-/// Profile/user bashrc `die` must abort the phase (regression: die_flag was
-/// cleared after bashrc, so merged-usr checks were no-ops — 2026-08-07).
+// Profile/user bashrc `die` must abort the phase (regression: die_flag was
+// cleared after bashrc, so merged-usr checks were no-ops — 2026-08-07).
 #[tokio::test]
 async fn bashrc_die_aborts_the_phase() {
     let dir = tempdir().unwrap();
@@ -380,15 +380,15 @@ async fn einstall_enforces_eapi_ban_and_requires_a_makefile() {
     assert_eq!(shell.get_var("NOMK").as_deref(), Some("died"));
 }
 
-/// `use_with`/`use_enable`'s explicit-empty second argument
-/// (`use_with brotli '' link`, as `net-libs/gnutls` calls it) must fall
-/// back to the flag name, matching bash's `${2:-$1}` in real portage's
-/// `use_with()` — not just an omitted argument. An empty `Option<String>`
-/// still satisfies `Option::unwrap_or`'s `Some` case, so a naive
-/// translation silently drops the feature name entirely, producing
-/// `--without-` instead of `--without-brotli` (which `./configure` then
-/// warns is unrecognized and ignores, leaving the feature auto-detected
-/// regardless of the requested USE flag).
+// `use_with`/`use_enable`'s explicit-empty second argument
+// (`use_with brotli '' link`, as `net-libs/gnutls` calls it) must fall
+// back to the flag name, matching bash's `${2:-$1}` in real portage's
+// `use_with()` — not just an omitted argument. An empty `Option<String>`
+// still satisfies `Option::unwrap_or`'s `Some` case, so a naive
+// translation silently drops the feature name entirely, producing
+// `--without-` instead of `--without-brotli` (which `./configure` then
+// warns is unrecognized and ignores, leaving the feature auto-detected
+// regardless of the requested USE flag).
 #[tokio::test]
 async fn use_with_and_use_enable_treat_empty_feature_arg_as_omitted() {
     let dir = tempdir().unwrap();
@@ -419,12 +419,12 @@ async fn use_with_and_use_enable_treat_empty_feature_arg_as_omitted() {
     assert_eq!(shell.get_var("ENABLE_OUT").as_deref(), Some("--enable-cxx"));
 }
 
-/// A profile/make.conf-sourced variable must reach a *real* subprocess an
-/// ebuild/eclass spawns directly — not just brush's in-process variable
-/// table (which is all `get_var`/em's Rust builtins need). `MULTILIB_ABIS`
-/// stands in for any such variable em doesn't specifically know about
-/// (this is the exact shape of the CHOST bug: invisible to a real child
-/// process, even though brush itself sees it fine).
+// A profile/make.conf-sourced variable must reach a *real* subprocess an
+// ebuild/eclass spawns directly — not just brush's in-process variable
+// table (which is all `get_var`/em's Rust builtins need). `MULTILIB_ABIS`
+// stands in for any such variable em doesn't specifically know about
+// (this is the exact shape of the CHOST bug: invisible to a real child
+// process, even though brush itself sees it fine).
 #[tokio::test]
 async fn export_sourced_env_reaches_a_real_subprocess() {
     let dir = tempdir().unwrap();
@@ -611,13 +611,13 @@ async fn minimal_shell(dir: &std::path::Path) -> EbuildShell {
     repo.shell().await.unwrap()
 }
 
-/// Regression test for the 2026-07-16 fix: the cross-toolchain PATH/CC
-/// selection used to derive its bin dir from `build_config_root`
-/// (`PORTAGE_CONFIGROOT`) — a proxy that only coincidentally matched the
-/// crossdev sysroot layout. It must instead come from `build_broot`
-/// (`Cli::host_roots()`'s merge root — the real host for a privileged `--root`,
-/// the prefix itself for an unprivileged `--prefix` overlay), so a `${CHOST}-
-/// gcc` built into the prefix (not the host) is still found.
+// Regression test for the 2026-07-16 fix: the cross-toolchain PATH/CC
+// selection used to derive its bin dir from `build_config_root`
+// (`PORTAGE_CONFIGROOT`) — a proxy that only coincidentally matched the
+// crossdev sysroot layout. It must instead come from `build_broot`
+// (`Cli::host_roots()`'s merge root — the real host for a privileged `--root`,
+// the prefix itself for an unprivileged `--prefix` overlay), so a `${CHOST}-
+// gcc` built into the prefix (not the host) is still found.
 #[tokio::test]
 async fn cross_toolchain_selection_uses_broot_not_config_root() {
     let dir = tempdir().unwrap();
@@ -656,10 +656,10 @@ async fn cross_toolchain_selection_uses_broot_not_config_root() {
     );
 }
 
-/// Without a `${CHOST}-gcc` reachable at all (no `build_broot`, and a bogus
-/// tuple that can't be on the real test-runner's `$PATH`), the cross-
-/// toolchain block must leave `CC` untouched rather than setting a bare,
-/// unreachable `${CHOST}-gcc`.
+// Without a `${CHOST}-gcc` reachable at all (no `build_broot`, and a bogus
+// tuple that can't be on the real test-runner's `$PATH`), the cross-
+// toolchain block must leave `CC` untouched rather than setting a bare,
+// unreachable `${CHOST}-gcc`.
 #[tokio::test]
 async fn cross_toolchain_selection_no_op_when_tool_unreachable() {
     let dir = tempdir().unwrap();
@@ -672,8 +672,8 @@ async fn cross_toolchain_selection_no_op_when_tool_unreachable() {
     assert!(shell.get_var("CC").unwrap_or_default().is_empty());
 }
 
-/// Do not set `PKG_CONFIG` to a missing `${chost}-pkg-config` just because
-/// `${chost}-gcc` exists — leave it unset so `tc-getPKG_CONFIG` can fall back.
+// Do not set `PKG_CONFIG` to a missing `${chost}-pkg-config` just because
+// `${chost}-gcc` exists — leave it unset so `tc-getPKG_CONFIG` can fall back.
 #[tokio::test]
 async fn cross_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     let dir = tempdir().unwrap();
@@ -700,14 +700,14 @@ async fn cross_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     );
 }
 
-/// Phase 2 of the `--prefix`/`--local` toolchain-awareness work: a
-/// **native** build (CHOST == CBUILD) under `--prefix`/`--local` used to
-/// never enter the toolchain-selection block at
-/// all (it was gated on `chost != cbuild`), so it silently fell through to
-/// the host's `gcc` on `$PATH` even after the prefix had built and activated
-/// its own compiler. `build_eprefix.is_some()` now also opens the gate;
-/// `build_broot` (already topology-correct — see the gate's own doc comment)
-/// is still the bin-dir source, unchanged from the cross case.
+// Phase 2 of the `--prefix`/`--local` toolchain-awareness work: a
+// **native** build (CHOST == CBUILD) under `--prefix`/`--local` used to
+// never enter the toolchain-selection block at
+// all (it was gated on `chost != cbuild`), so it silently fell through to
+// the host's `gcc` on `$PATH` even after the prefix had built and activated
+// its own compiler. `build_eprefix.is_some()` now also opens the gate;
+// `build_broot` (already topology-correct — see the gate's own doc comment)
+// is still the bin-dir source, unchanged from the cross case.
 #[tokio::test]
 async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
     let dir = tempdir().unwrap();
@@ -737,8 +737,8 @@ async fn native_toolchain_selection_prefers_prefix_gcc_when_eprefix_set() {
     );
 }
 
-/// Target packages use `${CTARGET}-*` tools (not ambient CHOST) and export
-/// `BUILD_CC` for host-side sub-probes.
+// Target packages use `${CTARGET}-*` tools (not ambient CHOST) and export
+// `BUILD_CC` for host-side sub-probes.
 #[tokio::test]
 async fn cross_target_package_toolchain_uses_ctarget_not_ambient_chost() {
     let dir = tempdir().unwrap();
@@ -775,12 +775,12 @@ async fn cross_target_package_toolchain_uses_ctarget_not_ambient_chost() {
     );
 }
 
-/// The host-arch toolchain-*tool* package class (`binutils`/`gcc`/`gdb` —
-/// `package.env` marks these with `TARGET_ABI`, unlike genuine target
-/// packages) must keep using `${CHOST}-<tool>`, exactly as before this fix —
-/// their own compile identity genuinely is the host's, `CTARGET` there only
-/// describes what the *resulting* cross compiler will target, not this
-/// package's own build.
+// The host-arch toolchain-*tool* package class (`binutils`/`gcc`/`gdb` —
+// `package.env` marks these with `TARGET_ABI`, unlike genuine target
+// packages) must keep using `${CHOST}-<tool>`, exactly as before this fix —
+// their own compile identity genuinely is the host's, `CTARGET` there only
+// describes what the *resulting* cross compiler will target, not this
+// package's own build.
 #[tokio::test]
 async fn cross_host_tool_package_still_uses_chost_when_target_abi_set() {
     let dir = tempdir().unwrap();
@@ -814,8 +814,8 @@ async fn cross_host_tool_package_still_uses_chost_when_target_abi_set() {
     );
 }
 
-/// Host-env package.env marker (`TARGET_ABI` set, bash-crossdev `*`) keeps
-/// the host CHOST compiler even when CTARGET is present for the target ABI.
+// Host-env package.env marker (`TARGET_ABI` set, bash-crossdev `*`) keeps
+// the host CHOST compiler even when CTARGET is present for the target ABI.
 #[tokio::test]
 async fn package_env_host_marker_uses_chost_tools() {
     let dir = tempdir().unwrap();
@@ -850,8 +850,8 @@ async fn package_env_host_marker_uses_chost_tools() {
     );
 }
 
-/// Target-env package.env (K|L): CTARGET set, no TARGET_ABI → CTARGET tools
-/// and host BUILD_*.
+// Target-env package.env (K|L): CTARGET set, no TARGET_ABI → CTARGET tools
+// and host BUILD_*.
 #[tokio::test]
 async fn package_env_target_marker_uses_ctarget_tools() {
     let dir = tempdir().unwrap();
@@ -886,10 +886,10 @@ async fn package_env_target_marker_uses_ctarget_tools() {
     );
 }
 
-/// A plain `--root`/bare build (no `--prefix`/`--local`, so `build_eprefix`
-/// stays `None`) must NOT be affected by the Phase 2 gate change — real
-/// `--root` defaulting to the host's `gcc` on `PATH` is correct as-is
-/// (catalyst seed-compiler model, confirmed not a bug).
+// A plain `--root`/bare build (no `--prefix`/`--local`, so `build_eprefix`
+// stays `None`) must NOT be affected by the Phase 2 gate change — real
+// `--root` defaulting to the host's `gcc` on `PATH` is correct as-is
+// (catalyst seed-compiler model, confirmed not a bug).
 #[tokio::test]
 async fn native_toolchain_selection_is_a_no_op_without_eprefix() {
     let dir = tempdir().unwrap();
@@ -902,9 +902,9 @@ async fn native_toolchain_selection_is_a_no_op_without_eprefix() {
     assert!(shell.get_var("CC").unwrap_or_default().is_empty());
 }
 
-/// Same `PKG_CONFIG`-must-not-point-at-a-dead-wrapper guard as
-/// `cross_toolchain_selection_skips_pkg_config_when_wrapper_missing`, for the
-/// native-prefix path opened by Phase 2.
+// Same `PKG_CONFIG`-must-not-point-at-a-dead-wrapper guard as
+// `cross_toolchain_selection_skips_pkg_config_when_wrapper_missing`, for the
+// native-prefix path opened by Phase 2.
 #[tokio::test]
 async fn native_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     let dir = tempdir().unwrap();
@@ -929,9 +929,9 @@ async fn native_toolchain_selection_skips_pkg_config_when_wrapper_missing() {
     );
 }
 
-/// Build a minimal ebuild fixture at `<category>/<pn>` and return its path,
-/// for tests that need `run_phase` (category/pn only exist per-ebuild,
-/// unlike the `init_build_env`-only tests above).
+// Build a minimal ebuild fixture at `<category>/<pn>` and return its path,
+// for tests that need `run_phase` (category/pn only exist per-ebuild,
+// unlike the `init_build_env`-only tests above).
 fn write_minimal_ebuild(repo_root: &std::path::Path, category: &str, pn: &str) -> Utf8PathBuf {
     std::fs::create_dir_all(repo_root.join("metadata")).unwrap();
     std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
@@ -948,10 +948,10 @@ fn write_minimal_ebuild(repo_root: &std::path::Path, category: &str, pn: &str) -
     Utf8PathBuf::from_path_buf(path).unwrap()
 }
 
-/// Build a minimal ebuild that `inherit`s an eclass which plain-assigns
-/// `IUSE="foo"` (matching real `verify-sig.eclass`'s own `IUSE="verify-sig"`
-/// — a plain assignment, not `+=`), for the `already_phase_sourced` tests
-/// below.
+// Build a minimal ebuild that `inherit`s an eclass which plain-assigns
+// `IUSE="foo"` (matching real `verify-sig.eclass`'s own `IUSE="verify-sig"`
+// — a plain assignment, not `+=`), for the `already_phase_sourced` tests
+// below.
 fn write_ebuild_with_plain_iuse_eclass(repo_root: &std::path::Path) -> Utf8PathBuf {
     std::fs::create_dir_all(repo_root.join("metadata")).unwrap();
     std::fs::create_dir_all(repo_root.join("profiles")).unwrap();
@@ -971,25 +971,25 @@ fn write_ebuild_with_plain_iuse_eclass(repo_root: &std::path::Path) -> Utf8PathB
     Utf8PathBuf::from_path_buf(path).unwrap()
 }
 
-/// Verifies the invariant `portage-cli`'s `run_merge` fix (2026-08-04) relies
-/// on: once an ebuild has been sourced by an earlier phase in this same shell
-/// (`run_phase`'s own `need_source`-gated sourcing — `unpack`/`prepare`/etc.
-/// in a real merge), the resulting `IUSE` already correctly folds in an
-/// eclass's own plain-assignment contribution (matching real
-/// `verify-sig.eclass`'s `IUSE="verify-sig"`) via the PMS 10.2 `E_IUSE`
-/// combine — so a caller can read it via `collect_env()` directly, guarded by
-/// `is_phase_sourced`, instead of calling `source_ebuild` again.
-///
-/// `run_merge` calling `source_ebuild` unconditionally (the pre-fix bug) was
-/// `verify-sig`, even though the pre-merge dependency plan showed it
-/// correctly and the md5-cache (via `em regen`) also has it. The exact
-/// bash/eclass-level reason the *specific* live sequence of phases dropped it
-/// wasn't isolated in a minimal repro here (a synthetic multi-pass
-/// `source_ebuild`/`run_phase` sequence modeled on the real merge's phase
-/// order did not reproduce the loss) — this test instead locks down the
-/// precondition the fix depends on, and the fix itself was verified directly
-/// against the real `::gentoo` binutils ebuild (VDB `IUSE` now matches the
-/// cache).
+// Verifies the invariant `portage-cli`'s `run_merge` fix (2026-08-04) relies
+// on: once an ebuild has been sourced by an earlier phase in this same shell
+// (`run_phase`'s own `need_source`-gated sourcing — `unpack`/`prepare`/etc.
+// in a real merge), the resulting `IUSE` already correctly folds in an
+// eclass's own plain-assignment contribution (matching real
+// `verify-sig.eclass`'s `IUSE="verify-sig"`) via the PMS 10.2 `E_IUSE`
+// combine — so a caller can read it via `collect_env()` directly, guarded by
+// `is_phase_sourced`, instead of calling `source_ebuild` again.
+//
+// `run_merge` calling `source_ebuild` unconditionally (the pre-fix bug) was
+// `verify-sig`, even though the pre-merge dependency plan showed it
+// correctly and the md5-cache (via `em regen`) also has it. The exact
+// bash/eclass-level reason the *specific* live sequence of phases dropped it
+// wasn't isolated in a minimal repro here (a synthetic multi-pass
+// `source_ebuild`/`run_phase` sequence modeled on the real merge's phase
+// order did not reproduce the loss) — this test instead locks down the
+// precondition the fix depends on, and the fix itself was verified directly
+// against the real `::gentoo` binutils ebuild (VDB `IUSE` now matches the
+// cache).
 #[tokio::test]
 async fn already_phase_sourced_iuse_includes_eclass_contribution() {
     let dir = tempdir().unwrap();
@@ -1017,8 +1017,8 @@ async fn already_phase_sourced_iuse_includes_eclass_contribution() {
     );
 }
 
-/// Host cross tools under `--prefix` get `-idirafter /usr/include` so
-/// host-only BDEPEND headers resolve.
+// Host cross tools under `--prefix` get `-idirafter /usr/include` so
+// host-only BDEPEND headers resolve.
 #[tokio::test]
 async fn cross_host_tool_package_gets_a_host_include_fallback_under_prefix() {
     let dir = tempdir().unwrap();
@@ -1049,10 +1049,10 @@ async fn cross_host_tool_package_gets_a_host_include_fallback_under_prefix() {
     );
 }
 
-/// Same package class, but no `build_sysroot` (`--local`'s standalone
-/// closure, not a `--prefix` overlay — `build_sysroot` stays `None`): must
-/// NOT get the host include fallback. `--local` is meant to own everything
-/// itself, not reach for the host's headers.
+// Same package class, but no `build_sysroot` (`--local`'s standalone
+// closure, not a `--prefix` overlay — `build_sysroot` stays `None`): must
+// NOT get the host include fallback. `--local` is meant to own everything
+// itself, not reach for the host's headers.
 #[tokio::test]
 async fn cross_host_tool_package_no_host_fallback_without_overlay() {
     let dir = tempdir().unwrap();
@@ -1080,9 +1080,9 @@ async fn cross_host_tool_package_no_host_fallback_without_overlay() {
     );
 }
 
-/// An ordinary (non-`cross-*`) package must never get the host include
-/// fallback, even under a `--prefix` overlay — it is specific to the
-/// host-arch crossdev toolchain-tool package class.
+// An ordinary (non-`cross-*`) package must never get the host include
+// fallback, even under a `--prefix` overlay — it is specific to the
+// host-arch crossdev toolchain-tool package class.
 #[tokio::test]
 async fn ordinary_package_no_host_fallback_even_under_prefix() {
     let dir = tempdir().unwrap();
@@ -1112,8 +1112,8 @@ async fn ordinary_package_no_host_fallback_even_under_prefix() {
     );
 }
 
-/// Ordinary target packages: ESYSROOT is the substituted sysroot alone,
-/// never sysroot+outer-eprefix.
+// Ordinary target packages: ESYSROOT is the substituted sysroot alone,
+// never sysroot+outer-eprefix.
 #[tokio::test]
 async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
     let dir = tempdir().unwrap();
@@ -1152,8 +1152,8 @@ async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
     );
 }
 
-/// `set_build_roots`'s `ld_library_path` is exported as-is, no filesystem
-/// read here (the caller resolves it — see todo/for-sonnet.md 2026-08-08).
+// `set_build_roots`'s `ld_library_path` is exported as-is, no filesystem
+// read here (the caller resolves it — see todo/for-sonnet.md 2026-08-08).
 #[tokio::test]
 async fn prefix_build_exports_the_given_ld_library_path() {
     let dir = tempdir().unwrap();
@@ -1182,8 +1182,8 @@ async fn prefix_build_exports_the_given_ld_library_path() {
     );
 }
 
-/// No `ld_library_path` given (a bare host/`--root` build) must not touch
-/// `LD_LIBRARY_PATH` at all.
+// No `ld_library_path` given (a bare host/`--root` build) must not touch
+// `LD_LIBRARY_PATH` at all.
 #[tokio::test]
 async fn no_ld_library_path_given_leaves_it_unset() {
     let dir = tempdir().unwrap();
@@ -1206,8 +1206,8 @@ async fn no_ld_library_path_given_leaves_it_unset() {
     assert!(shell.get_var("LD_LIBRARY_PATH").is_none());
 }
 
-/// `set_terminal` must export COLUMNS/NOCOLOR/NO_COLOR for external
-/// subprocesses (gentoo-functions, eclasses), not only brush-internal state.
+// `set_terminal` must export COLUMNS/NOCOLOR/NO_COLOR for external
+// subprocesses (gentoo-functions, eclasses), not only brush-internal state.
 #[tokio::test]
 async fn set_terminal_is_exported_to_phase_subprocesses() {
     let dir = tempdir().unwrap();
@@ -1259,14 +1259,14 @@ async fn set_terminal_is_exported_to_phase_subprocesses() {
     assert_eq!(shell.get_var("NO_COLOR").as_deref(), Some("1"));
 }
 
-/// The host's `TERM` reaches the phase, as it does through portage's
-/// environ_whitelist.
-///
-/// Leaving it unset is not the neutral choice it looks like: bash substitutes
-/// `dumb` for an unset `TERM`, and `dumb` is the first thing every capability
-/// probe tests for — real `gentoo-functions` throws away its entire palette on
-/// it (`rc.sh`'s `_has_color_terminal`), which is why `elibtoolize` (really the
-/// external `eltpatch` script) printed flat markers even in a capable terminal.
+// The host's `TERM` reaches the phase, as it does through portage's
+// environ_whitelist.
+//
+// Leaving it unset is not the neutral choice it looks like: bash substitutes
+// `dumb` for an unset `TERM`, and `dumb` is the first thing every capability
+// probe tests for — real `gentoo-functions` throws away its entire palette on
+// it (`rc.sh`'s `_has_color_terminal`), which is why `elibtoolize` (really the
+// external `eltpatch` script) printed flat markers even in a capable terminal.
 #[tokio::test]
 async fn host_term_reaches_the_phase() {
     // SAFETY: single-threaded test, and the value is read during shell setup
@@ -1305,8 +1305,8 @@ async fn host_term_reaches_the_phase() {
     );
 }
 
-/// Run `script` and return what it wrote to stderr, with trailing newlines
-/// stripped by the command substitution as usual.
+// Run `script` and return what it wrote to stderr, with trailing newlines
+// stripped by the command substitution as usual.
 async fn captured_stderr(shell: &mut EbuildShell, script: &str) -> String {
     shell
         .run_string(&format!("_captured=$({{ {script} ; }} 2>&1)"))
@@ -1315,15 +1315,15 @@ async fn captured_stderr(shell: &mut EbuildShell, script: &str) -> String {
     shell.get_var("_captured").unwrap_or_default()
 }
 
-/// The `e*` builtins render exactly as portage's `isolated-functions.sh` does,
-/// in both of the two modes it has.
-///
-/// Portage's bash half performs no terminal detection of its own: `RC_ENDCOL`
-/// is hardcoded to `"yes"`, and the only switch is `__set_colors` versus
-/// `__unset_colors`. With colours off `ENDCOL` is empty, so `eend`'s
-/// `echo -e "${ENDCOL} ${msg}"` degrades to the indicator on a line of its own;
-/// with colours on the same line becomes cursor-up plus cursor-forward, landing
-/// the indicator at the end of the line `ebegin` wrote.
+// The `e*` builtins render exactly as portage's `isolated-functions.sh` does,
+// in both of the two modes it has.
+//
+// Portage's bash half performs no terminal detection of its own: `RC_ENDCOL`
+// is hardcoded to `"yes"`, and the only switch is `__set_colors` versus
+// `__unset_colors`. With colours off `ENDCOL` is empty, so `eend`'s
+// `echo -e "${ENDCOL} ${msg}"` degrades to the indicator on a line of its own;
+// with colours on the same line becomes cursor-up plus cursor-forward, landing
+// the indicator at the end of the line `ebegin` wrote.
 #[tokio::test]
 async fn e_output_builtins_render_like_isolated_functions() {
     let dir = tempdir().unwrap();
@@ -1407,9 +1407,9 @@ async fn e_output_builtins_render_like_isolated_functions() {
     );
 }
 
-/// Every message the `e*` builtins print is also appended to
-/// `${T}/logging/${EBUILD_PHASE}`, portage's `__elog_base` — the file the elog
-/// system replays once the package is merged.
+// Every message the `e*` builtins print is also appended to
+// `${T}/logging/${EBUILD_PHASE}`, portage's `__elog_base` — the file the elog
+// system replays once the package is merged.
 #[tokio::test]
 async fn e_output_builtins_capture_elog_messages() {
     let dir = tempdir().unwrap();
@@ -1475,9 +1475,9 @@ async fn e_output_builtins_capture_elog_messages() {
     );
 }
 
-/// Messages go through `echo -e`, so a `\n` in one is a line break in both the
-/// printed output and the recorded entry — portage's `e*` helpers all render
-/// (and record) via `echo -e "$@"`.
+// Messages go through `echo -e`, so a `\n` in one is a line break in both the
+// printed output and the recorded entry — portage's `e*` helpers all render
+// (and record) via `echo -e "$@"`.
 #[tokio::test]
 async fn e_output_builtins_expand_escapes_like_echo_e() {
     let dir = tempdir().unwrap();
@@ -1531,10 +1531,10 @@ async fn e_output_builtins_expand_escapes_like_echo_e() {
     );
 }
 
-/// A palette with no colour in it is portage's `__unset_colors`, which is what
-/// lets `eend` decide between its two renderings without a second flag to keep
-/// in sync. anstyle renders an empty style as the empty string at both ends,
-/// so this holds by construction — pin it, since `eend` depends on it.
+// A palette with no colour in it is portage's `__unset_colors`, which is what
+// lets `eend` decide between its two renderings without a second flag to keep
+// in sync. anstyle renders an empty style as the empty string at both ends,
+// so this holds by construction — pin it, since `eend` depends on it.
 #[test]
 fn a_default_palette_is_plain() {
     assert!(crate::PortageColors::default().is_plain());
@@ -1546,9 +1546,9 @@ fn a_default_palette_is_plain() {
     assert!(!colors.is_plain());
 }
 
-/// What a build phase gets to see of the caller's `PATH`. `$HOME` and
-/// `/usr/local` come off it so a local install cannot shadow the Gentoo
-/// toolchain; everything else keeps its order.
+// What a build phase gets to see of the caller's `PATH`. `$HOME` and
+// `/usr/local` come off it so a local install cannot shadow the Gentoo
+// toolchain; everything else keeps its order.
 #[test]
 fn phase_path_drops_only_home_and_usr_local() {
     assert_eq!(
@@ -1570,8 +1570,8 @@ fn phase_path_drops_only_home_and_usr_local() {
     );
 }
 
-/// `set_extra_path` is the one way back in for a caller that resolved a tool
-/// the sanitising above would otherwise hide.
+// `set_extra_path` is the one way back in for a caller that resolved a tool
+// the sanitising above would otherwise hide.
 #[tokio::test]
 async fn extra_path_dirs_lead_the_phase_path() {
     let dir = tempdir().unwrap();

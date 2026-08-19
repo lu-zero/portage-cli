@@ -30,33 +30,21 @@ struct AvailEntry {
     /// The VDB-backed installed package this entry came from, when known —
     /// letting `atom_satisfied` verify USE-dep brackets (PMS 8.3.4) against
     /// its USE/IUSE instead of just CPN/version/slot. `None` for within-run
-    /// solved-plan merges (`record_merge` and friends): the solver's own
-    /// `check_use_deps` already validates USE-dep constraints among those
-    /// packages, so re-checking here would just duplicate that logic
-    /// without the parent-flag context it needs.
+    /// solved-plan merges: the solver's own `check_use_deps` already
+    /// validates USE-dep constraints among those, so re-checking here would
+    /// duplicate that without the parent-flag context it needs.
     ///
-    /// Deliberately *not* read eagerly into a `Vec<String>` pair at
-    /// construction: `USE`/`IUSE` are separate on-disk files per package
-    /// (`InstalledPackage::use_flags`/`iuse`), and the overwhelming majority
-    /// of `AvailEntry`s constructed for a whole VDB (712 packages measured
-    /// on one real host) are never checked against a USE-dep atom at all —
-    /// eagerly reading both files for every one of them cost ~1.3s of
-    /// almost pure file-I/O overhead nobody needed, a real regression found
-    /// live via `em -p` benchmarking against `emerge -p`. Reading lazily,
-    /// only inside `use_deps_satisfied` and only for an entry that already
-    /// matched the atom's CPN/version/slot *and* only when the atom actually
-    /// has USE-dep brackets to check, keeps the common case (no USE-deps on
-    /// the atom at all, or an early match in the `.any()` scan) essentially
-    /// free.
+    /// Deliberately *not* read eagerly: most `AvailEntry`s built for a whole
+    /// VDB are never checked against a USE-dep atom (eager reads cost ~1.3s
+    /// of pure I/O on a 712-package host, a real regression found via
+    /// `em -p` benchmarking). Reading lazily, only for an entry that already
+    /// matched and whose atom has USE-dep brackets, keeps the common case free.
     installed: Option<InstalledPackage>,
-    /// Interned `(enabled, iuse)` USE state, computed and cached on first
-    /// use-dep check against this entry. A single `preflight`/trim pass can
-    /// check the same entry against several different atoms (e.g. multiple
-    /// BDEPEND edges on the same host package), and `use_flags()`/`iuse()`
-    /// each allocate a fresh `Vec<String>` (with fresh `String`s per flag)
-    /// on every call even though the underlying file read is itself cached
-    /// (see `portage-vdb`'s `field_cache`) — this cell avoids redoing that
-    /// allocation+parse for every repeat check of the same entry.
+    /// Interned `(enabled, iuse)` USE state, cached on first use-dep check:
+    /// a single pass can check the same entry against several atoms, and
+    /// `use_flags()`/`iuse()` each allocate a fresh `Vec<String>` per call
+    /// even though the file read itself is cached — this cell avoids
+    /// redoing that allocation+parse per repeat check.
     interned_use: OnceCell<InternedUse>,
 }
 
@@ -66,25 +54,18 @@ pub struct Avail(Vec<AvailEntry>);
 
 impl Avail {
     /// `BDEPEND` availability at the start of a run: the build host's own
-    /// `BROOT` — `roots.satisfaction_root(DepClass::Bdepend)`, which is
-    /// carried correctly on `roots` even under an active `--target` sysroot
-    /// substitution (see `Cli::roots`'s doc comment), so the *same* `Roots`
-    /// value passed for `DEPEND` checks answers this too: an unsatisfied
-    /// Host BDEPEND builds into that BROOT (`entry_roots()` in
-    /// `merge/mod.rs`), so satisfaction must be checked against that same
-    /// root's VDB, or a package built there on one run is never recognized
-    /// as already satisfied on the next. This mirrors the
-    /// `load_host_installed` fix for the same bug in the solver's own
-    /// host-installed view.
+    /// `BROOT` — `roots.satisfaction_root(DepClass::Bdepend)`, carried
+    /// correctly on `roots` even under an active `--target` sysroot
+    /// substitution, so the *same* `Roots` value passed for `DEPEND` checks
+    /// answers this too (mirrors `load_host_installed`'s fix for the same
+    /// bug in the solver's own host-installed view).
     ///
     /// `--prefix` (an unprivileged overlay) additionally weaves in the
-    /// prefix's own VDB: `Cli::host_roots()` now sends an unsatisfied BDEPEND
+    /// prefix's own VDB: `Cli::host_roots()` sends an unsatisfied BDEPEND
     /// there (the overlay can't write the real host `/`), so a package
-    /// already built into the prefix by a previous run must also count as
-    /// satisfied. Not done for `--root`/`--local`: there, nothing is ever
-    /// merged anywhere but the single satisfaction root, so a second read
-    /// would only risk a false positive from an unrelated package
-    /// coincidentally present at the merge target.
+    /// already built into the prefix by a previous run also counts as
+    /// satisfied. Not done for `--root`/`--local`: nothing is ever merged
+    /// anywhere but the single satisfaction root there.
     pub fn initial_bdepend(roots: &Roots) -> Self {
         Self(avail_entries_from(broot_vdb_packages(roots)))
     }
@@ -199,13 +180,11 @@ impl Avail {
 /// `Avail` has no visibility into, so those are conservatively treated as
 /// satisfied (same as the prior behaviour for every USE-dep form).
 ///
-/// `USE`/`IUSE` are read from `entry.installed` here — lazily, only once a
-/// cpv/slot match already happened (see `atom_satisfied`'s `&&`) and only
-/// when `dep` actually has USE-dep brackets to check at all — not eagerly
-/// for every installed package up front (see `AvailEntry::installed`'s doc
-/// comment) — and memoized per entry afterward (see
-/// `AvailEntry::interned_use`'s doc comment), so a package checked against
-/// several USE-dep atoms in the same pass only pays the read+parse once.
+/// `USE`/`IUSE` are read from `entry.installed` lazily (only after a
+/// cpv/slot match, only when `dep` has USE-dep brackets — see
+/// [`AvailEntry::installed`]) and memoized per entry (see
+/// [`AvailEntry::interned_use`]), so a package checked against several
+/// USE-dep atoms in the same pass only pays the read+parse once.
 fn use_deps_satisfied(dep: &Dep, entry: &AvailEntry) -> bool {
     let Some(use_deps) = &dep.use_deps else {
         return true;
@@ -285,15 +264,13 @@ fn avail_entries_from(pkgs: Vec<InstalledPackage>) -> Vec<AvailEntry> {
 }
 
 /// Raw installed-package rows for the BROOT-availability seed shared by
-/// [`Avail::initial_bdepend`] and the solver's `host_installed` view
-/// (`query::depgraph::installed::load_host_installed`) — both need exactly
-/// the same root selection (the BDEPEND satisfaction root, plus the
-/// prefix's own VDB under `--prefix`, see `initial_bdepend`'s doc comment),
-/// only converting the resulting rows differently. Read once here; each
-/// caller converts to its own entry type and keeps its own merge semantics
-/// (union for `Avail`, last-wins insert for `add_host_installed`) — host
-/// entries come first, then prefix, so both behaviours fall out of
-/// iteration order.
+/// [`Avail::initial_bdepend`] and the solver's `host_installed` view — both
+/// need the same root selection (see [`Avail::initial_bdepend`]), only
+/// converting the resulting rows differently.
+///
+/// Read once here; each caller keeps its own merge semantics (union for
+/// `Avail`, last-wins insert for `add_host_installed`) — host entries come
+/// first, then prefix, so both behaviours fall out of iteration order.
 pub fn broot_vdb_packages(roots: &Roots) -> Vec<InstalledPackage> {
     let mut out = vdb_packages_at(roots.satisfaction_root(DepClass::Bdepend));
     if roots.is_overlay() {
@@ -435,14 +412,14 @@ mod tests {
         )
     }
 
-    /// Like [`atoms`], but the entry carries a real installed package with
-    /// authoritative USE/IUSE, so USE-dep brackets get checked (mirrors
-    /// [`vdb_avail_entries`]'s output). `AvailEntry::installed` reads
-    /// `USE`/`IUSE` lazily from disk now (not a hand-buildable `UseInfo`
-    /// pair), so this writes a real fake VDB entry and opens it — the
-    /// tempdir is deliberately leaked (`into_path`) rather than dropped at
-    /// the end of this function, since the returned `Avail` only reads its
-    /// files on demand, when the caller's `atom_satisfied` runs.
+    // Like [`atoms`], but the entry carries a real installed package with
+    // authoritative USE/IUSE, so USE-dep brackets get checked (mirrors
+    // [`vdb_avail_entries`]'s output). `AvailEntry::installed` reads
+    // `USE`/`IUSE` lazily from disk now (not a hand-buildable `UseInfo`
+    // pair), so this writes a real fake VDB entry and opens it — the
+    // tempdir is deliberately leaked (`into_path`) rather than dropped at
+    // the end of this function, since the returned `Avail` only reads its
+    // files on demand, when the caller's `atom_satisfied` runs.
     fn atom_with_use(spec: &str, enabled: &[&str], iuse: &[&str]) -> Avail {
         let cpv = Cpv::parse(spec).unwrap();
         let tmp = tempfile::tempdir().unwrap().keep();
@@ -465,11 +442,11 @@ mod tests {
         DepEntry::parse(dep).unwrap()
     }
 
-    /// Regression test for the `sys-apps/systemd-utils` stage3 failure: the
-    /// host had `dev-python/jinja2` installed, but only built for
-    /// `python_targets_python3_13`, not the `_14` this run actually needs.
-    /// The old CPN/version/slot-only check treated the atom as satisfied
-    /// regardless of the `[python_targets_python3_14(-)]` USE-dep bracket, so
+    // Regression test for the `sys-apps/systemd-utils` stage3 failure: the
+    // host had `dev-python/jinja2` installed, but only built for
+    // `python_targets_python3_13`, not the `_14` this run actually needs.
+    // The old CPN/version/slot-only check treated the atom as satisfied
+    // regardless of the `[python_targets_python3_14(-)]` USE-dep bracket, so
     /// `em` never scheduled a jinja2 rebuild and the target package's
     /// `meson` configure failed with "python3 is missing modules: jinja2".
     #[test]
@@ -667,15 +644,15 @@ mod tests {
         );
     }
 
-    /// Regression test: `initial_depend` must weave in the *target's* own
-    /// VDB for a bare `--root`, not just BROOT — a DEPEND provider already
-    /// built into a partially populated `--root` from an earlier run must
-    /// still count as satisfied even though the (real) host lacks it, or a
-    /// resumed stage build hits a false preflight failure. Found reviewing
-    /// the 2026-07-11 fix that made DEPEND resolve against BROOT for a
-    /// native build (`satisfaction_root(DepClass::Depend)`) — that fix
-    /// alone regressed this case by dropping the old `VDB(base) ∪
-    /// VDB(target)` weave entirely.
+    // Regression test: `initial_depend` must weave in the *target's* own
+    // VDB for a bare `--root`, not just BROOT — a DEPEND provider already
+    // built into a partially populated `--root` from an earlier run must
+    // still count as satisfied even though the (real) host lacks it, or a
+    // resumed stage build hits a false preflight failure. Found reviewing
+    // the 2026-07-11 fix that made DEPEND resolve against BROOT for a
+    // native build (`satisfaction_root(DepClass::Depend)`) — that fix
+    // alone regressed this case by dropping the old `VDB(base) ∪
+    // VDB(target)` weave entirely.
     #[test]
     fn initial_depend_weaves_in_the_target_vdb_for_a_bare_root() {
         let broot = tempfile::tempdir().unwrap();

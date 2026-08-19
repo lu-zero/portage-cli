@@ -17,10 +17,11 @@ use crate::src_uri::SrcUriEntry;
 /// A cache file is `KEY=VALUE\n` per line (see
 /// [PMS 14.2](https://projects.gentoo.org/pms/9/pms.html#mddict-cache-file-format)).
 /// `RawCacheEntry` validates only that structure and lets callers pluck out
-/// individual fields as borrowed `&str` slices. Use this when you don't need
-/// atom-tree parsing for DEPEND/RDEPEND/IUSE/KEYWORDS — for example to fetch
-/// just `DESCRIPTION` for a search hit, or `_md5_` and `_eclasses_` for a
-/// staleness check.
+/// individual fields as borrowed `&str` slices.
+///
+/// Use this when you don't need atom-tree parsing for
+/// DEPEND/RDEPEND/IUSE/KEYWORDS — e.g. just `DESCRIPTION` for a search hit,
+/// or `_md5_`/`_eclasses_` for a staleness check.
 ///
 /// To get the full typed parse, build a [`CacheEntry`] via [`CacheEntry::parse`]
 /// or [`CacheEntry::from_kv_pairs`] — the latter accepts the same `(key, value)`

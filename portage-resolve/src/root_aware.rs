@@ -13,19 +13,17 @@ use crate::Roots;
 
 /// Cross-compilation context derived from CLI roots.
 ///
-/// The single owner of "is this a cross build, and how" for the resolver: the
-/// derived predicates ([`is_cross_arch`](Self::is_cross_arch),
-/// [`target_arch`](Self::target_arch)) are computed here so call sites don't
-/// each re-derive them from `chost`. `--root-deps=rdeps` is deliberately NOT
-/// derived here — it's a property of which *operation* is running (`em
-/// crossdev --setup` vs `em stages --stage1`), not of the sysroot's
-/// CHOST/CBUILD; see `DepgraphOpts::root_deps_rdeps`.
+/// The single owner of "is this a cross build, and how" for the resolver:
+/// [`is_cross_arch`](Self::is_cross_arch)/[`target_arch`](Self::target_arch)
+/// are computed here so call sites don't each re-derive them from `chost`.
+/// `--root-deps=rdeps` is deliberately NOT derived here — it's a property
+/// of which *operation* is running, not the sysroot's CHOST/CBUILD.
 #[derive(Debug, Clone)]
 pub struct CrossContext {
-    /// Whether dual-root cross planning is active for this invocation (any
-    /// of: config≠install root, foreign target arch, or BROOT genuinely
-    /// differing from the target — true for `--root`/`--prefix`/cross,
-    /// false for bare and `--local` since BROOT equals the target there).
+    /// Whether dual-root cross planning is active for this invocation
+    /// (config≠install root, foreign target arch, or BROOT genuinely
+    /// differing from the target) — true for `--root`/`--prefix`/cross,
+    /// false for bare and `--local`.
     pub active: bool,
     /// `ESYSROOT` / `PORTAGE_CONFIGROOT`: where `DEPEND` is resolved.
     pub sysroot: Utf8PathBuf,
@@ -48,13 +46,11 @@ pub struct CrossContext {
 
 impl CrossContext {
     /// `true` when the target profile declares a different machine than the
-    /// host. When CHOST/CBUILD can't be read (no sysroot config yet, or a
-    /// same-arch offset that never declares them), default to same-arch —
-    /// NOT `sysroot != "/"`, which used to treat *any* non-host sysroot
-    /// (including a plain same-arch `--root <dir>`) as foreign-arch. Mirrors
-    /// `detect()`'s own `cross_arch` local (which already used `_ => false`).
-    /// Treating any non-host sysroot as foreign wrongly pins DEPEND to the
-    /// empty target for same-arch `--root` (huge false plan vs real emerge).
+    /// host. When CHOST/CBUILD can't be read, default to same-arch — NOT
+    /// `sysroot != "/"`, which used to treat *any* non-host sysroot
+    /// (including a plain same-arch `--root <dir>`) as foreign-arch,
+    /// wrongly pinning DEPEND to the empty target (huge false plan vs real
+    /// emerge).
     pub fn is_cross_arch(&self) -> bool {
         match (self.chost.as_deref(), self.cbuild.as_deref()) {
             (Some(c), Some(b)) => c != b,
@@ -71,12 +67,10 @@ impl CrossContext {
 }
 
 /// Detect cross context from CLI roots (no flag required). `host_merge_root`
-/// is `Cli::host_roots()`'s `merge_root()` — passed in rather than derived from
-/// `roots.is_overlay()` here, because `roots` can be `--target`-substituted
-/// (its `eprefix`/overlay-ness cleared), which would wrongly report the real
-/// host as the destination for a `MergeRoot::Host` entry even under an
-/// unprivileged `--prefix` overlay (`Cli::host_roots()` stays overlay-aware
-/// regardless of `--target`, since it's derived from `base_roots()`).
+/// is `Cli::host_roots()`'s `merge_root()` — passed in rather than derived
+/// here, because `roots` can be `--target`-substituted (its overlay-ness
+/// cleared), wrongly reporting the real host as the destination for a
+/// `MergeRoot::Host` entry under an unprivileged `--prefix` overlay.
 pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     let sysroot = roots
         .sysroot()

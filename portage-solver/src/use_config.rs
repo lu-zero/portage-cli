@@ -46,12 +46,11 @@ pub enum UseFlagState {
 /// See [PMS 8.2](https://projects.gentoo.org/pms/9/pms.html#use-flag-dependent-dependencies).
 ///
 /// A fully-resolved `UseConfig` (the output of [`resolve_effective_use`]) has
-/// every flag the package cares about already decided — there is no separate
-/// "fall back to the IUSE default" step, because [`resolve_effective_use`]
-/// already folded the ebuild's own `+`/`-` IUSE defaults in at their correct
-/// position in portage's real USE-resolution order. See that function's doc
-/// for why a config built any other way (e.g. a bare [`UseConfig::new`] plus
-/// ad hoc overrides) must not be treated as authoritative for a real package.
+/// every flag already decided — no separate "fall back to the IUSE default"
+/// step, because [`resolve_effective_use`] already folded the ebuild's own
+/// `+`/`-` IUSE defaults in at their correct position in portage's real
+/// USE-resolution order. See that function's doc for why a config built any
+/// other way must not be treated as authoritative for a real package.
 ///
 /// Internally this is a **shared profile base** ([`UseLayer`] fold, `Arc`) plus
 /// a **small per-package overlay** (IUSE-only flags, `package.use`, env,
@@ -227,13 +226,12 @@ pub struct UseLayer {
     /// Lowercased flag prefixes (`l10n_`, `video_cards_`, …) of the
     /// `USE_EXPAND` groups this layer *explicitly assigned*.
     ///
-    /// Portage's `is_not_incremental` branch (`config.py` `regenerate()`):
-    /// assigning a `USE_EXPAND` variable at any non-`defaults` config layer
-    /// wipes every accumulated flag carrying that group's prefix from the
-    /// layers below before the layer's own values apply. The flat USE string
-    /// gets that treatment already (`strip_expand_tokens`), but the ebuild's
-    /// own `+`-defaulted IUSE is only known per package — so the group has to
-    /// travel with the layer and bite inside [`resolve_effective_use`].
+    /// Portage's `is_not_incremental` branch: assigning a `USE_EXPAND`
+    /// variable at any non-`defaults` config layer wipes every accumulated
+    /// flag with that group's prefix from lower layers before this layer's
+    /// own values apply. The flat USE string gets that treatment already
+    /// (`strip_expand_tokens`), but the ebuild's own `+`-defaulted IUSE is
+    /// only known per package — so the group travels with the layer.
     group_clears: Arc<[String]>,
 }
 
@@ -358,41 +356,19 @@ fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, boo
 ///
 /// This is the **only** place "is flag F on for package P" gets decided —
 /// every consumer that used to re-derive its own "unset flag → check the
-/// IUSE default" fallback (there were five independent copies of this logic
-/// scattered across `portage-cli` before 2026-07-12; see
-/// `use-config-duplicate-fallback-logic` in the project's own notes) must
-/// call this function instead. Do not reimplement any part of this fold
-/// elsewhere.
+/// IUSE default" fallback must call this function instead; do not
+/// reimplement any part of this fold elsewhere. See [USE stacking
+/// precedence](../../docs/design/architecture.md) for the full fold order,
+/// the `-*` group-clear semantics, and the live-verified vscode/L10N case.
 ///
 /// Folds four token groups, in exactly portage's own USE-resolution order
-/// (`pkginternal < defaults/conf < pkg < env` — Portage's `USE_ORDER`,
-/// `config.py`'s `regenerate()`/`setcpv()`):
+/// (`pkginternal < defaults/conf < pkg < env`):
 ///
 /// 1. `iuse_defaults` — the ebuild's own `+`/`-` IUSE defaults (`pkginternal`).
 /// 2. `pre_env` — the profile/`make.conf` fold, already computed by
-///    `portage_repo`'s `ResolvedUse::pre_env` (`defaults` + `conf`), parsed
-///    once into a [`UseLayer`].
+///    `portage_repo`'s `ResolvedUse::pre_env`, parsed into a [`UseLayer`].
 /// 3. This package's matching `package_use` entries (`pkg`).
 /// 4. `env_use` — the process-environment USE layer ([`UseLayer`]), unmerged.
-///
-/// A `-*` token in **any** of these clears exactly what's accumulated from
-/// the layers before it — that's an ordinary property of the fold itself,
-/// not a derived flag anyone needs to track or branch on. This is why,
-/// empirically, `package.use` survives a `-*` in `make.conf` (layer 2) but
-/// not one in the environment (layer 4), and why the ebuild's own
-/// `+`-defaulted IUSE (layer 1) is wiped by a `-*` in *either* — confirmed
-/// against real `emerge` (`em stages --stage1` live-testing, 2026-07-12).
-///
-/// A layer's [`UseLayer::with_group_clears`] entries act as a `-*` scoped to
-/// one USE_EXPAND group, at that layer's position in the same fold: `pre_env`
-/// (make.conf) clears the group from the IUSE defaults and profile
-/// `package.use` below it but leaves user `package.use` alone, while `env_use`
-/// clears it from every lower layer, user `package.use` included. Confirmed
-/// against real `emerge -pv app-editors/vscode` (`IUSE="+l10n_…"` for 55
-/// locales) on portage 3.0.81.2, 2026-08-19: with no `L10N` assignment at all
-/// every locale stays enabled, `L10N="en-GB"` in make.conf plus
-/// `package.use` `l10n_fr` yields exactly `en-GB fr`, and `L10N=de` in the
-/// environment yields exactly `de`.
 #[allow(clippy::too_many_arguments)]
 pub fn resolve_effective_use(
     iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
@@ -934,15 +910,15 @@ mod tests {
         assert_eq!(cfg.get(flag("ssl")), UseFlagState::Disabled);
     }
 
-    /// Profile `package.use` sits in portage's *defaults* layer, BELOW
-    /// make.conf (`conf`): a `USE=` set in make.conf (the `pre_env` layer
-    /// here) wins over a profile `package.use -flag`. Contrast
-    /// `resolve_effective_use_package_use_disable_overrides_pre_env_enable`
-    /// above — that's USER `/etc/portage/package.use`, which sits in the
-    /// `pkg` layer above `conf` and DOES override it. Regression for the
-    /// `media-libs/libwebp -tiff` divergence from real emerge (Nathan's
-    /// report, 2026-08-11): `targets/desktop/package.use`'s `-tiff` was
-    /// incorrectly overriding a global `USE="tiff"`.
+    // Profile `package.use` sits in portage's *defaults* layer, BELOW
+    // make.conf (`conf`): a `USE=` set in make.conf (the `pre_env` layer
+    // here) wins over a profile `package.use -flag`. Contrast
+    // `resolve_effective_use_package_use_disable_overrides_pre_env_enable`
+    // above — that's USER `/etc/portage/package.use`, which sits in the
+    // `pkg` layer above `conf` and DOES override it. Regression for the
+    // `media-libs/libwebp -tiff` divergence from real emerge (Nathan's
+    // report, 2026-08-11): `targets/desktop/package.use`'s `-tiff` was
+    // incorrectly overriding a global `USE="tiff"`.
     #[test]
     fn resolve_effective_use_profile_package_use_does_not_override_make_conf() {
         let cfg = resolve_effective_use(

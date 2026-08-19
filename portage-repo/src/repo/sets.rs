@@ -183,17 +183,16 @@ pub fn set_name(s: &str) -> Option<&str> {
 }
 
 /// Whether a `@name` set, typed directly on the command line, should itself
-/// be recorded to `world_sets` (real emerge's `world-candidate` set-config
-/// flag). Real portage's default `sets.conf` (`cnf/sets/portage.conf`) sets
-/// `world-candidate = True` only on `[usersets]` — every file under
-/// `etc/portage/sets/` (or a `sets.conf` `[name]` section); every *named*
-/// built-in set defaults to `world_candidate = False` and is never recorded
-/// no matter how it's invoked. The exclusion list below is every section
-/// name in `cnf/sets/portage.conf` (not just the ones `em` currently
-/// implements — `@security`/`@live-rebuild`/etc. are real portage set names
-/// today even though `SetResolver` can't resolve them yet, and must stay
-/// excluded once they are implemented too, the same as the ones already
-/// live here).
+/// be recorded to `world_sets` (real emerge's `world-candidate` flag).
+/// Real portage's default `sets.conf` sets `world-candidate = True` only
+/// on `[usersets]`; every *named* built-in set defaults to `False` and is
+/// never recorded no matter how it's invoked.
+///
+/// The exclusion list below is every section name in
+/// `cnf/sets/portage.conf`, not just the ones `em` currently implements —
+/// `@security`/`@live-rebuild`/etc. are real portage set names today even
+/// though `SetResolver` can't resolve them yet, and must stay excluded
+/// once they are too.
 pub fn is_world_candidate(name: &str) -> bool {
     !matches!(
         name,

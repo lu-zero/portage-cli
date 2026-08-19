@@ -125,43 +125,28 @@ pub fn print_diagnostic(diag: &dyn miette::Diagnostic) {
 /// marker convention for `WARN`/`ERROR` instead of a literal text tag.
 ///
 /// `tracing_subscriber`'s default (`Full`) formatter prefixes every event
-/// with its enclosing span scope, e.g. `pkg{cpv=sys-devel/binutils-2.46.1}:
-/// phase{phase="fetch"}: fetch: binutils-2.46.1.tar.xz (already present)` —
-/// the `pkg`/`phase` spans exist so [`crate::activity::BusLayer`] can label a
-/// diagnostic with the package/phase it fired in (its own doc comment), not
-/// for the console. There's no builder toggle to hide span context on the
-/// stock formatter (the crate's `Full`/`Compact` formats always print it), so
-/// this reimplements just enough of it.
+/// with its enclosing span scope — the `pkg`/`phase` spans exist so
+/// [`crate::activity::BusLayer`] can label a diagnostic, not for the
+/// console. There's no builder toggle to hide span context on the stock
+/// formatter, so this reimplements just enough of it.
 ///
-/// `INFO` is this codebase's routine status channel (the doc table above:
-/// "per-package status + warnings + errors"), and real portage draws on two
-/// distinct conventions for it: a bare `">>> "` line for a major action
-/// announcement (`Emerging`, `Unpacking`), and `einfo`'s colored `" * "`
-/// marker for an ordinary informational note. A literal `"INFO"` tag matches
-/// neither, and is redundant noise on top of a call site's own `">>> "`
-/// prefix.
+/// `INFO` is this codebase's routine status channel, and real portage draws
+/// on two conventions for it: a bare `">>> "` line for a major action
+/// announcement, and `einfo`'s colored `" * "` marker for an ordinary note.
+/// A literal `"INFO"` tag matches neither and is redundant noise on top of
+/// a call site's own `">>> "` prefix.
 ///
 /// Which of the two an event is comes from its `tracing` **target**
-/// (`portage_repo::ACTION_TARGET`, checked below), not from sniffing the
-/// rendered message text for a `">>> "` prefix: the message is free-form
-/// call-site text, not a stable contract to pattern-match on, and `tracing`
-/// already gives every event a structured field for exactly this kind of
-/// routing decision. An event on that target is left bare (it already wrote
-/// its own `">>> "`); everything else gets `einfo`'s `" * "` in
-/// [`crate::style::C_MARKER_INFO`].
+/// (`portage_repo::ACTION_TARGET`), not from sniffing the message text: the
+/// message is free-form call-site text, not a stable contract to
+/// pattern-match on. An event on that target is left bare; everything else
+/// gets `einfo`'s `" * "` in [`crate::style::C_MARKER_INFO`].
 ///
-/// `WARN`/`ERROR` map to real portage's `ewarn`/`eerror` (`portage/output.py`'s
-/// `EOutput`): a colored `" * "` marker in [`crate::style::C_WARN`]/
-/// [`crate::style::C_ERROR`], distinguished from `einfo` purely by *color*,
-/// never by a literal `"WARN"`/`"ERROR"` word — so this drops the text tag
-/// for those two levels in favor of the marker, matching portage's own
-/// convention instead of inventing a different one. No call
-/// site's own message text embeds a `"!!! "`/`">>> "` marker of its own for
-/// `WARN`/`ERROR` today (checked directly, so this can't double them up) —
-/// if one ever does, it should drop this crate's own `" * "` at that call
-/// site instead of the reverse. `DEBUG`/`TRACE` keep the plain text tag: they
-/// have no real-portage equivalent (developer detail, never in default
-/// output — see the floor table above), so there's no convention to match.
+/// `WARN`/`ERROR` map to real portage's `ewarn`/`eerror`: a colored `" * "`
+/// marker in [`crate::style::C_WARN`]/[`crate::style::C_ERROR`],
+/// distinguished from `einfo` purely by *color*, never a literal
+/// `"WARN"`/`"ERROR"` word. `DEBUG`/`TRACE` keep the plain text tag: they
+/// have no real-portage equivalent, so there's no convention to match.
 struct CompactFormatter;
 
 impl<S, N> FormatEvent<S, N> for CompactFormatter
@@ -318,13 +303,13 @@ mod tests {
         }
     }
 
-    /// `CompactFormatter`'s own rendering, exercised end to end through a
-    /// real `tracing_subscriber` registry (not just the filter): `INFO` gets
-    /// einfo's `" * "` marker unless it is an `ACTION_TARGET` event (which
-    /// stays bare), `WARN`/`ERROR` get portage's colored `" * "` marker —
-    /// never a literal `"WARN"`/`"ERROR"` word — and no span-context prefix
-    /// leaks in even though the event fires inside `pkg`/`phase` spans
-    /// (mirroring `BusLayer`'s own real usage).
+    // `CompactFormatter`'s own rendering, exercised end to end through a
+    // real `tracing_subscriber` registry (not just the filter): `INFO` gets
+    // einfo's `" * "` marker unless it is an `ACTION_TARGET` event (which
+    // stays bare), `WARN`/`ERROR` get portage's colored `" * "` marker —
+    // never a literal `"WARN"`/`"ERROR"` word — and no span-context prefix
+    // leaks in even though the event fires inside `pkg`/`phase` spans
+    // (mirroring `BusLayer`'s own real usage).
     #[test]
     fn compact_formatter_matches_portage_conventions() {
         use std::sync::{Arc, Mutex};

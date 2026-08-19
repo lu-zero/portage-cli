@@ -141,6 +141,27 @@ Generalizing this by PN list for every ebuild that does
 Better: correct EPREFIX tree + clear BROOT vs EPREFIX rules; only then
 special-case remaining DESTDIR mismatches.
 
+**Why the EPREFIX flip is needed at all, not just cosmetic:** `toolchain.eclass`
+passes `--prefix=${EPREFIX}/usr` to the package's own `./configure`, and
+DESTDIR+prefix is a *physical* install-path convention (`make install
+DESTDIR=${D}` writes under `${D}${prefix}/...`) — unlike ESYSROOT (a pure
+DEPEND-resolution hint), what `PREFIX` bakes in also determines where built
+files land inside `${D}`, and `ED` must match for the merge step to find
+them. `--local` already supplies a correct EPREFIX by construction; a
+self-contained `--root DIR` (no `--local`) has `eprefix` empty, so
+`toolchain.eclass`'s baked-in `--with-sysroot` collapses to the bare host
+path `/usr/<tuple>` (the host's own unrelated crossdev sysroot, if any).
+Fix: for `host_codegen` packages only, when `eprefix` is otherwise empty,
+offset it exactly as `--local` would (root becomes EPREFIX, ROOT becomes
+`/`) — reusing the already-tested EPREFIX-subtree merge logic
+(`ebuild.rs::ed_image_dir`) generically rather than a new merge path.
+
+SYSROOT/ESYSROOT are untouched by this flip and must stay so: SYSROOT
+already equals `root_str` for a plain `--root` build (it must link against
+the root's own, not the real host's, native libc), and ESYSROOT for this
+package class is computed straight from `root_str` independent of
+`eprefix` — so flipping `eprefix` doesn't double-count either.
+
 ### Stage1 USE wipe and repair
 
 Catalyst-shaped:

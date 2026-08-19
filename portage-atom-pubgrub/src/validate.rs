@@ -773,18 +773,14 @@ mod tests {
         assert!(!hits[0].victims[0].retained_installed);
     }
 
-    /// Regression test for the same bug class as `graph.rs`'s
-    /// `host_package_bdepend_on_another_host_package_orders_correctly`
-    /// (`208c818`'s alias-miss bug, found again in `validate.rs`): a
-    /// `Host`-flavored solved package's own data lives under its
-    /// `Target`-flavored alias, so a raw `self.packages.get(pkg)` in
-    /// `check_blockers`'s main loop silently missed it — dropping every
-    /// blocker a Host-routed package declares, regardless of what it
-    /// targets. `dev-build/user` here is scheduled as an unsatisfied Host
-    /// BDEPEND (mirroring the `graph.rs` test's setup) and blocks
-    /// `dev-build/blocked`, which is separately pulled in as a normal
-    /// Target-side RDEPEND — so both are genuinely present in the solution
-    /// and the conflict must be detected.
+    // Regression test for the same alias-miss bug class as `graph.rs`'s
+    // `host_package_bdepend_on_another_host_package_orders_correctly`: a
+    // `Host`-flavored solved package's data lives under its `Target`-flavored
+    // alias, so a raw `self.packages.get(pkg)` in `check_blockers`'s main
+    // loop silently missed it, dropping every blocker a Host-routed package
+    // declares. `dev-build/user` is an unsatisfied Host BDEPEND that blocks
+    // `dev-build/blocked`, separately pulled in as a normal Target RDEPEND —
+    // both genuinely present, so the conflict must be detected.
     #[test]
     fn check_blockers_fires_from_a_host_routed_packages_own_blocker() {
         let mut repo = InMemoryRepository::new();

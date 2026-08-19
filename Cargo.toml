@@ -60,7 +60,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 smallvec = "1"
 smol_str = "0.3"
-toml = "0.8"
+toml = "1"
 symbol_table = { version = "0.5", features = ["global"] }
 tempfile = "3"
 thiserror = "2"
@@ -119,10 +119,10 @@ brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "24443b9d" }
 brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "24443b9d" }
 dhat = "0.3.3"
 # Fork: bad-path mknod/chown/chmod pass through to the kernel instead of aborting
-# the supervised tree (autoconf probes hit this). PR pending upstream koca-build.
+# the supervised tree (autoconf probes hit this). Parked until crates.io 0.1.2.
 fakeroost = { git = "https://github.com/lu-zero/fakeroost.git", rev = "3f2539f" }
-# LD_PRELOAD sibling of fakeroost (same FakerootCommandExt API), for --privilege pseudoroot.
-pseudoroot = { git = "https://github.com/lu-zero/pseudoroot.git", tag = "v0.2.1" }
+# LD_PRELOAD fake root (same FakerootCommandExt API), for --privilege pseudoroot.
+pseudoroot = "0.2.2"
 flume = "0.12.0"
 futures = "0.3"
 futures-util = "0.3"

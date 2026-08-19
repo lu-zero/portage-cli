@@ -71,14 +71,12 @@ impl Ebuild {
     /// Construct an [`Ebuild`] from an already-known [`Cpv`] and its on-disk
     /// `.ebuild` file path.
     ///
-    /// Unlike [`from_path`](Self::from_path), the CPV is never parsed back out
-    /// of the path text — it's exactly the one given. Use this when the
-    /// caller already has the authoritative identity (a solved merge plan, a
-    /// VDB entry) and the file's on-disk location may not match it: a
-    /// derived/aliased category (e.g. `cross-riscv64-unknown-linux-gnu/gcc`,
-    /// virtually mapped to `sys-devel/gcc`'s real ebuild) has no on-disk
-    /// directory of its own, so parsing the category back out of the real
-    /// path would silently recover the wrong one.
+    /// Unlike [`from_path`](Self::from_path), the CPV is never parsed back
+    /// out of the path text — it's exactly the one given. Use this when the
+    /// caller already has the authoritative identity and the file's on-disk
+    /// location may not match it: a derived/aliased category (e.g.
+    /// `cross-riscv64-unknown-linux-gnu/gcc`, mapped to `sys-devel/gcc`'s
+    /// real ebuild) has no on-disk directory of its own.
     ///
     /// The path is still canonicalized, for [`repo_root`](Self::repo_root)/
     /// eclass resolution.

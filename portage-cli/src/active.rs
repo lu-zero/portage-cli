@@ -533,10 +533,9 @@ fn ld_so_conf_entries(prefix: &Utf8Path) -> Vec<String> {
 /// Prepends the prefix's `etc/env.d` `PATH` entries — which is how anything
 /// outside `usr/bin` becomes reachable, and how an `em select clang` choice
 /// takes effect — followed by the prefix's own `usr/bin` and `bin`, exports
-/// `LD_LIBRARY_PATH` (todo/for-sonnet.md 2026-08-08), and exports the
-/// `EM_ACTIVE_KIND` / `EM_ACTIVE_PATH` markers. Does **not** set `EPREFIX`
-/// globally — that would confuse host tools; `em` itself reads the state
-/// file.
+/// `LD_LIBRARY_PATH`, and exports the `EM_ACTIVE_KIND` / `EM_ACTIVE_PATH`
+/// markers. Does **not** set `EPREFIX` globally — that would confuse host
+/// tools; `em` itself reads the state file.
 pub fn env_exports(ctx: &ActiveContext) -> String {
     let p = ctx.path.as_str();
     // Escape path components for use inside double quotes, then append the

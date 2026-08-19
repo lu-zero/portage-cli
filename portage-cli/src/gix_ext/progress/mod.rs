@@ -50,12 +50,12 @@ impl ProgressSession {
     ///
     /// The prodash progress *tree* (the counters gix mutates) is always
     /// created when not quiet; a renderer is only spawned when stderr is a
-    /// real terminal. Under a captured pipe (CI log capture, `cargo llvm-cov`,
-    /// redirection) the renderer's draw thread writes ANSI redraws to stderr
-    /// and can block on a full pipe, deadlocking `Drop` (and contaminating
-    /// sibling tests whose subprocesses inherit that fd). Skipping the
-    /// renderer there keeps the session (and counters) valid without the
-    /// deadlock.
+    /// real terminal.
+    ///
+    /// Under a captured pipe the renderer's draw thread writes ANSI
+    /// redraws to stderr and can block on a full pipe, deadlocking `Drop`
+    /// (and contaminating sibling tests whose subprocesses inherit that
+    /// fd) — skipping it there keeps the session valid without the deadlock.
     pub fn new(quiet: bool) -> Self {
         if quiet {
             return Self {

@@ -49,12 +49,9 @@ impl Roots {
     /// The literal `--config-root` value, if given — unlike
     /// [`config`](Self::config), never derived from `--root`. `em select`
     /// uses this instead of `config()`, matching real eselect's own
-    /// behavior (its `profile.eselect` module only ever honours an explicit
-    /// `PORTAGE_CONFIGROOT`/`EROOT`, never derives a config root from `ROOT`
-    /// alone) — so a bare `em --root R select ...` operates on the host's
+    /// behavior — so a bare `em --root R select ...` operates on the host's
     /// config unless `--config-root R` is also given, instead of silently
-    /// picking up whatever `--root`'s self-contained-bootstrap default
-    /// resolved `config()` to.
+    /// picking up whatever `--root`'s bootstrap default resolved `config()` to.
     pub fn config_root_explicit(&self) -> Option<&Utf8Path> {
         self.config_root_explicit.as_deref()
     }
@@ -89,13 +86,11 @@ impl Roots {
     /// `EPREFIX` for an in-place prefix build (`--local`), else `None`.
     ///
     /// This is an anchor, not always a build-time offset: `--target`
-    /// substitution (`Cli::roots()`) and an explicit `--root` override
-    /// (`Cli::outer_roots()`/`base_roots()`) both carry the *outer*
-    /// `--prefix`/`--local` path here unconditionally, for
+    /// substitution and an explicit `--root` override both carry the
+    /// *outer* `--prefix`/`--local` path here unconditionally, for
     /// [`relocate_root`](Self::relocate_root)/config-overlay purposes, even
-    /// when `merge_root()` has moved somewhere else entirely. Per-package
-    /// build context (the `EPREFIX` env var, `RootContext.eprefix`) must
-    /// use [`build_eprefix`](Self::build_eprefix) instead — see its doc.
+    /// when `merge_root()` has moved elsewhere. Per-package build context
+    /// must use [`build_eprefix`](Self::build_eprefix) instead.
     pub fn eprefix(&self) -> Option<&Utf8Path> {
         self.eprefix.as_deref()
     }
@@ -113,34 +108,28 @@ impl Roots {
     }
 
     /// Whether this is an overlay view (EPREFIX set, base is the host): the
-    /// `--prefix` case where `base_roots()`'s merge_root is the host but the
-    /// actual install target is the prefix. `roots()` uses this to reconstruct
-    /// the prefix-target view on top of `base_roots()`.
+    /// `--prefix` case where `base_roots()`'s merge_root is the host but
+    /// the actual install target is the prefix. `roots()` uses this to
+    /// reconstruct the prefix-target view on top of `base_roots()`.
     pub fn is_overlay(&self) -> bool {
         self.eprefix.is_some() && self.base.is_none()
     }
 
     /// Whether this is a self-contained `--root DIR` topology (own config,
-    /// own everything — `setup.rs`'s "self-contained offset" mode): no
-    /// EPREFIX, base == target, and not the bare host. Topology-only — a
-    /// robust replacement for the old `config().is_some()` proxy
-    /// (`config()` incidentally happens to be `Some` for exactly this
-    /// topology too, but that's no longer the *reason* to detect it — see
-    /// `config_root_explicit`). Used by `crossdev/mod.rs`'s
-    /// `ensure_self_contained_prefix`/`ensure_prefix_profile`.
+    /// own everything): no EPREFIX, base == target, and not the bare host.
+    /// Topology-only — a robust replacement for the old
+    /// `config().is_some()` proxy, which no longer reflects the *reason*
+    /// to detect it (see `config_root_explicit`).
     pub fn is_self_contained_root(&self) -> bool {
         self.eprefix.is_none() && self.base == self.target && self.merge_root().as_str() != "/"
     }
 
-    /// For internal orchestration only (`crossdev::activate_toolchain`):
-    /// a self-contained `--root` build's own `gcc-config`/`binutils-config`
-    /// slot files must live under *its own* `etc/env.d`, not the host's —
-    /// unlike `em select`'s user-facing config-root resolution
-    /// (`config_root_explicit`), which deliberately does NOT infer this from
-    /// `--root` alone (see that method's doc comment). The internal
-    /// orchestrator already knows it just bootstrapped this exact offset, so
-    /// it forces its own config root explicitly rather than requiring the
-    /// user to also type `--config-root` on every crossdev invocation.
+    /// For internal orchestration only: a self-contained `--root` build's
+    /// own `gcc-config`/`binutils-config` slot files must live under *its
+    /// own* `etc/env.d`, not the host's — unlike `em select`'s user-facing
+    /// `config_root_explicit`, which deliberately does NOT infer this from
+    /// `--root` alone. Forces its own config root rather than requiring
+    /// `--config-root` on every crossdev invocation.
     pub fn with_own_config_root_if_self_contained(mut self) -> Self {
         if self.is_self_contained_root() {
             self.config_root_explicit = Some(self.merge_root().to_owned());
@@ -256,14 +245,14 @@ impl Roots {
     }
 
     /// `PORTDIR_OVERLAY` from make.conf: the legacy, pre-repos.conf way of
-    /// declaring extra overlay directories (`repository/config.py`'s
-    /// `RepoConfigLoader._add_repositories`), still honored by real
-    /// portage. Whitespace-split paths, in listed order; the overlay
-    /// confdir wins over the base config root when both set it (unlike
-    /// [`repos_conf`](Self::repos_conf), the two aren't merged — a single
-    /// bash assignment, not a directory of stackable fragments). Read via
-    /// [`portage_repo::MakeConf::get`], a static parse rather than a real
-    /// shell, so `${VAR}` expansion and `NAME+=VALUE` append aren't
+    /// declaring extra overlay directories, still honored by real portage.
+    /// Whitespace-split paths, in listed order; the overlay confdir wins
+    /// over the base config root when both set it (unlike
+    /// [`repos_conf`](Self::repos_conf), not merged — a single bash
+    /// assignment, not a directory of stackable fragments).
+    ///
+    /// Read via [`portage_repo::MakeConf::get`], a static parse, so `${VAR}`
+    /// expansion and `NAME+=VALUE` append aren't
     /// honored (same limitation as `read_chost_cbuild` elsewhere).
     pub fn portdir_overlay(&self) -> Vec<Utf8PathBuf> {
         // `config_overlay` is always set to `<prefix>/etc/portage` directly

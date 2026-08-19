@@ -378,6 +378,7 @@ pub fn take_for_resume(root: &Utf8Path) -> Result<Option<ResumeState>> {
 ///   can only *add* shape flags — e.g. `-r --keep-going`). To change the
 ///   job shape in a way that needs a flag *off*, clear the list and
 ///   re-invoke (`em maint cleanresume --fix`).
+///
 /// - **Ephemeral UI** (`ask` / `tree` / `json`) comes only from `cli` —
 ///   never restored from the saved job.
 /// - **`jobs` / `load_average`**: current `Some` wins, else saved.

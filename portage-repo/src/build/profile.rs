@@ -106,49 +106,23 @@ impl ProfileStack {
     }
 
     /// Build the layered profile environment by sourcing each `make.defaults`
-    /// through brush with per-layer isolation.
+    /// through brush with per-layer isolation, in the **same** shell. Before
+    /// each file, `INCREMENTAL_VARS` reset to empty so its own assignments
+    /// are captured as a clean delta, then the accumulated values are
+    /// restored for the next file to reference (`${USE}`, …).
     ///
-    /// Each file is sourced in the **same** shell (preserving cross-file
-    /// variable visibility for non-incremental vars like `EAPI`, computed
-    /// paths, etc.).  Before each file the true incremental variables — `USE`,
-    /// `USE_EXPAND`, `FEATURES`, `ACCEPT_KEYWORDS`, `ACCEPT_LICENSE`,
-    /// `CONFIG_PROTECT`, `CONFIG_PROTECT_MASK`, `IUSE_IMPLICIT`
-    /// (`INCREMENTAL_VARS`) — are reset to empty so the file's own
-    /// assignments are captured as a clean delta. After sourcing, the
-    /// accumulated values are restored into the shell for the next file to
-    /// reference via `${USE}`, `${PYTHON_TARGETS}`, etc.
+    /// Per PMS 5.3.2, `USE_EXPAND`-listed variables (`VIDEO_CARDS`, `L10N`,
+    /// …) are incremental too — see `portage-repo/docs/pms-notes.md` for the
+    /// `make_defaults_use`-equivalent translate-and-fold algorithm this
+    /// reproduces, including why a later layer's `USE="-*"` wipes an earlier
+    /// layer's USE_EXPAND-derived tokens too, folded one layer at a time.
     ///
-    /// PMS 5.3.2: the variables *listed by* `USE_EXPAND` (`VIDEO_CARDS`,
-    /// `L10N`, …) are themselves incremental across the profile chain, not
-    /// just `USE_EXPAND` itself — confirmed live against real portage
-    /// 3.0.81.2 (`portage-repo/docs/pms-notes.md`). Real portage's
-    /// `make_defaults_use` (`config.py`) implements this by translating each
-    /// profile layer's own raw values into signed USE tokens and appending
-    /// *all* layers' translations into one combined string, which then goes
-    /// through the ordinary USE incremental fold alongside everything else —
-    /// this is why a later layer's `USE="-*"` also wipes an earlier layer's
-    /// USE_EXPAND-derived tokens (verified live: a child profile's bare
-    /// `USE="-* build"` really does drop a parent's `ELIBC`-derived
-    /// `elibc_glibc`, even though the child never touches `ELIBC`). This
-    /// function reproduces that by folding each layer's translated tokens
-    /// into the *accumulator's* `USE` as it goes, one layer at a time,
-    /// instead of portage's own two-pass (independently re-parse every
-    /// layer once the final `USE_EXPAND` name list is known) approach.
-    ///
-    /// The set of "known" `USE_EXPAND`/`USE_EXPAND_UNPREFIXED` names is
-    /// discovered progressively (from the accumulator, re-read *after* this
-    /// layer's own true-incremental merge so a layer that declares a new
-    /// name and sets it in the same file is caught immediately — the
-    /// near-universal real-world case). One known gap: if a value is
-    /// assigned to a variable in a layer *before* any layer has declared it
-    /// via `USE_EXPAND`, that early value is folded in — untranslated, as a
-    /// plain shell-persisted value — only once a later layer both declares
-    /// and re-touches it; an intervening layer's `USE="-*"` in between would
-    /// not retroactively strip it. This does not occur in any real Gentoo
-    /// profile (`USE_EXPAND` is declared once, early, by the base profile).
-    ///
-    /// When this method returns the shell holds the fully-accumulated profile
-    /// state, ready for `make.conf` to be sourced on top.
+    /// Known gap: a value assigned to a `USE_EXPAND` variable *before* any
+    /// layer has declared it via `USE_EXPAND` folds in untranslated until a
+    /// later layer both declares and re-touches it — doesn't occur in any
+    /// real Gentoo profile (`USE_EXPAND` is declared once, early, by the
+    /// base profile). Returns with the shell holding the fully-accumulated
+    /// profile state, ready for `make.conf` to source on top.
     pub async fn profile_env(&self, shell: &mut EbuildShell) -> Result<ProfileEnv> {
         let mut layers: Vec<ProfileEnvLayer> = Vec::new();
         // External accumulator: keeps the merged state per incremental var.
@@ -319,26 +293,18 @@ pub async fn configure_shell(
 }
 
 /// The outcome of resolving a profile stack's USE: the enabled flags plus the
-/// flags an explicit `-flag` USE token turned off. `disabled` is carried so the
-/// per-package step can record them as explicit `Disabled` and override a
-/// `+flag` IUSE default — portage gives a configured `USE=-flag` precedence over
-/// the ebuild's default. `enabled`/`disabled` are disjoint. Package-independent
-/// (no `package.use`, no ebuild's own IUSE defaults) — see [`Self::pre_env`]/
-/// [`Self::env_use`] for the pieces a per-package fold still needs.
+/// flags an explicit `-flag` USE token turned off, so the per-package step
+/// can record them as explicit `Disabled` and override a `+flag` IUSE
+/// default. `enabled`/`disabled` are disjoint. Package-independent — see
+/// [`Self::pre_env`]/[`Self::env_use`] for the pieces a per-package fold
+/// still needs.
 ///
-/// `pre_env` and `env_use` exist because real portage resolves USE as **one
-/// ordered fold over fixed layers** (`pkginternal < defaults < conf < pkg <
-/// env`, Portage's own `USE_ORDER`/`config.py` `regenerate()`/`setcpv()`), and
-/// `-*` is not a mode — it's an ordinary token that clears whatever the fold
-/// accumulated from *lower* layers so far. `package.use` (`pkg`) sits between
-/// `conf` and `env`, so a `-*` in `make.conf` doesn't affect it but a `-*` in
-/// the environment does; `em`'s canonical per-package resolver
-/// (`portage_solver::resolve_effective_use`) needs the fold's state
-/// immediately before `pkg`/`env` to reproduce this — a single collapsed
-/// `enabled`/`disabled` set (or a `wildcard_reset` bool derived from it) can't
-/// express it, since the information is *where in the fold order* a `-*`
-/// appeared, not a fact about the final state. See
-/// `docs/design/architecture.md`'s USE resolution section for the full model.
+/// `pre_env`/`env_use` exist because real portage resolves USE as one
+/// ordered fold (`pkginternal < defaults < conf < pkg < env`) where `-*`
+/// clears whatever lower layers accumulated so far — a single collapsed
+/// `enabled`/`disabled` set can't express *where in the fold order* a `-*`
+/// appeared. See `docs/design/architecture.md`'s USE stacking precedence
+/// section for the full model.
 pub struct ResolvedUse {
     pub enabled: UseFlags,
     pub disabled: Vec<Interned<DefaultInterner>>,
@@ -379,17 +345,10 @@ pub struct ResolvedUse {
 /// `/etc/portage/make.conf`) sourced **after** the profile env is applied but
 /// **before** `use.force`/`use.mask` are applied.
 ///
-/// Computation order:
-/// 1. Each `make.defaults` sourced through brush with per-layer USE isolation
-///    (see [`ProfileStack::profile_env`]); each layer's `USE_EXPAND`/
-///    `USE_EXPAND_UNPREFIXED` values are translated into USE tokens and
-///    folded with that layer's own `USE` (portage's `make_defaults_use`
-///    translation, `config.py` `regenerate()`)
-/// 2. Each `extra_confs` script sourced with the same incremental treatment
-///    (its expand values folded after its `USE`, portage's conf-layer order)
-/// 3. Process-environment layer: `USE`, `USE_EXPAND` keys, and
-///    `USE_EXPAND_UNPREFIXED` keys read from `std::env`, translated the same
-///    way, and merged
+/// Computation order (translate-and-fold detail: [`ProfileStack::profile_env`]):
+/// 1. Each `make.defaults`, per-layer USE_EXPAND-translated and folded
+/// 2. Each `extra_confs` script, same incremental treatment
+/// 3. Process env: `USE`/`USE_EXPAND`/`USE_EXPAND_UNPREFIXED`, merged
 /// 4. Profile `use.force` — unconditional add
 /// 5. Profile `use.mask` — unconditional remove
 ///
@@ -546,15 +505,12 @@ fn env_layer_use(shell: &EbuildShell) -> Vec<String> {
 }
 
 /// Remove every USE token belonging to `var`'s expansion (`video_cards_*`
-/// for `VIDEO_CARDS`, whether currently enabled or explicitly disabled)
-/// from an already-merged/signed USE token string. Used by
-/// [`source_incremental`] when a non-profile layer (make.conf, …)
+/// for `VIDEO_CARDS`, enabled or disabled) from an already-merged/signed USE
+/// token string. Used by [`source_incremental`] when a non-profile layer
 /// explicitly re-assigns a USE_EXPAND-listed variable: real portage clears
-/// every previously accumulated token with that variable's prefix before
-/// adding the new layer's own tokens, rather than merging into them
-/// (`config.py`'s `is_not_incremental` branch — verified live: make.conf
-/// `VIDEO_CARDS="amdgpu"` on a profile stack that built up `dummy`/`fbdev`
-/// ends with only `video_cards_amdgpu`, not a union).
+/// every accumulated token with that prefix before adding the new layer's
+/// own, rather than merging. See `portage-repo/docs/pms-notes.md` for the
+/// live-verified make.conf example this replaced a union with.
 fn strip_expand_tokens(use_str: &str, var: &str) -> String {
     let prefix = format!("{}_", var.to_lowercase());
     use_str
@@ -567,18 +523,12 @@ fn strip_expand_tokens(use_str: &str, var: &str) -> String {
         .join(" ")
 }
 
-/// Merge process-environment USE variables into the shell as a final incremental layer.
-///
-/// Reads `USE`, all `USE_EXPAND` keys, and all `USE_EXPAND_UNPREFIXED` keys from
-/// `std::env`. `USE` and `USE_EXPAND_UNPREFIXED` values merge with the accumulated
-/// shell state using the same incremental semantics as profile layers (tokens
-/// prefixed with `-` remove); a `USE_EXPAND` variable present in the environment
-/// gets the same **non-incremental replace** [`source_incremental`] applies to a
-/// make.conf assignment (one layer higher, so it also outranks make.conf's own
-/// value): the group's accumulated tokens are stripped from `USE` and the raw
-/// variable is overwritten rather than merged. The expand-variable contributions
-/// are translated into USE tokens ([`env_layer_use`]) so they land in the `USE`
-/// fold itself.
+/// Merge process-environment USE variables into the shell as a final
+/// incremental layer: `USE`/`USE_EXPAND_UNPREFIXED` merge with the
+/// accumulated state (`-`-prefixed tokens remove); a `USE_EXPAND` variable
+/// present in the environment gets the same non-incremental replace
+/// [`source_incremental`] applies to make.conf, one layer higher (so it
+/// also outranks make.conf's value). Translated via [`env_layer_use`].
 ///
 /// This is how `PYTHON_TARGETS=python3_15 em cat/pkg` selects a target,
 /// mirroring how `CC=my-cc` is applied in `init_build_env`.
@@ -868,18 +818,14 @@ mod tests {
             .unwrap()
     }
 
-    /// The gap the parser audit flagged as the most significant finding:
-    /// `source_env_file_composes_features_and_overrides_flags` (below) only
-    /// demonstrates composition when the *later* file explicitly writes
-    /// `${FEATURES} ccache`. Virtually every real `make.conf` instead does a
-    /// plain `FEATURES="candy ccache"` with no interpolation, relying on
-    /// portage itself (`config.py`, outside the shell) to merge it with the
-    /// profile's own `FEATURES` — make.conf(5)'s "Incremental Variables".
-    /// Before this fix, `FEATURES`/`ACCEPT_KEYWORDS`/`ACCEPT_LICENSE`/
-    /// `CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/`IUSE_IMPLICIT` weren't in the
-    /// `incr` list either `profile_env` or `source_incremental` isolate, so a
-    /// plain make.conf assignment silently overwrote the profile's value
-    /// instead of merging with it.
+    // Most real `make.conf`s do a plain `FEATURES="candy ccache"` with no
+    // interpolation, relying on portage itself to merge it with the
+    // profile's own `FEATURES` (make.conf(5) "Incremental Variables") —
+    // unlike the sibling test below, which only covers explicit
+    // `${FEATURES} ccache`. Before this fix, `FEATURES`/`ACCEPT_KEYWORDS`/
+    // `ACCEPT_LICENSE`/`CONFIG_PROTECT`/`CONFIG_PROTECT_MASK`/
+    // `IUSE_IMPLICIT` weren't in the incremental list, so a plain
+    // assignment silently overwrote the profile's value instead of merging.
     #[tokio::test]
     async fn make_conf_merges_features_without_interpolation() {
         let dir = tempfile::tempdir().unwrap();
@@ -1089,12 +1035,12 @@ mod tests {
         assert!(flags.contains("amd64"), "ARCH added unprefixed");
     }
 
-    /// Profile-injected USE_EXPAND defaults (the `elibc_glibc`/`kernel_linux`/
-    /// `python_targets_*` family: `profiles/base/make.defaults` sets
-    /// `USE_EXPAND="… ELIBC …"` + `ELIBC="glibc"`) must be translated into USE
-    /// tokens *inside the fold*, so they reach `ResolvedUse::pre_env` and every
-    /// per-package `resolve_effective_use` downstream — dep conditionals like
-    /// `!elibc_glibc? ( dev-libs/libintl )` depend on it.
+    // Profile-injected USE_EXPAND defaults (the `elibc_glibc`/`kernel_linux`/
+    // `python_targets_*` family: `profiles/base/make.defaults` sets
+    // `USE_EXPAND="… ELIBC …"` + `ELIBC="glibc"`) must be translated into USE
+    // tokens *inside the fold*, so they reach `ResolvedUse::pre_env` and every
+    // per-package `resolve_effective_use` downstream — dep conditionals like
+    // `!elibc_glibc? ( dev-libs/libintl )` depend on it.
     #[tokio::test]
     async fn use_expand_defaults_reach_pre_env() {
         let dir = tempfile::tempdir().unwrap();
@@ -1167,13 +1113,13 @@ mod tests {
         );
     }
 
-    /// Companion to the wildcard test above: without a `-*` in the way, a
-    /// child profile extending (not replacing) a parent's USE_EXPAND-listed
-    /// variable value gets the *union*, not last-wins — PMS 5.3.2 + live
-    /// portage 3.0.81.2 (`portage-repo/docs/pms-notes.md`). This is the
-    /// scenario that was actually broken before this fix: `VIDEO_CARDS`
-    /// went from `{dummy, fbdev}` (real portage) to just `{fbdev}` (old
-    /// `em`, last-assignment-wins across the whole profile chain).
+    // Companion to the wildcard test above: without a `-*` in the way, a
+    // child profile extending (not replacing) a parent's USE_EXPAND-listed
+    // variable value gets the *union*, not last-wins — PMS 5.3.2 + live
+    // portage 3.0.81.2 (`portage-repo/docs/pms-notes.md`). This is the
+    // scenario that was actually broken before this fix: `VIDEO_CARDS`
+    // went from `{dummy, fbdev}` (real portage) to just `{fbdev}` (old
+    // `em`, last-assignment-wins across the whole profile chain).
     #[tokio::test]
     async fn profile_chain_unions_use_expand_values_without_conf_override() {
         let dir = tempfile::tempdir().unwrap();
@@ -1202,10 +1148,10 @@ mod tests {
         );
     }
 
-    /// Negation within the profile chain: a child's `-flag` on a
-    /// USE_EXPAND-listed variable cancels just that one token from an
-    /// ancestor, matching PMS 5.3.1's stack-and-cancel algorithm (and live
-    /// portage 3.0.81.2).
+    // Negation within the profile chain: a child's `-flag` on a
+    // USE_EXPAND-listed variable cancels just that one token from an
+    // ancestor, matching PMS 5.3.1's stack-and-cancel algorithm (and live
+    // portage 3.0.81.2).
     #[tokio::test]
     async fn profile_chain_use_expand_negation_cancels_one_ancestor_token() {
         let dir = tempfile::tempdir().unwrap();
@@ -1242,14 +1188,14 @@ mod tests {
         );
     }
 
-    /// Regression for the real bug this was found from: a descendant profile
-    /// (or make.conf) re-assigning a USE_EXPAND variable to a *disjoint*
-    /// value must fully replace the ancestor's value, not add to it —
-    /// `VIDEO_CARDS="dummy fbdev"` (base) → `VIDEO_CARDS="fbdev"` (arch) →
-    /// `VIDEO_CARDS="amdgpu"` (make.conf) must end with only
-    /// `video_cards_amdgpu`, matching real `portageq envvar VIDEO_CARDS`/`USE`
-    /// on a `default/linux/arm64` profile with `VIDEO_CARDS="amdgpu"` in
-    /// make.conf (`dummy`/`fbdev` never appear).
+    // Regression for the real bug this was found from: a descendant profile
+    // (or make.conf) re-assigning a USE_EXPAND variable to a *disjoint*
+    // value must fully replace the ancestor's value, not add to it —
+    // `VIDEO_CARDS="dummy fbdev"` (base) → `VIDEO_CARDS="fbdev"` (arch) →
+    // `VIDEO_CARDS="amdgpu"` (make.conf) must end with only
+    // `video_cards_amdgpu`, matching real `portageq envvar VIDEO_CARDS`/`USE`
+    // on a `default/linux/arm64` profile with `VIDEO_CARDS="amdgpu"` in
+    // make.conf (`dummy`/`fbdev` never appear).
     #[tokio::test]
     async fn use_expand_final_value_replaces_ancestor_values_not_unions_them() {
         let dir = tempfile::tempdir().unwrap();
@@ -1288,9 +1234,9 @@ mod tests {
         );
     }
 
-    /// make.conf's own USE_EXPAND values are folded *after* its USE (portage's
-    /// conf-layer order), so they survive a `USE="-*"` in the same file while
-    /// the profile's expansions from the layer below are cleared.
+    // make.conf's own USE_EXPAND values are folded *after* its USE (portage's
+    // conf-layer order), so they survive a `USE="-*"` in the same file while
+    // the profile's expansions from the layer below are cleared.
     #[tokio::test]
     async fn conf_expand_values_survive_conf_level_wildcard() {
         let dir = tempfile::tempdir().unwrap();
@@ -1327,13 +1273,13 @@ mod tests {
         assert!(pre_env.contains(&"build"));
     }
 
-    /// make.conf assigning a USE_EXPAND-listed variable to the *empty
-    /// string* is how a user fully clears a group the profile stack built
-    /// up — it must still trigger the prefix-strip even though it
-    /// contributes zero tokens of its own (an explicit "assigned but
-    /// empty" must be told apart from "never mentioned by this layer", the
-    /// reason `source_incremental` resets these vars with `unset` rather
-    /// than `VAR=""`).
+    // make.conf assigning a USE_EXPAND-listed variable to the *empty
+    // string* is how a user fully clears a group the profile stack built
+    // up — it must still trigger the prefix-strip even though it
+    // contributes zero tokens of its own (an explicit "assigned but
+    // empty" must be told apart from "never mentioned by this layer", the
+    // reason `source_incremental` resets these vars with `unset` rather
+    // than `VAR=""`).
     #[tokio::test]
     async fn make_conf_empty_assignment_clears_profile_use_expand_group() {
         let dir = tempfile::tempdir().unwrap();
@@ -1361,13 +1307,13 @@ mod tests {
         );
     }
 
-    /// `use_flags_with_override`'s whole point: a transient conf-layer
-    /// override (`em stages --stage1`'s `USE="-* build ${BOOTSTRAP_USE}"`)
-    /// must land in `pre_env`, not `env_use` — otherwise it behaves like a
-    /// `std::env::set_var("USE", ...)` mutation (the pre-2026-07-12
-    /// mechanism), which sits *above* `package.use` and wipes it. Folding it
-    /// as one more conf file instead keeps `env_use` as the real,
-    /// untouched process environment.
+    // `use_flags_with_override`'s whole point: a transient conf-layer
+    // override (`em stages --stage1`'s `USE="-* build ${BOOTSTRAP_USE}"`)
+    // must land in `pre_env`, not `env_use` — otherwise it behaves like a
+    // `std::env::set_var("USE", ...)` mutation (the pre-2026-07-12
+    // mechanism), which sits *above* `package.use` and wipes it. Folding it
+    // as one more conf file instead keeps `env_use` as the real,
+    // untouched process environment.
     #[tokio::test]
     async fn use_flags_with_override_lands_in_pre_env_not_env_use() {
         let dir = tempfile::tempdir().unwrap();
@@ -1427,7 +1373,7 @@ mod tests {
         );
     }
 
-    /// Two-layer profile: base sets unicode, child sets crypt — both must survive.
+    // Two-layer profile: base sets unicode, child sets crypt — both must survive.
     #[tokio::test]
     async fn configure_shell_two_layer_use_accumulation() {
         let dir = tempfile::tempdir().unwrap();

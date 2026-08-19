@@ -132,12 +132,10 @@ fn report(consumer: &BrokenConsumer) {
 }
 
 /// `em revdep [-L NAME]`: detect and rebuild packages with broken shared
-/// library dependencies. Always `--oneshot`+`--complete-graph` (matching
-/// gentoolkit's own always-on `--oneshot --complete-graph=y`) — a revdep-
-/// triggered rebuild is never a world selection and must not leave a
-/// half-fixed chain unresolved. `-p`/`-a`/`-j`/`-k`/etc. are read from `cli`
-/// by [`crate::emerge_atoms`] exactly as for every other caller; no special
-/// handling needed here.
+/// library dependencies. Always `--oneshot`+`--complete-graph` — a
+/// revdep-triggered rebuild is never a world selection and must not leave
+/// a half-fixed chain unresolved. `-p`/`-a`/`-j`/`-k`/etc. are read from
+/// `cli` by [`crate::emerge_atoms`] exactly as for every other caller.
 pub async fn run(cli: &cli::Cli, library: Option<&str>) -> Result<()> {
     let vdb = open_cli_vdb(cli)?;
     let roots = cli.roots();

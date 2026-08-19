@@ -38,14 +38,11 @@ pub struct PackageVersions {
 /// Structured dependency trees separated by PMS class.
 ///
 /// Each class is a [`DepList`] (`Arc`-wrapped): a caller whose own
-/// dependency-tree source is already a `DepList` (e.g.
-/// `portage_metadata::EbuildMetadata`, once the ebuild cache is parsed) can
-/// hand these off as a cheap refcount bump instead of a deep clone. This
-/// matters because `PackageRepository::versions_for` gets called fresh for
-/// every package on every provider (re)build — including every USE-dep
-/// co-solve fixpoint iteration, up to ~8x per invocation — so a real
-/// package's hundreds of parsed atoms were being deep-cloned that many
-/// times over for data that never changes across those rebuilds.
+/// dependency-tree source is already a `DepList` can hand these off as a
+/// cheap refcount bump instead of a deep clone. Matters because
+/// `PackageRepository::versions_for` is called fresh for every package on
+/// every provider rebuild (up to ~8x per invocation for USE-dep co-solve),
+/// so hundreds of parsed atoms were being deep-cloned needlessly each time.
 #[derive(Clone, Default)]
 pub struct PackageDeps {
     /// DEPEND — build-time dependencies.
@@ -93,18 +90,15 @@ pub trait PackageRepository {
     /// Return all versions for a given CPN, with their metadata.
     fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, PackageVersions)>;
 
-    /// The slots of `cpn`'s (filtered) versions, **ordered by each slot's best
-    /// (newest) available version, ascending** — so the slot holding the newest
-    /// version sorts last. The `SlotChoice` numbering gives the last slot the
-    /// highest synthetic version, so the solver's `max()` pick lands on the
-    /// newest-*version* slot. Ordering by slot *name* instead would, for compat
-    /// slots like `app-shells/bash:5.1` vs `:0`, put the lexicographically-last
-    /// (`5.1`, older code) last — picking an older version. This mirrors
-    /// portage's version-descending selection for `:*` deps. A cheap projection
-    /// used to build the unslotted-dep slot map for the *whole* repository
-    /// without converting dependencies; implementations whose `versions_for` is
-    /// expensive should override with a direct metadata read applying the same
-    /// version filters.
+    /// The slots of `cpn`'s (filtered) versions, **ordered by each slot's
+    /// best (newest) available version, ascending** — so the slot with the
+    /// newest version sorts last, and `SlotChoice` numbering gives it the
+    /// highest synthetic version so the solver's `max()` lands there.
+    /// Ordering by slot *name* instead would pick an older compat slot
+    /// (mirrors portage's version-descending `:*` selection).
+    ///
+    /// A cheap whole-repository projection; override with a direct metadata
+    /// read if `versions_for` is expensive.
     fn slots_for(&self, cpn: &Cpn) -> Vec<Interned<DefaultInterner>> {
         let mut best: HashMap<Interned<DefaultInterner>, Version> = HashMap::new();
         for (cpv, meta) in self.versions_for(cpn) {

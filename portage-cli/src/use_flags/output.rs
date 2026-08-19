@@ -143,13 +143,10 @@ pub(super) fn show_info(cli: &cli::Cli, flags: &[String], global: bool, local: b
 }
 
 /// Sorted, uppercased USE_EXPAND variable names the active profile actually
-/// declares — resolved USE_EXPAND from the profile stack (the same
-/// `EbuildShell`/`apply_profile_env` machinery `em --info` uses), so a
-/// variable the repo merely has a `profiles/desc/*.desc` file for but no
-/// profile in the active stack pulls in is left out. Falls back to every
-/// desc-file name in the repo when no profile resolves at all (e.g. an
-/// unconfigured `--config-root`), so the listing degrades rather than
-/// going empty.
+/// declares — resolved from the profile stack, so a variable the repo
+/// merely has a `profiles/desc/*.desc` file for but no active profile pulls
+/// in is left out. Falls back to every desc-file name in the repo when no
+/// profile resolves at all, so the listing degrades rather than going empty.
 async fn expand_var_names(cli: &cli::Cli) -> Result<Vec<String>> {
     let repo = crate::crossdev::main_repo(cli).context("opening main repo")?;
     let roots = cli.roots();

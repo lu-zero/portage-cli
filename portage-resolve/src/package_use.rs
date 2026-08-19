@@ -119,11 +119,9 @@ pub fn build_entries(
 /// Turn per-package line groups into [`PackageUseEntry`]s, choosing each
 /// one's filename: the bare package name (e.g. `mesa`) when unambiguous,
 /// falling back to `category-package` only for names that collide across
-/// categories in this batch (e.g. both `x11-libs/foo` and `dev-libs/foo`
-/// need an entry) — real portage users keep bare-name package.use files day
-/// to day, and cat-name for everything is only needed to disambiguate.
-/// Sorted by filename so the report/written output is reproducible across
-/// runs; lines within a file keep their caller-given order.
+/// categories in this batch — real portage users keep bare-name
+/// package.use files day to day. Sorted by filename for reproducible
+/// output; lines within a file keep their caller-given order.
 fn assign_filenames(by_cpn: HashMap<Cpn, Vec<PackageUseLine>>) -> Vec<PackageUseEntry> {
     let cpns: Vec<Cpn> = by_cpn.keys().copied().collect();
     let mut names_by_bare: HashMap<&str, HashSet<&str>> = HashMap::new();
@@ -169,22 +167,19 @@ pub type CosolveOutcome<T> = (
 /// Auto-apply cross-package `[flag]` USE-deps to a fixpoint (emerge's
 /// autounmask-preview dependency calculation).
 ///
-/// Starting from `package_use`, repeatedly: solve (`solve` returns an opaque
-/// solve outcome `T`, or `None` if the solve failed), read the in-plan USE-flag
-/// requirements from it via `reqs_of`, force every demanded flag that is real
-/// IUSE of its target via a synthetic `cpn flags` entry, and re-solve — until no
-/// new flag is added. Flags the caller's *initial* `package_use` sets either
-/// way are pins and are never forced (emerge refuses to override explicit
-/// configuration; the demand is left to the advisory).
+/// Starting from `package_use`, repeatedly: solve, read the in-plan
+/// USE-flag requirements via `reqs_of`, force every demanded flag that is
+/// real IUSE of its target via a synthetic `cpn flags` entry, and re-solve
+/// — until no new flag is added. Flags the caller's *initial* `package_use`
+/// sets either way are pins, never forced (emerge refuses to override
+/// explicit configuration; the demand is left to the advisory).
 ///
-/// Returns the augmented `package_use`, the requirements that drove at least
-/// one applied flag (for the mandatory "USE changes are necessary" report —
-/// the final solve no longer demands them, so they must be carried out), and,
-/// **when the fixpoint converged on a solve of that exact `package_use`**,
-/// that final outcome — so the caller can reuse it instead of solving once
-/// more. The outcome is `None` if a solve failed or the iteration bound was
-/// hit (the returned `package_use` then has additions that were not re-solved,
-/// so the caller must solve again).
+/// Returns the augmented `package_use`, the requirements that drove at
+/// least one applied flag (for the mandatory "USE changes are necessary"
+/// report), and, when the fixpoint converged on a solve of that exact
+/// `package_use`, that final outcome so the caller can reuse it. `None`
+/// when a solve failed or the iteration bound was hit (the returned
+/// `package_use` then needs a fresh solve).
 ///
 /// `applied` (a flag forced once) is never re-forced, so a `[bar]` vs `[-bar]`
 /// contradiction resolves to first-wins + advisory for the loser rather than

@@ -144,13 +144,12 @@ pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     bus
 }
 
-/// `em regen`'s own bus — no [`LiveFsSink`]. Regen isn't a merge session
-/// (no phases, no ETA relevance, no reason to show up in `em log current`);
-/// its only user-facing needs — the `[N/of]` progress line and knowing which
-/// ebuild failed sourcing and why — are already served by
-/// [`HumanStdoutSink`], `PkgEnd.error`, and the rich miette frame `regen.rs`
-/// prints directly. `HistorySink` is kept for symmetry; it already no-ops on
-/// [`ActivityMode::Regen`] events.
+/// `em regen`'s own bus — no [`LiveFsSink`]. Regen isn't a merge session (no
+/// phases, no ETA relevance, no reason to show up in `em log current`); its
+/// user-facing needs — the `[N/of]` line and why an ebuild failed sourcing —
+/// are already served by [`HumanStdoutSink`], `PkgEnd.error`, and the rich
+/// miette frame `regen.rs` prints directly. `HistorySink` stays for
+/// symmetry; it already no-ops on [`ActivityMode::Regen`] events.
 pub fn regen_activity_bus(activity_root: &Utf8Path) -> ActivityBus {
     let bus = ActivityBus::new();
     bus.add_sink(Arc::new(BackgroundSink::new(
@@ -759,14 +758,14 @@ mod tests {
         assert_eq!(s.failed, 1);
     }
 
-    /// An unwritable activity root (e.g. `EROOT` owned by root, running
-    /// unprivileged) must not keep retrying a doomed write on every single
-    /// event — a real merge emits a `SessionStart`, periodic heartbeats, a
-    /// `PkgStart`/`PkgEnd` per package and a `PhaseEnter`/`PhaseLeave` per
-    /// phase, so an un-short-circuited sink would hammer the same failure
-    /// over and over. Once the first write fails, later events must be
-    /// no-ops (verified here by making the directory writable again and
-    /// confirming a later event still produces no file).
+    // An unwritable activity root (e.g. `EROOT` owned by root, running
+    // unprivileged) must not keep retrying a doomed write on every single
+    // event — a real merge emits a `SessionStart`, periodic heartbeats, a
+    // `PkgStart`/`PkgEnd` per package and a `PhaseEnter`/`PhaseLeave` per
+    // phase, so an un-short-circuited sink would hammer the same failure
+    // over and over. Once the first write fails, later events must be
+    // no-ops (verified here by making the directory writable again and
+    // confirming a later event still produces no file).
     #[test]
     fn live_fs_sink_stops_retrying_after_the_first_write_failure() {
         use std::os::unix::fs::PermissionsExt;

@@ -39,12 +39,12 @@ impl std::error::Error for ParseDiagnostic {}
 
 /// Roughly how much source text to keep on each side of the failing span.
 /// SRC_URI/LICENSE/etc. values are whitespace-separated token soup with no
-/// newlines, so unlike a real source file there is no natural line length to
-/// rely on — a go-module `SRC_URI` can run to a few thousand characters.
+/// newlines, so there's no natural line length to rely on — a go-module
+/// `SRC_URI` can run to a few thousand characters.
+///
 /// Without cropping, miette renders the *entire* value as one unbroken
-/// "line", and the caret ends up thousands of columns to the right of
-/// anything a terminal actually shows — exactly the illegibility this module
-/// exists to fix.
+/// "line", with the caret thousands of columns right of anything a
+/// terminal shows — exactly the illegibility this module exists to fix.
 const CONTEXT_CHARS: usize = 60;
 
 /// Crop `src` to a window around `span`, snapped to whitespace so a token

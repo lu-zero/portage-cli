@@ -63,12 +63,10 @@ pub(crate) fn installed_packages(globals: &Cli) -> Vec<(Cpv, SlotName)> {
 
 /// Where a command's own state lives for `eroot`: the real, root-owned
 /// system path (`eroot.join(real_subpath)`) under a managed
-/// `--root`/`--prefix`/`--local` target (the invoking user's own tree, same
-/// as `var/lib/portage/world` under it) — but `xdg()`'s unprivileged XDG
+/// `--root`/`--prefix`/`--local` target — but `xdg()`'s unprivileged XDG
 /// path on the bare host (`eroot == "/"`), since both `em news` and `em
-/// glsa` are read-mostly/unprivileged commands that shouldn't need root
-/// just to remember what they've already shown or fixed. Same reasoning as
-/// `xdg::regen_activity_root`.
+/// glsa` shouldn't need root just to remember what they've already shown
+/// or fixed. Same reasoning as `xdg::regen_activity_root`.
 pub(crate) fn state_dir(
     eroot: &Utf8Path,
     real_subpath: &str,

@@ -38,17 +38,12 @@ pub struct Distfile {
     /// text: `Some("fetch")` for a `fetch+` prefix, `Some("mirror")` for
     /// `mirror+`.
     ///
-    /// Per PMS 8.2.2.5, this prefix is an **exemption** from a package-level
-    /// `RESTRICT=fetch`/`RESTRICT=mirror` — "this particular URI may still be
-    /// fetched/mirrored despite the package-level restriction" — not a
-    /// restriction on the URI itself. `Fetcher::fetch_distfile`'s current
-    /// handling of this field (treating `Some("fetch")` as *itself* meaning
-    /// "don't fetch") has that backwards, and this file's own `expand_url`
-    /// GENTOO_MIRRORS suppression on `Some("mirror")` has the same inversion
-    /// in the other direction — both are pre-existing, undocumented-until-now
-    /// bugs in this field's only consumers, not fixed here (see
-    /// [`DistfileResolver::resolve_uri_map`], which does its own, correct
-    /// package-level+per-URI gating and never reads this field at all).
+    /// Per PMS 8.2.2.5, this is an **exemption** from a package-level
+    /// `RESTRICT=fetch`/`RESTRICT=mirror`, not a restriction on the URI.
+    /// **Known bug, not fixed here:** `Fetcher::fetch_distfile` and this
+    /// file's `expand_url` GENTOO_MIRRORS suppression both have that
+    /// backwards. [`DistfileResolver::resolve_uri_map`] gates correctly and
+    /// never reads this field.
     pub restriction: Option<String>,
 }
 
@@ -67,14 +62,11 @@ pub struct RestrictGate {
 }
 
 impl RestrictGate {
-    /// Build the gate from a parsed `RESTRICT` expression, matchnone-evaluated
-    /// (`RestrictExpr::has_unconditional`). `RESTRICT=fetch` implies
-    /// mirror-restriction too (real portage:
-    /// `restrict_mirror = restrict_fetch or "mirror" in restrict`,
-    /// `FetchIterator.py`) — a `fetch+`-tagged URI is exempted from the fetch
-    /// check only, so under plain `RESTRICT=fetch` it is *still* excluded
-    /// from mirroring; only a `mirror+`-tagged URI survives either
-    /// restriction.
+    /// Build the gate from a parsed `RESTRICT` expression. `RESTRICT=fetch`
+    /// implies mirror-restriction too (real portage: `restrict_mirror =
+    /// restrict_fetch or "mirror" in restrict`) — a `fetch+`-tagged URI is
+    /// exempted from the fetch check only, so under plain `RESTRICT=fetch`
+    /// it's still excluded from mirroring; only `mirror+` survives either.
     pub fn from_restrict(entries: &[RestrictExpr]) -> Self {
         let fetch = RestrictExpr::has_unconditional(entries, "fetch");
         let mirror = fetch || RestrictExpr::has_unconditional(entries, "mirror");
@@ -155,21 +147,18 @@ impl DistfileResolver {
     /// order, ignoring USE conditionals — like [`Self::resolve_all`]), gated
     /// by package-level `RESTRICT` via `opts.restrict`.
     ///
-    /// Unlike [`Self::resolve`]/[`Self::resolve_all`], which return one
-    /// `Distfile` **per URI** (a real bug for any caller that treats a
-    /// filename as having a single fetch record — concurrently fetching two
-    /// `Distfile`s that both write `distdir/<filename>` races) and populate
-    /// `Distfile::restriction` from the (currently inverted, see that
-    /// field's docs) per-URI prefix alone, this method does the RESTRICT
-    /// gating itself, correctly, and always returns `restriction: None`.
+    /// Unlike [`Self::resolve`]/[`Self::resolve_all`] (one `Distfile`
+    /// per URI — a bug for callers writing concurrently, using the
+    /// per-URI prefix alone, currently inverted, see that field's
+    /// docs), this does RESTRICT gating itself and returns
+    /// `restriction: None`.
     ///
-    /// Gating, per real portage (`FetchIterator.py`): a `fetch+`/`mirror+`
-    /// URI prefix is an *exemption* from `opts.restrict`, not a restriction.
+    /// Gating, per real portage: a `fetch+`/`mirror+` prefix is an
+    /// *exemption* from `opts.restrict`, not a restriction.
     /// `opts.restrict.mirror` must already include the `RESTRICT=fetch`
-    /// implication (`RestrictGate::from_restrict` does this) — under plain
-    /// `RESTRICT=fetch`, only a `mirror+`-tagged URI survives; a `fetch+`-tagged
-    /// one does not (it exempts the fetch check only, and fetch implies the
-    /// mirror check too).
+    /// implication (`RestrictGate::from_restrict` does this) — under
+    /// plain `RESTRICT=fetch`, only `mirror+` survives (`fetch+`
+    /// exempts fetch only; fetch implies mirror too).
     pub fn resolve_uri_map(&self, entries: &[SrcUriEntry], opts: &ResolveOpts) -> Vec<Distfile> {
         let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
         collect_uri_pairs_all(entries, &mut raw);

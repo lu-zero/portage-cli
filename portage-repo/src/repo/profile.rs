@@ -113,14 +113,15 @@ pub struct Profile {
     /// set contributions — only profiles whose `profile_formats` contains
     /// `profile-set` contribute their plain `packages` lines to `@profile`.
     ///
-    /// Resolved at open time by [`resolve_profile_formats`] (walking up to the
-    /// nearest enclosing repo, matching portage's longest-path-wins
-    /// `intersecting_repos` rule). Defaults to empty when no enclosing repo is
-    /// found — equivalent to portage's `portage-1`/`portage-1-compat` default,
-    /// neither of which enables `profile-set`. The site-local user profile
-    /// (`/etc/portage/profile`) is overridden to `["profile-bashrcs",
-    /// "profile-set"]` by [`ProfileStack::with_user_profile`], mirroring
-    /// portage's `LocationsManager.load_profiles` hardcoded value.
+    /// Resolved at open time by [`resolve_profile_formats`] (walking up to
+    /// the nearest enclosing repo, matching portage's longest-path-wins
+    /// rule). Defaults to empty when no enclosing repo is found —
+    /// equivalent to portage's `portage-1`/`portage-1-compat` default.
+    ///
+    /// The site-local user profile (`/etc/portage/profile`) is overridden
+    /// to `["profile-bashrcs", "profile-set"]` by
+    /// [`ProfileStack::with_user_profile`], mirroring portage's own
+    /// `LocationsManager.load_profiles` hardcoded value.
     profile_formats: Vec<String>,
 }
 
@@ -533,14 +534,11 @@ impl ProfileStack {
     /// profiles whose enclosing repo declares `profile-set` in
     /// `profile-formats`** (a portage extension, not PMS).
     ///
-    /// PMS 5.2.6 specifies that plain (non-`*`) `packages` lines are ignored
-    /// when calculating the *system* set. Portage additionally routes them into
-    /// `@profile` via `portage.sets.ProfilePackageSet`, gated on the
-    /// repo-level `profile-set` profile-format flag. Since the stock Gentoo
-    /// repo does not set `profile-set`, `@profile` is empty on a typical
-    /// install *unless* a site-local user profile (`/etc/portage/profile`)
-    /// contributes plain lines — portage hardcodes that layer to
-    /// `profile-set` (see [`Profile::profile_formats`]).
+    /// PMS 5.2.6 ignores plain (non-`*`) `packages` lines for the *system*
+    /// set. Portage additionally routes them into `@profile`, gated on the
+    /// repo-level `profile-set` flag — stock Gentoo doesn't set it, so
+    /// `@profile` is empty *unless* the user profile contributes plain
+    /// lines (hardcoded to `profile-set`, see [`Profile::profile_formats`]).
     ///
     /// Matches `portage.sets.ProfilePackageSet.ProfilePackageSet.load`
     /// (`if "profile-set" in y.profile_formats` … `if x[:1] != "*"`).
@@ -568,14 +566,12 @@ impl ProfileStack {
             .collect())
     }
 
-    /// Accumulated `packages.build` entries across the full stack, in build
-    /// order, with incremental `-atom`/`-*` removal applied. This is the
-    /// **stage1 bootstrap list** (catalyst/crossdev-stages convention) — the
-    /// minimal package set a stage1 emerges into an empty root, distinct from
-    /// (and much smaller than) [`system_set`](Self::system_set)'s `@system`.
-    /// Entries here are bare `cat/pkg` atoms (no version); see
-    /// [`stage1_packages`](Self::stage1_packages) for the version-qualified
-    /// merge with `packages`.
+    /// Accumulated `packages.build` entries across the stack, in build
+    /// order, with incremental `-atom`/`-*` removal. The **stage1 bootstrap
+    /// list** — the minimal set a stage1 emerges into an empty root, much
+    /// smaller than [`system_set`](Self::system_set)'s `@system`. Bare
+    /// `cat/pkg` atoms; see [`stage1_packages`](Self::stage1_packages) for
+    /// the version-qualified merge.
     pub fn packages_build(&self) -> Result<Vec<Dep>> {
         let mut acc: Vec<Dep> = Vec::new();
         for p in &self.profiles {
@@ -596,12 +592,13 @@ impl ProfileStack {
     /// The stage1 package list, version-qualified: mirrors catalyst's
     /// `targets/stage1/build.py`.
     ///
-    /// [`packages_build`](Self::packages_build) gives the build *order* and
-    /// *membership* as bare `cat/pkg` atoms; [`packages`](Self::packages) (the
-    /// `@system` set) may carry version/operator constraints (`>=cat/pkg-1.2`)
-    /// for the same key. For each `packages` entry whose `cat/pkg` key matches
-    /// a `packages.build` slot, that slot is replaced with the (possibly
-    /// versioned) `packages` atom — same key, so build order is preserved.
+    /// [`packages_build`](Self::packages_build) gives build *order* and
+    /// *membership* as bare `cat/pkg` atoms; [`packages`](Self::packages)
+    /// (`@system`) may carry version/operator constraints for the same key.
+    /// Each `packages` entry whose key matches a `packages.build` slot
+    /// replaces that slot with the (possibly versioned) `packages` atom —
+    /// same key, so build order is preserved.
+    ///
     /// `packages.build` entries with no `packages` match are kept bare;
     /// `packages` entries with no `packages.build` match are dropped (the
     /// build list drives order and membership, not the system list).
@@ -784,25 +781,23 @@ pub(crate) fn merge_flag_lists<'a>(iter: impl Iterator<Item = &'a str>) -> Vec<S
     acc
 }
 
-/// Like [`merge_flag_lists`] but *preserves explicit disables*: a flag whose net
-/// final token is negative is emitted as `-flag` rather than dropped, so a
-/// `USE=-foo` survives even when `foo` was never enabled in a prior layer. This
-/// keeps the negation visible to the per-package step, where it must override a
-/// `+foo` IUSE default — portage's USE-over-IUSE-default precedence. The output
-/// round-trips (a `-flag` in a later input is read back as "disabled"), so it
-/// chains across profile/`make.conf`/env layers. Used only for the `USE` var.
+/// Like [`merge_flag_lists`] but *preserves explicit disables*: a flag whose
+/// net final token is negative is emitted as `-flag` rather than dropped,
+/// so `USE=-foo` survives even when `foo` was never enabled in a prior
+/// layer — visible to the per-package step, which must override a `+foo`
+/// IUSE default. Round-trips across profile/`make.conf`/env layers. Used
+/// only for the `USE` var.
 ///
-/// `-*` (the incremental clear-all, make.conf(5)) is preserved as a *leading*
-/// literal token in the output rather than consumed. Portage's USE accumulator
-/// sits the ebuild's own `+`/`-` IUSE defaults (`pkginternal`) *below* the
-/// profile/`make.conf`/env layers, so a `-*` in any of those layers clears them;
-/// `em` folds IUSE defaults in a later per-package step, so it must remember
-/// that a clear-all happened to avoid resurrecting a `+`-defaulted flag the
-/// user asked to clear (e.g. curl's `+quic` under `USE="-* build"`). Keeping
-/// the token round-trips correctly: feeding this output back as `prev` re-fires
-/// the same clear (a no-op on the already-reduced list) and keeps propagating
-/// the signal forward through every subsequent layer. The top-level consumer
-/// (`build::profile::collect_use_flags`) strips it.
+/// `-*` (the incremental clear-all, make.conf(5)) is preserved as a
+/// *leading* literal token rather than consumed. Portage's USE accumulator
+/// sits the ebuild's own IUSE defaults *below* the profile/`make.conf`/env
+/// layers, so `em` (folding IUSE defaults in a later per-package step) must
+/// remember a clear-all happened to avoid resurrecting a `+`-defaulted flag
+/// (e.g. curl's `+quic` under `USE="-* build"`).
+///
+/// Keeping the token round-trips correctly: feeding this output back as
+/// `prev` re-fires the same clear and keeps propagating the signal forward.
+/// The top-level consumer (`build::profile::collect_use_flags`) strips it.
 ///
 /// Twinned with `portage_solver::use_config`'s identically-named function
 /// (deliberately duplicated, not shared — see its doc for why); a PMS fix here
@@ -865,22 +860,18 @@ fn collect_stack(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Vec<Prof
 /// up to the nearest enclosing repository root (the closest ancestor holding
 /// `metadata/layout.conf`) and reading its `profile-formats` key.
 ///
-/// Mirrors portage's longest-path-wins `intersecting_repos` rule
-/// (`LocationsManager._addProfile`): of all repos whose root path the profile
-/// path starts with, the most specific (nearest) one wins. Returns an empty
-/// list when no enclosing repo is found — equivalent to portage's
-/// `portage-1`/`portage-1-compat` default, neither of which enables
-/// `profile-set`, so such a profile does not contribute to `@profile`.
+/// Mirrors portage's longest-path-wins `intersecting_repos` rule: of all
+/// repos whose root path the profile path starts with, the most specific
+/// (nearest) one wins. Returns an empty list when no enclosing repo is
+/// found — equivalent to portage's `portage-1`/`portage-1-compat` default,
+/// so such a profile does not contribute to `@profile`.
 ///
-/// This walk approximates `intersecting_repos` using only the filesystem
-/// (no `repos.conf` registry available at this layer): `metadata/
-/// layout.conf` is the usual repo-root signal, but a repo may legitimately
-/// lack one (defaulting to no `profile-formats`, same as "no enclosing
-/// repo"). `profiles/repo_name` — PMS's own repository-structure marker —
-/// is checked as a hard stop for that case, so a real (layout.conf-less)
-/// repo root doesn't fall through to an unrelated ancestor directory that
-/// happens to have its own `layout.conf` (e.g. nested/co-located repos
-/// sharing a parent directory).
+/// This walk approximates `intersecting_repos` using only the filesystem:
+/// `metadata/layout.conf` is the usual repo-root signal, but a repo may
+/// legitimately lack one (defaulting to no `profile-formats`). PMS's own
+/// `profiles/repo_name` marker is checked as a hard stop for that case, so
+/// a real (layout.conf-less) repo root doesn't fall through to an
+/// unrelated ancestor's own `layout.conf` (nested/co-located repos).
 fn resolve_profile_formats(profile_path: &Path) -> Vec<String> {
     let mut dir = profile_path.parent();
     while let Some(d) = dir {

@@ -60,20 +60,17 @@ use crate::repo::Repository;
 /// Name of the sidecar listing the CPVs the in-tree cache does not serve.
 const GAP_INDEX: &str = "gap-index";
 
-/// Every metadata entry of `repo`: the in-tree bulk read, plus the chain over
-/// the ebuilds that read cannot serve — suspects (no entry, or newer than the
-/// cache file serving it), symlink-into-a-master reuse, then live sourcing.
-/// One function for every repo: a repo with no in-tree cache is this
-/// function's degenerate case (see the module doc).
+/// Every metadata entry of `repo`: the in-tree bulk read, plus the chain
+/// over ebuilds that read cannot serve — suspects, symlink-into-a-master
+/// reuse, then live sourcing. One function for every repo: a repo with no
+/// in-tree cache is this function's degenerate case (see the module doc).
 ///
-/// Finding suspects costs a tree walk, which is most of a resolve's repo-load
-/// time on its own. Two things keep that off the common path: the walk runs
-/// concurrently with the bulk read (`Ebuilds` owns its walker, so it moves onto
-/// a blocking thread cleanly), and — for a repo with a trustworthy sync marker
-/// ([`Repository::has_sync_marker`]) — its result is memoised in a sidecar
-/// keyed on [`Repository::sync_stamp`], so an unchanged tree skips the walk
-/// entirely and reads the handful of entries straight from the secondary
-/// store.
+/// Finding suspects costs a tree walk, most of a resolve's repo-load time
+/// on its own. Two things keep that off the common path: the walk runs
+/// concurrently with the bulk read, and — for a repo with a trustworthy
+/// sync marker ([`Repository::has_sync_marker`]) — its result is memoised
+/// keyed on [`Repository::sync_stamp`], so an unchanged tree reads the
+/// handful of entries straight from the secondary store.
 pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let stamp = repo.sync_stamp();
     let index = repo.sidecar_path(GAP_INDEX);
@@ -429,12 +426,12 @@ mod tests {
         std::fs::File::open(path).unwrap().set_modified(t).unwrap();
     }
 
-    /// Regression for the per-entry suspect rule (replacing a repo-wide
-    /// `sync_time` comparison): a hand-edited ebuild must be re-sourced even
-    /// though nothing touched `metadata/timestamp.chk` or the repo root
-    /// directory — the two things a repo-wide "since" marker actually
-    /// watches, and which an in-place edit three directories down never
-    /// moves.
+    // Regression for the per-entry suspect rule (replacing a repo-wide
+    // `sync_time` comparison): a hand-edited ebuild must be re-sourced even
+    // though nothing touched `metadata/timestamp.chk` or the repo root
+    // directory — the two things a repo-wide "since" marker actually
+    // watches, and which an in-place edit three directories down never
+    // moves.
     #[tokio::test]
     async fn a_hand_edited_ebuild_is_re_sourced_even_when_the_repo_root_mtime_does_not_move() {
         let dir = tempfile::tempdir().unwrap();
@@ -483,14 +480,14 @@ mod tests {
         );
     }
 
-    /// Regression for the `has_sync_marker` gate. Trusting the gap-index
-    /// memo skips the ebuild-mtime suspect walk entirely and returns
-    /// straight from the bulk cache read — correct only when the memo's
-    /// stamp can actually be trusted to track content, which is exactly
-    /// what a `timestamp.chk`-less repo cannot promise: a hand-edit changes
-    /// neither the (absent) `timestamp.chk` nor the repo root directory's
-    /// own mtime, so a forged-but-stamp-matching sidecar could otherwise
-    /// serve a stale cache entry forever.
+    // Regression for the `has_sync_marker` gate. Trusting the gap-index
+    // memo skips the ebuild-mtime suspect walk entirely and returns
+    // straight from the bulk cache read — correct only when the memo's
+    // stamp can actually be trusted to track content, which is exactly
+    // what a `timestamp.chk`-less repo cannot promise: a hand-edit changes
+    // neither the (absent) `timestamp.chk` nor the repo root directory's
+    // own mtime, so a forged-but-stamp-matching sidecar could otherwise
+    // serve a stale cache entry forever.
     #[tokio::test]
     async fn a_repo_without_a_sync_marker_never_trusts_a_forged_gap_index() {
         let dir = tempfile::tempdir().unwrap();
@@ -557,17 +554,13 @@ mod tests {
         );
     }
 
-    /// Regression for folding the secondary (durable, cross-invocation)
-    /// cache into the bulk read: a repo with no in-tree md5-cache at all
-    /// (crossdev, pentoo-shaped trees) previously left every ebuild
-    /// uncovered, so each one re-entered the full suspect chain — ebuild
-    /// digest, `Repository::cache_entry` lookup, eclass-freshness check —
-    /// on *every* call, even once the secondary store already held a fresh
-    /// answer. With the secondary folded into `covered`, an unedited entry
-    /// is trusted by mtime alone, the exact per-entry rule the primary
-    /// cache already gets (see the hand-edit test above) — deliberately
-    /// *not* re-validated by md5 when mtime alone already says nothing
-    /// changed since it was cached.
+    // Regression for folding the secondary (durable, cross-invocation)
+    // cache into the bulk read: a repo with no in-tree md5-cache at all
+    // previously left every ebuild uncovered, re-entering the full suspect
+    // chain every call even with a fresh secondary answer. With secondary
+    // folded into `covered`, an unedited entry is trusted by mtime alone —
+    // the same per-entry rule the primary cache gets, deliberately not
+    // re-validated by md5 when mtime alone says nothing changed.
     #[tokio::test]
     async fn a_warm_secondary_only_entry_is_trusted_without_re_validating_its_md5() {
         let dir = tempfile::tempdir().unwrap();

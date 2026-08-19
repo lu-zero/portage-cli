@@ -262,14 +262,13 @@ fn check_pkgdir_writable(pkgdir: &camino::Utf8Path) -> Result<()> {
 }
 
 /// Prompt before acting on `count` packages (`--ask`) — `verb` is what the
-/// run would do ("merge", "unmerge", "build"). Defaults to no on empty input
-/// or EOF.
-/// Real portage forbids `--ask` outside a terminal (`actions.py`: "forbid
-/// --ask when not in a terminal ... this breaks `emerge --ask | tee logfile`,
-/// but that doesn't work anyway") and exits immediately with this message,
-/// rather than silently reading EOF as "No" once it gets around to asking.
-/// Shared by every `--ask` prompt ([`confirm_action`],
-/// [`crate::config_plan::confirm_config_write`]).
+/// run would do ("merge", "unmerge", "build"). Defaults to no on empty
+/// input or EOF.
+///
+/// Real portage forbids `--ask` outside a terminal and exits immediately
+/// with this message, rather than silently reading EOF as "No" once it
+/// gets around to asking. Shared by every `--ask` prompt
+/// ([`confirm_action`], [`crate::config_plan::confirm_config_write`]).
 pub(crate) fn require_ask_tty() -> Result<()> {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
@@ -362,12 +361,12 @@ fn entry_desired_env<'a>(
 /// Build and merge a resolved plan in install order.
 ///
 /// **Resume progress:** when [`MergePlanRequest::resume_job`] is `Some`,
-/// each successful package creates a marker file under that job id (see
-/// `maint::resume`) so a later `-r` can drop completed work from the
-/// re-resolved plan. That is required under `--emptytree` (VDB presence
-/// alone is not a completion marker — the tree starts installed). Markers
-/// are independent files, so `--jobs N` never contends on a shared JSON
-/// rewrite. Non-emptytree installs/upgrades also still VDB-skip
+/// each successful package creates a marker file under that job id so a
+/// later `-r` can drop completed work from the re-resolved plan. Required
+/// under `--emptytree` (VDB presence alone isn't a completion marker).
+///
+/// Markers are independent files, so `--jobs N` never contends on a shared
+/// JSON rewrite. Non-emptytree installs also still VDB-skip
 /// already-present non-reinstall entries in the merge loop.
 ///
 /// With `-f`/`--fetchonly`, only distfiles (or remote binpkgs under `-g`) are
@@ -408,17 +407,17 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let total = plan.len();
 
     // A `--target` plan can carry `MergeRoot::Host` entries (an unsatisfied
-    // BDEPEND scheduled onto the build host — see `cross_target_runtime_deps`
-    // in portage-atom-pubgrub). `roots` here is the `--target`-substituted
-    // sysroot; `host_roots()` is where a Host entry actually belongs — the real
-    // host `/` for plain `--root` (portage `ROOT=` parity: BDEPEND resolves
-    // and installs on the host, full stop), matching `base_roots()` for
-    // `--prefix`/`--local`. NOT `base_roots()` directly: that's "the outer
-    // EROOT" (where crossdev's own `cross-*` toolchain *bootstrap* packages
-    // land via the separate `use_outer_eroot` mechanism in `emerge.rs`) —
-    // a different, unprivileged-writable-location concern from "where does
-    // an ordinary package's BDEPEND resolve". Equal to `roots` when `--target`
-    // isn't active, so this is a no-op outside cross builds.
+    // BDEPEND scheduled onto the build host). `roots` here is the
+    // `--target`-substituted sysroot; `host_roots()` is where a Host entry
+    // actually belongs — the real host `/` for plain `--root` (BDEPEND
+    // resolves and installs on the host, full stop), matching
+    // `base_roots()` for `--prefix`/`--local`.
+    //
+    // NOT `base_roots()` directly: that's "the outer EROOT" (where
+    // crossdev's own `cross-*` toolchain *bootstrap* packages land via the
+    // separate `use_outer_eroot` mechanism) — a different concern from
+    // "where does an ordinary package's BDEPEND resolve". Equal to `roots`
+    // when `--target` isn't active, so this is a no-op outside cross builds.
     let host_roots = globals.host_roots();
 
     // Per-entry PKGDIR: a Host entry's binpkgs live in the *host*'s PKGDIR
@@ -1115,11 +1114,12 @@ impl Scheduler {
 
 /// Parallel build+merge for `--jobs N > 1`. Up to `jobs` packages *build*
 /// concurrently; each only starts once its in-plan build dependencies
-/// (`blockers`) have completed, so build order is respected. The compile phases
-/// run in parallel (the heavy work is in child processes we await), while the
-/// merge critical section is serialised by a shared async lock — so the live
-/// root, VDB counter, and world/profile files are only mutated by one package
-/// at a time. Returns `(merged, skipped, failures)`.
+/// (`blockers`) have completed, so build order is respected. The compile
+/// phases run in parallel, while the merge critical section is serialised
+/// by a shared async lock — so the live root, VDB counter, and
+/// world/profile files are only mutated by one package at a time.
+///
+/// Returns `(merged, skipped, failures)`.
 ///
 /// `--load-average LOAD` (Portage `PollScheduler._can_add_job`): once at least
 /// one job is running, further starts wait until the 1-minute load average

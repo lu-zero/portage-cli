@@ -124,12 +124,11 @@ pub const C_PKG_NOMERGE_SELECTED: Style = Style::new()
 /// `-vv` only (`PrettyCtx::requested`, no real-emerge equivalent): a root
 /// target this run resolved `atoms` into, explicit or `@set`-expanded alike.
 /// Replaces [`C_PKG`]/[`C_PKG_BINARY`]/[`C_PKG_NOMERGE`] for that row's
-/// bracket+name entirely (merge/binary/nomerge status is still legible from
-/// the bracket's own word, just not its color) — a distinct purple rather
-/// than a `*` glyph column, so "you asked for this one" doesn't need extra
-/// width. Bright magenta: close enough to [`C_PKG_BINARY`]'s hue to read as
-/// "the same family, a different shade" but plainly distinguishable next to
-/// it in a mixed ebuild+binary plan.
+/// bracket+name entirely — a distinct purple rather than a `*` glyph
+/// column, so "you asked for this one" doesn't need extra width.
+///
+/// Bright magenta: close enough to [`C_PKG_BINARY`]'s hue to read as "the
+/// same family, a different shade" but distinguishable in a mixed plan.
 pub const C_PKG_REQUESTED: Style =
     Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightMagenta)));
 /// [`C_PKG_REQUESTED`] `+ _SELECTED`: also `@world`-tracked (or about to
@@ -271,12 +270,12 @@ pub(crate) fn einfo_line_impl(args: std::fmt::Arguments<'_>) {
 /// Underlying writer for [`ewarn_sub_bullet!`] — print an indented `einfo`
 /// sub-bullet to **stderr** with the marker in [`C_WARN`] (`ewarn`'s own
 /// colour): `"  * {args}"`, plain when stderr is not a terminal. Used for
-/// structured sub-item listings under a `>>>`-banner that itself carries the
-/// overall warning header (e.g. the per-`cpv` failure list under `>>> N
-/// package(s) failed to merge:` in the merge summary) — a single
-/// [`tracing::warn!`] per item would lose the visual hierarchy and prefix
-/// every continuation line, so this keeps the listing shape while still
-/// painting the marker to match every other WARN-flavoured ` * `.
+/// structured sub-item listings under a `>>>`-banner that itself carries
+/// the overall warning header (e.g. the per-`cpv` failure list under `>>>
+/// N package(s) failed to merge:`).
+///
+/// A single [`tracing::warn!`] per item would lose the visual hierarchy
+/// and prefix every continuation line, so this keeps the listing shape.
 pub(crate) fn ewarn_sub_bullet_impl(args: std::fmt::Arguments<'_>) {
     use std::io::Write;
     let mut out = anstream::stderr();
@@ -335,12 +334,10 @@ pub(crate) use {einfo_line, error_line, ewarn_sub_bullet, warn_line};
 /// (`eout.ebegin(f"{file} size ;-)"); eout.eend(0)`).
 ///
 /// Unlike real portage's own `ebegin`(prints immediately, no newline)/`eend`
-/// (completes the same line later), this renders the whole line in one call:
-/// every caller here already has the outcome in hand by the time it prints
-/// anything (e.g. `Fetcher::fetch_all` gathers every distfile's result
-/// before any of them get reported), so there's no live gap to bridge and,
-/// just as importantly, no risk of two concurrent checks' half-written
-/// "began" lines interleaving on the terminal.
+/// (completes the same line later), this renders the whole line in one
+/// call: every caller here already has the outcome in hand by the time it
+/// prints anything, so there's no live gap to bridge and no risk of two
+/// concurrent checks' half-written "began" lines interleaving.
 ///
 /// `width` is the terminal width ([`term_width`]); `ansi` whether to color
 /// the bracket (real portage's `BRACKET`=blue, `GOOD`=green, `BAD`=red).

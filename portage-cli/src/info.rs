@@ -481,13 +481,12 @@ fn print_text(info: &Info) -> Result<()> {
 }
 
 /// Resolve every set `crate::maint::sets::KnownSets` knows about — real
-/// portage's shipped built-ins (`/usr/share/portage/config/sets/*.conf`,
-/// `@preserved-rebuild`/`@live-rebuild`/`@security` always added since they
-/// have no conf-file backing here) plus this root's `sets.conf`/`sets/*` —
+/// portage's shipped built-ins plus this root's `sets.conf`/`sets/*` —
 /// through the same [`crate::maint::world::resolve_set`] the depgraph and
 /// `-W` use, so this reports what `em` can *actually* resolve today, not
-/// just what's configured. `@security` (the one set spanning the GLSA repo,
-/// arch, and VDB worlds) goes through [`crate::glsa::security_atoms_from_roots`]
+/// just what's configured.
+///
+/// `@security` goes through [`crate::glsa::security_atoms_from_roots`]
 /// instead. Any other set `em` doesn't recognise shows up with its resolve
 /// error rather than being silently absent from the list.
 fn resolve_all_sets(roots: &portage_resolve::Roots) -> BTreeMap<String, SetEntry> {
@@ -549,9 +548,8 @@ fn describe_set_failure(
 /// matched directly against the VDB rather than first resolved through
 /// `expand_new_virt` to whichever real package provides the virtual — em
 /// has no such GLEP-virtual-provider mapping. Most `info_pkgs` entries are
-/// real (non-virtual) packages anyway, so this only affects a couple of
-/// `virtual/*` rows (they'll show as unmatched instead of resolving to
-/// their provider).
+/// real packages anyway, so this only affects a couple of `virtual/*` rows
+/// (they show as unmatched instead of resolving to their provider).
 async fn toolchain_versions(
     cli: &Cli,
     repo: &portage_repo::Repository,
@@ -630,16 +628,16 @@ async fn toolchain_versions(
 ///
 /// - `LANG`: real portage reads this from the literal process environment,
 ///   not make.conf/profile — and `ProfileStack`'s shell deliberately does
-///   *not* inherit the ambient environment (a build-reproducibility choice
-///   elsewhere in the codebase), so `shell.get_var("LANG")` alone would
-///   always report it unset even when the shell running `em` clearly has one.
+///   *not* inherit the ambient environment, so `shell.get_var("LANG")`
+///   alone would always report it unset even when the shell running `em`
+///   clearly has one.
+///
 /// - `DISTDIR`/`PKGDIR`/`PORTAGE_TMPDIR`/`GENTOO_MIRRORS`: real
-///   `make.globals`-only defaults (confirmed: unset in this host's
-///   make.conf, yet `emerge --info` resolves them) — `ProfileStack` never
-///   sources `make.globals` into the shell at all
-///   (`ebuild::gentoo_mirrors_list`'s doc comment), so these need the same
-///   env → shell → `make.globals` fallback `em`'s own fetch/binpkg code
-///   already uses for them, via `ebuild::elog_setting`.
+///   `make.globals`-only defaults — `ProfileStack` never sources
+///   `make.globals` into the shell at all, so these need the same env →
+///   shell → `make.globals` fallback `em`'s fetch/binpkg code already uses,
+///   via `ebuild::elog_setting`.
+///
 /// - Everything else: plain `shell.get_var`.
 fn resolve_info_var(shell: &portage_repo::EbuildShell, name: &str) -> Option<String> {
     match name {

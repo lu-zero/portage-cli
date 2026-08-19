@@ -150,12 +150,11 @@ impl CrossTarget {
     /// declaring its arch there trips `planned_packages_are_all_declared`.
     ///
     /// `dev-debug/gdb` is deliberately NOT here: real crossdev only builds a
-    /// cross gdb when `--ex-gdb` is explicitly passed (`EX_GDB` defaults
-    /// unset, `/usr/bin/crossdev` — `ex_gdb && doemerge $DPKG`), same as any
-    /// other `--ex-pkg`; it's an opt-in extra, not part of the base
-    /// binutils/headers/gcc/libc toolchain. `em` has no `--ex-gdb`/`--ex-pkg`
-    /// equivalent yet, so there's nothing to wire it to — it was previously here
-    /// unconditionally by mistake.
+    /// cross gdb when `--ex-gdb` is explicitly passed, same as any other
+    /// `--ex-pkg` — an opt-in extra, not part of the base
+    /// binutils/headers/gcc/libc toolchain (`em`'s own `--ex-gdb`/`--ex-pkg`
+    /// wire into it separately, see `crossdev::ex_pkg_atoms`). It was
+    /// previously here unconditionally by mistake.
     pub fn packages(&self) -> Vec<(&'static str, &'static str, PackageArch)> {
         let mut pkgs: Vec<(&'static str, &'static str)> = Vec::new();
         if self.llvm {

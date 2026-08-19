@@ -39,11 +39,9 @@ fn detect_host_gentoo(host_root: &Utf8Path) -> Option<Utf8PathBuf> {
 
 /// Ensure `prefix` has a resolvable `::gentoo` — piggy-back a usable host
 /// tree, else write an own-tree entry pointing at
-/// `<prefix>/var/db/repos/gentoo` and sync it (shallow clone; the git sync
-/// backend already defaults to `--depth 1`). Idempotent: an existing
-/// `gentoo.conf` (this prefix's own earlier run, or a hand edit) is trusted
-/// and only re-synced if its tree turns out to still be empty. Returns the
-/// resolved on-disk repo path.
+/// `<prefix>/var/db/repos/gentoo` and sync it (shallow clone). Idempotent:
+/// an existing `gentoo.conf` is trusted and only re-synced if its tree
+/// turns out to still be empty. Returns the resolved on-disk repo path.
 pub(super) async fn ensure_repo(cli: &Cli, prefix: &Utf8Path) -> Result<Utf8PathBuf> {
     ensure_repo_from(cli, prefix, Utf8Path::new("/")).await
 }

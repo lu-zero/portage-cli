@@ -51,25 +51,12 @@ pub(crate) fn eval_violated_use_dep(
 }
 
 impl PortageDependencyProvider {
-    /// Walk the full PubGrub solution (including virtual choice packages) and
-    /// collect USE flag requirements for every package that has at least one
-    /// violated or unsatisfied USE dep constraint.
-    ///
-    /// **Installed packages** are compared against their VDB-recorded active USE
-    /// flags; only violated constraints are collected (the flag needs to change).
-    ///
-    /// **Non-installed packages** (being freshly built) are compared against the
-    /// global `use_config`; requirements where the flag might not be set by the
-    /// current configuration are collected as informational annotations.
-    ///
-    /// The full solution (with virtual nodes) is required so that per-branch
-    /// USE dep constraints from OR-group choices are also checked.
-    /// Evaluate one parent's USE-dep constraints against the current solution and
-    /// accumulate any violations into `by_target`. Shared by the two passes of the
-    /// [`compute_use_flag_requirements`] fixpoint: the main-solution pass (parent
-    /// = a solved package at its solution version) and the upgrade-expansion pass
-    /// (parent = an installed package at its pending upgrade version). `parent_ver`
-    /// is the version whose constraints are being expanded.
+    /// Evaluate one parent's USE-dep constraints against the current
+    /// solution and accumulate any violations into `by_target`. Shared by
+    /// the two passes of the [`compute_use_flag_requirements`] fixpoint:
+    /// main-solution (parent = a solved package at its solution version)
+    /// and upgrade-expansion (parent = an installed package at its pending
+    /// upgrade version). `parent_ver` is the version being expanded.
     fn accumulate_use_dep_violations(
         &self,
         parent: &PortagePackage,
@@ -180,6 +167,12 @@ impl PortageDependencyProvider {
         }
     }
 
+    /// Walk the full PubGrub solution (including virtual choice packages)
+    /// and collect USE flag requirements for every package with at least
+    /// one violated or unsatisfied USE dep constraint. Installed packages
+    /// are checked against their VDB-recorded active USE (only violations
+    /// collected); non-installed packages are checked against the global
+    /// `use_config` (unset-by-config requirements collected as annotations).
     pub(crate) fn compute_use_flag_requirements(
         &self,
         solution: &SelectedDependencies<PortagePackage, Version>,
@@ -314,16 +307,15 @@ impl PortageDependencyProvider {
             .collect()
     }
 
-    /// Effective state of `flag` on a non-installed package version that will be
-    /// freshly built. Mirrors what the build will see: `package.use` and global
-    /// USE applied on the ebuild's IUSE defaults; outside IUSE, the dep's own
-    /// `(+)`/`(-)` default — except at the installed version, where the VDB's
-    /// own record is ground truth instead. That covers both an installed
-    /// version dropped from the tree entirely (revbumped/pruned, a synthetic
-    /// empty-IUSE stub per `add_installed`) and one still in the tree whose
-    /// ebuild was edited in place to drop just this flag from IUSE (no
-    /// revbump): either way, the already-built package has whatever the VDB
-    /// recorded, independent of what the current tree metadata says.
+    /// Effective state of `flag` on a non-installed package version that
+    /// will be freshly built. Mirrors what the build will see: `package.use`
+    /// and global USE applied on the ebuild's IUSE defaults; outside IUSE,
+    /// the dep's own `(+)`/`(-)` default.
+    ///
+    /// Except at the installed version, where the VDB's own record is
+    /// ground truth instead — whatever the already-built package has,
+    /// independent of what the current tree metadata says (covers both a
+    /// revbumped/pruned version and an in-place IUSE edit with no revbump).
     pub(crate) fn effective_flag_new(
         &self,
         pkg: &PortagePackage,

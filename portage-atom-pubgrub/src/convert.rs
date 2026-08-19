@@ -835,11 +835,11 @@ impl RuBuilder<'_> {
 
     /// Emit `(⋁ ctx) ∨ (⋁ body)` — the clause form of "all guards active ⇒
     /// body", where each `ctx` literal is a guard's *inactive* value (its
-    /// escape). A single guard keeps the cheaper directional bucket form (no
-    /// extra `Choice` node); two or more guards — the case a Horn-style
-    /// dependency edge cannot express — become a preference-ordered `Choice`
-    /// over body-then-guard literals, so the solver first tries satisfying the
-    /// consequent before flipping a guard the user configured.
+    /// escape). A single guard keeps the cheaper directional bucket form.
+    ///
+    /// Two or more guards — a Horn-style dependency edge can't express this
+    /// — become a preference-ordered `Choice` over body-then-guard literals,
+    /// so the solver tries satisfying the consequent before flipping a guard.
     fn emit_clause(&mut self, ctx: &[FreeLit], body: &[FreeLit]) {
         match (ctx, body) {
             ([], []) => {}

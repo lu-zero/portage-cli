@@ -116,14 +116,13 @@ fn write_cache(path: &Utf8Path, text: &str) {
 /// 1. `frozen` + a cached copy exists → use it, no network at all.
 /// 2. Within the cached copy's own `TTL` (`download_timestamp + ttl > now`)
 ///    → use it, no network at all.
+///
 /// 3. Otherwise, a conditional GET (`If-Modified-Since` = the cached
-///    `TIMESTAMP`, if any). A 304 revalidates the cache (bumps
-///    `DOWNLOAD_TIMESTAMP`); fresh content replaces it (recording
-///    `DOWNLOAD_TIMESTAMP` = now, and `TIMESTAMP` from the response's
-///    `Last-Modified` header when the index's own content has none).
-/// 4. A network/HTTP failure falls back to a stale cached copy, if any,
-///    rather than failing the whole `--getbinpkg` run over one unreachable
-///    binhost.
+///    `TIMESTAMP`, if any). A 304 revalidates the cache; fresh content
+///    replaces it (`DOWNLOAD_TIMESTAMP` = now, `TIMESTAMP` from the
+///    response's `Last-Modified` when the index's own content has none).
+/// 4. A network/HTTP failure falls back to a stale cached copy rather than
+///    failing the whole `--getbinpkg` run over one unreachable binhost.
 pub async fn fetch_index_cached(
     sync_uri: &str,
     frozen: bool,

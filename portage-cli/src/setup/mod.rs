@@ -505,11 +505,11 @@ fn host_accept_keywords() -> Option<String> {
 /// In `--local` mode the host (`/`) is the base system and provides Python, but
 /// the python eclasses derive prefix-absolute paths from `EPREFIX`/`ESYSROOT`:
 ///
-/// - `${EPREFIX}/usr/bin/pythonX.Y` is baked into installed scripts' shebangs
-///   (e.g. g-ir-scanner). With no interpreter there, every such script dies with
-///   `bad interpreter: No such file or directory` — surfacing as meson's opaque
-///   "Unhandled python OSError" and breaking the whole gobject-introspection
-///   chain (harfbuzz, pango, gdk-pixbuf, gtk+, …).
+/// - `${EPREFIX}/usr/bin/pythonX.Y` is baked into installed scripts'
+///   shebangs. With no interpreter there, every such script dies with `bad
+///   interpreter: No such file or directory`, breaking the whole
+///   gobject-introspection chain (harfbuzz, pango, gdk-pixbuf, gtk+, …).
+///
 /// - `PYTHON_INCLUDEDIR=${ESYSROOT}/usr/include/pythonX.Y` is checked for
 ///   existence by python-utils-r1 (`does not install any header files!`),
 ///   breaking C-extension packages like dev-python/pillow.
@@ -677,24 +677,24 @@ mod tests {
         assert!(body.contains("CPPFLAGS"));
     }
 
-    /// Regression test for a guard that went silently dead: `--prefix DIR`
-    /// always sets `EPREFIX`, and `em` always resolves `ROOT` to `"/"` once
-    /// `EPREFIX` is set (`build/shell.rs`'s `root_var`) — a prior ROOT-keyed
-    /// version of `BASHRC_PREFIX` never actually ran for any real
-    /// `--prefix` build. A plain `body.contains("CPPFLAGS")` check (the test
-    /// above) can't catch this: the dead guard's body still contained the
-    /// string. This test actually *sources* the recipe with the real
-    /// runtime env (`ROOT="/"`, `EPREFIX=<dir>`) and checks what comes out.
-    ///
-    /// Sources it through `MakeConf::apply_to`'s embedded `brush_core::Shell`
-    /// rather than spawning a real `bash` binary: that's the same mechanism
-    /// `run_phase` actually uses to source bashrc hooks
-    /// (`portage-repo/src/build/shell.rs`'s `bashrc_files` handling) — `em`
-    /// never shells out to a subprocess for this, so testing against a
-    /// spawned `bash` was exercising a different interpreter than
-    /// production. It also depended on a `bash` binary being resolvable on
-    /// `PATH`, which raced against other tests that temporarily mutate the
-    /// process-wide `PATH` (see `test_support::path_lock`'s doc comment).
+    // Regression test for a guard that went silently dead: `--prefix DIR`
+    // always sets `EPREFIX`, and `em` always resolves `ROOT` to `"/"` once
+    // `EPREFIX` is set (`build/shell.rs`'s `root_var`) — a prior ROOT-keyed
+    // version of `BASHRC_PREFIX` never actually ran for any real
+    // `--prefix` build. A plain `body.contains("CPPFLAGS")` check (the test
+    // above) can't catch this: the dead guard's body still contained the
+    // string. This test actually *sources* the recipe with the real
+    // runtime env (`ROOT="/"`, `EPREFIX=<dir>`) and checks what comes out.
+    //
+    // Sources it through `MakeConf::apply_to`'s embedded `brush_core::Shell`
+    // rather than spawning a real `bash` binary: that's the same mechanism
+    // `run_phase` actually uses to source bashrc hooks
+    // (`portage-repo/src/build/shell.rs`'s `bashrc_files` handling) — `em`
+    // never shells out to a subprocess for this, so testing against a
+    // spawned `bash` was exercising a different interpreter than
+    // production. It also depended on a `bash` binary being resolvable on
+    // `PATH`, which raced against other tests that temporarily mutate the
+    // process-wide `PATH` (see `test_support::path_lock`'s doc comment).
     #[tokio::test]
     async fn overlay_bashrc_actually_exports_search_paths_at_runtime() {
         let dir = tempfile::tempdir().unwrap();
@@ -892,16 +892,16 @@ mod tests {
         );
     }
 
-    /// Regression: an ordinary
-    /// `--target riscv64-unknown-linux-gnu` package (`sys-libs/zlib`,
-    /// `sys-apps/install-xattr`, ...) has `CBUILD != CHOST` (its `CHOST`
-    /// correctly resolves from the sysroot's own `make.conf`) and no
-    /// `CTARGET` set at all — the pre-existing `CTARGET`-without-`TARGET_ABI`
-    /// check alone didn't catch this case, only the newly-added
-    /// `CBUILD == CHOST` guard does. Confirmed against real crossdev's own
-    /// `/usr/bin/cross-emerge`, which never injects host paths into plain
-    /// `CPPFLAGS`/`LDFLAGS` for a target-package build (see this recipe's own
-    /// doc comment).
+    // Regression: an ordinary
+    // `--target riscv64-unknown-linux-gnu` package (`sys-libs/zlib`,
+    // `sys-apps/install-xattr`, ...) has `CBUILD != CHOST` (its `CHOST`
+    // correctly resolves from the sysroot's own `make.conf`) and no
+    // `CTARGET` set at all — the pre-existing `CTARGET`-without-`TARGET_ABI`
+    // check alone didn't catch this case, only the newly-added
+    // `CBUILD == CHOST` guard does. Confirmed against real crossdev's own
+    // `/usr/bin/cross-emerge`, which never injects host paths into plain
+    // `CPPFLAGS`/`LDFLAGS` for a target-package build (see this recipe's own
+    // doc comment).
     #[tokio::test]
     async fn overlay_bashrc_skips_host_paths_for_an_ordinary_target_package() {
         let dir = tempfile::tempdir().unwrap();

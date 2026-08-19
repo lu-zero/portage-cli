@@ -271,14 +271,13 @@ impl PreservedLibsRegistry {
 /// The `@preserved-rebuild` special set: every installed package whose own
 /// `NEEDED.ELF.2` still requires a soname that no live package provides
 /// anymore, but that `registry` is only keeping on disk because of that
-/// requirement — real portage's `PreservedLibraryConsumerSet`
-/// (`portage/_sets/libs.py`'s `load()`). Simplified the same way
-/// [`find_libs_to_preserve`] already is: matched by (multilib category,
-/// soname) alone, no RPATH/RUNPATH directory disambiguation (real portage's
-/// `findConsumers(..., greedy=False)`). That costs little in practice — a
-/// registry entry only exists because the replacing package's own copy
-/// dropped that exact soname, so a live duplicate provider of the identical
-/// soname essentially never coexists with it.
+/// requirement — real portage's `PreservedLibraryConsumerSet`. Simplified
+/// the same way [`find_libs_to_preserve`] already is: matched by (multilib
+/// category, soname) alone, no RPATH/RUNPATH directory disambiguation.
+///
+/// That costs little in practice — a registry entry only exists because
+/// the replacing package's own copy dropped that exact soname, so a live
+/// duplicate provider of the identical soname essentially never coexists.
 ///
 /// A preserved lib is never counted as its own consumer, matching real
 /// portage's `consumers.difference_update(libs)`.
@@ -350,11 +349,11 @@ pub struct PreserveEntry {
 /// The workspace-wide `(category, soname)` provider/consumer index —
 /// everything [`find_libs_to_preserve`] needs to decide what to preserve,
 /// minus the one package actually being removed. Expensive to build (a
-/// full VDB scan), cheap to query — build **once per invocation** (not
-/// once per removed package) and reuse it across an entire `-C`/depclean
-/// batch. Correct to share across the whole batch because `exclude`
-/// already names every cpv the batch is committed to removing, so the
-/// graph doesn't change as individual removals within it actually happen.
+/// full VDB scan), cheap to query — build **once per invocation** and
+/// reuse it across an entire `-C`/depclean batch.
+///
+/// Correct to share across the batch because `exclude` already names every
+/// cpv it's committed to removing, so the graph doesn't change mid-batch.
 pub struct LinkGraph {
     providers: HashSet<(String, String)>,
     consumer_files: HashMap<(String, String), Vec<Utf8PathBuf>>,

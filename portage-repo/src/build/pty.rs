@@ -173,13 +173,12 @@ impl Drop for PhasePty {
 /// the same contract the `tee` had, and the same content real portage's build
 /// logs carry.
 ///
-/// Waits with a timeout rather than blocking outright. Normally the loop ends
-/// on its own the moment the last slave closes, but a phase that leaves a
-/// background process holding fd 1 would keep the pty open indefinitely, and a
-/// plain blocking read there would hang the merge rather than lose a stray
-/// line of output. `stop` bounds that: it is set once the phase has returned,
-/// and the next tick drains whatever is already buffered and gives up on the
-/// straggler.
+/// Waits with a timeout rather than blocking outright: the loop normally
+/// ends once the last slave closes, but a phase that leaves a background
+/// process holding fd 1 would keep the pty open indefinitely, and a plain
+/// blocking read there would hang the merge. `stop` bounds that — set once
+/// the phase has returned, the next tick drains whatever is already
+/// buffered and gives up on the straggler.
 fn pump(master: std::fs::File, mut log: std::fs::File, stop: &std::sync::atomic::AtomicBool) {
     /// How long to keep draining after the phase has returned before giving up
     /// on whatever is still holding the pty open.

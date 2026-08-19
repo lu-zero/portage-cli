@@ -324,12 +324,12 @@ fn check_world_sets_file(
 
 /// Add `atoms` to the world file, matching real emerge's `_world_atom`
 /// world-selection behaviour after a successful merge of explicitly-named
-/// atoms (skipped entirely under `--oneshot`/`--buildpkgonly`/
-/// `--fetchonly`/`--onlydeps`/`--pretend` — see the caller). An atom whose
-/// `Cpn` already has an entry (in any version-qualified form) is replaced
-/// in place rather than duplicated; a genuinely new one is appended.
-/// Best-effort: a failure here is reported but never unwinds a merge that
-/// already completed on disk.
+/// atoms (skipped under `--oneshot`/`--buildpkgonly`/`--fetchonly`/
+/// `--onlydeps`/`--pretend` — see the caller).
+///
+/// An atom whose `Cpn` already has an entry is replaced in place rather
+/// than duplicated; a genuinely new one is appended. Best-effort: a
+/// failure here is reported but never unwinds a merge already on disk.
 pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
     if atoms.is_empty() {
         return;
@@ -366,13 +366,12 @@ pub fn add_atoms(root: Option<&Utf8Path>, atoms: &[Dep]) {
 
 /// Add `@name` set references to `world_sets` — the other half of real
 /// emerge's world-recording, sibling to [`add_atoms`]'s `world` file.
-/// Matches real emerge's `_world_repr`/`world_set.update` behaviour for a
-/// `SetArg` favorite: writes the literal `@name` reference, never the set's
-/// expanded members (those stay off `world` entirely — see
-/// `emerge.rs::select_world_atoms`, which already filters `Set`-origin
-/// atoms out for this exact reason). A name already present is left
-/// untouched. Best-effort, like `add_atoms`: a failure here is reported but
-/// never unwinds a merge that already completed on disk.
+/// Writes the literal `@name` reference, never the set's expanded members
+/// (those stay off `world` entirely — `emerge.rs::select_world_atoms`
+/// already filters `Set`-origin atoms out for this reason).
+///
+/// A name already present is left untouched. Best-effort, like
+/// `add_atoms`: reported but never unwinds a merge already on disk.
 pub fn add_set_refs(root: Option<&Utf8Path>, names: &[String]) {
     if names.is_empty() {
         return;
@@ -520,13 +519,12 @@ pub(crate) fn resolve_set(
 /// refs expand to) union `additions` — the atoms this invocation would
 /// itself record ([`add_atoms`]' input, empty when it won't record any).
 ///
-/// Both halves of real emerge's `resolver/output.py::check_system_world`,
-/// which is what gates its bold `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/
-/// `PKG_BINARY_MERGE_WORLD` rows: already in `conf.selected_sets`, *or* a
-/// `favorites` (literal command-line) target of a non-`--oneshot` run that
-/// `create_world_atom` would add. Dropping the second half would render a
-/// plain `em -p newpkg` the same as `em -1p newpkg`, which real emerge does
-/// not do.
+/// Both halves of real emerge's `check_system_world`, which gates its bold
+/// `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/`PKG_BINARY_MERGE_WORLD` rows:
+/// already in `conf.selected_sets`, *or* a `favorites` target of a
+/// non-`--oneshot` run that `create_world_atom` would add. Dropping the
+/// second half would render `em -p newpkg` the same as `em -1p newpkg`,
+/// which real emerge does not do.
 ///
 /// `@selected`, deliberately not `@world`: `@world` is `@selected ∪
 /// @system`, and real portage colours system packages with a separate

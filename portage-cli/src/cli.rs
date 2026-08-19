@@ -129,11 +129,12 @@ pub struct Cli {
 
     /// Remove installed packages that are not needed by @world (with no
     /// atoms, cleans everything unreachable; with atoms, only considers
-    /// removing those, protecting everything else). Unlike `-C`, this
-    /// walks the installed dependency graph first — matches real emerge's
-    /// safe alternative to `-C`. Identical implementation to the `em
-    /// depclean [atoms]` applet (`crate::depclean::run` just forwards to
-    /// `crate::depclean::run_with_targets` with `cli.atoms`) — the applet
+    /// removing those, protecting everything else). Unlike `-C`, this walks
+    /// the installed dependency graph first — matches real emerge's safe
+    /// alternative to `-C`.
+    ///
+    /// Identical implementation to the `em depclean [atoms]` applet
+    /// (`crate::depclean::run` forwards to `run_with_targets`) — the applet
     /// form exists for scripting clarity, not a different behavior.
     #[arg(short = 'c', long)]
     pub depclean: bool,
@@ -173,14 +174,14 @@ pub struct Cli {
     pub vdb: Option<String>,
 
     /// Cross-build/setup for a crossdev target tuple. The single source for
-    /// "which tuple" everywhere: `em --target T crossdev --init-target`
-    /// sets T up; `em --target T stages --stage1` (or any plain atom build)
-    /// resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` (the
-    /// crossdev `<TUPLE>-emerge` entry point) — sugar for `--config-root
-    /// <sysroot> --root <sysroot>`, with the cross context (CHOST/CBUILD,
-    /// `--root-deps=rdeps`) read from the sysroot make.conf. One flag for
-    /// both roles, not two that can disagree — `crossdev` no longer has its
-    /// own `-t`/`--target`.
+    /// "which tuple" everywhere: `em --target T crossdev --init-target` sets
+    /// T up; `em --target T stages --stage1` (or any plain atom build)
+    /// resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` —
+    /// sugar for `--config-root <sysroot> --root <sysroot>`.
+    ///
+    /// Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the
+    /// sysroot make.conf. One flag for both roles — `crossdev` no longer
+    /// has its own `-t`/`--target`.
     #[arg(long, short = 'T', value_name = "TUPLE", global = true)]
     pub target: Option<String>,
 
@@ -306,17 +307,15 @@ impl Cli {
 
     /// The root view with any `--target` sysroot substitution undone: what
     /// [`roots`](Self::roots) returns when `--target` isn't set, computed
-    /// **unconditionally** regardless of whether `self.target` happens to
-    /// also be set. This is the "outer EROOT" — `--local`/`--prefix`'s
-    /// prefix, `--root`'s offset, or host `/` — that every crossdev *setup*
-    /// action (`crossdev/mod.rs`: `sysroot`, `setup_root`,
-    /// `ensure_self_contained_prefix`, `ensure_prefix_profile`, `main_repo`,
-    /// and `setup()`/`toolchain()`'s own top-level checks) must anchor to
-    /// instead of `roots()`. Using `roots()` there was a real bug: if
-    /// `--target T` happens to also be set on the same invocation as
-    /// `crossdev -t T --init-target`, `roots()` is *already* the sysroot,
-    /// so appending `usr/T` again doubly-nested it
-    /// (`<EROOT>/usr/T/usr/T` instead of `<EROOT>/usr/T`) — reproduced live.
+    /// **unconditionally** regardless of `self.target`. This is the "outer
+    /// EROOT" every crossdev *setup* action (`crossdev/mod.rs`: `sysroot`,
+    /// `setup_root`, `ensure_self_contained_prefix`, `main_repo`) must
+    /// anchor to instead of `roots()`.
+    ///
+    /// Using `roots()` there was a real bug: if `--target T` is also set on
+    /// the same invocation as `crossdev -t T --init-target`, `roots()` is
+    /// *already* the sysroot, so appending `usr/T` again doubly-nested it
+    /// (`<EROOT>/usr/T/usr/T`) — reproduced live.
     ///
     /// `stage1()`/`profile_stack()`/`resolve_gcc_version` deliberately keep
     /// using plain `roots()` — those genuinely want `--target`'s sysroot
@@ -372,13 +371,13 @@ impl Cli {
     /// `--target`'s sysroot substitution undone) — where `use_outer_eroot`
     /// toolchain-install steps land and where `write_cross_env`/
     /// `write_sysroot_config` (`crossdev/mod.rs`) write config. Under
-    /// `--prefix` that's the host `/` (the overlay borrows host tools);
-    /// under `--local`/`--root` it's the offset itself. **This is not
-    /// necessarily BROOT** — for plain `--root` the two differ (BROOT is
-    /// always the host, see [`host_roots`](Self::host_roots)); they only
-    /// coincide for `--prefix`/`--local`, which is why this function used to
-    /// be (mis)used for BDEPEND checks too. Use
-    /// [`host_roots`](Self::host_roots) for that.
+    /// `--prefix` that's the host `/`; under `--local`/`--root` it's the
+    /// offset itself.
+    ///
+    /// **Not necessarily BROOT** — for plain `--root` the two differ (BROOT
+    /// is always the host, see [`host_roots`](Self::host_roots)); they only
+    /// coincide for `--prefix`/`--local`, which is why this function used
+    /// to be (mis)used for BDEPEND checks too. Use `host_roots` for that.
     pub(crate) fn base_roots(&self) -> Roots {
         let path = opt_path;
         match self.topology_source() {
@@ -473,12 +472,12 @@ impl Cli {
     /// - `--root` (privileged offset, portage `ROOT=` parity): the real host
     ///   `/` — an unsatisfied Host-routed BDEPEND installs there because the
     ///   invocation has root to do so.
-    /// - `--prefix` (unprivileged overlay): the prefix itself
-    ///   (`outer_roots()`, whose `merge_root()` is already the promoted
-    ///   prefix-target view) — the overlay cannot write the real host `/`,
-    ///   so an unsatisfied BDEPEND must land in the prefix instead. Only the
-    ///   *satisfaction check* (is it already present) stays host-anchored,
-    ///   via `satisfaction_root`/`is_overlay`'s VDB-weave callers.
+    ///
+    /// - `--prefix` (unprivileged overlay): the prefix itself — it cannot
+    ///   write the real host `/`, so an unsatisfied BDEPEND must land there
+    ///   instead. Only the *satisfaction check* stays host-anchored, via
+    ///   `satisfaction_root`/`is_overlay`'s VDB-weave callers.
+    ///
     /// - `--local`/bare: BROOT already equals the merge root, so the two
     ///   questions coincide.
     pub(crate) fn host_roots(&self) -> Roots {
@@ -511,17 +510,15 @@ impl Cli {
 
     /// Reject an action (`toolchain --setup`, `stages --stage1`/`--stage3`)
     /// whose resolved destination equals the host install path
-    /// (`host_roots()`) — bare `--local`, bare `--prefix` (`host_roots()`
-    /// redirects to that same tree for both — see their own doc comments),
-    /// bare host, and `--local --root <the same local path>` all collapse to
-    /// this. `--root DIR` alone, `--prefix P --target T`, and an explicit
-    /// `--root B` redirecting the destination away from `--prefix`/
-    /// `--local`'s own anchor (`base_roots`/`outer_roots`, above) all
-    /// genuinely differ from `host_roots()` and pass. Replaces an older,
+    /// (`host_roots()`) — bare `--local`, bare `--prefix`, bare host, and
+    /// `--local --root <the same local path>` all collapse to this.
+    ///
+    /// `--root DIR` alone, `--prefix P --target T`, and an explicit
+    /// `--root B` redirecting away from `--prefix`/`--local`'s own anchor
+    /// all genuinely differ from `host_roots()` and pass. Replaces an older,
     /// narrower `merge_root == "/"` check — see todo/for-sonnet.md
     /// 2026-08-08 for the live bug (a real `.pc` file corrupted under
-    /// `--prefix --target`, with no way to redirect the destination) this
-    /// closes off.
+    /// `--prefix --target`) this closes off.
     pub(crate) fn require_root_distinct_from_host(
         &self,
         resolved: &Roots,
@@ -549,14 +546,13 @@ impl Cli {
 
     /// Narrower guard, also used standalone by `toolchain --setup`: only
     /// rejects the true bare-host case (no `--prefix`/`--local`/`--root`
-    /// given at all — bootstrapping a fresh compiler straight into the real
-    /// host `/` is meaningless, use the host toolchain directly). Unlike
-    /// [`require_root_distinct_from_host`](Self::require_root_distinct_from_host),
-    /// a toolchain bootstrap directly into a bare `--prefix`/`--local` (no
-    /// separate `--root`) is the intended, already-verified recipe for
-    /// giving that overlay/tree its own compiler — `--prefix`'s own
-    /// `BDEPEND`-lands-in-the-prefix role means this doesn't collide with
-    /// anything else the way a full `stages` snapshot would.
+    /// given at all — bootstrapping a fresh compiler into the real host `/`
+    /// is meaningless).
+    ///
+    /// Unlike [`require_root_distinct_from_host`], a toolchain bootstrap
+    /// directly into a bare `--prefix`/`--local` (no separate `--root`) is
+    /// the intended, already-verified recipe for giving that overlay/tree
+    /// its own compiler.
     pub(crate) fn require_destination_not_bare_host(
         &self,
         resolved: &Roots,
@@ -744,13 +740,13 @@ mod tests {
         );
     }
 
-    /// Same sysroot substitution, now with an explicit `--root B` on top
-    /// (`stages --stage1 --prefix P --root B --target T`'s exact shape):
-    /// the sysroot is computed from the *redirected* destination
-    /// (`B/usr/T`, not `P/usr/T`), but `build_eprefix()` is still `None` —
-    /// live-verified (zlib, real merge, sandbox) to also hold for the
-    /// `--root`-without-`--target` case (`explicit_root_overrides_prefix_destination_only`
-    /// below is the non-cross twin of this test).
+    // Same sysroot substitution, now with an explicit `--root B` on top
+    // (`stages --stage1 --prefix P --root B --target T`'s exact shape):
+    // the sysroot is computed from the *redirected* destination
+    // (`B/usr/T`, not `P/usr/T`), but `build_eprefix()` is still `None` —
+    // live-verified (zlib, real merge, sandbox) to also hold for the
+    // `--root`-without-`--target` case (`explicit_root_overrides_prefix_destination_only`
+    // below is the non-cross twin of this test).
     #[test]
     fn prefix_plus_root_plus_target_sysroot_still_builds_unprefixed() {
         let cli = Cli::parse_from([
@@ -1145,13 +1141,13 @@ mod tests {
         );
     }
 
-    /// `--prefix` is an unprivileged overlay: it cannot write the real host
-    /// `/`, so an unsatisfied `MergeRoot::Host` plan entry (`entry_roots()`
-    /// in `merge/mod.rs`, fed by `Cli::host_roots()`) must merge into the prefix
-    /// instead — unlike `--root`, where the same entry correctly lands on
-    /// the real host because that invocation has root. `host_roots()`'s `.broot`
-    /// field (the *satisfaction* root) stays the host either way; only the
-    /// merge destination (`merge_root()`) differs here.
+    // `--prefix` is an unprivileged overlay: it cannot write the real host
+    // `/`, so an unsatisfied `MergeRoot::Host` plan entry (`entry_roots()`
+    // in `merge/mod.rs`, fed by `Cli::host_roots()`) must merge into the prefix
+    // instead — unlike `--root`, where the same entry correctly lands on
+    // the real host because that invocation has root. `host_roots()`'s `.broot`
+    // field (the *satisfaction* root) stays the host either way; only the
+    // merge destination (`merge_root()`) differs here.
     #[test]
     fn prefix_overlay_broot_merges_into_prefix_not_host() {
         let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
@@ -1168,15 +1164,15 @@ mod tests {
         );
     }
 
-    /// Portage `ROOT=`/`{target}-emerge` parity: `--root R`'s BROOT is the
-    /// real host `/`, not `R`. `R` only receives the *install*; BDEPEND
-    /// tools run against (and are checked against) the host, exactly like
-    /// `--prefix`. Previously `base_roots().merge_root()` was (mis)used for
-    /// this and returned `R`, making an offset build check BDEPEND against
-    /// the (usually near-empty) offset VDB instead of the host's —
-    /// `roots().satisfaction_root(DepClass::BDepend)` is the dedicated
-    /// accessor now; `base_roots()` keeps its own, different "outer EROOT"
-    /// meaning (see both their doc comments).
+    // Portage `ROOT=`/`{target}-emerge` parity: `--root R`'s BROOT is the
+    // real host `/`, not `R`. `R` only receives the *install*; BDEPEND
+    // tools run against (and are checked against) the host, exactly like
+    // `--prefix`. Previously `base_roots().merge_root()` was (mis)used for
+    // this and returned `R`, making an offset build check BDEPEND against
+    // the (usually near-empty) offset VDB instead of the host's —
+    // `roots().satisfaction_root(DepClass::BDepend)` is the dedicated
+    // accessor now; `base_roots()` keeps its own, different "outer EROOT"
+    // meaning (see both their doc comments).
     #[test]
     fn root_broot_is_host_not_offset() {
         let cli = Cli::parse_from(["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
@@ -1662,12 +1658,12 @@ pub struct CrossdevArgs {
     pub show_target_cfg: bool,
 
     /// Build an extra package onto the established cross target (may be
-    /// given multiple times). `CATEGORY/PN` — crossdev's own `--ex-pkg`: it
-    /// always runs on the host (like `binutils`/`gcc`), not the target
-    /// sysroot, matching real crossdev's `set_env` treatment of `--ex-pkg`
-    /// extras. Applies to `--init-target`/`--setup` only (a config-time
-    /// concern, not a build one); named per invocation, like real crossdev —
-    /// not remembered across a later run that omits it.
+    /// given multiple times). `CATEGORY/PN` — always runs on the host (like
+    /// `binutils`/`gcc`), not the target sysroot, matching real crossdev's
+    /// `--ex-pkg`.
+    ///
+    /// Applies to `--init-target`/`--setup` only; named per invocation,
+    /// like real crossdev — not remembered across a later run that omits it.
     #[arg(long, value_name = "CATEGORY/PN")]
     pub ex_pkg: Vec<String>,
 

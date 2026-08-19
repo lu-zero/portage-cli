@@ -238,6 +238,7 @@ pub type Numbers = SmallVec<[u64; 4]>;
 ///   (semver requires exactly `major.minor.patch`).
 /// - **Letter suffix** — a single lowercase letter after the numbers (e.g.
 ///   `1.2.3a`); no semver equivalent.
+///
 /// - **Typed suffixes** — `_alpha`, `_beta`, `_pre`, `_rc`, `_p` with
 ///   defined ordering; semver uses free-form pre-release identifiers.
 /// - **Revision** — a dedicated `-rN` component for distribution-level changes.
@@ -271,14 +272,11 @@ pub struct Version {
     /// The version string exactly as parsed, preserving leading zeros
     /// (e.g. `"26.04.0"` instead of the reconstructed `"26.4.0"`).
     ///
-    /// `SmolStr` rather than `String`: cheap to clone (inline for the
-    /// common short version string, `Arc<str>` refcount bump otherwise)
-    /// without touching the process-global string interner. That interner
-    /// is meant for a small, heavily-reused vocabulary (package names, USE
-    /// flags, slots) — version strings are the opposite (tens of thousands
-    /// of distinct one-shot values per repo scan, each of which the
-    /// interner's default backend never frees), so interning them would
-    /// bloat the shared table for every other lookup instead of helping.
+    /// `SmolStr` rather than `String`: cheap to clone (inline for short
+    /// strings, `Arc<str>` refcount bump otherwise) without touching the
+    /// process-global string interner, which is meant for a small,
+    /// heavily-reused vocabulary — version strings are the opposite (tens
+    /// of thousands of one-shot values per scan the interner never frees).
     ///
     /// `None` when constructed programmatically via [`Version::new`] or the builder.
     #[cfg_attr(feature = "builder", builder(skip))]

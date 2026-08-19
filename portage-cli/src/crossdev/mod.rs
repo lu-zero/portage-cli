@@ -194,12 +194,10 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
 }
 
 /// Parse `--ex-pkg CATEGORY/PN` atoms (plus `--ex-gdb`'s `dev-debug/gdb`
-/// shorthand) into `(category, pn)` pairs — crossdev's own `--ex-pkg`/
-/// `--ex-gdb`: extra packages built onto an already-established cross
-/// target, after the base toolchain. These always run on the host (like
-/// `binutils`/`gcc`), never the target sysroot — real crossdev's
-/// `for_each_extra_pkg set_portage X` always takes `set_env`'s host-ABI
-/// branch for them, regardless of what the package actually does.
+/// shorthand) into `(category, pn)` pairs: extra packages built onto an
+/// already-established cross target, after the base toolchain. These always
+/// run on the host (like `binutils`/`gcc`), never the target sysroot — real
+/// crossdev always takes `set_env`'s host-ABI branch for them.
 fn ex_pkg_atoms(args: &CrossdevArgs) -> Result<Vec<Cpn>> {
     let mut atoms = Vec::new();
     for pkg in &args.ex_pkg {
@@ -219,13 +217,11 @@ fn ex_pkg_atoms(args: &CrossdevArgs) -> Result<Vec<Cpn>> {
 /// step lands, so toolchain and stage1 libc are one bootstrap.
 ///
 /// Lays down the FS config via `init_target`'s `FillGapsOnly` policy — only
-/// creates what's missing, never touches an already-existing file, so a hand
-/// edit made between an earlier explicit `--init-target` and this `--setup`
-/// survives (a fresh target still gets everything written, since nothing
-/// exists yet) — then runs each step of the ordered
-/// [`StagePlan`](stages::StagePlan) through the shared merge path
-/// ([`crate::emerge_atoms`]) — per-step `USE` override + `--nodeps`. With `-p`
-/// each step prints its plan instead of building.
+/// creates what's missing, so a hand edit between an earlier
+/// `--init-target` and this `--setup` survives — then runs each step of the
+/// ordered [`StagePlan`](stages::StagePlan) through the shared merge path
+/// ([`crate::emerge_atoms`]) — per-step `USE` override + `--nodeps`. With
+/// `-p` each step prints its plan instead of building.
 async fn setup(
     target: &CrossTarget,
     globals: &Cli,
@@ -525,13 +521,11 @@ async fn native_prefix_guest(globals: &Cli, roots: &portage_resolve::Roots) -> b
 }
 
 /// `em toolchain --setup`: bootstrap a self-hosting native toolchain into
-/// `--root` (`CHOST == CBUILD`, `SYSROOT == ROOT`). The native twin of the
-/// crossdev `--setup`, sharing its staged driver but with the *native* plan
-/// (baselayout → binutils → os-headers → full glibc → full gcc): the seed
-/// compiler at `BROOT=/` builds glibc directly, so there is no two-stage gcc
-/// (that is cross-only — see [`stages`]). Plain `::gentoo` atoms, none of the
-/// cross overlay/wrapper/sysroot-make.conf ceremony — the host profile and
-/// make.conf configure it (`--config-root /` by default).
+/// `--root` (`CHOST == CBUILD`). The native twin of crossdev `--setup`,
+/// sharing its staged driver but with the *native* plan (baselayout →
+/// binutils → os-headers → full glibc → full gcc): the seed compiler at
+/// `BROOT=/` builds glibc directly, no two-stage gcc (cross-only — see
+/// [`stages`]). Plain `::gentoo` atoms, no cross overlay/wrapper ceremony.
 ///
 /// Under `USE=prefix-guest` (see [`native_prefix_guest`]) the libc step is
 /// skipped: `virtual/libc`/`toolchain.eclass` already expect gcc to link
@@ -747,12 +741,10 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
 /// `use_outer_eroot` — see [`run_staged`]) before the stage1 plan itself.
 ///
 /// `sys-devel/gcc` (`CHOST == CTARGET`) builds single-pass, not as a
-/// self-hosting bootstrap (`toolchain.eclass`'s `is_crosscompile()` is false
-/// for it) — the active cross-compiler is its *only* build tool. GCC's own
-/// target libraries (e.g. `libatomic`) can pass driver flags only a
+/// self-hosting bootstrap — the active cross-compiler is its *only* build
+/// tool. GCC's own target libraries can pass driver flags only a
 /// matching-or-newer major version understands, so an older active
-/// cross-compiler silently breaks deep inside a target library's own
-/// `configure`.
+/// cross-compiler silently breaks deep inside a target library's `configure`.
 ///
 /// Best-effort: any failure determining compatibility (no active compiler
 /// yet is the *expected* "needs building" case and always weaves in; an
@@ -787,13 +779,12 @@ async fn maybe_weave_in_gcc_update(
 
 /// Whether the active cross-compiler slot is too old to build a
 /// `needed_slot` `sys-devel/gcc`: nothing activated yet (`None`) or a
-/// strictly older slot. A newer-or-equal active slot is assumed fine (GCC is
-/// generally backward compatible as a *build tool*, and this is a numeric
-/// gate, not exact-match, to avoid gratuitous rebuilds). An unparseable
-/// slot (either side) is treated as "can't tell" rather than "needs
-/// refresh" — GCC's own SLOT is always a plain integer, so this should never
-/// actually happen; if it does, silently doing nothing is safer than
-/// forcing an unwanted rebuild.
+/// strictly older slot. A newer-or-equal active slot is assumed fine (a
+/// numeric gate, not exact-match, to avoid gratuitous rebuilds).
+///
+/// An unparseable slot (either side) is treated as "can't tell" rather than
+/// "needs refresh" — GCC's SLOT is always a plain integer, so this should
+/// never happen; if it does, doing nothing is safer than an unwanted rebuild.
 fn gcc_needs_refresh(active_slot: Option<&str>, needed_slot: &str) -> bool {
     let Ok(needed_num) = needed_slot.parse::<u32>() else {
         return false;
@@ -875,19 +866,16 @@ fn profile_stack(globals: &Cli) -> Result<ProfileStack> {
     ProfileStack::build(canon).context("failed to build profile stack")
 }
 
-/// The profile's `BOOTSTRAP_USE` variable (`profiles/base/make.defaults`),
-/// after sourcing the profile chain — see [`stages::stage1_plan`]'s doc for
-/// why stage1 must re-add this after its `-*` clear. Read directly off the
-/// shell rather than through `ProfileEnv::merge`: `profile_env`'s per-layer
-/// capture only tracks `USE`/`USE_EXPAND`-family variables, and
-/// `BOOTSTRAP_USE` is neither — it's a plain, non-incremental profile
-/// variable, so its value just needs to still be sitting in the shell after
-/// the profile chain has been sourced (same pattern as `use_env.rs`'s
-/// `split_var` reading `USE_EXPAND`/`USE_EXPAND_HIDDEN` post-resolve).
+/// The profile's `BOOTSTRAP_USE` variable, after sourcing the profile chain
+/// — see [`stages::stage1_plan`]'s doc for why stage1 must re-add this
+/// after its `-*` clear. Read directly off the shell rather than
+/// `ProfileEnv::merge`: its per-layer capture only tracks `USE`/
+/// `USE_EXPAND`-family variables, and this plain, non-incremental one just
+/// needs to still be sitting in the shell after the chain is sourced.
+///
 /// Best-effort: any failure sourcing the profile chain just means no extra
-/// flags get restored, the same "can't tell, leave the plan alone" posture
-/// as [`maybe_weave_in_gcc_update`], rather than blocking the whole stage1
-/// run over a variable that fixes correctness, not availability.
+/// flags get restored, same "can't tell, leave the plan alone" posture as
+/// [`maybe_weave_in_gcc_update`] — this fixes correctness, not availability.
 async fn bootstrap_use(stack: &ProfileStack, globals: &Cli) -> Vec<String> {
     async fn try_read(stack: &ProfileStack, globals: &Cli) -> Result<Vec<String>> {
         let repo = main_repo(globals)?;
@@ -899,19 +887,16 @@ async fn bootstrap_use(stack: &ProfileStack, globals: &Cli) -> Vec<String> {
             .split_whitespace()
             .map(str::to_string)
             .collect();
-        // `ELIBC`/`KERNEL` (`USE_EXPAND_IMPLICIT` in every profile,
-        // profiles/base/make.defaults) are folded as ordinary USE_EXPAND
-        // tokens (`elibc_glibc`, `kernel_linux`) at the profile's own
-        // "defaults" layer — the *same* layer BOOTSTRAP_USE's own flags
-        // need re-adding from, and for the identical reason: `-*` wipes
-        // them just as it wipes everything else below it (verified against
-        // real portage's config.py `regenerate()`, not assumed). Real
-        // catalyst's own CATALYST_USE construction must re-add these too,
-        // for its stage1 to end up with a working `virtual/libc` — found
-        // live: without this, `sys-libs/glibc` never enters the stage1
-        // plan at all (`virtual/libc`'s `elibc_glibc? ( sys-libs/glibc )`
-        // RDEPEND silently never fires), and `gcc`'s own `libgcc` build
-        // then fails `fatal error: stdio.h: No such file or directory`.
+        // `ELIBC`/`KERNEL` (`USE_EXPAND_IMPLICIT` in every profile) are
+        // folded as ordinary USE_EXPAND tokens (`elibc_glibc`,
+        // `kernel_linux`) at the same "defaults" layer BOOTSTRAP_USE needs
+        // re-adding from, for the identical reason: `-*` wipes them too.
+        // Real catalyst's CATALYST_USE construction must re-add these too.
+        //
+        // Found live: without this, `sys-libs/glibc` never enters the
+        // stage1 plan at all (`virtual/libc`'s `elibc_glibc? (
+        // sys-libs/glibc )` RDEPEND silently never fires), and `gcc`'s own
+        // `libgcc` build then fails `stdio.h: No such file or directory`.
         for var in ["ELIBC", "KERNEL"] {
             if let Some(val) = shell.get_var(var).filter(|v| !v.is_empty()) {
                 use_tokens.push(format!("{}_{val}", var.to_lowercase()));
@@ -945,14 +930,12 @@ fn sysroot(target: &CrossTarget, globals: &Cli) -> Utf8PathBuf {
 
 /// The configured main repo (`gentoo`) — the real ebuilds the overlay links to.
 ///
-/// A self-contained `--root DIR` target (no `--local`/`--prefix` host-config
-/// sharing) starts with no `repos.conf` of its own — that's exactly the
-/// "stage1 from scratch" case, and `--init-target` is what's supposed to lay
-/// one down. So this can't rely solely on the target's own config-root: it
-/// falls back to the *host's* `repos.conf`, then to portage's own well-known
-/// default location (mirroring `Cli::repo_path`'s fallback), so the very first
-/// `--init-target` on a fresh root can still find the real ebuild tree to
-/// symlink/reference.
+/// A self-contained `--root DIR` target starts with no `repos.conf` of its
+/// own — that's exactly the "stage1 from scratch" case, and `--init-target`
+/// is what's supposed to lay one down. So this can't rely solely on the
+/// target's own config-root: it falls back to the host's `repos.conf`, then
+/// portage's well-known default, so the very first `--init-target` on a
+/// fresh root can still find the real ebuild tree to symlink/reference.
 pub(crate) fn main_repo(globals: &Cli) -> Result<Repository> {
     let target_conf = globals.outer_roots().repos_conf().ok();
     let host_conf = ReposConf::load_rooted(Utf8Path::new("/"), &[]).ok();
@@ -1170,15 +1153,13 @@ fn alias_repo_entry(target: &CrossTarget, extras: &[Cpn]) -> portage_repo::RepoE
 /// The self-contained-`--root`-only config entries (`gentoo.conf` +
 /// `make.profile` link) that both `em toolchain --setup` (native) and `em
 /// crossdev --setup`/`--init-target` (cross) need before merging anything:
-/// - a `gentoo` `repos.conf` entry, for a self-contained `--root DIR` target
-///   only (`roots.is_self_contained_root()` — unlike `--local`/`--prefix`,
-///   which merge this same directory onto the host's real repos.conf as an
-///   extra source, so already resolve `gentoo` from there);
-/// - a `make.profile` link, same self-contained-only condition — the EPREFIX
-///   builds *host-arch* packages (the crossdev toolchain lands on
-///   `ROOT=/`-equivalent, and a native toolchain always is host-arch), so it
-///   links the *host's* resolved profile, unlike the cross target sysroot,
-///   which links the target's own arch profile.
+///
+/// - a `gentoo` `repos.conf` entry, for a self-contained `--root DIR`
+///   target only — unlike `--local`/`--prefix`, which merge this directory
+///   onto the host's real repos.conf and already resolve `gentoo` there;
+/// - a `make.profile` link, same condition — it links the *host's* resolved
+///   profile (host-arch packages always land on `ROOT=/`-equivalent),
+///   unlike the cross target sysroot, which links the target's own profile.
 ///
 /// Without this a self-contained `--root` cannot resolve ebuilds.
 /// `gentoo_path` is the resolved `::gentoo` path; skeleton dirs come from
@@ -1231,14 +1212,14 @@ fn alias_packages_line(target: &CrossTarget, extras: &[Cpn]) -> String {
 }
 
 /// Link a `make.profile` for a self-contained `--root DIR` EPREFIX (same
-/// "stage1 from scratch" gap as [`ensure_repos_conf`]'s `gentoo.conf`): unlike
-/// `--local`/`--prefix`, which share the host's own `make.profile` via config
-/// sharing, plain `--root` has none of its own. The EPREFIX builds *host-arch*
-/// packages (the crossdev toolchain lands on `ROOT=/`-equivalent, just
-/// offset), so — unlike the target sysroot, which links the target's own
-/// arch profile — this links the *host's* resolved profile. A no-op for
-/// `--local`/`--prefix` (`!roots.is_self_contained_root()`, config already
-/// comes from the host).
+/// "stage1 from scratch" gap as [`ensure_repos_conf`]'s `gentoo.conf`):
+/// unlike `--local`/`--prefix`, which share the host's `make.profile`,
+/// plain `--root` has none of its own.
+///
+/// The EPREFIX builds *host-arch* packages, so — unlike the target sysroot,
+/// which links the target's own arch profile — this links the *host's*
+/// resolved profile. A no-op for `--local`/`--prefix`, whose config already
+/// comes from the host.
 fn prefix_profile_entries(globals: &Cli) -> Result<Vec<config_plan::ConfigEntry>> {
     if !globals.outer_roots().is_self_contained_root() {
         return Ok(Vec::new());
@@ -1339,12 +1320,11 @@ fn sysroot_repos_conf_entries(
 /// `~/.gentoo/usr/<CTARGET>`) is honoured, not the hardcoded `/usr/<CTARGET>`.
 ///
 /// Deliberately no `CTARGET` here — real crossdev's own target template
-/// (`/usr/share/crossdev/etc/portage/make.conf`) never sets it either. `CTARGET`
-/// only applies to the host-side `cross-<CTARGET>/{binutils,gcc,...}` builds
-/// (`toolchain.eclass` reads it off `CATEGORY`, scoped via [`write_cross_env`]'s
-/// `package.env`); leaking it into the sysroot-wide make.conf makes `econf` pass
-/// `--target=` to *every* ordinary package, which custom (non-autoconf)
-/// `configure` scripts like sqlite's reject outright.
+/// never sets it either. `CTARGET` only applies to the host-side
+/// `cross-<CTARGET>/{binutils,gcc,...}` builds (scoped via
+/// [`write_cross_env`]'s `package.env`); leaking it into the sysroot-wide
+/// make.conf makes `econf` pass `--target=` to *every* ordinary package,
+/// which custom (non-autoconf) `configure` scripts like sqlite's reject.
 ///
 /// `MAKEOPTS` mirrors the host's (like `setup::host_makeopts`, for the same
 /// reason): without it, every `sys-*` package resolved against this sysroot
@@ -1491,12 +1471,11 @@ fn host_arch_keyword_line(
 /// config root's `etc/portage` (where the host-side `cross-*` builds read it).
 ///
 /// Each env file carries the collision-safety crossdev sets on every cross
-/// package (`SYMLINK_LIB=no`, a `COLLISION_IGNORE` for the build-id tree) plus
-/// the per-ABI multilib block from [`multilib`] (crossdev's `load_multilib_env`):
-/// the target ABI's `CFLAGS_<abi>` (`-mabi=lp64d -march=rv64gc`) is what lets the
-/// libc build for `<CTARGET>` instead of inheriting the host CFLAGS. em owns these
-/// generated files (like crossdev, which regenerates them each run), so they are
-/// rewritten rather than preserved.
+/// package (`SYMLINK_LIB=no`, a `COLLISION_IGNORE`) plus the per-ABI
+/// multilib block from [`multilib`]: the target ABI's `CFLAGS_<abi>` is
+/// what lets libc build for `<CTARGET>` instead of inheriting host CFLAGS.
+/// em owns these generated files, like crossdev, so they're rewritten
+/// rather than preserved.
 fn cross_env_entries(
     target: &CrossTarget,
     globals: &Cli,
@@ -1600,13 +1579,12 @@ fn cross_env_entries(
 /// Create the ABI osdir compatibility symlinks the libc leaves out, so the cross
 /// gcc finds the target CRT/libc.
 ///
-/// `multilib.eclass` gives the **default ABI** the *un-suffixed* libdir (riscv
-/// `LIBDIR_lp64d=lib64`, vs non-default `lp64 → lib64/lp64`), and glibc installs
-/// its CRTs/`libc.so` straight into that bare `lib64`. But gcc searches the
-/// ABI-suffixed osdir (`lib64/lp64d`), so without a bridge `<CTARGET>-gcc` (and
-/// the gcc-stage2 self-build) fails with `cannot find Scrt1.o`. A real crossdev
-/// sysroot carries `lib64/lp64d -> .` (and `usr/lib64/lp64d -> .`) — untracked
-/// compat symlinks no package owns; em creates them here after the libc lands.
+/// `multilib.eclass` gives the **default ABI** the *un-suffixed* libdir
+/// (riscv `LIBDIR_lp64d=lib64`), and glibc installs its CRTs/`libc.so`
+/// straight into that bare `lib64`. But gcc searches the ABI-suffixed osdir
+/// (`lib64/lp64d`), so without a bridge `<CTARGET>-gcc` fails with `cannot
+/// find Scrt1.o`. A real crossdev sysroot carries `lib64/lp64d -> .` —
+/// untracked compat symlinks; em creates them here after the libc lands.
 fn link_abi_osdirs(target: &CrossTarget, globals: &Cli) -> Result<()> {
     let sysroot = sysroot(target, globals);
     let gentoo = main_repo(globals)?;
@@ -1633,12 +1611,11 @@ fn link_abi_osdirs(target: &CrossTarget, globals: &Cli) -> Result<()> {
 }
 
 /// Reject a cross target tuple identical to the host's own CHOST:
-/// `cross-<tuple>/linux-headers` (and every other cross-* package) is the
-/// *real* upstream ebuild, symlinked into the cross-* category — it decides
+/// `cross-<tuple>/linux-headers` (and every other cross-* package) decides
 /// where to install purely by comparing `CTARGET != CHOST` inside the
-/// ebuild itself (same as real crossdev). Same-tuple as host CHOST installs
-/// into host paths and collides with native packages — not a supported
-/// target. For a same-arch separate root, use `--root`/`--local` instead.
+/// ebuild itself. Same-tuple as host CHOST installs into host paths and
+/// collides with native packages — for a same-arch separate root, use
+/// `--root`/`--local` instead.
 fn reject_same_arch_target(tuple: &str, host: &str) -> Result<()> {
     if tuple == host {
         bail!(
@@ -2260,15 +2237,14 @@ mod tests {
         assert!(body.contains("CHOST=riscv64-unknown-linux-gnu"));
     }
 
-    /// The sysroot make.conf is the *only* config `sys-devel/gcc` and every
-    /// other ordinary stage1 package resolved against `--target` ever reads —
-    /// unlike the self-contained `--root`'s own make.conf
-    /// (`setup::host_makeopts`'s doc comment), there is no fallback host
-    /// config to inherit build parallelism from. Missing this made a real
-    /// stage1 build run fully serial (one `cc1plus` at a time on a 128-core
-    /// host)
-    /// bug, the same class of gap as `self_contained_root_gets_real_makeopts`
-    /// in `setup.rs`.
+    // The sysroot make.conf is the *only* config `sys-devel/gcc` and every
+    // other ordinary stage1 package resolved against `--target` ever reads —
+    // unlike the self-contained `--root`'s own make.conf
+    // (`setup::host_makeopts`'s doc comment), there is no fallback host
+    // config to inherit build parallelism from. Missing this made a real
+    // stage1 build run fully serial (one `cc1plus` at a time on a 128-core
+    // host) bug, the same class of gap as `self_contained_root_gets_real_makeopts`
+    // in `setup.rs`.
     #[test]
     fn make_conf_body_sets_makeopts() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
@@ -2284,13 +2260,13 @@ mod tests {
         );
     }
 
-    /// Regression test for the iproute2 stage3 failure: `./configure` ran
-    /// plain `pkg-config`, found the *host's* `net-libs/libtirpc.pc`
-    /// (`net-libs/libtirpc` isn't even in DEPEND — USE=-nfs — let alone
-    /// installed in the target sysroot), and linked `-ltirpc` into a build
-    /// that then failed since the library genuinely isn't in the sysroot.
-    /// `PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` must scope pkg-config to
-    /// the sysroot so a foreign-arch cross build never sees host `.pc` files.
+    // Regression test for the iproute2 stage3 failure: `./configure` ran
+    // plain `pkg-config`, found the *host's* `net-libs/libtirpc.pc`
+    // (`net-libs/libtirpc` isn't even in DEPEND — USE=-nfs — let alone
+    // installed in the target sysroot), and linked `-ltirpc` into a build
+    // that then failed since the library genuinely isn't in the sysroot.
+    // `PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` must scope pkg-config to
+    // the sysroot so a foreign-arch cross build never sees host `.pc` files.
     #[test]
     fn make_conf_body_scopes_pkg_config_to_the_sysroot() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
@@ -2318,15 +2294,15 @@ mod tests {
         );
     }
 
-    /// meson.eclass (and any buildsystem following the same convention) reads
-    /// `BUILD_PKG_CONFIG_LIBDIR` for its native build-machine pkg-config
-    /// search path, falling back to the *target* `PKG_CONFIG_LIBDIR` when
-    /// unset — the same host/target conflation that broke
-    /// `sys-devel/binutils`'s bare `zstd.m4` check (#29), just for
-    /// buildsystems that otherwise get this right. It must point at the
-    /// outer EROOT (where Host BDEPEND packages actually build — see
-    /// `entry_roots()` in `main.rs`), not the target sysroot and not the
-    /// bare host `/`.
+    // meson.eclass (and any buildsystem following the same convention) reads
+    // `BUILD_PKG_CONFIG_LIBDIR` for its native build-machine pkg-config
+    // search path, falling back to the *target* `PKG_CONFIG_LIBDIR` when
+    // unset — the same host/target conflation that broke
+    // `sys-devel/binutils`'s bare `zstd.m4` check (#29), just for
+    // buildsystems that otherwise get this right. It must point at the
+    // outer EROOT (where Host BDEPEND packages actually build — see
+    // `entry_roots()` in `main.rs`), not the target sysroot and not the
+    // bare host `/`.
     #[test]
     fn make_conf_body_sets_build_pkg_config_libdir_to_the_outer_root() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();

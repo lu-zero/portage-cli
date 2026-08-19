@@ -626,12 +626,10 @@ fn host_satisfied_on_broot_inner(
 
 /// Whether *some* branch of a `Choice`/`SlotChoice` virtual node is fully
 /// host-satisfied: every one of that branch's own dependency edges (all
-/// classes collapse into a single list for a synthetic choice branch — see
-/// `register_virtual_choices`) is itself `host_satisfied_on_broot_inner`,
-/// recursing for a nested Choice/SlotChoice (e.g. an `||` group with a `:*`
-/// member). `seen` guards against a pathological self-referential choice
-/// graph; a revisited node is conservatively treated as unsatisfied rather
-/// than looping.
+/// classes collapse into one list, see `register_virtual_choices`) is
+/// itself `host_satisfied_on_broot_inner`, recursing for a nested
+/// Choice/SlotChoice. `seen` guards against a pathological self-referential
+/// choice graph — a revisited node is conservatively unsatisfied.
 fn virtual_satisfied_on_broot(
     provider: &PortageDependencyProvider,
     choice: &PortagePackage,

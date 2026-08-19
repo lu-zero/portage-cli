@@ -107,22 +107,18 @@ pub async fn regen_cache(
 
     // A Dir target's writes go into a fresh staging directory, swapped into
     // place only once every entry is written — see `swap_dir_target`'s doc
-    // comment for why. `write` gets pointed at the staging path so the
-    // write closure below needs no further changes for that case;
-    // `dir_swap` remembers the real target for the swap at the end.
+    // for why. `write` points at the staging path so the closure below
+    // needs no further changes; `dir_swap` remembers the real target.
     //
-    // The default Repository target gets the exact same treatment against
-    // whichever of primary/secondary is actually writable — it would
-    // otherwise be the *common* case left paying the full replace-penalty
-    // (an already-synced tree's in-tree cache is never empty), while only
-    // the less-common explicit `-o DIR` runs got faster. `stage_dir_target`
-    // against primary's directory doubles as the writability check: primary
-    // being read-only (an unprivileged `em regen` against the system tree,
-    // exactly the case `write_cache_entry`'s own per-entry fallback exists
-    // for) fails to even create the staging dir, so this falls back to
-    // staging secondary instead. No staging at all (falls through to the
-    // existing per-entry `write_cache_entry`) only when secondary isn't a
-    // durable on-disk store either — in-memory secondary, tests only.
+    // The default Repository target gets the same treatment against
+    // whichever of primary/secondary is writable — otherwise it'd be the
+    // *common* case paying the full replace-penalty, while only explicit
+    // `-o DIR` got faster. `stage_dir_target` against primary doubles as
+    // the writability check: primary read-only (an unprivileged `em
+    // regen`, `write_cache_entry`'s own fallback case) fails to create the
+    // staging dir, falling back to staging secondary instead. No staging
+    // at all only when secondary isn't a durable on-disk store either
+    // (in-memory secondary, tests only).
     let (write, dir_swap) = match write {
         RegenWriteTarget::Dir(ref dir) => {
             let cats = ebuilds.iter().map(Ebuild::category);
@@ -285,16 +281,15 @@ fn stage_dir_target<'a>(
 /// [`stage_dir_target`] prepared.
 ///
 /// `rename()` can't replace a non-empty directory directly (Linux/POSIX:
-/// `ENOTEMPTY`), so this is a rename-away / rename-in / remove-old dance,
-/// not one syscall — a brief window where `dir` doesn't exist between the
-/// first two renames. But at every *other* instant — including for the
-/// entire multi-second write phase before this ever runs — `dir` holds
-/// either the complete old content or the complete new content, never a
-/// partial mix. That's the actual point versus clearing `dir` in place
-/// before writing (this optimization's first attempt, in the same commit
-/// history): `remove_dir_all` up front left `dir` empty/partial for the
-/// whole write phase, so a crash mid-run discarded the previous cache
-/// entirely instead of just leaving it stale.
+/// `ENOTEMPTY`), so this is a rename-away/rename-in/remove-old dance, not
+/// one syscall — a brief window where `dir` doesn't exist between the
+/// first two renames. But at every *other* instant `dir` holds either the
+/// complete old content or the complete new content, never a partial mix.
+///
+/// That's the point versus clearing `dir` in place before writing (this
+/// optimization's first attempt): `remove_dir_all` up front left `dir`
+/// empty/partial for the whole write phase, so a crash mid-run discarded
+/// the previous cache entirely instead of just leaving it stale.
 fn swap_dir_target(dir: &Path, staging: &Utf8Path) -> Result<()> {
     let dir = utf8_or_err(dir)?;
     let displaced = displaced_path_for(dir);
@@ -556,17 +551,12 @@ where
 /// way [`cache_entries_parallel_with_mtime`] bulk-reads a repo's in-tree
 /// cache, just pointed at [`Repository::secondary_cache_dir`] instead.
 ///
-/// A repo with no in-tree `metadata/md5-cache` at all (crossdev,
-/// pentoo-shaped trees) still accumulates entries in its secondary store
-/// across resolves, one at a time, via [`Repository::put_secondary`] — but
-/// [`crate::entries::repo_entries`]'s bulk read only ever looked at the
-/// in-tree cache, so every one of those repos' ebuilds kept re-entering the
-/// per-entry suspect chain (stat, md5, eclass-freshness) on every call even
-/// once the secondary store already had a fresh answer for it. Folding this
-/// bulk read into `covered` is what lets the per-entry suspect rule actually
-/// narrow the digest work for a cache-less repo the way it already does for
-/// one with an in-tree cache. Empty when the secondary isn't a durable
-/// on-disk store (in-memory secondary, tests).
+/// A repo with no in-tree `metadata/md5-cache` (crossdev, pentoo-shaped
+/// trees) still accumulates entries in its secondary store via
+/// [`Repository::put_secondary`] — but the bulk read only looked at the
+/// in-tree cache, so those ebuilds kept re-entering the per-entry suspect
+/// chain every call. Folding this in lets the suspect rule narrow digest
+/// work the same way. Empty when secondary isn't durable on-disk (tests).
 pub(crate) async fn secondary_cache_entries_with_mtime<T, F>(
     repo: &Repository,
     opts: &CacheReadOpts,

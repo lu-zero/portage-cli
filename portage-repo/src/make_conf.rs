@@ -191,19 +191,17 @@ impl MakeConf {
 
     /// Apply this file's assignments to `env` the way `bash source` would:
     /// sources the raw file text through a minimal, non-interactive
-    /// [`brush_core::Shell`] (bash's standard builtin set only — no
-    /// ebuild-specific builtins, no [`crate::Repository`] dependency, since
-    /// make.conf is never ebuild content), then overlays every variable left
-    /// in the shell afterward onto `env`.
+    /// [`brush_core::Shell`] (bash's standard builtins only — no
+    /// ebuild-specific ones, no [`crate::Repository`] dependency, since
+    /// make.conf is never ebuild content), then overlays every variable
+    /// left in the shell afterward onto `env`.
     ///
     /// `env`'s current contents are seeded into the shell first, so a
     /// caller-provided value (e.g. an ambient `CHOST`) is visible to
     /// self-references and `NAME+=VALUE` appends onto it. Because this is a
-    /// real shell, the full range of bash semantics applies: `${NAME}`/`$NAME`
-    /// expansion, `${NAME:-default}`-style parameter expansion, command
-    /// substitution, arithmetic, and so on — not just the `${NAME}` subset a
-    /// hand-rolled scanner would need to special-case one construct at a
-    /// time.
+    /// real shell, the full range of bash semantics applies (`${NAME}`
+    /// expansion, parameter expansion, command substitution, arithmetic),
+    /// not just the subset a hand-rolled scanner would special-case.
     pub async fn apply_to(
         &self,
         env: &mut std::collections::BTreeMap<String, String>,
@@ -342,13 +340,11 @@ impl MakeConf {
     }
 
     /// Fold `add`/`subtract`/`drop` onto the current effective USE at `path`
-    /// without writing anything — the same trichotomy `em pkg use` already
-    /// applies to `package.use` entries: `add` (positive, e.g. `nls`),
-    /// `subtract` (explicit negative, written as `-flag`), `drop` (removes
-    /// both the `flag` and `-flag` forms, reverting to whatever the profile
-    /// otherwise defaults to). Returns `(old, new)` joined values for `var`,
-    /// so a caller can preview or diff the change before deciding to write
-    /// it.
+    /// without writing anything — the same trichotomy `em pkg use` applies
+    /// to `package.use` entries: `add` (positive), `subtract` (explicit
+    /// negative, `-flag`), `drop` (removes both forms, reverting to the
+    /// profile default). Returns `(old, new)` joined values for `var`, so a
+    /// caller can preview or diff the change before deciding to write it.
     ///
     /// `var` is any space-separated flag-list variable — `USE` itself, or a
     /// USE_EXPAND variable such as `VIDEO_CARDS`; both are edited the same

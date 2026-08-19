@@ -309,23 +309,17 @@ impl RepositoryBuilder {
     /// Open a repository and resolve masters from `repos_dir`.
     ///
     /// `masters_override` is the repos.conf-parsed `masters =` for this
-    /// repo (`RepoEntry::masters`), if any. repos.conf wins over
-    /// `metadata/layout.conf`'s own `masters =` whenever it declares
-    /// anything at all — matching real portage (`RepoConfigLoader.
-    /// __init__`) — since many hand-maintained overlays (e.g. a plain
-    /// `/usr/local/portage` tree) set masters only in repos.conf and never
-    /// declare it in their own layout.conf. Pass `None` when the caller
-    /// has no repos.conf entry to consult (e.g. resolving a nested
-    /// master's own masters — those fall back to *that* repo's
-    /// layout.conf, since repos.conf only describes top-level entries).
+    /// repo, if any: repos.conf wins over `layout.conf`'s own `masters =`
+    /// whenever it declares anything (matching real portage), since many
+    /// hand-maintained overlays set masters only in repos.conf. Pass `None`
+    /// when the caller has no repos.conf entry (e.g. a nested master's own
+    /// masters, which fall back to *that* repo's layout.conf instead).
     ///
-    /// `default_master`: if neither `masters_override` nor layout.conf
-    /// declares anything at all, fall back to this name — real portage
-    /// defaults every non-main repo with zero declared masters to the main
-    /// repo (`RepoConfigLoader.__init__`: `if repo.masters is None: ...
-    /// repo.masters = (self.mainRepo(),)`), not to no masters at all. Pass
-    /// `None` for the main repo itself, and for a nested master's own
-    /// masters (this default is not re-applied recursively).
+    /// `default_master`: if neither source declares anything, fall back to
+    /// this name — real portage defaults every non-main repo with zero
+    /// declared masters to the main repo, not to no masters at all. Pass
+    /// `None` for the main repo itself and for a nested master's own
+    /// masters (not re-applied recursively).
     ///
     /// Masters share `UserRoot` (same root, per-name dirs) or get a fresh
     /// in-memory secondary for `Memory` / `Custom`. The returned `Repository`
@@ -644,16 +638,11 @@ impl Repository {
     /// Resolve a package pattern to one or more [`Cpn`] values.
     ///
     /// * `cat/pkg` — exact lookup within the named category.
-    /// * bare `name` — scans the *union* of this repo's own
+    /// * bare `name` — scans the union of this repo's own
     ///   `profiles/categories` and every [`masters`](Self::masters) entry's
-    ///   for packages matching the name — the same category-completeness
-    ///   rule [`ebuilds`](Self::ebuilds) already applies to the full ebuild
-    ///   walk: an overlay routinely ships packages in a category (e.g.
-    ///   `gui-apps`) only its master (e.g. `::gentoo`) lists in its own
-    ///   `profiles/categories`. Packages are still looked up on `self`
-    ///   (`self.category(..)`), never on a master — masters only widen which
-    ///   category *names* are valid to check, they are not an alternate
-    ///   source of packages here.
+    ///   (same completeness rule as [`ebuilds`](Self::ebuilds)). Looked up
+    ///   on `self`, never a master — masters only widen which category
+    ///   *names* are valid.
     ///
     /// Returns an empty `Vec` when no match is found.
     pub fn find_cpns(&self, pattern: &str) -> Vec<Cpn> {
@@ -1140,7 +1129,7 @@ fn parse_desc_file(path: impl AsRef<Path>) -> Result<Vec<(String, String)>> {
 mod tests {
     use super::*;
 
-    /// Create the minimal directory structure required by `Repository::builder().open`.
+    // Create the minimal directory structure required by `Repository::builder().open`.
     fn make_test_repo(dir: &tempfile::TempDir) -> Repository {
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
         std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
@@ -1151,10 +1140,10 @@ mod tests {
             .unwrap()
     }
 
-    /// A repo with no `profiles/repo_name` is named `x-<basename>`, not
-    /// the bare basename — matches real portage's own fallback
-    /// (`RepoConfig._read_repo_name`) and is where names like
-    /// `x-portage` (from a `/usr/local/portage` tree) actually come from.
+    // A repo with no `profiles/repo_name` is named `x-<basename>`, not
+    // the bare basename — matches real portage's own fallback
+    // (`RepoConfig._read_repo_name`) and is where names like
+    // `x-portage` (from a `/usr/local/portage` tree) actually come from.
     #[test]
     fn missing_repo_name_falls_back_to_x_prefixed_basename() {
         let parent = tempfile::tempdir().unwrap();
@@ -1545,15 +1534,15 @@ mod tests {
         assert_eq!(cpns.len(), 2);
     }
 
-    /// The real-world gap masters-aware `find_cpns` exists for: an overlay
-    /// (e.g. `guru`) routinely ships packages in a category (e.g.
-    /// `gui-apps`) that only its master's (`::gentoo`'s) own
-    /// `profiles/categories` lists — `profiles/categories` is not required
-    /// to be self-contained (same rule `ebuilds` already applies). An
-    /// overlay opened with no masters misses it; one opened with masters
-    /// finds it. Live-verified against this exact scenario on a real host:
-    /// `guru`'s own `gui-apps/1password` didn't list `gui-apps` in
-    /// `guru/profiles/categories` at all.
+    // The real-world gap masters-aware `find_cpns` exists for: an overlay
+    // (e.g. `guru`) routinely ships packages in a category (e.g.
+    // `gui-apps`) that only its master's (`::gentoo`'s) own
+    // `profiles/categories` lists — `profiles/categories` is not required
+    // to be self-contained (same rule `ebuilds` already applies). An
+    // overlay opened with no masters misses it; one opened with masters
+    // finds it. Live-verified against this exact scenario on a real host:
+    // `guru`'s own `gui-apps/1password` didn't list `gui-apps` in
+    // `guru/profiles/categories` at all.
     #[test]
     fn find_cpns_with_masters_finds_a_category_only_the_master_lists() {
         let master_dir = tempfile::tempdir().unwrap();
@@ -1588,15 +1577,15 @@ mod tests {
         assert_eq!(cpns[0].package.as_ref(), "1password");
     }
 
-    /// A hand-maintained overlay (e.g. a plain `/usr/local/portage` tree)
-    /// commonly declares `masters = gentoo` only in repos.conf and ships no
-    /// `metadata/layout.conf` `masters =` line of its own. `open_with_masters`
-    /// must still resolve the master from the repos.conf-parsed override —
-    /// previously it consulted only `layout.conf`, silently leaving such an
-    /// overlay masterless (and, by extension, unable to see any category it
-    /// doesn't list in its own `profiles/categories`, exactly like the
-    /// scenario `find_cpns_with_masters_finds_a_category_only_the_master_lists`
-    /// covers above).
+    // A hand-maintained overlay (e.g. a plain `/usr/local/portage` tree)
+    // commonly declares `masters = gentoo` only in repos.conf and ships no
+    // `metadata/layout.conf` `masters =` line of its own. `open_with_masters`
+    // must still resolve the master from the repos.conf-parsed override —
+    // previously it consulted only `layout.conf`, silently leaving such an
+    // overlay masterless (and, by extension, unable to see any category it
+    // doesn't list in its own `profiles/categories`, exactly like the
+    // scenario `find_cpns_with_masters_finds_a_category_only_the_master_lists`
+    // covers above).
     #[test]
     fn open_with_masters_honors_a_repos_conf_only_masters_override() {
         let repos_dir = tempfile::tempdir().unwrap();
@@ -1623,8 +1612,8 @@ mod tests {
         assert_eq!(repo.masters()[0].path(), master_dir);
     }
 
-    /// With no repos.conf override, no `masters =` in `layout.conf`, and no
-    /// `default_master` given, an overlay opens with zero masters.
+    // With no repos.conf override, no `masters =` in `layout.conf`, and no
+    // `default_master` given, an overlay opens with zero masters.
     #[test]
     fn open_with_masters_none_declared_anywhere_resolves_no_masters() {
         let repos_dir = tempfile::tempdir().unwrap();
@@ -1638,11 +1627,11 @@ mod tests {
         assert!(repo.masters().is_empty());
     }
 
-    /// Real portage defaults *every* non-main repo with zero declared
-    /// masters (neither repos.conf nor layout.conf) to the main repo
-    /// (`RepoConfigLoader.__init__`) — not to no masters at all. A plain
-    /// overlay with an empty layout.conf and no override must still pick
-    /// up `default_master` as its sole master.
+    // Real portage defaults *every* non-main repo with zero declared
+    // masters (neither repos.conf nor layout.conf) to the main repo
+    // (`RepoConfigLoader.__init__`) — not to no masters at all. A plain
+    // overlay with an empty layout.conf and no override must still pick
+    // up `default_master` as its sole master.
     #[test]
     fn open_with_masters_falls_back_to_default_master_when_nothing_declared() {
         let repos_dir = tempfile::tempdir().unwrap();
@@ -1662,15 +1651,15 @@ mod tests {
         assert_eq!(repo.masters()[0].path(), master_dir);
     }
 
-    /// A bare-name match across several categories comes back in a
-    /// deterministic (sorted-by-category) order, every call, in one
-    /// process and across repeated processes. The candidate list feeds
-    /// directly into the ambiguity error message and the `--ask` prompt's
-    /// *numbered* list (`query::resolve_ambiguous`/`ask_which_candidate`)
-    /// — a `HashSet`-backed implementation here would shuffle both on every
-    /// run, letting a user who reruns and retypes the same answer (e.g.
-    /// "2") land on a different package. Regression test for exactly that
-    /// (caught in review before it shipped).
+    // A bare-name match across several categories comes back in a
+    // deterministic (sorted-by-category) order, every call, in one
+    // process and across repeated processes. The candidate list feeds
+    // directly into the ambiguity error message and the `--ask` prompt's
+    // *numbered* list (`query::resolve_ambiguous`/`ask_which_candidate`)
+    // — a `HashSet`-backed implementation here would shuffle both on every
+    // run, letting a user who reruns and retypes the same answer (e.g.
+    // "2") land on a different package. Regression test for exactly that
+    // (caught in review before it shipped).
     #[test]
     fn find_cpns_bare_name_order_is_deterministic() {
         let dir = tempfile::tempdir().unwrap();

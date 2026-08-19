@@ -28,26 +28,23 @@ enum Probe {
     /// Run `bin args...` and check only the exit status — no version
     /// banner to parse (`sys-kernel/linux-headers` has none). Used for
     /// `linux-headers` to compile-check `#include <linux/version.h>`
-    /// through the actual host C preprocessor — the same header real
-    /// portage's own `virtual/os-headers` checks for, but through the
-    /// compiler that will actually consume it rather than a bare
-    /// `stat()`, so a compiler with a narrower search path than the
-    /// filesystem check would expect still gets caught. When it succeeds,
-    /// claim the tree's newest version: the declared CPV is otherwise
-    /// inert for a provided entry — nothing reads it back, and whatever
-    /// actually gets included at build time is the host's real
+    /// through the actual host C preprocessor rather than a bare `stat()`,
+    /// so a compiler with a narrower search path still gets caught.
+    ///
+    /// When it succeeds, claim the tree's newest version: the declared CPV
+    /// is otherwise inert for a provided entry — nothing reads it back, and
+    /// whatever actually gets included at build time is the host's real
     /// `/usr/include`, not this string.
     CommandSucceeds(&'static str, &'static [&'static str]),
 }
 
 /// One Tier-1 "cycle fuel" package: the bootstrap closure's build-tool
-/// dependencies (never the stage products themselves — `sys-apps/baselayout`,
-/// binutils, headers, libc, gcc must still be *built* into the prefix, see
-/// the design doc's "explicitly out of provided" list). `probe` is how to
-/// check the host already has this; `None` when there's no real host
-/// equivalent to probe at all (`elt-patches` is a Gentoo-only eclass-patches
-/// snapshot — unlike [`Probe::CommandSucceeds`], there's nothing to check,
-/// it's simply always claimed).
+/// dependencies (never the stage products themselves — baselayout,
+/// binutils, headers, libc, gcc must still be *built* into the prefix).
+///
+/// `probe` is how to check the host already has this; `None` when there's
+/// no real host equivalent to probe (`elt-patches` is a Gentoo-only
+/// eclass-patches snapshot — nothing to check, always claimed).
 struct Tier1Pkg {
     category: &'static str,
     package: &'static str,
@@ -219,11 +216,10 @@ const END_MARKER: &str = "# END em-bootstrap-provided";
 
 /// The first whitespace-separated token that looks like a PMS version
 /// (starts with a digit once outer punctuation is stripped, and contains a
-/// `.`) — good enough to pull `3.11.2` out of `Python 3.11.2`, `1.5.5` out of
-/// `*** Zstandard CLI (64-bit) v1.5.5, by ... ***`, `14.2.1_p20241221` out of
-/// a Gentoo-patched `gcc --version` banner, etc. Best-effort: a tool with an
-/// unusual banner just falls back to [`pick_version`]'s oldest-tree-version
-/// case.
+/// `.`) — good enough to pull `3.11.2` out of `Python 3.11.2` or
+/// `14.2.1_p20241221` out of a Gentoo-patched `gcc --version` banner.
+/// Best-effort: an unusual banner falls back to [`pick_version`]'s
+/// oldest-tree-version case.
 fn first_version_token(s: &str) -> Option<String> {
     s.split_whitespace().find_map(|tok| {
         let trimmed = tok.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');

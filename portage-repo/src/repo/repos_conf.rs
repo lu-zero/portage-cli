@@ -48,14 +48,11 @@ pub struct RepoEntry {
     /// `masters` from repos.conf. `None` means the key is absent from every
     /// `repos.conf` file for this repo — real portage then falls back to
     /// `metadata/layout.conf`'s `masters =`. `Some(vec![])` means the key
-    /// was present but empty, which explicitly opts out of that fallback
-    /// (`repository/config.py`'s `RepoConfigLoader.__init__`: `self.masters
-    /// = repo_opts.get("masters")`, then `if self.masters is None:
-    /// self.masters = layout_data["masters"]`). repos.conf wins over
-    /// layout.conf whenever it declares anything at all, even `masters =`
-    /// on its own — many hand-maintained overlays (e.g. a plain
-    /// `/usr/local/portage` tree) declare masters only in repos.conf and
-    /// ship no `metadata/layout.conf` of their own.
+    /// was present but empty, which explicitly opts out of that fallback.
+    ///
+    /// repos.conf wins over layout.conf whenever it declares anything at
+    /// all, even `masters =` on its own — many hand-maintained overlays
+    /// declare masters only in repos.conf and ship no layout.conf.
     pub masters: Option<Vec<String>>,
     /// `sync-type` from repos.conf (`git`, `rsync`, …). Empty means unsyncable.
     pub sync_type: Option<String>,
@@ -67,16 +64,15 @@ pub struct RepoEntry {
     /// changes (`git reset --hard` / `clean`). Unset means “infer from
     /// ownership” at sync time (Portage: volatile if not root/portage-owned).
     pub volatile: Option<bool>,
-    /// `priority` from repos.conf. Determines resolution order: repos are
-    /// searched (and `emerge --info`/`em --info` list them) ascending by
-    /// `(priority, name)`, lower first — a *negative* priority is searched
-    /// **before** the default `0`, e.g. an overlay meant to shadow the main
-    /// repo. Real portage defaults unset to `0` at sort time and forces the
-    /// main repo specifically to `-1000` when *it* has no explicit priority
-    /// (`repository/config.py`'s `RepoConfigLoader.__init__`) — see
+    /// `priority` from repos.conf: resolution order, repos searched
+    /// ascending by `(priority, name)`, lower first — a *negative* priority
+    /// is searched **before** the default `0`, e.g. to shadow the main repo.
+    ///
+    /// Real portage defaults unset to `0` at sort time and forces the main
+    /// repo to `-1000` when it has no explicit priority — see
     /// [`ReposConf::load_from`] for where that default is applied; this
-    /// field itself stays `None` until then, distinguishing "explicitly set
-    /// to 0" from "unset".
+    /// field stays `None` until then, distinguishing "explicitly `0`" from
+    /// "unset".
     pub priority: Option<i64>,
 }
 
@@ -267,15 +263,14 @@ impl ReposConf {
     }
 
     /// Fold legacy `PORTDIR_OVERLAY` directories in as synthetic entries,
-    /// then re-sort ascending `(priority, name)` together with everything
-    /// `repos.conf` already declared — matches real portage folding both
-    /// sources into one `prepos` dict before its own final sort
-    /// (`RepoConfigLoader._add_repositories`). Each directory gets a name
-    /// from its own `profiles/repo_name` (`x-<basename>` fallback, see
-    /// [`super::util::resolve_repo_name`]) and ascending priority
-    /// `0, 1, ...` in listed order. A directory that isn't a real
-    /// directory, or whose path already matches an existing entry,
-    /// contributes nothing. Reading `PORTDIR_OVERLAY` itself from
+    /// then re-sort ascending `(priority, name)` with everything repos.conf
+    /// already declared. Each directory gets a name from its own
+    /// `profiles/repo_name` (`x-<basename>` fallback, see
+    /// [`super::util::resolve_repo_name`]) and ascending priority in
+    /// listed order.
+    ///
+    /// A directory that isn't real, or whose path already matches an
+    /// existing entry, contributes nothing. Reading `PORTDIR_OVERLAY` from
     /// make.conf isn't this module's concern — see
     /// `portage_resolve::Roots::portdir_overlay`.
     pub fn with_portdir_overlay(mut self, portdir_overlay: &[Utf8PathBuf]) -> Self {

@@ -9,8 +9,8 @@ use std::net::{TcpListener, TcpStream};
 
 use portage_distfiles::{IndexFetch, fetch_index};
 
-/// Read one HTTP/1.1 request's headers off `stream` and return them
-/// lowercased-key-mapped, plus the request line's path.
+// Read one HTTP/1.1 request's headers off `stream` and return them
+// lowercased-key-mapped, plus the request line's path.
 fn read_request(stream: &TcpStream) -> (String, std::collections::HashMap<String, String>) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut request_line = String::new();
@@ -36,15 +36,15 @@ fn read_request(stream: &TcpStream) -> (String, std::collections::HashMap<String
     (path, headers)
 }
 
-/// `Connection: close` on every response is load-bearing, not decoration:
-/// the server below serves exactly one request per accepted connection, but
-/// HTTP/1.1 defaults to keep-alive, so without this header `reqwest`/hyper
-/// is entitled to reuse the `Packages.gz` connection for the `Packages`
-/// request. When it does, the server has already moved on to `accept()`ing
-/// a new connection and never reads the reused one; the original
-/// `TcpStream` is then dropped at the end of its loop iteration, closing
-/// the socket out from under the client's in-flight second request —
-/// observed as a flaky `hyper::Error(IncompleteMessage)`.
+// `Connection: close` on every response is load-bearing, not decoration:
+// the server below serves exactly one request per accepted connection, but
+// HTTP/1.1 defaults to keep-alive, so without this header `reqwest`/hyper
+// is entitled to reuse the `Packages.gz` connection for the `Packages`
+// request. When it does, the server has already moved on to `accept()`ing
+// a new connection and never reads the reused one; the original
+// `TcpStream` is then dropped at the end of its loop iteration, closing
+// the socket out from under the client's in-flight second request —
+// observed as a flaky `hyper::Error(IncompleteMessage)`.
 fn write_response(mut stream: &TcpStream, status_line: &str, extra_headers: &str, body: &str) {
     let resp = format!(
         "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n{extra_headers}\r\n{body}",
@@ -54,9 +54,9 @@ fn write_response(mut stream: &TcpStream, status_line: &str, extra_headers: &str
     let _ = stream.flush();
 }
 
-/// Serves exactly two requests on one listener: `Packages.gz` (always 404,
-/// forcing the real fallback path) then plain `Packages`, whose response
-/// depends on whether the request carried `If-Modified-Since`.
+// Serves exactly two requests on one listener: `Packages.gz` (always 404,
+// forcing the real fallback path) then plain `Packages`, whose response
+// depends on whether the request carried `If-Modified-Since`.
 fn spawn_server(if_modified_since_present_means_304: bool) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

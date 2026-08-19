@@ -73,13 +73,14 @@ pub struct DepgraphOutcome {
     pub plan: Vec<PlannedMerge>,
     /// For each `plan` entry, the indices of earlier entries that must finish
     /// building before it can build — in-plan `DEPEND`/`BDEPEND` **and**
-    /// `RDEPEND` edges. RDEPEND is included because Gentoo `virtual/*` packages
-    /// put real providers only in RDEPEND: e.g. `sed[acl]` DEPEND on
-    /// `virtual/acl`, which RDEPEND on `sys-apps/acl`. Blocking only on the
-    /// virtual lets `--jobs` start sed's configure while acl is still building
-    /// (live 2026-08-07, `--jobs 80`). Restricted to earlier indices, so it is
-    /// always acyclic (`install_order` already linearised soft RDEPEND cycles).
-    /// The `--jobs` scheduler uses this to parallelise builds while respecting
+    /// `RDEPEND` edges. RDEPEND is included because Gentoo `virtual/*`
+    /// packages put real providers only in RDEPEND: e.g. `sed[acl]` DEPEND
+    /// on `virtual/acl`, which RDEPEND on `sys-apps/acl`. Blocking only on
+    /// the virtual lets `--jobs` start sed's configure while acl still builds.
+    ///
+    /// Restricted to earlier indices, so it is always acyclic
+    /// (`install_order` already linearised soft RDEPEND cycles). The
+    /// `--jobs` scheduler uses this to parallelise builds while respecting
     /// order. Empty entry ⇒ no in-plan deps that constrain start.
     pub build_blockers: Vec<Vec<usize>>,
     /// `(dependent, dependency)` pairs where a hard (`DEPEND`/`BDEPEND`) edge
@@ -97,14 +98,15 @@ pub struct DepgraphOutcome {
 
 pub struct DepgraphOpts<'a> {
     /// The full priority-ordered repo set for this invocation: `main` plus
-    /// every `repos.conf` overlay. Built **once** by the caller (see
-    /// `repo_open::repo_set_from_conf`) and shared with the atom-resolution
-    /// step that runs *before* `depgraph()` — so the solver builds its plan
-    /// against the exact same repo world `resolve_atom` picked atoms from.
+    /// every `repos.conf` overlay. Built **once** by the caller and shared
+    /// with the atom-resolution step that runs *before* `depgraph()` — so
+    /// the solver builds its plan against the exact same repo world
+    /// `resolve_atom` picked atoms from.
+    ///
     /// Previously this function took a bare `repo_path` and rebuilt the set
-    /// internally, which double-opened every repo per merge and could diverge
-    /// from the caller's set when an overlay's open failed transiently in one
-    /// build and succeeded in the other.
+    /// internally, which double-opened every repo per merge and could
+    /// diverge from the caller's set when an overlay's open failed
+    /// transiently in one build and succeeded in the other.
     ///
     /// Caller-supplied aliases (e.g. `crossdev --setup -p`'s in-memory target)
     /// must already be prepended onto `set` before it is passed in.
@@ -112,13 +114,11 @@ pub struct DepgraphOpts<'a> {
     /// The root targets, each carrying the provenance that decides whether an
     /// unsatisfiable one aborts the run or just warns (see [`TargetOrigin`]).
     pub atoms: &'a [TargetAtom],
-    /// The atoms this invocation would record in the world file, i.e. real
-    /// emerge's `favorites` ∩ `create_world_atom` — `emerge.rs`'s
-    /// `select_world_atoms` output, gated on `--oneshot` *only*. Bolds those
-    /// rows on top of the ones already in `@selected`, which is the second
-    /// half of `resolver/output.py::check_system_world`: a plain
-    /// `em -p newpkg` bolds `newpkg` because dropping the `-p` would add it
-    /// to world, while `em -1p newpkg` leaves it plain.
+    /// The atoms this invocation would record in the world file — real
+    /// emerge's `favorites` ∩ `create_world_atom`, gated on `--oneshot`
+    /// *only*. Bolds those rows on top of the ones already in `@selected`:
+    /// a plain `em -p newpkg` bolds `newpkg` because dropping the `-p`
+    /// would add it to world, while `em -1p newpkg` leaves it plain.
     ///
     /// Notably *not* gated on `--pretend` (nor `--buildpkgonly`/`--fetchonly`/
     /// `--onlydeps`, which only suppress the on-disk write): a preview must
@@ -139,11 +139,10 @@ pub struct DepgraphOpts<'a> {
     pub autounmask_write: bool,
     /// `--ask`, already gated by the caller so it's only `true` for an
     /// interactive real merge (never `--pretend`, never a read-only query
-    /// command like `equery depgraph`). When USE changes are required and
-    /// `--autounmask-write` wasn't also given, this prompts to write them to
-    /// `package.use` instead — a deliberate divergence from real emerge,
-    /// which never offers this (only `--autounmask-write` does, non-
-    /// interactively).
+    /// command). When USE changes are required and `--autounmask-write`
+    /// wasn't also given, this prompts to write them to `package.use`
+    /// instead — a deliberate divergence from real emerge, which only
+    /// offers that non-interactively via `--autounmask-write`.
     pub ask: bool,
     pub autosolve_use: bool,
     /// The resolved root set (config / base / target / BROOT). See
@@ -169,10 +168,9 @@ pub struct DepgraphOpts<'a> {
     /// emerge's `--root-deps[=rdeps]`: only RDEPEND (not DEPEND) is required
     /// to be satisfiable in the merge target. Caller-supplied rather than
     /// auto-derived from cross-arch detection: it's a property of *which
-    /// operation* is running (`em crossdev --setup` bootstrapping a still-empty
-    /// target always needs it; `em stages --stage1` building ordinary packages
-    /// against an already-working toolchain should not), not of the sysroot's
-    /// CHOST/CBUILD alone.
+    /// operation* is running (`crossdev --setup` bootstrapping a
+    /// still-empty target always needs it; `stages --stage1` against a
+    /// working toolchain should not), not of CHOST/CBUILD alone.
     pub root_deps_rdeps: bool,
     /// `--deep`: re-examine transitive deps. With [`Self::update`], enables
     /// in-slot upgrades for packages in the graph (emerge `-uD`). Alone, bumps
@@ -198,27 +196,25 @@ pub struct DepgraphOpts<'a> {
     /// A transient conf-layer USE override for this resolve, e.g. `em stages
     /// --stage1`'s `USE="-* build ${BOOTSTRAP_USE}"` (catalyst's own
     /// recipe). Folded at the conf layer (after real `make.conf`, before
-    /// `package.use`/env), matching where catalyst actually places
-    /// `CATALYST_USE` — NOT the process environment, which would sit above
-    /// `package.use` and incorrectly wipe it. See
-    /// `portage_repo::build::profile::resolve_use_flags`'s
-    /// `extra_use_override` doc.
+    /// `package.use`/env) — NOT the process environment, which would sit
+    /// above `package.use` and incorrectly wipe it. See
+    /// `resolve_use_flags`'s `extra_use_override` doc.
     pub extra_use_override: Option<&'a str>,
     /// See `output::PrettyCtx::binpkg_index`'s doc — passed straight through
     /// to the `Pretty` printer so `-p` can show `[binary ...]`.
     pub binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
     /// `-X`/`--exclude`: package atoms to never install (emerge's own
     /// wording — "won't install any ebuild or binary package that matches
-    /// any of the given atoms"). Applied as a post-solve filter on `order`
-    /// (see the filter site below), before *any* consumer — the `-p`/
-    /// `--tree`/`--json` preview and the final `PlannedMerge` merge-loop
-    /// plan alike — is built from it, so every display and the actual merge
-    /// agree. Not integrated into the pubgrub solve itself: a deliberate,
-    /// documented simplification — if an excluded package is a genuine hard
-    /// dependency of something else still in the plan, that other
-    /// package's own preflight/build will fail with a clear
-    /// missing-dependency error rather than the solver reporting the
-    /// conflict up front the way real portage's backtracking search can.
+    /// any of the given atoms"). Applied as a post-solve filter on `order`,
+    /// before *any* consumer — the `-p`/`--tree`/`--json` preview and the
+    /// final `PlannedMerge` merge-loop plan alike — so every display and
+    /// the actual merge agree.
+    ///
+    /// Not integrated into the pubgrub solve itself: a deliberate
+    /// simplification — if an excluded package is a genuine hard dependency
+    /// of something else still in the plan, that other package's own
+    /// preflight/build fails with a clear missing-dependency error rather
+    /// than the solver reporting the conflict up front.
     pub exclude: &'a [String],
     /// Packages already finished in a prior attempt of a `-r`/`--resume`
     /// job (`maint::resume::completed_keys`). Dropped from `order` the same
@@ -227,12 +223,11 @@ pub struct DepgraphOpts<'a> {
     /// not a completion marker there). Empty for every non-resume call.
     pub resume_completed: HashSet<(MergeRoot, String)>,
     /// `--complete-graph`: when a deep update (`-uD`) moves a `~`-pinned
-    /// family (e.g. `llvm`/`clang`) but leaves a retained installed dependent
-    /// behind (`lldb`, whose pin the move now breaks), pull that dependent
-    /// into the plan too rather than stopping the chain halfway. Gated
-    /// behind an explicit flag because there is no emerge parity to validate
-    /// against and the policy can revert an upgrade a dependent has no
-    /// satisfying version for.
+    /// family but leaves a retained installed dependent behind (whose pin
+    /// the move now breaks), pull that dependent into the plan too rather
+    /// than stopping the chain halfway. Gated behind an explicit flag
+    /// because there is no emerge parity to validate against, and the
+    /// policy can revert an upgrade a dependent has no satisfying version for.
     pub complete_graph: bool,
 }
 
@@ -488,14 +483,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // multi-slot packages) computed once, up front, and reused by every
     // co-solve fixpoint iteration below instead of being recomputed on each
     // provider rebuild — see `build_slot_map`'s doc comment for why that
-    // recomputation is the single largest redundant cost in a per-iteration
-    // rebuild (~20k CPNs' worth of keyword/mask/license filtering, up to ~8x
-    // per invocation). Uses the pristine (pre-cosolve) `package_use`: license
-    // acceptance can in principle depend on `package_use` through a
-    // USE-conditional LICENSE expression, which *does* vary across
-    // iterations, so a package whose license acceptance flips because of a
-    // flag the fixpoint later cedes would see a stale slot entry here. That
-    // is PMS-legal but vanishingly rare in the real tree, and not worth
+    // recomputation is the single largest redundant cost per iteration.
+    //
+    // Uses the pristine (pre-cosolve) `package_use`: license acceptance can
+    // depend on `package_use` through a USE-conditional LICENSE expression,
+    // which *does* vary across iterations, so a package whose acceptance
+    // flips because of a flag the fixpoint later cedes would see a stale
+    // slot entry here. PMS-legal but vanishingly rare, not worth
     // recomputing the whole map every iteration to cover.
     let slot_map = build_slot_map(&repo::Adapter {
         data: &data,
@@ -546,18 +540,16 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 
     // Installed cpvs this run rebuilds anyway — Level-C's cede gate
     // (`repo::Adapter::rebuilding_cpvs`) treats these as build targets, not
-    // as "installed and staying installed" (see its doc comment for why
-    // that distinction matters — commit `b919014`). Mirrors the plan's own
-    // already-installed filter below: a non-selective explicit root target
-    // (reinstalled `[R]` at its installed version — e.g. `em stages
-    // --stage1`'s `packages.build` atoms) or a `-N`/`-U` USE-drift rebuild.
-    // Computed once, using the pristine `target_policy`/`package_use` — same
-    // accepted approximation `slot_map` above documents (a co-solve-ceded
-    // flag could in principle flip license acceptance and thus this
-    // decision, but that's PMS-legal-and-vanishingly-rare, not worth
-    // recomputing per iteration for). `--emptytree` needs no entry: its
-    // `installed_cpvs` is already empty (`solver_installed_cpvs` above), so
-    // cede already applies universally there.
+    // as "installed and staying installed" (see its doc comment for why).
+    // Mirrors the plan's own already-installed filter below: a
+    // non-selective explicit root target (reinstalled `[R]` at its
+    // installed version) or a `-N`/`-U` USE-drift rebuild.
+    //
+    // Computed once, using the pristine `target_policy`/`package_use` —
+    // same accepted approximation `slot_map` above documents, PMS-legal
+    // and vanishingly rare, not worth recomputing per iteration for.
+    // `--emptytree` needs no entry: its `installed_cpvs` is already empty,
+    // so cede already applies universally there.
     let mut rebuilding_installed_cpvs: std::collections::HashSet<Cpv> =
         std::collections::HashSet::new();
     if !emptytree_native {
@@ -1083,17 +1075,17 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 }
             }
 
-            // Native offset (same-arch `--root`/`--prefix`): schedule host build-copies
-            // — a target package's build edges (`DEPEND`/`BDEPEND`/`IDEPEND`) the host
-            // lacks are merged to BROOT (`/`) so the target can build against them
-            // (emerge lists these `to /` alongside the ROOT runtime copy). Computed as a
-            // post-solve walk over the finalized Target plan, not in the solver, to keep
-            // the Target solve pristine (the dual-root aliasing balloons it otherwise).
-            // `compute` returns the whole reordered plan (a no-op passthrough of
-            // `order` for every non-native-offset case, including the common one
-            // where nothing needs a host copy at all) — see its own doc comment for
-            // why each copy is interleaved in front of its first consumer during the
-            // walk, rather than spliced in as a separate, position-blind step.
+            // Native offset (same-arch `--root`/`--prefix`): schedule host
+            // build-copies — a target package's build edges the host lacks
+            // are merged to BROOT (`/`) so the target can build against
+            // them. Computed as a post-solve walk over the finalized
+            // Target plan, not in the solver, to keep the Target solve
+            // pristine (dual-root aliasing balloons it otherwise).
+            //
+            // `compute` returns the whole reordered plan (a no-op
+            // passthrough for every non-native-offset case) — see its own
+            // doc comment for why each copy is interleaved in front of its
+            // first consumer, rather than spliced in as a separate step.
             let host_copies_adapter = repo::Adapter {
                 data: &data,
                 accept_keywords: &accept_keywords,

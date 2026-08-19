@@ -30,21 +30,17 @@ pub fn open_with_masters(
 }
 
 /// The full priority-ordered [`RepoSet`] for this invocation: `main` plus
-/// every repo `roots.repos_conf()` returns — `repos.conf` overlays and
-/// legacy `PORTDIR_OVERLAY` directories alike, already merged and sorted
+/// every repo `roots.repos_conf()` returns, already merged and sorted
 /// ascending `(priority, name)` there — walked **descending** so a
-/// higher-priority repo's cpv wins a duplicate (real portage:
-/// `porttree.py`'s `findname2`/`xmatch` walk that order in reverse).
-/// Main's own priority comes from the same entry the path filter below
-/// matches against, already defaulted to `-1000` by `ReposConf` if unset.
+/// higher-priority repo's cpv wins a duplicate. `main`'s priority comes
+/// from the same entry the path filter below matches, defaulted to
+/// `-1000` by `ReposConf` if unset.
 ///
 /// `main` is always included, even with no path-matching entry (a symlink
 /// can break that match) — falls back to priority `-1000` here too. Each
-/// overlay's masters resolve, in order: its own entry (repos.conf-declared
-/// only — a `PORTDIR_OVERLAY` entry never has one), else its own
-/// `metadata/layout.conf`, else `main` — matching real portage's fallback
-/// to `mainRepo()` when a repo declares masters nowhere at all. A repo
-/// that fails to open is reported and skipped, not fatal.
+/// overlay's masters resolve, in order: its own entry (a `PORTDIR_OVERLAY`
+/// entry never has one), else its own `metadata/layout.conf`, else `main`.
+/// A repo that fails to open is reported and skipped, not fatal.
 pub fn repo_set_from_conf(
     main: Repository,
     roots: &portage_resolve::Roots,
@@ -176,14 +172,14 @@ mod tests {
         );
     }
 
-    /// Multiple `PORTDIR_OVERLAY` entries get ascending priority `0, 1, ...`
-    /// by listed order, not by name: the *second*-listed entry here has a
-    /// name that sorts alphabetically *before* the first-listed one, so a
-    /// name-only tie-break would pick the wrong winner. It must still win,
-    /// because listed order gives it the higher priority (`1` vs `0`) —
-    /// and that priority must also outrank a `repos.conf` overlay sharing
-    /// the same default-`0` priority, proving the two sources feed one
-    /// merged sort rather than `PORTDIR_OVERLAY` always trailing.
+    // Multiple `PORTDIR_OVERLAY` entries get ascending priority `0, 1, ...`
+    // by listed order, not by name: the *second*-listed entry here has a
+    // name that sorts alphabetically *before* the first-listed one, so a
+    // name-only tie-break would pick the wrong winner. It must still win,
+    // because listed order gives it the higher priority (`1` vs `0`) —
+    // and that priority must also outrank a `repos.conf` overlay sharing
+    // the same default-`0` priority, proving the two sources feed one
+    // merged sort rather than `PORTDIR_OVERLAY` always trailing.
     #[test]
     fn portdir_overlay_ascending_priority_follows_listed_order_not_name() {
         let root = tempfile::tempdir().unwrap();

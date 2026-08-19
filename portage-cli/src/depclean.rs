@@ -40,10 +40,8 @@ use crate::vdb::open_cli_vdb;
 /// Evaluate `pkg`'s own `RDEPEND`/`PDEPEND` (+ `DEPEND`/`BDEPEND` under
 /// `with_bdeps`) against its own recorded `USE`, returning concrete,
 /// non-blocker atoms. `UseConditional`s are resolved by
-/// `DepEntry::evaluate_use`, matching the same convention
-/// `bdepend_avail.rs`'s consumers already rely on (see that module's
-/// `collect_unsatisfied` doc: "UseConditionals are assumed already
-/// resolved by evaluate_use").
+/// `DepEntry::evaluate_use`, matching the convention
+/// `bdepend_avail.rs`'s `collect_unsatisfied` already relies on.
 fn own_atoms(pkg: &InstalledPackage, with_bdeps: bool) -> Vec<Dep> {
     let use_set: HashSet<Interned<DefaultInterner>> = pkg
         .use_flags()
@@ -105,10 +103,9 @@ fn matching<'a>(
 /// Everything reachable from `world_atoms` (+ `exclude_atoms`), walking
 /// the *installed* dependency graph only. When `target_atoms` is
 /// non-empty, every installed package not matching one of them is folded
-/// into the reachable set unconditionally first (real portage's
-/// `args_set`/`protected_set`: narrows candidates to the given atoms
-/// without treating anything else as fair game). Returns the packages
-/// installed but never reached — the depclean candidates.
+/// into the reachable set first (real portage's `args_set`/`protected_set`:
+/// narrows candidates without treating anything else as fair game).
+/// Returns the packages installed but never reached.
 fn compute_cleanlist(
     installed: &[InstalledPackage],
     world_atoms: &[Dep],
@@ -160,12 +157,11 @@ fn compute_cleanlist(
 
 /// Safe removal order within `cleanlist`: a dependent (something in
 /// `cleanlist` that depends on another `cleanlist` member) is ordered
-/// before the dependency it needs, via a Kahn's-algorithm topological
-/// sort — so removing one package never transiently leaves another,
-/// still-being-removed package logically missing something mid-run. Any
-/// leftover from a genuine dependency cycle within `cleanlist` (rare) is
-/// appended in original order — safe either way, since preserve-libs
-/// still protects any file still physically needed regardless of order.
+/// before the dependency it needs, via a Kahn's-algorithm topological sort.
+///
+/// Any leftover from a genuine dependency cycle within `cleanlist` (rare) is
+/// appended in original order — safe either way, since preserve-libs still
+/// protects any file still physically needed regardless of order.
 fn removal_order(cleanlist: &[InstalledPackage], with_bdeps: bool) -> Vec<InstalledPackage> {
     let by_cpv: HashMap<Cpv, InstalledPackage> = cleanlist
         .iter()

@@ -272,15 +272,14 @@ fn fix_atoms(glsa: &Glsa, installed: &[(Cpv, SlotName)], arch: &str) -> Vec<Stri
 
 /// The `@security` set: the union of every applicable GLSA's fix atoms.
 ///
-/// Mirrors real portage's `SecuritySet`/`NewAffectedSet`
-/// (`portage/_sets/security.py:SecuritySet.load`): for each GLSA the repo
-/// ships, if the system is vulnerable to it and it hasn't been marked applied
-/// (`glsa_injected`), collect its merge list. Returns `>=cat/pkg-ver` atoms
-/// (from [`fix_atoms`]) rather than real portage's `=`-prefixed
-/// `getMergeList` output — the solver still lands on a non-vulnerable version
-/// (typically the same one for the common single-`<unaffected>` case), and
-/// `>=` is robust to two GLSAs pinning different versions of the same package
-/// without needing portage's `_reduce` highest-wins dedup.
+/// Mirrors real portage's `SecuritySet`/`NewAffectedSet`: for each GLSA the
+/// repo ships, if the system is vulnerable to it and it hasn't been marked
+/// applied (`glsa_injected`), collect its merge list.
+///
+/// Returns `>=cat/pkg-ver` atoms (from [`fix_atoms`]) rather than real
+/// portage's `=`-prefixed `getMergeList` output — the solver still lands on
+/// a non-vulnerable version, and `>=` is robust to two GLSAs pinning
+/// different versions of the same package without needing a dedup pass.
 pub(crate) fn security_atoms(
     repo_path: &Utf8Path,
     installed: &[(Cpv, SlotName)],

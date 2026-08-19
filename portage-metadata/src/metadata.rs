@@ -67,11 +67,9 @@ where
     ///
     /// A [`DepList`]: this metadata is re-converted into the solver's own
     /// dependency-tree representation on every USE-dep co-solve fixpoint
-    /// iteration (up to ~8x per invocation, see
-    /// `portage_atom_pubgrub::repository::PackageDeps`), and cloning a
-    /// firefox-class package's hundreds of parsed atoms on every one of
-    /// those was a measured, real cost — `DepList`'s `Arc` clone is a
-    /// refcount bump instead of a deep copy.
+    /// iteration (up to ~8x per invocation), and cloning a firefox-class
+    /// package's hundreds of parsed atoms every time was a measured, real
+    /// cost — `DepList`'s `Arc` clone is a refcount bump instead.
     ///
     /// See [PMS 8.1](https://projects.gentoo.org/pms/9/pms.html#dependency-classes).
     pub depend: DepList,

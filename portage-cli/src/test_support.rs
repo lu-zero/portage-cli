@@ -8,22 +8,15 @@ use std::sync::Mutex;
 /// var against any *other* test that reads it — directly, or indirectly by
 /// spawning an external tool (`tar`/`zstd`/…) that resolves itself via a
 /// `PATH` lookup. Env vars are per-process, not per-thread, so a plain
-/// save/restore in one test module isn't enough once another module's test
-/// touches `PATH` too; every test on either side of the mutation must
-/// acquire this same lock.
+/// save/restore in one test module isn't enough; every test on either side
+/// of the mutation must acquire this same lock.
 ///
-/// synthetic, deliberately tool-free directory list to exercise "no backend
-/// reachable" (replacing, not prepending, since a real `pkg-config` on the
-/// host/CI machine's ambient `PATH` would otherwise still be found and
-/// falsify that exact case). While that window is open,
-/// `quickpkg::tests::package_one_builds_gpkg_from_vdb_and_root` spawning
-/// `tar` via `portage_binpkg::write_gpkg` failed with a bare ENOENT — not a
-/// flaky/theoretical race, a real, consistently-reproducing CI failure
-/// (`cargo test --workspace`'s default parallel harness) traced back to
-/// this exact PATH-clobbering window, 2026-07-20 — and again in
-/// `postprocess::tests` (`compresses_man_pages_and_retargets_symlinks`,
-/// `docompress_exclude_is_honored`, `strips_only_in_dostrip_scope`), whose
-/// `post_process_image` spawns `bzip2`/`strip` the same way.
+/// Found live: `select::pkgconf`'s tests temporarily replace `PATH` with a
+/// synthetic, tool-free directory list to exercise "no backend reachable".
+/// While that window is open, `quickpkg::tests` spawning `tar` (and
+/// `postprocess::tests` spawning `bzip2`/`strip`) failed with a bare
+/// ENOENT — a real, consistently-reproducing CI failure (2026-07-20)
+/// traced back to this exact PATH-clobbering window.
 static PATH_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire [`PATH_LOCK`] for the duration of a test that either mutates
@@ -36,17 +29,15 @@ pub(crate) fn path_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Same rationale as [`PATH_LOCK`], for tests that mutate the process-wide
-/// `HOME` env var (e.g. `--local`'s `~/.gentoo` derivation) **or** read it
-/// indirectly — real `git`/`gix` operations consult `$HOME/.gitconfig` for
-/// config layering even when the calling code never touches `HOME` itself,
-/// so `maint::sync::git_gix`'s and `gix_ext::reset`'s tests hold this too,
-/// not just [`PATH_LOCK`]. (Investigated as the cause of a 2026-08-10
-/// Coverage-CI-only `git_gix`/`gix_ext::reset` failure — it wasn't; that
-/// turned out to be [`set_test_git_identity`]'s problem, a deterministic
-/// missing-identity error, not a race. Kept here anyway: a concurrent
-/// `set_var("HOME", ..)` from `active.rs`/`cli.rs`'s tests — a *different*
-/// mutex from `PATH_LOCK` — racing a gix call reading `$HOME` is still a
-/// real, if not-yet-observed, hazard.)
+/// `HOME` env var **or** read it indirectly — real `git`/`gix` operations
+/// consult `$HOME/.gitconfig` even when the calling code never touches
+/// `HOME` itself, so `maint::sync::git_gix`'s and `gix_ext::reset`'s tests
+/// hold this too, not just [`PATH_LOCK`].
+///
+/// Investigated as the cause of a 2026-08-10 Coverage-CI-only failure — it
+/// wasn't (that was [`set_test_git_identity`]'s problem, a deterministic
+/// missing-identity error). Kept anyway: a concurrent `set_var("HOME", ..)`
+/// racing a gix call reading `$HOME` is still a real, if unobserved, hazard.
 static HOME_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire [`HOME_LOCK`] for the duration of a test that mutates `HOME`, or

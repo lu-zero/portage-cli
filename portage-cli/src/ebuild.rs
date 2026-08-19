@@ -183,17 +183,15 @@ pub struct RootContext<'a> {
     pub broot: Option<&'a Utf8Path>,
     /// The native toolchain bootstrap (`em toolchain --setup`) is
     /// unconditionally self-contained regardless of `--root`/`--prefix`
-    /// topology (mirrors `Roots::installed_view_target_only`, the same
-    /// signal for the same reason) — it must not source the `--prefix`
-    /// overlay's config-overlay `bashrc`. That recipe's `CPPFLAGS="-I<prefix>/
-    /// usr/include ..."` is right for an ordinary package layered over an
-    /// already-populated prefix (finds already-installed headers ahead of
-    /// the host's), but for THIS bootstrap it lands ahead of a package's own
-    /// project-local `-I` flags and can shadow a version-matched local header
-    /// with an incompatible one from the freshly-installed target libc —
-    /// build under `--prefix` (the exact same class of bug already fixed for
-    /// `--root` on 2026-07-03, see `setup.rs`'s `BASHRC_PREFIX`/`self_contained`
-    /// doc comment).
+    /// topology — it must not source the `--prefix` overlay's
+    /// config-overlay `bashrc`.
+    ///
+    /// That recipe's `CPPFLAGS="-I<prefix>/usr/include ..."` is right for an
+    /// ordinary package layered over an already-populated prefix, but for
+    /// THIS bootstrap it can shadow a version-matched local header with an
+    /// incompatible one from the freshly-installed target libc — the same
+    /// class of bug already fixed for `--root` on 2026-07-03 (see
+    /// `setup.rs`'s `BASHRC_PREFIX`/`self_contained`).
     pub self_contained_bootstrap: bool,
     /// Directories ahead of the sanitised phase `PATH`
     /// ([`portage_repo::phase_path_dirs`]), resolved by the caller. Empty for
@@ -398,12 +396,13 @@ pub struct BuildAndMerge<'a> {
     /// `-B`/`--buildpkgonly`: package the image, never qmerge it. Checked
     /// first and unconditionally single-process — there's no install into
     /// the live ROOT/VDB to delegate to a privilege-wrapped worker, so the
-    /// Q6 compile/install split this function otherwise does has nothing to
-    /// scope around (an unprivileged run is instead wrapped whole by
-    /// `maybe_supervise`, see `needs_whole_process_wrap`). `buildpkg` is
-    /// forced `true` for the `run_inner` call below regardless of the
-    /// caller's own `-b`: producing the binpkg is the entire point of `-B`,
-    /// not a separate opt-in on top of it.
+    /// compile/install split this function otherwise does has nothing to
+    /// scope around (an unprivileged run is wrapped whole instead, see
+    /// `needs_whole_process_wrap`).
+    ///
+    /// `buildpkg` is forced `true` for the `run_inner` call below regardless
+    /// of the caller's own `-b`: producing the binpkg is the entire point of
+    /// `-B`, not a separate opt-in on top of it.
     pub buildpkgonly: bool,
     /// `-f`/`--fetchonly`: download distfiles only (wins over `-b`/`-B`).
     pub fetchonly: bool,
@@ -1510,10 +1509,11 @@ async fn lock_builddir(work_dir: &Utf8Path) -> Option<std::fs::File> {
 /// Build the ecompress/estrip configuration from the post-`src_install`
 /// shell state (docompress/dostrip accumulators, FEATURES, RESTRICT,
 /// PORTAGE_COMPRESS) and run the image post-processing pass.
+///
 /// The image subtree that gets post-processed and merged: the shell's `ED`
 /// (`image/${EPREFIX}`, set by `init_build_env`), falling back to
-/// `work_root/image` when `ED` is unset or empty. With `EPREFIX=""` this is the
-/// plain image dir, so host / `--prefix` builds are unchanged.
+/// `work_root/image` when `ED` is unset or empty. With `EPREFIX=""` this is
+/// the plain image dir, so host / `--prefix` builds are unchanged.
 fn ed_image_dir(shell: &portage_repo::EbuildShell, work_root: &Utf8Path) -> Utf8PathBuf {
     shell
         .get_var("ED")
@@ -1543,13 +1543,13 @@ fn build_binpkg(
 }
 
 /// `-B`/`--buildpkgonly`: package the image without ever touching the live
-/// ROOT/VDB. Matches real portage's own model (`EbuildBuild.py`): it never
-/// calls `merge()` for `-B` either, packaging straight from `${D}` instead.
-/// Computes CONTENTS/metadata the exact same way a normal merge would --
-/// `walk_image` + `Vdb::register` -- just pointed at scratch locations
-/// under `work_root/temp` (already covered by the existing tree-drop
-/// cleanup) rather than the real root and the real VDB, which are
-/// genuinely never written to at any point.
+/// ROOT/VDB. Matches real portage's own model: it never calls `merge()` for
+/// `-B` either, packaging straight from `${D}` instead.
+///
+/// Computes CONTENTS/metadata the exact same way a normal merge would —
+/// `walk_image` + `Vdb::register` — just pointed at scratch locations under
+/// `work_root/temp` rather than the real root and VDB, which are never
+/// written to at any point.
 async fn build_binpkg_standalone(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
@@ -1685,12 +1685,13 @@ fn write_binpkg(
 
 /// Resolve `BINPKG_GPG_SIGNING_KEY` (+ `_GPG_HOME`/`_DIGEST`/passphrase
 /// vars) into a loaded [`portage_binpkg::gpg::SigningKey`] for
-/// `FEATURES=binpkg-signing`. `BINPKG_GPG_SIGNING_KEY` is **redefined**
-/// here vs real portage: a path to an armored secret-key file, not a gpg
-/// keyring key-ID — this project has no gpg-agent/pinentry to resolve a
-/// keyring ID against (see `portage_binpkg::gpg`'s module doc). A relative
-/// path resolves against `BINPKG_GPG_SIGNING_GPG_HOME`, defaulting to
-/// `<root>/etc/portage/gnupg`.
+/// `FEATURES=binpkg-signing`. **Redefined** here vs real portage: a path to
+/// an armored secret-key file, not a gpg keyring key-ID — this project has
+/// no gpg-agent/pinentry to resolve a keyring ID against (see
+/// `portage_binpkg::gpg`'s module doc).
+///
+/// A relative path resolves against `BINPKG_GPG_SIGNING_GPG_HOME`,
+/// defaulting to `<root>/etc/portage/gnupg`.
 fn resolve_binpkg_signing_key(
     shell: &portage_repo::EbuildShell,
     root: &Utf8Path,
@@ -1927,19 +1928,17 @@ async fn run_fetch(
 
     let results = fetcher.fetch_all(&distfiles, &manifest).await;
 
-    // A SRC_URI naming the same file more than once (e.g. sys-devel/binutils'
-    // mirror://gnu/... and https://sourceware.org/... both resolving to
-    // binutils-${PV}.tar.xz) currently produces one `Distfile`/result per URI,
-    // not per filename (a separate, pre-existing bug in
-    // `DistfileResolver::resolve`/`resolve_all`, not fixed here — see
+    // A SRC_URI naming the same file more than once currently produces one
+    // `Distfile`/result per URI, not per filename (a separate, pre-existing
+    // bug in `DistfileResolver::resolve`/`resolve_all`, not fixed here — see
     // `resolve_uri_map`'s own doc comment). Render each filename's outcome
     // once rather than once per underlying URI.
-    // Real portage's own fetch check reports each distfile via `ebegin`/`eend`
-    // (`eout.ebegin(f"{file} size ;-)"); eout.eend(0)`) — a colored `" * "`
-    // line ending in a right-aligned `"[ ok ]"`/`"[ !! ]"` bracket, not a log
-    // line. `crate::style::estatus_line` renders that same shape (see its own
-    // doc comment for why this can print it in one shot instead of real
-    // portage's separate begin-now/finish-later calls).
+    //
+    // Real portage's own fetch check reports each distfile via `ebegin`/
+    // `eend` — a colored `" * "` line ending in a right-aligned `"[ ok ]"`/
+    // `"[ !! ]"` bracket, not a log line. `crate::style::estatus_line`
+    // renders that same shape in one shot instead of real portage's
+    // separate begin-now/finish-later calls (see its own doc comment).
     let width = crate::style::term_width();
     let ansi = crate::diag::stderr_wants_color();
     let mut seen = std::collections::HashSet::new();
@@ -2906,12 +2905,13 @@ fn walk_image(
 }
 
 /// Set the merged path's owner to the image entry's uid/gid (`lchown`, so a
-/// symlink's own ownership is set, not its target). Succeeds as real root and
-/// under a fake root (fakeroost records the intended owner); a genuinely
-/// unprivileged merge can't set foreign ownership, so the error is ignored and
-/// the file keeps the build user — portage's unprivileged behaviour. portage
-/// preserves image ownership on merge; em did not, so even a *root* install left
-/// non-root-owned files (`acct-user/*` dirs) owned by the invoking user.
+/// symlink's own ownership is set, not its target). Succeeds as real root
+/// and under a fake root (fakeroost records the intended owner); an
+/// unprivileged merge can't set foreign ownership, so the error is ignored
+/// and the file keeps the build user (portage's own behaviour).
+///
+/// em previously left even a *root* install with `acct-user/*` dirs owned
+/// by the invoking user.
 fn preserve_owner(path: &Utf8Path, meta: &std::fs::Metadata) {
     use std::os::unix::fs::MetadataExt;
     let _ = std::os::unix::fs::lchown(path.as_std_path(), Some(meta.uid()), Some(meta.gid()));
@@ -2935,13 +2935,14 @@ async fn capture_environment(
     Ok(filter_declare_dump(&text).into_bytes())
 }
 
-/// Variables-only dump for the Compile→Install worker handoff. Deliberately no
-/// `declare -f`: the worker re-sources the ebuild (which defines every
-/// ebuild/eclass function), and brush's function printer does not round-trip
+/// Variables-only dump for the Compile→Install worker handoff. Deliberately
+/// no `declare -f`: the worker re-sources the ebuild (defining every
+/// ebuild/eclass function), and brush's function printer doesn't round-trip
 /// heredoc bodies (the indented `<<-EOF` delimiter never terminates), which
-/// would make the whole dump unparseable. Readonly declares are dropped —
-/// re-declaring them in the worker only produces "cannot mutate readonly
-/// variable" noise (portage's env restore filters them the same way).
+/// would make the whole dump unparseable.
+///
+/// Readonly declares are dropped too (re-declaring them in the worker only
+/// produces "cannot mutate readonly variable" noise).
 ///
 /// Also drops bash's own dynamic/special variables (`PIPESTATUS`,
 /// `FUNCNAME`, …): `declare -p` prints them like any other variable, but

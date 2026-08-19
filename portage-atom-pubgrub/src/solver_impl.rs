@@ -173,10 +173,9 @@ impl PortageDependencyProvider {
     /// Expand a solver [`TargetSpec`] into the PubGrub `(package, version-set)`
     /// targets to feed `resolve_targets`. A slot-pinned spec maps to that one
     /// slotted node; a slotless spec expands to every real slot node the
-    /// provider holds for the CPN (matching how the bench feeds
-    /// `packages_for_cpn`), since the solver keys nodes by `(cpn, slot)` and has
-    /// no slotless "any slot" node. Consumers that need a single slot pin it in
-    /// the `TargetSpec` (the CLI does, via keyword/mask-aware slot selection).
+    /// provider holds for the CPN, since the solver keys nodes by `(cpn,
+    /// slot)` and has no slotless "any slot" node. Consumers that need a
+    /// single slot pin it in the `TargetSpec` (keyword/mask-aware selection).
     fn to_portage_targets(&self, spec: &TargetSpec) -> Vec<(PortagePackage, PortageVersionSet)> {
         let vs = match (spec.op, &spec.version) {
             (Some(op), Some(v)) => PortageVersionSet::from_operator(op, spec.glob, v.clone()),

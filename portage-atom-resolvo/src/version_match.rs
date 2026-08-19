@@ -2,27 +2,23 @@
 //!
 //! Implements [PMS 8.3.2](https://projects.gentoo.org/pms/9/pms.html#block-operator):
 //! given a candidate version, an operator, and a constraint version, determine
-//! whether the candidate satisfies the constraint.
+//! whether the candidate satisfies the constraint. See [`version_matches`]
+//! for the operator table and the glob (`=cat/pkg-1.2*`) special case.
 
 use portage_atom::{Operator, Version};
 
-/// Test whether `candidate` satisfies the version constraint `op constraint`.
-///
-/// # Operators
+/// Test whether `candidate` satisfies the version constraint `op constraint`
+/// ([PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#operators)):
 ///
 /// | Operator | Meaning |
 /// |----------|---------|
-/// | `<`  | candidate is strictly less than constraint |
-/// | `<=` | candidate is less than or equal to constraint |
-/// | `=`  | candidate is exactly equal to constraint (including revision) |
-/// | `>=` | candidate is greater than or equal to constraint |
-/// | `>`  | candidate is strictly greater than constraint |
-/// | `~`  | candidate has the same base version, ignoring revision |
+/// | `<` / `<=` | strictly less / less-or-equal than constraint |
+/// | `=` | exactly equal to constraint (including revision) |
+/// | `>=` / `>` | greater-or-equal / strictly greater than constraint |
+/// | `~` | same base version as constraint, ignoring revision |
 ///
-/// When `constraint.glob` is `true` (i.e. the `=cat/pkg-1.2*` form), the `=`
-/// operator performs prefix matching via [`Version::glob_matches`].
-///
-/// See [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#operators).
+/// When `constraint.glob` is `true` (the `=cat/pkg-1.2*` form), `=` performs
+/// prefix matching via [`Version::glob_matches`] instead of equality.
 pub fn version_matches(
     candidate: &Version,
     op: &Operator,

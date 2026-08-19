@@ -177,13 +177,13 @@ mod tests {
     use crate::cli::Cli;
     use clap::Parser;
 
-    /// `em select`'s config-root resolution deliberately does NOT infer a
-    /// config root from bare `--root` (matching real eselect, which only
-    /// ever honours an explicit `PORTAGE_CONFIGROOT`/`EROOT` — see
-    /// `select/mod.rs::config_portage_dir_for`'s doc comment) — so reading
-    /// a self-contained root's own gcc slot requires `--config-root`
-    /// alongside `--root`, exactly like a user would need to point real
-    /// eselect at it explicitly.
+    // `em select`'s config-root resolution deliberately does NOT infer a
+    // config root from bare `--root` (matching real eselect, which only
+    // ever honours an explicit `PORTAGE_CONFIGROOT`/`EROOT` — see
+    // `select/mod.rs::config_portage_dir_for`'s doc comment) — so reading
+    // a self-contained root's own gcc slot requires `--config-root`
+    // alongside `--root`, exactly like a user would need to point real
+    // eselect at it explicitly.
     #[test]
     fn current_slot_reads_the_active_gcc_config_profile() {
         let dir = tempfile::tempdir().unwrap();
@@ -205,13 +205,13 @@ mod tests {
         assert_eq!(current_slot(&cli.roots(), target), Some("15".to_string()));
     }
 
-    /// Without `--config-root`, a bare `--root` must NOT silently pick up
-    /// the offset's own env.d — `em select` only follows an explicit
-    /// config root, never `--root` alone (see the test above's doc
-    /// comment). Verified via the `is_self_contained_root`-aware internal
-    /// override instead of the real host's `/etc/env.d/gcc`, so this stays
-    /// deterministic in CI regardless of what's activated on the machine
-    /// running the test.
+    // Without `--config-root`, a bare `--root` must NOT silently pick up
+    // the offset's own env.d — `em select` only follows an explicit
+    // config root, never `--root` alone (see the test above's doc
+    // comment). Verified via the `is_self_contained_root`-aware internal
+    // override instead of the real host's `/etc/env.d/gcc`, so this stays
+    // deterministic in CI regardless of what's activated on the machine
+    // running the test.
     #[test]
     fn current_slot_ignores_bare_root_without_explicit_config_root() {
         let dir = tempfile::tempdir().unwrap();

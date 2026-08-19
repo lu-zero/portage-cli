@@ -147,23 +147,19 @@ pub fn compute(
 /// Recurse into `pkg`'s unsatisfied-on-host `DEPEND`/`BDEPEND`/`IDEPEND`
 /// edges, appending each resolved host copy to `order` only *after* its own
 /// edges have been visited — deps-first, so a copy never lands before
-/// something it needs. Called just before `pkg` itself is pushed to `order`
-/// by the caller (see the `compute` function), so every copy discovered here also ends
-/// up immediately before `pkg` — its first (and closure-wide, since already-
-/// resolved copies are never revisited) consumer.
+/// something it needs. Called just before `pkg` itself is pushed to
+/// `order`, so every copy discovered here also ends up immediately before
+/// `pkg` — its first (and closure-wide) consumer.
 ///
-/// `top_level` is `true` only for the direct per-Target-package calls from
-/// the `compute` function, not for edges discovered by recursing into an already-found
-/// copy's own edges. Under `cross.active`, the solver's own dual-root
-/// expansion (`append_unsatisfied_broot` in `portage-atom-pubgrub`) should
-/// already schedule a `MergeRoot::Host` node for every built Target
-/// package's unsatisfied BDEPEND/IDEPEND edge — so a *top-level* BDEPEND/
-/// IDEPEND gap reaching here means this walk's `Avail` view and the
-/// solver's own `host_installed` view disagreed, or a post-solve trim
-/// dropped a needed `@host` entry: worth surfacing. A copy's own
-/// recursed-into edges never trigger this: those packages never went
-/// through the solver,
-/// nothing else schedules their build deps.
+/// `top_level` is `true` only for direct per-Target-package calls, not
+/// edges found recursing into an already-found copy. Under `cross.active`
+/// the solver's dual-root expansion should already schedule every
+/// unsatisfied BDEPEND/IDEPEND edge, so a *top-level* gap here means this
+/// walk's `Avail` view and the solver's disagreed, or a post-solve trim
+/// dropped a needed `@host` entry: worth surfacing.
+///
+/// A copy's own recursed-into edges never trigger this — those packages
+/// never went through the solver, nothing else schedules their build deps.
 fn visit_unsatisfied(
     ctx: &Ctx<'_>,
     walk: &mut Walk,
@@ -269,14 +265,14 @@ mod tests {
         root_aware::detect(roots, roots.merge_root())
     }
 
-    /// Regression test for the `5989eb1` fix (the `dev-perl/Digest-HMAC`
-    /// duplicate-plan-entry incident): when
-    /// the solver's own dual-root expansion has already scheduled a
-    /// `MergeRoot::Host` node for a CPN (simulating crossdev's host-arch
-    /// tools), `compute` must not re-derive or duplicate it. Before that fix
-    /// this produced a second, independently-versioned, anti-topologically
-    /// ordered copy; this pins the seeding behavior that stops it, which had
-    /// no test of its own — the fix was verified live only.
+    // Regression test for the `5989eb1` fix (the `dev-perl/Digest-HMAC`
+    // duplicate-plan-entry incident): when
+    // the solver's own dual-root expansion has already scheduled a
+    // `MergeRoot::Host` node for a CPN (simulating crossdev's host-arch
+    // tools), `compute` must not re-derive or duplicate it. Before that fix
+    // this produced a second, independently-versioned, anti-topologically
+    // ordered copy; this pins the seeding behavior that stops it, which had
+    // no test of its own — the fix was verified live only.
     #[test]
     fn does_not_duplicate_a_solver_seeded_host_entry() {
         let data = repo_from(&[
@@ -432,13 +428,13 @@ mod tests {
         );
     }
 
-    /// Regression test for a second forward-reference variant found in
-    /// review: two *different* Target entries share a host build-copy
-    /// dependency chain (`t2 -> libb -> liba`, `t1 -> liba` directly). `liba`
-    /// is resolved once (while visiting `t1`) and must not be re-derived for
-    /// `t2` — but `libb` (discovered later, under `t2`) still depends on it,
-    /// and must land after it despite `liba` no longer being "unsatisfied"
-    /// (it's already recorded as available) by the time `libb` is visited.
+    // Regression test for a second forward-reference variant found in
+    // review: two *different* Target entries share a host build-copy
+    // dependency chain (`t2 -> libb -> liba`, `t1 -> liba` directly). `liba`
+    // is resolved once (while visiting `t1`) and must not be re-derived for
+    // `t2` — but `libb` (discovered later, under `t2`) still depends on it,
+    // and must land after it despite `liba` no longer being "unsatisfied"
+    // (it's already recorded as available) by the time `libb` is visited.
     #[test]
     fn a_later_consumers_copy_still_lands_after_an_earlier_consumers_shared_dep() {
         let data = repo_from(&[

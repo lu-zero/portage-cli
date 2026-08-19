@@ -517,13 +517,13 @@ mod tests {
         assert_eq!(profiles_by_target.values().map(Vec::len).sum::<usize>(), 1);
     }
 
-    /// `activate_latest`/the list-display sorts used to pick "newest" by
-    /// plain `str::cmp`, which prefers `"...-9"` over `"...-13"` byte-wise
-    /// (`'9' > '1'`) -- a real bug for GCC once a build spans a single- to
-    /// double-digit major version bump (a documented bootstrap scenario in
-    /// this codebase: an older bootstrap compiler and the final one can
-    /// coexist in the same root). Fixed by comparing the trailing version
-    /// with `portage_atom::Version` instead.
+    // `activate_latest`/the list-display sorts used to pick "newest" by
+    // plain `str::cmp`, which prefers `"...-9"` over `"...-13"` byte-wise
+    // (`'9' > '1'`) -- a real bug for GCC once a build spans a single- to
+    // double-digit major version bump (a documented bootstrap scenario in
+    // this codebase: an older bootstrap compiler and the final one can
+    // coexist in the same root). Fixed by comparing the trailing version
+    // with `portage_atom::Version` instead.
     #[test]
     fn compare_profile_names_is_version_aware_across_a_digit_boundary() {
         use std::cmp::Ordering;

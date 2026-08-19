@@ -212,14 +212,12 @@ impl KeywordAccept {
     /// Whether the package is accepted on a *stable* keyword path (gates
     /// profile `use.stable.{force,mask}`).
     ///
-    /// Portage's `isStable` (`KeywordsManager.py`): accepted, AND *still*
-    /// accepted after downgrading every stable package keyword to testing.
-    /// If the downgraded set is still accepted, the accept set's own testing
-    /// grant is what's really pulling the package in — nothing is being
-    /// "forced" by stability, so it isn't stable for `use.stable.*` purposes.
-    /// Concretely: `ACCEPT_KEYWORDS="arm64 ~arm64"` with `KEYWORDS="arm64"`
-    /// is **not** stable (the `~arm64` grant alone already accepts it) — the
-    /// opposite of what an earlier version of this comment claimed.
+    /// Portage's `isStable`: accepted, AND *still* accepted after
+    /// downgrading every stable package keyword to testing — if so, the
+    /// accept set's own testing grant is what's really pulling the package
+    /// in, nothing is "forced" by stability. `ACCEPT_KEYWORDS="arm64
+    /// ~arm64"` with `KEYWORDS="arm64"` is **not** stable this way (the
+    /// `~arm64` grant alone already accepts it).
     fn is_stable_for(&self, keywords: &[Keyword]) -> bool {
         self.accepts_inner(keywords, false) && !self.accepts_inner(keywords, true)
     }
@@ -688,12 +686,10 @@ pub struct RepoData {
     pub repo_of: HashMap<Cpv, String>,
     /// Cross-derivation reverse map: `cross-<tuple>/<pkg>` → real `<cat>/<pkg>`.
     /// Populated by `load_repos` from `Location::Alias` entries; empty for
-    /// non-cross solves. Used by `PlannedMerge.ebuild_path` construction
-    /// (`mod.rs`) to find the real on-disk file for a derived cross cpv — but
-    /// that's only half of the merge-path decoupling. `Ebuild::from_path`
-    /// still re-derives CATEGORY from that real path's text, which loses the
-    /// cross category on an actual merge — this should be resolved before
-    /// wiring a real producer of `Location::Alias` entries.
+    /// non-cross solves. Used by `PlannedMerge.ebuild_path` to find the real
+    /// on-disk file for a derived cross cpv — but `Ebuild::from_path` still
+    /// re-derives CATEGORY from that path's text, losing the cross category
+    /// on an actual merge; resolve before wiring a real `Location::Alias` producer.
     pub real_cpn_of: HashMap<Cpn, Cpn>,
 }
 
@@ -705,16 +701,15 @@ pub fn repo_name_of<'a>(data: &'a RepoData, cpv: &Cpv) -> &'a str {
 }
 
 /// The resolved keyword/mask/license/USE policy, shared by every version
-/// filter and USE-config computation (the `effective_use_config` function,
-/// the `license_ok_for` function, `target_package`, `find_autounmask_candidates`,
-/// and `download_size::compute`) so each takes one reference instead of
+/// filter and USE-config computation so each takes one reference instead of
 /// re-listing the same fields. The solver-specific remainder of [`Adapter`]
 /// (`data`, `installed_cpvs`, `autosolve_use`) isn't part of this — those
-/// three vary by call site in ways this shared policy doesn't. `Copy` so a
-/// caller can build one base value and override just `package_use` per call
-/// site (it's the one field that legitimately varies mid-resolution, e.g.
-/// across a Level-C co-solve fixpoint) via `ResolvePolicy { package_use: X,
-/// ..base }`.
+/// vary by call site in ways this shared policy doesn't.
+///
+/// `Copy` so a caller can build one base value and override just
+/// `package_use` per call site (the one field that legitimately varies
+/// mid-resolution, e.g. across a Level-C co-solve fixpoint) via
+/// `ResolvePolicy { package_use: X, ..base }`.
 #[derive(Clone, Copy)]
 pub struct ResolvePolicy<'a> {
     /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision.
@@ -781,23 +776,20 @@ pub struct Adapter<'a> {
     /// consulted by the Level-C cede gate (pinned flags are never ceded).
     pub force_mask: &'a crate::force_mask::ForceMask,
     /// Exact installed cpvs. A version that is installed and staying installed
-    /// never has its `REQUIRED_USE` flags ceded — its USE was decided at build
-    /// time, and only packages being built get theirs auto-satisfied (emerge
-    /// likewise leaves installed packages' constraints alone). See
-    /// [`Self::rebuilding_cpvs`] for the exception: an installed cpv that is
+    /// never has its `REQUIRED_USE` flags ceded — its USE was decided at
+    /// build time, only packages being built get theirs auto-satisfied. See
+    /// [`Self::rebuilding_cpvs`] for the exception: an installed cpv
     /// nonetheless being rebuilt this run.
     pub installed_cpvs: &'a std::collections::HashSet<Cpv>,
     /// Installed cpvs this run rebuilds anyway — non-selective explicit root
-    /// targets (reinstalled `[R]` at their installed version, e.g. `em stages
-    /// --stage1`'s `packages.build` atoms) and `-N`/`-U` USE-drift rebuilds.
-    /// Level-C treats these as "being built": their `REQUIRED_USE` is
-    /// re-decided for the new build's USE context, unlike a package that is
-    /// installed and staying installed (see `installed_cpvs`'s doc comment,
-    /// and commit `b919014` for why that distinction matters — config drift
-    /// on a genuinely untouched installed package must not invent USE
-    /// decisions). Mid-solve USE-dep-forced reinstalls and post-solve subslot
-    /// rebuilds aren't known yet when this set is built, so those stay
-    /// Level-A advisory only — a documented limitation, not a bug.
+    /// targets (reinstalled `[R]`) and `-N`/`-U` USE-drift rebuilds. Level-C
+    /// treats these as "being built": `REQUIRED_USE` is re-decided for the
+    /// new build's USE context, unlike a package staying installed
+    /// untouched (see [`Self::installed_cpvs`], `b919014`).
+    ///
+    /// Mid-solve USE-dep-forced reinstalls and post-solve subslot rebuilds
+    /// aren't known yet when this set is built, so those stay Level-A
+    /// advisory only — a documented limitation, not a bug.
     pub rebuilding_cpvs: &'a std::collections::HashSet<Cpv>,
     /// Level-C: when set, cede each package's non-pinned `REQUIRED_USE` flags to
     /// the solver (`SolverDecided`) instead of fixing them. See
@@ -1166,15 +1158,12 @@ fn collect_required_use_flags(
     }
 }
 
-/// Load every repo's metadata (sourcing cache-less ebuilds — see
-/// `portage_repo::repo_entries`), merged in `set`'s priority order: higher
-/// priority wins a duplicate cpv, matching real portage (`porttree.py`'s
-/// `findname2`/`xmatch` `reversed(...)` over the ascending `(priority,
-/// name)` list; `man 5 portage`: "those with higher priority are
-/// preferred"). The main repo defaults to priority `-1000` when unset
-/// (`ReposConf::load_from`), so by default *any* overlay shadows it — the
-/// ordinary "drop an ebuild in a local overlay to override ::gentoo"
-/// workflow, no repos.conf configuration required.
+/// Load every repo's metadata (sourcing cache-less ebuilds), merged in
+/// `set`'s priority order: higher priority wins a duplicate cpv, matching
+/// real portage's ascending `(priority, name)` list ("those with higher
+/// priority are preferred"). The main repo defaults to priority `-1000`
+/// when unset, so by default *any* overlay shadows it — the ordinary "drop
+/// an ebuild in a local overlay to override ::gentoo" workflow.
 ///
 /// Overlay secondary caches must already be configured on each
 /// [`portage_repo::Repository`] (via [`portage_repo::RepositoryBuilder`]).
@@ -1753,17 +1742,14 @@ mod tests {
         );
     }
 
-    /// Answers the open question left after the `-arch`/`-~arch` fix: does
-    /// `-arch` retract a *wildcard* grant (`*`/`**`) for that one arch, or
-    /// only a specific bare `arch`/`~arch` token? Real Portage's matcher
-    /// works over a flat set of literal strings — `-riscv` only ever
-    /// discards a literal `riscv` token if present, and is inert against a
-    /// separate `*`/`**` token, which stays granted. `KeywordAccept::add`
-    /// already matches this exactly (each token clears only its own set
-    /// membership — `Negate` removes a stable arch, never `any_stable`/
-    /// `any`), so this was already correct once the fold stopped joining
-    /// tokens together; this test just makes that answer explicit and locks
-    /// it in.
+    // Answers the open question left after the `-arch`/`-~arch` fix: does
+    // `-arch` retract a *wildcard* grant (`*`/`**`) for that one arch, or
+    // only a specific bare `arch`/`~arch` token? Real Portage's matcher
+    // works over a flat set of literal strings — `-riscv` only discards a
+    // literal `riscv` token, inert against a separate `*`/`**` token.
+    // `KeywordAccept::add` already matches this (each token clears only its
+    // own set membership), so this was already correct; this test just
+    // locks it in.
     #[test]
     fn negate_arch_does_not_retract_a_wildcard_grant() {
         let arch = Arch::intern("riscv");
@@ -1795,13 +1781,13 @@ mod tests {
         assert!(!star_reset_without_riscv.accepts(&stable, &foo, None));
     }
 
-    /// Regression:
-    /// `package.accept_keywords`'s own documented "pin to stable" idiom
-    /// (`portage(5)`: `media-video/mplayer -~x86`) needs `-~arch` to withdraw
-    /// *only* the testing grant, leaving the stable one intact. An earlier
-    /// version of `AcceptToken::parse` stripped the `~` and treated `-~x86`
-    /// identically to `-x86`, so this idiom fully masked the package instead
-    /// of pinning it to stable.
+    // Regression:
+    // `package.accept_keywords`'s own documented "pin to stable" idiom
+    // (`portage(5)`: `media-video/mplayer -~x86`) needs `-~arch` to withdraw
+    // *only* the testing grant, leaving the stable one intact. An earlier
+    // version of `AcceptToken::parse` stripped the `~` and treated `-~x86`
+    // identically to `-x86`, so this idiom fully masked the package instead
+    // of pinning it to stable.
     #[test]
     fn negate_testing_pins_a_package_to_stable_without_masking_it() {
         let arch = Arch::intern("x86");
@@ -2064,14 +2050,14 @@ mod tests {
         (dir, repo)
     }
 
-    /// By default (main listed after the overlay in `sources`, matching
-    /// main's real `-1000` default priority losing to an overlay's unset-
-    /// priority `0`) an overlay's cpv wins over an identical cpv from main
-    /// -- live-verified against real portage 3.0.81.2 (`portdbapi.xmatch`,
-    /// same setup: main priority -1000, overlay priority 0, `bestmatch-
-    /// visible` picks the overlay's ebuild). This is the ordinary "drop an
-    /// ebuild in a local overlay to override ::gentoo" workflow, no
-    /// repos.conf configuration required.
+    // By default (main listed after the overlay in `sources`, matching
+    // main's real `-1000` default priority losing to an overlay's unset-
+    // priority `0`) an overlay's cpv wins over an identical cpv from main
+    // -- live-verified against real portage 3.0.81.2 (`portdbapi.xmatch`,
+    // same setup: main priority -1000, overlay priority 0, `bestmatch-
+    // visible` picks the overlay's ebuild). This is the ordinary "drop an
+    // ebuild in a local overlay to override ::gentoo" workflow, no
+    // repos.conf configuration required.
     #[tokio::test]
     async fn load_repos_overlay_wins_over_main_for_duplicate_cpv_by_default() {
         let (_main_dir, main) =
@@ -2630,20 +2616,17 @@ mod tests {
     }
 
     // Fixes the `em stages --stage1 --prefix <dir>` finding:
-    // `cede_required_use`'s old
-    // `installed_cpvs.contains(cpv)` early return fired for *any* cpv already
-    // in the "installed" view, even when that exact cpv is the one currently
-    // being resolved with a REQUIRED_USE-violating config (e.g. stage1's
-    // `USE="-* build"` suppressing app-alternatives.eclass's `+`-default
-    // flag on `app-alternatives/awk-4`, itself a literal `packages.build`
-    // root target) — so autosolve-use never got a chance to cede/re-decide
-    // it, and the plan carried a genuine REQUIRED_USE violation into the
-    // build, which then died at pkg_setup/src_install. Fixed (Fable-planned)
-    // by adding `rebuilding_cpvs`: an installed cpv also in that set is
-    // being rebuilt this run (non-selective explicit root target, or
-    // -N/-U USE-drift), so its REQUIRED_USE is ceded like any other build
-    // target — see `installed_and_untouched_package_required_use_drift_is_not_ceded`
-    // below for why `installed_cpvs` alone still gates everything else.
+    // `cede_required_use`'s old `installed_cpvs.contains(cpv)` early return
+    // fired for *any* cpv already installed, even the one currently being
+    // resolved with a REQUIRED_USE-violating config (stage1's `USE="-*
+    // build"` suppressing `app-alternatives/awk-4`'s `+`-default flag) — so
+    // autosolve-use never re-decided it, and a genuine violation reached
+    // the build.
+    //
+    // Fixed by adding `rebuilding_cpvs`: an installed cpv also in that set
+    // is being rebuilt this run, so its REQUIRED_USE is ceded like any
+    // other build target — see the sibling drift test below for why
+    // `installed_cpvs` alone still gates everything else.
     #[test]
     fn installed_but_rebuilding_cpv_with_violated_required_use_is_ceded() {
         let (data, cpv) = repo_with(
@@ -2692,20 +2675,17 @@ mod tests {
         }
     }
 
-    // Why `installed_cpvs` alone still gates everything else (commit
-    // b919014, 2026-06-10): an installed package that is genuinely staying
-    // installed (not in `rebuilding_cpvs`) must NOT have its `REQUIRED_USE`
-    // flags ceded just because profile/config drift now violates them —
-    // only packages being *built* get their constraints auto-satisfied,
-    // matching real emerge (installed-package violations are Level-A
-    // advisories only). Without this guard, config drift on an untouched
-    // package invents a USE decision that can cascade into a spurious
-    // rebuild of something else entirely (the original bug: installed
-    // systemd-utils' `^^` drifted against a moved PYTHON_SINGLE_TARGET,
-    // autosolve ceded it, and a C7 co-solve forced a spurious jinja2 rebuild
-    // for a target nothing needs). `rebuilding_cpvs` is empty here — this
-    // cpv is installed but not a rebuild target — so the guard must still
-    // hold exactly as before the fix above.
+    // Why `installed_cpvs` alone still gates everything else (`b919014`):
+    // an installed package genuinely staying installed (not in
+    // `rebuilding_cpvs`) must NOT have its `REQUIRED_USE` ceded just
+    // because config drift now violates it — only packages being *built*
+    // get constraints auto-satisfied (Level-A advisories only otherwise).
+    //
+    // Without this guard, drift on an untouched package invents a USE
+    // decision that can cascade into a spurious rebuild elsewhere (the
+    // original bug: installed systemd-utils' `^^` drifted against a moved
+    // PYTHON_SINGLE_TARGET, autosolve ceded it, forcing a spurious jinja2
+    // rebuild). `rebuilding_cpvs` is empty here, so the guard must hold.
     #[test]
     fn installed_and_untouched_package_required_use_drift_is_not_ceded() {
         let (data, cpv) = repo_with(

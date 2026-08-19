@@ -98,14 +98,13 @@ pub struct HostInstalledEntry {
 /// (each slot is a distinct `PortagePackage`).
 ///
 /// The root selection (BROOT, plus the prefix's own VDB under `--prefix`) is
-/// `crate::broot_vdb_packages` — shared with
-/// `Avail::initial_bdepend`, which the same #28/#30 bug (reading the bare
-/// host `/var/db/pkg` instead of the given BROOT) was once fixed in
-/// separately; see that function's doc comment for the full rationale.
+/// `crate::broot_vdb_packages` — shared with `Avail::initial_bdepend`,
+/// which the same #28/#30 bug was once fixed in separately.
+///
 /// `add_host_installed` (`provider/mod.rs`) does a plain `HashMap::insert`
-/// keyed by package, so whichever entry is appended last wins — matching
-/// "what is in the prefix drives" for a package present in both (host
-/// entries come first, prefix second).
+/// keyed by package, so whichever entry is appended last wins — "what is
+/// in the prefix drives" for a package present in both (host entries come
+/// first, prefix second).
 pub fn load_host_installed(roots: &crate::Roots) -> Vec<HostInstalledEntry> {
     crate::broot_vdb_packages(roots)
         .into_iter()
@@ -321,15 +320,15 @@ mod tests {
         assert_eq!(entries.len(), 1, "must still find the host-only entry");
     }
 
-    /// Regression test: `load_installed`'s target-shadows-base union must
-    /// dedup by `(Cpn, slot)`, not `(Cpn, version)` — a base entry at a
-    /// *different* version than the target's own must not survive the
-    /// union.
-    /// `sys-devel/binutils-2.46.1` in the target's own VDB, but the host's
-    /// VDB still had the older `binutils-2.46.0` — a subsequent `-p` kept
-    /// showing `[2.46.0]` (the host's version) as the installed base to
-    /// "upgrade" from, because the old version-keyed dedup treated the two
-    /// versions as distinct entries and let both through.
+    // Regression test: `load_installed`'s target-shadows-base union must
+    // dedup by `(Cpn, slot)`, not `(Cpn, version)` — a base entry at a
+    // *different* version than the target's own must not survive the
+    // union.
+    // `sys-devel/binutils-2.46.1` in the target's own VDB, but the host's
+    // VDB still had the older `binutils-2.46.0` — a subsequent `-p` kept
+    // showing `[2.46.0]` (the host's version) as the installed base to
+    // "upgrade" from, because the old version-keyed dedup treated the two
+    // versions as distinct entries and let both through.
     #[test]
     fn load_installed_target_shadows_base_even_at_a_different_version() {
         let host = tempfile::tempdir().unwrap();

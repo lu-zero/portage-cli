@@ -36,12 +36,10 @@ pub struct TrimCtx<'a> {
 ///
 /// `full_solution_order` is every real package the solver selected, *before*
 /// the caller's "already installed, nothing to display" filter drops entries
-/// like `virtual/libcrypt` from `order`. Runtime-requirement scanning must use
-/// the full set: an already-installed package invisible in `order` can still
-/// be the sole reason some other, not-yet-installed package is required (its
-/// own DEPEND/RDEPEND edges don't stop existing just because it needs no
-/// action itself). Scanning only `order` made such a dependency look
-/// orphaned and wrongly trimmable.
+/// like `virtual/libcrypt` from `order`. Runtime-requirement scanning must
+/// use the full set: an already-installed package invisible in `order` can
+/// still be the sole reason some other package is required. Scanning only
+/// `order` made such a dependency look orphaned and wrongly trimmable.
 pub fn trim_within_run_bdepend(
     order: Vec<(PortagePackage, Version)>,
     full_solution_order: &[(PortagePackage, Version)],
@@ -250,14 +248,14 @@ mod tests {
         }
     }
 
-    /// Regression test for the bug found chasing `sys-apps/shadow` missing
-    /// `sys-libs/libxcrypt`: an already-installed package (here
-    /// `virtual/lib`, standing in for `virtual/libcrypt`) is correctly
-    /// excluded from the *displayed* `order` — but it's still the sole
-    /// reason `sys-libs/reallib` (standing in for `sys-libs/libxcrypt`) is
-    /// required. `runtime_required_cpns` must see `virtual/lib`'s RDEPEND
-    /// edge via `full_solution_order` even though `virtual/lib` itself never
-    /// appears in `order`, or `reallib` gets wrongly trimmed as orphaned.
+    // Regression test for the bug found chasing `sys-apps/shadow` missing
+    // `sys-libs/libxcrypt`: an already-installed package (here
+    // `virtual/lib`, standing in for `virtual/libcrypt`) is correctly
+    // excluded from the *displayed* `order` — but it's still the sole
+    // reason `sys-libs/reallib` (standing in for `sys-libs/libxcrypt`) is
+    // required. `runtime_required_cpns` must see `virtual/lib`'s RDEPEND
+    // edge via `full_solution_order` even though `virtual/lib` itself never
+    // appears in `order`, or `reallib` gets wrongly trimmed as orphaned.
     #[test]
     fn already_installed_package_excluded_from_order_still_pins_its_rdepend() {
         let data = repo_from(&[

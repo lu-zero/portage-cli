@@ -67,13 +67,12 @@ impl<'a> ContentsRef<'a> {
     /// Parse a single CONTENTS line. See [`ContentsEntry::parse_line`] for the
     /// format; this is the implementation both share.
     ///
-    /// Hand-written rather than `winnow`, unlike every other parser in this
-    /// workspace. CONTENTS is delimited from the *right* — a path may contain
-    /// spaces, so `obj`'s md5/mtime and `sym`'s mtime are only identifiable as
-    /// the last tokens, and `sym` splits on the *last* `" -> "`. A forward
-    /// combinator parser cannot express that without either `rest` plus these
-    /// same `rsplit_once` calls, or a token-split-and-rejoin that silently
-    /// corrupts any path containing consecutive spaces.
+    /// Hand-written rather than `winnow`, unlike every other parser here.
+    /// CONTENTS is delimited from the *right* — a path may contain spaces,
+    /// so `obj`'s md5/mtime and `sym`'s mtime are only identifiable as the
+    /// last tokens, and `sym` splits on the *last* `" -> "`. A forward
+    /// combinator can't express that without these same `rsplit_once`
+    /// calls, or a rejoin that corrupts paths with consecutive spaces.
     ///
     /// Returns `None` for blank or unrecognised lines.
     pub fn parse_line(line: &'a str) -> Option<Self> {

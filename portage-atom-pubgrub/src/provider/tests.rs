@@ -278,21 +278,21 @@ fn installed_favored_picks_installed_version() {
     );
 }
 
-/// Regression for the `@system` version-choice-ordering bug (see
-/// `todo/pubgrub-version-choice-heuristic.md`): a dependency with *fewer*
-/// in-range versions than a root target must not get decided (and committed
-/// to its installed version) before that root target's own dependency
-/// bound is even examined.
+// Regression for the `@system` version-choice-ordering bug (see
+// `todo/pubgrub-version-choice-heuristic.md`): a dependency with *fewer*
+// in-range versions than a root target must not get decided (and committed
+// to its installed version) before that root target's own dependency
+// bound is even examined.
 ///
-/// `sys-libs/libacl` (2 versions, not a root target, installed at the older
-/// one) is under-constrained by `leader` (a bare, unversioned dep) but
-/// strictly constrained by `syncer`'s newest version (`>=libacl-2.0`).
-/// `syncer` has more in-range versions (3) than `libacl` (2), so plain
-/// minimum-remaining-values would decide `libacl` first and lock it to the
-/// installed `1.0` — silently holding both `libacl` and `syncer` back a
-/// version, exactly like `virtual/acl`/`net-misc/rsync` in the real bug.
-/// Both `leader` and `syncer` are root targets (`resolve_targets`); `libacl`
-/// is not.
+// `sys-libs/libacl` (2 versions, not a root target, installed at the older
+// one) is under-constrained by `leader` (a bare, unversioned dep) but
+// strictly constrained by `syncer`'s newest version (`>=libacl-2.0`).
+// `syncer` has more in-range versions (3) than `libacl` (2), so plain
+// minimum-remaining-values would decide `libacl` first and lock it to the
+// installed `1.0` — silently holding both `libacl` and `syncer` back a
+// version, exactly like `virtual/acl`/`net-misc/rsync` in the real bug.
+// Both `leader` and `syncer` are root targets (`resolve_targets`); `libacl`
+// is not.
 #[test]
 fn root_target_priority_avoids_premature_dependency_commitment() {
     let mut repo = InMemoryRepository::new();
@@ -375,8 +375,8 @@ fn root_target_priority_avoids_premature_dependency_commitment() {
     );
 }
 
-/// `-uD` / `prefer_update`: transitive deps upgrade in-slot even when the
-/// installed version still satisfies the atom (emerge deep update).
+// `-uD` / `prefer_update`: transitive deps upgrade in-slot even when the
+// installed version still satisfies the atom (emerge deep update).
 #[test]
 fn prefer_update_upgrades_transitive_in_slot() {
     let mut repo = InMemoryRepository::new();
@@ -427,7 +427,7 @@ fn prefer_update_upgrades_transitive_in_slot() {
     );
 }
 
-/// Flag off: same graph keeps the installed transitive dep (Favor contract).
+// Flag off: same graph keeps the installed transitive dep (Favor contract).
 #[test]
 fn prefer_update_off_keeps_transitive() {
     let mut repo = InMemoryRepository::new();
@@ -478,9 +478,9 @@ fn prefer_update_off_keeps_transitive() {
     );
 }
 
-/// `--noreplace`/`-N`/`-U` without `-u`: a *root target* whose installed
-/// version still satisfies the atom keeps that version. Without the flag the
-/// same target takes the newest accepted one (emerge's reinstall default).
+// `--noreplace`/`-N`/`-U` without `-u`: a *root target* whose installed
+// version still satisfies the atom keeps that version. Without the flag the
+// same target takes the newest accepted one (emerge's reinstall default).
 #[test]
 fn selective_no_update_keeps_an_installed_root_target() {
     let build = |selective: bool| {
@@ -520,9 +520,9 @@ fn selective_no_update_keeps_an_installed_root_target() {
     );
 }
 
-/// Installed version pruned from the tree: under prefer_update the transitive
-/// dep upgrades (without the flag, Favor keeps the stub — see
-/// `installed_version_removed_from_repo_kept_when_satisfying`).
+// Installed version pruned from the tree: under prefer_update the transitive
+// dep upgrades (without the flag, Favor keeps the stub — see
+// `installed_version_removed_from_repo_kept_when_satisfying`).
 #[test]
 fn prefer_update_revbump_transitive() {
     let mut repo = InMemoryRepository::new();
@@ -749,12 +749,12 @@ fn or_group_prefers_installed_alternative() {
     );
 }
 
-/// A dropped `||` branch must keep a *multi-slot* sibling as an alternative.
-/// Regression for glibc's `BDEPEND=|| ( >=sys-devel/gcc-6.2
-/// >=llvm-runtimes/libgcc-18 )`: gcc is multi-slot (a `SlotChoice` virtual),
-/// > llvm-runtimes/libgcc is masked for the arch (dropped). The dropped branch
-/// > was recorded with no alternatives — because sibling collection skipped
-/// > virtual nodes — so autounmask falsely reported it as needing an unmask.
+// A dropped `||` branch must keep a *multi-slot* sibling as an alternative.
+// Regression for glibc's `BDEPEND=|| ( >=sys-devel/gcc-6.2
+// >=llvm-runtimes/libgcc-18 )`: gcc is multi-slot (a `SlotChoice` virtual),
+// > llvm-runtimes/libgcc is masked for the arch (dropped). The dropped branch
+// > was recorded with no alternatives — because sibling collection skipped
+// > virtual nodes — so autounmask falsely reported it as needing an unmask.
 #[test]
 fn dropped_or_branch_keeps_multislot_sibling() {
     let mut repo = InMemoryRepository::new();
@@ -1474,9 +1474,9 @@ fn ceded_flag_follows_preference() {
 
 // ---- Level-C REQUIRED_USE encoding (Phase 1b) ----
 
-/// Build `app-misc/a` with the given REQUIRED_USE, ceding x/y/z (preferences
-/// from `prefer`), where each flag pulls a marker dep `dev-libs/p{flag}` when
-/// on. Returns the set of marker package names present in the solution.
+// Build `app-misc/a` with the given REQUIRED_USE, ceding x/y/z (preferences
+// from `prefer`), where each flag pulls a marker dep `dev-libs/p{flag}` when
+// on. Returns the set of marker package names present in the solution.
 fn solve_required_use(
     ru: crate::required_use::RequiredUse,
     prefer: &[(&str, bool)],
@@ -1945,7 +1945,7 @@ fn required_use_nested_at_most_one_under_guard() {
 // change (the caller will fold IUSE defaults / config into the desired set),
 // but the assertions — needed vs not-needed — must stay identical.
 
-/// `a` RDEPENDs `b[flag]`; `flag` is off everywhere → `b` needs it enabled.
+// `a` RDEPENDs `b[flag]`; `flag` is off everywhere → `b` needs it enabled.
 #[test]
 fn use_flag_needed_when_flag_off() {
     let mut repo = InMemoryRepository::new();
@@ -1979,7 +1979,7 @@ fn use_flag_needed_when_flag_off() {
     assert!(b.required_enabled.contains(&Interned::intern("flag")));
 }
 
-/// Same, but `b` carries `+flag` as an IUSE default → already on, none needed.
+// Same, but `b` carries `+flag` as an IUSE default → already on, none needed.
 #[test]
 fn use_flag_not_needed_when_iuse_default_on() {
     let mut repo = InMemoryRepository::new();
@@ -2021,7 +2021,7 @@ fn use_flag_not_needed_when_iuse_default_on() {
     );
 }
 
-/// Same, but the global config already enables `flag` → none needed.
+// Same, but the global config already enables `flag` → none needed.
 #[test]
 fn use_flag_not_needed_when_config_enables() {
     let mut repo = InMemoryRepository::new();
@@ -2165,11 +2165,11 @@ fn use_dep_from_new_parent_on_installed_target_built_without_flag() {
     assert!(req.required_enabled.contains(&Interned::intern("flag")));
 }
 
-/// Same-slot update where the installed version was *removed from the
-/// repo* and a newer version in the same slot is available, with no USE
-/// violation to trigger the upgrade path. Mirrors `dev-lang/python:3.13`
-/// installed at an old 3.13.x that's been dropped from the tree, with a
-/// newer 3.13.y present. The resolver must select the newer version.
+// Same-slot update where the installed version was *removed from the
+// repo* and a newer version in the same slot is available, with no USE
+// violation to trigger the upgrade path. Mirrors `dev-lang/python:3.13`
+// installed at an old 3.13.x that's been dropped from the tree, with a
+// newer 3.13.y present. The resolver must select the newer version.
 #[test]
 fn installed_version_removed_from_repo_upgrades_in_slot() {
     let mut repo = InMemoryRepository::new();
@@ -2217,13 +2217,13 @@ fn installed_version_removed_from_repo_upgrades_in_slot() {
     );
 }
 
-/// Same scenario as above, but `b` is reached *transitively* (not a root
-/// target). Under `Favor` (no `--update`/`--deep`) emerge keeps the
-/// installed version even when its exact cpv was pruned from the tree (e.g.
-/// a revbump `4.3.3` -> `4.3.3-r1` superseding the installed build): it
-/// satisfies the plain dep, and a revbump is not pulled without `--update`.
-/// The empty-deps installed stub is fine since the package is satisfying a
-/// dep, not being rebuilt.
+// Same scenario as above, but `b` is reached *transitively* (not a root
+// target). Under `Favor` (no `--update`/`--deep`) emerge keeps the
+// installed version even when its exact cpv was pruned from the tree (e.g.
+// a revbump `4.3.3` -> `4.3.3-r1` superseding the installed build): it
+// satisfies the plain dep, and a revbump is not pulled without `--update`.
+// The empty-deps installed stub is fine since the package is satisfying a
+// dep, not being rebuilt.
 #[test]
 fn installed_version_removed_from_repo_kept_when_satisfying() {
     let mut repo = InMemoryRepository::new();
@@ -2281,10 +2281,10 @@ fn installed_version_removed_from_repo_kept_when_satisfying() {
     );
 }
 
-/// `host_installed` (BROOT) satisfies BDEPEND: a package being built whose
-/// BDEPEND is already present on the host must not pull that build tool into
-/// the plan. Mirrors portage — `em --root <empty> a` doesn't build host-gcc.
-/// Per-edge: a package that is *also* an RDEPEND is still pulled (next test).
+// `host_installed` (BROOT) satisfies BDEPEND: a package being built whose
+// BDEPEND is already present on the host must not pull that build tool into
+// the plan. Mirrors portage — `em --root <empty> a` doesn't build host-gcc.
+// Per-edge: a package that is *also* an RDEPEND is still pulled (next test).
 #[test]
 fn host_installed_satisfies_bdepend() {
     let mut repo = InMemoryRepository::new();
@@ -2338,8 +2338,8 @@ fn host_installed_satisfies_bdepend() {
     );
 }
 
-/// `-uD` / `prefer_update`: host-satisfied BDEPEND still enters the graph so
-/// an in-slot newer version can be selected (emerge deep-update of build tools).
+// `-uD` / `prefer_update`: host-satisfied BDEPEND still enters the graph so
+// an in-slot newer version can be selected (emerge deep-update of build tools).
 #[test]
 fn prefer_update_upgrades_host_satisfied_bdepend() {
     let mut repo = InMemoryRepository::new();
@@ -2401,9 +2401,9 @@ fn prefer_update_upgrades_host_satisfied_bdepend() {
     );
 }
 
-/// Per-edge BDEPEND filtering: when `b` is *both* a's BDEPEND (host-provided)
-/// and c's RDEPEND, the host satisfies the build edge but c still needs b at
-/// runtime — so b must be built. Confirms filtering is edge-class-scoped.
+// Per-edge BDEPEND filtering: when `b` is *both* a's BDEPEND (host-provided)
+// and c's RDEPEND, the host satisfies the build edge but c still needs b at
+// runtime — so b must be built. Confirms filtering is edge-class-scoped.
 #[test]
 fn bdepend_filtering_is_per_edge_not_per_package() {
     let mut repo = InMemoryRepository::new();
@@ -2463,7 +2463,7 @@ fn bdepend_filtering_is_per_edge_not_per_package() {
     );
 }
 
-/// Native offset / host: host-satisfied `IDEPEND` (BROOT) must not enter the plan.
+// Native offset / host: host-satisfied `IDEPEND` (BROOT) must not enter the plan.
 #[test]
 fn host_installed_satisfies_native_idepend() {
     let mut repo = InMemoryRepository::new();
@@ -2509,9 +2509,9 @@ fn host_installed_satisfies_native_idepend() {
     );
 }
 
-/// Cross target build: host-satisfied `IDEPEND` (BROOT) must not enter the plan.
-/// Mirrors glibc `!compile-locales? ( sys-apps/locale-gen )` when locale-gen
-/// is already installed on the build host.
+// Cross target build: host-satisfied `IDEPEND` (BROOT) must not enter the plan.
+// Mirrors glibc `!compile-locales? ( sys-apps/locale-gen )` when locale-gen
+// is already installed on the build host.
 #[test]
 fn host_installed_satisfies_cross_idepend() {
     let mut repo = InMemoryRepository::new();
@@ -2564,11 +2564,11 @@ fn host_installed_satisfies_cross_idepend() {
     );
 }
 
-/// `--root-deps=rdeps` (crossdev cross builds): a target package's `DEPEND`
-/// (build-only) is discarded from the sysroot graph, while `RDEPEND` still
-/// installs into the sysroot. Mirrors crossdev's `<CTARGET>-emerge
-/// --root-deps=rdeps`, where build deps resolve on the host toolchain and
-/// only runtime libraries land in the target ROOT.
+// `--root-deps=rdeps` (crossdev cross builds): a target package's `DEPEND`
+// (build-only) is discarded from the sysroot graph, while `RDEPEND` still
+// installs into the sysroot. Mirrors crossdev's `<CTARGET>-emerge
+// --root-deps=rdeps`, where build deps resolve on the host toolchain and
+// only runtime libraries land in the target ROOT.
 #[test]
 fn root_deps_rdeps_drops_target_depend() {
     let slot0 = Interned::intern("0");
@@ -2640,12 +2640,12 @@ fn root_deps_rdeps_drops_target_depend() {
     );
 }
 
-/// A host-satisfied BDEPEND edge whose atom USE-dep is **not** met by the
-/// host instance's active USE is rebuilt rather than pruned: `b[text(+)]`
-/// with the host `b` built `text`-off fails the USE-dep, so `b` enters the
-/// plan (and its `text?` conditional would re-expand on rebuild). Mirrors
-/// portage's USE-change rebuild — e.g. `app-text/xmlto[text(+)]` pulling
-/// `virtual/w3m` when the host xmlto lacks `text`.
+// A host-satisfied BDEPEND edge whose atom USE-dep is **not** met by the
+// host instance's active USE is rebuilt rather than pruned: `b[text(+)]`
+// with the host `b` built `text`-off fails the USE-dep, so `b` enters the
+// plan (and its `text?` conditional would re-expand on rebuild). Mirrors
+// portage's USE-change rebuild — e.g. `app-text/xmlto[text(+)]` pulling
+// `virtual/w3m` when the host xmlto lacks `text`.
 #[test]
 fn host_installed_bdepend_with_unmet_use_dep_is_rebuilt() {
     let text = Interned::intern("text");
@@ -2718,9 +2718,9 @@ fn host_installed_bdepend_with_unmet_use_dep_is_rebuilt() {
     );
 }
 
-/// The satisfied counterpart: when the host instance *does* meet the
-/// `[flag]` USE-dep (text active), the edge is pruned as before and b/c are
-/// not pulled.
+// The satisfied counterpart: when the host instance *does* meet the
+// `[flag]` USE-dep (text active), the edge is pruned as before and b/c are
+// not pulled.
 #[test]
 fn host_installed_bdepend_with_met_use_dep_is_pruned() {
     let text = Interned::intern("text");
@@ -2773,8 +2773,8 @@ fn host_installed_bdepend_with_met_use_dep_is_pruned() {
     );
 }
 
-/// Cross target build with `--with-bdeps`: host-satisfied BDEPEND must not
-/// enter the plan (same closure as without the flag; mirrors emerge cross `-p`).
+// Cross target build with `--with-bdeps`: host-satisfied BDEPEND must not
+// enter the plan (same closure as without the flag; mirrors emerge cross `-p`).
 #[test]
 fn host_installed_satisfies_cross_bdepend_with_bdeps() {
     let mut repo = InMemoryRepository::new();
@@ -2828,15 +2828,15 @@ fn host_installed_satisfies_cross_bdepend_with_bdeps() {
     );
 }
 
-/// Regression test for the `sys-apps/systemd-utils` stage3 failure:
-/// `cross_target_runtime_deps` (the dependency function for a `--cross`
-/// Target-root package actually being built) called
-/// `append_unsatisfied_broot` for IDEPEND but never for BDEPEND at all —
-/// an unsatisfied BDEPEND (the host lacks `b` entirely here, standing in
-/// for `dev-python/jinja2` built for the wrong python target) never
-/// scheduled a Host-root rebuild, so `em` silently omitted it from the
-/// plan and the target package's own build later failed for a "missing"
-/// dependency `em` itself dropped.
+// Regression test for the `sys-apps/systemd-utils` stage3 failure:
+// `cross_target_runtime_deps` (the dependency function for a `--cross`
+// Target-root package actually being built) called
+// `append_unsatisfied_broot` for IDEPEND but never for BDEPEND at all —
+// an unsatisfied BDEPEND (the host lacks `b` entirely here, standing in
+// for `dev-python/jinja2` built for the wrong python target) never
+// scheduled a Host-root rebuild, so `em` silently omitted it from the
+// plan and the target package's own build later failed for a "missing"
+// dependency `em` itself dropped.
 #[test]
 fn cross_target_build_pulls_unsatisfied_bdepend() {
     let mut repo = InMemoryRepository::new();
@@ -2888,15 +2888,15 @@ fn cross_target_build_pulls_unsatisfied_bdepend() {
     );
 }
 
-/// Regression test for the riscv64 stage3 shakeout: same scenario as
-/// `cross_target_build_pulls_unsatisfied_bdepend`, but `b` is *also*
+// Regression test for the riscv64 stage3 shakeout: same scenario as
+// `cross_target_build_pulls_unsatisfied_bdepend`, but `b` is *also*
 //
 // See issue #33.
-/// already installed at the **Target** (the `--cross` sysroot) — standing
-/// in for `dev-lang/perl` being genuinely present in a real, already-built
-/// target `@system` while `base_roots()` (BROOT) still lacks it. A
-/// Host-root `b` must still be scheduled: BDEPEND always resolves on
-/// BROOT, and a same-named Target-side package can never satisfy it.
+// already installed at the **Target** (the `--cross` sysroot) — standing
+// in for `dev-lang/perl` being genuinely present in a real, already-built
+// target `@system` while `base_roots()` (BROOT) still lacks it. A
+// Host-root `b` must still be scheduled: BDEPEND always resolves on
+// BROOT, and a same-named Target-side package can never satisfy it.
 #[test]
 fn cross_target_build_pulls_unsatisfied_bdepend_even_if_target_already_has_it() {
     let mut repo = InMemoryRepository::new();
@@ -2952,14 +2952,14 @@ fn cross_target_build_pulls_unsatisfied_bdepend_even_if_target_already_has_it() 
 }
 
 ///
-/// `virtual/libcrypt` completed while `sys-libs/libxcrypt` never got
-/// `Emerging`, so pam's configure failed to find libcrypt in the *sysroot*.
+// `virtual/libcrypt` completed while `sys-libs/libxcrypt` never got
+// `Emerging`, so pam's configure failed to find libcrypt in the *sysroot*.
 ///
-/// Host often has `libxcrypt` (and even `virtual/libcrypt`) installed. Those
-/// must satisfy BDEPEND on BROOT only — they must **not** suppress a Target
-/// RDEPEND of the virtual. The provider must select Target `libxcrypt`,
-/// order it before the virtual, and emit a Target→Target RDEPEND edge so
-/// `build_blockers` can wait on the provider.
+// Host often has `libxcrypt` (and even `virtual/libcrypt`) installed. Those
+// must satisfy BDEPEND on BROOT only — they must **not** suppress a Target
+// RDEPEND of the virtual. The provider must select Target `libxcrypt`,
+// order it before the virtual, and emit a Target→Target RDEPEND edge so
+// `build_blockers` can wait on the provider.
 #[test]
 fn cross_target_virtual_rdepend_provider_is_target_not_host() {
     let mut repo = InMemoryRepository::new();
@@ -3105,12 +3105,12 @@ fn cross_target_virtual_rdepend_provider_is_target_not_host() {
     );
 }
 
-/// The `sys-apps/coreutils` shape: RDEPEND nests one USE-conditional group
-/// inside another, `!static? ( acl? ( sys-apps/acl ) )` (LIB_DEPEND folded
-/// into RDEPEND at the ebuild level — PMS doesn't special-case it, it's just
-/// ordinary nested group syntax). `static` is off and `acl` is on, so the
-/// inner atom should convert to a real requirement and pull `sys-apps/acl`
-/// into the solution.
+// The `sys-apps/coreutils` shape: RDEPEND nests one USE-conditional group
+// inside another, `!static? ( acl? ( sys-apps/acl ) )` (LIB_DEPEND folded
+// into RDEPEND at the ebuild level — PMS doesn't special-case it, it's just
+// ordinary nested group syntax). `static` is off and `acl` is on, so the
+// inner atom should convert to a real requirement and pull `sys-apps/acl`
+// into the solution.
 #[test]
 fn nested_use_conditional_groups_still_pull_the_inner_atom() {
     let mut repo = InMemoryRepository::new();
@@ -3156,10 +3156,10 @@ fn nested_use_conditional_groups_still_pull_the_inner_atom() {
     );
 }
 
-/// The `net-misc/rsync` shape: RDEPEND has a *versioned* atom inside a single
-/// USE-conditional group, `acl? ( >=virtual/acl-2.4.0 )`. The installed
-/// `virtual/acl-0-r2` (Favor policy) does not satisfy `>=2.4.0`, so this
-/// should force a real upgrade requirement, not a silently-dropped edge.
+// The `net-misc/rsync` shape: RDEPEND has a *versioned* atom inside a single
+// USE-conditional group, `acl? ( >=virtual/acl-2.4.0 )`. The installed
+// `virtual/acl-0-r2` (Favor policy) does not satisfy `>=2.4.0`, so this
+// should force a real upgrade requirement, not a silently-dropped edge.
 #[test]
 fn versioned_atom_inside_use_conditional_forces_the_upgrade() {
     let mut repo = InMemoryRepository::new();
@@ -3219,12 +3219,12 @@ fn versioned_atom_inside_use_conditional_forces_the_upgrade() {
     );
 }
 
-/// The real `virtual/acl-2.4.0` shape: `kernel_linux? ( >=sys-apps/acl-2.4.0[
-/// static-libs?,abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,
-/// abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?] )` — a
-/// versioned atom carrying eight simultaneous conditional USE-deps (the
-/// multilib-build ABI flags), none of which this arm64 fixture's `sys-apps/acl`
-/// declares in IUSE. `kernel_linux` is on (every Linux profile sets it).
+// The real `virtual/acl-2.4.0` shape: `kernel_linux? ( >=sys-apps/acl-2.4.0[
+// static-libs?,abi_x86_32(-)?,abi_x86_64(-)?,abi_x86_x32(-)?,abi_mips_n32(-)?,
+// abi_mips_n64(-)?,abi_mips_o32(-)?,abi_s390_32(-)?,abi_s390_64(-)?] )` — a
+// versioned atom carrying eight simultaneous conditional USE-deps (the
+// multilib-build ABI flags), none of which this arm64 fixture's `sys-apps/acl`
+// declares in IUSE. `kernel_linux` is on (every Linux profile sets it).
 #[test]
 fn many_conditional_use_deps_on_one_atom_still_pull_it_in() {
     let mut repo = InMemoryRepository::new();

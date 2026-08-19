@@ -247,13 +247,15 @@ impl PackageLog {
     /// The worker→parent handoff format: one entry per line, `<CLASS> <phase>
     /// <message>`.
     ///
-    /// Deliberately *not* [`to_text`](Self::to_text). That format is portage's
-    /// and has to stay the one that gets filed, but it cannot be parsed back
-    /// without guessing: a message reading `ERROR: setup` is indistinguishable
-    /// from a header, and guessing wrong drops the message and re-colours the
-    /// ones after it. Here the class and phase are fixed-vocabulary tokens
-    /// split from the left, so the message keeps whatever it says. Entries are
-    /// always single lines — the producer splits on `\n` before writing.
+    /// Deliberately *not* [`to_text`](Self::to_text). That format is
+    /// portage's and has to stay the one that gets filed, but it cannot be
+    /// parsed back without guessing: a message reading `ERROR: setup` is
+    /// indistinguishable from a header, and guessing wrong drops the
+    /// message and re-colours the ones after it.
+    ///
+    /// Here the class and phase are fixed-vocabulary tokens split from the
+    /// left, so the message keeps whatever it says. Entries are always
+    /// single lines — the producer splits on `\n` before writing.
     fn to_handoff(&self) -> String {
         let mut out = String::new();
         for (phase, entries) in &self.phases {
@@ -489,22 +491,22 @@ fn pf(cpv: &portage_atom::Cpv) -> String {
 
 /// Create the elog directory group-owned and setgid, portage's `mod_save`.
 ///
-/// The point is the *directory*: mode 2770 lets any member of the group create
-/// and remove entries in it whoever owns them, and the setgid bit puts every
-/// file that lands there in the same group. That is what keeps logs written by
-/// a privileged run (`--privilege sudo`, where the worker is real root)
-/// manageable afterwards by the unprivileged user who ran `em`. Every other
-/// backend already writes as that user — `pseudoroot` and `fakeroost` only fake
-/// `chown`, and hakoniwa maps the container's root back to the caller — so this
-/// is specifically the `sudo` case.
+/// The point is the *directory*: mode 2770 lets any member of the group
+/// create and remove entries in it whoever owns them, and the setgid bit
+/// puts every file that lands there in the same group — keeping logs
+/// written by a privileged run (`--privilege sudo`, real root worker)
+/// manageable afterwards by the unprivileged user who ran `em`.
 ///
-/// The group is the *invoking user's*, not `portage`. Naming portage's group
-/// looks like the faithful choice and is the wrong one here: under
-/// `--privilege sudo` that `chown` succeeds (root may give a directory to any
-/// group), leaving `portage:2770` — and a user who is not in the portage group,
-/// which is the usual case, still cannot manage their own logs. `SUDO_GID` is
-/// the group of whoever actually ran `em`, so it always can. Without it the
-/// creator's own group is already that answer and nothing needs changing.
+/// Every other backend already writes as that user (`pseudoroot`/
+/// `fakeroost` only fake `chown`, hakoniwa maps the container's root back
+/// to the caller) — so this is specifically the `sudo` case.
+///
+/// The group is the *invoking user's*, not `portage`. Naming portage's
+/// group looks like the faithful choice and is wrong here: under
+/// `--privilege sudo` that `chown` succeeds, leaving `portage:2770` — and a
+/// user not in the portage group (the usual case) still cannot manage
+/// their own logs. `SUDO_GID` is the group of whoever actually ran `em`,
+/// so it always can; without it the creator's own group is already the answer.
 ///
 /// This costs nothing against real portage's convention, because of the next
 /// paragraph: a system where portage already made `/var/log/portage`

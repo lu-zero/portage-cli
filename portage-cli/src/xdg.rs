@@ -66,14 +66,15 @@ pub fn md5_cache_dir(repo_name: &str) -> Utf8PathBuf {
 /// `$XDG_STATE_HOME/em/news` — `em news`'s unread/read/skip tracking when
 /// operating on the bare host (no `--root`/`--prefix`/`--local`).
 ///
-/// Real GLEP 42 news state lives at `<EROOT>/var/lib/gentoo/news/`, root-
-/// owned and portage-group-writable. That's fine for a managed
-/// `--root`/`--prefix`/`--local` target (the invoking user owns that tree,
-/// same as `var/lib/portage/world` under it), but `em news list`/`count` is
-/// a read-mostly, unprivileged operation an ordinary user should be able to
+/// Real GLEP 42 news state lives at `<EROOT>/var/lib/gentoo/news/`,
+/// root-owned and portage-group-writable. That's fine for a managed
+/// `--root`/`--prefix`/`--local` target, but `em news list`/`count` is a
+/// read-mostly, unprivileged operation an ordinary user should be able to
 /// run against the real host without root — same reasoning as
-/// [`regen_activity_root`]. Callers pick between this and the real
-/// `<eroot>/var/lib/gentoo/news` based on whether `eroot` is `/`.
+/// [`regen_activity_root`].
+///
+/// Callers pick between this and the real `<eroot>/var/lib/gentoo/news`
+/// based on whether `eroot` is `/`.
 pub fn news_state_dir() -> Utf8PathBuf {
     em_state_dir().join("news")
 }
@@ -97,13 +98,11 @@ pub fn mirrordist_state_dir() -> Utf8PathBuf {
 }
 
 /// `$XDG_STATE_HOME/em/activity` — stand-in "merge root" for `em regen`'s
-/// activity bus. Unlike a real merge, `regen` is designed to run
-/// unprivileged (its own cache write already falls back to
-/// [`md5_cache_root`] when the in-tree cache isn't writable), but its
+/// activity bus. Unlike a real merge, `regen` runs unprivileged, but its
 /// activity bus used to be built from the real `--root` unconditionally,
-/// so `LiveFsSink` tried (and, unprivileged, failed) to write under
-/// `<root>/var/cache/edb/em-activity/live`. Passing this path instead keeps
-/// regen's live-session tracking working without root.
+/// so `LiveFsSink` tried (and failed) to write under
+/// `<root>/var/cache/edb/em-activity/live`. This path keeps regen's
+/// live-session tracking working without root.
 pub fn regen_activity_root() -> Utf8PathBuf {
     em_state_dir().join("activity")
 }

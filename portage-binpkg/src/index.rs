@@ -196,13 +196,11 @@ pub(crate) fn split_iuse(s: &str) -> HashSet<String> {
 }
 
 /// Split a `Packages` text into `(header, body)` at the first blank line or
-/// the first `CPV:` line, whichever comes first. Real portage always writes
-/// a blank line after the header, but its own reader tolerates the header
-/// glued directly onto the first entry (no blank line) — so must we: without
-/// this shared boundary, a naive `split("\n\n")` over the whole text either
-/// drops a glued header's fields entirely (`parse_index_header`) or merges
-/// them into the first entry's own fields (`parse_index_blocks`), leaking
-/// e.g. a header `CHOST:` into an entry that legitimately omitted one.
+/// the first `CPV:` line, whichever comes first. Real portage's reader
+/// tolerates the header glued directly onto the first entry (no blank
+/// line), so must we: a naive `split("\n\n")` would drop a glued header's
+/// fields or merge them into the first entry, leaking e.g. `CHOST:` into an
+/// entry that legitimately omitted one.
 fn split_header_body(text: &str) -> (&str, &str) {
     let mut pos = 0usize;
     let mut rest = text;
@@ -586,12 +584,11 @@ fn filter_c_family_abi_flags(flags: &str) -> String {
 }
 
 /// GCC/Clang document every `-m*` option as a "machine dependent option"
-/// (target/ISA/ABI selector) — `-march=`/`-mcpu=`/`-mabi=`/`-mrvv-vector-bits=`/
-/// `-mno-outline-atomics`/`-mavx2`/… An allowlist of specific flag names is
+/// (target/ISA/ABI selector). An allowlist of specific flag names is
 /// perpetually incomplete (a missed selector means silent wrong-arch binpkg
-/// reuse); treat the whole `-m` namespace as ABI-relevant instead. Over-keying
-/// only costs an extra rebuild (the safe direction) — see the design doc's
-/// explicit "Policy B: stricter, more rebuilds" tradeoff.
+/// reuse); treat the whole `-m` namespace as ABI-relevant instead —
+/// over-keying only costs an extra rebuild, the safe direction. See [the
+/// build-env key doc](../../docs/user/binhost.md) for the full policy.
 fn is_c_family_abi_token(tok: &str) -> bool {
     tok.starts_with("-m") && tok != "-m"
 }

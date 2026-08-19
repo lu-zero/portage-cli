@@ -24,13 +24,12 @@ pub struct Conflict {
     pub dep: Dep,
     /// The version the solver chose (which violates the dep).
     pub proposed_ver: Version,
-    /// The version the plan installs over this same installed package, when it
-    /// does. `Some` means the constraint is stale rather than broken: the
-    /// package that carries it is itself being replaced in this run, so the
-    /// dep string evaluated here belongs to a build that will not survive the
-    /// plan. Lockstep families (`~`-pinned llvm/clang/lldb, the perl virtuals)
-    /// are entirely this case, so it is reported apart from real breakage
-    /// rather than silently dropped.
+    /// The version the plan installs over this same installed package, when
+    /// it does. `Some` means the constraint is stale rather than broken: the
+    /// package that carries it is itself being replaced this run, so the dep
+    /// string evaluated here belongs to a build that won't survive the plan
+    /// (lockstep families — `~`-pinned llvm/clang/lldb, perl virtuals — are
+    /// entirely this case), reported apart from real breakage, not dropped.
     pub owner_replaced_by: Option<Version>,
 }
 
@@ -48,13 +47,11 @@ pub struct ProposedPkg {
 
 /// Check all installed packages' dep strings against the proposed solution.
 ///
-/// Returns one `Conflict` per violated constraint.  A dependency is only a
-/// conflict when **no** package present after the plan satisfies it — where
-/// "present" means a proposed package *plus* every installed package the plan
-/// does not replace in the same `(cpn, slot)`.  This is slot-aware: pulling a
-/// new slot (e.g. `llvm:21`) alongside a retained old slot (`llvm:20`) does not
-/// break an installed consumer that pinned `~llvm:20`, whereas an in-slot
-/// upgrade past a `<` bound (e.g. `docutils:0` to `0.23`) still does.
+/// Returns one `Conflict` per violated constraint: no package present after
+/// the plan (a proposed package plus every installed package the plan
+/// doesn't replace in the same `(cpn, slot)`) satisfies it. Slot-aware:
+/// pulling `llvm:21` alongside a retained `llvm:20` doesn't break a consumer
+/// pinned to `~llvm:20`, but an in-slot upgrade past a `<` bound does.
 pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<Conflict> {
     // `(cpn, slot)` the plan installs into, and with what; a same-slot installed
     // package is replaced and therefore not retained.
@@ -107,12 +104,10 @@ pub fn find_conflicts(installed: &[VdbEntry], proposed: &[ProposedPkg]) -> Vec<C
 }
 
 /// Conflicts whose owner is *retained* — genuine breakage, not a stale
-/// constraint that will disappear because its owner is itself replaced in
-/// this run (see [`Conflict::owner_replaced_by`]). This is the set a
-/// chain-completion repair loop should act on: each one names an installed
-/// package (`installed_cpn`/`slot`) worth pulling into the plan as an
-/// upgrade/rebuild target so its violated dep is satisfied instead of merely
-/// reported.
+/// constraint that will disappear because its owner is itself replaced this
+/// run (see [`Conflict::owner_replaced_by`]). The set a chain-completion
+/// repair loop should act on: each names an installed package worth pulling
+/// into the plan as an upgrade/rebuild target instead of merely reported.
 pub fn retained_owners(conflicts: &[Conflict]) -> impl Iterator<Item = &Conflict> {
     conflicts.iter().filter(|c| c.owner_replaced_by.is_none())
 }
@@ -158,14 +153,11 @@ fn collect_violations(
 }
 
 /// Shared dependency-tree walk for "is this atom satisfied by what's
-/// present after the plan" checks: [`find_conflicts`] (blame a violation on
-/// the proposed version) and [`removal_obstacles`] (blame it on the removed
-/// candidate) need the identical group semantics — `AllOf`/`^^`/`??` report
-/// any unsatisfied branch naming a touched package; `AnyOf` (`||`) only
-/// reports when *every* alternative is violated (e.g. `virtual/resolvconf`'s
-/// `|| ( net-dns/openresolv sys-apps/systemd[resolvconf] )` survives
-/// openresolv's removal as long as the systemd branch is satisfied) — so
-/// this is one function, not two copies that could drift apart.
+/// present after the plan" checks: [`find_conflicts`] and
+/// [`removal_obstacles`] need identical group semantics — `AllOf`/`^^`/`??`
+/// report any unsatisfied branch naming a touched package; `AnyOf` (`||`)
+/// only reports when *every* alternative is violated — so this is one
+/// function, not two copies that could drift apart.
 ///
 /// `on_violation` decides both whether an unsatisfied atom counts (`None`
 /// skips it) and what to record (`Some(t)` pushes `t`); it can look up
@@ -404,12 +396,10 @@ pub fn dep_to_version_set(dep: &Dep) -> PortageVersionSet {
 
 /// When an auto-removed victim would be unmerged, relative to the merge of
 /// the package that blocks it — real portage's `BlockerDepPriority` edge
-/// direction (`_emerge/depgraph.py`, `_validate_blockers`): a strong `!!`
-/// blocker cannot tolerate any overlap, so its unmerge is ordered *before*
-/// the blocking merge; a weak `!` blocker tolerates transient overlap, so
-/// its unmerge is ordered *after*. Both are equally auto-removed when
-/// nothing else needs the blocked package — this only affects scheduling,
-/// not whether removal happens.
+/// direction: a strong `!!` blocker cannot tolerate any overlap, so its
+/// unmerge is ordered *before* the blocking merge; a weak `!` blocker
+/// tolerates transient overlap, ordered *after*. Both are equally
+/// auto-removed either way — this only affects scheduling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnmergeOrder {
     /// Weak `!`: unmerge after the blocking package merges.
@@ -801,14 +791,14 @@ mod tests {
         );
     }
 
-    /// Joint removal fixpoint, both directions:
-    /// - A and B are both candidates; B is A's only consumer. Removing them
-    ///   jointly succeeds (B's dep on A never gets walked, since a removed
-    ///   candidate's own deps are skipped as an owner).
-    /// - Adding a retained consumer C of B changes the outcome: B is no
-    ///   longer safe to remove (needed by C), so B is put back into the
-    ///   world and rechecked as an owner — which re-activates its own
-    ///   dependency on A, so A becomes an obstacle too (needed by B).
+    // Joint removal fixpoint, both directions:
+    // - A and B are both candidates; B is A's only consumer. Removing them
+    //   jointly succeeds (B's dep on A never gets walked, since a removed
+    //   candidate's own deps are skipped as an owner).
+    // - Adding a retained consumer C of B changes the outcome: B is no
+    //   longer safe to remove (needed by C), so B is put back into the
+    //   world and rechecked as an owner — which re-activates its own
+    //   dependency on A, so A becomes an obstacle too (needed by B).
     #[test]
     fn fixpoint_reintroduces_a_still_needed_candidates_own_dependency() {
         // Both A and B removable jointly: nothing outside the candidate set

@@ -21,12 +21,10 @@ use crate::util::write_if_absent;
 
 /// The full `[crossdev.<tuple>]` `Location::Alias` body for
 /// `name`/`category`/`packages_line` — the single formatter both
-/// `ConfigEntry::Alias`'s `change()` (comparison) and `apply()` (write) use,
-/// so they can never drift apart from each other. `name` is per-target
-/// (`crossdev.<tuple>`, see `crossdev::overlay_name`) so each cross target
-/// gets its own section/file and multiple targets can coexist on one prefix
-/// instead of the last `--setup`/`--init-target` silently orphaning the
-/// previous target's alias.
+/// `ConfigEntry::Alias`'s `change()` and `apply()` use, so they can never
+/// drift apart. `name` is per-target so each cross target gets its own
+/// section/file, instead of the last `--setup`/`--init-target` silently
+/// orphaning the previous target's alias.
 fn alias_body(name: &str, category: &str, packages_line: &str) -> String {
     format!(
         "[{name}]\nalias-source = gentoo\nalias-target = {category}\n\
@@ -82,12 +80,11 @@ pub(crate) enum RefreshPolicy {
     /// selection and re-detecting drift in a hand-edited file.
     Sync,
     /// Only create what's missing; anything already on disk — hand-edited
-    /// or not — is left untouched, whatever its content. `--setup`'s own
-    /// implied config-laydown step: a hand edit made between an earlier
-    /// explicit `--init-target` and this `--setup` must survive. Trade-off:
-    /// `--setup --ex-pkg X` against an *already-initialized* target won't
-    /// pick up the new extra either — run `--init-target --ex-pkg X`
-    /// (`Sync`) first for that.
+    /// or not — is left untouched. `--setup`'s implied config-laydown step:
+    /// a hand edit made between an earlier `--init-target` and this
+    /// `--setup` must survive. Trade-off: `--setup --ex-pkg X` against an
+    /// already-initialized target won't pick up the new extra either — run
+    /// `--init-target --ex-pkg X` (`Sync`) first for that.
     FillGapsOnly,
 }
 
@@ -431,14 +428,14 @@ mod tests {
         Ok(())
     }
 
-    /// A hand-edited `alias-packages` line that happens to *contain* the
-    /// computed line as a substring (e.g. someone appended a package by hand
-    /// instead of using `--ex-pkg`) must still count as drift and be
-    /// refreshed — a loose `.contains()` check previously let this slip
-    /// through as "already up to date", silently discarding the hand edit
-    /// on any later re-run instead of visibly overwriting it (or, depending
-    /// on where in the line the edit landed, inconsistently doing the
-    /// opposite). Exact-body comparison fixes both.
+    // A hand-edited `alias-packages` line that happens to *contain* the
+    // computed line as a substring (e.g. someone appended a package by hand
+    // instead of using `--ex-pkg`) must still count as drift and be
+    // refreshed — a loose `.contains()` check previously let this slip
+    // through as "already up to date", silently discarding the hand edit
+    // on any later re-run instead of visibly overwriting it (or, depending
+    // on where in the line the edit landed, inconsistently doing the
+    // opposite). Exact-body comparison fixes both.
     #[test]
     fn alias_entry_treats_a_hand_extended_line_as_drift() -> Result<()> {
         let dir = tempfile::tempdir()?;

@@ -191,13 +191,10 @@ pub struct UseFlagRequirement {
 pub struct PortageDependencyProvider {
     /// Keyed by the `Target`-flavored identity only — a `Host`-flavored
     /// package's data lives under its alias (see `host_aliases`). Private
-    /// (not even `pub(crate)`) so `package_data()`/`package_data_key()` are
-    /// the only way to look this up outside `provider`'s own submodules — a
-    /// raw `.get()` on a possibly-Host-flavored key (e.g. anything sourced
-    /// from a solved `SelectedDependencies`) silently misses instead of
-    /// resolving the alias. `dependency_graph` (`graph.rs`) forgot this once
-    /// (`208c818`); the same bug class was later found in `validate.rs`/
-    /// `post_solve.rs`/this module's own public API too.
+    /// so `package_data()`/`package_data_key()` are the only lookup path —
+    /// a raw `.get()` on a possibly-Host-flavored key silently misses
+    /// instead of resolving the alias (a recurring bug class, hit in
+    /// `graph.rs`, `validate.rs`, and `post_solve.rs` alike).
     packages: HashMap<PortagePackage, PackageData>,
     pub(crate) installed: HashMap<PortagePackage, (Version, InstalledPolicy)>,
     pub(crate) installed_cpns: HashSet<Cpn>,
@@ -208,14 +205,13 @@ pub struct PortageDependencyProvider {
     /// installed owner points at the plan — the owner is never in the solve.
     pub(crate) installed_blockers: HashMap<PortagePackage, Vec<Dep>>,
     /// Packages present on the **build host** (BROOT), used only to satisfy
-    /// `BDEPEND` edges — a BDEPEND that the host already provides is dropped in
-    /// [`get_dependencies`](crate::DependencyProvider::get_dependencies), so an
-    /// offset build (`--root <empty>`) doesn't pull host-provided build tools
-    /// (gcc, autoconf, cmake, …) into the plan. A flat atom set fed by the
-    /// caller (policy layer); the solver is root-agnostic and never knows how
-    /// many roots contributed (it may be `VDB(host)` alone, or a union with
-    /// other BROOTs / within-run merges). Always "present" (Lock-equivalent):
-    /// the solver never re-chooses these, it just checks satisfaction.
+    /// `BDEPEND` edges — a BDEPEND the host already provides is dropped in
+    /// [`get_dependencies`](crate::DependencyProvider::get_dependencies), so
+    /// an offset build (`--root <empty>`) doesn't pull host-provided build
+    /// tools into the plan.
+    ///
+    /// A flat atom set fed by the caller (policy layer); the solver is
+    /// root-agnostic. Always "present" (Lock-equivalent): never re-chosen.
     pub(crate) host_installed: HashMap<PortagePackage, HostEntry>,
     /// Packages present in the cross **sysroot** (`ESYSROOT`), used to satisfy
     /// `DEPEND` edges for target-root instances when [`cross_active`](Self::cross_active).
@@ -227,14 +223,13 @@ pub struct PortageDependencyProvider {
     /// need at the `DEPEND`-filtering branch in `solve.rs`.
     pub(crate) cross_active: bool,
     /// Whether this is a genuine foreign-arch build (`CHOST != CBUILD`), not
-    /// just a same-arch offset (`--root <dir>`, `cross_active` alone doesn't
-    /// distinguish them). Only a genuine cross build keeps `DEPEND` pinned to
-    /// the target sysroot unconditionally (`cross_target_runtime_deps`) — a
-    /// same-arch offset build's `DEPEND` is satisfied by whatever machine does
-    /// the actual compiling, same as `BDEPEND` (`broot_filtered`). Found
-    /// fallback used to treat *any* non-host sysroot as foreign-arch, so a
-    /// same-arch `--root` build always took the cross branch and never
-    /// dropped host-satisfied `DEPEND` at all.
+    /// just a same-arch offset (`--root <dir>`) — `cross_active` alone
+    /// doesn't distinguish them. Only a genuine cross build keeps `DEPEND`
+    /// pinned to the target sysroot unconditionally.
+    ///
+    /// A same-arch offset build's `DEPEND` is satisfied by whatever machine
+    /// compiles, same as `BDEPEND` — the old fallback treated any non-host
+    /// sysroot as foreign-arch, so `--root` never dropped it.
     pub(crate) is_cross_arch: bool,
     /// Host `@host` instances alias target package data (no duplicate ingest).
     pub(crate) host_aliases: HashMap<PortagePackage, PortagePackage>,
@@ -335,9 +330,8 @@ pub struct CededFlag {
 /// `IDEPEND` edges without building them into the plan. Carries the host
 /// instance's active USE and IUSE so a host-satisfied edge can be checked
 /// against its atom USE-dependencies: a `[flag]` the host lacks is **not**
-/// satisfied — the package must be rebuilt (portage's USE-change rebuild),
-/// which pulls its re-evaluated USE-conditional closure (PMS §8.3 atom
-/// USE-dependencies, §8.2.2 USE-conditional deps).
+/// satisfied — the package must be rebuilt, pulling its re-evaluated
+/// USE-conditional closure (PMS §8.3/§8.2.2).
 #[derive(Debug, Clone)]
 pub(crate) struct HostEntry {
     /// Installed version on BROOT.
@@ -358,11 +352,9 @@ pub(crate) struct HostEntry {
 /// Expensive to redo per solve: for a real Gentoo tree this filters
 /// `slots_for`'s ~32k cached versions through keyword/mask/license
 /// acceptance. Callers that rebuild the provider repeatedly against the
-/// same repository view (the USE-dep co-solve fixpoint) should call this
-/// once and reuse the result via
-/// [`PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map`],
-/// rather than `new`/`new_for_targets*` (which call this internally, once
-/// per construction).
+/// same repository view (USE-dep co-solve) should call this once and reuse
+/// it via
+/// [`PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map`].
 pub fn build_slot_map<R: PackageRepository>(repo: &R) -> convert::SlotMap {
     let mut cpn_slots: HashMap<Cpn, Vec<Interned<DefaultInterner>>> = HashMap::new();
     for cpn in repo.all_packages() {
@@ -398,11 +390,9 @@ impl PortageDependencyProvider {
 
     /// Like [`new`](Self::new), but converts only the packages *reachable*
     /// from `seeds` (typically the resolve targets plus the installed set).
-    /// References are followed transitively, so after ingestion a referenced
-    /// package missing from `packages` is genuinely absent from the
-    /// repository — the dropped-dependency filtering stays sound. For a
-    /// targeted resolve this converts a few hundred packages instead of the
-    /// whole tree.
+    /// References are followed transitively, so after ingestion a missing
+    /// referenced package is genuinely absent — dropped-dependency filtering
+    /// stays sound. Converts a few hundred packages instead of the whole tree.
     pub fn new_for_targets<R: PackageRepository>(repo: R, seeds: Vec<Cpn>) -> Self {
         let slot_map = build_slot_map(&repo);
         Self::new_with_seeds(repo, seeds, false, &slot_map)
@@ -424,14 +414,11 @@ impl PortageDependencyProvider {
     /// instead of recomputing it internally.
     ///
     /// For callers that rebuild the provider repeatedly against the same
-    /// repository view — e.g. the USE-dep co-solve fixpoint, which reruns the
-    /// whole solve up to ~8× per invocation — recomputing `slots_for` for
-    /// every CPN in the repository on every rebuild is the single largest
-    /// redundant cost in a per-iteration rebuild (a real Gentoo tree has
-    /// ~20k CPNs / ~32k cached versions, each checked against
-    /// keyword/mask/license acceptance). Building the slot map once and
-    /// reusing it here removes that cost from every iteration after the
-    /// first.
+    /// repository view — e.g. the USE-dep co-solve fixpoint, which reruns
+    /// the whole solve up to ~8× per invocation — recomputing `slots_for`
+    /// every rebuild is the single largest redundant cost (a real Gentoo
+    /// tree has ~20k CPNs / ~32k cached versions to re-filter). Building the
+    /// slot map once and reusing it here removes that cost after the first.
     pub fn new_for_targets_with_bdeps_and_slot_map<R: PackageRepository>(
         repo: R,
         seeds: Vec<Cpn>,
@@ -732,11 +719,12 @@ impl PortageDependencyProvider {
     /// upgraded if a dependency requires it. **Locked** packages are pinned to
     /// their exact installed version.
     ///
-    /// If the installed version is not present in the repository (e.g. a revbump
-    /// `4.3.3` -> `4.3.3-r1` superseded it, or an older version was removed), it
-    /// is registered with empty dependencies so PubGrub can select it.  Without
-    /// this, PubGrub would call `get_dependencies` for the installed version,
-    /// receive `Unavailable`, and fall back to the newest repository version.
+    /// If the installed version is not present in the repository (e.g. a
+    /// revbump superseded it, or an older version was removed), it's
+    /// registered with empty dependencies so PubGrub can select it — without
+    /// this, PubGrub would call `get_dependencies`, receive `Unavailable`,
+    /// and fall back to the newest repository version.
+    ///
     /// Under `Favor` (non-update) `choose_version` keeps this installed stub
     /// when it satisfies the constraint, matching emerge (a revbump is not
     /// pulled without `--update`).
@@ -1106,9 +1094,8 @@ impl PortageDependencyProvider {
     /// provider alternatives, which form an acyclic tree down to concrete
     /// packages. Other virtuals (`UseDecision`, `Root`) are *not* recursed
     /// into: `UseDecision` nodes encode `REQUIRED_USE` Level-C constraints
-    /// (e.g. a `^^` group's mutual-exclusion pairs), which reference each
-    /// other symmetrically — recursing into Level-C overflowed the stack.
-    /// Only provider alternatives belong here.
+    /// that reference each other symmetrically — recursing into them
+    /// overflowed the stack. Only provider alternatives belong here.
     ///
     /// `depth` bounds recursion (see [`Self::branch_best_installed`]) so an
     /// unexpected deep/cyclic shape degrades to "no preference".
@@ -1133,13 +1120,10 @@ impl PortageDependencyProvider {
     }
 
     /// The newest installed version reachable (one level) through a virtual
-    /// `||`-Choice branch — i.e. the newest version of the branch's target
-    /// package (e.g. rust / rust-bin) that is present in `self.installed`.
-    /// `None` when the branch reaches no installed package. Used by the
-    /// `choose_version` installed-preference heuristic to break ties when every
-    /// branch of a provider `||` group is installed at some version: the branch
-    /// with the newer installed version wins (matching emerge's `dep_zapdeps`),
-    /// avoiding a needless `[NS]` of the first-listed provider's newest slot.
+    /// `||`-Choice branch — the newest version of the branch's target
+    /// package present in `self.installed`, `None` if none is. Breaks ties
+    /// when every branch of a provider `||` group is installed: the branch
+    /// with the newer version wins (matching emerge's `dep_zapdeps`).
     ///
     /// `depth` is the remaining recursion budget shared with
     /// [`Self::branch_installed_ver`]; the public entry point
@@ -1159,16 +1143,15 @@ impl PortageDependencyProvider {
     /// while still bounding a pathological or unexpectedly cyclic shape.
     const BRANCH_DEPTH_LIMIT: u8 = 16;
 
-    /// For an all-branches-installed provider `||` Choice, return the candidate
-    /// branch whose reachable installed version is newest — emerge's
-    /// `dep_zapdeps` tie-break, which keeps the newer provider and avoids a
-    /// needless `[NS]` of the first-listed provider's newest slot
-    /// (e.g. `|| ( rust-bin:* rust:* )` with installed source rust-1.95.0 >
-    /// rust-bin-1.93.1 keeps source rust). Branches may be nested `:*`
-    /// SlotChoice virtuals (resolved one level via [`Self::branch_best_installed`])
-    /// or direct real packages (looked up in `self.installed`). Returns `None`
-    /// when no candidate exposes an installed version, so the caller falls back
-    /// to the default `max()` (= first-listed) pick.
+    /// For an all-branches-installed provider `||` Choice, return the
+    /// candidate branch whose reachable installed version is newest —
+    /// emerge's `dep_zapdeps` tie-break (e.g. `|| ( rust-bin:* rust:* )`
+    /// with installed source rust-1.95.0 > rust-bin-1.93.1 keeps source
+    /// rust). Branches may be nested `:*` SlotChoice virtuals or direct
+    /// real packages.
+    ///
+    /// Returns `None` when no candidate exposes an installed version, so
+    /// the caller falls back to the default `max()` (= first-listed) pick.
     pub(crate) fn newest_installed_choice_branch<'a>(
         &self,
         data: &PackageData,

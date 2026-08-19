@@ -109,10 +109,9 @@ impl Vdb {
     /// Same shape as `portage_repo::source_parallel`: a bounded work channel
     /// feeding a fixed worker pool, results handed to the caller over an
     /// unbounded one so a worker never parks on the hand-off. Workers take
-    /// the next package rather than a fixed slice each, which matters here
-    /// because CONTENTS sizes are heavily skewed — a handful of packages hold
-    /// most of a VDB's bytes, so equal chunks would leave one worker running
-    /// long after the rest finished.
+    /// the next package rather than a fixed slice each — CONTENTS sizes are
+    /// heavily skewed, so equal chunks would leave one worker running long
+    /// after the rest finished.
     ///
     /// Each worker keeps one `S` for the whole run and hands it to `f` — a
     /// read buffer, typically ([`InstalledPackage::contents_into`]), so a
