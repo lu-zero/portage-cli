@@ -435,28 +435,16 @@ pub fn gcc_refresh_plan(target: &CrossTarget, version: &str) -> StagePlan {
 }
 
 /// The native **stage1** plan (catalyst `stage1/chroot.sh`): baselayout first
-/// (USE=build, `--nodeps` — the bare FS skeleton), then the profile's
-/// [`packages.build`](ProfileStack::stage1_packages) set in one batch with
-/// `USE="-* build ${BOOTSTRAP_USE}"` (catalyst's own recipe,
-/// `targets/stage1/chroot.sh`: `CATALYST_USE="-* build ${BINDIST} ..."`;
-/// `USE="${CATALYST_USE} ${USE} ${BOOTSTRAP_USE} ..."` — `BINDIST` dropped, a
-/// catalyst-only var). `bootstrap_use` is the profile's own `BOOTSTRAP_USE`
-/// variable (`profiles/base/make.defaults`), already merged across the
-/// profile chain — its own comment there explains why this re-add is
-/// required: "stage1 builds break because of `USE="-* ${BOOTSTRAP_USE}"`"
-/// (it restores flags like `python_targets_python3_14` that a bare `-*`
-/// would otherwise wipe, matching the exact fold-order semantics
-/// `resolve_effective_use` implements — `BOOTSTRAP_USE` isn't itself part of
-/// the profile's `USE` fold, so it has to be spliced in here explicitly,
-/// same as catalyst does).
+/// (`USE=build`, `--nodeps` — the bare FS skeleton), then the profile's
+/// [`packages.build`](ProfileStack::stage1_packages) set with
+/// `USE="-* build ${BOOTSTRAP_USE}"`, matching catalyst's own recipe. See
+/// [Stage1](../../docs/user/stages-and-testing.md) for why `BOOTSTRAP_USE`
+/// must be spliced back in explicitly (it isn't part of the profile's `USE`
+/// fold itself) and why `--autosolve-use` is always on for this step.
 ///
-/// Stage1 always runs with `--autosolve-use` (see [`crate::crossdev::run_stage1`]):
-/// conf-level `-*` clears IUSE `+` defaults (e.g. `app-alternatives` first
-/// provider), which violates `REQUIRED_USE`; Level-C cedes those flags and
-/// prefers the ebuild's `+` IUSE default when the config left the flag off.
 /// Distinct from [`toolchain_plan`]'s `BootstrapKind::Native`, which builds
-/// the *compiler* itself (binutils/glibc/gcc) — stage1 assumes that toolchain
-/// already exists in the root and just emerges the minimal bootable package
+/// the *compiler* itself (binutils/glibc/gcc) — stage1 assumes that
+/// toolchain already exists and just emerges the minimal bootable package
 /// set with it, mirroring crossdev-stages' `install_stage1`.
 pub fn stage1_plan(stack: &ProfileStack, bootstrap_use: &[String]) -> Result<StagePlan> {
     let mut steps = vec![StageStep {

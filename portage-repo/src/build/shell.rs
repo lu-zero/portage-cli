@@ -2091,30 +2091,18 @@ impl EbuildShell {
 
     /// Export every variable currently in the shell's environment, so a real
     /// subprocess an ebuild/eclass spawns directly (`bash
-    /// "${FILESDIR}/gentoo.config"`, any raw `$(external-tool)`) inherits it —
-    /// not just em's own Rust builtins (`econf`/`emake`), which read brush's
-    /// variable table in-process and never needed export at all.
+    /// "${FILESDIR}/gentoo.config"`, any raw `$(external-tool)`) inherits it
+    /// — `source`d make.conf/profile assignments are plain (non-exported)
+    /// otherwise, unlike real portage's `config.environ()`. Call this right
+    /// after `apply_profile_env` so every profile-derived variable is
+    /// covered generically. See [the sourced-env sweep design
+    /// doc](../../docs/design/build-environment.md) for why, and the
+    /// `CHOST`/`gentoo.config` breakage this replaced.
     ///
-    /// Real portage doesn't hand-list what to export: `config.environ()`
-    /// exports its *entire* settings dict minus a small internal denylist,
-    /// because it builds the whole OS-level process environment before the
-    /// ebuild's bash even starts. `em` instead `source`s make.conf/profile
-    /// into an already-running brush shell as plain (non-exported)
-    /// assignments — matching real bash `source` semantics, but meaning
-    /// nothing reaches a real child process without an explicit `export`.
-    /// Call this right after sourcing make.conf/profile/package.env (see
-    /// `apply_profile_env` in `portage-cli/src/ebuild.rs`) so every
-    /// profile-derived variable (`CHOST`, `ELIBC`, `MULTILIB_ABIS`,
-    /// `DEFAULT_ABI`, …) is covered generically, instead of growing the
-    /// hand-written identity-var list in `init_build_env` one silent
-    /// breakage at a time (as happened with `CHOST` — invisible to
-    /// `openssl`'s `gentoo.config` subshell, which fell back to `uname`
-    /// autodetection and picked the *build host's* arch under `--cross`).
-    ///
-    /// Flips the export bit directly via brush's `ResolvedVarRefMut::
-    /// base_var_mut` rather than round-tripping through a generated `export
-    /// a b c …` string re-parsed by the interpreter — this is pure metadata
-    /// mutation, not shell execution.
+    /// Flips the export bit directly via brush's
+    /// `ResolvedVarRefMut::base_var_mut` rather than round-tripping through
+    /// a generated `export a b c …` string — pure metadata mutation, not
+    /// shell execution.
     pub fn export_sourced_env(&mut self) -> Result<()> {
         let names: Vec<String> = self
             .shell

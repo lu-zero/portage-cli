@@ -484,6 +484,36 @@ right back out — which is exactly the bug this layer was added to fix
 (`em stages --stage1`'s `USE="-* build"` silently defeated `--autosolve-use`
 for every package it touched until this landed, 2026-07-12).
 
+## ACCEPT_KEYWORDS accept-set folding
+
+`portage-resolve::repo::AcceptToken` parses one `ACCEPT_KEYWORDS` /
+`package.accept_keywords` token. **Package-side** `KEYWORDS` tokens
+(`amd64 ~arm64 -mips`) are PMS vocabulary
+([PMS 7.3.3](https://projects.gentoo.org/pms/9/pms.html#keywords)), parsed
+into `portage_metadata::Keyword`. **User/profile-side** acceptance
+(`ACCEPT_KEYWORDS`, `package.accept_keywords`) is Portage policy, not PMS:
+`ACCEPT_KEYWORDS` is an incremental variable (profile → globals → make.conf →
+env, default `$ARCH`); `package.accept_keywords` augments that set per atom,
+with `*` / `~*` / `**` wildcards and the pin idiom
+`media-video/mplayer -~x86`. Visibility is exact membership of a package
+`KEYWORDS` token in the folded accept set (Portage
+`KeywordsManager._getMissingKeywords`), not "host arch bits only".
+
+Real Portage keeps `pgroups` as a flat set of literal strings (`arm64`,
+`~arm64`, `riscv`, `*`, `**`, …); match is `token in set` plus wildcards.
+Each token sets or clears **exactly its own** grant — never a lattice join.
+That shape matters because of bugs already hit by folding it differently:
+
+| Shortcut tried | What broke |
+|---|---|
+| Host-arch bools only | Crossdev foreign-arch grants ignored — a host-only bitfield drops `riscv`/`~riscv` as no-ops from `cross-…/pkg riscv ~riscv -arm64 -~arm64`, masking every version (canary: `cross-riscv64-unknown-linux-gnu/linux-headers`) |
+| Join testing⇒stable at fold | `package.accept_keywords`'s `mplayer -~x86` pin idiom fully masked stable `x86` too, instead of only withdrawing `~x86` |
+| Treat `-~arch` as `-arch` | Same pin idiom fully masked |
+
+So: `-arch` and `-~arch` are independent negations; `~arch` does not accept
+stable `arch` and vice versa at match time; `-*` is an incremental clear-all
+(same family as make.conf(5) incremental clear-all for `USE`/`ACCEPT_*`).
+
 ## Post-solve validation
 
 The solver decides *versions*; several constraints are intentionally **not**

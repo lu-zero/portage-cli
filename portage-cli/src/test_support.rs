@@ -100,42 +100,18 @@ impl Drop for ActiveStateGuard {
 }
 
 /// Set `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_NAME`/
-/// `GIT_COMMITTER_EMAIL` to a fixed test identity for the whole process.
+/// `GIT_COMMITTER_EMAIL` to a fixed test identity for the whole process, for
+/// direct `gix` API calls (which read process env like real git but have no
+/// per-call override point) — real `git` `Command` invocations already get
+/// their identity per-call via `.env(...)`. See [the CI-only gix identity
+/// gap](../../docs/design/testing.md) for why this is needed at all.
 ///
-/// Real `git` invocations spawned via `Command` (e.g. `git_gix`'s and
-/// `gix_ext::reset`'s own `git()` test helper) get their identity per-call
-/// via `.env(...)` on the child process. This is for the *other* half: the
-/// direct `gix` API calls those same tests' production code makes
-/// (`gix::open` + fetch/reset), which read process env exactly like real
-/// git does but have no per-call override point available to a caller.
-///
-/// Without an identity from *some* source (env or git config), gix's
-/// ref/reflog-write machinery hard-errors —
-/// `RefEdit("The reflog could not be created or updated")` — where real
-/// git's equivalent operation (`git reset --hard` moving a ref with no new
-/// commit) quietly falls back to `$(whoami)@$(hostname)` and succeeds; gix
-/// does not replicate that fallback. Confirmed deterministic, not a race:
-/// reproduces 100% of the time with no git identity resolvable from any
-/// source (`GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-/// GIT_CONFIG_NOSYSTEM=1`, no `GIT_*` env vars), never on a dev machine
-/// with a real `~/.gitconfig` — which is exactly the gap between this
-/// project's CI runner (fresh, no git identity configured anywhere) and
-/// every local dev machine that ever exercised these tests before
-/// 2026-08-10. Also a real product gap, not just a test one: `em`'s
-/// optional `--features sync-gix` backend would hit this identically on
-/// any host that has never run `git config --global user.name` — tracked
-/// separately from this test-only fix.
-///
-/// No restoration needed: the value is a fixed constant no other test
-/// cares about, and every caller sets the same one. Callers must still
-/// hold [`path_lock`] (and typically [`home_lock`]) for the general
-/// environment-variable safety those locks exist for.
-///
-/// Only ever called from `sync-gix`-gated test modules (`gix_ext::reset`,
-/// `maint::sync::git_gix`); the `cfg_attr` keeps it dead-code-clean in the
-/// default (no `sync-gix`) build instead of gating the function itself,
-/// which would break the `[set_test_git_identity]` link in [`HOME_LOCK`]'s
-/// always-compiled doc comment.
+/// No restoration needed: every caller sets the same fixed constant.
+/// Callers must still hold [`path_lock`] (and typically [`home_lock`]).
+/// Only called from `sync-gix`-gated test modules; the `cfg_attr` keeps it
+/// dead-code-clean in the default build instead of gating the function
+/// itself, which would break the `[set_test_git_identity]` link in
+/// [`HOME_LOCK`]'s doc comment.
 #[cfg_attr(not(feature = "sync-gix"), allow(dead_code))]
 pub(crate) fn set_test_git_identity() {
     // SAFETY: held under path_lock()/home_lock() by every caller; no other

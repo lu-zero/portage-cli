@@ -87,20 +87,16 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     // Dual-root solver bookkeeping ((package, merge_root) nodes, BROOT-
     // satisfaction dropping, host_copies' post-solve walk) is needed only
     // when BROOT is genuinely a *different filesystem* from the target —
-    // true for `--root`/`--prefix`/cross (BROOT stays the real, already-
-    // populated host, or a real sysroot, while the target moves), false for
-    // both the bare invocation (broot == target == `/`) and `--local`
-    // (broot == target == the same prefix — structurally the same
-    // single-root shape as bare, just at a different path). Replaced the
-    // old `target != "/"` test (2026-07-16): that made `--local` spuriously
-    // "active", engaging `host_copies`'s Tier-1 (already-populated-host)
-    // machinery against a `--local` prefix's own, initially-empty BROOT —
-    // it can't find *anything* satisfied there and ends up inserting a
-    // parallel `@Host` copy of nearly the whole closure alongside the
-    // regular Target one, duplicate entries preflight then rejects the
-    // order of. `roots.broot() == None` means "trivially equals
-    // merge_root" (see `Roots::broot`'s own doc), so that case reads as
-    // "doesn't differ" correctly too.
+    // true for `--root`/`--prefix`/cross, false for both the bare
+    // invocation (broot == target == `/`) and `--local` (broot == target ==
+    // the same prefix — structurally the same single-root shape as bare).
+    //
+    // Replaced the old `target != "/"` test (2026-07-16): that made
+    // `--local` spuriously "active", engaging host_copies's Tier-1 machinery
+    // against a `--local` prefix's own, initially-empty BROOT, inserting a
+    // parallel `@Host` copy of nearly the whole closure that preflight then
+    // rejects the order of. `roots.broot() == None` means "trivially equals
+    // merge_root", so that case reads as "doesn't differ" correctly too.
     let broot_differs = roots.broot().is_some_and(|b| b.as_str() != target.as_str());
     let (chost, cbuild) = read_chost_cbuild(&sysroot);
     let cross_arch = match (chost.as_deref(), cbuild.as_deref()) {

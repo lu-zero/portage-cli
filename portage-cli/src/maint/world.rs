@@ -399,19 +399,15 @@ pub fn add_set_refs(root: Option<&Utf8Path>, names: &[String]) {
 }
 
 /// Remove `tokens` (plain atoms or `@set` names) from the world files —
-/// `-W`/`--deselect`. Mirrors real emerge's `action_deselect`
-/// (`_emerge/actions.py`): a plain-atom token is matched by `Cpn` against
-/// `world` (any version-qualified form, same granularity `add_atoms` uses
-/// for replacement); a `@name` token is matched by exact name against
-/// `world_sets` — the two files, and the two token kinds, are handled
-/// completely independently, never cross-matched. `world` is also checked
-/// for a stray `@name` line for backward compatibility with this file's own
-/// pre-fix leniency (`check_world_file` has long tolerated `@` lines living
-/// directly in `world`, and older data or a hand-edit may still have one
-/// there rather than in `world_sets`). Tokens matching nothing are silently
-/// no-ops (matches real emerge: deselecting something not selected isn't an
-/// error). Returns the total number of lines actually removed across both
-/// files.
+/// `-W`/`--deselect`. Mirrors real emerge's `action_deselect`: a plain-atom
+/// token is matched by `Cpn` against `world` (any version-qualified form);
+/// a `@name` token is matched by exact name against `world_sets` — the two
+/// files and token kinds are handled independently, never cross-matched.
+///
+/// `world` is also checked for a stray `@name` line for backward
+/// compatibility (`check_world_file` has long tolerated `@` lines living
+/// directly in `world` rather than `world_sets`). Tokens matching nothing
+/// are silent no-ops (matches real emerge). Returns the total lines removed.
 pub fn remove_atoms(root: Option<&Utf8Path>, tokens: &[String]) -> Result<usize> {
     let mut set_names: HashSet<&str> = HashSet::new();
     let mut cpns: HashSet<portage_atom::Cpn> = HashSet::new();

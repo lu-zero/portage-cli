@@ -229,6 +229,19 @@ etc.).
 can't always resolve the same way local sibling-worktree overrides do) but
 still gets a compile-only smoke check so its benches don't silently rot.
 
+### `test_support::set_git_identity` — the CI-only gix identity gap
+
+`git` invocations spawned via `Command` get their identity per-call via
+`.env(...)`. Direct `gix` API calls (`gix::open` + fetch/reset) read process
+env like real git but have no per-call override, so without an identity
+from *some* source gix's ref/reflog-write machinery hard-errors
+(`RefEdit("The reflog could not be created or updated")`) where real git
+quietly falls back to `$(whoami)@$(hostname)`. Reproduces 100% of the time
+with no git identity resolvable from any source — this project's CI runner,
+never a dev machine with `~/.gitconfig`. `em`'s optional `--features
+sync-gix` backend would hit this identically on a host that never ran `git
+config --global user.name`, tracked separately from this test-only fix.
+
 ## Bumping brush (routine maintenance)
 
 As common as a formal bench run: the ebuild shell is **brush** from

@@ -391,25 +391,20 @@ impl PortageDependencyProvider {
             return Dependencies::Available(host_native_deps(self, vd));
         }
 
-        // A package being *built* always pulls its BDEPEND/IDEPEND, minus the
-        // edges already satisfied on BROOT (the host). Its build deps are
-        // strictly required to build it, so `--with-bdeps` does not gate them:
-        // emerge likewise pulls a built package's BDEPEND even under
-        // `--with-bdeps=n` (that flag governs only the BDEPEND of installed-and-
-        // *kept* packages, which the runtime-only branch above already excludes).
-        // Host-satisfied edges are dropped so an offset build (`--root <empty>`)
-        // does not re-pull host-provided build/install tools. DEPEND/RDEPEND are
+        // A package being *built* always pulls its BDEPEND/IDEPEND, minus
+        // edges already satisfied on BROOT (the host) — build deps are
+        // strictly required, so `--with-bdeps` doesn't gate them (that flag
+        // only governs installed-and-*kept* packages' BDEPEND, already
+        // excluded by the runtime-only branch above). DEPEND/RDEPEND
         // unaffected.
+        //
         // `!package.is_virtual()`: the synthetic solver root also flows
-        // through here (nothing else catches it once cross/emptytree/
-        // installed-and-kept are ruled out) and carries the user's requested
-        // target atoms in its own "DEPEND" slot (see `target_drops_depend`'s
-        // doc comment on the same footgun for the cross path). Applying
-        // host-satisfaction filtering there would drop a requested atom
-        // outright whenever the *host* happens to already have it installed
-        // (e.g. `em --root <dir> sys-devel/gcc` on a host that already has
-        // gcc) — collapsing the plan to 0 packages instead of adding gcc to
-        // the target.
+        // through here and carries the user's requested target atoms in its
+        // own "DEPEND" slot (see `target_drops_depend`'s doc comment on the
+        // same footgun for the cross path) — host-satisfaction filtering
+        // there would drop a requested atom whenever the host already has
+        // it (`em --root <dir> sys-devel/gcc` on a host with gcc already
+        // installed), collapsing the plan to 0 packages instead of adding it.
         if !package.is_virtual() && !self.host_installed.is_empty() {
             return Dependencies::Available(broot_filtered(self, vd));
         }
@@ -539,22 +534,11 @@ fn host_native_deps(
 }
 
 /// Native build: keep RDEPEND/PDEPEND; drop host-satisfied DEPEND, BDEPEND,
-/// and IDEPEND.
-///
-/// DEPEND joined BDEPEND/IDEPEND's host-satisfied filtering 2026-07-11: for a
-/// native (same-arch) build there's no separate build sysroot distinct from
-/// the host when `CBUILD==CHOST` — DEPEND is satisfied by whatever machine
-/// does the actual compiling, same as BDEPEND. Confirmed empirically against
-/// real portage: `ROOT=X emerge sys-devel/gcc` against a genuinely empty `X`
-/// does not need `os-headers`/`perl`/`sys-apps/portage`/etc. built fresh into
-/// `X` — glibc's and gcc's own DEPEND is satisfied by the host. Before this
-/// fix, DEPEND was included unconditionally with no host check at all, so a
-/// self-contained `--root` build of a single package (e.g. `sys-devel/gcc`)
-/// pulled in perl's own `!minimal?` PDEPEND tail (`perl-cleaner`,
-/// `sys-apps/portage`, `app-crypt/gnupg`, `app-admin/eselect`,
-/// `net-misc/rsync`) transitively via `virtual/os-headers` →
-/// `sys-kernel/linux-headers` → `dev-lang/perl` — a 127-package plan for a
-/// real `emerge`'s 16.
+/// and IDEPEND — for a native (same-arch) build there's no build sysroot
+/// distinct from the host when `CBUILD==CHOST`, so DEPEND is satisfied by
+/// whatever machine does the actual compiling, same as BDEPEND. See [the
+/// gcc→perl→rsync explosion this closed](../../docs/design/root-topology.md)
+/// for why DEPEND had to join BDEPEND/IDEPEND's host-satisfied filtering.
 fn broot_filtered(
     provider: &PortageDependencyProvider,
     vd: &VersionData,
@@ -591,18 +575,14 @@ fn broot_filtered(
 /// `p` a `Choice`/`SlotChoice` virtual node (an `||`/`^^`/`??` OR-group or a
 /// `:*` slot-star group) delegates to [`virtual_satisfied_on_broot`]: the
 /// edge is satisfied when *any* branch is. Before this, a virtual target was
-/// never a `host_installed` key, so this always returned `false` — every
-/// DEPEND/BDEPEND/IDEPEND edge routed through an OR-group or a plain
-/// unslotted dep on a multi-slot package (gcc, python, ...) became an
-/// unconditional constraint, bypassing host-satisfaction entirely. Found
-/// ~123 packages after `broot_filtered` started filtering DEPEND: every
-/// exploding package (`perl`, `os-headers`, `linux-headers`, `elt-patches`,
-/// ...) checked `satisfied=true` on its *direct* edge, yet still ended up in
-/// the plan — reached only through a Choice/SlotChoice node whose own edge
-/// was never checked at all. `Root`/`UseDecision` are excluded (never
-/// virtual-satisfiable): they aren't a real installable alternative, and
-/// REQUIRED_USE/ceding machinery must keep deciding them, not have them
-/// silently treated as "the host already has it".
+/// never a `host_installed` key, so every such edge became an unconditional
+/// constraint, bypassing host-satisfaction — ~123 stray packages reached
+/// only through a Choice/SlotChoice node whose own edge was never checked.
+///
+/// `Root`/`UseDecision` are excluded (never virtual-satisfiable): they
+/// aren't a real installable alternative, and REQUIRED_USE/ceding machinery
+/// must keep deciding them, not have them silently treated as "the host
+/// already has it".
 fn host_satisfied_on_broot(
     provider: &PortageDependencyProvider,
     vd: &VersionData,

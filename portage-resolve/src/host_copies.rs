@@ -344,19 +344,15 @@ mod tests {
         );
     }
 
-    /// Documents a genuinely unsolvable input, found while testing the
-    /// forward-reference fix: `consumer` needs `tool` needs `base`, but
-    /// `base` is a seeded `MergeRoot::Host` entry the solver placed *after*
-    /// `consumer` for reasons unrelated to this chain (host_copies never
-    /// repositions an existing `target_order` entry, only inserts new
-    /// copies around it). No linear order can put `tool` both after `base`
-    /// and before `consumer` when `base` itself comes after `consumer` — this
-    /// isn't a bug `compute` can fix; it's exactly the class of conflict
-    /// `preflight::check` exists to catch instead of silently mis-building.
-    /// Pinned here so a future change to `compute` that starts silently
-    /// "resolving" this by reordering seeded entries gets caught: that would
-    /// be a different, larger design (repositioning immovable solver output)
-    /// than the deps-first-copy-insertion this module does.
+    // Documents a genuinely unsolvable input: `consumer` needs `tool` needs
+    // `base`, but `base` is a seeded `MergeRoot::Host` entry the solver
+    // placed *after* `consumer` (host_copies never repositions an existing
+    // `target_order` entry, only inserts new copies around it). No linear
+    // order can satisfy that — not a bug `compute` can fix, exactly the
+    // class of conflict `preflight::check` exists to catch instead. Pinned
+    // so a future `compute` change that starts silently "resolving" this by
+    // reordering seeded entries gets caught: that's a different, larger
+    // design than the deps-first-copy-insertion this module does.
     #[test]
     fn seeded_host_entry_after_its_dependents_consumer_is_unsolvable_by_design() {
         let data = repo_from(&[

@@ -102,22 +102,12 @@ impl Roots {
 
     /// The `EPREFIX` a package merging into `merge_root()` should actually
     /// build against: `eprefix()` only when it IS `merge_root()` (the PMS
-    /// invariant `EROOT = ROOT + EPREFIX` holds), `None` whenever an
-    /// explicit `--root` or a `--target` sysroot substitution has moved
-    /// `merge_root()` away from the outer anchor — that package installs
-    /// into a self-contained, unprefixed tree (a cross sysroot, or a
-    /// `stages --stage1`/`--stage3` destination), and baking the outer
-    /// prefix into its installed `.pc`/`.la` files would point them at a
-    /// path with nothing on it. Live-verified: `libffi`'s `.pc` under
-    /// `--prefix P --target T` and `zlib`'s `.pc` under plain `--prefix P
-    /// --root B` (no `--target` at all) both leaked `P` before this
-    /// existed — same root cause, no `--target`/`is_cross_arch()`
-    /// special-casing needed, the merge_root/eprefix comparison alone
-    /// covers both. See `RootContext.eprefix`'s three callers
-    /// (`merge/mod.rs`, `emerge.rs`'s unmerge path, `dispatch.rs`'s
-    /// `__ebuild`) — this must be the only thing any of them ever read for
-    /// that field; everything else (`relocate_root()`, `setup.rs`,
-    /// `select/clang.rs`, `privilege.rs`) keeps using raw `eprefix()`.
+    /// invariant `EROOT = ROOT + EPREFIX` holds), `None` whenever a moved
+    /// `merge_root()` means this package installs into a self-contained,
+    /// unprefixed tree instead. `RootContext.eprefix`'s three callers must
+    /// read this, never raw `eprefix()`. See [`build_eprefix` vs
+    /// `eprefix`](../../docs/design/em-prefix-experiment.md) for the
+    /// live-verified `libffi`/`zlib` leak this fixed.
     pub fn build_eprefix(&self) -> Option<&Utf8Path> {
         self.eprefix.as_deref().filter(|e| *e == self.merge_root())
     }

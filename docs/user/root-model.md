@@ -61,6 +61,13 @@ satisfy them: the resulting compiler looks for headers, `crt*.o` and its loader
 under `P`, finds none, and cannot build a hello-world. A `--local` prefix, which
 does own its libc, wants the standalone behaviour it already gets.
 
+`USE=prefix-guest` itself is **not FreeBSD/Darwin-specific** — upstream Gentoo
+Prefix force-sets it for the entire standard "rpath" profile family regardless
+of host OS (`features/prefix/rpath/use.force`), so `em`'s
+`native_prefix_guest` reads `true` for essentially every `--local`/`--prefix`
+bootstrap, Linux included — live-confirmed on both a real Debian 12 and a real
+FreeBSD 14.4 host.
+
 Neither `--root` nor `--prefix` ever changes `config_root` — only
 `--config-root` does (see above). `--prefix` additionally leaves `base_root`
 alone too — only the destination moves. That is the whole difference between

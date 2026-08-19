@@ -254,31 +254,17 @@ fn current_backend(roots: &Roots, target: &str) -> Option<(String, Utf8PathBuf)>
 
 /// Create the `<target>-pkg-config` symlink (and the shared script it
 /// points to, if this is the first target activated under this root) if
-/// the symlink doesn't already exist, preferring `pkgconf` over
-/// `pkg-config` (matching modern Gentoo's own default). Idempotent and
-/// non-destructive: an existing symlink — from an earlier auto-activation
-/// or a deliberate `em select pkgconf set` — is left untouched, and an
-/// already-existing shared script's backend choice is never silently
-/// re-picked, the same `FillGapsOnly`-style deference this codebase uses
-/// elsewhere for one-time bootstrap state. Returns `false` if no known
-/// backend is reachable and there's no shared script to link to yet.
+/// it doesn't already exist, preferring `pkgconf` over `pkg-config`
+/// (matching modern Gentoo's default). Idempotent: an existing symlink or
+/// shared script is left untouched (`FillGapsOnly`-style deference).
+/// Returns `false` if no known backend is reachable yet.
 ///
-/// `is_native` (true only for `target == ` the host's own native CHOST, from
-/// `crossdev::activate_native_toolchain`) skips activation entirely under a
-/// `roots.is_overlay()` topology (`--prefix`). The shared script's
-/// `ESYSROOT`-only scoping is correct for `--local`/`--root` (standalone
-/// closures — nothing outside `ESYSROOT` should be visible anyway) and for a
-/// genuine foreign `CTARGET` (`is_native: false`, real cross target — the
-/// only place its own sysroot's packages could live). `--prefix` is neither:
-/// it's documented and designed as an overlay that *borrows* the host's
-/// already-populated system (`roots.base()` is the host, unlike `--local`'s
-/// `Some(prefix)`), and activating this wrapper for the native/host CHOST
-/// there regresses a `--prefix` build from "transparently uses the real
-/// system pkgconf" (and what `em select pkgconf set` still does — that
-/// path never calls this). Shadowing the host CHOST with an ESYSROOT-
-/// scoped wrapper breaks host BDEPEND discovery (e.g. libdebuginfod).
-/// `is_overlay()` alone is not enough: `--prefix --target` crossdev
-/// correctly activates with `is_native: false`.
+/// `is_native` (true only for the host's own native CHOST) skips activation
+/// under `roots.is_overlay()` (`--prefix`): that topology borrows the
+/// host's already-populated system, so shadowing the host CHOST would
+/// break host BDEPEND discovery (e.g. libdebuginfod) instead of
+/// transparently using the real system pkgconf. `is_overlay()` alone isn't
+/// enough: `--prefix --target` crossdev still activates (`is_native: false`).
 pub fn activate_pkgconf(roots: &Roots, target: &str, is_native: bool) -> Result<bool> {
     if is_native && roots.is_overlay() {
         return Ok(false);

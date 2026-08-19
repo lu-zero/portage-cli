@@ -32,26 +32,10 @@ fn merge_use_var<'a>(var: &str, iter: impl Iterator<Item = &'a str>) -> Vec<Stri
 /// layer by both [`ProfileStack::profile_env`] and [`source_incremental`].
 ///
 /// Individual USE_EXPAND-listed variables (`VIDEO_CARDS`, `PYTHON_TARGETS`,
-/// `ELIBC`, …) are deliberately **not** here — they need different treatment
-/// depending on *which* layer touches them, not the single raw-merge rule
-/// this list drives:
-/// - Within the profile chain (parent → child `make.defaults`), PMS 5.3.2
-///   says the variables *listed by* `USE_EXPAND` are themselves incremental
-///   — confirmed live against real portage 3.0.81.2: a child profile's
-///   `VIDEO_CARDS="fbdev"` does *not* replace a parent's
-///   `VIDEO_CARDS="dummy fbdev"`, both survive as `video_cards_dummy` and
-///   `video_cards_fbdev`. `profile_env` implements this itself (see its doc
-///   comment), translating each layer's own value into USE tokens and
-///   folding them into the accumulator's `USE` as it goes.
-/// - Once a non-profile layer (make.conf, package.use, environment)
-///   explicitly touches the same variable, it's a hard replace, not a
-///   union — confirmed live: make.conf's `VIDEO_CARDS="amdgpu"` on a stack
-///   that built up `dummy`/`fbdev` ends with only `video_cards_amdgpu`.
-///   `source_incremental` implements this with an explicit prefix-strip
-///   (see its doc comment), not the plain merge this list's vars get.
-///
-/// See `portage-repo/docs/pms-notes.md` for the full investigation and the
-/// live-verification transcripts.
+/// `ELIBC`, …) are deliberately **not** here: they need per-layer USE-token
+/// translation, not this list's plain raw-string merge. See
+/// `portage-repo/docs/pms-notes.md` for the full PMS 5.3.1/5.3.2 rules,
+/// the live-verification transcripts, and why the split is this shape.
 const INCREMENTAL_VARS: &[&str] = &[
     "USE",
     "USE_EXPAND",
@@ -648,36 +632,15 @@ async fn apply_env_layer(shell: &mut EbuildShell) -> Result<()> {
 
 /// Source a single config file (e.g. `make.conf`) with incremental USE semantics.
 ///
-/// Before sourcing, the true incremental vars (`USE`, `USE_EXPAND`,
-/// `FEATURES`, `ACCEPT_KEYWORDS`, `ACCEPT_LICENSE`, `CONFIG_PROTECT`,
-/// `CONFIG_PROTECT_MASK`, `IUSE_IMPLICIT` — `INCREMENTAL_VARS`) are reset to
-/// empty so the file's own assignments represent its pure contribution.
-/// After sourcing, those contributions are merged back into the accumulated
-/// shell state using [`merge_flag_lists`].
-///
-/// USE_EXPAND-listed variables (`VIDEO_CARDS`, `L10N`, …) are different from
-/// both `INCREMENTAL_VARS` (which merge) and from [`ProfileStack::profile_env`]'s
-/// treatment of the same variables (which also merge, within the profile
-/// chain — see that function's doc comment). Here, a variable this layer
-/// *explicitly assigns* — even to `""` — gets a hard replace: every existing
-/// USE token with that variable's prefix is stripped ([`strip_expand_tokens`])
-/// before this layer's own translated tokens are added, and the raw
-/// variable's own accumulated value is replaced outright, not merged.
-/// Verified live against real portage 3.0.81.2: make.conf's
-/// `VIDEO_CARDS="amdgpu"` on a profile stack that built up `dummy`/`fbdev`
-/// ends with only `video_cards_amdgpu` — this is `config.py`'s
-/// `is_not_incremental` branch, which applies to every non-"defaults"
-/// config source (make.conf, package.use, environment) alike. `unset`, not
-/// `VAR=""`, is used for the reset so "never mentioned by this layer" (the
-/// shell variable stays absent) can be told apart from "explicitly assigned
-/// empty" (`shell.get_var` returns `Some("")`) — the latter must still
-/// trigger the strip even though it contributes no tokens (portage:
-/// `VIDEO_CARDS=""` in make.conf is how a user fully clears the group).
-///
-/// `USE_EXPAND_UNPREFIXED` variables (`ARCH`, …) don't get the prefix-strip
-/// treatment — a bare unprefixed token (`amd64`) has no structural prefix to
-/// safely identify an old value by, so they keep a plain incremental add,
-/// same as before this fix.
+/// `INCREMENTAL_VARS` are reset to empty before sourcing so the file's own
+/// assignments represent its pure contribution, then merged back in via
+/// [`merge_flag_lists`]. USE_EXPAND-listed variables (`VIDEO_CARDS`, `L10N`,
+/// …) instead get a hard replace when this layer *explicitly assigns* one
+/// (even to `""`): [`strip_expand_tokens`] strips every existing token with
+/// that prefix first — unlike [`ProfileStack::profile_env`]'s plain merge
+/// for the same variables within the profile chain. `USE_EXPAND_UNPREFIXED`
+/// variables (`ARCH`, …) keep a plain incremental add — no structural prefix
+/// to strip by. See `portage-repo/docs/pms-notes.md` for the details.
 ///
 /// Where one `source_incremental` layer's content comes from: a real conf
 /// file (`/etc/portage/make.conf`), or a raw string — e.g. a transient
@@ -1166,26 +1129,15 @@ mod tests {
         assert!(pre_env.contains("foo"), "plain USE kept");
     }
 
-    /// A `-*` in a child profile's own `USE=` *does* clear an ancestor's
-    /// USE_EXPAND expansions (`ELIBC`, `VIDEO_CARDS`, …) — corrected
-    /// 2026-08-10, live-verified against real portage 3.0.81.2 with this
-    /// exact scenario: `USE` ends up `{build}`, `elibc_glibc` absent. This
-    /// test previously asserted the opposite ("final-value semantics,
-    /// confirmed against `_lazy_use_expand`"), which does not hold up:
-    /// `_lazy_use_expand` (`config.py`) reconstructs a USE_EXPAND variable's
-    /// *display* value from the already-resolved USE flag set — it plays no
-    /// part in computing that set. What actually computes it is
-    /// `make_defaults_use`, which folds every profile layer's own
-    /// USE_EXPAND-derived tokens together with that layer's own `USE=`
-    /// value into *one combined string per layer*, then joins every layer's
-    /// string together and runs the whole thing through the ordinary
-    /// incremental/signed USE fold — `config.py`'s
-    /// `if curdb is configdict_defaults: continue` guard confirms profile
-    /// layers get this one-shared-fold treatment, distinct from the
-    /// prefix-strip-and-replace `source_incremental` implements for
-    /// make.conf/package.use/environment. A later layer's `-*` in that
-    /// shared fold wipes everything before it, expand-derived tokens
-    /// included, exactly like it would a plain USE token.
+    // A `-*` in a child profile's own `USE=` *does* clear an ancestor's
+    // USE_EXPAND expansions (`ELIBC`, `VIDEO_CARDS`, …) — corrected
+    // 2026-08-10, live-verified against real portage 3.0.81.2. Not
+    // `_lazy_use_expand` final-value semantics (that only reconstructs a
+    // USE_EXPAND variable's *display* value, it doesn't compute the set):
+    // `make_defaults_use` folds every profile layer's own USE_EXPAND tokens
+    // plus its own `USE=` into one combined string per layer, joins all
+    // layers, then runs one shared incremental fold — so a later layer's
+    // `-*` wipes everything before it, expand-derived tokens included.
     #[tokio::test]
     async fn child_profile_wildcard_clears_ancestor_use_expand_expansion() {
         let dir = tempfile::tempdir().unwrap();

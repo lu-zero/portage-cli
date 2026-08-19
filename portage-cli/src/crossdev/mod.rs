@@ -494,20 +494,16 @@ fn step_flags(step: &stages::StageStep) -> String {
 
 /// Whether the active profile has `USE=prefix-guest` set — Gentoo Prefix's
 /// own "the host, not `::gentoo`, owns this OS's libc" signal:
-/// `virtual/libc`/`virtual/os-headers`'s own RDEPEND already collapse to a
-/// bare blocker under it, and `toolchain.eclass` gates gcc's own
-/// libc-linking on the same flag. **Not FreeBSD/Darwin-specific** — real
-/// upstream Gentoo Prefix force-sets it for the entire standard "rpath"
-/// profile family regardless of host OS
-/// (`features/prefix/rpath/use.force`: "prefix-guest USE flag should be
-/// set in prefix rpath profiles"), so this is `true` for essentially every
-/// `--local`/`--prefix` bootstrap, Linux included — confirmed live on both
-/// a real Debian 12 and a real FreeBSD 14.4 host. Read the same way
-/// `info.rs` reads USE for its own display (`main_repo` → `repo.shell()` →
-/// `apply_profile_env` → `shell.get_var`) rather than a second, lighter
-/// parser that could diverge from real profile-inheritance/USE-conditional
-/// semantics. `false` on any failure to open the repo/profile — matches
-/// today's behaviour.
+/// `virtual/libc`/`virtual/os-headers`'s RDEPEND collapse to a bare blocker
+/// under it, and `toolchain.eclass` gates gcc's libc-linking on the same
+/// flag. See [prefix-guest is host-OS-agnostic](../../docs/user/root-model.md)
+/// for why this reads `true` on Linux too, not just BSD/Darwin.
+///
+/// Read the same way `info.rs` reads USE for its own display (`main_repo` →
+/// `repo.shell()` → `apply_profile_env` → `shell.get_var`) rather than a
+/// second, lighter parser that could diverge from real
+/// profile-inheritance/USE-conditional semantics. `false` on any failure to
+/// open the repo/profile — matches today's behaviour.
 async fn native_prefix_guest(globals: &Cli, roots: &portage_resolve::Roots) -> bool {
     let Ok(repo) = main_repo(globals) else {
         return false;
@@ -1516,25 +1512,18 @@ fn cross_env_entries(
         target.tuple
     );
 
-    // Write into the outer EROOT's `etc/portage`, where the `cross-<tuple>/*`
-    // builds read config (the staged driver routes them through
-    // `outer_roots()` under `use_outer_eroot` — see `emerge.rs`; that's `/`
-    // for `--root`/bare, the prefix for `--prefix`/`--local`, never `--target`'s
-    // sysroot substitution). These are HOST-arch-built packages (binutils/gcc
-    // produce target code, glibc/linux-headers carry target runtime info)
-    // managed via package.env so `emerge -u cross-<tuple>/glibc` works —
-    // exactly what real crossdev does (`/etc/portage/package.env/cross-<tuple>`).
-    // Write into the build config the `cross-<tuple>/*` packages read — the
-    // per-target CTARGET/ABI-CFLAGS env files plus the `package.env` mapping
-    // that binds them to each cross package. The read path (`env_files_for`,
-    // `ebuild.rs`) consults the config overlay *on top of* the config root, so
-    // we write into the overlay when one exists (`--prefix`/`--local`: the
-    // user-writable `<prefix>/etc/portage`, avoiding a privileged write to host
-    // `/etc/portage`), and fall back to the bare config root otherwise
-    // (`--root`/plain host). This keeps the cross env scoped to the prefix and
-    // unprivileged, and is read back correctly in every mode — including
-    // `use_outer_eroot` toolchain steps, whose `outer_roots()` preserves the
-    // same `config_overlay`.
+    // Write into the outer EROOT's `etc/portage`, where HOST-arch-built
+    // `cross-<tuple>/*` packages (binutils/gcc produce target code,
+    // glibc/linux-headers carry target runtime info) read config via
+    // package.env — exactly what real crossdev does
+    // (`/etc/portage/package.env/cross-<tuple>`). Writes per-target
+    // CTARGET/ABI-CFLAGS env files plus the `package.env` mapping.
+    //
+    // The read path (`env_files_for`, `ebuild.rs`) consults the config
+    // overlay on top of the config root, so we write into the overlay when
+    // one exists (`--prefix`/`--local`: the user-writable
+    // `<prefix>/etc/portage`, avoiding a privileged host write) and fall
+    // back to the bare config root otherwise (`--root`/plain host).
     let base = globals.base_roots();
     let portage = if let Some(overlay) = base.config_overlay() {
         overlay.to_owned()

@@ -79,6 +79,21 @@ A plain `emerge` on a Gentoo host rarely hits all three at once.
 These stack. Fixing only order does not fix identity; fixing only layout does
 not fix every probe; host-tool allowlists do not replace baselayout.
 
+### Canary: `Roots::build_eprefix` vs `Roots::eprefix`
+
+Path leakage canary for the per-package `EPREFIX` a build should bake into
+its own installed `.pc`/`.la` files: only when `eprefix()` IS `merge_root()`
+(the PMS invariant `EROOT = ROOT + EPREFIX` holds) is it safe to use —
+`None` whenever an explicit `--root` or `--target` sysroot substitution has
+moved `merge_root()` away from the outer anchor, since that package installs
+into a self-contained, unprefixed tree. Live-verified regressions before this
+existed: `libffi`'s `.pc` under `--prefix P --target T`, and `zlib`'s `.pc`
+under plain `--prefix P --root B` (no `--target` at all) — same root cause,
+no `--target`/`is_cross_arch()` special-casing needed. `RootContext.eprefix`
+has exactly three callers (`merge/mod.rs`, `emerge.rs`'s unmerge path,
+`dispatch.rs`'s `__ebuild`); all three must read `build_eprefix()`, never
+raw `eprefix()`, for that field.
+
 ---
 
 ## What each mechanism is for

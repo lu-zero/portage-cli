@@ -136,9 +136,11 @@ em --root /path/to/stage \
 - **USE:** forced to catalyst-style bootstrap:
   - step baselayout: `USE=build`, `--nodeps`
   - step packages.build: `USE="-* build ${BOOTSTRAP_USE}"` (profile
-    `BOOTSTRAP_USE` re-applied after `-*`); merge always uses `--autosolve-use`
-    so REQUIRED_USE after the wipe (e.g. `app-alternatives` `^^`) is ceded,
-    preferring ebuild `+` IUSE defaults
+    `BOOTSTRAP_USE` re-applied after `-*` since it isn't itself part of the
+    profile's `USE` fold, so `em` splices it back in explicitly, same as
+    catalyst); merge always uses `--autosolve-use` so REQUIRED_USE after the
+    wipe (e.g. `app-alternatives` `^^`) is ceded, preferring ebuild `+` IUSE
+    defaults
 - Seeds **PKGDIR** with `-b` by default (stage runs force buildpkg).
 - Requires a working toolchain already in the root.
 

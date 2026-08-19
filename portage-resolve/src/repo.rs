@@ -38,59 +38,11 @@ pub struct AutounmaskCandidate {
 
 /// One parsed `ACCEPT_KEYWORDS` / `package.accept_keywords` token.
 ///
-/// # Spec split (PMS vs Portage)
-///
-/// - **Package-side** keywords (`KEYWORDS="amd64 ~arm64 -mips"`) are PMS
-///   vocabulary — [PMS 7.3.3](https://projects.gentoo.org/pms/9/pms.html#keywords)
-///   (stable / testing / disabled / `-*`). Parsed into
-///   [`portage_metadata::Keyword`].
-/// - **User/profile-side** acceptance (`ACCEPT_KEYWORDS`,
-///   `/etc/portage/package.accept_keywords`) is **Portage policy**, not PMS:
-///   - [`make.conf(5)`](https://dev.gentoo.org/~zmedico/portage/doc/man/make.conf.5.html)
-///     — `ACCEPT_KEYWORDS` is an *incremental* variable (profile → globals →
-///     make.conf → env); defaults to `$ARCH`; users typically add `~arch`.
-///   - [`portage(5)`](https://dev.gentoo.org/~zmedico/portage/doc/man/portage.5.html)
-///     — `package.accept_keywords` *augments* that set per atom; bare atom ⇒
-///     unstable host arch; special tokens `*` / `~*` / `**`; documented pin
-///     idiom `media-video/mplayer -~x86`.
-///
-/// Visibility is exact membership of a package `KEYWORDS` token in the
-/// folded accept set (Portage `KeywordsManager._getMissingKeywords`), not
-/// “host arch bits only”. Wildcards on the *accept* side: `*` = any stable
-/// package keyword, `~*` = any testing package keyword, `**` = always.
-///
-/// # Fold rules (why this shape)
-///
-/// Tokens are interned at config-read time so the solver never sees a raw
-/// keyword string. Each token sets or clears **exactly its own** grant —
-/// `KeywordAccept::add` is set insert/remove, never a lattice join.
-///
-/// Real Portage keeps `pgroups` as a flat set of *literal strings*
-/// (`arm64`, `~arm64`, `riscv`, `*`, `**`, …). Match is `token in set` (plus
-/// wildcards). That implies:
-///
-/// 1. **`-arch` and `-~arch` are independent** — `portage(5)`'s
-///    `media-video/mplayer -~x86` must leave stable `x86` accepted while
-///    withdrawing only `~x86`. Folding “testing ⇒ stable” at add-time made
-///    both negations clear both bits (bug fixed in the Opus review pass).
-/// 2. **Foreign arches are first-class** — crossdev’s usual line
-///    `cross-…/pkg riscv ~riscv -arm64 -~arm64` must *grant* target tokens
-///    and *withdraw* host ones. A host-only bitfield drops `riscv`/`~riscv`
-///    as no-ops and still applies `-arm64`/`-~arm64`, emptying the set and
-///    masking every version (live canary:
-///    `cross-riscv64-unknown-linux-gnu/linux-headers`).
-/// 3. **`~arch` does not accept stable `arch`** (and vice versa) at match
-///    time — profile baseline is typically `ARCH` plus make.conf `~ARCH`.
-/// 4. **`-*` clear-all** resets the accept set (incremental rebuild), same
-///    family as make.conf(5) incremental clear-all for `USE`/`ACCEPT_*`.
-///
-/// # Failure modes we already hit
-///
-/// | Shortcut | What broke |
-/// |----------|------------|
-/// | Host-arch bools only | Crossdev foreign-arch grants ignored |
-/// | Join testing⇒stable at fold | `mplayer -~x86` fully masked |
-/// | Treat `-~arch` as `-arch` | Same pin idiom fully masked |
+/// Each token sets or clears **exactly its own** grant in the folded accept
+/// set — never a lattice join — so e.g. `-arch` and `-~arch` stay
+/// independent negations and foreign-arch crossdev tokens stay first-class.
+/// See [ACCEPT_KEYWORDS accept-set folding](../../docs/design/architecture.md)
+/// for the PMS-vs-Portage spec split and the bugs this shape fixes.
 #[derive(Clone, Copy)]
 pub enum AcceptToken {
     /// `arch` — accept the stable package keyword for this arch (any arch name).

@@ -339,28 +339,19 @@ pub struct BinRepoEntry {
     pub verify_signature: bool,
 }
 
-/// Resolve the configured remote binhosts: `binrepos.conf` (global defaults,
-/// then `${PORTAGE_CONFIGROOT}/etc/portage/binrepos.conf` — either may be a
-/// directory of `*.conf` files, real portage's own two-path search order,
-/// `dbapi/bintree.py`'s `getbinpkgs` `config_paths`) plus legacy
-/// `PORTAGE_BINHOST`, combined in real portage's own priority order
-/// (`BinRepoConfigLoader.__init__`): explicit sections use their own
-/// `priority =` (default `0`, ties broken by name); `PORTAGE_BINHOST`'s
-/// space-separated URLs are folded in as unnamed, auto-prioritized entries,
-/// skipping any URL an explicit section already covers. The combined list is
-/// sorted **ascending** by `(priority, name)` and then **reversed** for
-/// final order — matching `bintree.py`'s own
-/// `reversed(list(self._binrepos_conf.values()))`. For a plain
-/// `PORTAGE_BINHOST` list with no `binrepos.conf` at all, the two reversals
-/// cancel out, netting the original left-to-right order (verified against
-/// real portage's source, not assumed — see the unit tests below). Used by
-/// `-g`/`--getbinpkg`.
+/// Resolve the configured remote binhosts: `binrepos.conf` (global then
+/// `${PORTAGE_CONFIGROOT}/etc/portage/binrepos.conf`, either may be a
+/// directory of `*.conf` files) plus legacy `PORTAGE_BINHOST`, combined in
+/// real portage's priority order (`BinRepoConfigLoader.__init__`): explicit
+/// sections use their own `priority =` (default `0`, ties by name);
+/// `PORTAGE_BINHOST` URLs fold in as unnamed, auto-prioritized entries.
 ///
-/// Simplification vs real portage's `ConfigParser`: no `%(VAR)s`
-/// interpolation, and a `[DEFAULT]` section's keys are not inherited into
-/// other sections (same simplification `ReposConf` already makes for
-/// `repos.conf`'s own `[DEFAULT]`/`main-repo`) — no configured value
-/// observed in practice needs either.
+/// Sorted ascending by `(priority, name)` then reversed, matching
+/// `bintree.py`'s `reversed(list(self._binrepos_conf.values()))` — for a
+/// plain `PORTAGE_BINHOST` list with no `binrepos.conf`, the reversals
+/// cancel to left-to-right order (see unit tests below). Simplification vs
+/// real portage's `ConfigParser`: no `%(VAR)s` interpolation, no
+/// `[DEFAULT]` section inheritance (same as `ReposConf`'s handling).
 pub(crate) async fn portage_binhosts(globals: &Cli) -> Vec<BinRepoEntry> {
     let config_root = globals
         .roots()
