@@ -1,4 +1,4 @@
-//! The solver abstraction both bridges implement.
+//! The solver abstraction both bridges implement
 //!
 //! [`Solver`] covers the post-construction surface a consumer needs: feed in
 //! installed packages and knobs, then run [`Solver::resolve_targets`], which
@@ -16,7 +16,7 @@
 
 use crate::{InstalledPackage, Plan, SolveError, TargetSpec};
 
-/// A Portage dependency solver.
+/// A Portage dependency solver
 ///
 /// Both `portage-atom-pubgrub` and `portage-atom-resolvo` implement this so a
 /// plan can be produced — and cross-checked — by two independent algorithms
@@ -30,7 +30,7 @@ use crate::{InstalledPackage, Plan, SolveError, TargetSpec};
 /// 3. Call [`Solver::resolve_targets`] with the resolve targets — a single
 ///    joint solve over a synthetic root — and read the returned [`Plan`].
 pub trait Solver {
-    /// Register an installed package (called before `resolve_targets`).
+    /// Register an installed package (called before `resolve_targets`)
     fn add_installed(&mut self, pkg: InstalledPackage);
 
     /// Whether to pull build-host dependencies (`--with-bdeps`). Default
@@ -47,7 +47,7 @@ pub trait Solver {
     /// Default no-op.
     fn set_prefer_update(&mut self, _on: bool) {}
 
-    /// Whether to expand the full deep closure (native `--emptytree`).
+    /// Whether to expand the full deep closure (native `--emptytree`)
     /// Default no-op.
     fn set_rebuild_tree(&mut self, _on: bool) {}
 

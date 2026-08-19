@@ -1,4 +1,4 @@
-//! USE flag policy vocabulary.
+//! USE flag policy vocabulary
 //!
 //! These types describe the per-package USE *policy* a consumer resolves
 //! (profile, `make.conf`, `package.use`, IUSE defaults) and hands to a solver.
@@ -18,14 +18,14 @@ use portage_atom::{Cpv, Dep, Operator, Revision, UseFlagLookup};
 
 use crate::IUseDefault;
 
-/// How a single USE flag should be evaluated during dependency conversion.
+/// How a single USE flag should be evaluated during dependency conversion
 ///
 /// See [PMS 8.2](https://projects.gentoo.org/pms/9/pms.html#use-flag-dependent-dependencies).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UseFlagState {
-    /// The flag is ON — `flag? ( deps )` includes deps, `!flag? ( deps )` skips.
+    /// The flag is ON — `flag? ( deps )` includes deps, `!flag? ( deps )` skips
     Enabled,
-    /// The flag is OFF — `flag? ( deps )` skips deps, `!flag? ( deps )` includes.
+    /// The flag is OFF — `flag? ( deps )` skips deps, `!flag? ( deps )` includes
     Disabled,
     /// The caller cedes this flag to the solver — a virtual decision node is
     /// created and the solver picks its value subject to constraints (Level-C
@@ -39,7 +39,7 @@ pub enum UseFlagState {
     },
 }
 
-/// Configuration for USE flag evaluation during dependency conversion.
+/// Configuration for USE flag evaluation during dependency conversion
 ///
 /// Unset flags default to [`UseFlagState::Disabled`].
 ///
@@ -59,19 +59,19 @@ pub enum UseFlagState {
 /// every CPV.
 #[derive(Debug, Clone, Default)]
 pub struct UseConfig {
-    /// Profile/`make.conf` fold shared across packages (`true` = enabled).
+    /// Profile/`make.conf` fold shared across packages (`true` = enabled)
     base: Option<Arc<HashMap<Interned<DefaultInterner>, bool>>>,
-    /// Package-local and higher-priority decisions (win over [`Self::base`]).
+    /// Package-local and higher-priority decisions (win over [`Self::base`])
     overlay: HashMap<Interned<DefaultInterner>, UseFlagState>,
 }
 
 impl UseConfig {
-    /// Create an empty config (all flags default to `Disabled`).
+    /// Create an empty config (all flags default to `Disabled`)
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Config whose only content is a shared frozen layer (e.g. env after `-*`).
+    /// Config whose only content is a shared frozen layer (e.g. env after `-*`)
     fn from_base_map(map: Arc<HashMap<Interned<DefaultInterner>, bool>>) -> Self {
         if map.is_empty() {
             Self::default()
@@ -83,35 +83,35 @@ impl UseConfig {
         }
     }
 
-    /// Set a flag's state.
+    /// Set a flag's state
     pub fn set(&mut self, flag: Interned<DefaultInterner>, state: UseFlagState) {
         self.overlay.insert(flag, state);
     }
 
-    /// Enable a flag.
+    /// Enable a flag
     pub fn enable(&mut self, flag: Interned<DefaultInterner>) {
         self.overlay.insert(flag, UseFlagState::Enabled);
     }
 
-    /// Disable a flag.
+    /// Disable a flag
     pub fn disable(&mut self, flag: Interned<DefaultInterner>) {
         self.overlay.insert(flag, UseFlagState::Disabled);
     }
 
-    /// Mark a flag as solver-decided, with the caller's preferred value.
+    /// Mark a flag as solver-decided, with the caller's preferred value
     pub fn solver_decide(&mut self, flag: Interned<DefaultInterner>, prefer: bool) {
         self.overlay
             .insert(flag, UseFlagState::SolverDecided { prefer });
     }
 
-    /// Get the state of a flag.
+    /// Get the state of a flag
     ///
     /// Unset flags default to `Disabled`.
     pub fn get(&self, flag: Interned<DefaultInterner>) -> UseFlagState {
         self.get_opt(flag).unwrap_or(UseFlagState::Disabled)
     }
 
-    /// Return `Some(state)` if the flag is explicitly set, `None` if absent.
+    /// Return `Some(state)` if the flag is explicitly set, `None` if absent
     pub fn get_opt(&self, flag: Interned<DefaultInterner>) -> Option<UseFlagState> {
         // Prefer overlay when present; skip the HashMap probe when empty.
         if !self.overlay.is_empty()
@@ -131,7 +131,7 @@ impl UseConfig {
         }
     }
 
-    /// Returns all flags explicitly enabled in this config (sorted, for stable output).
+    /// Returns all flags explicitly enabled in this config (sorted, for stable output)
     pub fn enabled_flags(&self) -> Vec<Interned<DefaultInterner>> {
         let mut v: Vec<Interned<DefaultInterner>> = Vec::new();
         if let Some(base) = &self.base {
@@ -169,7 +169,7 @@ impl UseFlagLookup for UseConfig {
     }
 }
 
-/// A parsed `package.use` override: a USE flag and whether it is turned on.
+/// A parsed `package.use` override: a USE flag and whether it is turned on
 ///
 /// Parsing (`+flag`/`flag` → on, `-flag` → off) and interning happen once at
 /// config-read time (via [`UseOverride::parse`]) so the per-version
@@ -177,9 +177,9 @@ impl UseFlagLookup for UseConfig {
 /// interned `u32` plus a bool).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UseOverride {
-    /// The interned flag name, with any `+`/`-` prefix stripped.
+    /// The interned flag name, with any `+`/`-` prefix stripped
     pub flag: Interned<DefaultInterner>,
-    /// `true` enables the flag, `false` disables it.
+    /// `true` enables the flag, `false` disables it
     pub enable: bool,
 }
 
@@ -201,19 +201,19 @@ impl UseOverride {
     }
 }
 
-/// One token inside a [`UseLayer`]: clear-all or a signed flag.
+/// One token inside a [`UseLayer`]: clear-all or a signed flag
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LayerTok {
-    /// `-*` — discard everything accumulated from lower layers so far.
+    /// `-*` — discard everything accumulated from lower layers so far
     ClearAll,
-    /// `flag` / `+flag` / `-flag` with the name already interned.
+    /// `flag` / `+flag` / `-flag` with the name already interned
     Flag {
         flag: Interned<DefaultInterner>,
         enable: bool,
     },
 }
 
-/// A pre-tokenized USE layer (profile `pre_env` or process `env_use`).
+/// A pre-tokenized USE layer (profile `pre_env` or process `env_use`)
 ///
 /// Profile USE_EXPAND folding can put a hundred-plus flags into `pre_env`.
 /// Parse that string **once** at config load ([`UseLayer::parse`]): intern
@@ -223,9 +223,9 @@ enum LayerTok {
 #[derive(Debug, Clone)]
 pub struct UseLayer {
     tokens: Vec<LayerTok>,
-    /// Whether this layer contains any `-*` (clears lower layers when applied).
+    /// Whether this layer contains any `-*` (clears lower layers when applied)
     has_clear_all: bool,
-    /// This layer folded alone from empty — shared via [`Arc`].
+    /// This layer folded alone from empty — shared via [`Arc`]
     frozen: Arc<HashMap<Interned<DefaultInterner>, bool>>,
     /// Lowercased flag prefixes (`l10n_`, `video_cards_`, …) of the
     /// `USE_EXPAND` groups this layer *explicitly assigned*.
@@ -259,12 +259,12 @@ impl PartialEq for UseLayer {
 impl Eq for UseLayer {}
 
 impl UseLayer {
-    /// Empty layer (no tokens).
+    /// Empty layer (no tokens)
     pub fn empty() -> Self {
         Self::default()
     }
 
-    /// Split and intern a whitespace-separated USE string once.
+    /// Split and intern a whitespace-separated USE string once
     ///
     /// Accepts the same tokens as a profile/`make.conf`/`USE=` fold:
     /// `flag`, `+flag`, `-flag`, and `-*`.
@@ -323,23 +323,23 @@ impl UseLayer {
             .any(|p| name.starts_with(p.as_str()))
     }
 
-    /// Whether this layer contributes no tokens.
+    /// Whether this layer contributes no tokens
     pub fn is_empty(&self) -> bool {
         self.tokens.is_empty()
     }
 
-    /// Number of tokens (including `-*`).
+    /// Number of tokens (including `-*`)
     pub fn len(&self) -> usize {
         self.tokens.len()
     }
 
-    /// Whether this layer contains `-*` (wipes everything accumulated below it).
+    /// Whether this layer contains `-*` (wipes everything accumulated below it)
     pub fn has_clear_all(&self) -> bool {
         self.has_clear_all
     }
 }
 
-/// Fold tokens from empty into a map; report whether any `-*` appeared.
+/// Fold tokens from empty into a map; report whether any `-*` appeared
 fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, bool>, bool) {
     let mut state = HashMap::new();
     let mut has_clear = false;
@@ -357,7 +357,7 @@ fn freeze_tokens(tokens: &[LayerTok]) -> (HashMap<Interned<DefaultInterner>, boo
     (state, has_clear)
 }
 
-/// Resolve a single package's effective USE.
+/// Resolve a single package's effective USE
 ///
 /// This is the **only** place "is flag F on for package P" gets decided —
 /// every consumer that used to re-derive its own "unset flag → check the
@@ -516,7 +516,7 @@ pub fn resolve_effective_use(
     UseConfig { base, overlay }
 }
 
-/// Whether a dependency atom matches a given `cpv` (+ optional slot).
+/// Whether a dependency atom matches a given `cpv` (+ optional slot)
 ///
 /// Pure helper used by [`resolve_effective_use`]; mirrors the PMS
 /// atom-matching operators (including `~` revision-stripping and `=*` glob)

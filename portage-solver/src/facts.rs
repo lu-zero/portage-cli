@@ -1,4 +1,4 @@
-//! Solver-agnostic package facts vocabulary.
+//! Solver-agnostic package facts vocabulary
 //!
 //! These types describe the *facts* a [`PackageRepository`] hands a solver:
 //! per-version slot/subslot/repo/IUSE/dependencies/`REQUIRED_USE`, plus the
@@ -12,29 +12,29 @@ use portage_atom::{Cpn, Cpv, DepEntry, Version};
 
 use crate::{RequiredUse, UseConfig};
 
-/// Default state for an IUSE flag, from the `+`/`-` prefix in IUSE.
+/// Default state for an IUSE flag, from the `+`/`-` prefix in IUSE
 ///
 /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IUseDefault {
-    /// `+flag` — enabled by default.
+    /// `+flag` — enabled by default
     Enabled,
-    /// `-flag` — disabled by default.
+    /// `-flag` — disabled by default
     Disabled,
 }
 
-/// Structured dependency trees separated by PMS class.
+/// Structured dependency trees separated by PMS class
 #[derive(Clone, Debug, Default)]
 pub struct PackageDeps {
-    /// DEPEND — build-time dependencies.
+    /// DEPEND — build-time dependencies
     pub depend: Vec<DepEntry>,
-    /// RDEPEND — runtime dependencies.
+    /// RDEPEND — runtime dependencies
     pub rdepend: Vec<DepEntry>,
-    /// BDEPEND — build-host dependencies (EAPI 7+).
+    /// BDEPEND — build-host dependencies (EAPI 7+)
     pub bdepend: Vec<DepEntry>,
-    /// PDEPEND — post-merge dependencies.
+    /// PDEPEND — post-merge dependencies
     pub pdepend: Vec<DepEntry>,
-    /// IDEPEND — install-time dependencies (EAPI 8+).
+    /// IDEPEND — install-time dependencies (EAPI 8+)
     pub idepend: Vec<DepEntry>,
 }
 
@@ -57,18 +57,18 @@ impl PackageDeps {
     }
 }
 
-/// PMS dependency class.
+/// PMS dependency class
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DepClass {
-    /// `DEPEND` — build-time.
+    /// `DEPEND` — build-time
     Depend,
-    /// `RDEPEND` — runtime.
+    /// `RDEPEND` — runtime
     Rdepend,
-    /// `BDEPEND` — build host (cross-compilation).
+    /// `BDEPEND` — build host (cross-compilation)
     Bdepend,
-    /// `PDEPEND` — post-merge.
+    /// `PDEPEND` — post-merge
     Pdepend,
-    /// `IDEPEND` — install-time.
+    /// `IDEPEND` — install-time
     Idepend,
 }
 
@@ -84,29 +84,29 @@ impl std::fmt::Display for DepClass {
     }
 }
 
-/// Metadata for a single ebuild version, including its dependency trees.
+/// Metadata for a single ebuild version, including its dependency trees
 ///
 /// Solver-agnostic equivalent of `portage-atom-pubgrub::PackageVersions`.
 #[derive(Clone, Debug)]
 pub struct VersionFacts {
-    /// Slot name for this version.
+    /// Slot name for this version
     pub slot: Option<Interned<DefaultInterner>>,
-    /// Subslot name for this version.
+    /// Subslot name for this version
     pub subslot: Option<Interned<DefaultInterner>>,
-    /// Repository this version comes from.
+    /// Repository this version comes from
     pub repo: Option<Interned<DefaultInterner>>,
-    /// IUSE flags for this version (USE flags the package defines).
+    /// IUSE flags for this version (USE flags the package defines)
     pub iuse: Vec<Interned<DefaultInterner>>,
-    /// IUSE default states — flags prefixed with `+` in IUSE default to enabled.
+    /// IUSE default states — flags prefixed with `+` in IUSE default to enabled
     pub iuse_defaults: HashMap<Interned<DefaultInterner>, IUseDefault>,
-    /// Dependency trees by class.
+    /// Dependency trees by class
     pub deps: PackageDeps,
     /// `REQUIRED_USE` constraint (a *fact*, not policy). `None` when the ebuild
     /// declares no `REQUIRED_USE`.
     pub required_use: Option<RequiredUse>,
 }
 
-/// Trait for a package repository that the solver can query.
+/// Trait for a package repository that the solver can query
 ///
 /// Implementations provide package metadata sourced from ebuild caches, and
 /// the fully-resolved per-version desired USE (the caller's policy). The solver
@@ -114,13 +114,13 @@ pub struct VersionFacts {
 ///
 /// See [PMS 7](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
 pub trait PackageRepository {
-    /// Return all packages in the repository.
+    /// Return all packages in the repository
     fn all_packages(&self) -> Vec<Cpn>;
 
-    /// Return all versions for a given CPN, with their metadata.
+    /// Return all versions for a given CPN, with their metadata
     fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, VersionFacts)>;
 
-    /// The resolved **desired** USE state for a specific version.
+    /// The resolved **desired** USE state for a specific version
     ///
     /// This is the caller's policy fully resolved — global USE (profile +
     /// `make.conf`), `package.use` overrides, and the ebuild's IUSE defaults
