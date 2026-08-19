@@ -2,7 +2,8 @@
 """PreToolUse hook: block Edit/Write calls that introduce oversized comments.
 
 Regular paragraphs cap at 3 lines, doc comments at 6, except Rust module
-docs (unlimited) and trait docs (relaxed). Skipped for unknown extensions.
+docs (unlimited) and trait docs (relaxed). A blank comment line starts a new
+paragraph. Skipped for unknown extensions.
 """
 import json
 import os
@@ -22,42 +23,88 @@ HASH_EXTS = {".toml", ".yaml", ".yml", ".rb"}
 PY_EXTS = {".py"}
 
 
-def count_prose_lines(contents):
-    """Line count excluding ``` fenced code examples (not slop, exempt)."""
-    count = 0
+def split_paragraphs(contents):
+    """Split comment content into paragraphs on blank lines.
+
+    ``` fenced regions are skipped entirely: not counted, don't break a
+    paragraph. Returns (start_idx, end_idx_exclusive, prose_len) tuples.
+    """
+    paragraphs = []
     in_fence = False
-    for c in contents:
-        if c.strip().startswith("```"):
+    start = None
+    length = 0
+    last = None
+    for idx, c in enumerate(contents):
+        s = c.strip()
+        if s.startswith("```"):
             in_fence = not in_fence
+            if start is None:
+                start = idx
+            last = idx
             continue
         if in_fence:
+            last = idx
             continue
-        count += 1
-    return count
+        if s == "":
+            if start is not None and length > 0:
+                paragraphs.append((start, last + 1, length))
+            start, length, last = None, 0, None
+            continue
+        if start is None:
+            start = idx
+        length += 1
+        last = idx
+    if start is not None and length > 0:
+        paragraphs.append((start, last + 1, length))
+    return paragraphs
 
 
 def reference_leeway(raw_lines):
-    """+3 lines when a block points to a docs/*.md reference instead of inlining."""
+    """+3 lines when a paragraph points to a docs/*.md reference instead of inlining."""
     return 3 if any(REFERENCE_RE.search(l) for l in raw_lines) else 0
 
 
-def check_line_runs(lines, is_comment, is_doc, max_regular, max_doc):
+def check_line_runs(lines, marker, exclude, max_len):
     violations = []
     i, n = 0, len(lines)
+
+    def is_comment(l):
+        s = l.strip()
+        return s.startswith(marker) and not (exclude and s.startswith(exclude))
+
     while i < n:
         if not is_comment(lines[i]):
             i += 1
             continue
-        doc = is_doc(lines[i])
         start = i
-        while i < n and is_comment(lines[i]) and is_doc(lines[i]) == doc:
+        while i < n and is_comment(lines[i]):
             i += 1
-        run_len = i - start
-        limit = (max_doc if doc else max_regular) + reference_leeway(lines[start:i])
-        if run_len > limit:
-            kind = "doc comment" if doc else "comment"
-            violations.append((start + 1, run_len, kind, limit))
+        raw = lines[start:i]
+        contents = [l.strip()[len(marker):] for l in raw]
+        for pstart, pend, plen in split_paragraphs(contents):
+            seg = raw[pstart:pend]
+            limit = max_len + reference_leeway(seg)
+            if plen > limit:
+                violations.append((start + pstart + 1, plen, "comment", limit))
     return violations
+
+
+def block_content_lines(raw_lines, opener_len):
+    """Per-line text of a block comment, stripped of `/**`, `*/`, and `* ` bullets."""
+    out = []
+    for idx, line in enumerate(raw_lines):
+        s = line.strip()
+        if idx == 0:
+            s = s[opener_len:]
+        if idx == len(raw_lines) - 1:
+            pos = s.rfind("*/")
+            if pos != -1:
+                s = s[:pos]
+        s = s.strip()
+        if s.startswith("*") and not s.startswith("*/"):
+            s = s[1:].strip()
+        out.append(s)
+    return out
 
 
 def check_block_runs(lines, opener, doc_opener, closer, max_regular, max_doc):
@@ -65,24 +112,28 @@ def check_block_runs(lines, opener, doc_opener, closer, max_regular, max_doc):
     i, n = 0, len(lines)
     while i < n:
         s = lines[i].strip()
-        if s.startswith(doc_opener) or (s.startswith(opener) and not s.startswith(doc_opener)):
-            doc = s.startswith(doc_opener)
-            start = i
-            j = i
-            # closer may be on the opening line itself (single-line block comment)
-            if closer not in lines[j][len(opener):]:
-                j += 1
-                while j < n and closer not in lines[j]:
-                    j += 1
-            end = min(j, n - 1)
-            run_len = end - start + 1
-            limit = (max_doc if doc else max_regular) + reference_leeway(lines[start : end + 1])
-            if run_len > limit:
-                kind = "doc block comment" if doc else "block comment"
-                violations.append((start + 1, run_len, kind, limit))
-            i = end + 1
+        if not (s.startswith(doc_opener) or (s.startswith(opener) and not s.startswith(doc_opener))):
+            i += 1
             continue
-        i += 1
+        doc = s.startswith(doc_opener)
+        opener_len = len(doc_opener) if doc else len(opener)
+        start = i
+        j = i
+        if closer not in lines[j][opener_len:]:
+            j += 1
+            while j < n and closer not in lines[j]:
+                j += 1
+        end = min(j, n - 1)
+        block_lines = lines[start : end + 1]
+        contents = block_content_lines(block_lines, opener_len)
+        max_len = max_doc if doc else max_regular
+        kind = "doc block comment" if doc else "block comment"
+        for pstart, pend, plen in split_paragraphs(contents):
+            seg = block_lines[pstart:pend]
+            limit = max_len + reference_leeway(seg)
+            if plen > limit:
+                violations.append((start + pstart + 1, plen, kind, limit))
+        i = end + 1
     return violations
 
 
@@ -91,37 +142,39 @@ def check_python_docstrings(lines, max_doc):
     i, n = 0, len(lines)
     while i < n:
         s = lines[i].strip()
+        matched = False
         for q in ('"""', "'''"):
-            if s.startswith(q):
-                rest = s[3:]
-                if q in rest:
-                    i += 1
-                    break
-                start = i
-                j = i + 1
-                while j < n and q not in lines[j]:
-                    j += 1
-                end = min(j, n - 1)
-                contents = []
-                for idx, raw in enumerate(lines[start : end + 1]):
-                    c = raw.strip()
-                    if idx == 0:
-                        c = c[3:]
-                    if idx == end - start:
-                        pos = c.rfind(q)
-                        if pos != -1:
-                            c = c[:pos]
-                    contents.append(c)
-                length = count_prose_lines(contents)
-                limit = max_doc + reference_leeway(lines[start : end + 1])
-                if length > limit:
-                    violations.append((start + 1, length, "docstring", limit))
-                i = end + 1
+            if not s.startswith(q):
+                continue
+            matched = True
+            if q in s[3:]:
+                i += 1
                 break
-        else:
+            start = i
+            j = i + 1
+            while j < n and q not in lines[j]:
+                j += 1
+            end = min(j, n - 1)
+            block_lines = lines[start : end + 1]
+            contents = []
+            for idx, raw in enumerate(block_lines):
+                c = raw.strip()
+                if idx == 0:
+                    c = c[3:]
+                if idx == len(block_lines) - 1:
+                    pos = c.rfind(q)
+                    if pos != -1:
+                        c = c[:pos]
+                contents.append(c)
+            for pstart, pend, plen in split_paragraphs(contents):
+                seg = block_lines[pstart:pend]
+                limit = max_doc + reference_leeway(seg)
+                if plen > limit:
+                    violations.append((start + pstart + 1, plen, "docstring", limit))
+            i = end + 1
+            break
+        if not matched:
             i += 1
-            continue
-        continue
     return violations
 
 
@@ -157,23 +210,29 @@ def check_rust_line_comments(lines):
             start = i
             while i < n and lines[i].strip().startswith("///"):
                 i += 1
-            contents = [l.strip()[3:] for l in lines[start:i]]
-            prose_len = count_prose_lines(contents)
+            raw = lines[start:i]
+            contents = [l.strip()[3:] for l in raw]
             trait = is_trait_doc(lines, i)
-            limit = (TRAIT_DOC_MAX if trait else DOC_MAX) + reference_leeway(lines[start:i])
-            if prose_len > limit:
-                kind = "trait doc comment" if trait else "doc comment"
-                violations.append((start + 1, prose_len, kind, limit))
+            max_len = TRAIT_DOC_MAX if trait else DOC_MAX
+            kind = "trait doc comment" if trait else "doc comment"
+            for pstart, pend, plen in split_paragraphs(contents):
+                seg = raw[pstart:pend]
+                limit = max_len + reference_leeway(seg)
+                if plen > limit:
+                    violations.append((start + pstart + 1, plen, kind, limit))
             continue
         start = i
         while i < n and lines[i].strip().startswith("//") and not lines[i].strip().startswith(
             "///"
         ) and not lines[i].strip().startswith("//!"):
             i += 1
-        run_len = i - start
-        limit = REGULAR_MAX + reference_leeway(lines[start:i])
-        if run_len > limit:
-            violations.append((start + 1, run_len, "comment", limit))
+        raw = lines[start:i]
+        contents = [l.strip()[2:] for l in raw]
+        for pstart, pend, plen in split_paragraphs(contents):
+            seg = raw[pstart:pend]
+            limit = REGULAR_MAX + reference_leeway(seg)
+            if plen > limit:
+                violations.append((start + pstart + 1, plen, "comment", limit))
     return violations
 
 
@@ -195,42 +254,24 @@ def check_rust_block_comments(lines):
             while j < n and "*/" not in lines[j]:
                 j += 1
         end = min(j, n - 1)
-        run_len = end - start + 1
         i = end + 1
         if module:
             continue
         block_lines = lines[start : end + 1]
+        contents = block_content_lines(block_lines, opener_len)
+        trait = is_trait_doc(lines, i) if doc else False
         if doc:
-            contents = block_content_lines(block_lines, opener_len)
-            length = count_prose_lines(contents)
-            trait = is_trait_doc(lines, i)
-            limit = (TRAIT_DOC_MAX if trait else DOC_MAX) + reference_leeway(block_lines)
+            max_len = TRAIT_DOC_MAX if trait else DOC_MAX
             kind = "trait doc block comment" if trait else "doc block comment"
         else:
-            length = run_len
-            limit = REGULAR_MAX + reference_leeway(block_lines)
+            max_len = REGULAR_MAX
             kind = "block comment"
-        if length > limit:
-            violations.append((start + 1, length, kind, limit))
+        for pstart, pend, plen in split_paragraphs(contents):
+            seg = block_lines[pstart:pend]
+            limit = max_len + reference_leeway(seg)
+            if plen > limit:
+                violations.append((start + pstart + 1, plen, kind, limit))
     return violations
-
-
-def block_content_lines(raw_lines, opener_len):
-    """Per-line text of a block comment, stripped of `/**`, `*/`, and `* ` bullets."""
-    out = []
-    for idx, line in enumerate(raw_lines):
-        s = line.strip()
-        if idx == 0:
-            s = s[opener_len:]
-        if idx == len(raw_lines) - 1:
-            pos = s.rfind("*/")
-            if pos != -1:
-                s = s[:pos]
-        s = s.strip()
-        if s.startswith("*") and not s.startswith("*/"):
-            s = s[1:].strip()
-        out.append(s)
-    return out
 
 
 def check_rust(lines):
@@ -239,25 +280,13 @@ def check_rust(lines):
 
 def check_c(lines):
     v = []
-    v += check_line_runs(
-        lines,
-        is_comment=lambda l: l.strip().startswith("//"),
-        is_doc=lambda l: False,
-        max_regular=REGULAR_MAX,
-        max_doc=DOC_MAX,
-    )
+    v += check_line_runs(lines, marker="//", exclude=None, max_len=REGULAR_MAX)
     v += check_block_runs(lines, "/*", "/**", "*/", REGULAR_MAX, DOC_MAX)
     return v
 
 
 def check_hash(lines):
-    return check_line_runs(
-        lines,
-        is_comment=lambda l: l.strip().startswith("#") and not l.strip().startswith("#!"),
-        is_doc=lambda l: False,
-        max_regular=REGULAR_MAX,
-        max_doc=DOC_MAX,
-    )
+    return check_line_runs(lines, marker="#", exclude="#!", max_len=REGULAR_MAX)
 
 
 def check_python(lines):
