@@ -42,13 +42,17 @@ pub struct BinpkgEntry {
     pub ldflags: String,
     /// Build-time `RUSTFLAGS` (empty if absent).
     pub rustflags: String,
-    /// Build environment key derived from cflags, cxxflags, ldflags, rustflags
-    /// via sokgi. Empty if all flag sets are empty (skip gate).
-    /// "__native__" if any flag set contains machine-dependent flags.
+    /// Build environment key derived from cflags, cxxflags, ldflags,
+    /// rustflags via sokgi.
+    ///
+    /// Empty if all flag sets are empty (skip gate). `"__native__"` if any
+    /// flag set contains machine-dependent flags.
     pub build_env_key: String,
-    /// Recorded `BUILD_ID` (`0` for the implicit single-instance case). Used
-    /// to prefer the newest matching instance in [`BinpkgIndex::find_reusable`]
-    /// / [`RemoteBinpkgIndex::find_reusable`] instead of the first one listed.
+    /// Recorded `BUILD_ID` (`0` for the implicit single-instance case).
+    ///
+    /// Used to prefer the newest matching instance in
+    /// [`BinpkgIndex::find_reusable`] / [`RemoteBinpkgIndex::find_reusable`]
+    /// instead of the first one listed.
     pub build_id: u32,
 }
 
@@ -61,9 +65,11 @@ pub struct BinpkgIndex {
 }
 
 impl BinpkgIndex {
-    /// Open the `Packages` index in `pkgdir`. If it is missing or unreadable,
-    /// rebuild it on the fly by scanning `pkgdir` for `*.gpkg.tar` and reading
-    /// each container's metadata (the slow fallback).
+    /// Open the `Packages` index in `pkgdir`.
+    ///
+    /// If it is missing or unreadable, rebuild it on the fly by scanning
+    /// `pkgdir` for `*.gpkg.tar` and reading each container's metadata (the
+    /// slow fallback).
     pub fn open(pkgdir: &Path) -> Result<Self> {
         let index_path = pkgdir.join("Packages");
         if index_path.is_file() {
@@ -76,8 +82,10 @@ impl BinpkgIndex {
         Self::scan(pkgdir)
     }
 
-    /// Parse a `Packages` file. The first blank-line-separated block is the
-    /// header; each later block is one package (`CPV:` required).
+    /// Parse a `Packages` file.
+    ///
+    /// The first blank-line-separated block is the header; each later
+    /// block is one package (`CPV:` required).
     fn parse(text: &str, pkgdir: PathBuf) -> Self {
         let entries = parse_packages_entries(text);
         Self { entries, pkgdir }
@@ -143,11 +151,13 @@ impl BinpkgIndex {
         self.entries.is_empty()
     }
 
-    /// Find a reusable binpkg for `cpv` given the desired `USE`, `CHOST`, and
-    /// `build_env_key`, returning the absolute container path. `None` if no
-    /// binpkg exists for the cpv, or if its recorded USE/CHOST/build_env_key
-    /// does not match (i.e. it must be rebuilt). Version and slot match by
-    /// `cpv` lookup (a binpkg for a cpv is that ebuild's slot).
+    /// Find a reusable binpkg for `cpv` given the desired `USE`, `CHOST`,
+    /// and `build_env_key`, returning the absolute container path.
+    ///
+    /// `None` if no binpkg exists for the cpv, or if its recorded
+    /// USE/CHOST/build_env_key does not match (i.e. it must be rebuilt).
+    /// Version and slot match by `cpv` lookup (a binpkg for a cpv is that
+    /// ebuild's slot).
     ///
     /// `desired_chost` empty skips the CHOST gate (legacy/test callers); a
     /// missing CHOST on the binpkg also skips it so sparse indexes still work.
@@ -175,8 +185,10 @@ impl BinpkgIndex {
     }
 
     /// Look up the raw index entries for `cpv` (including CFLAGS/CXXFLAGS/
-    /// LDFLAGS provenance), if present. Does not apply USE/CHOST reuse rules.
-    /// Returns all entries for the CPV (there may be multiple variants).
+    /// LDFLAGS provenance), if present.
+    ///
+    /// Does not apply USE/CHOST reuse rules. Returns all entries for the
+    /// CPV (there may be multiple variants).
     pub fn get(&self, cpv: &str) -> Option<&[BinpkgEntry]> {
         self.entries.get(cpv).map(|v| v.as_slice())
     }
@@ -196,11 +208,12 @@ pub(crate) fn split_iuse(s: &str) -> HashSet<String> {
 }
 
 /// Split a `Packages` text into `(header, body)` at the first blank line or
-/// the first `CPV:` line, whichever comes first. Real portage's reader
-/// tolerates the header glued directly onto the first entry (no blank
-/// line), so must we: a naive `split("\n\n")` would drop a glued header's
-/// fields or merge them into the first entry, leaking e.g. `CHOST:` into an
-/// entry that legitimately omitted one.
+/// the first `CPV:` line, whichever comes first.
+///
+/// Real portage's reader tolerates the header glued directly onto the
+/// first entry (no blank line), so must we: a naive `split("\n\n")` would
+/// drop a glued header's fields or merge them into the first entry,
+/// leaking e.g. `CHOST:` into an entry that legitimately omitted one.
 fn split_header_body(text: &str) -> (&str, &str) {
     let mut pos = 0usize;
     let mut rest = text;
@@ -220,10 +233,11 @@ fn split_header_body(text: &str) -> (&str, &str) {
 }
 
 /// Split a `Packages` index into its per-package `KEY: VALUE` blocks (the
-/// header block is excluded — see `split_header_body`). Shared by every
-/// consumer that needs a different subset of fields than [`BinpkgEntry`]
-/// carries — e.g. `em maint binpkg`'s verify/list/prune, which also need
-/// `MD5`/`SHA1`/`SIZE`/`BUILD_ID`.
+/// header block is excluded — see `split_header_body`).
+///
+/// Shared by every consumer that needs a different subset of fields than
+/// [`BinpkgEntry`] carries — e.g. `em maint binpkg`'s verify/list/prune,
+/// which also need `MD5`/`SHA1`/`SIZE`/`BUILD_ID`.
 pub fn parse_index_blocks(text: &str) -> Vec<BTreeMap<&str, &str>> {
     let (_, body) = split_header_body(text);
     let mut blocks = Vec::new();
@@ -259,11 +273,13 @@ pub fn build_env_key_from_fields(fields: &BTreeMap<&str, &str>) -> String {
     )
 }
 
-/// Short, path-safe display/slug form of a build-env key: `"generic"` for the
-/// empty key (unkeyed/no ISA-relevant flags), `"native"` for `"__native__"`,
-/// else the first 12 hex chars of the MD5 of the full key. Shared by
-/// `em maint binpkg list`'s KEY column and `em maint binpkg fingerprint`, so
-/// the two correlate and the slug is usable as a PKGDIR path component.
+/// Short, path-safe display/slug form of a build-env key: `"generic"` for
+/// the empty key (unkeyed/no ISA-relevant flags), `"native"` for
+/// `"__native__"`, else the first 12 hex chars of the MD5 of the full key.
+///
+/// Shared by `em maint binpkg list`'s KEY column and `em maint binpkg
+/// fingerprint`, so the two correlate and the slug is usable as a PKGDIR
+/// path component.
 pub fn short_build_env_key(key: &str) -> String {
     match key {
         "" => "generic".to_string(),
@@ -272,9 +288,10 @@ pub fn short_build_env_key(key: &str) -> String {
     }
 }
 
-/// Parse a `Packages` index into `cpv → entry`. Shared by the local and remote
-/// consumers (the only difference is how `path` is resolved: a local `PKGDIR`
-/// join vs a remote `base_uri` join).
+/// Parse a `Packages` index into `cpv → entry`.
+///
+/// Shared by the local and remote consumers (the only difference is how
+/// `path` is resolved: a local `PKGDIR` join vs a remote `base_uri` join).
 pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> {
     let mut entries: BTreeMap<String, Vec<BinpkgEntry>> = BTreeMap::new();
     for fields in parse_index_blocks(text) {
@@ -309,7 +326,9 @@ pub fn parse_packages_entries(text: &str) -> BTreeMap<String, Vec<BinpkgEntry>> 
 }
 
 /// Header fields of a `Packages` index (see `split_header_body` for where
-/// the header ends). Used for server-controlled `URI` / BASE_URI.
+/// the header ends).
+///
+/// Used for server-controlled `URI` / BASE_URI.
 pub fn parse_index_header(text: &str) -> BTreeMap<String, String> {
     let (header, _) = split_header_body(text);
     let header = header.trim();
@@ -325,9 +344,11 @@ pub fn parse_index_header(text: &str) -> BTreeMap<String, String> {
     fields
 }
 
-/// A remote binhost's `Packages` index, parsed from a fetched index text and a
-/// base URI. Mirrors [`BinpkgIndex`] but resolves each entry's `PATH` to a
-/// download URL instead of a local file — used by `-g`/`--getbinpkg`.
+/// A remote binhost's `Packages` index, parsed from a fetched index text
+/// and a base URI.
+///
+/// Mirrors [`BinpkgIndex`] but resolves each entry's `PATH` to a download
+/// URL instead of a local file — used by `-g`/`--getbinpkg`.
 #[derive(Debug, Clone)]
 pub struct RemoteBinpkgIndex {
     entries: BTreeMap<String, Vec<BinpkgEntry>>,
@@ -390,8 +411,9 @@ impl RemoteBinpkgIndex {
     }
 
     /// Find a reusable remote binpkg for `cpv`, returning its download URL.
-    /// `None` if the cpv is absent or its USE/CHOST/build_env_key does not match
-    /// (same rules as the local index). URL = `base_uri` + `/` + `PATH`.
+    ///
+    /// `None` if the cpv is absent or its USE/CHOST/build_env_key does not
+    /// match (same rules as the local index). URL = `base_uri` + `/` + `PATH`.
     ///
     /// CFLAGS/CXXFLAGS/LDFLAGS are carried on the entry ([`Self::get`]) and
     /// checked via the computed build_env_key.
@@ -413,18 +435,21 @@ impl RemoteBinpkgIndex {
     }
 
     /// Look up the raw index entries for `cpv` (including CFLAGS/CXXFLAGS/
-    /// LDFLAGS), if present. Does not apply USE/CHOST reuse rules.
-    /// Returns all entries for the CPV (there may be multiple variants).
+    /// LDFLAGS), if present.
+    ///
+    /// Does not apply USE/CHOST reuse rules. Returns all entries for the
+    /// CPV (there may be multiple variants).
     pub fn get(&self, cpv: &str) -> Option<&[BinpkgEntry]> {
         self.entries.get(cpv).map(|v| v.as_slice())
     }
 }
 
 /// The single reuse-gate the local and remote indexes share: among the
-/// entries recorded for `cpv`, the newest-`BUILD_ID` one whose USE/CHOST and
-/// build-env key are compatible with the desired build. The callers differ
-/// only in how they render the winning entry's `path` (a local container path
-/// vs a remote download URL).
+/// entries recorded for `cpv`, the newest-`BUILD_ID` one whose USE/CHOST
+/// and build-env key are compatible with the desired build.
+///
+/// The callers differ only in how they render the winning entry's `path`
+/// (a local container path vs a remote download URL).
 fn best_reusable_entry<'a>(
     entries: &'a BTreeMap<String, Vec<BinpkgEntry>>,
     cpv: &str,
@@ -447,8 +472,9 @@ fn entry_reusable(entry: &BinpkgEntry, desired_use: &[String], desired_chost: &s
     chost_compatible(&entry.chost, desired_chost)
 }
 
-/// CHOST gate: both sides set and unequal → not reusable. Either side empty
-/// skips the check (sparse index / unknown desired CHOST).
+/// CHOST gate: both sides set and unequal → not reusable.
+///
+/// Either side empty skips the check (sparse index / unknown desired CHOST).
 fn chost_compatible(binpkg_chost: &str, desired_chost: &str) -> bool {
     if binpkg_chost.is_empty() || desired_chost.is_empty() {
         return true;
@@ -458,10 +484,12 @@ fn chost_compatible(binpkg_chost: &str, desired_chost: &str) -> bool {
 
 /// Build-env key gate. Asymmetric: an unkeyed binpkg (`binpkg_key` empty —
 /// sparse index / old GPKG predating this field) is permissive, matching
-/// anything (backward compatibility). But once a binpkg *is* keyed (built
-/// with recorded ISA/ABI flags), an empty *desired* key (a generic/unknown
-/// build) must not silently match it — that would reuse a march-specific
-/// binpkg on a generic board. Both non-empty: exact match only.
+/// anything (backward compatibility).
+///
+/// But once a binpkg *is* keyed (built with recorded ISA/ABI flags), an
+/// empty *desired* key (a generic/unknown build) must not silently match
+/// it — that would reuse a march-specific binpkg on a generic board. Both
+/// non-empty: exact match only.
 fn build_env_key_compatible(binpkg_key: &str, desired_key: &str) -> bool {
     if binpkg_key.is_empty() {
         return true;
@@ -472,10 +500,12 @@ fn build_env_key_compatible(binpkg_key: &str, desired_key: &str) -> bool {
     binpkg_key == desired_key
 }
 
-/// The reuse core: is a binpkg's `USE` (restricted to its `IUSE`) equal to the
-/// desired `USE` (restricted to `IUSE`)? Flags outside `IUSE` (USE_EXPAND
-/// defaults, profile-implicit flags) don't affect the package and are ignored.
-/// This is portage's built-package USE check.
+/// The reuse core: is a binpkg's `USE` (restricted to its `IUSE`) equal to
+/// the desired `USE` (restricted to `IUSE`)?
+///
+/// Flags outside `IUSE` (USE_EXPAND defaults, profile-implicit flags)
+/// don't affect the package and are ignored. This is portage's
+/// built-package USE check.
 //
 // See bug #453400.
 pub fn use_compatible(
@@ -584,11 +614,13 @@ fn filter_c_family_abi_flags(flags: &str) -> String {
 }
 
 /// GCC/Clang document every `-m*` option as a "machine dependent option"
-/// (target/ISA/ABI selector). An allowlist of specific flag names is
-/// perpetually incomplete (a missed selector means silent wrong-arch binpkg
-/// reuse); treat the whole `-m` namespace as ABI-relevant instead —
-/// over-keying only costs an extra rebuild, the safe direction. See [the
-/// build-env key doc](../../docs/user/binhost.md) for the full policy.
+/// (target/ISA/ABI selector).
+///
+/// An allowlist of specific flag names is perpetually incomplete (a missed
+/// selector means silent wrong-arch binpkg reuse); treat the whole `-m`
+/// namespace as ABI-relevant instead — over-keying only costs an extra
+/// rebuild, the safe direction. See [the build-env key
+/// doc](../../docs/user/binhost.md) for the full policy.
 fn is_c_family_abi_token(tok: &str) -> bool {
     tok.starts_with("-m") && tok != "-m"
 }

@@ -32,7 +32,9 @@ use crate::error::Result;
 use crate::scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
 
 /// Walk `pkgdir` for `*.gpkg.tar`, build per-package entries, and write the
-/// `Packages` index. Returns `(indexed, skipped)`.
+/// `Packages` index.
+///
+/// Returns `(indexed, skipped)`.
 pub fn index_pkgdir(pkgdir: &Utf8Path, chost: &str) -> Result<(usize, usize)> {
     let mut files: Vec<(String, PathBuf)> = Vec::new();
     find_gpkg_containers(pkgdir.as_std_path(), pkgdir.as_std_path(), &mut files)?;
@@ -186,9 +188,9 @@ mod tests {
     use super::*;
     use crate::write_gpkg;
 
-    /// Seed a PKGDIR with a gpkg via the writer, then build the index and
-    /// verify the `Packages` file has the expected header + one sorted entry
-    /// with checksums and the translated DESC/REPO keys.
+    // Seed a PKGDIR with a gpkg via the writer, then build the index and
+    // verify the `Packages` file has the expected header + one sorted entry
+    // with checksums and the translated DESC/REPO keys.
     #[test]
     fn index_roundtrips_a_written_gpkg() {
         let tmp = tempfile::tempdir().unwrap();

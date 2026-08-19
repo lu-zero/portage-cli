@@ -35,8 +35,9 @@ use crate::scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
 
 /// One `Packages` index entry, with the digest/size fields [`verify`]/
 /// [`list_index`] need that [`crate::index::BinpkgEntry`] doesn't carry.
-/// Kept separate from `BinpkgEntry` rather than unified: `BinpkgEntry` is on
-/// the reuse hot path and deliberately doesn't carry these display-only
+///
+/// Kept separate from `BinpkgEntry` rather than unified: `BinpkgEntry` is
+/// on the reuse hot path and deliberately doesn't carry these display-only
 /// digest/size fields, and this type doesn't need `BinpkgEntry`'s parsed
 /// `USE`/`IUSE` sets.
 #[derive(Debug, Clone)]
@@ -132,8 +133,9 @@ pub struct VerifyProblem {
     /// `fix: true`.
     pub quarantined_to: Option<Utf8PathBuf>,
     /// Signature status, when a signature check was requested at all
-    /// (`require_signature` or a keyring was given). `None` means no
-    /// signature check was requested for this run.
+    /// (`require_signature` or a keyring was given).
+    ///
+    /// `None` means no signature check was requested for this run.
     pub signature: Option<SignatureStatus>,
 }
 
@@ -191,10 +193,12 @@ impl VerifyReport {
 }
 
 /// Check each indexed container's size/MD5/SHA1 against disk, and (when
-/// `require_signature` or `keyring` is given) its OpenPGP signature. `fix`:
-/// quarantine corrupt containers and regenerate the index. Signature
-/// problems are reported but never trigger quarantine — a correctly-indexed
-/// container with a bad signature is a trust problem, not a corrupt one.
+/// `require_signature` or `keyring` is given) its OpenPGP signature.
+///
+/// `fix`: quarantine corrupt containers and regenerate the index.
+/// Signature problems are reported but never trigger quarantine — a
+/// correctly-indexed container with a bad signature is a trust problem,
+/// not a corrupt one.
 pub fn verify(
     pkgdir: &Utf8Path,
     chost: &str,
@@ -327,9 +331,10 @@ pub struct PruneEntry {
     pub rel: String,
 }
 
-/// Outcome of [`prune`]. Only cpvs that actually had more than one container
-/// are represented — an untouched cpv (already down to one instance) isn't
-/// reported at all.
+/// Outcome of [`prune`].
+///
+/// Only cpvs that actually had more than one container are represented —
+/// an untouched cpv (already down to one instance) isn't reported at all.
 #[derive(Debug, Clone, Default)]
 pub struct PruneReport {
     /// The newest-`BUILD_ID` container kept for each cpv that had extras.
@@ -341,9 +346,10 @@ pub struct PruneReport {
     pub reindexed: Option<usize>,
 }
 
-/// Keep only the newest `BUILD_ID` container per (cpv, chost, build_env_key),
-/// delete the rest, and regenerate the index. `dry_run`: report what would
-/// be deleted without touching anything.
+/// Keep only the newest `BUILD_ID` container per (cpv, chost,
+/// build_env_key), delete the rest, and regenerate the index.
+///
+/// `dry_run`: report what would be deleted without touching anything.
 pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneReport> {
     if !pkgdir.exists() {
         return Err(Error::NoPkgdir(pkgdir.as_std_path().to_path_buf()));
@@ -479,9 +485,9 @@ mod tests {
         assert!(rows[0].build_id.is_none());
     }
 
-    /// Seed `pkgdir/<cat>/<pf>-<build_id>.gpkg.tar`, a real container with
-    /// enough metadata for `container_cpv`/`container_build_id` and for
-    /// `index_pkgdir`'s own indexer to pick it up.
+    // Seed `pkgdir/<cat>/<pf>-<build_id>.gpkg.tar`, a real container with
+    // enough metadata for `container_cpv`/`container_build_id` and for
+    // `index_pkgdir`'s own indexer to pick it up.
     fn seed_container(work: &Path, pkgdir: &Utf8Path, cat: &str, pf: &str, build_id: u32) {
         let image = work.join(format!("image-{pf}-{build_id}"));
         std::fs::create_dir_all(image.join("usr/bin")).unwrap();
@@ -549,9 +555,9 @@ mod tests {
         assert!(report.problems[0].quarantined_to.is_none());
     }
 
-    /// A row the index recorded without SIZE must not panic when another
-    /// field flags the container as a problem (the eager-`then_some`
-    /// regression): the report carries the md5 mismatch, size stays `None`.
+    // A row the index recorded without SIZE must not panic when another
+    // field flags the container as a problem (the eager-`then_some`
+    // regression): the report carries the md5 mismatch, size stays `None`.
     #[test]
     fn verify_handles_a_size_less_index_row_with_an_md5_mismatch() {
         let tmp = tempfile::tempdir().expect("tempdir");

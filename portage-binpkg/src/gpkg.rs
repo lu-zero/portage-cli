@@ -141,9 +141,11 @@ pub fn write_gpkg(input: &GpkgInput, out_path: &Path) -> Result<()> {
     run("tar", &mut cmd)
 }
 
-/// `tar --zstd` the whole *tree* under `dir` into `out`, renaming the root to
-/// `prefix` (so members are `prefix/...`, directory entries included). With
-/// `xattrs`, file capabilities, ACLs and device nodes are preserved (pax format).
+/// `tar --zstd` the whole *tree* under `dir` into `out`, renaming the root
+/// to `prefix` (so members are `prefix/...`, directory entries included).
+///
+/// With `xattrs`, file capabilities, ACLs and device nodes are preserved
+/// (pax format).
 fn tar_tree(dir: &Path, prefix: &str, out: &Path, xattrs: bool) -> Result<()> {
     // Empty / missing image is valid (virtuals, symlink-only packages under
     // EPREFIX never create `ED`). `tar -C` requires the directory to exist.
@@ -196,6 +198,7 @@ struct ManifestEntry {
 
 /// Parse every `DATA` line out of a GLEP 74 Manifest body (plain text —
 /// callers recover the plaintext from a clearsign wrapper first if needed).
+///
 /// Non-`DATA` lines (blank lines, any future record type) are skipped
 /// rather than rejected, matching real portage's own tolerant Manifest
 /// parser.
@@ -261,6 +264,7 @@ fn check_entry(entry: &ManifestEntry, data: &[u8]) -> Result<()> {
 }
 
 /// Verify `file` against a GLEP 74 `DATA <name> <size> SHA512 …` Manifest line.
+///
 /// `member_name` is the path as stored in the Manifest (e.g. `pkg/image.tar.zst`).
 fn verify_data_member(manifest: &Path, member_name: &Path, file: &Path) -> Result<()> {
     let text = std::fs::read_to_string(manifest)?;
@@ -300,6 +304,7 @@ fn write_manifest(out: &Path, members: &[(String, PathBuf)]) -> Result<()> {
 }
 
 /// Policy for verifying a GPKG container's signature before trusting it.
+///
 /// Two independent knobs, deliberately not collapsed into one flag — the
 /// direct encoding of real portage's two independent toggles
 /// (`FEATURES=binpkg-request-signature` vs. `binrepos.conf`'s
@@ -315,11 +320,13 @@ pub struct VerifyPolicy<'a> {
     pub keyring: Option<&'a gpg::Keyring>,
 }
 
-/// Result of [`verify_container_signature`]. `signature_valid`/per-member
-/// entries are `None` when not checked (unsigned container, or no keyring
-/// configured) rather than an error — callers decide what "not checked"
-/// means for their own policy (`extract_image` hard-fails on `Some(false)`,
-/// `em maint binpkg verify` just reports it).
+/// Result of [`verify_container_signature`].
+///
+/// `signature_valid`/per-member entries are `None` when not checked
+/// (unsigned container, or no keyring configured) rather than an error —
+/// callers decide what "not checked" means for their own policy
+/// (`extract_image` hard-fails on `Some(false)`, `em maint binpkg verify`
+/// just reports it).
 pub struct SignatureReport {
     /// Whether the Manifest carries an OpenPGP cleartext-signature wrapper.
     pub signed: bool,
@@ -462,8 +469,10 @@ fn container_member_listing(container: &Path) -> Result<String> {
 }
 
 /// The first container member whose basename starts with `prefix`
-/// (e.g. `image.tar` / `metadata.tar`), as GNU tar lists it (trailing slash
-/// trimmed). `Corrupt` if none is present.
+/// (e.g. `image.tar` / `metadata.tar`), as GNU tar lists it (trailing
+/// slash trimmed).
+///
+/// `Corrupt` if none is present.
 fn find_container_member<'a>(listing: &'a str, prefix: &str, container: &Path) -> Result<&'a str> {
     listing
         .lines()
@@ -478,11 +487,12 @@ fn find_container_member<'a>(listing: &'a str, prefix: &str, container: &Path) -
         .ok_or_else(|| Error::Corrupt(format!("no {prefix}.* member in {}", container.display())))
 }
 
-/// Extract the GPKG container's installed image into `dest` (e.g. `${D}` or a
-/// merge `work_root/image`), stripping the inner `image/` prefix so members land
-/// at `dest/<path>` (e.g. `dest/usr/bin/foo`). Used by the `-k`/`--usepkg`
-/// consumer to merge a pre-built package without compiling. Requires `tar` and
-/// `zstd` on `PATH`.
+/// Extract the GPKG container's installed image into `dest` (e.g. `${D}`
+/// or a merge `work_root/image`), stripping the inner `image/` prefix so
+/// members land at `dest/<path>` (e.g. `dest/usr/bin/foo`).
+///
+/// Used by the `-k`/`--usepkg` consumer to merge a pre-built package
+/// without compiling. Requires `tar` and `zstd` on `PATH`.
 ///
 /// `policy` is checked first (via [`verify_container_signature`]) — a
 /// signature-required-but-missing or fails-to-verify container is rejected
@@ -721,8 +731,8 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Build a fake `${D}` + VDB-style metadata dir, pack a gpkg, read the
-    /// metadata back — verifying the field files survive the round trip.
+    // Build a fake `${D}` + VDB-style metadata dir, pack a gpkg, read the
+    // metadata back — verifying the field files survive the round trip.
     #[test]
     fn write_then_read_metadata_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
@@ -786,8 +796,8 @@ mod tests {
         assert!(!out.contains_key("foo-1.0.ebuild"));
     }
 
-    /// `extract_image` recovers the image tree with the `image/` prefix stripped
-    /// and the file contents intact.
+    // `extract_image` recovers the image tree with the `image/` prefix stripped
+    // and the file contents intact.
     #[test]
     fn extract_image_roundtrip() {
         let tmp = tempfile::tempdir().unwrap();
@@ -832,9 +842,9 @@ mod tests {
         );
     }
 
-    /// Build a fake `${D}` + VDB-style metadata dir under `root`, returning
-    /// `(image_dir, metadata_dir)` — the shared fixture for the signed
-    /// round-trip tests below.
+    // Build a fake `${D}` + VDB-style metadata dir under `root`, returning
+    // `(image_dir, metadata_dir)` — the shared fixture for the signed
+    // round-trip tests below.
     fn build_fixture(root: &Path) -> (PathBuf, PathBuf) {
         let image = root.join("image");
         fs::create_dir_all(image.join("usr/bin")).unwrap();
@@ -876,9 +886,9 @@ mod tests {
         (signing, keyring)
     }
 
-    /// A signed GPKG round-trips through `extract_image` when the caller's
-    /// keyring contains the signing key — the success path for
-    /// `FEATURES=binpkg-signing` + `binrepos.conf`'s `verify-signature=yes`.
+    // A signed GPKG round-trips through `extract_image` when the caller's
+    // keyring contains the signing key — the success path for
+    // `FEATURES=binpkg-signing` + `binrepos.conf`'s `verify-signature=yes`.
     #[test]
     fn signed_gpkg_extracts_with_the_right_keyring() {
         let tmp = tempfile::tempdir().unwrap();
@@ -937,8 +947,8 @@ mod tests {
         );
     }
 
-    /// A signed GPKG fails cryptographic verification against a keyring that
-    /// doesn't contain the signing cert — the "unknown signer" case.
+    // A signed GPKG fails cryptographic verification against a keyring that
+    // doesn't contain the signing cert — the "unknown signer" case.
     #[test]
     fn signed_gpkg_fails_verification_against_wrong_keyring() {
         let tmp = tempfile::tempdir().unwrap();
@@ -975,8 +985,8 @@ mod tests {
         assert!(matches!(err, Error::Signature(_)));
     }
 
-    /// `FEATURES=binpkg-request-signature` (`require_signature: true`)
-    /// rejects an unsigned container outright, before any extraction.
+    // `FEATURES=binpkg-request-signature` (`require_signature: true`)
+    // rejects an unsigned container outright, before any extraction.
     #[test]
     fn unsigned_gpkg_rejected_when_signature_required() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1009,9 +1019,9 @@ mod tests {
         assert!(matches!(err, Error::SignatureRequired(_)));
     }
 
-    /// An unsigned container still round-trips under the default policy —
-    /// regression guard for the `GpkgInput`/`extract_image` signature
-    /// changes across this whole module.
+    // An unsigned container still round-trips under the default policy —
+    // regression guard for the `GpkgInput`/`extract_image` signature
+    // changes across this whole module.
     #[test]
     fn unsigned_gpkg_still_round_trips_under_default_policy() {
         let tmp = tempfile::tempdir().unwrap();

@@ -10,8 +10,9 @@ use sha1::Sha1;
 
 use crate::error::Result;
 
-/// Recursively enumerate `*.gpkg.tar` container files under `root`, as
-/// `(rel_path, full)` pairs.
+/// Recursively enumerate `*.gpkg.tar` container files under `root`.
+///
+/// Returns `(rel_path, full)` pairs.
 pub fn find_gpkg_containers(
     dir: &Path,
     root: &Path,
@@ -41,8 +42,10 @@ pub fn find_gpkg_containers(
 }
 
 /// Container file MD5+SHA1 (lowercase hex), byte size, and mtime (unix secs).
-/// Shared by index regeneration (`build_entry`) and `em maint binpkg verify`,
-/// which recomputes these to compare against the index's recorded values.
+///
+/// Shared by index regeneration (`build_entry`) and `em maint binpkg
+/// verify`, which recomputes these to compare against the index's recorded
+/// values.
 pub fn checksum(path: &Path) -> Result<(String, String, u64, u64)> {
     let mut file = std::fs::File::open(path)?;
     let mut md5 = md5::Context::new();
@@ -72,8 +75,9 @@ pub fn checksum(path: &Path) -> Result<(String, String, u64, u64)> {
 }
 
 /// Parse the trailing `-<n>` build-id from a container basename, portage's
-/// `<PF>-<BUILD_ID>.gpkg.tar` layout. `None` for the single-instance
-/// `<PF>.gpkg.tar` form.
+/// `<PF>-<BUILD_ID>.gpkg.tar` layout.
+///
+/// `None` for the single-instance `<PF>.gpkg.tar` form.
 pub fn parse_build_id_from_name(rel: &str) -> Option<u32> {
     let base = std::path::Path::new(rel).file_name()?.to_str()?;
     let stem = base.strip_suffix(".gpkg.tar")?;

@@ -11,8 +11,9 @@
 //! resolution, `binrepos.conf`) — this crate deliberately has no such
 //! dependency, so it stays usable standalone.
 //!
-//! The writer shells out to GNU `tar` and `zstd` (so file capabilities, ACLs and
-//! device nodes in the image survive natively), matching Portage's own approach.
+//! The writer shells out to GNU `tar` and `zstd` (so file capabilities,
+//! ACLs and device nodes in the image survive natively), matching
+//! Portage's own approach.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

@@ -53,6 +53,7 @@ pub struct SigningKey {
 
 impl SigningKey {
     /// Load an armored secret-key file (`BINPKG_GPG_SIGNING_KEY`).
+    ///
     /// `passphrase` unlocks it; pass `""` for an unencrypted key.
     pub fn load(path: &Path, passphrase: &str, digest: HashAlgorithm) -> Result<Self> {
         let (key, _headers) = SignedSecretKey::from_armor_file(path)
@@ -177,6 +178,7 @@ impl Keyring {
 }
 
 /// Load every `*.asc` file directly under `dir` into a [`Keyring`].
+///
 /// `Ok(None)` if `dir` doesn't exist at all (distinct from an
 /// existing-but-empty directory) — callers use this to distinguish "no
 /// verify keyring configured" from "configured but no keys imported yet".
@@ -206,8 +208,9 @@ pub fn verify_clearsign(armored: &str) -> Result<CleartextSignedMessage> {
     Ok(msg)
 }
 
-/// Verify `msg` (from [`verify_clearsign`]) against every key in `keyring` —
-/// each cert's primary key, then each of its subkeys (a signature's
+/// Verify `msg` (from [`verify_clearsign`]) against every key in `keyring`.
+///
+/// Checks each cert's primary key, then each of its subkeys (a signature's
 /// issuer-fingerprint subpacket doesn't uniquely identify *which* cert in a
 /// multi-cert keyring signed it; `SignedPublicKey`'s own `VerifyingKey` impl
 /// only ever checks its primary key, never subkeys). Returns the plaintext
@@ -266,10 +269,10 @@ mod tests {
     use pgp::composed::{EncryptionCaps, KeyType, SecretKeyParamsBuilder, SubkeyParamsBuilder};
     use pgp::crypto::ecc_curve::ECCCurve;
 
-    /// A throwaway Ed25519 keypair (plus one encryption subkey, to exercise
-    /// `ImportedKey::subkeys` reporting), generated fresh per test — never a
-    /// checked-in real key. Signing always uses the primary key (see this
-    /// module's doc comment), so the subkey here is never used to sign.
+    // A throwaway Ed25519 keypair (plus one encryption subkey, to exercise
+    // `ImportedKey::subkeys` reporting), generated fresh per test — never a
+    // checked-in real key. Signing always uses the primary key (see this
+    // module's doc comment), so the subkey here is never used to sign.
     fn gen_test_key(uid: &str) -> (SignedSecretKey, SignedPublicKey) {
         let mut rng = rand::thread_rng();
         let mut params = SecretKeyParamsBuilder::default();
