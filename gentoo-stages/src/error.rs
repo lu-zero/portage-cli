@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Stage3 fetching and management errors
+/// Stage3 fetching and management errors.
 #[derive(Debug, Error)]
 pub enum Error {
     /// The host architecture could not be determined.

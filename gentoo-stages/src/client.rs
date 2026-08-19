@@ -5,7 +5,7 @@ use gentoo_core::Arch;
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, info};
 
-/// Client for interacting with Gentoo distfiles mirrors
+/// Client for interacting with Gentoo distfiles mirrors.
 pub struct Client {
     mirror_url: String,
     arch: Arch,
@@ -15,7 +15,7 @@ pub struct Client {
 
 #[bon]
 impl Client {
-    /// Create a new Client with default settings
+    /// Create a new Client with default settings.
     ///
     /// Uses <https://distfiles.gentoo.org> mirror, the host architecture,
     /// and a temporary cache directory.
@@ -49,8 +49,9 @@ impl Client {
         })
     }
 
-    /// List all available stage3 images for the configured architecture
-    /// Includes both remote images and locally cached images
+    /// List all available stage3 images for the configured architecture.
+    ///
+    /// Includes both remote images and locally cached images.
     pub async fn list(&self) -> Result<Vec<Stage3>, Error> {
         let mut stage3_list = self.fetch_all_stage3_flavors().await?;
 
@@ -71,7 +72,7 @@ impl Client {
         Ok(stage3_list)
     }
 
-    /// Get a specific stage3 variant (downloads if not cached)
+    /// Get a specific stage3 variant (downloads if not cached).
     pub async fn get(&self, variant: &str) -> Result<Stage3, Error> {
         let stage3 = self
             .find(variant)
@@ -85,7 +86,7 @@ impl Client {
         Ok(stage3)
     }
 
-    /// Find a specific stage3 variant by name without downloading
+    /// Find a specific stage3 variant by name without downloading.
     ///
     /// Returns `None` if the variant is not found in either the remote
     /// repository or the local cache.
@@ -94,7 +95,7 @@ impl Client {
         Ok(stage3_list.into_iter().find(|s| s.variant == variant))
     }
 
-    /// Scan the cache directory for locally cached stage3 files
+    /// Scan the cache directory for locally cached stage3 files.
     fn scan_cached_stage3_files(&self) -> Vec<Stage3> {
         let arch_cache_dir = self
             .cache_dir
@@ -135,7 +136,7 @@ impl Client {
         cached_files
     }
 
-    /// Fetch the list of all available stage3 images for the architecture
+    /// Fetch the list of all available stage3 images for the architecture.
     async fn fetch_all_stage3_flavors(&self) -> Result<Vec<Stage3>, Error> {
         let latest_url = format!(
             "{}/releases/{}/autobuilds/latest-stage3.txt",
@@ -157,7 +158,7 @@ impl Client {
         self.parse_all_flavors_list(&content)
     }
 
-    /// Parse stage3 list content into Stage3 structures (for all flavors)
+    /// Parse stage3 list content into Stage3 structures (for all flavors).
     fn parse_all_flavors_list(&self, content: &str) -> Result<Vec<Stage3>, Error> {
         let mut stage3_images = Vec::new();
         let mut in_pgp_section = false;
@@ -232,7 +233,7 @@ impl Client {
         Ok(stage3_images)
     }
 
-    /// Download a stage3 image
+    /// Download a stage3 image.
     async fn download_stage3(&self, stage3: &Stage3) -> Result<(), Error> {
         let arch_cache_dir = stage3.arch_cache_dir();
         tokio::fs::create_dir_all(&arch_cache_dir).await?;
@@ -285,15 +286,16 @@ impl Client {
     }
 }
 
-/// Extract timestamp from stage3 filename as a sortable integer
+/// Extract timestamp from stage3 filename as a sortable integer.
 fn extract_timestamp(filename: &str) -> u64 {
     extract_date_from_filename(filename)
         .and_then(|ts| ts.replace('T', "").trim_end_matches('Z').parse().ok())
         .unwrap_or(0)
 }
 
-/// Extract variant from stage3 filename
-/// The variant is everything between "stage3-" and the final "-{timestamp}.tar.xz"
+/// Extract variant from stage3 filename.
+///
+/// The variant is everything between "stage3-" and the final "-{timestamp}.tar.xz".
 fn extract_variant_from_filename(filename: &str) -> String {
     let without_ext = filename.strip_suffix(".tar.xz").unwrap_or(filename);
     let without_prefix = without_ext.strip_prefix("stage3-").unwrap_or(without_ext);
@@ -309,9 +311,10 @@ fn extract_variant_from_filename(filename: &str) -> String {
     without_prefix.to_string()
 }
 
-/// Extract date from stage3 filename
-/// Returns the full datetime string (e.g., "20260216T163057Z")
-/// or None if no valid timestamp can be extracted
+/// Extract date from stage3 filename.
+///
+/// Returns the full datetime string (e.g., "20260216T163057Z"), or `None`
+/// if no valid timestamp can be extracted.
 fn extract_date_from_filename(filename: &str) -> Option<&str> {
     // Split from the right to handle complex arch names with hyphens
     let mut parts = filename.rsplit('-');
