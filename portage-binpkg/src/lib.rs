@@ -1,4 +1,4 @@
-//! Gentoo binary package (GPKG) reading and writing.
+//! Gentoo binary package (GPKG) reading and writing
 //!
 //! Provides the [GLEP 78](https://www.gentoo.org/glep/glep-0078.html) GPKG
 //! container **writer** ([`write_gpkg`]) and **metadata reader**

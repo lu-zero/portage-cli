@@ -62,7 +62,7 @@ pub fn index_pkgdir(pkgdir: &Utf8Path, chost: &str) -> Result<(usize, usize)> {
     Ok((entries.len(), skipped))
 }
 
-/// Build one index entry from a container: metadata fields + file checksums.
+/// Build one index entry from a container: metadata fields + file checksums
 ///
 /// Returns `(cpv, fields)` where `fields` keys are already in their
 /// index-translated form (`DESC`, `REPO`).
@@ -141,7 +141,7 @@ fn copy_field(meta: &BTreeMap<String, String>, out: &mut BTreeMap<String, String
     }
 }
 
-/// Write the `Packages` index: header block, then one block per entry.
+/// Write the `Packages` index: header block, then one block per entry
 fn write_index(
     pkgdir: &Utf8Path,
     header: &BTreeMap<String, String>,

@@ -42,21 +42,21 @@ use crate::scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
 /// `USE`/`IUSE` sets.
 #[derive(Debug, Clone)]
 pub struct IndexRow {
-    /// `category/PF`.
+    /// `category/PF`
     pub cpv: String,
-    /// Path relative to `PKGDIR`.
+    /// Path relative to `PKGDIR`
     pub path: String,
-    /// Recorded MD5 hex digest, if the index has one.
+    /// Recorded MD5 hex digest, if the index has one
     pub md5: Option<String>,
-    /// Recorded SHA1 hex digest, if the index has one.
+    /// Recorded SHA1 hex digest, if the index has one
     pub sha1: Option<String>,
-    /// Recorded container size in bytes, if the index has one.
+    /// Recorded container size in bytes, if the index has one
     pub size: Option<u64>,
-    /// Recorded `BUILD_ID`, if the index has one.
+    /// Recorded `BUILD_ID`, if the index has one
     pub build_id: Option<u32>,
-    /// Recorded `CHOST` ("" if the index omitted it).
+    /// Recorded `CHOST` ("" if the index omitted it)
     pub chost: String,
-    /// Recorded `CFLAGS` ("" if absent) — display only.
+    /// Recorded `CFLAGS` ("" if absent) — display only
     pub cflags: String,
     /// Derived build-env key (see [`crate::index::build_env_key`]); "" means
     /// unkeyed (no ISA-relevant flags recorded).
@@ -106,9 +106,9 @@ pub enum SignatureStatus {
     /// Signed, but no verify keyring was given — presence-only, not
     /// cryptographically checked.
     Unverified,
-    /// Signed and cryptographically verified against the given keyring.
+    /// Signed and cryptographically verified against the given keyring
     Valid,
-    /// Signed, but the signature does not verify against the given keyring.
+    /// Signed, but the signature does not verify against the given keyring
     Invalid,
 }
 
@@ -117,17 +117,17 @@ pub enum SignatureStatus {
 /// required check.
 #[derive(Debug, Clone)]
 pub struct VerifyProblem {
-    /// `category/PF`.
+    /// `category/PF`
     pub cpv: String,
-    /// Path relative to `PKGDIR`.
+    /// Path relative to `PKGDIR`
     pub path: String,
-    /// The container file itself is missing (no digest check was possible).
+    /// The container file itself is missing (no digest check was possible)
     pub missing: bool,
-    /// `(actual, expected)` when the recorded size didn't match.
+    /// `(actual, expected)` when the recorded size didn't match
     pub size_mismatch: Option<(u64, u64)>,
-    /// `(actual, expected)` when the recorded MD5 didn't match.
+    /// `(actual, expected)` when the recorded MD5 didn't match
     pub md5_mismatch: Option<(String, String)>,
-    /// `(actual, expected)` when the recorded SHA1 didn't match.
+    /// `(actual, expected)` when the recorded SHA1 didn't match
     pub sha1_mismatch: Option<(String, String)>,
     /// Where the corrupt container was renamed to, if `verify` was run with
     /// `fix: true`.
@@ -139,14 +139,14 @@ pub struct VerifyProblem {
     pub signature: Option<SignatureStatus>,
 }
 
-/// Outcome of [`verify`].
+/// Outcome of [`verify`]
 #[derive(Debug, Clone, Default)]
 pub struct VerifyReport {
-    /// Number of containers whose size/MD5/SHA1 all matched the index.
+    /// Number of containers whose size/MD5/SHA1 all matched the index
     pub ok: usize,
-    /// Total number of indexed entries examined.
+    /// Total number of indexed entries examined
     pub total: usize,
-    /// Missing or corrupt entries (see [`VerifyProblem`]).
+    /// Missing or corrupt entries (see [`VerifyProblem`])
     pub problems: Vec<VerifyProblem>,
     /// The regenerated package count, if `fix: true` and there was anything
     /// to fix (`None` when nothing needed reindexing).
@@ -154,17 +154,17 @@ pub struct VerifyReport {
 }
 
 impl VerifyReport {
-    /// Whether every indexed container matched its recorded digest/size.
+    /// Whether every indexed container matched its recorded digest/size
     pub fn is_clean(&self) -> bool {
         self.problems.is_empty()
     }
 
-    /// Count of entries whose container file is missing outright.
+    /// Count of entries whose container file is missing outright
     pub fn missing_count(&self) -> usize {
         self.problems.iter().filter(|p| p.missing).count()
     }
 
-    /// Count of entries present on disk but with a digest/size mismatch.
+    /// Count of entries present on disk but with a digest/size mismatch
     pub fn corrupt_count(&self) -> usize {
         self.problems
             .iter()
@@ -320,26 +320,26 @@ pub fn verify(
     })
 }
 
-/// One container involved in a [`prune`] decision.
+/// One container involved in a [`prune`] decision
 #[derive(Debug, Clone)]
 pub struct PruneEntry {
-    /// `category/PF`.
+    /// `category/PF`
     pub cpv: String,
-    /// This container's `BUILD_ID` (`0` for the implicit single-instance form).
+    /// This container's `BUILD_ID` (`0` for the implicit single-instance form)
     pub build_id: u32,
-    /// Path relative to `PKGDIR`.
+    /// Path relative to `PKGDIR`
     pub rel: String,
 }
 
-/// Outcome of [`prune`].
+/// Outcome of [`prune`]
 ///
 /// Only cpvs that actually had more than one container are represented —
 /// an untouched cpv (already down to one instance) isn't reported at all.
 #[derive(Debug, Clone, Default)]
 pub struct PruneReport {
-    /// The newest-`BUILD_ID` container kept for each cpv that had extras.
+    /// The newest-`BUILD_ID` container kept for each cpv that had extras
     pub kept: Vec<PruneEntry>,
-    /// Older containers removed (or, under `dry_run`, that would be removed).
+    /// Older containers removed (or, under `dry_run`, that would be removed)
     pub removed: Vec<PruneEntry>,
     /// The regenerated package count, if anything was actually removed
     /// (`None` under `dry_run`, or when there was nothing to prune).
@@ -422,7 +422,7 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
     })
 }
 
-/// Extract CPV from metadata (same as container_cpv but from already-read metadata).
+/// Extract CPV from metadata (same as container_cpv but from already-read metadata)
 fn container_cpv_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {
     let cat = meta.get("CATEGORY")?;
     let pf = meta.get("PF")?;

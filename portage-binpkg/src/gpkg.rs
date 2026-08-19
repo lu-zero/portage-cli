@@ -1,4 +1,4 @@
-//! GPKG (GLEP 78) binary-package container writer.
+//! GPKG (GLEP 78) binary-package container writer
 //!
 //! A GPKG is a **plain (uncompressed) tar** whose members, all owned `0/0`, are —
 //! **in this exact order**:
@@ -24,12 +24,12 @@ use sha2::{Digest, Sha512};
 use crate::error::{Error, Result};
 use crate::gpg;
 
-/// The GLEP 78 format-marker filename (and version).
+/// The GLEP 78 format-marker filename (and version)
 const GPKG_VERSION: &str = "gpkg-1";
 const METADATA_TAR: &str = "metadata.tar.zst";
 const IMAGE_TAR: &str = "image.tar.zst";
 
-/// Inputs for [`write_gpkg`].
+/// Inputs for [`write_gpkg`]
 pub struct GpkgInput<'a> {
     /// The installed image directory (`${D}`); its contents are packed under
     /// `image/` with ownership/xattrs preserved.
@@ -37,7 +37,7 @@ pub struct GpkgInput<'a> {
     /// The VDB-style metadata directory (the package's `var/db/pkg/<cat>/<pf>`);
     /// its contents are packed under `metadata/`.
     pub metadata_dir: &'a Path,
-    /// The package basename — `PF`, e.g. `gentoo-functions-1.7.6`.
+    /// The package basename — `PF`, e.g. `gentoo-functions-1.7.6`
     pub basename: &'a str,
     /// `FEATURES=binpkg-signing`: when `Some`, `metadata.tar.<c>` and
     /// `image.tar.<c>` each get a sibling detached `.sig` member, and the
@@ -188,7 +188,7 @@ fn tar_metadata(dir: &Path, out: &Path) -> Result<()> {
     run("tar", &mut cmd)
 }
 
-/// One parsed `DATA <name> <size> SHA512 <hex> BLAKE2B <hex>` Manifest line.
+/// One parsed `DATA <name> <size> SHA512 <hex> BLAKE2B <hex>` Manifest line
 struct ManifestEntry {
     name: String,
     size: u64,
@@ -232,7 +232,7 @@ fn parse_manifest_entries(text: &str) -> Vec<ManifestEntry> {
     entries
 }
 
-/// Check `data` against `entry`'s recorded size/hashes.
+/// Check `data` against `entry`'s recorded size/hashes
 fn check_entry(entry: &ManifestEntry, data: &[u8]) -> Result<()> {
     if data.len() as u64 != entry.size {
         return Err(Error::Corrupt(format!(
@@ -263,7 +263,7 @@ fn check_entry(entry: &ManifestEntry, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Verify `file` against a GLEP 74 `DATA <name> <size> SHA512 …` Manifest line.
+/// Verify `file` against a GLEP 74 `DATA <name> <size> SHA512 …` Manifest line
 ///
 /// `member_name` is the path as stored in the Manifest (e.g. `pkg/image.tar.zst`).
 fn verify_data_member(manifest: &Path, member_name: &Path, file: &Path) -> Result<()> {
@@ -287,7 +287,7 @@ fn verify_data_member(manifest: &Path, member_name: &Path, file: &Path) -> Resul
     check_entry(entry, &data)
 }
 
-/// Write a GLEP 74-style Manifest with one `DATA` line per member.
+/// Write a GLEP 74-style Manifest with one `DATA` line per member
 fn write_manifest(out: &Path, members: &[(String, PathBuf)]) -> Result<()> {
     let mut text = String::new();
     for (name, path) in members {
@@ -303,7 +303,7 @@ fn write_manifest(out: &Path, members: &[(String, PathBuf)]) -> Result<()> {
     Ok(())
 }
 
-/// Policy for verifying a GPKG container's signature before trusting it.
+/// Policy for verifying a GPKG container's signature before trusting it
 ///
 /// Two independent knobs, deliberately not collapsed into one flag — the
 /// direct encoding of real portage's two independent toggles
@@ -320,7 +320,7 @@ pub struct VerifyPolicy<'a> {
     pub keyring: Option<&'a gpg::Keyring>,
 }
 
-/// Result of [`verify_container_signature`].
+/// Result of [`verify_container_signature`]
 ///
 /// `signature_valid`/per-member entries are `None` when not checked
 /// (unsigned container, or no keyring configured) rather than an error —
@@ -328,17 +328,17 @@ pub struct VerifyPolicy<'a> {
 /// (`extract_image` hard-fails on `Some(false)`, `em maint binpkg verify`
 /// just reports it).
 pub struct SignatureReport {
-    /// Whether the Manifest carries an OpenPGP cleartext-signature wrapper.
+    /// Whether the Manifest carries an OpenPGP cleartext-signature wrapper
     pub signed: bool,
-    /// `Some(true/false)` once cryptographically checked against a keyring.
+    /// `Some(true/false)` once cryptographically checked against a keyring
     pub signature_valid: Option<bool>,
-    /// Fingerprint of the key that verified the Manifest signature.
+    /// Fingerprint of the key that verified the Manifest signature
     pub signer_fingerprint: Option<String>,
-    /// Per detached-`.sig` member: `(member name, Some(valid))`.
+    /// Per detached-`.sig` member: `(member name, Some(valid))`
     pub member_signatures: Vec<(String, Option<bool>)>,
 }
 
-/// List a container's members (paths relative to the archive root).
+/// List a container's members (paths relative to the archive root)
 fn list_container(container: &Path) -> Result<Vec<String>> {
     let listing = String::from_utf8_lossy(&capture(
         "tar",
@@ -351,7 +351,7 @@ fn list_container(container: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Extract member `name` from `container` into `dest_dir`, returning its path.
+/// Extract member `name` from `container` into `dest_dir`, returning its path
 fn extract_member(container: &Path, name: &str, dest_dir: &Path) -> Result<PathBuf> {
     run(
         "tar",
@@ -459,7 +459,7 @@ pub fn verify_container_signature(
     })
 }
 
-/// `tar -tf` the container, returning its member listing (one path per line).
+/// `tar -tf` the container, returning its member listing (one path per line)
 fn container_member_listing(container: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&capture(
         "tar",
@@ -598,7 +598,7 @@ pub fn extract_image(container: &Path, dest: &Path, policy: VerifyPolicy) -> Res
     Ok(())
 }
 
-/// Ensure every path under `root` stays within it (no symlink-escape after extract).
+/// Ensure every path under `root` stays within it (no symlink-escape after extract)
 fn validate_tree_under(root: &Path) -> Result<()> {
     let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let mut stack = vec![root.to_path_buf()];
@@ -648,7 +648,7 @@ fn run(tool: &'static str, cmd: &mut Command) -> Result<()> {
     }
 }
 
-/// Run a command and capture its stdout, failing on a non-zero exit.
+/// Run a command and capture its stdout, failing on a non-zero exit
 fn capture(tool: &'static str, cmd: &mut Command) -> Result<Vec<u8>> {
     let out = cmd.output()?;
     if out.status.success() {

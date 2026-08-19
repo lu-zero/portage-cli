@@ -10,7 +10,7 @@ use sha1::Sha1;
 
 use crate::error::Result;
 
-/// Recursively enumerate `*.gpkg.tar` container files under `root`.
+/// Recursively enumerate `*.gpkg.tar` container files under `root`
 ///
 /// Returns `(rel_path, full)` pairs.
 pub fn find_gpkg_containers(
@@ -41,7 +41,7 @@ pub fn find_gpkg_containers(
     Ok(())
 }
 
-/// Container file MD5+SHA1 (lowercase hex), byte size, and mtime (unix secs).
+/// Container file MD5+SHA1 (lowercase hex), byte size, and mtime (unix secs)
 ///
 /// Shared by index regeneration (`build_entry`) and `em maint binpkg
 /// verify`, which recomputes these to compare against the index's recorded

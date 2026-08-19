@@ -20,27 +20,27 @@ use sokgi::Dialect;
 use crate::error::Result;
 use crate::scan::find_gpkg_containers;
 
-/// One `Packages` index entry, parsed into the fields the reuse check needs.
+/// One `Packages` index entry, parsed into the fields the reuse check needs
 #[derive(Debug, Clone)]
 pub struct BinpkgEntry {
-    /// Path relative to `PKGDIR` (e.g. `app-test/foo-1.0-1.gpkg.tar`).
+    /// Path relative to `PKGDIR` (e.g. `app-test/foo-1.0-1.gpkg.tar`)
     pub path: String,
-    /// The binpkg's recorded `USE`, as a bare-flag set.
+    /// The binpkg's recorded `USE`, as a bare-flag set
     pub use_set: HashSet<String>,
-    /// The package's `IUSE`, prefix-stripped (`+flag`/`-flag` → `flag`).
+    /// The package's `IUSE`, prefix-stripped (`+flag`/`-flag` → `flag`)
     pub iuse: HashSet<String>,
-    /// Build `CHOST` from the entry (or empty if the index omitted it).
+    /// Build `CHOST` from the entry (or empty if the index omitted it)
     ///
     /// Reuse rejects a mismatch against the live desired CHOST so an aarch64
     /// PKGDIR entry is never taken for a riscv64 plan (and vice versa).
     pub chost: String,
-    /// Build-time `CFLAGS` (empty if absent).
+    /// Build-time `CFLAGS` (empty if absent)
     pub cflags: String,
-    /// Build-time `CXXFLAGS` (empty if absent).
+    /// Build-time `CXXFLAGS` (empty if absent)
     pub cxxflags: String,
-    /// Build-time `LDFLAGS` (empty if absent).
+    /// Build-time `LDFLAGS` (empty if absent)
     pub ldflags: String,
-    /// Build-time `RUSTFLAGS` (empty if absent).
+    /// Build-time `RUSTFLAGS` (empty if absent)
     pub rustflags: String,
     /// Build environment key derived from cflags, cxxflags, ldflags,
     /// rustflags via sokgi.
@@ -48,7 +48,7 @@ pub struct BinpkgEntry {
     /// Empty if all flag sets are empty (skip gate). `"__native__"` if any
     /// flag set contains machine-dependent flags.
     pub build_env_key: String,
-    /// Recorded `BUILD_ID` (`0` for the implicit single-instance case).
+    /// Recorded `BUILD_ID` (`0` for the implicit single-instance case)
     ///
     /// Used to prefer the newest matching instance in
     /// [`BinpkgIndex::find_reusable`] / [`RemoteBinpkgIndex::find_reusable`]
@@ -56,16 +56,16 @@ pub struct BinpkgEntry {
     pub build_id: u32,
 }
 
-/// A parsed `Packages` index, keyed by `cpv`, answering reuse queries.
+/// A parsed `Packages` index, keyed by `cpv`, answering reuse queries
 #[derive(Debug, Default)]
 pub struct BinpkgIndex {
     entries: BTreeMap<String, Vec<BinpkgEntry>>,
-    /// Absolute `PKGDIR`, used to resolve each entry's relative `path`.
+    /// Absolute `PKGDIR`, used to resolve each entry's relative `path`
     pkgdir: PathBuf,
 }
 
 impl BinpkgIndex {
-    /// Open the `Packages` index in `pkgdir`.
+    /// Open the `Packages` index in `pkgdir`
     ///
     /// If it is missing or unreadable, rebuild it on the fly by scanning
     /// `pkgdir` for `*.gpkg.tar` and reading each container's metadata (the
@@ -82,7 +82,7 @@ impl BinpkgIndex {
         Self::scan(pkgdir)
     }
 
-    /// Parse a `Packages` file.
+    /// Parse a `Packages` file
     ///
     /// The first blank-line-separated block is the header; each later
     /// block is one package (`CPV:` required).
@@ -141,12 +141,12 @@ impl BinpkgIndex {
         })
     }
 
-    /// The number of indexed packages (for reporting).
+    /// The number of indexed packages (for reporting)
     pub fn len(&self) -> usize {
         self.entries.values().map(|v| v.len()).sum()
     }
 
-    /// Whether the index has no entries.
+    /// Whether the index has no entries
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -194,7 +194,7 @@ impl BinpkgIndex {
     }
 }
 
-/// Split a `USE` string into a bare-flag set.
+/// Split a `USE` string into a bare-flag set
 pub(crate) fn split_use(s: &str) -> HashSet<String> {
     s.split_whitespace().map(str::to_owned).collect()
 }
@@ -288,7 +288,7 @@ pub fn short_build_env_key(key: &str) -> String {
     }
 }
 
-/// Parse a `Packages` index into `cpv → entry`.
+/// Parse a `Packages` index into `cpv → entry`
 ///
 /// Shared by the local and remote consumers (the only difference is how
 /// `path` is resolved: a local `PKGDIR` join vs a remote `base_uri` join).
@@ -390,27 +390,27 @@ impl RemoteBinpkgIndex {
         self
     }
 
-    /// This binhost's `verify-signature` setting (see [`Self::with_verify_signature`]).
+    /// This binhost's `verify-signature` setting (see [`Self::with_verify_signature`])
     pub fn verify_signature(&self) -> bool {
         self.verify_signature
     }
 
-    /// The effective download base URI (after header `URI` override).
+    /// The effective download base URI (after header `URI` override)
     pub fn base_uri(&self) -> &str {
         &self.base_uri
     }
 
-    /// The number of indexed packages (for reporting).
+    /// The number of indexed packages (for reporting)
     pub fn len(&self) -> usize {
         self.entries.values().map(|v| v.len()).sum()
     }
 
-    /// Whether the index has no entries.
+    /// Whether the index has no entries
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    /// Find a reusable remote binpkg for `cpv`, returning its download URL.
+    /// Find a reusable remote binpkg for `cpv`, returning its download URL
     ///
     /// `None` if the cpv is absent or its USE/CHOST/build_env_key does not
     /// match (same rules as the local index). URL = `base_uri` + `/` + `PATH`.
@@ -472,7 +472,7 @@ fn entry_reusable(entry: &BinpkgEntry, desired_use: &[String], desired_chost: &s
     chost_compatible(&entry.chost, desired_chost)
 }
 
-/// CHOST gate: both sides set and unequal → not reusable.
+/// CHOST gate: both sides set and unequal → not reusable
 ///
 /// Either side empty skips the check (sparse index / unknown desired CHOST).
 fn chost_compatible(binpkg_chost: &str, desired_chost: &str) -> bool {
@@ -523,7 +523,7 @@ pub fn use_compatible(
     true
 }
 
-/// Compute a **sub-target / ISA identity** key for binpkg reuse.
+/// Compute a **sub-target / ISA identity** key for binpkg reuse
 ///
 /// Returns empty string if nothing ABI-relevant remains (skip gate).
 /// Returns `"__native__"` if any retained flag is machine-dependent
@@ -604,7 +604,7 @@ pub fn build_env_key(cflags: &str, cxxflags: &str, ldflags: &str, rustflags: &st
     all_hashes.join(" ")
 }
 
-/// Keep only ISA/ABI-relevant tokens from a GCC-style flag string.
+/// Keep only ISA/ABI-relevant tokens from a GCC-style flag string
 fn filter_c_family_abi_flags(flags: &str) -> String {
     flags
         .split_whitespace()
@@ -625,7 +625,7 @@ fn is_c_family_abi_token(tok: &str) -> bool {
     tok.starts_with("-m") && tok != "-m"
 }
 
-/// Keep Rust target-cpu / target-feature settings; drop opt-level and noise.
+/// Keep Rust target-cpu / target-feature settings; drop opt-level and noise
 fn filter_rust_abi_flags(flags: &str) -> String {
     let toks: Vec<&str> = flags.split_whitespace().collect();
     let mut out = Vec::new();

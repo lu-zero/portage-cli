@@ -1,4 +1,4 @@
-//! OpenPGP primitives (the `pgp`/rpgp crate) for GPKG signing/verification.
+//! OpenPGP primitives (the `pgp`/rpgp crate) for GPKG signing/verification
 //!
 //! No `gpg`/`gpg-agent` subprocess — a native Rust OpenPGP implementation,
 //! RFC 9580 compliant, so real `gpg --verify` and gemato's own verification
@@ -31,7 +31,7 @@ use pgp::composed::{
     ArmorOptions, CleartextSignedMessage, Deserializable, DetachedSignature, SignedPublicKey,
     SignedSecretKey,
 };
-/// Hash algorithm for a detached member signature (`BINPKG_GPG_SIGNING_DIGEST`).
+/// Hash algorithm for a detached member signature (`BINPKG_GPG_SIGNING_DIGEST`)
 pub use pgp::crypto::hash::HashAlgorithm;
 use pgp::types::{KeyDetails, Password};
 
@@ -41,7 +41,7 @@ fn sig_err(context: &str, e: impl std::fmt::Display) -> Error {
     Error::Signature(format!("{context}: {e}"))
 }
 
-/// A loaded, decrypted secret key ready to sign.
+/// A loaded, decrypted secret key ready to sign
 pub struct SigningKey {
     key: SignedSecretKey,
     password: Password,
@@ -52,7 +52,7 @@ pub struct SigningKey {
 }
 
 impl SigningKey {
-    /// Load an armored secret-key file (`BINPKG_GPG_SIGNING_KEY`).
+    /// Load an armored secret-key file (`BINPKG_GPG_SIGNING_KEY`)
     ///
     /// `passphrase` unlocks it; pass `""` for an unencrypted key.
     pub fn load(path: &Path, passphrase: &str, digest: HashAlgorithm) -> Result<Self> {
@@ -115,11 +115,11 @@ pub fn sign_detached(data: &[u8], key: &SigningKey) -> Result<String> {
 /// display summary — what [`parse_public_key`] returns for `em maint
 /// binpkg gpg-import`'s printout.
 pub struct ImportedKey {
-    /// Hex-encoded (uppercase) OpenPGP fingerprint of the primary key.
+    /// Hex-encoded (uppercase) OpenPGP fingerprint of the primary key
     pub fingerprint: String,
-    /// The certificate's first user ID, if any.
+    /// The certificate's first user ID, if any
     pub primary_uid: Option<String>,
-    /// Number of subkeys the certificate carries.
+    /// Number of subkeys the certificate carries
     pub subkeys: usize,
 }
 
@@ -161,23 +161,23 @@ pub struct Keyring {
 }
 
 impl Keyring {
-    /// Build a keyring from already-parsed, self-signature-validated certs.
+    /// Build a keyring from already-parsed, self-signature-validated certs
     pub fn new(certs: Vec<SignedPublicKey>) -> Self {
         Self { certs }
     }
 
-    /// Whether this keyring has no certificates at all.
+    /// Whether this keyring has no certificates at all
     pub fn is_empty(&self) -> bool {
         self.certs.is_empty()
     }
 
-    /// Number of certificates in this keyring.
+    /// Number of certificates in this keyring
     pub fn len(&self) -> usize {
         self.certs.len()
     }
 }
 
-/// Load every `*.asc` file directly under `dir` into a [`Keyring`].
+/// Load every `*.asc` file directly under `dir` into a [`Keyring`]
 ///
 /// `Ok(None)` if `dir` doesn't exist at all (distinct from an
 /// existing-but-empty directory) — callers use this to distinguish "no
@@ -208,7 +208,7 @@ pub fn verify_clearsign(armored: &str) -> Result<CleartextSignedMessage> {
     Ok(msg)
 }
 
-/// Verify `msg` (from [`verify_clearsign`]) against every key in `keyring`.
+/// Verify `msg` (from [`verify_clearsign`]) against every key in `keyring`
 ///
 /// Checks each cert's primary key, then each of its subkeys (a signature's
 /// issuer-fingerprint subpacket doesn't uniquely identify *which* cert in a

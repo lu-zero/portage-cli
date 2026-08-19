@@ -1,39 +1,39 @@
-//! Errors for GPKG read/write operations.
+//! Errors for GPKG read/write operations
 
 use std::path::PathBuf;
 
-/// Result alias for this crate.
+/// Result alias for this crate
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Errors produced while building or reading a binary package.
+/// Errors produced while building or reading a binary package
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// I/O error while reading or writing GPKG files.
+    /// I/O error while reading or writing GPKG files
     #[error("i/o error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// An external tool (`tar`/`zstd`) exited non-zero.
+    /// An external tool (`tar`/`zstd`) exited non-zero
     #[error("{tool} failed with exit code {code}")]
     Tool {
-        /// Name of the external tool.
+        /// Name of the external tool
         tool: &'static str,
-        /// Non-zero exit code returned by the tool.
+        /// Non-zero exit code returned by the tool
         code: i32,
     },
 
-    /// A path lacked an expected component (parent / file name).
+    /// A path lacked an expected component (parent / file name)
     #[error("invalid path: {0}")]
     BadPath(PathBuf),
 
-    /// The container is missing a required member or is otherwise malformed.
+    /// The container is missing a required member or is otherwise malformed
     #[error("corrupt or incomplete GPKG: {0}")]
     Corrupt(String),
 
-    /// No `Packages` index file exists yet at this `PKGDIR`.
+    /// No `Packages` index file exists yet at this `PKGDIR`
     #[error("no Packages index at {} — run `em maint binhost` first", .0.display())]
     NoIndex(PathBuf),
 
-    /// `PKGDIR` itself does not exist.
+    /// `PKGDIR` itself does not exist
     #[error("PKGDIR does not exist: {}", .0.display())]
     NoPkgdir(PathBuf),
 
