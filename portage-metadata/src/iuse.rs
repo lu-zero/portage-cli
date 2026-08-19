@@ -5,7 +5,7 @@ use crate::interner::{DefaultInterner, Interned, Interner};
 
 use crate::error::{Error, Result};
 
-/// Default state for an IUSE flag.
+/// Default state for an IUSE flag
 ///
 /// Flags may be prefixed with `+` (enabled by default) or `-` (disabled by
 /// default) in the `IUSE` variable.
@@ -13,13 +13,13 @@ use crate::error::{Error, Result};
 /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IUseDefault {
-    /// `+flag` — enabled by default.
+    /// `+flag` — enabled by default
     Enabled,
-    /// `-flag` — disabled by default.
+    /// `-flag` — disabled by default
     Disabled,
 }
 
-/// A single USE flag entry from the `IUSE` variable.
+/// A single USE flag entry from the `IUSE` variable
 ///
 /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -27,9 +27,9 @@ pub struct IUse<I = DefaultInterner>
 where
     I: Interner,
 {
-    /// Interned USE flag name (without prefix).
+    /// Interned USE flag name (without prefix)
     name: <I as Interner>::Key,
-    /// Optional default state prefix (`+` or `-`).
+    /// Optional default state prefix (`+` or `-`)
     pub default: Option<IUseDefault>,
 }
 
@@ -43,12 +43,12 @@ fn is_valid_use_flag_name(name: &str) -> bool {
 }
 
 impl<I: Interner> IUse<I> {
-    /// The interned USE flag name (without `+`/`-` prefix).
+    /// The interned USE flag name (without `+`/`-` prefix)
     pub fn flag(&self) -> &<I as Interner>::Key {
         &self.name
     }
 
-    /// The USE flag name.
+    /// The USE flag name
     pub fn name(&self) -> &str {
         I::resolve(&self.name)
     }
@@ -61,7 +61,7 @@ impl<I: Interner> IUse<I> {
         self.default == Some(IUseDefault::Enabled)
     }
 
-    /// Parse a single IUSE token.
+    /// Parse a single IUSE token
     pub fn parse(s: &str) -> Result<Self> {
         if s.is_empty() {
             return Err(Error::InvalidIUse("empty IUSE entry".to_string()));
@@ -109,7 +109,7 @@ impl From<&IUse<DefaultInterner>> for Interned<DefaultInterner> {
 }
 
 impl IUse<DefaultInterner> {
-    /// Parse a space-separated `IUSE` line into a list of flags.
+    /// Parse a space-separated `IUSE` line into a list of flags
     ///
     /// # Examples
     ///

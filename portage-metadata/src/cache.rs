@@ -12,7 +12,7 @@ use crate::required_use::RequiredUseExpr;
 use crate::restrict::RestrictExpr;
 use crate::src_uri::SrcUriEntry;
 
-/// Borrowed line-oriented view over a raw md5-cache file's text.
+/// Borrowed line-oriented view over a raw md5-cache file's text
 ///
 /// A cache file is `KEY=VALUE\n` per line (see
 /// [PMS 14.2](https://projects.gentoo.org/pms/9/pms.html#mddict-cache-file-format)).
@@ -35,17 +35,17 @@ pub struct RawCacheEntry<'a> {
 }
 
 impl<'a> RawCacheEntry<'a> {
-    /// Wrap a cache file's raw text. No parsing happens until a method is called.
+    /// Wrap a cache file's raw text. No parsing happens until a method is called
     pub fn new(text: &'a str) -> Self {
         Self { text }
     }
 
-    /// First value for `key`, or `None` if no line in the file matches.
+    /// First value for `key`, or `None` if no line in the file matches
     pub fn field(&self, key: &str) -> Option<&'a str> {
         self.lines().find_map(|(k, v)| (k == key).then_some(v))
     }
 
-    /// Resolve several fields in a single pass over the text.
+    /// Resolve several fields in a single pass over the text
     ///
     /// Returns one `Option<&str>` per requested key, in the same order. Faster
     /// than calling [`Self::field`] in a loop when more than one key is needed.
@@ -64,7 +64,7 @@ impl<'a> RawCacheEntry<'a> {
         out
     }
 
-    /// Every `KEY=VALUE` pair in the file, in source order.
+    /// Every `KEY=VALUE` pair in the file, in source order
     ///
     /// Underscored keys (`_eclasses_`, `_md5_`) are included; lines without
     /// `=` are skipped.
@@ -79,7 +79,7 @@ impl<'a> RawCacheEntry<'a> {
     }
 }
 
-/// A parsed md5-cache entry.
+/// A parsed md5-cache entry
 ///
 /// Represents a single file from `metadata/md5-cache/<category>/<package>-<version>`.
 /// Contains the full ebuild metadata plus cache-specific fields (`md5`, `eclasses`).
@@ -90,20 +90,20 @@ pub struct CacheEntry<I = DefaultInterner>
 where
     I: Interner,
 {
-    /// The ebuild metadata.
+    /// The ebuild metadata
     pub metadata: EbuildMetadata<I>,
 
-    /// MD5 checksum of the ebuild file (from `_md5_`).
+    /// MD5 checksum of the ebuild file (from `_md5_`)
     pub md5: Option<String>,
 
-    /// All transitively inherited eclasses with their checksums (from `_eclasses_`).
+    /// All transitively inherited eclasses with their checksums (from `_eclasses_`)
     ///
     /// Each tuple is `(eclass_name, md5_checksum)`.  Pairs are tab-separated
     /// as described in [PMS 14.3](https://projects.gentoo.org/pms/latest/pms.html#md5-dict-cache-file-format).
     pub eclasses: Vec<(String, String)>,
 }
 
-/// Accumulator for key-value pairs before building a `CacheEntry`.
+/// Accumulator for key-value pairs before building a `CacheEntry`
 ///
 /// Holds `&str` slices into the source data — no intermediate String
 /// allocations.  Call `finish()` to parse and build the typed entry.
@@ -315,7 +315,7 @@ impl<I: Interner> CacheEntry<I> {
         state.finish()
     }
 
-    /// Serialize this cache entry back to md5-cache format.
+    /// Serialize this cache entry back to md5-cache format
     ///
     /// Produces a string suitable for writing to a cache file.
     /// Empty-valued fields are omitted.
@@ -414,7 +414,7 @@ impl<I: Interner> CacheEntry<I> {
 }
 
 impl CacheEntry<DefaultInterner> {
-    /// Parse a md5-cache file's contents into a `CacheEntry`.
+    /// Parse a md5-cache file's contents into a `CacheEntry`
     ///
     /// The input is the full text of a cache file. Lines are `KEY=VALUE`
     /// pairs in arbitrary order. Empty values may be omitted entirely.
@@ -438,7 +438,7 @@ impl CacheEntry<DefaultInterner> {
         Self::parse_impl(input)
     }
 
-    /// Build a `CacheEntry` from an iterator of `(key, value)` string pairs.
+    /// Build a `CacheEntry` from an iterator of `(key, value)` string pairs
     ///
     /// Avoids the text-format round-trip of `parse` — useful when building
     /// entries from in-memory data (e.g., shell environment variables).
@@ -452,7 +452,7 @@ impl CacheEntry<DefaultInterner> {
     }
 }
 
-/// Check that a slot or subslot name is valid per PMS 3.1.3.
+/// Check that a slot or subslot name is valid per PMS 3.1.3
 ///
 /// Slot names may contain `[A-Za-z0-9+_.-]` and must not begin with `-`, `.`, or `+`.
 fn is_valid_slot_name(s: &str) -> bool {
@@ -467,7 +467,7 @@ fn is_valid_slot_name(s: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'_' | b'.' | b'-'))
 }
 
-/// Parse a SLOT value into a `Slot`.
+/// Parse a SLOT value into a `Slot`
 fn parse_slot(s: &str) -> Result<Slot> {
     if s.is_empty() {
         return Err(Error::MissingField("SLOT".to_string()));
@@ -485,7 +485,7 @@ fn parse_slot(s: &str) -> Result<Slot> {
     }
 }
 
-/// Parse a dependency field value into `Vec<DepEntry>`.
+/// Parse a dependency field value into `Vec<DepEntry>`
 fn parse_dep_field(s: &str) -> Result<Vec<DepEntry>> {
     if s.is_empty() {
         return Ok(Vec::new());
@@ -493,7 +493,7 @@ fn parse_dep_field(s: &str) -> Result<Vec<DepEntry>> {
     DepEntry::parse(s).map_err(|e| Error::DepError(format!("{e}")))
 }
 
-/// Parse the `_eclasses_` value: tab-separated pairs of `name\tchecksum`.
+/// Parse the `_eclasses_` value: tab-separated pairs of `name\tchecksum`
 fn parse_eclasses(s: &str) -> Vec<(String, String)> {
     if s.is_empty() {
         return Vec::new();
@@ -511,7 +511,7 @@ fn parse_eclasses(s: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Format DEFINED_PHASES for serialization.
+/// Format DEFINED_PHASES for serialization
 fn format_phases(phases: &[Phase]) -> String {
     if phases.is_empty() {
         "-".to_string()
@@ -524,7 +524,7 @@ fn format_phases(phases: &[Phase]) -> String {
     }
 }
 
-/// Format dependency entries for serialization.
+/// Format dependency entries for serialization
 fn format_dep_entries(entries: &[DepEntry]) -> String {
     let strs: Vec<String> = entries.iter().map(|e| e.to_string()).collect();
     strs.join(" ")

@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{Error, Result};
 
-/// EAPI (Ebuild API) version.
+/// EAPI (Ebuild API) version
 ///
 /// The EAPI controls which features and behaviours are available to an ebuild.
 /// Each EAPI builds on the previous one, adding or modifying capabilities.
@@ -11,46 +11,46 @@ use crate::error::{Error, Result};
 /// See [PMS 2](https://projects.gentoo.org/pms/9/pms.html#eapis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Eapi {
-    /// EAPI 0 — base (legacy).
+    /// EAPI 0 — base (legacy)
     Zero,
-    /// EAPI 1 — slot deps, IUSE defaults.
+    /// EAPI 1 — slot deps, IUSE defaults
     One,
-    /// EAPI 2 — SRC_URI arrows, USE deps, `src_prepare`/`src_configure`.
+    /// EAPI 2 — SRC_URI arrows, USE deps, `src_prepare`/`src_configure`
     Two,
-    /// EAPI 3 — `PROPERTIES`, prefix support.
+    /// EAPI 3 — `PROPERTIES`, prefix support
     Three,
-    /// EAPI 4 — `REQUIRED_USE`, `pkg_pretend`, `DOCS`/`HTML_DOCS`.
+    /// EAPI 4 — `REQUIRED_USE`, `pkg_pretend`, `DOCS`/`HTML_DOCS`
     Four,
-    /// EAPI 5 — sub-slots, slot operators, `??` in REQUIRED_USE.
+    /// EAPI 5 — sub-slots, slot operators, `??` in REQUIRED_USE
     Five,
-    /// EAPI 6 — `eapply`/`eapply_user`, bash 4.2 minimum.
+    /// EAPI 6 — `eapply`/`eapply_user`, bash 4.2 minimum
     Six,
-    /// EAPI 7 — `BDEPEND`, `SYSROOT`/`BROOT`.
+    /// EAPI 7 — `BDEPEND`, `SYSROOT`/`BROOT`
     Seven,
-    /// EAPI 8 — `IDEPEND`, USE-conditional `PROPERTIES`/`RESTRICT`.
+    /// EAPI 8 — `IDEPEND`, USE-conditional `PROPERTIES`/`RESTRICT`
     Eight,
-    /// EAPI 9 — Same features as EAPI 8, plus selective URI restrictions.
+    /// EAPI 9 — Same features as EAPI 8, plus selective URI restrictions
     ///
     /// See [PMS 2](https://projects.gentoo.org/pms/9/pms.html#eapis).
     Nine,
 }
 
 impl Eapi {
-    /// Whether this EAPI supports `BDEPEND` (build-host dependencies).
+    /// Whether this EAPI supports `BDEPEND` (build-host dependencies)
     ///
     /// Introduced in EAPI 7.
     pub fn has_bdepend(&self) -> bool {
         *self >= Eapi::Seven
     }
 
-    /// Whether this EAPI supports `IDEPEND` (install-time dependencies).
+    /// Whether this EAPI supports `IDEPEND` (install-time dependencies)
     ///
     /// Introduced in EAPI 8.
     pub fn has_idepend(&self) -> bool {
         *self >= Eapi::Eight
     }
 
-    /// Whether this EAPI supports `REQUIRED_USE`.
+    /// Whether this EAPI supports `REQUIRED_USE`
     ///
     /// Introduced in EAPI 4.
     pub fn has_required_use(&self) -> bool {
@@ -65,49 +65,49 @@ impl Eapi {
         *self >= Eapi::Five
     }
 
-    /// Whether this EAPI supports `src_prepare` and `src_configure` phases.
+    /// Whether this EAPI supports `src_prepare` and `src_configure` phases
     ///
     /// Introduced in EAPI 2.
     pub fn has_src_prepare(&self) -> bool {
         *self >= Eapi::Two
     }
 
-    /// Whether this EAPI supports the `pkg_pretend` phase.
+    /// Whether this EAPI supports the `pkg_pretend` phase
     ///
     /// Introduced in EAPI 4.
     pub fn has_pkg_pretend(&self) -> bool {
         *self >= Eapi::Four
     }
 
-    /// Whether this EAPI supports SRC_URI arrow renaming (`-> filename`).
+    /// Whether this EAPI supports SRC_URI arrow renaming (`-> filename`)
     ///
     /// Introduced in EAPI 2.
     pub fn has_src_uri_arrows(&self) -> bool {
         *self >= Eapi::Two
     }
 
-    /// Whether this EAPI supports sub-slots and slot operators (`:=`, `:*`).
+    /// Whether this EAPI supports sub-slots and slot operators (`:=`, `:*`)
     ///
     /// Introduced in EAPI 5.
     pub fn has_slot_operators(&self) -> bool {
         *self >= Eapi::Five
     }
 
-    /// Whether this EAPI supports `PROPERTIES`.
+    /// Whether this EAPI supports `PROPERTIES`
     ///
     /// Introduced in EAPI 3.
     pub fn has_properties(&self) -> bool {
         *self >= Eapi::Three
     }
 
-    /// Whether this EAPI supports USE-conditional `PROPERTIES` and `RESTRICT`.
+    /// Whether this EAPI supports USE-conditional `PROPERTIES` and `RESTRICT`
     ///
     /// Introduced in EAPI 8.
     pub fn has_use_conditional_restrict(&self) -> bool {
         *self >= Eapi::Eight
     }
 
-    /// Whether this EAPI supports selective URI restrictions (`fetch+`/`mirror+` prefixes).
+    /// Whether this EAPI supports selective URI restrictions (`fetch+`/`mirror+` prefixes)
     ///
     /// Introduced in EAPI 8.
     pub fn has_selective_uri_restrictions(&self) -> bool {

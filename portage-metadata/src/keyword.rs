@@ -5,22 +5,22 @@ use crate::interner::{DefaultInterner, Interned, Interner};
 
 use crate::error::{Error, Result};
 
-/// Stability level for an architecture keyword.
+/// Stability level for an architecture keyword
 ///
 /// See [PMS 7.3.3](https://projects.gentoo.org/pms/9/pms.html#keywords).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stability {
-    /// The package is stable on this architecture (e.g. `amd64`).
+    /// The package is stable on this architecture (e.g. `amd64`)
     Stable,
-    /// The package is testing/unstable on this architecture (e.g. `~amd64`).
+    /// The package is testing/unstable on this architecture (e.g. `~amd64`)
     Testing,
-    /// The package is disabled on this architecture (e.g. `-amd64`).
+    /// The package is disabled on this architecture (e.g. `-amd64`)
     Disabled,
-    /// All architectures are disabled (`-*`).
+    /// All architectures are disabled (`-*`)
     DisabledAll,
 }
 
-/// A single architecture keyword entry from the `KEYWORDS` variable.
+/// A single architecture keyword entry from the `KEYWORDS` variable
 ///
 /// Each keyword consists of an architecture name and a stability level.
 ///
@@ -30,9 +30,9 @@ pub struct Keyword<I = DefaultInterner>
 where
     I: Interner,
 {
-    /// Architecture (interned).
+    /// Architecture (interned)
     pub arch: Interned<I>,
-    /// Stability classification.
+    /// Stability classification
     pub stability: Stability,
 }
 
@@ -84,7 +84,7 @@ impl<I: Interner> Keyword<I> {
         }
     }
 
-    /// Parse a single keyword token.
+    /// Parse a single keyword token
     pub fn parse(s: &str) -> Result<Self> {
         Self::parse_impl(s)
     }
@@ -111,7 +111,7 @@ impl<I: Interner> FromStr for Keyword<I> {
 }
 
 impl Keyword<DefaultInterner> {
-    /// Parse a space-separated `KEYWORDS` line.
+    /// Parse a space-separated `KEYWORDS` line
     ///
     /// # Examples
     ///

@@ -8,7 +8,7 @@ use winnow::token::{any, take_while};
 
 use crate::error::{Error, Result};
 
-/// A node in a `LICENSE` expression tree.
+/// A node in a `LICENSE` expression tree
 ///
 /// The `LICENSE` variable uses a dependency-specification-like grammar
 /// with `||` (any-of) groups and USE-conditional groups.
@@ -17,25 +17,25 @@ use crate::error::{Error, Result};
 /// and [PMS 8.2](https://projects.gentoo.org/pms/9/pms.html#dependency-specification-format).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LicenseExpr {
-    /// A single license identifier (e.g. `MIT`, `GPL-2+`).
+    /// A single license identifier (e.g. `MIT`, `GPL-2+`)
     License(String),
-    /// `|| ( license1 license2 ... )` — any one license is acceptable.
+    /// `|| ( license1 license2 ... )` — any one license is acceptable
     AnyOf(Vec<LicenseExpr>),
-    /// `flag? ( licenses... )` or `!flag? ( licenses... )` conditional group.
+    /// `flag? ( licenses... )` or `!flag? ( licenses... )` conditional group
     UseConditional {
-        /// USE flag name.
+        /// USE flag name
         flag: String,
-        /// `true` for `!flag?` (negated conditional).
+        /// `true` for `!flag?` (negated conditional)
         negated: bool,
-        /// License entries guarded by this flag.
+        /// License entries guarded by this flag
         entries: Vec<LicenseExpr>,
     },
-    /// Top-level grouping: all listed licenses apply.
+    /// Top-level grouping: all listed licenses apply
     All(Vec<LicenseExpr>),
 }
 
 impl LicenseExpr {
-    /// Parse a `LICENSE` expression string.
+    /// Parse a `LICENSE` expression string
     ///
     /// # Examples
     ///
@@ -62,7 +62,7 @@ impl LicenseExpr {
         })
     }
 
-    /// Return a copy with duplicate entries removed at every level (first occurrence wins).
+    /// Return a copy with duplicate entries removed at every level (first occurrence wins)
     pub fn dedup(&self) -> Self {
         match self {
             LicenseExpr::License(_) => self.clone(),

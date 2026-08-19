@@ -8,7 +8,7 @@ use winnow::token::{any, take_while};
 
 use crate::error::{Error, Result};
 
-/// A single entry in a `SRC_URI` expression.
+/// A single entry in a `SRC_URI` expression
 ///
 /// `SRC_URI` specifies the source files needed to build a package. Entries
 /// may be plain URIs, renamed URIs (EAPI 2+: `url -> filename`), or
@@ -19,39 +19,39 @@ use crate::error::{Error, Result};
 /// and [PMS 8.2](https://projects.gentoo.org/pms/9/pms.html#dependency-specification-format).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SrcUriEntry {
-    /// A plain URI. The filename is derived from the last path component.
+    /// A plain URI. The filename is derived from the last path component
     Uri {
-        /// The download URL.
+        /// The download URL
         url: String,
-        /// The target filename (last path component of the URL).
+        /// The target filename (last path component of the URL)
         filename: String,
-        /// URI restriction prefix (EAPI 8+): `None`, `Some("fetch")`, or `Some("mirror")`.
+        /// URI restriction prefix (EAPI 8+): `None`, `Some("fetch")`, or `Some("mirror")`
         restriction: Option<String>,
     },
-    /// A renamed URI (EAPI 2+): `url -> target`.
+    /// A renamed URI (EAPI 2+): `url -> target`
     Renamed {
-        /// The download URL.
+        /// The download URL
         url: String,
-        /// The local filename to save as.
+        /// The local filename to save as
         target: String,
-        /// URI restriction prefix (EAPI 8+): `None`, `Some("fetch")`, or `Some("mirror")`.
+        /// URI restriction prefix (EAPI 8+): `None`, `Some("fetch")`, or `Some("mirror")`
         restriction: Option<String>,
     },
-    /// `flag? ( entries... )` or `!flag? ( entries... )` conditional group.
+    /// `flag? ( entries... )` or `!flag? ( entries... )` conditional group
     UseConditional {
-        /// USE flag name.
+        /// USE flag name
         flag: String,
-        /// `true` for `!flag?` (negated conditional).
+        /// `true` for `!flag?` (negated conditional)
         negated: bool,
-        /// Entries guarded by this flag.
+        /// Entries guarded by this flag
         entries: Vec<SrcUriEntry>,
     },
-    /// A bare parenthesized group `( entries... )`.
+    /// A bare parenthesized group `( entries... )`
     Group(Vec<SrcUriEntry>),
 }
 
 impl SrcUriEntry {
-    /// Parse a `SRC_URI` expression string into a list of entries.
+    /// Parse a `SRC_URI` expression string into a list of entries
     ///
     /// # Examples
     ///
@@ -71,7 +71,7 @@ impl SrcUriEntry {
         })
     }
 
-    /// Append the distfile names this entry contributes for a given USE state.
+    /// Append the distfile names this entry contributes for a given USE state
     ///
     /// `enabled(flag)` reports whether `flag` is enabled in the package's
     /// effective USE; `flag? ( … )` / `!flag? ( … )` groups are descended only
@@ -102,7 +102,7 @@ impl SrcUriEntry {
     }
 }
 
-/// Extract filename from a URL (last path component).
+/// Extract filename from a URL (last path component)
 fn filename_from_url(url: &str) -> String {
     url.rsplit('/')
         .next()
@@ -230,7 +230,7 @@ fn parse_filename(input: &mut &str) -> ModalResult<String> {
         .parse_next(input)
 }
 
-/// Parse a single URI, optionally followed by `-> filename`.
+/// Parse a single URI, optionally followed by `-> filename`
 fn parse_uri_entry(input: &mut &str) -> ModalResult<SrcUriEntry> {
     (
         parse_restriction_prefix,
@@ -256,7 +256,7 @@ fn parse_uri_entry(input: &mut &str) -> ModalResult<SrcUriEntry> {
         .parse_next(input)
 }
 
-/// Parse `[!]flag? ( entries... )`.
+/// Parse `[!]flag? ( entries... )`
 fn parse_use_conditional(input: &mut &str) -> ModalResult<SrcUriEntry> {
     let negated = opt('!').parse_next(input)?.is_some();
     let flag: String = take_while(1.., is_flag_char)
@@ -279,7 +279,7 @@ fn parse_use_conditional(input: &mut &str) -> ModalResult<SrcUriEntry> {
     })
 }
 
-/// Parse `( entries... )` — bare parenthesized group.
+/// Parse `( entries... )` — bare parenthesized group
 fn parse_group(input: &mut &str) -> ModalResult<SrcUriEntry> {
     delimited(
         '(',
@@ -290,7 +290,7 @@ fn parse_group(input: &mut &str) -> ModalResult<SrcUriEntry> {
     .parse_next(input)
 }
 
-/// Parse a single SRC_URI entry.
+/// Parse a single SRC_URI entry
 fn parse_src_uri_entry(input: &mut &str) -> ModalResult<SrcUriEntry> {
     dispatch! {peek(any);
         '(' => parse_group,
@@ -302,12 +302,12 @@ fn parse_src_uri_entry(input: &mut &str) -> ModalResult<SrcUriEntry> {
     .parse_next(input)
 }
 
-/// Parse zero or more SRC_URI entries separated by whitespace.
+/// Parse zero or more SRC_URI entries separated by whitespace
 fn parse_src_uri_entries(input: &mut &str) -> ModalResult<Vec<SrcUriEntry>> {
     repeat(0.., preceded(multispace0, parse_src_uri_entry)).parse_next(input)
 }
 
-/// Parse a complete SRC_URI string.
+/// Parse a complete SRC_URI string
 pub(crate) fn parse_src_uri_string(input: &mut &str) -> ModalResult<Vec<SrcUriEntry>> {
     let entries = parse_src_uri_entries(input)?;
     multispace0.parse_next(input)?;

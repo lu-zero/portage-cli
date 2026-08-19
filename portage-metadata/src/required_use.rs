@@ -8,7 +8,7 @@ use winnow::token::{any, take_while};
 
 use crate::error::{Error, Result};
 
-/// A node in a `REQUIRED_USE` expression tree.
+/// A node in a `REQUIRED_USE` expression tree
 ///
 /// `REQUIRED_USE` constrains which combinations of USE flags are valid.
 /// Introduced in EAPI 4. The `AtMostOne` (`??`) operator was added in EAPI 5.
@@ -16,34 +16,34 @@ use crate::error::{Error, Result};
 /// See [PMS 7.3.4](https://projects.gentoo.org/pms/9/pms.html#use-state-constraints).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequiredUseExpr {
-    /// A single USE flag (possibly negated with `!`).
+    /// A single USE flag (possibly negated with `!`)
     Flag {
-        /// Flag name.
+        /// Flag name
         name: String,
-        /// `true` if prefixed with `!`.
+        /// `true` if prefixed with `!`
         negated: bool,
     },
-    /// `|| ( ... )` — at least one of the children must be satisfied.
+    /// `|| ( ... )` — at least one of the children must be satisfied
     AnyOf(Vec<RequiredUseExpr>),
-    /// `^^ ( ... )` — exactly one of the children must be satisfied (EAPI 4+).
+    /// `^^ ( ... )` — exactly one of the children must be satisfied (EAPI 4+)
     ExactlyOne(Vec<RequiredUseExpr>),
-    /// `?? ( ... )` — at most one of the children may be satisfied (EAPI 5+).
+    /// `?? ( ... )` — at most one of the children may be satisfied (EAPI 5+)
     AtMostOne(Vec<RequiredUseExpr>),
-    /// `flag? ( ... )` or `!flag? ( ... )` conditional group.
+    /// `flag? ( ... )` or `!flag? ( ... )` conditional group
     UseConditional {
-        /// USE flag name.
+        /// USE flag name
         flag: String,
-        /// `true` for `!flag?` (negated conditional).
+        /// `true` for `!flag?` (negated conditional)
         negated: bool,
-        /// Children guarded by this flag.
+        /// Children guarded by this flag
         entries: Vec<RequiredUseExpr>,
     },
-    /// Top-level grouping: all children must be satisfied.
+    /// Top-level grouping: all children must be satisfied
     All(Vec<RequiredUseExpr>),
 }
 
 impl RequiredUseExpr {
-    /// Parse a `REQUIRED_USE` expression string.
+    /// Parse a `REQUIRED_USE` expression string
     ///
     /// # Examples
     ///
@@ -72,7 +72,7 @@ impl RequiredUseExpr {
         })
     }
 
-    /// Evaluate this constraint against a USE-flag predicate.
+    /// Evaluate this constraint against a USE-flag predicate
     ///
     /// `enabled(flag)` must return whether `flag` is enabled in the package's
     /// effective USE.  Returns `true` when the constraint is satisfied, per
@@ -170,7 +170,7 @@ impl RequiredUseExpr {
         }
     }
 
-    /// Return a copy with duplicate entries removed at every level (first occurrence wins).
+    /// Return a copy with duplicate entries removed at every level (first occurrence wins)
     pub fn dedup(&self) -> Self {
         match self {
             RequiredUseExpr::Flag { .. } => self.clone(),
@@ -333,7 +333,7 @@ fn parse_use_conditional(input: &mut &str) -> ModalResult<RequiredUseExpr> {
     })
 }
 
-/// Parse a bare flag: `flag` or `!flag`.
+/// Parse a bare flag: `flag` or `!flag`
 fn parse_flag(input: &mut &str) -> ModalResult<RequiredUseExpr> {
     (
         opt('!'),

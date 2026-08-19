@@ -13,7 +13,7 @@
 
 use miette::Diagnostic;
 
-/// A structured `SRC_URI`/`LICENSE`/`REQUIRED_USE`/`RESTRICT` parse failure.
+/// A structured `SRC_URI`/`LICENSE`/`REQUIRED_USE`/`RESTRICT` parse failure
 ///
 /// `Display` gives a short one-line summary (safe for log lines, `anyhow`
 /// chains, activity-bus `error` fields). Implementors of a UI should treat
@@ -37,7 +37,7 @@ impl std::fmt::Display for ParseDiagnostic {
 
 impl std::error::Error for ParseDiagnostic {}
 
-/// Roughly how much source text to keep on each side of the failing span.
+/// Roughly how much source text to keep on each side of the failing span
 ///
 /// SRC_URI/LICENSE/etc. values are whitespace-separated token soup with no
 /// newlines, so there's no natural line length to rely on — a go-module
@@ -83,7 +83,7 @@ fn windowed(src: &str, span: std::ops::Range<usize>) -> (String, std::ops::Range
 }
 
 impl ParseDiagnostic {
-    /// Build a diagnostic from a winnow parse failure.
+    /// Build a diagnostic from a winnow parse failure
     ///
     /// `what` names the grammar being parsed (e.g. `"SRC_URI"`). The label
     /// under the code frame is winnow's own accumulated context (e.g. a
@@ -109,7 +109,7 @@ impl ParseDiagnostic {
         }
     }
 
-    /// Render a no-color miette code frame (for unit tests and plain logs).
+    /// Render a no-color miette code frame (for unit tests and plain logs)
     ///
     /// Production UIs should prefer a color-aware handler at the application
     /// boundary (`portage_cli::diag::print_diagnostic`).

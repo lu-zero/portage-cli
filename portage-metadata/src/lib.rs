@@ -1,4 +1,4 @@
-//! Gentoo ebuild metadata cache types and parser based on [PMS].
+//! Gentoo ebuild metadata cache types and parser based on [PMS]
 //!
 //! This crate provides types for representing ebuild metadata and a
 //! parser for the `md5-cache` format used by Gentoo's package manager.

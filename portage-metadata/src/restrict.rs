@@ -8,7 +8,7 @@ use winnow::token::{any, take_while};
 
 use crate::error::{Error, Result};
 
-/// A node in a `RESTRICT` or `PROPERTIES` expression.
+/// A node in a `RESTRICT` or `PROPERTIES` expression
 ///
 /// Before EAPI 8, these are simple space-separated token lists.
 /// In EAPI 8, they support USE-conditional groups (`flag? ( ... )`).
@@ -16,21 +16,21 @@ use crate::error::{Error, Result};
 /// See [PMS 7.3.6](https://projects.gentoo.org/pms/9/pms.html#restrict).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestrictExpr {
-    /// A single restriction/property token (e.g. `mirror`, `test`, `live`).
+    /// A single restriction/property token (e.g. `mirror`, `test`, `live`)
     Token(String),
-    /// `flag? ( ... )` or `!flag? ( ... )` conditional group (EAPI 8+).
+    /// `flag? ( ... )` or `!flag? ( ... )` conditional group (EAPI 8+)
     UseConditional {
-        /// USE flag name.
+        /// USE flag name
         flag: String,
-        /// `true` for `!flag?` (negated conditional).
+        /// `true` for `!flag?` (negated conditional)
         negated: bool,
-        /// Entries guarded by this flag.
+        /// Entries guarded by this flag
         entries: Vec<RestrictExpr>,
     },
 }
 
 impl RestrictExpr {
-    /// Parse a `RESTRICT` or `PROPERTIES` expression string.
+    /// Parse a `RESTRICT` or `PROPERTIES` expression string
     ///
     /// Handles both the simple space-separated format (EAPI <8) and
     /// the USE-conditional format (EAPI 8).
@@ -57,7 +57,7 @@ impl RestrictExpr {
         })
     }
 
-    /// Collect all plain token values, ignoring USE-conditional structure.
+    /// Collect all plain token values, ignoring USE-conditional structure
     ///
     /// Useful for simple queries like "does RESTRICT contain `test`?"
     /// when you don't need to evaluate USE conditions.
@@ -115,7 +115,7 @@ impl RestrictExpr {
             .collect()
     }
 
-    /// Whether `token` applies unconditionally. See [`Self::unconditional_tokens`].
+    /// Whether `token` applies unconditionally. See [`Self::unconditional_tokens`]
     pub fn has_unconditional(entries: &[RestrictExpr], token: &str) -> bool {
         entries
             .iter()

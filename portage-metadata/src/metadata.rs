@@ -12,7 +12,7 @@ use crate::required_use::RequiredUseExpr;
 use crate::restrict::RestrictExpr;
 use crate::src_uri::SrcUriEntry;
 
-/// Metadata for a single ebuild, as produced by the metadata cache.
+/// Metadata for a single ebuild, as produced by the metadata cache
 ///
 /// Contains all the PMS-defined metadata variables that a package manager
 /// extracts from an ebuild. Mandatory fields (`eapi`, `description`, `slot`)
@@ -24,46 +24,46 @@ pub struct EbuildMetadata<I = DefaultInterner>
 where
     I: Interner,
 {
-    /// EAPI version.
+    /// EAPI version
     ///
     /// See [PMS 7.3.1](https://projects.gentoo.org/pms/9/pms.html#eapi).
     pub eapi: Eapi,
 
-    /// Package description (mandatory).
+    /// Package description (mandatory)
     ///
     /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
     pub description: String,
 
-    /// Package slot (mandatory).
+    /// Package slot (mandatory)
     ///
     /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
     pub slot: Slot,
 
-    /// Homepage URL(s).
+    /// Homepage URL(s)
     pub homepage: Vec<String>,
 
-    /// Source URI expression.
+    /// Source URI expression
     pub src_uri: Vec<SrcUriEntry>,
 
-    /// License expression.
+    /// License expression
     pub license: Option<LicenseExpr>,
 
-    /// Architecture keywords.
+    /// Architecture keywords
     pub keywords: Vec<Keyword<I>>,
 
-    /// USE flags declared by the ebuild.
+    /// USE flags declared by the ebuild
     pub iuse: Vec<IUse<I>>,
 
-    /// REQUIRED_USE expression (EAPI 4+).
+    /// REQUIRED_USE expression (EAPI 4+)
     pub required_use: Option<RequiredUseExpr>,
 
-    /// RESTRICT entries.
+    /// RESTRICT entries
     pub restrict: Vec<RestrictExpr>,
 
-    /// PROPERTIES entries.
+    /// PROPERTIES entries
     pub properties: Vec<RestrictExpr>,
 
-    /// Build-time dependencies (`DEPEND`).
+    /// Build-time dependencies (`DEPEND`)
     ///
     /// A [`DepList`]: this metadata is re-converted into the solver's own
     /// dependency-tree representation on every USE-dep co-solve fixpoint
@@ -74,19 +74,19 @@ where
     /// See [PMS 8.1](https://projects.gentoo.org/pms/9/pms.html#dependency-classes).
     pub depend: DepList,
 
-    /// Runtime dependencies (`RDEPEND`).
+    /// Runtime dependencies (`RDEPEND`)
     pub rdepend: DepList,
 
-    /// Build-host dependencies (`BDEPEND`, EAPI 7+).
+    /// Build-host dependencies (`BDEPEND`, EAPI 7+)
     pub bdepend: DepList,
 
-    /// Post-merge dependencies (`PDEPEND`).
+    /// Post-merge dependencies (`PDEPEND`)
     pub pdepend: DepList,
 
-    /// Install-time dependencies (`IDEPEND`, EAPI 8).
+    /// Install-time dependencies (`IDEPEND`, EAPI 8)
     pub idepend: DepList,
 
-    /// Eclasses directly listed in the ebuild's `inherit` statement.
+    /// Eclasses directly listed in the ebuild's `inherit` statement
     ///
     /// Stored as `INHERIT=` in the md5-dict cache format.  This is a portage
     /// auxdb extension; it is not specified by PMS.
@@ -94,7 +94,7 @@ where
     /// See [PMS 10.1](https://projects.gentoo.org/pms/latest/pms.html#the-inherit-command).
     pub inherit: Vec<String>,
 
-    /// All transitively inherited eclass names (direct + nested).
+    /// All transitively inherited eclass names (direct + nested)
     ///
     /// Corresponds to the [`INHERITED`](https://projects.gentoo.org/pms/latest/pms.html#magic-ebuild-defined-variables)
     /// ebuild variable (PMS 7.4).  In the md5-dict cache format (PMS 14.3)
@@ -104,12 +104,12 @@ where
     /// and [PMS 14.3](https://projects.gentoo.org/pms/latest/pms.html#md5-dict-cache-file-format).
     pub inherited: Vec<String>,
 
-    /// Defined phase functions.
+    /// Defined phase functions
     pub defined_phases: Vec<Phase>,
 }
 
 impl<I: Interner + Clone> EbuildMetadata<I> {
-    /// Return a copy with duplicate top-level dep entries removed (first occurrence wins).
+    /// Return a copy with duplicate top-level dep entries removed (first occurrence wins)
     ///
     /// Portage and portage-repo accumulate eclass contributions by appending
     /// `E_*` values after sourcing, while the ebuild may already have expanded

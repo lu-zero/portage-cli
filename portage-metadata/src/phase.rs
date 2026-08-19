@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{Error, Result};
 
-/// Ebuild phase function.
+/// Ebuild phase function
 ///
 /// Phase functions are called by the package manager in a defined order
 /// during package build and installation.
@@ -11,40 +11,40 @@ use crate::error::{Error, Result};
 /// See [PMS 9](https://projects.gentoo.org/pms/9/pms.html#ebuilddefined-functions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Phase {
-    /// `pkg_pretend` — pre-flight checks (EAPI 4+).
+    /// `pkg_pretend` — pre-flight checks (EAPI 4+)
     PkgPretend,
-    /// `pkg_setup` — environment setup.
+    /// `pkg_setup` — environment setup
     PkgSetup,
-    /// `src_unpack` — extract source archives.
+    /// `src_unpack` — extract source archives
     SrcUnpack,
-    /// `src_prepare` — apply patches (EAPI 2+).
+    /// `src_prepare` — apply patches (EAPI 2+)
     SrcPrepare,
-    /// `src_configure` — run configure (EAPI 2+).
+    /// `src_configure` — run configure (EAPI 2+)
     SrcConfigure,
-    /// `src_compile` — build the software.
+    /// `src_compile` — build the software
     SrcCompile,
-    /// `src_test` — run test suite.
+    /// `src_test` — run test suite
     SrcTest,
-    /// `src_install` — install into image directory.
+    /// `src_install` — install into image directory
     SrcInstall,
-    /// `pkg_preinst` — before merging into live filesystem.
+    /// `pkg_preinst` — before merging into live filesystem
     PkgPreinst,
-    /// `pkg_postinst` — after merging into live filesystem.
+    /// `pkg_postinst` — after merging into live filesystem
     PkgPostinst,
-    /// `pkg_prerm` — before removing from live filesystem.
+    /// `pkg_prerm` — before removing from live filesystem
     PkgPrerm,
-    /// `pkg_postrm` — after removing from live filesystem.
+    /// `pkg_postrm` — after removing from live filesystem
     PkgPostrm,
-    /// `pkg_config` — optional post-install configuration.
+    /// `pkg_config` — optional post-install configuration
     PkgConfig,
-    /// `pkg_info` — display package information.
+    /// `pkg_info` — display package information
     PkgInfo,
-    /// `pkg_nofetch` — handle fetch-restricted sources.
+    /// `pkg_nofetch` — handle fetch-restricted sources
     PkgNofetch,
 }
 
 impl Phase {
-    /// Return the short phase name as a `&'static str` (same as `Display`).
+    /// Return the short phase name as a `&'static str` (same as `Display`)
     pub fn as_str(self) -> &'static str {
         match self {
             Phase::PkgPretend => "pretend",
@@ -65,7 +65,7 @@ impl Phase {
         }
     }
 
-    /// Parse a space-separated `DEFINED_PHASES` line into a list of phases.
+    /// Parse a space-separated `DEFINED_PHASES` line into a list of phases
     ///
     /// The special value `-` (used in the cache to mean "no phases defined")
     /// returns an empty list.
