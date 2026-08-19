@@ -1,23 +1,23 @@
-//! Gentoo-specific error types
+//! Gentoo-specific error types.
 
 use thiserror::Error;
 
-/// Gentoo operation errors
+/// Gentoo operation errors.
 #[derive(Error, Debug)]
 pub enum Error {
-    /// Architecture-related error
+    /// Architecture-related error.
     #[error("Architecture error: {0}")]
     ArchError(String),
 
-    /// Variant configuration error
+    /// Variant configuration error.
     #[error("Variant configuration error: {0}")]
     VariantError(String),
 
-    /// I/O operation failed
+    /// I/O operation failed.
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
 
-    /// Parse error
+    /// Parse error.
     #[error("Parse error: {0}")]
     ParseError(String),
 }

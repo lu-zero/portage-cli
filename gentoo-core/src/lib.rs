@@ -1,4 +1,4 @@
-//! Core Gentoo types and utilities
+//! Core Gentoo types and utilities.
 //!
 //! This crate provides efficient types for working with Gentoo architecture
 //! keywords and release media variants. It is designed for use in tools that
