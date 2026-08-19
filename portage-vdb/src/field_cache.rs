@@ -1,4 +1,4 @@
-//! Process-wide memoization for VDB flat-file reads, keyed by absolute path.
+//! Process-wide memoization for VDB flat-file reads, keyed by absolute path
 //!
 //! This module knows nothing about `std::fs` or any other I/O backend —
 //! [`get_or_fetch`] takes a closure that performs the actual uncached read,
@@ -34,7 +34,7 @@ fn lock_cache() -> MutexGuard<'static, HashMap<Utf8PathBuf, Option<String>>> {
     cache().lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Return the cached value for `path`, or call `fetch` on a miss and cache its result.
+/// Return the cached value for `path`, or call `fetch` on a miss and cache its result
 ///
 /// `Ok(None)` means "confirmed absent" and is cached too, so a missing
 /// optional field isn't restated on every call.
@@ -50,7 +50,7 @@ pub(crate) fn get_or_fetch(
     Ok(value)
 }
 
-/// Drop every cached entry whose path is under `pkg_dir` — a single VDB entry's fields.
+/// Drop every cached entry whose path is under `pkg_dir` — a single VDB entry's fields
 ///
 /// This makes a write there visible on the next read. Entry-granularity:
 /// every other package's cached fields are untouched.

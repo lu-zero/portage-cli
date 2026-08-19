@@ -1,4 +1,4 @@
-//! Gentoo Portage VDB (installed package database) reader.
+//! Gentoo Portage VDB (installed package database) reader
 //!
 //! Reads `/var/db/pkg` to provide access to installed package metadata,
 //! USE flags, dependencies, and file ownership information.
@@ -33,5 +33,5 @@ pub use package::{InstalledPackage, SlotName};
 pub use vdb::{AllPackages, AllPackagesIter, Vdb};
 pub use write::MergeSpec;
 
-/// Convenience alias for results in this crate.
+/// Convenience alias for results in this crate
 pub type Result<T> = std::result::Result<T, Error>;

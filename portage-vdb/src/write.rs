@@ -1,4 +1,4 @@
-//! VDB write API: package registration (merge) and removal (unmerge).
+//! VDB write API: package registration (merge) and removal (unmerge)
 
 use camino::Utf8PathBuf;
 use portage_atom::{Cpn, Cpv, Pf};
@@ -8,82 +8,82 @@ use crate::error::Error;
 use crate::package::InstalledPackage;
 use crate::{Result, Vdb};
 
-/// All metadata needed to register a package in the VDB after a merge.
+/// All metadata needed to register a package in the VDB after a merge
 ///
 /// All string fields mirror their VDB flat-file counterparts.
 pub struct MergeSpec {
-    /// Parsed category/package-version.
+    /// Parsed category/package-version
     pub cpv: Cpv,
-    /// EAPI string (e.g. `"8"`).
+    /// EAPI string (e.g. `"8"`)
     pub eapi: String,
-    /// Full SLOT value (e.g. `"0"` or `"0/5.1"`).
+    /// Full SLOT value (e.g. `"0"` or `"0/5.1"`)
     pub slot: String,
-    /// Active USE flags at build time.
+    /// Active USE flags at build time
     pub use_flags: Vec<String>,
-    /// IUSE as declared by the ebuild (may include `+`/`-` defaults).
+    /// IUSE as declared by the ebuild (may include `+`/`-` defaults)
     pub iuse: Vec<String>,
-    /// `DEPEND` line from the ebuild (build-time dependencies).
+    /// `DEPEND` line from the ebuild (build-time dependencies)
     pub depend: Option<String>,
-    /// `RDEPEND` line from the ebuild (run-time dependencies).
+    /// `RDEPEND` line from the ebuild (run-time dependencies)
     pub rdepend: Option<String>,
-    /// `BDEPEND` line from the ebuild (build-host dependencies).
+    /// `BDEPEND` line from the ebuild (build-host dependencies)
     pub bdepend: Option<String>,
-    /// `PDEPEND` line from the ebuild (post-install dependencies).
+    /// `PDEPEND` line from the ebuild (post-install dependencies)
     pub pdepend: Option<String>,
-    /// `IDEPEND` line from the ebuild (install-time dependencies).
+    /// `IDEPEND` line from the ebuild (install-time dependencies)
     pub idepend: Option<String>,
-    /// Keywords for this package (e.g., `"amd64"`, `"~arm64"`).
+    /// Keywords for this package (e.g., `"amd64"`, `"~arm64"`)
     pub keywords: Vec<String>,
-    /// License expression for this package.
+    /// License expression for this package
     pub license: Option<String>,
-    /// Short description of this package.
+    /// Short description of this package
     pub description: String,
-    /// Homepage URL for this package.
+    /// Homepage URL for this package
     pub homepage: Option<String>,
-    /// `RESTRICT` line from the ebuild.
+    /// `RESTRICT` line from the ebuild
     pub restrict: Option<String>,
-    /// `PROPERTIES` line from the ebuild.
+    /// `PROPERTIES` line from the ebuild
     pub properties: Option<String>,
-    /// Phase functions defined by the ebuild (e.g. `["configure", "install"]`).
+    /// Phase functions defined by the ebuild (e.g. `["configure", "install"]`)
     pub defined_phases: Vec<String>,
-    /// Repository name (e.g. `"gentoo"`).
+    /// Repository name (e.g. `"gentoo"`)
     pub repository: Option<String>,
-    /// Inherited eclasses (INHERITED).
+    /// Inherited eclasses (INHERITED)
     pub inherited: Vec<String>,
-    /// FEATURES active for the build.
+    /// FEATURES active for the build
     pub features: Option<String>,
-    /// Target host triple (CHOST).
+    /// Target host triple (CHOST)
     pub chost: Option<String>,
-    /// Build triple (CBUILD).
+    /// Build triple (CBUILD)
     pub cbuild: Option<String>,
-    /// C compiler flags (CFLAGS).
+    /// C compiler flags (CFLAGS)
     pub cflags: Option<String>,
-    /// C++ compiler flags (CXXFLAGS).
+    /// C++ compiler flags (CXXFLAGS)
     pub cxxflags: Option<String>,
-    /// Linker flags (LDFLAGS).
+    /// Linker flags (LDFLAGS)
     pub ldflags: Option<String>,
-    /// Rust compiler flags (RUSTFLAGS).
+    /// Rust compiler flags (RUSTFLAGS)
     pub rustflags: Option<String>,
-    /// Legacy `NEEDED` lines (`<path> <needed,comma>`).
+    /// Legacy `NEEDED` lines (`<path> <needed,comma>`)
     pub needed: Vec<String>,
-    /// `NEEDED.ELF.2` lines.
+    /// `NEEDED.ELF.2` lines
     pub needed_elf2: Vec<String>,
-    /// `REQUIRES` lines (`<cat>: <sonames>`).
+    /// `REQUIRES` lines (`<cat>: <sonames>`)
     pub requires: Vec<String>,
-    /// `PROVIDES` lines (`<cat>: <sonames>`).
+    /// `PROVIDES` lines (`<cat>: <sonames>`)
     pub provides: Vec<String>,
-    /// Installed file list (built by walking `$D`).
+    /// Installed file list (built by walking `$D`)
     pub contents: Vec<ContentsEntry>,
-    /// Unix timestamp of the build.
+    /// Unix timestamp of the build
     pub build_time: u64,
-    /// Total installed size in bytes (sum of regular-file sizes).
+    /// Total installed size in bytes (sum of regular-file sizes)
     pub size: u64,
-    /// Monotonically increasing VDB counter for this entry.
+    /// Monotonically increasing VDB counter for this entry
     pub counter: u64,
 }
 
 impl Vdb {
-    /// Read and atomically increment the global VDB COUNTER.
+    /// Read and atomically increment the global VDB COUNTER
     ///
     /// Lives at `{vdb_root}/COUNTER`.  Returns the *new* value.
     /// If the file is absent the counter starts at 1.
@@ -99,7 +99,7 @@ impl Vdb {
         Ok(next)
     }
 
-    /// Register a merged package in the VDB.
+    /// Register a merged package in the VDB
     ///
     /// Creates `{vdb_root}/{category}/{pf}/` and writes all metadata flat files.
     /// The caller must have already:
@@ -206,7 +206,7 @@ impl Vdb {
         Ok(InstalledPackage::from_dir(&pkg_dir, spec.cpv.clone()))
     }
 
-    /// Remove a package's VDB directory.
+    /// Remove a package's VDB directory
     ///
     /// Only removes the VDB entry — the caller is responsible for removing
     /// installed files (from `CONTENTS`) before calling this.
@@ -220,7 +220,7 @@ impl Vdb {
         Ok(())
     }
 
-    /// Find the installed package in the same main slot as the given CPN, if any.
+    /// Find the installed package in the same main slot as the given CPN, if any
     ///
     /// Used before a merge to detect slot conflicts that require replacing the
     /// existing occupant.  Returns `None` if no package with this CPN is

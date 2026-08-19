@@ -1,4 +1,4 @@
-//! Parser for the VDB `CONTENTS` file.
+//! Parser for the VDB `CONTENTS` file
 //!
 //! Format (one entry per line):
 //! ```text
@@ -11,37 +11,37 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-/// Kind of filesystem entry in a CONTENTS file.
+/// Kind of filesystem entry in a CONTENTS file
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentsKind {
-    /// Regular file (`obj`). Carries an MD5 hash and mtime.
+    /// Regular file (`obj`). Carries an MD5 hash and mtime
     Obj,
-    /// Directory (`dir`).
+    /// Directory (`dir`)
     Dir,
-    /// Symbolic link (`sym`). Carries a target path and mtime.
+    /// Symbolic link (`sym`). Carries a target path and mtime
     Sym,
-    /// FIFO/pipe (`fif`).
+    /// FIFO/pipe (`fif`)
     Fifo,
-    /// Device node (`dev`).
+    /// Device node (`dev`)
     Dev,
 }
 
-/// A single entry from a `CONTENTS` file.
+/// A single entry from a `CONTENTS` file
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentsEntry {
-    /// Kind of entry (obj, dir, sym, fif, dev).
+    /// Kind of entry (obj, dir, sym, fif, dev)
     pub kind: ContentsKind,
-    /// Absolute path of the installed file/directory/symlink.
+    /// Absolute path of the installed file/directory/symlink
     pub path: Utf8PathBuf,
-    /// MD5 digest (only for `Obj` entries).
+    /// MD5 digest (only for `Obj` entries)
     pub md5: Option<String>,
-    /// File size or symlink target mtime as a Unix timestamp.
+    /// File size or symlink target mtime as a Unix timestamp
     pub mtime: Option<u64>,
-    /// Symlink target (only for `Sym` entries).
+    /// Symlink target (only for `Sym` entries)
     pub target: Option<Utf8PathBuf>,
 }
 
-/// A single entry from a `CONTENTS` file, borrowed from the file text.
+/// A single entry from a `CONTENTS` file, borrowed from the file text
 ///
 /// The scanning counterpart to [`ContentsEntry`]: a package's CONTENTS runs
 /// to hundreds of thousands of lines, and a caller that only asks a question
@@ -51,15 +51,15 @@ pub struct ContentsEntry {
 /// fields-from-the-right rules have exactly one implementation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContentsRef<'a> {
-    /// Kind of entry (obj, dir, sym, fif, dev).
+    /// Kind of entry (obj, dir, sym, fif, dev)
     pub kind: ContentsKind,
-    /// Absolute path of the installed file/directory/symlink.
+    /// Absolute path of the installed file/directory/symlink
     pub path: &'a Utf8Path,
-    /// MD5 digest (only for `Obj` entries).
+    /// MD5 digest (only for `Obj` entries)
     pub md5: Option<&'a str>,
-    /// File size or symlink target mtime as a Unix timestamp.
+    /// File size or symlink target mtime as a Unix timestamp
     pub mtime: Option<u64>,
-    /// Symlink target (only for `Sym` entries).
+    /// Symlink target (only for `Sym` entries)
     pub target: Option<&'a Utf8Path>,
 }
 
@@ -137,7 +137,7 @@ impl<'a> ContentsRef<'a> {
         None
     }
 
-    /// Every entry in a full CONTENTS file, borrowed from `contents`.
+    /// Every entry in a full CONTENTS file, borrowed from `contents`
     ///
     /// The lazy counterpart to [`ContentsEntry::parse`] — nothing is
     /// allocated, and a caller that short-circuits (`any`, `find`) stops
@@ -146,7 +146,7 @@ impl<'a> ContentsRef<'a> {
         contents.lines().filter_map(ContentsRef::parse_line)
     }
 
-    /// Copy into an owned [`ContentsEntry`].
+    /// Copy into an owned [`ContentsEntry`]
     pub fn to_entry(&self) -> ContentsEntry {
         ContentsEntry {
             kind: self.kind,
@@ -158,7 +158,7 @@ impl<'a> ContentsRef<'a> {
     }
 }
 
-/// Serialize a slice of entries back to a CONTENTS file string.
+/// Serialize a slice of entries back to a CONTENTS file string
 pub fn format_contents(entries: &[ContentsEntry]) -> String {
     let mut out = String::new();
     for e in entries {
@@ -169,7 +169,7 @@ pub fn format_contents(entries: &[ContentsEntry]) -> String {
 }
 
 impl ContentsEntry {
-    /// Serialize this entry to a single CONTENTS line (no trailing newline).
+    /// Serialize this entry to a single CONTENTS line (no trailing newline)
     pub fn format_line(&self) -> String {
         match self.kind {
             ContentsKind::Obj => format!(
@@ -190,7 +190,7 @@ impl ContentsEntry {
         }
     }
 
-    /// Parse a single line from a CONTENTS file.
+    /// Parse a single line from a CONTENTS file
     ///
     /// Paths may contain spaces. Portage's format (see `dblink._contents_re`)
     /// is field-oriented from the right for `obj`/`sym`:
@@ -204,7 +204,7 @@ impl ContentsEntry {
         ContentsRef::parse_line(line).map(|e| e.to_entry())
     }
 
-    /// Parse a full CONTENTS file into entries.
+    /// Parse a full CONTENTS file into entries
     ///
     /// Allocates one owned entry per line; [`ContentsRef::parse`] is the
     /// borrowing form for callers that only scan.

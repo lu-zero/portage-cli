@@ -1,4 +1,4 @@
-//! Top-level VDB reader.
+//! Top-level VDB reader
 
 use std::sync::Arc;
 
@@ -9,10 +9,10 @@ use crate::category::{Categories, CategoriesIter, Category, PackageFilter, Packa
 use crate::error::Error;
 use crate::package::InstalledPackage;
 
-/// The default VDB path.
+/// The default VDB path
 pub const DEFAULT_VDB_PATH: &str = "/var/db/pkg";
 
-/// Reader for the Portage installed package database (VDB).
+/// Reader for the Portage installed package database (VDB)
 ///
 /// The VDB lives at `/var/db/pkg` and contains one subdirectory per
 /// category, each containing one subdirectory per installed package.
@@ -46,7 +46,7 @@ fn default_scan_jobs() -> usize {
 }
 
 impl Vdb {
-    /// Open the VDB at the given root path (typically `/var/db/pkg`).
+    /// Open the VDB at the given root path (typically `/var/db/pkg`)
     pub fn open(path: impl AsRef<Utf8Path>) -> Result<Self> {
         let path = path.as_ref();
         if path.is_dir() {
@@ -58,22 +58,22 @@ impl Vdb {
         }
     }
 
-    /// Open the VDB at the default path (`/var/db/pkg`).
+    /// Open the VDB at the default path (`/var/db/pkg`)
     pub fn open_default() -> Result<Self> {
         Self::open(DEFAULT_VDB_PATH)
     }
 
-    /// The root path of this VDB.
+    /// The root path of this VDB
     pub fn root(&self) -> &Utf8Path {
         &self.root
     }
 
-    /// Lazy iterator over all categories in the VDB.
+    /// Lazy iterator over all categories in the VDB
     pub fn categories(&self) -> Categories {
         Categories::new(self.root.clone())
     }
 
-    /// Look up a single category by name.
+    /// Look up a single category by name
     pub fn category(&self, name: &str) -> Option<Category> {
         let path = self.root.join(name);
         if path.is_dir() {
@@ -83,12 +83,12 @@ impl Vdb {
         }
     }
 
-    /// Flat lazy iterator over every installed package across all categories.
+    /// Flat lazy iterator over every installed package across all categories
     pub fn packages(&self) -> AllPackages {
         AllPackages::new(self.categories())
     }
 
-    /// Find which installed package owns a given file path.
+    /// Find which installed package owns a given file path
     ///
     /// Scans all packages' CONTENTS files. This is O(n) over installed packages.
     pub fn owner(&self, file_path: &Utf8Path) -> Option<InstalledPackage> {
@@ -173,7 +173,7 @@ impl Vdb {
         out_rx
     }
 
-    /// Total number of installed packages.
+    /// Total number of installed packages
     pub fn len(&self) -> usize {
         self.categories()
             .into_iter()
@@ -181,13 +181,13 @@ impl Vdb {
             .sum()
     }
 
-    /// Whether the VDB contains no installed packages.
+    /// Whether the VDB contains no installed packages
     pub fn is_empty(&self) -> bool {
         self.packages().into_iter().next().is_none()
     }
 }
 
-/// Lazy, composable flat iterator over all installed packages in a VDB.
+/// Lazy, composable flat iterator over all installed packages in a VDB
 ///
 /// Produced by [`Vdb::packages`]. Iterates categories in sorted order, then
 /// packages within each category sorted by CPV.
@@ -196,7 +196,7 @@ pub struct AllPackages {
     filter: Option<Arc<PackageFilter>>,
 }
 
-/// Concrete iterator produced by [`AllPackages::into_iter`].
+/// Concrete iterator produced by [`AllPackages::into_iter`]
 pub struct AllPackagesIter {
     current: Option<PackagesIter>,
     remaining: CategoriesIter,
@@ -211,7 +211,7 @@ impl AllPackages {
         }
     }
 
-    /// Retain only packages matching the predicate.
+    /// Retain only packages matching the predicate
     pub fn filter<F>(mut self, f: F) -> Self
     where
         F: Fn(&InstalledPackage) -> bool + Send + Sync + 'static,
@@ -220,7 +220,7 @@ impl AllPackages {
         self
     }
 
-    /// Collect all matching packages into a `Vec`.
+    /// Collect all matching packages into a `Vec`
     pub fn collect_vec(self) -> Vec<InstalledPackage> {
         self.into_iter().collect()
     }

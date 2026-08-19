@@ -1,4 +1,4 @@
-//! Installed package representation.
+//! Installed package representation
 
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::interner::{DefaultInterner, Interned};
@@ -10,14 +10,14 @@ use crate::contents::ContentsEntry;
 use crate::error::Error;
 use crate::field_cache;
 
-/// An interned SLOT name — the part before any `/`, as stored per package.
+/// An interned SLOT name — the part before any `/`, as stored per package
 ///
 /// Distinct from [`portage_atom::Slot`], which pairs a slot with its subslot;
 /// this is just the name. Interned because a whole VDB draws its slots from a
 /// handful of distinct strings. Derefs to `&str`.
 pub type SlotName = Interned<DefaultInterner>;
 
-/// A package installed in the VDB.
+/// A package installed in the VDB
 ///
 /// Each instance corresponds to a directory under `/var/db/pkg/$CATEGORY/$PF/`.
 /// Fields are read lazily from the filesystem on first access.
@@ -35,17 +35,17 @@ impl InstalledPackage {
         }
     }
 
-    /// The directory path in the VDB (`/var/db/pkg/$CATEGORY/$PF`).
+    /// The directory path in the VDB (`/var/db/pkg/$CATEGORY/$PF`)
     pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 
-    /// The category name (e.g. `app-shells`).
+    /// The category name (e.g. `app-shells`)
     pub fn category(&self) -> &str {
         self.cpv.cpn.category.as_ref()
     }
 
-    /// The package name-version without category (e.g. `bash-5.3_p9-r2`).
+    /// The package name-version without category (e.g. `bash-5.3_p9-r2`)
     ///
     /// This is the `PF` format used for VDB directory names (PMS §11.1).
     pub fn pf(&self) -> Pf {
@@ -55,19 +55,19 @@ impl InstalledPackage {
         }
     }
 
-    /// The parsed Cpn (category + package name).
+    /// The parsed Cpn (category + package name)
     pub fn cpn(&self) -> &portage_atom::Cpn {
         &self.cpv.cpn
     }
 
-    /// The parsed Cpv (category + package name + version).
+    /// The parsed Cpv (category + package name + version)
     pub fn cpv(&self) -> &Cpv {
         &self.cpv
     }
 
     // -- Metadata fields (read from individual files) --
 
-    /// Read an arbitrary VDB field by name, returning `None` if the file is absent.
+    /// Read an arbitrary VDB field by name, returning `None` if the file is absent
     ///
     /// The value is returned as a raw (trimmed) string, exactly as stored on disk.
     /// Use this for generic `em query has`-style lookups; prefer the typed accessors
@@ -94,12 +94,12 @@ impl InstalledPackage {
         .map_err(|source| Error::Io { path: p, source })
     }
 
-    /// The package description.
+    /// The package description
     pub fn description(&self) -> Result<String> {
         self.read_field("DESCRIPTION")
     }
 
-    /// The EAPI this package was built with.
+    /// The EAPI this package was built with
     pub fn eapi(&self) -> Result<Eapi> {
         let raw = self.read_field("EAPI")?;
         raw.parse().map_err(|_| Error::MalformedPackage {
@@ -108,7 +108,7 @@ impl InstalledPackage {
         })
     }
 
-    /// The package's slot, sub-slot included (e.g. `0/5.1`).
+    /// The package's slot, sub-slot included (e.g. `0/5.1`)
     ///
     /// Parsed rather than raw text so callers cannot hand the unsplit
     /// `"0/5.1"` to something expecting the slot name — see
@@ -135,7 +135,7 @@ impl InstalledPackage {
         self.read_field("SLOT")
     }
 
-    /// The main slot only (the part before `/`, e.g. `0` from `0/5.1`).
+    /// The main slot only (the part before `/`, e.g. `0` from `0/5.1`)
     ///
     /// Interned rather than owned: a whole VDB draws its slots from a handful
     /// of distinct strings (`0`, `0/5.1`, `3.12`), so handing back a `String`
@@ -145,14 +145,14 @@ impl InstalledPackage {
         Ok(self.slot()?.slot)
     }
 
-    /// The subslot if present (the part after `/`, e.g. `5.1` from `0/5.1`).
+    /// The subslot if present (the part after `/`, e.g. `5.1` from `0/5.1`)
     ///
     /// Interned, for the same reason as [`Self::slot_main`].
     pub fn subslot(&self) -> Result<Option<SlotName>> {
         Ok(self.slot()?.subslot)
     }
 
-    /// The repository name this package was installed from.
+    /// The repository name this package was installed from
     ///
     /// Interned: a system draws these from the two or three repos it has configured.
     pub fn repository(&self) -> Result<Option<Interned<DefaultInterner>>> {
@@ -161,7 +161,7 @@ impl InstalledPackage {
             .map(|r| Interned::intern(&r)))
     }
 
-    /// USE flags active at build time.
+    /// USE flags active at build time
     ///
     /// Interned: flag names are a small vocabulary repeated across the whole
     /// database (3257 tokens over 275 distinct names on one measured host),
@@ -171,7 +171,7 @@ impl InstalledPackage {
         Ok(raw.split_whitespace().map(Interned::intern).collect())
     }
 
-    /// IUSE flags declared by the package, with their `+`/`-` defaults.
+    /// IUSE flags declared by the package, with their `+`/`-` defaults
     ///
     /// [`IUse`] keeps the name interned and the default separate, so callers
     /// stop stripping the prefix and re-interning what it already holds —
@@ -184,7 +184,7 @@ impl InstalledPackage {
         })
     }
 
-    /// Build timestamp (Unix epoch).
+    /// Build timestamp (Unix epoch)
     pub fn build_time(&self) -> Result<Option<u64>> {
         self.read_field_opt("BUILD_TIME")?
             .map(|s| {
@@ -196,7 +196,7 @@ impl InstalledPackage {
             .transpose()
     }
 
-    /// Installed size in bytes.
+    /// Installed size in bytes
     pub fn size(&self) -> Result<Option<u64>> {
         self.read_field_opt("SIZE")?
             .map(|s| {
@@ -208,7 +208,7 @@ impl InstalledPackage {
             .transpose()
     }
 
-    /// Installation counter (monotonically increasing).
+    /// Installation counter (monotonically increasing)
     pub fn counter(&self) -> Result<Option<u64>> {
         self.read_field_opt("COUNTER")?
             .map(|s| {
@@ -220,7 +220,7 @@ impl InstalledPackage {
             .transpose()
     }
 
-    /// Keywords. Empty if the KEYWORDS file is absent.
+    /// Keywords. Empty if the KEYWORDS file is absent
     ///
     /// Interned: the vocabulary is one entry per arch plus its `~` form, so a
     /// whole database's keywords resolve to a few dozen distinct strings.
@@ -229,39 +229,39 @@ impl InstalledPackage {
         Ok(raw.split_whitespace().map(Interned::intern).collect())
     }
 
-    /// License string.
+    /// License string
     pub fn license(&self) -> Result<Option<String>> {
         self.read_field_opt("LICENSE")
     }
 
-    /// Homepage URL(s).
+    /// Homepage URL(s)
     pub fn homepage(&self) -> Result<Option<String>> {
         self.read_field_opt("HOMEPAGE")
     }
 
     // -- Dependency fields --
 
-    /// DEPEND (build dependencies) parsed as a dep tree.
+    /// DEPEND (build dependencies) parsed as a dep tree
     pub fn depend(&self) -> Result<Option<Vec<DepEntry>>> {
         self.read_dep_field("DEPEND")
     }
 
-    /// RDEPEND (runtime dependencies) parsed as a dep tree.
+    /// RDEPEND (runtime dependencies) parsed as a dep tree
     pub fn rdepend(&self) -> Result<Option<Vec<DepEntry>>> {
         self.read_dep_field("RDEPEND")
     }
 
-    /// BDEPEND (build-tool dependencies) parsed as a dep tree.
+    /// BDEPEND (build-tool dependencies) parsed as a dep tree
     pub fn bdepend(&self) -> Result<Option<Vec<DepEntry>>> {
         self.read_dep_field("BDEPEND")
     }
 
-    /// PDEPEND (post-merge dependencies) parsed as a dep tree.
+    /// PDEPEND (post-merge dependencies) parsed as a dep tree
     pub fn pdepend(&self) -> Result<Option<Vec<DepEntry>>> {
         self.read_dep_field("PDEPEND")
     }
 
-    /// IDEPEND (install-time dependencies) parsed as a dep tree.
+    /// IDEPEND (install-time dependencies) parsed as a dep tree
     pub fn idepend(&self) -> Result<Option<Vec<DepEntry>>> {
         self.read_dep_field("IDEPEND")
     }
@@ -289,7 +289,7 @@ impl InstalledPackage {
     // against a VDB another process is writing, which the cache — invalidated
     // only by this process's own `register`/`unregister` — is not.
 
-    /// Parse the CONTENTS file — the list of files installed by this package.
+    /// Parse the CONTENTS file — the list of files installed by this package
     pub fn contents(&self) -> Result<Vec<ContentsEntry>> {
         Ok(ContentsEntry::parse(&self.contents_required()?))
     }
@@ -340,7 +340,7 @@ impl InstalledPackage {
         })
     }
 
-    /// Returns `true` if this package owns the given path.
+    /// Returns `true` if this package owns the given path
     pub fn owns(&self, file_path: &Utf8Path) -> Result<bool> {
         let raw = self.contents_required()?;
         Ok(crate::ContentsRef::parse(&raw).any(|e| {

@@ -1,4 +1,4 @@
-//! Collision detection for planned merges.
+//! Collision detection for planned merges
 //!
 //! Before registering a new package, the caller can check whether any files it
 //! would install are already owned by a different package in the VDB.
@@ -13,17 +13,17 @@ use crate::error::Error;
 use crate::package::InstalledPackage;
 use crate::{Result, Vdb};
 
-/// A file-ownership conflict between a planned install and the existing VDB.
+/// A file-ownership conflict between a planned install and the existing VDB
 #[derive(Debug)]
 pub struct Collision {
-    /// The path that would collide.
+    /// The path that would collide
     pub path: Utf8PathBuf,
-    /// The currently installed package that owns the path.
+    /// The currently installed package that owns the path
     pub owner: InstalledPackage,
 }
 
 impl Vdb {
-    /// Check `planned` CONTENTS for files already owned by another package.
+    /// Check `planned` CONTENTS for files already owned by another package
     ///
     /// Only `obj` and `sym` entries are checked — directories are legitimately
     /// shared between packages and are never considered collisions.
