@@ -14,9 +14,9 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SlotOperator {
     /// `:=` — the dependent package must be rebuilt when the dependency's
-    /// slot or sub-slot changes.
+    /// slot or sub-slot changes
     Equal,
-    /// `:*` — accept any slot; no rebuild is triggered on slot changes.
+    /// `:*` — accept any slot; no rebuild is triggered on slot changes
     Star,
 }
 
@@ -40,16 +40,16 @@ impl fmt::Display for SlotOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct Slot {
-    /// The slot name (e.g. `0`, `3.12`, `stable`).
+    /// The slot name (e.g. `0`, `3.12`, `stable`)
     #[cfg_attr(feature = "builder", builder(into))]
     pub slot: Interned<DefaultInterner>,
-    /// Optional sub-slot for ABI tracking (e.g. `1.2` in `:0/1.2`).
+    /// Optional sub-slot for ABI tracking (e.g. `1.2` in `:0/1.2`)
     #[cfg_attr(feature = "builder", builder(into))]
     pub subslot: Option<Interned<DefaultInterner>>,
 }
 
 impl Slot {
-    /// Create a new slot without a sub-slot.
+    /// Create a new slot without a sub-slot
     ///
     /// The value is interned automatically.
     pub fn new(slot: impl AsRef<str>) -> Self {
@@ -59,7 +59,7 @@ impl Slot {
         }
     }
 
-    /// Create a new slot with a sub-slot.
+    /// Create a new slot with a sub-slot
     ///
     /// Both values are interned automatically.
     pub fn with_subslot(slot: impl AsRef<str>, subslot: impl AsRef<str>) -> Self {
@@ -69,7 +69,7 @@ impl Slot {
         }
     }
 
-    /// Split a `SLOT` value (`0`, `0/5.1`) into its name and sub-slot.
+    /// Split a `SLOT` value (`0`, `0/5.1`) into its name and sub-slot
     ///
     /// The form ebuilds and the VDB record. Only the first `/` separates —
     /// PMS forbids one in either part, so the rest belongs to the sub-slot.
@@ -87,7 +87,7 @@ impl Slot {
         })
     }
 
-    /// A slot known only by name, from a handle that is already interned.
+    /// A slot known only by name, from a handle that is already interned
     ///
     /// For callers that identify a package by `(cpn, slot)` and never see its
     /// sub-slot — the solver, whose package identity is exactly that. Their
@@ -124,23 +124,25 @@ impl fmt::Display for Slot {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SlotDep {
     /// A named slot with optional sub-slot and optional operator,
-    /// e.g. `0`, `0/1.2`, `0=`.
+    /// e.g. `0`, `0/1.2`, `0=`
     Slot {
-        /// The slot and optional sub-slot (e.g. `0`, `0/1.2`).
+        /// The slot and optional sub-slot (e.g. `0`, `0/1.2`)
+        ///
         /// `None` only when a bare operator is present (e.g. `:=`).
         slot: Option<Slot>,
-        /// The slot operator (`=` for rebuild-on-change, `*` for any-slot).
+        /// The slot operator (`=` for rebuild-on-change, `*` for any-slot)
+        ///
         /// See [PMS 8.3.3].
         ///
         /// [PMS 8.3.3]: https://projects.gentoo.org/pms/9/pms.html#slot-dependencies
         op: Option<SlotOperator>,
     },
-    /// A bare operator without a named slot (`:=` or `:*`).
+    /// A bare operator without a named slot (`:=` or `:*`)
     Operator(SlotOperator),
 }
 
 impl SlotDep {
-    /// Parse the slot dependency portion of an atom (without the leading `:`).
+    /// Parse the slot dependency portion of an atom (without the leading `:`)
     ///
     /// Accepts forms like `0`, `0/1.2`, `0=`, `=`, `*`.
     pub fn parse(input: &str) -> Result<Self> {
@@ -178,7 +180,8 @@ impl FromStr for SlotDep {
 // Winnow parsers
 
 /// Parse slot name (alphanumeric, _, -, +, .)
-/// PMS 3.1.3: must not begin with hyphen, dot, or plus
+///
+/// PMS 3.1.3: must not begin with hyphen, dot, or plus.
 fn parse_slot_name(input: &mut &str) -> ModalResult<Interned<DefaultInterner>> {
     use crate::parsers::parse_ident_with_dot;
 

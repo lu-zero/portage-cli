@@ -25,9 +25,9 @@ use crate::version::{Version, parse_version, parse_version_no_raw};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct Cpv {
-    /// The unversioned category/package name.
+    /// The unversioned category/package name
     pub cpn: Cpn,
-    /// The version component (e.g. `1.75.0`, `3.11.0_rc2_p1-r1`).
+    /// The version component (e.g. `1.75.0`, `3.11.0_rc2_p1-r1`)
     ///
     /// See [`Version`] and [PMS 3.2] for the full version format.
     ///
@@ -36,12 +36,12 @@ pub struct Cpv {
 }
 
 impl Cpv {
-    /// Create a new Cpv from a [`Cpn`] and a [`Version`].
+    /// Create a new Cpv from a [`Cpn`] and a [`Version`]
     pub fn new(cpn: Cpn, version: Version) -> Self {
         Cpv { cpn, version }
     }
 
-    /// Create a [`Cpv`] from separate category, package, and version parts.
+    /// Create a [`Cpv`] from separate category, package, and version parts
     ///
     /// Both `category` and `package` are interned. Prefer this over
     /// constructing a `format!("{category}/{pf}")` string just to parse it.
@@ -53,7 +53,7 @@ impl Cpv {
         Cpv::new(Cpn::new(category, package), version)
     }
 
-    /// Parse a `category/package-version` string into a [`Cpv`].
+    /// Parse a `category/package-version` string into a [`Cpv`]
     ///
     /// Returns an error if the string does not conform to the PMS format or
     /// naming rules.
@@ -63,7 +63,7 @@ impl Cpv {
             .map_err(|e| Error::InvalidCpv(format!("{}: {}", input, e)))
     }
 
-    /// Try to create from a string.
+    /// Try to create from a string
     ///
     /// Alias for [`Cpv::parse`].
     pub fn try_new(s: &str) -> Result<Self> {
@@ -102,7 +102,7 @@ impl FromStr for Cpv {
 
 // Winnow parsers
 
-/// Parse a `category/package-version` string (without storing the raw version).
+/// Parse a `category/package-version` string (without storing the raw version)
 ///
 /// Package names can contain hyphens, so the version boundary is found at the
 /// last hyphen followed by a digit (per PMS).

@@ -13,7 +13,7 @@ use crate::dep::{Dep, parse_dep};
 use crate::error::{Error, Result};
 use crate::parsers::parse_ident_with_at;
 
-/// Structured dependency tree entry.
+/// Structured dependency tree entry
 ///
 /// Represents the forms that appear in ebuild `*DEPEND` variables
 /// (PMS 8.2): bare atoms, USE-conditional groups, all-of groups,
@@ -25,32 +25,32 @@ use crate::parsers::parse_ident_with_at;
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DepEntry {
-    /// A single dependency atom.
+    /// A single dependency atom
     Atom(Dep),
-    /// `flag? ( children )` or `!flag? ( children )` conditional group.
+    /// `flag? ( children )` or `!flag? ( children )` conditional group
     UseConditional {
-        /// USE flag name.
+        /// USE flag name
         flag: Interned<DefaultInterner>,
-        /// `true` for `!use?` (negated conditional).
+        /// `true` for `!use?` (negated conditional)
         negate: bool,
-        /// Dependencies guarded by this flag.
+        /// Dependencies guarded by this flag
         children: Vec<DepEntry>,
     },
-    /// `( a b c )` — all of the children must be matched.
+    /// `( a b c )` — all of the children must be matched
     ///
     /// A bare parenthesised group representing an all-of dependency
     /// specification per [PMS 8.2.1](https://projects.gentoo.org/pms/9/pms.html#all-of-dependency-specifications).
     AllOf(Vec<DepEntry>),
-    /// `|| ( a b c )` — any one of the children satisfies the dependency.
+    /// `|| ( a b c )` — any one of the children satisfies the dependency
     AnyOf(Vec<DepEntry>),
-    /// `^^ ( a b c )` — exactly one child must be matched.
+    /// `^^ ( a b c )` — exactly one child must be matched
     ExactlyOneOf(Vec<DepEntry>),
-    /// `?? ( a b c )` — at most one child must be matched.
+    /// `?? ( a b c )` — at most one child must be matched
     AtMostOneOf(Vec<DepEntry>),
 }
 
 /// A dependency-class tree (e.g. one package version's parsed `DEPEND`),
-/// `Arc`-wrapped so cloning it is a refcount bump rather than a deep copy.
+/// `Arc`-wrapped so cloning it is a refcount bump rather than a deep copy
 ///
 /// Ebuild metadata gets re-converted into a solver's own representation on
 /// every rebuild — for the PubGrub-backed resolver, up to ~8x per
@@ -64,7 +64,7 @@ pub enum DepEntry {
 pub struct DepList(Arc<Vec<DepEntry>>);
 
 impl DepList {
-    /// Wrap an owned dependency list.
+    /// Wrap an owned dependency list
     pub fn new(entries: Vec<DepEntry>) -> Self {
         Self(Arc::new(entries))
     }
@@ -106,7 +106,7 @@ impl FromIterator<DepEntry> for DepList {
 }
 
 impl DepEntry {
-    /// Parse a full dependency string into a list of entries.
+    /// Parse a full dependency string into a list of entries
     ///
     /// Accepts the format used in ebuild `*DEPEND` variables: whitespace-separated
     /// atoms, `|| ( ... )` any-of groups, `^^ ( ... )` exactly-one-of groups,
@@ -127,7 +127,7 @@ impl DepEntry {
             .map_err(|e| Error::InvalidDepString(format!("{e}")))
     }
 
-    /// Evaluate USE conditionals using a predicate.
+    /// Evaluate USE conditionals using a predicate
     ///
     /// Resolves every `UseConditional` node: active `flag? ( ... )` and inactive
     /// `!flag? ( ... )` are replaced by their (recursively evaluated) children;
@@ -253,12 +253,12 @@ fn fmt_group(f: &mut std::fmt::Formatter, prefix: &str, entries: &[DepEntry]) ->
 
 // Winnow parsers
 
-/// Parse a complete dependency string (top-level).
+/// Parse a complete dependency string (top-level)
 pub(crate) fn parse_dep_string(input: &mut &str) -> ModalResult<Vec<DepEntry>> {
     terminated(parse_dep_entries, multispace0).parse_next(input)
 }
 
-/// Parse zero or more dependency entries separated by whitespace.
+/// Parse zero or more dependency entries separated by whitespace
 ///
 /// Stops when it encounters `)` or end-of-input.
 fn parse_dep_entries(input: &mut &str) -> ModalResult<Vec<DepEntry>> {
@@ -271,7 +271,7 @@ fn parse_dep_entries(input: &mut &str) -> ModalResult<Vec<DepEntry>> {
 }
 
 /// Quick lookahead: returns `true` when the remaining input is a USE-conditional
-/// (`flag? ( ... )` / `!flag? ( ... )`) rather than a dependency atom.
+/// (`flag? ( ... )` / `!flag? ( ... )`) rather than a dependency atom
 ///
 /// PMS 8.2 defines USE-conditionals as `'!'? flag-name '?' ws '(' ... ')'`.
 /// The discriminant is `?` followed by whitespace then `(`.  This sequence
@@ -296,7 +296,7 @@ fn is_use_conditional(input: &str) -> bool {
     false
 }
 
-/// Parse a single dependency entry.
+/// Parse a single dependency entry
 ///
 /// Uses `dispatch!(peek(any); ...)` to route on the first character:
 /// - `|` → any-of group (`|| ( ... )`)
@@ -331,7 +331,7 @@ fn dispatch_dep_entry_fallback(input: &mut &str) -> ModalResult<DepEntry> {
     }
 }
 
-/// Parse `|| ( entry+ )`.
+/// Parse `|| ( entry+ )`
 ///
 /// After consuming `||`, uses `cut_err` to commit — a missing `(` or `)`
 /// becomes a hard error instead of backtracking into `alt`.
@@ -344,7 +344,7 @@ fn parse_any_of(input: &mut &str) -> ModalResult<DepEntry> {
         .parse_next(input)
 }
 
-/// Parse `^^ ( entry+ )`.
+/// Parse `^^ ( entry+ )`
 ///
 /// After consuming `^^`, uses `cut_err` to commit — a missing `(` or `)`
 /// becomes a hard error instead of backtracking into `alt`.
@@ -357,7 +357,7 @@ fn parse_exactly_one_of(input: &mut &str) -> ModalResult<DepEntry> {
         .parse_next(input)
 }
 
-/// Parse `?? ( entry+ )`.
+/// Parse `?? ( entry+ )`
 ///
 /// After consuming `??`, uses `cut_err` to commit — a missing `(` or `)`
 /// becomes a hard error instead of backtracking into `alt`.
@@ -370,7 +370,7 @@ fn parse_at_most_one_of(input: &mut &str) -> ModalResult<DepEntry> {
         .parse_next(input)
 }
 
-/// Parse `[!]flag? ( entry+ )` per PMS 8.2.
+/// Parse `[!]flag? ( entry+ )` per PMS 8.2
 ///
 /// Uses `parse_ident_with_at` for the flag name (PMS 3.1.4: `[A-Za-z0-9+_@-]`,
 /// starting with alphanumeric). After `?`, `cut_err` commits so a missing
@@ -394,7 +394,7 @@ fn parse_use_conditional(input: &mut &str) -> ModalResult<DepEntry> {
     })
 }
 
-/// Parse `( entry* )` — all-of group.
+/// Parse `( entry* )` — all-of group
 ///
 /// After consuming `(`, uses `cut_err` for the closing `)`.
 fn parse_all_of(input: &mut &str) -> ModalResult<DepEntry> {
@@ -630,7 +630,7 @@ mod tests {
 
     // --- dispatch-specific edge cases ---
 
-    /// `>=`, `<`, `~`, `=` dispatch directly to atom parser.
+    // `>=`, `<`, `~`, `=` dispatch directly to atom parser.
     #[test]
     fn operator_prefixed_atoms() {
         for input in [
@@ -645,8 +645,8 @@ mod tests {
         }
     }
 
-    /// `!` followed by a category/package must parse as a blocker atom, not
-    /// a USE conditional.
+    // `!` followed by a category/package must parse as a blocker atom, not
+    // a USE conditional.
     #[test]
     fn blocker_not_confused_with_use_conditional() {
         let entries = DepEntry::parse("!dev-libs/old ssl? ( dev-libs/openssl )").unwrap();
@@ -658,7 +658,7 @@ mod tests {
         );
     }
 
-    /// Empty USE conditional body.
+    // Empty USE conditional body.
     #[test]
     fn empty_use_conditional() {
         let entries = DepEntry::parse("test? ( )").unwrap();
@@ -672,19 +672,19 @@ mod tests {
         }
     }
 
-    /// Missing `( )` after `||` is a hard error (cut_err), not a backtrack.
+    // Missing `( )` after `||` is a hard error (cut_err), not a backtrack.
     #[test]
     fn error_any_of_missing_paren() {
         assert!(DepEntry::parse("|| dev-libs/a").is_err());
     }
 
-    /// Missing `( )` after `flag?` is a hard error (cut_err).
+    // Missing `( )` after `flag?` is a hard error (cut_err).
     #[test]
     fn error_use_cond_missing_paren() {
         assert!(DepEntry::parse("ssl? dev-libs/openssl").is_err());
     }
 
-    /// Extra whitespace should be tolerated everywhere.
+    // Extra whitespace should be tolerated everywhere.
     #[test]
     fn extra_whitespace() {
         let entries = DepEntry::parse("  dev-lang/rust   ssl? (  dev-libs/openssl  )  ").unwrap();
@@ -693,7 +693,7 @@ mod tests {
         assert!(matches!(&entries[1], DepEntry::UseConditional { .. }));
     }
 
-    /// Display round-trip with nested structures.
+    // Display round-trip with nested structures.
     #[test]
     fn display_round_trip_nested() {
         let input = "|| ( ssl? ( dev-libs/openssl ) !ssl? ( dev-libs/libressl ) )";
@@ -704,7 +704,7 @@ mod tests {
         assert_eq!(entries, reparsed);
     }
 
-    /// Atoms with USE deps and repo in a dep string.
+    // Atoms with USE deps and repo in a dep string.
     #[test]
     fn complex_atoms_in_dep_string() {
         let entries =

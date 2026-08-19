@@ -1,29 +1,29 @@
-/// Error type for portage-atom parsing and operations.
+/// Error type for portage-atom parsing and operations
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
-    /// Generic parse error.
+    /// Generic parse error
     #[error("parse error: {0}")]
     Parse(String),
 
-    /// The category name does not conform to [PMS 3.1.1].
+    /// The category name does not conform to [PMS 3.1.1]
     ///
     /// [PMS 3.1.1]: https://projects.gentoo.org/pms/9/pms.html#category-names
     #[error("invalid category: {0}")]
     InvalidCategory(String),
 
-    /// The package name does not conform to [PMS 3.1.2].
+    /// The package name does not conform to [PMS 3.1.2]
     ///
     /// [PMS 3.1.2]: https://projects.gentoo.org/pms/9/pms.html#package-names
     #[error("invalid package: {0}")]
     InvalidPackage(String),
 
-    /// The version string does not conform to [PMS 3.2].
+    /// The version string does not conform to [PMS 3.2]
     ///
     /// [PMS 3.2]: https://projects.gentoo.org/pms/9/pms.html#version-specifications
     #[error("invalid version: {0}")]
     InvalidVersion(String),
 
-    /// The category/package-version string is malformed.
+    /// The category/package-version string is malformed
     ///
     /// See [PMS 3.2] for the CPV format.
     ///
@@ -31,7 +31,7 @@ pub enum Error {
     #[error("invalid cpv: {0}")]
     InvalidCpv(String),
 
-    /// The category/package string is malformed.
+    /// The category/package string is malformed
     ///
     /// See [PMS 3.1] for the CPN format.
     ///
@@ -39,7 +39,7 @@ pub enum Error {
     #[error("invalid cpn: {0}")]
     InvalidCpn(String),
 
-    /// The dependency atom string is malformed.
+    /// The dependency atom string is malformed
     ///
     /// See [PMS 8.3] for the dependency specification.
     ///
@@ -47,7 +47,7 @@ pub enum Error {
     #[error("invalid dep: {0}")]
     InvalidDep(String),
 
-    /// The slot dependency portion is malformed.
+    /// The slot dependency portion is malformed
     ///
     /// See [PMS 8.3.3].
     ///
@@ -55,7 +55,7 @@ pub enum Error {
     #[error("invalid slot: {0}")]
     InvalidSlot(String),
 
-    /// A USE-dependency item is malformed.
+    /// A USE-dependency item is malformed
     ///
     /// See [PMS 8.3.4].
     ///
@@ -63,7 +63,7 @@ pub enum Error {
     #[error("invalid use dep: {0}")]
     InvalidUseDep(String),
 
-    /// A version comparison operator is not recognised.
+    /// A version comparison operator is not recognised
     ///
     /// See [PMS 8.3.1].
     ///
@@ -71,7 +71,7 @@ pub enum Error {
     #[error("invalid operator: {0}")]
     InvalidOperator(String),
 
-    /// A dependency string (the contents of a `*DEPEND` variable) is malformed.
+    /// A dependency string (the contents of a `*DEPEND` variable) is malformed
     ///
     /// See [PMS 8.2].
     ///

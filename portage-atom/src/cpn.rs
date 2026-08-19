@@ -23,7 +23,7 @@ use crate::error::{Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct Cpn {
-    /// The category portion (e.g. `dev-lang`, `app-misc`).
+    /// The category portion (e.g. `dev-lang`, `app-misc`)
     ///
     /// Must begin with a character other than `-`, `.`, or `+` and may contain
     /// `[A-Za-z0-9+_.-]`. See [PMS 3.1.1].
@@ -31,7 +31,7 @@ pub struct Cpn {
     /// [PMS 3.1.1]: https://projects.gentoo.org/pms/9/pms.html#category-names
     #[cfg_attr(feature = "builder", builder(into))]
     pub category: Interned<DefaultInterner>,
-    /// The package name portion (e.g. `rust`, `python`).
+    /// The package name portion (e.g. `rust`, `python`)
     ///
     /// Must begin with a character other than `-` or `+` and may contain
     /// `[A-Za-z0-9+_-]`. The name must not end with a hyphen followed
@@ -43,7 +43,7 @@ pub struct Cpn {
 }
 
 impl Cpn {
-    /// Create a new Cpn from category and package strings.
+    /// Create a new Cpn from category and package strings
     ///
     /// The values are interned automatically. This does **not** validate that
     /// the strings conform to PMS naming rules; use [`Cpn::parse`] for that.
@@ -54,7 +54,7 @@ impl Cpn {
         }
     }
 
-    /// Parse a `category/package` string into a [`Cpn`].
+    /// Parse a `category/package` string into a [`Cpn`]
     ///
     /// Returns an error if the string does not conform to the PMS category
     /// and package naming rules.
@@ -64,7 +64,7 @@ impl Cpn {
             .map_err(|e| Error::InvalidCpn(format!("{}: {}", input, e)))
     }
 
-    /// Try to create from a string.
+    /// Try to create from a string
     ///
     /// Alias for [`Cpn::parse`].
     pub fn try_new(s: &str) -> Result<Self> {
@@ -104,7 +104,9 @@ impl FromStr for Cpn {
 // Winnow parsers
 
 /// Parse category name
-/// PMS 3.1.1: category name may contain [A-Za-z0-9+_.-], must not begin with hyphen or plus
+///
+/// PMS 3.1.1: category name may contain [A-Za-z0-9+_.-], must not begin
+/// with hyphen or plus.
 pub(crate) fn parse_category(input: &mut &str) -> ModalResult<Interned<DefaultInterner>> {
     use crate::parsers::parse_ident_with_dot;
 
@@ -119,8 +121,9 @@ pub(crate) fn parse_category(input: &mut &str) -> ModalResult<Interned<DefaultIn
 }
 
 /// Parse package name
-/// PMS: package name must start with letter/digit, contain alphanumeric + _ - +
-/// Must not end with hyphen followed by version-like string
+///
+/// PMS: package name must start with letter/digit, contain alphanumeric +
+/// _ - +. Must not end with hyphen followed by version-like string.
 ///
 /// Note: In practice, Gentoo's tree contains packages whose names start with
 /// an underscore (e.g. `acct-user/_cron-failure`). We accept those even though

@@ -16,9 +16,9 @@ use crate::error::{Error, Result};
 /// See [PMS 8.3.4](https://projects.gentoo.org/pms/9/pms.html#style-and-style-use-dependencies).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UseDefault {
-    /// `(+)` — assume the flag is enabled if not defined by the package.
+    /// `(+)` — assume the flag is enabled if not defined by the package
     Enabled,
-    /// `(-)` — assume the flag is disabled if not defined by the package.
+    /// `(-)` — assume the flag is disabled if not defined by the package
     Disabled,
 }
 
@@ -36,21 +36,21 @@ impl fmt::Display for UseDefault {
 /// See [PMS 8.3.4](https://projects.gentoo.org/pms/9/pms.html#style-and-style-use-dependencies).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UseDepKind {
-    /// `[flag]` — the dependency's flag must be enabled.
+    /// `[flag]` — the dependency's flag must be enabled
     Enabled,
-    /// `[-flag]` — the dependency's flag must be disabled.
+    /// `[-flag]` — the dependency's flag must be disabled
     Disabled,
     /// `[flag?]` — if the *parent's* flag is enabled, the dependency's flag
-    /// must also be enabled; otherwise unconstrained.
+    /// must also be enabled; otherwise unconstrained
     Conditional,
     /// `[!flag?]` — if the *parent's* flag is disabled, the dependency's flag
-    /// must be enabled; otherwise unconstrained.
+    /// must be enabled; otherwise unconstrained
     ConditionalInverse,
     /// `[flag=]` — the dependency's flag must match the parent's flag state
-    /// (both enabled or both disabled).
+    /// (both enabled or both disabled)
     Equal,
     /// `[!flag=]` — the dependency's flag must be the opposite of the
-    /// parent's flag state.
+    /// parent's flag state
     EqualInverse,
 }
 
@@ -77,18 +77,18 @@ impl fmt::Display for UseDepKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct UseDep {
-    /// The USE flag name (e.g. `ssl`, `debug`, `python_targets_python3_12`).
+    /// The USE flag name (e.g. `ssl`, `debug`, `python_targets_python3_12`)
     #[cfg_attr(feature = "builder", builder(into))]
     pub flag: Interned<DefaultInterner>,
-    /// The kind of constraint this dependency expresses.
+    /// The kind of constraint this dependency expresses
     pub kind: UseDepKind,
     /// Optional default value (`(+)` or `(-)`) for when the flag is not
-    /// defined by the dependency package.
+    /// defined by the dependency package
     pub default: Option<UseDefault>,
 }
 
 impl UseDep {
-    /// Create a new USE dependency without a default annotation.
+    /// Create a new USE dependency without a default annotation
     ///
     /// The flag name is interned automatically.
     pub fn new(flag: impl AsRef<str>, kind: UseDepKind) -> Self {
@@ -99,7 +99,7 @@ impl UseDep {
         }
     }
 
-    /// Create a new USE dependency with a default annotation (`(+)` or `(-)`).
+    /// Create a new USE dependency with a default annotation (`(+)` or `(-)`)
     ///
     /// The flag name is interned automatically.
     pub fn with_default(flag: impl AsRef<str>, kind: UseDepKind, default: UseDefault) -> Self {
@@ -110,7 +110,7 @@ impl UseDep {
         }
     }
 
-    /// Parse a single USE dependency (without surrounding brackets).
+    /// Parse a single USE dependency (without surrounding brackets)
     ///
     /// Accepts forms like `ssl`, `-debug`, `python?`, `!flag=`, `ssl(+)`.
     pub fn parse(input: &str) -> Result<Self> {
@@ -168,7 +168,8 @@ impl FromStr for UseDep {
 // Winnow parsers
 
 /// Parse USE flag name
-/// PMS 3.1.4: must begin with alphanumeric character
+///
+/// PMS 3.1.4: must begin with alphanumeric character.
 fn parse_use_flag(input: &mut &str) -> ModalResult<Interned<DefaultInterner>> {
     use crate::parsers::parse_ident_with_at;
 

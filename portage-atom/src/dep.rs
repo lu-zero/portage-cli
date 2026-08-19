@@ -21,10 +21,10 @@ use crate::version::{Operator, Version};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Blocker {
     /// `!` — weak blocker: the blocked package may be temporarily installed
-    /// during a transition, but must be uninstalled before the operation completes.
+    /// during a transition, but must be uninstalled before the operation completes
     Weak,
     /// `!!` — strong blocker: the blocked package must never be installed
-    /// at the same time as this package.
+    /// at the same time as this package
     Strong,
 }
 
@@ -49,52 +49,52 @@ impl fmt::Display for Blocker {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct Dep {
-    /// The unversioned category/package name (e.g. `dev-lang/rust`).
+    /// The unversioned category/package name (e.g. `dev-lang/rust`)
     ///
     /// See [`Cpn`] and [PMS 3.1].
     ///
     /// [PMS 3.1]: https://projects.gentoo.org/pms/9/pms.html#restrictions-upon-names
     #[cfg_attr(feature = "builder", builder(start_fn))]
     pub cpn: Cpn,
-    /// Optional blocker prefix.
+    /// Optional blocker prefix
     ///
     /// `!` is a weak blocker; `!!` is a strong blocker.
     /// See [PMS 8.3.2].
     ///
     /// [PMS 8.3.2]: https://projects.gentoo.org/pms/9/pms.html#block-operator
     pub blocker: Option<Blocker>,
-    /// Optional version comparison operator.
+    /// Optional version comparison operator
     ///
     /// See [PMS 8.3.1].
     ///
     /// [PMS 8.3.1]: https://projects.gentoo.org/pms/9/pms.html#operators
     pub op: Option<Operator>,
-    /// Optional version constraint.
+    /// Optional version constraint
     ///
     /// See [PMS 8.3.1].
     ///
     /// [PMS 8.3.1]: https://projects.gentoo.org/pms/9/pms.html#operators
     pub version: Option<Version>,
-    /// PMS glob suffix (`*`) for wildcard matching with `=` operator.
+    /// PMS glob suffix (`*`) for wildcard matching with `=` operator
     ///
     /// Per PMS 8.3.1: "if the version specified has an asterisk immediately
     /// following it, then only the given number of version components is used
     /// for comparison". Only valid with `op = Some(Equal)`.
     #[cfg_attr(feature = "builder", builder(default))]
     pub glob: bool,
-    /// Optional slot dependency (the portion after `:`).
+    /// Optional slot dependency (the portion after `:`)
     ///
     /// See [PMS 8.3.3].
     ///
     /// [PMS 8.3.3]: https://projects.gentoo.org/pms/9/pms.html#slot-dependencies
     pub slot_dep: Option<SlotDep>,
-    /// Optional USE flag constraints (the bracketed portion).
+    /// Optional USE flag constraints (the bracketed portion)
     ///
     /// See [PMS 8.3.4].
     ///
     /// [PMS 8.3.4]: https://projects.gentoo.org/pms/9/pms.html#style-and-style-use-dependencies
     pub use_deps: Option<Vec<UseDep>>,
-    /// Optional repository name (after `::`, e.g. `gentoo`).
+    /// Optional repository name (after `::`, e.g. `gentoo`)
     ///
     /// See [PMS 8.3.5].
     ///
@@ -106,7 +106,7 @@ pub struct Dep {
 impl Dep {
     /// Whether an installed/available `cpv` (with its `slot`, when known)
     /// satisfies this atom's name, version operator, and named-slot
-    /// constraints.
+    /// constraints
     ///
     /// `slot` is the candidate's own [`Slot`], not a raw `SLOT` string: an
     /// installed `0/1` is in slot `0`, so an atom's `:0` must match it.
@@ -169,7 +169,7 @@ impl Dep {
         }
     }
 
-    /// Create a minimal dependency from a [`Cpn`].
+    /// Create a minimal dependency from a [`Cpn`]
     ///
     /// All optional fields default to `None`.
     pub fn new(cpn: Cpn) -> Self {
@@ -185,7 +185,7 @@ impl Dep {
         }
     }
 
-    /// Parse a full dependency atom string.
+    /// Parse a full dependency atom string
     ///
     /// Returns an error if the string does not conform to the PMS format.
     pub fn parse(input: &str) -> Result<Self> {
@@ -194,24 +194,24 @@ impl Dep {
             .map_err(|e| Error::InvalidDep(format!("{}: {}", input, e)))
     }
 
-    /// Try to create from a string.
+    /// Try to create from a string
     ///
     /// Alias for [`Dep::parse`].
     pub fn try_new(s: &str) -> Result<Self> {
         Self::parse(s)
     }
 
-    /// The category portion of the atom (e.g. `dev-lang`).
+    /// The category portion of the atom (e.g. `dev-lang`)
     pub fn category(&self) -> &str {
         &self.cpn.category
     }
 
-    /// The package name portion of the atom (e.g. `rust`).
+    /// The package name portion of the atom (e.g. `rust`)
     pub fn package(&self) -> &str {
         &self.cpn.package
     }
 
-    /// Build a [`Cpv`] from this dependency, if it carries a version.
+    /// Build a [`Cpv`] from this dependency, if it carries a version
     pub fn cpv(&self) -> Option<Cpv> {
         self.version.as_ref().map(|v| Cpv::new(self.cpn, v.clone()))
     }
@@ -298,6 +298,7 @@ fn parse_repo(input: &mut &str) -> ModalResult<Interned<DefaultInterner>> {
 }
 
 /// Parse full dependency atom
+///
 /// Handles: [!|!!][op]cat/pkg[-ver][:slot][use][::repo]
 pub(crate) fn parse_dep(input: &mut &str) -> ModalResult<Dep> {
     use crate::version::{Operator, parse_operator};

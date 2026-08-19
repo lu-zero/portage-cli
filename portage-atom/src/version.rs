@@ -22,7 +22,8 @@ use crate::error::{Error, Result};
 /// See [PMS 3.2](https://projects.gentoo.org/pms/9/pms.html#version-specifications).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Revision(
-    /// The revision number (e.g. `1` for `-r1`, `2` for `-r2`).
+    /// The revision number (e.g. `1` for `-r1`, `2` for `-r2`)
+    ///
     /// `0` means no revision (omitted from display).
     pub u64,
 );
@@ -59,15 +60,15 @@ impl Ord for Revision {
 /// and [Algorithm 3.1](https://projects.gentoo.org/pms/9/pms.html#version-comparison).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SuffixKind {
-    /// `_alpha` — earliest pre-release stage.
+    /// `_alpha` — earliest pre-release stage
     Alpha,
-    /// `_beta` — feature-complete but not yet stable.
+    /// `_beta` — feature-complete but not yet stable
     Beta,
-    /// `_pre` — pre-release snapshot.
+    /// `_pre` — pre-release snapshot
     Pre,
-    /// `_rc` — release candidate.
+    /// `_rc` — release candidate
     Rc,
-    /// `_p` — post-release patchlevel (sorts *above* the base version).
+    /// `_p` — post-release patchlevel (sorts *above* the base version)
     P,
 }
 
@@ -111,7 +112,7 @@ impl FromStr for SuffixKind {
     }
 }
 
-/// A version suffix with an optional numeric qualifier.
+/// A version suffix with an optional numeric qualifier
 ///
 /// Represents a single `_alpha`, `_beta`, `_pre`, `_rc`, or `_p` segment,
 /// optionally followed by a number (e.g. `_rc2`, `_p1`).
@@ -122,9 +123,10 @@ impl FromStr for SuffixKind {
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct Suffix {
-    /// The suffix kind (`_alpha`, `_beta`, `_pre`, `_rc`, or `_p`).
+    /// The suffix kind (`_alpha`, `_beta`, `_pre`, `_rc`, or `_p`)
     pub kind: SuffixKind,
-    /// Optional numeric qualifier (e.g. `2` in `_rc2`, absent in `_rc`).
+    /// Optional numeric qualifier (e.g. `2` in `_rc2`, absent in `_rc`)
+    ///
     /// When absent, the implicit value is `0` (PMS Algorithm 3.6).
     pub version: Option<u64>,
 }
@@ -182,20 +184,21 @@ impl Ord for Suffix {
 /// See [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#operators).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Operator {
-    /// `<` — strictly less than the specified version.
+    /// `<` — strictly less than the specified version
     Less,
-    /// `<=` — less than or equal to the specified version.
+    /// `<=` — less than or equal to the specified version
     LessOrEqual,
-    /// `=` — exactly the specified version (including revision).
+    /// `=` — exactly the specified version (including revision)
+    ///
     /// When used with a version ending in `*`, performs prefix matching
     /// per PMS 8.3.1 (e.g., `=pkg-1.2*` matches `1.2.3`, `1.2.4`, etc.).
     Equal,
     /// `~` — matches the same base version, ignoring the revision
-    /// (e.g. `~dev-lang/rust-1.75.0` matches `-r0`, `-r1`, etc.).
+    /// (e.g. `~dev-lang/rust-1.75.0` matches `-r0`, `-r1`, etc.)
     Approximate,
-    /// `>=` — greater than or equal to the specified version.
+    /// `>=` — greater than or equal to the specified version
     GreaterOrEqual,
-    /// `>` — strictly greater than the specified version.
+    /// `>` — strictly greater than the specified version
     Greater,
 }
 
@@ -212,11 +215,13 @@ impl fmt::Display for Operator {
     }
 }
 
-/// Dot-separated numeric components. `SmallVec`-backed: real-world versions
-/// almost always have 4 or fewer components, so this avoids a heap
-/// allocation for the common case — `Version` is cloned constantly during
-/// dependency resolution (per solver decision, per dependency edge, inside
-/// the range-algebra of the version-set crate it's compared through).
+/// Dot-separated numeric components
+///
+/// `SmallVec`-backed: real-world versions almost always have 4 or fewer
+/// components, so this avoids a heap allocation for the common case —
+/// `Version` is cloned constantly during dependency resolution (per solver
+/// decision, per dependency edge, inside the range-algebra of the
+/// version-set crate it's compared through).
 pub type Numbers = SmallVec<[u64; 4]>;
 
 /// Package version according to PMS
@@ -247,7 +252,7 @@ pub type Numbers = SmallVec<[u64; 4]>;
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]
 pub struct Version {
-    /// Dot-separated numeric components (e.g. `[1, 2, 3]` for `1.2.3`).
+    /// Dot-separated numeric components (e.g. `[1, 2, 3]` for `1.2.3`)
     ///
     /// Integer form used by callers that need major/minor extraction or
     /// range algebra. Leading zeros are preserved separately in
@@ -258,19 +263,19 @@ pub struct Version {
     /// [`Self::numbers`]). Preserves leading zeros so Algorithm 3.3 can
     /// distinguish `1.01` from `1.1`. Empty when constructed via structural
     /// update that only sets `numbers` — comparison then falls back to
-    /// formatting each `u64`.
+    /// formatting each `u64`
     #[cfg_attr(feature = "builder", builder(skip))]
     pub digits: SmallVec<[SmolStr; 4]>,
-    /// Optional single lowercase letter after the numeric components.
+    /// Optional single lowercase letter after the numeric components
     pub letter: Option<char>,
-    /// Zero or more version suffixes (`_alpha`, `_beta`, `_pre`, `_rc`, `_p`).
+    /// Zero or more version suffixes (`_alpha`, `_beta`, `_pre`, `_rc`, `_p`)
     #[cfg_attr(feature = "builder", builder(default))]
     pub suffixes: Vec<Suffix>,
-    /// Package revision; defaults to `0` (omitted from display).
+    /// Package revision; defaults to `0` (omitted from display)
     #[cfg_attr(feature = "builder", builder(default))]
     pub revision: Revision,
     /// The version string exactly as parsed, preserving leading zeros
-    /// (e.g. `"26.04.0"` instead of the reconstructed `"26.4.0"`).
+    /// (e.g. `"26.04.0"` instead of the reconstructed `"26.4.0"`)
     ///
     /// `SmolStr` rather than `String`: cheap to clone (inline for short
     /// strings, `Arc<str>` refcount bump otherwise) without touching the
@@ -283,7 +288,7 @@ pub struct Version {
     pub raw: Option<SmolStr>,
 }
 
-/// Digit string for component `i`, preferring the original parse text.
+/// Digit string for component `i`, preferring the original parse text
 fn component_digits<'a>(v: &'a Version, i: usize) -> Option<std::borrow::Cow<'a, str>> {
     if let Some(d) = v.digits.get(i) {
         return Some(std::borrow::Cow::Borrowed(d.as_str()));
@@ -293,7 +298,7 @@ fn component_digits<'a>(v: &'a Version, i: usize) -> Option<std::borrow::Cow<'a,
         .map(|n| std::borrow::Cow::Owned(n.to_string()))
 }
 
-/// PMS Algorithm 3.2 / 3.3 integer compare on digit strings (no fixed-width limit).
+/// PMS Algorithm 3.2 / 3.3 integer compare on digit strings (no fixed-width limit)
 fn cmp_int_digits(a: &str, b: &str) -> Ordering {
     let a = a.trim_start_matches('0');
     let b = b.trim_start_matches('0');
@@ -305,7 +310,7 @@ fn cmp_int_digits(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Compare one numeric component pair.
+/// Compare one numeric component pair
 ///
 /// * First component (index 0): always Algorithm 3.2 integer compare.
 /// * Later components: Algorithm 3.3 — if either side has a leading `0`,
@@ -324,7 +329,7 @@ fn cmp_component(i: usize, a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Hash a single component consistently with [`cmp_component`] equality.
+/// Hash a single component consistently with [`cmp_component`] equality
 fn hash_component<H: Hasher>(i: usize, digits: &str, state: &mut H) {
     if i == 0 || !digits.starts_with('0') {
         let s = digits.trim_start_matches('0');
@@ -361,7 +366,7 @@ impl Hash for Version {
 }
 
 impl Version {
-    /// Create a version from its dot-separated numeric components.
+    /// Create a version from its dot-separated numeric components
     ///
     /// `Version::new(&[1, 75, 0])` produces `1.75.0`. All optional fields
     /// (letter, suffixes, revision, glob) default to their zero values.
@@ -389,7 +394,7 @@ impl Version {
         }
     }
 
-    /// Parse a version string (without a leading operator).
+    /// Parse a version string (without a leading operator)
     ///
     /// Accepts forms like `1.2.3`, `1.2.3a_rc1_p2-r5`.
     pub fn parse(input: &str) -> Result<Self> {
@@ -398,7 +403,7 @@ impl Version {
             .map_err(|e| Error::InvalidVersion(format!("{}: {}", input, e)))
     }
 
-    /// Check whether this version matches a glob pattern (PMS 8.3.1 `=V*`).
+    /// Check whether this version matches a glob pattern (PMS 8.3.1 `=V*`)
     ///
     /// Truncates this version to the number of numeric components in
     /// `pattern` and requires PMS component equality on that prefix. A
@@ -431,7 +436,7 @@ impl Version {
     }
 
     /// Return the version without its revision, for `~` (approximate)
-    /// comparison per [PMS 8.3.1].
+    /// comparison per [PMS 8.3.1]
     ///
     /// [PMS 8.3.1]: https://projects.gentoo.org/pms/9/pms.html#operators
     pub fn base(&self) -> Self {
@@ -446,7 +451,7 @@ impl Version {
     }
 
     /// Return the version stripped of suffixes and revision, for `*` glob
-    /// comparison per [PMS 8.3.1].
+    /// comparison per [PMS 8.3.1]
     ///
     /// [PMS 8.3.1]: https://projects.gentoo.org/pms/9/pms.html#operators
     pub fn without_suffix(&self) -> Self {
@@ -460,9 +465,11 @@ impl Version {
         }
     }
 
-    /// Format the version portion (numbers, letter, suffixes, revision, glob)
-    /// without the operator.  Uses the raw string when available to preserve
-    /// leading zeros in numeric components.
+    /// Format the version portion (numbers, letter, suffixes, revision,
+    /// glob) without the operator
+    ///
+    /// Uses the raw string when available to preserve leading zeros in
+    /// numeric components.
     pub(crate) fn fmt_version(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(ref raw) = self.raw {
             write!(f, "{raw}")
@@ -563,7 +570,7 @@ fn parse_number(input: &mut &str) -> ModalResult<u64> {
     digit1.try_map(|s: &str| s.parse::<u64>()).parse_next(input)
 }
 
-/// Parse one version component, keeping the original digit text for PMS 3.3.
+/// Parse one version component, keeping the original digit text for PMS 3.3
 fn parse_component(input: &mut &str) -> ModalResult<(SmolStr, u64)> {
     digit1
         .try_map(|s: &str| s.parse::<u64>().map(|n| (SmolStr::new(s), n)))

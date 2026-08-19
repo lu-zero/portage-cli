@@ -35,6 +35,7 @@ pub(crate) fn has_version_suffix(input: &str) -> bool {
 }
 
 /// Parse alphanumeric + common special characters
+///
 /// Base set: [A-Za-z0-9+_-]
 pub(crate) fn parse_ident_base<'s>(input: &mut &'s str) -> ModalResult<&'s str> {
     take_while(1.., |c: char| {
@@ -44,6 +45,7 @@ pub(crate) fn parse_ident_base<'s>(input: &mut &'s str) -> ModalResult<&'s str> 
 }
 
 /// Parse alphanumeric + common special characters + dot
+///
 /// Set: [A-Za-z0-9+_.-]
 pub(crate) fn parse_ident_with_dot<'s>(input: &mut &'s str) -> ModalResult<&'s str> {
     take_while(1.., |c: char| {
@@ -53,6 +55,7 @@ pub(crate) fn parse_ident_with_dot<'s>(input: &mut &'s str) -> ModalResult<&'s s
 }
 
 /// Parse alphanumeric + common special characters + @
+///
 /// Set: [A-Za-z0-9+_@-]
 pub(crate) fn parse_ident_with_at<'s>(input: &mut &'s str) -> ModalResult<&'s str> {
     take_while(1.., |c: char| {
@@ -62,6 +65,7 @@ pub(crate) fn parse_ident_with_at<'s>(input: &mut &'s str) -> ModalResult<&'s st
 }
 
 /// Parse alphanumeric + common special characters + . and *
+///
 /// Set: [A-Za-z0-9+_.*-]
 pub(crate) fn parse_ident_with_dot_star<'s>(input: &mut &'s str) -> ModalResult<&'s str> {
     take_while(1.., |c: char| {
