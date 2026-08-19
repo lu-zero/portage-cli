@@ -68,6 +68,7 @@ fn set_header_field(text: &str, key: &str, value: &str) -> String {
 
 /// `${EROOT}/var/cache/edb/binhost/<host>/<url-path>/Packages` — real
 /// portage's own local-cache layout (`CACHE_PATH` = `var/cache/edb`).
+///
 /// `None` if `sync_uri` isn't a parseable absolute URL (no cache, so the
 /// caller always fetches fresh — safe fallback, never a hard error over a
 /// cache-path oddity).
@@ -104,8 +105,10 @@ fn write_cache(path: &Utf8Path, text: &str) {
 }
 
 /// Fetch a binhost's `Packages` index, using the local cache to skip the
-/// network when possible. Returns the index text (fresh, cached, or
-/// revalidated) and a short reason for the caller to report.
+/// network when possible.
+///
+/// Returns the index text (fresh, cached, or revalidated) and a short
+/// reason for the caller to report.
 ///
 /// `sync_uri` is the binhost's base URI (`binrepos.conf`'s `sync-uri` /
 /// `PORTAGE_BINHOST` entry); `frozen` is that repo's `frozen =` setting

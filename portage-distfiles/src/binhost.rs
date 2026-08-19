@@ -135,10 +135,12 @@ async fn fetch_plain(
     })
 }
 
-/// Download a binary package from `url` into `dest` (a file path). Streams to
-/// avoid buffering whole packages in memory. `dest`'s parent is created if
-/// missing. Portage downloads to `<dest>.partial` then renames; we do the same
-/// so a half-fetched file never appears complete to a concurrent `-k` lookup.
+/// Download a binary package from `url` into `dest` (a file path).
+///
+/// Streams to avoid buffering whole packages in memory. `dest`'s parent is
+/// created if missing. Portage downloads to `<dest>.partial` then renames;
+/// we do the same so a half-fetched file never appears complete to a
+/// concurrent `-k` lookup.
 pub async fn fetch_binpkg(url: &str, dest: &Path) -> Result<()> {
     if let Some(parent) = dest.parent()
         && !parent.as_os_str().is_empty()

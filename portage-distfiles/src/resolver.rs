@@ -62,11 +62,13 @@ pub struct RestrictGate {
 }
 
 impl RestrictGate {
-    /// Build the gate from a parsed `RESTRICT` expression. `RESTRICT=fetch`
-    /// implies mirror-restriction too (real portage: `restrict_mirror =
-    /// restrict_fetch or "mirror" in restrict`) — a `fetch+`-tagged URI is
-    /// exempted from the fetch check only, so under plain `RESTRICT=fetch`
-    /// it's still excluded from mirroring; only `mirror+` survives either.
+    /// Build the gate from a parsed `RESTRICT` expression.
+    ///
+    /// `RESTRICT=fetch` implies mirror-restriction too (real portage:
+    /// `restrict_mirror = restrict_fetch or "mirror" in restrict`) — a
+    /// `fetch+`-tagged URI is exempted from the fetch check only, so under
+    /// plain `RESTRICT=fetch` it's still excluded from mirroring; only
+    /// `mirror+` survives either.
     pub fn from_restrict(entries: &[RestrictExpr]) -> Self {
         let fetch = RestrictExpr::has_unconditional(entries, "fetch");
         let mirror = fetch || RestrictExpr::has_unconditional(entries, "mirror");
@@ -78,14 +80,17 @@ impl RestrictGate {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResolveOpts {
     /// Append GENTOO_MIRRORS *after* the ebuild's own URIs, as a last-resort
-    /// fallback. `false` is the right default for a mirror builder: it goes
-    /// to upstream, not to a peer mirror — real emirrordist never falls back
+    /// fallback.
+    ///
+    /// `false` is the right default for a mirror builder: it goes to
+    /// upstream, not to a peer mirror — real emirrordist never falls back
     /// to GENTOO_MIRRORS at all. Named (and ordered) to match the
     /// `--gentoo-mirrors-fallback` CLI flag, unlike `resolve`/`resolve_all`'s
     /// unconditional mirrors-*first* behavior.
     pub gentoo_mirrors_fallback: bool,
-    /// Package-level RESTRICT gate. Default (`RestrictGate::default()`) is
-    /// unrestricted.
+    /// Package-level RESTRICT gate.
+    ///
+    /// Default (`RestrictGate::default()`) is unrestricted.
     pub restrict: RestrictGate,
 }
 
@@ -123,9 +128,6 @@ impl DistfileResolver {
     /// Resolve `SRC_URI` entries into distfiles given the active USE flags.
     ///
     /// USE-conditional groups are evaluated; `mirror://` URIs are expanded.
-    /// Resolve `SRC_URI` entries into distfiles given the active USE flags.
-    ///
-    /// USE-conditional groups are evaluated; `mirror://` URIs are expanded.
     /// GENTOO_MIRRORS are appended as a fallback for every distfile that is
     /// not `mirror`-restricted.
     pub fn resolve(&self, entries: &[SrcUriEntry], use_flags: &HashSet<String>) -> Vec<Distfile> {
@@ -155,6 +157,7 @@ impl DistfileResolver {
     ///
     /// Gating, per real portage: a `fetch+`/`mirror+` prefix is an
     /// *exemption* from `opts.restrict`, not a restriction.
+    ///
     /// `opts.restrict.mirror` must already include the `RESTRICT=fetch`
     /// implication (`RestrictGate::from_restrict` does this) — under
     /// plain `RESTRICT=fetch`, only `mirror+` survives (`fetch+`
@@ -482,9 +485,9 @@ mod tests {
         );
     }
 
-    /// Real emirrordist expands `mirror://gentoo/` via thirdpartymirrors
-    /// only — never GENTOO_MIRRORS (that would mirror a peer mirror). The
-    /// profiles map's `gentoo` entry already ends in `/distfiles`.
+    // Real emirrordist expands `mirror://gentoo/` via thirdpartymirrors
+    // only — never GENTOO_MIRRORS (that would mirror a peer mirror). The
+    // profiles map's `gentoo` entry already ends in `/distfiles`.
     #[test]
     fn mirror_gentoo_uses_thirdpartymirrors_not_gentoo_mirrors() {
         let r = DistfileResolver::new(
@@ -517,9 +520,9 @@ mod tests {
         );
     }
 
-    /// With no thirdpartymirrors `gentoo` key and empty GENTOO_MIRRORS
-    /// (mirrordist's default), `mirror://gentoo/` yields no URLs and the
-    /// file is dropped from the plan — same as an unknown mirror name.
+    // With no thirdpartymirrors `gentoo` key and empty GENTOO_MIRRORS
+    // (mirrordist's default), `mirror://gentoo/` yields no URLs and the
+    // file is dropped from the plan — same as an unknown mirror name.
     #[test]
     fn mirror_gentoo_with_no_thirdparty_and_empty_gentoo_mirrors_is_dropped() {
         let r = DistfileResolver::new(vec![], vec![]);
@@ -637,10 +640,10 @@ mod tests {
         assert_eq!(dfs[0].urls, expected);
     }
 
-    /// The real-portage regression case: `RESTRICT=fetch` + a `fetch+`-tagged
-    /// URI is still excluded — `fetch+` only exempts the fetch check, and
-    /// `RESTRICT=fetch` implies the mirror check too, which nothing exempts
-    /// it from.
+    // The real-portage regression case: `RESTRICT=fetch` + a `fetch+`-tagged
+    // URI is still excluded — `fetch+` only exempts the fetch check, and
+    // `RESTRICT=fetch` implies the mirror check too, which nothing exempts
+    // it from.
     #[test]
     fn resolve_uri_map_restrict_fetch_with_fetch_plus_override_is_still_excluded() {
         let r = resolver(&[]);
@@ -660,7 +663,7 @@ mod tests {
         assert!(dfs.is_empty());
     }
 
-    /// Only a `mirror+`-tagged URI survives `RESTRICT=fetch`.
+    // Only a `mirror+`-tagged URI survives `RESTRICT=fetch`.
     #[test]
     fn resolve_uri_map_restrict_fetch_with_mirror_plus_override_is_included() {
         let r = resolver(&[]);

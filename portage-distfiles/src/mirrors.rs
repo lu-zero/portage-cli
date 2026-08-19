@@ -53,9 +53,10 @@ pub struct Mirror {
 }
 
 impl Mirror {
-    /// Pick the best endpoint matching `protocols`, in priority order. Returns
-    /// the first endpoint of any protocol if none of the preferred ones match.
-    /// Mirrors `mirrorselect`'s `Mirror.preferred_endpoint`.
+    /// Pick the best endpoint matching `protocols`, in priority order.
+    ///
+    /// Returns the first endpoint of any protocol if none of the preferred
+    /// ones match. Mirrors `mirrorselect`'s `Mirror.preferred_endpoint`.
     pub fn preferred_endpoint(&self, protocols: &[&str]) -> Option<&Endpoint> {
         let first = self.endpoints.first()?;
         for proto in protocols {
@@ -153,8 +154,10 @@ impl MirrorList {
     }
 }
 
-/// Fetch the distfiles mirror list XML. Network errors are surfaced to the
-/// caller; [`MirrorList::fetch`] turns them into the default fallback.
+/// Fetch the distfiles mirror list XML.
+///
+/// Network errors are surfaced to the caller; [`MirrorList::fetch`] turns
+/// them into the default fallback.
 async fn try_fetch_mirrors_xml() -> Result<String> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("em/", env!("CARGO_PKG_VERSION")))
@@ -201,6 +204,7 @@ async fn try_fetch_mirrors_xml() -> Result<String> {
 ///   </mirrorgroup>
 /// </mirrors>
 /// ```
+///
 /// XML comments (mirrors marked inactive in the source) are skipped
 /// automatically by `roxmltree`.
 fn parse_mirrors_xml(xml: &str) -> Result<MirrorList> {

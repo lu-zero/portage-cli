@@ -7,11 +7,12 @@ use tokio::io::AsyncWriteExt;
 use crate::error::{Error, Result};
 use crate::resolver::Distfile;
 
-/// `filename -> DIST` [`ManifestEntry`], for O(1) lookup during a fetch
-/// batch. The old approach — a linear `manifest.dist_entries().find()` scan
-/// per file — is fine for one package's ~5-entry Manifest (the only case
-/// before a repo-wide mirror tool existed); a combined Manifest spanning a
-/// whole repo is tens of thousands of entries, where the linear scan becomes
+/// `filename -> DIST` [`ManifestEntry`], for O(1) lookup during a fetch batch.
+///
+/// The old approach — a linear `manifest.dist_entries().find()` scan per
+/// file — is fine for one package's ~5-entry Manifest (the only case before
+/// a repo-wide mirror tool existed); a combined Manifest spanning a whole
+/// repo is tens of thousands of entries, where the linear scan becomes
 /// O(files²), run from inside concurrently-scheduled async tasks.
 #[derive(Debug, Clone, Default)]
 pub struct DistDigests(HashMap<String, ManifestEntry>);
@@ -21,9 +22,10 @@ impl DistDigests {
         Self(HashMap::new())
     }
 
-    /// Fold `manifest`'s `DIST` entries in. First entry per filename wins —
-    /// matches first-owner-wins ownership when folding multiple packages'
-    /// manifests into one combined index.
+    /// Fold `manifest`'s `DIST` entries in.
+    ///
+    /// First entry per filename wins — matches first-owner-wins ownership
+    /// when folding multiple packages' manifests into one combined index.
     pub fn extend_from_manifest(&mut self, manifest: &Manifest) {
         for entry in manifest.dist_entries() {
             if let ManifestEntry::Dist { filename, .. } = entry {
@@ -90,22 +92,26 @@ pub struct FetchConfig {
     /// Maximum number of distfiles fetched concurrently.  Defaults to 4.
     pub max_concurrent: usize,
     /// Accept an already-present file on **size alone**, skipping the full
-    /// hash. Default `false` — every present file is fully re-verified.
-    /// Set `true` for a repo-wide mirror tool: re-hashing a multi-hundred-GB
+    /// hash.
+    ///
+    /// Default `false` — every present file is fully re-verified. Set
+    /// `true` for a repo-wide mirror tool: re-hashing a multi-hundred-GB
     /// mirror on every run would turn a "nothing to do" pass into a
     /// full-disk scan. Matches real `emirrordist`'s own default.
     pub trust_existing_size: bool,
-    /// Download to a temporary path in the distdir, verify, then rename over
-    /// the final path — instead of streaming straight to the final path.
+    /// Download to a temporary path in the distdir, verify, then rename
+    /// over the final path — instead of streaming straight to the final path.
+    ///
     /// Default `false` (fine for a private build-box DISTDIR). Set `true`
     /// when the distdir is served live: otherwise a client fetching
     /// mid-download sees a partial or briefly-corrupt file.
     ///
     /// **No cross-run resume of an atomic-mode download** — a leftover temp
     /// file from an interrupted attempt is discarded and refetched fresh,
-    /// never appended to. Only affects [`FetchStrategy::Builtin`] — a
-    /// [`FetchStrategy::Command`] template writes directly to `${DISTDIR}`
-    /// and isn't wrapped.
+    /// never appended to.
+    ///
+    /// Only affects [`FetchStrategy::Builtin`] — a [`FetchStrategy::Command`]
+    /// template writes directly to `${DISTDIR}` and isn't wrapped.
     pub atomic_write: bool,
 }
 
@@ -370,10 +376,11 @@ impl Fetcher {
         }
     }
 
-    /// Download to a temp path, verify, then rename over `dest` — never seen
-    /// by anything reading `dest` until it's a complete, verified file. No
-    /// resume: any leftover temp from a previous attempt is discarded and the
-    /// file is always fetched fresh (see [`FetchConfig::atomic_write`]).
+    /// Download to a temp path, verify, then rename over `dest` — never
+    /// seen by anything reading `dest` until it's a complete, verified file.
+    ///
+    /// No resume: any leftover temp from a previous attempt is discarded
+    /// and the file is always fetched fresh (see [`FetchConfig::atomic_write`]).
     async fn fetch_builtin_atomic(
         &self,
         url: &str,
@@ -397,10 +404,12 @@ impl Fetcher {
     }
 
     /// Temp path for an atomic-write in-progress download of `filename`, in
-    /// the writable distdir. Prefixed with `.` and suffixed distinctively so
-    /// a caller scanning the distdir (e.g. an orphan/deletion sweep) can
-    /// recognize and skip it — never a legitimate distfile, never resumed
-    /// across calls or runs. See [`is_atomic_temp_name`].
+    /// the writable distdir.
+    ///
+    /// Prefixed with `.` and suffixed distinctively so a caller scanning
+    /// the distdir (e.g. an orphan/deletion sweep) can recognize and skip
+    /// it — never a legitimate distfile, never resumed across calls or
+    /// runs. See [`is_atomic_temp_name`].
     fn atomic_temp_path(&self, filename: &str) -> Utf8PathBuf {
         self.distdir.join(format!(".{filename}.__em_download__"))
     }
@@ -434,6 +443,7 @@ impl Fetcher {
     }
 
     /// Resume a partial via `RESUMECOMMAND` (if set) or an HTTP `Range` request.
+    ///
     /// Returns `Ok(true)` only when the resumed file verifies against the
     /// manifest; `Ok(false)` means "couldn't resume — download fresh instead".
     async fn resume_partial(
@@ -480,9 +490,11 @@ impl Fetcher {
         Ok(verify_ok(manifest_entry, dest))
     }
 
-    /// Download the entire file fresh (no `Range`), rejecting obvious non-file
-    /// bodies and verifying against the manifest. A body that fails verification
-    /// is removed so it can't masquerade as a resumable partial next time.
+    /// Download the entire file fresh (no `Range`), rejecting obvious
+    /// non-file bodies and verifying against the manifest.
+    ///
+    /// A body that fails verification is removed so it can't masquerade as
+    /// a resumable partial next time.
     async fn download_full(
         &self,
         url: &str,
@@ -561,10 +573,11 @@ impl Fetcher {
 }
 
 /// The exact filename shape [`Fetcher`]'s atomic-write mode uses for an
-/// in-progress download (`.{filename}.__em_download__`). A directory scan
-/// that walks a distdir (an orphan/deletion sweep) must recognize and skip
-/// these — never a legitimate distfile, and always safe to remove as a
-/// stale leftover from an interrupted run.
+/// in-progress download (`.{filename}.__em_download__`).
+///
+/// A directory scan that walks a distdir (an orphan/deletion sweep) must
+/// recognize and skip these — never a legitimate distfile, and always safe
+/// to remove as a stale leftover from an interrupted run.
 pub fn is_atomic_temp_name(name: &str) -> bool {
     name.starts_with('.') && name.ends_with(".__em_download__")
 }
@@ -590,9 +603,10 @@ fn dist_size(entry: &ManifestEntry) -> Option<u64> {
 
 /// A leftover file is a resumable partial only when its size is a *strict*
 /// prefix of the target: present, and smaller than the known manifest size.
-/// Without a known size we never resume (a blind `Range` onto an unknown body is
-/// how a corrupt cache wedges every retry); a complete-but-wrong file (`>=`
-/// expected) is refetched fresh, not appended to.
+///
+/// Without a known size we never resume (a blind `Range` onto an unknown
+/// body is how a corrupt cache wedges every retry); a complete-but-wrong
+/// file (`>=` expected) is refetched fresh, not appended to.
 fn is_resumable(expected_size: Option<u64>, existing_size: u64) -> bool {
     matches!(expected_size, Some(exp) if existing_size > 0 && existing_size < exp)
 }
@@ -664,8 +678,10 @@ async fn stream_to_file(
 
 /// Expose a distfile found in a read-only distdir under the writable `dest`
 /// (in DISTDIR), so the build's unpack/eapply — which only consult DISTDIR —
-/// can open it. Best-effort, mirroring portage: prefer a symlink to the RO
-/// copy, fall back to a hard link, then a copy; replaces any stale entry.
+/// can open it.
+///
+/// Best-effort, mirroring portage: prefer a symlink to the RO copy, fall
+/// back to a hard link, then a copy; replaces any stale entry.
 fn link_into_distdir(src: &Utf8Path, dest: &Utf8Path) {
     if let Some(parent) = dest.parent() {
         let _ = std::fs::create_dir_all(parent.as_std_path());
