@@ -1,4 +1,4 @@
-//! String interning for Gentoo-related crates.
+//! String interning for Gentoo-related crates
 //!
 //! Provides a flexible interning system for reducing memory usage when
 //! processing large numbers of repeated strings.
@@ -44,23 +44,23 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
-/// Trait for interning strings into compact keys.
+/// Trait for interning strings into compact keys
 ///
 /// Implementations map strings to keys and resolve keys back to strings.
 /// All methods are static, allowing the interner type to serve as a
 /// configuration parameter without carrying runtime state.
 pub trait Interner: Clone + Send + Sync + 'static {
-    /// Key type returned by [`get_or_intern`](Self::get_or_intern).
+    /// Key type returned by [`get_or_intern`](Self::get_or_intern)
     type Key: Clone + Eq + Ord + std::hash::Hash + Send + Sync + 'static + Debug;
 
-    /// Intern `s`, returning a stable key.
+    /// Intern `s`, returning a stable key
     fn get_or_intern(s: &str) -> Self::Key;
 
-    /// Resolve `key` back to its original string.
+    /// Resolve `key` back to its original string
     fn resolve(key: &Self::Key) -> &str;
 }
 
-/// Non-interning fallback that allocates each string as a `Box<str>`.
+/// Non-interning fallback that allocates each string as a `Box<str>`
 ///
 /// No deduplication occurs. The [`Key`](Interner::Key) type is `Box<str>`,
 /// making `Interned<NoInterner>` `Clone` but not `Copy`. Unlike
@@ -81,7 +81,7 @@ impl Interner for NoInterner {
     }
 }
 
-/// Global process-wide interner.
+/// Global process-wide interner
 ///
 /// Zero-sized type; all state lives in a process-wide static. Keys are
 /// stable `u32` values, making `Interned<GlobalInterner>` `Copy`.
@@ -221,7 +221,7 @@ cfg_if::cfg_if! {
 
 // ── DefaultInterner selection ─────────────────────────────────────────────────
 
-/// Default interner type based on feature flags.
+/// Default interner type based on feature flags
 ///
 /// - `interner` (default) or `lasso`: [`GlobalInterner`] — process-global, `Copy` keys
 /// - neither: [`NoInterner`] — no deduplication, `Clone` only
@@ -230,7 +230,7 @@ pub type DefaultInterner = GlobalInterner;
 #[cfg(not(any(feature = "interner", feature = "lasso", feature = "symbol-table")))]
 pub type DefaultInterner = NoInterner;
 
-/// An interned string key parameterized by [`Interner`] type `I`.
+/// An interned string key parameterized by [`Interner`] type `I`
 ///
 /// With [`GlobalInterner`], this is 4 bytes and `Copy`.
 /// With [`NoInterner`], this is a pointer and `Clone` only.
@@ -278,12 +278,12 @@ impl<I: Interner> std::fmt::Debug for Interned<I> {
 }
 
 impl<I: Interner> Interned<I> {
-    /// Intern a string, returning a new `Interned<I>`.
+    /// Intern a string, returning a new `Interned<I>`
     pub fn intern(s: &str) -> Self {
         Self::from_key(I::get_or_intern(s))
     }
 
-    /// Wrap an existing interner key without re-interning.
+    /// Wrap an existing interner key without re-interning
     pub fn from_key(key: <I as Interner>::Key) -> Self {
         Self {
             key,
@@ -291,12 +291,12 @@ impl<I: Interner> Interned<I> {
         }
     }
 
-    /// Resolve this interned key back to its original string.
+    /// Resolve this interned key back to its original string
     pub fn resolve(&self) -> &str {
         I::resolve(&self.key)
     }
 
-    /// Get the interned string as a `&str`.
+    /// Get the interned string as a `&str`
     pub fn as_str(&self) -> &str {
         self.resolve()
     }
