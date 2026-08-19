@@ -14,7 +14,7 @@ pub mod set;
 pub mod sets;
 pub mod use_expand;
 pub mod usedb;
-pub(crate) mod util;
+pub mod util;
 
 pub use category::{Categories, CategoriesIter, Category, Packages, PackagesIter};
 pub use ebuild::Ebuild;

@@ -296,7 +296,7 @@ impl UseLayer {
 
     /// Record the `USE_EXPAND` groups this layer explicitly assigned, by
     /// variable name as declared (`L10N`, `VIDEO_CARDS`, …). See the
-    /// [`Self::group_clears`] field doc.
+    /// `group_clears` field doc.
     pub fn with_group_clears(mut self, vars: impl IntoIterator<Item = String>) -> Self {
         self.group_clears = vars
             .into_iter()

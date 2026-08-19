@@ -92,6 +92,7 @@ pub use repo::util::read_lines as read_config_lines;
 /// Expand a Portage config path that may be a file or a directory of fragments.
 pub use repo::util::{
     ConfigFilesMode, config_basename_included, iter_config_files, list_config_files,
+    resolve_repo_name,
 };
 pub use repo::{
     CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository,
