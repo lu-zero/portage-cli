@@ -1025,14 +1025,14 @@ impl PortageDependencyProvider {
         self.rebuild_triggers.contains(&vs_id)
     }
 
-    /// resolvo condition that holds when `flag` is enabled, if the flag has a
-    /// solver-decided virtual.
+    /// The resolvo condition that holds when `flag` is enabled, if the flag
+    /// has a solver-decided virtual.
     pub fn flag_condition(&self, flag: Interned<DefaultInterner>) -> Option<ConditionId> {
         self.flag_virtuals.get(&flag).map(|fv| fv.on_condition)
     }
 
-    /// resolvo condition that holds when `flag` is disabled, if the flag has a
-    /// solver-decided virtual.
+    /// The resolvo condition that holds when `flag` is disabled, if the flag
+    /// has a solver-decided virtual.
     pub fn flag_off_condition(&self, flag: Interned<DefaultInterner>) -> Option<ConditionId> {
         self.flag_virtuals.get(&flag).map(|fv| fv.off_condition)
     }

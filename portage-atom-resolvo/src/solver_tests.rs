@@ -9,8 +9,8 @@ use crate::provider::PortageDependencyProvider;
 use crate::repository::InMemoryRepository;
 use portage_atom::DepEntry;
 
-/// Helper: build a [`PackageMetadata`] from a CPV string.
-/// Deps are placed in `depend` (build-time) for simplicity.
+// Helper: build a [`PackageMetadata`] from a CPV string.
+// Deps are placed in `depend` (build-time) for simplicity.
 fn pkg(cpv: &str, slot: &str, deps: Vec<DepEntry>) -> PackageMetadata {
     PackageMetadata {
         cpv: Cpv::parse(cpv).unwrap(),
@@ -26,7 +26,7 @@ fn pkg(cpv: &str, slot: &str, deps: Vec<DepEntry>) -> PackageMetadata {
     }
 }
 
-/// Helper: build a [`PackageMetadata`] with a sub-slot.
+// Helper: build a [`PackageMetadata`] with a sub-slot.
 fn pkg_subslot(cpv: &str, slot: &str, subslot: &str, deps: Vec<DepEntry>) -> PackageMetadata {
     PackageMetadata {
         cpv: Cpv::parse(cpv).unwrap(),
