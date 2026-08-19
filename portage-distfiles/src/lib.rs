@@ -1,4 +1,4 @@
-//! Distfile fetching and verification for Gentoo Portage.
+//! Distfile fetching and verification for Gentoo Portage
 //!
 //! Resolves `SRC_URI` entries to mirror URLs, downloads them honoring
 //! `DISTDIR`/`PORTAGE_RO_DISTDIRS`, and verifies them against Manifest

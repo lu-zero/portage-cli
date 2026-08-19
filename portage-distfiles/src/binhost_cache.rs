@@ -18,12 +18,12 @@ use camino::{Utf8Path, Utf8PathBuf};
 use crate::binhost::{IndexFetch, fetch_index};
 use crate::error::{Error, Result};
 
-/// The subset of a `Packages` index header this cache cares about.
+/// The subset of a `Packages` index header this cache cares about
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct PackagesHeader {
-    /// The server's own `TIMESTAMP:` field — when *it* generated this index.
+    /// The server's own `TIMESTAMP:` field — when *it* generated this index
     timestamp: Option<i64>,
-    /// When *we* last downloaded or revalidated this cached copy.
+    /// When *we* last downloaded or revalidated this cached copy
     download_timestamp: Option<i64>,
     /// Seconds a downloaded copy is trusted without even asking the server
     /// (a server-configured `PORTAGE_BINHOST_TTL`, echoed in its own index).

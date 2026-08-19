@@ -1,4 +1,4 @@
-/// Error type for distfile fetch and verification operations.
+/// Error type for distfile fetch and verification operations
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("HTTP {status} fetching {url}")]

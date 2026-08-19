@@ -7,7 +7,7 @@ use tokio::io::AsyncWriteExt;
 use crate::error::{Error, Result};
 use crate::resolver::Distfile;
 
-/// `filename -> DIST` [`ManifestEntry`], for O(1) lookup during a fetch batch.
+/// `filename -> DIST` [`ManifestEntry`], for O(1) lookup during a fetch batch
 ///
 /// The old approach — a linear `manifest.dist_entries().find()` scan per
 /// file — is fine for one package's ~5-entry Manifest (the only case before
@@ -22,7 +22,7 @@ impl DistDigests {
         Self(HashMap::new())
     }
 
-    /// Fold `manifest`'s `DIST` entries in.
+    /// Fold `manifest`'s `DIST` entries in
     ///
     /// First entry per filename wins — matches first-owner-wins ownership
     /// when folding multiple packages' manifests into one combined index.
@@ -61,17 +61,17 @@ impl From<&Manifest> for DistDigests {
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Strategy for downloading a distfile.
+/// Strategy for downloading a distfile
 ///
 /// `Builtin` uses the embedded reqwest client.  `Command` shells out to an
 /// external program using the same template variables as Portage's
 /// `FETCHCOMMAND` / `RESUMECOMMAND` make.conf settings.
 #[derive(Debug, Clone, Default)]
 pub enum FetchStrategy {
-    /// Built-in reqwest HTTP client (default).
+    /// Built-in reqwest HTTP client (default)
     #[default]
     Builtin,
-    /// External command template.
+    /// External command template
     ///
     /// Template variables (same as Portage):
     /// - `${URI}` — the full download URL
@@ -80,16 +80,16 @@ pub enum FetchStrategy {
     Command(String),
 }
 
-/// Fetch and resume configuration.
+/// Fetch and resume configuration
 #[derive(Debug, Clone)]
 pub struct FetchConfig {
-    /// Primary fetch strategy.  Defaults to `Builtin`.
+    /// Primary fetch strategy.  Defaults to `Builtin`
     pub strategy: FetchStrategy,
-    /// Fallback command template used when the primary strategy fails.
+    /// Fallback command template used when the primary strategy fails
     pub fallback_command: Option<String>,
-    /// Resume command template (`RESUMECOMMAND`).
+    /// Resume command template (`RESUMECOMMAND`)
     pub resume_command: Option<String>,
-    /// Maximum number of distfiles fetched concurrently.  Defaults to 4.
+    /// Maximum number of distfiles fetched concurrently.  Defaults to 4
     pub max_concurrent: usize,
     /// Accept an already-present file on **size alone**, skipping the full
     /// hash.
@@ -129,7 +129,7 @@ impl Default for FetchConfig {
 }
 
 impl FetchConfig {
-    /// Build from `make.conf`-style environment/config values.
+    /// Build from `make.conf`-style environment/config values
     pub fn from_make_conf(fetch_command: Option<String>, resume_command: Option<String>) -> Self {
         match fetch_command {
             Some(cmd) => Self {
@@ -150,21 +150,21 @@ impl FetchConfig {
 // Fetcher
 // ---------------------------------------------------------------------------
 
-/// Outcome of a single fetch operation.
+/// Outcome of a single fetch operation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FetchStatus {
-    /// File was already present and passed manifest verification.
+    /// File was already present and passed manifest verification
     AlreadyPresent,
-    /// File was downloaded and verified successfully.
+    /// File was downloaded and verified successfully
     Downloaded,
-    /// RESTRICT=fetch — the distfile must not be auto-fetched.
+    /// RESTRICT=fetch — the distfile must not be auto-fetched
     ///
     /// The caller should run the ebuild's `pkg_nofetch` phase, which prints
     /// manual download instructions.
     FetchRestricted,
 }
 
-/// Downloads and verifies distfiles.
+/// Downloads and verifies distfiles
 #[derive(Clone)]
 pub struct Fetcher {
     client: reqwest::Client,
@@ -193,13 +193,13 @@ impl Fetcher {
         }
     }
 
-    /// Add read-only locations consulted for already-present distfiles.
+    /// Add read-only locations consulted for already-present distfiles
     pub fn with_ro_distdirs(mut self, dirs: Vec<Utf8PathBuf>) -> Self {
         self.ro_distdirs = dirs;
         self
     }
 
-    /// Fetch a single distfile, verifying it against `manifest`.
+    /// Fetch a single distfile, verifying it against `manifest`
     ///
     /// If the file already exists and passes verification it is not
     /// re-downloaded.  If a partial file is present a resume is attempted.
@@ -442,7 +442,7 @@ impl Fetcher {
         self.download_full(url, dest, manifest_entry).await
     }
 
-    /// Resume a partial via `RESUMECOMMAND` (if set) or an HTTP `Range` request.
+    /// Resume a partial via `RESUMECOMMAND` (if set) or an HTTP `Range` request
     ///
     /// Returns `Ok(true)` only when the resumed file verifies against the
     /// manifest; `Ok(false)` means "couldn't resume — download fresh instead".
@@ -538,7 +538,7 @@ impl Fetcher {
         verify_or_discard(manifest_entry, dest)
     }
 
-    /// Execute a FETCHCOMMAND/RESUMECOMMAND template.
+    /// Execute a FETCHCOMMAND/RESUMECOMMAND template
     ///
     /// Template substitution: `${URI}` → url, `${FILE}` → filename,
     /// `${DISTDIR}` → distdir path.  The expanded command is run via `sh -c`.
@@ -586,14 +586,14 @@ pub fn is_atomic_temp_name(name: &str) -> bool {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Current on-disk size of `dest`, or 0 when it is absent or unreadable.
+/// Current on-disk size of `dest`, or 0 when it is absent or unreadable
 fn current_size(dest: &Utf8Path) -> u64 {
     std::fs::metadata(dest.as_std_path())
         .map(|m| m.len())
         .unwrap_or(0)
 }
 
-/// The manifest's recorded size for a distfile entry (`None` for non-`Dist`).
+/// The manifest's recorded size for a distfile entry (`None` for non-`Dist`)
 fn dist_size(entry: &ManifestEntry) -> Option<u64> {
     match entry {
         ManifestEntry::Dist { size, .. } => Some(*size),
@@ -650,7 +650,7 @@ fn verify_or_discard(manifest_entry: Option<&ManifestEntry>, dest: &Utf8Path) ->
     Ok(())
 }
 
-/// Stream a response body into `file` to completion, then flush.
+/// Stream a response body into `file` to completion, then flush
 async fn stream_to_file(
     url: &str,
     response: reqwest::Response,

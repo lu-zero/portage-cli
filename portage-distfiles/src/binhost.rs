@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 
 const PKG_VERSION: &str = concat!("em/", env!("CARGO_PKG_VERSION"));
 
-/// Outcome of a conditional [`fetch_index`] call.
+/// Outcome of a conditional [`fetch_index`] call
 pub enum IndexFetch {
     /// The server confirmed the caller's `if_modified_since` value is still
     /// current (HTTP 304) — the caller's own cached copy remains valid.
@@ -135,7 +135,7 @@ async fn fetch_plain(
     })
 }
 
-/// Download a binary package from `url` into `dest` (a file path).
+/// Download a binary package from `url` into `dest` (a file path)
 ///
 /// Streams to avoid buffering whole packages in memory. `dest`'s parent is
 /// created if missing. Portage downloads to `<dest>.partial` then renames;
@@ -203,7 +203,7 @@ pub async fn fetch_binpkg(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Gzip-decode `bytes` to a string. Portage's `Packages.gz` is always text.
+/// Gzip-decode `bytes` to a string. Portage's `Packages.gz` is always text
 fn gunzip(bytes: &[u8]) -> std::result::Result<String, std::io::Error> {
     let mut decoder = flate2::read::GzDecoder::new(bytes);
     let mut out = String::new();

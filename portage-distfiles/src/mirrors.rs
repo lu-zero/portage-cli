@@ -1,4 +1,4 @@
-//! Gentoo distfile mirror list and selection.
+//! Gentoo distfile mirror list and selection
 //!
 //! Fetches and parses the official machine-readable mirror list at
 //! <https://api.gentoo.org/mirrors/distfiles.xml> — the same source
@@ -14,46 +14,46 @@ use std::time::Duration;
 
 use crate::{Error, Result};
 
-/// URL of Gentoo's structured mirror list (machine-readable XML).
+/// URL of Gentoo's structured mirror list (machine-readable XML)
 const DISTFILES_MIRRORS_XML: &str = "https://api.gentoo.org/mirrors/distfiles.xml";
 
-/// A single protocol endpoint of a [`Mirror`].
+/// A single protocol endpoint of a [`Mirror`]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
-    /// The endpoint URI (e.g. `https://gentoo.osuosl.org/`).
+    /// The endpoint URI (e.g. `https://gentoo.osuosl.org/`)
     pub uri: String,
-    /// The protocol: `https`, `http`, `ftp`, or `rsync`.
+    /// The protocol: `https`, `http`, `ftp`, or `rsync`
     pub protocol: String,
-    /// Whether the endpoint is reachable over IPv4.
+    /// Whether the endpoint is reachable over IPv4
     pub ipv4: bool,
-    /// Whether the endpoint is reachable over IPv6.
+    /// Whether the endpoint is reachable over IPv6
     pub ipv6: bool,
 }
 
 impl Endpoint {
-    /// Whether this endpoint is HTTP or HTTPS — the protocols reqwest can fetch.
+    /// Whether this endpoint is HTTP or HTTPS — the protocols reqwest can fetch
     pub fn is_http(&self) -> bool {
         matches!(self.protocol.as_str(), "http" | "https")
     }
 }
 
-/// A Gentoo distfile mirror: one site with one or more [`Endpoint`]s.
+/// A Gentoo distfile mirror: one site with one or more [`Endpoint`]s
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mirror {
-    /// Human-readable site name (e.g. "OSU Open Source Lab").
+    /// Human-readable site name (e.g. "OSU Open Source Lab")
     pub name: String,
-    /// Two-letter ISO country code (e.g. "US", "DE").
+    /// Two-letter ISO country code (e.g. "US", "DE")
     pub country: String,
-    /// The country's full name (e.g. "United States (USA)").
+    /// The country's full name (e.g. "United States (USA)")
     pub country_name: String,
-    /// Continent or region (e.g. "North America", "Europe").
+    /// Continent or region (e.g. "North America", "Europe")
     pub region: String,
-    /// All protocol endpoints advertised for this site.
+    /// All protocol endpoints advertised for this site
     pub endpoints: Vec<Endpoint>,
 }
 
 impl Mirror {
-    /// Pick the best endpoint matching `protocols`, in priority order.
+    /// Pick the best endpoint matching `protocols`, in priority order
     ///
     /// Returns the first endpoint of any protocol if none of the preferred
     /// ones match. Mirrors `mirrorselect`'s `Mirror.preferred_endpoint`.
@@ -67,31 +67,31 @@ impl Mirror {
         Some(first)
     }
 
-    /// The best HTTP/HTTPS endpoint (HTTPS preferred), if the site has one.
+    /// The best HTTP/HTTPS endpoint (HTTPS preferred), if the site has one
     pub fn http_endpoint(&self) -> Option<&Endpoint> {
         self.preferred_endpoint(&["https", "http"])
             .filter(|e| e.is_http())
     }
 }
 
-/// A collection of Gentoo distfile mirrors.
+/// A collection of Gentoo distfile mirrors
 #[derive(Debug, Clone, Default)]
 pub struct MirrorList {
     mirrors: Vec<Mirror>,
 }
 
 impl MirrorList {
-    /// Create an empty [`MirrorList`].
+    /// Create an empty [`MirrorList`]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Create a [`MirrorList`] from an owned vector of mirrors.
+    /// Create a [`MirrorList`] from an owned vector of mirrors
     pub fn from_vec(mirrors: Vec<Mirror>) -> Self {
         Self { mirrors }
     }
 
-    /// Fetch the official mirror list from Gentoo's XML API and parse it.
+    /// Fetch the official mirror list from Gentoo's XML API and parse it
     ///
     /// Infallible: any network or parse error falls back to
     /// [`default_mirror_list`] (with a warning on stderr), so listing/setting
@@ -114,12 +114,12 @@ impl MirrorList {
         }
     }
 
-    /// All mirrors, in document order.
+    /// All mirrors, in document order
     pub fn all(&self) -> &[Mirror] {
         &self.mirrors
     }
 
-    /// Mirrors whose ISO country code matches `code` (case-insensitive).
+    /// Mirrors whose ISO country code matches `code` (case-insensitive)
     pub fn by_country(&self, code: &str) -> Vec<&Mirror> {
         self.mirrors
             .iter()
@@ -127,7 +127,7 @@ impl MirrorList {
             .collect()
     }
 
-    /// Mirrors whose region matches `region` (case-insensitive).
+    /// Mirrors whose region matches `region` (case-insensitive)
     pub fn by_region(&self, region: &str) -> Vec<&Mirror> {
         self.mirrors
             .iter()
@@ -135,7 +135,7 @@ impl MirrorList {
             .collect()
     }
 
-    /// One URL per mirror that has an HTTP/HTTPS endpoint, HTTPS preferred.
+    /// One URL per mirror that has an HTTP/HTTPS endpoint, HTTPS preferred
     pub fn preferred_urls(&self) -> Vec<String> {
         self.mirrors
             .iter()
@@ -154,7 +154,7 @@ impl MirrorList {
     }
 }
 
-/// Fetch the distfiles mirror list XML.
+/// Fetch the distfiles mirror list XML
 ///
 /// Network errors are surfaced to the caller; [`MirrorList::fetch`] turns
 /// them into the default fallback.
@@ -190,7 +190,7 @@ async fn try_fetch_mirrors_xml() -> Result<String> {
     })
 }
 
-/// Parse the distfiles mirror list XML into a [`MirrorList`].
+/// Parse the distfiles mirror list XML into a [`MirrorList`]
 ///
 /// The document shape is:
 /// ```xml
@@ -253,7 +253,7 @@ fn parse_mirrors_xml(xml: &str) -> Result<MirrorList> {
     Ok(MirrorList::from_vec(mirrors))
 }
 
-/// A small built-in mirror list used when the network fetch fails.
+/// A small built-in mirror list used when the network fetch fails
 ///
 /// Deliberately short — just enough to keep distfile fetching working offline.
 pub fn default_mirror_list() -> MirrorList {

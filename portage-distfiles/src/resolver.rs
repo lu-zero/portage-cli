@@ -24,12 +24,12 @@ fn gentoo_distfile_urls(mirror: &str, filename: &str) -> Vec<String> {
     ]
 }
 
-/// A fully resolved distfile: local filename + all candidate download URLs.
+/// A fully resolved distfile: local filename + all candidate download URLs
 ///
 /// URLs are in priority order — try each in turn until one succeeds.
 #[derive(Debug, Clone)]
 pub struct Distfile {
-    /// The local filename to store in DISTDIR.
+    /// The local filename to store in DISTDIR
     pub filename: String,
     /// Download URLs in priority order — GENTOO_MIRRORS first (mirrors-before-
     /// upstream, matching portage), then the expanded `mirror://`/upstream URLs.
@@ -62,7 +62,7 @@ pub struct RestrictGate {
 }
 
 impl RestrictGate {
-    /// Build the gate from a parsed `RESTRICT` expression.
+    /// Build the gate from a parsed `RESTRICT` expression
     ///
     /// `RESTRICT=fetch` implies mirror-restriction too (real portage:
     /// `restrict_mirror = restrict_fetch or "mirror" in restrict`) — a
@@ -76,7 +76,7 @@ impl RestrictGate {
     }
 }
 
-/// Options for [`DistfileResolver::resolve_uri_map`].
+/// Options for [`DistfileResolver::resolve_uri_map`]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ResolveOpts {
     /// Append GENTOO_MIRRORS *after* the ebuild's own URIs, as a last-resort
@@ -88,25 +88,25 @@ pub struct ResolveOpts {
     /// `--gentoo-mirrors-fallback` CLI flag, unlike `resolve`/`resolve_all`'s
     /// unconditional mirrors-*first* behavior.
     pub gentoo_mirrors_fallback: bool,
-    /// Package-level RESTRICT gate.
+    /// Package-level RESTRICT gate
     ///
     /// Default (`RestrictGate::default()`) is unrestricted.
     pub restrict: RestrictGate,
 }
 
-/// Resolves `SRC_URI` entries into concrete [`Distfile`]s.
+/// Resolves `SRC_URI` entries into concrete [`Distfile`]s
 ///
 /// Expands `mirror://` URIs using the repository's `thirdpartymirrors` data
 /// and appends GENTOO_MIRRORS as a fallback for every distfile.
 pub struct DistfileResolver {
-    /// Parsed `profiles/thirdpartymirrors`: mirror name → list of base URLs.
+    /// Parsed `profiles/thirdpartymirrors`: mirror name → list of base URLs
     thirdparty: HashMap<String, Vec<String>>,
-    /// GENTOO_MIRRORS — appended as final fallback for every distfile.
+    /// GENTOO_MIRRORS — appended as final fallback for every distfile
     gentoo_mirrors: Vec<String>,
 }
 
 impl DistfileResolver {
-    /// Build a resolver from explicit data (useful for testing).
+    /// Build a resolver from explicit data (useful for testing)
     pub fn new(thirdparty: Vec<(String, Vec<String>)>, gentoo_mirrors: Vec<String>) -> Self {
         Self {
             thirdparty: thirdparty.into_iter().collect(),
@@ -114,7 +114,7 @@ impl DistfileResolver {
         }
     }
 
-    /// Build a resolver from a live repository + a GENTOO_MIRRORS list.
+    /// Build a resolver from a live repository + a GENTOO_MIRRORS list
     ///
     /// `gentoo_mirrors` should come from the `GENTOO_MIRRORS` environment
     /// variable or `make.conf`, split on whitespace.
@@ -125,7 +125,7 @@ impl DistfileResolver {
         Ok(Self::new(thirdparty, gentoo_mirrors))
     }
 
-    /// Resolve `SRC_URI` entries into distfiles given the active USE flags.
+    /// Resolve `SRC_URI` entries into distfiles given the active USE flags
     ///
     /// USE-conditional groups are evaluated; `mirror://` URIs are expanded.
     /// GENTOO_MIRRORS are appended as a fallback for every distfile that is
@@ -252,7 +252,7 @@ impl DistfileResolver {
             .collect()
     }
 
-    /// Expand a single URL to one or more concrete download URLs.
+    /// Expand a single URL to one or more concrete download URLs
     ///
     /// Every `mirror://name/path` — **including** `mirror://gentoo/` — is
     /// expanded via `profiles/thirdpartymirrors` (path append), matching both
@@ -301,7 +301,7 @@ impl DistfileResolver {
     }
 }
 
-/// Walk `SRC_URI` entries collecting `(url, filename, restriction)` tuples.
+/// Walk `SRC_URI` entries collecting `(url, filename, restriction)` tuples
 ///
 /// USE-conditional groups are evaluated against `use_flags`.
 /// This is the public equivalent of the private `collect_src_filenames`
