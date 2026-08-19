@@ -390,10 +390,10 @@ mod tests {
         assert_eq!(vdb.next_counter().unwrap(), 3);
     }
 
-    /// A same-version rebuild (e.g. a host BDEPEND rebuilt for a USE-flag
-    /// fix) overwrites its VDB entry's fields in place via a second
-    /// `register()` call at the same path. The field cache must not keep
-    /// serving the pre-rebuild value afterward.
+    // A same-version rebuild (e.g. a host BDEPEND rebuilt for a USE-flag
+    // fix) overwrites its VDB entry's fields in place via a second
+    // `register()` call at the same path. The field cache must not keep
+    // serving the pre-rebuild value afterward.
     #[test]
     fn register_over_existing_entry_invalidates_cached_fields() {
         let tmp = tempfile::tempdir().unwrap();

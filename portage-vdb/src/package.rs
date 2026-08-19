@@ -146,13 +146,15 @@ impl InstalledPackage {
     }
 
     /// The subslot if present (the part after `/`, e.g. `5.1` from `0/5.1`).
+    ///
     /// Interned, for the same reason as [`Self::slot_main`].
     pub fn subslot(&self) -> Result<Option<SlotName>> {
         Ok(self.slot()?.subslot)
     }
 
-    /// The repository name this package was installed from. Interned: a
-    /// system draws these from the two or three repos it has configured.
+    /// The repository name this package was installed from.
+    ///
+    /// Interned: a system draws these from the two or three repos it has configured.
     pub fn repository(&self) -> Result<Option<Interned<DefaultInterner>>> {
         Ok(self
             .read_field_opt("repository")?
@@ -293,8 +295,9 @@ impl InstalledPackage {
     }
 
     /// The unparsed CONTENTS text, to scan with [`crate::ContentsRef::parse`]
-    /// instead of materializing every entry. `None` when the package has no
-    /// CONTENTS file at all.
+    /// instead of materializing every entry.
+    ///
+    /// `None` when the package has no CONTENTS file at all.
     ///
     /// Returned as read, without the trim the other field accessors apply:
     /// trimming a string this size is a second full copy, and

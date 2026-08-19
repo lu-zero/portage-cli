@@ -309,7 +309,7 @@ mod tests {
         }
     }
 
-    /// Real Portage CONTENTS includes paths with spaces (cmake docs, etc.).
+    // Real Portage CONTENTS includes paths with spaces (cmake docs, etc.).
     #[test]
     fn parse_obj_path_with_spaces() {
         let line = "obj /usr/share/cmake/Help/generator/Visual Studio 9 2008.rst d5a7badc3622ea283eeb1f1668288e1d 1774616911";
