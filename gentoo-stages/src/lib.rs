@@ -1,4 +1,4 @@
-//! Gentoo stage3 image support.
+//! Gentoo stage3 image support
 //!
 //! This crate provides functionality for fetching, parsing, and managing
 //! Gentoo Linux stage3 images.

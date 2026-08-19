@@ -1,17 +1,17 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-/// Cache configuration for stage3 images.
+/// Cache configuration for stage3 images
 #[derive(Debug)]
 pub enum Cache {
-    /// Temporary cache that will be automatically cleaned up.
+    /// Temporary cache that will be automatically cleaned up
     Temp(TempDir),
-    /// Persistent cache at a specific path.
+    /// Persistent cache at a specific path
     Path(PathBuf),
 }
 
 impl Cache {
-    /// Get the cache directory path.
+    /// Get the cache directory path
     pub fn path(&self) -> &Path {
         match self {
             Cache::Temp(temp_dir) => temp_dir.path(),
