@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """PreToolUse hook: block Edit/Write calls that introduce oversized comments.
 
-Regular paragraphs cap at 3 lines, doc comments at 6, except Rust module
-docs (unlimited) and trait docs (relaxed). A blank comment line starts a new
-paragraph. Skipped for unknown extensions.
+Regular (non-doc) paragraphs cap at 10 lines, doc comments at 6 (they're
+user-facing rustdoc output), except Rust module docs (unlimited) and trait
+docs (relaxed). A blank comment line starts a new paragraph.
 """
 import json
 import os
 import re
 import sys
 
-REGULAR_MAX = 3
+REGULAR_MAX = 10
 DOC_MAX = 6
 TRAIT_DOC_MAX = 18
 
