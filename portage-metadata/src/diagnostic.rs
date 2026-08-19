@@ -38,6 +38,7 @@ impl std::fmt::Display for ParseDiagnostic {
 impl std::error::Error for ParseDiagnostic {}
 
 /// Roughly how much source text to keep on each side of the failing span.
+///
 /// SRC_URI/LICENSE/etc. values are whitespace-separated token soup with no
 /// newlines, so there's no natural line length to rely on — a go-module
 /// `SRC_URI` can run to a few thousand characters.
@@ -49,8 +50,10 @@ const CONTEXT_CHARS: usize = 60;
 
 /// Crop `src` to a window around `span`, snapped to whitespace so a token
 /// isn't cut mid-word, and remap `span` into the cropped string's own byte
-/// offsets. A `…` marks a cropped edge. No-ops (returns `src`/`span`
-/// untouched) when the string is already window-sized.
+/// offsets.
+///
+/// A `…` marks a cropped edge. No-ops (returns `src`/`span` untouched)
+/// when the string is already window-sized.
 fn windowed(src: &str, span: std::ops::Range<usize>) -> (String, std::ops::Range<usize>) {
     let span_len = span.end - span.start;
     if src.len() <= CONTEXT_CHARS * 2 + span_len + 10 {
@@ -80,11 +83,13 @@ fn windowed(src: &str, span: std::ops::Range<usize>) -> (String, std::ops::Range
 }
 
 impl ParseDiagnostic {
-    /// Build a diagnostic from a winnow parse failure. `what` names the
-    /// grammar being parsed (e.g. `"SRC_URI"`). The label under the code
-    /// frame is winnow's own accumulated context (e.g. a `StrContext::Label`
-    /// from a `cut_err`), or a generic fallback when the failing parser
-    /// pushed no context (most plain token/URI mismatches don't).
+    /// Build a diagnostic from a winnow parse failure.
+    ///
+    /// `what` names the grammar being parsed (e.g. `"SRC_URI"`). The label
+    /// under the code frame is winnow's own accumulated context (e.g. a
+    /// `StrContext::Label` from a `cut_err`), or a generic fallback when
+    /// the failing parser pushed no context (most plain token/URI
+    /// mismatches don't).
     pub(crate) fn from_winnow<E: std::fmt::Display>(
         what: &'static str,
         err: winnow::error::ParseError<&str, E>,

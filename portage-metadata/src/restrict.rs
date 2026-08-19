@@ -349,9 +349,9 @@ mod tests {
         assert_eq!(RestrictExpr::unconditional_tokens(&entries), vec!["mirror"]);
     }
 
-    /// The matchnone regression: a *negated* conditional is dropped too,
-    /// not included — matchnone means "no conditional ever applies," not
-    /// "treat every flag as unset" (which would make `!flag?` apply).
+    // The matchnone regression: a *negated* conditional is dropped too,
+    // not included — matchnone means "no conditional ever applies," not
+    // "treat every flag as unset" (which would make `!flag?` apply).
     #[test]
     fn unconditional_tokens_drops_negated_conditionals_too() {
         let entries = RestrictExpr::parse("!test? ( mirror )").unwrap();

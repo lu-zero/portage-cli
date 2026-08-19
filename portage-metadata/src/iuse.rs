@@ -53,9 +53,10 @@ impl<I: Interner> IUse<I> {
         I::resolve(&self.name)
     }
 
-    /// Whether this flag carries a `+` (enabled) IUSE default — i.e. it is on
-    /// unless the configuration turns it off. Used when computing a package's
-    /// effective build USE.
+    /// Whether this flag carries a `+` (enabled) IUSE default — i.e. it is
+    /// on unless the configuration turns it off.
+    ///
+    /// Used when computing a package's effective build USE.
     pub fn is_enabled_default(&self) -> bool {
         self.default == Some(IUseDefault::Enabled)
     }
@@ -95,10 +96,12 @@ impl<I: Interner> IUse<I> {
 }
 
 /// The flag as an [`Interned`] handle — wraps the key stored at parse time,
-/// not a fresh intern lookup. Prefer `Interned::from(iu)`/`iu.into()` over
-/// `Interned::intern(iu.name())`: the latter round-trips through `resolve`
-/// (key → `&str`) and `get_or_intern` (`&str` → key) to arrive back at the
-/// same key, paying two interner lookups for a value already in hand.
+/// not a fresh intern lookup.
+///
+/// Prefer `Interned::from(iu)`/`iu.into()` over `Interned::intern(iu.name())`:
+/// the latter round-trips through `resolve` (key → `&str`) and
+/// `get_or_intern` (`&str` → key) to arrive back at the same key, paying
+/// two interner lookups for a value already in hand.
 impl From<&IUse<DefaultInterner>> for Interned<DefaultInterner> {
     fn from(iu: &IUse<DefaultInterner>) -> Self {
         Interned::from_key(iu.name)

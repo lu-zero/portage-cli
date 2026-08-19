@@ -64,8 +64,10 @@ impl<'a> RawCacheEntry<'a> {
         out
     }
 
-    /// Every `KEY=VALUE` pair in the file, in source order. Underscored keys
-    /// (`_eclasses_`, `_md5_`) are included; lines without `=` are skipped.
+    /// Every `KEY=VALUE` pair in the file, in source order.
+    ///
+    /// Underscored keys (`_eclasses_`, `_md5_`) are included; lines without
+    /// `=` are skipped.
     pub fn lines(&self) -> impl Iterator<Item = (&'a str, &'a str)> + '_ {
         self.text.lines().filter_map(|line| {
             let line = line.trim();

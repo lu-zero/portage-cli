@@ -109,11 +109,13 @@ impl RequiredUseExpr {
     }
 
     /// Collect the unsatisfied sub-constraints for reporting, at a useful
-    /// granularity: a top-level `All` is descended into so each failing clause
-    /// is reported on its own (e.g. `|| ( X wayland )` separately from
-    /// `^^ ( llvm_slot_20 llvm_slot_21 )`); any other failing node — including a
-    /// `flag? ( ... )` group whose guard is active — is reported whole, matching
-    /// how emerge lists unsatisfied REQUIRED_USE.
+    /// granularity.
+    ///
+    /// A top-level `All` is descended into so each failing clause is
+    /// reported on its own (e.g. `|| ( X wayland )` separately from
+    /// `^^ ( llvm_slot_20 llvm_slot_21 )`); any other failing node —
+    /// including a `flag? ( ... )` group whose guard is active — is
+    /// reported whole, matching how emerge lists unsatisfied REQUIRED_USE.
     pub fn unsatisfied<'a>(&'a self, enabled: &dyn Fn(&str) -> bool) -> Vec<&'a RequiredUseExpr> {
         let mut out = Vec::new();
         self.collect_unsatisfied(enabled, &mut out);
@@ -139,9 +141,11 @@ impl RequiredUseExpr {
         }
     }
 
-    /// The top-level clauses: the children of a top-level `All`, or the whole
-    /// expression as a single clause otherwise. Useful for isolating the
-    /// relevant part of a large `REQUIRED_USE` when reporting one flag.
+    /// The top-level clauses: the children of a top-level `All`, or the
+    /// whole expression as a single clause otherwise.
+    ///
+    /// Useful for isolating the relevant part of a large `REQUIRED_USE`
+    /// when reporting one flag.
     pub fn clauses(&self) -> &[RequiredUseExpr] {
         match self {
             RequiredUseExpr::All(children) => children,
@@ -563,7 +567,7 @@ mod tests {
         assert!(RequiredUseExpr::parse("-flag? ( ssl )").is_err());
     }
 
-    /// Build a predicate from a set of enabled flag names.
+    // Build a predicate from a set of enabled flag names.
     fn enabled_set(flags: &[&str]) -> impl Fn(&str) -> bool {
         let set: std::collections::HashSet<String> = flags.iter().map(|s| s.to_string()).collect();
         move |f: &str| set.contains(f)
