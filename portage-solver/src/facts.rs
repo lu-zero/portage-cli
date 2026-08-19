@@ -40,8 +40,10 @@ pub struct PackageDeps {
 
 impl PackageDeps {
     /// Iterate over all dependency classes and their entries, skipping empty
-    /// classes. Yields in canonical class order (DEPEND, RDEPEND, BDEPEND,
-    /// PDEPEND, IDEPEND).
+    /// classes.
+    ///
+    /// Yields in canonical class order (DEPEND, RDEPEND, BDEPEND, PDEPEND,
+    /// IDEPEND).
     pub fn iter_classes(&self) -> impl Iterator<Item = (DepClass, &[DepEntry])> {
         [
             (DepClass::Depend, self.depend.as_slice()),
@@ -151,8 +153,10 @@ pub trait PackageRepository {
     }
 }
 
-/// Order slots by their best version (ascending; the newest-version slot sorts
-/// last). The comparison is total without a tie-break: each cpv is unique and
+/// Order slots by their best version (ascending; the newest-version slot
+/// sorts last).
+///
+/// The comparison is total without a tie-break: each cpv is unique and
 /// lives in exactly one slot, so two distinct slots can never share a best
 /// `Version`.
 pub fn rank_slots_by_version(

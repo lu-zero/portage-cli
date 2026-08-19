@@ -104,7 +104,9 @@ impl UseConfig {
             .insert(flag, UseFlagState::SolverDecided { prefer });
     }
 
-    /// Get the state of a flag. Unset flags default to `Disabled`.
+    /// Get the state of a flag.
+    ///
+    /// Unset flags default to `Disabled`.
     pub fn get(&self, flag: Interned<DefaultInterner>) -> UseFlagState {
         self.get_opt(flag).unwrap_or(UseFlagState::Disabled)
     }
@@ -148,8 +150,10 @@ impl UseConfig {
         v
     }
 
-    /// Returns all flags marked `SolverDecided` (the ones ceded to the solver
-    /// for Level-C `REQUIRED_USE` handling). Order is not guaranteed.
+    /// Returns all flags marked `SolverDecided` (the ones ceded to the
+    /// solver for Level-C `REQUIRED_USE` handling).
+    ///
+    /// Order is not guaranteed.
     pub fn solver_decided_flags(&self) -> Vec<Interned<DefaultInterner>> {
         self.overlay
             .iter()
@@ -293,8 +297,9 @@ impl UseLayer {
     }
 
     /// Record the `USE_EXPAND` groups this layer explicitly assigned, by
-    /// variable name as declared (`L10N`, `VIDEO_CARDS`, …). See the
-    /// `group_clears` field doc.
+    /// variable name as declared (`L10N`, `VIDEO_CARDS`, …).
+    ///
+    /// See the `group_clears` field doc.
     pub fn with_group_clears(mut self, vars: impl IntoIterator<Item = String>) -> Self {
         self.group_clears = vars
             .into_iter()
@@ -634,11 +639,11 @@ mod tests {
         UseLayer::parse(s)
     }
 
-    /// No `L10N` assigned anywhere outside profile `make.defaults`: real
-    /// portage leaves every `+l10n_*` IUSE default enabled (the `defaults`
-    /// layer is exempt from the group replace). Verified 2026-08-19 against
-    /// `emerge -pv app-editors/vscode` on portage 3.0.81.2, which listed all
-    /// 55 locales positive.
+    // No `L10N` assigned anywhere outside profile `make.defaults`: real
+    // portage leaves every `+l10n_*` IUSE default enabled (the `defaults`
+    // layer is exempt from the group replace). Verified 2026-08-19 against
+    // `emerge -pv app-editors/vscode` on portage 3.0.81.2, which listed all
+    // 55 locales positive.
     #[test]
     fn unassigned_use_expand_group_keeps_its_iuse_defaults() {
         let cfg = resolve_effective_use(
@@ -657,10 +662,10 @@ mod tests {
         assert_eq!(cfg.get(flag("l10n_en-GB")), UseFlagState::Enabled);
     }
 
-    /// `L10N="en-GB"` in make.conf against an ebuild that `+`-defaults every
-    /// locale: portage's non-incremental conf-layer replace wipes the group's
-    /// IUSE defaults, so only the assigned value survives. Flags outside any
-    /// assigned group are untouched.
+    // `L10N="en-GB"` in make.conf against an ebuild that `+`-defaults every
+    // locale: portage's non-incremental conf-layer replace wipes the group's
+    // IUSE defaults, so only the assigned value survives. Flags outside any
+    // assigned group are untouched.
     #[test]
     fn conf_use_expand_assignment_wipes_group_iuse_defaults() {
         let cfg = resolve_effective_use(
@@ -681,11 +686,11 @@ mod tests {
         assert_eq!(cfg.get(flag("seccomp")), UseFlagState::Enabled);
     }
 
-    /// Profile `package.use` sits in the `defaults` layer, below make.conf, so
-    /// a conf-level assignment wipes its group tokens; user `package.use` is
-    /// the `pkg` layer above conf and survives. Verified live: make.conf
-    /// `L10N="en-GB"` plus `app-editors/vscode l10n_fr` in
-    /// `/etc/portage/package.use` gives `L10N="en-GB fr"`.
+    // Profile `package.use` sits in the `defaults` layer, below make.conf, so
+    // a conf-level assignment wipes its group tokens; user `package.use` is
+    // the `pkg` layer above conf and survives. Verified live: make.conf
+    // `L10N="en-GB"` plus `app-editors/vscode l10n_fr` in
+    // `/etc/portage/package.use` gives `L10N="en-GB fr"`.
     #[test]
     fn conf_group_clear_spares_user_package_use() {
         let cfg = resolve_effective_use(
@@ -711,10 +716,10 @@ mod tests {
         );
     }
 
-    /// `L10N=de em …`: the env layer's replace reaches every lower layer —
-    /// IUSE defaults, the make.conf value inside `pre_env`, and user
-    /// `package.use` alike. Verified live: the same vscode run yields exactly
-    /// `L10N="de"`.
+    // `L10N=de em …`: the env layer's replace reaches every lower layer —
+    // IUSE defaults, the make.conf value inside `pre_env`, and user
+    // `package.use` alike. Verified live: the same vscode run yields exactly
+    // `L10N="de"`.
     #[test]
     fn env_use_expand_assignment_wipes_group_from_all_lower_layers() {
         let cfg = resolve_effective_use(
@@ -732,9 +737,9 @@ mod tests {
         assert_eq!(cfg.get(flag("l10n_fr")), UseFlagState::Disabled);
     }
 
-    /// `L10N=""` — an explicit empty assignment still clears the group, which
-    /// is how a user turns every locale off (`emerge -pv` shows the whole
-    /// group negative).
+    // `L10N=""` — an explicit empty assignment still clears the group, which
+    // is how a user turns every locale off (`emerge -pv` shows the whole
+    // group negative).
     #[test]
     fn empty_use_expand_assignment_still_clears_the_group() {
         let cfg = resolve_effective_use(
@@ -937,10 +942,10 @@ mod tests {
         );
     }
 
-    /// The flip side: when make.conf is silent on a flag, profile
-    /// `package.use` DOES set it (that's its purpose — e.g. a profile
-    /// enabling `pulseaudio` for `media-sound/alsa-plugins` when global
-    /// USE doesn't mention it).
+    // The flip side: when make.conf is silent on a flag, profile
+    // `package.use` DOES set it (that's its purpose — e.g. a profile
+    // enabling `pulseaudio` for `media-sound/alsa-plugins` when global
+    // USE doesn't mention it).
     #[test]
     fn resolve_effective_use_profile_package_use_applies_when_make_conf_silent() {
         let cfg = resolve_effective_use(
