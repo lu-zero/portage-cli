@@ -1,16 +1,13 @@
 # Blocker enforcement (Tier-2 → Tier-1)
 
-STATUS: **Step 1 (classification) DONE, 2026-08-01.** **PMS 8.3.2 refuse
-DONE, 2026-08-20.** Blockers (`!foo`/`!!foo`) are classified as auto-removable
-/ genuine conflict / non-actionable and reported with richer advisory text.
-Hard conflicts (`PlannedCoexistence`, strong `StillNeeded`) fail with exit 1.
-Strong `!!` `WouldUnmerge` refuses a real merge (no auto-unmerge). **Step 2
-(actual unmerge) remains SLATED LAST** per the user's 2026-06-20 decision.
+STATUS: **DONE, 2026-08-20.** Step 1 classification (2026-08-01) plus PMS 8.3.2
+enforcement: hard conflicts fail with exit 1; `WouldUnmerge` victims are
+unmerged on a real merge (strong `!!` before the merge loop, weak `!` after),
+reusing `execute_unmerge_batch`. `-p` still exits 0. Related: [[pms-compliance]].
 
 PMS 8.3.2: the blocked package must not be installed. A weak block may be
 ignored only if that package is uninstalled later. A **strong** block must
-not be ignored. Weak `WouldUnmerge` still installs without unmerge (Step 2).
-Related: [[pms-compliance]].
+not be ignored.
 
 Planned by a Fable agent (grounded directly against real portage's
 `_emerge/depgraph.py::_validate_blockers` and this repo's actual code, not just
@@ -62,21 +59,19 @@ tests plus the canonical `systemd[resolvconf]`/openresolv two-edge case).
   (`Blocker::{Weak,Strong}`), evaluates blocker USE-deps correctly, and keeps
   full victim identity (`BlockerHit`/`BlockerVictim`). The old `check_blockers`
   is now a thin compat wrapper over it.
-- `conflicts::classify_blockers` turns each hit into a `BlockerVerdict`
-  (auto-removable / still-needed / planned-coexistence / pre-existing), and
-  `output::report_blockers` prints it. `is_hard_conflict` fails `-p`/merge
-  with exit 1; `strong_unmerge_pending` refuses a real merge only. **No
-  removal happens.**
-- `DepgraphOutcome` is still install-only (`plan: Vec<PlannedMerge>`) — no
-  removal set yet; that's Step 2.
-- `em depclean` already exists and owns unmerge *execution* machinery to reuse
-  when (and only when) the destructive step is built.
+- `conflicts::classify_blockers` turns each hit into a `BlockerVerdict`.
+  `is_hard_conflict` fails `-p`/merge with exit 1. `planned_unmerges` is
+  the removal set on `DepgraphOutcome`; a real merge runs it via
+  `execute_unmerge_batch` (same path as `-C`/`depclean`).
+- `-f`/`-B` skip unmerge (they never install). Already-gone CPVs are skipped
+  (resume). Hard conflicts are not unmerged — they fail first.
 
 ## Reference case
 
 `sys-apps/systemd[resolvconf]` declares `!net-dns/openresolv`; openresolv is
 installed and nothing else needs it → emerge schedules openresolv for **removal**;
-em keeps it. (Full 4-edge `blocks B` report parity already reached — see
+em unmerges it after the blocking merge (weak `!`). (Full 4-edge `blocks B`
+report parity already reached — see
 `todo/broad-basket-gaps.md`.)
 
 ## Step 1 — non-destructive classification (DONE, 2026-08-01)
@@ -96,11 +91,8 @@ auto-removes only when safe. Render as richer advisory text and/or a
 no removal — purely analysis.** (This is "option 1 ≈ option 3" from the scoping
 discussion: a removal-set display and richer advisory wording are the same work.)
 
-## Step 2 — actual enforcement (SLATED LAST — destructive automation)
+## Step 2 — actual enforcement (DONE, 2026-08-20)
 
-Only after everything else. Thread a removal set into the plan and perform the
-unmerge in the real (non-pretend) merge path, reusing `em depclean`'s execution.
-Blast radius is large and it removes installed packages, so the Step-1 safety
-classification must be rock-solid and well-tested first, and it likely wants its
-own opt-in/confirmation. Do not start this until the cheaper gaps
-(properties/restrict, package.env, wrapper/shim) are done.
+`planned_unmerges` on the depgraph; `unmerge_blocker_victims` before/after
+the merge loop. Confirmation is the existing `--ask` merge prompt (the
+`>>> would unmerge:` preview already printed). No extra opt-in flag.

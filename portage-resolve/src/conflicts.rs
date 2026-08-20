@@ -424,13 +424,12 @@ pub enum UnmergeOrder {
 pub enum BlockerVerdict {
     /// Nothing retained still needs the blocked installed package
     ///
-    /// Real emerge would schedule it for unmerge.
-    ///
-    /// Advisory-only until Step 2 threads this into the actual plan.
+    /// Real emerge schedules it for unmerge (before the blocking merge if
+    /// strong, after if weak). [`planned_unmerges`] collects these for the plan.
     WouldUnmerge {
         /// The blocked installed package that would be removed
         cpv: Cpv,
-        /// Scheduling relative to the blocking merge (display/Step-2 only)
+        /// Scheduling relative to the blocking merge
         order: UnmergeOrder,
     },
     /// The blocked installed package is still needed: a genuine,
@@ -565,6 +564,43 @@ fn hit_is_strong(hit: &BlockerHit) -> bool {
     matches!(hit.atom.blocker, Some(Blocker::Strong))
 }
 
+/// An installed package the merge will unmerge to satisfy a blocker (PMS 8.3.2)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedUnmerge {
+    /// The blocked installed package
+    pub cpv: Cpv,
+    /// Before the merge loop (`!!`) or after it (`!`)
+    pub order: UnmergeOrder,
+}
+
+/// Deduplicated [`BlockerVerdict::WouldUnmerge`] set for the merge plan.
+///
+/// One entry per CPV. If both a weak and a strong hit name the same victim,
+/// `BeforeBlocker` wins — any strong block forbids overlap.
+pub fn planned_unmerges(classified: &[ClassifiedBlocker]) -> Vec<PlannedUnmerge> {
+    let mut by_cpv: HashMap<Cpv, UnmergeOrder> = HashMap::new();
+    for c in classified {
+        for v in &c.verdicts {
+            if let BlockerVerdict::WouldUnmerge { cpv, order } = v {
+                by_cpv
+                    .entry(cpv.clone())
+                    .and_modify(|existing| {
+                        if *order == UnmergeOrder::BeforeBlocker {
+                            *existing = UnmergeOrder::BeforeBlocker;
+                        }
+                    })
+                    .or_insert(*order);
+            }
+        }
+    }
+    let mut out: Vec<PlannedUnmerge> = by_cpv
+        .into_iter()
+        .map(|(cpv, order)| PlannedUnmerge { cpv, order })
+        .collect();
+    out.sort_by(|a, b| a.cpv.cmp(&b.cpv));
+    out
+}
+
 /// PMS 8.3.2 unresolvable conflict: planned coexistence, or a strong `!!`
 /// block of a package that is still needed.
 ///
@@ -578,19 +614,6 @@ pub fn is_hard_conflict(classified: &[ClassifiedBlocker]) -> bool {
             BlockerVerdict::StillNeeded { .. } => strong,
             _ => false,
         })
-    })
-}
-
-/// Strong `!!` WouldUnmerge: emerge would unmerge first.
-///
-/// `-p` stays exit 0 (emerge parity). A real merge must refuse until Step 2
-/// auto-unmerge exists — PMS 8.3.2 forbids ignoring a strong block.
-pub fn strong_unmerge_pending(classified: &[ClassifiedBlocker]) -> bool {
-    classified.iter().any(|c| {
-        hit_is_strong(&c.hit)
-            && c.verdicts
-                .iter()
-                .any(|v| matches!(v, BlockerVerdict::WouldUnmerge { .. }))
     })
 }
 
@@ -1092,9 +1115,16 @@ mod tests {
         }
     }
 
-    // PMS 8.3.2: coexistence or strong StillNeeded is fatal; strong WouldUnmerge
-    // is pending (refuse real merge, not -p); weak WouldUnmerge/StillNeeded and
-    // PreExisting are not.
+    fn unmerge_of(classified: &[ClassifiedBlocker]) -> Vec<(String, UnmergeOrder)> {
+        planned_unmerges(classified)
+            .into_iter()
+            .map(|u| (u.cpv.to_string(), u.order))
+            .collect()
+    }
+
+    // PMS 8.3.2: coexistence or strong StillNeeded is fatal; WouldUnmerge is
+    // scheduled (strong before, weak after); PreExisting and weak StillNeeded
+    // are not.
     #[test]
     fn pms_832_enforcement_predicates() {
         let weak_coexist = classify_blockers(
@@ -1113,7 +1143,7 @@ mod tests {
             &[],
         );
         assert!(is_hard_conflict(&weak_coexist));
-        assert!(!strong_unmerge_pending(&weak_coexist));
+        assert!(unmerge_of(&weak_coexist).is_empty());
 
         let strong_needed = classify_blockers(
             &[hit(HitSpec {
@@ -1134,7 +1164,7 @@ mod tests {
             &[],
         );
         assert!(is_hard_conflict(&strong_needed));
-        assert!(!strong_unmerge_pending(&strong_needed));
+        assert!(unmerge_of(&strong_needed).is_empty());
 
         let weak_needed = classify_blockers(
             &[hit(HitSpec {
@@ -1155,7 +1185,7 @@ mod tests {
             &[],
         );
         assert!(!is_hard_conflict(&weak_needed));
-        assert!(!strong_unmerge_pending(&weak_needed));
+        assert!(unmerge_of(&weak_needed).is_empty());
 
         let strong_orphan = classify_blockers(
             &[hit(HitSpec {
@@ -1173,7 +1203,13 @@ mod tests {
             &[],
         );
         assert!(!is_hard_conflict(&strong_orphan));
-        assert!(strong_unmerge_pending(&strong_orphan));
+        assert_eq!(
+            unmerge_of(&strong_orphan),
+            vec![(
+                "net-dns/openresolv-3.17.4".into(),
+                UnmergeOrder::BeforeBlocker
+            )]
+        );
 
         let weak_orphan = classify_blockers(
             &[hit(HitSpec {
@@ -1191,7 +1227,13 @@ mod tests {
             &[],
         );
         assert!(!is_hard_conflict(&weak_orphan));
-        assert!(!strong_unmerge_pending(&weak_orphan));
+        assert_eq!(
+            unmerge_of(&weak_orphan),
+            vec![(
+                "net-dns/openresolv-3.17.4".into(),
+                UnmergeOrder::AfterBlocker
+            )]
+        );
 
         let pre_existing = classify_blockers(
             &[hit(HitSpec {
@@ -1212,6 +1254,64 @@ mod tests {
             &[],
         );
         assert!(!is_hard_conflict(&pre_existing));
-        assert!(!strong_unmerge_pending(&pre_existing));
+        assert!(unmerge_of(&pre_existing).is_empty());
+    }
+
+    // Forward+reciprocal on the same victim collapse to one entry; a strong
+    // hit on a victim that also has a weak hit schedules BeforeBlocker.
+    #[test]
+    fn planned_unmerges_dedups_and_strong_wins() {
+        let forward_weak = hit(HitSpec {
+            owner_cpn: "sys-apps/systemd",
+            owner_slot: "0",
+            owner_ver: "260.2",
+            owner_installed: false,
+            atom: "!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
+        let reciprocal_weak = hit(HitSpec {
+            owner_cpn: "net-dns/openresolv",
+            owner_slot: "0",
+            owner_ver: "3.17.4",
+            owner_installed: true,
+            atom: "!sys-apps/systemd",
+            victim_cpn: "sys-apps/systemd",
+            victim_slot: "0",
+            victim_ver: "260.2",
+            victim_retained_installed: false,
+        });
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
+        let classified =
+            classify_blockers(&[forward_weak, reciprocal_weak.clone()], &installed, &[]);
+        assert_eq!(
+            unmerge_of(&classified),
+            vec![(
+                "net-dns/openresolv-3.17.4".into(),
+                UnmergeOrder::AfterBlocker
+            )]
+        );
+
+        let forward_strong = hit(HitSpec {
+            owner_cpn: "sys-apps/systemd",
+            owner_slot: "0",
+            owner_ver: "260.2",
+            owner_installed: false,
+            atom: "!!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
+        let classified = classify_blockers(&[forward_strong, reciprocal_weak], &installed, &[]);
+        assert_eq!(
+            unmerge_of(&classified),
+            vec![(
+                "net-dns/openresolv-3.17.4".into(),
+                UnmergeOrder::BeforeBlocker
+            )]
+        );
     }
 }

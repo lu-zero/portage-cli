@@ -95,9 +95,9 @@ pub struct DepgraphOutcome {
     /// package (e.g. the host interpreter, `dev-lang/python:3.14`) is not
     /// reported missing — the solver already treats it as satisfied.
     pub provided: Vec<(Cpv, Option<String>)>,
-    /// Strong `!!` WouldUnmerge: `-p` stays exit 0 (emerge would unmerge);
-    /// a real merge refuses until Step 2 auto-unmerge exists (PMS 8.3.2).
-    pub strong_unmerge_pending: bool,
+    /// Installed packages the merge will unmerge to satisfy blockers (PMS 8.3.2).
+    /// Strong `!!` entries run before the merge loop; weak `!` after.
+    pub unmerges: Vec<portage_resolve::conflicts::PlannedUnmerge>,
 }
 
 pub struct DepgraphOpts<'a> {
@@ -1455,7 +1455,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     //  - blockers (`!foo` / `!!foo`) and `::repo` constraints, which the solver
     //    does not model;
     //  - REQUIRED_USE, evaluated per-package against its effective USE.
-    let (hard_conflict, strong_unmerge_pending) = {
+    let (hard_conflict, unmerges) = {
         // `dep_conflicts` was computed per-round above (settled by the
         // `--complete-graph` repair loop, or from the single round when the
         // gate is off) — reporting it here, once, is the only place this
@@ -1483,7 +1483,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         let classified = conflicts::classify_blockers(&hits, &target_installed, &proposed);
         output::report_blockers(&classified);
         let hard_conflict = conflicts::is_hard_conflict(&classified);
-        let strong_unmerge_pending = conflicts::strong_unmerge_pending(&classified);
+        let unmerges = conflicts::planned_unmerges(&classified);
 
         let repo_violations = provider.check_repo_constraints(&solution);
         if !repo_violations.is_empty() {
@@ -1538,7 +1538,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         if !unsatisfiable.is_empty() {
             output::report_unsatisfiable_targets(&unsatisfiable, &data, set.is_multi());
         }
-        (hard_conflict, strong_unmerge_pending)
+        (hard_conflict, unmerges)
     };
 
     // `Total:`/`Size of downloads:` print *after* the advisories above (not
@@ -1696,7 +1696,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         build_blockers,
         hard_cycle_edges,
         provided: provided_avail,
-        strong_unmerge_pending,
+        unmerges,
     })
 }
 

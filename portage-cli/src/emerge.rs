@@ -565,13 +565,6 @@ async fn emerge_atoms_inner(
         return Ok(());
     }
 
-    // PMS 8.3.2: a strong block must not be ignored. `-p` already printed
-    // `>>> would unmerge:` and exited 0 (emerge parity). Step 2 auto-unmerge
-    // is not implemented, so a real merge refuses rather than ignore the block.
-    if outcome.strong_unmerge_pending {
-        return Err(error::BlockerUnmergeRequired.into());
-    }
-
     // --prefix/--local relocates distfiles and work trees under the outer
     // prefix (eprefix), not under a --target sysroot — see Roots::relocate_root.
     let relocate = roots.relocate_root();
@@ -695,26 +688,50 @@ async fn emerge_atoms_inner(
         blockers: outcome.build_blockers.clone(),
     });
 
-    let merge_result = run_merge_plan(crate::merge::MergePlanRequest {
-        plan: &outcome.plan,
-        blockers: &outcome.build_blockers,
-        roots: &roots,
-        work_base: &work_base,
-        distdir: distdir.as_deref(),
-        merge_flags,
-        globals: cli,
-        extra_path,
-        resume_job: resume_job_id.as_deref().map(|id| crate::merge::ResumeJob {
-            root: roots.merge_root(),
-            job_id: id,
-        }),
-        activity: Some(crate::merge::ActivityTrack {
-            bus: activity.clone(),
-            job_id: job_id.clone(),
-            parent_job_id: parent_job_id.clone(),
-            live_root: live_root.clone(),
-        }),
-    })
+    // PMS 8.3.2: strong `!!` must not overlap; weak `!` may overlap until later
+    // unmerge. `-f`/`-B` never install, so they never unmerge either.
+    let skip_unmerge =
+        merge_flags.fetchonly || merge_flags.fetch_all_uri || merge_flags.buildpkgonly;
+    let merge_result: Result<()> = async {
+        if !skip_unmerge {
+            unmerge_blocker_victims(
+                cli,
+                &outcome.unmerges,
+                portage_resolve::conflicts::UnmergeOrder::BeforeBlocker,
+            )
+            .await?;
+        }
+        run_merge_plan(crate::merge::MergePlanRequest {
+            plan: &outcome.plan,
+            blockers: &outcome.build_blockers,
+            roots: &roots,
+            work_base: &work_base,
+            distdir: distdir.as_deref(),
+            merge_flags,
+            globals: cli,
+            extra_path,
+            resume_job: resume_job_id.as_deref().map(|id| crate::merge::ResumeJob {
+                root: roots.merge_root(),
+                job_id: id,
+            }),
+            activity: Some(crate::merge::ActivityTrack {
+                bus: activity.clone(),
+                job_id: job_id.clone(),
+                parent_job_id: parent_job_id.clone(),
+                live_root: live_root.clone(),
+            }),
+        })
+        .await?;
+        if !skip_unmerge {
+            unmerge_blocker_victims(
+                cli,
+                &outcome.unmerges,
+                portage_resolve::conflicts::UnmergeOrder::AfterBlocker,
+            )
+            .await?;
+        }
+        Ok(())
+    }
     .await;
 
     let ok = merge_result.is_ok();
@@ -1053,7 +1070,6 @@ pub(crate) async fn run_unmerge_batch(
     // also needs `root` to preview any preserve-libs findings.
     let roots = cli.roots();
     let root = roots.merge_root().to_owned();
-    let broot = cli.host_roots();
 
     if cli.pretend {
         // Preview what preserve-libs would keep, without registering or
@@ -1074,6 +1090,25 @@ pub(crate) async fn run_unmerge_batch(
         println!(">>> Quitting.");
         return Ok(());
     }
+    execute_unmerge_batch(cli, vdb, packages, exclude, verb, gerund).await
+}
+
+/// Disk-mutating half of [`run_unmerge_batch`]: profile-env'd shell, one
+/// preserve-libs graph for the batch, per-package removal, `env-update`.
+///
+/// No `--pretend`/`--ask` — callers that already confirmed (blocker unmerge
+/// during a real merge) use this directly.
+async fn execute_unmerge_batch(
+    cli: &cli::Cli,
+    vdb: &portage_vdb::Vdb,
+    packages: &[portage_vdb::InstalledPackage],
+    exclude: &std::collections::HashSet<portage_atom::Cpv>,
+    verb: &str,
+    gerund: &str,
+) -> Result<()> {
+    let roots = cli.roots();
+    let root = roots.merge_root().to_owned();
+    let broot = cli.host_roots();
     // Scratch trees for pkg_prerm/postrm land where builds would
     // (`emerge_atoms_inner`'s relocation rule).
     let work_base = ebuild::default_work_base(roots.relocate_root());
@@ -1144,6 +1179,55 @@ pub(crate) async fn run_unmerge_batch(
         );
     }
     Ok(())
+}
+
+/// PMS 8.3.2 auto-unmerge of classified WouldUnmerge victims at `order`.
+///
+/// Already-gone packages (resume, a prior run) are skipped. Empty at this
+/// order is a no-op — no VDB open.
+async fn unmerge_blocker_victims(
+    cli: &cli::Cli,
+    unmerges: &[portage_resolve::conflicts::PlannedUnmerge],
+    order: portage_resolve::conflicts::UnmergeOrder,
+) -> Result<()> {
+    let cpvs: Vec<&portage_atom::Cpv> = unmerges
+        .iter()
+        .filter(|u| u.order == order)
+        .map(|u| &u.cpv)
+        .collect();
+    if cpvs.is_empty() {
+        return Ok(());
+    }
+    let vdb = open_cli_vdb(cli)?;
+    let packages = packages_for_unmerge(&vdb, &cpvs);
+    if packages.is_empty() {
+        return Ok(());
+    }
+    let exclude: std::collections::HashSet<portage_atom::Cpv> =
+        packages.iter().map(|p| p.cpv().clone()).collect();
+    execute_unmerge_batch(cli, &vdb, &packages, &exclude, "unmerge", "Unmerging").await
+}
+
+/// Resolve classified unmerge CPVs against the VDB. Missing entries are
+/// skipped (already gone), not an error.
+fn packages_for_unmerge(
+    vdb: &portage_vdb::Vdb,
+    cpvs: &[&portage_atom::Cpv],
+) -> Vec<portage_vdb::InstalledPackage> {
+    let mut packages = Vec::new();
+    for cpv in cpvs {
+        let pf = format!("{}-{}", cpv.cpn.package, cpv.version);
+        match vdb
+            .category(cpv.cpn.category.as_str())
+            .and_then(|c| c.package(&pf))
+        {
+            Some(pkg) => packages.push(pkg),
+            None => {
+                tracing::info!("blocker unmerge skipped, not installed: {cpv}");
+            }
+        }
+    }
+    packages
 }
 
 #[cfg(test)]
@@ -1355,5 +1439,18 @@ mod tests {
         let err =
             match_installed_atoms(&vdb, &["app-misc/foo".to_string()], "-P/--prune").unwrap_err();
         assert!(err.to_string().contains("-P/--prune"));
+    }
+
+    #[test]
+    fn packages_for_unmerge_finds_installed_and_skips_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        write_pkg(&vdb_root, "net-dns", "openresolv-3.17.4");
+        let vdb = open_vdb(tmp.path());
+        let present = portage_atom::Cpv::parse("net-dns/openresolv-3.17.4").unwrap();
+        let missing = portage_atom::Cpv::parse("sys-apps/systemd-260.2").unwrap();
+        let pkgs = packages_for_unmerge(&vdb, &[&present, &missing]);
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].cpv(), &present);
     }
 }

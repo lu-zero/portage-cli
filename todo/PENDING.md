@@ -21,7 +21,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` never reaches `PkgStart` still open | 🟡 | [[activity-status]] |
 | **4** | **Distfile GENTOO_MIRRORS parity residual** — core fetch facets done; no remote `layout.conf`, no `/etc/portage/mirrors`, etc. | 🟡 | [[distfile-fetch-reliability]] |
 | **5** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
-| **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; `cede_required_use` awk-4/stage1 bug fixed 2026-08-01; destructive Step 2 **slated last** (user) | 🟡 last | [[blocker-enforcement]] |
+| **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; PMS 8.3.2 unmerge 2026-08-20 | ✅ | [[blocker-enforcement]] |
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
 | **8** | **Drop `BuildClass` for cross-*** — package.env + HostCodegen allowlist; type removed 2026-08-07; live verify open | 🟡 | [[drop-buildclass]], matrix: [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md) |
 | **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` now resolves cleanly on real Debian 12 (real python step, SLOT-aware provided, linux-headers/glibc provided, a real zstd↔meson↔python cycle root-caused to a missing host `meson`); a full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [[meson-zstd-python-hard-cycle]] (resolved — real hard cycle, not an em bug) |
@@ -38,7 +38,7 @@ Index: [[pms-compliance]].
 | 1 | `IUSE_EFFECTIVE` never built | ✅ | [[pms-iuse-effective]] |
 | 2 | Empty `\|\|`/`^^` after USE strip is EAPI 0–6 on every EAPI | ✅ | [[pms-empty-dep-groups]] |
 | 3 | `fetch+` inverted on merge fetch | ✅ merge path | [[pms-fetch-plus]] |
-| 4 | Strong blockers still produce an installable plan | ✅ refuse (no auto-unmerge) | [[blocker-enforcement]] |
+| 4 | Strong blockers still produce an installable plan | ✅ unmerge | [[blocker-enforcement]] |
 | 5 | `REQUIRED_USE` advisory, not a mask | 🔴 policy | [[pms-required-use-mask]] |
 | 6 | IDEPEND native root is `merge_root`, not BROOT | ✅ | [[pms-idepend-broot]] |
 | 7 | No `D`-symlink rewrite on EAPI 0–8 | ✅ | [[pms-symlink-rewrite]] |
@@ -137,7 +137,8 @@ carry an effort estimate.
 | VDB/set read-path perf pass — CONTENTS out of `field_cache`, needle-seek instead of full-line parse, SIMD `memmem`, GLSA prefilter, interned slot/USE/IUSE/KEYWORDS/repository | 2026-08-15–16 | `em --info -v` 7.90x faster / 16x leaner RSS, solver paths flat; bench anchor `559b644`; memory: `benchmark-vdb-set-perf-2026-08-16` |
 | Package-set (`@name`) coverage — `@selected-*`, `@live-rebuild`, `@deprecated-live-rebuild`, `@module-rebuild`, `@x11-module-rebuild`, `@profile` bug, `@security` | 2026-08-13 | whole 2026-08-12 audit closed; `@security` last, via `em glsa`'s GLSA machinery; [[package-sets-support]] [[for_opencode]] |
 | `cede_required_use` awk-4/stage1 REQUIRED_USE-reconsideration bug | 2026-08-01 | `Adapter::rebuilding_cpvs`, Fable-designed, [[em-stages-scenario-matrix]] |
-| Blocker Tier-1 Step 1 (classify_blockers advisory verdicts) | 2026-08-01 | [[blocker-enforcement]] (Step 2 unmerge still open) |
+| Blocker Tier-1 Step 1 (classify_blockers advisory verdicts) | 2026-08-01 | [[blocker-enforcement]] |
+| Blocker PMS 8.3.2 auto-unmerge | 2026-08-20 | [[blocker-enforcement]] |
 | Build-dir clean FEATURES parity (`keepwork`/`keeptemp`/`noclean`) | 2026-07-30 | [[build-clean-env]] |
 | brush `PIPESTATUS`/`declare -a` on Dynamic — fixed independently on `for-portage-repo` (`64b38e16`), not the never-merged `pipestatus-dynamic-freeze` branch; live-verified | 2026-08-01 | [[brush-pipestatus-not-reset]] |
 | `ACCEPT_PROPERTIES` / `ACCEPT_RESTRICT` + `-arch` vs `*` | 2026-07-29 | [[accept-properties-restrict]] |

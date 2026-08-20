@@ -527,7 +527,7 @@ only a package's own facts):
 | Check | Where | Notes |
 |---|---|---|
 | USE-dep constraints (`[flag]`, `[flag?]`, `[flag=]`) | crate `validate.rs` | `check_use_deps` |
-| Blockers (`!foo` / `!!foo`) | crate `validate.rs` + `conflicts` | classify post-solve; PMS 8.3.2 hard conflict → exit 1 |
+| Blockers (`!foo` / `!!foo`) | crate `validate.rs` + `conflicts` | classify; hard conflict → exit 1; WouldUnmerge on real merge |
 | `::repo` constraints | crate `validate.rs` | `check_repo_constraints` |
 | Reverse-dependency conflicts | cli `conflicts.rs` | complete-graph check (every installed pkg's deps vs the plan) that a default `emerge -p` skips; advisory, reported as "Dependency constraint conflict" |
 | `REQUIRED_USE` | cli `required_use.rs` | **Level A** — see below |
@@ -588,7 +588,6 @@ PubGrub core" in *some* way:
   must change).
 - **Tier 2 — advisory.** Checked post-solve; the plan is still emitted even when
   violated, and the caveat is printed after it (as emerge does):
-  - weak `!` `WouldUnmerge` — reported, not unmerged (Step 2);
   - `::repo` constraints;
   - `REQUIRED_USE` Level-A (the default);
   - reverse-dependency conflicts — an *enrichment* a default targeted `emerge -p`
@@ -597,9 +596,9 @@ PubGrub core" in *some* way:
   with no warning:
   - old-slot wrapper/shim packages (`autoconf-wrapper`, `gcc-config`).
 
-PMS 8.3.2 hard blocker conflicts (`PlannedCoexistence`, strong `StillNeeded`)
-fail with exit 1 after classify. Strong `!!` `WouldUnmerge` refuses a real
-merge until Step 2 auto-unmerge; `-p` still exits 0 (emerge parity).
+PMS 8.3.2: hard blocker conflicts (`PlannedCoexistence`, strong `StillNeeded`)
+fail with exit 1 after classify. `WouldUnmerge` victims are unmerged on a real
+merge — strong `!!` before the merge loop, weak `!` after. `-p` still exits 0.
 
 **`@profile` / `profile-set` (package-set semantics).** Real portage's `@profile`
 set (`ProfilePackageSet`) reads only the *non-`*`* `packages` entries, and only
