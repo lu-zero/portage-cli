@@ -1577,8 +1577,13 @@ async fn build_binpkg_standalone(
     // identical contents list without copying a single file into the real
     // system.
     let scratch_dest = work_root.join("temp/buildpkgonly-dest");
-    let WalkResult { contents, size, .. } =
-        walk_image(&image_dir, &scratch_dest, &cp, rewrite_d_symlinks(&env))?;
+    let WalkResult { contents, size, .. } = walk_image(
+        &image_dir,
+        &work_root.join("image"),
+        &scratch_dest,
+        &cp,
+        rewrite_d_symlinks(&env),
+    )?;
 
     let scratch_vdb_root = work_root.join("temp/buildpkgonly-vdb");
     let vdb = open_or_create_vdb(&scratch_vdb_root)?;
@@ -2071,7 +2076,13 @@ async fn run_merge(
         contents,
         size,
         protected,
-    } = walk_image(&image_dir, root, &cp, rewrite_d_symlinks(&env))?;
+    } = walk_image(
+        &image_dir,
+        &work_root.join("image"),
+        root,
+        &cp,
+        rewrite_d_symlinks(&env),
+    )?;
 
     let exclude_cpv = old_pkg.as_ref().map(|p| p.cpv().clone());
     let collisions = vdb
@@ -2714,8 +2725,16 @@ fn rewrite_d_symlinks(env: &EbuildEnv) -> bool {
         .is_ok_and(|e| e.rewrites_d_symlinks())
 }
 
+/// Walk `image_dir` (`$ED`, where the built files physically live) into `dest_root`
+///
+/// `d_dir` is the bare `$D` (`work_root/image`, without the `$EPREFIX`
+/// offset `$ED` adds) — PMS 13.4.1 rewrites an absolute symlink whose
+/// target starts with `$D`, not `$ED`; stripping the wrong one either
+/// leaves a leaked build-time `$D` path dangling or, under a real
+/// `EPREFIX`, drops the offset entirely and escapes the prefix.
 fn walk_image(
     image_dir: &Utf8Path,
+    d_dir: &Utf8Path,
     dest_root: &Utf8Path,
     cp: &ConfigProtect,
     rewrite_d: bool,
@@ -2768,7 +2787,7 @@ fn walk_image(
                     .map_err(|_| anyhow::anyhow!("non-UTF-8 symlink target"))?;
                 if rewrite_d
                     && target.is_absolute()
-                    && let Ok(rest) = target.strip_prefix(image_dir)
+                    && let Ok(rest) = target.strip_prefix(d_dir)
                 {
                     let rewritten = Utf8PathBuf::from("/").join(rest);
                     tracing::info!(
@@ -3455,7 +3474,7 @@ mod tests {
         fs::create_dir_all(root.as_std_path()).unwrap();
 
         let WalkResult { contents, size, .. } =
-            walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
+            walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
 
         assert!(root.join("usr/bin/testprog").exists());
         assert!(
@@ -3501,7 +3520,7 @@ mod tests {
         fs::create_dir_all(root_off.as_std_path()).unwrap();
 
         let WalkResult { contents, .. } =
-            walk_image(&image, &root_on, &ConfigProtect::none(), true).unwrap();
+            walk_image(&image, &image, &root_on, &ConfigProtect::none(), true).unwrap();
         let tp = contents
             .iter()
             .find(|e| e.path.as_str() == "/usr/bin/tp")
@@ -3509,12 +3528,63 @@ mod tests {
         assert_eq!(tp.target.as_deref(), Some(Utf8Path::new("/usr/bin/tool")));
 
         let WalkResult { contents, .. } =
-            walk_image(&image, &root_off, &ConfigProtect::none(), false).unwrap();
+            walk_image(&image, &image, &root_off, &ConfigProtect::none(), false).unwrap();
         let tp = contents
             .iter()
             .find(|e| e.path.as_str() == "/usr/bin/tp")
             .unwrap();
         assert_eq!(tp.target.as_deref(), Some(abs.as_path()));
+    }
+
+    // PMS 13.4.1 strips a leading $D, not $ED. Under a real EPREFIX, $ED is
+    // a subdir of $D (`$D$EPREFIX`) — the two prior bugs: a target using
+    // bare $D didn't match a strip-$ED prefix at all and stayed dangling;
+    // a target using $ED got the whole prefix offset stripped, escaping it.
+    #[test]
+    fn walk_image_strips_bare_d_not_ed_under_a_real_eprefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = Utf8PathBuf::try_from(tmp.path().join("image")).unwrap();
+        let ed = d.join("prefixoff");
+        let root = Utf8PathBuf::try_from(tmp.path().join("root")).unwrap();
+        fs::create_dir_all(ed.join("usr/bin").as_std_path()).unwrap();
+        fs::write(ed.join("usr/bin/tool").as_std_path(), b"x").unwrap();
+        // A symlink target using the bare $D path (a common ebuild mistake
+        // under offset-prefix EAPIs).
+        symlink(
+            d.join("usr/bin/tool").as_std_path(),
+            ed.join("usr/bin/tp_bare_d").as_std_path(),
+        )
+        .unwrap();
+        // A symlink target using $ED (the correct convention).
+        symlink(
+            ed.join("usr/bin/tool").as_std_path(),
+            ed.join("usr/bin/tp_ed").as_std_path(),
+        )
+        .unwrap();
+        fs::create_dir_all(root.as_std_path()).unwrap();
+
+        let WalkResult { contents, .. } =
+            walk_image(&ed, &d, &root, &ConfigProtect::none(), true).unwrap();
+
+        let bare_d = contents
+            .iter()
+            .find(|e| e.path.as_str() == "/usr/bin/tp_bare_d")
+            .unwrap();
+        assert_eq!(
+            bare_d.target.as_deref(),
+            Some(Utf8Path::new("/usr/bin/tool")),
+            "a bare-$D target must be rewritten relative to $D, not left unmodified"
+        );
+
+        let via_ed = contents
+            .iter()
+            .find(|e| e.path.as_str() == "/usr/bin/tp_ed")
+            .unwrap();
+        assert_eq!(
+            via_ed.target.as_deref(),
+            Some(Utf8Path::new("/prefixoff/usr/bin/tool")),
+            "an $ED-based target must keep the $EPREFIX offset, not have it stripped away"
+        );
     }
 
     #[test]
@@ -3526,7 +3596,7 @@ mod tests {
         fs::create_dir_all(root.as_std_path()).unwrap();
 
         let WalkResult { contents, size, .. } =
-            walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
+            walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
         assert!(contents.is_empty());
         assert_eq!(size, 0);
     }
@@ -3537,7 +3607,7 @@ mod tests {
         let image = Utf8PathBuf::try_from(tmp.path().join("no-such-image")).unwrap();
         let root = Utf8PathBuf::try_from(tmp.path().join("root")).unwrap();
         let WalkResult { contents, size, .. } =
-            walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
+            walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
         assert!(contents.is_empty());
         assert_eq!(size, 0);
     }
@@ -3568,7 +3638,7 @@ mod tests {
             contents,
             protected,
             ..
-        } = walk_image(&image, &root, &cp, false).unwrap();
+        } = walk_image(&image, &image, &root, &cp, false).unwrap();
 
         // Differing protected file diverted; original untouched.
         assert_eq!(
@@ -3626,8 +3696,9 @@ mod tests {
         fs::create_dir_all(image.join("usr/bin").as_std_path()).unwrap();
         fs::write(image.join("usr/bin/bug").as_std_path(), b"new\n").unwrap();
 
-        let WalkResult { contents, .. } = walk_image(&image, &root, &ConfigProtect::none(), false)
-            .expect("re-merge over a read-only file must succeed (unlink before copy)");
+        let WalkResult { contents, .. } =
+            walk_image(&image, &image, &root, &ConfigProtect::none(), false)
+                .expect("re-merge over a read-only file must succeed (unlink before copy)");
 
         assert_eq!(
             fs::read(root.join("usr/bin/bug").as_std_path()).unwrap(),
@@ -3665,7 +3736,7 @@ mod tests {
             AtFlags::SYMLINK_NOFOLLOW,
         );
 
-        walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
+        walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
 
         let merged = fs::symlink_metadata(root.join("usr/bin/tp").as_std_path()).unwrap();
         assert_eq!(merged.mtime(), 1_000_000_000);
@@ -3698,7 +3769,7 @@ mod tests {
         .unwrap();
         fs::create_dir_all(root.as_std_path()).unwrap();
 
-        walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
+        walk_image(&image, &image, &root, &ConfigProtect::none(), false).unwrap();
 
         let a = fs::metadata(root.join("usr/bin/tool").as_std_path()).unwrap();
         let b = fs::metadata(root.join("usr/bin/tool-alias").as_std_path()).unwrap();
@@ -3725,7 +3796,7 @@ mod tests {
             protect: vec!["/etc".into()],
             mask: vec![],
         };
-        walk_image(&image, &root, &cp, false).unwrap();
+        walk_image(&image, &image, &root, &cp, false).unwrap();
         // Reused the existing ._cfg0000 rather than creating ._cfg0001.
         assert!(!root.join("etc/._cfg0001_foo.conf").exists());
         assert_eq!(

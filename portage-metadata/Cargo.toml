@@ -12,6 +12,7 @@ categories = ["parser-implementations", "development-tools"]
 exclude = ["AGENTS.md", "CLAUDE.md", ".claude", "docs", "Cargo.lock"]
 
 [dependencies]
+gentoo-core = { workspace = true }
 portage-atom = { workspace = true }
 winnow = { workspace = true }
 thiserror = { workspace = true }

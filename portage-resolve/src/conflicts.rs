@@ -486,16 +486,24 @@ pub fn classify_blockers(
     proposed: &[ProposedPkg],
 ) -> Vec<ClassifiedBlocker> {
     // Every (cpn, slot) that some hit needs a removal verdict for: a victim
-    // that's a retained installed package, or — for a reciprocal hit whose
-    // victim is a solution member — the owner itself (see the module-level
-    // classification table in the loop below).
+    // that's a retained installed package (forward hit), or — for a
+    // reciprocal hit whose victim is a solution member — the owner itself.
+    // Mirrors the verdict match below exactly: a `(true, true)` PreExisting
+    // or `(false, false)` PlannedCoexistence pair is never actually removed,
+    // so it must not enter the joint simulation either — including it would
+    // let `removal_obstacles` treat it as gone when clearing obstacles for
+    // some other candidate, auto-removing a package that's still needed.
     let mut candidates: HashSet<(Cpn, Slot)> = HashSet::new();
     for hit in hits {
         for victim in &hit.victims {
-            if victim.retained_installed {
-                candidates.insert((*victim.package.cpn(), victim.package.slot()));
-            } else if hit.owner_installed {
-                candidates.insert((*hit.owner.cpn(), hit.owner.slot()));
+            match (hit.owner_installed, victim.retained_installed) {
+                (false, true) => {
+                    candidates.insert((*victim.package.cpn(), victim.package.slot()));
+                }
+                (true, false) => {
+                    candidates.insert((*hit.owner.cpn(), hit.owner.slot()));
+                }
+                (true, true) | (false, false) => {}
             }
         }
     }
@@ -560,10 +568,6 @@ pub fn classify_blockers(
         .collect()
 }
 
-fn hit_is_strong(hit: &BlockerHit) -> bool {
-    matches!(hit.atom.blocker, Some(Blocker::Strong))
-}
-
 /// An installed package the merge will unmerge to satisfy a blocker (PMS 8.3.2)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedUnmerge {
@@ -601,18 +605,21 @@ pub fn planned_unmerges(classified: &[ClassifiedBlocker]) -> Vec<PlannedUnmerge>
     out
 }
 
-/// PMS 8.3.2 unresolvable conflict: planned coexistence, or a strong `!!`
-/// block of a package that is still needed.
+/// PMS 8.3.2 unresolvable conflict: planned coexistence, or a blocked
+/// package (weak or strong) that is still needed
 ///
-/// Weak `!` StillNeeded stays advisory — emerge auto-unmerges only when safe,
-/// and does not treat that case as "cannot be installed together".
+/// "A weak block may be ignored by the package manager, so long as any
+/// blocked package will be uninstalled later on" — when it can't be (i.e.
+/// `StillNeeded`), that exception doesn't apply, so weak fails exactly like
+/// strong. Only auto-removable `WouldUnmerge` victims are what "later on"
+/// actually means.
 pub fn is_hard_conflict(classified: &[ClassifiedBlocker]) -> bool {
     classified.iter().any(|c| {
-        let strong = hit_is_strong(&c.hit);
-        c.verdicts.iter().any(|v| match v {
-            BlockerVerdict::PlannedCoexistence { .. } => true,
-            BlockerVerdict::StillNeeded { .. } => strong,
-            _ => false,
+        c.verdicts.iter().any(|v| {
+            matches!(
+                v,
+                BlockerVerdict::PlannedCoexistence { .. } | BlockerVerdict::StillNeeded { .. }
+            )
         })
     })
 }
@@ -1122,9 +1129,10 @@ mod tests {
             .collect()
     }
 
-    // PMS 8.3.2: coexistence or strong StillNeeded is fatal; WouldUnmerge is
-    // scheduled (strong before, weak after); PreExisting and weak StillNeeded
-    // are not.
+    // PMS 8.3.2: coexistence or StillNeeded (weak or strong) is fatal;
+    // WouldUnmerge is scheduled (strong before, weak after); PreExisting is
+    // not fatal (portage suppresses pre-existing installed-vs-installed
+    // conflicts — the damage is already done).
     #[test]
     fn pms_832_enforcement_predicates() {
         let weak_coexist = classify_blockers(
@@ -1184,7 +1192,7 @@ mod tests {
             ],
             &[],
         );
-        assert!(!is_hard_conflict(&weak_needed));
+        assert!(is_hard_conflict(&weak_needed));
         assert!(unmerge_of(&weak_needed).is_empty());
 
         let strong_orphan = classify_blockers(
@@ -1255,6 +1263,56 @@ mod tests {
         );
         assert!(!is_hard_conflict(&pre_existing));
         assert!(unmerge_of(&pre_existing).is_empty());
+    }
+
+    // A pre-existing, suppressed blocker pair (app-misc/a weakly blocks
+    // installed app-misc/b — PreExisting, b is never actually removed) must
+    // not pollute the joint removal simulation for an unrelated blocker.
+    // Before the fix, b entered `candidates` anyway, so the simulation
+    // treated b as gone when checking whether anything still needs
+    // app-misc/c — silently clearing the one real obstacle and marking c
+    // safe to auto-remove, even though b (which stays installed) needs it.
+    #[test]
+    fn a_preexisting_suppressed_pair_does_not_pollute_an_unrelated_removal() {
+        let pre_existing_pair = hit(HitSpec {
+            owner_cpn: "app-misc/a",
+            owner_slot: "0",
+            owner_ver: "1.0",
+            owner_installed: true,
+            atom: "!app-misc/b",
+            victim_cpn: "app-misc/b",
+            victim_slot: "0",
+            victim_ver: "1.0",
+            victim_retained_installed: true,
+        });
+        let unrelated_blocker = hit(HitSpec {
+            owner_cpn: "app-misc/attacker",
+            owner_slot: "0",
+            owner_ver: "1.0",
+            owner_installed: false,
+            atom: "!app-misc/c",
+            victim_cpn: "app-misc/c",
+            victim_slot: "0",
+            victim_ver: "1.0",
+            victim_retained_installed: true,
+        });
+        let installed = vec![
+            entry("app-misc/a", "0", "1.0", &[]),
+            entry("app-misc/b", "0", "1.0", &["app-misc/c"]),
+            entry("app-misc/c", "0", "1.0", &[]),
+        ];
+        let classified =
+            classify_blockers(&[pre_existing_pair, unrelated_blocker], &installed, &[]);
+        let c_verdict = classified
+            .iter()
+            .find(|c| c.hit.owner.cpn().to_string() == "app-misc/attacker")
+            .and_then(|c| c.verdicts.first())
+            .expect("attacker hit has one verdict");
+        assert!(
+            matches!(c_verdict, BlockerVerdict::StillNeeded { .. }),
+            "app-misc/c is still needed by the never-removed app-misc/b, got {c_verdict:?}"
+        );
+        assert!(unmerge_of(&classified).is_empty());
     }
 
     // Forward+reciprocal on the same victim collapse to one entry; a strong

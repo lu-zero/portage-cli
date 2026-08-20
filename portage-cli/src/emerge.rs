@@ -268,6 +268,32 @@ fn eta_message(
     crate::activity::format_eta(&eta)
 }
 
+/// `--ask` confirmation for a merge: "{verb} these N package(s)", plus an
+/// "and unmerge M blocked package(s)" clause when this merge will also
+/// auto-unmerge PMS 8.3.2 blocker victims. `skip_unmerge` is `-f`/`-B`
+/// (which never install, so never unmerge either) — the prompt must not
+/// promise a removal that won't actually happen.
+fn confirm_merge(
+    verb: &str,
+    outcome: &query::depgraph::DepgraphOutcome,
+    skip_unmerge: bool,
+) -> Result<bool> {
+    let unmerge_count = if skip_unmerge {
+        0
+    } else {
+        outcome.unmerges.len()
+    };
+    let removal_suffix = if unmerge_count > 0 {
+        format!(" and unmerge {unmerge_count} blocked package(s)")
+    } else {
+        String::new()
+    };
+    confirm_action(&format!(
+        "{verb} these {} package(s){removal_suffix}",
+        outcome.plan.len()
+    ))
+}
+
 /// Resolve and (unless `--pretend`) merge `raw_atoms` with the global
 /// config in `cli`, plus the per-call [`EmergeOpts`]. Factored out of
 /// [`run_emerge`] so the crossdev staged-build driver can run each
@@ -579,11 +605,17 @@ async fn emerge_atoms_inner(
     } else {
         "merge"
     };
+    // PMS 8.3.2: strong `!!` must not overlap; weak `!` may overlap until later
+    // unmerge. `-f`/`-B` never install, so they never unmerge either — the
+    // `--ask` prompt below must not promise a removal that skip_unmerge means
+    // never actually happens.
+    let skip_unmerge =
+        merge_flags.fetchonly || merge_flags.fetch_all_uri || merge_flags.buildpkgonly;
     if merge_flags.ask {
         if merge_flags.eta {
             print_eta();
         }
-        if !confirm_action(verb, outcome.plan.len())? {
+        if !confirm_merge(verb, &outcome, skip_unmerge)? {
             println!(">>> Quitting.");
             return Ok(());
         }
@@ -688,10 +720,6 @@ async fn emerge_atoms_inner(
         blockers: outcome.build_blockers.clone(),
     });
 
-    // PMS 8.3.2: strong `!!` must not overlap; weak `!` may overlap until later
-    // unmerge. `-f`/`-B` never install, so they never unmerge either.
-    let skip_unmerge =
-        merge_flags.fetchonly || merge_flags.fetch_all_uri || merge_flags.buildpkgonly;
     let merge_result: Result<()> = async {
         if !skip_unmerge {
             unmerge_blocker_victims(
@@ -1086,7 +1114,9 @@ pub(crate) async fn run_unmerge_batch(
         return Ok(());
     }
 
-    if cli.merge_flags.ask && !confirm_action(verb, packages.len())? {
+    if cli.merge_flags.ask
+        && !confirm_action(&format!("{verb} these {} package(s)", packages.len()))?
+    {
         println!(">>> Quitting.");
         return Ok(());
     }

@@ -163,6 +163,29 @@ impl KnownArch {
     pub fn current() -> Result<Self, Error> {
         Self::parse(std::env::consts::ARCH)
     }
+
+    /// Every known variant, in declaration order (keywords repeat where
+    /// variants share one, e.g. `Riscv32`/`Riscv64` both give `"riscv"`)
+    pub const ALL: &[KnownArch] = &[
+        KnownArch::Arm,
+        KnownArch::AArch64,
+        KnownArch::X86,
+        KnownArch::X86_64,
+        KnownArch::Riscv32,
+        KnownArch::Riscv64,
+        KnownArch::Powerpc,
+        KnownArch::Powerpc64,
+        KnownArch::Mips,
+        KnownArch::Mips64,
+        KnownArch::Sparc,
+        KnownArch::Sparc64,
+        KnownArch::S390x,
+        KnownArch::M68k,
+        KnownArch::LoongArch64,
+        KnownArch::Alpha,
+        KnownArch::Hppa,
+        KnownArch::Ia64,
+    ];
 }
 
 impl fmt::Display for KnownArch {
@@ -443,6 +466,17 @@ mod tests {
         assert_eq!(KnownArch::Powerpc64.as_keyword(), "ppc64");
         assert_eq!(KnownArch::LoongArch64.as_keyword(), "loong");
         assert_eq!(KnownArch::Hppa.as_keyword(), "hppa");
+    }
+
+    #[test]
+    fn all_covers_every_variant_and_keyword_round_trips() {
+        assert_eq!(KnownArch::ALL.len(), 18);
+        for arch in KnownArch::ALL {
+            assert_eq!(
+                KnownArch::parse(arch.as_keyword()).unwrap().as_keyword(),
+                arch.as_keyword()
+            );
+        }
     }
 
     #[test]

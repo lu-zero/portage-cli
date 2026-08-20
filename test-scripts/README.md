@@ -113,6 +113,37 @@ real cross package builds.
 ./test-scripts/test-crossdev-binpkg-sandbox.sh --keep
 ```
 
+### `test-blockers-iuse-effective-sandbox.sh`
+
+Real-chroot regression test for the 2026-08-20 PMS pass: blocker
+auto-unmerge (PMS 8.3.2, `portage-resolve/src/conflicts.rs`) and
+`IUSE_EFFECTIVE` (PMS 11.1.1 / table 12.20, `portage-metadata`'s
+`iuse_effective.rs` + `portage-repo`'s `use_flag.rs`). Both landed with
+extensive unit coverage but neither had been exercised through a real
+merge/VDB/build-shell round trip — that's the gap this script closes.
+Builds a tiny synthetic overlay (`test-pms`, via `em select repository
+create`) with seven trivial no-fetch ebuilds rather than hunting for a real
+Gentoo package with the right blocker/USE shape (the canonical
+`systemd[resolvconf]`/`openresolv` blocker pair is far too heavy to build
+here) — keeps the whole run fast and isolates exactly the behavior under
+test.
+
+Checks: a declared USE flag merges clean and lands in the VDB's
+`IUSE_EFFECTIVE`; querying a flag outside that set dies (EAPI 8); an EAPI 4
+ebuild (PMS 11.1.1's non-injection branch) can still query a real `ARCH`
+value with no declared IUSE at all; `-p` previews a weak blocker's unmerge
+without touching the VDB; a real merge auto-unmerges the blocked package
+for both weak (`!`, after the blocking merge) and strong (`!!`, before it)
+when nothing else needs it; a strong blocker against a still-needed
+package is a hard, unresolvable conflict (nonzero exit, nothing unmerged,
+nothing merged); `-B`/`--buildpkgonly` never triggers an unmerge (it never
+installs).
+
+```sh
+./test-scripts/test-blockers-iuse-effective-sandbox.sh
+./test-scripts/test-blockers-iuse-effective-sandbox.sh --keep
+```
+
 ## Known `crossdev-stages` gotchas
 
 - **Never hand-patch, bind-mount, or `sudo chroot` into an *existing*

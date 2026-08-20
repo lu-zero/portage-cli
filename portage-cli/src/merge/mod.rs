@@ -280,7 +280,11 @@ pub(crate) fn require_ask_tty() -> Result<()> {
     }
 }
 
-pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
+/// `action` is the full description ("merge these 3 package(s)") — the
+/// caller composes it, since what belongs in it (e.g. PMS 8.3.2 blocker
+/// victims a merge will also unmerge) is caller-specific; this just handles
+/// the prompt itself.
+pub(crate) fn confirm_action(action: &str) -> Result<bool> {
     use std::io::Write;
 
     use crate::style::{C_CHOICE_DEFAULT, C_CHOICE_OTHER};
@@ -294,7 +298,7 @@ pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
     let mut out = anstream::stdout();
     let _ = write!(
         out,
-        "\n>>> Would you like to {verb} these {count} package(s)? [{C_CHOICE_OTHER}y{C_CHOICE_OTHER:#}/{C_CHOICE_DEFAULT}N{C_CHOICE_DEFAULT:#}] "
+        "\n>>> Would you like to {action}? [{C_CHOICE_OTHER}y{C_CHOICE_OTHER:#}/{C_CHOICE_DEFAULT}N{C_CHOICE_DEFAULT:#}] "
     );
     let _ = out.flush();
     let mut line = String::new();

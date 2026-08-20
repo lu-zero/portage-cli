@@ -360,7 +360,7 @@ impl PortageDependencyProvider {
                 continue;
             };
             for blocker in &vd.blockers {
-                let victims = self.blocker_victims(blocker, solution, &retained);
+                let victims = self.blocker_victims(blocker, pkg, version, solution, &retained);
                 if !victims.is_empty() {
                     hits.push(BlockerHit {
                         owner: pkg.clone(),
@@ -383,7 +383,7 @@ impl PortageDependencyProvider {
                 continue;
             };
             for blocker in blockers {
-                let victims = self.blocker_victims(blocker, solution, &retained);
+                let victims = self.blocker_victims(blocker, owner, owner_ver, solution, &retained);
                 if !victims.is_empty() {
                     hits.push(BlockerHit {
                         owner: owner.clone(),
@@ -402,15 +402,27 @@ impl PortageDependencyProvider {
     /// Every package present after the plan (a solution member, or an
     /// installed one `retained` keeps in place) that satisfies `blocker`'s
     /// atom
+    ///
+    /// PMS 8.3.2: "weak blocks on the package version of the ebuild itself
+    /// do not count" — `owner`/`owner_version` exclude the owner's own
+    /// (package, version) from the candidate set when `blocker` is weak.
+    /// Full package equality (not just cpn), so a same-cpn/version package
+    /// in a different slot or `Host`/`Target` flavor is never mistaken for
+    /// the owner itself.
     fn blocker_victims(
         &self,
         blocker: &Dep,
+        owner: &PortagePackage,
+        owner_version: &Version,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
         retained: &impl Fn(&PortagePackage) -> bool,
     ) -> Vec<BlockerVictim> {
+        let is_self = |p: &PortagePackage, v: &Version| {
+            blocker.blocker == Some(portage_atom::Blocker::Weak) && p == owner && v == owner_version
+        };
         let mut victims: Vec<BlockerVictim> = solution
             .iter()
-            .filter(|(p, v)| self.blocker_satisfied_by(blocker, p, v, false))
+            .filter(|(p, v)| !is_self(p, v) && self.blocker_satisfied_by(blocker, p, v, false))
             .map(|(p, v)| BlockerVictim {
                 package: p.clone(),
                 version: v.clone(),
@@ -420,7 +432,9 @@ impl PortageDependencyProvider {
         victims.extend(
             self.installed
                 .iter()
-                .filter(|(p, (v, _))| retained(p) && self.blocker_satisfied_by(blocker, p, v, true))
+                .filter(|(p, (v, _))| {
+                    !is_self(p, v) && retained(p) && self.blocker_satisfied_by(blocker, p, v, true)
+                })
                 .map(|(p, (v, _))| BlockerVictim {
                     package: p.clone(),
                     version: v.clone(),
@@ -777,6 +791,109 @@ mod tests {
             PortagePackage::unslotted(Cpn::parse("dev-libs/libressl").unwrap())
         );
         assert!(!hits[0].victims[0].retained_installed);
+    }
+
+    // PMS 8.3.2: "weak blocks on the package version of the ebuild itself
+    // do not count."
+    #[test]
+    fn weak_self_block_does_not_count() {
+        let mut repo = InMemoryRepository::new();
+        repo.add_version(
+            portage_atom::Cpv::parse("app-misc/foo-1.0").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("!app-misc/foo").unwrap())]).into(),
+                rdepend: (vec![]).into(),
+                bdepend: (vec![]).into(),
+                pdepend: (vec![]).into(),
+                idepend: (vec![]).into(),
+            },
+        );
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let foo = PortagePackage::unslotted(Cpn::parse("app-misc/foo").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(foo, PortageVersionSet::any())])
+            .unwrap();
+        let hits = provider.check_blockers_detailed(&solution);
+        assert!(
+            hits.is_empty(),
+            "a weak self-block must not report itself as a victim, got {hits:?}"
+        );
+    }
+
+    // The PMS exception is weak-only: a strong self-block still counts.
+    #[test]
+    fn strong_self_block_still_counts() {
+        let mut repo = InMemoryRepository::new();
+        repo.add_version(
+            portage_atom::Cpv::parse("app-misc/foo-1.0").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("!!app-misc/foo").unwrap())]).into(),
+                rdepend: (vec![]).into(),
+                bdepend: (vec![]).into(),
+                pdepend: (vec![]).into(),
+                idepend: (vec![]).into(),
+            },
+        );
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let foo = PortagePackage::unslotted(Cpn::parse("app-misc/foo").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(foo, PortageVersionSet::any())])
+            .unwrap();
+        let hits = provider.check_blockers_detailed(&solution);
+        assert_eq!(hits.len(), 1, "a strong self-block is not exempted");
+        assert_eq!(hits[0].victims.len(), 1);
+    }
+
+    // The self-block exemption is per-package, not per (cpn, version): a
+    // same-cpn/version package in a *different* slot is a genuinely
+    // different package, not "itself".
+    #[test]
+    fn weak_block_on_a_different_slot_of_the_same_cpn_and_version_still_counts() {
+        let mut repo = InMemoryRepository::new();
+        let slot_0 = Interned::<DefaultInterner>::intern("0");
+        let slot_1 = Interned::<DefaultInterner>::intern("1");
+
+        repo.add_version(
+            portage_atom::Cpv::parse("app-misc/foo-1.0").unwrap(),
+            Some(slot_0),
+            None,
+            PackageDeps {
+                depend: (vec![DepEntry::Atom(Dep::parse("!app-misc/foo:1").unwrap())]).into(),
+                rdepend: (vec![]).into(),
+                bdepend: (vec![]).into(),
+                pdepend: (vec![]).into(),
+                idepend: (vec![]).into(),
+            },
+        );
+        repo.add_version(
+            portage_atom::Cpv::parse("app-misc/foo-1.0").unwrap(),
+            Some(slot_1),
+            None,
+            empty_deps(),
+        );
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let foo_0 = PortagePackage::slotted(Cpn::parse("app-misc/foo").unwrap(), slot_0);
+        let foo_1 = PortagePackage::slotted(Cpn::parse("app-misc/foo").unwrap(), slot_1);
+        let solution = provider
+            .resolve_targets(vec![
+                (foo_0, PortageVersionSet::any()),
+                (foo_1, PortageVersionSet::any()),
+            ])
+            .unwrap();
+        let hits = provider.check_blockers_detailed(&solution);
+        assert_eq!(
+            hits.len(),
+            1,
+            "a same-cpn/version package in a different slot is not \"itself\""
+        );
+        assert_eq!(hits[0].victims.len(), 1);
     }
 
     // Regression test for the same alias-miss bug class as `graph.rs`'s
