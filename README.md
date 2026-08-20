@@ -41,13 +41,11 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `mirrordist` | `emirrordist` | Working — [detail](./docs/user/applets.md#em-mirrordist-emirrordist) |
 | `clean` | `eclean` | Stub |
 | `revdep` | `revdep-rebuild` | Working — [detail](./docs/user/applets.md#em-revdep-revdep-rebuild) |
-| `news` | `eselect news` | Stub |
-| `glsa` | `glsa-check` | Stub |
 | `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/user/activity.md) |
 | `grep` | `egreplite` | Stub |
 | `portageq` | `portageq` | Stub |
 | `read` | `elogv` / elog reader | Working — [detail](./docs/user/applets.md#em-read-elogv-and-the-elog-system) |
-| `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, … |
+| `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, `news` (`eselect news`), `glsa` (`glsa-check`), … |
 | `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
 | `setup` | — | Working — bootstrap a prefix layout (`--local` / `--prefix`) |
 | `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap; see [docs/crossdev.md](./docs/user/crossdev.md) |
@@ -103,10 +101,8 @@ cargo install --path portage-cli
 
 ## Local Development
 
-The project expects sibling checkouts (`brush/` at the `for-portage-repo`
-fork branch, alongside this workspace) and a gitignored
-`.cargo/config.toml` path patch — see [AGENTS.md](AGENTS.md) for the full
-setup, build commands, and CI-parity checks.
+See [AGENTS.md](AGENTS.md) for build commands, local dependency overrides,
+and CI-parity checks.
 
 ## License
 

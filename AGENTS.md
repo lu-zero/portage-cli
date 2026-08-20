@@ -93,9 +93,11 @@ CLI/runtime deps: `clap`, `tokio`, `anyhow`, `thiserror`.
 
 ## Local dependency overrides
 
-Machine-specific path patches in **gitignored** `.cargo/config.toml` (sibling
-`brush` / `pkgcraft` worktrees) are expected during development. Do not commit
-them. Example shape:
+`brush`/`pkgcraft` are ordinary git dependencies in the workspace `Cargo.toml`
+— a plain `cargo build`/`cargo test` fetches them itself, no sibling checkout
+needed. A path patch in **gitignored** `.cargo/config.toml` is only for
+iterating on local, uncommitted changes to one of those forks (sibling
+`brush` / `pkgcraft` worktrees). Do not commit it. Example shape:
 
 ```toml
 [patch."https://github.com/lu-zero/brush.git"]
