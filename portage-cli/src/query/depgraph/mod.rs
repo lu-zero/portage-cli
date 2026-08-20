@@ -66,8 +66,9 @@ pub struct PlannedMerge {
 
 /// What [`depgraph`] resolved
 pub struct DepgraphOutcome {
-    /// Process exit code: `1` when configuration changes are required to
-    /// realise the displayed plan (matching `emerge -p`), `0` otherwise.
+    /// Process exit code: `1` when the displayed plan is not directly
+    /// installable (USE/mask/license changes, or a PMS 8.3.2 hard blocker
+    /// conflict), matching `emerge -p`. `0` otherwise.
     pub exit_code: i32,
     /// The merge list in install order
     pub plan: Vec<PlannedMerge>,
@@ -94,6 +95,9 @@ pub struct DepgraphOutcome {
     /// package (e.g. the host interpreter, `dev-lang/python:3.14`) is not
     /// reported missing — the solver already treats it as satisfied.
     pub provided: Vec<(Cpv, Option<String>)>,
+    /// Strong `!!` WouldUnmerge: `-p` stays exit 0 (emerge would unmerge);
+    /// a real merge refuses until Step 2 auto-unmerge exists (PMS 8.3.2).
+    pub strong_unmerge_pending: bool,
 }
 
 pub struct DepgraphOpts<'a> {
@@ -1442,7 +1446,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 
     // Advisory warnings are emitted after the plan so the merge list reads
     // first and the caveats follow it (emerge lists issues at the bottom too).
-    // These are non-fatal: the plan is still produced.
+    // The plan is still produced; a PMS 8.3.2 hard blocker conflict fails via
+    // `exit_code` after this block.
     //
     //  - reverse-dependency constraints: a complete-graph check that emerge's
     //    default targeted `-p` skips (e.g. upgrading docutils past an installed
@@ -1450,7 +1455,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     //  - blockers (`!foo` / `!!foo`) and `::repo` constraints, which the solver
     //    does not model;
     //  - REQUIRED_USE, evaluated per-package against its effective USE.
-    {
+    let (hard_conflict, strong_unmerge_pending) = {
         // `dep_conflicts` was computed per-round above (settled by the
         // `--complete-graph` repair loop, or from the single round when the
         // gate is off) — reporting it here, once, is the only place this
@@ -1477,6 +1482,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         let hits = provider.check_blockers_detailed(&solution);
         let classified = conflicts::classify_blockers(&hits, &target_installed, &proposed);
         output::report_blockers(&classified);
+        let hard_conflict = conflicts::is_hard_conflict(&classified);
+        let strong_unmerge_pending = conflicts::strong_unmerge_pending(&classified);
 
         let repo_violations = provider.check_repo_constraints(&solution);
         if !repo_violations.is_empty() {
@@ -1531,7 +1538,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         if !unsatisfiable.is_empty() {
             output::report_unsatisfiable_targets(&unsatisfiable, &data, set.is_multi());
         }
-    }
+        (hard_conflict, strong_unmerge_pending)
+    };
 
     // `Total:`/`Size of downloads:` print *after* the advisories above (not
     // right after the merge list, as it used to): the caller's `--eta`
@@ -1674,11 +1682,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     }
 
     Ok(DepgraphOutcome {
-        // Non-zero when the displayed plan needs config changes to be realised:
-        // either USE changes (co-solve fixpoint) or unmask/keyword/license
-        // changes for a required dep the solver had to drop. Either way the plan
-        // as printed is not directly installable — emerge exits non-zero too.
-        exit_code: if use_change_entries.is_empty() && autounmask_candidates.is_empty() {
+        // Non-zero when the displayed plan is not directly installable: USE
+        // changes, unmask/keyword/license, or a PMS 8.3.2 hard blocker conflict.
+        exit_code: if use_change_entries.is_empty()
+            && autounmask_candidates.is_empty()
+            && !hard_conflict
+        {
             0
         } else {
             1
@@ -1687,6 +1696,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         build_blockers,
         hard_cycle_edges,
         provided: provided_avail,
+        strong_unmerge_pending,
     })
 }
 

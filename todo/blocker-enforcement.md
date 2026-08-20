@@ -1,17 +1,16 @@
 # Blocker enforcement (Tier-2 → Tier-1)
 
-STATUS: **Step 1 (classification) DONE, 2026-08-01.** Blockers (`!foo`/`!!foo`)
-are now classified as auto-removable / genuine conflict / non-actionable and
-reported with richer advisory text (`>>> would unmerge:` preview, the same
-fatal "cannot be installed at the same time" message real emerge prints for a
-hard conflict). **No removal happens yet** — Step 2 (actual unmerge execution)
-remains SLATED LAST per the user's 2026-06-20 decision.
+STATUS: **Step 1 (classification) DONE, 2026-08-01.** **PMS 8.3.2 refuse
+DONE, 2026-08-20.** Blockers (`!foo`/`!!foo`) are classified as auto-removable
+/ genuine conflict / non-actionable and reported with richer advisory text.
+Hard conflicts (`PlannedCoexistence`, strong `StillNeeded`) fail with exit 1.
+Strong `!!` `WouldUnmerge` refuses a real merge (no auto-unmerge). **Step 2
+(actual unmerge) remains SLATED LAST** per the user's 2026-06-20 decision.
 
 PMS 8.3.2: the blocked package must not be installed. A weak block may be
 ignored only if that package is uninstalled later. A **strong** block must
-not be ignored. Today's plan+exit 0 on `PlannedCoexistence` / `StillNeeded`
-is a letter-of-PMS diverge; Step 2 (or a merge-time refuse on hard conflict
-without unmerge) is what closes it. Related: [[pms-compliance]].
+not be ignored. Weak `WouldUnmerge` still installs without unmerge (Step 2).
+Related: [[pms-compliance]].
 
 Planned by a Fable agent (grounded directly against real portage's
 `_emerge/depgraph.py::_validate_blockers` and this repo's actual code, not just
@@ -65,10 +64,9 @@ tests plus the canonical `systemd[resolvconf]`/openresolv two-edge case).
   is now a thin compat wrapper over it.
 - `conflicts::classify_blockers` turns each hit into a `BlockerVerdict`
   (auto-removable / still-needed / planned-coexistence / pre-existing), and
-  `output::report_blockers` prints it — a post-solve advisory only (`!!!
-  Blocker conflict(s) detected`, plus a `>>> would unmerge:` preview and the
-  emerge-style fatal message for a real hard conflict). **No removal
-  happens.**
+  `output::report_blockers` prints it. `is_hard_conflict` fails `-p`/merge
+  with exit 1; `strong_unmerge_pending` refuses a real merge only. **No
+  removal happens.**
 - `DepgraphOutcome` is still install-only (`plan: Vec<PlannedMerge>`) — no
   removal set yet; that's Step 2.
 - `em depclean` already exists and owns unmerge *execution* machinery to reuse

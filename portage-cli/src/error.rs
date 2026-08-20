@@ -23,3 +23,11 @@ pub struct ConfigChangesNeeded;
 #[derive(Debug, thiserror::Error)]
 #[error("no valid atoms (see warnings above)")]
 pub struct NoValidAtoms;
+
+/// Strong `!!` blocker requires removing an installed package before merge
+///
+/// PMS 8.3.2: a strong block must not be ignored. The depgraph already printed
+/// the `>>> would unmerge:` preview; this refuses the merge until Step 2.
+#[derive(Debug, thiserror::Error)]
+#[error("strong blocker requires unmerge before merge (not implemented; see above)")]
+pub struct BlockerUnmergeRequired;

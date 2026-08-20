@@ -519,12 +519,9 @@ async fn emerge_atoms_inner(
         print_eta();
     }
 
-    // A non-zero resolver exit means USE/mask changes are needed (the change
-    // block was already printed). Surface it as a typed error so the normal
-    // Result flow yields exit 1 — `main` prints it quietly, and the staged
-    // driver stops at the step that needs the change, with step context.
-    // Checked before the `--pretend` return (not just for a real run) so
-    // `-p`/`-a` show the same signal a real run would hit.
+    // Non-zero resolver exit: printed plan is not installable (USE/mask/license
+    // or a PMS 8.3.2 hard blocker). The block was already printed; quiet exit 1.
+    // Checked before `--pretend` so `-p`/`-a` match a real run.
     if outcome.exit_code != 0 {
         return Err(error::ConfigChangesNeeded.into());
     }
@@ -566,6 +563,13 @@ async fn emerge_atoms_inner(
 
     if cli.pretend {
         return Ok(());
+    }
+
+    // PMS 8.3.2: a strong block must not be ignored. `-p` already printed
+    // `>>> would unmerge:` and exited 0 (emerge parity). Step 2 auto-unmerge
+    // is not implemented, so a real merge refuses rather than ignore the block.
+    if outcome.strong_unmerge_pending {
+        return Err(error::BlockerUnmergeRequired.into());
     }
 
     // --prefix/--local relocates distfiles and work trees under the outer

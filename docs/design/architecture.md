@@ -518,16 +518,16 @@ stable `arch` and vice versa at match time; `-*` is an incremental clear-all
 ## Post-solve validation
 
 The solver decides *versions*; several constraints are intentionally **not**
-modelled inside it and are checked after a solution exists. All of these are
-**advisory** (the plan is still produced) and are printed *after* the merge list,
-so the plan reads first and the caveats follow — as emerge does. Some live in the
-solver crate (they read its `VersionData`), some in the cli (they need only a
-package's own facts):
+modelled inside it and are checked after a solution exists. They are printed
+*after* the merge list, so the plan reads first and the caveats follow — as
+emerge does. Hard blocker conflicts then fail the run (PMS 8.3.2). Some live
+in the solver crate (they read its `VersionData`), some in the cli (they need
+only a package's own facts):
 
 | Check | Where | Notes |
 |---|---|---|
 | USE-dep constraints (`[flag]`, `[flag?]`, `[flag=]`) | crate `validate.rs` | `check_use_deps` |
-| Blockers (`!foo` / `!!foo`) | crate `validate.rs` | `check_blockers`; evaluates the blocker's own USE condition to avoid false positives |
+| Blockers (`!foo` / `!!foo`) | crate `validate.rs` + `conflicts` | classify post-solve; PMS 8.3.2 hard conflict → exit 1 |
 | `::repo` constraints | crate `validate.rs` | `check_repo_constraints` |
 | Reverse-dependency conflicts | cli `conflicts.rs` | complete-graph check (every installed pkg's deps vs the plan) that a default `emerge -p` skips; advisory, reported as "Dependency constraint conflict" |
 | `REQUIRED_USE` | cli `required_use.rs` | **Level A** — see below |
@@ -588,7 +588,7 @@ PubGrub core" in *some* way:
   must change).
 - **Tier 2 — advisory.** Checked post-solve; the plan is still emitted even when
   violated, and the caveat is printed after it (as emerge does):
-  - blockers (`!foo`/`!!foo`) — reported, not used to exclude/replace;
+  - weak `!` `WouldUnmerge` — reported, not unmerged (Step 2);
   - `::repo` constraints;
   - `REQUIRED_USE` Level-A (the default);
   - reverse-dependency conflicts — an *enrichment* a default targeted `emerge -p`
@@ -596,6 +596,10 @@ PubGrub core" in *some* way:
 - **Tier 3 — invisible.** Not detected; the plan can silently differ from emerge
   with no warning:
   - old-slot wrapper/shim packages (`autoconf-wrapper`, `gcc-config`).
+
+PMS 8.3.2 hard blocker conflicts (`PlannedCoexistence`, strong `StillNeeded`)
+fail with exit 1 after classify. Strong `!!` `WouldUnmerge` refuses a real
+merge until Step 2 auto-unmerge; `-p` still exits 0 (emerge parity).
 
 **`@profile` / `profile-set` (package-set semantics).** Real portage's `@profile`
 set (`ProfilePackageSet`) reads only the *non-`*`* `packages` entries, and only
@@ -618,7 +622,7 @@ topological order, different scheduler — emerge: target-driven DFS; here: SCC
 condensation + lexicographic Kahn) and the `:slot` suffix on autounmask
 `package.use` atoms. Severity tracks the tier: Tier 3 (silent) is the priority to
 fix, Tier 2 is a deliberate "report don't block" stance (some intentional like
-reverse-deps, some pending promotion like blockers).
+reverse-deps).
 The running per-item list lives in the
 [`portage-atom-pubgrub` README](../../portage-atom-pubgrub/README.md) "Known
 limitations" section and `docs/required-use-level-c.md` (§6, C7).

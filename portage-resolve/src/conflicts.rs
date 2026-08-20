@@ -561,6 +561,39 @@ pub fn classify_blockers(
         .collect()
 }
 
+fn hit_is_strong(hit: &BlockerHit) -> bool {
+    matches!(hit.atom.blocker, Some(Blocker::Strong))
+}
+
+/// PMS 8.3.2 unresolvable conflict: planned coexistence, or a strong `!!`
+/// block of a package that is still needed.
+///
+/// Weak `!` StillNeeded stays advisory — emerge auto-unmerges only when safe,
+/// and does not treat that case as "cannot be installed together".
+pub fn is_hard_conflict(classified: &[ClassifiedBlocker]) -> bool {
+    classified.iter().any(|c| {
+        let strong = hit_is_strong(&c.hit);
+        c.verdicts.iter().any(|v| match v {
+            BlockerVerdict::PlannedCoexistence { .. } => true,
+            BlockerVerdict::StillNeeded { .. } => strong,
+            _ => false,
+        })
+    })
+}
+
+/// Strong `!!` WouldUnmerge: emerge would unmerge first.
+///
+/// `-p` stays exit 0 (emerge parity). A real merge must refuse until Step 2
+/// auto-unmerge exists — PMS 8.3.2 forbids ignoring a strong block.
+pub fn strong_unmerge_pending(classified: &[ClassifiedBlocker]) -> bool {
+    classified.iter().any(|c| {
+        hit_is_strong(&c.hit)
+            && c.verdicts
+                .iter()
+                .any(|v| matches!(v, BlockerVerdict::WouldUnmerge { .. }))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1057,5 +1090,128 @@ mod tests {
                 other => panic!("expected WouldUnmerge for openresolv, got {other:?}"),
             }
         }
+    }
+
+    // PMS 8.3.2: coexistence or strong StillNeeded is fatal; strong WouldUnmerge
+    // is pending (refuse real merge, not -p); weak WouldUnmerge/StillNeeded and
+    // PreExisting are not.
+    #[test]
+    fn pms_832_enforcement_predicates() {
+        let weak_coexist = classify_blockers(
+            &[hit(HitSpec {
+                owner_cpn: "app-misc/a",
+                owner_slot: "0",
+                owner_ver: "1.0",
+                owner_installed: false,
+                atom: "!app-misc/b",
+                victim_cpn: "app-misc/b",
+                victim_slot: "0",
+                victim_ver: "1.0",
+                victim_retained_installed: false,
+            })],
+            &[],
+            &[],
+        );
+        assert!(is_hard_conflict(&weak_coexist));
+        assert!(!strong_unmerge_pending(&weak_coexist));
+
+        let strong_needed = classify_blockers(
+            &[hit(HitSpec {
+                owner_cpn: "sys-apps/systemd",
+                owner_slot: "0",
+                owner_ver: "260.2",
+                owner_installed: false,
+                atom: "!!net-dns/openresolv",
+                victim_cpn: "net-dns/openresolv",
+                victim_slot: "0",
+                victim_ver: "3.17.4",
+                victim_retained_installed: true,
+            })],
+            &[
+                entry("net-dns/openresolv", "0", "3.17.4", &[]),
+                entry("app-misc/keeper", "0", "2.0", &["net-dns/openresolv"]),
+            ],
+            &[],
+        );
+        assert!(is_hard_conflict(&strong_needed));
+        assert!(!strong_unmerge_pending(&strong_needed));
+
+        let weak_needed = classify_blockers(
+            &[hit(HitSpec {
+                owner_cpn: "sys-apps/systemd",
+                owner_slot: "0",
+                owner_ver: "260.2",
+                owner_installed: false,
+                atom: "!net-dns/openresolv",
+                victim_cpn: "net-dns/openresolv",
+                victim_slot: "0",
+                victim_ver: "3.17.4",
+                victim_retained_installed: true,
+            })],
+            &[
+                entry("net-dns/openresolv", "0", "3.17.4", &[]),
+                entry("app-misc/keeper", "0", "2.0", &["net-dns/openresolv"]),
+            ],
+            &[],
+        );
+        assert!(!is_hard_conflict(&weak_needed));
+        assert!(!strong_unmerge_pending(&weak_needed));
+
+        let strong_orphan = classify_blockers(
+            &[hit(HitSpec {
+                owner_cpn: "sys-apps/systemd",
+                owner_slot: "0",
+                owner_ver: "260.2",
+                owner_installed: false,
+                atom: "!!net-dns/openresolv",
+                victim_cpn: "net-dns/openresolv",
+                victim_slot: "0",
+                victim_ver: "3.17.4",
+                victim_retained_installed: true,
+            })],
+            &[entry("net-dns/openresolv", "0", "3.17.4", &[])],
+            &[],
+        );
+        assert!(!is_hard_conflict(&strong_orphan));
+        assert!(strong_unmerge_pending(&strong_orphan));
+
+        let weak_orphan = classify_blockers(
+            &[hit(HitSpec {
+                owner_cpn: "sys-apps/systemd",
+                owner_slot: "0",
+                owner_ver: "260.2",
+                owner_installed: false,
+                atom: "!net-dns/openresolv",
+                victim_cpn: "net-dns/openresolv",
+                victim_slot: "0",
+                victim_ver: "3.17.4",
+                victim_retained_installed: true,
+            })],
+            &[entry("net-dns/openresolv", "0", "3.17.4", &[])],
+            &[],
+        );
+        assert!(!is_hard_conflict(&weak_orphan));
+        assert!(!strong_unmerge_pending(&weak_orphan));
+
+        let pre_existing = classify_blockers(
+            &[hit(HitSpec {
+                owner_cpn: "app-misc/a",
+                owner_slot: "0",
+                owner_ver: "1.0",
+                owner_installed: true,
+                atom: "!app-misc/b",
+                victim_cpn: "app-misc/b",
+                victim_slot: "0",
+                victim_ver: "1.0",
+                victim_retained_installed: true,
+            })],
+            &[
+                entry("app-misc/a", "0", "1.0", &[]),
+                entry("app-misc/b", "0", "1.0", &[]),
+            ],
+            &[],
+        );
+        assert!(!is_hard_conflict(&pre_existing));
+        assert!(!strong_unmerge_pending(&pre_existing));
     }
 }

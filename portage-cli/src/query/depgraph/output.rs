@@ -374,12 +374,10 @@ pub(super) fn report_held_back_targets(held_back: &[portage_atom_pubgrub::HeldBa
     }
 }
 
-/// Report classified blocker (`!`/`!!`) hits: Step 1 of the blocker Tier-1
-/// auto-unmerge plan — analysis and richer
-/// advisory text only, no plan mutation. `PreExisting` verdicts (both sides
-/// already installed) are deliberately not printed, matching real emerge's
-/// own suppression of that case ("the damage is already done";
-/// `_emerge/depgraph.py`'s `_validate_blockers`).
+/// Report classified blocker (`!`/`!!`) hits after solve.
+///
+/// `PreExisting` is not printed (emerge: "the damage is already done").
+/// Hard-conflict wording matches emerge's "cannot be installed at the same time".
 pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::ClassifiedBlocker]) {
     use portage_resolve::conflicts::BlockerVerdict;
 
@@ -388,7 +386,6 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
     }
     let mut out = anstream::stderr();
     let mut would_unmerge: Vec<Cpv> = Vec::new();
-    let mut hard_conflict = false;
 
     writeln!(out, "\n{C_OFF}!!!{C_OFF:#} Blocker conflict(s) detected:\n").ok();
     for c in classified {
@@ -423,7 +420,6 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
                     would_unmerge.push(cpv.clone());
                 }
                 BlockerVerdict::StillNeeded { cpv, obstacles } => {
-                    hard_conflict = hard_conflict || strength == "strong(!!)";
                     for o in obstacles {
                         writeln!(
                             out,
@@ -434,7 +430,6 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
                     }
                 }
                 BlockerVerdict::PlannedCoexistence { cpv } => {
-                    hard_conflict = true;
                     writeln!(
                         out,
                         "      unresolved: {cpv} is itself part of this plan — cannot coexist"
@@ -455,7 +450,7 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
         }
     }
 
-    if hard_conflict {
+    if portage_resolve::conflicts::is_hard_conflict(classified) {
         writeln!(
             out,
             "\n * Error: The above package list contains packages which cannot be\n\
