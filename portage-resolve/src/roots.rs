@@ -17,15 +17,15 @@ pub struct Roots {
     config: Option<Utf8PathBuf>,
     base: Option<Utf8PathBuf>,
     target: Option<Utf8PathBuf>,
-    /// Where `BDEPEND`/`IDEPEND` (cross) resolve — always the true build host
+    /// Where `BDEPEND`/`IDEPEND` resolve — always the true build host
     ///
     /// Independent of any `--target` sysroot substitution.
     ///
     /// `None` only where it trivially equals `merge_root()` (bare, `--local`). See
     /// [`satisfaction_root`](Self::satisfaction_root).
     broot: Option<Utf8PathBuf>,
-    /// `CHOST != CBUILD` for the currently active topology — the one cell
-    /// `satisfaction_root` needs it for (`IDEPEND`)
+    /// `CHOST != CBUILD` for the currently active topology — used by
+    /// `satisfaction_root` for `DEPEND` native vs `--target`
     is_cross_arch: bool,
     /// `EPREFIX`: when set (`--local`), packages are configured for and
     /// installed in place at this offset
@@ -228,7 +228,7 @@ impl Roots {
     /// See [docs/design/root-topology.md](../../docs/design/root-topology.md)
     /// and PMS table 8.2:
     /// - `BDEPEND` → `broot` (build host; ignores `--target` substitution)
-    /// - `IDEPEND` → `broot` when cross, else same as `RDEPEND`
+    /// - `IDEPEND` → `broot` (PMS table 8.2, same as BDEPEND)
     /// - `DEPEND` → `base` when it differs from target (overlay); else `broot`
     ///   for native (`CBUILD==CHOST`, host satisfies DEPEND — matches portage
     ///   `ROOT=X emerge`); target sysroot only for foreign-arch `--target`
@@ -239,9 +239,10 @@ impl Roots {
     /// is carried on the same `Roots` value now, so one value answers both.
     pub fn satisfaction_root(&self, class: DepClass) -> &Utf8Path {
         match class {
-            DepClass::Bdepend => self.broot.as_deref().unwrap_or_else(|| self.merge_root()),
-            DepClass::Idepend if self.is_cross_arch => self.satisfaction_root(DepClass::Bdepend),
-            DepClass::Idepend | DepClass::Rdepend | DepClass::Pdepend => self.merge_root(),
+            DepClass::Bdepend | DepClass::Idepend => {
+                self.broot.as_deref().unwrap_or_else(|| self.merge_root())
+            }
+            DepClass::Rdepend | DepClass::Pdepend => self.merge_root(),
             DepClass::Depend => {
                 if let Some(base) = self.base.as_deref()
                     && base != self.merge_root()
@@ -448,6 +449,24 @@ fn read_portdir_overlay(root: &Utf8Path) -> Option<Vec<Utf8PathBuf>> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod satisfaction_root_tests {
+    use super::*;
+
+    #[test]
+    fn native_offset_idepend_uses_broot() {
+        let roots = Roots::for_test_root_with_broot("/offset", "/host");
+        assert_eq!(
+            roots.satisfaction_root(DepClass::Idepend),
+            roots.satisfaction_root(DepClass::Bdepend)
+        );
+        assert_ne!(
+            roots.satisfaction_root(DepClass::Idepend),
+            roots.satisfaction_root(DepClass::Rdepend)
+        );
+    }
 }
 
 #[cfg(test)]

@@ -96,7 +96,7 @@ The dep-class → role map is fixed by PMS table 8.2:
 | `BDEPEND` | **BROOT** (always the build host, native `${CBUILD}`) |
 | `DEPEND` | **sysroot** (`ESYSROOT`) |
 | `RDEPEND` | **target root** (`ROOT`) |
-| `IDEPEND` | running root (BROOT for cross, target for native) |
+| `IDEPEND` | **BROOT** (same as BDEPEND; PMS table 8.2) |
 
 Getting a build right is, mechanically, getting this map right. Almost every
 hard bug in the cross/stage work has been one role silently standing in for

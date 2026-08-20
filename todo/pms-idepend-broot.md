@@ -1,6 +1,6 @@
 # IDEPEND satisfaction root (PMS table 8.2)
 
-Status: 🔴 not started. Related: [[pms-compliance]],
+Status: ✅ IDEPEND → BROOT (PMS table 8.2). Related: [[pms-compliance]],
 [`docs/design/root-topology.md`](../docs/design/root-topology.md).
 
 ## PMS
