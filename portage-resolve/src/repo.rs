@@ -658,7 +658,7 @@ pub fn is_masked(
     unmasks: &[Dep],
     cpv: &Cpv,
     slot: &portage_atom::Slot,
-    repo: &str,
+    repo: Interned<DefaultInterner>,
 ) -> bool {
     let hit =
         |m: &Dep| mask_matches(m, cpv) && mask_slot_matches(m, slot) && mask_repo_matches(m, repo);
@@ -683,8 +683,8 @@ fn mask_slot_matches(mask_dep: &Dep, slot: &portage_atom::Slot) -> bool {
 }
 
 /// Whether a mask atom's `::reponame` component (if any) matches the candidate's repo
-fn mask_repo_matches(mask_dep: &Dep, repo: &str) -> bool {
-    mask_dep.repo.is_none_or(|r| r.as_str() == repo)
+fn mask_repo_matches(mask_dep: &Dep, repo: Interned<DefaultInterner>) -> bool {
+    mask_dep.repo.is_none_or(|r| r == repo)
 }
 
 /// Whether `mask_dep`'s version constraint matches `cpv` (CPN + version op;
@@ -727,9 +727,9 @@ pub struct RepoData {
     /// Every known version per `Cpn`, with its parsed cache entry
     pub versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>>,
     /// The main repo's name; versions from overlays are recorded in `repo_of`
-    pub repo_name: String,
+    pub repo_name: Interned<DefaultInterner>,
     /// Source repo of overlay-provided versions (absent ⇒ the main repo)
-    pub repo_of: HashMap<Cpv, String>,
+    pub repo_of: HashMap<Cpv, Interned<DefaultInterner>>,
     /// Cross-derivation reverse map: `cross-<tuple>/<pkg>` → real `<cat>/<pkg>`
     ///
     /// Populated by `load_repos` from `Location::Alias` entries; empty for
@@ -743,10 +743,8 @@ pub struct RepoData {
 }
 
 /// The repo a version comes from (for `::repo` display and constraints)
-pub fn repo_name_of<'a>(data: &'a RepoData, cpv: &Cpv) -> &'a str {
-    data.repo_of
-        .get(cpv)
-        .map_or(data.repo_name.as_str(), String::as_str)
+pub fn repo_name_of(data: &RepoData, cpv: &Cpv) -> Interned<DefaultInterner> {
+    data.repo_of.get(cpv).copied().unwrap_or(data.repo_name)
 }
 
 /// The resolved keyword/mask/license/USE policy
@@ -1146,9 +1144,7 @@ impl PackageRepository for Adapter<'_> {
                         let meta = &cache.metadata;
                         let slot = Some(meta.slot.slot);
                         let subslot = meta.slot.subslot;
-                        let repo = Some(Interned::<DefaultInterner>::intern(repo_name_of(
-                            self.data, cpv,
-                        )));
+                        let repo = Some(repo_name_of(self.data, cpv));
                         // `Interned::from(iu)` wraps the key `CacheEntry::parse`
                         // already produced (same `DefaultInterner`) — zero-cost.
                         // `Interned::intern(iu.name())` would instead resolve that
@@ -1255,11 +1251,12 @@ fn collect_required_use_flags(
 pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
     let mut cpns_set: HashSet<Cpn> = HashSet::new();
     let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
-    let mut repo_of: HashMap<Cpv, String> = HashMap::new();
+    let mut repo_of: HashMap<Cpv, Interned<DefaultInterner>> = HashMap::new();
     let mut seen: HashSet<Cpv> = HashSet::new();
     let mut real_cpn_of: HashMap<Cpn, Cpn> = HashMap::new();
 
     for (i, source_repo) in set.iter().enumerate() {
+        let repo_name = source_repo.name();
         for (cpv, entry) in portage_repo::repo_entries(source_repo).await {
             if !seen.insert(cpv.clone()) {
                 continue;
@@ -1268,7 +1265,7 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
             // No `repo_of` insert for the main repo: absence means "the
             // main repo", per `RepoData::repo_of`'s documented convention.
             if i != set.main_index() {
-                repo_of.insert(cpv.clone(), source_repo.name().to_string());
+                repo_of.insert(cpv.clone(), repo_name);
             }
             versions.entry(cpv.cpn).or_default().push((cpv, entry));
         }
@@ -1279,7 +1276,7 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
     // This is the in-memory equivalent of crossdev's symlink overlay — no
     // on-disk tree needed.
     // Collect first, then inject, to avoid borrowing `versions` while mutating.
-    type CrossInject = (String, Cpn, Vec<(Cpv, CacheEntry)>);
+    type CrossInject = (Interned<DefaultInterner>, Cpn, Vec<(Cpv, CacheEntry)>);
     let mut cross_inject: Vec<CrossInject> = Vec::new();
     for entry in set.aliases() {
         let portage_repo::Location::Alias { source, aliases } = &entry.location else {
@@ -1289,9 +1286,10 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
         // doesn't track per-cpn origin for main-repo entries (only overlays
         // get a `repo_of` entry), so there's no way to disambiguate a
         // same-named cpn coming from elsewhere.
-        if source != set.main().name() {
+        if *source != set.main().name() {
             continue;
         }
+        let repo_name = entry.name;
         for (dest_cat, source_cpns) in aliases {
             let dest_cat_interned = Interned::<DefaultInterner>::intern(dest_cat.as_str());
             for source_cpn in source_cpns {
@@ -1305,7 +1303,7 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
                     .iter()
                     .map(|(cpv, cache)| (Cpv::new(cross_cpn, cpv.version.clone()), cache.clone()))
                     .collect();
-                cross_inject.push((entry.name.clone(), cross_cpn, copies));
+                cross_inject.push((repo_name, cross_cpn, copies));
             }
         }
     }
@@ -1314,7 +1312,7 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
             if !seen.insert(cross_cpv.clone()) {
                 continue;
             }
-            repo_of.insert(cross_cpv.clone(), repo_name.clone());
+            repo_of.insert(cross_cpv.clone(), repo_name);
             versions
                 .entry(cross_cpn)
                 .or_default()
@@ -1330,7 +1328,7 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
     RepoData {
         cpns,
         versions,
-        repo_name: set.main().name().to_string(),
+        repo_name: set.main().name(),
         repo_of,
         real_cpn_of,
     }
@@ -2170,7 +2168,7 @@ mod tests {
         let (_main_dir, main) =
             disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
         let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
-        let overlay_name = overlay.name().to_string();
+        let overlay_name = overlay.name();
 
         let set = portage_repo::RepoSet::from_ordered(
             vec![std::sync::Arc::new(overlay), std::sync::Arc::new(main)],
@@ -2188,8 +2186,8 @@ mod tests {
         );
         assert_eq!(entries[0].1.metadata.description, "from overlay");
         assert_eq!(
-            data.repo_of.get(&cpv).map(String::as_str),
-            Some(overlay_name.as_str()),
+            data.repo_of.get(&cpv).copied(),
+            Some(overlay_name),
             "repo_of must attribute the win to the overlay, not be absent (which means main)"
         );
     }
@@ -2277,7 +2275,7 @@ mod tests {
         let alias_entry = portage_repo::RepoEntry {
             name: "crossdev".into(),
             location: portage_repo::Location::Alias {
-                source: repo.name().to_string(),
+                source: repo.name(),
                 aliases,
             },
             masters: None,

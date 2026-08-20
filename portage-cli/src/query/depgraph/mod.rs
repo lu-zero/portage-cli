@@ -1558,7 +1558,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // displayed plan used.
     let repo_path_of = |cpv: &Cpv| -> camino::Utf8PathBuf {
         let name = repo::repo_name_of(&data, cpv);
-        set.by_name(name).unwrap_or(set.main()).path().to_owned()
+        set.by_name(name.as_str())
+            .unwrap_or(set.main())
+            .path()
+            .to_owned()
     };
     let plan: Vec<PlannedMerge> = plan_entries
         .iter()

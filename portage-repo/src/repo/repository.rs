@@ -6,6 +6,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use gentoo_core::Arch;
 use jwalk::WalkDir;
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_metadata::{CacheEntry, Eapi};
 
@@ -223,7 +224,7 @@ use crate::error::{Error, Result};
 pub struct Repository {
     path: Utf8PathBuf,
     layout: LayoutConf,
-    name: String,
+    name: Interned<DefaultInterner>,
     arch_cache: Vec<Arch>,
     /// In-tree `metadata/md5-cache` (usually a [`DirMetadataCache`])
     primary: Arc<dyn MetadataCache>,
@@ -370,6 +371,7 @@ impl Repository {
         let layout = LayoutConf::from_repo(path.as_std_path())?;
 
         let name = util::resolve_repo_name(path.as_std_path())?;
+        let interned_name = Interned::<DefaultInterner>::intern(&name);
 
         let arch_cache: Vec<Arch> = util::read_lines(path.join("profiles").join("arch.list"))
             .unwrap_or_default()
@@ -389,7 +391,7 @@ impl Repository {
         Ok(Repository {
             path,
             layout,
-            name,
+            name: interned_name,
             arch_cache,
             primary,
             secondary,
@@ -536,8 +538,8 @@ impl Repository {
     }
 
     /// Repository name (from `profiles/repo_name`)
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn name(&self) -> Interned<DefaultInterner> {
+        self.name
     }
 
     /// The parsed `metadata/layout.conf`

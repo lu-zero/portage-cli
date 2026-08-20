@@ -24,7 +24,7 @@ repository = "https://github.com/lu-zero/portage-cli"
 
 [workspace.dependencies]
 # Workspace members (path + version for publishable crates)
-gentoo-interner = { version = "0.4.1", path = "gentoo-interner" }
+gentoo-interner = { version = "0.4.1", path = "gentoo-interner", features = ["serde"] }
 gentoo-core = { version = "0.6.1", path = "gentoo-core" }
 gentoo-stages = { version = "0.6.1", path = "gentoo-stages" }
 portage-atom = { version = "0.11.1", path = "portage-atom" }

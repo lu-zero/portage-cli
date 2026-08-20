@@ -55,6 +55,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Dep, Pf, Version};
 use portage_atom_pubgrub::DepClass;
 use portage_repo::{MakeConf, ProfileStack, ReposConf, Repository};
@@ -1144,9 +1145,9 @@ fn alias_repo_entry(target: &CrossTarget, extras: &[Cpn]) -> portage_repo::RepoE
     let mut aliases = HashMap::new();
     aliases.insert(category, pkgs);
     portage_repo::RepoEntry {
-        name: overlay_name(target),
+        name: Interned::<DefaultInterner>::intern(&overlay_name(target)),
         location: portage_repo::Location::Alias {
-            source: "gentoo".to_string(),
+            source: Interned::intern("gentoo"),
             aliases,
         },
         masters: None,

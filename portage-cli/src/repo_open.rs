@@ -72,7 +72,7 @@ pub fn repo_set_from_conf(
             path.to_path_buf(),
             &repos_dir,
             e.masters.as_deref(),
-            Some(main.name()),
+            Some(main.name().as_str()),
         ) {
             Ok(r) => repos.push(Arc::new(r)),
             Err(err) => {

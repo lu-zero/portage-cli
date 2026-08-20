@@ -169,7 +169,7 @@ impl RepoSet {
             let super::repos_conf::Location::Alias { source, aliases } = &entry.location else {
                 continue;
             };
-            if source != main_name {
+            if *source != main_name {
                 continue;
             }
             for (dest_cat, source_cpns) in aliases {
@@ -385,6 +385,7 @@ impl<'a> Iterator for EbuildsAcross<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portage_atom::interner::Interned;
 
     fn make_repo(dir: &tempfile::TempDir, categories: &[&str]) -> Repository {
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
@@ -427,8 +428,8 @@ mod tests {
         let overlay_dir = tempfile::tempdir().unwrap();
         let main = make_repo(&main_dir, &[]);
         let overlay = make_repo(&overlay_dir, &[]);
-        let main_name = main.name().to_string();
-        let overlay_name = overlay.name().to_string();
+        let main_name = main.name();
+        let overlay_name = overlay.name();
 
         // Overlay ranked above main, as a real higher-priority overlay would be.
         let set = RepoSet::from_ordered(vec![Arc::new(overlay), Arc::new(main)], 1, Vec::new());
@@ -436,7 +437,10 @@ mod tests {
         assert!(set.is_multi());
         assert_eq!(set.main().name(), main_name);
         assert_eq!(set.get(0).name(), overlay_name);
-        assert_eq!(set.by_name(&overlay_name).unwrap().name(), overlay_name);
+        assert_eq!(
+            set.by_name(overlay_name.as_str()).unwrap().name(),
+            overlay_name
+        );
         assert!(set.by_name("nonexistent").is_none());
     }
 
@@ -482,7 +486,7 @@ mod tests {
         let alias_entry = super::super::repos_conf::RepoEntry {
             name: "crossdev".into(),
             location: super::super::repos_conf::Location::Alias {
-                source: main.name().to_string(),
+                source: main.name(),
                 aliases,
             },
             masters: None,
@@ -532,7 +536,7 @@ mod tests {
         let alias_entry = super::super::repos_conf::RepoEntry {
             name: "crossdev".into(),
             location: super::super::repos_conf::Location::Alias {
-                source: "some-other-repo".to_string(),
+                source: Interned::intern("some-other-repo"),
                 aliases,
             },
             masters: None,
@@ -567,7 +571,7 @@ mod tests {
         add_ebuild(&overlay_dir, "app-misc", "bar", "2.0");
         let main = make_repo(&main_dir, &["sys-apps"]);
         let overlay = make_repo(&overlay_dir, &["sys-apps", "app-misc"]);
-        let overlay_name = overlay.name().to_string();
+        let overlay_name = overlay.name();
 
         // Overlay ranked above main: its copy of sys-apps/foo-1.0 should win.
         let set = RepoSet::from_ordered(vec![Arc::new(overlay), Arc::new(main)], 1, Vec::new());

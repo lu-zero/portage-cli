@@ -280,7 +280,7 @@ fn load_repo(repo_path: &str, sys: &SystemConfig) -> InMemoryRepository {
         .in_memory_cache()
         .open(repo_path)
         .expect("failed to open repo");
-    let repo_name = Interned::intern(repo.name());
+    let repo_name = repo.name();
     let mut out = InMemoryRepository::new();
 
     for cat in repo.categories() {

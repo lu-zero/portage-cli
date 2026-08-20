@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Cpn;
+use portage_atom::interner::{DefaultInterner, Interned};
 
 use super::ini;
 use super::repository::Repository;
@@ -19,7 +20,7 @@ pub enum Location {
     /// symlink overlay.
     Alias {
         /// The source repo name (e.g. `"gentoo"`) whose packages are aliased
-        source: String,
+        source: Interned<DefaultInterner>,
         /// Destination category → source cpns within [`source`](Self::Alias::source)
         /// Key: the category the packages appear under in this virtual repo
         /// (e.g. `cross-riscv64-unknown-linux-gnu`). Value: the real cpns
@@ -42,7 +43,7 @@ impl Location {
 #[derive(Debug, Clone)]
 pub struct RepoEntry {
     /// Section name (e.g. `gentoo`, `crossdev`)
-    pub name: String,
+    pub name: Interned<DefaultInterner>,
     /// Where the repository's packages live: a real path or a virtual alias
     pub location: Location,
     /// `masters` from repos.conf. `None` means the key is absent from every
@@ -167,9 +168,9 @@ impl ReposConf {
                     let mut aliases = HashMap::new();
                     aliases.insert(target.clone(), pkgs);
                     return Some(RepoEntry {
-                        name: name.clone(),
+                        name: Interned::intern(name),
                         location: Location::Alias {
-                            source: source.clone(),
+                            source: Interned::intern(source),
                             aliases,
                         },
                         masters,
@@ -182,7 +183,7 @@ impl ReposConf {
                 }
                 let location = s.get("location")?;
                 Some(RepoEntry {
-                    name: name.clone(),
+                    name: Interned::intern(name),
                     location: Location::Path(PathBuf::from(location)),
                     masters,
                     sync_type: s.get("sync-type").cloned().filter(|t| !t.is_empty()),
@@ -287,7 +288,7 @@ impl ReposConf {
                 continue;
             };
             self.repos.push(RepoEntry {
-                name,
+                name: Interned::intern(&name),
                 location: Location::Path(dir.clone().into_std_path_buf()),
                 masters: None,
                 sync_type: None,

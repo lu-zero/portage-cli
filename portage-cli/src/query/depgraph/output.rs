@@ -1215,7 +1215,7 @@ fn format_flags(
 /// Mirrors portage: show `:slot/subslot` when the subslot differs from the
 /// slot, else `:slot` when the slot isn't the default `0`, else nothing —
 /// always followed by `::repo`.
-fn slot_repo_suffix(cache: &CacheEntry, repo_name: &str) -> String {
+fn slot_repo_suffix(cache: &CacheEntry, repo_name: Interned<DefaultInterner>) -> String {
     let slot = cache.metadata.slot.slot.as_str();
     let subslot = cache.metadata.slot.subslot.map(|s| s.as_str().to_string());
     let mut s = String::new();

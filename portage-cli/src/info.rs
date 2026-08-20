@@ -14,6 +14,7 @@ use std::io::Write as _;
 use anstyle::{AnsiColor, Color, Effects, Style};
 use anyhow::{Context, Result};
 use camino::Utf8Path;
+use portage_atom::interner::{DefaultInterner, Interned};
 use portage_repo::UseExpand;
 use serde::Serialize;
 
@@ -94,7 +95,7 @@ const ALWAYS_SHOW_COMPILERS: &[&str] = &["sys-devel/gcc", "llvm-core/clang"];
 
 #[derive(Serialize)]
 struct RepoInfo {
-    name: String,
+    name: Interned<DefaultInterner>,
     location: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     masters: Vec<String>,
@@ -221,7 +222,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
                     ),
                 };
                 out.push(RepoInfo {
-                    name: r.name.clone(),
+                    name: r.name,
                     location: path
                         .map(|p| p.display().to_string())
                         .unwrap_or_else(|| "(virtual)".to_string()),
