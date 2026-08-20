@@ -22,6 +22,8 @@ pub struct MergeSpec {
     pub use_flags: Vec<String>,
     /// IUSE as declared by the ebuild (may include `+`/`-` defaults)
     pub iuse: Vec<String>,
+    /// `IUSE_EFFECTIVE` (PMS 11.1.1); omitted from the VDB when empty
+    pub iuse_effective: Vec<String>,
     /// `DEPEND` line from the ebuild (build-time dependencies)
     pub depend: Option<String>,
     /// `RDEPEND` line from the ebuild (run-time dependencies)
@@ -128,6 +130,12 @@ impl Vdb {
         write_field("SLOT", format!("{}\n", spec.slot))?;
         write_field("USE", format!("{}\n", spec.use_flags.join(" ")))?;
         write_field("IUSE", format!("{}\n", spec.iuse.join(" ")))?;
+        if !spec.iuse_effective.is_empty() {
+            write_field(
+                "IUSE_EFFECTIVE",
+                format!("{}\n", spec.iuse_effective.join(" ")),
+            )?;
+        }
         write_field("DESCRIPTION", format!("{}\n", spec.description))?;
         write_field("BUILD_TIME", format!("{}\n", spec.build_time))?;
         write_field("SIZE", format!("{}\n", spec.size))?;
@@ -292,6 +300,7 @@ mod tests {
             slot: "0".into(),
             use_flags: vec!["readline".into(), "nls".into()],
             iuse: vec!["+readline".into(), "+nls".into()],
+            iuse_effective: vec![],
             depend: None,
             rdepend: Some("sys-libs/readline".into()),
             bdepend: None,

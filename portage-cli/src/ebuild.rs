@@ -8,7 +8,7 @@ use bzip2::write::BzEncoder;
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Cpv;
 use portage_distfiles::{DistfileResolver, FetchConfig, FetchStatus, Fetcher, RestrictGate};
-use portage_metadata::{RestrictExpr, SrcUriEntry};
+use portage_metadata::{Eapi, RestrictExpr, SrcUriEntry};
 use portage_repo::{Ebuild, EbuildEnv, MakeConf, Manifest, ReposConf, Repository};
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, MergeSpec, Vdb};
 use tracing::Instrument;
@@ -1565,6 +1565,7 @@ async fn build_binpkg_standalone(
     work_root: &Utf8Path,
     root: &Utf8Path,
 ) -> Result<Utf8PathBuf> {
+    shell.apply_iuse_effective();
     let env = shell.collect_env();
     let env_dump = capture_environment(shell, work_root).await;
     let image_dir = ed_image_dir(shell, work_root);
@@ -1576,7 +1577,8 @@ async fn build_binpkg_standalone(
     // identical contents list without copying a single file into the real
     // system.
     let scratch_dest = work_root.join("temp/buildpkgonly-dest");
-    let WalkResult { contents, size, .. } = walk_image(&image_dir, &scratch_dest, &cp)?;
+    let WalkResult { contents, size, .. } =
+        walk_image(&image_dir, &scratch_dest, &cp, rewrite_d_symlinks(&env))?;
 
     let scratch_vdb_root = work_root.join("temp/buildpkgonly-vdb");
     let vdb = open_or_create_vdb(&scratch_vdb_root)?;
@@ -2033,6 +2035,7 @@ async fn run_merge(
             .await
             .context("sourcing ebuild")?;
     }
+    shell.apply_iuse_effective();
     let env = shell.collect_env();
 
     let env_dump = capture_environment(shell, work_root).await;
@@ -2068,7 +2071,7 @@ async fn run_merge(
         contents,
         size,
         protected,
-    } = walk_image(&image_dir, root, &cp)?;
+    } = walk_image(&image_dir, root, &cp, rewrite_d_symlinks(&env))?;
 
     let exclude_cpv = old_pkg.as_ref().map(|p| p.cpv().clone());
     let collisions = vdb
@@ -2705,10 +2708,17 @@ struct WalkResult {
     protected: Vec<Utf8PathBuf>,
 }
 
+fn rewrite_d_symlinks(env: &EbuildEnv) -> bool {
+    env.eapi
+        .parse::<Eapi>()
+        .is_ok_and(|e| e.rewrites_d_symlinks())
+}
+
 fn walk_image(
     image_dir: &Utf8Path,
     dest_root: &Utf8Path,
     cp: &ConfigProtect,
+    rewrite_d: bool,
 ) -> Result<WalkResult> {
     if !image_dir.exists() {
         return Ok(WalkResult {
@@ -2753,9 +2763,19 @@ fn walk_image(
             if meta.file_type().is_symlink() {
                 let raw_target = std::fs::read_link(src_path.as_std_path())
                     .with_context(|| format!("readlink {src_path}"))?;
-                let target: Utf8PathBuf = raw_target
+                let mut target: Utf8PathBuf = raw_target
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("non-UTF-8 symlink target"))?;
+                if rewrite_d
+                    && target.is_absolute()
+                    && let Ok(rest) = target.strip_prefix(image_dir)
+                {
+                    let rewritten = Utf8PathBuf::from("/").join(rest);
+                    tracing::info!(
+                        "rewriting absolute symlink {installed} -> {target} to {rewritten}"
+                    );
+                    target = rewritten;
+                }
                 // Symlinks are config-protectable too (portage bug #485598):
                 // divert when an existing link points somewhere different.
                 let write_path = if cp.is_protected(&installed) {
@@ -3084,6 +3104,7 @@ fn merge_spec_from_env(
         slot: env.slot,
         use_flags: env.use_flags,
         iuse: env.iuse,
+        iuse_effective: env.iuse_effective,
         depend: env.depend,
         rdepend: env.rdepend,
         bdepend: env.bdepend,
@@ -3434,7 +3455,7 @@ mod tests {
         fs::create_dir_all(root.as_std_path()).unwrap();
 
         let WalkResult { contents, size, .. } =
-            walk_image(&image, &root, &ConfigProtect::none()).unwrap();
+            walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
 
         assert!(root.join("usr/bin/testprog").exists());
         assert!(
@@ -3467,6 +3488,36 @@ mod tests {
     }
 
     #[test]
+    fn walk_image_rewrites_absolute_symlink_into_d() {
+        let tmp = tempfile::tempdir().unwrap();
+        let image = Utf8PathBuf::try_from(tmp.path().join("image")).unwrap();
+        let root_on = Utf8PathBuf::try_from(tmp.path().join("root-on")).unwrap();
+        let root_off = Utf8PathBuf::try_from(tmp.path().join("root-off")).unwrap();
+        fs::create_dir_all(image.join("usr/bin").as_std_path()).unwrap();
+        fs::write(image.join("usr/bin/tool").as_std_path(), b"x").unwrap();
+        let abs = image.join("usr/bin/tool");
+        symlink(abs.as_std_path(), image.join("usr/bin/tp").as_std_path()).unwrap();
+        fs::create_dir_all(root_on.as_std_path()).unwrap();
+        fs::create_dir_all(root_off.as_std_path()).unwrap();
+
+        let WalkResult { contents, .. } =
+            walk_image(&image, &root_on, &ConfigProtect::none(), true).unwrap();
+        let tp = contents
+            .iter()
+            .find(|e| e.path.as_str() == "/usr/bin/tp")
+            .unwrap();
+        assert_eq!(tp.target.as_deref(), Some(Utf8Path::new("/usr/bin/tool")));
+
+        let WalkResult { contents, .. } =
+            walk_image(&image, &root_off, &ConfigProtect::none(), false).unwrap();
+        let tp = contents
+            .iter()
+            .find(|e| e.path.as_str() == "/usr/bin/tp")
+            .unwrap();
+        assert_eq!(tp.target.as_deref(), Some(abs.as_path()));
+    }
+
+    #[test]
     fn walk_image_empty_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let image = Utf8PathBuf::try_from(tmp.path().join("image")).unwrap();
@@ -3475,7 +3526,7 @@ mod tests {
         fs::create_dir_all(root.as_std_path()).unwrap();
 
         let WalkResult { contents, size, .. } =
-            walk_image(&image, &root, &ConfigProtect::none()).unwrap();
+            walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
         assert!(contents.is_empty());
         assert_eq!(size, 0);
     }
@@ -3486,7 +3537,7 @@ mod tests {
         let image = Utf8PathBuf::try_from(tmp.path().join("no-such-image")).unwrap();
         let root = Utf8PathBuf::try_from(tmp.path().join("root")).unwrap();
         let WalkResult { contents, size, .. } =
-            walk_image(&image, &root, &ConfigProtect::none()).unwrap();
+            walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
         assert!(contents.is_empty());
         assert_eq!(size, 0);
     }
@@ -3517,7 +3568,7 @@ mod tests {
             contents,
             protected,
             ..
-        } = walk_image(&image, &root, &cp).unwrap();
+        } = walk_image(&image, &root, &cp, false).unwrap();
 
         // Differing protected file diverted; original untouched.
         assert_eq!(
@@ -3575,7 +3626,7 @@ mod tests {
         fs::create_dir_all(image.join("usr/bin").as_std_path()).unwrap();
         fs::write(image.join("usr/bin/bug").as_std_path(), b"new\n").unwrap();
 
-        let WalkResult { contents, .. } = walk_image(&image, &root, &ConfigProtect::none())
+        let WalkResult { contents, .. } = walk_image(&image, &root, &ConfigProtect::none(), false)
             .expect("re-merge over a read-only file must succeed (unlink before copy)");
 
         assert_eq!(
@@ -3614,7 +3665,7 @@ mod tests {
             AtFlags::SYMLINK_NOFOLLOW,
         );
 
-        walk_image(&image, &root, &ConfigProtect::none()).unwrap();
+        walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
 
         let merged = fs::symlink_metadata(root.join("usr/bin/tp").as_std_path()).unwrap();
         assert_eq!(merged.mtime(), 1_000_000_000);
@@ -3647,7 +3698,7 @@ mod tests {
         .unwrap();
         fs::create_dir_all(root.as_std_path()).unwrap();
 
-        walk_image(&image, &root, &ConfigProtect::none()).unwrap();
+        walk_image(&image, &root, &ConfigProtect::none(), false).unwrap();
 
         let a = fs::metadata(root.join("usr/bin/tool").as_std_path()).unwrap();
         let b = fs::metadata(root.join("usr/bin/tool-alias").as_std_path()).unwrap();
@@ -3674,7 +3725,7 @@ mod tests {
             protect: vec!["/etc".into()],
             mask: vec![],
         };
-        walk_image(&image, &root, &cp).unwrap();
+        walk_image(&image, &root, &cp, false).unwrap();
         // Reused the existing ._cfg0000 rather than creating ._cfg0001.
         assert!(!root.join("etc/._cfg0001_foo.conf").exists());
         assert_eq!(

@@ -1,6 +1,6 @@
 # Absolute symlink rewrite (PMS 13.4.1)
 
-Status: 🔴 not started. Related: [[pms-compliance]].
+Status: ✅ EAPI 0–8 rewrite in `walk_image`. Related: [[pms-compliance]].
 
 ## PMS
 

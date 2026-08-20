@@ -129,6 +129,7 @@ mod tests {
             slot: "0".into(),
             use_flags: vec![],
             iuse: vec![],
+            iuse_effective: vec![],
             depend: None,
             rdepend: None,
             bdepend: None,

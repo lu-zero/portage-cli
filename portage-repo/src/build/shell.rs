@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -1828,6 +1828,7 @@ impl EbuildShell {
             }
 
             self.phase_sourced_ebuild = Some(ebuild.path().to_path_buf());
+            self.apply_iuse_effective();
         }
 
         // Compute $A from $SRC_URI for the active USE flag set.
@@ -2067,6 +2068,45 @@ impl EbuildShell {
         self.shell.env_str(name).map(|cow| cow.into_owned())
     }
 
+    /// Set `IUSE_EFFECTIVE` from IUSE + profile implicit/expand values (PMS 11.1.1)
+    ///
+    /// Undefined during metadata generation; call this on the build-phase
+    /// source path only.
+    pub fn apply_iuse_effective(&mut self) {
+        let eapi = self
+            .get_var("EAPI")
+            .and_then(|s| s.parse::<Eapi>().ok())
+            .unwrap_or(Eapi::Zero);
+        let split = |name: &str| -> Vec<String> {
+            self.get_var(name)
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect()
+        };
+        let expand = split("USE_EXPAND");
+        let unprefixed = split("USE_EXPAND_UNPREFIXED");
+        let mut values = HashMap::new();
+        for v in expand.iter().chain(unprefixed.iter()) {
+            let key = format!("USE_EXPAND_VALUES_{v}");
+            let vals = split(&key);
+            if !vals.is_empty() {
+                values.insert(v.clone(), vals);
+            }
+        }
+        let set = portage_metadata::iuse_effective(
+            eapi,
+            split("IUSE"),
+            split("IUSE_IMPLICIT"),
+            expand,
+            split("USE_EXPAND_IMPLICIT"),
+            unprefixed,
+            &values,
+        );
+        let joined = set.into_iter().collect::<Vec<_>>().join(" ");
+        self.set_var("IUSE_EFFECTIVE", &joined);
+    }
+
     /// Snapshot all ebuild metadata variables into an `EbuildEnv`
     ///
     /// Call this after [`source_ebuild`](Self::source_ebuild) to capture the
@@ -2086,6 +2126,7 @@ impl EbuildShell {
                 if s.is_empty() { "0".to_string() } else { s }
             },
             iuse: split("IUSE"),
+            iuse_effective: split("IUSE_EFFECTIVE"),
             use_flags: split("USE"),
             keywords: split("KEYWORDS"),
             description: get("DESCRIPTION"),

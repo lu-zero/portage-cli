@@ -18,6 +18,8 @@ pub struct EbuildEnv {
     pub slot: String,
     /// IUSE as declared by the ebuild (may include `+`/`-` defaults)
     pub iuse: Vec<String>,
+    /// `IUSE_EFFECTIVE` (PMS 11.1.1), empty when unset (metadata generation)
+    pub iuse_effective: Vec<String>,
     /// USE flags that were active when the ebuild was sourced
     pub use_flags: Vec<String>,
     /// KEYWORDS (e.g. `["amd64", "~arm64"]`)

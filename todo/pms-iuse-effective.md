@@ -1,6 +1,6 @@
 # `IUSE_EFFECTIVE` (PMS 11.1.1)
 
-Status: 🔴 not started. Highest-impact gap from the 2026-08-20 PMS pass.
+Status: 🟡 constructor + `in_iuse` + VDB write; ForceMask still uses raw IUSE.
 Related: [[pms-compliance]], [[pms-empty-dep-groups]] (flags in `flag?`
 groups must be in this set).
 
