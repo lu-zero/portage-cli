@@ -48,30 +48,51 @@ impl TreeView {
         let repo = crate::repo_open::open(repo_path.as_std_path())
             .map_err(|e| anyhow::anyhow!("failed to open repo at {repo_path}: {e}"))?;
         let set = crate::repo_open::repo_set_from_conf(repo, roots, multi_repo);
-        let (data, env) = tokio::join!(
+        let (raw_data, env) = tokio::join!(
             portage_resolve::repo::load_repos(&set),
             portage_resolve::use_env::build_use_env(set.main(), roots.config(), None, None),
         );
         let env = env?;
+        let accept_keywords = portage_resolve::repo::AcceptKeywords::new(
+            arch,
+            &env.accept_keywords,
+            env.package_accept_keywords,
+        );
+        let accept_licenses =
+            portage_resolve::repo::AcceptLicenses::new(env.accept_license, env.package_license);
+        let accept_properties = portage_resolve::repo::AcceptProperties::new(
+            env.accept_properties,
+            env.package_properties,
+        );
+        let accept_restrict =
+            portage_resolve::repo::AcceptRestrict::new(env.accept_restrict, env.package_restrict);
+        // Same policy-then-collapse ordering as `query/depgraph/mod.rs`'s
+        // `depgraph()` — see `repo::collapse_duplicates`'s own doc for why a
+        // masked higher-priority repo's copy must not hide an available
+        // identical version from a lower-priority one.
+        let data = portage_resolve::repo::collapse_duplicates(
+            raw_data,
+            &portage_resolve::repo::ResolvePolicy {
+                accept_keywords: &accept_keywords,
+                package_mask: &env.package_mask,
+                package_unmask: &env.package_unmask,
+                accept_licenses: &accept_licenses,
+                accept_properties: &accept_properties,
+                accept_restrict: &accept_restrict,
+                defaults: &env.defaults,
+                conf: &env.conf,
+                env_use: &env.env_use,
+                package_use: &env.package_use,
+                profile_package_use: &env.profile_package_use,
+                force_mask: &env.force_mask,
+            },
+        );
         Ok(Self {
             data,
-            accept_keywords: portage_resolve::repo::AcceptKeywords::new(
-                arch,
-                &env.accept_keywords,
-                env.package_accept_keywords,
-            ),
-            accept_licenses: portage_resolve::repo::AcceptLicenses::new(
-                env.accept_license,
-                env.package_license,
-            ),
-            accept_properties: portage_resolve::repo::AcceptProperties::new(
-                env.accept_properties,
-                env.package_properties,
-            ),
-            accept_restrict: portage_resolve::repo::AcceptRestrict::new(
-                env.accept_restrict,
-                env.package_restrict,
-            ),
+            accept_keywords,
+            accept_licenses,
+            accept_properties,
+            accept_restrict,
             package_mask: env.package_mask,
             package_unmask: env.package_unmask,
             defaults: env.defaults,

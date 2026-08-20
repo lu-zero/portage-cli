@@ -110,8 +110,10 @@ impl AcceptToken {
 /// because bare `ACCEPT_KEYWORDS="arm64 ~arm64"` never mentions another arch.
 /// It is **wrong** for `package.accept_keywords`, which routinely lists
 /// *other* arches (crossdev target keywords, binary packages on a foreign
-/// KEYWORDS line, `*`/`~*`/`**`). Those tokens are ordinary set members in
-/// Portage; they are not “host-relative modifiers”.
+/// KEYWORDS line, `*`/`~*`/`**`).
+///
+/// Those tokens are ordinary set members in Portage; they are not
+/// “host-relative modifiers”.
 ///
 /// ## Match algorithm (must stay Portage-shaped)
 ///
@@ -1248,26 +1250,24 @@ fn collect_required_use_flags(
 ///
 /// Overlay secondary caches must already be configured on each
 /// [`portage_repo::Repository`] (via [`portage_repo::RepositoryBuilder`]).
-pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
+pub async fn load_repos(set: &portage_repo::RepoSet) -> RawRepoData {
     let mut cpns_set: HashSet<Cpn> = HashSet::new();
-    let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
-    let mut repo_of: HashMap<Cpv, Interned<DefaultInterner>> = HashMap::new();
-    let mut seen: HashSet<Cpv> = HashSet::new();
+    let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry, Interned<DefaultInterner>)>> =
+        HashMap::new();
+    let mut seen: HashSet<(Cpv, Interned<DefaultInterner>)> = HashSet::new();
     let mut real_cpn_of: HashMap<Cpn, Cpn> = HashMap::new();
 
-    for (i, source_repo) in set.iter().enumerate() {
+    for source_repo in set.iter() {
         let repo_name = source_repo.name();
         for (cpv, entry) in portage_repo::repo_entries(source_repo).await {
-            if !seen.insert(cpv.clone()) {
+            if !seen.insert((cpv.clone(), repo_name)) {
                 continue;
             }
             cpns_set.insert(cpv.cpn);
-            // No `repo_of` insert for the main repo: absence means "the
-            // main repo", per `RepoData::repo_of`'s documented convention.
-            if i != set.main_index() {
-                repo_of.insert(cpv.clone(), repo_name);
-            }
-            versions.entry(cpv.cpn).or_default().push((cpv, entry));
+            versions
+                .entry(cpv.cpn)
+                .or_default()
+                .push((cpv, entry, repo_name));
         }
     }
 
@@ -1276,16 +1276,18 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
     // This is the in-memory equivalent of crossdev's symlink overlay — no
     // on-disk tree needed.
     // Collect first, then inject, to avoid borrowing `versions` while mutating.
-    type CrossInject = (Interned<DefaultInterner>, Cpn, Vec<(Cpv, CacheEntry)>);
+    type CrossInject = (
+        Interned<DefaultInterner>,
+        Cpn,
+        Vec<(Cpv, CacheEntry, Interned<DefaultInterner>)>,
+    );
     let mut cross_inject: Vec<CrossInject> = Vec::new();
     for entry in set.aliases() {
         let portage_repo::Location::Alias { source, aliases } = &entry.location else {
             continue;
         };
-        // Only the main repo is a supported alias source today — `versions`
-        // doesn't track per-cpn origin for main-repo entries (only overlays
-        // get a `repo_of` entry), so there's no way to disambiguate a
-        // same-named cpn coming from elsewhere.
+        // Only the main repo is a supported alias source today — a same-named
+        // cpn from a non-main repo can't be disambiguated here.
         if *source != set.main().name() {
             continue;
         }
@@ -1299,24 +1301,29 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
                 let cross_cpn = Cpn::new(dest_cat_interned, source_cpn.package);
                 real_cpn_of.insert(cross_cpn, *source_cpn);
                 cpns_set.insert(cross_cpn);
-                let copies: Vec<(Cpv, CacheEntry)> = real_entries
+                let copies: Vec<(Cpv, CacheEntry, Interned<DefaultInterner>)> = real_entries
                     .iter()
-                    .map(|(cpv, cache)| (Cpv::new(cross_cpn, cpv.version.clone()), cache.clone()))
+                    .map(|(cpv, cache, _)| {
+                        (
+                            Cpv::new(cross_cpn, cpv.version.clone()),
+                            cache.clone(),
+                            repo_name,
+                        )
+                    })
                     .collect();
                 cross_inject.push((repo_name, cross_cpn, copies));
             }
         }
     }
     for (repo_name, cross_cpn, copies) in cross_inject {
-        for (cross_cpv, cache) in copies {
-            if !seen.insert(cross_cpv.clone()) {
+        for (cross_cpv, cache, _) in copies {
+            if !seen.insert((cross_cpv.clone(), repo_name)) {
                 continue;
             }
-            repo_of.insert(cross_cpv.clone(), repo_name);
             versions
                 .entry(cross_cpn)
                 .or_default()
-                .push((cross_cpv, cache));
+                .push((cross_cpv, cache, repo_name));
         }
     }
 
@@ -1325,13 +1332,116 @@ pub async fn load_repos(set: &portage_repo::RepoSet) -> RepoData {
     // strings — alphabetical, no per-comparison allocation.
     cpns.sort_unstable();
 
-    RepoData {
+    RawRepoData {
         cpns,
         versions,
         repo_name: set.main().name(),
-        repo_of,
         real_cpn_of,
     }
+}
+
+/// Every repo's own copy of every version, not yet collapsed to a winner
+///
+/// See [`collapse_duplicates`] for why the collapse needs policy and
+/// can't happen inside [`load_repos`] itself. A `Cpn`'s entries are
+/// grouped by repo-scan order (main first if listed first, then each
+/// overlay in priority order) — `collapse_duplicates` relies on that
+/// ordering to prefer the higher-priority repo on a tie.
+pub struct RawRepoData {
+    /// Every known `Cpn`, sorted
+    pub cpns: Vec<Cpn>,
+    /// Every known version per `Cpn`, tagged with its source repo
+    ///
+    /// May hold more than one entry for the same `Cpv` when multiple
+    /// repos ship the identical version.
+    pub versions: HashMap<Cpn, Vec<(Cpv, CacheEntry, Interned<DefaultInterner>)>>,
+    /// The main repo's name
+    pub repo_name: Interned<DefaultInterner>,
+    /// Cross-derivation reverse map: `cross-<tuple>/<pkg>` → real `<cat>/<pkg>`
+    pub real_cpn_of: HashMap<Cpn, Cpn>,
+}
+
+/// Collapse [`RawRepoData`] to one entry per `Cpv`, respecting policy
+///
+/// Real Portage keeps every repo's instance of a version visible through
+/// mask/keyword/license filtering, and only then picks the highest-
+/// priority *accepted* one (`portage/dbapi/porttree.py`'s `cp_list`, PMS
+/// 8.3.5) — so a masked higher-priority repo's copy doesn't hide an
+/// otherwise-available identical version from a lower-priority repo.
+///
+/// `load_repos` can't do this itself: it runs concurrently with the
+/// config load that produces the policy this needs.
+///
+/// When multiple repos ship an identical `Cpv`, the accepted one wins,
+/// preferring the higher-priority repo among ties (repo-scan order, see
+/// [`RawRepoData::versions`]). When *none* are accepted, the highest-
+/// priority repo's (rejected) instance is kept anyway — dropping it
+/// entirely would break `filter_reasons_for`'s "why is this masked"
+/// reporting, which needs a real entry to explain.
+pub fn collapse_duplicates(raw: RawRepoData, policy: &ResolvePolicy) -> RepoData {
+    let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
+    let mut repo_of: HashMap<Cpv, Interned<DefaultInterner>> = HashMap::new();
+
+    for (cpn, entries) in raw.versions {
+        let mut by_version: Vec<(Cpv, CacheEntry, Interned<DefaultInterner>)> = Vec::new();
+        'entries: for (cpv, cache, repo) in entries {
+            for existing in &mut by_version {
+                if existing.0 != cpv {
+                    continue;
+                }
+                let existing_ok =
+                    version_accepted_for(policy, &existing.0, &existing.1, existing.2);
+                let candidate_ok = version_accepted_for(policy, &cpv, &cache, repo);
+                if !existing_ok && candidate_ok {
+                    *existing = (cpv, cache, repo);
+                }
+                continue 'entries;
+            }
+            by_version.push((cpv, cache, repo));
+        }
+        for (cpv, cache, repo) in by_version {
+            if repo != raw.repo_name {
+                repo_of.insert(cpv.clone(), repo);
+            }
+            versions.entry(cpn).or_default().push((cpv, cache));
+        }
+    }
+
+    RepoData {
+        cpns: raw.cpns,
+        versions,
+        repo_name: raw.repo_name,
+        repo_of,
+        real_cpn_of: raw.real_cpn_of,
+    }
+}
+
+/// Whether `cpv`/`cache` from `repo` passes keyword/mask/license/
+/// properties/restrict
+///
+/// The same acceptance bar [`Adapter::version_accepted`] applies,
+/// factored out so [`collapse_duplicates`] can use it before a
+/// [`RepoData`] (and thus an `Adapter`) exists to call it on.
+fn version_accepted_for(
+    policy: &ResolvePolicy,
+    cpv: &Cpv,
+    cache: &CacheEntry,
+    repo: Interned<DefaultInterner>,
+) -> bool {
+    let meta = &cache.metadata;
+    policy
+        .accept_keywords
+        .accepts(&meta.keywords, cpv, Some(meta.slot.slot))
+        && !is_masked(
+            policy.package_mask,
+            policy.package_unmask,
+            cpv,
+            &meta.slot,
+            repo,
+        )
+        && license_ok_for(cpv, meta, policy)
+        && properties_ok_for(cpv, meta, policy)
+        && restrict_ok_for(cpv, meta, policy)
 }
 
 /// Map a dep atom to a `PortagePackage` for the solver
@@ -2104,70 +2214,55 @@ mod tests {
         (dir, repo)
     }
 
-    // Like [`disk_repo`], but also writes a real `.ebuild` file with a matching `_md5_` in the cache entry
-    //
-    // `disk_repo`'s bare cache entry is trusted as-is only because it has no
-    // on-disk ebuild to contradict it (`repo_entries`'s suspect walk has nothing
-    // to flag); a test whose repo *does* carry a real ebuild tree needs the digest
-    // to actually match, or the entry is dropped and re-sourced instead.
-    fn disk_repo_with_ebuild(cpv: &str, description: &str) -> (tempfile::TempDir, Repository) {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
-        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
-        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
-
-        let cpv = Cpv::parse(cpv).unwrap();
-        // `ebuilds` (unlike the cache-only bulk read) scans only the
-        // categories listed here -- an empty/missing file means it finds
-        // nothing at all, silently.
-        std::fs::write(
-            dir.path().join("profiles").join("categories"),
-            cpv.cpn.category.as_ref(),
-        )
-        .unwrap();
-        let pf = format!("{}-{}", cpv.cpn.package, cpv.version);
-        let pkg_dir = dir
-            .path()
-            .join(cpv.cpn.category.as_ref())
-            .join(cpv.cpn.package.as_ref());
-        std::fs::create_dir_all(&pkg_dir).unwrap();
-        let ebuild_text =
-            format!("EAPI=8\nDESCRIPTION=\"{description}\"\nSLOT=\"0\"\nKEYWORDS=\"~amd64\"\n");
-        std::fs::write(pkg_dir.join(format!("{pf}.ebuild")), &ebuild_text).unwrap();
-        let digest = format!("{:x}", md5::compute(ebuild_text.as_bytes()));
-
-        let cache_dir = dir
-            .path()
-            .join("metadata")
-            .join("md5-cache")
-            .join(cpv.cpn.category.as_ref());
-        std::fs::create_dir_all(&cache_dir).unwrap();
-        std::fs::write(
-            cache_dir.join(&pf),
-            format!("EAPI=8\nDESCRIPTION={description}\nSLOT=0\n_md5_={digest}\n"),
-        )
-        .unwrap();
-
-        let repo = Repository::builder()
-            .in_memory_cache()
-            .open(dir.path())
-            .unwrap();
-        (dir, repo)
+    /// A permissive `ResolvePolicy` that accepts everything — every test
+    /// building one owns its `ak`/`mask`/`unmask` locals, so this takes
+    /// them by reference rather than constructing its own throwaway ones.
+    fn permissive_policy<'a>(
+        ak: &'a AcceptKeywords,
+        mask: &'a [Dep],
+        unmask: &'a [Dep],
+    ) -> ResolvePolicy<'a> {
+        ResolvePolicy {
+            accept_keywords: ak,
+            package_mask: mask,
+            package_unmask: unmask,
+            accept_licenses: Box::leak(Box::new(AcceptOverlay::new(
+                accept_all_licenses(),
+                Vec::new(),
+            ))),
+            accept_properties: Box::leak(Box::new(AcceptProperties::new(
+                accept_all_licenses(),
+                Vec::new(),
+            ))),
+            accept_restrict: Box::leak(Box::new(AcceptRestrict::new(
+                accept_all_licenses(),
+                Vec::new(),
+            ))),
+            defaults: empty_layer(),
+            conf: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            profile_package_use: &[],
+            force_mask: Box::leak(Box::default()),
+        }
     }
 
     // By default (main listed after the overlay in `sources`, matching
     // main's real `-1000` default priority losing to an overlay's unset-
-    // priority `0`) an overlay's cpv wins over an identical cpv from main
-    // -- live-verified against real portage 3.0.81.2 (`portdbapi.xmatch`,
-    // same setup: main priority -1000, overlay priority 0, `bestmatch-
-    // visible` picks the overlay's ebuild). This is the ordinary "drop an
-    // ebuild in a local overlay to override ::gentoo" workflow, no
-    // repos.conf configuration required.
+    // priority `0`) `load_repos` keeps *both* repos' identical cpv —
+    // `collapse_duplicates` is what picks a winner, see the two tests
+    // below. Live-verified against real portage 3.0.81.2 (`portdbapi.cp_list`
+    // keeps every repo's instance too, ordered by `(version, priority)`).
     #[tokio::test]
-    async fn load_repos_overlay_wins_over_main_for_duplicate_cpv_by_default() {
-        let (_main_dir, main) =
-            disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
-        let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
+    async fn load_repos_keeps_every_repos_copy_of_a_duplicate_cpv() {
+        let (_main_dir, main) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from main\nSLOT=0\nKEYWORDS=arm64\n",
+        );
+        let (_overlay_dir, overlay) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from overlay\nSLOT=0\nKEYWORDS=arm64\n",
+        );
         let overlay_name = overlay.name();
 
         let set = portage_repo::RepoSet::from_ordered(
@@ -2175,15 +2270,44 @@ mod tests {
             1,
             Vec::new(),
         );
-        let data = load_repos(&set).await;
+        let raw = load_repos(&set).await;
+
+        let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
+        let entries = raw.versions.get(&cpv.cpn).unwrap();
+        assert_eq!(entries.len(), 2, "both repos' copies must survive raw load");
+        // Overlay listed first (higher priority) comes first.
+        assert_eq!(entries[0].1.metadata.description, "from overlay");
+        assert_eq!(entries[0].2, overlay_name);
+        assert_eq!(entries[1].1.metadata.description, "from main");
+    }
+
+    // `collapse_duplicates` picks the higher-priority repo among accepted
+    // candidates — matches the old (pre-duplicate-preserving) "overlay
+    // wins" behavior for the ordinary case where nothing is masked.
+    #[tokio::test]
+    async fn collapse_duplicates_prefers_higher_priority_repo_when_both_accepted() {
+        let (_main_dir, main) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from main\nSLOT=0\nKEYWORDS=arm64\n",
+        );
+        let (_overlay_dir, overlay) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from overlay\nSLOT=0\nKEYWORDS=arm64\n",
+        );
+        let overlay_name = overlay.name();
+
+        let set = portage_repo::RepoSet::from_ordered(
+            vec![std::sync::Arc::new(overlay), std::sync::Arc::new(main)],
+            1,
+            Vec::new(),
+        );
+        let raw = load_repos(&set).await;
+        let ak = AcceptKeywords::from_global(&Arch::intern("arm64"), &["arm64", "~arm64"]);
+        let data = collapse_duplicates(raw, &permissive_policy(&ak, &[], &[]));
 
         let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
         let entries = data.versions.get(&cpv.cpn).unwrap();
-        assert_eq!(
-            entries.len(),
-            1,
-            "the duplicate must be deduped, not both kept"
-        );
+        assert_eq!(entries.len(), 1, "collapse must pick exactly one winner");
         assert_eq!(entries[0].1.metadata.description, "from overlay");
         assert_eq!(
             data.repo_of.get(&cpv).copied(),
@@ -2192,23 +2316,73 @@ mod tests {
         );
     }
 
-    // The inverse: when main is listed *before* the overlay in `sources`
-    // (an overlay with an explicit priority lower than main's -1000 --
-    // exotic, but real portage supports it, `man 5 portage`'s own
-    // `priority = 9999`-style examples for the opposite direction), main
-    // wins instead, and `repo_of` correctly has no entry for that cpv
+    // The real bug fix: when the higher-priority repo's copy is masked but
+    // an identical version from a lower-priority repo is not, real Portage
+    // falls through to the unmasked one (`portdbapi.cp_list` keeps both
+    // visible through filtering) — `load_repos`'s old eager dedup silently
+    // discarded main's copy before masking ever ran, so a `::overlay`-
+    // qualified mask on the surviving overlay copy made the package look
+    // wholly unavailable instead of falling back to main's.
     #[tokio::test]
-    async fn load_repos_main_wins_when_ranked_above_the_overlay() {
-        let (_main_dir, main) =
-            disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
-        let (_overlay_dir, overlay) = disk_repo_with_ebuild("dev-libs/foo-1", "from overlay");
+    async fn collapse_duplicates_falls_through_to_an_unmasked_lower_priority_repo() {
+        let (_main_dir, main) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from main\nSLOT=0\nKEYWORDS=arm64\n",
+        );
+        let (_overlay_dir, overlay) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from overlay\nSLOT=0\nKEYWORDS=arm64\n",
+        );
+        let overlay_name = overlay.name();
+
+        let set = portage_repo::RepoSet::from_ordered(
+            vec![std::sync::Arc::new(overlay), std::sync::Arc::new(main)],
+            1,
+            Vec::new(),
+        );
+        let raw = load_repos(&set).await;
+        let ak = AcceptKeywords::from_global(&Arch::intern("arm64"), &["arm64", "~arm64"]);
+        let mask = vec![Dep::parse(&format!("dev-libs/foo::{overlay_name}")).unwrap()];
+        let data = collapse_duplicates(raw, &permissive_policy(&ak, &mask, &[]));
+
+        let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
+        let entries = data.versions.get(&cpv.cpn).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].1.metadata.description, "from main",
+            "overlay's copy is masked; main's identical version must win instead"
+        );
+        assert_eq!(
+            data.repo_of.get(&cpv),
+            None,
+            "absence means main, the correctly-chosen fallback"
+        );
+    }
+
+    // The inverse of the priority case: when main is listed *before* the
+    // overlay in `sources` (an overlay with an explicit priority lower
+    // than main's -1000 -- exotic, but real portage supports it, `man 5
+    // portage`'s own `priority = 9999`-style examples for the opposite
+    // direction), main wins instead
+    #[tokio::test]
+    async fn collapse_duplicates_main_wins_when_ranked_above_the_overlay() {
+        let (_main_dir, main) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from main\nSLOT=0\nKEYWORDS=arm64\n",
+        );
+        let (_overlay_dir, overlay) = disk_repo(
+            "dev-libs/foo-1",
+            "EAPI=8\nDESCRIPTION=from overlay\nSLOT=0\nKEYWORDS=arm64\n",
+        );
 
         let set = portage_repo::RepoSet::from_ordered(
             vec![std::sync::Arc::new(main), std::sync::Arc::new(overlay)],
             0,
             Vec::new(),
         );
-        let data = load_repos(&set).await;
+        let raw = load_repos(&set).await;
+        let ak = AcceptKeywords::from_global(&Arch::intern("arm64"), &["arm64", "~arm64"]);
+        let data = collapse_duplicates(raw, &permissive_policy(&ak, &[], &[]));
 
         let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
         let entries = data.versions.get(&cpv.cpn).unwrap();
@@ -2221,9 +2395,10 @@ mod tests {
     // repo's copy, not every repo providing the cpn — the dosbox-x bug
     // Nathan reported: `games-emulation/dosbox-x::tatsh-overlay` in
     // package.mask was masking dosbox-x from every repo, not just
-    // tatsh-overlay. Uses two *different* versions (the ordinary overlay
-    // shape) so `load_repos`'s duplicate-cpv dedup never enters into it —
-    // that dedup's own interaction with masking is a separate, open gap.
+    // tatsh-overlay. Checks `is_masked` directly against raw (pre-collapse)
+    // entries, each carrying its own repo tag; `collapse_duplicates`'s own
+    // fallback-to-an-unmasked-repo behavior is covered separately by
+    // `collapse_duplicates_falls_through_to_an_unmasked_lower_priority_repo`.
     #[tokio::test]
     async fn repo_qualified_mask_only_masks_that_repo() {
         let (_main_dir, main) =
@@ -2232,27 +2407,21 @@ mod tests {
             "dev-libs/foo-2",
             "EAPI=8\nDESCRIPTION=from overlay\nSLOT=0\n",
         );
-        let overlay_name = overlay.name().to_string();
+        let overlay_name = overlay.name();
 
         let set = portage_repo::RepoSet::from_ordered(
             vec![std::sync::Arc::new(overlay), std::sync::Arc::new(main)],
             1,
             Vec::new(),
         );
-        let data = load_repos(&set).await;
+        let raw = load_repos(&set).await;
 
         let mask = vec![Dep::parse(&format!("dev-libs/foo::{overlay_name}")).unwrap()];
         let cpn = Cpn::parse("dev-libs/foo").unwrap();
-        let entries = data.versions.get(&cpn).unwrap();
+        let entries = raw.versions.get(&cpn).unwrap();
 
-        for (cpv, cache) in entries {
-            let masked = is_masked(
-                &mask,
-                &[],
-                cpv,
-                &cache.metadata.slot,
-                repo_name_of(&data, cpv),
-            );
+        for (cpv, cache, repo) in entries {
+            let masked = is_masked(&mask, &[], cpv, &cache.metadata.slot, *repo);
             if cpv.version == Version::parse("2").unwrap() {
                 assert!(masked, "overlay's own version must be masked");
             } else {

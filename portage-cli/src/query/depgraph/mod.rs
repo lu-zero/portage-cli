@@ -296,7 +296,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // `set` is built once by the caller (shared with the atom-resolution step)
     // and already carries any caller-supplied aliases prepended onto it.
 
-    let (data, (target_installed, installed_blockers), host_installed, use_env_result) = tokio::join!(
+    let (raw_data, (target_installed, installed_blockers), host_installed, use_env_result) = tokio::join!(
         repo::load_repos(&set),
         // Also precompute each installed package's blocker atoms on this task
         // (for `check_blockers`): the walk only needs the VDB, so it overlaps the
@@ -338,32 +338,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         distdir,
         provided,
     } = use_env;
-
-    // Map each `package.provided` CPV onto the repo slot(s) a `:slot` dep would
-    // reference (the version sharing its major.minor series), so both the solver
-    // (host-seed, below) and the pre-flight check treat it as present at that
-    // slot. A CPV with no matching repo version is recorded slotless.
-    let provided_avail: Vec<(Cpv, Option<String>)> = provided
-        .iter()
-        .flat_map(|cpv| {
-            let mut slots: Vec<String> = Vec::new();
-            if let Some(entries) = data.versions.get(&cpv.cpn) {
-                for (rcpv, ce) in entries {
-                    if same_slot_series(&rcpv.version, &cpv.version) {
-                        let s = ce.metadata.slot.slot.to_string();
-                        if !slots.contains(&s) {
-                            slots.push(s);
-                        }
-                    }
-                }
-            }
-            if slots.is_empty() {
-                vec![(cpv.clone(), None)]
-            } else {
-                slots.into_iter().map(|s| (cpv.clone(), Some(s))).collect()
-            }
-        })
-        .collect();
 
     // Fold global ACCEPT_KEYWORDS and per-package package.accept_keywords into a
     // single interned acceptance decision. A cross build accepts by the TARGET
@@ -436,6 +410,40 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
     };
+
+    // Collapse each repo's own copy of a duplicate cpv (see
+    // `repo::collapse_duplicates`'s own doc) now that policy exists — masks/
+    // keywords/license decide the winner instead of an arbitrary priority-only
+    // pick, so a masked higher-priority repo's copy can't hide an otherwise-
+    // available identical version from a lower-priority one.
+    let data = repo::collapse_duplicates(raw_data, &target_policy);
+
+    // Map each `package.provided` CPV onto the repo slot(s) a `:slot` dep would
+    // reference (the version sharing its major.minor series), so both the solver
+    // (host-seed, below) and the pre-flight check treat it as present at that
+    // slot. A CPV with no matching repo version is recorded slotless.
+    let provided_avail: Vec<(Cpv, Option<String>)> = provided
+        .iter()
+        .flat_map(|cpv| {
+            let mut slots: Vec<String> = Vec::new();
+            if let Some(entries) = data.versions.get(&cpv.cpn) {
+                for (rcpv, ce) in entries {
+                    if same_slot_series(&rcpv.version, &cpv.version) {
+                        let s = ce.metadata.slot.slot.to_string();
+                        if !slots.contains(&s) {
+                            slots.push(s);
+                        }
+                    }
+                }
+            }
+            if slots.is_empty() {
+                vec![(cpv.clone(), None)]
+            } else {
+                slots.into_iter().map(|s| (cpv.clone(), Some(s))).collect()
+            }
+        })
+        .collect();
+
     let mut root_deps = Vec::new();
     let mut root_cpns: std::collections::HashSet<Cpn> = std::collections::HashSet::new();
     // Root targets with no acceptable candidate, dropped from the solve and
