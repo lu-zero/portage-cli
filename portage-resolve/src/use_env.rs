@@ -362,7 +362,23 @@ async fn compute_use_env(
     // baked into the base state. The package-level and *.stable.* sets are
     // also per package; they carry raw `-flag` tokens so unforce/unmask is
     // resolved per package.
+    let use_expand_implicit = split_var("USE_EXPAND_IMPLICIT");
+    let use_expand_unprefixed = split_var("USE_EXPAND_UNPREFIXED");
+    let mut expand_values = HashMap::new();
+    for v in expand.iter().chain(use_expand_unprefixed.iter()) {
+        let vals = split_var(&format!("USE_EXPAND_VALUES_{v}"));
+        if !vals.is_empty() {
+            expand_values.insert(v.clone(), vals);
+        }
+    }
     let force_mask = ForceMask {
+        iuse_injection: crate::force_mask::IuseInjection {
+            iuse_implicit: split_var("IUSE_IMPLICIT"),
+            use_expand: expand.clone(),
+            use_expand_implicit,
+            use_expand_unprefixed,
+            expand_values,
+        },
         layers: stack
             .profiles()
             .iter()

@@ -7,7 +7,7 @@ use portage_atom::{Cpn, Cpv, DepEntry, Version};
 use portage_atom_pubgrub::{CededFlag, IUseDefault, PortagePackage, UseConfig, UseFlagState};
 use portage_metadata::{CacheEntry, IUseDefault as MetaIUseDefault};
 
-use crate::force_mask::ForceMask;
+use crate::force_mask::{ForceMask, IuseInjection, iuse_effective_set};
 use crate::repo::{self, RepoData, ResolvePolicy};
 
 /// Re-apply ceded (`--autosolve-use`) flag decisions on a resolved `UseConfig`
@@ -69,9 +69,16 @@ pub fn apply_force_mask(
     }
 }
 
-/// IUSE set as interned flags for force/mask filtering
-pub fn iuse_set(cache: &CacheEntry) -> HashSet<Interned<DefaultInterner>> {
-    cache.metadata.iuse.iter().map(Interned::from).collect()
+/// `IUSE_EFFECTIVE` as interned flags for force/mask filtering
+pub fn iuse_set(
+    cache: &CacheEntry,
+    injection: &IuseInjection,
+) -> HashSet<Interned<DefaultInterner>> {
+    iuse_effective_set(
+        cache.metadata.eapi,
+        cache.metadata.iuse.iter().map(|iu| iu.name()),
+        injection,
+    )
 }
 
 /// The full effective USE fold for one `(pkg, ver)`: IUSE defaults, `pre_env`,
@@ -101,7 +108,7 @@ pub fn effective_use(
         policy.profile_package_use,
         policy.conf,
     );
-    let iuse = iuse_set(cache);
+    let iuse = iuse_set(cache, &policy.force_mask.iuse_injection);
     let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
     apply_force_mask(
         &mut cfg,

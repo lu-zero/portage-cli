@@ -25,6 +25,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_atom_pubgrub::UseConfig;
+use portage_metadata::Eapi;
 
 /// An interned USE flag
 pub type Flag = Interned<DefaultInterner>;
@@ -70,6 +71,23 @@ pub struct ForceMaskLayer {
     pub pkg_stable_mask: PkgRules,
 }
 
+/// Profile inputs for `IUSE_EFFECTIVE` (PMS 11.1.1)
+///
+/// Shared across packages; the per-package IUSE and EAPI come from the cache.
+#[derive(Debug, Clone, Default)]
+pub struct IuseInjection {
+    /// Profile `IUSE_IMPLICIT`
+    pub iuse_implicit: Vec<String>,
+    /// Profile `USE_EXPAND`
+    pub use_expand: Vec<String>,
+    /// Profile `USE_EXPAND_IMPLICIT`
+    pub use_expand_implicit: Vec<String>,
+    /// Profile `USE_EXPAND_UNPREFIXED`
+    pub use_expand_unprefixed: Vec<String>,
+    /// `USE_EXPAND_VALUES_${v}` for each expand name
+    pub expand_values: HashMap<String, Vec<String>>,
+}
+
 /// Resolved profile force/mask policy, interned once at config-read time
 ///
 /// Layers are parent-first, matching [`ProfileStack::profiles`].
@@ -77,6 +95,9 @@ pub struct ForceMaskLayer {
 pub struct ForceMask {
     /// Profile-chain nodes, ancestors first
     pub layers: Vec<ForceMaskLayer>,
+    /// Profile IUSE injection used to build `IUSE_EFFECTIVE` for the global
+    /// `use.force`/`use.mask` filter (Algorithm 5.1)
+    pub iuse_injection: IuseInjection,
 }
 
 impl ForceMask {
@@ -84,8 +105,29 @@ impl ForceMask {
     pub fn one(layer: ForceMaskLayer) -> Self {
         Self {
             layers: vec![layer],
+            ..Default::default()
         }
     }
+}
+
+/// `IUSE_EFFECTIVE` interned for force/mask filtering
+pub fn iuse_effective_set(
+    eapi: Eapi,
+    iuse: impl IntoIterator<Item = impl AsRef<str>>,
+    injection: &IuseInjection,
+) -> HashSet<Flag> {
+    portage_metadata::iuse_effective(
+        eapi,
+        iuse,
+        &injection.iuse_implicit,
+        &injection.use_expand,
+        &injection.use_expand_implicit,
+        &injection.use_expand_unprefixed,
+        &injection.expand_values,
+    )
+    .into_iter()
+    .map(|s| Interned::intern(&s))
+    .collect()
 }
 
 /// Parse `use.mask`/`use.force` lines to interned signed tokens
@@ -477,6 +519,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            ..Default::default()
         };
         assert!(
             !fm.effective(&glib, None, true, &iuse)
@@ -502,5 +545,16 @@ mod tests {
                 .contains(&flag("sysprof")),
             "unstable merges ignore package.use.stable.mask"
         );
+    }
+
+    #[test]
+    fn iuse_effective_includes_profile_implicit() {
+        let inj = IuseInjection {
+            iuse_implicit: vec!["prefix".into()],
+            ..Default::default()
+        };
+        let set = iuse_effective_set(portage_metadata::Eapi::Eight, ["ssl"], &inj);
+        assert!(set.contains(&flag("ssl")));
+        assert!(set.contains(&flag("prefix")));
     }
 }

@@ -544,8 +544,11 @@ fn effective_use_config(
     );
     if !policy.force_mask.is_empty() {
         let stable = policy.accept_keywords.is_stable(&meta.keywords, cpv, slot);
-        let iuse: std::collections::HashSet<Interned<DefaultInterner>> =
-            meta.iuse.iter().map(Interned::from).collect();
+        let iuse = crate::force_mask::iuse_effective_set(
+            meta.eapi,
+            meta.iuse.iter().map(|iu| iu.name()),
+            &policy.force_mask.iuse_injection,
+        );
         let slot_dep = slot.map(portage_atom::Slot::from_name);
         policy
             .force_mask
@@ -1060,8 +1063,14 @@ impl PackageRepository for Adapter<'_> {
                 .is_stable(&m.keywords, cpv, Some(m.slot.slot))
         });
         if !self.force_mask.is_empty() {
-            let iuse: std::collections::HashSet<Interned<DefaultInterner>> = meta
-                .map(|m| m.iuse.iter().map(Interned::from).collect())
+            let iuse = meta
+                .map(|m| {
+                    crate::force_mask::iuse_effective_set(
+                        m.eapi,
+                        m.iuse.iter().map(|iu| iu.name()),
+                        &self.force_mask.iuse_injection,
+                    )
+                })
                 .unwrap_or_default();
             let slot_dep = slot.map(portage_atom::Slot::from_name);
             self.force_mask

@@ -35,7 +35,7 @@ Index: [[pms-compliance]].
 
 | Pri | Item | Status | Detail |
 |-----|------|--------|--------|
-| 1 | `IUSE_EFFECTIVE` never built | 🟡 ctor/`in_iuse`/VDB | [[pms-iuse-effective]] |
+| 1 | `IUSE_EFFECTIVE` never built | ✅ | [[pms-iuse-effective]] |
 | 2 | Empty `\|\|`/`^^` after USE strip is EAPI 0–6 on every EAPI | ✅ | [[pms-empty-dep-groups]] |
 | 3 | `fetch+` inverted on merge fetch | ✅ merge path | [[pms-fetch-plus]] |
 | 4 | Strong blockers still produce an installable plan | 🟡 Step 1 done | [[blocker-enforcement]] |

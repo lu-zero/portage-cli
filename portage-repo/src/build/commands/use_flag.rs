@@ -2,6 +2,9 @@ use std::io::Write;
 
 use brush_core::builtins;
 use clap::Parser;
+use portage_metadata::Eapi;
+
+use super::die::DieFlag;
 
 // ── use ───────────────────────────────────────────────────────────────────────
 
@@ -23,6 +26,9 @@ impl builtins::Command for UseCommand {
         &self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        if let Some(msg) = unknown_use_flag_msg(context.shell, &self.flag) {
+            return Ok(die_use_query(context, &msg));
+        }
         let enabled = use_flag_enabled(context.shell, &self.flag);
         Ok(brush_core::ExecutionResult::new(u8::from(!enabled)))
     }
@@ -51,6 +57,9 @@ impl builtins::Command for UsevCommand {
         &self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        if let Some(msg) = unknown_use_flag_msg(context.shell, &self.flag) {
+            return Ok(die_use_query(context, &msg));
+        }
         let shell = context.shell;
         if use_flag_enabled(shell, &self.flag) {
             // Default output is the flag name without any leading `!`.
@@ -96,6 +105,9 @@ impl builtins::Command for UsexCommand {
         &self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        if let Some(msg) = unknown_use_flag_msg(context.shell, &self.flag) {
+            return Ok(die_use_query(context, &msg));
+        }
         let shell = context.shell;
         if use_flag_enabled(shell, &self.flag) {
             let s = self.true_str.as_deref().unwrap_or("yes");
@@ -135,6 +147,9 @@ impl builtins::Command for UseEnableCommand {
         &self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        if let Some(msg) = unknown_use_flag_msg(context.shell, &self.flag) {
+            return Ok(die_use_query(context, &msg));
+        }
         let shell = context.shell;
         // PMS/portage's use_enable() resolves the feature name with bash
         // `${2:-$1}` — an explicitly empty `feature` arg (e.g. `use_enable foo
@@ -180,6 +195,9 @@ impl builtins::Command for UseWithCommand {
         &self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        if let Some(msg) = unknown_use_flag_msg(context.shell, &self.flag) {
+            return Ok(die_use_query(context, &msg));
+        }
         let shell = context.shell;
         // See the matching comment in UseEnableCommand: an explicitly empty
         // `feature` arg must fall back to `flag`, same as an omitted one.
@@ -209,6 +227,44 @@ pub(crate) fn use_flag_enabled<SE: brush_core::ShellExtensions>(
     flag: &str,
 ) -> bool {
     flag_in_use(shell.env_str("USE").as_deref().unwrap_or(""), flag)
+}
+
+/// PMS table 12.20: EAPI ≥ 4, `use*` on a flag not in IUSE_EFFECTIVE is an error.
+///
+/// Skipped when `IUSE_EFFECTIVE` is unset (metadata generation — PMS 11.1.1
+/// leaves the set undefined there).
+fn unknown_use_flag_msg<SE: brush_core::ShellExtensions>(
+    shell: &brush_core::Shell<SE>,
+    flag: &str,
+) -> Option<String> {
+    let name = flag.strip_prefix('!').unwrap_or(flag);
+    let eapi = shell
+        .env_str("EAPI")
+        .and_then(|s| s.parse::<Eapi>().ok())
+        .unwrap_or(Eapi::Zero);
+    if !eapi.use_query_errors_outside_iuse_effective() {
+        return None;
+    }
+    let effective = shell.env_str("IUSE_EFFECTIVE")?.into_owned();
+    if effective.is_empty() {
+        return None;
+    }
+    if effective.split_whitespace().any(|f| f == name) {
+        return None;
+    }
+    Some(format!("USE flag '{name}' not in IUSE_EFFECTIVE"))
+}
+
+fn die_use_query<SE: brush_core::ShellExtensions>(
+    context: brush_core::ExecutionContext<'_, SE>,
+    msg: &str,
+) -> brush_core::ExecutionResult {
+    if let Ok(die) = context.shared::<DieFlag>() {
+        die.raise(msg);
+    }
+    let shell = context.shell;
+    let _ = writeln!(context.params.stderr(shell), "die: {msg}");
+    brush_core::ExecutionResult::new(1)
 }
 
 /// Whether `flag` is satisfied by the space-separated `use_str`

@@ -1491,7 +1491,7 @@ fn format_plan_parts(
     let mut forced_display: HashSet<Interned<DefaultInterner>> = HashSet::new();
     if let Some(c) = cache {
         let stable = accept_keywords.is_stable(&c.metadata.keywords, &cpv, pkg.slot());
-        let iuse = super::effective_use::iuse_set(c);
+        let iuse = super::effective_use::iuse_set(c, &force_mask.iuse_injection);
         let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
         if !force_mask.is_empty() {
             let (forced, masked) = force_mask.effective(&cpv, slot_key.as_ref(), stable, &iuse);

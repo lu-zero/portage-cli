@@ -1726,7 +1726,7 @@ fn package_needs_use_reinstall(
     // mask's stable sets rarely change reinstall detection vs the main USE fold.
     let stable = true;
     let cfg = effective_use::effective_use(policy, pkg, &plan_ver, cache, stable, &[]);
-    let cur_iuse = effective_use::iuse_set(cache);
+    let cur_iuse = effective_use::iuse_set(cache, &policy.force_mask.iuse_injection);
     let cur_enabled: HashSet<_> = cur_iuse
         .iter()
         .copied()

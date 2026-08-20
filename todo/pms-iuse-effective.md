@@ -1,6 +1,6 @@
 # `IUSE_EFFECTIVE` (PMS 11.1.1)
 
-Status: 🟡 constructor + `in_iuse` + VDB write; ForceMask still uses raw IUSE.
+Status: ✅ constructor, `in_iuse`, VDB, ForceMask filter, `use*` table 12.20.
 Related: [[pms-compliance]], [[pms-empty-dep-groups]] (flags in `flag?`
 groups must be in this set).
 
@@ -24,14 +24,11 @@ The PM must save `IUSE_EFFECTIVE` when installing.
 
 ## What `em` does
 
-`IUSE_IMPLICIT` / `USE_EXPAND_IMPLICIT` are incrementally stacked
-(`INCREMENTAL_VARS`) and then unused. `in_iuse` scans `$IUSE`
-(`portage-repo/src/build/commands/has.rs`). `use` scans `$USE` with no
-legality check. VDB write stores `IUSE` + `USE` only
-(`todo/PENDING.md` already notes the VDB follow-up).
-
-`ForceMask::effective` also skips global `use.mask` tokens not in ebuild
-`IUSE`, so an implicit flag can slip the Algorithm 5.1 walk.
+`iuse_effective()` builds the set (EAPI 5+ injection). Merge sets
+`IUSE_EFFECTIVE`; `in_iuse` reads it; VDB writes it. ForceMask's global
+filter uses that set. `use`/`usev`/`usex`/`use_enable`/`use_with` die on
+EAPI ≥ 4 when the flag is outside the set (skipped if `IUSE_EFFECTIVE` is
+unset — metadata generation).
 
 ## How to attack
 

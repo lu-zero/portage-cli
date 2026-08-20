@@ -138,6 +138,12 @@ impl Eapi {
     pub fn rewrites_d_symlinks(&self) -> bool {
         *self < Eapi::Nine
     }
+
+    /// `use`/`usev`/`usex`/`use_enable`/`use_with` error if the flag is not in
+    /// `IUSE_EFFECTIVE` (PMS table 12.20). EAPI 0–3: undefined (we do not die).
+    pub fn use_query_errors_outside_iuse_effective(&self) -> bool {
+        *self >= Eapi::Four
+    }
 }
 
 impl fmt::Display for Eapi {
@@ -284,5 +290,8 @@ mod tests {
 
         assert!(Eapi::Eight.rewrites_d_symlinks());
         assert!(!Eapi::Nine.rewrites_d_symlinks());
+
+        assert!(!Eapi::Three.use_query_errors_outside_iuse_effective());
+        assert!(Eapi::Four.use_query_errors_outside_iuse_effective());
     }
 }

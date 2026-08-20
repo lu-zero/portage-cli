@@ -12,7 +12,7 @@ Recently matched: **5.2.10** (`b0e4b11`) profile `package.use` over
 
 | Pri | Item | PMS | Detail |
 |-----|------|-----|--------|
-| 1 | `IUSE_EFFECTIVE` | 11.1.1 / 12.3.12 / table 12.20 | [[pms-iuse-effective]] 🟡 |
+| 1 | `IUSE_EFFECTIVE` | 11.1.1 / 12.3.12 / table 12.20 | [[pms-iuse-effective]] ✅ |
 | 2 | Empty `\|\|` / `^^` after USE strip | table 8.6 | [[pms-empty-dep-groups]] ✅ |
 | 3 | `fetch+` / `mirror+` on merge fetch | 7.3.2 | [[pms-fetch-plus]] ✅ |
 | 4 | Strong blockers still install | 8.3.2 | [[blocker-enforcement]] (PMS note added) |
