@@ -34,16 +34,9 @@ pub struct Distfile {
     /// Download URLs in priority order — GENTOO_MIRRORS first (mirrors-before-
     /// upstream, matching portage), then the expanded `mirror://`/upstream URLs.
     pub urls: Vec<String>,
-    /// EAPI 8+ per-URI restriction prefix, as parsed off the raw `SRC_URI`
-    /// text: `Some("fetch")` for a `fetch+` prefix, `Some("mirror")` for
-    /// `mirror+`.
-    ///
-    /// Per PMS 8.2.2.5, this is an **exemption** from a package-level
-    /// `RESTRICT=fetch`/`RESTRICT=mirror`, not a restriction on the URI.
-    /// **Known bug, not fixed here:** `Fetcher::fetch_distfile` and this
-    /// file's `expand_url` GENTOO_MIRRORS suppression both have that
-    /// backwards. [`DistfileResolver::resolve_uri_map`] gates correctly and
-    /// never reads this field.
+    /// EAPI 8+ per-URI prefix (PMS 7.3.2): `Some("fetch")` for `fetch+`,
+    /// `Some("mirror")` for `mirror+`. An **exemption** from package-level
+    /// `RESTRICT=fetch` / `RESTRICT=mirror`, not a restriction on the URI.
     pub restriction: Option<String>,
 }
 
@@ -73,6 +66,16 @@ impl RestrictGate {
         let fetch = RestrictExpr::has_unconditional(entries, "fetch");
         let mirror = fetch || RestrictExpr::has_unconditional(entries, "mirror");
         Self { fetch, mirror }
+    }
+
+    /// `fetch+` or `mirror+` exempts this URI from `RESTRICT=fetch` (PMS 7.3.2)
+    pub fn uri_exempts_fetch(restriction: Option<&str>) -> bool {
+        matches!(restriction, Some("fetch" | "mirror"))
+    }
+
+    /// `mirror+` exempts this URI from `RESTRICT=mirror` (PMS 7.3.2)
+    pub fn uri_exempts_mirror(restriction: Option<&str>) -> bool {
+        matches!(restriction, Some("mirror"))
     }
 }
 
@@ -128,21 +131,36 @@ impl DistfileResolver {
     /// Resolve `SRC_URI` entries into distfiles given the active USE flags
     ///
     /// USE-conditional groups are evaluated; `mirror://` URIs are expanded.
-    /// GENTOO_MIRRORS are appended as a fallback for every distfile that is
-    /// not `mirror`-restricted.
+    /// GENTOO_MIRRORS are prepended unless package `RESTRICT=mirror` applies
+    /// and the URI is not `mirror+` (PMS 7.3.2).
     pub fn resolve(&self, entries: &[SrcUriEntry], use_flags: &HashSet<String>) -> Vec<Distfile> {
+        self.resolve_with(entries, use_flags, RestrictGate::default())
+    }
+
+    /// [`Self::resolve`] with a package-level `RESTRICT` gate
+    pub fn resolve_with(
+        &self,
+        entries: &[SrcUriEntry],
+        use_flags: &HashSet<String>,
+        gate: RestrictGate,
+    ) -> Vec<Distfile> {
         let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
         collect_uri_pairs(entries, use_flags, &mut raw);
-        self.build_distfiles(raw)
+        self.build_distfiles(raw, gate)
     }
 
     /// Resolve every `SRC_URI` entry regardless of USE conditionals —
     /// `-F`/`--fetch-all-uri`: fetch everything an ebuild could ever need,
     /// not just what the current USE selection asks for.
     pub fn resolve_all(&self, entries: &[SrcUriEntry]) -> Vec<Distfile> {
+        self.resolve_all_with(entries, RestrictGate::default())
+    }
+
+    /// [`Self::resolve_all`] with a package-level `RESTRICT` gate
+    pub fn resolve_all_with(&self, entries: &[SrcUriEntry], gate: RestrictGate) -> Vec<Distfile> {
         let mut raw: Vec<(String, String, Option<String>)> = Vec::new();
         collect_uri_pairs_all(entries, &mut raw);
-        self.build_distfiles(raw)
+        self.build_distfiles(raw, gate)
     }
 
     /// One [`Distfile`] per **filename** (URLs merged/deduped, in `SRC_URI`
@@ -217,18 +235,24 @@ impl DistfileResolver {
             .collect()
     }
 
-    fn build_distfiles(&self, raw: Vec<(String, String, Option<String>)>) -> Vec<Distfile> {
+    fn build_distfiles(
+        &self,
+        raw: Vec<(String, String, Option<String>)>,
+        gate: RestrictGate,
+    ) -> Vec<Distfile> {
         raw.into_iter()
             .map(|(url, filename, restriction)| {
                 // Portage tries GENTOO_MIRRORS *before* the upstream SRC_URI URLs
                 // (make.conf(5): "These locations are used to download files before
-                // the ones listed in the ebuild scripts"). GENTOO_MIRRORS are
-                // skipped for mirror-restricted files and for `mirror://gentoo/`
-                // (expanded via thirdpartymirrors / GLEP-75 fallback in
-                // `expand_url` — prepending GENTOO_MIRRORS again would double them).
+                // the ones listed in the ebuild scripts"). Skip them when the
+                // package is `RESTRICT=mirror` and this URI is not `mirror+`,
+                // and for `mirror://gentoo/` (expanded via thirdpartymirrors —
+                // prepending GENTOO_MIRRORS again would double them).
                 let mut urls = Vec::new();
-                let use_gentoo_mirrors = restriction.as_deref() != Some("mirror")
-                    && !url.starts_with("mirror://gentoo/");
+                let package_blocks_mirrors =
+                    gate.mirror && !RestrictGate::uri_exempts_mirror(restriction.as_deref());
+                let use_gentoo_mirrors =
+                    !package_blocks_mirrors && !url.starts_with("mirror://gentoo/");
                 if use_gentoo_mirrors {
                     for mirror in &self.gentoo_mirrors {
                         for candidate in gentoo_distfile_urls(mirror, &filename) {
@@ -459,19 +483,45 @@ mod tests {
     }
 
     #[test]
-    fn mirror_restriction_suppresses_gentoo_fallback() {
+    fn package_restrict_mirror_suppresses_gentoo_fallback() {
         let r = resolver(&["https://mirror.gentoo.org"]);
         let entries = vec![SrcUriEntry::Renamed {
             url: "https://proprietary.example.com/secret.tar.gz".to_owned(),
             target: "secret.tar.gz".to_owned(),
-            restriction: Some("mirror".to_owned()),
+            restriction: None,
         }];
-        let dfs = r.resolve(&entries, &HashSet::new());
+        let gate = RestrictGate {
+            fetch: false,
+            mirror: true,
+        };
+        let dfs = r.resolve_with(&entries, &HashSet::new(), gate);
         assert_eq!(
             dfs[0].urls,
             ["https://proprietary.example.com/secret.tar.gz"]
         );
         assert_eq!(dfs[0].urls.len(), 1);
+    }
+
+    #[test]
+    fn mirror_plus_exempts_package_restrict_mirror() {
+        let r = resolver(&["https://mirror.gentoo.org"]);
+        let entries = vec![SrcUriEntry::Renamed {
+            url: "https://example.com/foo.tar.gz".to_owned(),
+            target: "foo.tar.gz".to_owned(),
+            restriction: Some("mirror".to_owned()),
+        }];
+        let gate = RestrictGate {
+            fetch: false,
+            mirror: true,
+        };
+        let dfs = r.resolve_with(&entries, &HashSet::new(), gate);
+        assert!(
+            dfs[0]
+                .urls
+                .iter()
+                .any(|u| u.starts_with("https://mirror.gentoo.org/")),
+            "mirror+ must still see GENTOO_MIRRORS under RESTRICT=mirror"
+        );
     }
 
     #[test]

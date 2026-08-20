@@ -47,10 +47,10 @@ what it does not:
 - 🟡 **`FEATURES=mirror`/`force-mirror`/`lmirror` unhandled.** `force-mirror`
   drops upstream URIs; `mirror` fetches all of SRC_URI regardless of USE.
   `fetch.py:883-892,1064`.
-- ✅ **`mirror+`/`fetch+` URI prefixes — DONE.** `portage-metadata/src/src_uri.rs`
-  parses both prefixes into a `restriction` field, consumed by
-  `portage-distfiles/src/resolver.rs` and `fetch.rs` for mirror-routing
-  suppression / fetch-restriction.
+- ✅ **`mirror+`/`fetch+` URI prefixes — DONE.** `src_uri.rs` parses both;
+  `resolve_uri_map` and merge `Fetcher` treat them as PMS 7.3.2 exemptions.
+  `run_fetch` passes package `RESTRICT` as `RestrictGate`. See
+  [[pms-fetch-plus]].
 - 🔵 **thirdparty mirrors not `random.shuffle`d.** portage shuffles the
   thirdparty mirror set per-file for load balancing; em preserves list order.
   `fetch.py:1156`. Intentional divergence (deterministic); revisit if a mirror

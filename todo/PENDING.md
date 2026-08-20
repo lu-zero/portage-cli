@@ -37,7 +37,7 @@ Index: [[pms-compliance]].
 |-----|------|--------|--------|
 | 1 | `IUSE_EFFECTIVE` never built | 🔴 | [[pms-iuse-effective]] |
 | 2 | Empty `\|\|`/`^^` after USE strip is EAPI 0–6 on every EAPI | 🟡 eval/REQUIRED_USE | [[pms-empty-dep-groups]] |
-| 3 | `fetch+` inverted on merge fetch | 🟡 merge path | [[pms-fetch-plus]] |
+| 3 | `fetch+` inverted on merge fetch | ✅ merge path | [[pms-fetch-plus]] |
 | 4 | Strong blockers still produce an installable plan | 🟡 Step 1 done | [[blocker-enforcement]] |
 | 5 | `REQUIRED_USE` advisory, not a mask | 🔴 policy | [[pms-required-use-mask]] |
 | 6 | IDEPEND native root is `merge_root`, not BROOT | 🔴 | [[pms-idepend-broot]] |

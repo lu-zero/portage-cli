@@ -7,8 +7,8 @@ use bzip2::Compression;
 use bzip2::write::BzEncoder;
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::Cpv;
-use portage_distfiles::{DistfileResolver, FetchConfig, FetchStatus, Fetcher};
-use portage_metadata::SrcUriEntry;
+use portage_distfiles::{DistfileResolver, FetchConfig, FetchStatus, Fetcher, RestrictGate};
+use portage_metadata::{RestrictExpr, SrcUriEntry};
 use portage_repo::{Ebuild, EbuildEnv, MakeConf, Manifest, ReposConf, Repository};
 use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, MergeSpec, Vdb};
 use tracing::Instrument;
@@ -1898,10 +1898,13 @@ async fn run_fetch(
 
     let gentoo_mirrors = gentoo_mirrors_list(shell);
     let resolver = DistfileResolver::from_repo(repo, gentoo_mirrors).context("loading mirrors")?;
+    let restrict_gate = RestrictGate::from_restrict(
+        &RestrictExpr::parse(&shell.get_var("RESTRICT").unwrap_or_default()).unwrap_or_default(),
+    );
     let distfiles = if fetch_all_uri {
-        resolver.resolve_all(&entries)
+        resolver.resolve_all_with(&entries, restrict_gate)
     } else {
-        resolver.resolve(&entries, &use_flags)
+        resolver.resolve_with(&entries, &use_flags, restrict_gate)
     };
 
     if distfiles.is_empty() {
@@ -1930,7 +1933,9 @@ async fn run_fetch(
         .split_whitespace()
         .map(Utf8PathBuf::from)
         .collect();
-    let fetcher = Fetcher::new(distdir.clone(), config).with_ro_distdirs(ro_distdirs);
+    let fetcher = Fetcher::new(distdir.clone(), config)
+        .with_ro_distdirs(ro_distdirs)
+        .with_restrict(restrict_gate);
 
     std::fs::create_dir_all(distdir.as_std_path())
         .with_context(|| format!("creating distdir {distdir}"))?;

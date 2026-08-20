@@ -5,7 +5,7 @@ use portage_repo::{Manifest, ManifestEntry};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{Error, Result};
-use crate::resolver::Distfile;
+use crate::resolver::{Distfile, RestrictGate};
 
 /// `filename -> DIST` [`ManifestEntry`], for O(1) lookup during a fetch batch
 ///
@@ -174,6 +174,8 @@ pub struct Fetcher {
     /// writable one is a per-user directory).
     ro_distdirs: Vec<Utf8PathBuf>,
     config: FetchConfig,
+    /// Package-level `RESTRICT=fetch`/`mirror` (PMS 7.3.2)
+    restrict: RestrictGate,
 }
 
 impl Fetcher {
@@ -190,12 +192,19 @@ impl Fetcher {
             distdir,
             ro_distdirs: Vec::new(),
             config,
+            restrict: RestrictGate::default(),
         }
     }
 
     /// Add read-only locations consulted for already-present distfiles
     pub fn with_ro_distdirs(mut self, dirs: Vec<Utf8PathBuf>) -> Self {
         self.ro_distdirs = dirs;
+        self
+    }
+
+    /// Apply package-level `RESTRICT=fetch` / `RESTRICT=mirror`
+    pub fn with_restrict(mut self, restrict: RestrictGate) -> Self {
+        self.restrict = restrict;
         self
     }
 
@@ -220,12 +229,6 @@ impl Fetcher {
         df: &Distfile,
         digests: &DistDigests,
     ) -> Result<FetchStatus> {
-        // RESTRICT=fetch: the ebuild forbids automatic downloading.
-        // Return immediately so the caller can run pkg_nofetch.
-        if df.restriction.as_deref() == Some("fetch") {
-            return Ok(FetchStatus::FetchRestricted);
-        }
-
         let dest = self.distdir.join(&df.filename);
 
         let manifest_entry = digests.get(&df.filename);
@@ -257,6 +260,13 @@ impl Fetcher {
                 link_into_distdir(&candidate, &dest);
             }
             return Ok(FetchStatus::AlreadyPresent);
+        }
+
+        // PMS 7.3.2: `fetch+`/`mirror+` exempt a URI from RESTRICT=fetch.
+        // A file already in DISTDIR was handled above; missing + not exempt
+        // means the caller should run pkg_nofetch.
+        if self.restrict.fetch && !RestrictGate::uri_exempts_fetch(df.restriction.as_deref()) {
+            return Ok(FetchStatus::FetchRestricted);
         }
 
         if df.urls.is_empty() {
@@ -899,5 +909,70 @@ mod tests {
             !temp.as_std_path().exists(),
             "the atomic temp file must not linger after a failed attempt"
         );
+    }
+
+    #[tokio::test]
+    async fn restrict_fetch_without_exemption_is_fetch_restricted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let distdir = Utf8Path::from_path(tmp.path()).unwrap().to_path_buf();
+        let fetcher = Fetcher::new(distdir, FetchConfig::default()).with_restrict(RestrictGate {
+            fetch: true,
+            mirror: true,
+        });
+        let df = Distfile {
+            filename: "secret.tar.gz".to_string(),
+            urls: vec!["http://127.0.0.1:1/secret.tar.gz".to_string()],
+            restriction: None,
+        };
+        let status = fetcher
+            .fetch_distfile_digests(&df, &DistDigests::new())
+            .await
+            .unwrap();
+        assert_eq!(status, FetchStatus::FetchRestricted);
+    }
+
+    #[tokio::test]
+    async fn fetch_plus_exempts_restrict_fetch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let distdir = Utf8Path::from_path(tmp.path()).unwrap().to_path_buf();
+        let fetcher = Fetcher::new(distdir, FetchConfig::default()).with_restrict(RestrictGate {
+            fetch: true,
+            mirror: true,
+        });
+        let df = Distfile {
+            filename: "secret.tar.gz".to_string(),
+            urls: vec![],
+            restriction: Some("fetch".to_string()),
+        };
+        let err = fetcher
+            .fetch_distfile_digests(&df, &DistDigests::new())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::AllFailed { .. }),
+            "fetch+ must attempt a download, not return FetchRestricted"
+        );
+    }
+
+    #[tokio::test]
+    async fn restrict_fetch_already_present_is_ok() {
+        let tmp = tempfile::tempdir().unwrap();
+        let distdir = Utf8Path::from_path(tmp.path()).unwrap().to_path_buf();
+        let filename = "secret.tar.gz";
+        std::fs::write(distdir.join(filename).as_std_path(), b"placed").unwrap();
+        let fetcher = Fetcher::new(distdir, FetchConfig::default()).with_restrict(RestrictGate {
+            fetch: true,
+            mirror: true,
+        });
+        let df = Distfile {
+            filename: filename.to_string(),
+            urls: vec!["http://127.0.0.1:1/secret.tar.gz".to_string()],
+            restriction: None,
+        };
+        let status = fetcher
+            .fetch_distfile_digests(&df, &DistDigests::new())
+            .await
+            .unwrap();
+        assert_eq!(status, FetchStatus::AlreadyPresent);
     }
 }

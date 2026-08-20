@@ -1,7 +1,7 @@
 # `fetch+` / `mirror+` on the merge fetch path (PMS 7.3.2)
 
-Status: 🟡 in progress (merge path + unit tests). Related: [[pms-compliance]],
-[[distfile-fetch-reliability]] (the `resolve_uri_map` half is already right).
+Status: ✅ merge path. Related: [[pms-compliance]],
+[[distfile-fetch-reliability]] (`resolve_uri_map` was already right).
 
 ## PMS
 
