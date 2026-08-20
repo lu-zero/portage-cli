@@ -11,7 +11,7 @@ use portage_atom_pubgrub::{
 use portage_metadata::CacheEntry;
 
 pub(super) use crate::style::{
-    C_BOLD, C_OLDVERSION, C_PKG, C_PKG_BINARY, C_PKG_BINARY_SELECTED, C_PKG_NOMERGE,
+    C_BOLD, C_ERROR, C_OLDVERSION, C_PKG, C_PKG_BINARY, C_PKG_BINARY_SELECTED, C_PKG_NOMERGE,
     C_PKG_NOMERGE_SELECTED, C_PKG_REQUESTED, C_PKG_REQUESTED_SELECTED, C_PKG_SELECTED,
 };
 
@@ -374,6 +374,20 @@ pub(super) fn report_held_back_targets(held_back: &[portage_atom_pubgrub::HeldBa
     }
 }
 
+/// Real emerge's `[blocks B     ]` row (`_emerge/resolver/output.py`'s
+/// `_blockers`): same 14-char bracket width as `[ebuild  N     ]`, `B`
+/// (`PKG_BLOCKER`, red) for a hit nothing auto-resolves. `atom` is the
+/// blocker atom with its `!`/`!!` stripped; real portage shows it in both
+/// the identity column and the quote, which is what a reader actually
+/// searches for.
+fn blocker_bracket_line(atom: &str, owner_cpv: &str, strong: bool) -> String {
+    let blocking = if strong { "hard" } else { "soft" };
+    format!(
+        "[blocks {C_ERROR}B{C_ERROR:#}      ] {C_ERROR}{atom}{C_ERROR:#} \
+         (\"{atom}\" is {blocking} blocking {owner_cpv})"
+    )
+}
+
 /// Report classified blocker (`!`/`!!`) hits after solve.
 ///
 /// `PreExisting` is not printed (emerge: "the damage is already done").
@@ -386,20 +400,29 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
     }
     let mut out = anstream::stderr();
     let mut would_unmerge: Vec<Cpv> = Vec::new();
+    writeln!(out).ok();
 
-    writeln!(out, "\n{C_OFF}!!!{C_OFF:#} Blocker conflict(s) detected:\n").ok();
     for c in classified {
         let owner = format!("{}-{}", c.hit.owner, c.hit.owner_version);
-        let strength = match c.hit.atom.blocker {
-            Some(portage_atom::Blocker::Strong) => "strong(!!)",
-            _ => "weak(!)",
-        };
-        writeln!(
-            out,
-            "  {C_PKG}{owner}{C_PKG:#} blocks {C_OFF}{}{C_OFF:#} ({strength})",
-            c.hit.atom
-        )
-        .ok();
+        let strong = c.hit.atom.blocker == Some(portage_atom::Blocker::Strong);
+        let atom_text = c.hit.atom.to_string();
+        let atom_text = atom_text.trim_start_matches('!');
+
+        // WouldUnmerge keeps its own advisory header + wording — it isn't
+        // the "cannot be installed" case real emerge's `[blocks B]` row
+        // means, it's the resolved (auto-removable) case.
+        let has_would_unmerge = c
+            .verdicts
+            .iter()
+            .any(|v| matches!(v, BlockerVerdict::WouldUnmerge { .. }));
+        if has_would_unmerge {
+            let strength = if strong { "strong(!!)" } else { "weak(!)" };
+            writeln!(
+                out,
+                "  {C_PKG}{owner}{C_PKG:#} blocks {C_OFF}{atom_text}{C_OFF:#} ({strength})"
+            )
+            .ok();
+        }
         for verdict in &c.verdicts {
             match verdict {
                 BlockerVerdict::WouldUnmerge { cpv, order } => {
@@ -420,19 +443,21 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
                     would_unmerge.push(cpv.clone());
                 }
                 BlockerVerdict::StillNeeded { cpv, obstacles } => {
+                    writeln!(out, "{}", blocker_bracket_line(atom_text, &owner, strong)).ok();
                     for o in obstacles {
                         writeln!(
                             out,
-                            "      unresolved: {cpv} is still required by {} ({})",
+                            "      {cpv} is still required by {} ({})",
                             o.needed_by, o.dep
                         )
                         .ok();
                     }
                 }
                 BlockerVerdict::PlannedCoexistence { cpv } => {
+                    writeln!(out, "{}", blocker_bracket_line(atom_text, &owner, strong)).ok();
                     writeln!(
                         out,
-                        "      unresolved: {cpv} is itself part of this plan — cannot coexist"
+                        "      {cpv} is itself part of this plan — cannot coexist"
                     )
                     .ok();
                 }
@@ -440,7 +465,6 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
             }
         }
     }
-
     if !would_unmerge.is_empty() {
         would_unmerge.sort_by_key(ToString::to_string);
         would_unmerge.dedup();
