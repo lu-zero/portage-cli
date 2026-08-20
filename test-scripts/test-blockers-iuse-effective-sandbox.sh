@@ -6,15 +6,28 @@
 # through a real merge/VDB/build-shell round trip — that's the gap this
 # script closes.
 #
-# Every command inside the sandbox runs via `crossdev-stages sandbox run`
-# (hakoniwa: unshared mount/PID/user namespaces, its own fresh /proc,
-# /dev, /tmp, DNS, uid/gid mapping) — deliberately NOT `sudo chroot` +
-# manual `mount --bind`. A raw chroot shares the host's mount namespace, so
-# a script that dies mid-run (or a wrong umount order) leaves real mounts
-# behind on the host; hakoniwa's namespaces are torn down with the process,
-# nothing to leak. The only host-side privileged operations left are plain
-# file writes into the sandbox's own directory (`sudo cp`/`sudo tee`) — no
-# mount, no chroot, nothing that outlives this script.
+# Runs entirely unprivileged: every command inside the sandbox goes through
+# `crossdev-stages sandbox run` (hakoniwa — unshared mount/PID/user
+# namespaces, its own fresh /proc, /dev, /tmp, DNS, uid/gid mapping), and
+# every file this script writes goes *through* that same mechanism (piped
+# into `dd`/`tar` running inside the sandbox) rather than being written
+# *onto* the sandbox's host directory with `sudo`. That distinction matters:
+# a file `sandbox run` creates lands on the host owned by your own uid
+# (hakoniwa's namespace mapping), which `sandbox destroy` can always clean
+# up itself; a file written with `sudo tee`/`sudo cp` lands owned by real
+# root, a privilege domain `sandbox destroy`'s own (unprivileged) removal
+# cannot touch — the first version of this script did that and left
+# behind a sandbox `destroy` couldn't fully remove. No `sudo` at all here
+# now, and — the earlier motivation for this rewrite — no `chroot` or
+# manual `mount --bind` either: a raw chroot shares the host's mount
+# namespace, so a script that dies mid-run can leave real mounts behind;
+# hakoniwa's namespaces are torn down with the process, nothing to leak.
+#
+# `sandbox run`'s CMD is rejoined with plain spaces before being handed to
+# `bash --login -c`, so nested shell syntax (`bash -c "a && b"`, `cat >
+# file`) does not survive the round trip — every call below is a flat,
+# unquoted argv command (`mkdir -p DIR`, `dd of=FILE`, `tar -xf - -C DIR`),
+# never a string containing shell operators.
 #
 # Builds a tiny synthetic overlay (`test-pms`, via `em select repository
 # create`) with seven trivial ebuilds — no SRC_URI, no network fetch —
@@ -22,9 +35,9 @@
 # blocker/USE shape (the canonical systemd[resolvconf]/openresolv blocker
 # pair is far too heavy to build here). This isolates exactly the
 # integration behavior under test and keeps the whole run fast. The real
-# `portage-repo/gentoo` checkout is copied in (not bind-mounted) so
-# `masters = gentoo` has real profiles/licenses to inherit, without a live
-# mount tying the sandbox to the host tree.
+# `portage-repo/gentoo` checkout is streamed in via `tar` (not bind-mounted,
+# not `cp`) so `masters = gentoo` has real profiles/licenses to inherit,
+# without a live mount tying the sandbox to the host tree.
 #
 # Usage: ./test-blockers-iuse-effective-sandbox.sh [--keep] [--sandbox NAME]
 #   --keep           Don't destroy the sandbox on exit (for follow-up manual
@@ -58,27 +71,26 @@ if [[ -z "$SANDBOX" ]]; then
 fi
 
 CDS="$CROSSDEV_STAGES_DIR/target/release/crossdev-stages"
-SB="$HOME/.cache/crossdev-stages/sandboxes/$SANDBOX"
 FAIL=0
 
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; FAIL=1; }
 
+# Every crossdev-stages invocation needs its cwd inside the checkout
+# (--project-dir defaults to `.`); run() wraps that so every call site
+# below reads as a plain command.
+cds() { ( cd "$CROSSDEV_STAGES_DIR" && "$CDS" "$@" ); }
+
 cleanup() {
     echo "--- cleaning up ---"
     if [[ $KEEP -eq 0 ]]; then
-        # `sandbox destroy`'s own removal runs inside its hakoniwa
-        # namespace and can't touch the ebuild/em/repo files this script
-        # wrote via `sudo tee`/`sudo cp` (real host-root-owned, not just
-        # the stage3's own root-owned files it's built to handle) — it
-        # reliably fails on those. `sudo rm -rf` on this one
-        # already-validated, always-absolute `$SB` path is not the chroot
-        # pattern this script was rewritten to drop: no mount, no
-        # namespace, a single bounded removal of a path we just built.
-        sudo rm -rf "$SB"
-        ( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox destroy "$SANDBOX" ) 2>/dev/null
+        # NAME is positional for destroy (unlike run/enter/setup/prepare's
+        # --name) — the wrong form silently no-ops and leaves the sandbox
+        # behind, so this checks the actual exit status.
+        cds sandbox destroy "$SANDBOX" \
+            || echo "warning: sandbox destroy failed — check crossdev-stages sandbox list" >&2
     else
-        echo "kept sandbox: $SANDBOX ($SB) — poke it with:"
+        echo "kept sandbox: $SANDBOX — poke it with:"
         echo "  (cd $CROSSDEV_STAGES_DIR && $CDS sandbox enter --name $SANDBOX)"
     fi
 }
@@ -88,22 +100,31 @@ echo "--- building em (release) ---"
 ( cd "$REPO_ROOT" && cargo build --release -p portage-cli ) || { echo "em build failed"; exit 1; }
 
 echo "--- fresh sandbox: $SANDBOX ---"
-( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox destroy "$SANDBOX" ) 2>/dev/null
-( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox setup --arch aarch64 --name "$SANDBOX" ) \
-    || { echo "sandbox setup failed"; exit 1; }
+cds sandbox destroy "$SANDBOX" 2>/dev/null
+cds sandbox setup --arch aarch64 --name "$SANDBOX" || { echo "sandbox setup failed"; exit 1; }
 
-# Plain file writes into the sandbox's own directory tree — no mount, no
-# chroot. `sandbox run` bind-mounts this whole directory as the container
-# root, so anything placed here is visible inside at the same path.
-echo "--- wiring sandbox (file copies only) ---"
-sudo mkdir -p "$SB/usr/local/bin" "$SB/var/db/repos"
-sudo cp "$REPO_ROOT/target/release/em" "$SB/usr/local/bin/em"
-sudo cp -a "$REPO_ROOT/portage-repo/gentoo" "$SB/var/db/repos/gentoo"
+run_in() { cds sandbox run --name "$SANDBOX" -- "$@"; }
+em() { run_in /usr/local/bin/em "$@"; }
 
-em() { ( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox run --name "$SANDBOX" -- /usr/local/bin/em "$@" ); }
-mconf() { sudo tee "$SB/etc/portage/make.conf" >/dev/null; }
+# Pipe stdin into a file at the container path DEST, entirely through
+# `sandbox run` — never a host-side `sudo tee`. `dd` (not a `cat >`
+# redirect) because CMD's flattening can't carry shell syntax; `dd` reads
+# stdin as plain argv, no redirect needed.
+write_in() {
+    local dest="$1"
+    run_in mkdir -p "$(dirname "$dest")"
+    cds sandbox run --name "$SANDBOX" -- dd "of=$dest" bs=1M status=none
+}
 
-cat <<'EOF' | mconf
+echo "--- wiring sandbox (streamed in, no sudo) ---"
+run_in mkdir -p /usr/local/bin /var/db/repos
+dd if="$REPO_ROOT/target/release/em" bs=1M status=none | write_in /usr/local/bin/em
+run_in chmod +x /usr/local/bin/em
+tar -cf - -C "$REPO_ROOT/portage-repo" gentoo \
+    | cds sandbox run --name "$SANDBOX" -- tar -xf - -C /var/db/repos \
+    || { echo "streaming the gentoo tree in failed"; exit 1; }
+
+cat <<'EOF' | write_in /etc/portage/make.conf
 CHOST="aarch64-unknown-linux-gnu"
 CFLAGS="-O2 -pipe"
 CXXFLAGS="-O2 -pipe"
@@ -112,20 +133,16 @@ FEATURES="-sandbox -usersandbox"
 EOF
 
 em --help >/dev/null || { echo "em --help failed in the sandbox"; exit 1; }
-pass "em runs under crossdev-stages sandbox run"
+pass "em runs under crossdev-stages sandbox run, no sudo"
 
 echo "--- creating synthetic overlay: test-pms ---"
 em select repository create test-pms || { echo "overlay create failed"; exit 1; }
-OV="$SB/var/db/repos/test-pms"
-printf 'test-blockers\ntest-iuse\n' | sudo tee "$OV/profiles/categories" >/dev/null
+OVERLAY=/var/db/repos/test-pms
+printf 'test-blockers\ntest-iuse\n' | write_in "$OVERLAY/profiles/categories"
 
 write_ebuild() {
     # write_ebuild CAT/PN-VER <<'EOF' ... EOF
-    local cpv="$1" dir file
-    dir="$OV/${cpv%/*}"
-    file="$OV/${cpv}.ebuild"
-    sudo mkdir -p "$dir"
-    sudo tee "$file" >/dev/null
+    write_in "$OVERLAY/${1}.ebuild"
 }
 
 write_ebuild test-blockers/victim/victim-1.0 <<'EOF'
@@ -218,7 +235,7 @@ EOF
 echo "--- em regen test-pms ---"
 em regen test-pms || { echo "regen failed"; exit 1; }
 
-installed() { sudo test -d "$SB/var/db/pkg/$1"; }
+installed() { run_in test -d "/var/db/pkg/$1"; }
 
 echo "=== IUSE_EFFECTIVE: known flag merges clean, VDB records the set ==="
 OUT="$(em test-iuse/known-flag 2>&1)"
@@ -228,7 +245,7 @@ if installed test-iuse/known-flag-1.0; then
 else
     fail "known-flag did not merge: $OUT"
 fi
-IEFF="$(sudo cat "$SB/var/db/pkg/test-iuse/known-flag-1.0/IUSE_EFFECTIVE" 2>/dev/null)"
+IEFF="$(run_in cat /var/db/pkg/test-iuse/known-flag-1.0/IUSE_EFFECTIVE 2>/dev/null)"
 echo "$IEFF" | grep -qw foo && pass "VDB IUSE_EFFECTIVE contains 'foo'" || fail "VDB IUSE_EFFECTIVE missing 'foo': '$IEFF'"
 
 echo "=== IUSE_EFFECTIVE: flag outside the set dies (EAPI 8, PMS table 12.20) ==="

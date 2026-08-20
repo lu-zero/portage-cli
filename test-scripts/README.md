@@ -120,15 +120,22 @@ Regression test for the 2026-08-20 PMS pass: blocker auto-unmerge (PMS
 / table 12.20, `portage-metadata`'s `iuse_effective.rs` + `portage-repo`'s
 `use_flag.rs`). Both landed with extensive unit coverage but neither had
 been exercised through a real merge/VDB/build-shell round trip — that's
-the gap this script closes. Unlike the other scripts here, it drives `em`
-via `crossdev-stages sandbox run`/`enter` (hakoniwa namespaces) rather than
-`sudo chroot` + manual `mount --bind` — no host mount to leak if the script
-dies mid-run. Builds a tiny synthetic overlay (`test-pms`, via `em select
-repository create`) with seven trivial no-fetch ebuilds rather than hunting
-for a real Gentoo package with the right blocker/USE shape (the canonical
-`systemd[resolvconf]`/`openresolv` blocker pair is far too heavy to build
-here) — keeps the whole run fast and isolates exactly the behavior under
-test.
+the gap this script closes. Unlike the other scripts here, it runs fully
+unprivileged: `em`, the ebuild/`make.conf` files, and the `portage-repo/
+gentoo` tree are all streamed *into* the sandbox through `crossdev-stages
+sandbox run` (`dd`/`tar`, no shell redirects — `sandbox run`'s CMD is
+rejoined with plain spaces, so nested shell syntax doesn't survive the
+round trip), landing owned by your own uid via hakoniwa's namespace
+mapping. No `sudo`, no `chroot`, no manual `mount --bind` — a raw chroot
+shares the host's mount namespace (real mounts leak if the script dies
+mid-run) and a `sudo`-written file lands owned by real root, a privilege
+domain `sandbox destroy`'s own unprivileged removal can't clean up (both
+were true of this script's first version). Builds a tiny synthetic overlay
+(`test-pms`, via `em select repository create`) with seven trivial
+no-fetch ebuilds rather than hunting for a real Gentoo package with the
+right blocker/USE shape (the canonical `systemd[resolvconf]`/`openresolv`
+blocker pair is far too heavy to build here) — keeps the whole run fast
+and isolates exactly the behavior under test.
 
 Checks: a declared USE flag merges clean and lands in the VDB's
 `IUSE_EFFECTIVE`; querying a flag outside that set dies (EAPI 8); an EAPI 4
