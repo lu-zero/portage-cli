@@ -287,7 +287,7 @@ echo "=== blockers: -p preview must never touch the VDB ==="
 em test-blockers/victim >/dev/null || { echo "victim merge (setup) failed"; exit 1; }
 PRETEND_OUT="$(em -p test-blockers/attacker-weak 2>&1)"
 echo "$PRETEND_OUT"
-echo "$PRETEND_OUT" | grep -q ">>> would unmerge:.*victim" && pass "-p previews the weak-blocker unmerge" || fail "-p did not preview the unmerge: $PRETEND_OUT"
+echo "$PRETEND_OUT" | grep -q "\[uninstall.*\].*victim" && pass "-p previews the weak-blocker unmerge" || fail "-p did not preview the unmerge: $PRETEND_OUT"
 installed test-blockers/victim-1.0 && pass "-p left victim installed (no side effect)" || fail "-p actually unmerged victim!"
 
 echo "=== blockers: weak (!) auto-unmerges the orphaned victim after the merge ==="

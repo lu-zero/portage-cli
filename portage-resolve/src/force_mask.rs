@@ -90,7 +90,7 @@ pub struct IuseInjection {
 
 /// Resolved profile force/mask policy, interned once at config-read time
 ///
-/// Layers are parent-first, matching [`ProfileStack::profiles`].
+/// Layers are parent-first, matching the profile stack's own ancestor order.
 #[derive(Default)]
 pub struct ForceMask {
     /// Profile-chain nodes, ancestors first

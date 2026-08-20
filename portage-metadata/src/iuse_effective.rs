@@ -12,8 +12,7 @@ use crate::eapi::Eapi;
 /// The expand maps are profile `USE_EXPAND` / `USE_EXPAND_IMPLICIT` /
 /// `USE_EXPAND_UNPREFIXED` and `USE_EXPAND_VALUES_${v}` token lists.
 ///
-/// Non-injection EAPIs (table 5.6) get PMS 11.1.1's narrower set instead —
-/// see [`non_injection_extras`].
+/// Non-injection EAPIs (table 5.6) get PMS 11.1.1's narrower set instead.
 pub fn iuse_effective(
     eapi: Eapi,
     iuse: impl IntoIterator<Item = impl AsRef<str>>,

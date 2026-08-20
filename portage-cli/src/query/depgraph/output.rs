@@ -388,6 +388,21 @@ fn blocker_bracket_line(atom: &str, owner_cpv: &str, strong: bool) -> String {
     )
 }
 
+/// Real emerge's row for an auto-resolved (satisfied) blocker victim
+///
+/// `resolver/output.py`'s non-merge branch: `[{operation.ljust(13)}]`,
+/// literally `"uninstall".ljust(13)` — `[uninstall    ]`, not the
+/// `[ebuild N]` bracket a real merge gets. `PKG_UNINSTALL` is red, same as
+/// `PKG_BLOCKER`.
+///
+/// Real emerge inserts this as a genuine node in the merge list itself, in
+/// dependency order; this one still prints in the advisories block (same
+/// position as the line it replaces) — full interleaving is tracked
+/// separately, not attempted here.
+fn uninstall_row(cpv: &Cpv) -> String {
+    format!("[{C_ERROR}uninstall{C_ERROR:#}    ] {C_ERROR}{cpv}{C_ERROR:#}")
+}
+
 /// Report classified blocker (`!`/`!!`) hits after solve.
 ///
 /// `PreExisting` is not printed (emerge: "the damage is already done").
@@ -470,7 +485,7 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
         would_unmerge.dedup();
         writeln!(out).ok();
         for cpv in &would_unmerge {
-            writeln!(out, ">>> would unmerge: {C_PKG}{cpv}{C_PKG:#}").ok();
+            writeln!(out, "{}", uninstall_row(cpv)).ok();
         }
     }
 
