@@ -1740,6 +1740,7 @@ fn best_rebuild_version(
                     policy.package_unmask,
                     cpv,
                     &cache.metadata.slot,
+                    repo::repo_name_of(data, cpv),
                 )
         })
         .collect();

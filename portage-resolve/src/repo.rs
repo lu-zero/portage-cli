@@ -646,11 +646,22 @@ fn restrict_ok_for(
 }
 
 /// Check whether `mask_dep` matches the given `cpv` (version + CPN, no slot check)
-/// Whether `cpv` (in `slot`) is masked: some mask atom matches and no unmask
-/// atom does (`/etc/portage/package.unmask` cancels masks per package,
-/// portage(5))
-pub fn is_masked(masks: &[Dep], unmasks: &[Dep], cpv: &Cpv, slot: &portage_atom::Slot) -> bool {
-    let hit = |m: &Dep| mask_matches(m, cpv) && mask_slot_matches(m, slot);
+/// Whether `cpv` (in `slot`, from `repo`) is masked: some mask atom matches
+/// and no unmask atom does (`/etc/portage/package.unmask` cancels masks per
+/// package, portage(5))
+///
+/// `repo` is the candidate's own repo (see [`repo_name_of`]) — a mask atom
+/// qualified with `::reponame` (PMS 8.3.5) only masks that repo's versions,
+/// not every repo providing the same cpn/version.
+pub fn is_masked(
+    masks: &[Dep],
+    unmasks: &[Dep],
+    cpv: &Cpv,
+    slot: &portage_atom::Slot,
+    repo: &str,
+) -> bool {
+    let hit =
+        |m: &Dep| mask_matches(m, cpv) && mask_slot_matches(m, slot) && mask_repo_matches(m, repo);
     masks.iter().any(hit) && !unmasks.iter().any(hit)
 }
 
@@ -669,6 +680,11 @@ fn mask_slot_matches(mask_dep: &Dep, slot: &portage_atom::Slot) -> bool {
         }
         _ => true,
     }
+}
+
+/// Whether a mask atom's `::reponame` component (if any) matches the candidate's repo
+fn mask_repo_matches(mask_dep: &Dep, repo: &str) -> bool {
+    mask_dep.repo.is_none_or(|r| r.as_str() == repo)
 }
 
 /// Whether `mask_dep`'s version constraint matches `cpv` (CPN + version op;
@@ -851,7 +867,13 @@ impl Adapter<'_> {
         let meta = &cache.metadata;
         self.accept_keywords
             .accepts(&meta.keywords, cpv, Some(meta.slot.slot))
-            && !is_masked(self.package_mask, self.package_unmask, cpv, &meta.slot)
+            && !is_masked(
+                self.package_mask,
+                self.package_unmask,
+                cpv,
+                &meta.slot,
+                repo_name_of(self.data, cpv),
+            )
             && self.license_ok(cpv, meta)
             && properties_ok_for(cpv, meta, &self.policy())
             && restrict_ok_for(cpv, meta, &self.policy())
@@ -1344,6 +1366,7 @@ pub fn target_package(
                     policy.package_unmask,
                     cpv,
                     &cache.metadata.slot,
+                    repo_name_of(data, cpv),
                 )
                 && license_ok_for(cpv, &cache.metadata, policy)
         })
@@ -1484,7 +1507,13 @@ pub fn filter_reasons_for(
         {
             reasons.push(FilterReason::Keyword(kw));
         }
-        if is_masked(policy.package_mask, policy.package_unmask, cpv, &meta.slot) {
+        if is_masked(
+            policy.package_mask,
+            policy.package_unmask,
+            cpv,
+            &meta.slot,
+            repo_name_of(data, cpv),
+        ) {
             reasons.push(FilterReason::Masked);
         }
         if let Some(lic) = &meta.license {
@@ -2044,6 +2073,18 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
         std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
         std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        // A raw tempdir leaf name (e.g. `.tmpfY6cHK`) is not a valid repo
+        // name token (`Dep::parse` rejects the leading `.`) — sanitize so a
+        // test can round-trip this repo's name through a `::reponame` atom.
+        let name: String = dir
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("test-repo")
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { 'x' })
+            .collect();
+        std::fs::write(dir.path().join("profiles").join("repo_name"), &name).unwrap();
 
         let cpv = Cpv::parse(cpv).unwrap();
         let cache_dir = dir
@@ -2176,6 +2217,50 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.metadata.description, "from main");
         assert_eq!(data.repo_of.get(&cpv), None, "absence means main");
+    }
+
+    // A `::reponame`-qualified package.mask atom (PMS 8.3.5) masks only that
+    // repo's copy, not every repo providing the cpn — the dosbox-x bug
+    // Nathan reported: `games-emulation/dosbox-x::tatsh-overlay` in
+    // package.mask was masking dosbox-x from every repo, not just
+    // tatsh-overlay. Uses two *different* versions (the ordinary overlay
+    // shape) so `load_repos`'s duplicate-cpv dedup never enters into it —
+    // that dedup's own interaction with masking is a separate, open gap.
+    #[tokio::test]
+    async fn repo_qualified_mask_only_masks_that_repo() {
+        let (_main_dir, main) =
+            disk_repo("dev-libs/foo-1", "EAPI=8\nDESCRIPTION=from main\nSLOT=0\n");
+        let (_overlay_dir, overlay) = disk_repo(
+            "dev-libs/foo-2",
+            "EAPI=8\nDESCRIPTION=from overlay\nSLOT=0\n",
+        );
+        let overlay_name = overlay.name().to_string();
+
+        let set = portage_repo::RepoSet::from_ordered(
+            vec![std::sync::Arc::new(overlay), std::sync::Arc::new(main)],
+            1,
+            Vec::new(),
+        );
+        let data = load_repos(&set).await;
+
+        let mask = vec![Dep::parse(&format!("dev-libs/foo::{overlay_name}")).unwrap()];
+        let cpn = Cpn::parse("dev-libs/foo").unwrap();
+        let entries = data.versions.get(&cpn).unwrap();
+
+        for (cpv, cache) in entries {
+            let masked = is_masked(
+                &mask,
+                &[],
+                cpv,
+                &cache.metadata.slot,
+                repo_name_of(&data, cpv),
+            );
+            if cpv.version == Version::parse("2").unwrap() {
+                assert!(masked, "overlay's own version must be masked");
+            } else {
+                assert!(!masked, "main's version must stay unmasked");
+            }
+        }
     }
 
     // `load_repos` injects `Location::Alias` entries as in-memory `cross-<tuple>/<pkg>`
