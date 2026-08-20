@@ -422,7 +422,7 @@ on top of the resolved `make.profile` chain (portage(5),
 `LocationsManager`'s `CUSTOM_PROFILE_PATH`) — a flat node whose own `parent` file
 is not followed. `ProfileStack::with_user_profile` folds it in as the last
 defaults node, so its `make.defaults`/`package.use` and `use.force`/`use.mask`
-win over the `make.profile` chain. Per PMS 5.2.4 any of these profile files may
+win over the `make.profile` chain. Per PMS 5.2.5 any of these profile files may
 be a *directory* whose regular files are concatenated in filename order
 (`/etc/portage/profile/package.use.mask/<name>` is the common case);
 `read_lines` handles both forms.
@@ -582,8 +582,10 @@ PubGrub core" in *some* way:
 
 - **Tier 1 — solved (enforced).** The solution provably satisfies it: version
   ranges, slots/subslots, `||`/`^^`/`??` groups, USE-*conditional* deps
-  (`flag? ( dep )`), slot-operator `:=` subslot-change rebuilds, and Level-C
-  `REQUIRED_USE` (opt-in, `--autosolve-use`).
+  (`flag? ( dep )`), slot-operator `:=` subslot-change rebuilds, Level-C
+  `REQUIRED_USE` (opt-in, `--autosolve-use`), and cross-package `[flag]`
+  USE-deps (`package_use::cosolve_use_deps` on every `-p`, exit 1 when USE
+  must change).
 - **Tier 2 — advisory.** Checked post-solve; the plan is still emitted even when
   violated, and the caveat is printed after it (as emerge does):
   - blockers (`!foo`/`!!foo`) — reported, not used to exclude/replace;
@@ -591,9 +593,6 @@ PubGrub core" in *some* way:
   - `REQUIRED_USE` Level-A (the default);
   - reverse-dependency conflicts — an *enrichment* a default targeted `emerge -p`
     hides (every installed package's constraints checked against the plan);
-  - cross-package `[flag]` USE-deps — surfaced as autounmask `package.use`
-    suggestions by default, but **co-solved** (promoted to Tier 1) under
-    `--autosolve-use` by `package_use::cosolve_use_deps` (C7).
 - **Tier 3 — invisible.** Not detected; the plan can silently differ from emerge
   with no warning:
   - old-slot wrapper/shim packages (`autoconf-wrapper`, `gcc-config`).
@@ -619,7 +618,7 @@ topological order, different scheduler — emerge: target-driven DFS; here: SCC
 condensation + lexicographic Kahn) and the `:slot` suffix on autounmask
 `package.use` atoms. Severity tracks the tier: Tier 3 (silent) is the priority to
 fix, Tier 2 is a deliberate "report don't block" stance (some intentional like
-reverse-deps, some pending promotion like blockers and cross-package `[flag]`).
+reverse-deps, some pending promotion like blockers).
 The running per-item list lives in the
 [`portage-atom-pubgrub` README](../../portage-atom-pubgrub/README.md) "Known
 limitations" section and `docs/required-use-level-c.md` (§6, C7).
