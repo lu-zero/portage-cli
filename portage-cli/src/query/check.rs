@@ -1,4 +1,4 @@
-//! `em query check` — verify checksums and mtimes of installed package files.
+//! `em query check` — verify checksums and mtimes of installed package files
 
 use anyhow::{Context, Result};
 use portage_vdb::{ContentsKind, InstalledPackage, Vdb};

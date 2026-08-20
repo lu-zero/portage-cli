@@ -117,7 +117,7 @@ pub(crate) async fn open_local_index_for_preview(
     portage_binpkg::BinpkgIndex::open(resolve_pkgdir(globals).await.as_std_path()).ok()
 }
 
-/// Read a variable from `make.conf` under the resolved config root.
+/// Read a variable from `make.conf` under the resolved config root
 pub(crate) async fn read_make_conf_var(globals: &Cli, var: &str) -> Option<String> {
     read_make_conf_var_for_roots(&globals.roots(), var).await
 }
@@ -200,10 +200,11 @@ pub(crate) struct DesiredBuildEnv {
 }
 
 impl DesiredBuildEnv {
-    /// Read the desired build env for `roots` — one make.conf evaluation,
-    /// not five. `chost` falls back to the process `CHOST` env var when
-    /// make.conf doesn't set it, the same rule `merge_sequential`/
-    /// `merge_parallel` already apply for their own per-entry desired CHOST.
+    /// Read the desired build env for `roots` — one make.conf evaluation, not five
+    ///
+    /// `chost` falls back to the process `CHOST` env var when make.conf doesn't set it, the
+    /// same rule `merge_sequential`/ `merge_parallel` already apply for their own per-entry
+    /// desired CHOST.
     pub(crate) async fn for_roots(roots: &Roots) -> Self {
         let make_conf_env = evaluated_make_conf_env(roots).await;
         let get = |name: &str| make_conf_env.get(name).cloned().unwrap_or_default();
@@ -319,7 +320,7 @@ pub struct BinRepoEntry {
     /// priority `>= 1`, so they never actually tie against an explicit
     /// section's default `priority` of `0`).
     pub name: String,
-    /// The binhost base URI, trailing slash stripped.
+    /// The binhost base URI, trailing slash stripped
     pub sync_uri: String,
     pub frozen: bool,
     pub verify_signature: bool,
@@ -468,10 +469,10 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    /// Regression test for the stage3 --buildpkg failure: a non-host root
-    /// must never default PKGDIR to the real system's `/var/cache/binpkgs`
-    /// (root-owned, not writable, and not even meaningful for a different
-    /// root's package cache) — see `resolve_pkgdir`'s doc comment.
+    // Regression test for the stage3 --buildpkg failure: a non-host root
+    // must never default PKGDIR to the real system's `/var/cache/binpkgs`
+    // (root-owned, not writable, and not even meaningful for a different
+    // root's package cache) — see `resolve_pkgdir`'s doc comment.
     #[tokio::test]
     async fn non_host_root_gets_root_relative_pkgdir_default() {
         assert!(
@@ -488,10 +489,10 @@ mod tests {
         );
     }
 
-    /// A plain host build (root `/`, no --root/--prefix/--local/--target) is
-    /// unaffected by the root-aware branch — it still falls through to the
-    /// pre-existing make.globals/hardcoded-default lookup, exactly as before
-    /// this change.
+    // A plain host build (root `/`, no --root/--prefix/--local/--target) is
+    // unaffected by the root-aware branch — it still falls through to the
+    // pre-existing make.globals/hardcoded-default lookup, exactly as before
+    // this change.
     #[tokio::test]
     async fn host_root_skips_the_root_relative_branch() {
         assert!(
@@ -571,8 +572,8 @@ mod tests {
         assert_eq!(resolve_pkgdir_for_roots(&host_roots).await, expected_host);
     }
 
-    /// Config-root make.conf `PKGDIR=` wins for whichever roots see that
-    /// config root — proven independently for target and host roots.
+    // Config-root make.conf `PKGDIR=` wins for whichever roots see that
+    // config root — proven independently for target and host roots.
     #[tokio::test]
     async fn resolve_pkgdir_for_roots_honours_config_root_make_conf() {
         assert!(
@@ -594,10 +595,10 @@ mod tests {
         );
     }
 
-    /// The stock Gentoo stage3 `COMMON_FLAGS=… CFLAGS="${COMMON_FLAGS}"`
-    /// pattern must resolve to the real flags, not the literal `${…}` text —
-    /// see `read_make_conf_var_for_roots`'s doc comment for why this matters
-    /// (an unexpanded read silently starves the binpkg reuse key).
+    // The stock Gentoo stage3 `COMMON_FLAGS=… CFLAGS="${COMMON_FLAGS}"`
+    // pattern must resolve to the real flags, not the literal `${…}` text —
+    // see `read_make_conf_var_for_roots`'s doc comment for why this matters
+    // (an unexpanded read silently starves the binpkg reuse key).
     #[tokio::test]
     async fn read_make_conf_var_expands_common_flags_indirection() {
         let dir = tempfile::tempdir().unwrap();
@@ -642,9 +643,9 @@ mod tests {
         );
     }
 
-    /// Under `--target`, the sysroot's own config (`roots()`) and the host's
-    /// (`host_roots()`) can have genuinely different make.conf CFLAGS — the
-    /// fingerprint command's `--host` flag exists exactly for this split.
+    // Under `--target`, the sysroot's own config (`roots()`) and the host's
+    // (`host_roots()`) can have genuinely different make.conf CFLAGS — the
+    // fingerprint command's `--host` flag exists exactly for this split.
     #[tokio::test]
     async fn desired_build_env_host_vs_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -682,10 +683,10 @@ mod tests {
         assert_ne!(target_env.key(), host_env.key());
     }
 
-    /// Build a `--root R --config-root R` `Cli` with `R/etc/portage/make.conf`
-    /// (given CFLAGS) plus, optionally, `package.env` and its named env files
-    /// under that same `etc/portage` dir — the layout `env_files_for` (and
-    /// the real build path) actually reads.
+    // Build a `--root R --config-root R` `Cli` with `R/etc/portage/make.conf`
+    // (given CFLAGS) plus, optionally, `package.env` and its named env files
+    // under that same `etc/portage` dir — the layout `env_files_for` (and
+    // the real build path) actually reads.
     fn cli_with_make_conf_and_package_env(
         dir: &std::path::Path,
         make_conf_cflags: &str,
@@ -791,12 +792,12 @@ mod tests {
         entries.iter().map(|e| e.sync_uri.as_str()).collect()
     }
 
-    /// The two reversals in real portage's own algorithm (`BinRepoConfigLoader`
-    /// assigns increasing priority walking `PORTAGE_BINHOST` *backwards*;
-    /// `bintree.py` then consumes the whole sorted list *reversed*) cancel out
-    /// for a plain `PORTAGE_BINHOST` with no `binrepos.conf` at all — verified
-    /// against the real source, not assumed (see `binrepo/config.py` +
-    /// `dbapi/bintree.py`).
+    // The two reversals in real portage's own algorithm (`BinRepoConfigLoader`
+    // assigns increasing priority walking `PORTAGE_BINHOST` *backwards*;
+    // `bintree.py` then consumes the whole sorted list *reversed*) cancel out
+    // for a plain `PORTAGE_BINHOST` with no `binrepos.conf` at all — verified
+    // against the real source, not assumed (see `binrepo/config.py` +
+    // `dbapi/bintree.py`).
     #[test]
     fn plain_portage_binhost_preserves_original_order() {
         let (sections, order) = parse_sections("");
@@ -804,9 +805,9 @@ mod tests {
         assert_eq!(uris(&result), vec!["A", "B", "C"]);
     }
 
-    /// A higher `priority =` in `binrepos.conf` is tried *first* (ascending
-    /// sort, then reversed for consumption — a higher number sorts later
-    /// ascending, so ends up first after the reversal).
+    // A higher `priority =` in `binrepos.conf` is tried *first* (ascending
+    // sort, then reversed for consumption — a higher number sorts later
+    // ascending, so ends up first after the reversal).
     #[test]
     fn binrepos_conf_priority_higher_number_tried_first() {
         let (sections, order) = parse_sections(
@@ -817,9 +818,9 @@ mod tests {
         assert_eq!(uris(&result), vec!["http://high", "http://low"]);
     }
 
-    /// Explicit `binrepos.conf` sections (priority defaults to 0) and legacy
-    /// `PORTAGE_BINHOST` entries (always priority >= 1) combine correctly:
-    /// the `PORTAGE_BINHOST` entries outrank the unprioritized section.
+    // Explicit `binrepos.conf` sections (priority defaults to 0) and legacy
+    // `PORTAGE_BINHOST` entries (always priority >= 1) combine correctly:
+    // the `PORTAGE_BINHOST` entries outrank the unprioritized section.
     #[test]
     fn binrepos_conf_and_portage_binhost_combine() {
         let (sections, order) = parse_sections("[mine]\nsync-uri = http://mine\n");
@@ -829,8 +830,8 @@ mod tests {
         assert_eq!(uris(&result), vec!["http://a", "http://b", "http://mine"]);
     }
 
-    /// A `PORTAGE_BINHOST` URL already covered by an explicit `binrepos.conf`
-    /// section is not duplicated.
+    // A `PORTAGE_BINHOST` URL already covered by an explicit `binrepos.conf`
+    // section is not duplicated.
     #[test]
     fn duplicate_sync_uri_is_not_added_twice() {
         let (sections, order) = parse_sections("[mine]\nsync-uri = http://dup\npriority = 5\n");
@@ -839,8 +840,8 @@ mod tests {
         assert_eq!(uris(&result), vec!["http://dup", "http://new"]);
     }
 
-    /// A section with no `sync-uri` is skipped entirely (matching real
-    /// portage's own warn-and-skip behaviour), not merged with a blank URI.
+    // A section with no `sync-uri` is skipped entirely (matching real
+    // portage's own warn-and-skip behaviour), not merged with a blank URI.
     #[test]
     fn missing_sync_uri_is_skipped() {
         let (sections, order) = parse_sections("[broken]\npriority = 1\n");
@@ -867,10 +868,10 @@ mod tests {
         assert!(!result[0].verify_signature);
     }
 
-    /// Exercises the real `portage_binhosts` entry point end-to-end against a
-    /// real file on disk (not just `combine_binhosts`'s pure core): a real
-    /// `--root`, a real `etc/portage/binrepos.conf` file, real
-    /// `collect_conf_files`/`merge_sections` I/O.
+    // Exercises the real `portage_binhosts` entry point end-to-end against a
+    // real file on disk (not just `combine_binhosts`'s pure core): a real
+    // `--root`, a real `etc/portage/binrepos.conf` file, real
+    // `collect_conf_files`/`merge_sections` I/O.
     #[tokio::test]
     async fn portage_binhosts_reads_a_real_binrepos_conf_file() {
         assert!(

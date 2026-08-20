@@ -1,4 +1,4 @@
-//! Tracing → activity-bus bridge.
+//! Tracing → activity-bus bridge
 //!
 //! A [`tracing_subscriber::Layer`] that surfaces diagnostics (info/warn/error)
 //! onto the current session's [`ActivityBus`] as [`ActivityEvent::Diagnostic`],
@@ -24,7 +24,7 @@ use tracing_subscriber::{Layer, registry::LookupSpan};
 use super::bus::ActivityBus;
 use super::event::{ACTIVITY_EVENT_VERSION, ActivityEvent, DiagnosticLevel};
 
-/// The session the layer forwards diagnostics to. One per process in practice.
+/// The session the layer forwards diagnostics to. One per process in practice
 static SESSION: OnceLock<Mutex<Option<Session>>> = OnceLock::new();
 
 struct Session {
@@ -32,7 +32,7 @@ struct Session {
     job_id: String,
 }
 
-/// Install (or replace) the session the bus layer forwards diagnostics to.
+/// Install (or replace) the session the bus layer forwards diagnostics to
 pub fn set_session(bus: ActivityBus, job_id: &str) {
     let slot = SESSION.get_or_init(|| Mutex::new(None));
     *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Session {
@@ -91,7 +91,7 @@ fn fmt_debug_value(value: &dyn std::fmt::Debug) -> String {
     }
 }
 
-/// Tracing layer that mirrors info/warn/error events onto the activity bus.
+/// Tracing layer that mirrors info/warn/error events onto the activity bus
 pub struct BusLayer;
 
 impl BusLayer {

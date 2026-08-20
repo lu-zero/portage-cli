@@ -17,15 +17,17 @@ use portage_vdb::Vdb;
 
 use crate::style::{C_BOLD, C_COUNT, C_PKG, C_WARN};
 
-/// How to handle ambiguous bare package names (matching multiple categories).
+/// How to handle ambiguous bare package names (matching multiple categories)
 #[derive(Clone, Copy, Debug)]
 pub enum ResolveMode {
-    /// Report ambiguity as an error listing the candidates. If exactly one
-    /// candidate is installed, the error names it and suggests `-u`.
+    /// Report ambiguity as an error listing the candidates
+    ///
+    /// If exactly one candidate is installed, the error names it and suggests `-u`.
     Error,
-    /// Prefer the installed package (if exactly one matches). Otherwise error
-    /// (same as [`Error`](Self::Error), hint included). A note is printed
-    /// when disambiguation occurs.
+    /// Prefer the installed package (if exactly one matches)
+    ///
+    /// Otherwise error (same as [`Error`](Self::Error), hint included). A note is printed when
+    /// disambiguation occurs.
     PreferInstalled,
     /// Interactively prompt for which candidate was meant (`--ask`) — real
     /// emerge has no equivalent (it just hard-errors); this is `em`'s own
@@ -46,7 +48,7 @@ fn is_pseudo_category(cpn: &portage_atom::Cpn) -> bool {
     PSEUDO_CATEGORIES.contains(&cpn.category.as_ref())
 }
 
-/// Resolve a raw atom string, expanding bare package names via `set`.
+/// Resolve a raw atom string, expanding bare package names via `set`
 ///
 /// * `cat/pkg` — parsed as a standard atom.
 /// * bare `name` — looked up across every repo in `set` ([`RepoSet::find_cpns`],
@@ -95,7 +97,7 @@ pub fn resolve_atom(
     }
 }
 
-/// Handle an ambiguous bare name that matched multiple categories.
+/// Handle an ambiguous bare name that matched multiple categories
 fn resolve_ambiguous(
     vdb: Option<&Vdb>,
     mode: ResolveMode,
@@ -145,7 +147,7 @@ fn resolve_ambiguous(
     ))
 }
 
-/// Whether `cpn` has an installed entry in `vdb`.
+/// Whether `cpn` has an installed entry in `vdb`
 fn is_installed(vdb: &Vdb, cpn: &portage_atom::Cpn) -> bool {
     vdb.category(cpn.category.as_ref()).is_some_and(|cat| {
         cat.packages()
@@ -154,7 +156,7 @@ fn is_installed(vdb: &Vdb, cpn: &portage_atom::Cpn) -> bool {
     })
 }
 
-/// Find the single installed candidate among `candidates`.
+/// Find the single installed candidate among `candidates`
 /// Returns `None` if zero or more than one are installed.
 fn pick_installed<'a>(
     vdb: &Vdb,
@@ -223,7 +225,7 @@ fn ask_which_candidate(
         .and_then(|n| portage_atom::Dep::from_str(&candidates[n - 1].to_string()).ok())
 }
 
-/// Resolve multiple raw atom strings, expanding bare names via `set`.
+/// Resolve multiple raw atom strings, expanding bare names via `set`
 ///
 /// Same disambiguation rules as [`resolve_atom`]. Failed resolutions are
 /// printed as warnings and skipped.
@@ -243,10 +245,11 @@ pub fn resolve_atoms(
     out
 }
 
-/// Resolve `raw` to an atom, then return every ebuild in `ebuilds` it matches,
-/// sorted oldest-to-newest by version. Shared by the per-package `query`
-/// commands (`keywords`/`meta`/`uses`); each caller reports its own message on
-/// an empty result.
+/// Resolve `raw` to an atom, then return every ebuild in `ebuilds` it matches, sorted
+/// oldest-to-newest by version
+///
+/// Shared by the per-package `query` commands (`keywords`/`meta`/`uses`); each caller
+/// reports its own message on an empty result.
 ///
 /// `ebuilds` itself only ever comes from `set.main()` today (`keywords`/
 /// `meta`/`uses` all build it that way) — resolving `raw` against overlay
@@ -276,7 +279,7 @@ mod tests {
 
     use super::*;
 
-    /// Build a minimal repo on disk with the given `(category, package)` pairs.
+    // Build a minimal repo on disk with the given `(category, package)` pairs
     fn make_repo(packages: &[(&str, &str)]) -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
@@ -301,14 +304,14 @@ mod tests {
         (dir, repo)
     }
 
-    /// A single-repo set, for the common non-overlay test case.
+    // A single-repo set, for the common non-overlay test case
     fn single(repo: Repository) -> RepoSet {
         RepoSet::single(repo)
     }
 
-    /// A two-repo set with `main` at index 0 and `overlay` ranked below it —
-    /// `find_cpns`' union is order-independent, so which index is "main"
-    /// only matters for `repo_of`/`main()`, not for what these tests assert.
+    // A two-repo set with `main` at index 0 and `overlay` ranked below it —
+    // `find_cpns`' union is order-independent, so which index is "main"
+    // only matters for `repo_of`/`main()`, not for what these tests assert.
     fn with_overlay(main: Repository, overlay: Repository) -> RepoSet {
         RepoSet::from_ordered(
             vec![std::sync::Arc::new(main), std::sync::Arc::new(overlay)],
@@ -317,7 +320,7 @@ mod tests {
         )
     }
 
-    /// Build a minimal VDB on disk with the given `(category, package, version)` entries.
+    // Build a minimal VDB on disk with the given `(category, package, version)` entries
     fn make_vdb(packages: &[(&str, &str, &str)]) -> (tempfile::TempDir, Vdb) {
         let dir = tempfile::tempdir().unwrap();
         for (cat, pkg, ver) in packages {
@@ -350,10 +353,10 @@ mod tests {
         assert_eq!(dep.cpn.package.as_ref(), "foo");
     }
 
-    /// The gap this was found from: a package that exists *only* in an
-    /// overlay (a local overlay, `guru`, `crossdev`) was invisible to
-    /// bare-name resolution even though the full `cat/pkg` atom resolved it
-    /// fine — `find_cpns` only ever searched one `Repository`.
+    // The gap this was found from: a package that exists *only* in an
+    // overlay (a local overlay, `guru`, `crossdev`) was invisible to
+    // bare-name resolution even though the full `cat/pkg` atom resolved it
+    // fine — `find_cpns` only ever searched one `Repository`.
     #[test]
     fn resolve_atom_bare_name_finds_overlay_only_package() {
         let (_main_dir, main) = make_repo(&[("sys-apps", "foo")]);
@@ -364,9 +367,9 @@ mod tests {
         assert_eq!(dep.cpn.package.as_ref(), "bar");
     }
 
-    /// A name that's genuinely ambiguous *across* main and an overlay (two
-    /// different real categories) still goes through the normal
-    /// disambiguation machinery, not a silent overlay-wins/main-wins pick.
+    // A name that's genuinely ambiguous *across* main and an overlay (two
+    // different real categories) still goes through the normal
+    // disambiguation machinery, not a silent overlay-wins/main-wins pick.
     #[test]
     fn resolve_atom_bare_name_ambiguous_across_main_and_overlay() {
         let (_main_dir, main) = make_repo(&[("sys-apps", "foo")]);
@@ -426,8 +429,8 @@ mod tests {
         assert_eq!(dep.cpn.category.as_ref(), "sys-apps");
     }
 
-    /// Two real-category candidates alongside a pseudo one: genuine
-    /// ambiguity remains between the two real packages, still an error.
+    // Two real-category candidates alongside a pseudo one: genuine
+    // ambiguity remains between the two real packages, still an error.
     #[test]
     fn resolve_atom_pseudo_category_does_not_mask_real_ambiguity() {
         let (_dir, repo) = make_repo(&[

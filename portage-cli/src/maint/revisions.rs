@@ -3,7 +3,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 const REPO_REVISIONS: &str = "var/lib/portage/repo_revisions";
 
-/// Purge the repo_revisions file (emaint revisions behaviour).
+/// Purge the repo_revisions file (emaint revisions behaviour)
 ///
 /// Without `repos`, the entire file is deleted.  With `repos`, only those
 /// specific repo entries are removed from the JSON object.

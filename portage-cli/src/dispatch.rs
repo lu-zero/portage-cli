@@ -1,4 +1,4 @@
-//! CLI dispatch: applet routing and shared helpers.
+//! CLI dispatch: applet routing and shared helpers
 
 use std::io::Write;
 use std::str::FromStr;
@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::vdb::open_cli_vdb;
 use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, vdb};
 
-/// Dispatch one parsed invocation to its applet or the default emerge path.
+/// Dispatch one parsed invocation to its applet or the default emerge path
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     match &cli.applet {
         Some(applet) => run_applet(applet, cli).await,

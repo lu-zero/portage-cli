@@ -1,4 +1,4 @@
-//! `-r`/`--resume` persisted state + `em maint cleanresume`.
+//! `-r`/`--resume` persisted state + `em maint cleanresume`
 //!
 //! Mirrors real portage's own mechanism (`portage/util/mtimedb.py`,
 //! `_emerge/actions.py`, `_emerge/Scheduler.py::_save_resume_list`), read
@@ -48,9 +48,10 @@ use crate::cli::{DepgraphFlags, MergeFlags};
 use crate::query::depgraph::MergeRoot;
 use crate::util::write_atomic;
 
-/// Legacy JSON-embedded completion entry (pre-marker layout). Still
-/// deserialised so an interrupted job from an older build can resume once;
-/// never written back.
+/// Legacy JSON-embedded completion entry (pre-marker layout)
+///
+/// Still deserialised so an interrupted job from an older build can resume once; never
+/// written back.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Hash)]
 struct LegacyCompletedPkg {
     merge_root: String,
@@ -72,7 +73,7 @@ fn parse_merge_root(s: &str) -> Option<MergeRoot> {
     }
 }
 
-/// Everything needed to replay a top-level `em <atoms>` invocation.
+/// Everything needed to replay a top-level `em <atoms>` invocation
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ResumeState {
     /// The original atoms/`@set` refs, before expansion — so a replay
@@ -85,18 +86,20 @@ pub struct ResumeState {
     pub depgraph_flags: DepgraphFlags,
     #[serde(default)]
     pub nodeps: bool,
-    /// Directory name under `em-resume.done/` for this job's markers.
+    /// Directory name under `em-resume.done/` for this job's markers
     /// Assigned on first [`save`] of a fresh job; preserved across `-r`.
     #[serde(default)]
     pub job_id: String,
-    /// Pre-marker builds stored completions here. Read for migration only;
-    /// after migration the vec is empty so this field is omitted on write.
+    /// Pre-marker builds stored completions here
+    ///
+    /// Read for migration only; after migration the vec is empty so this field is omitted on
+    /// write.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     completed: Vec<LegacyCompletedPkg>,
 }
 
 impl ResumeState {
-    /// Fresh job shape for [`save`] — `job_id` is assigned there.
+    /// Fresh job shape for [`save`] — `job_id` is assigned there
     pub fn new(
         atoms: Vec<String>,
         merge_flags: MergeFlags,
@@ -132,8 +135,9 @@ fn job_done_dir(root: &Utf8Path, job_id: &str) -> Utf8PathBuf {
     done_root(root).join(job_id)
 }
 
-/// Marker file for one finished package. CPV `cat/pf` becomes
-/// `…/<job_id>/<host|target>/<cat>/<pf>`.
+/// Marker file for one finished package
+///
+/// CPV `cat/pf` becomes `…/<job_id>/<host|target>/<cat>/<pf>`.
 fn marker_path(root: &Utf8Path, job_id: &str, merge_root: MergeRoot, cpv: &str) -> Utf8PathBuf {
     let (cat, pf) = cpv.split_once('/').unwrap_or(("_", cpv));
     job_done_dir(root, job_id)
@@ -197,7 +201,7 @@ fn ensure_job_id(root: &Utf8Path, state: &mut ResumeState) {
     }
 }
 
-/// Strip UI-only flags that must never be restored from a saved job.
+/// Strip UI-only flags that must never be restored from a saved job
 ///
 /// `ask` / `tree` / `json` describe how *this* invocation should present
 /// itself, not the job's merge shape. Persisting them made `-r` re-prompt
@@ -252,9 +256,10 @@ pub fn save(root: &Utf8Path, mut state: ResumeState, is_resume: bool) -> Result<
     Ok(job_id)
 }
 
-/// Record that one plan entry finished successfully by creating its marker
-/// file. Concurrent-safe for distinct packages under `--jobs N` (each path
-/// is independent). Idempotent if the marker already exists.
+/// Record that one plan entry finished successfully by creating its marker file
+///
+/// Concurrent-safe for distinct packages under `--jobs N` (each path is independent).
+/// Idempotent if the marker already exists.
 ///
 /// `job_id` comes from [`save`]'s return value — do not re-read the JSON on
 /// every package.
@@ -340,7 +345,8 @@ fn completed_count(root: &Utf8Path, state: &ResumeState) -> usize {
     if n > 0 { n } else { state.completed.len() }
 }
 
-/// Clear the current `resume` entry after a fully successful run.
+/// Clear the current `resume` entry after a fully successful run
+///
 /// Removes that job's marker directory. `resume_backup` (if any) is left
 /// untouched — matches portage, which only prunes `resume` on success.
 pub fn clear(root: &Utf8Path) {
@@ -368,7 +374,7 @@ pub fn take_for_resume(root: &Utf8Path) -> Result<Option<ResumeState>> {
     Ok(Some(backup))
 }
 
-/// Merge a *saved* job's flags with the current `-r` invocation.
+/// Merge a *saved* job's flags with the current `-r` invocation
 ///
 /// Semantics (intentionally different from
 /// [`crate::crossdev::merge_merge_flags_fields`]'s subcommand-vs-global OR):

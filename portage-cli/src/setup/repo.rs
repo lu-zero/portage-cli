@@ -9,8 +9,9 @@ use portage_repo::ReposConf;
 use crate::cli::Cli;
 use crate::config_plan::{self, ConfigEntry};
 
-/// Default `::gentoo` mirror for a fresh own-tree clone. Matches the URI
-/// real `emerge-webrsync`/the Gentoo handbook point new installs at.
+/// Default `::gentoo` mirror for a fresh own-tree clone
+///
+/// Matches the URI real `emerge-webrsync`/the Gentoo handbook point new installs at.
 const DEFAULT_SYNC_URI: &str = "https://github.com/gentoo-mirror/gentoo.git";
 
 /// A repo tree is usable once it has a `profiles/repo_name` — the same
@@ -107,11 +108,12 @@ fn resolve_repo_path(prefix: &Utf8Path, host_root: &Utf8Path) -> Result<Utf8Path
     Ok(own_path)
 }
 
-/// Run `em sync gentoo` against `cli`'s own topology. `cli.roots().repos_conf()`
-/// always merges the `--local` overlay's `repos.conf` as an extra source
-/// (`ReposConf::load_rooted`'s doc comment) regardless of whether the merge
-/// config root has flipped to the prefix yet, so the `gentoo.conf` entry
-/// [`ensure_repo`] just wrote is already visible here.
+/// Run `em sync gentoo` against `cli`'s own topology
+///
+/// `cli.roots().repos_conf()` always merges the `--local` overlay's `repos.conf` as an
+/// extra source (`ReposConf::load_rooted`'s doc comment) regardless of whether the merge
+/// config root has flipped to the prefix yet, so the `gentoo.conf` entry [`ensure_repo`]
+/// just wrote is already visible here.
 async fn sync_gentoo(cli: &Cli) -> Result<()> {
     crate::maint::sync::run(&["gentoo".to_string()], cli).await
 }

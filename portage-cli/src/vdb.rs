@@ -78,7 +78,7 @@ fn print_pkg_size(pkg: &portage_vdb::InstalledPackage) -> Result<()> {
     Ok(())
 }
 
-/// Find installed packages matching `pattern`.
+/// Find installed packages matching `pattern`
 ///
 /// Accepts full Portage atoms (`=cat/pkg-1.2`, `>=cat/pkg-1`, `cat/pkg:2`,
 /// …) via [`portage_atom::Dep::matches_cpv`], plus bare package-name / PF
@@ -100,7 +100,7 @@ pub(crate) fn find_packages(vdb: &Vdb, pattern: &str) -> Vec<portage_vdb::Instal
         .collect()
 }
 
-/// Open the VDB for a CLI invocation (explicit `--vdb` or the merge root default).
+/// Open the VDB for a CLI invocation (explicit `--vdb` or the merge root default)
 pub(crate) fn open_cli_vdb(globals: &crate::cli::Cli) -> Result<Vdb> {
     let vdb_path = globals
         .vdb

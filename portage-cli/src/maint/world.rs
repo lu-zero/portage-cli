@@ -190,14 +190,14 @@ pub fn run(vdb: &Vdb, fix: bool, root: Option<&Utf8Path>, tree: Option<&TreeView
     Ok(())
 }
 
-/// World-file problems, split by what `--fix` may do about each.
+/// World-file problems, split by what `--fix` may do about each
 #[derive(Default)]
 struct Counts {
-    /// Not installed, or naming a set that no longer exists — removable.
+    /// Not installed, or naming a set that no longer exists — removable
     orphaned: usize,
-    /// Unparseable as an atom — removable.
+    /// Unparseable as an atom — removable
     invalid: usize,
-    /// Installed and usable, but unbuildable from the current tree — kept.
+    /// Installed and usable, but unbuildable from the current tree — kept
     unbuildable: usize,
 }
 
@@ -400,11 +400,12 @@ pub fn add_set_refs(root: Option<&Utf8Path>, names: &[String]) {
     }
 }
 
-/// Remove `tokens` (plain atoms or `@set` names) from the world files —
-/// `-W`/`--deselect`. Mirrors real emerge's `action_deselect`: a plain-atom
-/// token is matched by `Cpn` against `world` (any version-qualified form);
-/// a `@name` token is matched by exact name against `world_sets` — the two
-/// files and token kinds are handled independently, never cross-matched.
+/// Remove `tokens` (plain atoms or `@set` names) from the world files — `-W`/`--deselect`
+///
+/// Mirrors real emerge's `action_deselect`: a plain-atom token is matched by `Cpn` against
+/// `world` (any version-qualified form); a `@name` token is matched by exact name against
+/// `world_sets` — the two files and token kinds are handled independently, never
+/// cross-matched.
 ///
 /// `world` is also checked for a stray `@name` line for backward
 /// compatibility (`check_world_file` has long tolerated `@` lines living
@@ -549,7 +550,7 @@ pub(crate) fn selected_cpns(
     out
 }
 
-/// `pub(crate)`: also reused by `em --info`'s `Installed sets:` line.
+/// `pub(crate)`: also reused by `em --info`'s `Installed sets:` line
 pub(crate) fn world_sets_path(root: Option<&Utf8Path>) -> Utf8PathBuf {
     match root {
         Some(r) => r.join("var/lib/portage/world_sets"),
@@ -734,9 +735,9 @@ mod tests {
         assert!(remove_atoms(Some(&root), &["not a valid atom!!!".to_owned()]).is_err());
     }
 
-    /// A root `SetResolver` can resolve `@selected` in: any existing dir is a
-    /// valid (empty) profile, which is all `@selected` needs — it reads the
-    /// world file, not the profile.
+    // A root `SetResolver` can resolve `@selected` in: any existing dir is a
+    // valid (empty) profile, which is all `@selected` needs — it reads the
+    // world file, not the profile.
     fn world_root(content: &str) -> (tempfile::TempDir, Utf8PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();

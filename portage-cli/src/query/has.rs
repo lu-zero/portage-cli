@@ -1,4 +1,4 @@
-//! `em query has` — list installed packages where a VDB field matches a value.
+//! `em query has` — list installed packages where a VDB field matches a value
 //!
 //! Usage: `em query has <FIELD> [VALUE]`
 //!

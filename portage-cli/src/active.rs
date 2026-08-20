@@ -1,4 +1,4 @@
-//! Persistent "active" `--prefix` / `--local` for dogfooding.
+//! Persistent "active" `--prefix` / `--local` for dogfooding
 //!
 //! Registers a default topology so bare `em <pkg>` picks up a prefix/local
 //! without repeating flags every time.
@@ -45,16 +45,16 @@ use serde::{Deserialize, Serialize};
 use crate::cli::{ActiveCommand, Cli};
 use crate::util::write_atomic;
 
-/// State file format version.
+/// State file format version
 const FORMAT_VERSION: u32 = 1;
 
-/// Kind of registered active topology.
+/// Kind of registered active topology
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ActiveKind {
-    /// `--prefix` overlay (BROOT stays the host; install target is the path).
+    /// `--prefix` overlay (BROOT stays the host; install target is the path)
     Prefix,
-    /// `--local` standalone Gentoo-Prefix (own BROOT + EPREFIX).
+    /// `--local` standalone Gentoo-Prefix (own BROOT + EPREFIX)
     Local,
 }
 
@@ -73,20 +73,20 @@ impl fmt::Display for ActiveKind {
     }
 }
 
-/// A single registered active topology entry.
+/// A single registered active topology entry
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveEntry {
-    /// User-assigned or generated name for this entry.
+    /// User-assigned or generated name for this entry
     pub name: String,
-    /// The kind of topology (prefix or local).
+    /// The kind of topology (prefix or local)
     pub kind: ActiveKind,
-    /// Absolute path to the prefix/local.
+    /// Absolute path to the prefix/local
     #[serde(with = "camino_utf8pathbuf")]
     pub path: Utf8PathBuf,
 }
 
 impl ActiveEntry {
-    /// Create a new entry with a generated name from the path.
+    /// Create a new entry with a generated name from the path
     pub fn new(kind: ActiveKind, path: Utf8PathBuf) -> Self {
         // Generate a name from the path basename
         let name = path
@@ -96,12 +96,12 @@ impl ActiveEntry {
         Self { name, kind, path }
     }
 
-    /// Create a new entry with an explicit name.
+    /// Create a new entry with an explicit name
     pub fn with_name(name: String, kind: ActiveKind, path: Utf8PathBuf) -> Self {
         Self { name, kind, path }
     }
 
-    /// Human-readable one-liner for display.
+    /// Human-readable one-liner for display
     pub fn display_line(&self) -> String {
         format!("{} {}", self.kind, self.path)
     }
@@ -143,14 +143,14 @@ mod camino_utf8pathbuf {
     }
 }
 
-/// Reference to an entry - can be by name, index, or path.
+/// Reference to an entry - can be by name, index, or path
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryReference {
-    /// Reference by entry name.
+    /// Reference by entry name
     Name(String),
-    /// Reference by 0-based index.
+    /// Reference by 0-based index
     Index(usize),
-    /// Reference by exact path.
+    /// Reference by exact path
     Path(Utf8PathBuf),
 }
 
@@ -173,16 +173,16 @@ impl FromStr for EntryReference {
     }
 }
 
-/// The complete active state: multiple entries with one active.
+/// The complete active state: multiple entries with one active
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveStore {
-    /// Format version for future migrations.
+    /// Format version for future migrations
     #[serde(default = "default_format")]
     pub format: u32,
-    /// Name of the currently active entry (None means no active).
+    /// Name of the currently active entry (None means no active)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
-    /// All registered entries.
+    /// All registered entries
     pub entries: Vec<ActiveEntry>,
 }
 
@@ -197,7 +197,7 @@ impl Default for ActiveStore {
 }
 
 impl ActiveStore {
-    /// Create a new empty store.
+    /// Create a new empty store
     pub fn new() -> Self {
         Self {
             format: FORMAT_VERSION,
@@ -206,14 +206,14 @@ impl ActiveStore {
         }
     }
 
-    /// Get the currently active entry, if any.
+    /// Get the currently active entry, if any
     pub fn active_entry(&self) -> Option<&ActiveEntry> {
         self.active
             .as_ref()
             .and_then(|name| self.entries.iter().find(|e| e.name == *name))
     }
 
-    /// Find entry index by reference.
+    /// Find entry index by reference
     pub fn find_index(&self, reference: &EntryReference) -> Option<usize> {
         match reference {
             EntryReference::Name(name) => self.entries.iter().position(|e| e.name == *name),
@@ -222,7 +222,7 @@ impl ActiveStore {
         }
     }
 
-    /// Set the active entry by reference.
+    /// Set the active entry by reference
     pub fn set_active(&mut self, reference: &EntryReference) -> Result<()> {
         let name = match reference {
             EntryReference::Name(name) => {
@@ -250,7 +250,7 @@ impl ActiveStore {
         Ok(())
     }
 
-    /// Add a new entry. Returns the entry's name.
+    /// Add a new entry. Returns the entry's name
     pub fn add_entry(&mut self, entry: ActiveEntry) -> String {
         // Check if an entry with this path already exists
         if let Some(existing) = self.entries.iter_mut().find(|e| e.path == entry.path) {
@@ -274,7 +274,7 @@ impl ActiveStore {
         self.entries.last().unwrap().name.clone()
     }
 
-    /// Remove an entry by reference.
+    /// Remove an entry by reference
     pub fn remove_entry(&mut self, reference: &EntryReference) -> Result<ActiveEntry> {
         let index = self.find_index(reference).ok_or_else(|| {
             anyhow::anyhow!(
@@ -297,14 +297,14 @@ impl ActiveStore {
         Ok(entry)
     }
 
-    /// Clear the active pointer but keep entries.
+    /// Clear the active pointer but keep entries
     pub fn clear_active(&mut self) -> bool {
         let had_active = self.active.is_some();
         self.active = None;
         had_active
     }
 
-    /// Clear all entries and active pointer.
+    /// Clear all entries and active pointer
     pub fn clear_all(&mut self) -> usize {
         let count = self.entries.len();
         self.entries.clear();
@@ -313,26 +313,26 @@ impl ActiveStore {
     }
 }
 
-/// `$XDG_STATE_HOME/em`, or `~/.local/state/em` when unset.
+/// `$XDG_STATE_HOME/em`, or `~/.local/state/em` when unset
 ///
 /// Override via `XDG_STATE_HOME` (tests pin this to a temp dir).
 pub fn state_dir() -> Utf8PathBuf {
     crate::xdg::em_state_dir()
 }
 
-/// Path of the active-state file.
+/// Path of the active-state file
 pub fn state_file() -> Utf8PathBuf {
     state_dir().join("active")
 }
 
-/// Load the active state from disk.
+/// Load the active state from disk
 ///
 /// Returns `Ok(None)` when no file exists.
 pub fn load() -> Result<Option<ActiveStore>> {
     load_store()
 }
 
-/// Internal function to load the store.
+/// Internal function to load the store
 pub(crate) fn load_store() -> Result<Option<ActiveStore>> {
     let path = state_file();
     if !path.exists() {
@@ -344,7 +344,7 @@ pub(crate) fn load_store() -> Result<Option<ActiveStore>> {
     parse_state_toml(&text).map(Some)
 }
 
-/// Load the active context.
+/// Load the active context
 ///
 /// Returns the currently active entry as an ActiveContext, or None if no active entry.
 pub fn load_active_context() -> Result<Option<ActiveContext>> {
@@ -358,7 +358,7 @@ pub fn load_active_context() -> Result<Option<ActiveContext>> {
     })
 }
 
-/// Persist the entire store to disk.
+/// Persist the entire store to disk
 pub fn save(store: &ActiveStore) -> Result<()> {
     let dir = state_dir();
     std::fs::create_dir_all(dir.as_std_path())
@@ -368,7 +368,7 @@ pub fn save(store: &ActiveStore) -> Result<()> {
     write_atomic(&state_file(), body)
 }
 
-/// Format store as TOML string.
+/// Format store as TOML string
 fn format_state_toml(store: &ActiveStore) -> Result<String> {
     let mut out = String::new();
     out.push_str("# em active registrations\n");
@@ -377,7 +377,7 @@ fn format_state_toml(store: &ActiveStore) -> Result<String> {
     Ok(out)
 }
 
-/// Parse TOML state file format.
+/// Parse TOML state file format
 fn parse_state_toml(text: &str) -> Result<ActiveStore> {
     let store: ActiveStore = toml::from_str(text)
         .map_err(|e| anyhow::anyhow!("active state: failed to parse TOML: {}", e))?;
@@ -401,7 +401,7 @@ fn parse_state_toml(text: &str) -> Result<ActiveStore> {
     Ok(store)
 }
 
-/// Legacy ActiveContext for backward compatibility with existing code.
+/// Legacy ActiveContext for backward compatibility with existing code
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveContext {
     pub kind: ActiveKind,
@@ -417,7 +417,7 @@ impl From<&ActiveEntry> for ActiveContext {
     }
 }
 
-/// Resolve a user-supplied path to an absolute UTF-8 path.
+/// Resolve a user-supplied path to an absolute UTF-8 path
 ///
 /// Canonicalizes when the path exists so `../foo` registrations stay stable;
 /// otherwise joins against the current working directory.
@@ -440,7 +440,7 @@ pub fn absolutize(path: &Utf8Path) -> Result<Utf8PathBuf> {
         .map_err(|p| anyhow::anyhow!("active path is not valid UTF-8: {}", p.display()))
 }
 
-/// Register `path` as an available entry, without activating it.
+/// Register `path` as an available entry, without activating it
 ///
 /// `em setup` calls this so a prefix it just created shows up in
 /// `em active list` immediately: the registry exists so you can *choose*
@@ -468,7 +468,7 @@ pub fn register_available(kind: ActiveKind, path: &Utf8Path) -> Option<String> {
     Some(name)
 }
 
-/// Default `--local` path (`~/.gentoo`), matching [`Cli`]'s flag semantics.
+/// Default `--local` path (`~/.gentoo`), matching [`Cli`]'s flag semantics
 pub fn default_local_path() -> Utf8PathBuf {
     crate::xdg::home().join(".gentoo")
 }
@@ -528,7 +528,7 @@ fn ld_so_conf_entries(prefix: &Utf8Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Shell snippet suitable for `eval "$(em active env)"` (bash/zsh).
+/// Shell snippet suitable for `eval "$(em active env)"` (bash/zsh)
 ///
 /// Prepends the prefix's `etc/env.d` `PATH` entries — which is how anything
 /// outside `usr/bin` becomes reachable, and how an `em select clang` choice
@@ -572,7 +572,7 @@ pub fn env_exports(ctx: &ActiveContext) -> String {
     )
 }
 
-/// Double-quote a string for POSIX shell (escape `\`, `"`, `$`, `` ` ``).
+/// Double-quote a string for POSIX shell (escape `\`, `"`, `$`, `` ` ``)
 fn shell_double_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -581,7 +581,7 @@ fn shell_double_quote(s: &str) -> String {
     out
 }
 
-/// Escape characters that are special inside double-quoted POSIX shell strings.
+/// Escape characters that are special inside double-quoted POSIX shell strings
 fn shell_escape_double_inner(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -596,7 +596,7 @@ fn shell_escape_double_inner(s: &str) -> String {
     out
 }
 
-/// Dispatch `em active …`.
+/// Dispatch `em active …`
 pub fn run(command: Option<&ActiveCommand>, globals: &Cli) -> Result<()> {
     match command {
         None | Some(ActiveCommand::Show) => run_show(),
@@ -813,7 +813,7 @@ fn run_remove(reference: &String) -> Result<()> {
     Ok(())
 }
 
-/// Resolve what `em active set` should register from the global flags.
+/// Resolve what `em active set` should register from the global flags
 ///
 /// Precedence: `--local` > `--prefix` (matches [`Cli::topology_source`]).
 /// `--root` is intentionally not registerable — active is for unprivileged
@@ -845,7 +845,7 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
     );
 }
 
-/// Canonicalize when the path exists; otherwise keep the absolute form.
+/// Canonicalize when the path exists; otherwise keep the absolute form
 fn finalize_abs_path(path: Utf8PathBuf) -> Result<Utf8PathBuf> {
     if path.exists() {
         path.canonicalize_utf8()
@@ -860,9 +860,9 @@ fn finalize_abs_path(path: Utf8PathBuf) -> Result<Utf8PathBuf> {
 #[cfg(test)]
 mod tests {
 
-    /// `em setup` registers what it built so it is selectable, but must not
-    /// take over the active pointer — creating a prefix is not a decision to
-    /// start using it.
+    // `em setup` registers what it built so it is selectable, but must not
+    // take over the active pointer — creating a prefix is not a decision to
+    // start using it.
     #[test]
     fn registering_an_entry_never_moves_the_active_pointer() {
         let mut store = ActiveStore::new();
@@ -895,10 +895,10 @@ mod tests {
         assert_eq!(store.entries.len(), 2, "no duplicate for the same path");
     }
 
-    /// env.d is how a prefix's compilers become reachable at all, and the
-    /// numeric prefixes *are* the priority order — an `em select clang`
-    /// choice (`59llvm-selected`) has to land ahead of the slot's own
-    /// `60llvm-*`, and both ahead of plain `usr/bin`.
+    // env.d is how a prefix's compilers become reachable at all, and the
+    // numeric prefixes *are* the priority order — an `em select clang`
+    // choice (`59llvm-selected`) has to land ahead of the slot's own
+    // `60llvm-*`, and both ahead of plain `usr/bin`.
     #[test]
     fn env_exports_honour_env_d_priority_order() {
         let dir = tempfile::tempdir().unwrap();
@@ -1138,7 +1138,7 @@ path = "/home/u/.gentoo"
         );
     }
 
-    /// Live-verified, todo/for-sonnet.md 2026-08-08.
+    // Live-verified, todo/for-sonnet.md 2026-08-08
     #[test]
     fn env_exports_include_ld_library_path_from_prefix_ld_so_conf() {
         let dir = tempfile::tempdir().unwrap();
@@ -1174,7 +1174,7 @@ path = "/home/u/.gentoo"
         );
     }
 
-    /// No `ld.so.conf`: no empty `LD_LIBRARY_PATH=""` export.
+    // No `ld.so.conf`: no empty `LD_LIBRARY_PATH=""` export
     #[test]
     fn env_exports_omit_ld_library_path_line_when_ld_so_conf_absent() {
         let ctx = ActiveContext {

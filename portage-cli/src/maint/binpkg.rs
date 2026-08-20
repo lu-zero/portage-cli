@@ -18,7 +18,7 @@ use crate::binpkg::{
 use crate::cli::{BinpkgAction, Cli};
 use crate::style::C_ERROR;
 
-/// Dispatch `em maint binpkg <action>`.
+/// Dispatch `em maint binpkg <action>`
 pub async fn run(action: &BinpkgAction, globals: &Cli) -> Result<()> {
     let pkgdir = resolve_pkgdir(globals).await;
     match action {

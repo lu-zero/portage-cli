@@ -61,7 +61,7 @@ pub(crate) fn isolate_active_state() -> (tempfile::TempDir, ActiveStateGuard) {
     (tmp, guard)
 }
 
-/// Restores `XDG_STATE_HOME` on drop. See [`isolate_active_state`].
+/// Restores `XDG_STATE_HOME` on drop. See [`isolate_active_state`]
 pub(crate) struct ActiveStateGuard {
     _home: std::sync::MutexGuard<'static, ()>,
     saved: Option<String>,

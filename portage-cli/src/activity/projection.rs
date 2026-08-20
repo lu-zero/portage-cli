@@ -1,4 +1,4 @@
-//! Fold [`ActivityEvent`]s into a live dashboard snapshot.
+//! Fold [`ActivityEvent`]s into a live dashboard snapshot
 
 use std::collections::HashMap;
 
@@ -7,7 +7,7 @@ use super::event::{
 };
 use super::history::{DurationStore, EtaPkg};
 
-/// One package currently being acted on.
+/// One package currently being acted on
 #[derive(Clone, Debug)]
 pub struct InflightPkg {
     pub cpv: String,
@@ -22,7 +22,7 @@ pub struct InflightPkg {
     pub phases_done: Vec<(String, f64)>,
 }
 
-/// One ongoing (or just-ended) activity session.
+/// One ongoing (or just-ended) activity session
 #[derive(Clone, Debug)]
 pub struct LiveSession {
     pub job_id: String,
@@ -38,9 +38,9 @@ pub struct LiveSession {
     pub completed: u32,
     pub failed: u32,
     pub inflight: HashMap<(ActivityMergeRoot, String), InflightPkg>,
-    /// Full plan (install order) when the session recorded it.
+    /// Full plan (install order) when the session recorded it
     pub plan: Vec<ActivityPlanPkg>,
-    /// Build-order blockers for [`Self::plan`] (same indices as merge scheduler).
+    /// Build-order blockers for [`Self::plan`] (same indices as merge scheduler)
     pub blockers: Vec<Vec<usize>>,
     pub ended: bool,
     pub ok: Option<bool>,
@@ -53,7 +53,7 @@ impl LiveSession {
         v
     }
 
-    /// Remaining plan packages + remapped blockers for critical-path ETA.
+    /// Remaining plan packages + remapped blockers for critical-path ETA
     ///
     /// Falls back to inflight-only (no blockers) when the session has no plan.
     /// `store` (`history/merges.jsonl`, already loaded by the caller) is the
@@ -112,7 +112,7 @@ impl LiveSession {
     }
 }
 
-/// Reducer: apply events → session map (same shape as `em log current`).
+/// Reducer: apply events → session map (same shape as `em log current`)
 #[derive(Clone, Debug, Default)]
 pub struct LiveProjection {
     sessions: HashMap<String, LiveSession>,
@@ -268,7 +268,7 @@ impl LiveProjection {
         }
     }
 
-    /// Active (not ended) sessions, oldest first.
+    /// Active (not ended) sessions, oldest first
     pub fn active(&self) -> Vec<&LiveSession> {
         let mut v: Vec<_> = self.sessions.values().filter(|s| !s.ended).collect();
         v.sort_by(|a, b| a.started_at.total_cmp(&b.started_at));

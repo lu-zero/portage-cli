@@ -1,4 +1,4 @@
-//! Open a [`portage_repo::Repository`] with em's durable user metadata cache.
+//! Open a [`portage_repo::Repository`] with em's durable user metadata cache
 //!
 //! Production code should use these helpers so resolve, search, and regen
 //! share one secondary store layout without re-deriving paths at each call
@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use portage_repo::{RepoSet, Repository, Result};
 
-/// Open a tree with secondary at `$XDG_CACHE_HOME/em/md5-cache/<repo-name>`.
+/// Open a tree with secondary at `$XDG_CACHE_HOME/em/md5-cache/<repo-name>`
 pub fn open(path: impl Into<PathBuf>) -> Result<Repository> {
     Repository::builder()
         .user_cache_root(crate::xdg::md5_cache_root())
@@ -111,9 +111,9 @@ mod tests {
         make_masterless_ebuild_repo(dir, name, cpn, version);
     }
 
-    /// Like [`make_ebuild_repo`], but with no `profiles/categories` of its
-    /// own — a category-`cpn` ebuild here is only discoverable through a
-    /// master's own category list.
+    // Like [`make_ebuild_repo`], but with no `profiles/categories` of its
+    // own — a category-`cpn` ebuild here is only discoverable through a
+    // master's own category list.
     fn make_masterless_ebuild_repo(dir: &camino::Utf8Path, name: &str, cpn: &str, version: &str) {
         write(&dir.join("metadata/layout.conf"), "");
         write(&dir.join("profiles/repo_name"), &format!("{name}\n"));
@@ -126,9 +126,9 @@ mod tests {
         );
     }
 
-    /// A repo declared only via `PORTDIR_OVERLAY` in make.conf — no
-    /// `repos.conf` section of its own — must still be discovered and must
-    /// still shadow main's copy of the same cpv.
+    // A repo declared only via `PORTDIR_OVERLAY` in make.conf — no
+    // `repos.conf` section of its own — must still be discovered and must
+    // still shadow main's copy of the same cpv.
     #[test]
     fn portdir_overlay_only_entry_shadows_main() {
         let root = tempfile::tempdir().unwrap();
@@ -232,11 +232,11 @@ mod tests {
         );
     }
 
-    /// A `PORTDIR_OVERLAY` entry with no `masters =` anywhere (no
-    /// `repos.conf` section to declare one, empty `layout.conf`) must still
-    /// default to `main` as its master, so it can see a category it
-    /// doesn't list itself — real portage's own fallback when a repo
-    /// declares masters nowhere at all.
+    // A `PORTDIR_OVERLAY` entry with no `masters =` anywhere (no
+    // `repos.conf` section to declare one, empty `layout.conf`) must still
+    // default to `main` as its master, so it can see a category it
+    // doesn't list itself — real portage's own fallback when a repo
+    // declares masters nowhere at all.
     #[test]
     fn portdir_overlay_entry_defaults_to_main_as_master() {
         let root = tempfile::tempdir().unwrap();

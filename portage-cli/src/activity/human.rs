@@ -79,7 +79,7 @@ struct PkgLoc {
     kind: PkgKind,
 }
 
-/// Per-session `--jobs` bookkeeping for the `Jobs: N of M complete` line.
+/// Per-session `--jobs` bookkeeping for the `Jobs: N of M complete` line
 #[derive(Default)]
 struct JobStatus {
     plan_total: u32,
@@ -114,9 +114,10 @@ fn regen_bar_style() -> ProgressStyle {
     .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
 }
 
-/// Terminal renderer for the activity bus. Attached as a **direct** (inline)
-/// sink so banners appear immediately, not buffered behind the disk sinks'
-/// background threads.
+/// Terminal renderer for the activity bus
+///
+/// Attached as a **direct** (inline) sink so banners appear immediately, not buffered
+/// behind the disk sinks' background threads.
 pub struct HumanStdoutSink {
     quiet: bool,
     verbose: u8,
@@ -161,7 +162,7 @@ impl HumanStdoutSink {
         }
     }
 
-    /// Redraw progress for the session.
+    /// Redraw progress for the session
     ///
     /// - **Regen:** delegates entirely to the session's indicatif bar (see
     ///   [`regen_bar_style`]) — it owns TTY detection, redraw-rate limiting,

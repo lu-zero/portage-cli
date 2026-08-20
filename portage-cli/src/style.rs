@@ -1,6 +1,7 @@
-//! Shared terminal styles for `em` output — the single source of truth, so
-//! colours stay consistent across applets. Plain `anstyle::Style` values that
-//! interpolate in format strings with anstream writers
+//! Shared terminal styles for `em` output — the single source of truth, so colours stay
+//! consistent across applets
+//!
+//! Plain `anstyle::Style` values that interpolate in format strings with anstream writers
 //! (`"{C_PKG}foo{C_PKG:#}"`); anstream strips them when output is not a TTY.
 //!
 //! Add palette entries here (and a mapping helper if a domain enum drives the
@@ -48,9 +49,10 @@ pub fn terminal_config() -> portage_repo::TerminalConfig {
     }
 }
 
-/// Wrap `items` into space-separated lines that fit `width`, each line after
-/// the first indented by `indent`. Never splits an item, so a single item
-/// longer than the width simply overflows its line.
+/// Wrap `items` into space-separated lines that fit `width`, each line after the first
+/// indented by `indent`
+///
+/// Never splits an item, so a single item longer than the width simply overflows its line.
 pub fn wrap_items(items: &[String], indent: usize, width: usize) -> Vec<String> {
     let budget = width.saturating_sub(indent).max(1);
     let mut lines: Vec<String> = Vec::new();
@@ -67,48 +69,49 @@ pub fn wrap_items(items: &[String], indent: usize, width: usize) -> Vec<String> 
 }
 
 // ── Package / label palette ────────────────────────────────────────────────
-/// Package atoms and general "primary" text.
+/// Package atoms and general "primary" text
 pub const C_PKG: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-/// Field labels and list indices.
+/// Field labels and list indices
 pub const C_LABEL: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
-/// Emphasis without colour.
+/// Emphasis without colour
 pub const C_BOLD: Style = Style::new().effects(Effects::BOLD);
-/// "Current selection" marker (`*`).
+/// "Current selection" marker (`*`)
 pub const C_STAR: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Green)))
     .effects(Effects::BOLD);
-/// Masked / error emphasis.
+/// Masked / error emphasis
 pub const C_MASKED: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)))
     .effects(Effects::BOLD);
-/// Category half of a `cat/pkg` (subdued).
+/// Category half of a `cat/pkg` (subdued)
 pub const C_CAT: Style = Style::new().effects(Effects::DIMMED);
-/// Package-name half of a `cat/pkg`.
+/// Package-name half of a `cat/pkg`
 pub const C_PKGNAME: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::BrightGreen)));
-/// Version strings.
+/// Version strings
 pub const C_VERSION: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
 /// The `[oldversion]` column in `-p` output — the version(s) being replaced
 /// (real emerge's `convert_myoldbest`, which paints it bold blue: `\x1b[34;01m`).
 pub const C_OLDVERSION: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Blue)))
     .effects(Effects::BOLD);
-/// Prefix profile source label.
+/// Prefix profile source label
 pub const C_PREFIX: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-/// Host profile source label.
+/// Host profile source label
 pub const C_HOST: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Yellow)));
-/// Binary-package cpv in merge banners (real emerge's `PKG_BINARY_MERGE`).
+/// Binary-package cpv in merge banners (real emerge's `PKG_BINARY_MERGE`)
 pub const C_PKG_BINARY: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Magenta)));
 /// A `-t`/`--tree` row shown only for dependency context, not actually being
 /// (re)built — real emerge's `PKG_NOMERGE` (`portage/output.py`: `"teal"` ==
 /// `0x00AAAA`, plain — not bold — ANSI cyan). Distinct from [`C_PKG`]/
 /// [`C_PKG_BINARY`], which are for rows that *are* merging.
 pub const C_PKG_NOMERGE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Cyan)));
-/// `_SELECTED`: a package the world file tracks, or is about to — bolds a
-/// row's merge/nomerge/binary color. Matches real emerge's
-/// `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/`PKG_BINARY_MERGE_WORLD` and their
-/// two-part gate: bold when already in `@selected`, or a literal target of
-/// a non-`--oneshot` run that would record it (see `PrettyCtx::selected`'s
-/// doc and the `6f25f52` fix).
+/// `_SELECTED`: a package the world file tracks, or is about to — bolds a row's
+/// merge/nomerge/binary color
+///
+/// Matches real emerge's `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/`PKG_BINARY_MERGE_WORLD` and
+/// their two-part gate: bold when already in `@selected`, or a literal target of a
+/// non-`--oneshot` run that would record it (see `PrettyCtx::selected`'s doc and the
+/// `6f25f52` fix).
 ///
 /// Same three hues real portage's `_WORLD` variants use — note
 /// `_NOMERGE_SELECTED` is bold **blue**, not teal.
@@ -192,15 +195,15 @@ pub const C_CHOICE_DEFAULT: Style = Style::new().fg_color(Some(Color::Ansi(AnsiC
 pub const C_CHOICE_OTHER: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Red)));
 
 // ── Stability / status palette (stable=green, testing/dev=yellow, …=red) ────
-/// Stable keyword / stable profile.
+/// Stable keyword / stable profile
 pub const C_STABLE: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Green)))
     .effects(Effects::BOLD);
-/// Testing keyword / dev profile.
+/// Testing keyword / dev profile
 pub const C_TESTING: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Yellow)))
     .effects(Effects::BOLD);
-/// Disabled keyword / experimental profile.
+/// Disabled keyword / experimental profile
 pub const C_DISABLED: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Red)))
     .effects(Effects::BOLD);
@@ -297,28 +300,28 @@ pub(crate) fn ewarn_sub_bullet_impl(args: std::fmt::Arguments<'_>) {
 // only for the writer's own `writeln!` to re-format — a double format pass
 // for every line; `writeln!(… "{}", fmt::Arguments)` is a single pass).
 
-/// `warn_line!("…", args…)` — see [`warn_line_impl`] (the writer).
+/// `warn_line!("…", args…)` — see [`warn_line_impl`] (the writer)
 macro_rules! warn_line {
     ($($arg:tt)*) => {
         $crate::style::warn_line_impl(::std::format_args!($($arg)*))
     };
 }
 
-/// `error_line!("…", args…)` — see [`error_line_impl`] (the writer).
+/// `error_line!("…", args…)` — see [`error_line_impl`] (the writer)
 macro_rules! error_line {
     ($($arg:tt)*) => {
         $crate::style::error_line_impl(::std::format_args!($($arg)*))
     };
 }
 
-/// `einfo_line!("…", args…)` — see [`einfo_line_impl`] (the writer).
+/// `einfo_line!("…", args…)` — see [`einfo_line_impl`] (the writer)
 macro_rules! einfo_line {
     ($($arg:tt)*) => {
         $crate::style::einfo_line_impl(::std::format_args!($($arg)*))
     };
 }
 
-/// `ewarn_sub_bullet!("…", args…)` — see [`ewarn_sub_bullet_impl`] (the writer).
+/// `ewarn_sub_bullet!("…", args…)` — see [`ewarn_sub_bullet_impl`] (the writer)
 macro_rules! ewarn_sub_bullet {
     ($($arg:tt)*) => {
         $crate::style::ewarn_sub_bullet_impl(::std::format_args!($($arg)*))
@@ -363,7 +366,7 @@ pub fn estatus_line(msg: &str, ok: bool, width: usize, ansi: bool) -> String {
     }
 }
 
-/// Style for a profile's stability status (same palette as keyword stability).
+/// Style for a profile's stability status (same palette as keyword stability)
 pub fn profile_status(status: &portage_repo::ProfileStatus) -> Style {
     use portage_repo::ProfileStatus::*;
     match status {
@@ -382,8 +385,8 @@ mod tests {
         v.iter().map(|s| (*s).to_owned()).collect()
     }
 
-    /// Budget is `width - indent`, so 10 here: `aaa bbb` fits, `aaa bbb ccc`
-    /// (11) does not.
+    // Budget is `width - indent`, so 10 here: `aaa bbb` fits, `aaa bbb ccc`
+    // (11) does not.
     #[test]
     fn wraps_to_the_budget_left_after_the_indent() {
         let got = wrap_items(&items(&["aaa", "bbb", "ccc", "ddd"]), 2, 12);
@@ -413,10 +416,10 @@ mod tests {
         assert!(wrap_items(&[], 4, 80).is_empty());
     }
 
-    /// Right edge lands one column short of `width` (real portage's own
-    /// `EOutput.__eend` deliberately leaves a 1-column margin so an
-    /// exact-width terminal doesn't wrap) — checked plain (no ANSI padding
-    /// characters to throw off a byte-length check).
+    // Right edge lands one column short of `width` (real portage's own
+    // `EOutput.__eend` deliberately leaves a 1-column margin so an
+    // exact-width terminal doesn't wrap) — checked plain (no ANSI padding
+    // characters to throw off a byte-length check).
     #[test]
     fn estatus_line_ok_right_aligns_one_short_of_width() {
         let line = estatus_line("fetch: binutils-2.46.1.tar.xz", true, 80, false);
@@ -439,9 +442,9 @@ mod tests {
         assert!(colored.contains("\x1b[32mok"), "{colored:?}");
     }
 
-    /// A message longer than the terminal must not underflow the padding
-    /// arithmetic (`saturating_sub` + a `.max(1)` floor) — must still
-    /// terminate with the bracket, not panic.
+    // A message longer than the terminal must not underflow the padding
+    // arithmetic (`saturating_sub` + a `.max(1)` floor) — must still
+    // terminate with the bracket, not panic.
     #[test]
     fn estatus_line_survives_a_narrow_terminal() {
         let line = estatus_line("a very long message indeed", true, 10, false);

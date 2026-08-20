@@ -169,7 +169,7 @@ if [[ -n ${EPREFIX} && ${EPREFIX%/} != "" && ${EPREFIX%/} != "/" ]]; then
 fi
 "#;
 
-/// Directories laid out under the prefix's install root (`EROOT`).
+/// Directories laid out under the prefix's install root (`EROOT`)
 const SKELETON: &[&str] = &[
     "etc/portage",
     "var/db/pkg",
@@ -185,11 +185,11 @@ const SKELETON: &[&str] = &[
 /// building, derived once from the resolved roots.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
-    /// `--local`: EPREFIX set, base == target.
+    /// `--local`: EPREFIX set, base == target
     Local,
-    /// `--prefix DIR`: EPREFIX set, host is the base.
+    /// `--prefix DIR`: EPREFIX set, host is the base
     Overlay,
-    /// `--root DIR`: no EPREFIX, base == target.
+    /// `--root DIR`: no EPREFIX, base == target
     SelfContained,
 }
 
@@ -238,7 +238,7 @@ impl Mode {
     }
 }
 
-/// `em setup` — bootstrap a layout and register it as available.
+/// `em setup` — bootstrap a layout and register it as available
 ///
 /// Registration lives here rather than in [`bootstrap`] because it is a
 /// property of *the command*, not of building a layout: `crossdev` bootstraps
@@ -345,7 +345,7 @@ pub async fn merge_baselayout(cli: &crate::cli::Cli, extra_path: &[Utf8PathBuf])
     .await
 }
 
-/// `-p` / `--pretend` path for [`run`]: describe the layout without writing.
+/// `-p` / `--pretend` path for [`run`]: describe the layout without writing
 fn preview(roots: &Roots, mode: Mode) -> Result<()> {
     let eroot = roots.merge_root();
     println!(">>> would bootstrap layout at {eroot} ({})", mode.label());
@@ -369,9 +369,10 @@ fn preview(roots: &Roots, mode: Mode) -> Result<()> {
     Ok(())
 }
 
-/// Bootstrap the layout described by `roots`. Needs a target other than the host
-/// `/` — i.e. `--local`, `--prefix DIR`, or `--root DIR` (the cross-sysroot
-/// confdir case; pair with `em select profile` to set its profile).
+/// Bootstrap the layout described by `roots`
+///
+/// Needs a target other than the host `/` — i.e. `--local`, `--prefix DIR`, or `--root DIR`
+/// (the cross-sysroot confdir case; pair with `em select profile` to set its profile).
 pub fn bootstrap(roots: &Roots) -> Result<()> {
     bootstrap_mode(roots, Mode::resolve(roots)?)
 }
@@ -427,10 +428,11 @@ fn bootstrap_mode(roots: &Roots, mode: Mode) -> Result<()> {
     Ok(())
 }
 
-/// `make.conf` for a new prefix/root. Overlay/local: commentary only (host
-/// supplies profile + MAKEOPTS). Self-contained `--root`: the only make.conf
-/// read — seed real `MAKEOPTS` / `ACCEPT_KEYWORDS` from the host so builds
-/// are not serial stable-only by default.
+/// `make.conf` for a new prefix/root
+///
+/// Overlay/local: commentary only (host supplies profile + MAKEOPTS). Self-contained
+/// `--root`: the only make.conf read — seed real `MAKEOPTS` / `ACCEPT_KEYWORDS` from the
+/// host so builds are not serial stable-only by default.
 fn make_conf_template(mode: Mode, eroot: &Utf8Path) -> String {
     let how = if mode == Mode::Local {
         format!(
@@ -491,16 +493,17 @@ pub(crate) fn host_makeopts() -> String {
         })
 }
 
-/// Host `ACCEPT_KEYWORDS`, when set. Self-contained roots mirror it so
-/// packages are not stuck on stable-only (newer toolchain versions are often
-/// `~arch` only).
+/// Host `ACCEPT_KEYWORDS`, when set
+///
+/// Self-contained roots mirror it so packages are not stuck on stable-only (newer toolchain
+/// versions are often `~arch` only).
 fn host_accept_keywords() -> Option<String> {
     portage_repo::MakeConf::load_default()
         .ok()
         .and_then(|m| m.get("ACCEPT_KEYWORDS").map(str::to_owned))
 }
 
-/// Expose the host's Python at the prefix paths the eclasses expect.
+/// Expose the host's Python at the prefix paths the eclasses expect
 ///
 /// In `--local` mode the host (`/`) is the base system and provides Python, but
 /// the python eclasses derive prefix-absolute paths from `EPREFIX`/`ESYSROOT`:
@@ -522,11 +525,11 @@ fn link_host_pythons(eroot: &Utf8Path) -> Result<()> {
     Ok(())
 }
 
-/// Host tools linked into `${EPREFIX}/usr/bin` for **overlay** (`--prefix`)
-/// only. Ebuilds often hardcode prefix-absolute paths; without a full Prefix
-/// userland those must resolve somehow. Layout (`bin`→`usr/bin`) comes from
-/// merging baselayout — this list is host binary content only. See
-/// `docs/design/em-prefix-experiment.md`.
+/// Host tools linked into `${EPREFIX}/usr/bin` for **overlay** (`--prefix`) only
+///
+/// Ebuilds often hardcode prefix-absolute paths; without a full Prefix userland those must
+/// resolve somehow. Layout (`bin`→`usr/bin`) comes from merging baselayout — this list is
+/// host binary content only. See `docs/design/em-prefix-experiment.md`.
 const HOST_BASE_TOOLS: &[&str] = &[
     "bash", "sh", "xargs", "find", "perl", "install", "true", "grep", "env", "ed",
 ];
@@ -603,9 +606,9 @@ mod tests {
         );
     }
 
-    /// Relaxing the build `PATH` is a `--local` bootstrap concern only: an
-    /// overlay layers on a host that already supplies the tools, and reaches
-    /// them through its own layout rather than the phase `PATH`.
+    // Relaxing the build `PATH` is a `--local` bootstrap concern only: an
+    // overlay layers on a host that already supplies the tools, and reaches
+    // them through its own layout rather than the phase `PATH`.
     #[tokio::test]
     async fn extra_path_is_refused_outside_local() {
         let dir = tempfile::tempdir().unwrap();
@@ -620,12 +623,12 @@ mod tests {
         assert!(err.to_string().contains("--extra-path"), "{err}");
     }
 
-    /// Each flag maps to the topology `em setup` builds, and only two of the
-    /// three are ones `em active` can select — a self-contained `--root` is
-    /// driven by the flag, never by a registered default. Registration itself
-    /// deliberately lives in `run`, not in `bootstrap`: `crossdev` bootstraps
-    /// prefixes internally and tests bootstrap into tempdirs, and neither
-    /// should touch the user's state.
+    // Each flag maps to the topology `em setup` builds, and only two of the
+    // three are ones `em active` can select — a self-contained `--root` is
+    // driven by the flag, never by a registered default. Registration itself
+    // deliberately lives in `run`, not in `bootstrap`: `crossdev` bootstraps
+    // prefixes internally and tests bootstrap into tempdirs, and neither
+    // should touch the user's state.
     #[test]
     fn mode_maps_flags_to_selectable_topologies() {
         use super::Mode;
@@ -754,9 +757,9 @@ mod tests {
         );
     }
 
-    /// Target packages (CTARGET set, no TARGET_ABI) must not get overlay
-    /// host-path injection (CPPFLAGS/LDFLAGS/…); PATH still gains prefix
-    /// usr/bin for cross tools.
+    // Target packages (CTARGET set, no TARGET_ABI) must not get overlay
+    // host-path injection (CPPFLAGS/LDFLAGS/…); PATH still gains prefix
+    // usr/bin for cross tools.
     #[tokio::test]
     async fn overlay_bashrc_skips_host_paths_for_a_genuine_target_package() {
         let dir = tempfile::tempdir().unwrap();
@@ -804,10 +807,10 @@ mod tests {
         );
     }
 
-    /// The host-arch toolchain-*tool* package class (`binutils`/`gcc` —
-    /// `TARGET_ABI` also set alongside `CTARGET`, `CBUILD == CHOST` via
-    /// `use_outer_eroot`'s routing) must keep getting the host path
-    /// injection, exactly as before this fix.
+    // The host-arch toolchain-*tool* package class (`binutils`/`gcc` —
+    // `TARGET_ABI` also set alongside `CTARGET`, `CBUILD == CHOST` via
+    // `use_outer_eroot`'s routing) must keep getting the host path
+    // injection, exactly as before this fix.
     #[tokio::test]
     async fn overlay_bashrc_keeps_host_paths_for_a_cross_host_tool_package() {
         let dir = tempfile::tempdir().unwrap();
@@ -839,8 +842,8 @@ mod tests {
         );
     }
 
-    /// package.env CBUILD/CTARGET/TARGET_ABI sniff is the only host-class
-    /// gate (no EM_BUILD_CLASS).
+    // package.env CBUILD/CTARGET/TARGET_ABI sniff is the only host-class
+    // gate (no EM_BUILD_CLASS).
     #[tokio::test]
     async fn overlay_bashrc_uses_package_env_sniff_for_host_class() {
         let dir = tempfile::tempdir().unwrap();
@@ -992,7 +995,7 @@ mod tests {
         assert!(!make_conf.contains("MAKEOPTS="));
     }
 
-    /// `--prefix` (overlay) symlinks host base tools into ${EPREFIX}/usr/bin —
+    // `--prefix` (overlay) symlinks host base tools into ${EPREFIX}/usr/bin —
     // the relocatable installed tree's shebangs reference ${EPREFIX}/usr/bin/...
     // and the overlay borrows host tools rather than building its own.
     // Previously the symlinks were gated on `--local` (exactly backwards).
@@ -1012,8 +1015,8 @@ mod tests {
         );
     }
 
-    /// `--root` (self-contained) does NOT symlink host tools — it owns everything.
-    /// (Layout comes from oneshot baselayout in [`super::run`], not bootstrap.)
+    // `--root` (self-contained) does NOT symlink host tools — it owns everything
+    // (Layout comes from oneshot baselayout in [`super::run`], not bootstrap.)
     #[test]
     fn self_contained_root_does_not_symlink_host_tools() {
         let dir = tempfile::tempdir().unwrap();

@@ -9,20 +9,20 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
-/// What estrip should do, decided from FEATURES/RESTRICT/dostrip.
+/// What estrip should do, decided from FEATURES/RESTRICT/dostrip
 pub enum StripMode {
-    /// FEATURES=nostrip, or RESTRICT=strip with no `dostrip` opt-ins.
+    /// FEATURES=nostrip, or RESTRICT=strip with no `dostrip` opt-ins
     Disabled,
-    /// Default: every ELF object in the image (minus excludes).
+    /// Default: every ELF object in the image (minus excludes)
     All,
-    /// RESTRICT=strip with explicit `dostrip <path>` opt-ins.
+    /// RESTRICT=strip with explicit `dostrip <path>` opt-ins
     Only(Vec<Utf8PathBuf>),
 }
 
 pub struct PostProcess {
     pub compress_include: Vec<Utf8PathBuf>,
     pub compress_exclude: Vec<Utf8PathBuf>,
-    /// e.g. `bzip2`; the on-disk suffix is derived from it.
+    /// e.g. `bzip2`; the on-disk suffix is derived from it
     pub compress_cmd: String,
     pub compress_flags: Vec<String>,
     pub strip: StripMode,
@@ -45,7 +45,7 @@ const SKIP_SUFFIXES: &[&str] = &[
     "js", "pdf", "png", "svg",
 ];
 
-/// ecompress skips tiny files where the container overhead wins.
+/// ecompress skips tiny files where the container overhead wins
 const MIN_COMPRESS_SIZE: u64 = 128;
 
 fn compress_suffix(cmd: &str) -> &'static str {
@@ -69,7 +69,7 @@ fn under_any(rel: &Utf8Path, prefixes: &[Utf8PathBuf]) -> bool {
     prefixes.iter().any(|p| rel.starts_with(p))
 }
 
-/// All entries below `image_dir` as (absolute installed path, on-disk path).
+/// All entries below `image_dir` as (absolute installed path, on-disk path)
 fn walk(image_dir: &Utf8Path) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>> {
     let mut out = Vec::new();
     let mut queue = std::collections::VecDeque::new();
@@ -98,7 +98,7 @@ fn walk(image_dir: &Utf8Path) -> Result<Vec<(Utf8PathBuf, Utf8PathBuf)>> {
     Ok(out)
 }
 
-/// Normalize `.`/`..` in an absolute installed path (no filesystem access).
+/// Normalize `.`/`..` in an absolute installed path (no filesystem access)
 fn normalize(path: &Utf8Path) -> Utf8PathBuf {
     let mut parts: Vec<&str> = Vec::new();
     for c in path.components() {
@@ -117,7 +117,7 @@ fn normalize(path: &Utf8Path) -> Utf8PathBuf {
     out
 }
 
-/// Run both passes over the image; returns counts for the caller to report.
+/// Run both passes over the image; returns counts for the caller to report
 pub fn post_process_image(image_dir: &Utf8Path, cfg: &PostProcess) -> Result<PostStats> {
     let mut stats = PostStats::default();
     if !image_dir.exists() {
@@ -277,7 +277,7 @@ pub fn post_process_image(image_dir: &Utf8Path, cfg: &PostProcess) -> Result<Pos
     Ok(stats)
 }
 
-/// True for ET_EXEC/ET_DYN ELF objects (shared libraries and executables).
+/// True for ET_EXEC/ET_DYN ELF objects (shared libraries and executables)
 /// Relocatable objects (.o, .ko) are left alone: `--strip-unneeded` on those
 /// can drop relocation symbols they still need.
 fn is_strippable_elf(path: &Utf8Path) -> bool {

@@ -11,19 +11,19 @@
 use anyhow::{Result, bail};
 use gentoo_core::Arch;
 
-/// The target C library, chosen from the tuple's last field.
+/// The target C library, chosen from the tuple's last field
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Libc {
-    /// `…-linux-gnu` — `sys-libs/glibc`.
+    /// `…-linux-gnu` — `sys-libs/glibc`
     Glibc,
-    /// `…-linux-musl` — `sys-libs/musl`.
+    /// `…-linux-musl` — `sys-libs/musl`
     Musl,
-    /// `…-elf`/`-eabi`/`-newlib` — `sys-libs/newlib`, bare metal (no kernel).
+    /// `…-elf`/`-eabi`/`-newlib` — `sys-libs/newlib`, bare metal (no kernel)
     Newlib,
 }
 
 impl Libc {
-    /// The real `category/package` providing this libc in `::gentoo`.
+    /// The real `category/package` providing this libc in `::gentoo`
     fn package(self) -> (&'static str, &'static str) {
         match self {
             Libc::Glibc => ("sys-libs", "glibc"),
@@ -33,24 +33,24 @@ impl Libc {
     }
 }
 
-/// A parsed cross target plus the toolchain model (`--llvm`).
+/// A parsed cross target plus the toolchain model (`--llvm`)
 #[derive(Debug, Clone)]
 pub struct CrossTarget {
-    /// The full `CTARGET` tuple, e.g. `riscv64-unknown-linux-gnu`.
+    /// The full `CTARGET` tuple, e.g. `riscv64-unknown-linux-gnu`
     pub tuple: String,
-    /// The CPU field (`tuple` before the first `-`), e.g. `riscv64`.
+    /// The CPU field (`tuple` before the first `-`), e.g. `riscv64`
     pub cpu: String,
-    /// The target libc.
+    /// The target libc
     pub libc: Libc,
     /// Whether the OS has a kernel (`linux`) — bare-metal targets do not, so they
     /// skip `sys-kernel/linux-headers`.
     pub has_kernel: bool,
-    /// LLVM/Clang model (`cross_llvm-*`, no per-target compiler) vs GCC.
+    /// LLVM/Clang model (`cross_llvm-*`, no per-target compiler) vs GCC
     pub llvm: bool,
 }
 
 impl CrossTarget {
-    /// Parse `tuple` (`ARCH-VENDOR-OS-LIBC`); `llvm` selects the Clang model.
+    /// Parse `tuple` (`ARCH-VENDOR-OS-LIBC`); `llvm` selects the Clang model
     pub fn parse(tuple: &str, llvm: bool) -> Result<Self> {
         let cpu = tuple
             .split('-')
@@ -100,16 +100,16 @@ impl CrossTarget {
         format!("{prefix}{}", self.tuple)
     }
 
-    /// The Gentoo `ARCH`/keyword for the target CPU (e.g. `riscv64` → `riscv`).
+    /// The Gentoo `ARCH`/keyword for the target CPU (e.g. `riscv64` → `riscv`)
     pub fn gentoo_arch(&self) -> String {
         Arch::from_chost(&self.tuple)
             .map(|a| a.as_keyword().to_owned())
             .unwrap_or_else(|| self.cpu.clone())
     }
 
-    /// The repo-relative target profile path (`gentoo_profile` in
-    /// crossdev-stages). Linked **directly** — `eselect profile` rejects a
-    /// foreign arch.
+    /// The repo-relative target profile path (`gentoo_profile` in crossdev-stages)
+    ///
+    /// Linked **directly** — `eselect profile` rejects a foreign arch.
     ///
     /// This deliberately uses the **arch-specific** profile, the crossdev-stages
     /// fix (`lib/sysroot.sh`): canonical `crossdev` hardcodes the arch-neutral
@@ -131,7 +131,7 @@ impl CrossTarget {
         }
     }
 
-    /// Target `CFLAGS` (`target_cflags` in crossdev-stages).
+    /// Target `CFLAGS` (`target_cflags` in crossdev-stages)
     pub fn cflags(&self) -> &'static str {
         match self.cpu.as_str() {
             "x86_64" => "-O3 -march=x86-64 -pipe",
@@ -141,9 +141,10 @@ impl CrossTarget {
         }
     }
 
-    /// The `(real_category, package)` set to symlink into the overlay category,
-    /// in stage order. The cross magic lives in the eclasses, triggered by the
-    /// `cross-*` category, so these point at the ordinary `::gentoo` ebuilds.
+    /// The `(real_category, package)` set to symlink into the overlay category, in stage order
+    ///
+    /// The cross magic lives in the eclasses, triggered by the `cross-*` category, so these
+    /// point at the ordinary `::gentoo` ebuilds.
     ///
     /// Each entry's [`PackageArch`] comes from [`CROSS_PACKAGE_ARCH`], the one
     /// table for package.env / keywords — so adding a package here without
@@ -256,7 +257,7 @@ pub enum PackageArch {
     /// Runs on the host — the toolchain itself (binutils/gcc/clang wrapper)
     /// and host-side tools like gdb.
     Host,
-    /// Installs into the target sysroot, built for `<CTARGET>`.
+    /// Installs into the target sysroot, built for `<CTARGET>`
     Target,
 }
 
@@ -341,9 +342,9 @@ mod tests {
         assert!(err.to_string().contains("glibc"));
     }
 
-    /// Every shape of target `em crossdev` can plan, so the `debug_assert` in
-    /// `packages()` covers the whole space rather than whichever tuple a test
-    /// happened to name.
+    // Every shape of target `em crossdev` can plan, so the `debug_assert` in
+    // `packages()` covers the whole space rather than whichever tuple a test
+    // happened to name.
     fn every_target() -> Vec<CrossTarget> {
         ["riscv64-unknown-linux-gnu", "riscv64-unknown-elf"]
             .iter()
@@ -369,7 +370,7 @@ mod tests {
         }
     }
 
-    /// package.env letter fidelity (bash-crossdev matrix): K|L target, else host.
+    // package.env letter fidelity (bash-crossdev matrix): K|L target, else host
     #[test]
     fn packages_match_the_arch_table() {
         for t in every_target() {
@@ -383,8 +384,8 @@ mod tests {
         }
     }
 
-    /// Host codegen specials (PATH/ESYSROOT) are a narrow PN allowlist — not
-    /// every host-env package (llvm runtimes are host-env, not host-codegen).
+    // Host codegen specials (PATH/ESYSROOT) are a narrow PN allowlist — not
+    // every host-env package (llvm runtimes are host-env, not host-codegen).
     #[test]
     fn host_codegen_is_only_code_generators() {
         use portage_repo::EbuildShell;
@@ -440,9 +441,9 @@ mod tests {
         assert_eq!(cross_package_arch("dev-debug", "gdb"), None);
     }
 
-    /// The depgraph looks up the *real* cpn, but if a `real_cpn_of` redirect
-    /// is ever missing it passes the `cross-<tuple>` category through. The
-    /// name must still resolve, or the answer silently degrades to host.
+    // The depgraph looks up the *real* cpn, but if a `real_cpn_of` redirect
+    // is ever missing it passes the `cross-<tuple>` category through. The
+    // name must still resolve, or the answer silently degrades to host.
     #[test]
     fn an_unresolved_redirect_still_finds_the_arch_by_name() {
         assert_eq!(

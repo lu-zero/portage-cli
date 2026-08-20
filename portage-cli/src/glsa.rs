@@ -1,4 +1,4 @@
-//! `em glsa` — Gentoo Linux Security Advisories.
+//! `em glsa` — Gentoo Linux Security Advisories
 //!
 //! Mirrors real portage's `portage/glsa.py` (`Glsa`/`get_glsa_list`). GLSAs
 //! ship pre-synced as `<repo>/metadata/glsa/glsa-<id>.xml`, so — unlike real
@@ -45,8 +45,10 @@ enum RangeOp {
     Eq,
     Gt,
     Ge,
-    /// Revision-scoped variants (`r*`): same base version, revision compared
-    /// with the mapped operator. Real portage's `revisionMatch`.
+    /// Revision-scoped variants (`r*`): same base version, revision compared with the mapped
+    /// operator
+    ///
+    /// Real portage's `revisionMatch`.
     RLe,
     RLt,
     RGe,
@@ -120,7 +122,7 @@ fn range_matches(range: &VersionRange, cpv: &Cpv, slot: SlotName) -> bool {
 
 struct GlsaPackage {
     name: Cpn,
-    /// Raw `arch` attribute: `"*"` or a space-separated keyword list.
+    /// Raw `arch` attribute: `"*"` or a space-separated keyword list
     arch: String,
     vulnerable: Vec<VersionRange>,
     unaffected: Vec<VersionRange>,
@@ -270,7 +272,7 @@ fn fix_atoms(glsa: &Glsa, installed: &[(Cpv, SlotName)], arch: &str) -> Vec<Stri
     atoms.into_iter().collect()
 }
 
-/// The `@security` set: the union of every applicable GLSA's fix atoms.
+/// The `@security` set: the union of every applicable GLSA's fix atoms
 ///
 /// Mirrors real portage's `SecuritySet`/`NewAffectedSet`: for each GLSA the
 /// repo ships, if the system is vulnerable to it and it hasn't been marked
@@ -382,16 +384,17 @@ fn glsa_dir(repo_path: &Utf8Path) -> Utf8PathBuf {
     repo_path.join("metadata/glsa")
 }
 
-/// Where `glsa_injected` lives for `eroot` — see [`advisory::state_dir`] for
-/// the bare-host/managed-root split. Real portage's
-/// `<EROOT>/var/lib/portage/glsa_injected` (`PRIVATE_PATH`).
+/// Where `glsa_injected` lives for `eroot` — see [`advisory::state_dir`] for the
+/// bare-host/managed-root split
+///
+/// Real portage's `<EROOT>/var/lib/portage/glsa_injected` (`PRIVATE_PATH`).
 fn injected_path(eroot: &Utf8Path) -> Utf8PathBuf {
     state_dir(eroot, "var/lib/portage/glsa_injected", || {
         crate::xdg::glsa_state_dir().join("glsa_injected")
     })
 }
 
-/// GLSA ids previously marked applied (real portage's `get_applied_glsas`).
+/// GLSA ids previously marked applied (real portage's `get_applied_glsas`)
 fn read_injected(eroot: &Utf8Path) -> BTreeSet<String> {
     read_line_set(&injected_path(eroot))
 }
@@ -405,7 +408,7 @@ fn mark_injected(eroot: &Utf8Path, ids: &[String]) -> Result<()> {
     write_line_set(&injected_path(eroot), &all)
 }
 
-/// Every GLSA id available in the repo, sorted.
+/// Every GLSA id available in the repo, sorted
 fn list_ids(repo_path: &Utf8Path) -> Result<Vec<String>> {
     let dir = glsa_dir(repo_path);
     let entries = std::fs::read_dir(dir.as_std_path()).with_context(|| format!("reading {dir}"))?;
@@ -751,7 +754,7 @@ mod tests {
 
     // --- @security (security_atoms) ---
 
-    /// Seed a fake repo with one GLSA xml and return its path.
+    // Seed a fake repo with one GLSA xml and return its path
     fn glsa_repo(xml: &str) -> (tempfile::TempDir, Utf8PathBuf) {
         let repo = tempfile::tempdir().unwrap();
         let dir = repo.path().join("metadata/glsa");

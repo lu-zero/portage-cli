@@ -1,4 +1,4 @@
-//! `em select mirrors` — mirrorselect workalike for managing `GENTOO_MIRRORS`.
+//! `em select mirrors` — mirrorselect workalike for managing `GENTOO_MIRRORS`
 //!
 //! Lists, shows, and sets Gentoo distfile mirrors. The mirror list comes from
 //! [`portage_distfiles::MirrorList`] (Gentoo's structured XML API). `GENTOO_MIRRORS`
@@ -15,12 +15,12 @@ use crate::style::C_STAR;
 use portage_distfiles::{Mirror, MirrorList};
 use portage_repo::MakeConf;
 
-/// Resolve the `make.conf` path the root flags select.
+/// Resolve the `make.conf` path the root flags select
 fn make_conf_path(globals: &Cli) -> Utf8PathBuf {
     config_portage_dir(globals).join("make.conf")
 }
 
-/// Dispatch `em select mirrors <action>`.
+/// Dispatch `em select mirrors <action>`
 pub async fn run(action: &MirrorAction, globals: &Cli) -> Result<()> {
     match action {
         MirrorAction::List { country, region } => {
@@ -35,7 +35,7 @@ pub async fn run(action: &MirrorAction, globals: &Cli) -> Result<()> {
     }
 }
 
-/// List available mirrors, optionally filtered by country or region.
+/// List available mirrors, optionally filtered by country or region
 async fn list_mirrors(globals: &Cli, country: Option<&str>, region: Option<&str>) -> Result<()> {
     let list = MirrorList::fetch().await;
     let filtered: Vec<&Mirror> = if let Some(c) = country {
@@ -79,7 +79,7 @@ async fn list_mirrors(globals: &Cli, country: Option<&str>, region: Option<&str>
     Ok(())
 }
 
-/// Show the currently configured `GENTOO_MIRRORS` value.
+/// Show the currently configured `GENTOO_MIRRORS` value
 fn show(globals: &Cli) -> Result<()> {
     let path = make_conf_path(globals);
     if !path.exists() {
@@ -94,7 +94,7 @@ fn show(globals: &Cli) -> Result<()> {
     Ok(())
 }
 
-/// Set `GENTOO_MIRRORS` in `make.conf`.
+/// Set `GENTOO_MIRRORS` in `make.conf`
 ///
 /// With explicit URLs those are used verbatim; otherwise every mirror matching
 /// `--country`/`--region` is used (one HTTPS-preferred URL per mirror).
@@ -143,7 +143,7 @@ async fn set_mirrors(
     Ok(())
 }
 
-/// Read the current `GENTOO_MIRRORS` URLs as a set (for the list marker).
+/// Read the current `GENTOO_MIRRORS` URLs as a set (for the list marker)
 fn current_mirror_set(globals: &Cli) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
     let path = make_conf_path(globals);
@@ -158,7 +158,7 @@ fn current_mirror_set(globals: &Cli) -> std::collections::HashSet<String> {
     set
 }
 
-/// Ensure a mirror URL ends with `/`, matching how portage stores mirror URLs.
+/// Ensure a mirror URL ends with `/`, matching how portage stores mirror URLs
 fn ensure_trailing_slash(url: &str) -> String {
     if url.ends_with('/') {
         url.to_string()

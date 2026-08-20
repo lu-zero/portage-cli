@@ -1,4 +1,4 @@
-//! Small filesystem helpers shared across applets.
+//! Small filesystem helpers shared across applets
 
 use std::io::Write;
 
@@ -16,7 +16,7 @@ pub(crate) fn write_if_absent(path: &Utf8Path, contents: &str) -> Result<()> {
     std::fs::write(path, contents).with_context(|| format!("writing {path}"))
 }
 
-/// Atomically replace `path` with `contents`.
+/// Atomically replace `path` with `contents`
 ///
 /// Creates a temporary file in the same directory as `path` (so rename stays
 /// on one filesystem), writes `contents`, then [`NamedTempFile::persist`]s it

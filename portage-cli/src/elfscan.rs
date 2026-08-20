@@ -31,34 +31,34 @@ use object::{Endianness, FileKind, StringTable};
 /// scanelf on AmpereOne / large `/usr/lib64` trees).
 const DEFAULT_JOBS_CAP: usize = 16;
 
-/// Below this many paths, skip thread-pool overhead.
+/// Below this many paths, skip thread-pool overhead
 const PARALLEL_PATH_FLOOR: usize = 32;
 
-/// The four ELF metadata fields, ready to write into the VDB.
+/// The four ELF metadata fields, ready to write into the VDB
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ElfScan {
-    /// Legacy `NEEDED`: `<path> <needed,comma>` per ELF.
+    /// Legacy `NEEDED`: `<path> <needed,comma>` per ELF
     pub needed: Vec<String>,
-    /// `NEEDED.ELF.2`: `<MACHINE>;<path>;<SONAME>;<RPATH>;<needed,comma>;<cat>`.
+    /// `NEEDED.ELF.2`: `<MACHINE>;<path>;<SONAME>;<RPATH>;<needed,comma>;<cat>`
     pub needed_elf2: Vec<String>,
-    /// `REQUIRES`: `<cat>: <sonames>` (needed minus provided).
+    /// `REQUIRES`: `<cat>: <sonames>` (needed minus provided)
     pub requires: Vec<String>,
-    /// `PROVIDES`: `<cat>: <sonames>` (the package's own DT_SONAMEs).
+    /// `PROVIDES`: `<cat>: <sonames>` (the package's own DT_SONAMEs)
     pub provides: Vec<String>,
 }
 
-/// Per-file dynamic-link metadata (internal + benches).
+/// Per-file dynamic-link metadata (internal + benches)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElfInfo {
-    /// ELF machine name for `NEEDED.ELF.2` (e.g. `X86_64`).
+    /// ELF machine name for `NEEDED.ELF.2` (e.g. `X86_64`)
     pub machine: &'static str,
-    /// Portage multilib category (e.g. `x86_64`).
+    /// Portage multilib category (e.g. `x86_64`)
     pub category: String,
-    /// `DT_SONAME`, if any.
+    /// `DT_SONAME`, if any
     pub soname: Option<String>,
-    /// `DT_RPATH` / `DT_RUNPATH`, if any.
+    /// `DT_RPATH` / `DT_RUNPATH`, if any
     pub rpath: Option<String>,
-    /// `DT_NEEDED` sonames.
+    /// `DT_NEEDED` sonames
     pub needed: Vec<String>,
 }
 
@@ -84,7 +84,7 @@ pub(crate) fn scan_file(path: &Path) -> Option<ElfInfo> {
     parse_elf(&mmap)
 }
 
-/// Walk `image_dir` and collect ELF link metadata for every dynamic ELF object.
+/// Walk `image_dir` and collect ELF link metadata for every dynamic ELF object
 ///
 /// Worker count defaults to [`default_jobs`]. Use [`scan_image_with_jobs`] for
 /// serial (`Some(1)`) microbenchmarks.
@@ -92,7 +92,7 @@ pub fn scan_image(image_dir: &Utf8Path) -> ElfScan {
     scan_image_with_jobs(image_dir, None)
 }
 
-/// Default worker count: `available_parallelism` capped at `DEFAULT_JOBS_CAP`.
+/// Default worker count: `available_parallelism` capped at `DEFAULT_JOBS_CAP`
 pub fn default_jobs() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
@@ -109,7 +109,7 @@ pub fn scan_image_with_jobs(image_dir: &Utf8Path, jobs: Option<usize>) -> ElfSca
     assemble_scan(&entries)
 }
 
-/// Scan an arbitrary list of absolute paths under `image_root` (for benches).
+/// Scan an arbitrary list of absolute paths under `image_root` (for benches)
 pub fn scan_paths_parallel(
     image_root: &Path,
     paths: Vec<PathBuf>,
@@ -180,7 +180,7 @@ fn scan_paths_serial(image_root: &Path, paths: Vec<PathBuf>) -> Vec<(String, Elf
     entries
 }
 
-/// Build the four VDB field lists from sorted `(install_path, info)` pairs.
+/// Build the four VDB field lists from sorted `(install_path, info)` pairs
 pub fn assemble_scan(entries: &[(String, ElfInfo)]) -> ElfScan {
     let mut scan = ElfScan::default();
     let mut provides: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();

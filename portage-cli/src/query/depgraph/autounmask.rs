@@ -5,11 +5,11 @@ use camino::Utf8Path;
 use super::repo::AutounmaskCandidate;
 use super::repo::FilterReason;
 
-/// One line to write into a portage config file.
+/// One line to write into a portage config file
 struct Entry {
     filename: String,
     atom: String,
-    /// Trailing tokens after the atom (keywords, licenses); empty for unmask.
+    /// Trailing tokens after the atom (keywords, licenses); empty for unmask
     tokens: Vec<String>,
 }
 
@@ -85,7 +85,7 @@ fn format_line(e: &Entry) -> String {
     }
 }
 
-/// Print autounmask changes to stderr in portage style.
+/// Print autounmask changes to stderr in portage style
 /// Order: mask → keywords → license (most fundamental first).
 pub(super) fn report(candidates: &[AutounmaskCandidate]) {
     use super::output::{C_DIM, C_ON, C_PKG};

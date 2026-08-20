@@ -59,9 +59,10 @@ pub(crate) fn package_needed(pkg: &InstalledPackage) -> Vec<NeededRecord> {
         .unwrap_or_default()
 }
 
-/// One `cp:slot`'s registered preserved-lib set. `paths` are stored as
-/// plain `String`s (not `Utf8PathBuf`) since `camino` doesn't implement
-/// `serde` traits without an extra feature flag on a shared workspace dep —
+/// One `cp:slot`'s registered preserved-lib set
+///
+/// `paths` are stored as plain `String`s (not `Utf8PathBuf`) since `camino` doesn't
+/// implement `serde` traits without an extra feature flag on a shared workspace dep —
 /// converted at the [`PreservedLibsRegistry`] API boundary instead.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct RegistryEntry {
@@ -92,8 +93,9 @@ impl PreservedLibsRegistry {
         Self { path, data }
     }
 
-    /// Write the registry back out. Best-effort: a failure here shouldn't
-    /// abort an unmerge that already completed on disk.
+    /// Write the registry back out
+    ///
+    /// Best-effort: a failure here shouldn't abort an unmerge that already completed on disk.
     pub fn store(&self) {
         match serde_json::to_string_pretty(&self.data) {
             Ok(json) => {
@@ -179,7 +181,7 @@ impl PreservedLibsRegistry {
         self.apply_prune(remove_keys, updates);
     }
 
-    /// Delete preserved files no live package still needs via `DT_NEEDED`.
+    /// Delete preserved files no live package still needs via `DT_NEEDED`
     fn prune_unneeded(&mut self, vdb: &Vdb, root: &Utf8Path) {
         if self.data.is_empty() {
             return;
@@ -603,9 +605,9 @@ mod tests {
         assert_eq!(c.len(), 1);
     }
 
-    /// Write one fake installed package into `vdb_root/<cat>/<pf>/`: a
-    /// `CONTENTS` file (real portage line format) and a `NEEDED.ELF.2` file
-    /// (the exact format [`parse_needed_line`] parses).
+    // Write one fake installed package into `vdb_root/<cat>/<pf>/`: a
+    // `CONTENTS` file (real portage line format) and a `NEEDED.ELF.2` file
+    // (the exact format [`parse_needed_line`] parses).
     fn write_fake_package(
         vdb_root: &std::path::Path,
         cat: &str,
@@ -694,9 +696,9 @@ mod tests {
         assert!(preserved.is_empty());
     }
 
-    /// A real system `.so` to drive `preserved_rebuild_atoms` tests without
-    /// hand-synthesizing an ELF file — same precedent as `elfscan.rs`'s own
-    /// tests (skip, don't fail, if the host doesn't have it).
+    // A real system `.so` to drive `preserved_rebuild_atoms` tests without
+    // hand-synthesizing an ELF file — same precedent as `elfscan.rs`'s own
+    // tests (skip, don't fail, if the host doesn't have it).
     fn real_system_lib() -> Option<(Utf8PathBuf, elfscan::ElfInfo)> {
         for candidate in ["/usr/lib64/libz.so.1", "/lib64/libz.so.1"] {
             let path = Utf8PathBuf::from(candidate);

@@ -1,4 +1,4 @@
-//! `em select repos` — `eselect repository` workalike for **local** repos.
+//! `em select repos` — `eselect repository` workalike for **local** repos
 //!
 //! `list` / `add` / `remove` / `create`. Manages `repos.conf` entries and
 //! (for `create`) lays down a local overlay skeleton on disk. Remote
@@ -25,7 +25,7 @@ pub fn run(action: &RepositoryAction, globals: &Cli) -> Result<()> {
     }
 }
 
-/// The per-repo conf file `em` writes/removes (`repos.conf/<name>.conf`).
+/// The per-repo conf file `em` writes/removes (`repos.conf/<name>.conf`)
 fn repo_conf_file(globals: &Cli, name: &str) -> Utf8PathBuf {
     config_portage_dir(globals)
         .join("repos.conf")
@@ -63,7 +63,7 @@ fn list(globals: &Cli) -> Result<()> {
     Ok(())
 }
 
-/// The `repos.conf` stanza for a local repo (the `[name]` + `location` lines).
+/// The `repos.conf` stanza for a local repo (the `[name]` + `location` lines)
 fn repo_conf_body(name: &str, location: &Utf8Path) -> String {
     format!("# created by `em select repos`\n[{name}]\nlocation = {location}\n")
 }
@@ -85,7 +85,7 @@ fn write_overlay_skeleton(location: &Utf8Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write `repos.conf/<name>.conf` for a local repo at `location`.
+/// Write `repos.conf/<name>.conf` for a local repo at `location`
 fn write_conf(globals: &Cli, name: &str, location: &Utf8Path) -> Result<()> {
     let file = repo_conf_file(globals, name);
     if let Some(parent) = file.parent() {

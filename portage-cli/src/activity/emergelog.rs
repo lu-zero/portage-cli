@@ -1,4 +1,4 @@
-//! Opt-in Portage-compatible `emerge.log` dual-write.
+//! Opt-in Portage-compatible `emerge.log` dual-write
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -9,20 +9,20 @@ use camino::{Utf8Path, Utf8PathBuf};
 use super::bus::ActivitySink;
 use super::event::{ActivityEvent, ActivityMode};
 
-/// Appends classic emerge.log lines for qlop/genlop/emlop.
+/// Appends classic emerge.log lines for qlop/genlop/emlop
 ///
 /// Opt-in only (product decision): not on the default CLI bus.
 pub struct EmergeLogSink {
     path: Utf8PathBuf,
     lock: Mutex<()>,
-    /// Display ROOT for "to {root}" lines (session merge root).
+    /// Display ROOT for "to {root}" lines (session merge root)
     merge_root_display: Mutex<String>,
-    /// Current session mode — regen skips per-item lines (thousands of ebuilds).
+    /// Current session mode — regen skips per-item lines (thousands of ebuilds)
     mode: Mutex<ActivityMode>,
 }
 
 impl EmergeLogSink {
-    /// `log_path` e.g. `/var/log/emerge.log` or `<root>/var/log/emerge.log`.
+    /// `log_path` e.g. `/var/log/emerge.log` or `<root>/var/log/emerge.log`
     pub fn new(log_path: impl Into<Utf8PathBuf>) -> Self {
         Self {
             path: log_path.into(),
@@ -156,7 +156,7 @@ impl ActivitySink for EmergeLogSink {
     }
 }
 
-/// Rough local time string without pulling chrono — good enough for emerge.log.
+/// Rough local time string without pulling chrono — good enough for emerge.log
 fn chrono_like(unix: f64) -> String {
     // Portage uses ctime-style; keep simple ISO-ish UTC for portability.
     let secs = unix.max(0.0) as i64;

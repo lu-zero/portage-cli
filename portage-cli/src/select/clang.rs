@@ -1,4 +1,4 @@
-//! `em select clang` — LLVM/clang slot selection.
+//! `em select clang` — LLVM/clang slot selection
 //!
 //! Manages which LLVM/clang version (slot) is active. Unlike gcc which uses
 //! env.d/gcc/ profiles, clang is installed under /usr/lib/llvm/${SLOT}/ and
@@ -14,7 +14,7 @@ use crate::cli::{ClangAction, Cli};
 use crate::style::C_STAR;
 use portage_atom::Version;
 
-/// Base directory for LLVM installations.
+/// Base directory for LLVM installations
 fn llvm_base_dir(globals: &Cli) -> Utf8PathBuf {
     // Check if we're in a prefix/local context
     if is_prefix_context(globals) {
@@ -31,7 +31,7 @@ fn llvm_base_dir(globals: &Cli) -> Utf8PathBuf {
     Utf8PathBuf::from("/usr/lib/llvm")
 }
 
-/// Path to the current clang slot config file.
+/// Path to the current clang slot config file
 fn current_clang_slot_path(globals: &Cli) -> Utf8PathBuf {
     let config_dir = config_portage_dir(globals);
     config_dir.join("clang").join("current-slot")
@@ -54,7 +54,7 @@ fn linker_cfg_path(globals: &Cli, slot: &str) -> Utf8PathBuf {
     Utf8PathBuf::from(format!("/etc/clang/{slot}/gentoo-linker.cfg"))
 }
 
-/// The `-fuse-ld=` value from a slot's `gentoo-linker.cfg`, if present.
+/// The `-fuse-ld=` value from a slot's `gentoo-linker.cfg`, if present
 fn linker_default(globals: &Cli, slot: &str) -> Option<String> {
     let content = std::fs::read_to_string(linker_cfg_path(globals, slot)).ok()?;
     content
@@ -64,7 +64,7 @@ fn linker_default(globals: &Cli, slot: &str) -> Option<String> {
         .find_map(|line| line.strip_prefix("-fuse-ld=").map(str::to_string))
 }
 
-/// Which installation a slot was found in.
+/// Which installation a slot was found in
 ///
 /// Only `em` has to care: real `eselect` sees one root, while an overlay
 /// prefix can hold the *same* slot as the host, so a selection is ambiguous
@@ -92,7 +92,7 @@ impl Origin {
     }
 }
 
-/// An LLVM/clang slot.
+/// An LLVM/clang slot
 #[derive(Debug, Clone)]
 struct ClangSlot {
     name: String,
@@ -114,7 +114,7 @@ impl ClangSlot {
         }
     }
 
-    /// The unambiguous name for this slot, e.g. `22@prefix`.
+    /// The unambiguous name for this slot, e.g. `22@prefix`
     fn qualified(&self) -> String {
         format!("{}@{}", self.name, self.origin().as_str())
     }
@@ -236,7 +236,7 @@ fn find_slot_targets(slot_dir: &Utf8PathBuf) -> Vec<String> {
     targets
 }
 
-/// Get the current clang slot.
+/// Get the current clang slot
 fn get_current_clang_slot(globals: &Cli) -> Option<String> {
     let config_path = current_clang_slot_path(globals);
     if let Ok(content) = std::fs::read_to_string(&config_path) {
@@ -250,7 +250,7 @@ fn get_current_clang_slot(globals: &Cli) -> Option<String> {
     None
 }
 
-/// Resolve a `set` argument against the available slots.
+/// Resolve a `set` argument against the available slots
 ///
 /// Accepted, in this order: an exact slot name (`22`), a slot qualified by
 /// origin (`22@host`), or a 1-based number from `list`. Name is tried before
@@ -298,7 +298,7 @@ fn resolve_slot<'a>(slots: &'a [ClangSlot], arg: &str) -> Result<&'a ClangSlot> 
     )
 }
 
-/// Record the selection and make it take effect.
+/// Record the selection and make it take effect
 fn set_clang_slot(globals: &Cli, arg: &str) -> Result<String> {
     let slots = list_all_clang_slots(globals)?;
     let slot = resolve_slot(&slots, arg)?;
@@ -450,7 +450,7 @@ mod tests {
         }
     }
 
-    /// The overlay case real eselect never faces: the same slot in both roots.
+    // The overlay case real eselect never faces: the same slot in both roots
     #[test]
     fn a_bare_slot_in_both_roots_resolves_to_the_prefix() {
         let slots = [slot("20", true), slot("22", false), slot("22", true)];
@@ -467,9 +467,10 @@ mod tests {
         assert_eq!(resolve_slot(&slots, "20").unwrap().qualified(), "20@host");
     }
 
-    /// Slot names are numbers, so a name must beat a list position — `22` has
-    /// always meant the slot. Indices still work where they do not collide,
-    /// which is what `list` advertises.
+    // Slot names are numbers, so a name must beat a list position — `22` has always meant the
+    // slot
+    //
+    // Indices still work where they do not collide, which is what `list` advertises.
     #[test]
     fn a_slot_name_wins_over_a_list_index() {
         let slots = [slot("1", true), slot("22", true)];

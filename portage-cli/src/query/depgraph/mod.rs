@@ -35,7 +35,7 @@ use crate::cli::DepgraphFormat;
 /// One entry of the resolved merge list, in install order — everything the
 /// build loop needs to emerge it.
 pub struct PlannedMerge {
-    /// Where this package is merged (`BROOT` host vs target `ROOT`).
+    /// Where this package is merged (`BROOT` host vs target `ROOT`)
     pub merge_root: MergeRoot,
     /// The identity to build/register under (display + work-dir naming +
     /// VDB category) — for a cross-derived package this is the *virtual*
@@ -44,7 +44,7 @@ pub struct PlannedMerge {
     /// formatted string, so nothing downstream has to re-derive it by
     /// parsing a path or string.
     pub cpv: Cpv,
-    /// Absolute path to the ebuild.
+    /// Absolute path to the ebuild
     pub ebuild_path: camino::Utf8PathBuf,
     /// Effective enabled USE flags for this build: the global config and
     /// per-package overrides resolved per the displayed plan (including
@@ -64,12 +64,12 @@ pub struct PlannedMerge {
     pub reinstall: bool,
 }
 
-/// What [`depgraph`] resolved.
+/// What [`depgraph`] resolved
 pub struct DepgraphOutcome {
     /// Process exit code: `1` when configuration changes are required to
     /// realise the displayed plan (matching `emerge -p`), `0` otherwise.
     pub exit_code: i32,
-    /// The merge list in install order.
+    /// The merge list in install order
     pub plan: Vec<PlannedMerge>,
     /// For each `plan` entry, the indices of earlier entries that must finish
     /// building before it can build — in-plan `DEPEND`/`BDEPEND` **and**
@@ -97,10 +97,11 @@ pub struct DepgraphOutcome {
 }
 
 pub struct DepgraphOpts<'a> {
-    /// The full priority-ordered repo set for this invocation: `main` plus
-    /// every `repos.conf` overlay. Built **once** by the caller and shared
-    /// with the atom-resolution step that runs *before* `depgraph()` — so
-    /// the solver builds its plan against the exact same repo world
+    /// The full priority-ordered repo set for this invocation: `main` plus every `repos.conf`
+    /// overlay
+    ///
+    /// Built **once** by the caller and shared with the atom-resolution step that runs *before*
+    /// `depgraph()` — so the solver builds its plan against the exact same repo world
     /// `resolve_atom` picked atoms from.
     ///
     /// Previously this function took a bare `repo_path` and rebuilt the set
@@ -145,41 +146,46 @@ pub struct DepgraphOpts<'a> {
     /// offers that non-interactively via `--autounmask-write`.
     pub ask: bool,
     pub autosolve_use: bool,
-    /// The resolved root set (config / base / target / BROOT). See
-    /// docs/user/root-model.md. `roots.satisfaction_root(DepClass::Bdepend)`
-    /// answers the Host-routed BDEPEND/IDEPEND question directly — `roots`
-    /// carries BROOT correctly even under an active `--target` sysroot
-    /// substitution, so a separate `host_roots` field is no longer needed
-    /// (see `Cli::roots`'s doc comment).
+    /// The resolved root set (config / base / target / BROOT)
+    ///
+    /// See docs/user/root-model.md. `roots.satisfaction_root(DepClass::Bdepend)` answers the
+    /// Host-routed BDEPEND/IDEPEND question directly — `roots` carries BROOT correctly even
+    /// under an active `--target` sysroot substitution, so a separate `host_roots` field is no
+    /// longer needed (see `Cli::roots`'s doc comment).
     pub roots: &'a portage_resolve::Roots,
     /// Where a `MergeRoot::Host` plan entry actually merges — `Cli::host_roots()`'s
-    /// `merge_root()`. Passed separately from `roots` because `roots` can be
-    /// `--target`-substituted (its `eprefix`/`is_overlay()` cleared), which
-    /// would make the `-p` display fall back to the real host even under an
-    /// unprivileged `--prefix` overlay; `Cli::host_roots()` is computed from
-    /// `base_roots()` and stays overlay-aware regardless of `--target`.
+    /// `merge_root()`
+    ///
+    /// Passed separately from `roots` because `roots` can be `--target`-substituted (its
+    /// `eprefix`/`is_overlay()` cleared), which would make the `-p` display fall back to the
+    /// real host even under an unprivileged `--prefix` overlay; `Cli::host_roots()` is computed
+    /// from `base_roots()` and stays overlay-aware regardless of `--target`.
     pub host_merge_root: &'a Utf8Path,
     /// `--onlydeps`: drop the explicitly-requested targets from the plan,
     /// keeping only their dependencies (emerge's `--onlydeps`).
     pub onlydeps: bool,
-    /// Include BDEPEND in resolution (emerge's `--with-bdeps`). Default false
-    /// (exclude BDEPEND) to match emerge's default.
+    /// Include BDEPEND in resolution (emerge's `--with-bdeps`)
+    ///
+    /// Default false (exclude BDEPEND) to match emerge's default.
     pub with_bdeps: bool,
-    /// emerge's `--root-deps[=rdeps]`: only RDEPEND (not DEPEND) is required
-    /// to be satisfiable in the merge target. Caller-supplied rather than
-    /// auto-derived from cross-arch detection: it's a property of *which
-    /// operation* is running (`crossdev --setup` bootstrapping a
-    /// still-empty target always needs it; `stages --stage1` against a
-    /// working toolchain should not), not of CHOST/CBUILD alone.
+    /// emerge's `--root-deps[=rdeps]`: only RDEPEND (not DEPEND) is required to be satisfiable
+    /// in the merge target
+    ///
+    /// Caller-supplied rather than auto-derived from cross-arch detection: it's a property of
+    /// *which operation* is running (`crossdev --setup` bootstrapping a still-empty target
+    /// always needs it; `stages --stage1` against a working toolchain should not), not of
+    /// CHOST/CBUILD alone.
     pub root_deps_rdeps: bool,
-    /// `--deep`: re-examine transitive deps. With [`Self::update`], enables
-    /// in-slot upgrades for packages in the graph (emerge `-uD`). Alone, bumps
-    /// `:*` any-slot deps to the newest slot rather than keeping a satisfying
-    /// installed slot.
+    /// `--deep`: re-examine transitive deps
+    ///
+    /// With [`Self::update`], enables in-slot upgrades for packages in the graph (emerge
+    /// `-uD`). Alone, bumps `:*` any-slot deps to the newest slot rather than keeping a
+    /// satisfying installed slot.
     pub deep: bool,
-    /// `--update`: prefer newest accepted versions. Combined with [`Self::deep`]
-    /// for transitive in-slot upgrades; alone only affects atom disambiguation
-    /// at the CLI and root-target selection (roots already take best in-slot).
+    /// `--update`: prefer newest accepted versions
+    ///
+    /// Combined with [`Self::deep`] for transitive in-slot upgrades; alone only affects atom
+    /// disambiguation at the CLI and root-target selection (roots already take best in-slot).
     pub update: bool,
     /// `--newuse` / `-N`: rebuild installed packages in the graph when planned
     /// USE or IUSE differs from the VDB.
@@ -190,8 +196,9 @@ pub struct DepgraphOpts<'a> {
     /// `--noreplace` / `-n`: leave a named target alone when an installed
     /// version already satisfies it, rather than reinstalling it.
     pub noreplace: bool,
-    /// `--nodeps` (emerge `-O`): merge only the named atoms, no dependency
-    /// expansion. Used by the staged toolchain bootstrap.
+    /// `--nodeps` (emerge `-O`): merge only the named atoms, no dependency expansion
+    ///
+    /// Used by the staged toolchain bootstrap.
     pub nodeps: bool,
     /// A transient conf-layer USE override for this resolve, e.g. `em stages
     /// --stage1`'s `USE="-* build ${BOOTSTRAP_USE}"` (catalyst's own
@@ -216,11 +223,12 @@ pub struct DepgraphOpts<'a> {
     /// preflight/build fails with a clear missing-dependency error rather
     /// than the solver reporting the conflict up front.
     pub exclude: &'a [String],
-    /// Packages already finished in a prior attempt of a `-r`/`--resume`
-    /// job (`maint::resume::completed_keys`). Dropped from `order` the same
-    /// way `--exclude` is — so `-p` and the merge plan omit completed work,
-    /// which is required for correct `--emptytree` resume (VDB presence is
-    /// not a completion marker there). Empty for every non-resume call.
+    /// Packages already finished in a prior attempt of a `-r`/`--resume` job
+    /// (`maint::resume::completed_keys`)
+    ///
+    /// Dropped from `order` the same way `--exclude` is — so `-p` and the merge plan omit
+    /// completed work, which is required for correct `--emptytree` resume (VDB presence is not
+    /// a completion marker there). Empty for every non-resume call.
     pub resume_completed: HashSet<(MergeRoot, String)>,
     /// `--complete-graph`: when a deep update (`-uD`) moves a `~`-pinned
     /// family but leaves a retained installed dependent behind (whose pin

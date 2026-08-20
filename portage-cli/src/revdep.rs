@@ -40,7 +40,7 @@ struct BrokenNeed {
     consumer: Utf8PathBuf,
 }
 
-/// One installed package with at least one [`BrokenNeed`].
+/// One installed package with at least one [`BrokenNeed`]
 struct BrokenConsumer {
     cpv: Cpv,
     slot: portage_vdb::SlotName,
@@ -131,11 +131,12 @@ fn report(consumer: &BrokenConsumer) {
     }
 }
 
-/// `em revdep [-L NAME]`: detect and rebuild packages with broken shared
-/// library dependencies. Always `--oneshot`+`--complete-graph` — a
-/// revdep-triggered rebuild is never a world selection and must not leave
-/// a half-fixed chain unresolved. `-p`/`-a`/`-j`/`-k`/etc. are read from
-/// `cli` by [`crate::emerge_atoms`] exactly as for every other caller.
+/// `em revdep [-L NAME]`: detect and rebuild packages with broken shared library
+/// dependencies
+///
+/// Always `--oneshot`+`--complete-graph` — a revdep-triggered rebuild is never a world
+/// selection and must not leave a half-fixed chain unresolved. `-p`/`-a`/`-j`/`-k`/etc. are
+/// read from `cli` by [`crate::emerge_atoms`] exactly as for every other caller.
 pub async fn run(cli: &cli::Cli, library: Option<&str>) -> Result<()> {
     let vdb = open_cli_vdb(cli)?;
     let roots = cli.roots();

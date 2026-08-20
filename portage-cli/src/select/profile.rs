@@ -1,4 +1,4 @@
-//! `em select profile` — cross-aware `eselect profile` workalike.
+//! `em select profile` — cross-aware `eselect profile` workalike
 //!
 //! `list` / `show` / `set`. The cross-aware difference: `set` accepts **any**
 //! profile path (or a list number) and links it *without* validating it against
@@ -31,7 +31,7 @@ fn effective_arch(globals: &Cli) -> String {
     globals.arch.as_str().to_string()
 }
 
-/// Profiles matching `arch` (the eselect-like filter), in `profiles.desc` order.
+/// Profiles matching `arch` (the eselect-like filter), in `profiles.desc` order
 fn profiles_for(repo: &Repository, arch: &str) -> Result<Vec<ProfileDesc>> {
     Ok(repo
         .profiles_desc()
@@ -49,10 +49,11 @@ pub fn run(action: &ProfileAction, globals: &Cli) -> Result<()> {
     }
 }
 
-/// The repo whose `profiles/` we list/link from — the configured main repo
-/// (usually `gentoo`). `outer_roots()`, not `roots()` — see
-/// `env_d::run_list`'s doc comment; `select` never wants `roots()`'s sysroot
-/// substitution.
+/// The repo whose `profiles/` we list/link from — the configured main repo (usually
+/// `gentoo`)
+///
+/// `outer_roots()`, not `roots()` — see `env_d::run_list`'s doc comment; `select` never
+/// wants `roots()`'s sysroot substitution.
 fn main_repo(globals: &Cli) -> Result<Repository> {
     let conf = globals
         .outer_roots()
@@ -80,7 +81,7 @@ fn main_repo(globals: &Cli) -> Result<Repository> {
     })
 }
 
-/// Where `make.profile` lives for this invocation.
+/// Where `make.profile` lives for this invocation
 fn make_profile_link(globals: &Cli) -> Utf8PathBuf {
     config_portage_dir(globals).join("make.profile")
 }

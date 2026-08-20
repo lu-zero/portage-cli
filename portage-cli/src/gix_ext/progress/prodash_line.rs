@@ -1,4 +1,4 @@
-//! prodash line renderer UI (`feature = "rich"`).
+//! prodash line renderer UI (`feature = "rich"`)
 
 use std::sync::Arc;
 use std::time::Duration;

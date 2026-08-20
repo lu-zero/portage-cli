@@ -1,4 +1,4 @@
-//! Generic env.d-based profile selection module.
+//! Generic env.d-based profile selection module
 //!
 //! This module provides a shared implementation for `eselect`-like modules that
 //! manage profiles via env.d directories (gcc, binutils, linker).
@@ -15,21 +15,21 @@ use crate::style::C_STAR;
 use portage_atom::Version;
 use portage_resolve::Roots;
 
-/// Trait for env.d-based profile selection modules.
+/// Trait for env.d-based profile selection modules
 pub trait EnvDProfile: Sized + 'static {
-    /// The module name for display purposes.
+    /// The module name for display purposes
     fn module_name() -> &'static str;
 
-    /// The subdirectory name under env.d/ (e.g., "gcc", "binutils", "linker").
+    /// The subdirectory name under env.d/ (e.g., "gcc", "binutils", "linker")
     fn env_d_subdir() -> &'static str;
 
-    /// The name of the global environment file in env.d/.
+    /// The name of the global environment file in env.d/
     /// For gcc: "04gcc-{target}" (includes target)
     /// For binutils: "05binutils" (no target)
     /// For linker: "06linker" (no target)
     fn global_env_file() -> &'static str;
 
-    /// Whether the global env file name includes a target suffix that needs to be formatted.
+    /// Whether the global env file name includes a target suffix that needs to be formatted
     /// For gcc: true (uses {target})
     /// For binutils: false
     /// For linker: false
@@ -37,10 +37,10 @@ pub trait EnvDProfile: Sized + 'static {
         false
     }
 
-    /// The variable name to look for in profiles to extract the target (e.g., "CTARGET", "TARGET").
+    /// The variable name to look for in profiles to extract the target (e.g., "CTARGET", "TARGET")
     fn target_var_name() -> &'static str;
 
-    /// Additional environment variable prefixes to extract from profiles (e.g., ["LD="] for linker).
+    /// Additional environment variable prefixes to extract from profiles (e.g., ["LD="] for linker)
     fn extra_env_vars() -> &'static [&'static str] {
         &[]
     }
@@ -67,7 +67,7 @@ pub trait EnvDProfile: Sized + 'static {
     }
 }
 
-/// Base directory for env.d files.
+/// Base directory for env.d files
 pub fn env_d_dir<T: EnvDProfile>(roots: &Roots) -> Utf8PathBuf {
     let config_portage = config_portage_dir_for(roots);
 
@@ -105,7 +105,7 @@ fn current_config_path<T: EnvDProfile>(roots: &Roots, target: &str) -> Utf8PathB
         .join(format!("env.d/{}/config-{}", T::env_d_subdir(), target))
 }
 
-/// Path to the global environment file, rooted like [`current_config_path`].
+/// Path to the global environment file, rooted like [`current_config_path`]
 fn global_env_path<T: EnvDProfile>(roots: &Roots, target: &str) -> Utf8PathBuf {
     let file_name = if T::global_env_uses_target() {
         T::global_env_file().replace("{target}", target)
@@ -119,7 +119,7 @@ fn global_env_path<T: EnvDProfile>(roots: &Roots, target: &str) -> Utf8PathBuf {
         .join(format!("env.d/{}", file_name))
 }
 
-/// A profile with its target.
+/// A profile with its target
 #[derive(Debug, Clone)]
 pub struct Profile<T: EnvDProfile> {
     pub name: String,
@@ -129,7 +129,7 @@ pub struct Profile<T: EnvDProfile> {
     _marker: std::marker::PhantomData<T>,
 }
 
-/// List all profiles, grouped by target.
+/// List all profiles, grouped by target
 fn list_all_profiles<T: EnvDProfile>(roots: &Roots) -> Result<BTreeMap<String, Vec<Profile<T>>>> {
     let mut profiles_by_target: BTreeMap<String, Vec<Profile<T>>> = BTreeMap::new();
 
@@ -157,7 +157,7 @@ fn list_all_profiles<T: EnvDProfile>(roots: &Roots) -> Result<BTreeMap<String, V
     Ok(profiles_by_target)
 }
 
-/// Helper to collect profiles from a directory.
+/// Helper to collect profiles from a directory
 fn collect_profiles<T: EnvDProfile>(
     base_dir: &Utf8PathBuf,
     profiles_by_target: &mut BTreeMap<String, Vec<Profile<T>>>,
@@ -213,14 +213,14 @@ fn collect_profiles<T: EnvDProfile>(
     Ok(())
 }
 
-/// Get the current profile for a target.
+/// Get the current profile for a target
 pub(super) fn get_current_profile<T: EnvDProfile>(roots: &Roots, target: &str) -> Option<String> {
     let config_path = current_config_path::<T>(roots, target);
     let content = std::fs::read_to_string(&config_path).ok()?;
     parse_env_vars(&content).remove("CURRENT")
 }
 
-/// Set the profile for a target.
+/// Set the profile for a target
 fn set_profile<T: EnvDProfile>(
     roots: &Roots,
     target: &str,
@@ -292,7 +292,7 @@ pub(super) fn eprefix(roots: &Roots) -> Utf8PathBuf {
         .unwrap_or_else(|| Utf8PathBuf::from("/"))
 }
 
-/// Parse `KEY="value"` env.d lines into a map (surrounding quotes stripped).
+/// Parse `KEY="value"` env.d lines into a map (surrounding quotes stripped)
 pub(super) fn parse_env_vars(content: &str) -> BTreeMap<String, String> {
     content
         .lines()
@@ -309,7 +309,7 @@ pub(super) fn parse_env_vars(content: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The trailing version-like component of an env.d profile filename (e.g.
+/// The trailing version-like component of an env.d profile filename (e.g
 /// `aarch64-unknown-linux-gnu-13` -> `13`, `2.41` on its own -> `2.41`), or
 /// `None` if `name` doesn't end in one. Mirrors the suffix `collect_profiles`
 /// already recognizes as a version when it strips it to derive a target.
@@ -334,7 +334,7 @@ fn compare_profile_names(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-/// Replace `link` with a symlink pointing at `content` (mkdir parent, force-replace).
+/// Replace `link` with a symlink pointing at `content` (mkdir parent, force-replace)
 pub(super) fn symlink_force(content: &Utf8Path, link: &Utf8Path) -> Result<()> {
     if let Some(parent) = link.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("creating {parent}"))?;
@@ -348,7 +348,7 @@ pub(super) fn symlink_force(content: &Utf8Path, link: &Utf8Path) -> Result<()> {
         .with_context(|| format!("linking {link} -> {content}"))
 }
 
-/// Run a list action.
+/// Run a list action
 ///
 /// Use `outer_roots()`, not `roots()` — same clap `--target` collision as
 /// [`crate::select::config_portage_dir`]: select must not trigger sysroot
@@ -410,8 +410,9 @@ pub fn run_list<T: EnvDProfile>(globals: &Cli) -> Result<()> {
     Ok(())
 }
 
-/// Run a show action. `outer_roots()`, not `roots()` — see [`run_list`]'s
-/// doc comment.
+/// Run a show action
+///
+/// `outer_roots()`, not `roots()` — see [`run_list`]'s doc comment.
 pub fn run_show<T: EnvDProfile>(globals: &Cli, target: &str) {
     match get_current_profile::<T>(&globals.outer_roots(), target) {
         Some(profile) => println!("{}", profile),
@@ -423,8 +424,9 @@ pub fn run_show<T: EnvDProfile>(globals: &Cli, target: &str) {
     }
 }
 
-/// Run a set action. `outer_roots()`, not `roots()` — see [`run_list`]'s
-/// doc comment.
+/// Run a set action
+///
+/// `outer_roots()`, not `roots()` — see [`run_list`]'s doc comment.
 pub fn run_set<T: EnvDProfile>(
     globals: &Cli,
     target: &str,
@@ -483,7 +485,7 @@ pub(super) fn activate_latest<T: EnvDProfile>(roots: &Roots, target: &str) -> Re
     Ok(true)
 }
 
-/// Get the default target from CHOST or architecture.
+/// Get the default target from CHOST or architecture
 pub fn get_default_target(globals: &Cli) -> String {
     get_chost(globals)
 }
@@ -493,11 +495,11 @@ mod tests {
     use super::*;
     use crate::select::linker::LinkerProfileType;
 
-    /// A profile file whose target line's value is a single stray quote
-    /// character used to panic (`target[1..target.len() - 1]` sliced
-    /// `1..0`) in the old hand-rolled quote-stripping loop here, before it
-    /// was rewritten to go through `parse_env_vars` like `set_profile`
-    /// already did.
+    // A profile file whose target line's value is a single stray quote
+    // character used to panic (`target[1..target.len() - 1]` sliced
+    // `1..0`) in the old hand-rolled quote-stripping loop here, before it
+    // was rewritten to go through `parse_env_vars` like `set_profile`
+    // already did.
     #[test]
     fn collect_profiles_does_not_panic_on_a_bare_quote_value() {
         let dir = tempfile::tempdir().unwrap();

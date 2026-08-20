@@ -1,4 +1,4 @@
-//! Append-only JSONL duration history + ETA estimates.
+//! Append-only JSONL duration history + ETA estimates
 
 use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::fs::OpenOptions;
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::bus::ActivitySink;
 use super::event::{ActivityEvent, ActivityMergeRoot, ActivityMode, PhaseTiming, PkgKind};
 
-/// One finished package action (one JSONL line).
+/// One finished package action (one JSONL line)
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct HistoryRecord {
     pub ts_end: f64,
@@ -29,15 +29,15 @@ pub struct HistoryRecord {
     pub error: Option<String>,
 }
 
-/// Appends [`HistoryRecord`]s on [`ActivityEvent::PkgEnd`].
+/// Appends [`HistoryRecord`]s on [`ActivityEvent::PkgEnd`]
 ///
 /// Skips [`ActivityMode::Regen`] sessions — regenerating thousands of ebuilds
 /// must not pollute the merge-duration history used for ETA.
 pub struct HistorySink {
     path: Utf8PathBuf,
-    /// Serialize multi-job appends on the same path within one process.
+    /// Serialize multi-job appends on the same path within one process
     lock: Mutex<()>,
-    /// job_id → mode from the most recent [`ActivityEvent::SessionStart`].
+    /// job_id → mode from the most recent [`ActivityEvent::SessionStart`]
     modes: Mutex<std::collections::HashMap<String, ActivityMode>>,
 }
 
@@ -140,7 +140,7 @@ impl ActivitySink for HistorySink {
     }
 }
 
-/// Read-only view of history for `em log list` / `time` / ETA.
+/// Read-only view of history for `em log list` / `time` / ETA
 pub struct DurationStore {
     records: Vec<HistoryRecord>,
 }
@@ -192,7 +192,7 @@ impl DurationStore {
             .collect()
     }
 
-    /// Most recent records first, optional limit.
+    /// Most recent records first, optional limit
     pub fn recent(&self, limit: Option<usize>) -> Vec<&HistoryRecord> {
         let n = self.records.len();
         let take = limit.unwrap_or(n).min(n);
@@ -202,7 +202,7 @@ impl DurationStore {
             .collect()
     }
 
-    /// Successful durations for `cpn` (or substring match on cpn/cpv), newest first.
+    /// Successful durations for `cpn` (or substring match on cpn/cpv), newest first
     pub fn successes_for_atom(&self, atom: &str) -> Vec<&HistoryRecord> {
         let atom = atom.trim();
         self.records
@@ -218,7 +218,7 @@ impl DurationStore {
             .collect()
     }
 
-    /// Last `k` successful durations for exact cpn (seconds), oldest→newest in window.
+    /// Last `k` successful durations for exact cpn (seconds), oldest→newest in window
     pub fn recent_success_seconds(&self, cpn: &str, k: usize) -> Vec<f64> {
         let mut v: Vec<f64> = self
             .records
@@ -246,7 +246,7 @@ impl DurationStore {
         })
     }
 
-    /// Fallback: median of all successful merges (any cpn), last `k` overall.
+    /// Fallback: median of all successful merges (any cpn), last `k` overall
     pub fn global_median_seconds(&self, k: usize) -> Option<f64> {
         let mut s: Vec<f64> = self
             .records
@@ -269,30 +269,30 @@ impl DurationStore {
     }
 }
 
-/// One remaining package in a plan for ETA.
+/// One remaining package in a plan for ETA
 #[derive(Clone, Debug)]
 pub struct EtaPkg {
     pub cpn: String,
     pub cpv: String,
 }
 
-/// Result of [`estimate_remaining`] / [`estimate_remaining_with_blockers`].
+/// Result of [`estimate_remaining`] / [`estimate_remaining_with_blockers`]
 #[derive(Clone, Debug)]
 pub struct Eta {
-    /// Estimated wall-clock seconds (parallel schedule).
+    /// Estimated wall-clock seconds (parallel schedule)
     pub wall_seconds: f64,
-    /// Sum of per-package serial estimates.
+    /// Sum of per-package serial estimates
     pub serial_seconds: f64,
     pub jobs: u32,
     pub known: u32,
     pub unknown: u32,
-    /// True when wall used the build-graph critical-path scheduler.
+    /// True when wall used the build-graph critical-path scheduler
     pub critical_path: bool,
-    /// Per-package serial estimates (same order as input).
+    /// Per-package serial estimates (same order as input)
     pub per_pkg: Vec<(String, Option<f64>)>,
 }
 
-/// `(durations, known, unknown, per_pkg, serial_sum)`.
+/// `(durations, known, unknown, per_pkg, serial_sum)`
 type PackageEstimates = (Vec<f64>, u32, u32, Vec<(String, Option<f64>)>, f64);
 
 fn package_estimates(store: &DurationStore, pkgs: &[EtaPkg], k: usize) -> PackageEstimates {
@@ -323,7 +323,7 @@ fn package_estimates(store: &DurationStore, pkgs: &[EtaPkg], k: usize) -> Packag
     (durations, known, unknown, per_pkg, serial)
 }
 
-/// Median of last `k` successes per cpn; unknown use global median if any.
+/// Median of last `k` successes per cpn; unknown use global median if any
 /// Wall time ≈ serial / max(jobs, 1) (no build-order constraints).
 pub fn estimate_remaining(store: &DurationStore, pkgs: &[EtaPkg], jobs: u32, k: usize) -> Eta {
     let (durations, known, unknown, per_pkg, serial) = package_estimates(store, pkgs, k);
@@ -419,7 +419,7 @@ fn critical_path_wall(durations: &[f64], blockers: &[Vec<usize>], jobs: usize) -
     time
 }
 
-/// Total-order wrapper so finish times can sit in a heap.
+/// Total-order wrapper so finish times can sit in a heap
 #[derive(Clone, Copy, Debug)]
 struct OrderedF64(f64);
 
@@ -454,7 +454,7 @@ pub fn format_seconds(secs: f64) -> String {
     }
 }
 
-/// Format `em log list`.
+/// Format `em log list`
 pub fn format_list(store: &DurationStore, limit: Option<usize>) -> String {
     let rows = store.recent(limit.or(Some(20)));
     if rows.is_empty() {
@@ -473,7 +473,7 @@ pub fn format_list(store: &DurationStore, limit: Option<usize>) -> String {
     out
 }
 
-/// Format `em log time [atom]`.
+/// Format `em log time [atom]`
 pub fn format_time(store: &DurationStore, atom: Option<&str>) -> String {
     match atom {
         None => {
@@ -519,10 +519,11 @@ pub fn format_time(store: &DurationStore, atom: Option<&str>) -> String {
     }
 }
 
-/// Format ETA for human output. Only the headline value (`unknown`, or the
-/// `~time` estimate) is bold, matching how `Total:`/`Size of downloads:`
-/// bold their own headline numbers — everything else on this line, and the
-/// whole detail line below it, stays plain.
+/// Format ETA for human output
+///
+/// Only the headline value (`unknown`, or the `~time` estimate) is bold, matching how
+/// `Total:`/`Size of downloads:` bold their own headline numbers — everything else on this
+/// line, and the whole detail line below it, stays plain.
 pub fn format_eta(eta: &Eta) -> String {
     use crate::style::C_BOLD;
     use std::fmt::Write as _;

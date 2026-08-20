@@ -1,4 +1,4 @@
-//! Shared helpers and formatters for `em select news` and `em select glsa`.
+//! Shared helpers and formatters for `em select news` and `em select glsa`
 //!
 //! Both are small "here's a list of named items, some need your attention"
 //! tools — unread news items, unresolved security advisories — reading a
@@ -79,7 +79,7 @@ pub(crate) fn state_dir(
     }
 }
 
-/// Read a flat, one-item-per-line state file (missing/unreadable → empty).
+/// Read a flat, one-item-per-line state file (missing/unreadable → empty)
 pub(crate) fn read_line_set(path: &Utf8Path) -> BTreeSet<String> {
     std::fs::read_to_string(path)
         .ok()
@@ -93,7 +93,7 @@ pub(crate) fn read_line_set(path: &Utf8Path) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-/// Write `items` back out, one per line, atomically.
+/// Write `items` back out, one per line, atomically
 pub(crate) fn write_line_set(path: &Utf8Path, items: &BTreeSet<String>) -> Result<()> {
     let body: String = items.iter().map(|i| format!("{i}\n")).collect();
     crate::util::write_atomic(path, body.as_bytes()).with_context(|| format!("writing {path}"))
@@ -111,12 +111,12 @@ pub(crate) fn status_marker(active: bool, letter: char) -> String {
     }
 }
 
-/// A list's header banner ("News items:", "GLSAs:").
+/// A list's header banner ("News items:", "GLSAs:")
 pub(crate) fn print_list_header(title: &str) {
     println!("{C_BOLD}{title}{C_BOLD:#}\n");
 }
 
-/// The right-aligned row-number column width for `count` rows.
+/// The right-aligned row-number column width for `count` rows
 pub(crate) fn num_width(count: usize) -> usize {
     count.to_string().len()
 }

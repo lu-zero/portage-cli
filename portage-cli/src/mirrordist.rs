@@ -42,10 +42,12 @@ use portage_repo::{
 
 use crate::cli;
 
-/// Options for [`run`], one field per CLI flag on `Applet::MirrorDist`.
+/// Options for [`run`], one field per CLI flag on `Applet::MirrorDist`
 pub struct MirrorDistOpts {
-    /// repos.conf name or path. `None` = the main repo (opposite default
-    /// from `em regen`, which deliberately excludes it).
+    /// repos.conf name or path
+    ///
+    /// `None` = the main repo (opposite default from `em regen`, which deliberately excludes
+    /// it).
     pub repo: Option<String>,
     pub repos_dir: Option<String>,
     pub distfiles: Utf8PathBuf,
@@ -325,8 +327,9 @@ struct OwnedFile {
     owner: Cpv,
 }
 
-/// Everything the scan phase learned. The fetch/delete phases are pure
-/// functions of this plus on-disk state.
+/// Everything the scan phase learned
+///
+/// The fetch/delete phases are pure functions of this plus on-disk state.
 pub struct MirrorPlan {
     files: Vec<OwnedFile>,
     digests: DistDigests,
@@ -505,9 +508,9 @@ async fn build_plan(
     Ok(plan)
 }
 
-/// One distfile name per line, `#`-prefixed comments and blank lines
-/// ignored. Real portage also accepts a directory of such files; v1 only
-/// accepts plain files.
+/// One distfile name per line, `#`-prefixed comments and blank lines ignored
+///
+/// Real portage also accepts a directory of such files; v1 only accepts plain files.
 fn parse_whitelist(paths: &[Utf8PathBuf]) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for path in paths {
@@ -626,7 +629,7 @@ impl DeletionDb {
         *self.data.entry(filename.to_string()).or_insert(now)
     }
 
-    /// Keep only entries that are still current orphans.
+    /// Keep only entries that are still current orphans
     ///
     /// Real emirrordist's `DeletionIterator` deletes a db key when the file is
     /// re-owned (`filename in file_owners`) or gone from the distfiles set.
@@ -676,7 +679,7 @@ fn default_deletion_db_path(repo_name: &str, distfiles: &Utf8Path) -> Utf8PathBu
     crate::xdg::mirrordist_state_dir().join(format!("{repo_name}-{key:016x}-deletion.json"))
 }
 
-/// FNV-1a 64-bit — fixed algorithm, independent of std's `DefaultHasher`.
+/// FNV-1a 64-bit — fixed algorithm, independent of std's `DefaultHasher`
 fn fnv1a64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf29ce484222325u64;
     for &b in bytes {
@@ -852,9 +855,9 @@ mod tests {
         std::fs::write(root.join("profiles").join("categories"), cats.join("\n")).unwrap();
     }
 
-    /// Write one fixture package version: an (empty, never-sourced) ebuild
-    /// file, an appended `Manifest` DIST line, and a minimal md5-cache entry
-    /// carrying only the two fields `build_plan` reads.
+    // Write one fixture package version: an (empty, never-sourced) ebuild
+    // file, an appended `Manifest` DIST line, and a minimal md5-cache entry
+    // carrying only the two fields `build_plan` reads.
     fn write_package(
         root: &Path,
         cat: &str,
@@ -973,9 +976,9 @@ mod tests {
         assert_eq!(plan.cpvs_restricted, 1);
     }
 
-    /// End-to-end bug #1 regression: a *negated* conditional restriction is
-    /// still mirrored — matchnone means "no conditional ever applies," not
-    /// "treat every flag as unset."
+    // End-to-end bug #1 regression: a *negated* conditional restriction is
+    // still mirrored — matchnone means "no conditional ever applies," not
+    // "treat every flag as unset."
     #[tokio::test]
     async fn negated_conditional_restrict_is_still_mirrored() {
         let dir = tempfile::tempdir().unwrap();
@@ -1075,8 +1078,8 @@ mod tests {
         assert_eq!(state.orphans, vec!["orphan.tar.gz".to_string()]);
     }
 
-    /// Pretend/dry-run mode (`remove_stale_partials: false`) must count but
-    /// never touch the filesystem — the count is reported, the file stays.
+    // Pretend/dry-run mode (`remove_stale_partials: false`) must count but
+    // never touch the filesystem — the count is reported, the file stays.
     #[test]
     fn scan_distdir_pretend_counts_stale_partials_without_deleting() {
         let dir = tempfile::tempdir().unwrap();
@@ -1090,11 +1093,11 @@ mod tests {
         assert!(temp.as_std_path().exists(), "dry-run must not delete");
     }
 
-    /// A real run (`remove_stale_partials: true`) actually removes leftover
-    /// atomic-write temp files — this is the fix for the leak where a
-    /// filename that falls out of the referenced set is never attempted
-    /// again and so its stray temp file would otherwise sit forever,
-    /// invisible to both the orphan scan and `--delete`.
+    // A real run (`remove_stale_partials: true`) actually removes leftover
+    // atomic-write temp files — this is the fix for the leak where a
+    // filename that falls out of the referenced set is never attempted
+    // again and so its stray temp file would otherwise sit forever,
+    // invisible to both the orphan scan and `--delete`.
     #[test]
     fn scan_distdir_real_run_deletes_stale_partials() {
         let dir = tempfile::tempdir().unwrap();
@@ -1175,8 +1178,8 @@ mod tests {
         assert!(db.data.is_empty());
     }
 
-    /// Real emirrordist: re-owned files are dropped from the deletion db so a
-    /// later re-orphan starts a fresh grace period.
+    // Real emirrordist: re-owned files are dropped from the deletion db so a
+    // later re-orphan starts a fresh grace period.
     #[test]
     fn deletion_db_re_referenced_while_present_resets_grace() {
         let dir = tempfile::tempdir().unwrap();

@@ -6,7 +6,7 @@ pub(super) use portage_resolve::package_use::{
 
 use super::output::{C_DIM, C_OFF, C_ON, C_PKG};
 
-/// Print the required USE changes to stderr in portage style.
+/// Print the required USE changes to stderr in portage style
 pub(super) fn report(entries: &[PackageUseEntry]) {
     if entries.is_empty() {
         return;

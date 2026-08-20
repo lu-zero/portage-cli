@@ -1,4 +1,4 @@
-//! System load average — Portage-compatible read + formatting.
+//! System load average — Portage-compatible read + formatting
 //!
 //! Real emerge uses `_emerge/getloadavg.py` (`os.getloadavg()`, falling back
 //! to `/proc/loadavg`) for the `Jobs:` status line (`JobStatusDisplay`) and
@@ -12,7 +12,7 @@
 
 use std::fs;
 
-/// 1-, 5-, and 15-minute load averages, or `None` if unobtainable.
+/// 1-, 5-, and 15-minute load averages, or `None` if unobtainable
 pub fn get_loadavg() -> Option<(f64, f64, f64)> {
     let line = fs::read_to_string("/proc/loadavg").ok()?;
     let mut parts = line.split_whitespace();
@@ -38,7 +38,7 @@ pub fn format_load_avg(avg: (f64, f64, f64)) -> String {
     format!("{}, {}, {}", fmt(avg.0), fmt(avg.1), fmt(avg.2))
 }
 
-/// `"Load avg: …"` or `"Load avg: unknown"` when unreadable.
+/// `"Load avg: …"` or `"Load avg: unknown"` when unreadable
 pub fn load_avg_display() -> String {
     match get_loadavg() {
         Some(avg) => format!("Load avg: {}", format_load_avg(avg)),
@@ -46,7 +46,7 @@ pub fn load_avg_display() -> String {
     }
 }
 
-/// Whether a new parallel job may start under `--load-average LOAD`.
+/// Whether a new parallel job may start under `--load-average LOAD`
 ///
 /// Portage `PollScheduler._can_add_job`: when `max_load` is set and at least
 /// one job is already running, refuse to start another if the 1-minute

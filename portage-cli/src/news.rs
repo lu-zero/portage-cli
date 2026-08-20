@@ -1,4 +1,4 @@
-//! `em news` — GLEP 42 news items.
+//! `em news` — GLEP 42 news items
 //!
 //! Mirrors real portage's `portage/news.py` (`NewsManager`/`NewsItem`) and
 //! `eselect news`'s state-file dance rather than reinventing the format: news
@@ -72,8 +72,10 @@ struct ParsedItem {
     posted: Option<String>,
 }
 
-/// Parse a news item's header. Only the fields needed for relevance and
-/// listing are extracted; the body is re-read verbatim when displaying.
+/// Parse a news item's header
+///
+/// Only the fields needed for relevance and listing are extracted; the body is re-read
+/// verbatim when displaying.
 fn parse_item(text: &str) -> ParsedItem {
     let mut format_ok = false;
     let mut restrictions = Restrictions::default();
@@ -175,7 +177,7 @@ fn state_path(eroot: &Utf8Path, repo: &str, kind: &str) -> Utf8PathBuf {
     news_lib_dir(eroot).join(format!("news-{repo}.{kind}"))
 }
 
-/// A repo's news directory, if it has one on disk.
+/// A repo's news directory, if it has one on disk
 fn repo_news_dir(repo_path: &Utf8Path) -> Utf8PathBuf {
     repo_path.join("metadata/news")
 }
@@ -491,9 +493,9 @@ mod tests {
         assert_eq!(dir.as_str(), "/tmp/some-root/var/lib/gentoo/news");
     }
 
-    /// Header block only (no trailing blank line / body) — restriction lines
-    /// can be appended directly, since `parse_item` stops scanning at the
-    /// first blank line.
+    // Header block only (no trailing blank line / body) — restriction lines
+    // can be appended directly, since `parse_item` stops scanning at the
+    // first blank line.
     const HEADER: &str = "\
 Title: Change of ACCEPT_LICENSE default
 Author: Thomas Deutschmann <whissi@gentoo.org>

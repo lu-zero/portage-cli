@@ -31,7 +31,7 @@ pub fn run(
     Ok(())
 }
 
-/// The highest-version ebuild among `ebuilds` matching `dep`.
+/// The highest-version ebuild among `ebuilds` matching `dep`
 fn best_ebuild_path<'a>(
     ebuilds: &'a [portage_repo::EbuildIn<'a>],
     dep: &Dep,
@@ -98,10 +98,10 @@ mod tests {
             .unwrap()
     }
 
-    /// Before `which::run` scanned `set.ebuilds()` (every repo, shadowed by
-    /// cpv) instead of just `set.main()`, an atom that resolved to an
-    /// overlay-only package still failed the file lookup — `resolve_atom`
-    /// found the name, but the ebuild scan never looked outside main.
+    // Before `which::run` scanned `set.ebuilds()` (every repo, shadowed by
+    // cpv) instead of just `set.main()`, an atom that resolved to an
+    // overlay-only package still failed the file lookup — `resolve_atom`
+    // found the name, but the ebuild scan never looked outside main.
     #[test]
     fn finds_an_overlay_only_ebuild() {
         let main_dir = tempfile::tempdir().unwrap();
@@ -117,9 +117,9 @@ mod tests {
         assert!(path.as_str().contains("bar-2.0.ebuild"));
     }
 
-    /// A cpv present in both main and an overlay is shadowed by
-    /// `RepoSet::ebuilds` down to the higher-priority repo's copy — `which`
-    /// must report that file, the one the merge would actually build.
+    // A cpv present in both main and an overlay is shadowed by
+    // `RepoSet::ebuilds` down to the higher-priority repo's copy — `which`
+    // must report that file, the one the merge would actually build.
     #[test]
     fn a_duplicate_cpv_reports_the_higher_priority_repos_file() {
         let main_dir = tempfile::tempdir().unwrap();

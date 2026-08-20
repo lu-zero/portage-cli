@@ -40,7 +40,7 @@ pub struct Cli {
     #[command(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
-    /// Show what would be done without actually performing any actions.
+    /// Show what would be done without actually performing any actions
     #[arg(short = 'p', long, global = true)]
     pub pretend: bool,
 
@@ -53,10 +53,11 @@ pub struct Cli {
     #[arg(long)]
     pub info: bool,
 
-    /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/`--emergelog`)
-    /// for the merge path. Flattened (not `global = true`) so they only appear
-    /// on commands that drive an activity bus; the merge path reads the
-    /// applet-merged set via [`Cli::effective_activity`].
+    /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/`--emergelog`) for the merge
+    /// path
+    ///
+    /// Flattened (not `global = true`) so they only appear on commands that drive an activity
+    /// bus; the merge path reads the applet-merged set via [`Cli::effective_activity`].
     #[command(flatten)]
     pub activity: ActivityArgs,
 
@@ -65,17 +66,18 @@ pub struct Cli {
     #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
     pub verbose: u8,
 
-    /// Suppress non-error output.
+    /// Suppress non-error output
     #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
 
-    /// Target architecture for operations. Defaults to current system architecture.
+    /// Target architecture for operations. Defaults to current system architecture
     #[arg(long, value_name = "ARCH", default_value_t = Arch::current(), value_parser = parse_arch)]
     pub arch: Arch,
 
-    /// Pin search/query to a single repository. When unset, repositories are
-    /// auto-discovered from `repos.conf` (the main repo wins for single-repo
-    /// applets; search walks all of them).
+    /// Pin search/query to a single repository
+    ///
+    /// When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for
+    /// single-repo applets; search walks all of them).
     #[arg(long, value_name = "PATH")]
     pub repo: Option<String>,
 
@@ -102,7 +104,7 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
     pub privilege: Privilege,
 
-    /// Search package names (each argument is a pattern).
+    /// Search package names (each argument is a pattern)
     ///
     /// Deliberately separate from the `em search` applet: this is emerge's
     /// own `-s` (drives `crate::search::run_emerge_style`, emerge-style
@@ -112,18 +114,20 @@ pub struct Cli {
     #[arg(short = 's', long)]
     pub search: bool,
 
-    /// Search package names and descriptions. See `search`'s doc comment for
-    /// why this is separate from `em search --desc`.
+    /// Search package names and descriptions
+    ///
+    /// See `search`'s doc comment for why this is separate from `em search --desc`.
     #[arg(short = 'S', long)]
     pub searchdesc: bool,
 
-    /// Skip dependency resolution and only merge specified packages.
+    /// Skip dependency resolution and only merge specified packages
     #[arg(short = 'O', long)]
     pub nodeps: bool,
 
-    /// Remove the matching installed packages completely, without regard to
-    /// dependencies. Matches every installed slot/version of each atom. For
-    /// removing unneeded dependencies too, use `depclean` instead.
+    /// Remove the matching installed packages completely, without regard to dependencies
+    ///
+    /// Matches every installed slot/version of each atom. For removing unneeded dependencies
+    /// too, use `depclean` instead.
     #[arg(short = 'C', long)]
     pub unmerge: bool,
 
@@ -150,22 +154,22 @@ pub struct Cli {
     #[arg(short = 'W', long)]
     pub deselect: bool,
 
-    /// Resume the last saved merge (see `em maint cleanresume` to discard
-    /// it instead). Atoms are not accepted together with this flag — the
-    /// package list comes from the saved state. Combine with other flags
-    /// (e.g. `-r --keep-going`, `-r -X stuck/atom`) to adjust the resumed
-    /// run.
+    /// Resume the last saved merge (see `em maint cleanresume` to discard it instead)
+    ///
+    /// Atoms are not accepted together with this flag — the package list comes from the saved
+    /// state. Combine with other flags (e.g. `-r --keep-going`, `-r -X stuck/atom`) to adjust
+    /// the resumed run.
     #[arg(short = 'r', long)]
     pub resume: bool,
 
     #[command(flatten)]
     pub merge_flags: MergeFlags,
 
-    /// Installation root (the offset all applets install into / query).
+    /// Installation root (the offset all applets install into / query)
     #[arg(long, env = "ROOT", value_name = "PATH", global = true)]
     pub root: Option<String>,
 
-    /// Read config (profile, make.conf) from this root instead of `--root`.
+    /// Read config (profile, make.conf) from this root instead of `--root`
     #[arg(long, value_name = "PATH", global = true)]
     pub config_root: Option<String>,
 
@@ -173,11 +177,12 @@ pub struct Cli {
     #[arg(long, value_name = "PATH", global = true)]
     pub vdb: Option<String>,
 
-    /// Cross-build/setup for a crossdev target tuple. The single source for
-    /// "which tuple" everywhere: `em --target T crossdev --init-target` sets
-    /// T up; `em --target T stages --stage1` (or any plain atom build)
-    /// resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` —
-    /// sugar for `--config-root <sysroot> --root <sysroot>`.
+    /// Cross-build/setup for a crossdev target tuple
+    ///
+    /// The single source for "which tuple" everywhere: `em --target T crossdev --init-target`
+    /// sets T up; `em --target T stages --stage1` (or any plain atom build) resolves/installs
+    /// into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for
+    /// `--config-root <sysroot> --root <sysroot>`.
     ///
     /// Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the
     /// sysroot make.conf. One flag for both roles — `crossdev` no longer
@@ -198,7 +203,7 @@ fn home_dir() -> camino::Utf8PathBuf {
     crate::xdg::home()
 }
 
-/// Topology after resolving CLI flags + optional `em active` registration.
+/// Topology after resolving CLI flags + optional `em active` registration
 ///
 /// Explicit `--local` / `--prefix` / `--root` always win. When none are set,
 /// a previously registered active context (see [`crate::active`]) supplies
@@ -206,19 +211,21 @@ fn home_dir() -> camino::Utf8PathBuf {
 enum TopologySource {
     Local(camino::Utf8PathBuf),
     Prefix(camino::Utf8PathBuf),
-    /// `--root R`. The path itself is read from `self.root` at the one site
-    /// that needs it (`base_roots`), so this variant carries no payload.
+    /// `--root R`
+    ///
+    /// The path itself is read from `self.root` at the one site that needs it (`base_roots`),
+    /// so this variant carries no payload.
     Root,
     Host,
 }
 
-/// `s.as_deref()` parsed as a path, or `None`.
+/// `s.as_deref()` parsed as a path, or `None`
 fn opt_path(s: &Option<String>) -> Option<camino::Utf8PathBuf> {
     s.as_deref().map(camino::Utf8PathBuf::from)
 }
 
 impl Cli {
-    /// Resolve topology from explicit flags, else the `em active` registration.
+    /// Resolve topology from explicit flags, else the `em active` registration
     ///
     /// Precedence: `--local` > `--prefix` > `--root` > active state > bare host.
     /// Active state is only consulted when no root-topology flag is present, so
@@ -250,7 +257,7 @@ impl Cli {
 }
 
 impl Cli {
-    /// Resolve the root model (docs/design/root-topology.md) from the global flags.
+    /// Resolve the root model (docs/design/root-topology.md) from the global flags
     ///
     /// `--target <tuple>` layers on top of the base model: it targets the crossdev
     /// sysroot `<EROOT>/usr/<tuple>` as both config-root and root (crossdev's
@@ -341,12 +348,12 @@ impl Cli {
         base
     }
 
-    /// The overlay's own anchor, ignoring any `--root` override — always
-    /// `prefix` itself. Shared by `outer_roots()` (which then applies an
-    /// explicit `--root` redirect on top, for the merge *destination* only)
-    /// and `host_roots()` (which must NOT apply that redirect: it answers
-    /// "where do the overlay's own host-shared build tools live", which
-    /// never moves just because `--root` retargets where packages install).
+    /// The overlay's own anchor, ignoring any `--root` override — always `prefix` itself
+    ///
+    /// Shared by `outer_roots()` (which then applies an explicit `--root` redirect on top, for
+    /// the merge *destination* only) and `host_roots()` (which must NOT apply that redirect: it
+    /// answers "where do the overlay's own host-shared build tools live", which never moves
+    /// just because `--root` retargets where packages install).
     fn overlay_anchor(&self, base: &Roots, prefix: camino::Utf8PathBuf) -> Roots {
         Roots::default()
             .with_config(base.config().map(|p| p.to_owned()))
@@ -570,8 +577,10 @@ impl Cli {
         Ok(())
     }
 
-    /// Path used by single-repo applets. Falls back to `/var/db/repos/gentoo`
-    /// when neither `--repo` nor `repos.conf` is available.
+    /// Path used by single-repo applets
+    ///
+    /// Falls back to `/var/db/repos/gentoo` when neither `--repo` nor `repos.conf` is
+    /// available.
     pub fn repo_path(&self) -> String {
         if let Some(p) = &self.repo {
             return p.clone();
@@ -590,8 +599,9 @@ impl Cli {
         "/var/db/repos/gentoo".to_string()
     }
 
-    /// Repositories to walk for `em search`. Honours `--repo` when set;
-    /// otherwise returns every entry from `repos.conf` (main first).
+    /// Repositories to walk for `em search`
+    ///
+    /// Honours `--repo` when set; otherwise returns every entry from `repos.conf` (main first).
     pub fn search_repos(&self) -> Vec<std::path::PathBuf> {
         if let Some(p) = &self.repo {
             return vec![std::path::PathBuf::from(p)];
@@ -623,12 +633,13 @@ impl Cli {
         merge_activity_args_fields(&self.activity, sub)
     }
 
-    /// Effective privilege backend for the dispatched command. `--privilege`
-    /// is read at process start (the supervisor re-exec, before dispatch), so
-    /// the top-level `Cli::privilege` is the base; the crossdev staged applets
-    /// (`crossdev`/`toolchain`/`stages`) carry an optional override that wins
-    /// when set, so `em crossdev --setup --privilege sudo` and
-    /// `em --privilege sudo crossdev --setup` both land on `sudo`.
+    /// Effective privilege backend for the dispatched command
+    ///
+    /// `--privilege` is read at process start (the supervisor re-exec, before dispatch), so the
+    /// top-level `Cli::privilege` is the base; the crossdev staged applets
+    /// (`crossdev`/`toolchain`/`stages`) carry an optional override that wins when set, so
+    /// `em crossdev --setup --privilege sudo` and `em --privilege sudo crossdev --setup` both
+    /// land on `sudo`.
     pub fn effective_privilege(&self) -> Privilege {
         let sub = match &self.applet {
             Some(Applet::Crossdev(a)) => &a.privilege,
@@ -702,8 +713,8 @@ mod tests {
         );
     }
 
-    /// `--prefix P --target T` must keep distfiles/work under P (relocate +
-    /// eprefix), not fall back to host paths or nest under the sysroot.
+    // `--prefix P --target T` must keep distfiles/work under P (relocate +
+    // eprefix), not fall back to host paths or nest under the sysroot.
     #[test]
     fn prefix_plus_target_preserves_overlay_relocate() {
         let cli = Cli::parse_from([
@@ -768,12 +779,12 @@ mod tests {
         assert_eq!(r.build_eprefix(), None);
     }
 
-    /// Positive control: a plain `--prefix`/`--local` build (no `--root`
-    /// redirect, no `--target` substitution) still gets `build_eprefix() ==
-    /// eprefix()` — guards against over-clearing. The PMS invariant `EROOT
-    /// == ROOT + EPREFIX` holds here (`merge_root() == eprefix()`), so the
-    /// package genuinely is the thing living at that prefix and its `.pc`
-    /// files must say so.
+    // Positive control: a plain `--prefix`/`--local` build (no `--root`
+    // redirect, no `--target` substitution) still gets `build_eprefix() ==
+    // eprefix()` — guards against over-clearing. The PMS invariant `EROOT
+    // == ROOT + EPREFIX` holds here (`merge_root() == eprefix()`), so the
+    // package genuinely is the thing living at that prefix and its `.pc`
+    // files must say so.
     #[test]
     fn plain_prefix_and_local_still_report_build_eprefix() {
         let prefix = Cli::parse_from(["em", "--prefix", "/tmp/p", "-p", "sys-libs/zlib"]);
@@ -785,11 +796,11 @@ mod tests {
         assert_eq!(lr.build_eprefix().map(|p| p.as_str()), Some("/tmp/a"));
     }
 
-    /// An explicit `--root B` alongside `--prefix A` redirects only the
-    /// destination (`merge_root()`) — EPREFIX/config-overlay/relocate stay
-    /// anchored to `A`, matching `--prefix`'s own build-context role.
-    /// Previously `B` was silently discarded the moment `--prefix` matched in
-    /// `topology_source()` (todo/for-sonnet.md 2026-08-08).
+    // An explicit `--root B` alongside `--prefix A` redirects only the
+    // destination (`merge_root()`) — EPREFIX/config-overlay/relocate stay
+    // anchored to `A`, matching `--prefix`'s own build-context role.
+    // Previously `B` was silently discarded the moment `--prefix` matched in
+    // `topology_source()` (todo/for-sonnet.md 2026-08-08).
     #[test]
     fn explicit_root_overrides_prefix_destination_only() {
         let cli = Cli::parse_from([
@@ -818,8 +829,8 @@ mod tests {
         );
     }
 
-    /// Same override, now also combined with `--target`: the sysroot is
-    /// derived from the *redirected* destination (`B/usr/T`), not the prefix.
+    // Same override, now also combined with `--target`: the sysroot is
+    // derived from the *redirected* destination (`B/usr/T`), not the prefix.
     #[test]
     fn explicit_root_overrides_prefix_destination_under_target() {
         let cli = Cli::parse_from([
@@ -840,9 +851,9 @@ mod tests {
         );
     }
 
-    /// Same idea for `--local`: an explicit, genuinely different `--root B`
-    /// redirects the destination; BROOT/EPREFIX stay the local prefix itself
-    /// (still self-hosting for build-context purposes).
+    // Same idea for `--local`: an explicit, genuinely different `--root B`
+    // redirects the destination; BROOT/EPREFIX stay the local prefix itself
+    // (still self-hosting for build-context purposes).
     #[test]
     fn explicit_root_overrides_local_destination_only() {
         let cli = Cli::parse_from([
@@ -860,9 +871,9 @@ mod tests {
         assert_eq!(r.eprefix().map(|p| p.as_str()), Some("/tmp/a"));
     }
 
-    /// `--root` set to the *same* path as `--local`/`--prefix` is a no-op
-    /// (not a distinct override) — this is exactly the degenerate case
-    /// `require_root_distinct_from_host` must still reject.
+    // `--root` set to the *same* path as `--local`/`--prefix` is a no-op
+    // (not a distinct override) — this is exactly the degenerate case
+    // `require_root_distinct_from_host` must still reject.
     #[test]
     fn root_matching_local_is_not_a_distinct_override() {
         let cli = Cli::parse_from([
@@ -878,10 +889,10 @@ mod tests {
         assert_eq!(r.merge_root(), cli.host_roots().merge_root());
     }
 
-    /// The actual guard: bare `--local`, bare `--prefix`, and bare host all
-    /// resolve to the same place their own build tools live and must be
-    /// rejected; `--root DIR` alone and `--prefix P --target T` genuinely
-    /// differ and must pass.
+    // The actual guard: bare `--local`, bare `--prefix`, and bare host all
+    // resolve to the same place their own build tools live and must be
+    // rejected; `--root DIR` alone and `--prefix P --target T` genuinely
+    // differ and must pass.
     #[test]
     fn require_root_distinct_from_host_rejects_the_degenerate_cases() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
@@ -946,11 +957,11 @@ mod tests {
         );
     }
 
-    /// `toolchain --setup`'s own, narrower guard: bare `--prefix`/`--local`
-    /// (no separate `--root`) are the intended recipe for giving that
-    /// overlay/tree its own compiler and must pass — unlike `stages`'s
-    /// guard above, which rejects bare `--prefix` specifically. Only a true
-    /// bare host (nothing given at all) is rejected.
+    // `toolchain --setup`'s own, narrower guard: bare `--prefix`/`--local`
+    // (no separate `--root`) are the intended recipe for giving that
+    // overlay/tree its own compiler and must pass — unlike `stages`'s
+    // guard above, which rejects bare `--prefix` specifically. Only a true
+    // bare host (nothing given at all) is rejected.
     #[test]
     fn require_destination_not_bare_host_only_rejects_true_bare_host() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
@@ -991,8 +1002,8 @@ mod tests {
         assert_eq!(r.merge_root().as_str(), "/");
     }
 
-    /// A registered active `--prefix` is applied when no explicit topology
-    /// flag is given (dogfooding path for `em active set`).
+    // A registered active `--prefix` is applied when no explicit topology
+    // flag is given (dogfooding path for `em active set`).
     #[test]
     fn active_prefix_applies_when_no_explicit_flag() {
         let (tmp, _g) = crate::test_support::isolate_active_state();
@@ -1019,7 +1030,7 @@ mod tests {
         assert_eq!(bare.base_roots().merge_root().as_str(), "/");
     }
 
-    /// Explicit `--root` wins over a registered active prefix.
+    // Explicit `--root` wins over a registered active prefix
     #[test]
     fn explicit_root_overrides_active_prefix() {
         let (tmp, _g) = crate::test_support::isolate_active_state();
@@ -1046,11 +1057,11 @@ mod tests {
         );
     }
 
-    /// `--local` is a standalone prefix: base == target == ~/.gentoo (full
-    /// closure, own VDB), not an overlay (base would be the host). Previously
-    /// base was None (host) — wrong for cross on a foreign host, where there's
-    /// no host VDB to seed the plan. See docs/design/root-topology.md § "Override
-    /// semantics".
+    // `--local` is a standalone prefix: base == target == ~/.gentoo (full
+    // closure, own VDB), not an overlay (base would be the host). Previously
+    // base was None (host) — wrong for cross on a foreign host, where there's
+    // no host VDB to seed the plan. See docs/design/root-topology.md § "Override
+    // semantics".
     #[test]
     fn local_is_standalone_not_overlay() {
         // HOME is process-global; lock against other tests reading/writing
@@ -1101,10 +1112,10 @@ mod tests {
         );
     }
 
-    /// `--prefix` sets EPREFIX: the installed tree is relocatable, so ebuilds
-    /// bake ${EPREFIX}/usr/bin/pythonX.Y into shebangs. The overlay then
-    /// symlinks host python there (setup.rs) to satisfy them without building
-    /// a prefix python. See docs/design/root-topology.md § "Override semantics".
+    // `--prefix` sets EPREFIX: the installed tree is relocatable, so ebuilds
+    // bake ${EPREFIX}/usr/bin/pythonX.Y into shebangs. The overlay then
+    // symlinks host python there (setup.rs) to satisfy them without building
+    // a prefix python. See docs/design/root-topology.md § "Override semantics".
     #[test]
     fn prefix_sets_eprefix_for_relocatable_overlay() {
         let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
@@ -1118,12 +1129,12 @@ mod tests {
         assert_eq!(r.base(), None, "--prefix base is the host (overlay)");
     }
 
-    /// `--prefix` BROOT is the host: `base_roots().merge_root()` (BROOT, where
-    /// preflight checks BDEPEND) is `/`, while `roots().merge_root()` (the
-    /// actual install target) is the prefix. These two genuinely differ for an
-    /// overlay; conflating them made preflight check jinja2's BDEPEND against
-    /// the empty prefix VDB instead of the host, failing the build.
-    /// See docs/design/root-topology.md § "Override semantics".
+    // `--prefix` BROOT is the host: `base_roots().merge_root()` (BROOT, where
+    // preflight checks BDEPEND) is `/`, while `roots().merge_root()` (the
+    // actual install target) is the prefix. These two genuinely differ for an
+    // overlay; conflating them made preflight check jinja2's BDEPEND against
+    // the empty prefix VDB instead of the host, failing the build.
+    // See docs/design/root-topology.md § "Override semantics".
     #[test]
     fn prefix_overlay_broot_is_host_not_prefix() {
         let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
@@ -1193,9 +1204,9 @@ mod tests {
         );
     }
 
-    /// `--local DIR` uses `DIR` directly as the standalone prefix root (not
-    /// `DIR/.gentoo` — that expansion only applies to the bare-flag default,
-    /// covered by `local_is_standalone_not_overlay`).
+    // `--local DIR` uses `DIR` directly as the standalone prefix root (not
+    // `DIR/.gentoo` — that expansion only applies to the bare-flag default,
+    // covered by `local_is_standalone_not_overlay`).
     #[test]
     fn local_with_path_uses_dir_directly() {
         let cli = Cli::parse_from(["em", "--local", "/tmp/x", "-p", "sys-libs/zlib"]);
@@ -1209,15 +1220,15 @@ mod tests {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)] // __worker carries many CLI strings
 pub enum Applet {
-    /// Run one do*/new* install helper standalone against the exported build
-    /// env. Internal: backs the PATH shims dropped during a build so
-    /// `find -exec doman` / `xargs do*` reach helpers that are in-shell
-    /// builtins. Not for direct use.
+    /// Run one do*/new* install helper standalone against the exported build env
+    ///
+    /// Internal: backs the PATH shims dropped during a build so `find -exec doman` /
+    /// `xargs do*` reach helpers that are in-shell builtins. Not for direct use.
     #[command(name = "__helper", hide = true)]
     Helper {
-        /// Helper name (e.g. `doman`, `dolib.a`).
+        /// Helper name (e.g. `doman`, `dolib.a`)
         name: String,
-        /// Arguments passed through to the helper.
+        /// Arguments passed through to the helper
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1246,16 +1257,16 @@ pub enum Applet {
         sysroot: Option<String>,
         #[arg(long)]
         eprefix: Option<String>,
-        /// Where BDEPEND-class build tools live (`Cli::host_roots()`'s merge root).
+        /// Where BDEPEND-class build tools live (`Cli::host_roots()`'s merge root)
         #[arg(long)]
         broot: Option<String>,
-        /// See `ebuild::RootContext::self_contained_bootstrap`.
+        /// See `ebuild::RootContext::self_contained_bootstrap`
         #[arg(long)]
         self_contained_bootstrap: bool,
-        /// See `ebuild::RootContext::extra_path`, `:`-joined.
+        /// See `ebuild::RootContext::extra_path`, `:`-joined
         #[arg(long)]
         extra_path: Option<String>,
-        /// A pre-built GPKG to merge (`-k`/`-g`).
+        /// A pre-built GPKG to merge (`-k`/`-g`)
         #[arg(long)]
         binpkg: Option<String>,
         /// `binpkg`'s origin forces cryptographic GPG signature
@@ -1268,18 +1279,18 @@ pub enum Applet {
         buildpkg: bool,
         #[arg(long)]
         quiet: bool,
-        /// Parent activity session id — live FS phase updates only.
+        /// Parent activity session id — live FS phase updates only
         #[arg(long)]
         activity_job_id: Option<String>,
         #[arg(long)]
         activity_parent_job_id: Option<String>,
-        /// Filesystem root of the parent's live activity sink.
+        /// Filesystem root of the parent's live activity sink
         #[arg(long)]
         activity_live_root: Option<String>,
-        /// `host` or `target` package side for inflight paths.
+        /// `host` or `target` package side for inflight paths
         #[arg(long)]
         activity_side: Option<String>,
-        /// Unix socket path: stream phase JSONL back to the parent activity bus.
+        /// Unix socket path: stream phase JSONL back to the parent activity bus
         #[arg(long)]
         activity_reemit_path: Option<String>,
     },
@@ -1309,7 +1320,7 @@ pub enum Applet {
         args: Vec<String>,
     },
 
-    /// Sync ebuild repositories from `repos.conf` (`git` and `rsync`).
+    /// Sync ebuild repositories from `repos.conf` (`git` and `rsync`)
     ///
     /// With no names, syncs every entry with `auto-sync = yes` (Portage
     /// default) and a usable `sync-type`/`sync-uri`. Named repos are synced
@@ -1380,48 +1391,49 @@ machine fetches from.\n\n\
 Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays."
     )]
     MirrorDist {
-        /// repos.conf name or path. Defaults to the main repo (opposite
-        /// default from `em regen`, which excludes it).
+        /// repos.conf name or path
+        ///
+        /// Defaults to the main repo (opposite default from `em regen`, which excludes it).
         repo: Option<String>,
-        /// Directory containing master repositories.
+        /// Directory containing master repositories
         #[arg(long, value_name = "DIR")]
         repos_dir: Option<String>,
-        /// Distfiles directory to populate.
+        /// Distfiles directory to populate
         #[arg(long, value_name = "DIR", required = true)]
         distfiles: camino::Utf8PathBuf,
-        /// Concurrent downloads.
+        /// Concurrent downloads
         #[arg(short = 'j', long)]
         jobs: Option<usize>,
-        /// Delete distfiles no longer referenced by any ebuild.
+        /// Delete distfiles no longer referenced by any ebuild
         #[arg(long)]
         delete: bool,
-        /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`).
+        /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`)
         #[arg(long, value_name = "DURATION", default_value = "7d")]
         deletion_delay: String,
-        /// Deletion-grace state file (default: `$XDG_STATE_HOME/em/mirrordist/<repo>-*.json`).
+        /// Deletion-grace state file (default: `$XDG_STATE_HOME/em/mirrordist/<repo>-*.json`)
         #[arg(long, value_name = "FILE")]
         deletion_db: Option<camino::Utf8PathBuf>,
-        /// Tab-delimited log of fetched files (appended).
+        /// Tab-delimited log of fetched files (appended)
         #[arg(long, value_name = "FILE")]
         success_log: Option<camino::Utf8PathBuf>,
-        /// Tab-delimited log of fetch failures (appended).
+        /// Tab-delimited log of fetch failures (appended)
         #[arg(long, value_name = "FILE")]
         failure_log: Option<camino::Utf8PathBuf>,
-        /// Report of files scheduled for deletion, grouped by date (rewritten).
+        /// Report of files scheduled for deletion, grouped by date (rewritten)
         #[arg(long, value_name = "FILE")]
         scheduled_deletion_log: Option<camino::Utf8PathBuf>,
         /// File(s) listing distfile names --delete must never remove (one
         /// name per line, `#`-comments ignored).
         #[arg(long, value_name = "FILE")]
         whitelist_from: Vec<camino::Utf8PathBuf>,
-        /// Re-hash already-present files instead of trusting their size.
+        /// Re-hash already-present files instead of trusting their size
         #[arg(long)]
         verify_existing_digest: bool,
         /// Also try GENTOO_MIRRORS after the ebuild's own URIs (real
         /// emirrordist never does this — off by default).
         #[arg(long)]
         gentoo_mirrors_fallback: bool,
-        /// Allow --delete even when some ebuilds had no metadata cache entry.
+        /// Allow --delete even when some ebuilds had no metadata cache entry
         #[arg(long)]
         delete_allow_incomplete: bool,
     },
@@ -1521,22 +1533,22 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 
     #[command(about = "Rebuild packages with broken shared library deps")]
     Revdep {
-        /// Only consider consumers of libraries whose soname contains NAME.
+        /// Only consider consumers of libraries whose soname contains NAME
         #[arg(short = 'L', long, value_name = "NAME")]
         library: Option<String>,
     },
 
     #[command(about = "Display Portage elog files")]
     Read {
-        /// Only show packages whose `<category>/<pf>` contains this text.
+        /// Only show packages whose `<category>/<pf>` contains this text
         package: Option<String>,
-        /// List what is filed instead of printing the messages.
+        /// List what is filed instead of printing the messages
         #[arg(short, long)]
         list: bool,
-        /// Show only this many of the most recent packages; 0 for all.
+        /// Show only this many of the most recent packages; 0 for all
         #[arg(short = 'n', long, default_value_t = 10)]
         limit: usize,
-        /// Remove each file once it has been shown.
+        /// Remove each file once it has been shown
         #[arg(long)]
         delete: bool,
     },
@@ -1586,9 +1598,10 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         command: SelectCommand,
     },
 
-    /// Register a default `--prefix` / `--local` so bare `em <pkg>` picks it
-    /// up (dogfooding). Explicit `--prefix`/`--local`/`--root` still win.
-    /// State: `$XDG_STATE_HOME/em/active`. See `em active --help`.
+    /// Register a default `--prefix` / `--local` so bare `em <pkg>` picks it up (dogfooding)
+    ///
+    /// Explicit `--prefix`/`--local`/`--root` still win. State: `$XDG_STATE_HOME/em/active`.
+    /// See `em active --help`.
     #[command(about = "Register a default --prefix/--local for bare em invocations")]
     Active {
         #[command(subcommand)]
@@ -1619,7 +1632,7 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     Env,
 }
 
-/// `em setup` — bootstrap a prefix layout.
+/// `em setup` — bootstrap a prefix layout
 #[derive(clap::Args, Default)]
 pub struct SetupArgs {
     /// Directory holding host tools this prefix should borrow while it has
@@ -1638,12 +1651,14 @@ pub struct SetupArgs {
 /// no-build subset for now; building the toolchain is future work).
 #[derive(clap::Args)]
 pub struct CrossdevArgs {
-    /// Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no
-    /// per-target compiler). Rejects glibc — use musl or a bare-metal target.
+    /// Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no per-target
+    /// compiler)
+    ///
+    /// Rejects glibc — use musl or a bare-metal target.
     #[arg(short = 'L', long)]
     pub llvm: bool,
 
-    /// Lay down the overlay + sysroot config without building anything.
+    /// Lay down the overlay + sysroot config without building anything
     #[arg(long)]
     pub init_target: bool,
 
@@ -1653,14 +1668,14 @@ pub struct CrossdevArgs {
     #[arg(long)]
     pub setup: bool,
 
-    /// Print the derived target configuration and exit (no writes).
+    /// Print the derived target configuration and exit (no writes)
     #[arg(long)]
     pub show_target_cfg: bool,
 
-    /// Build an extra package onto the established cross target (may be
-    /// given multiple times). `CATEGORY/PN` — always runs on the host (like
-    /// `binutils`/`gcc`), not the target sysroot, matching real crossdev's
-    /// `--ex-pkg`.
+    /// Build an extra package onto the established cross target (may be given multiple times)
+    ///
+    /// `CATEGORY/PN` — always runs on the host (like `binutils`/`gcc`), not the target sysroot,
+    /// matching real crossdev's `--ex-pkg`.
     ///
     /// Applies to `--init-target`/`--setup` only; named per invocation,
     /// like real crossdev — not remembered across a later run that omits it.
@@ -1687,7 +1702,7 @@ pub struct CrossdevArgs {
     pub privilege: Option<Privilege>,
 }
 
-/// `em toolchain` — bootstrap a self-hosting native toolchain into `--root`.
+/// `em toolchain` — bootstrap a self-hosting native toolchain into `--root`
 ///
 /// The native twin of `crossdev --setup` (`CHOST == CBUILD`): the staged
 /// `baselayout → binutils → os-headers → glibc → gcc` bootstrap that produces a
@@ -1791,7 +1806,7 @@ pub enum MaintCommand {
         #[arg(value_name = "REPO")]
         repos: Vec<String>,
     },
-    /// Same as `em sync` — shared implementation.
+    /// Same as `em sync` — shared implementation
     #[command(about = "Sync repositories (git, rsync)")]
     Sync {
         /// Repo names from repos.conf (default: auto-sync enabled repos)
@@ -1805,10 +1820,11 @@ pub enum MaintCommand {
     },
 }
 
-/// `em maint binpkg <action>` — local `PKGDIR` maintenance built on the
-/// `Packages` index/reader substrate. No real-portage `emaint` module exists
-/// for this (only `emaint binhost`, which just regenerates the index); this
-/// is an em-only extension.
+/// `em maint binpkg <action>` — local `PKGDIR` maintenance built on the `Packages`
+/// index/reader substrate
+///
+/// No real-portage `emaint` module exists for this (only `emaint binhost`, which just
+/// regenerates the index); this is an em-only extension.
 #[derive(Subcommand)]
 pub enum BinpkgAction {
     #[command(about = "Check each indexed binpkg's size/MD5/SHA1 against the file on disk")]
@@ -1828,7 +1844,7 @@ pub enum BinpkgAction {
     List,
     #[command(about = "Keep only the newest BUILD_ID per package, deleting older ones")]
     Prune {
-        /// Report what would be deleted without deleting or reindexing.
+        /// Report what would be deleted without deleting or reindexing
         #[arg(long)]
         dry_run: bool,
     },
@@ -1851,7 +1867,7 @@ pub enum BinpkgAction {
     },
 }
 
-/// `em select <module>` — native, eselect-like config selectors.
+/// `em select <module>` — native, eselect-like config selectors
 #[derive(Subcommand)]
 pub enum SelectCommand {
     #[command(about = "Select the system/sysroot profile (cross-aware)")]
@@ -1917,7 +1933,7 @@ pub enum SelectCommand {
     },
 }
 
-/// `em select profile <action>`.
+/// `em select profile <action>`
 #[derive(Subcommand)]
 pub enum ProfileAction {
     #[command(about = "List available profiles (marks the current one)")]
@@ -1926,113 +1942,113 @@ pub enum ProfileAction {
     Show,
     #[command(about = "Set the profile by list number or path (cross-aware: no arch check)")]
     Set {
-        /// Profile list number (from `list`) or path (e.g. `default/linux/riscv/23.0/rv64/lp64d`).
+        /// Profile list number (from `list`) or path (e.g. `default/linux/riscv/23.0/rv64/lp64d`)
         target: String,
     },
 }
 
-/// `em select repository <action>` — local repos only (remote sync is a TODO).
+/// `em select repository <action>` — local repos only (remote sync is a TODO)
 #[derive(Subcommand)]
 pub enum RepositoryAction {
     #[command(about = "List configured repositories")]
     List,
     #[command(about = "Register an existing local repository")]
     Add {
-        /// Repository name.
+        /// Repository name
         name: String,
-        /// Existing local path to the repository.
+        /// Existing local path to the repository
         location: String,
     },
     #[command(visible_alias = "rm", about = "Remove a repository's repos.conf entry")]
     Remove {
-        /// Repository name.
+        /// Repository name
         name: String,
     },
     #[command(about = "Create a new local overlay (skeleton + repos.conf entry)")]
     Create {
-        /// Repository name.
+        /// Repository name
         name: String,
-        /// Location (default: `<config-root>/var/db/repos/<name>`).
+        /// Location (default: `<config-root>/var/db/repos/<name>`)
         location: Option<String>,
     },
 }
 
-/// `em select compiler <action>` — gcc-config workalike.
+/// `em select compiler <action>` — gcc-config workalike
 #[derive(Subcommand)]
 pub enum CompilerAction {
     #[command(about = "List available compiler profiles")]
     List {
-        /// Target tuple (CTARGET) to list profiles for.
+        /// Target tuple (CTARGET) to list profiles for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Show the current compiler profile")]
     Show {
-        /// Target tuple (CTARGET) to show profile for.
+        /// Target tuple (CTARGET) to show profile for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Set the active compiler profile")]
     Set {
-        /// Compiler profile to activate (e.g., `riscv64-unknown-linux-gnu-16` or `1` for list number).
+        /// Compiler profile to activate (e.g., `riscv64-unknown-linux-gnu-16` or `1` for list number)
         profile: String,
-        /// Target tuple (CTARGET) for cross-compiler selection.
+        /// Target tuple (CTARGET) for cross-compiler selection
         #[arg(short, long)]
         target: Option<String>,
     },
 }
 
-/// `em select binutils <action>` — binutils-config workalike.
+/// `em select binutils <action>` — binutils-config workalike
 #[derive(Subcommand)]
 pub enum BinutilsAction {
     #[command(about = "List available binutils profiles")]
     List {
-        /// Target tuple (CTARGET) to list profiles for.
+        /// Target tuple (CTARGET) to list profiles for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Show the current binutils profile")]
     Show {
-        /// Target tuple (CTARGET) to show profile for.
+        /// Target tuple (CTARGET) to show profile for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Set the active binutils profile")]
     Set {
-        /// Binutils profile to activate (e.g., `riscv64-unknown-linux-gnu-2.46.0` or `1` for list number).
+        /// Binutils profile to activate (e.g., `riscv64-unknown-linux-gnu-2.46.0` or `1` for list number)
         profile: String,
-        /// Target tuple (CTARGET) for cross-binutils selection.
+        /// Target tuple (CTARGET) for cross-binutils selection
         #[arg(short, long)]
         target: Option<String>,
     },
 }
 
-/// `em select linker <action>` — linker profile selection.
+/// `em select linker <action>` — linker profile selection
 #[derive(Subcommand)]
 pub enum LinkerAction {
     #[command(about = "List available linker profiles")]
     List {
-        /// Target tuple (CTARGET) to list profiles for.
+        /// Target tuple (CTARGET) to list profiles for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Show the current linker profile")]
     Show {
-        /// Target tuple (CTARGET) to show profile for.
+        /// Target tuple (CTARGET) to show profile for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Set the active linker profile")]
     Set {
-        /// Linker profile to activate (e.g., `riscv64-unknown-linux-gnu-lld-18` or `1` for list number).
+        /// Linker profile to activate (e.g., `riscv64-unknown-linux-gnu-lld-18` or `1` for list number)
         profile: String,
-        /// Target tuple (CTARGET) for cross-linker selection.
+        /// Target tuple (CTARGET) for cross-linker selection
         #[arg(short, long)]
         target: Option<String>,
     },
 }
 
-/// `em select clang <action>` — LLVM/clang slot selection.
+/// `em select clang <action>` — LLVM/clang slot selection
 #[derive(Subcommand)]
 pub enum ClangAction {
     #[command(about = "List available LLVM/clang slots")]
@@ -2056,50 +2072,51 @@ pub enum ClangAction {
 pub enum PkgconfAction {
     #[command(about = "List available pkg-config backends (pkgconf, pkg-config)")]
     List {
-        /// Target tuple (CTARGET) to show the wrapper for.
+        /// Target tuple (CTARGET) to show the wrapper for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Show the backend the <target>-pkg-config wrapper currently points at")]
     Show {
-        /// Target tuple (CTARGET) to show the wrapper for.
+        /// Target tuple (CTARGET) to show the wrapper for
         #[arg(short, long)]
         target: Option<String>,
     },
     #[command(about = "Create/update the <target>-pkg-config wrapper")]
     Set {
-        /// Backend to wrap (`pkgconf`, `pkg-config`, or a list number from `list`).
+        /// Backend to wrap (`pkgconf`, `pkg-config`, or a list number from `list`)
         backend: String,
-        /// Target tuple (CTARGET) to create the wrapper for.
+        /// Target tuple (CTARGET) to create the wrapper for
         #[arg(short, long)]
         target: Option<String>,
     },
 }
 
-/// `em select mirrors <action>` — mirrorselect workalike for `GENTOO_MIRRORS`.
+/// `em select mirrors <action>` — mirrorselect workalike for `GENTOO_MIRRORS`
 #[derive(Subcommand)]
 pub enum MirrorAction {
-    /// List available Gentoo distfile mirrors (marks those already selected).
+    /// List available Gentoo distfile mirrors (marks those already selected)
     List {
-        /// Keep only mirrors in this ISO country code (e.g. `US`, `DE`).
+        /// Keep only mirrors in this ISO country code (e.g. `US`, `DE`)
         #[arg(short, long)]
         country: Option<String>,
-        /// Keep only mirrors in this region (e.g. `Europe`, `North America`).
+        /// Keep only mirrors in this region (e.g. `Europe`, `North America`)
         #[arg(short, long)]
         region: Option<String>,
     },
-    /// Show the currently configured `GENTOO_MIRRORS` value.
+    /// Show the currently configured `GENTOO_MIRRORS` value
     Show,
-    /// Set `GENTOO_MIRRORS`.
+    /// Set `GENTOO_MIRRORS`
     Set {
-        /// Explicit mirror URLs to use. If omitted, mirrors are picked from
-        /// `--country`/`--region` instead.
+        /// Explicit mirror URLs to use
+        ///
+        /// If omitted, mirrors are picked from `--country`/`--region` instead.
         #[arg(value_name = "URL")]
         urls: Vec<String>,
-        /// Use every mirror in this ISO country code.
+        /// Use every mirror in this ISO country code
         #[arg(short, long)]
         country: Option<String>,
-        /// Use every mirror in this region.
+        /// Use every mirror in this region
         #[arg(short, long)]
         region: Option<String>,
     },
@@ -2215,17 +2232,17 @@ pub enum QueryCommand {
         /// Output format
         #[arg(long, short, value_enum, default_value = "pretty")]
         format: DepgraphFormat,
-        /// Let the solver choose USE flags to satisfy REQUIRED_USE (Level C).
+        /// Let the solver choose USE flags to satisfy REQUIRED_USE (Level C)
         #[arg(long)]
         autosolve_use: bool,
         #[command(flatten)]
         depgraph_flags: DepgraphFlags,
-        /// Treat every atom as not-yet-installed (emerge's `-e`/`--emptytree`).
+        /// Treat every atom as not-yet-installed (emerge's `-e`/`--emptytree`)
         #[arg(short = 'e', long)]
         emptytree: bool,
         #[arg(short = 'o', long)]
         onlydeps: bool,
-        /// Include build-time dependencies (BDEPEND) in the resolution.
+        /// Include build-time dependencies (BDEPEND) in the resolution
         #[arg(long)]
         with_bdeps: bool,
         /// emerge's `--root-deps[=rdeps]`: only require RDEPEND (not DEPEND)
@@ -2323,7 +2340,7 @@ pub enum GlsaCommand {
     Fix { ids: Vec<String> },
 }
 
-/// `em active <subcommand>` — persistent default `--prefix` / `--local`.
+/// `em active <subcommand>` — persistent default `--prefix` / `--local`
 ///
 /// `set` reads the global `--prefix` / `--local` flags (same shape as
 /// `em --prefix DIR setup`), so there is no second set of flag names to
@@ -2332,10 +2349,10 @@ pub enum GlsaCommand {
 /// Entries can be referenced by name, index (0-based), or exact path.
 #[derive(Subcommand)]
 pub enum ActiveCommand {
-    /// Show the registered active context (default when no subcommand).
+    /// Show the registered active context (default when no subcommand)
     #[command(about = "Show the registered active prefix/local")]
     Show,
-    /// Register the invocation's `--prefix` or `--local` as the active context.
+    /// Register the invocation's `--prefix` or `--local` as the active context
     ///
     /// Without arguments, reads from `--prefix`/`--local` flags:
     ///   `em --prefix /home/me/prefix active set`
@@ -2351,27 +2368,28 @@ pub enum ActiveCommand {
     /// `--local` path. Use `em --local=` or pass an explicit directory.
     #[command(about = "Register --prefix/--local as active or activate an existing entry")]
     Set {
-        /// Reference to an existing entry (name, index, or path) to activate.
+        /// Reference to an existing entry (name, index, or path) to activate
+        ///
         /// If not provided, creates a new entry from --prefix/--local flags.
         #[arg(value_name = "REF")]
         reference: Option<String>,
     },
-    /// Clear the registered active context.
+    /// Clear the registered active context
     ///
     /// Use `--all` to remove all entries, not just the active pointer.
     #[command(about = "Clear the active context (or all entries with --all)")]
     Clear {
-        /// Clear all entries, not just the active pointer.
+        /// Clear all entries, not just the active pointer
         #[arg(long)]
         all: bool,
     },
-    /// Print shell exports for `eval "$(em active env)"` (PATH + markers).
+    /// Print shell exports for `eval "$(em active env)"` (PATH + markers)
     #[command(about = "Print shell exports for the active context")]
     Env,
-    /// List all registered entries.
+    /// List all registered entries
     #[command(about = "List all registered prefix/local entries")]
     List,
-    /// Add a new entry without activating it.
+    /// Add a new entry without activating it
     ///
     /// Examples:
     ///   `em --prefix /home/me/prefix active add my-prefix`
@@ -2379,11 +2397,11 @@ pub enum ActiveCommand {
     ///   `em --local= active add`  # adds ~/.gentoo with auto-generated name
     #[command(about = "Add a new prefix/local entry")]
     Add {
-        /// Optional name for the entry. If not provided, uses path basename.
+        /// Optional name for the entry. If not provided, uses path basename
         #[arg(value_name = "NAME")]
         name: Option<String>,
     },
-    /// Remove an entry by name, index, or path.
+    /// Remove an entry by name, index, or path
     ///
     /// Examples:
     ///   `em active remove my-name`
@@ -2391,7 +2409,7 @@ pub enum ActiveCommand {
     ///   `em active remove /path/to/dir` # by exact path
     #[command(about = "Remove a registered entry")]
     Remove {
-        /// Reference to the entry to remove (name, index, or path).
+        /// Reference to the entry to remove (name, index, or path)
         #[arg(value_name = "REF")]
         reference: String,
     },
@@ -2415,29 +2433,29 @@ pub enum LogCommand {
     Predict,
 }
 
-/// How an unprivileged build gets root for `chown`/setuid (see `--privilege`).
+/// How an unprivileged build gets root for `chown`/setuid (see `--privilege`)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum Privilege {
     /// Best compiled-in fake root (pseudoroot, else fakeroost, else none) when
     /// unprivileged, real chowns when already root (default).
     #[default]
     Auto,
-    /// Pure-Rust ptrace+seccomp fake root; ownership faked in-session.
+    /// Pure-Rust ptrace+seccomp fake root; ownership faked in-session
     #[cfg(all(feature = "fakeroost", target_os = "linux"))]
     Fakeroost,
-    /// LD_PRELOAD fake root (`pseudoroot`); ownership faked in-session, no ptrace tax.
+    /// LD_PRELOAD fake root (`pseudoroot`); ownership faked in-session, no ptrace tax
     #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
     Pseudoroot,
-    /// User-namespace sandbox with build-user→0 map; real chowns in-box.
+    /// User-namespace sandbox with build-user→0 map; real chowns in-box
     #[cfg(all(feature = "hakoniwa", target_os = "linux"))]
     Hakoniwa,
-    /// Re-exec under `sudo` for real root (root-owned tree, real setuid).
+    /// Re-exec under `sudo` for real root (root-owned tree, real setuid)
     Sudo,
-    /// No wrapping; run unprivileged (chowns best-effort, may not stick).
+    /// No wrapping; run unprivileged (chowns best-effort, may not stick)
     None,
 }
 
-/// Output format for `em query depgraph`.
+/// Output format for `em query depgraph`
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum DepgraphFormat {
     /// emerge -p style pretend output

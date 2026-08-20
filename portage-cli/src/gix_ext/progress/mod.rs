@@ -1,4 +1,4 @@
-//! Progress sessions for pure-gix work (sync fetch/clone/hard-reset).
+//! Progress sessions for pure-gix work (sync fetch/clone/hard-reset)
 //!
 //! ## Architecture
 //!
@@ -26,14 +26,14 @@ mod indicatif_render;
 #[cfg(feature = "rich")]
 mod prodash_line;
 
-/// One progress session spanning a sync step (fetch, clone, or hard-reset).
+/// One progress session spanning a sync step (fetch, clone, or hard-reset)
 pub struct ProgressSession {
     root: Option<std::sync::Arc<prodash::tree::Root>>,
-    /// Keeps the UI thread alive until drop.
+    /// Keeps the UI thread alive until drop
     _ui: Option<UiGuard>,
 }
 
-/// Held only so Drop tears the UI down; not read elsewhere.
+/// Held only so Drop tears the UI down; not read elsewhere
 #[allow(dead_code)]
 enum UiGuard {
     #[cfg(not(feature = "rich"))]
@@ -42,11 +42,11 @@ enum UiGuard {
     ProdashLine(prodash_line::Guard),
 }
 
-/// Child handle passed into gix — always a real prodash tree item when active.
+/// Child handle passed into gix — always a real prodash tree item when active
 pub type ProgressChild = DoOrDiscard<prodash::tree::Item>;
 
 impl ProgressSession {
-    /// `quiet` suppresses all progress UI (gix still gets a discard sink).
+    /// `quiet` suppresses all progress UI (gix still gets a discard sink)
     ///
     /// The prodash progress *tree* (the counters gix mutates) is always
     /// created when not quiet; a renderer is only spawned when stderr is a
@@ -96,7 +96,7 @@ impl ProgressSession {
         }
     }
 
-    /// A named progress node for a gix call (`prepare_fetch`, `receive`, …).
+    /// A named progress node for a gix call (`prepare_fetch`, `receive`, …)
     pub fn child(&self, name: &str) -> ProgressChild {
         match &self.root {
             Some(root) => DoOrDiscard::from(Some(root.add_child(name))),

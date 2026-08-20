@@ -120,7 +120,7 @@ pub async fn run(command: &PkgCommand, globals: &Cli) -> Result<()> {
     }
 }
 
-/// How `edit_valued`'s callers colorize the value tokens they show/write.
+/// How `edit_valued`'s callers colorize the value tokens they show/write
 /// `Use`'s tokens are USE flags (bold red/blue on/off, same palette `em use`
 /// uses); `Keyword`'s are KEYWORDS-shaped arch tokens (stable/testing/masked,
 /// [`portage_metadata::Keyword::parse`]); `Env`'s are just filenames (plain).
@@ -734,8 +734,8 @@ mod tests {
             .to_owned()
     }
 
-    /// The regression this module was root-blind for: edits must land under
-    /// the passed config dir, never the host's /etc/portage.
+    // The regression this module was root-blind for: edits must land under
+    // the passed config dir, never the host's /etc/portage.
     #[test]
     fn edit_valued_writes_under_the_given_confdir() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -786,8 +786,8 @@ mod tests {
         assert!(written.contains("sys-libs/zlib static-libs"), "{written}");
     }
 
-    /// `--dry-run` must compute the same result the write path would
-    /// otherwise produce, but the file itself must stay untouched.
+    // `--dry-run` must compute the same result the write path would
+    // otherwise produce, but the file itself must stay untouched.
     #[test]
     fn edit_valued_dry_run_does_not_write() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -884,9 +884,9 @@ mod tests {
         gentoo_core::Arch::intern("amd64")
     }
 
-    /// `use.mask` must win over an explicit `package.use` override — the
-    /// exact scenario live-verified against the real host (arm64 profile,
-    /// `multilib` masked) when this landed.
+    // `use.mask` must win over an explicit `package.use` override — the
+    // exact scenario live-verified against the real host (arm64 profile,
+    // `multilib` masked) when this landed.
     #[tokio::test]
     async fn resolve_active_use_mask_wins_over_package_use() {
         let (_repo_tmp, config_tmp, repo, roots) =
@@ -910,7 +910,7 @@ mod tests {
         );
     }
 
-    /// `use.force` must enable a flag with no other source turning it on.
+    // `use.force` must enable a flag with no other source turning it on
     #[tokio::test]
     async fn resolve_active_use_force_enables_a_flag() {
         let (_repo_tmp, _config_tmp, repo, roots) =
@@ -927,7 +927,7 @@ mod tests {
         );
     }
 
-    /// An unsatisfied `REQUIRED_USE` must be reported, not silently ignored.
+    // An unsatisfied `REQUIRED_USE` must be reported, not silently ignored
     #[tokio::test]
     async fn resolve_active_use_reports_a_required_use_violation() {
         let (_repo_tmp, config_tmp, repo, roots) =
@@ -955,7 +955,7 @@ mod tests {
         );
     }
 
-    /// A satisfied `REQUIRED_USE` reports no violation.
+    // A satisfied `REQUIRED_USE` reports no violation
     #[tokio::test]
     async fn resolve_active_use_no_violation_when_required_use_is_satisfied() {
         let (_repo_tmp, _config_tmp, repo, roots) =

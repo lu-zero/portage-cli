@@ -1,4 +1,4 @@
-//! Structured activity events for merge progress (library channel + sinks).
+//! Structured activity events for merge progress (library channel + sinks)
 //!
 //! Call sites emit via [`ActivityBus`]; front-ends subscribe or read the live
 //! FS sink. emerge.log is not the control plane.
@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 
 use camino::Utf8Path;
 
-/// Per-package activity handle passed into the ebuild phase runner.
+/// Per-package activity handle passed into the ebuild phase runner
 ///
 /// Holds enough identity to emit [`ActivityEvent::PhaseEnter`] /
 /// [`ActivityEvent::PhaseLeave`] without the phase loop knowing about the
@@ -53,7 +53,7 @@ pub struct ActivityPkgCtx {
     pub parent_job_id: Option<String>,
     pub cpv: String,
     pub merge_root: ActivityMergeRoot,
-    /// Session live-FS root (`None` when activity is in-process only / tests).
+    /// Session live-FS root (`None` when activity is in-process only / tests)
     pub live_root: Option<camino::Utf8PathBuf>,
     phases: Arc<Mutex<Vec<PhaseTiming>>>,
 }
@@ -77,7 +77,7 @@ impl ActivityPkgCtx {
         }
     }
 
-    /// Set the session live-FS root so an install worker can mirror phases.
+    /// Set the session live-FS root so an install worker can mirror phases
     pub fn with_live_root(mut self, root: impl Into<camino::Utf8PathBuf>) -> Self {
         self.live_root = Some(root.into());
         self
@@ -127,10 +127,11 @@ impl ActivityPkgCtx {
     }
 }
 
-/// Build the default CLI bus: live FS + history JSONL under `merge_root`
-/// (no emerge.log — opt-in only). Both disk sinks are offloaded to background
-/// threads so [`ActivityBus::emit`] never blocks the async merge scheduler on
-/// phase-transition I/O.
+/// Build the default CLI bus: live FS + history JSONL under `merge_root` (no emerge.log —
+/// opt-in only)
+///
+/// Both disk sinks are offloaded to background threads so [`ActivityBus::emit`] never
+/// blocks the async merge scheduler on phase-transition I/O.
 pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     let bus = ActivityBus::new();
     bus.add_sink(Arc::new(BackgroundSink::new(
@@ -144,12 +145,13 @@ pub fn default_cli_bus(merge_root: &Utf8Path) -> ActivityBus {
     bus
 }
 
-/// `em regen`'s own bus — no [`LiveFsSink`]. Regen isn't a merge session (no
-/// phases, no ETA relevance, no reason to show up in `em log current`); its
-/// user-facing needs — the `[N/of]` line and why an ebuild failed sourcing —
-/// are already served by [`HumanStdoutSink`], `PkgEnd.error`, and the rich
-/// miette frame `regen.rs` prints directly. `HistorySink` stays for
-/// symmetry; it already no-ops on [`ActivityMode::Regen`] events.
+/// `em regen`'s own bus — no [`LiveFsSink`]
+///
+/// Regen isn't a merge session (no phases, no ETA relevance, no reason to show up in
+/// `em log current`); its user-facing needs — the `[N/of]` line and why an ebuild failed
+/// sourcing — are already served by [`HumanStdoutSink`], `PkgEnd.error`, and the rich
+/// miette frame `regen.rs` prints directly. `HistorySink` stays for symmetry; it already
+/// no-ops on [`ActivityMode::Regen`] events.
 pub fn regen_activity_bus(activity_root: &Utf8Path) -> ActivityBus {
     let bus = ActivityBus::new();
     bus.add_sink(Arc::new(BackgroundSink::new(
@@ -159,10 +161,11 @@ pub fn regen_activity_bus(activity_root: &Utf8Path) -> ActivityBus {
     bus
 }
 
-/// Install-worker bus: LiveFs + optional JSONL re-emit path (Unix socket or
-/// pipe write end). Parent owns Session/PkgStart/PkgEnd and history; the child
-/// refreshes phase on the shared live tree and streams the same events back so
-/// parent `--activity-fd` / subscribers see install/qmerge phases.
+/// Install-worker bus: LiveFs + optional JSONL re-emit path (Unix socket or pipe write end)
+///
+/// Parent owns Session/PkgStart/PkgEnd and history; the child refreshes phase on the shared
+/// live tree and streams the same events back so parent `--activity-fd` / subscribers see
+/// install/qmerge phases.
 ///
 /// The live-FS sink is offloaded (phase writes can be frequent); the re-emit
 /// FD sink stays inline so its writes complete in `emit` order and a slow
@@ -183,19 +186,20 @@ pub fn worker_activity_bus(live_root: &Utf8Path, reemit_path: Option<&str>) -> A
     bus
 }
 
-/// Back-compat alias: LiveFs only (no re-emit).
+/// Back-compat alias: LiveFs only (no re-emit)
 pub fn worker_live_bus(live_root: &Utf8Path) -> ActivityBus {
     worker_activity_bus(live_root, None)
 }
 
-/// Attach the emerge-style terminal renderer. Renders `PkgStart`/`PhaseEnter`
-/// banners from the bus (a direct, inline sink so output is immediate). `quiet`
-/// suppresses everything; `verbose` adds per-phase timings.
+/// Attach the emerge-style terminal renderer
+///
+/// Renders `PkgStart`/`PhaseEnter` banners from the bus (a direct, inline sink so output is
+/// immediate). `quiet` suppresses everything; `verbose` adds per-phase timings.
 pub fn attach_human_stdout(bus: &ActivityBus, quiet: bool, verbose: u8) {
     bus.add_sink(Arc::new(HumanStdoutSink::new(quiet, verbose)));
 }
 
-/// Attach optional JSONL FD / path sinks to an existing bus.
+/// Attach optional JSONL FD / path sinks to an existing bus
 pub fn attach_jsonl_outputs(
     bus: &ActivityBus,
     activity_fd: Option<i32>,
@@ -214,7 +218,7 @@ pub fn attach_jsonl_outputs(
     Ok(())
 }
 
-/// Opt-in Portage-compatible emerge.log dual-write under `merge_root`.
+/// Opt-in Portage-compatible emerge.log dual-write under `merge_root`
 pub fn attach_emergelog(bus: &ActivityBus, merge_root: &Utf8Path) {
     bus.add_sink(Arc::new(BackgroundSink::new(
         Arc::new(EmergeLogSink::for_merge_root(merge_root)),
@@ -222,7 +226,7 @@ pub fn attach_emergelog(bus: &ActivityBus, merge_root: &Utf8Path) {
     )));
 }
 
-/// Resolve the job id for this merge: explicit opt, else new id (or resume's).
+/// Resolve the job id for this merge: explicit opt, else new id (or resume's)
 pub fn resolve_job_id(opts: &ActivitySessionOpts, resume_job_id: Option<&str>) -> String {
     if let Some(id) = opts.job_id.as_deref().filter(|s| !s.is_empty()) {
         return id.to_string();
@@ -239,7 +243,7 @@ pub fn resolve_job_id(opts: &ActivitySessionOpts, resume_job_id: Option<&str>) -
     format!("{t:x}-{}", std::process::id())
 }
 
-/// Format active sessions for `em log current`.
+/// Format active sessions for `em log current`
 pub fn format_current(proj: &LiveProjection, now: f64) -> String {
     let active: Vec<_> = proj
         .active()
@@ -450,9 +454,9 @@ mod tests {
         assert_eq!(p.active()[0].completed, 1);
     }
 
-    /// `em log current` merges the real merge root with regen's separate XDG
-    /// activity root (see `xdg::regen_activity_root`) — job_ids are unique,
-    /// so this must be a plain union, not one overwriting the other.
+    // `em log current` merges the real merge root with regen's separate XDG
+    // activity root (see `xdg::regen_activity_root`) — job_ids are unique,
+    // so this must be a plain union, not one overwriting the other.
     #[test]
     fn live_projection_merge_unions_sessions_from_two_roots() {
         let mut a = LiveProjection::new();
@@ -687,12 +691,12 @@ mod tests {
         assert!(loaded2.active().is_empty());
     }
 
-    /// `session.json` is static (written once, at `SessionStart`) and
-    /// `progress.json` is the only file rewritten per package — this is the
-    /// split that replaced the O(N²) `write_session_file` rewrite behind the
-    /// `em regen` hang (`todo/for-sonnet.md` 2026-08-09). Assert the split
-    /// actually holds: no dynamic field ever lands in `session.json`, and
-    /// `completed`/`failed` round-trip correctly through `progress.json`.
+    // `session.json` is static (written once, at `SessionStart`) and
+    // `progress.json` is the only file rewritten per package — this is the
+    // split that replaced the O(N²) `write_session_file` rewrite behind the
+    // `em regen` hang (`todo/for-sonnet.md` 2026-08-09). Assert the split
+    // actually holds: no dynamic field ever lands in `session.json`, and
+    // `completed`/`failed` round-trip correctly through `progress.json`.
     #[test]
     fn live_fs_session_file_is_static_progress_file_is_dynamic() {
         use camino::Utf8PathBuf;

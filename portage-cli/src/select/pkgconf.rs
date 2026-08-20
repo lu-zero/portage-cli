@@ -61,11 +61,12 @@ const BACKENDS: &[&str] = &["pkgconf", "pkg-config"];
 /// artifact, not a real system crossdev install.
 const SHARED_SCRIPT_NAME: &str = "em-cross-pkg-config";
 
-/// The shared script body. `@@BACKEND@@` is the resolved absolute path of
-/// the chosen backend — the only thing baked in; `CHOST` is derived from
-/// the script's own invoked name (`${0##*/}`, minus the `-pkg-config`
-/// suffix), exactly like real crossdev's `cross-pkg-config`, so the same
-/// file works correctly through any `<CTARGET>-pkg-config` symlink.
+/// The shared script body
+///
+/// `@@BACKEND@@` is the resolved absolute path of the chosen backend — the only thing baked
+/// in; `CHOST` is derived from the script's own invoked name (`${0##*/}`, minus the
+/// `-pkg-config` suffix), exactly like real crossdev's `cross-pkg-config`, so the same file
+/// works correctly through any `<CTARGET>-pkg-config` symlink.
 ///
 /// Adapted from real crossdev's `cross-pkg-config` (GPL-2): keeps the
 /// EAPI 7+ (`ESYSROOT`), generic (`SYSROOT`), and legacy (`ROOT`)
@@ -170,7 +171,7 @@ fi
 exit ${ret}
 "##;
 
-/// Find `name` on the real `$PATH`, returning its absolute path if present.
+/// Find `name` on the real `$PATH`, returning its absolute path if present
 fn find_on_path(name: &str) -> Option<Utf8PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
@@ -191,7 +192,7 @@ fn shared_script_path(roots: &Roots) -> Utf8PathBuf {
         .join(SHARED_SCRIPT_NAME)
 }
 
-/// Path to the `<target>-pkg-config` symlink.
+/// Path to the `<target>-pkg-config` symlink
 fn wrapper_path(roots: &Roots, target: &str) -> Utf8PathBuf {
     env_d::eprefix(roots)
         .join("usr/bin")
@@ -460,9 +461,9 @@ mod tests {
         assert_eq!(name, "pkg-config");
     }
 
-    /// Regression test for the bug this module exists to fix: without any
-    /// reachable backend, `activate_pkgconf` must leave no shared script or
-    /// symlink behind (not one pointing at a name that doesn't exist).
+    // Regression test for the bug this module exists to fix: without any
+    // reachable backend, `activate_pkgconf` must leave no shared script or
+    // symlink behind (not one pointing at a name that doesn't exist).
     #[test]
     fn activate_pkgconf_returns_false_when_no_backend_reachable() {
         let dir = tempfile::tempdir().unwrap();
@@ -475,10 +476,10 @@ mod tests {
         assert!(current_backend(&roots, "riscv64-unknown-linux-gnu").is_none());
     }
 
-    /// A deliberate `em select pkgconf set` choice (or an earlier
-    /// auto-activation) must survive a later `activate_pkgconf` call rather
-    /// than being silently re-picked -- for a *second* target under the
-    /// same root too, not just the one that first created the script.
+    // A deliberate `em select pkgconf set` choice (or an earlier
+    // auto-activation) must survive a later `activate_pkgconf` call rather
+    // than being silently re-picked -- for a *second* target under the
+    // same root too, not just the one that first created the script.
     #[test]
     fn activate_pkgconf_shares_one_choice_across_multiple_targets() {
         let dir = tempfile::tempdir().unwrap();
@@ -534,12 +535,12 @@ mod tests {
         );
     }
 
-    /// Regression: activating the
-    /// native/host-CHOST pkg-config wrapper under a `--prefix` overlay
-    /// shadows the real system's own `<chost>-pkg-config` (which correctly
-    /// finds host-installed packages) with an `ESYSROOT`-only-scoped one
-    /// (which can't). `is_native: true` under `roots.is_overlay()` must
-    /// no-op, leaving no symlink behind at all.
+    // Regression: activating the
+    // native/host-CHOST pkg-config wrapper under a `--prefix` overlay
+    // shadows the real system's own `<chost>-pkg-config` (which correctly
+    // finds host-installed packages) with an `ESYSROOT`-only-scoped one
+    // (which can't). `is_native: true` under `roots.is_overlay()` must
+    // no-op, leaving no symlink behind at all.
     #[test]
     fn activate_pkgconf_skips_native_chost_under_prefix_overlay() {
         let dir = tempfile::tempdir().unwrap();
@@ -562,9 +563,9 @@ mod tests {
         );
     }
 
-    /// A genuine foreign `CTARGET` (`is_native: false`) must still activate
-    /// normally under the same `--prefix` overlay — only the native/host
-    /// case is special-cased, not `is_overlay()` on its own.
+    // A genuine foreign `CTARGET` (`is_native: false`) must still activate
+    // normally under the same `--prefix` overlay — only the native/host
+    // case is special-cased, not `is_overlay()` on its own.
     #[test]
     fn activate_pkgconf_still_activates_a_real_cross_target_under_prefix_overlay() {
         let dir = tempfile::tempdir().unwrap();
@@ -584,11 +585,11 @@ mod tests {
         assert!(current_backend(&roots, "riscv64-unknown-linux-gnu").is_some());
     }
 
-    /// The shared script must actually work as a real shell script,
-    /// correctly re-rooting `-I`/`-L` flags for a cross sysroot -- not just
-    /// contain plausible-looking text. Runs it through a per-target symlink
-    /// (exercising the `${0##*/}`-derived CHOST, exactly like real
-    /// crossdev) against a fake pkgconf-like backend and a fake sysroot.
+    // The shared script must actually work as a real shell script,
+    // correctly re-rooting `-I`/`-L` flags for a cross sysroot -- not just
+    // contain plausible-looking text. Runs it through a per-target symlink
+    // (exercising the `${0##*/}`-derived CHOST, exactly like real
+    // crossdev) against a fake pkgconf-like backend and a fake sysroot.
     #[test]
     fn generated_wrapper_scopes_flags_to_the_sysroot() {
         let dir = tempfile::tempdir().unwrap();

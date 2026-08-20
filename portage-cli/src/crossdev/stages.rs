@@ -1,4 +1,4 @@
-//! Staged ordered-build plans — the stage1/toolchain-bootstrap problem.
+//! Staged ordered-build plans — the stage1/toolchain-bootstrap problem
 //!
 //! A [`StagePlan`] is a curated, *ordered* list of builds that the dependency
 //! solver cannot produce on its own, because the steps break a bootstrap
@@ -29,7 +29,7 @@ use portage_repo::ProfileStack;
 
 use super::target::{CrossTarget, Libc};
 
-/// gcc USE forced off for **every** cross gcc build (crossdev `GUSE_DISABLE`).
+/// gcc USE forced off for **every** cross gcc build (crossdev `GUSE_DISABLE`)
 const GCC_DISABLE: &[&str] = &["-objc", "-objc++", "-objc-gc", "-vtv"];
 /// Additional gcc USE forced off for **stage1** — a freestanding C compiler with
 /// no libc yet (crossdev `GUSE_DISABLE_STAGE_1`).
@@ -44,18 +44,19 @@ const GCC_DISABLE_STAGE1: &[&str] = &[
     "-zstd",
     "-zlib",
 ];
-/// Additional gcc USE forced off for **stage2** (crossdev `GUSE_DISABLE_STAGE_2`).
+/// Additional gcc USE forced off for **stage2** (crossdev `GUSE_DISABLE_STAGE_2`)
 const GCC_DISABLE_STAGE2: &[&str] = &["-sanitize"];
 
-/// One ordered build in a [`StagePlan`].
+/// One ordered build in a [`StagePlan`]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageStep {
-    /// Human label for progress / dry-run (e.g. `gcc-stage1`).
+    /// Human label for progress / dry-run (e.g. `gcc-stage1`)
     pub label: String,
-    /// Atoms to merge for this step, in order (e.g. `cross-riscv64-…/gcc`).
+    /// Atoms to merge for this step, in order (e.g. `cross-riscv64-…/gcc`)
     pub atoms: Vec<String>,
-    /// USE tokens forced for this step, in emerge syntax (`headers-only`,
-    /// `-cxx`). Applied on top of the configured USE.
+    /// USE tokens forced for this step, in emerge syntax (`headers-only`, `-cxx`)
+    ///
+    /// Applied on top of the configured USE.
     pub use_override: Vec<String>,
     /// Skip dependency resolution (crossdev's `--nodeps`): used for the
     /// headers-only libc step, to break the glibc→newer-gcc cycle before a
@@ -69,15 +70,15 @@ pub struct StageStep {
     pub into_sysroot: bool,
 }
 
-/// An ordered sequence of [`StageStep`]s run against one root.
+/// An ordered sequence of [`StageStep`]s run against one root
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StagePlan {
-    /// The steps, in build order.
+    /// The steps, in build order
     pub steps: Vec<StageStep>,
 }
 
 impl Libc {
-    /// Package name in `::gentoo` (the `cross-*` overlay symlinks the same name).
+    /// Package name in `::gentoo` (the `cross-*` overlay symlinks the same name)
     fn pkg_name(self) -> &'static str {
         match self {
             Libc::Glibc => "glibc",
@@ -87,28 +88,31 @@ impl Libc {
     }
 }
 
-/// The flavour of staged toolchain bootstrap: **cross** or **native**. The
-/// ordered step sequence ([`toolchain_plan`]) is identical; only how each
-/// component is named as an atom differs — cross rewrites the category to
-/// `cross-<tuple>`, native keeps the real `::gentoo` category. Single typed
-/// decision point for "build a toolchain into a fresh root", replacing a
-/// cross-vs-native split the driver used to re-derive at each call site.
+/// The flavour of staged toolchain bootstrap: **cross** or **native**
+///
+/// The ordered step sequence ([`toolchain_plan`]) is identical; only how each component is
+/// named as an atom differs — cross rewrites the category to `cross-<tuple>`, native keeps
+/// the real `::gentoo` category. Single typed decision point for "build a toolchain into a
+/// fresh root", replacing a cross-vs-native split the driver used to re-derive at each call
+/// site.
 #[derive(Debug, Clone)]
 pub enum BootstrapKind {
     /// Cross-compilation into a `<CTARGET>` sysroot (`CBUILD ≠ CHOST`): atoms
     /// resolve to the `cross-<tuple>` overlay category.
     Cross(CrossTarget),
-    /// Native self-hosting stage1 into `--root` (`CBUILD == CHOST`): atoms keep
-    /// their real `::gentoo` category. Single full gcc (the seed compiler builds
-    /// glibc — no two-stage split), with kernel headers. (A native LLVM stage1
-    /// has the same shape but is not yet wired.)
+    /// Native self-hosting stage1 into `--root` (`CBUILD == CHOST`): atoms keep their real
+    /// `::gentoo` category
+    ///
+    /// Single full gcc (the seed compiler builds glibc — no two-stage split), with kernel
+    /// headers. (A native LLVM stage1 has the same shape but is not yet wired.)
     Native,
 }
 
 impl BootstrapKind {
-    /// The category-qualified atom for component `(real_cat, pkg)` in
-    /// `::gentoo`. Cross maps every component under `cross-<tuple>`; native uses
-    /// the real category verbatim.
+    /// The category-qualified atom for component `(real_cat, pkg)` in `::gentoo`
+    ///
+    /// Cross maps every component under `cross-<tuple>`; native uses the real category
+    /// verbatim.
     fn atom(&self, real_cat: &str, pkg: &str) -> String {
         match self {
             BootstrapKind::Cross(t) => format!("{}/{pkg}", t.category()),
@@ -125,7 +129,7 @@ impl BootstrapKind {
         }
     }
 
-    /// Whether the target OS has a kernel (the `sys-kernel/linux-headers` step).
+    /// Whether the target OS has a kernel (the `sys-kernel/linux-headers` step)
     fn has_kernel(&self) -> bool {
         match self {
             BootstrapKind::Cross(t) => t.has_kernel,
@@ -133,7 +137,7 @@ impl BootstrapKind {
         }
     }
 
-    /// The libc package name (`glibc` / `musl` / `newlib`).
+    /// The libc package name (`glibc` / `musl` / `newlib`)
     fn libc_pkg(&self) -> &'static str {
         match self {
             BootstrapKind::Cross(t) => t.libc.pkg_name(),
@@ -141,11 +145,13 @@ impl BootstrapKind {
         }
     }
 
-    /// The kernel-headers step atom. Native merges the `virtual/os-headers` meta
-    /// (glibc DEPENDs on the virtual, which must be installed *in* a SYSROOT=ROOT
-    /// build — merging it registers the virtual plus the linux-headers provider in
-    /// the ROOT VDB). Cross builds the provider directly: no `virtual/*` in its
-    /// overlay, and its DEPENDs resolve against the host where the virtual exists.
+    /// The kernel-headers step atom
+    ///
+    /// Native merges the `virtual/os-headers` meta (glibc DEPENDs on the virtual, which must be
+    /// installed *in* a SYSROOT=ROOT build — merging it registers the virtual plus the
+    /// linux-headers provider in the ROOT VDB). Cross builds the provider directly: no
+    /// `virtual/*` in its overlay, and its DEPENDs resolve against the host where the virtual
+    /// exists.
     fn kernel_headers_atom(&self) -> String {
         match self {
             BootstrapKind::Cross(_) => self.atom("sys-kernel", "linux-headers"),
@@ -575,17 +581,17 @@ mod tests {
         assert!(!plan.steps[6].use_override.contains(&"-cxx".to_string()));
     }
 
-    /// **Invariant:** every `cross-<tuple>/<pkg>` atom `toolchain_plan` emits
-    /// for a cross target must be derivable — i.e. its underlying real
-    /// `(category, package)` must be in `CrossTarget::packages()`, the single
-    /// source of truth the alias-derivation map (`Location::Alias`) is built
-    /// from. If this fails, the plan references a package the resolver cannot
-    /// alias, so a from-scratch `--setup` would `NoVersions` at runtime.
-    ///
-    /// Real-category bypass atoms (`sys-apps/baselayout`, `virtual/os-headers`)
-    /// are intentionally not cross-aliased — they're host/EPREFIX-arch packages
-    /// merged via their real category — so they're filtered out before the
-    /// check, keeping the build plan honest.
+    // **Invariant:** every `cross-<tuple>/<pkg>` atom `toolchain_plan` emits
+    // for a cross target must be derivable — i.e. its underlying real
+    // `(category, package)` must be in `CrossTarget::packages()`, the single
+    // source of truth the alias-derivation map (`Location::Alias`) is built
+    // from. If this fails, the plan references a package the resolver cannot
+    // alias, so a from-scratch `--setup` would `NoVersions` at runtime.
+    //
+    // Real-category bypass atoms (`sys-apps/baselayout`, `virtual/os-headers`)
+    // are intentionally not cross-aliased — they're host/EPREFIX-arch packages
+    // merged via their real category — so they're filtered out before the
+    // check, keeping the build plan honest.
     #[test]
     fn toolchain_plan_atoms_are_all_in_packages_set() {
         use portage_atom::Dep;

@@ -1,4 +1,4 @@
-//! `em maint binhost` — regenerate the binpkg `Packages` index.
+//! `em maint binhost` — regenerate the binpkg `Packages` index
 //!
 //! Thin CLI wrapper: resolves `PKGDIR`/`CHOST` and reports the result. The
 //! actual scan/checksum/write logic lives in `portage_binpkg::regen`.
@@ -8,7 +8,7 @@ use anyhow::{Result, bail};
 use crate::binpkg::{read_make_conf_var, resolve_pkgdir};
 use crate::cli::Cli;
 
-/// Dispatch `em maint binhost`.
+/// Dispatch `em maint binhost`
 pub async fn run(globals: &Cli) -> Result<()> {
     let pkgdir = resolve_pkgdir(globals).await;
     if !pkgdir.exists() {

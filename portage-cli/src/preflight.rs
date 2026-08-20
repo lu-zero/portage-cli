@@ -1,4 +1,4 @@
-//! Pre-flight build-dependency check (todo/build-roadmap.md, M2).
+//! Pre-flight build-dependency check (todo/build-roadmap.md, M2)
 //!
 //! Before the (potentially hours-long) build loop, verify that every plan
 //! entry's build-time dependencies are present in the set that will be visible
@@ -37,7 +37,7 @@ use portage_resolve::{Avail, collect_unsatisfied};
 
 use crate::query::depgraph::PlannedMerge;
 
-/// Verify the plan's build dependencies are satisfiable in install order.
+/// Verify the plan's build dependencies are satisfiable in install order
 ///
 /// One `roots` value answers both `DEPEND` (via `initial_depend`) and
 /// `BDEPEND` (via `initial_bdepend`, `roots.satisfaction_root(DepClass::BDepend)`)
@@ -137,9 +137,9 @@ pub fn check(
 mod tests {
     use super::*;
 
-    /// Build a plan entry from an already-parsed [`Cpv`] — never re-derives
-    /// identity from a string internally, matching the rest of the merge
-    /// path.
+    // Build a plan entry from an already-parsed [`Cpv`] — never re-derives
+    // identity from a string internally, matching the rest of the merge
+    // path.
     fn planned(merge_root: MergeRoot, cpv: Cpv, depend: &str) -> Result<PlannedMerge> {
         Ok(PlannedMerge {
             merge_root,
@@ -160,17 +160,17 @@ mod tests {
         Ok(Roots::for_test(path))
     }
 
-    /// Regression test for the riscv64 stage3 shakeout (#31): a `Host`
-    /// entry's own DEPEND on an *earlier* `Host` entry in the same plan
-    /// (both routed to `base_roots()`, e.g. `dev-lang/perl` on
-    /// `sys-libs/gdbm` in a self-contained native bootstrap) must be seen
-    /// as satisfied — checking it against `depend_avail` (which only grows
-    /// from Target merges) made it spuriously fail.
-    ///
-    /// Uses an isolated tempdir root (via `Roots::for_test`), not
-    /// `Roots::default()`: the default falls through to the *real* bare
-    /// host `/var/db/pkg`, which may already have `gdbm`/`perl` installed on
-    /// the machine running the test, silently passing regardless of the fix.
+    // Regression test for the riscv64 stage3 shakeout (#31): a `Host`
+    // entry's own DEPEND on an *earlier* `Host` entry in the same plan
+    // (both routed to `base_roots()`, e.g. `dev-lang/perl` on
+    // `sys-libs/gdbm` in a self-contained native bootstrap) must be seen
+    // as satisfied — checking it against `depend_avail` (which only grows
+    // from Target merges) made it spuriously fail.
+    //
+    // Uses an isolated tempdir root (via `Roots::for_test`), not
+    // `Roots::default()`: the default falls through to the *real* bare
+    // host `/var/db/pkg`, which may already have `gdbm`/`perl` installed on
+    // the machine running the test, silently passing regardless of the fix.
     #[test]
     fn host_entry_depend_satisfied_by_earlier_host_entry() -> Result<()> {
         let tmp = tempfile::tempdir()?;
@@ -187,9 +187,9 @@ mod tests {
         Ok(())
     }
 
-    /// Negative control: a `Target` entry's DEPEND on a `Host`-only merge is
-    /// *not* satisfied — the two roots are genuinely different, and Host
-    /// merges must not leak into the Target/base-system view.
+    // Negative control: a `Target` entry's DEPEND on a `Host`-only merge is
+    // *not* satisfied — the two roots are genuinely different, and Host
+    // merges must not leak into the Target/base-system view.
     #[test]
     fn target_entry_depend_not_satisfied_by_host_only_entry() -> Result<()> {
         let tmp = tempfile::tempdir()?;
@@ -206,9 +206,9 @@ mod tests {
         Ok(())
     }
 
-    /// A failure caused by a genuine hard-dependency cycle (`hard_cycle_edges`
-    /// names the pair) gets the distinct cycle note appended, not just the
-    /// generic "needs: X".
+    // A failure caused by a genuine hard-dependency cycle (`hard_cycle_edges`
+    // names the pair) gets the distinct cycle note appended, not just the
+    // generic "needs: X".
     #[test]
     fn hard_cycle_failure_gets_a_distinct_note() -> Result<()> {
         let tmp = tempfile::tempdir()?;
@@ -230,10 +230,10 @@ mod tests {
         Ok(())
     }
 
-    /// A `:slot` build dep on a system-supplied `package.provided` package is
-    /// satisfied by the seeded provided entry (the interpreter case: the plan's
-    /// python packages `DEPEND` on `dev-lang/python:3.14`, which is provided by
-    /// the host and never merged). Without the seed the check fails.
+    // A `:slot` build dep on a system-supplied `package.provided` package is
+    // satisfied by the seeded provided entry (the interpreter case: the plan's
+    // python packages `DEPEND` on `dev-lang/python:3.14`, which is provided by
+    // the host and never merged). Without the seed the check fails.
     #[test]
     fn provided_slotted_dep_is_satisfied() -> Result<()> {
         let tmp = tempfile::tempdir()?;

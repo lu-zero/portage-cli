@@ -1,4 +1,4 @@
-//! `em select compiler` — `gcc-config`/`eselect gcc` workalike.
+//! `em select compiler` — `gcc-config`/`eselect gcc` workalike
 //!
 //! Manages compiler profile selection for gcc. Reads/writes env.d files and
 //! creates symlinks similar to gcc-config. Supports grouping profiles by target
@@ -13,7 +13,7 @@ use super::{Cli, env_d};
 use crate::cli::CompilerAction;
 use portage_resolve::Roots;
 
-/// GCC-specific profile type.
+/// GCC-specific profile type
 pub struct GccProfileType;
 
 impl env_d::EnvDProfile for GccProfileType {
@@ -125,8 +125,9 @@ fn install_gcc_wrappers(eprefix: &Utf8Path, target: &str, gcc_path: &str) -> Res
     Ok(())
 }
 
-/// Activate the newest gcc profile built into this root for `target`
-/// (`crossdev --setup`). EPREFIX-aware; no-op until a gcc step merges. Run after
+/// Activate the newest gcc profile built into this root for `target` (`crossdev --setup`)
+///
+/// EPREFIX-aware; no-op until a gcc step merges. Run after
 /// [`super::binutils::activate_latest`] so the gcc wrappers can reach cross as/ld.
 pub fn activate_latest(roots: &Roots, target: &str) -> Result<bool> {
     env_d::activate_latest::<GccProfileType>(roots, target)
@@ -267,9 +268,9 @@ mod tests {
         );
     }
 
-    /// `gcc-config`'s clang hand-off: rewrite an existing
-    /// `gentoo-gcc-install.cfg`, never create one, and leave it alone when the
-    /// selection did not actually change.
+    // `gcc-config`'s clang hand-off: rewrite an existing
+    // `gentoo-gcc-install.cfg`, never create one, and leave it alone when the
+    // selection did not actually change.
     #[test]
     fn clang_gcc_install_cfg_follows_gcc_config() {
         let dir = tempfile::tempdir().unwrap();

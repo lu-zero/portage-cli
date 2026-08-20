@@ -59,7 +59,7 @@ fn default_profile_for_arch(repo: &Repository) -> Result<String> {
         .with_context(|| format!("no {arch} prefix profile found in ::gentoo — pass --profile"))
 }
 
-/// Symlink `<eroot>/etc/portage/make.profile` to the resolved profile.
+/// Symlink `<eroot>/etc/portage/make.profile` to the resolved profile
 /// Idempotent: a profile already linked is left untouched — checked by
 /// link presence (`symlink_metadata`), not `exists()`, which follows the
 /// link and would treat a dangling symlink (e.g. its host profile target
@@ -106,9 +106,9 @@ mod tests {
         (dir, path)
     }
 
-    /// A minimal openable repo (same skeleton `portage_repo`'s own
-    /// `make_test_repo` test helper uses) with `profiles.desc` set to
-    /// `desc_body`.
+    // A minimal openable repo (same skeleton `portage_repo`'s own
+    // `make_test_repo` test helper uses) with `profiles.desc` set to
+    // `desc_body`.
     fn fixture_repo(desc_body: &str) -> (tempfile::TempDir, Repository) {
         let (dir, path) = utf8_tempdir();
         std::fs::create_dir_all(path.join("metadata")).unwrap();

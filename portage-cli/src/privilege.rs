@@ -53,15 +53,15 @@ use crate::cli::{Applet, Cli, Privilege};
 /// `Cli` — can pick the worker backend.
 static PRIVILEGE_REQUEST: std::sync::OnceLock<Privilege> = std::sync::OnceLock::new();
 
-/// Marker set on a wrapped re-exec so the inner process does not re-wrap.
+/// Marker set on a wrapped re-exec so the inner process does not re-wrap
 const ACTIVE_ENV: &str = "EM_PRIVILEGE_ACTIVE";
 
-/// The root mechanism backing an unprivileged build.
+/// The root mechanism backing an unprivileged build
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
-    /// Already root, or already inside a session: real chowns, no wrapping.
+    /// Already root, or already inside a session: real chowns, no wrapping
     RealRoot,
-    /// Pure-Rust ptrace+seccomp fake root (`fakeroost`).
+    /// Pure-Rust ptrace+seccomp fake root (`fakeroost`)
     #[cfg(all(feature = "fakeroost", target_os = "linux"))]
     Fakeroost,
     /// LD_PRELOAD fake root (`pseudoroot`) — same faked-ownership model as
@@ -69,10 +69,10 @@ pub enum Backend {
     /// and raw syscalls escape it) — the default unprivileged backend.
     #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
     Pseudoroot,
-    /// User-namespace sandbox (`hakoniwa`) with build-user→0 map.
+    /// User-namespace sandbox (`hakoniwa`) with build-user→0 map
     #[cfg(all(feature = "hakoniwa", target_os = "linux"))]
     Hakoniwa,
-    /// Re-exec under `sudo` for real root. Opt-in via `EM_PRIVILEGE=sudo`.
+    /// Re-exec under `sudo` for real root. Opt-in via `EM_PRIVILEGE=sudo`
     Sudo,
 }
 
@@ -213,7 +213,7 @@ pub fn install_wrap_backend() -> Option<Backend> {
 /// `build_and_merge`'s args that cross the process boundary.
 pub struct WorkerArgs<'a> {
     pub ebuild_path: &'a str,
-    /// The resolved plan entry's authoritative `Cpv` (e.g.
+    /// The resolved plan entry's authoritative `Cpv` (e.g
     /// `cross-riscv64-unknown-linux-gnu/gcc-16.1.1`) — carried across the
     /// process boundary explicitly so the worker never re-derives it from
     /// `ebuild_path`'s on-disk directory name, which is wrong for a
@@ -229,10 +229,11 @@ pub struct WorkerArgs<'a> {
     /// Where BDEPEND-class build tools live for this invocation
     /// (`Cli::host_roots()`'s merge root) — see `EbuildShell::build_broot`.
     pub broot: Option<&'a str>,
-    /// See `ebuild::RootContext::self_contained_bootstrap`.
+    /// See `ebuild::RootContext::self_contained_bootstrap`
     pub self_contained_bootstrap: bool,
-    /// See `ebuild::RootContext::extra_path`, `:`-joined. Empty for all but
-    /// `em setup --local`'s own merge.
+    /// See `ebuild::RootContext::extra_path`, `:`-joined
+    ///
+    /// Empty for all but `em setup --local`'s own merge.
     pub extra_path: &'a str,
     pub binpkg: Option<&'a str>,
     /// `binpkg`'s origin forces cryptographic signature verification
@@ -242,21 +243,23 @@ pub struct WorkerArgs<'a> {
     pub force_verify_signature: bool,
     pub buildpkg: bool,
     pub quiet: bool,
-    /// Activity session id (same as parent `SessionStart.job_id`). When set
-    /// with [`Self::activity_live_root`], the worker emits install-phase
-    /// events into the shared live FS tree.
+    /// Activity session id (same as parent `SessionStart.job_id`)
+    ///
+    /// When set with [`Self::activity_live_root`], the worker emits install-phase events into
+    /// the shared live FS tree.
     pub activity_job_id: Option<&'a str>,
     pub activity_parent_job_id: Option<&'a str>,
-    /// Filesystem root of the parent's live activity sink.
+    /// Filesystem root of the parent's live activity sink
     pub activity_live_root: Option<&'a str>,
-    /// `host` or `target` — must match the parent's package side.
+    /// `host` or `target` — must match the parent's package side
     pub activity_side: Option<&'a str>,
     /// Unix socket path for streaming phase events back to the parent bus
     /// (set by [`spawn_install_worker`] when `reemit` is provided).
     pub activity_reemit_path: Option<&'a str>,
 }
 
-/// Spawn a wrapped `em __worker` child for the install group and await it.
+/// Spawn a wrapped `em __worker` child for the install group and await it
+///
 /// The compile ran un-wrapped in the parent; this wraps only the
 /// install/qmerge/binpkg tail where ownership/device-node metadata is produced.
 ///
@@ -567,7 +570,7 @@ mod hakoniwa {
 
     use crate::cli::Cli;
 
-    /// Whether the host can spawn an unprivileged user namespace with id maps.
+    /// Whether the host can spawn an unprivileged user namespace with id maps
     ///
     /// Hakoniwa's parent process writes `/proc/<child>/uid_map` via `newuidmap` /
     /// `newgidmap`; both the kernel knob and those helpers must be present.
@@ -591,7 +594,7 @@ mod hakoniwa {
         std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
     }
 
-    /// Bind `host` read-write at the same path inside hakoniwa's mount namespace.
+    /// Bind `host` read-write at the same path inside hakoniwa's mount namespace
     fn bind_rw(container: &mut Container, host: &str) {
         if std::path::Path::new(host).is_dir() {
             container.bindmount_rw(host, host);
@@ -654,7 +657,7 @@ mod hakoniwa {
         None
     }
 
-    /// hakoniwa id-map triples `(container_id, host_id, count)`.
+    /// hakoniwa id-map triples `(container_id, host_id, count)`
     type IdMaps = Vec<(u32, u32, u32)>;
 
     /// Container root → the caller, plus the caller's delegated subuid/subgid range
@@ -669,7 +672,7 @@ mod hakoniwa {
         maps
     }
 
-    /// `(uid_maps, gid_maps)` for the current user (root + delegated subuid/subgid).
+    /// `(uid_maps, gid_maps)` for the current user (root + delegated subuid/subgid)
     fn id_range_maps() -> (IdMaps, IdMaps) {
         let uid = rustix::process::getuid().as_raw();
         let gid = rustix::process::getgid().as_raw();

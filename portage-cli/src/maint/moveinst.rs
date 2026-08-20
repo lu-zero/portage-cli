@@ -14,9 +14,10 @@ enum UpdateEntry {
     },
 }
 
-/// Detect installed packages that are affected by package moves recorded in
-/// `profiles/updates/`.  Reports what would need to be renamed; does not
-/// modify the VDB.
+/// Detect installed packages affected by package moves recorded in
+/// `profiles/updates/`
+///
+/// Reports what would need to be renamed; does not modify the VDB.
 pub fn run(repo_path: &Utf8Path, vdb: &Vdb) -> Result<()> {
     let updates_dir = repo_path.join("profiles/updates");
 

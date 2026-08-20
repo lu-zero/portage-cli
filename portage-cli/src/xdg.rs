@@ -7,15 +7,15 @@
 
 use camino::Utf8PathBuf;
 
-/// Application directory name under cache/state homes.
+/// Application directory name under cache/state homes
 const APP: &str = "em";
 
-/// `$HOME`, or `/root` when unset (matches unprivileged `~` resolution).
+/// `$HOME`, or `/root` when unset (matches unprivileged `~` resolution)
 pub fn home() -> Utf8PathBuf {
     env_path("HOME").unwrap_or_else(|| Utf8PathBuf::from("/root"))
 }
 
-/// `$XDG_CACHE_HOME`, or `~/.cache`.
+/// `$XDG_CACHE_HOME`, or `~/.cache`
 ///
 /// When both `XDG_CACHE_HOME` and `HOME` are unset, falls back to `/tmp`
 /// (writable without a home directory).
@@ -29,17 +29,17 @@ pub fn cache_home() -> Utf8PathBuf {
     }
 }
 
-/// `$XDG_STATE_HOME`, or `~/.local/state`.
+/// `$XDG_STATE_HOME`, or `~/.local/state`
 pub fn state_home() -> Utf8PathBuf {
     env_path("XDG_STATE_HOME").unwrap_or_else(|| home().join(".local/state"))
 }
 
-/// `$XDG_CACHE_HOME/em` (or `~/.cache/em`).
+/// `$XDG_CACHE_HOME/em` (or `~/.cache/em`)
 pub fn em_cache_dir() -> Utf8PathBuf {
     cache_home().join(APP)
 }
 
-/// `$XDG_STATE_HOME/em` (or `~/.local/state/em`).
+/// `$XDG_STATE_HOME/em` (or `~/.local/state/em`)
 pub fn em_state_dir() -> Utf8PathBuf {
     state_home().join(APP)
 }
@@ -54,7 +54,7 @@ pub fn md5_cache_root() -> Utf8PathBuf {
     em_cache_dir().join("md5-cache")
 }
 
-/// Per-repo user md5-cache: [`md5_cache_root`]/`/<repo>`.
+/// Per-repo user md5-cache: [`md5_cache_root`]/`/<repo>`
 ///
 /// Prefer opening repos via [`crate::repo_open`] so this path is applied as
 /// the repository secondary; call this only when you need the path itself.
@@ -79,11 +79,11 @@ pub fn news_state_dir() -> Utf8PathBuf {
     em_state_dir().join("news")
 }
 
-/// `$XDG_STATE_HOME/em/glsa` — `em glsa`'s `glsa_injected` tracking on the
-/// bare host. Same reasoning as [`news_state_dir`]: real portage's
-/// `glsa_injected` lives at `<EROOT>/var/lib/portage/glsa_injected`
-/// (`PRIVATE_PATH`), and `em glsa fix` marking a GLSA as applied shouldn't
-/// need root just to remember what it already fixed.
+/// `$XDG_STATE_HOME/em/glsa` — `em glsa`'s `glsa_injected` tracking on the bare host
+///
+/// Same reasoning as [`news_state_dir`]: real portage's `glsa_injected` lives at
+/// `<EROOT>/var/lib/portage/glsa_injected` (`PRIVATE_PATH`), and `em glsa fix` marking a
+/// GLSA as applied shouldn't need root just to remember what it already fixed.
 pub fn glsa_state_dir() -> Utf8PathBuf {
     em_state_dir().join("glsa")
 }
@@ -97,12 +97,12 @@ pub fn mirrordist_state_dir() -> Utf8PathBuf {
     em_state_dir().join("mirrordist")
 }
 
-/// `$XDG_STATE_HOME/em/activity` — stand-in "merge root" for `em regen`'s
-/// activity bus. Unlike a real merge, `regen` runs unprivileged, but its
-/// activity bus used to be built from the real `--root` unconditionally,
-/// so `LiveFsSink` tried (and failed) to write under
-/// `<root>/var/cache/edb/em-activity/live`. This path keeps regen's
-/// live-session tracking working without root.
+/// `$XDG_STATE_HOME/em/activity` — stand-in "merge root" for `em regen`'s activity bus
+///
+/// Unlike a real merge, `regen` runs unprivileged, but its activity bus used to be built
+/// from the real `--root` unconditionally, so `LiveFsSink` tried (and failed) to write
+/// under `<root>/var/cache/edb/em-activity/live`. This path keeps regen's live-session
+/// tracking working without root.
 pub fn regen_activity_root() -> Utf8PathBuf {
     em_state_dir().join("activity")
 }

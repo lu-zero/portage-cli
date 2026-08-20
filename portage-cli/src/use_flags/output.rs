@@ -15,7 +15,7 @@ use crate::cli;
 use crate::query::depgraph::output::colorize_use_flag;
 use crate::style::C_LABEL;
 
-/// Colorize a raw, space-separated USE-shaped string via [`colorize_use_flag`].
+/// Colorize a raw, space-separated USE-shaped string via [`colorize_use_flag`]
 fn colorize_flags(raw: &str) -> String {
     raw.split_whitespace()
         .map(colorize_use_flag)
@@ -23,7 +23,7 @@ fn colorize_flags(raw: &str) -> String {
         .join(" ")
 }
 
-/// Print the current `VAR="..."` line at `path`, colorized.
+/// Print the current `VAR="..."` line at `path`, colorized
 pub(super) fn show(path: &Utf8Path, var: &str) -> Result<()> {
     let mc = MakeConf::load(path).with_context(|| format!("reading {path}"))?;
 

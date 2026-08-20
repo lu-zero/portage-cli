@@ -1,4 +1,4 @@
-//! Emerge resolve-and-merge orchestration.
+//! Emerge resolve-and-merge orchestration
 
 use std::io::Write;
 use std::str::FromStr;
@@ -14,21 +14,24 @@ use crate::query::depgraph::{TargetAtom, TargetOrigin};
 use crate::vdb::open_cli_vdb;
 use crate::{binpkg, ebuild, maint, preflight, preserve_libs, query, search};
 
-/// Parse every token as a [`portage_atom::Dep`], failing the whole list on the
-/// first invalid atom. Use this for destructive operations (`-c`/`--depclean`)
-/// where dropping a typo would change the meaning of the command (e.g. a
-/// targeted depclean silently becoming a full-system clean).
+/// Parse every token as a [`portage_atom::Dep`], failing the whole list on the first
+/// invalid atom
+///
+/// Use this for destructive operations (`-c`/`--depclean`) where dropping a typo would
+/// change the meaning of the command (e.g. a targeted depclean silently becoming a
+/// full-system clean).
 pub(crate) fn parse_atoms_strict(raw: &[String]) -> Result<Vec<portage_atom::Dep>> {
     raw.iter()
         .map(|s| portage_atom::Dep::from_str(s).with_context(|| format!("invalid atom '{s}'")))
         .collect()
 }
 
-/// Expand `@set` references in `raw` to concrete atoms, leaving plain atoms
-/// untouched. Sets are a portage-config concept (not PMS); resolution lives
-/// in `portage_repo::SetResolver`. The profile stack comes from
-/// `<config_root>/etc/portage/make.profile` (for `@system`/`@profile`);
-/// user sets, `@world`, and `@selected` are read from `eroot`.
+/// Expand `@set` references in `raw` to concrete atoms, leaving plain atoms untouched
+///
+/// Sets are a portage-config concept (not PMS); resolution lives in
+/// `portage_repo::SetResolver`. The profile stack comes from
+/// `<config_root>/etc/portage/make.profile` (for `@system`/`@profile`); user sets,
+/// `@world`, and `@selected` are read from `eroot`.
 ///
 /// `@preserved-rebuild` is handled separately, inline below — a
 /// VDB/preserve-libs-registry query `SetResolver` has no access to.
@@ -139,41 +142,46 @@ pub(crate) fn expand_sets(raw: &[String], roots: &portage_resolve::Roots) -> Vec
     out
 }
 pub(crate) struct EmergeOpts<'a> {
-    /// USE tokens forced for resolve + build (emerge syntax: `headers-only`,
-    /// `-cxx`). Applied as a transient *conf-layer* override
-    /// (`DepgraphOpts::extra_use_override`, catalyst's `CATALYST_USE` layer),
-    /// not the process environment — env sits above `package.use` and would
-    /// wipe package.use / break `--autosolve-use` under `USE="-* build"`.
+    /// USE tokens forced for resolve + build (emerge syntax: `headers-only`, `-cxx`)
+    ///
+    /// Applied as a transient *conf-layer* override (`DepgraphOpts::extra_use_override`,
+    /// catalyst's `CATALYST_USE` layer), not the process environment — env sits above
+    /// `package.use` and would wipe package.use / break `--autosolve-use` under
+    /// `USE="-* build"`.
     pub use_override: &'a [String],
-    /// `--nodeps`: merge only the named atoms, no dependency expansion.
+    /// `--nodeps`: merge only the named atoms, no dependency expansion
     pub nodeps: bool,
-    /// Override depgraph flags for this call; `None` → `cli.depgraph_flags`.
+    /// Override depgraph flags for this call; `None` → `cli.depgraph_flags`
     pub depgraph_flags: Option<crate::cli::DepgraphFlags>,
-    /// Override merge flags for this call; `None` → `cli.merge_flags`. The
-    /// staged driver merges subcommand + top-level flags so either position
-    /// works (`em -j 80 stages …` vs `em stages … -j 80`).
+    /// Override merge flags for this call; `None` → `cli.merge_flags`
+    ///
+    /// The staged driver merges subcommand + top-level flags so either position works
+    /// (`em -j 80 stages …` vs `em stages … -j 80`).
     pub merge_flags: Option<crate::cli::MergeFlags>,
-    /// Install into the plain outer EROOT, ignoring `--target` sysroot
-    /// substitution. Used for host-side `cross-*` toolchain steps.
+    /// Install into the plain outer EROOT, ignoring `--target` sysroot substitution
+    ///
+    /// Used for host-side `cross-*` toolchain steps.
     pub use_outer_eroot: bool,
-    /// Use only the target VDB as the installed view (no host-base sharing).
+    /// Use only the target VDB as the installed view (no host-base sharing)
     /// Native toolchain bootstrap into an empty `--root`.
     pub target_only_installed_view: bool,
-    /// Update world on a successful real user merge (emerge `_world_atom`).
+    /// Update world on a successful real user merge (emerge `_world_atom`)
     /// Staged/internal steps leave this false.
     pub update_world: bool,
-    /// Replaying `-r`/`--resume` — resume-state save must not rotate backup.
+    /// Replaying `-r`/`--resume` — resume-state save must not rotate backup
     /// Only [`resume_atoms`] sets this true.
     pub is_resume: bool,
-    /// Optional activity bus; `None` → default live-FS sink for real merges.
+    /// Optional activity bus; `None` → default live-FS sink for real merges
     pub activity: Option<crate::activity::ActivityBus>,
-    /// Session correlation (outer job_id / parent_job_id for staged plans).
+    /// Session correlation (outer job_id / parent_job_id for staged plans)
     pub activity_session: crate::activity::ActivitySessionOpts,
-    /// In-memory crossdev aliases for this resolve. Empty for normal emerges;
-    /// staged crossdev `-p` passes the planned alias here.
+    /// In-memory crossdev aliases for this resolve
+    ///
+    /// Empty for normal emerges; staged crossdev `-p` passes the planned alias here.
     pub extra_aliases: &'a [portage_repo::RepoEntry],
-    /// Directories ahead of the sanitised build `PATH`. Empty for every
-    /// merge but `em setup --local`'s own — see `setup::host_tools`.
+    /// Directories ahead of the sanitised build `PATH`
+    ///
+    /// Empty for every merge but `em setup --local`'s own — see `setup::host_tools`.
     pub extra_path: &'a [camino::Utf8PathBuf],
 }
 
@@ -228,7 +236,7 @@ pub(crate) async fn emerge_atoms(
     .await
 }
 
-/// `--eta` estimate for `outcome.plan`, formatted for terminal display.
+/// `--eta` estimate for `outcome.plan`, formatted for terminal display
 /// Shared by the `-p`/`--pretend` preview and the `-a`/`--ask` confirmation
 /// prompt, so "am I about to start a 25-minute build" is visible at the
 /// point the user is actually asked to confirm, not only under a dry-run
@@ -731,7 +739,7 @@ async fn emerge_atoms_inner(
     Ok(())
 }
 
-/// Run the default emerge path for a parsed CLI invocation.
+/// Run the default emerge path for a parsed CLI invocation
 pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     // emerge -r/--resume: replaces the whole action, same precedence real
     // emerge gives it (checked first, ahead of every other action flag).
@@ -782,10 +790,11 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
     .await
 }
 
-/// `-r`/`--resume`: replay the last saved merge (`maint::resume`). Atoms are
-/// not accepted alongside this flag — the package list comes from the saved
-/// state, matching real emerge (`--resume`'s favorites/mergelist come only
-/// from `mtimedb`, never the command line).
+/// `-r`/`--resume`: replay the last saved merge (`maint::resume`)
+///
+/// Atoms are not accepted alongside this flag — the package list comes from the saved
+/// state, matching real emerge (`--resume`'s favorites/mergelist come only from `mtimedb`,
+/// never the command line).
 ///
 /// Flag overlay is [`maint::resume::merge_resume_flags`] (not the
 /// subcommand-vs-global OR helper): job-shape flags start from the saved
@@ -1149,9 +1158,9 @@ mod tests {
         portage_vdb::Vdb::open(root.join("var/db/pkg")).unwrap()
     }
 
-    /// Same skip-if-absent precedent as `elfscan.rs`'s own tests: a real
-    /// system `.so`, so `@preserved-rebuild` wiring can be exercised without
-    /// hand-synthesizing an ELF file.
+    // Same skip-if-absent precedent as `elfscan.rs`'s own tests: a real
+    // system `.so`, so `@preserved-rebuild` wiring can be exercised without
+    // hand-synthesizing an ELF file.
     fn real_system_lib() -> Option<(camino::Utf8PathBuf, crate::elfscan::ElfInfo)> {
         for candidate in ["/usr/lib64/libz.so.1", "/lib64/libz.so.1"] {
             let path = camino::Utf8PathBuf::from(candidate);

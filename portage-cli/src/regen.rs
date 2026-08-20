@@ -1,4 +1,4 @@
-//! Metadata-cache regeneration (`em regen`).
+//! Metadata-cache regeneration (`em regen`)
 //!
 //! Library work ([`portage_repo::regen_cache`]) sends one
 //! [`portage_repo::RegenItem`] per finished ebuild on a channel. This applet
@@ -19,7 +19,7 @@ use crate::activity::{
 };
 use crate::cli::Cli;
 
-/// Regenerate metadata caches.
+/// Regenerate metadata caches
 ///
 /// With no repos named, every `repos.conf` repo *except the main one* is
 /// regenerated — overlays are the repos that usually ship no `md5-cache`,
@@ -205,7 +205,7 @@ pub async fn run(
     Ok(())
 }
 
-/// Map one finished ebuild onto the bus (and rich UI for parse failures).
+/// Map one finished ebuild onto the bus (and rich UI for parse failures)
 fn emit_item(bus: &ActivityBus, job_id: &str, item: RegenItem) {
     let cpv = item.ebuild.cpv().to_string();
     let cpn = item.ebuild.cpv().cpn.to_string();

@@ -1,6 +1,6 @@
 pub use anyhow::Result;
 
-/// A `--pretend` resolve that surfaced required USE/mask changes.
+/// A `--pretend` resolve that surfaced required USE/mask changes
 ///
 /// The detailed change block was already printed (by the depgraph), so this
 /// is carried as an error purely to drive a non-zero exit through the
@@ -12,7 +12,7 @@ pub use anyhow::Result;
 #[error("USE/mask changes are required to proceed (see above)")]
 pub struct ConfigChangesNeeded;
 
-/// No atom on the command line resolved to anything mergeable/queryable.
+/// No atom on the command line resolved to anything mergeable/queryable
 ///
 /// Each failure already printed its own `!!!` warning (unresolvable atom,
 /// ambiguous name with its "pass -u" hint, etc.), so — same pattern as

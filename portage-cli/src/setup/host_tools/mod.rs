@@ -1,4 +1,4 @@
-//! Host tools a fresh `--local` prefix borrows until it has built its own.
+//! Host tools a fresh `--local` prefix borrows until it has built its own
 //!
 //! The prefix starts with an empty VDB, so the host's own binaries run every
 //! early phase, and two of them must be GNU: `sys-apps/baselayout`'s
@@ -20,16 +20,16 @@ mod system;
 use anyhow::{Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 
-/// A tool the first `--local` merges cannot proceed without.
+/// A tool the first `--local` merges cannot proceed without
 struct Hard {
-    /// Accepted command names, in search order.
+    /// Accepted command names, in search order
     names: &'static [&'static str],
-    /// `--version` banner substring proving the behaviour ebuilds rely on.
+    /// `--version` banner substring proving the behaviour ebuilds rely on
     /// `None` when merely being present is enough.
     banner: Option<&'static str>,
-    /// Homebrew formula shipping a GNU build of this tool.
+    /// Homebrew formula shipping a GNU build of this tool
     brew: Option<&'static str>,
-    /// Completes "… needs <why>", for the failure message.
+    /// Completes "… needs <why>", for the failure message
     why: &'static str,
 }
 
@@ -105,10 +105,11 @@ const HARD: &[Hard] = &[
     },
 ];
 
-/// Where the tools resolved outside the phase `PATH` are exposed under the
-/// names ebuilds actually invoke. Outside the prefix: a `--local` prefix owns
-/// only what it built itself, and a host symlink under `${EPREFIX}/usr/bin`
-/// would masquerade as prefix-owned content.
+/// Where the tools resolved outside the phase `PATH` are exposed under the names ebuilds
+/// actually invoke
+///
+/// Outside the prefix: a `--local` prefix owns only what it built itself, and a host
+/// symlink under `${EPREFIX}/usr/bin` would masquerade as prefix-owned content.
 fn farm_dir() -> Utf8PathBuf {
     crate::xdg::em_state_dir().join("bootstrap-bin")
 }
@@ -152,7 +153,7 @@ pub(super) fn which(name: &str, extra_path: &[Utf8PathBuf]) -> Option<Utf8PathBu
     find_in(dirs, name)
 }
 
-/// The first executable `name` across `dirs`, in order.
+/// The first executable `name` across `dirs`, in order
 fn find_in<'a>(dirs: impl Iterator<Item = &'a str>, name: &str) -> Option<Utf8PathBuf> {
     dirs.map(|d| Utf8Path::new(d).join(name))
         .find(|p| is_executable(p))
@@ -163,7 +164,8 @@ fn is_executable(path: &Utf8Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Whether `path --version` identifies as the implementation `banner` names.
+/// Whether `path --version` identifies as the implementation `banner` names
+///
 /// A candidate that cannot even be run is simply not a match.
 fn behaves_like(path: &Utf8Path, banner: &str) -> bool {
     let Ok(out) = std::process::Command::new(path).arg("--version").output() else {
@@ -172,7 +174,7 @@ fn behaves_like(path: &Utf8Path, banner: &str) -> bool {
     String::from_utf8_lossy(&out.stdout).contains(banner)
 }
 
-/// This tool as a phase would get it today, if that is usable at all.
+/// This tool as a phase would get it today, if that is usable at all
 fn resolve(tool: &Hard, extra_path: &[Utf8PathBuf]) -> Option<Utf8PathBuf> {
     tool.names.iter().find_map(|name| {
         let path = which(name, extra_path)?;
@@ -242,7 +244,7 @@ fn missing(tool: &Hard) -> String {
 mod tests {
     use super::*;
 
-    /// An executable `dir/name` printing `banner` for `--version`.
+    // An executable `dir/name` printing `banner` for `--version`
     fn fake_tool(dir: &Utf8Path, name: &str, banner: &str) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(dir).unwrap();

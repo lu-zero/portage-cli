@@ -1,4 +1,4 @@
-//! `em sync` / `em maint sync` — update ebuild repositories from `repos.conf`.
+//! `em sync` / `em maint sync` — update ebuild repositories from `repos.conf`
 //!
 //! ## Backends
 //!
@@ -33,7 +33,7 @@ use portage_repo::{RepoEntry, ReposConf};
 use crate::cli::Cli;
 use crate::style::{C_BOLD, C_ERROR, C_WARN};
 
-/// Run repository sync for `em sync` and `em maint sync`.
+/// Run repository sync for `em sync` and `em maint sync`
 pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
     let conf = globals.roots().repos_conf().context("reading repos.conf")?;
     let selected = select_repos(&conf, repos)?;
@@ -232,7 +232,7 @@ fn git_sync(path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<b
     }
 }
 
-/// Portage `volatile`: explicit conf wins; else volatile if not root/portage-owned.
+/// Portage `volatile`: explicit conf wins; else volatile if not root/portage-owned
 /// `pub(crate)`: also reused by `em --info` to show the same `volatile:
 /// True/False` real emerge infers from filesystem ownership when a repo
 /// doesn't set it explicitly in `repos.conf`.
@@ -259,7 +259,7 @@ pub(crate) fn resolve_volatile(entry: &RepoEntry, path: &Path) -> bool {
     }
 }
 
-/// Resolve the `portage` user's uid from the host's `/etc/passwd` by name.
+/// Resolve the `portage` user's uid from the host's `/etc/passwd` by name
 /// Falls back to the conventional Gentoo uid (250) when there is no entry
 /// (e.g. a minimal chroot with no passwd db yet) — same fallback shape as
 /// `portage-repo`'s `resolve_owner`.
@@ -305,7 +305,7 @@ fn error_repo(name: &str, msg: &str) {
     let _ = out.flush();
 }
 
-/// Shared trait for git backends (command vs gix).
+/// Shared trait for git backends (command vs gix)
 pub(super) trait GitBackend {
     fn pretend(&self, path: &Utf8Path, uri: &str, volatile: bool) -> String;
     fn sync(&self, path: &Utf8Path, uri: &str, volatile: bool, quiet: bool) -> Result<bool>;

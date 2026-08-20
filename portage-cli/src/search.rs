@@ -8,7 +8,7 @@ use portage_repo::{CacheReadOpts, Repository, cache_entries_parallel};
 
 use crate::style::{C_BOLD, C_LABEL, C_MASKED, C_PKG, C_STAR};
 
-/// Open every configured repo path, skipping (with a warning) any that fail.
+/// Open every configured repo path, skipping (with a warning) any that fail
 /// Errors only when no path is configured, or none opened.
 fn open_repos(repo_paths: &[std::path::PathBuf]) -> Result<Vec<Repository>> {
     if repo_paths.is_empty() {

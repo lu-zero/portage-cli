@@ -67,7 +67,7 @@ use super::repo::{FilterReason, RepoData, find_cache};
 /// structured so the caller can wrap each variable's value list under its
 /// own opening quote.
 struct GroupedUse {
-    /// `None` = base flags (the `USE=` group).
+    /// `None` = base flags (the `USE=` group)
     var: Option<String>,
     values: Vec<String>,
 }
@@ -117,7 +117,7 @@ fn group_use_flags(flags: &[String], use_expand: &[String]) -> Vec<GroupedUse> {
     out
 }
 
-/// Plain on/off coloring, no change marker: `C_ON name` or `C_OFF -name`.
+/// Plain on/off coloring, no change marker: `C_ON name` or `C_OFF -name`
 /// This is [`flag_token`]'s "unchanged" rendering (the on/off rows of its
 /// table with no `*`/`%`) — shared because it is *all* a bare use-dep needs:
 /// a constraint just states a required flag state, there is no "old build"
@@ -130,10 +130,11 @@ fn colorize_on_off(name: &str, enabled: bool) -> String {
     }
 }
 
-/// Color one USE-dep token via [`colorize_on_off`], reading the leading `-`
-/// (negated use-dep) as "disabled". `pub(crate)`: also reused by `em
-/// --info`, so its USE="..." line uses the exact same enabled/disabled
-/// palette as the rest of the CLI instead of a second, duplicated one.
+/// Color one USE-dep token via [`colorize_on_off`], reading the leading `-` (negated
+/// use-dep) as "disabled"
+///
+/// `pub(crate)`: also reused by `em --info`, so its USE="..." line uses the exact same
+/// enabled/disabled palette as the rest of the CLI instead of a second, duplicated one.
 pub(crate) fn colorize_use_flag(tok: &str) -> String {
     match tok.strip_prefix('-') {
         Some(rest) => colorize_on_off(rest, false),
@@ -141,9 +142,11 @@ pub(crate) fn colorize_use_flag(tok: &str) -> String {
     }
 }
 
-/// Color every space-separated token in an already-[`wrap_items`](crate::style::wrap_items)-wrapped
-/// chunk. Coloring must happen after wrapping, not before — embedded ANSI
-/// bytes would otherwise inflate `wrap_items`'s plain `.len()`-based width math.
+/// Color every space-separated token in an
+/// already-[`wrap_items`](crate::style::wrap_items)-wrapped chunk
+///
+/// Coloring must happen after wrapping, not before — embedded ANSI bytes would otherwise
+/// inflate `wrap_items`'s plain `.len()`-based width math.
 fn colorize_use_flags_chunk(chunk: &str) -> String {
     chunk
         .split(' ')
@@ -152,7 +155,7 @@ fn colorize_use_flags_chunk(chunk: &str) -> String {
         .join(" ")
 }
 
-/// Report the installed packages whose dependencies the plan would violate.
+/// Report the installed packages whose dependencies the plan would violate
 ///
 /// Aggregated rather than listed one row per violated atom. A requirer
 /// commonly contributes many atoms differing solely in one USE dep, each
@@ -314,11 +317,11 @@ pub(super) fn report_conflicts(conflicts: &[super::conflicts::Conflict], use_exp
     }
 }
 
-/// Report `::repo` constraint violations detected post-solve. The solver
-/// does not model these, so they are surfaced here like slot conflicts
-/// rather than failing resolution. Blockers have their own, richer
-/// [`report_blockers`] (classified auto-remove/conflict verdicts, not just
-/// an advisory string).
+/// Report `::repo` constraint violations detected post-solve
+///
+/// The solver does not model these, so they are surfaced here like slot conflicts rather
+/// than failing resolution. Blockers have their own, richer [`report_blockers`] (classified
+/// auto-remove/conflict verdicts, not just an advisory string).
 pub(super) fn report_repo_constraint_violations(violations: &[portage_atom_pubgrub::Error]) {
     use portage_atom_pubgrub::Error;
     let mut out = anstream::stderr();
@@ -462,20 +465,21 @@ pub(super) fn report_blockers(classified: &[portage_resolve::conflicts::Classifi
     }
 }
 
-/// A root target no acceptable ebuild satisfies.
+/// A root target no acceptable ebuild satisfies
 pub(super) struct UnsatisfiableTarget {
-    /// The atom as written.
+    /// The atom as written
     pub atom: String,
-    /// Where the atom came from, for the `(dependency required by …)` trailer.
+    /// Where the atom came from, for the `(dependency required by …)` trailer
     pub origin: super::TargetOrigin,
-    /// Whether the tree has matching-but-filtered versions, or none at all.
+    /// Whether the tree has matching-but-filtered versions, or none at all
     pub problem: super::targets::TargetProblem,
-    /// The matching versions and why each was filtered out. Empty for
-    /// [`TargetProblem::NoEbuilds`](super::targets::TargetProblem::NoEbuilds).
+    /// The matching versions and why each was filtered out
+    ///
+    /// Empty for [`TargetProblem::NoEbuilds`](super::targets::TargetProblem::NoEbuilds).
     pub reasons: Vec<super::repo::AutounmaskCandidate>,
 }
 
-/// Portage's `(masked by: …)` parenthetical for one filtered version.
+/// Portage's `(masked by: …)` parenthetical for one filtered version
 fn masked_by(reasons: &[FilterReason]) -> String {
     let parts: Vec<String> = reasons
         .iter()
@@ -500,7 +504,7 @@ fn seg(style: Style, text: impl Into<String>) -> (Style, String) {
     (style, text.into())
 }
 
-/// Flatten styled segments for a context that cannot carry escapes.
+/// Flatten styled segments for a context that cannot carry escapes
 fn plain(line: &Segments) -> String {
     line.iter().map(|(_, t)| t.as_str()).collect()
 }
@@ -562,9 +566,10 @@ pub(super) fn unsatisfiable_target_message(
     msg
 }
 
-/// Report the world-family root targets dropped from the solve because nothing
-/// acceptable satisfies them. Advisory only — the plan still stands and the run
-/// still exits 0, matching emerge.
+/// Report the world-family root targets dropped from the solve because nothing acceptable
+/// satisfies them
+///
+/// Advisory only — the plan still stands and the run still exits 0, matching emerge.
 ///
 /// Grouped by the set each atom came from, so the provenance is stated once
 /// instead of trailing every entry.
@@ -606,7 +611,7 @@ pub(super) fn report_unsatisfiable_targets(
     }
 }
 
-/// Report `REQUIRED_USE` constraints left unsatisfied by the planned USE.
+/// Report `REQUIRED_USE` constraints left unsatisfied by the planned USE
 /// Mirrors emerge's "following REQUIRED_USE flag constraints are unsatisfied".
 pub(super) fn report_required_use(violations: &[super::required_use::RequiredUseViolation]) {
     let mut out = anstream::stderr();
@@ -623,7 +628,7 @@ pub(super) fn report_required_use(violations: &[super::required_use::RequiredUse
     }
 }
 
-/// Report the USE flags `--autosolve-use` flipped to satisfy `REQUIRED_USE`.
+/// Report the USE flags `--autosolve-use` flipped to satisfy `REQUIRED_USE`
 ///
 /// Flips are grouped onto each in-plan `cpv` (the version the synthetic
 /// `package.use` entry keys on), and each block shows the package's
@@ -702,7 +707,7 @@ pub(super) fn report_autosolved_use<'a>(
 /// package: `(cpn, slots in the plan, decided flags)`.
 pub(super) type SharedSlotDecision = (Cpn, Vec<String>, Vec<String>);
 
-/// Find ceded USE decisions shared across multiple in-plan slots.
+/// Find ceded USE decisions shared across multiple in-plan slots
 ///
 /// `UseDecision` nodes are keyed per `(cpn, flag)` — slot-agnostic, because
 /// cross-package USE-dep references (`Q[flag]`) and the C7 co-solve address
@@ -815,7 +820,7 @@ pub(super) fn report_dropped_deps(dropped: &[DroppedDep], data: &RepoData, arch:
     }
 }
 
-/// The installed build a candidate's USE flags are diffed against.
+/// The installed build a candidate's USE flags are diffed against
 ///
 /// Portage's three-tier fallback (`_emerge/resolver/output.py:683-694`): the
 /// exact CPV if it is installed (catches a SLOT change of the same version),
@@ -869,7 +874,7 @@ struct FlagState {
     forced: bool,
 }
 
-/// How one flag renders, relative to the installed build it is compared against.
+/// How one flag renders, relative to the installed build it is compared against
 ///
 /// Ports portage's `_create_use_string`, which decides both *which* flags
 /// appear and how each is marked:
@@ -1171,7 +1176,7 @@ fn format_flags(
     }
 }
 
-/// Build the `:slot/subslot::repo` suffix shown in verbose mode.
+/// Build the `:slot/subslot::repo` suffix shown in verbose mode
 ///
 /// Mirrors portage: show `:slot/subslot` when the subslot differs from the
 /// slot, else `:slot` when the slot isn't the default `0`, else nothing —
@@ -1189,7 +1194,7 @@ fn slot_repo_suffix(cache: &CacheEntry, repo_name: &str) -> String {
     s
 }
 
-/// Render the emerge-style `Total:` breakdown, e.g.
+/// Render the emerge-style `Total:` breakdown, e.g
 /// `Total: 26 packages (20 new, 1 upgrade, 5 reinstalls)`.
 ///
 /// Printed by the caller (`depgraph()`) *after* the advisory block (USE
@@ -1292,7 +1297,7 @@ fn status_field(tag: &str, forced_rebuild: bool) -> String {
 
 /// Colorize the status field characters according to portage conventions:
 /// - N: green
-/// - S: green  
+/// - S: green
 /// - U: cyan
 /// - D: blue
 /// - R: yellow
@@ -1339,9 +1344,9 @@ pub(super) struct PrettyCtx<'a> {
     pub slot_op_cpns: &'a std::collections::HashSet<Cpn>,
     pub verbose: u8,
     pub ceded: &'a [CededFlag],
-    /// Profile force/mask applied post-fold (not via package.use).
+    /// Profile force/mask applied post-fold (not via package.use)
     pub force_mask: &'a portage_resolve::force_mask::ForceMask,
-    /// For deciding whether `*.stable.*` force/mask applies to a version.
+    /// For deciding whether `*.stable.*` force/mask applies to a version
     pub accept_keywords: &'a portage_resolve::repo::AcceptKeywords,
     /// Local binpkg index, when `-k`/`-K` (usepkg/usepkgonly) is active —
     /// used to show `[binary ...]` instead of `[ebuild ...]` for an entry
@@ -1816,10 +1821,10 @@ pub(super) fn print_tree(
     render_tree(ctx, &display, &version_map, cross);
 }
 
-/// One row of the tree walk, prior to pruning.
+/// One row of the tree walk, prior to pruning
 struct TreeNode<'a> {
     pkg: &'a PortagePackage,
-    /// Indent depth — the number of spaces to render before this node.
+    /// Indent depth — the number of spaces to render before this node
     /// `0` means a flush-left tree root.
     depth: usize,
     /// `true` for a node taken straight from `order` (a real merge step);
@@ -1828,8 +1833,10 @@ struct TreeNode<'a> {
     ordered: bool,
 }
 
-/// Portage's `_ordered_tree_display`: walk `order` and grow a tree whose depth
-/// tracks the merge sequence. Returns the unpruned display list.
+/// Portage's `_ordered_tree_display`: walk `order` and grow a tree whose depth tracks the
+/// merge sequence
+///
+/// Returns the unpruned display list.
 ///
 /// `tree_nodes` is the current rightmost branch (a stack of ancestors); for
 /// each package in `order` we shrink that stack until its top actually
@@ -1903,7 +1910,7 @@ struct WalkState<'a> {
 }
 
 impl<'a> WalkState<'a> {
-    /// Whether `child` is a direct forward dependency of `parent`.
+    /// Whether `child` is a direct forward dependency of `parent`
     fn is_child_of(&self, parent: &'a PortagePackage, child: &'a PortagePackage) -> bool {
         self.children.get(parent).is_some_and(|c| c.contains(child))
     }
@@ -1980,9 +1987,11 @@ impl<'a> WalkState<'a> {
     }
 }
 
-/// Portage's `_prune_tree_display`: strip redundant `[nomerge]` filler now
-/// that the real branch has been drawn. Walks the list backward, dropping a
-/// filler node when it sits at or below the depth of the next real merge.
+/// Portage's `_prune_tree_display`: strip redundant `[nomerge]` filler now that the real
+/// branch has been drawn
+///
+/// Walks the list backward, dropping a filler node when it sits at or below the depth of
+/// the next real merge.
 fn prune_tree<'a>(
     display: &[TreeNode<'a>],
     order_set: &HashSet<&PortagePackage>,
@@ -2019,12 +2028,12 @@ fn prune_tree<'a>(
     out
 }
 
-/// Render the pruned display list as emerge-style rows. Indentation is
-/// portage's own `" " * depth` — one space per tree level, no box-drawing
-/// connectors or rails — matching real `emerge --tree` exactly. The bracket
-/// status column stays flush-left (a fixed-width column, like `-p`'s table)
-/// and the indent sits after it, so the bracket doesn't drift right at each
-/// depth.
+/// Render the pruned display list as emerge-style rows
+///
+/// Indentation is portage's own `" " * depth` — one space per tree level, no box-drawing
+/// connectors or rails — matching real `emerge --tree` exactly. The bracket status column
+/// stays flush-left (a fixed-width column, like `-p`'s table) and the indent sits after it,
+/// so the bracket doesn't drift right at each depth.
 ///
 /// `(*)` marks a repeat showing of the same package elsewhere in the tree
 /// (emerge doesn't re-expand it). `node.ordered` — whether the node is a real
@@ -2070,9 +2079,9 @@ fn render_tree(
 mod tests {
     use super::*;
 
-    /// Call [`flag_token`] with the given comparison state, returning the
-    /// rendered token with ANSI escapes stripped so the marker matrix is
-    /// asserted on plain text.
+    // Call [`flag_token`] with the given comparison state, returning the
+    // rendered token with ANSI escapes stripped so the marker matrix is
+    // asserted on plain text.
     fn render(name: &str, enabled: bool, st: &FlagState, show_unchanged: bool) -> Option<String> {
         flag_token(name, enabled, st, show_unchanged).map(|(tok, _)| {
             let mut out = String::new();
@@ -2162,7 +2171,7 @@ mod tests {
         assert!(group_use_flags(&[], &["LLVM_TARGETS".to_string()]).is_empty());
     }
 
-    /// `flag_token` with `forced = false` (the common case).
+    // `flag_token` with `forced = false` (the common case)
     fn plain(
         name: &str,
         enabled: bool,
@@ -2186,7 +2195,7 @@ mod tests {
         )
     }
 
-    /// `flag_token` with `forced = true` (a `use.force`/`use.mask` flag).
+    // `flag_token` with `forced = true` (a `use.force`/`use.mask` flag)
     fn plain_forced(
         name: &str,
         enabled: bool,
@@ -2373,9 +2382,10 @@ mod tests {
         PortagePackage::unslotted(Cpn::parse(cpn).unwrap())
     }
 
-    /// Build `(children, parents)` adjacency from a list of `parent -> child`
-    /// edges, plus a `roots` set. Returns owned maps whose borrowed keys point
-    /// into `pkgs` so they outlive the call.
+    // Build `(children, parents)` adjacency from a list of `parent -> child` edges, plus a
+    // `roots` set
+    //
+    // Returns owned maps whose borrowed keys point into `pkgs` so they outlive the call.
     type Adjacency<'a> = HashMap<&'a PortagePackage, HashSet<&'a PortagePackage>>;
 
     fn adjacency<'a>(
@@ -2390,8 +2400,9 @@ mod tests {
         (children, parents)
     }
 
-    /// `(cpn, depth, ordered)` triples, for readable assertions. `Cpn` is
-    /// `Copy` and interned, so this borrows no heap strings.
+    // `(cpn, depth, ordered)` triples, for readable assertions
+    //
+    // `Cpn` is `Copy` and interned, so this borrows no heap strings.
     fn summary(display: &[TreeNode<'_>]) -> Vec<(Cpn, usize, bool)> {
         display
             .iter()
@@ -2399,8 +2410,8 @@ mod tests {
             .collect()
     }
 
-    /// Run the full reshape (build + prune) over owned packages, returning the
-    /// pruned `(cpn, depth, ordered)` summary.
+    // Run the full reshape (build + prune) over owned packages, returning the
+    // pruned `(cpn, depth, ordered)` summary.
     fn reshape(
         pkgs: &[PortagePackage],
         edges: &[(&PortagePackage, &PortagePackage)],
@@ -2421,9 +2432,10 @@ mod tests {
         summary(&pruned)
     }
 
-    /// Linear chain A→B→C. `order` is install order (deps first: C, B, A);
-    /// the walk reverses it (root first) so depth tracks the merge sequence
-    /// top-down. No grafting or pruning needed.
+    // Linear chain A→B→C
+    //
+    // `order` is install order (deps first: C, B, A); the walk reverses it (root first) so
+    // depth tracks the merge sequence top-down. No grafting or pruning needed.
     #[test]
     fn tree_linear_chain_depth_tracks_order() {
         let a = pkg("app-foo/a");
@@ -2444,12 +2456,12 @@ mod tests {
         );
     }
 
-    /// Diamond: A→{B,C}, B→D, C→D, install order [D, C, B, A] (the solver
-    /// built D and C before B). Reversed, the walk is A, B, C, D: B extends
-    /// A (depth 1), C is a sibling of B (depth 1, grafted back under A when
-    /// B's branch closed), and D extends whichever of B/C came first (depth
-    /// 2). This is the order-driven reconnection a plain graph DFS wouldn't
-    /// reproduce.
+    // Diamond: A→{B,C}, B→D, C→D, install order [D, C, B, A] (the solver built D and C before
+    // B)
+    //
+    // Reversed, the walk is A, B, C, D: B extends A (depth 1), C is a sibling of B (depth 1,
+    // grafted back under A when B's branch closed), and D extends whichever of B/C came first
+    // (depth 2). This is the order-driven reconnection a plain graph DFS wouldn't reproduce.
     #[test]
     fn tree_diamond_grafts_sibling_back_to_root() {
         let a = pkg("app-foo/a");
@@ -2472,11 +2484,11 @@ mod tests {
         );
     }
 
-    /// A root that is a target but *not* in the merge plan (already installed,
-    /// not rebuilding) is reached only to reconnect the tree, so it renders as
-    /// `[nomerge]` filler. Install order is just [B]; the walk reverses to
-    /// [B], B has no open ancestor, so `add_parents` grafts it under root A
-    /// (depth 0, filler), then B at depth 1 as the real merge.
+    // A root that is a target but *not* in the merge plan (already installed,
+    // not rebuilding) is reached only to reconnect the tree, so it renders as
+    // `[nomerge]` filler. Install order is just [B]; the walk reverses to
+    // [B], B has no open ancestor, so `add_parents` grafts it under root A
+    // (depth 0, filler), then B at depth 1 as the real merge.
     #[test]
     fn tree_root_not_in_order_shown_as_nomerge_filler() {
         let a = pkg("app-foo/a");
@@ -2493,11 +2505,11 @@ mod tests {
         );
     }
 
-    /// Pruning drops a filler node the real branch renders redundant. Edges
-    /// A→{B,D}, B→C; install order [C, B, A] (D is never a merge step and
-    /// nothing in order depends on it). D is emitted as filler under A but
-    /// pruned because it sits at the depth of the surviving A→B branch and
-    /// carries no real merge below it.
+    // Pruning drops a filler node the real branch renders redundant
+    //
+    // Edges A→{B,D}, B→C; install order [C, B, A] (D is never a merge step and nothing in
+    // order depends on it). D is emitted as filler under A but pruned because it sits at the
+    // depth of the surviving A→B branch and carries no real merge below it.
     #[test]
     fn tree_redundant_filler_is_pruned() {
         let a = pkg("app-foo/a");
@@ -2521,10 +2533,10 @@ mod tests {
         assert!(got.iter().all(|(_, _, o)| *o));
     }
 
-    /// A root is never grafted *under* something else: even if a root has a
-    /// parent edge in the graph, `add_parents` stops walking up at it
-    /// (portage's `set_nodes` rule). Here root A has an incoming edge from X,
-    /// but X must not appear above A in the tree. Install order [B, A].
+    // A root is never grafted *under* something else: even if a root has a
+    // parent edge in the graph, `add_parents` stops walking up at it
+    // (portage's `set_nodes` rule). Here root A has an incoming edge from X,
+    // but X must not appear above A in the tree. Install order [B, A].
     #[test]
     fn tree_root_is_never_grafted_under_a_parent() {
         let a = pkg("app-foo/a");

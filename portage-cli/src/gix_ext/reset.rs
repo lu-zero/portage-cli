@@ -1,4 +1,4 @@
-//! Pure-gix hard-reset composition.
+//! Pure-gix hard-reset composition
 //!
 //! # Algorithm (mirrors `git reset --hard <target>`)
 //!
@@ -49,7 +49,7 @@ use gix::bstr::{BStr, ByteSlice};
 use gix::refs::transaction::PreviousValue;
 use gix::worktree::stack::state::attributes;
 
-/// Errors from [`hard_reset_to`] and friends.
+/// Errors from [`hard_reset_to`] and friends
 #[derive(Debug, thiserror::Error)]
 pub enum HardResetError {
     #[error("repository has no worktree (bare)")]
@@ -87,7 +87,7 @@ pub enum HardResetError {
     Other(String),
 }
 
-/// How much a [`hard_reset_to`] is allowed to clobber.
+/// How much a [`hard_reset_to`] is allowed to clobber
 ///
 /// The two variants mirror the two shapes Portage's git sync module uses (see
 /// `portage.sync.modules.git.git.GitSync.update`):
@@ -130,7 +130,7 @@ pub enum ResetGuard {
     RefuseIfDirty,
 }
 
-/// Resolve the commit `HEAD` tracks on its upstream remote (`@{upstream}`).
+/// Resolve the commit `HEAD` tracks on its upstream remote (`@{upstream}`)
 pub fn resolve_upstream_tip(repo: &gix::Repository) -> Result<gix::ObjectId, HardResetError> {
     let head = repo
         .head()
@@ -157,7 +157,7 @@ pub fn resolve_upstream_tip(repo: &gix::Repository) -> Result<gix::ObjectId, Har
     Ok(id)
 }
 
-/// Remove untracked **and** ignored worktree entries — `git clean --force -d -x`.
+/// Remove untracked **and** ignored worktree entries — `git clean --force -d -x`
 ///
 /// Portage runs this before a non-volatile `reset --hard` because a shallow
 /// fetch can leave orphaned files behind that block the next sync (see the
@@ -225,7 +225,7 @@ pub fn clean_worktree(repo: &gix::Repository) -> Result<usize, HardResetError> {
     Ok(removed)
 }
 
-/// Hard-reset `HEAD`, the index, and the worktree to `target` (a commit-ish).
+/// Hard-reset `HEAD`, the index, and the worktree to `target` (a commit-ish)
 ///
 /// `guard` decides whether uncommitted worktree changes are clobbered
 /// ([`ResetGuard::Force`]) or make the reset fail with
@@ -508,8 +508,8 @@ mod tests {
         assert!(st.success(), "git {args:?} failed");
     }
 
-    /// A repo with one commit on `master`, plus a second commit available on
-    /// `other` that changes `a.txt` and drops `b.txt`.
+    // A repo with one commit on `master`, plus a second commit available on
+    // `other` that changes `a.txt` and drops `b.txt`.
     fn repo_with_two_commits(tmp: &Path) -> (std::path::PathBuf, gix::ObjectId) {
         let work = tmp.join("work");
         git(tmp, &["init", "-q", "-b", "master", work.to_str().unwrap()]);
@@ -558,10 +558,10 @@ mod tests {
         assert!(!gix::open(&work).unwrap().is_dirty().unwrap());
     }
 
-    /// `ResetGuard::RefuseIfDirty` must *not* imply the old fast-forward
-    /// check: `master` and `other` here have a common ancestor, but a shallow
-    /// re-sync's tip routinely does not, and refusing on that basis broke
-    /// every volatile update (bug #887025). Only worktree cleanliness matters.
+    // `ResetGuard::RefuseIfDirty` must *not* imply the old fast-forward
+    // check: `master` and `other` here have a common ancestor, but a shallow
+    // re-sync's tip routinely does not, and refusing on that basis broke
+    // every volatile update (bug #887025). Only worktree cleanliness matters.
     #[test]
     fn refuse_if_dirty_allows_a_non_fast_forward_when_the_tree_is_clean() {
         let _path = crate::test_support::path_lock();
@@ -669,10 +669,10 @@ mod tests {
         );
     }
 
-    /// The confirmed `remove_dir_all(workdir)` bug: any index path that does
-    /// not map to a real, strictly-nested worktree path — an empty one above
-    /// all, which is what the old `to_str().unwrap_or("")` produced for every
-    /// non-UTF-8 entry — must be skipped, never joined onto `workdir`.
+    // The confirmed `remove_dir_all(workdir)` bug: any index path that does
+    // not map to a real, strictly-nested worktree path — an empty one above
+    // all, which is what the old `to_str().unwrap_or("")` produced for every
+    // non-UTF-8 entry — must be skipped, never joined onto `workdir`.
     #[test]
     fn worktree_path_never_resolves_to_the_workdir_or_outside_it() {
         let workdir = Path::new("/var/db/repos/gentoo");
@@ -708,11 +708,12 @@ mod tests {
         assert_eq!(good, workdir.join("sys-apps/portage/Manifest"));
     }
 
-    /// Guards the ordering fix: HEAD must only move once the checkout and the
-    /// index write have both succeeded. A directory the checkout cannot create
-    /// a new entry in stands in for ENOSPC/EACCES/an interrupt. (The target
-    /// must *add* a file, not just modify one — modifying an existing file
-    /// needs no write permission on its parent directory.)
+    // Guards the ordering fix: HEAD must only move once the checkout and the index write have
+    // both succeeded
+    //
+    // A directory the checkout cannot create a new entry in stands in for ENOSPC/EACCES/an
+    // interrupt. (The target must *add* a file, not just modify one — modifying an existing
+    // file needs no write permission on its parent directory.)
     #[test]
     #[cfg(unix)]
     fn head_does_not_move_when_the_checkout_fails() {

@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use camino::Utf8Path;
 
-/// Variables joined with `:` across env.d files (portage's COLON_SEPARATED).
+/// Variables joined with `:` across env.d files (portage's COLON_SEPARATED)
 const COLON_SEPARATED: &[&str] = &[
     "ADA_INCLUDE_PATH",
     "ADA_OBJECTS_PATH",
@@ -31,7 +31,7 @@ const COLON_SEPARATED: &[&str] = &[
     "ROOTPATH",
 ];
 
-/// Variables joined with a space (portage's SPACE_SEPARATED).
+/// Variables joined with a space (portage's SPACE_SEPARATED)
 const SPACE_SEPARATED: &[&str] = &["CONFIG_PROTECT", "CONFIG_PROTECT_MASK"];
 
 /// Regenerate `etc/profile.env` and `etc/ld.so.conf` under `root`, then
@@ -131,8 +131,10 @@ pub fn env_update(root: &Utf8Path) -> Result<()> {
 }
 
 /// Rebuild `${root}/etc/ld.so.cache` from `${root}/etc/ld.so.conf` (or the
-/// default search dirs), updating the soname symlinks as glibc's `ldconfig`
-/// does. Arch-correct for foreign roots — the scanner reads each ELF.
+/// default search dirs)
+///
+/// Updates the soname symlinks as glibc's `ldconfig` does. Arch-correct
+/// for foreign roots — the scanner reads each ELF.
 fn refresh_ld_cache(root: &Utf8Path) -> Result<()> {
     use ldconfig::{Cache, SearchPaths};
 

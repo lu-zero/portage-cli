@@ -31,7 +31,7 @@ const C_LABEL: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green))
 const C_BOLD: Style = Style::new().effects(Effects::BOLD);
 const C_DIM: Style = Style::new().effects(Effects::DIMMED);
 
-/// Color each USE token via the same helper `-pv`'s own USE="..." line uses.
+/// Color each USE token via the same helper `-pv`'s own USE="..." line uses
 fn colorize_flags(flags: &[String]) -> String {
     flags
         .iter()
@@ -169,9 +169,10 @@ struct Info {
     /// plain atoms (real emerge's `Installed sets:` line).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     installed_sets: Vec<String>,
-    /// `-v`/`-vv`: every set `KnownSets` can see, resolved. `None` (not
-    /// merely empty) when `-v` wasn't passed, so `--json` output omits the
-    /// key entirely rather than an always-empty `{}`.
+    /// `-v`/`-vv`: every set `KnownSets` can see, resolved
+    ///
+    /// `None` (not merely empty) when `-v` wasn't passed, so `--json` output omits the key
+    /// entirely rather than an always-empty `{}`.
     #[serde(skip_serializing_if = "Option::is_none")]
     sets: Option<BTreeMap<String, SetEntry>>,
     /// `"global"` (the plain, non-USE_EXPAND flags) plus one entry per
@@ -518,7 +519,7 @@ fn resolve_all_sets(roots: &portage_resolve::Roots) -> BTreeMap<String, SetEntry
         .collect()
 }
 
-/// Why a set in the known list didn't resolve, as displayed after its name.
+/// Why a set in the known list didn't resolve, as displayed after its name
 ///
 /// Portage's own `.conf` files declare sets by Python class
 /// (`class = portage.sets.dbapi.ChangedDepsSet`), so `em` advertises names it
@@ -725,10 +726,10 @@ fn mem_info() -> Option<MemInfo> {
 mod tests {
     use super::*;
 
-    /// A minimal root `resolve_all_sets` can work against: an empty (but
-    /// valid) profile dir, one user-defined set, and an empty VDB so
-    /// `@preserved-rebuild` resolves cleanly instead of erroring on a
-    /// missing `var/db/pkg`.
+    // A minimal root `resolve_all_sets` can work against: an empty (but
+    // valid) profile dir, one user-defined set, and an empty VDB so
+    // `@preserved-rebuild` resolves cleanly instead of erroring on a
+    // missing `var/db/pkg`.
     fn scratch_root() -> (tempfile::TempDir, camino::Utf8PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let root = camino::Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();

@@ -19,19 +19,20 @@
 //! relevant applets' own flattened copy removes that trap (same reasoning as
 //! `--ask`'s move off `global = true`, see [`super::MergeFlags::ask`]).
 
-/// Activity-output sink selection for a merge / regen run.
+/// Activity-output sink selection for a merge / regen run
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct ActivityArgs {
-    /// Write activity events as JSONL to file descriptor N (subprocess
-    /// front-ends). Takes ownership of the FD.
+    /// Write activity events as JSONL to file descriptor N (subprocess front-ends)
+    ///
+    /// Takes ownership of the FD.
     #[arg(long = "activity-fd", value_name = "N")]
     pub activity_fd: Option<i32>,
 
-    /// Append activity events as JSONL to PATH (not `-`; use `--activity-fd`).
+    /// Append activity events as JSONL to PATH (not `-`; use `--activity-fd`)
     #[arg(long = "activity-jsonl", value_name = "PATH")]
     pub activity_jsonl: Option<String>,
 
-    /// Dual-write Portage-compatible emerge.log lines (opt-in; qlop/genlop).
+    /// Dual-write Portage-compatible emerge.log lines (opt-in; qlop/genlop)
     /// Path defaults to `<merge-root>/var/log/emerge.log` (or
     /// `/var/log/emerge.log`).
     #[arg(long = "emergelog", env = "EM_EMERGELOG")]

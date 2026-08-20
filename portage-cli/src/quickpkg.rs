@@ -1,4 +1,4 @@
-//! `em quickpkg` — package installed files into a GPKG under PKGDIR.
+//! `em quickpkg` — package installed files into a GPKG under PKGDIR
 //!
 //! Portage's `quickpkg(1)` builds a binary package from the live filesystem
 //! using the installed package's VDB `CONTENTS` (not a build image). Default
@@ -18,19 +18,19 @@ use crate::cli::Cli;
 use crate::emerge::expand_sets;
 use crate::vdb::{find_packages, open_cli_vdb};
 
-/// CLI options for `em quickpkg`.
+/// CLI options for `em quickpkg`
 #[derive(Debug, Clone)]
 pub(crate) struct QuickpkgOpts {
-    /// Atom / set / VDB-path arguments.
+    /// Atom / set / VDB-path arguments
     pub atoms: Vec<String>,
-    /// Include all CONFIG_PROTECT files (default: false).
+    /// Include all CONFIG_PROTECT files (default: false)
     pub include_config: bool,
     /// When `include_config` is false, still include protected files whose
     /// live MD5 matches the CONTENTS record (default: false).
     pub include_unmodified_config: bool,
 }
 
-/// Run `em quickpkg`.
+/// Run `em quickpkg`
 pub(crate) async fn run(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
     // Match real quickpkg's default umask (0077) so packages aren't world-readable.
     let prev = rustix::process::umask(rustix::fs::Mode::from_bits_truncate(0o077));
@@ -135,7 +135,7 @@ async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
     Ok(())
 }
 
-/// Resolve one CLI arg to installed packages.
+/// Resolve one CLI arg to installed packages
 ///
 /// Accepts:
 /// - VDB directory path (`/var/db/pkg/cat/pf` or under `--root`)
@@ -391,7 +391,7 @@ fn warn_bindist(pkg: &InstalledPackage) {
     }
 }
 
-/// CONFIG_PROTECT / CONFIG_PROTECT_MASK for quickpkg (no ebuild shell needed).
+/// CONFIG_PROTECT / CONFIG_PROTECT_MASK for quickpkg (no ebuild shell needed)
 struct ConfigProtectLists {
     protect: Vec<String>,
     mask: Vec<String>,

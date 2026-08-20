@@ -1,4 +1,4 @@
-//! `em select binutils` — `binutils-config`/`eselect binutils` workalike.
+//! `em select binutils` — `binutils-config`/`eselect binutils` workalike
 //!
 //! Manages binutils profile selection. Supports grouping profiles by target
 //! architecture and showing which is active per architecture.
@@ -12,7 +12,7 @@ use super::{Cli, env_d};
 use crate::cli::BinutilsAction;
 use portage_resolve::Roots;
 
-/// Binutils-specific profile type.
+/// Binutils-specific profile type
 pub struct BinutilsProfileType;
 
 impl env_d::EnvDProfile for BinutilsProfileType {
@@ -68,10 +68,11 @@ fn install_binutils_wrappers(eprefix: &Utf8Path, target: &str, ver: &str) -> Res
     Ok(())
 }
 
-/// Locate the `binutils-bin/<ver>` directory and its `BINPATH_LINKS` dir. Cross
-/// installs nest under `usr/<CBUILD>/<T>/binutils-bin` (links via
-/// `usr/libexec/gcc/<T>`); a native install sits at `usr/<T>/binutils-bin`
-/// (links via `usr/<T>/bin`).
+/// Locate the `binutils-bin/<ver>` directory and its `BINPATH_LINKS` dir
+///
+/// Cross installs nest under `usr/<CBUILD>/<T>/binutils-bin` (links via
+/// `usr/libexec/gcc/<T>`); a native install sits at `usr/<T>/binutils-bin` (links via
+/// `usr/<T>/bin`).
 fn locate_binutils_bin(
     eprefix: &Utf8Path,
     target: &str,
@@ -97,7 +98,9 @@ fn locate_binutils_bin(
 }
 
 /// Activate the newest binutils profile built into this root for `target`
-/// (`crossdev --setup`). EPREFIX-aware; no-op until the binutils step merges.
+/// (`crossdev --setup`)
+///
+/// EPREFIX-aware; no-op until the binutils step merges.
 pub fn activate_latest(roots: &Roots, target: &str) -> Result<bool> {
     env_d::activate_latest::<BinutilsProfileType>(roots, target)
 }

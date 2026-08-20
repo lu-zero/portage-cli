@@ -1,4 +1,4 @@
-//! Diff-and-apply plan for `em`-generated config files.
+//! Diff-and-apply plan for `em`-generated config files
 //!
 //! `crossdev --init-target` used to write every file unconditionally and
 //! immediately, with no way to preview or confirm it — unlike every other
@@ -32,7 +32,7 @@ fn alias_body(name: &str, category: &str, packages_line: &str) -> String {
     )
 }
 
-/// One file/dir/symlink a caller wants in a particular state.
+/// One file/dir/symlink a caller wants in a particular state
 #[derive(Debug)]
 pub(crate) enum ConfigEntry {
     /// Regenerated every run: em owns the full content, so a rewrite always
@@ -55,9 +55,9 @@ pub(crate) enum ConfigEntry {
         category: String,
         packages_line: String,
     },
-    /// A directory that just needs to exist (e.g. an empty target VDB).
+    /// A directory that just needs to exist (e.g. an empty target VDB)
     Dir { path: Utf8PathBuf },
-    /// A symlink that should point at `target`.
+    /// A symlink that should point at `target`
     Symlink {
         link: Utf8PathBuf,
         target: Utf8PathBuf,
@@ -74,16 +74,17 @@ enum Change {
 /// already on disk.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RefreshPolicy {
-    /// Always regenerate to match the freshly-computed desired state.
+    /// Always regenerate to match the freshly-computed desired state
     /// Explicit `--init-target`: an intentional "make this exactly right"
     /// action, including picking up a changed package set or `--ex-pkg`
     /// selection and re-detecting drift in a hand-edited file.
     Sync,
-    /// Only create what's missing; anything already on disk — hand-edited
-    /// or not — is left untouched. `--setup`'s implied config-laydown step:
-    /// a hand edit made between an earlier `--init-target` and this
-    /// `--setup` must survive. Trade-off: `--setup --ex-pkg X` against an
-    /// already-initialized target won't pick up the new extra either — run
+    /// Only create what's missing; anything already on disk — hand-edited or not — is left
+    /// untouched
+    ///
+    /// `--setup`'s implied config-laydown step: a hand edit made between an earlier
+    /// `--init-target` and this `--setup` must survive. Trade-off: `--setup --ex-pkg X` against
+    /// an already-initialized target won't pick up the new extra either — run
     /// `--init-target --ex-pkg X` (`Sync`) first for that.
     FillGapsOnly,
 }
@@ -228,15 +229,15 @@ pub(crate) fn apply_now(entries: &[ConfigEntry]) -> Result<()> {
     Ok(())
 }
 
-/// What happened to a collected [`ConfigEntry`] plan.
+/// What happened to a collected [`ConfigEntry`] plan
 pub(crate) enum Outcome {
-    /// Nothing to do (or `-p`: shown but not written).
+    /// Nothing to do (or `-p`: shown but not written)
     NothingToApply,
-    /// `-p`: previewed only.
+    /// `-p`: previewed only
     Previewed,
-    /// `-a`: user declined.
+    /// `-a`: user declined
     Declined,
-    /// Written for real.
+    /// Written for real
     Applied,
 }
 
@@ -249,12 +250,12 @@ impl Outcome {
     }
 }
 
-/// Diff `entries` against disk under `policy` and, per `pretend`/`ask`,
-/// preview, confirm, or apply them. `pretend` is `Cli`'s own `global` field
-/// (one shared value, works from any position); `ask` is the caller's
-/// already-merged `MergeFlags::ask` (see `merge_merge_flags`) — not global,
-/// so it has to be resolved by the caller instead of read straight off
-/// `&Cli`.
+/// Diff `entries` against disk under `policy` and, per `pretend`/`ask`, preview, confirm,
+/// or apply them
+///
+/// `pretend` is `Cli`'s own `global` field (one shared value, works from any position);
+/// `ask` is the caller's already-merged `MergeFlags::ask` (see `merge_merge_flags`) — not
+/// global, so it has to be resolved by the caller instead of read straight off `&Cli`.
 pub(crate) fn apply(
     entries: &[ConfigEntry],
     pretend: bool,
@@ -325,7 +326,7 @@ mod tests {
             .join(rel))
     }
 
-    /// `-p`: nothing is written, even though there's a real change to make.
+    // `-p`: nothing is written, even though there's a real change to make
     #[test]
     fn pretend_writes_nothing() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -340,7 +341,7 @@ mod tests {
         Ok(())
     }
 
-    /// Neither `-p` nor `-a`: applies directly, no prompt needed.
+    // Neither `-p` nor `-a`: applies directly, no prompt needed
     #[test]
     fn plain_run_applies_directly() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -356,10 +357,10 @@ mod tests {
         Ok(())
     }
 
-    /// Nothing changed (content already matches): reported as
-    /// `NothingToApply`, and `Outcome::applied()` treats that as "the
-    /// caller's own 'ready' summary may print" (it's already in the desired
-    /// state either way).
+    // Nothing changed (content already matches): reported as
+    // `NothingToApply`, and `Outcome::applied()` treats that as "the
+    // caller's own 'ready' summary may print" (it's already in the desired
+    // state either way).
     #[test]
     fn no_change_is_reported_as_nothing_to_apply() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -373,8 +374,8 @@ mod tests {
         Ok(())
     }
 
-    /// `CreateOnly` never overwrites an existing file's content, no matter
-    /// how it differs from `desired`.
+    // `CreateOnly` never overwrites an existing file's content, no matter
+    // how it differs from `desired`.
     #[test]
     fn create_only_never_overwrites_existing_content() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -392,7 +393,7 @@ mod tests {
         Ok(())
     }
 
-    /// `Dir` creates a missing directory and is a no-op once it exists.
+    // `Dir` creates a missing directory and is a no-op once it exists
     #[test]
     fn dir_entry_creates_a_missing_directory() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -408,8 +409,8 @@ mod tests {
         Ok(())
     }
 
-    /// A foreign `Alias` entry (no `alias-target =` key) is reported
-    /// unchanged and never overwritten.
+    // A foreign `Alias` entry (no `alias-target =` key) is reported
+    // unchanged and never overwritten.
     #[test]
     fn alias_entry_never_touches_a_foreign_file() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -457,10 +458,10 @@ mod tests {
         Ok(())
     }
 
-    /// `FillGapsOnly` (`--setup`'s own implied config-laydown step): an
-    /// existing file is left completely alone, no matter how far its
-    /// content has drifted from `desired` — a hand edit made between an
-    /// earlier `--init-target` and this `--setup` must survive.
+    // `FillGapsOnly` (`--setup`'s own implied config-laydown step): an
+    // existing file is left completely alone, no matter how far its
+    // content has drifted from `desired` — a hand edit made between an
+    // earlier `--init-target` and this `--setup` must survive.
     #[test]
     fn fill_gaps_only_never_touches_an_existing_file() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -476,9 +477,9 @@ mod tests {
         Ok(())
     }
 
-    /// `FillGapsOnly` still creates a file that's genuinely missing — a
-    /// fresh target being `--setup` directly (no prior `--init-target`)
-    /// still gets fully written.
+    // `FillGapsOnly` still creates a file that's genuinely missing — a
+    // fresh target being `--setup` directly (no prior `--init-target`)
+    // still gets fully written.
     #[test]
     fn fill_gaps_only_still_creates_missing_files() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -494,11 +495,11 @@ mod tests {
         Ok(())
     }
 
-    /// `FillGapsOnly` also leaves an existing `Alias` entry alone even when
-    /// its `packages_line` no longer matches what this run would compute
-    /// (e.g. a different `--ex-pkg` selection than an earlier explicit
-    /// `--init-target` used) — the accepted trade-off for hand edits
-    /// surviving `--setup`.
+    // `FillGapsOnly` also leaves an existing `Alias` entry alone even when
+    // its `packages_line` no longer matches what this run would compute
+    // (e.g. a different `--ex-pkg` selection than an earlier explicit
+    // `--init-target` used) — the accepted trade-off for hand edits
+    // surviving `--setup`.
     #[test]
     fn fill_gaps_only_never_touches_an_existing_alias_even_with_a_different_packages_line()
     -> Result<()> {

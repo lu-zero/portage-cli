@@ -26,39 +26,43 @@ use crate::preserve_libs;
 /// process. [`PhaseGroup::Debug`] backs `em ebuild`.
 #[derive(Clone, Debug)]
 enum PhaseGroup {
-    /// Full source build + merge: clean → `pretend..qmerge` → buildpkg → tree-drop.
+    /// Full source build + merge: clean → `pretend..qmerge` → buildpkg → tree-drop
     Full,
-    /// Pre-install phases only (the un-wrapped parent): clean →
-    /// `pretend..compile` → dump env to `worker-env`. No buildpkg, no tree-drop
-    /// — the compile artifacts must survive for the Install worker.
+    /// Pre-install phases only (the un-wrapped parent): clean → `pretend..compile` → dump env
+    /// to `worker-env`
+    ///
+    /// No buildpkg, no tree-drop — the compile artifacts must survive for the Install worker.
     Compile,
-    /// Install + qmerge (the wrapped worker): restore env from `worker-env` →
-    /// `install,qmerge` → buildpkg → tree-drop. Does NOT wipe `work/` (the
-    /// compile artifacts live there); only `image/temp/homedir`.
+    /// Install + qmerge (the wrapped worker): restore env from `worker-env` → `install,qmerge`
+    /// → buildpkg → tree-drop
+    ///
+    /// Does NOT wipe `work/` (the compile artifacts live there); only `image/temp/homedir`.
     Install,
-    /// Merge a pre-built GPKG (`-k`/`-g`): clean → extract image → `qmerge` →
-    /// tree-drop. No src_install — the extracted image is the payload.
+    /// Merge a pre-built GPKG (`-k`/`-g`): clean → extract image → `qmerge` → tree-drop
+    ///
+    /// No src_install — the extracted image is the payload.
     BinpkgMerge,
-    /// `-B`/`--buildpkgonly`: clean → `pretend..install` → buildpkg →
-    /// tree-drop. No `qmerge` at all, unlike every other merge-shaped
-    /// group — the image is packaged but never installed into the live
-    /// ROOT/VDB. Real emerge's own caveat applies: this doesn't resolve or
-    /// install anything, so the ebuild's own DEPEND/BDEPEND closure must
-    /// already be satisfied on the build host.
+    /// `-B`/`--buildpkgonly`: clean → `pretend..install` → buildpkg → tree-drop
+    ///
+    /// No `qmerge` at all, unlike every other merge-shaped group — the image is packaged but
+    /// never installed into the live ROOT/VDB. Real emerge's own caveat applies: this doesn't
+    /// resolve or install anything, so the ebuild's own DEPEND/BDEPEND closure must already be
+    /// satisfied on the build host.
     BuildOnly,
-    /// `-f`/`--fetchonly`: resolve `SRC_URI` under the plan's USE and download
-    /// distfiles into DISTDIR. No unpack/build/install — mirrors emerge's
-    /// `EbuildFetcher` short-circuit (no phase shell beyond what's needed
-    /// for SRC_URI + RESTRICT=fetch / `pkg_nofetch`). `all_uri` is
-    /// `-F`/`--fetch-all-uri`: every `SRC_URI` entry regardless of USE,
-    /// instead of just what the plan's own USE selection asks for.
+    /// `-f`/`--fetchonly`: resolve `SRC_URI` under the plan's USE and download distfiles into
+    /// DISTDIR
+    ///
+    /// No unpack/build/install — mirrors emerge's `EbuildFetcher` short-circuit (no phase shell
+    /// beyond what's needed for SRC_URI + RESTRICT=fetch / `pkg_nofetch`). `all_uri` is
+    /// `-F`/`--fetch-all-uri`: every `SRC_URI` entry regardless of USE, instead of just what
+    /// the plan's own USE selection asks for.
     FetchOnly { all_uri: bool },
-    /// Debug (`em ebuild`): run the given phases only; no clean/drop/buildpkg.
+    /// Debug (`em ebuild`): run the given phases only; no clean/drop/buildpkg
     Debug(Vec<String>),
 }
 
 impl PhaseGroup {
-    /// The phases this group runs, in order.
+    /// The phases this group runs, in order
     fn phases(&self) -> Vec<String> {
         match self {
             Self::Full => [
@@ -121,11 +125,11 @@ impl PhaseGroup {
         !matches!(self, Self::Debug(_))
     }
 
-    /// Subdirs to wipe before the phase loop (stale-tree clean).
+    /// Subdirs to wipe before the phase loop (stale-tree clean)
+    ///
     /// Full/Compile/BinpkgMerge: everything (starting fresh). Install:
     /// `image` only — `work/` *and* `temp` (`${T}`) hold state the Compile
-    /// parent produced that `src_install` may still need.
-    /// Debug: none.
+    /// parent produced that `src_install` may still need. Debug: none.
     ///
     /// Keep `temp` (`${T}`) across Compile→Install: PMS scratch that
     /// `src_prepare` may stage for `src_install` (e.g. gnupg systemd units).
@@ -149,7 +153,7 @@ impl PhaseGroup {
         matches!(self, Self::Compile)
     }
 
-    /// Source `worker-env` before the phase loop (Install only).
+    /// Source `worker-env` before the phase loop (Install only)
     fn should_restore_env(&self) -> bool {
         matches!(self, Self::Install)
     }
@@ -160,7 +164,7 @@ impl PhaseGroup {
         matches!(self, Self::Full | Self::Install | Self::BuildOnly)
     }
 
-    /// Drop the build tree afterward.
+    /// Drop the build tree afterward
     fn should_tree_drop(&self) -> bool {
         matches!(
             self,
@@ -193,10 +197,11 @@ pub struct RootContext<'a> {
     /// class of bug already fixed for `--root` on 2026-07-03 (see
     /// `setup.rs`'s `BASHRC_PREFIX`/`self_contained`).
     pub self_contained_bootstrap: bool,
-    /// Directories ahead of the sanitised phase `PATH`
-    /// ([`portage_repo::phase_path_dirs`]), resolved by the caller. Empty for
-    /// every build but `em setup --local`'s own, which has to reach the host
-    /// tools a still-empty prefix borrows.
+    /// Directories ahead of the sanitised phase `PATH` ([`portage_repo::phase_path_dirs`]),
+    /// resolved by the caller
+    ///
+    /// Empty for every build but `em setup --local`'s own, which has to reach the host tools a
+    /// still-empty prefix borrows.
     pub extra_path: &'a [Utf8PathBuf],
 }
 
@@ -243,7 +248,7 @@ pub fn default_work_base(prefix: Option<&Utf8Path>) -> Utf8PathBuf {
     Utf8PathBuf::from(home).join(".cache/em/build")
 }
 
-/// Stable subdirectory key for a merge root under [`default_work_base`].
+/// Stable subdirectory key for a merge root under [`default_work_base`]
 ///
 /// Portage keeps `$PORTAGE_TMPDIR/portage/$CATEGORY/$PF` without ROOT in the
 /// path and serializes dual-ROOT same-CPV merges instead. em prefers
@@ -259,7 +264,7 @@ pub fn work_root_key(merge_root: &Utf8Path) -> String {
     s.trim_start_matches('/').replace('/', "-")
 }
 
-/// Per-package work tree: `$work_base/<root-key>/<category>/<pf>`.
+/// Per-package work tree: `$work_base/<root-key>/<category>/<pf>`
 ///
 /// See [`work_root_key`]. Callers that only know the outer prefix work base
 /// must also pass the entry's merge root so dual-root plans isolate.
@@ -393,23 +398,23 @@ pub struct BuildAndMerge<'a> {
     pub roots: RootContext<'a>,
     pub merge_gate: Option<&'a tokio::sync::Mutex<()>>,
     pub buildpkg: bool,
-    /// `-B`/`--buildpkgonly`: package the image, never qmerge it. Checked
-    /// first and unconditionally single-process — there's no install into
-    /// the live ROOT/VDB to delegate to a privilege-wrapped worker, so the
-    /// compile/install split this function otherwise does has nothing to
-    /// scope around (an unprivileged run is wrapped whole instead, see
-    /// `needs_whole_process_wrap`).
+    /// `-B`/`--buildpkgonly`: package the image, never qmerge it
+    ///
+    /// Checked first and unconditionally single-process — there's no install into the live
+    /// ROOT/VDB to delegate to a privilege-wrapped worker, so the compile/install split this
+    /// function otherwise does has nothing to scope around (an unprivileged run is wrapped
+    /// whole instead, see `needs_whole_process_wrap`).
     ///
     /// `buildpkg` is forced `true` for the `run_inner` call below regardless
     /// of the caller's own `-b`: producing the binpkg is the entire point of
     /// `-B`, not a separate opt-in on top of it.
     pub buildpkgonly: bool,
-    /// `-f`/`--fetchonly`: download distfiles only (wins over `-b`/`-B`).
+    /// `-f`/`--fetchonly`: download distfiles only (wins over `-b`/`-B`)
     pub fetchonly: bool,
     /// `-F`/`--fetch-all-uri`: like `fetchonly`, but ignores USE conditionals
     /// when resolving SRC_URI (every entry, not just what's USE-selected).
     pub fetch_all_uri: bool,
-    /// When set, emit phase enter/leave on the activity bus.
+    /// When set, emit phase enter/leave on the activity bus
     pub activity: Option<crate::activity::ActivityPkgCtx>,
 }
 
@@ -563,7 +568,7 @@ pub async fn build_and_merge(opts: BuildAndMerge<'_>) -> Result<()> {
     result
 }
 
-/// Inputs for [`merge_binpkg`] — reuse a pre-built GPKG without compiling.
+/// Inputs for [`merge_binpkg`] — reuse a pre-built GPKG without compiling
 pub struct MergeBinpkg<'a> {
     pub binpkg_path: &'a Utf8Path,
     pub ebuild_path: &'a Utf8Path,
@@ -660,7 +665,7 @@ pub async fn merge_binpkg(opts: MergeBinpkg<'_>) -> Result<()> {
     result
 }
 
-/// Inputs for [`run_install_worker`] (the privilege-wrapped `__worker` child).
+/// Inputs for [`run_install_worker`] (the privilege-wrapped `__worker` child)
 pub struct InstallWorker<'a> {
     pub ebuild_path: &'a str,
     pub cpv_str: &'a str,
@@ -683,7 +688,7 @@ pub struct InstallWorker<'a> {
     pub activity_parent_job_id: Option<&'a str>,
     pub activity_live_root: Option<&'a str>,
     pub activity_side: Option<&'a str>,
-    /// Parent-bound Unix socket for phase JSONL re-emit onto the parent bus.
+    /// Parent-bound Unix socket for phase JSONL re-emit onto the parent bus
     pub activity_reemit_path: Option<&'a str>,
 }
 
@@ -727,14 +732,15 @@ struct WorkerStep<'a> {
     binpkg: Option<&'a Utf8Path>,
     force_verify_signature: bool,
     activity: Option<&'a crate::activity::ActivityPkgCtx>,
-    /// `build`/`merge` — names the log in the non-zero-exit error only.
+    /// `build`/`merge` — names the log in the non-zero-exit error only
     log_label: &'a str,
     log: &'a Utf8Path,
 }
 
-/// Assemble the `WorkerArgs` and run one privilege-wrapped `__worker` install,
-/// bailing on a non-zero exit. Shared by the two spawn sites so a new
-/// `WorkerArgs` field lands in one place, not three.
+/// Assemble the `WorkerArgs` and run one privilege-wrapped `__worker` install, bailing on a
+/// non-zero exit
+///
+/// Shared by the two spawn sites so a new `WorkerArgs` field lands in one place, not three.
 async fn spawn_install_worker_step(
     backend: crate::privilege::Backend,
     step: WorkerStep<'_>,
@@ -794,7 +800,7 @@ async fn spawn_install_worker_step(
     Ok(())
 }
 
-/// Rebuild a package activity handle inside the install worker (LiveFs + optional re-emit).
+/// Rebuild a package activity handle inside the install worker (LiveFs + optional re-emit)
 fn worker_activity_ctx(
     job_id: Option<&str>,
     parent_job_id: Option<&str>,
@@ -910,10 +916,12 @@ pub async fn run_install_worker(opts: InstallWorker<'_>) -> Result<()> {
     result
 }
 
-/// Resolve a repo's master repositories (depth-first), so eclasses inherited
-/// from a master are found. Master locations come from `repos.conf` by name,
-/// falling back to a sibling of `repo_root`. Masters that can't be opened are
-/// skipped with a warning rather than aborting the build.
+/// Resolve a repo's master repositories (depth-first), so eclasses inherited from a master
+/// are found
+///
+/// Master locations come from `repos.conf` by name, falling back to a sibling of
+/// `repo_root`. Masters that can't be opened are skipped with a warning rather than
+/// aborting the build.
 fn resolve_masters(
     repo: &Repository,
     repo_root: &Utf8Path,
@@ -955,7 +963,7 @@ fn resolve_masters(
     out
 }
 
-/// Core phase-runner inputs (shared by build, binpkg merge, worker, debug).
+/// Core phase-runner inputs (shared by build, binpkg merge, worker, debug)
 struct RunInner<'a> {
     ebuild_path: &'a str,
     /// Authoritative Cpv from the plan when present; `None` for standalone
@@ -972,7 +980,7 @@ struct RunInner<'a> {
     roots: RootContext<'a>,
     merge_gate: Option<&'a tokio::sync::Mutex<()>>,
     buildpkg: bool,
-    /// Pre-built GPKG to extract after clean (`-k`/`-g`); Install group only.
+    /// Pre-built GPKG to extract after clean (`-k`/`-g`); Install group only
     binpkg: Option<&'a Utf8Path>,
     /// This binpkg's origin (a `binrepos.conf` entry with
     /// `verify-signature = yes`) forces cryptographic signature
@@ -1424,16 +1432,16 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     Ok(())
 }
 
-/// When a build-tree clean runs relative to the phase loop.
+/// When a build-tree clean runs relative to the phase loop
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CleanWhen {
-    /// Before phases (stale-tree scrub).
+    /// Before phases (stale-tree scrub)
     Pre,
-    /// After a successful merge chain.
+    /// After a successful merge chain
     Post,
 }
 
-/// Apply `FEATURES=keepwork|keeptemp|noclean` to a clean-subdir list.
+/// Apply `FEATURES=keepwork|keeptemp|noclean` to a clean-subdir list
 ///
 /// Portage make.conf(5) / `__dyn_clean` shape:
 /// - **keepwork** — skip all cleaning (pre and post)
@@ -1542,9 +1550,10 @@ fn build_binpkg(
     write_binpkg(shell, ebuild, work_root, root, &vdb_dir)
 }
 
-/// `-B`/`--buildpkgonly`: package the image without ever touching the live
-/// ROOT/VDB. Matches real portage's own model: it never calls `merge()` for
-/// `-B` either, packaging straight from `${D}` instead.
+/// `-B`/`--buildpkgonly`: package the image without ever touching the live ROOT/VDB
+///
+/// Matches real portage's own model: it never calls `merge()` for `-B` either, packaging
+/// straight from `${D}` instead.
 ///
 /// Computes CONTENTS/metadata the exact same way a normal merge would —
 /// `walk_image` + `Vdb::register` — just pointed at scratch locations under
@@ -2461,7 +2470,7 @@ fn stage_env_bz2(pkg: &InstalledPackage, work_root: &Utf8Path) -> Option<Utf8Pat
     Some(temp_env)
 }
 
-/// Run `pkg_prerm` / `pkg_postrm` from a previously staged environment dump.
+/// Run `pkg_prerm` / `pkg_postrm` from a previously staged environment dump
 async fn try_run_phase_from_env_file(
     shell: &mut portage_repo::EbuildShell,
     phase: &str,
@@ -2568,7 +2577,7 @@ fn run_clean(work_root: &Utf8Path) -> Result<()> {
     Ok(())
 }
 
-/// CONFIG_PROTECT / CONFIG_PROTECT_MASK resolution (portage's `ConfigProtect`).
+/// CONFIG_PROTECT / CONFIG_PROTECT_MASK resolution (portage's `ConfigProtect`)
 ///
 /// A path is protected when the longest matching `CONFIG_PROTECT` prefix is
 /// longer than the longest matching `CONFIG_PROTECT_MASK` prefix. Protected
@@ -2580,8 +2589,9 @@ struct ConfigProtect {
 }
 
 impl ConfigProtect {
-    /// Read the lists from the configured shell. `/etc` is always protected
-    /// (portage's make.globals guarantees it).
+    /// Read the lists from the configured shell
+    ///
+    /// `/etc` is always protected (portage's make.globals guarantees it).
     fn from_shell(shell: &portage_repo::EbuildShell) -> Self {
         let read = |name: &str| -> Vec<String> {
             shell
@@ -2659,9 +2669,10 @@ fn scan_cfg(dest: &Utf8Path) -> (Utf8PathBuf, Option<Utf8PathBuf>) {
     (dir.join(format!("._cfg{:04}_{name}", highest + 1)), latest)
 }
 
-/// Set a symlink's own atime/mtime. `std::fs` always follows symlinks, so we
-/// go through `utimensat(AT_SYMLINK_NOFOLLOW)`. Best-effort: failures are
-/// ignored, matching the regular-file mtime path.
+/// Set a symlink's own atime/mtime
+///
+/// `std::fs` always follows symlinks, so we go through `utimensat(AT_SYMLINK_NOFOLLOW)`.
+/// Best-effort: failures are ignored, matching the regular-file mtime path.
 fn set_symlink_times(path: &Utf8Path, meta: &std::fs::Metadata) {
     use rustix::fs::{AtFlags, CWD, Timespec, Timestamps, utimensat};
     let to_ts = |t: std::io::Result<std::time::SystemTime>| -> Timespec {
@@ -2681,11 +2692,11 @@ fn set_symlink_times(path: &Utf8Path, meta: &std::fs::Metadata) {
     let _ = utimensat(CWD, path.as_str(), &times, AtFlags::SYMLINK_NOFOLLOW);
 }
 
-/// Result of merging the image into ROOT.
+/// Result of merging the image into ROOT
 struct WalkResult {
     contents: Vec<ContentsEntry>,
     size: u64,
-    /// Installed paths whose update was diverted to a `._cfg` file.
+    /// Installed paths whose update was diverted to a `._cfg` file
     protected: Vec<Utf8PathBuf>,
 }
 
@@ -2935,11 +2946,12 @@ async fn capture_environment(
     Ok(filter_declare_dump(&text).into_bytes())
 }
 
-/// Variables-only dump for the Compile→Install worker handoff. Deliberately
-/// no `declare -f`: the worker re-sources the ebuild (defining every
-/// ebuild/eclass function), and brush's function printer doesn't round-trip
-/// heredoc bodies (the indented `<<-EOF` delimiter never terminates), which
-/// would make the whole dump unparseable.
+/// Variables-only dump for the Compile→Install worker handoff
+///
+/// Deliberately no `declare -f`: the worker re-sources the ebuild (defining every
+/// ebuild/eclass function), and brush's function printer doesn't round-trip heredoc bodies
+/// (the indented `<<-EOF` delimiter never terminates), which would make the whole dump
+/// unparseable.
 ///
 /// Readonly declares are dropped too (re-declaring them in the worker only
 /// produces "cannot mutate readonly variable" noise).
@@ -3204,7 +3216,7 @@ fn dispatch_elog(
     );
 }
 
-/// The same, for the `pkg_prerm`/`pkg_postrm` of a package being removed.
+/// The same, for the `pkg_prerm`/`pkg_postrm` of a package being removed
 ///
 /// Real portage files these too (`vartree.py`'s
 /// `_elog_process(phasefilter=("prerm", "postrm"))`) — the "after removing
@@ -3231,7 +3243,7 @@ fn dispatch_unmerge_elog(
     );
 }
 
-/// Resolve the elog settings from the live shell.
+/// Resolve the elog settings from the live shell
 ///
 /// The log directory follows portage's `mod_save`: `PORTAGE_LOGDIR` when set,
 /// otherwise `<broot>/var/log/portage` — `broot` rather than the merge root
@@ -3280,7 +3292,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::symlink;
 
-    /// Dual-root same-CPV plan entries must not share a WORKDIR (Sonnet
+    // Dual-root same-CPV plan entries must not share a WORKDIR (Sonnet
     #[test]
     fn package_work_dir_isolates_merge_roots() {
         let base = Utf8Path::new("/tmp/em-work");
@@ -3305,10 +3317,10 @@ mod tests {
         );
     }
 
-    /// Regression test for the gnupg stage1 failure: the Install worker must
-    /// never wipe `temp` (`${T}`) — it's cross-phase scratch space the
-    /// Compile parent may have staged a file into for `src_install` to
-    /// consume, not throwaway-per-process state like `image` (`${D}`).
+    // Regression test for the gnupg stage1 failure: the Install worker must
+    // never wipe `temp` (`${T}`) — it's cross-phase scratch space the
+    // Compile parent may have staged a file into for `src_install` to
+    // consume, not throwaway-per-process state like `image` (`${D}`).
     #[test]
     fn install_worker_clean_subs_never_includes_temp() {
         let install_subs = PhaseGroup::Install.clean_subs().unwrap();
@@ -3333,9 +3345,9 @@ mod tests {
         assert!(safe_dest_under(root, Utf8Path::new("/usr/../etc/passwd")).is_err());
     }
 
-    /// Full/Compile/BinpkgMerge start genuinely fresh, so they wipe
-    /// everything including `work` — unlike Install, which relies on
-    /// `work`'s compile artifacts surviving the process boundary.
+    // Full/Compile/BinpkgMerge start genuinely fresh, so they wipe
+    // everything including `work` — unlike Install, which relies on
+    // `work`'s compile artifacts surviving the process boundary.
     #[test]
     fn full_and_compile_clean_subs_wipe_work_too() {
         for group in [

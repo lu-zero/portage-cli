@@ -1,4 +1,4 @@
-//! Optional pure-gix git sync backend (`--features sync-gix`).
+//! Optional pure-gix git sync backend (`--features sync-gix`)
 //!
 //! Not the default: heavy to compile and not yet proven faster than `git` for
 //! Portage sync. Kept for dogfooding / upstream hard-reset contribution.
@@ -273,9 +273,9 @@ mod tests {
         assert!(st.success(), "git {args:?} failed");
     }
 
-    /// A real `file://` bare remote (not a plain local-path clone, which
-    /// silently ignores `--depth`): the shallow-history bug this backend has
-    /// to survive only reproduces against a genuinely shallow clone.
+    // A real `file://` bare remote (not a plain local-path clone, which
+    // silently ignores `--depth`): the shallow-history bug this backend has
+    // to survive only reproduces against a genuinely shallow clone.
     struct Fixture {
         _tmp: tempfile::TempDir,
         remote_uri: String,
@@ -356,11 +356,11 @@ mod tests {
         assert!(is_shallow(&f.overlay));
     }
 
-    /// Regression test for the confirmed bug: `hard_reset_to` used to receive
-    /// `volatile` as `require_fast_forward`, and a `--depth 1` fetch's new tip
-    /// shares no ancestry with the previous shallow history — so the
-    /// merge-base check rejected every volatile re-sync. Same failure the
-    /// default backend had with `merge --ff-only` (bug #887025).
+    // Regression test for the confirmed bug: `hard_reset_to` used to receive
+    // `volatile` as `require_fast_forward`, and a `--depth 1` fetch's new tip
+    // shares no ancestry with the previous shallow history — so the
+    // merge-base check rejected every volatile re-sync. Same failure the
+    // default backend had with `merge --ff-only` (bug #887025).
     #[test]
     fn volatile_update_survives_unrelated_shallow_history() {
         let _path = crate::test_support::path_lock();
@@ -387,8 +387,8 @@ mod tests {
         );
     }
 
-    /// The protective half of `reset --merge`: a volatile repo with real
-    /// uncommitted work must be refused, not clobbered.
+    // The protective half of `reset --merge`: a volatile repo with real
+    // uncommitted work must be refused, not clobbered.
     #[test]
     fn volatile_update_refuses_a_dirty_worktree() {
         let _path = crate::test_support::path_lock();
@@ -420,8 +420,8 @@ mod tests {
         );
     }
 
-    /// Non-volatile means Portage owns the tree: local changes are clobbered
-    /// and orphaned untracked files are cleaned before the reset.
+    // Non-volatile means Portage owns the tree: local changes are clobbered
+    // and orphaned untracked files are cleaned before the reset.
     #[test]
     fn nonvolatile_update_cleans_orphans_and_clobbers_local_changes() {
         let _path = crate::test_support::path_lock();
@@ -476,7 +476,7 @@ mod tests {
         assert!(!changed, "no upstream change: sync must report unchanged");
     }
 
-    /// Portage never shallows a volatile repo the user cloned in full.
+    // Portage never shallows a volatile repo the user cloned in full
     #[test]
     fn volatile_update_does_not_shallow_a_full_clone() {
         let _path = crate::test_support::path_lock();
@@ -555,9 +555,9 @@ mod tests {
         );
     }
 
-    /// The URL-compare guard: an unchanged `sync-uri` must leave
-    /// `.git/config` byte-for-byte alone rather than round-tripping it
-    /// through gix's remote serializer on every sync.
+    // The URL-compare guard: an unchanged `sync-uri` must leave
+    // `.git/config` byte-for-byte alone rather than round-tripping it
+    // through gix's remote serializer on every sync.
     #[test]
     fn matching_sync_uri_does_not_rewrite_the_config() {
         let _path = crate::test_support::path_lock();

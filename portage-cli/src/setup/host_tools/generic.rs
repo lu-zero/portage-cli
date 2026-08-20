@@ -1,6 +1,8 @@
-//! Hosts that install GNU tools through the ordinary system package manager,
-//! i.e. they are already on `PATH` under their plain names and nothing but
-//! `PATH` needs searching.
+//! Hosts with GNU tools on the plain `PATH`
+//!
+//! These hosts install GNU tools through the ordinary system package
+//! manager, so the tools are already on `PATH` under their plain names and
+//! nothing but `PATH` needs searching.
 
 use camino::Utf8PathBuf;
 

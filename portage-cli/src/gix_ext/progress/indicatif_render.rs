@@ -1,4 +1,4 @@
-//! Poll a prodash progress tree into an indicatif multi-progress display.
+//! Poll a prodash progress tree into an indicatif multi-progress display
 //!
 //! gix mutates prodash `Item`s (including via `counter()` atomics). We never
 //! implement NestedProgress ourselves — we only snapshot the tree.

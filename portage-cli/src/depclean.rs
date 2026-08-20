@@ -72,9 +72,10 @@ fn own_atoms(pkg: &InstalledPackage, with_bdeps: bool) -> Vec<Dep> {
     atoms
 }
 
-/// Flatten a (already USE-evaluated) `DepEntry` tree into concrete atoms,
-/// dropping blockers. A `||` group walks every branch (see module doc:
-/// an accepted over-keep simplification, not resolver-accurate choice).
+/// Flatten a (already USE-evaluated) `DepEntry` tree into concrete atoms, dropping blockers
+///
+/// A `||` group walks every branch (see module doc: an accepted over-keep simplification,
+/// not resolver-accurate choice).
 fn collect_atoms(entries: &[DepEntry], out: &mut Vec<Dep>) {
     for e in entries {
         match e {
@@ -100,12 +101,13 @@ fn matching<'a>(
         .filter(move |p| dep.matches_cpv(p.cpv(), p.slot().ok().as_ref()))
 }
 
-/// Everything reachable from `world_atoms` (+ `exclude_atoms`), walking
-/// the *installed* dependency graph only. When `target_atoms` is
-/// non-empty, every installed package not matching one of them is folded
-/// into the reachable set first (real portage's `args_set`/`protected_set`:
-/// narrows candidates without treating anything else as fair game).
-/// Returns the packages installed but never reached.
+/// Everything reachable from `world_atoms` (+ `exclude_atoms`), walking the *installed*
+/// dependency graph only
+///
+/// When `target_atoms` is non-empty, every installed package not matching one of them is
+/// folded into the reachable set first (real portage's `args_set`/`protected_set`: narrows
+/// candidates without treating anything else as fair game). Returns the packages installed
+/// but never reached.
 fn compute_cleanlist(
     installed: &[InstalledPackage],
     world_atoms: &[Dep],
@@ -286,10 +288,10 @@ mod tests {
     use super::*;
     use portage_vdb::Vdb;
 
-    /// Write one fake installed package into `vdb_root/<cat>/<pf>/`:
-    /// `SLOT`, `USE`, `RDEPEND`, `PDEPEND` — everything `own_atoms`/
-    /// `compute_cleanlist` reads. Mirrors `preserve_libs::tests`'
-    /// `write_fake_package` technique.
+    // Write one fake installed package into `vdb_root/<cat>/<pf>/`:
+    // `SLOT`, `USE`, `RDEPEND`, `PDEPEND` — everything `own_atoms`/
+    // `compute_cleanlist` reads. Mirrors `preserve_libs::tests`'
+    // `write_fake_package` technique.
     fn write_fake_package(
         vdb_root: &std::path::Path,
         cat: &str,

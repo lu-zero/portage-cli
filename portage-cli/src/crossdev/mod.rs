@@ -1,4 +1,4 @@
-//! `em crossdev` — set up a cross-compilation target, a `crossdev` workalike.
+//! `em crossdev` — set up a cross-compilation target, a `crossdev` workalike
 //!
 //! Implements the **no-build setup** (`--init-target` / `--show-target-cfg`):
 //! overlay creation (the `cross-*` symlink category + `metadata`/`profiles` + a
@@ -149,8 +149,9 @@ pub(crate) fn merge_merge_flags_fields(base: &MergeFlags, over: &MergeFlags) -> 
 /// entries.
 const OVERLAY_NAME: &str = "crossdev";
 
-/// Per-target overlay/section name (`crossdev.<tuple>`). One section per
-/// target so a second `--setup` under `FillGapsOnly` cannot treat a shared
+/// Per-target overlay/section name (`crossdev.<tuple>`)
+///
+/// One section per target so a second `--setup` under `FillGapsOnly` cannot treat a shared
 /// `crossdev.conf` as "already present" and skip a different target's alias.
 fn overlay_name(target: &CrossTarget) -> String {
     format!("{OVERLAY_NAME}.{}", target.tuple)
@@ -212,9 +213,11 @@ fn ex_pkg_atoms(args: &CrossdevArgs) -> Result<Vec<Cpn>> {
 }
 
 /// `em crossdev <tuple> --setup`: bootstrap the cross toolchain into the prefix
-/// (`/usr/<chost>`). The full intertwined sequence (binutils → headers →
-/// gcc-stage1 → libc → gcc-stage2) — the compiler is not usable until the libc
-/// step lands, so toolchain and stage1 libc are one bootstrap.
+/// (`/usr/<chost>`)
+///
+/// The full intertwined sequence (binutils → headers → gcc-stage1 → libc → gcc-stage2) —
+/// the compiler is not usable until the libc step lands, so toolchain and stage1 libc are
+/// one bootstrap.
 ///
 /// Lays down the FS config via `init_target`'s `FillGapsOnly` policy — only
 /// creates what's missing, so a hand edit between an earlier
@@ -323,7 +326,7 @@ fn post_step_cross(target: &CrossTarget, globals: &Cli, step: &stages::StageStep
     Ok(())
 }
 
-/// Options for the staged bootstrap driver ([`run_staged`]).
+/// Options for the staged bootstrap driver ([`run_staged`])
 struct RunStagedOpts<'a> {
     plan: &'a stages::StagePlan,
     globals: &'a Cli,
@@ -338,15 +341,16 @@ struct RunStagedOpts<'a> {
     /// Restrict the installed view to the target VDB only (native toolchain
     /// into an empty `--root`).
     target_only_installed_view: bool,
-    /// In-memory crossdev aliases (pretend / repos.conf not written yet).
+    /// In-memory crossdev aliases (pretend / repos.conf not written yet)
     extra_aliases: &'a [portage_repo::RepoEntry],
 }
 
 /// Run each step of a staged [`stages::StagePlan`] through [`crate::emerge_atoms`],
-/// printing per-step progress. `post_step` fires after each *built* step
-/// (skipped under `-p`) for flavour-specific activation — cross activates
-/// `<CTARGET>-*` wrappers + ABI osdirs; native activates host wrappers.
-/// Shared by `crossdev --setup`, `toolchain --setup`, and stage1 plans.
+/// printing per-step progress
+///
+/// `post_step` fires after each *built* step (skipped under `-p`) for flavour-specific
+/// activation — cross activates `<CTARGET>-*` wrappers + ABI osdirs; native activates host
+/// wrappers. Shared by `crossdev --setup`, `toolchain --setup`, and stage1 plans.
 async fn run_staged(
     opts: RunStagedOpts<'_>,
     post_step: impl Fn(&stages::StageStep) -> Result<()>,
@@ -409,17 +413,19 @@ async fn run_staged(
     Ok(())
 }
 
-/// Whether `atom`'s package name is `pkg`. Handles bare (`cross-<T>/gcc`) and
-/// version-pinned (`=cross-<T>/gcc-16…`) forms; a suffix check misses the
-/// latter and would skip activating a refreshed compiler.
+/// Whether `atom`'s package name is `pkg`
+///
+/// Handles bare (`cross-<T>/gcc`) and version-pinned (`=cross-<T>/gcc-16…`) forms; a suffix
+/// check misses the latter and would skip activating a refreshed compiler.
 fn atom_is_package(atom: &str, pkg: &str) -> bool {
     Dep::parse(atom).is_ok_and(|dep| dep.cpn.package == pkg)
 }
 
 /// After a toolchain step, run `binutils-config`/`gcc-config` to create
-/// `<EROOT>/usr/bin/<CTARGET>-*` wrappers. Always uses `outer_roots()` (not
-/// `roots()` / `base_roots()`): `cross-*` packages install into the outer
-/// EROOT; `base_roots().merge_root()` is BROOT (host `/` under `--prefix`).
+/// `<EROOT>/usr/bin/<CTARGET>-*` wrappers
+///
+/// Always uses `outer_roots()` (not `roots()` / `base_roots()`): `cross-*` packages install
+/// into the outer EROOT; `base_roots().merge_root()` is BROOT (host `/` under `--prefix`).
 fn activate_toolchain(target: &CrossTarget, globals: &Cli, step: &stages::StageStep) -> Result<()> {
     let Some(atom) = step.atoms.first() else {
         return Ok(());
@@ -472,7 +478,7 @@ fn activate_native_toolchain(globals: &Cli, step: &stages::StageStep) -> Result<
     Ok(())
 }
 
-/// Render a step's USE override / `--nodeps` as a compact suffix for the plan.
+/// Render a step's USE override / `--nodeps` as a compact suffix for the plan
 fn step_flags(step: &stages::StageStep) -> String {
     let mut parts = Vec::new();
     if step.nodeps {
@@ -520,12 +526,13 @@ async fn native_prefix_guest(globals: &Cli, roots: &portage_resolve::Roots) -> b
         .any(|f| f == "prefix-guest")
 }
 
-/// `em toolchain --setup`: bootstrap a self-hosting native toolchain into
-/// `--root` (`CHOST == CBUILD`). The native twin of crossdev `--setup`,
-/// sharing its staged driver but with the *native* plan (baselayout →
-/// binutils → os-headers → full glibc → full gcc): the seed compiler at
-/// `BROOT=/` builds glibc directly, no two-stage gcc (cross-only — see
-/// [`stages`]). Plain `::gentoo` atoms, no cross overlay/wrapper ceremony.
+/// `em toolchain --setup`: bootstrap a self-hosting native toolchain into `--root`
+/// (`CHOST == CBUILD`)
+///
+/// The native twin of crossdev `--setup`, sharing its staged driver but with the *native*
+/// plan (baselayout → binutils → os-headers → full glibc → full gcc): the seed compiler at
+/// `BROOT=/` builds glibc directly, no two-stage gcc (cross-only — see [`stages`]). Plain
+/// `::gentoo` atoms, no cross overlay/wrapper ceremony.
 ///
 /// Under `USE=prefix-guest` (see [`native_prefix_guest`]) the libc step is
 /// skipped: `virtual/libc`/`toolchain.eclass` already expect gcc to link
@@ -587,7 +594,7 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     Ok(())
 }
 
-/// `em stages --stage1` / `--stage3`: stage production into `--root`.
+/// `em stages --stage1` / `--stage3`: stage production into `--root`
 ///
 /// - **stage1** — baselayout + `packages.build` (USE="-* build"), catalyst
 ///   `stage1/chroot.sh`; needs a working ROOT toolchain ([`toolchain`]).
@@ -684,7 +691,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     Ok(())
 }
 
-/// Emptytree `@system` rebuild into `--root` (catalyst stage3).
+/// Emptytree `@system` rebuild into `--root` (catalyst stage3)
 async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
     let roots = globals.roots();
     let merge_root = roots.merge_root();
@@ -928,7 +935,7 @@ fn sysroot(target: &CrossTarget, globals: &Cli) -> Utf8PathBuf {
         .join(&target.tuple)
 }
 
-/// The configured main repo (`gentoo`) — the real ebuilds the overlay links to.
+/// The configured main repo (`gentoo`) — the real ebuilds the overlay links to
 ///
 /// A self-contained `--root DIR` target starts with no `repos.conf` of its
 /// own — that's exactly the "stage1 from scratch" case, and `--init-target`
@@ -982,11 +989,12 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
     }
 }
 
-/// Lay down the overlay + sysroot config for `target`. Collects every file
-/// `em` wants in a particular state as a [`config_plan::ConfigEntry`], then
-/// hands the whole batch to [`config_plan::apply`] — so this now honours
-/// `-p` (preview instead of writing) and `-a` (confirm before writing) like
-/// any other mutating `em` path, instead of writing blindly.
+/// Lay down the overlay + sysroot config for `target`
+///
+/// Collects every file `em` wants in a particular state as a [`config_plan::ConfigEntry`],
+/// then hands the whole batch to [`config_plan::apply`] — so this now honours `-p` (preview
+/// instead of writing) and `-a` (confirm before writing) like any other mutating `em` path,
+/// instead of writing blindly.
 ///
 /// `extras` are `--ex-pkg`/`--ex-gdb` atoms (crossdev's own "Extra Fun"):
 /// additional packages onto the established cross target, beyond
@@ -1241,7 +1249,7 @@ fn prefix_profile_entries(globals: &Cli) -> Result<Vec<config_plan::ConfigEntry>
     }])
 }
 
-/// Write the cross sysroot `etc/portage/{make.conf,make.profile}`.
+/// Write the cross sysroot `etc/portage/{make.conf,make.profile}`
 fn sysroot_config_entries(
     target: &CrossTarget,
     sysroot: &Utf8Path,
@@ -1632,7 +1640,7 @@ fn reject_same_arch_target(tuple: &str, host: &str) -> Result<()> {
     Ok(())
 }
 
-/// The host `CHOST` (= the target's `CBUILD`), read from the host `make.conf`.
+/// The host `CHOST` (= the target's `CBUILD`), read from the host `make.conf`
 fn host_chost() -> String {
     MakeConf::load_default()
         .ok()
@@ -1661,10 +1669,10 @@ mod tests {
         }
     }
 
-    /// Test-only compatibility shim: build the alias `ConfigEntry` and apply
-    /// it immediately (no preview/confirm), matching the old
-    /// `write_alias_repo_conf`'s eager-write behaviour the tests below assert
-    /// against.
+    // Test-only compatibility shim: build the alias `ConfigEntry` and apply
+    // it immediately (no preview/confirm), matching the old
+    // `write_alias_repo_conf`'s eager-write behaviour the tests below assert
+    // against.
     fn write_alias_repo_conf(
         globals: &Cli,
         gentoo: &Utf8Path,
@@ -1690,10 +1698,12 @@ mod tests {
         reject_same_arch_target("riscv64-unknown-linux-gnu", "aarch64-unknown-linux-gnu").unwrap();
     }
 
-    /// `--target` is global: `em --target T crossdev --show-target-cfg`
-    /// reads it straight off `Cli`. One flag for both "set up" and "use" —
-    /// no local `-t` to disagree with it. `--show-target-cfg` only prints
-    /// (no filesystem writes), so `run()` is safe to exercise directly here.
+    // `--target` is global: `em --target T crossdev --show-target-cfg` reads it straight off
+    // `Cli`
+    //
+    // One flag for both "set up" and "use" — no local `-t` to disagree with it.
+    // `--show-target-cfg` only prints (no filesystem writes), so `run()` is safe to exercise
+    // directly here.
     #[tokio::test]
     async fn run_reads_the_global_target() {
         let cli = crate::cli::Cli::parse_from([
@@ -1708,7 +1718,7 @@ mod tests {
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
-    /// Neither given: a clear error, not a panic or a silent bare-host guess.
+    // Neither given: a clear error, not a panic or a silent bare-host guess
     #[tokio::test]
     async fn run_without_target_is_an_error() {
         let cli = crate::cli::Cli::parse_from(["em", "crossdev", "--show-target-cfg"]);
@@ -1779,10 +1789,10 @@ mod tests {
         );
     }
 
-    /// `--ex-pkg` extras: validated for existence like the base set, appended
-    /// to the alias-packages line, and always get the host-ABI env +
-    /// `**` keyword treatment (real crossdev's `--ex-pkg` is always host-arch,
-    /// regardless of what the package actually does).
+    // `--ex-pkg` extras: validated for existence like the base set, appended
+    // to the alias-packages line, and always get the host-ABI env +
+    // `**` keyword treatment (real crossdev's `--ex-pkg` is always host-arch,
+    // regardless of what the package actually does).
     #[test]
     fn ex_pkg_extras_are_validated_aliased_and_host_classified() {
         let dir = tempfile::tempdir().unwrap();
@@ -1878,9 +1888,9 @@ mod tests {
         );
     }
 
-    /// Nothing installed, no ebuilds at all: the safe fallback is a blanket
-    /// `**` rather than silently writing nothing (existence is otherwise
-    /// already validated up front by `alias_repo_conf_entry`).
+    // Nothing installed, no ebuilds at all: the safe fallback is a blanket
+    // `**` rather than silently writing nothing (existence is otherwise
+    // already validated up front by `alias_repo_conf_entry`).
     #[test]
     fn host_arch_keyword_line_falls_back_to_blanket_when_nothing_exists() {
         let dir = tempfile::tempdir().unwrap();
@@ -1899,10 +1909,10 @@ mod tests {
         assert_eq!(line, "cross-riscv64-unknown-linux-gnu/gcc **\n");
     }
 
-    /// Nothing installed, but ebuilds exist: bound to the newest available
-    /// version's branch — this is the `sys-devel/rust-std` shape (never
-    /// installed on the host, permanently unkeyworded, still needs `**`
-    /// scoped to its own branch rather than a blanket category-wide grant).
+    // Nothing installed, but ebuilds exist: bound to the newest available
+    // version's branch — this is the `sys-devel/rust-std` shape (never
+    // installed on the host, permanently unkeyworded, still needs `**`
+    // scoped to its own branch rather than a blanket category-wide grant).
     #[test]
     fn host_arch_keyword_line_bounds_to_newest_when_nothing_installed() {
         let dir = tempfile::tempdir().unwrap();
@@ -1926,8 +1936,8 @@ mod tests {
         );
     }
 
-    /// Installed, and that exact version's ebuild still exists in the tree:
-    /// pin exactly to it (host and cross-compiler track the same version).
+    // Installed, and that exact version's ebuild still exists in the tree:
+    // pin exactly to it (host and cross-compiler track the same version).
     #[test]
     fn host_arch_keyword_line_pins_the_installed_version_when_still_available() {
         let dir = tempfile::tempdir().unwrap();
@@ -1952,10 +1962,10 @@ mod tests {
         );
     }
 
-    /// Installed, but that exact version's ebuild is gone from the tree
-    /// (e.g. cleaned up after a version bump): bound to the installed
-    /// version's own branch instead of silently jumping to whatever's
-    /// newest (which could be a different, newer branch/slot).
+    // Installed, but that exact version's ebuild is gone from the tree
+    // (e.g. cleaned up after a version bump): bound to the installed
+    // version's own branch instead of silently jumping to whatever's
+    // newest (which could be a different, newer branch/slot).
     #[test]
     fn host_arch_keyword_line_bounds_to_installed_branch_when_exact_version_gone() {
         let dir = tempfile::tempdir().unwrap();
@@ -1982,11 +1992,11 @@ mod tests {
         );
     }
 
-    /// `write_alias_repo_conf` emits a `Location::Alias` repos.conf entry that
-    /// (a) parses back into the expected alias declaration, (b) is idempotent
-    /// across re-runs with the same target, and (c) rejects a missing source
-    /// package up front with a clear error. Covers the producer half of
-    /// derive-on-the-fly in isolation from the prefix-bootstrap topology.
+    // `write_alias_repo_conf` emits a `Location::Alias` repos.conf entry that
+    // (a) parses back into the expected alias declaration, (b) is idempotent
+    // across re-runs with the same target, and (c) rejects a missing source
+    // package up front with a clear error. Covers the producer half of
+    // derive-on-the-fly in isolation from the prefix-bootstrap topology.
     #[test]
     fn write_alias_repo_conf_emits_a_parseable_alias_entry() {
         let dir = tempfile::tempdir().unwrap();
@@ -2033,8 +2043,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), body_before);
     }
 
-    /// Two targets on one prefix keep separate alias files; a second setup
-    /// must not clobber or skip the first under `FillGapsOnly`.
+    // Two targets on one prefix keep separate alias files; a second setup
+    // must not clobber or skip the first under `FillGapsOnly`.
     #[test]
     fn write_alias_repo_conf_lets_two_targets_coexist() {
         let dir = tempfile::tempdir().unwrap();
@@ -2070,12 +2080,12 @@ mod tests {
         }
     }
 
-    /// A stale alias file from an earlier run (a different package set, e.g.
-    /// before `gdb` was removed from `CrossTarget::packages()`) must be
-    /// refreshed, not left in place. `write_if_absent` alone would silently
-    /// no-op here — this was a real, live bug: a re-run of `--init-target`
-    /// after a `packages()` change never actually updated the alias, so a
-    /// removed package kept resolving until the file was deleted by hand.
+    // A stale alias file from an earlier run (a different package set, e.g
+    // before `gdb` was removed from `CrossTarget::packages()`) must be
+    // refreshed, not left in place. `write_if_absent` alone would silently
+    // no-op here — this was a real, live bug: a re-run of `--init-target`
+    // after a `packages()` change never actually updated the alias, so a
+    // removed package kept resolving until the file was deleted by hand.
     #[test]
     fn write_alias_repo_conf_refreshes_a_stale_own_entry() {
         let dir = tempfile::tempdir().unwrap();
@@ -2118,10 +2128,10 @@ mod tests {
         assert_eq!(refreshed, expected);
     }
 
-    /// A foreign, non-alias `[crossdev]` entry (e.g. a real crossdev/eselect-
-    /// managed physical overlay pointing `location =` at a real repo
-    /// directory) must never be touched — only an entry recognisably written
-    /// by `em` itself (has an `alias-target =` key) is ever refreshed.
+    // A foreign, non-alias `[crossdev]` entry (e.g. a real crossdev/eselect-
+    // managed physical overlay pointing `location =` at a real repo
+    // directory) must never be touched — only an entry recognisably written
+    // by `em` itself (has an `alias-target =` key) is ever refreshed.
     #[test]
     fn write_alias_repo_conf_never_touches_a_foreign_entry() {
         let dir = tempfile::tempdir().unwrap();
@@ -2145,8 +2155,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), foreign);
     }
 
-    /// A source package missing from ::gentoo is rejected before any alias is
-    /// written — the producer never declares a derivation it can't satisfy.
+    // A source package missing from ::gentoo is rejected before any alias is
+    // written — the producer never declares a derivation it can't satisfy.
     #[test]
     fn write_alias_repo_conf_rejects_a_missing_source_package() {
         let dir = tempfile::tempdir().unwrap();
@@ -2165,8 +2175,8 @@ mod tests {
         );
     }
 
-    /// Build a `Cli` whose roots resolve under `root`, so `setup_root`/config
-    /// helpers used by the writer land inside the tempdir.
+    // Build a `Cli` whose roots resolve under `root`, so `setup_root`/config
+    // helpers used by the writer land inside the tempdir.
     fn test_cli_at_root(root: &camino::Utf8Path) -> Cli {
         use clap::Parser;
         // `--config-root` scopes both config reads and `setup_root` writes.
@@ -2216,12 +2226,12 @@ mod tests {
         assert!(!atom_is_package("sys-devel/binutils", "gcc"));
     }
 
-    /// The sysroot-wide `make.conf` must never set `CTARGET`: unlike real
-    /// crossdev, which scopes it via `package.env` to the host-side
-    /// `cross-<CTARGET>/{binutils,gcc,...}` builds only, a sysroot-wide
-    /// `CTARGET` leaks into every ordinary package's `econf` invocation
-    /// (`--target=`), which non-autoconf `configure` scripts (e.g. sqlite's)
-    /// reject outright.
+    // The sysroot-wide `make.conf` must never set `CTARGET`: unlike real
+    // crossdev, which scopes it via `package.env` to the host-side
+    // `cross-<CTARGET>/{binutils,gcc,...}` builds only, a sysroot-wide
+    // `CTARGET` leaks into every ordinary package's `econf` invocation
+    // (`--target=`), which non-autoconf `configure` scripts (e.g. sqlite's)
+    // reject outright.
     #[test]
     fn make_conf_body_never_sets_ctarget() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();

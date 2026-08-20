@@ -1,4 +1,4 @@
-//! `em select` — native workalikes of `eselect` modules.
+//! `em select` — native workalikes of `eselect` modules
 //!
 //! Currently implemented:
 //! - [`profile`] — a cross-aware `eselect profile` (can set a foreign-arch
@@ -39,9 +39,11 @@ pub fn activate_binutils(roots: &Roots, target: &str) -> Result<bool> {
     binutils::activate_latest(roots, target)
 }
 
-/// Activate the newest gcc profile built into `roots`' merge root for
-/// `target` (the `gcc-config` half). Run after [`activate_binutils`]. See its
-/// doc comment for why this takes `Roots` rather than `&Cli`.
+/// Activate the newest gcc profile built into `roots`' merge root for `target` (the
+/// `gcc-config` half)
+///
+/// Run after [`activate_binutils`]. See its doc comment for why this takes `Roots` rather
+/// than `&Cli`.
 pub fn activate_compiler(roots: &Roots, target: &str) -> Result<bool> {
     compiler::activate_latest(roots, target)
 }
@@ -66,7 +68,7 @@ pub fn activate_pkgconf(roots: &Roots, target: &str, is_native: bool) -> Result<
     pkgconf::activate_pkgconf(roots, target, is_native)
 }
 
-/// Dispatch `em select <module> <action>`.
+/// Dispatch `em select <module> <action>`
 pub async fn run(command: &SelectCommand, globals: &Cli) -> Result<()> {
     match command {
         SelectCommand::Profile { action } => profile::run(action, globals),
@@ -119,9 +121,9 @@ pub(super) fn config_portage_dir_for(roots: &Roots) -> Utf8PathBuf {
     Utf8PathBuf::from("/etc/portage")
 }
 
-/// Check if we're in a prefix/local context (--local or --prefix without
-/// --config-root). `outer_roots()`, not `roots()` — see
-/// [`config_portage_dir`]'s doc comment.
+/// Check if we're in a prefix/local context (--local or --prefix without --config-root)
+///
+/// `outer_roots()`, not `roots()` — see [`config_portage_dir`]'s doc comment.
 pub fn is_prefix_context(globals: &Cli) -> bool {
     is_prefix_context_for(&globals.outer_roots())
 }
@@ -132,7 +134,7 @@ pub(super) fn is_prefix_context_for(roots: &Roots) -> bool {
     roots.config_root_explicit().is_none() && roots.config_overlay().is_some()
 }
 
-/// Format a source label for display in prefix context.
+/// Format a source label for display in prefix context
 pub fn source_label(is_host: bool) -> String {
     if is_host {
         format!("{C_HOST} (host){C_HOST:#}")
@@ -141,7 +143,7 @@ pub fn source_label(is_host: bool) -> String {
     }
 }
 
-/// Get CHOST from make.conf.
+/// Get CHOST from make.conf
 pub fn get_chost(globals: &Cli) -> String {
     let make_conf_path = config_portage_dir(globals).join("make.conf");
 
@@ -180,9 +182,9 @@ mod tests {
     use super::*;
     use clap::Parser;
 
-    /// A CHOST= line, however it's quoted, read the same way `get_chost`
-    /// itself parses one — used to compute this test's expected value from
-    /// the real host config rather than hardcoding it.
+    // A CHOST= line, however it's quoted, read the same way `get_chost`
+    // itself parses one — used to compute this test's expected value from
+    // the real host config rather than hardcoding it.
     fn read_chost(path: &std::path::Path) -> Option<String> {
         let content = std::fs::read_to_string(path).ok()?;
         content.lines().find_map(|l| {
@@ -192,11 +194,11 @@ mod tests {
         })
     }
 
-    /// Under `--prefix`, the prefix's own make.conf overlay never sets
-    /// CHOST by design (`setup.rs`'s generated template: "Profile and base
-    /// make.conf come from the host") — `get_chost` must fall back to the
-    /// host's real `/etc/portage/make.conf`, not silently derive a bogus
-    /// Prefix make.conf without CHOST falls back to the host's real CHOST.
+    // Under `--prefix`, the prefix's own make.conf overlay never sets
+    // CHOST by design (`setup.rs`'s generated template: "Profile and base
+    // make.conf come from the host") — `get_chost` must fall back to the
+    // host's real `/etc/portage/make.conf`, not silently derive a bogus
+    // Prefix make.conf without CHOST falls back to the host's real CHOST.
     #[test]
     fn get_chost_under_prefix_falls_back_to_host_make_conf() {
         let Some(expected) = read_chost(std::path::Path::new("/etc/portage/make.conf")) else {
@@ -222,10 +224,10 @@ mod tests {
         assert_eq!(get_chost(&cli), expected);
     }
 
-    /// A plain host build (no `--prefix`/`--local`) is unaffected by the
-    /// new fallback -- `config_portage_dir` already points straight at the
-    /// host's own make.conf for that topology, so `get_chost` must still
-    /// read the same real CHOST it always did.
+    // A plain host build (no `--prefix`/`--local`) is unaffected by the
+    // new fallback -- `config_portage_dir` already points straight at the
+    // host's own make.conf for that topology, so `get_chost` must still
+    // read the same real CHOST it always did.
     #[test]
     fn get_chost_host_context_is_unaffected() {
         let Some(expected) = read_chost(std::path::Path::new("/etc/portage/make.conf")) else {

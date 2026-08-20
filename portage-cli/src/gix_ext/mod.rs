@@ -1,4 +1,4 @@
-//! Small pure-gix compositions that gitoxide does not ship as porcelain yet.
+//! Small pure-gix compositions that gitoxide does not ship as porcelain yet
 //!
 //! gitoxide's own status ([`crate-status.md`] in the gitoxide tree) still marks
 //! *checkout / switch / restore / reset orchestration* as unfinished. The

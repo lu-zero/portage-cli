@@ -21,7 +21,7 @@ pub struct KnownSets {
 }
 
 impl KnownSets {
-    /// Load from the given portage config root (usually `/`).
+    /// Load from the given portage config root (usually `/`)
     pub fn load(root: Option<&Utf8Path>) -> Self {
         let root = root.unwrap_or(Utf8Path::new("/"));
         let mut names = HashSet::new();
@@ -65,7 +65,7 @@ impl KnownSets {
         Self { names, declared }
     }
 
-    /// Return `true` if `name` (without the `@` prefix) is a known set.
+    /// Return `true` if `name` (without the `@` prefix) is a known set
     pub fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
     }
@@ -108,7 +108,7 @@ fn vdb_set_kind(name: &str) -> Option<VdbSet> {
     })
 }
 
-/// Resolve a VDB-aware built-in set under `eroot`.
+/// Resolve a VDB-aware built-in set under `eroot`
 ///
 /// These sets (`@preserved-rebuild`, `@live-rebuild`,
 /// `@deprecated-live-rebuild`, and — to follow — `@module-rebuild`/
@@ -333,7 +333,7 @@ fn owns_any(raw: &str, queries: &[Query], eroot: &Utf8Path, symlinks: &LazySymli
     })
 }
 
-/// The CONTENTS lines that could possibly match one of `queries`.
+/// The CONTENTS lines that could possibly match one of `queries`
 ///
 /// Both of [`matches_any`]'s arms need the entry's last path component to
 /// be a query basename, and a CONTENTS path field ends at a space, newline
@@ -364,7 +364,7 @@ fn candidate_lines<'a>(raw: &'a str, queries: &'a [Query]) -> impl Iterator<Item
     })
 }
 
-/// Whether the CONTENTS entry at `path` (basename `base`) matches any query.
+/// Whether the CONTENTS entry at `path` (basename `base`) matches any query
 fn matches_any(
     queries: &[Query],
     path: &Utf8Path,
@@ -391,10 +391,11 @@ struct Query {
     path: Utf8PathBuf,
     base: Utf8PathBuf,
     real: Utf8PathBuf,
-    /// Searcher for `/` + [`Self::base`], the text a matching CONTENTS entry
-    /// must contain (see [`candidate_lines`]). Built once and reused across
-    /// every installed package: `str::match_indices` would rebuild Two-Way's
-    /// tables per package and search scalar, where this is SIMD.
+    /// Searcher for `/` + [`Self::base`], the text a matching CONTENTS entry must contain (see
+    /// [`candidate_lines`])
+    ///
+    /// Built once and reused across every installed package: `str::match_indices` would rebuild
+    /// Two-Way's tables per package and search scalar, where this is SIMD.
     finder: memmem::Finder<'static>,
 }
 
@@ -415,22 +416,25 @@ impl Query {
     }
 }
 
-/// Trailing `/`-separated component of a CONTENTS path. `Utf8Path::file_name`
-/// builds a `Components` iterator per call, which dominates the scan once it
-/// runs over every entry of every installed package.
+/// Trailing `/`-separated component of a CONTENTS path
+///
+/// `Utf8Path::file_name` builds a `Components` iterator per call, which dominates the scan
+/// once it runs over every entry of every installed package.
 fn base_name(p: &str) -> &str {
     p.rsplit('/').next().unwrap_or(p)
 }
 
-/// Every VDB-recorded symlink, collected on first use and then reused.
+/// Every VDB-recorded symlink, collected on first use and then reused
 ///
 /// [`real_path`] consults it only when the live filesystem can't resolve a
 /// path — which on a normal root never happens — and building it parses every
 /// installed package's `CONTENTS`. Deferring keeps that whole pass off the
 /// common path while leaving the scratch-root fallback intact.
 struct LazySymlinks {
-    /// Owned so the whole thing can be shared with [`portage_vdb::Vdb::scan`]'s
-    /// workers, which outlive the call frame. A `Vdb` is a path.
+    /// Owned so the whole thing can be shared with [`portage_vdb::Vdb::scan`]'s workers, which
+    /// outlive the call frame
+    ///
+    /// A `Vdb` is a path.
     vdb: portage_vdb::Vdb,
     /// `OnceLock`, not `OnceCell`: whichever worker needs the map first builds
     /// it for all of them.
@@ -529,7 +533,7 @@ fn collect_symlinks(vdb: &portage_vdb::Vdb) -> HashMap<Utf8PathBuf, Utf8PathBuf>
     map
 }
 
-/// The `cat/pkg:{slot}` dep for a set member.
+/// The `cat/pkg:{slot}` dep for a set member
 ///
 /// Built from the parts rather than formatted and re-parsed: both already
 /// come off the VDB entry interned and validated.
@@ -567,7 +571,7 @@ fn slot_member(pkg: &InstalledPackage) -> Option<(Cpn, Slot)> {
     Some((*pkg.cpn(), Slot::from_name(pkg.slot_main().ok()?)))
 }
 
-/// Parse `[section_name]` headers from all `.conf` files in `dir`.
+/// Parse `[section_name]` headers from all `.conf` files in `dir`
 fn collect_from_conf_dir(dir: &Utf8Path, names: &mut HashSet<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -589,7 +593,7 @@ fn collect_from_conf_dir(dir: &Utf8Path, names: &mut HashSet<String>) {
     }
 }
 
-/// Parse `[section_name]` headers from a single ini-style `.conf` file.
+/// Parse `[section_name]` headers from a single ini-style `.conf` file
 fn collect_from_conf_file(path: &Utf8Path, names: &mut HashSet<String>) {
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
@@ -605,7 +609,7 @@ fn collect_from_conf_file(path: &Utf8Path, names: &mut HashSet<String>) {
     }
 }
 
-/// Each filename (non-hidden, non-directory) in `dir` is a set name.
+/// Each filename (non-hidden, non-directory) in `dir` is a set name
 fn collect_from_sets_dir(dir: &Utf8Path, names: &mut HashSet<String>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -683,8 +687,8 @@ mod tests {
 
     // --- resolve_vdb_set dispatch ---
 
-    /// A scratch eroot with an (empty) `var/db/pkg`, enough for the
-    /// VDB-aware resolvers to open without error.
+    // A scratch eroot with an (empty) `var/db/pkg`, enough for the
+    // VDB-aware resolvers to open without error.
     fn vdb_eroot() -> (tempfile::TempDir, Utf8PathBuf) {
         let dir = tempdir().unwrap();
         let eroot = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
@@ -711,10 +715,11 @@ mod tests {
 
     // --- @live-rebuild / @deprecated-live-rebuild (VariableSet) ---
 
-    /// Write a minimal VDB package dir under `eroot/var/db/pkg/<cat>/<pf>`
-    /// with the given metadata fields. Enumeration only needs the dir + a
-    /// parseable pf, but the variable/slot accessors read files, so callers
-    /// pass the fields they need (`SLOT`, `PROPERTIES`, `INHERITED`, …).
+    // Write a minimal VDB package dir under `eroot/var/db/pkg/<cat>/<pf>` with the given
+    // metadata fields
+    //
+    // Enumeration only needs the dir + a parseable pf, but the variable/slot accessors read
+    // files, so callers pass the fields they need (`SLOT`, `PROPERTIES`, `INHERITED`, …).
     fn write_vdb_pkg(eroot: &Utf8Path, cat_pf: &str, fields: &[(&str, &str)]) {
         let dir = eroot.join("var/db/pkg").join(cat_pf);
         std::fs::create_dir_all(&dir).unwrap();

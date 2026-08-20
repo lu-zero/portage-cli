@@ -1,4 +1,4 @@
-//! Parallel and sequential merge scheduling.
+//! Parallel and sequential merge scheduling
 
 use std::collections::VecDeque;
 
@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::maint;
 use crate::query;
 
-/// One package's merge failure, for the end-of-run report.
+/// One package's merge failure, for the end-of-run report
 struct MergeFailure {
     cpv: String,
     log: camino::Utf8PathBuf,
@@ -30,38 +30,40 @@ pub(crate) struct MergePlanRequest<'a> {
     pub distdir: Option<&'a camino::Utf8Path>,
     pub merge_flags: &'a cli::MergeFlags,
     pub globals: &'a cli::Cli,
-    /// Directories to put ahead of the sanitised build `PATH`, resolved by
-    /// the caller. Only `em setup --local` has any (see its `--extra-path`).
+    /// Directories to put ahead of the sanitised build `PATH`, resolved by the caller
+    ///
+    /// Only `em setup --local` has any (see its `--extra-path`).
     pub extra_path: &'a [camino::Utf8PathBuf],
     /// When set, each successful package gets a completion marker under this
     /// job id (see `maint::resume`) so `-r` can skip finished work.
     pub resume_job: Option<ResumeJob<'a>>,
-    /// Structured activity bus (session already started by caller).
+    /// Structured activity bus (session already started by caller)
     pub activity: Option<ActivityTrack>,
 }
 
-/// Where to record per-package completion for a live resume job.
+/// Where to record per-package completion for a live resume job
 #[derive(Clone, Copy)]
 pub(crate) struct ResumeJob<'a> {
     pub root: &'a camino::Utf8Path,
     pub job_id: &'a str,
 }
 
-/// Activity correlation for package-level emit during the merge loop.
+/// Activity correlation for package-level emit during the merge loop
 #[derive(Clone)]
 pub(crate) struct ActivityTrack {
     pub bus: crate::activity::ActivityBus,
     pub job_id: String,
     pub parent_job_id: Option<String>,
-    /// Session live-FS root so install workers can re-open the same tree.
+    /// Session live-FS root so install workers can re-open the same tree
     pub live_root: camino::Utf8PathBuf,
 }
 
-/// Activity kind for `PkgStart`/`PkgEnd` banners (`Emerging` vs `Emerging
-/// binary` vs `Fetching`). Binpkg reuse is decided here with the same
-/// `find_reusable` rules as [`act_on_package`], so the status line and
-/// human sink colour match what the merge path will actually do — not a
-/// conservative `Source` default that made `PkgKind::Binpkg` unreachable.
+/// Activity kind for `PkgStart`/`PkgEnd` banners (`Emerging` vs `Emerging binary` vs
+/// `Fetching`)
+///
+/// Binpkg reuse is decided here with the same `find_reusable` rules as [`act_on_package`],
+/// so the status line and human sink colour match what the merge path will actually do —
+/// not a conservative `Source` default that made `PkgKind::Binpkg` unreachable.
 fn pkg_kind_for_entry(
     flags: &ActionFlags,
     planned: &query::depgraph::PlannedMerge,
@@ -177,7 +179,7 @@ fn activity_pkg_ctx(
     })
 }
 
-/// Plan-wide state shared by the sequential and parallel merge loops.
+/// Plan-wide state shared by the sequential and parallel merge loops
 struct MergeRun<'a> {
     plan: &'a [query::depgraph::PlannedMerge],
     roots: &'a portage_resolve::Roots,
@@ -199,7 +201,7 @@ struct MergeRun<'a> {
     activity: Option<ActivityTrack>,
 }
 
-/// Per-run mode bits derived once from [`MergeRun`] / [`cli::MergeFlags`].
+/// Per-run mode bits derived once from [`MergeRun`] / [`cli::MergeFlags`]
 struct ActionFlags {
     keep_going: bool,
     emptytree: bool,
@@ -230,7 +232,7 @@ impl MergeRun<'_> {
     }
 }
 
-/// Everything needed to act on one plan entry (fetch / binpkg / source).
+/// Everything needed to act on one plan entry (fetch / binpkg / source)
 struct PackageAction<'a> {
     planned: &'a query::depgraph::PlannedMerge,
     merge_root: &'a camino::Utf8Path,
@@ -245,7 +247,7 @@ struct PackageAction<'a> {
     remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
     desired_chost: &'a str,
     desired_build_env_key: &'a str,
-    /// Phase enter/leave emitter for this package (if activity is enabled).
+    /// Phase enter/leave emitter for this package (if activity is enabled)
     activity_pkg: Option<crate::activity::ActivityPkgCtx>,
 }
 
@@ -302,18 +304,20 @@ pub(crate) fn confirm_action(verb: &str, count: usize) -> Result<bool> {
     Ok(matches!(line.trim(), "y" | "Y" | "yes" | "Yes"))
 }
 
-/// Which [`portage_resolve::Roots`] a plan entry actually installs into: the outer EROOT
-/// (`host_roots`) for a Host-rooted entry — an unsatisfied BDEPEND scheduled
-/// onto the build host by a `--target` solve (see `cross_target_runtime_deps`
-/// in portage-atom-pubgrub) — or the `--target`-substituted sysroot (`roots`,
-/// the resolved install target) for everything else. `host_roots` equals
-/// `roots` outside `--target`, so this is a no-op there.
+/// Which [`portage_resolve::Roots`] a plan entry actually installs into
 ///
-// regardless of `PlannedMerge.merge_root`, so a Host BDEPEND (e.g.
-// `dev-python/jinja2`, rebuilt for a python target the real host lacked)
-// silently built into the sysroot instead — the package "succeeded" but
-// never became available where the later build that needed it actually
-// looked.
+/// The outer EROOT (`host_roots`) for a Host-rooted entry — an unsatisfied
+/// BDEPEND scheduled onto the build host by a `--target` solve (see
+/// `cross_target_runtime_deps` in portage-atom-pubgrub) — or the
+/// `--target`-substituted sysroot (`roots`, the resolved install target)
+/// for everything else. `host_roots` equals `roots` outside `--target`, so
+/// this is a no-op there.
+///
+/// Before this split existed, every entry used `roots` regardless of
+/// `PlannedMerge.merge_root`, so a Host BDEPEND (e.g. `dev-python/jinja2`,
+/// rebuilt for a python target the real host lacked) silently built into
+/// the sysroot instead — the package "succeeded" but never became
+/// available where the later build that needed it actually looked.
 fn entry_roots<'a>(
     planned: &query::depgraph::PlannedMerge,
     roots: &'a portage_resolve::Roots,
@@ -358,7 +362,7 @@ fn entry_desired_env<'a>(
     }
 }
 
-/// Build and merge a resolved plan in install order.
+/// Build and merge a resolved plan in install order
 ///
 /// **Resume progress:** when [`MergePlanRequest::resume_job`] is `Some`,
 /// each successful package creates a marker file under that job id so a
@@ -645,7 +649,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     );
 }
 
-/// Act on one plan entry: fetch-only, binpkg merge, or source build.
+/// Act on one plan entry: fetch-only, binpkg merge, or source build
 async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
     let PackageAction {
         planned,
@@ -937,7 +941,7 @@ fn record_package_outcome(
     }
 }
 
-/// Sequential build+merge in install order (the `--jobs 1` / default path).
+/// Sequential build+merge in install order (the `--jobs 1` / default path)
 /// Returns `(merged, skipped, failures)`.
 async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure>) {
     let flags = run.action_flags();
@@ -1034,8 +1038,10 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
     (merged, skipped, failures)
 }
 
-/// Download a remote binpkg from `url` into a per-run cache under `work_base`,
-/// returning the local path. Cached per filename so a retry doesn't re-download.
+/// Download a remote binpkg from `url` into a per-run cache under `work_base`, returning
+/// the local path
+///
+/// Cached per filename so a retry doesn't re-download.
 async fn fetch_remote_binpkg(
     url: &str,
     work_base: &camino::Utf8Path,
@@ -1060,11 +1066,11 @@ async fn fetch_remote_binpkg(
 /// have `complete`d; this is the topological bookkeeping behind `--jobs`,
 /// independent of how many run at once or in what real-time order they finish.
 struct Scheduler {
-    /// Remaining un-completed blockers per node.
+    /// Remaining un-completed blockers per node
     outstanding: Vec<usize>,
-    /// Reverse adjacency: `dependents[j]` are nodes blocked on `j`.
+    /// Reverse adjacency: `dependents[j]` are nodes blocked on `j`
     dependents: Vec<Vec<usize>>,
-    /// Nodes with no outstanding blockers, awaiting a build slot.
+    /// Nodes with no outstanding blockers, awaiting a build slot
     ready: VecDeque<usize>,
 }
 
@@ -1087,8 +1093,10 @@ impl Scheduler {
         }
     }
 
-    /// Pop the next ready node for which `path_free` is true (e.g. workdir
-    /// not held by an inflight merge). Blocked nodes stay queued in order.
+    /// Pop the next ready node for which `path_free` is true (e.g. workdir not held by an
+    /// inflight merge)
+    ///
+    /// Blocked nodes stay queued in order.
     fn next_ready_free(&mut self, mut path_free: impl FnMut(usize) -> bool) -> Option<usize> {
         let n = self.ready.len();
         for _ in 0..n {
@@ -1101,7 +1109,7 @@ impl Scheduler {
         None
     }
 
-    /// Mark node `i` finished (built or skipped), unblocking its dependents.
+    /// Mark node `i` finished (built or skipped), unblocking its dependents
     fn complete(&mut self, i: usize) {
         for d in std::mem::take(&mut self.dependents[i]) {
             self.outstanding[d] -= 1;
@@ -1112,12 +1120,13 @@ impl Scheduler {
     }
 }
 
-/// Parallel build+merge for `--jobs N > 1`. Up to `jobs` packages *build*
-/// concurrently; each only starts once its in-plan build dependencies
-/// (`blockers`) have completed, so build order is respected. The compile
-/// phases run in parallel, while the merge critical section is serialised
-/// by a shared async lock — so the live root, VDB counter, and
-/// world/profile files are only mutated by one package at a time.
+/// Parallel build+merge for `--jobs N > 1`
+///
+/// Up to `jobs` packages *build* concurrently; each only starts once its in-plan build
+/// dependencies (`blockers`) have completed, so build order is respected. The compile
+/// phases run in parallel, while the merge critical section is serialised by a shared async
+/// lock — so the live root, VDB counter, and world/profile files are only mutated by one
+/// package at a time.
 ///
 /// Returns `(merged, skipped, failures)`.
 ///

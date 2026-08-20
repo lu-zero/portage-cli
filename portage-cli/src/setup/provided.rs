@@ -230,8 +230,9 @@ fn first_version_token(s: &str) -> Option<String> {
     })
 }
 
-/// Run `bin args...` and extract a best-guess host version. `None` when the
-/// run fails or nothing version-shaped comes out — an unusual banner is not
+/// Run `bin args...` and extract a best-guess host version
+///
+/// `None` when the run fails or nothing version-shaped comes out — an unusual banner is not
 /// an error, [`pick_version`] just falls back to the tree's own floor.
 fn probe_version(bin: &Utf8Path, args: &[&str]) -> Option<Version> {
     let output = std::process::Command::new(bin).args(args).output().ok()?;
@@ -303,12 +304,13 @@ fn rewrite_managed_block(existing: &str, block: &str) -> String {
     }
 }
 
-/// Write (or refresh) the managed `package.provided` block. Unlike
-/// [`super::repo::ensure_repo`]/[`super::local_profile::ensure_profile`],
-/// this re-derives and rewrites the block on every `em setup --local` run —
-/// the host's tool versions can legitimately drift between runs, and the
-/// doc's format spec calls for "rewrite only the `BEGIN`…`END` region on
-/// setup re-run", preserving any hand-written lines outside the markers.
+/// Write (or refresh) the managed `package.provided` block
+///
+/// Unlike [`super::repo::ensure_repo`]/[`super::local_profile::ensure_profile`], this
+/// re-derives and rewrites the block on every `em setup --local` run — the host's tool
+/// versions can legitimately drift between runs, and the doc's format spec calls for
+/// "rewrite only the `BEGIN`…`END` region on setup re-run", preserving any hand-written
+/// lines outside the markers.
 pub(super) fn ensure_provided(
     eroot: &Utf8Path,
     repo: &Repository,

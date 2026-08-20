@@ -1,4 +1,4 @@
-//! rsync sync backend: shell out to `rsync` (Portage parity MVP).
+//! rsync sync backend: shell out to `rsync` (Portage parity MVP)
 //!
 //! Uses a conservative flag set close to Portage's git-overlay sibling
 //! defaults: archive mode, delete extras, human-readable progress when not

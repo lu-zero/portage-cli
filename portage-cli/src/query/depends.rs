@@ -31,8 +31,10 @@ pub async fn run(
     Ok(())
 }
 
-/// Every cpn across `entries` (every repo, not just main) whose DEPEND/
-/// RDEPEND/BDEPEND/PDEPEND/IDEPEND names `target`.
+/// Every cpn whose deps name `target`
+///
+/// Scans DEPEND/RDEPEND/BDEPEND/PDEPEND/IDEPEND across `entries` (every
+/// repo, not just main).
 fn reverse_deps(entries: &[portage_repo::EntryIn<'_>], target: &Dep) -> BTreeSet<String> {
     let mut matches: BTreeSet<String> = BTreeSet::new();
     for item in entries {
@@ -70,8 +72,8 @@ mod tests {
 
     use super::*;
 
-    /// A repo with one package, whose cache entry's RDEPEND names `rdepend_on`
-    /// (e.g. `"sys-apps/foo"`), or no RDEPEND at all when `None`.
+    // A repo with one package, whose cache entry's RDEPEND names `rdepend_on`
+    // (e.g. `"sys-apps/foo"`), or no RDEPEND at all when `None`.
     fn make_repo(
         dir: &tempfile::TempDir,
         cat: &str,
@@ -106,9 +108,9 @@ mod tests {
             .unwrap()
     }
 
-    /// Before `depends::run` scanned `set.entries()` (every repo) instead of
-    /// just `set.main()`, a reverse-dependency living only in an overlay
-    /// (guru, crossdev, a local overlay) was invisible to `em query depends`.
+    // Before `depends::run` scanned `set.entries()` (every repo) instead of
+    // just `set.main()`, a reverse-dependency living only in an overlay
+    // (guru, crossdev, a local overlay) was invisible to `em query depends`.
     #[tokio::test]
     async fn finds_a_reverse_dependency_that_lives_only_in_an_overlay() {
         let main_dir = tempfile::tempdir().unwrap();

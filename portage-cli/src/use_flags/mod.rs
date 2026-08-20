@@ -1,9 +1,9 @@
-//! `em use` — enable/disable/query USE flags in make.conf. Mirrors `em pkg
-//! use`'s add/subtract/drop trichotomy (`subtract` writes an explicit
-//! `-flag`, `drop` removes the token entirely) so the two applets never
-//! drift onto different semantics for the same three verbs. `-a`/`-s`/`-d`
-//! also accept euse's own short letters as aliases — `-E`/`-D`/`-R`/`-P`
-//! (enable/disable/remove/prune).
+//! `em use` — enable/disable/query USE flags in make.conf
+//!
+//! Mirrors `em pkg use`'s add/subtract/drop trichotomy (`subtract` writes an explicit
+//! `-flag`, `drop` removes the token entirely) so the two applets never drift onto
+//! different semantics for the same three verbs. `-a`/`-s`/`-d` also accept euse's own
+//! short letters as aliases — `-E`/`-D`/`-R`/`-P` (enable/disable/remove/prune).
 //!
 //! `--expand VAR`/`-e VAR` retargets the edit onto a USE_EXPAND variable
 //! (e.g. `VIDEO_CARDS`) instead of `USE` — same trichotomy, same file, just
@@ -23,7 +23,7 @@ use crate::cli;
 
 mod output;
 
-/// Options for [`run`], one field per CLI flag on `Applet::Use`.
+/// Options for [`run`], one field per CLI flag on `Applet::Use`
 pub struct UseOpts<'a> {
     pub add: &'a [String],
     pub subtract: &'a [String],
@@ -127,8 +127,8 @@ mod tests {
         }
     }
 
-    /// The bug this module used to have: `resolve_path` ignored `--local`
-    /// entirely and always resolved the host's `/etc/portage/make.conf`.
+    // The bug this module used to have: `resolve_path` ignored `--local`
+    // entirely and always resolved the host's `/etc/portage/make.conf`.
     #[test]
     fn resolve_path_follows_local_prefix_not_the_host() {
         let dir = tempfile::tempdir().unwrap();
@@ -151,8 +151,8 @@ mod tests {
         assert_eq!(resolved, explicit);
     }
 
-    /// `--dry-run` must compute the same result `run()` would otherwise
-    /// write, but the file itself must stay untouched.
+    // `--dry-run` must compute the same result `run()` would otherwise
+    // write, but the file itself must stay untouched.
     #[tokio::test]
     async fn dry_run_previews_without_writing() {
         let dir = tempfile::tempdir().unwrap();
@@ -176,8 +176,8 @@ mod tests {
         assert_eq!(untouched, "USE=\"ssl\"\n");
     }
 
-    /// `add`/`subtract`/`drop` follow the same trichotomy as `em pkg use`:
-    /// subtract writes an explicit `-flag`, drop removes the token entirely.
+    // `add`/`subtract`/`drop` follow the same trichotomy as `em pkg use`:
+    // subtract writes an explicit `-flag`, drop removes the token entirely.
     #[tokio::test]
     async fn add_subtract_drop_match_pkg_use_semantics() {
         let dir = tempfile::tempdir().unwrap();
@@ -203,8 +203,8 @@ mod tests {
         assert!(!written.contains("bar"), "{written}");
     }
 
-    /// `--expand VAR` retargets add/subtract/drop onto that variable instead
-    /// of USE, lowercase input included (profile `.desc` names are lowercase).
+    // `--expand VAR` retargets add/subtract/drop onto that variable instead
+    // of USE, lowercase input included (profile `.desc` names are lowercase).
     #[tokio::test]
     async fn expand_targets_the_named_variable() {
         let dir = tempfile::tempdir().unwrap();

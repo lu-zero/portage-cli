@@ -4,7 +4,7 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-/// Homebrew's standard prefixes: Apple Silicon, then Intel.
+/// Homebrew's standard prefixes: Apple Silicon, then Intel
 const BREW_PREFIXES: &[&str] = &["/opt/homebrew", "/usr/local"];
 
 const MACPORTS_BIN: &str = "/opt/local/bin";
@@ -21,8 +21,10 @@ pub(super) fn candidates(brew: Option<&str>, name: &str) -> Vec<Utf8PathBuf> {
     out
 }
 
-/// `<prefix>/opt/<formula>` for each Homebrew install. Asked of `brew` itself
-/// when it is on `PATH`, since a user may have installed it elsewhere.
+/// `<prefix>/opt/<formula>` for each Homebrew install
+///
+/// Asked of `brew` itself when it is on `PATH`, since a user may have installed it
+/// elsewhere.
 fn brew_prefixes(formula: &str) -> Vec<Utf8PathBuf> {
     if let Ok(out) = std::process::Command::new("brew")
         .args(["--prefix", formula])

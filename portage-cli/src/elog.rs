@@ -31,7 +31,7 @@ use std::sync::{Mutex, OnceLock};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-/// The elog message classes, portage's `_log_levels`.
+/// The elog message classes, portage's `_log_levels`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
     Info,
@@ -44,7 +44,7 @@ pub enum Class {
 impl Class {
     const ALL: [Self; 5] = [Self::Info, Self::Log, Self::Warn, Self::Error, Self::Qa];
 
-    /// The name used both in `${T}/logging/<phase>` and in the combined logs.
+    /// The name used both in `${T}/logging/<phase>` and in the combined logs
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Info => "INFO",
@@ -84,8 +84,10 @@ impl ClassSet {
         1 << Class::ALL.iter().position(|c| *c == class).unwrap_or(0)
     }
 
-    /// Parse a class list. Names are case-insensitive and `*` means all of
-    /// them, as `filter_loglevels` has it. Unknown names are ignored.
+    /// Parse a class list
+    ///
+    /// Names are case-insensitive and `*` means all of them, as `filter_loglevels` has it.
+    /// Unknown names are ignored.
     pub fn parse(spec: &str) -> Self {
         let mut set = Self::default();
         for word in spec.split([' ', '\t', ',', '\n']).filter(|w| !w.is_empty()) {
@@ -107,16 +109,17 @@ impl ClassSet {
         self.0 == 0
     }
 
-    /// Every class in either set.
+    /// Every class in either set
     pub fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 }
 
-/// Phases in the order the combined log lists them, portage's
-/// `EBUILD_PHASES`. Also the set of legal `${T}/logging/` file names — the
-/// producer writes `${EBUILD_PHASE:-other}`, so anything else in there was put
-/// there by something that is not an `e*` call.
+/// Phases in the order the combined log lists them, portage's `EBUILD_PHASES`
+///
+/// Also the set of legal `${T}/logging/` file names — the producer writes
+/// `${EBUILD_PHASE:-other}`, so anything else in there was put there by something that is
+/// not an `e*` call.
 const EBUILD_PHASES: &[&str] = &[
     "pretend",
     "setup",
@@ -138,7 +141,7 @@ const EBUILD_PHASES: &[&str] = &[
     "other",
 ];
 
-/// One package's messages, grouped by phase in [`EBUILD_PHASES`] order.
+/// One package's messages, grouped by phase in [`EBUILD_PHASES`] order
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PackageLog {
     phases: Vec<(&'static str, Vec<(Class, String)>)>,
@@ -205,7 +208,7 @@ impl PackageLog {
         log
     }
 
-    /// Drop everything outside `classes`, portage's `filter_loglevels`.
+    /// Drop everything outside `classes`, portage's `filter_loglevels`
     pub fn filter(&self, classes: ClassSet) -> Self {
         let phases = self
             .phases
@@ -271,7 +274,7 @@ impl PackageLog {
         out
     }
 
-    /// Inverse of [`to_handoff`](Self::to_handoff).
+    /// Inverse of [`to_handoff`](Self::to_handoff)
     fn from_handoff(text: &str) -> Self {
         let mut log = Self::default();
         // `split('\n')` not `lines()`: a trailing `\r` is content, not a line
@@ -319,7 +322,7 @@ impl PackageLog {
         log
     }
 
-    /// Render as the `e*` builtins would have, for `echo` and `em read`.
+    /// Render as the `e*` builtins would have, for `echo` and `em read`
     fn print_to(&self, out: &mut impl Write) {
         for (_, entries) in &self.phases {
             for (class, message) in entries {
@@ -336,11 +339,11 @@ impl PackageLog {
 /// it cannot import.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Module {
-    /// One file per package: `<logdir>/elog/<cat>:<pf>:<timestamp>.log`.
+    /// One file per package: `<logdir>/elog/<cat>:<pf>:<timestamp>.log`
     Save,
-    /// Appended to `<logdir>/elog/summary.log`.
+    /// Appended to `<logdir>/elog/summary.log`
     SaveSummary,
-    /// Replayed to the console when the whole run finishes.
+    /// Replayed to the console when the whole run finishes
     Echo,
 }
 
@@ -356,13 +359,13 @@ impl Module {
     }
 }
 
-/// Resolved elog configuration for one merge.
+/// Resolved elog configuration for one merge
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Config {
     /// Which modules to run, each with the classes it wants — its own
     /// `module:classes` override when given, otherwise `PORTAGE_ELOG_CLASSES`.
     pub systems: Vec<(Module, ClassSet)>,
-    /// `<logdir>/elog/` is where the file-writing modules put their output.
+    /// `<logdir>/elog/` is where the file-writing modules put their output
     pub logdir: Utf8PathBuf,
 }
 
@@ -410,16 +413,18 @@ impl Config {
 /// package's work dir (alongside `build.log`, which the tree drop also keeps).
 pub const PENDING_ECHO_FILE: &str = "elog";
 
-/// Where the `echo` module's share of a package's messages goes.
+/// Where the `echo` module's share of a package's messages goes
 pub enum Echo<'a> {
-    /// Leave it in `<work_dir>/elog` for the parent process to collect. The
-    /// merge chain's own dispatch runs in the `em __worker` child, which is not
-    /// the process that prints the end-of-run block.
+    /// Leave it in `<work_dir>/elog` for the parent process to collect
+    ///
+    /// The merge chain's own dispatch runs in the `em __worker` child, which is not the process
+    /// that prints the end-of-run block.
     Handoff(&'a Utf8Path),
-    /// Queue it here. For work with no `__worker` seam to cross — `-C` and the
-    /// `pkg_prerm`/`pkg_postrm` of a package being replaced — whichever process
-    /// dispatched is one that also calls [`finalize_echo`]. `root` is the tree
-    /// the package was removed from, for the header.
+    /// Queue it here
+    ///
+    /// For work with no `__worker` seam to cross — `-C` and the `pkg_prerm`/`pkg_postrm` of a
+    /// package being replaced — whichever process dispatched is one that also calls
+    /// [`finalize_echo`]. `root` is the tree the package was removed from, for the header.
     InProcess { root: Option<&'a Utf8Path> },
 }
 
@@ -484,12 +489,12 @@ pub fn dispatch(config: &Config, cpv: &portage_atom::Cpv, log: &PackageLog, echo
     }
 }
 
-/// `<pn>-<version>`, the `PF` half of an elog file name.
+/// `<pn>-<version>`, the `PF` half of an elog file name
 fn pf(cpv: &portage_atom::Cpv) -> String {
     format!("{}-{}", cpv.cpn.package, cpv.version)
 }
 
-/// Create the elog directory group-owned and setgid, portage's `mod_save`.
+/// Create the elog directory group-owned and setgid, portage's `mod_save`
 ///
 /// The point is the *directory*: mode 2770 lets any member of the group
 /// create and remove entries in it whoever owns them, and the setgid bit
@@ -588,9 +593,10 @@ fn timestamp() -> String {
     format!("{}-{}", date.replace('-', ""), time.replace(':', ""))
 }
 
-/// RFC 3339 UTC. Portage's summary header uses local time with a `%Z` suffix;
-/// `em` records UTC instead, which needs no timezone database and stays
-/// sortable.
+/// RFC 3339 UTC
+///
+/// Portage's summary header uses local time with a `%Z` suffix; `em` records UTC instead,
+/// which needs no timezone database and stays sortable.
 fn timestamp_human() -> String {
     humantime::format_rfc3339_seconds(std::time::SystemTime::now()).to_string()
 }
@@ -600,7 +606,7 @@ fn timestamp_human() -> String {
 /// single `finalize` at the end.
 static PENDING: OnceLock<Mutex<Vec<EchoItem>>> = OnceLock::new();
 
-/// One package's held messages, with the tree it was merged to or removed from.
+/// One package's held messages, with the tree it was merged to or removed from
 struct EchoItem {
     package: String,
     root: Option<String>,
@@ -611,14 +617,14 @@ fn pending() -> &'static Mutex<Vec<EchoItem>> {
     PENDING.get_or_init(Mutex::default)
 }
 
-/// Hold one package's messages for [`finalize_echo`].
+/// Hold one package's messages for [`finalize_echo`]
 fn queue_echo(package: String, root: Option<String>, log: PackageLog) {
     if let Ok(mut queue) = pending().lock() {
         queue.push(EchoItem { package, root, log });
     }
 }
 
-/// Discard any handoff left in `<work_dir>/elog` by an earlier run.
+/// Discard any handoff left in `<work_dir>/elog` by an earlier run
 ///
 /// The file sits at the work dir's top level, which the pre-merge clean leaves
 /// alone (like `build.log`), so a run killed between the worker writing it and
@@ -628,9 +634,10 @@ pub fn discard_stale_pending(work_dir: &Utf8Path) {
     let _ = std::fs::remove_file(work_dir.join(PENDING_ECHO_FILE).as_std_path());
 }
 
-/// Take what the merge chain left in `<work_dir>/elog` and hold it for
-/// [`finalize_echo`]. Called by the parent once a package has merged, whether
-/// or not the chain ran in a `__worker` child.
+/// Take what the merge chain left in `<work_dir>/elog` and hold it for [`finalize_echo`]
+///
+/// Called by the parent once a package has merged, whether or not the chain ran in a
+/// `__worker` child.
 pub fn take_pending(cpv: &portage_atom::Cpv, work_dir: &Utf8Path, root: &Utf8Path) {
     let path = work_dir.join(PENDING_ECHO_FILE);
     let Ok(text) = std::fs::read_to_string(path.as_std_path()) else {
@@ -664,9 +671,11 @@ pub fn finalize_echo() {
     let _ = out.flush();
 }
 
-/// One package's block as `echo` renders it: a blank line, the header, a blank
-/// line, then the messages. Shared with `em read`, which shows a saved log in
-/// the same shape the live run would have.
+/// One package's block as `echo` renders it: a blank line, the header, a blank line, then
+/// the messages
+///
+/// Shared with `em read`, which shows a saved log in the same shape the live run would
+/// have.
 fn print_block(out: &mut impl Write, package: &str, root: Option<&str>, log: &PackageLog) {
     let info = crate::style::PORTAGE_COLORS.info;
     let pkg = crate::style::C_PKG;
@@ -695,19 +704,21 @@ fn print_block(out: &mut impl Write, package: &str, root: Option<&str>, log: &Pa
 
 // ── Reading back what was saved (`em read`) ───────────────────────────────
 
-/// A per-package file the `save` module wrote.
+/// A per-package file the `save` module wrote
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedLog {
     pub path: Utf8PathBuf,
-    /// `<category>/<pf>`, recovered from the file name.
+    /// `<category>/<pf>`, recovered from the file name
     pub package: String,
-    /// The file name's `%Y%m%d-%H%M%S` stamp, which is also its sort key.
+    /// The file name's `%Y%m%d-%H%M%S` stamp, which is also its sort key
     pub stamp: String,
 }
 
 impl SavedLog {
-    /// The stamp as a human reads it. Purely presentational — the stamp itself
-    /// stays the sort key, since it is already lexicographically ordered.
+    /// The stamp as a human reads it
+    ///
+    /// Purely presentational — the stamp itself stays the sort key, since it is already
+    /// lexicographically ordered.
     pub fn when(&self) -> String {
         // The stamp comes from a file name, so it is whatever is on disk, not
         // necessarily what `save` wrote: byte-slicing it needs the digits
@@ -735,7 +746,7 @@ impl SavedLog {
     }
 }
 
-/// Every per-package file under `<logdir>/elog`, newest first.
+/// Every per-package file under `<logdir>/elog`, newest first
 ///
 /// Both layouts portage writes are read: the flat
 /// `<category>:<pf>:<stamp>.log`, and `FEATURES=split-elog`'s
@@ -933,10 +944,11 @@ mod tests {
         assert_eq!(PackageLog::default().to_text(), "");
     }
 
-    /// The handoff must survive a message that reads exactly like a
-    /// combined-log header for a real phase. Through `to_text` this one is
-    /// destroyed — dropped, and the entries after it re-attributed to the class
-    /// and phase it appears to announce.
+    // The handoff must survive a message that reads exactly like a combined-log header for a
+    // real phase
+    //
+    // Through `to_text` this one is destroyed — dropped, and the entries after it
+    // re-attributed to the class and phase it appears to announce.
     #[test]
     fn the_handoff_survives_a_message_that_looks_like_a_header() {
         let log = log_of(&[
@@ -950,9 +962,10 @@ mod tests {
         assert_ne!(PackageLog::from_text(&log.to_text()), log);
     }
 
-    /// A trailing `\r` inside a message is content, not a line break (portage
-    /// bug #390833). `collect` keeps it via `split('\n')`; `from_handoff` must
-    /// agree, or every `echo` replay silently drops the byte.
+    // A trailing `\r` inside a message is content, not a line break (portage bug #390833)
+    //
+    // `collect` keeps it via `split('\n')`; `from_handoff` must agree, or every `echo` replay
+    // silently drops the byte.
     #[test]
     fn the_handoff_preserves_a_trailing_carriage_return() {
         let log = log_of(&[
@@ -963,8 +976,8 @@ mod tests {
         assert_eq!(PackageLog::from_handoff(&log.to_handoff()), log);
     }
 
-    /// Collecting consumes the files, so a build tree kept by
-    /// `FEATURES=keeptemp` cannot have its messages filed twice.
+    // Collecting consumes the files, so a build tree kept by
+    // `FEATURES=keeptemp` cannot have its messages filed twice.
     #[test]
     fn collect_consumes_the_logging_dir() {
         let dir = tempfile::tempdir().unwrap();
@@ -979,8 +992,8 @@ mod tests {
         assert!(!logging.join("postinst").exists());
     }
 
-    /// A directory `em` creates gets the group and setgid bit; one that already
-    /// exists is left exactly as the administrator set it.
+    // A directory `em` creates gets the group and setgid bit; one that already
+    // exists is left exactly as the administrator set it.
     #[test]
     fn the_elogdir_is_only_shaped_when_created() {
         use std::os::unix::fs::PermissionsExt;
@@ -1015,10 +1028,10 @@ mod tests {
         );
     }
 
-    /// `write_elog_file` forces group-readable (0o660) regardless of umask, so
-    /// `em read` can display a file a sudo'd merge filed as
-    /// `root:<invoker group>` — the directory's setgid bit only makes such
-    /// files deletable, not readable.
+    // `write_elog_file` forces group-readable (0o660) regardless of umask, so
+    // `em read` can display a file a sudo'd merge filed as
+    // `root:<invoker group>` — the directory's setgid bit only makes such
+    // files deletable, not readable.
     #[test]
     fn write_elog_file_is_group_readable() {
         use std::os::unix::fs::PermissionsExt;
@@ -1039,10 +1052,10 @@ mod tests {
         );
     }
 
-    /// The echo handoff needs the same guarantee: the privileged `__worker`
-    /// writes it and the unprivileged parent reads it back, whose failure path
-    /// is a silent `return` — a too-tight mode would drop the end-of-run
-    /// replay with no diagnostic at all.
+    // The echo handoff needs the same guarantee: the privileged `__worker`
+    // writes it and the unprivileged parent reads it back, whose failure path
+    // is a silent `return` — a too-tight mode would drop the end-of-run
+    // replay with no diagnostic at all.
     #[test]
     fn handoff_file_is_group_readable() {
         use std::os::unix::fs::PermissionsExt;
@@ -1064,8 +1077,8 @@ mod tests {
         assert_eq!(mode & 0o7777, 0o660, "the handoff file is group-readable");
     }
 
-    /// A stamp is whatever is in a file name, not necessarily what `save`
-    /// wrote — byte-slicing it must not panic on a char boundary.
+    // A stamp is whatever is in a file name, not necessarily what `save`
+    // wrote — byte-slicing it must not panic on a char boundary.
     #[test]
     fn a_non_ascii_stamp_does_not_panic() {
         let log = SavedLog {

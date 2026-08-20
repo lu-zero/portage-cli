@@ -1,4 +1,4 @@
-//! Tracing subscriber setup.
+//! Tracing subscriber setup
 //!
 //! `tracing`'s contract is "library emits, application decides": library
 //! crates emit [`tracing`] events, and the CLI installs the subscriber that
@@ -35,8 +35,9 @@ use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
 use tracing_subscriber::registry::LookupSpan;
 
-/// Crates whose events the verbosity flags actually govern. Third-party
-/// targets are deliberately absent: they keep the `WARN` default.
+/// Crates whose events the verbosity flags actually govern
+///
+/// Third-party targets are deliberately absent: they keep the `WARN` default.
 const OURS: &[&str] = &[
     "portage_cli",
     "portage_atom",
@@ -54,7 +55,7 @@ const OURS: &[&str] = &[
     "gentoo_stages",
 ];
 
-/// The level floor for our own crates, per the table above.
+/// The level floor for our own crates, per the table above
 fn floor(quiet: bool, verbose: u8, parallel: bool) -> LevelFilter {
     if verbose >= 3 {
         LevelFilter::TRACE
@@ -67,9 +68,11 @@ fn floor(quiet: bool, verbose: u8, parallel: bool) -> LevelFilter {
     }
 }
 
-/// Build the filter both layers share: `WARN` for everything, raised to the
-/// verbosity floor for [`OURS`]. A parseable `RUST_LOG` replaces it entirely,
-/// which is the only way to reach a dependency's own debug traces.
+/// Build the filter both layers share: `WARN` for everything, raised to the verbosity floor
+/// for [`OURS`]
+///
+/// A parseable `RUST_LOG` replaces it entirely, which is the only way to reach a
+/// dependency's own debug traces.
 fn filter(quiet: bool, verbose: u8, parallel: bool) -> Targets {
     if let Ok(spec) = std::env::var("RUST_LOG")
         && let Ok(targets) = spec.parse()
@@ -104,7 +107,7 @@ pub fn stdout_wants_color() -> bool {
     )
 }
 
-/// Render a [`miette::Diagnostic`] code frame to stderr.
+/// Render a [`miette::Diagnostic`] code frame to stderr
 ///
 /// Color is decided here, at the UI boundary — never pre-baked into a
 /// library error string that might later travel through tracing or JSONL.
@@ -214,8 +217,9 @@ where
     }
 }
 
-/// Install the global tracing subscriber. Call once at startup, before any
-/// library code that emits tracing events.
+/// Install the global tracing subscriber
+///
+/// Call once at startup, before any library code that emits tracing events.
 ///
 /// `parallel` is whether more than one merge job will run concurrently (`-j>1`);
 /// it drops the floor to `WARN` so per-package info does not interleave.

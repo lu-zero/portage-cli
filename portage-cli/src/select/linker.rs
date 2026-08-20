@@ -1,4 +1,4 @@
-//! `em select linker` — linker profile selection.
+//! `em select linker` — linker profile selection
 //!
 //! Manages linker profile selection. Similar to binutils-config but focused
 //! specifically on the linker (ld, lld, mold, etc.). Supports grouping profiles
@@ -9,7 +9,7 @@ use anyhow::Result;
 use super::{Cli, env_d};
 use crate::cli::LinkerAction;
 
-/// Linker-specific profile type.
+/// Linker-specific profile type
 pub struct LinkerProfileType;
 
 impl env_d::EnvDProfile for LinkerProfileType {

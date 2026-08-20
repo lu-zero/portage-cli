@@ -1,4 +1,4 @@
-//! `em query meta` — display package metadata from repo + VDB.
+//! `em query meta` — display package metadata from repo + VDB
 
 use std::io::Write as _;
 use std::path::Path;

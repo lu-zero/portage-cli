@@ -1,4 +1,4 @@
-//! Subprocess JSONL sink (`--activity-fd`) and worker re-emit path.
+//! Subprocess JSONL sink (`--activity-fd`) and worker re-emit path
 
 use std::fs::File;
 use std::io::Write;
@@ -47,7 +47,7 @@ impl JsonlFdSink {
         })
     }
 
-    /// Connect to a parent-created Unix domain socket (install-worker re-emit).
+    /// Connect to a parent-created Unix domain socket (install-worker re-emit)
     #[cfg(unix)]
     pub fn connect_reemit(path: &str) -> std::io::Result<Self> {
         use std::os::unix::net::UnixStream;

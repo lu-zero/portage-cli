@@ -1,4 +1,4 @@
-//! crossdev's `load_multilib_env`, ported.
+//! crossdev's `load_multilib_env`, ported
 //!
 //! The cross package `package.env` needs the per-ABI multilib tables so the libc
 //! builds for the *target* ABI (e.g. `-mabi=lp64d -march=rv64gc`) instead of
@@ -14,18 +14,18 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use camino::Utf8Path;
 
-/// The per-ABI multilib variables multilib.eclass computes for one tuple.
+/// The per-ABI multilib variables multilib.eclass computes for one tuple
 pub struct MultilibEnv {
     /// `CFLAGS_<abi>` / `CHOST_<abi>` / `CTARGET_<abi>` / `LDFLAGS_<abi>` /
     /// `LIBDIR_<abi>`, keyed by name.
     vars: BTreeMap<String, String>,
-    /// The active ABI list (space-separated) and the default ABI.
+    /// The active ABI list (space-separated) and the default ABI
     multilib_abis: String,
     default_abi: String,
 }
 
 impl MultilibEnv {
-    /// The first (primary) ABI — crossdev's `TARGET_ABI`.
+    /// The first (primary) ABI — crossdev's `TARGET_ABI`
     fn primary_abi(&self) -> &str {
         self.multilib_abis
             .split_whitespace()
@@ -33,12 +33,12 @@ impl MultilibEnv {
             .unwrap_or(&self.default_abi)
     }
 
-    /// The default ABI (`DEFAULT_ABI`).
+    /// The default ABI (`DEFAULT_ABI`)
     pub fn default_abi(&self) -> &str {
         &self.default_abi
     }
 
-    /// `LIBDIR_<abi>` for `abi`, if multilib.eclass defined one.
+    /// `LIBDIR_<abi>` for `abi`, if multilib.eclass defined one
     pub fn libdir(&self, abi: &str) -> Option<&str> {
         self.vars.get(&format!("LIBDIR_{abi}")).map(String::as_str)
     }
@@ -126,11 +126,12 @@ printf 'DEFAULT_ABI=%s\n' "${{DEFAULT_ABI}}"
     })
 }
 
-/// The cross `package.env` body for one package — crossdev's `set_env`. The
-/// per-ABI tables of `host` and `target` are merged (every file carries both);
-/// the unprefixed `ABI`/`MULTILIB_ABIS`/`DEFAULT_ABI` is the **target's** for a
-/// target package (libc/headers/runtimes — code that runs on `<CTARGET>`) and
-/// the **host's** (plus `TARGET_*`) for a host tool (binutils/gcc/the clang wrapper).
+/// The cross `package.env` body for one package — crossdev's `set_env`
+///
+/// The per-ABI tables of `host` and `target` are merged (every file carries both); the
+/// unprefixed `ABI`/`MULTILIB_ABIS`/`DEFAULT_ABI` is the **target's** for a target package
+/// (libc/headers/runtimes — code that runs on `<CTARGET>`) and the **host's** (plus
+/// `TARGET_*`) for a host tool (binutils/gcc/the clang wrapper).
 pub fn env_block(host: &MultilibEnv, target: &MultilibEnv, target_package: bool) -> String {
     let mut merged = host.vars.clone();
     merged.extend(target.vars.iter().map(|(k, v)| (k.clone(), v.clone())));

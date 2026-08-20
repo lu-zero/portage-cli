@@ -1,4 +1,4 @@
-//! Default git sync backend: shell out to `git` (Portage parity).
+//! Default git sync backend: shell out to `git` (Portage parity)
 //!
 //! Mirrors `portage.sync.modules.git.git.GitSync.update` (see
 //! `sync/modules/git/git.py`, comment block above `sync_depth`, bug #887025 /
@@ -316,9 +316,9 @@ mod tests {
         assert!(st.success(), "git {args:?} failed");
     }
 
-    /// A real `file://` bare remote (not a plain local-path clone, which
-    /// silently ignores `--depth` — the bug this whole module works around
-    /// only reproduces against a genuinely shallow clone).
+    // A real `file://` bare remote (not a plain local-path clone, which
+    // silently ignores `--depth` — the bug this whole module works around
+    // only reproduces against a genuinely shallow clone).
     struct Fixture {
         _tmp: tempfile::TempDir,
         remote_uri: String,
@@ -386,11 +386,11 @@ mod tests {
         );
     }
 
-    /// Regression test for the confirmed bug: a `--depth 1` fetch's new tip
-    /// shares no ancestry with the previous shallow history, so `git merge
-    /// --ff-only` used to fail with "refusing to merge unrelated histories"
-    /// on every volatile-repo sync after the first. `reset --merge` must not
-    /// have that problem.
+    // Regression test for the confirmed bug: a `--depth 1` fetch's new tip
+    // shares no ancestry with the previous shallow history, so `git merge
+    // --ff-only` used to fail with "refusing to merge unrelated histories"
+    // on every volatile-repo sync after the first. `reset --merge` must not
+    // have that problem.
     #[test]
     fn volatile_update_survives_unrelated_shallow_history() {
         let _path = crate::test_support::path_lock();
@@ -447,9 +447,9 @@ mod tests {
         assert!(!changed, "no upstream change: sync must report unchanged");
     }
 
-    /// Portage never shallows a volatile repo the user cloned in full —
-    /// `sync_depth` only drops to 0 (full fetch, no `--depth`) in exactly
-    /// that case. A full clone updated as volatile must stay full.
+    // Portage never shallows a volatile repo the user cloned in full —
+    // `sync_depth` only drops to 0 (full fetch, no `--depth`) in exactly
+    // that case. A full clone updated as volatile must stay full.
     #[test]
     fn volatile_update_does_not_shallow_a_full_clone() {
         let _path = crate::test_support::path_lock();

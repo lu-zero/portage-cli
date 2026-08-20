@@ -1,4 +1,4 @@
-//! On-disk live status sink — concurrent-friendly per-package files.
+//! On-disk live status sink — concurrent-friendly per-package files
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -13,9 +13,9 @@ use super::event::{
 use super::projection::LiveProjection;
 use crate::util::write_atomic;
 
-/// Writes `var/cache/edb/em-activity/live/<job_id>/…` under a merge root.
+/// Writes `var/cache/edb/em-activity/live/<job_id>/…` under a merge root
 pub struct LiveFsSink {
-    /// Absolute path of the merge root that owns this activity tree.
+    /// Absolute path of the merge root that owns this activity tree
     activity_root: Utf8PathBuf,
     /// Keep a projection so phase updates can rewrite inflight JSON without
     /// re-reading every field from the event alone.
@@ -30,7 +30,7 @@ pub struct LiveFsSink {
 }
 
 impl LiveFsSink {
-    /// `merge_root` is the EROOT that owns `var/cache/edb/em-activity/`.
+    /// `merge_root` is the EROOT that owns `var/cache/edb/em-activity/`
     pub fn new(merge_root: impl Into<Utf8PathBuf>) -> Self {
         Self {
             activity_root: merge_root.into(),
@@ -82,10 +82,11 @@ impl LiveFsSink {
         }
     }
 
-    /// Static job metadata — written once, at `SessionStart` only. `plan` and
-    /// `blockers` can be large, so this must never be rewritten per-package
-    /// (that O(N) reserialize-and-rewrite, once per `PkgStart`/`PkgEnd`, is
-    /// what made `em regen` hang — see `todo/for-sonnet.md` 2026-08-09).
+    /// Static job metadata — written once, at `SessionStart` only
+    ///
+    /// `plan` and `blockers` can be large, so this must never be rewritten per-package (that
+    /// O(N) reserialize-and-rewrite, once per `PkgStart`/`PkgEnd`, is what made `em regen` hang
+    /// — see `todo/for-sonnet.md` 2026-08-09).
     fn write_session_file(&self, job_id: &str) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let Some(s) = state.get(job_id) else {
@@ -129,8 +130,9 @@ impl LiveFsSink {
         );
     }
 
-    /// Dynamic progress — rewritten on every `SessionHeartbeat`/`PkgStart`/
-    /// `PkgEnd`. Genuinely O(1) per write: none of these three fields grow.
+    /// Dynamic progress — rewritten on every `SessionHeartbeat`/`PkgStart`/ `PkgEnd`
+    ///
+    /// Genuinely O(1) per write: none of these three fields grow.
     fn write_progress_file(&self, job_id: &str) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let Some(s) = state.get(job_id) else {
@@ -460,7 +462,7 @@ fn load_inflight_dir(
     }
 }
 
-/// True if `pid` is still running (best-effort; Unix).
+/// True if `pid` is still running (best-effort; Unix)
 pub fn pid_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;

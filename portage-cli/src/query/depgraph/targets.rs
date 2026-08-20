@@ -12,12 +12,12 @@ use std::collections::HashMap;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
 
-/// Where a root-target atom came from.
+/// Where a root-target atom came from
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetOrigin {
-    /// Named directly on the command line.
+    /// Named directly on the command line
     Explicit,
-    /// Expanded from `@<name>`.
+    /// Expanded from `@<name>`
     Set(String),
 }
 
@@ -33,7 +33,7 @@ impl TargetOrigin {
         matches!(self, Self::Set(name) if matches!(name.as_str(), "selected" | "system" | "world"))
     }
 
-    /// How to name this origin when heading a group of targets that share it.
+    /// How to name this origin when heading a group of targets that share it
     pub fn label(&self) -> String {
         match self {
             Self::Explicit => "requested".to_string(),
@@ -41,10 +41,10 @@ impl TargetOrigin {
         }
     }
 
-    /// Portage's `(dependency required by …)` trailer under an unsatisfied
-    /// argument. An atom typed on the command line is its own argument and
-    /// gets none; a set names itself, so the user can tell where the atom they
-    /// never typed came from.
+    /// Portage's `(dependency required by …)` trailer under an unsatisfied argument
+    ///
+    /// An atom typed on the command line is its own argument and gets none; a set names itself,
+    /// so the user can tell where the atom they never typed came from.
     ///
     /// Portage prints one line per level of set nesting (`"@selected" [set]`
     /// then `"@world" [argument]`); `expand_sets` keeps only the name the user
@@ -57,17 +57,17 @@ impl TargetOrigin {
     }
 }
 
-/// One resolved root target plus its provenance.
+/// One resolved root target plus its provenance
 #[derive(Debug, Clone)]
 pub struct TargetAtom {
-    /// The atom text handed to the resolver.
+    /// The atom text handed to the resolver
     pub atom: String,
-    /// Where it came from.
+    /// Where it came from
     pub origin: TargetOrigin,
 }
 
 impl TargetAtom {
-    /// A target named on the command line.
+    /// A target named on the command line
     pub fn explicit(atom: impl Into<String>) -> Self {
         Self {
             atom: atom.into(),
@@ -76,25 +76,25 @@ impl TargetAtom {
     }
 }
 
-/// Why a root target has no acceptable candidate.
+/// Why a root target has no acceptable candidate
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetProblem {
     /// The tree has versions, but keyword/mask/license filtering rejects every
     /// one matching the atom.
     AllFiltered,
-    /// No ebuild for this package at all.
+    /// No ebuild for this package at all
     NoEbuilds,
 }
 
-/// What to do with a root target no acceptable ebuild satisfies.
+/// What to do with a root target no acceptable ebuild satisfies
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RootTargetDecision {
-    /// Drop the atom, report it, and keep resolving (exit 0).
+    /// Drop the atom, report it, and keep resolving (exit 0)
     DropWithWarning,
     /// Drop the atom without a word: an installed instance satisfies it and the
     /// resolve is selective, so there is nothing to do and nothing wrong.
     DropSilently,
-    /// Abort the resolve.
+    /// Abort the resolve
     Fatal,
 }
 
@@ -139,7 +139,7 @@ mod tests {
         TargetOrigin::Set(name.to_string())
     }
 
-    /// Every row was measured against emerge 3.13.
+    // Every row was measured against emerge 3.13
     #[test]
     fn fatal_vs_soft_matches_portage() {
         use RootTargetDecision::*;
