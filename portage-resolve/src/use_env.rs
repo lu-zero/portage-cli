@@ -6,7 +6,7 @@ use portage_atom::interner::Interned;
 use portage_atom_pubgrub::{ProfileUseNode, UseLayer, UseOverride};
 use portage_repo::{AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
 
-use crate::force_mask::{ForceMask, index_by_cpn};
+use crate::force_mask::{ForceMask, ForceMaskLayer, index_by_cpn, signed_flags};
 use crate::repo::AcceptToken;
 
 type Result<T> = anyhow::Result<T>;
@@ -362,16 +362,21 @@ async fn compute_use_env(
     // baked into the base state. The package-level and *.stable.* sets are
     // also per package; they carry raw `-flag` tokens so unforce/unmask is
     // resolved per package.
-    let intern_flags = |v: Vec<String>| v.iter().map(|s| Interned::intern(s)).collect();
     let force_mask = ForceMask {
-        use_force: intern_flags(stack.use_force().unwrap_or_default()),
-        use_mask: intern_flags(stack.use_mask().unwrap_or_default()),
-        use_stable_force: intern_flags(stack.use_stable_force().unwrap_or_default()),
-        use_stable_mask: intern_flags(stack.use_stable_mask().unwrap_or_default()),
-        pkg_force: index_by_cpn(stack.package_use_force().unwrap_or_default()),
-        pkg_mask: index_by_cpn(stack.package_use_mask().unwrap_or_default()),
-        pkg_stable_force: index_by_cpn(stack.package_use_stable_force().unwrap_or_default()),
-        pkg_stable_mask: index_by_cpn(stack.package_use_stable_mask().unwrap_or_default()),
+        layers: stack
+            .profiles()
+            .iter()
+            .map(|p| ForceMaskLayer {
+                use_force: signed_flags(p.use_force().unwrap_or_default()),
+                use_mask: signed_flags(p.use_mask().unwrap_or_default()),
+                use_stable_force: signed_flags(p.use_stable_force().unwrap_or_default()),
+                use_stable_mask: signed_flags(p.use_stable_mask().unwrap_or_default()),
+                pkg_force: index_by_cpn(p.package_use_force().unwrap_or_default()),
+                pkg_mask: index_by_cpn(p.package_use_mask().unwrap_or_default()),
+                pkg_stable_force: index_by_cpn(p.package_use_stable_force().unwrap_or_default()),
+                pkg_stable_mask: index_by_cpn(p.package_use_stable_mask().unwrap_or_default()),
+            })
+            .collect(),
     };
 
     Ok(UseEnv {

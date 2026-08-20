@@ -2505,10 +2505,10 @@ mod tests {
         let arch = Arch::intern("amd64");
         let pre_env = portage_atom_pubgrub::UseLayer::parse("a b"); // both on ⇒ ?? ( a b ) violated
 
-        let fm = ForceMask {
-            use_force: vec![Interned::intern("a")],
+        let fm = ForceMask::one(crate::force_mask::ForceMaskLayer {
+            use_force: crate::force_mask::signed_flags(vec!["a".into()]),
             ..Default::default()
-        };
+        });
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
         let adapter = Adapter {
             data: &data,
@@ -2976,11 +2976,11 @@ mod tests {
         let arch = Arch::intern("amd64");
         let pre_env = portage_atom_pubgrub::UseLayer::parse("cet"); // user enabled a flag the profile masks
 
-        let fm = ForceMask {
+        let fm = ForceMask::one(crate::force_mask::ForceMaskLayer {
             pkg_force: index_by_cpn(vec![(dep("cross-foo/gcc"), vec!["multilib".to_string()])]),
             pkg_mask: index_by_cpn(vec![(dep("cross-foo/gcc"), vec!["cet".to_string()])]),
             ..Default::default()
-        };
+        });
         let ak = AcceptKeywords::from_global(&arch, &["~amd64"]);
         let adapter = Adapter {
             data: &data,

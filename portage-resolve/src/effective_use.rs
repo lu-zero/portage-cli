@@ -278,10 +278,10 @@ mod tests {
             UseFlagState::Disabled
         ));
 
-        let fm = ForceMask {
-            use_force: vec![Interned::intern("multilib")],
+        let fm = ForceMask::one(crate::force_mask::ForceMaskLayer {
+            use_force: crate::force_mask::signed_flags(vec!["multilib".into()]),
             ..Default::default()
-        };
+        });
         let iuse: HashSet<_> = [Interned::intern("multilib")].into_iter().collect();
         apply_force_mask(&mut cfg, &fm, &cpv, None, false, &iuse);
 
