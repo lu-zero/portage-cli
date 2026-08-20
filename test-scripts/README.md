@@ -115,15 +115,17 @@ real cross package builds.
 
 ### `test-blockers-iuse-effective-sandbox.sh`
 
-Real-chroot regression test for the 2026-08-20 PMS pass: blocker
-auto-unmerge (PMS 8.3.2, `portage-resolve/src/conflicts.rs`) and
-`IUSE_EFFECTIVE` (PMS 11.1.1 / table 12.20, `portage-metadata`'s
-`iuse_effective.rs` + `portage-repo`'s `use_flag.rs`). Both landed with
-extensive unit coverage but neither had been exercised through a real
-merge/VDB/build-shell round trip — that's the gap this script closes.
-Builds a tiny synthetic overlay (`test-pms`, via `em select repository
-create`) with seven trivial no-fetch ebuilds rather than hunting for a real
-Gentoo package with the right blocker/USE shape (the canonical
+Regression test for the 2026-08-20 PMS pass: blocker auto-unmerge (PMS
+8.3.2, `portage-resolve/src/conflicts.rs`) and `IUSE_EFFECTIVE` (PMS 11.1.1
+/ table 12.20, `portage-metadata`'s `iuse_effective.rs` + `portage-repo`'s
+`use_flag.rs`). Both landed with extensive unit coverage but neither had
+been exercised through a real merge/VDB/build-shell round trip — that's
+the gap this script closes. Unlike the other scripts here, it drives `em`
+via `crossdev-stages sandbox run`/`enter` (hakoniwa namespaces) rather than
+`sudo chroot` + manual `mount --bind` — no host mount to leak if the script
+dies mid-run. Builds a tiny synthetic overlay (`test-pms`, via `em select
+repository create`) with seven trivial no-fetch ebuilds rather than hunting
+for a real Gentoo package with the right blocker/USE shape (the canonical
 `systemd[resolvconf]`/`openresolv` blocker pair is far too heavy to build
 here) — keeps the whole run fast and isolates exactly the behavior under
 test.

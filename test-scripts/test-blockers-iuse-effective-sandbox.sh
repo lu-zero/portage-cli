@@ -1,21 +1,34 @@
 #!/usr/bin/env bash
-# test-blockers-iuse-effective-sandbox.sh — real-chroot regression test for
-# the 2026-08-20 PMS pass: blocker auto-unmerge (PMS 8.3.2, conflicts.rs)
-# and IUSE_EFFECTIVE (PMS 11.1.1 / table 12.20, iuse_effective.rs +
+# test-blockers-iuse-effective-sandbox.sh — regression test for the
+# 2026-08-20 PMS pass: blocker auto-unmerge (PMS 8.3.2, conflicts.rs) and
+# IUSE_EFFECTIVE (PMS 11.1.1 / table 12.20, iuse_effective.rs +
 # use_flag.rs). Both were unit-tested in isolation but never exercised
 # through a real merge/VDB/build-shell round trip — that's the gap this
 # script closes.
 #
+# Every command inside the sandbox runs via `crossdev-stages sandbox run`
+# (hakoniwa: unshared mount/PID/user namespaces, its own fresh /proc,
+# /dev, /tmp, DNS, uid/gid mapping) — deliberately NOT `sudo chroot` +
+# manual `mount --bind`. A raw chroot shares the host's mount namespace, so
+# a script that dies mid-run (or a wrong umount order) leaves real mounts
+# behind on the host; hakoniwa's namespaces are torn down with the process,
+# nothing to leak. The only host-side privileged operations left are plain
+# file writes into the sandbox's own directory (`sudo cp`/`sudo tee`) — no
+# mount, no chroot, nothing that outlives this script.
+#
 # Builds a tiny synthetic overlay (`test-pms`, via `em select repository
-# create`) with six trivial ebuilds — no SRC_URI, no network fetch — rather
-# than hunting for a real Gentoo package pair with the right blocker/USE
-# shape (the canonical systemd[resolvconf]/openresolv blocker pair is far
-# too heavy to build here). This isolates exactly the integration behavior
-# under test and keeps the whole run fast.
+# create`) with seven trivial ebuilds — no SRC_URI, no network fetch —
+# rather than hunting for a real Gentoo package pair with the right
+# blocker/USE shape (the canonical systemd[resolvconf]/openresolv blocker
+# pair is far too heavy to build here). This isolates exactly the
+# integration behavior under test and keeps the whole run fast. The real
+# `portage-repo/gentoo` checkout is copied in (not bind-mounted) so
+# `masters = gentoo` has real profiles/licenses to inherit, without a live
+# mount tying the sandbox to the host tree.
 #
 # Usage: ./test-blockers-iuse-effective-sandbox.sh [--keep] [--sandbox NAME]
 #   --keep           Don't destroy the sandbox on exit (for follow-up manual
-#                     poking). Mounts are still torn down.
+#                     poking via `crossdev-stages sandbox enter --name NAME`).
 #   --sandbox NAME   Sandbox name (default: em-blockers-iuse). Always
 #                     destroyed-then-recreated fresh — never reused as-is.
 #
@@ -40,8 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$SANDBOX" ]]; then
-    echo "--sandbox must not be empty (an empty name collapses \$SB to the" \
-        "whole sandboxes dir, and cleanup would sudo rm -rf it)" >&2
+    echo "--sandbox must not be empty" >&2
     exit 1
 fi
 
@@ -54,15 +66,20 @@ fail() { echo "FAIL: $1"; FAIL=1; }
 
 cleanup() {
     echo "--- cleaning up ---"
-    sudo umount -R "$SB/dev" 2>/dev/null
-    sudo umount "$SB/var/cache/distfiles" "$SB/sys" "$SB/proc" "$SB/var/db/repos/gentoo" 2>/dev/null
     if [[ $KEEP -eq 0 ]]; then
-        # See test-binpkg-identity-sandbox.sh's cleanup comment: `sandbox
-        # destroy` leaves root-owned files behind, so `sudo rm -rf` first.
+        # `sandbox destroy`'s own removal runs inside its hakoniwa
+        # namespace and can't touch the ebuild/em/repo files this script
+        # wrote via `sudo tee`/`sudo cp` (real host-root-owned, not just
+        # the stage3's own root-owned files it's built to handle) — it
+        # reliably fails on those. `sudo rm -rf` on this one
+        # already-validated, always-absolute `$SB` path is not the chroot
+        # pattern this script was rewritten to drop: no mount, no
+        # namespace, a single bounded removal of a path we just built.
         sudo rm -rf "$SB"
-        "$CDS" sandbox destroy "$SANDBOX" 2>/dev/null
+        ( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox destroy "$SANDBOX" ) 2>/dev/null
     else
-        echo "kept sandbox: $SANDBOX ($SB)"
+        echo "kept sandbox: $SANDBOX ($SB) — poke it with:"
+        echo "  (cd $CROSSDEV_STAGES_DIR && $CDS sandbox enter --name $SANDBOX)"
     fi
 }
 trap cleanup EXIT
@@ -71,23 +88,19 @@ echo "--- building em (release) ---"
 ( cd "$REPO_ROOT" && cargo build --release -p portage-cli ) || { echo "em build failed"; exit 1; }
 
 echo "--- fresh sandbox: $SANDBOX ---"
-sudo rm -rf "$SB"
-"$CDS" sandbox destroy "$SANDBOX" 2>/dev/null
-"$CDS" sandbox setup --arch aarch64 --name "$SANDBOX" || { echo "sandbox setup failed"; exit 1; }
+( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox destroy "$SANDBOX" ) 2>/dev/null
+( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox setup --arch aarch64 --name "$SANDBOX" ) \
+    || { echo "sandbox setup failed"; exit 1; }
 
-echo "--- wiring sandbox ---"
-sudo mkdir -p "$SB/usr/local/bin"
+# Plain file writes into the sandbox's own directory tree — no mount, no
+# chroot. `sandbox run` bind-mounts this whole directory as the container
+# root, so anything placed here is visible inside at the same path.
+echo "--- wiring sandbox (file copies only) ---"
+sudo mkdir -p "$SB/usr/local/bin" "$SB/var/db/repos"
 sudo cp "$REPO_ROOT/target/release/em" "$SB/usr/local/bin/em"
-sudo mkdir -p "$SB/var/db/repos/gentoo" "$SB/proc" "$SB/dev" "$SB/sys" "$SB/var/cache/distfiles"
-sudo mount --bind "$REPO_ROOT/portage-repo/gentoo" "$SB/var/db/repos/gentoo"
-sudo mount --bind /proc "$SB/proc"
-sudo mount --rbind /dev "$SB/dev"
-sudo mount --bind /sys "$SB/sys"
-sudo cp /etc/resolv.conf "$SB/etc/resolv.conf"
-sudo mkdir -p /var/cache/distfiles
-sudo mount --bind /var/cache/distfiles "$SB/var/cache/distfiles"
+sudo cp -a "$REPO_ROOT/portage-repo/gentoo" "$SB/var/db/repos/gentoo"
 
-em() { sudo chroot "$SB" /usr/local/bin/em "$@"; }
+em() { ( cd "$CROSSDEV_STAGES_DIR" && "$CDS" sandbox run --name "$SANDBOX" -- /usr/local/bin/em "$@" ); }
 mconf() { sudo tee "$SB/etc/portage/make.conf" >/dev/null; }
 
 cat <<'EOF' | mconf
@@ -98,8 +111,8 @@ ACCEPT_KEYWORDS="~arm64"
 FEATURES="-sandbox -usersandbox"
 EOF
 
-sudo chroot "$SB" /usr/local/bin/em --help >/dev/null || { echo "em --help failed in chroot"; exit 1; }
-pass "em runs in chroot"
+em --help >/dev/null || { echo "em --help failed in the sandbox"; exit 1; }
+pass "em runs under crossdev-stages sandbox run"
 
 echo "--- creating synthetic overlay: test-pms ---"
 em select repository create test-pms || { echo "overlay create failed"; exit 1; }
