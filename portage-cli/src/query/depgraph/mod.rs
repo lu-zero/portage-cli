@@ -1086,7 +1086,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         Some(s) => PortagePackage::slotted(rb.cpn, Interned::intern(s)),
                         None => PortagePackage::unslotted(rb.cpn),
                     };
-                    order.insert(pos, (pkg, rb.version.clone()));
+                    let ver = best_rebuild_version(&data, &target_policy, &rb, &planned_slots);
+                    order.insert(pos, (pkg, ver));
                     slot_op_cpns.insert(rb.cpn);
                     slot_op_cpns.extend(rb.triggers.iter().copied());
                 }
@@ -1697,6 +1698,99 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         hard_cycle_edges,
         provided: provided_avail,
         unmerges,
+    })
+}
+
+/// Prefer a newer available version for a slot-operator rebuild's target
+///
+/// `subslot::find_rebuilds` only sees the installed VDB entry, so it always
+/// names the currently-installed version — rebuilding at that stale version
+/// when a newer one is sitting right there is pure waste (host-verified
+/// 2026-08-20: `dev-cpp/abseil-cpp` bumping unconditionally force-rebuilt
+/// `dev-libs/protobuf` at its old 33.1 even though 34.2 was available and
+/// depends on abseil-cpp identically).
+///
+/// Looks for the newest accepted (keyword/mask-ok) same-slot candidate
+/// above `rb.version`, and uses it only if its own raw DEPEND+RDEPEND still
+/// references every trigger with a version range the trigger's planned
+/// version satisfies — checked structurally (like `repo::cpns_for`, not
+/// USE-evaluated, since this candidate's resolved USE isn't computed yet).
+/// Falls back to `rb.version` untouched otherwise.
+fn best_rebuild_version(
+    data: &repo::RepoData,
+    policy: &repo::ResolvePolicy,
+    rb: &subslot::SubslotRebuild,
+    planned_slots: &HashMap<Cpn, Vec<(Version, portage_atom::Slot)>>,
+) -> Version {
+    let Some(entries) = data.versions.get(&rb.cpn) else {
+        return rb.version.clone();
+    };
+    let mut candidates: Vec<_> = entries
+        .iter()
+        .filter(|(cpv, cache)| {
+            cpv.version > rb.version
+                && rb.slot.is_none_or(|s| cache.metadata.slot.slot == s)
+                && policy.accept_keywords.accepts(
+                    &cache.metadata.keywords,
+                    cpv,
+                    Some(cache.metadata.slot.slot),
+                )
+                && !repo::is_masked(
+                    policy.package_mask,
+                    policy.package_unmask,
+                    cpv,
+                    &cache.metadata.slot,
+                )
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.0.version.cmp(&a.0.version));
+    candidates
+        .into_iter()
+        .find(|(_, cache)| {
+            rb.triggers
+                .iter()
+                .all(|trig| trigger_still_satisfied(cache, *trig, planned_slots))
+        })
+        .map_or_else(|| rb.version.clone(), |(cpv, _)| cpv.version.clone())
+}
+
+/// Whether `cache`'s own DEPEND/RDEPEND still binds `trigger` to a version
+/// range its planned version satisfies (see [`best_rebuild_version`])
+fn trigger_still_satisfied(
+    cache: &portage_metadata::CacheEntry,
+    trigger: Cpn,
+    planned_slots: &HashMap<Cpn, Vec<(Version, portage_atom::Slot)>>,
+) -> bool {
+    fn collect<'a>(entries: &'a [portage_atom::DepEntry], trigger: Cpn, out: &mut Vec<&'a Dep>) {
+        for entry in entries {
+            match entry {
+                portage_atom::DepEntry::Atom(dep)
+                    if dep.blocker.is_none() && dep.cpn == trigger =>
+                {
+                    out.push(dep);
+                }
+                portage_atom::DepEntry::UseConditional { children, .. }
+                | portage_atom::DepEntry::AllOf(children)
+                | portage_atom::DepEntry::AnyOf(children)
+                | portage_atom::DepEntry::ExactlyOneOf(children)
+                | portage_atom::DepEntry::AtMostOneOf(children) => collect(children, trigger, out),
+                portage_atom::DepEntry::Atom(_) => {}
+            }
+        }
+    }
+
+    let Some(planned) = planned_slots.get(&trigger) else {
+        return true;
+    };
+    let mut atoms = Vec::new();
+    collect(&cache.metadata.depend, trigger, &mut atoms);
+    collect(&cache.metadata.rdepend, trigger, &mut atoms);
+    if atoms.is_empty() {
+        return false;
+    }
+    atoms.iter().any(|dep| {
+        let vs = conflicts::dep_to_version_set(dep);
+        planned.iter().any(|(ver, _)| vs.contains(ver))
     })
 }
 

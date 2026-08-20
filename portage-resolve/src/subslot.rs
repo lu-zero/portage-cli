@@ -226,4 +226,64 @@ mod tests {
         let plan = planned(&[("dev-lang/tcl", "9.0.3", "9", Some("9.0"))]);
         assert!(find_rebuilds(&installed, &plan, &HashSet::new()).is_empty());
     }
+
+    /// One `find_rebuilds` call, checked against an expected trigger set
+    ///
+    /// `installed` is `(cpn, version, deps)` triples (as [`vdb`] takes);
+    /// `plan` is fed straight to [`planned`]; `in_plan` lists CPNs already in
+    /// the plan. `want` is the expected set of rebuilt CPNs (empty = no
+    /// rebuild) — add a case here rather than writing a new `#[test]` unless
+    /// the case needs its own custom assertions on `triggers`/`version`.
+    fn scenario(
+        installed: &[(&str, &str, &str)],
+        plan: &[(&str, &str, &str, Option<&str>)],
+        in_plan: &[&str],
+        want: &[&str],
+    ) {
+        let installed: Vec<VdbEntry> = installed
+            .iter()
+            .map(|(cpn, ver, deps)| vdb(cpn, ver, deps))
+            .collect();
+        let plan = planned(plan);
+        let in_plan: HashSet<Cpn> = in_plan.iter().map(|c| Cpn::parse(c).unwrap()).collect();
+        let got: HashSet<String> = find_rebuilds(&installed, &plan, &in_plan)
+            .into_iter()
+            .map(|r| r.cpn.to_string())
+            .collect();
+        let want: HashSet<String> = want.iter().map(|s| s.to_string()).collect();
+        assert_eq!(got, want);
+    }
+
+    /// Real-world repro: bumping abseil-cpp unconditionally rebuilds protobuf
+    ///
+    /// Host A/B verified against `emerge`, 2026-08-20: `dev-cpp/abseil-cpp`'s
+    /// `SLOT` is version-derived (`0/${PV}`-shaped), so any version bump
+    /// changes its subslot; `dev-libs/protobuf` binds it with `:=`. Bumping
+    /// abseil-cpp alone (not targeting protobuf) makes `find_rebuilds`
+    /// unconditionally pull protobuf in as a same-version rebuild.
+    ///
+    /// Real `emerge` (even with `--complete-graph=y`, `--complete-graph-
+    /// if-new-ver`'s default-on trigger for this exact case) does not,
+    /// because `preserve-libs` keeps the old abseil-cpp `.so` on disk
+    /// until protobuf is next touched. This pins today's behavior as a
+    /// regression baseline for whichever fix direction gets picked — not
+    /// an assertion that it's the intended one.
+    #[test]
+    fn real_world_abseil_cpp_bump_unconditionally_rebuilds_protobuf() {
+        scenario(
+            &[(
+                "dev-libs/protobuf",
+                "33.1",
+                ">=dev-cpp/abseil-cpp-20250127.0:0/2508.1.0=",
+            )],
+            &[(
+                "dev-cpp/abseil-cpp",
+                "20260107.1",
+                "0",
+                Some("2601.1.0-cpp20"),
+            )],
+            &[],
+            &["dev-libs/protobuf"],
+        );
+    }
 }
