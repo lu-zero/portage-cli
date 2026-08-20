@@ -1,7 +1,15 @@
 # `use.stable` / `package.use.stable` inside the defaults layer
 
 Status: 🔴 not started. Split out of the 2026-08-19 defaults/conf USE-fold
-work (`use-defaults-package-use`). Related: [[use-order-repo-layer]]
+work (`use-defaults-package-use`). Related: [[use-order-repo-layer]],
+[[pms-compliance]].
+
+## PMS 5.2.11 (EAPI 9, table 5.4)
+
+`use.stable` and `package.use.stable` override `make.defaults` USE for
+packages merged due to a stable keyword (same predicate as 5.2.12).
+Precedence: `package.use.stable` > `package.use` > `use.stable`. These are
+ordinary USE tokens, not force/mask.
 
 ## What Portage does
 

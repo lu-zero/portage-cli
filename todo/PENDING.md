@@ -27,6 +27,28 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` now resolves cleanly on real Debian 12 (real python step, SLOT-aware provided, linux-headers/glibc provided, a real zstd↔meson↔python cycle root-caused to a missing host `meson`); a full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [[meson-zstd-python-hard-cycle]] (resolved — real hard cycle, not an em bug) |
 | **10** | **Workdir dual-root race (P0)** — per-target builddirs + lock/schedule like Portage; dual plan entries under `--jobs` collide today | 🔴 | [[workdir-dual-root]], clang findings #3/#4 |
 
+### PMS 9 compliance (audit 2026-08-20)
+
+Full pass against [PMS 9](https://projects.gentoo.org/pms/9/pms.html). User
+config (PMS 1.1) is not scored. 5.2.10 / 5.2.12 already match.
+Index: [[pms-compliance]].
+
+| Pri | Item | Status | Detail |
+|-----|------|--------|--------|
+| 1 | `IUSE_EFFECTIVE` never built | 🔴 | [[pms-iuse-effective]] |
+| 2 | Empty `\|\|`/`^^` after USE strip is EAPI 0–6 on every EAPI | 🟡 eval/REQUIRED_USE | [[pms-empty-dep-groups]] |
+| 3 | `fetch+` inverted on merge fetch | 🟡 merge path | [[pms-fetch-plus]] |
+| 4 | Strong blockers still produce an installable plan | 🟡 Step 1 done | [[blocker-enforcement]] |
+| 5 | `REQUIRED_USE` advisory, not a mask | 🔴 policy | [[pms-required-use-mask]] |
+| 6 | IDEPEND native root is `merge_root`, not BROOT | 🔴 | [[pms-idepend-broot]] |
+| 7 | No `D`-symlink rewrite on EAPI 0–8 | 🔴 | [[pms-symlink-rewrite]] |
+| 8 | `CONFIG_PROTECT` longest-prefix vs PMS ancestor-mask | 🔴 confirm | [[pms-config-protect]] |
+
+Letter-of-PMS, empty on current gentoo: [[pms-profile-stack]],
+[[pms-env-unset]], [[use-stable-in-defaults]], [[pms-rdepend-fallback]].
+Parser/docs: [[pms-parser-lenient]], [[pms-einstalldocs]],
+[[pms-doc-citations]].
+
 ### Solver correctness (found 2026-08-17)
 
 - 🟡 **`@system`/`@world` plans could silently pick stale versions — Phases
@@ -96,7 +118,8 @@ carry an effort estimate.
   canary on stock gentoo — both file types are empty in gentoo/guru/pentoo
   today): `use.stable`/`package.use.stable` inside defaults
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
-  ([[use-order-repo-layer]])
+  ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
+  ([[pms-compliance]]).
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 

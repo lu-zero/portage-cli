@@ -7,6 +7,12 @@ fatal "cannot be installed at the same time" message real emerge prints for a
 hard conflict). **No removal happens yet** — Step 2 (actual unmerge execution)
 remains SLATED LAST per the user's 2026-06-20 decision.
 
+PMS 8.3.2: the blocked package must not be installed. A weak block may be
+ignored only if that package is uninstalled later. A **strong** block must
+not be ignored. Today's plan+exit 0 on `PlannedCoexistence` / `StillNeeded`
+is a letter-of-PMS diverge; Step 2 (or a merge-time refuse on hard conflict
+without unmerge) is what closes it. Related: [[pms-compliance]].
+
 Planned by a Fable agent (grounded directly against real portage's
 `_emerge/depgraph.py::_validate_blockers` and this repo's actual code, not just
 this doc's prior prose — see the plan's "ground truth" corrections below),
