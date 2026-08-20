@@ -53,7 +53,8 @@ pub fn find_violations(
             )
         };
 
-        let unmet = required_use.unsatisfied(&enabled);
+        let unmet =
+            required_use.unsatisfied_groups(&enabled, cache.metadata.eapi.empty_any_of_matches());
         if !unmet.is_empty() {
             out.push(RequiredUseViolation {
                 cpv,

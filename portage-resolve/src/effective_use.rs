@@ -132,29 +132,37 @@ pub struct EvaluatedDeps<'a> {
 /// One USE-evaluated dep-class accessor per PMS dep class; each just picks
 /// the field and hands it to `DepEntry::evaluate_use`
 impl EvaluatedDeps<'_> {
+    fn eval(&self, deps: &[DepEntry]) -> Vec<DepEntry> {
+        DepEntry::evaluate_use_groups(
+            deps,
+            &self.effective,
+            self.cache.metadata.eapi.empty_any_of_matches(),
+        )
+    }
+
     /// `DEPEND` edges
     pub fn depend(&self) -> Vec<DepEntry> {
-        DepEntry::evaluate_use(&self.cache.metadata.depend, &self.effective)
+        self.eval(&self.cache.metadata.depend)
     }
 
     /// `BDEPEND` edges
     pub fn bdepend(&self) -> Vec<DepEntry> {
-        DepEntry::evaluate_use(&self.cache.metadata.bdepend, &self.effective)
+        self.eval(&self.cache.metadata.bdepend)
     }
 
     /// `RDEPEND` edges
     pub fn rdepend(&self) -> Vec<DepEntry> {
-        DepEntry::evaluate_use(&self.cache.metadata.rdepend, &self.effective)
+        self.eval(&self.cache.metadata.rdepend)
     }
 
     /// `PDEPEND` edges
     pub fn pdepend(&self) -> Vec<DepEntry> {
-        DepEntry::evaluate_use(&self.cache.metadata.pdepend, &self.effective)
+        self.eval(&self.cache.metadata.pdepend)
     }
 
     /// `IDEPEND` edges
     pub fn idepend(&self) -> Vec<DepEntry> {
-        DepEntry::evaluate_use(&self.cache.metadata.idepend, &self.effective)
+        self.eval(&self.cache.metadata.idepend)
     }
 }
 

@@ -79,23 +79,62 @@ impl RequiredUseExpr {
     /// [PMS 7.3.4](https://projects.gentoo.org/pms/9/pms.html#use-state-constraints):
     ///
     /// - a bare flag is satisfied when enabled (a negated flag when disabled);
-    /// - `|| ( ... )` — at least one child satisfied (empty group is satisfied);
+    /// - `|| ( ... )` — at least one child satisfied (empty group is satisfied
+    ///   in EAPI 0–6, unmatched in EAPI 7–9 — see [`Self::is_satisfied_groups`]);
     /// - `^^ ( ... )` — exactly one child satisfied;
     /// - `?? ( ... )` — at most one child satisfied;
     /// - `flag? ( ... )` / `!flag? ( ... )` — when the guard is active, all
     ///   children must be satisfied; otherwise vacuously satisfied.
     pub fn is_satisfied(&self, enabled: &dyn Fn(&str) -> bool) -> bool {
+        self.is_satisfied_groups(enabled, true)
+    }
+
+    /// [`Self::is_satisfied`] with PMS table 8.6 empty-`||`/`^^` policy
+    pub fn is_satisfied_groups(
+        &self,
+        enabled: &dyn Fn(&str) -> bool,
+        empty_any_of_matches: bool,
+    ) -> bool {
         match self {
             RequiredUseExpr::Flag { name, negated } => enabled(name) != *negated,
-            RequiredUseExpr::All(children) => children.iter().all(|c| c.is_satisfied(enabled)),
+            RequiredUseExpr::All(children) => children
+                .iter()
+                .all(|c| c.is_satisfied_groups(enabled, empty_any_of_matches)),
             RequiredUseExpr::AnyOf(children) => {
-                children.is_empty() || children.iter().any(|c| c.is_satisfied(enabled))
+                // PMS 8.2.3: inactive use-conditional children are not members.
+                let members: Vec<_> = children
+                    .iter()
+                    .filter(|c| c.is_group_member(enabled))
+                    .collect();
+                if members.is_empty() {
+                    empty_any_of_matches
+                } else {
+                    members
+                        .iter()
+                        .any(|c| c.is_satisfied_groups(enabled, empty_any_of_matches))
+                }
             }
             RequiredUseExpr::ExactlyOne(children) => {
-                children.iter().filter(|c| c.is_satisfied(enabled)).count() == 1
+                let members: Vec<_> = children
+                    .iter()
+                    .filter(|c| c.is_group_member(enabled))
+                    .collect();
+                members
+                    .iter()
+                    .filter(|c| c.is_satisfied_groups(enabled, empty_any_of_matches))
+                    .count()
+                    == 1
             }
             RequiredUseExpr::AtMostOne(children) => {
-                children.iter().filter(|c| c.is_satisfied(enabled)).count() <= 1
+                let members: Vec<_> = children
+                    .iter()
+                    .filter(|c| c.is_group_member(enabled))
+                    .collect();
+                members
+                    .iter()
+                    .filter(|c| c.is_satisfied_groups(enabled, empty_any_of_matches))
+                    .count()
+                    <= 1
             }
             RequiredUseExpr::UseConditional {
                 flag,
@@ -103,8 +142,20 @@ impl RequiredUseExpr {
                 entries,
             } => {
                 let guard_active = enabled(flag) != *negated;
-                !guard_active || entries.iter().all(|c| c.is_satisfied(enabled))
+                !guard_active
+                    || entries
+                        .iter()
+                        .all(|c| c.is_satisfied_groups(enabled, empty_any_of_matches))
             }
+        }
+    }
+
+    /// PMS 8.2.3/8.2.4: a use-conditional that is an immediate child of
+    /// `||` / `^^` / `??` is not a member when its guard is inactive.
+    fn is_group_member(&self, enabled: &dyn Fn(&str) -> bool) -> bool {
+        match self {
+            RequiredUseExpr::UseConditional { flag, negated, .. } => enabled(flag) != *negated,
+            _ => true,
         }
     }
 
@@ -117,24 +168,34 @@ impl RequiredUseExpr {
     /// including a `flag? ( ... )` group whose guard is active — is
     /// reported whole, matching how emerge lists unsatisfied REQUIRED_USE.
     pub fn unsatisfied<'a>(&'a self, enabled: &dyn Fn(&str) -> bool) -> Vec<&'a RequiredUseExpr> {
+        self.unsatisfied_groups(enabled, true)
+    }
+
+    /// [`Self::unsatisfied`] with PMS table 8.6 empty-group policy
+    pub fn unsatisfied_groups<'a>(
+        &'a self,
+        enabled: &dyn Fn(&str) -> bool,
+        empty_any_of_matches: bool,
+    ) -> Vec<&'a RequiredUseExpr> {
         let mut out = Vec::new();
-        self.collect_unsatisfied(enabled, &mut out);
+        self.collect_unsatisfied(enabled, empty_any_of_matches, &mut out);
         out
     }
 
     fn collect_unsatisfied<'a>(
         &'a self,
         enabled: &dyn Fn(&str) -> bool,
+        empty_any_of_matches: bool,
         out: &mut Vec<&'a RequiredUseExpr>,
     ) {
         match self {
             RequiredUseExpr::All(children) => {
                 for child in children {
-                    child.collect_unsatisfied(enabled, out);
+                    child.collect_unsatisfied(enabled, empty_any_of_matches, out);
                 }
             }
             other => {
-                if !other.is_satisfied(enabled) {
+                if !other.is_satisfied_groups(enabled, empty_any_of_matches) {
                     out.push(other);
                 }
             }
@@ -588,6 +649,14 @@ mod tests {
         assert!(expr.is_satisfied(&enabled_set(&["X"])));
         assert!(expr.is_satisfied(&enabled_set(&["wayland"])));
         assert!(!expr.is_satisfied(&enabled_set(&[])));
+    }
+
+    #[test]
+    fn eval_empty_any_of_after_use_strip() {
+        let expr = RequiredUseExpr::parse("|| ( ssl? ( openssl ) )").unwrap();
+        let none = enabled_set(&[]);
+        assert!(expr.is_satisfied_groups(&none, true));
+        assert!(!expr.is_satisfied_groups(&none, false));
     }
 
     #[test]

@@ -131,8 +131,8 @@ impl DepEntry {
     ///
     /// Resolves every `UseConditional` node: active `flag? ( ... )` and inactive
     /// `!flag? ( ... )` are replaced by their (recursively evaluated) children;
-    /// the others are dropped. All other node types keep their structure with
-    /// children recursively evaluated. Empty groups after evaluation are dropped.
+    /// the others are dropped. Empty `||` / `^^` groups are dropped (EAPI 0–6
+    /// table 8.6). Callers with an EAPI use [`Self::evaluate_use_groups`].
     ///
     /// `active` is any [`UseFlagLookup`] — typically a `HashSet` of interned
     /// flags, a `&[&str]` slice, or a folded `UseConfig` (from the
@@ -150,17 +150,37 @@ impl DepEntry {
     /// assert_eq!(resolved.len(), 1);
     /// ```
     pub fn evaluate_use<A: UseFlagLookup + ?Sized>(entries: &[Self], active: &A) -> Vec<Self> {
-        Self::eval_entries(entries, active)
+        Self::evaluate_use_groups(entries, active, true)
     }
 
-    fn eval_entries<A: UseFlagLookup + ?Sized>(entries: &[Self], active: &A) -> Vec<Self> {
+    /// [`Self::evaluate_use`] with PMS table 8.6 empty-group policy
+    ///
+    /// `empty_groups_match` is EAPI 0–6: drop empty `||` / `^^`. EAPI 7–9
+    /// keep them so the caller sees an unsatisfiable group.
+    pub fn evaluate_use_groups<A: UseFlagLookup + ?Sized>(
+        entries: &[Self],
+        active: &A,
+        empty_groups_match: bool,
+    ) -> Vec<Self> {
+        Self::eval_entries(entries, active, empty_groups_match)
+    }
+
+    fn eval_entries<A: UseFlagLookup + ?Sized>(
+        entries: &[Self],
+        active: &A,
+        empty_groups_match: bool,
+    ) -> Vec<Self> {
         entries
             .iter()
-            .flat_map(|e| e.eval_use_one(active))
+            .flat_map(|e| e.eval_use_one(active, empty_groups_match))
             .collect()
     }
 
-    fn eval_use_one<A: UseFlagLookup + ?Sized>(&self, active: &A) -> Vec<Self> {
+    fn eval_use_one<A: UseFlagLookup + ?Sized>(
+        &self,
+        active: &A,
+        empty_groups_match: bool,
+    ) -> Vec<Self> {
         match self {
             DepEntry::Atom(_) => vec![self.clone()],
             DepEntry::UseConditional {
@@ -170,13 +190,13 @@ impl DepEntry {
             } => {
                 let flag_active = active.use_flag_active(*flag);
                 if flag_active != *negate {
-                    Self::eval_entries(children, active)
+                    Self::eval_entries(children, active, empty_groups_match)
                 } else {
                     vec![]
                 }
             }
             DepEntry::AllOf(children) => {
-                let ev = Self::eval_entries(children, active);
+                let ev = Self::eval_entries(children, active, empty_groups_match);
                 if ev.is_empty() {
                     vec![]
                 } else {
@@ -184,23 +204,31 @@ impl DepEntry {
                 }
             }
             DepEntry::AnyOf(children) => {
-                let ev = Self::eval_entries(children, active);
+                let ev = Self::eval_entries(children, active, empty_groups_match);
                 if ev.is_empty() {
-                    vec![]
+                    if empty_groups_match {
+                        vec![]
+                    } else {
+                        vec![DepEntry::AnyOf(vec![])]
+                    }
                 } else {
                     vec![DepEntry::AnyOf(ev)]
                 }
             }
             DepEntry::ExactlyOneOf(children) => {
-                let ev = Self::eval_entries(children, active);
+                let ev = Self::eval_entries(children, active, empty_groups_match);
                 if ev.is_empty() {
-                    vec![]
+                    if empty_groups_match {
+                        vec![]
+                    } else {
+                        vec![DepEntry::ExactlyOneOf(vec![])]
+                    }
                 } else {
                     vec![DepEntry::ExactlyOneOf(ev)]
                 }
             }
             DepEntry::AtMostOneOf(children) => {
-                let ev = Self::eval_entries(children, active);
+                let ev = Self::eval_entries(children, active, empty_groups_match);
                 if ev.is_empty() {
                     vec![]
                 } else {
@@ -1124,10 +1152,18 @@ mod tests {
 
     #[test]
     fn evaluate_use_empty_any_of_dropped() {
-        // ssl inactive: the whole AnyOf collapses to nothing
+        // EAPI 0–6 (table 8.6): empty || matches, so the group is dropped
         let entries = DepEntry::parse("|| ( ssl? ( dev-libs/openssl ) )").unwrap();
         let result = DepEntry::evaluate_use(&entries, &[] as &[&str]);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn evaluate_use_empty_any_of_kept_when_unmatched() {
+        // EAPI 7–9: empty || does not match
+        let entries = DepEntry::parse("|| ( ssl? ( dev-libs/openssl ) )").unwrap();
+        let result = DepEntry::evaluate_use_groups(&entries, &[] as &[&str], false);
+        assert!(matches!(&result[..], [DepEntry::AnyOf(c)] if c.is_empty()));
     }
 
     #[test]
