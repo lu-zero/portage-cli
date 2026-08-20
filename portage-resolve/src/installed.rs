@@ -4,6 +4,7 @@ use portage_atom::DepEntry;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Version};
 use portage_atom_pubgrub::PortagePackage;
+use portage_metadata::Eapi;
 use portage_vdb::Vdb;
 
 /// One VDB-installed package, as the depgraph's post-solve passes need it
@@ -21,6 +22,15 @@ pub struct VdbEntry {
     pub active_use: Vec<Interned<DefaultInterner>>,
     /// The package's declared `IUSE`, prefix-stripped
     pub iuse: Vec<Interned<DefaultInterner>>,
+    /// The EAPI this package was built with, for implicit-IUSE injection
+    ///
+    /// Real Portage's `_reinstall_for_flags` diffs `pkg.iuse.all` on both
+    /// sides — the *installed* package's implicit IUSE (ARCH/ELIBC/KERNEL
+    /// etc, PMS 11.1.1) included, computed under its own EAPI's injection
+    /// rules, not just the raw declared `IUSE` file. Falls back to
+    /// `Eapi::Zero` (narrowest injection) if the VDB's `EAPI` file is
+    /// unreadable.
+    pub eapi: Eapi,
     /// RDEPEND + DEPEND as stored in the VDB (pre-USE evaluation)
     pub deps: Vec<DepEntry>,
 }
@@ -177,12 +187,14 @@ fn load_one(root: Option<&camino::Utf8Path>) -> Vec<VdbEntry> {
                     deps.extend(entries);
                 }
             }
+            let eapi = pkg.eapi().unwrap_or(Eapi::Zero);
             VdbEntry {
                 cpn: *pkg.cpn(),
                 slot: pkg.slot_main().ok(),
                 version: pkg.cpv().version.clone(),
                 active_use,
                 iuse,
+                eapi,
                 deps,
             }
         })

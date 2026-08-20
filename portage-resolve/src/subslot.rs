@@ -134,6 +134,7 @@ mod tests {
             version: Version::parse(ver).unwrap(),
             active_use: Vec::new(),
             iuse: Vec::new(),
+            eapi: portage_metadata::Eapi::Eight,
             deps: DepEntry::parse(deps).unwrap(),
         }
     }

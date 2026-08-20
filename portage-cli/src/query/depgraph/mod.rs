@@ -1748,11 +1748,25 @@ fn package_needs_use_reinstall(
         .force_mask
         .effective(&cpv, slot.as_ref(), stable, &cur_iuse);
     let forced: HashSet<_> = forced.into_iter().chain(masked).collect();
+    // Real Portage diffs `pkg.iuse.all` on *both* sides (`_reinstall_for_flags`
+    // callers pass `iuses = pkg.iuse.all` for the installed package too) —
+    // implicit IUSE injection (ARCH/ELIBC/KERNEL, PMS 11.1.1) included, under
+    // that package's own EAPI. Comparing against the raw VDB `IUSE` file
+    // (declared flags only) here would make every package with sparse/empty
+    // declared IUSE look like it gained the whole implicit set, spuriously
+    // flagging it for reinstall.
+    let orig_iuse: Vec<_> = portage_resolve::force_mask::iuse_effective_set(
+        e.eapi,
+        e.iuse.iter().copied(),
+        &policy.force_mask.iuse_injection,
+    )
+    .into_iter()
+    .collect();
     needs_use_reinstall(
         mode,
         &forced,
         &e.active_use,
-        &e.iuse,
+        &orig_iuse,
         &cur_enabled,
         &cur_iuse,
     )

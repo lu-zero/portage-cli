@@ -684,6 +684,7 @@ mod tests {
             version: version.parse().expect("test version parses"),
             active_use: Vec::new(),
             iuse: Vec::new(),
+            eapi: portage_metadata::Eapi::Eight,
             deps: deps
                 .iter()
                 .map(|d| DepEntry::Atom(Dep::parse(d).expect("test atom parses")))
@@ -871,6 +872,7 @@ mod tests {
             version: "1.0".parse().expect("test version parses"),
             active_use: Vec::new(),
             iuse: Vec::new(),
+            eapi: portage_metadata::Eapi::Eight,
             deps: DepEntry::parse("|| ( net-dns/openresolv sys-apps/systemd )")
                 .expect("test dep string parses"),
         };
