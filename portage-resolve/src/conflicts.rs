@@ -575,31 +575,45 @@ pub struct PlannedUnmerge {
     pub cpv: Cpv,
     /// Before the merge loop (`!!`) or after it (`!`)
     pub order: UnmergeOrder,
+    /// Every package whose blocker triggers this removal. A caller that
+    /// only learns which specific packages actually completed *this* run
+    /// (not just whether the whole plan succeeded) can unmerge a victim
+    /// once all its owners are confirmed merged, instead of tying the
+    /// removal to the whole plan's final `Result` — see
+    /// `emerge.rs::unmerge_blocker_victims`.
+    pub owners: Vec<Cpv>,
 }
 
 /// Deduplicated [`BlockerVerdict::WouldUnmerge`] set for the merge plan.
 ///
 /// One entry per CPV. If both a weak and a strong hit name the same victim,
-/// `BeforeBlocker` wins — any strong block forbids overlap.
+/// `BeforeBlocker` wins — any strong block forbids overlap. `owners`
+/// collects every hit's owner that named this victim (a package can be
+/// blocked by more than one).
 pub fn planned_unmerges(classified: &[ClassifiedBlocker]) -> Vec<PlannedUnmerge> {
-    let mut by_cpv: HashMap<Cpv, UnmergeOrder> = HashMap::new();
+    let mut by_cpv: HashMap<Cpv, (UnmergeOrder, Vec<Cpv>)> = HashMap::new();
     for c in classified {
+        let owner_cpv = Cpv::new(*c.hit.owner.cpn(), c.hit.owner_version.clone());
         for v in &c.verdicts {
             if let BlockerVerdict::WouldUnmerge { cpv, order } = v {
-                by_cpv
+                let entry = by_cpv
                     .entry(cpv.clone())
-                    .and_modify(|existing| {
-                        if *order == UnmergeOrder::BeforeBlocker {
-                            *existing = UnmergeOrder::BeforeBlocker;
-                        }
-                    })
-                    .or_insert(*order);
+                    .or_insert_with(|| (*order, Vec::new()));
+                if *order == UnmergeOrder::BeforeBlocker {
+                    entry.0 = UnmergeOrder::BeforeBlocker;
+                }
+                if !entry.1.contains(&owner_cpv) {
+                    entry.1.push(owner_cpv.clone());
+                }
             }
         }
     }
     let mut out: Vec<PlannedUnmerge> = by_cpv
         .into_iter()
-        .map(|(cpv, order)| PlannedUnmerge { cpv, order })
+        .map(|(cpv, (order, mut owners))| {
+            owners.sort_by_key(ToString::to_string);
+            PlannedUnmerge { cpv, order, owners }
+        })
         .collect();
     out.sort_by(|a, b| a.cpv.cmp(&b.cpv));
     out
@@ -1370,6 +1384,47 @@ mod tests {
                 "net-dns/openresolv-3.17.4".into(),
                 UnmergeOrder::BeforeBlocker
             )]
+        );
+    }
+
+    // Two different owners both blocking the same victim must both show up
+    // in `owners` — a caller checking "did the triggering package actually
+    // complete" needs every trigger, not just one.
+    #[test]
+    fn planned_unmerges_collects_every_owner_for_the_same_victim() {
+        let hit_a = hit(HitSpec {
+            owner_cpn: "sys-apps/systemd",
+            owner_slot: "0",
+            owner_ver: "260.2",
+            owner_installed: false,
+            atom: "!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
+        let hit_b = hit(HitSpec {
+            owner_cpn: "app-misc/other",
+            owner_slot: "0",
+            owner_ver: "1.0",
+            owner_installed: false,
+            atom: "!net-dns/openresolv",
+            victim_cpn: "net-dns/openresolv",
+            victim_slot: "0",
+            victim_ver: "3.17.4",
+            victim_retained_installed: true,
+        });
+        let installed = vec![entry("net-dns/openresolv", "0", "3.17.4", &[])];
+        let classified = classify_blockers(&[hit_a, hit_b], &installed, &[]);
+        let unmerges = planned_unmerges(&classified);
+        assert_eq!(unmerges.len(), 1);
+        let owners: Vec<String> = unmerges[0].owners.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            owners,
+            vec![
+                "app-misc/other-1.0".to_string(),
+                "sys-apps/systemd-260.2".to_string()
+            ]
         );
     }
 }

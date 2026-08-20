@@ -131,7 +131,7 @@ shares the host's mount namespace (real mounts leak if the script dies
 mid-run) and a `sudo`-written file lands owned by real root, a privilege
 domain `sandbox destroy`'s own unprivileged removal can't clean up (both
 were true of this script's first version). Builds a tiny synthetic overlay
-(`test-pms`, via `em select repository create`) with seven trivial
+(`test-pms`, via `em select repository create`) with eight trivial
 no-fetch ebuilds rather than hunting for a real Gentoo package with the
 right blocker/USE shape (the canonical `systemd[resolvconf]`/`openresolv`
 blocker pair is far too heavy to build here) — keeps the whole run fast
@@ -146,7 +146,9 @@ for both weak (`!`, after the blocking merge) and strong (`!!`, before it)
 when nothing else needs it; a strong blocker against a still-needed
 package is a hard, unresolvable conflict (nonzero exit, nothing unmerged,
 nothing merged); `-B`/`--buildpkgonly` never triggers an unmerge (it never
-installs).
+installs); an unrelated package failing *after* the real blocker trigger
+already succeeded still gets the victim unmerged, not silently and
+permanently dropped (the F4 regression).
 
 ```sh
 ./test-scripts/test-blockers-iuse-effective-sandbox.sh

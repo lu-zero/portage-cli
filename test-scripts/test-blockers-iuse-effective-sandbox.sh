@@ -177,6 +177,22 @@ S="${WORKDIR}"
 src_install() { keepdir /usr/share/${PN}; }
 EOF
 
+# F4 regression: real dependency (not just naming) forces this to build
+# strictly after attacker-weak, then always dies. Proves the AfterBlocker
+# unmerge is gated on whether attacker-weak itself finished, not on the
+# whole run's Result — an unrelated failure after it must not silently,
+# permanently drop the pending unmerge.
+write_ebuild test-blockers/fails-after/fails-after-1.0 <<'EOF'
+EAPI=8
+DESCRIPTION="blocker test: F4 regression, fails after the real blocker owner"
+SLOT="0"
+KEYWORDS="~arm64"
+LICENSE="GPL-2"
+RDEPEND="test-blockers/attacker-weak"
+S="${WORKDIR}"
+src_install() { die "intentional failure for the F4 regression test"; }
+EOF
+
 write_ebuild test-blockers/attacker-strong/attacker-strong-1.0 <<'EOF'
 EAPI=8
 DESCRIPTION="blocker test: strong (!!) blocker on victim"
@@ -309,6 +325,22 @@ echo "=== blockers: -B/--buildpkgonly never installs, so it must not unmerge eit
 em -B test-blockers/attacker-weak >/dev/null 2>&1
 installed test-blockers/attacker-weak-1.0 && fail "-B actually installed attacker-weak" || pass "-B did not install attacker-weak"
 installed test-blockers/victim-1.0 && pass "-B left victim installed (no unmerge on a package-only build)" || fail "-B unmerged victim despite never installing anything"
+
+echo "--- reset: re-merge victim for the F4 partial-failure regression ---"
+em -C test-blockers/attacker-weak test-blockers/fails-after >/dev/null 2>&1
+em test-blockers/victim >/dev/null || { echo "victim re-merge failed"; exit 1; }
+
+echo "=== F4 regression: the AfterBlocker unmerge survives an unrelated later failure ==="
+# fails-after real-depends on attacker-weak, so attacker-weak (the actual
+# blocker trigger) always finishes first, then fails-after always dies —
+# proving the pending unmerge is gated on attacker-weak's own completion,
+# not on the whole run's final (necessarily nonzero) exit code.
+OUT="$(em test-blockers/attacker-weak test-blockers/fails-after 2>&1; echo "exit=$?")"
+echo "$OUT"
+echo "$OUT" | grep -q "exit=0" && fail "expected a nonzero exit (fails-after must fail)" || pass "run failed overall as expected (fails-after dies)"
+installed test-blockers/attacker-weak-1.0 && pass "attacker-weak (the real blocker trigger) merged before the failure" || fail "attacker-weak did not merge: $OUT"
+installed test-blockers/fails-after-1.0 && fail "fails-after should never install (it always dies)" || pass "fails-after did not install"
+installed test-blockers/victim-1.0 && fail "F4 regression: victim survived despite its trigger (attacker-weak) already succeeding" || pass "victim was still unmerged despite the later unrelated failure (F4 fixed)"
 
 echo "==="
 if [[ $FAIL -eq 0 ]]; then

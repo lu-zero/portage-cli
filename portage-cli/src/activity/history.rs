@@ -192,6 +192,27 @@ impl DurationStore {
             .collect()
     }
 
+    /// CPVs that finished *successfully* for `job_id` this run
+    ///
+    /// Unlike [`finished_set`](Self::finished_set) (success or failure),
+    /// this is for gating a blocker-victim unmerge on whether its specific
+    /// triggering package actually merged — not on whether the whole run's
+    /// final `Result` was `Ok`, which stays wrong on a `-jN` run where an
+    /// unrelated later package fails after the trigger already succeeded.
+    ///
+    /// Parses each record's stored cpv text back into a real
+    /// [`portage_atom::Cpv`] so the caller compares its own typed `Cpv`
+    /// directly instead of `to_string()`-ing one at every check. A record
+    /// that fails to parse is skipped, not an error — it was always
+    /// written from a real `Cpv`'s own `Display`.
+    pub fn successful_set(&self, job_id: &str) -> HashSet<portage_atom::Cpv> {
+        self.records
+            .iter()
+            .filter(|r| r.job_id == job_id && r.ok)
+            .filter_map(|r| r.cpv.parse().ok())
+            .collect()
+    }
+
     /// Most recent records first, optional limit
     pub fn recent(&self, limit: Option<usize>) -> Vec<&HistoryRecord> {
         let n = self.records.len();

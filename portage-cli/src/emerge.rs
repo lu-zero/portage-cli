@@ -720,12 +720,13 @@ async fn emerge_atoms_inner(
         blockers: outcome.build_blockers.clone(),
     });
 
-    let merge_result: Result<()> = async {
+    let plan_result: Result<()> = async {
         if !skip_unmerge {
             unmerge_blocker_victims(
                 cli,
                 &outcome.unmerges,
                 portage_resolve::conflicts::UnmergeOrder::BeforeBlocker,
+                None,
             )
             .await?;
         }
@@ -749,18 +750,29 @@ async fn emerge_atoms_inner(
                 live_root: live_root.clone(),
             }),
         })
-        .await?;
-        if !skip_unmerge {
-            unmerge_blocker_victims(
-                cli,
-                &outcome.unmerges,
-                portage_resolve::conflicts::UnmergeOrder::AfterBlocker,
-            )
-            .await?;
-        }
-        Ok(())
+        .await
     }
     .await;
+
+    // Runs regardless of `plan_result`: a weak blocker's victim is safe to
+    // remove once its specific triggering owner(s) actually merged, not
+    // once the *whole* run's Result is Ok — an unrelated later package
+    // failing must not silently, permanently drop a pending unmerge whose
+    // real trigger already succeeded. Checked against `DurationStore`
+    // (what actually completed this job_id), not `plan_result`.
+    let after_unmerge_result = if skip_unmerge {
+        Ok(())
+    } else {
+        let done = crate::activity::DurationStore::load(roots.merge_root()).successful_set(&job_id);
+        unmerge_blocker_victims(
+            cli,
+            &outcome.unmerges,
+            portage_resolve::conflicts::UnmergeOrder::AfterBlocker,
+            Some(&done),
+        )
+        .await
+    };
+    let merge_result = plan_result.and(after_unmerge_result);
 
     let ok = merge_result.is_ok();
     // SessionEnd counters: best-effort zeros here; merge loop emits per-pkg.
@@ -1211,18 +1223,30 @@ async fn execute_unmerge_batch(
     Ok(())
 }
 
-/// PMS 8.3.2 auto-unmerge of classified WouldUnmerge victims at `order`.
+/// PMS 8.3.2 auto-unmerge of classified WouldUnmerge victims at `order`
 ///
 /// Already-gone packages (resume, a prior run) are skipped. Empty at this
 /// order is a no-op — no VDB open.
+///
+/// `done`, when given, additionally requires every owner that triggered a
+/// victim's removal to appear in it (cpvs that finished successfully this
+/// run) — used for `AfterBlocker` so an unrelated later package failing
+/// doesn't drop a pending unmerge whose real trigger already succeeded.
+/// `None` for `BeforeBlocker`, which runs before anything in the plan has
+/// merged, so there's nothing yet to check.
 async fn unmerge_blocker_victims(
     cli: &cli::Cli,
     unmerges: &[portage_resolve::conflicts::PlannedUnmerge],
     order: portage_resolve::conflicts::UnmergeOrder,
+    done: Option<&std::collections::HashSet<portage_atom::Cpv>>,
 ) -> Result<()> {
     let cpvs: Vec<&portage_atom::Cpv> = unmerges
         .iter()
         .filter(|u| u.order == order)
+        .filter(|u| match done {
+            Some(done) => u.owners.iter().all(|o| done.contains(o)),
+            None => true,
+        })
         .map(|u| &u.cpv)
         .collect();
     if cpvs.is_empty() {
