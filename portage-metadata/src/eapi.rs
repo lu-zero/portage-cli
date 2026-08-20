@@ -113,6 +113,31 @@ impl Eapi {
     pub fn has_selective_uri_restrictions(&self) -> bool {
         *self >= Eapi::Eight
     }
+
+    /// Whether an empty `||` / `^^` group is matched (PMS table 8.6)
+    ///
+    /// EAPI 0–6: yes. EAPI 7–9: no (the group is unsatisfiable).
+    pub fn empty_any_of_matches(&self) -> bool {
+        *self < Eapi::Seven
+    }
+
+    /// Profile-defined IUSE injection (PMS table 5.6) — IUSE_EFFECTIVE includes
+    /// `IUSE_IMPLICIT` and implicit `USE_EXPAND` values.
+    pub fn has_profile_iuse_injection(&self) -> bool {
+        *self >= Eapi::Five
+    }
+
+    /// `ENV_UNSET` is incremental and applied (PMS table 5.7)
+    pub fn has_env_unset(&self) -> bool {
+        *self >= Eapi::Seven
+    }
+
+    /// Absolute symlinks whose target starts with `D` are rewritten (PMS table 13.2)
+    ///
+    /// EAPI 0–8: yes. EAPI 9: leave the target unmodified.
+    pub fn rewrites_d_symlinks(&self) -> bool {
+        *self < Eapi::Nine
+    }
 }
 
 impl fmt::Display for Eapi {
@@ -247,5 +272,17 @@ mod tests {
         assert!(!Eapi::Seven.has_selective_uri_restrictions());
         assert!(Eapi::Eight.has_selective_uri_restrictions());
         assert!(Eapi::Nine.has_selective_uri_restrictions());
+
+        assert!(Eapi::Six.empty_any_of_matches());
+        assert!(!Eapi::Seven.empty_any_of_matches());
+
+        assert!(!Eapi::Four.has_profile_iuse_injection());
+        assert!(Eapi::Five.has_profile_iuse_injection());
+
+        assert!(!Eapi::Six.has_env_unset());
+        assert!(Eapi::Seven.has_env_unset());
+
+        assert!(Eapi::Eight.rewrites_d_symlinks());
+        assert!(!Eapi::Nine.rewrites_d_symlinks());
     }
 }
