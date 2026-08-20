@@ -1,8 +1,6 @@
 # Empty `||` / `^^` after USE strip (PMS table 8.6)
 
-Status: 🟡 partial. `evaluate_use_groups` + REQUIRED_USE table 8.6 are
-wired; solver `convert_choice_group` still treats an empty `||` branch as
-vacuous success. Related: [[pms-compliance]].
+Status: ✅ eval, REQUIRED_USE, and solver convert. Related: [[pms-compliance]].
 
 ## PMS
 

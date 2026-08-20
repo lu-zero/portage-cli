@@ -199,6 +199,7 @@ mod pubgrub_solver {
                                     // REQUIRED_USE is a dormant Level-C fact; the
                                     // benchmark adapter does not feed it.
                                     required_use: None,
+                                    empty_any_of_matches: meta.eapi.empty_any_of_matches(),
                                 },
                             )
                         })

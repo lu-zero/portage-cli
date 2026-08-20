@@ -33,6 +33,8 @@ pub struct PackageVersions {
     /// but not yet consumed by the solver (Level-C auto-satisfaction is the
     /// future consumer — see `docs/required-use-level-c.md`).
     pub required_use: Option<RequiredUse>,
+    /// PMS table 8.6: empty `||` / `^^` after USE strip matches (EAPI 0–6)
+    pub empty_any_of_matches: bool,
 }
 
 /// Structured dependency trees separated by PMS class
@@ -237,6 +239,7 @@ impl InMemoryRepository {
                 iuse_defaults: HashMap::new(),
                 deps,
                 required_use: None,
+                empty_any_of_matches: true,
             },
         ));
     }
@@ -261,6 +264,7 @@ impl InMemoryRepository {
                 iuse_defaults: HashMap::new(),
                 deps,
                 required_use: Some(required_use),
+                empty_any_of_matches: true,
             },
         ));
     }
@@ -308,6 +312,7 @@ impl PackageRepository for InMemoryRepository {
                                 iuse_defaults: meta.iuse_defaults.clone(),
                                 deps: meta.deps.clone(),
                                 required_use: meta.required_use.clone(),
+                                empty_any_of_matches: meta.empty_any_of_matches,
                             },
                         )
                     })

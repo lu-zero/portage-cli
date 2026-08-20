@@ -141,16 +141,33 @@ pub(crate) fn use_decision_package(
 ///
 /// `slot_map` maps each CPN to its known slots, so unslotted deps on
 /// multi-slot packages can be resolved correctly.
-pub fn convert_deps(
+#[cfg(test)]
+fn convert_deps(
     entries: &[DepEntry],
     cpn_str: &str,
     use_config: &UseConfig,
     slot_map: &SlotMap,
 ) -> ConversionResult {
+    convert_deps_groups(entries, cpn_str, use_config, slot_map, true)
+}
+
+/// [`convert_deps`] with PMS table 8.6 empty-`||`/`^^` policy
+///
+/// `empty_any_of_matches` is EAPI 0–6 (vacuous success). EAPI 7–9 pass
+/// `false` so an any-of/exactly-one-of with no remaining members is
+/// unsatisfiable.
+pub fn convert_deps_groups(
+    entries: &[DepEntry],
+    cpn_str: &str,
+    use_config: &UseConfig,
+    slot_map: &SlotMap,
+    empty_any_of_matches: bool,
+) -> ConversionResult {
     let mut ctx = ConvertCtx {
         cpn_str,
         use_config,
         slot_map,
+        empty_any_of_matches,
         requirements: Vec::new(),
         blockers: Vec::new(),
         virtual_choices: Vec::new(),
@@ -178,6 +195,7 @@ struct ConvertCtx<'a> {
     cpn_str: &'a str,
     use_config: &'a UseConfig,
     slot_map: &'a SlotMap,
+    empty_any_of_matches: bool,
     requirements: Vec<Req>,
     blockers: Vec<Dep>,
     virtual_choices: Vec<VirtualChoice>,
@@ -500,6 +518,25 @@ impl ConvertCtx<'_> {
             versions.push((ver.clone(), deps));
             branch_use_deps.push((ver.clone(), this_branch_use_deps));
             branch_blockers.push((ver, choice_blockers));
+        }
+
+        let all_empty = versions.iter().all(|(_, d)| d.is_empty())
+            && branch_blockers.iter().all(|(_, b)| b.is_empty())
+            && branch_use_deps.iter().all(|(_, u)| u.is_empty());
+        if !allow_none && all_empty {
+            if self.empty_any_of_matches {
+                return;
+            }
+            // EAPI 7+: empty || / ^^ does not match (PMS table 8.6).
+            self.virtual_choices.push(VirtualChoice {
+                package: pkg.clone(),
+                versions: vec![],
+                branch_use_deps: vec![],
+                branch_blockers: vec![],
+            });
+            self.requirements
+                .push((pkg, PortageVersionSet::any(), self.gating_flag));
+            return;
         }
 
         self.virtual_choices.push(VirtualChoice {
@@ -1560,6 +1597,29 @@ mod tests {
         assert!(
             result.slot_operator_deps.is_empty(),
             ":* should not produce slot-operator dep"
+        );
+    }
+
+    #[test]
+    fn empty_any_of_matches_on_eapi_0_6() {
+        let config = UseConfig::new();
+        let entries = DepEntry::parse("|| ( ssl? ( dev-libs/openssl ) )").unwrap();
+        let result = convert_deps(&entries, "test/pkg", &config, &empty_slots());
+        assert!(
+            result.requirements.is_empty(),
+            "EAPI 0–6: empty || after USE strip is vacuous"
+        );
+    }
+
+    #[test]
+    fn empty_any_of_unmatches_on_eapi_7() {
+        let config = UseConfig::new();
+        let entries = DepEntry::parse("|| ( ssl? ( dev-libs/openssl ) )").unwrap();
+        let result = convert_deps_groups(&entries, "test/pkg", &config, &empty_slots(), false);
+        assert_eq!(result.requirements.len(), 1);
+        assert!(
+            result.virtual_choices[0].versions.is_empty(),
+            "EAPI 7+: empty || has no choice versions"
         );
     }
 }

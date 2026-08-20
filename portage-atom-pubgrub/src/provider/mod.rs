@@ -526,7 +526,13 @@ impl PortageDependencyProvider {
                 }
 
                 let class_results: [convert::ConversionResult; 5] = dep_classes.map(|entries| {
-                    convert::convert_deps(entries, &cpn_str, &cpv_use_cfg, slot_map)
+                    convert::convert_deps_groups(
+                        entries,
+                        &cpn_str,
+                        &cpv_use_cfg,
+                        slot_map,
+                        meta.empty_any_of_matches,
+                    )
                 });
 
                 let mut all_blockers = Vec::new();

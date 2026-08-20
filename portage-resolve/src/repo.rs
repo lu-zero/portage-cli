@@ -1144,6 +1144,7 @@ impl PackageRepository for Adapter<'_> {
                                 iuse_defaults,
                                 deps,
                                 required_use,
+                                empty_any_of_matches: meta.eapi.empty_any_of_matches(),
                             },
                         )
                     })

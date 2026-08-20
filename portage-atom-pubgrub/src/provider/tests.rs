@@ -1995,6 +1995,7 @@ fn use_flag_not_needed_when_iuse_default_on() {
             iuse_defaults: defaults,
             deps: empty_deps(),
             required_use: None,
+            empty_any_of_matches: true,
         },
     );
     repo.add_version(
