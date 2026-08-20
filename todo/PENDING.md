@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-18**.
+here briefly for context). Updated **2026-08-21**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -26,6 +26,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **8** | **Drop `BuildClass` for cross-*** — package.env + HostCodegen allowlist; type removed 2026-08-07; live verify open | 🟡 | [[drop-buildclass]], matrix: [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md) |
 | **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` now resolves cleanly on real Debian 12 (real python step, SLOT-aware provided, linux-headers/glibc provided, a real zstd↔meson↔python cycle root-caused to a missing host `meson`); a full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [[meson-zstd-python-hard-cycle]] (resolved — real hard cycle, not an em bug) |
 | **10** | **Workdir dual-root race (P0)** — per-target builddirs + lock/schedule like Portage; dual plan entries under `--jobs` collide today | 🔴 | [[workdir-dual-root]], clang findings #3/#4 |
+| **11** | **Factor `UseEnv` → `ResolvePolicy` construction** — same ~15-line `Accept*`/`ResolvePolicy` build duplicated in `pkg.rs`, `depgraph()`, `TreeView::load` (3rd copy added 2026-08-20's repo-mask/dedup work); proposed `ResolvedPolicy` type + optional `load_and_resolve` helper | 🔴 | [[applet-policy-factoring]] |
 
 ### PMS 9 compliance (audit 2026-08-20)
 
