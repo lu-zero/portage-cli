@@ -119,6 +119,17 @@ impl LazyDepList {
         self.get_mut(|s| DepEntry::parse(s).map(DepList::new).unwrap_or_default())
             .make_mut()
     }
+
+    /// Whether the parsed list is empty, forcing the parse first
+    ///
+    /// Not the same question as [`Self::is_empty_raw`]: after
+    /// [`Self::make_mut`] there is no raw text left even though the list may
+    /// still hold entries, so a caller that needs to know whether there is
+    /// content to emit (e.g. serializing back to md5-cache text) must check
+    /// this, not `is_empty_raw`.
+    pub fn is_empty(&self) -> bool {
+        self.list().is_empty()
+    }
 }
 
 impl PartialEq for LazyDepList {

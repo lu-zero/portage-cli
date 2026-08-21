@@ -325,7 +325,7 @@ impl<I: Interner> CacheEntry<I> {
             format_phases(&m.defined_phases)
         ));
 
-        if !m.depend.is_empty_raw() {
+        if !m.depend.is_empty() {
             lines.push(format!("DEPEND={}", format_dep_entries(m.depend.list())));
         }
 
@@ -350,11 +350,11 @@ impl<I: Interner> CacheEntry<I> {
             lines.push(format!("LICENSE={}", lic));
         }
 
-        if !m.pdepend.is_empty_raw() {
+        if !m.pdepend.is_empty() {
             lines.push(format!("PDEPEND={}", format_dep_entries(m.pdepend.list())));
         }
 
-        if !m.rdepend.is_empty_raw() {
+        if !m.rdepend.is_empty() {
             lines.push(format!("RDEPEND={}", format_dep_entries(m.rdepend.list())));
         }
 
@@ -369,16 +369,16 @@ impl<I: Interner> CacheEntry<I> {
 
         lines.push(format!("SLOT={}", m.slot));
 
-        if !m.src_uri.is_empty_raw() {
+        if !m.src_uri.is_empty() {
             let uri_str: Vec<String> = m.src_uri.list().iter().map(|u| u.to_string()).collect();
             lines.push(format!("SRC_URI={}", uri_str.join(" ")));
         }
 
-        if !m.bdepend.is_empty_raw() {
+        if !m.bdepend.is_empty() {
             lines.push(format!("BDEPEND={}", format_dep_entries(m.bdepend.list())));
         }
 
-        if !m.idepend.is_empty_raw() {
+        if !m.idepend.is_empty() {
             lines.push(format!("IDEPEND={}", format_dep_entries(m.idepend.list())));
         }
 
@@ -683,6 +683,32 @@ _md5_=4539d849d3cea8ac84debad9b3154143
         );
         assert_eq!(entry.md5, reparsed.md5);
         assert_eq!(entry.eclasses, reparsed.eclasses);
+    }
+
+    #[test]
+    fn serialize_after_dedup_keeps_depend_family_fields() {
+        // dedup() calls LazyDepList::make_mut(), which forces the parse and
+        // drops the raw text — serialize() must not mistake "no raw text
+        // left" (is_empty_raw) for "nothing to emit" (is_empty), or the
+        // DEPEND-family lines silently vanish even though the parsed list
+        // still holds entries.
+        let entry = CacheEntry::parse(EXAMPLE_CACHE).unwrap();
+        let deduped = CacheEntry {
+            metadata: entry.metadata.dedup(),
+            ..entry
+        };
+        let serialized = deduped.serialize();
+        assert!(
+            serialized.contains("DEPEND="),
+            "DEPEND line dropped after dedup:\n{serialized}"
+        );
+        assert!(
+            serialized.contains("RDEPEND="),
+            "RDEPEND line dropped after dedup:\n{serialized}"
+        );
+        let reparsed = CacheEntry::parse(&serialized).unwrap();
+        assert!(!reparsed.metadata.depend.list().is_empty());
+        assert!(!reparsed.metadata.rdepend.list().is_empty());
     }
 
     #[test]

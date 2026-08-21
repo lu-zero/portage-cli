@@ -83,6 +83,15 @@ impl LazySrcUriList {
     pub fn list(&self) -> &[SrcUriEntry] {
         self.0.get(|s| SrcUriEntry::parse(s).unwrap_or_default())
     }
+
+    /// Whether the parsed list is empty, forcing the parse first
+    ///
+    /// Not the same question as [`Self::is_empty_raw`] — see
+    /// `LazyDepList::is_empty`'s doc for why a caller that needs to know
+    /// whether there is content to emit should check this instead.
+    pub fn is_empty(&self) -> bool {
+        self.list().is_empty()
+    }
 }
 
 impl PartialEq for LazySrcUriList {
