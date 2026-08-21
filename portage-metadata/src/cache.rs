@@ -1,4 +1,4 @@
-use crate::interner::{DefaultInterner, Interner};
+use crate::interner::{DefaultInterner, Interned, Interner};
 use portage_atom::{DepEntry, LazyDepList, Slot};
 
 use crate::eapi::Eapi;
@@ -10,7 +10,7 @@ use crate::metadata::EbuildMetadata;
 use crate::phase::Phase;
 use crate::required_use::RequiredUseExpr;
 use crate::restrict::RestrictExpr;
-use crate::src_uri::SrcUriEntry;
+use crate::src_uri::LazySrcUriList;
 
 /// Borrowed line-oriented view over a raw md5-cache file's text
 ///
@@ -98,9 +98,12 @@ where
 
     /// All transitively inherited eclasses with their checksums (from `_eclasses_`)
     ///
-    /// Each tuple is `(eclass_name, md5_checksum)`.  Pairs are tab-separated
+    /// Each tuple is `(eclass_name, md5_checksum)`. Pairs are tab-separated
     /// as described in [PMS 14.3](https://projects.gentoo.org/pms/latest/pms.html#md5-dict-cache-file-format).
-    pub eclasses: Vec<(String, String)>,
+    /// The name is interned and the checksum is a real `md5::Digest`, not
+    /// its hex text — both avoid a `String` allocation per occurrence
+    /// (~20 eclasses × ~30k ebuilds recur across the same few hundred names).
+    pub eclasses: Vec<(Interned<I>, md5::Digest)>,
 }
 
 /// Accumulator for key-value pairs before building a `CacheEntry`
@@ -210,12 +213,6 @@ impl<'a> ParseState<'a> {
                 .collect()
         };
 
-        let src_uri_val = if self.src_uri.is_empty() {
-            Vec::new()
-        } else {
-            SrcUriEntry::parse(self.src_uri)?
-        };
-
         let license_val = if self.license.is_empty() {
             None
         } else {
@@ -258,7 +255,11 @@ impl<'a> ParseState<'a> {
             RestrictExpr::parse(self.properties)?
         };
 
-        let eclasses = parse_eclasses(self.eclasses_raw);
+        // `parse_eclasses` interns the name directly: the same few hundred
+        // eclasses recur across every ebuild in a tree, so `inherited_val`
+        // below reuses these keys (a `Copy`) instead of allocating a
+        // second `String` per name.
+        let eclasses: Vec<(Interned<I>, md5::Digest)> = parse_eclasses(self.eclasses_raw)?;
 
         let inherit_val: Vec<String> = self
             .inherit
@@ -268,7 +269,8 @@ impl<'a> ParseState<'a> {
 
         // PMS 14.3: md5-dict format excludes the INHERITED key; the
         // transitive eclass list is carried by _eclasses_ instead.
-        let inherited_val: Vec<String> = eclasses.iter().map(|(name, _)| name.clone()).collect();
+        let inherited_val: Vec<Interned<I>> =
+            eclasses.iter().map(|(name, _)| name.clone()).collect();
 
         let defined_phases_val = Phase::parse_line(self.defined_phases)?;
 
@@ -278,7 +280,7 @@ impl<'a> ParseState<'a> {
                 description: description_val,
                 slot: slot_val,
                 homepage: homepage_val,
-                src_uri: src_uri_val,
+                src_uri: LazySrcUriList::from_raw(self.src_uri),
                 license: license_val,
                 keywords: keywords_val,
                 iuse: iuse_val,
@@ -367,8 +369,8 @@ impl<I: Interner> CacheEntry<I> {
 
         lines.push(format!("SLOT={}", m.slot));
 
-        if !m.src_uri.is_empty() {
-            let uri_str: Vec<String> = m.src_uri.iter().map(|u| u.to_string()).collect();
+        if !m.src_uri.is_empty_raw() {
+            let uri_str: Vec<String> = m.src_uri.list().iter().map(|u| u.to_string()).collect();
             lines.push(format!("SRC_URI={}", uri_str.join(" ")));
         }
 
@@ -393,7 +395,7 @@ impl<I: Interner> CacheEntry<I> {
             let parts: Vec<String> = self
                 .eclasses
                 .iter()
-                .flat_map(|(name, checksum)| vec![name.clone(), checksum.clone()])
+                .flat_map(|(name, checksum)| vec![name.to_string(), format!("{checksum:x}")])
                 .collect();
             lines.push(format!("_eclasses_={}", parts.join("\t")));
         }
@@ -479,22 +481,38 @@ fn parse_slot(s: &str) -> Result<Slot> {
     }
 }
 
-/// Parse the `_eclasses_` value: tab-separated pairs of `name\tchecksum`
-fn parse_eclasses(s: &str) -> Vec<(String, String)> {
+/// Parse the `_eclasses_` value: tab-separated pairs of `name\tchecksum`.
+///
+/// A complete pair whose checksum isn't 32 hex characters is a parse error
+/// rather than a dropped pair — dropping it would make a truncated list look
+/// like an empty one, which freshness treats as vacuously matching.
+fn parse_eclasses<I: Interner>(s: &str) -> Result<Vec<(Interned<I>, md5::Digest)>> {
     if s.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let parts: Vec<&str> = s.split('\t').collect();
-    parts
-        .chunks(2)
-        .filter_map(|chunk| {
-            if chunk.len() == 2 {
-                Some((chunk[0].to_string(), chunk[1].to_string()))
-            } else {
-                None
-            }
-        })
-        .collect()
+    let mut out = Vec::new();
+    let mut parts = s.split('\t');
+    while let Some(name) = parts.next() {
+        let Some(checksum) = parts.next() else { break };
+        let digest = parse_md5_hex(checksum).ok_or_else(|| {
+            Error::InvalidCacheEntry(format!(
+                "invalid _eclasses_ checksum for {name}: {checksum}"
+            ))
+        })?;
+        out.push((Interned::intern(name), digest));
+    }
+    Ok(out)
+}
+
+/// Parse a 32-hex-character MD5 digest (PMS 14.3's `_eclasses_` checksum
+/// format), rejecting anything not exactly that shape rather than silently
+/// accepting a truncated value as a smaller number
+fn parse_md5_hex(s: &str) -> Option<md5::Digest> {
+    if s.len() != 32 {
+        return None;
+    }
+    let value = u128::from_str_radix(s, 16).ok()?;
+    Some(md5::Digest(value.to_be_bytes()))
 }
 
 /// Format DEFINED_PHASES for serialization
@@ -536,7 +554,7 @@ REQUIRED_USE=|| ( python_targets_python3_6 python_targets_python3_7 )
 RESTRICT=!test? ( test )
 SLOT=0
 SRC_URI=https://github.com/llvm/llvm-project/archive/llvmorg-10.0.0-rc1.tar.gz
-_eclasses_=llvm.org\t4e92abc\tmultibuild\t40fe1234
+_eclasses_=llvm.org\t4e92abcd4e92abcd4e92abcd4e92abcd\tmultibuild\t40fe123440fe123440fe123440fe1234
 _md5_=4539d849d3cea8ac84debad9b3154143
 ";
 
@@ -558,7 +576,7 @@ _md5_=4539d849d3cea8ac84debad9b3154143
         assert!(entry.metadata.required_use.is_some());
         assert!(!entry.metadata.restrict.is_empty());
         assert_eq!(entry.metadata.defined_phases.len(), 3);
-        assert_eq!(entry.metadata.src_uri.len(), 1);
+        assert_eq!(entry.metadata.src_uri.list().len(), 1);
         assert!(!entry.metadata.depend.list().is_empty());
         assert!(!entry.metadata.rdepend.list().is_empty());
         assert!(entry.metadata.bdepend.list().is_empty()); // EAPI 7 but no BDEPEND in this example
@@ -609,26 +627,46 @@ _md5_=4539d849d3cea8ac84debad9b3154143
 
     #[test]
     fn parse_eclasses() {
-        let eclasses = super::parse_eclasses("llvm.org\tabc123\tmultibuild\tdef456");
+        let a = md5::Digest(0xabc123u128.to_be_bytes());
+        let b = md5::Digest(0xdef456u128.to_be_bytes());
+        let input = format!("llvm.org\t{a:x}\tmultibuild\t{b:x}");
+        let eclasses: Vec<(Interned<DefaultInterner>, md5::Digest)> =
+            super::parse_eclasses(&input).unwrap();
         assert_eq!(eclasses.len(), 2);
-        assert_eq!(eclasses[0], ("llvm.org".to_string(), "abc123".to_string()));
-        assert_eq!(
-            eclasses[1],
-            ("multibuild".to_string(), "def456".to_string())
-        );
+        assert_eq!(eclasses[0], (Interned::intern("llvm.org"), a));
+        assert_eq!(eclasses[1], (Interned::intern("multibuild"), b));
     }
 
     #[test]
     fn parse_eclasses_empty() {
-        let eclasses = super::parse_eclasses("");
+        let eclasses: Vec<(Interned<DefaultInterner>, md5::Digest)> =
+            super::parse_eclasses("").unwrap();
         assert!(eclasses.is_empty());
     }
 
     #[test]
     fn parse_eclasses_odd_count() {
         // Odd number of tab-separated values: last one is ignored
-        let eclasses = super::parse_eclasses("llvm.org\tabc123\torphan");
+        let a = md5::Digest(0xabc123u128.to_be_bytes());
+        let input = format!("llvm.org\t{a:x}\torphan");
+        let eclasses: Vec<(Interned<DefaultInterner>, md5::Digest)> =
+            super::parse_eclasses(&input).unwrap();
         assert_eq!(eclasses.len(), 1);
+    }
+
+    #[test]
+    fn parse_eclasses_rejects_a_checksum_that_isnt_32_hex_chars() {
+        let err = super::parse_eclasses::<DefaultInterner>("llvm.org\tabc123").unwrap_err();
+        assert!(matches!(err, Error::InvalidCacheEntry(_)));
+    }
+
+    #[test]
+    fn truncated_eclasses_checksum_fails_the_entry() {
+        // Mixed list: dropping the truncated pair would leave a partial
+        // eclass list (or an empty one, treated as trivially fresh).
+        let input = "DESCRIPTION=Test\nSLOT=0\n\
+                     _eclasses_=llvm.org\t4e92abcd4e92abcd4e92abcd4e92abcd\tmultibuild\tabc123\n";
+        assert!(CacheEntry::parse(input).is_err());
     }
 
     #[test]
@@ -693,7 +731,7 @@ _md5_=4539d849d3cea8ac84debad9b3154143
 
     #[test]
     fn inherited_from_eclasses() {
-        let input = "DESCRIPTION=Test\nSLOT=0\n_eclasses_=alpha\tdeadbeef\tbeta\tcafe1234\n";
+        let input = "DESCRIPTION=Test\nSLOT=0\n_eclasses_=alpha\tdeadbeefdeadbeefdeadbeefdeadbeef\tbeta\tcafe1234cafe1234cafe1234cafe1234\n";
         let entry = CacheEntry::parse(input).unwrap();
         assert!(entry.metadata.inherit.is_empty());
         assert_eq!(entry.metadata.inherited, vec!["alpha", "beta"]);
@@ -706,7 +744,7 @@ _md5_=4539d849d3cea8ac84debad9b3154143
 DESCRIPTION=Test
 SLOT=0
 INHERIT=foo
-_eclasses_=foo\taabb\tbar\tccdd
+_eclasses_=foo\taabbaabbaabbaabbaabbaabbaabbaabb\tbar\tccddccddccddccddccddccddccddccdd
 ";
         let entry = CacheEntry::parse(input).unwrap();
         assert_eq!(entry.metadata.inherit, vec!["foo"]);
@@ -719,7 +757,7 @@ _eclasses_=foo\taabb\tbar\tccdd
 DESCRIPTION=Test
 SLOT=0
 INHERITED=ignored_legacy
-_eclasses_=real\t1234
+_eclasses_=real\t12341234123412341234123412341234
 ";
         let entry = CacheEntry::parse(input).unwrap();
         assert_eq!(entry.metadata.inherited, vec!["real"]);
@@ -731,7 +769,7 @@ _eclasses_=real\t1234
 DESCRIPTION=Test
 SLOT=0
 INHERIT=foo bar
-_eclasses_=foo\taabb\tbar\tccdd\tbaz\teeff
+_eclasses_=foo\taabbaabbaabbaabbaabbaabbaabbaabb\tbar\tccddccddccddccddccddccddccddccdd\tbaz\teeffeeffeeffeeffeeffeeffeeffeeff
 ";
         let entry = CacheEntry::parse(input).unwrap();
         let serialized = entry.serialize();

@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::{Arc, OnceLock};
 
 use winnow::ascii::multispace0;
 use winnow::combinator::{alt, cut_err, delimited, dispatch, opt, peek, preceded, repeat};
@@ -49,6 +50,69 @@ pub enum SrcUriEntry {
     /// A bare parenthesized group `( entries... )`
     Group(Vec<SrcUriEntry>),
 }
+
+/// `SRC_URI`'s raw md5-cache text, parsed to `Vec<SrcUriEntry>` on first
+/// access
+///
+/// Same rationale as `portage_atom::LazyDepList`: only a small fraction of
+/// a repo's ebuilds (the ones a plan actually merges) ever need their
+/// `SRC_URI` parsed — download-size accounting and `em search` are the only
+/// consumers, both over a small already-selected set, not the whole tree.
+///
+/// A malformed field parses to an empty list rather than propagating an
+/// error, same tradeoff as `LazyDepList`.
+#[derive(Debug, Default)]
+pub struct LazySrcUriList {
+    raw: Option<Arc<str>>,
+    parsed: OnceLock<Vec<SrcUriEntry>>,
+}
+
+impl LazySrcUriList {
+    /// Wrap raw md5-cache field text, parsed on first [`Self::list`] call
+    pub fn from_raw(s: &str) -> Self {
+        if s.is_empty() {
+            return Self::default();
+        }
+        Self {
+            raw: Some(Arc::from(s)),
+            parsed: OnceLock::new(),
+        }
+    }
+
+    /// Whether the field is empty, without forcing the parse
+    pub fn is_empty_raw(&self) -> bool {
+        self.raw.is_none()
+    }
+
+    /// The parsed list, computed and memoized on first call
+    pub fn list(&self) -> &[SrcUriEntry] {
+        self.parsed.get_or_init(|| match &self.raw {
+            Some(s) => SrcUriEntry::parse(s).unwrap_or_default(),
+            None => Vec::new(),
+        })
+    }
+}
+
+impl Clone for LazySrcUriList {
+    fn clone(&self) -> Self {
+        let parsed = OnceLock::new();
+        if let Some(v) = self.parsed.get() {
+            let _ = parsed.set(v.clone());
+        }
+        Self {
+            raw: self.raw.clone(),
+            parsed,
+        }
+    }
+}
+
+impl PartialEq for LazySrcUriList {
+    fn eq(&self, other: &Self) -> bool {
+        self.list() == other.list()
+    }
+}
+
+impl Eq for LazySrcUriList {}
 
 impl SrcUriEntry {
     /// Parse a `SRC_URI` expression string into a list of entries
@@ -928,5 +992,30 @@ mod tests {
         let rendered = err.parse_diagnostic().unwrap().render_nocolor();
         assert!(rendered.contains('{'));
         assert!(rendered.lines().all(|l| l.chars().count() < 200));
+    }
+
+    #[test]
+    fn lazy_src_uri_parses_on_first_access_only() {
+        let lazy = LazySrcUriList::from_raw("https://example.com/foo-1.0.tar.gz");
+        assert!(!lazy.is_empty_raw());
+        assert!(lazy.parsed.get().is_none(), "must not parse eagerly");
+        assert_eq!(lazy.list().len(), 1);
+        assert!(
+            lazy.parsed.get().is_some(),
+            "must memoize after first access"
+        );
+    }
+
+    #[test]
+    fn lazy_src_uri_empty_raw_never_forces() {
+        let lazy = LazySrcUriList::from_raw("");
+        assert!(lazy.is_empty_raw());
+        assert!(lazy.parsed.get().is_none());
+    }
+
+    #[test]
+    fn lazy_src_uri_malformed_field_is_empty_not_an_error() {
+        let lazy = LazySrcUriList::from_raw("v{oops}/bad.tar.gz");
+        assert!(lazy.list().is_empty());
     }
 }

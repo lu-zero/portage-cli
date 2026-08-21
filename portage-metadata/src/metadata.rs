@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::interner::{DefaultInterner, Interner};
+use crate::interner::{DefaultInterner, Interned, Interner};
 use portage_atom::{DepEntry, LazyDepList, Slot};
 
 use crate::eapi::Eapi;
@@ -10,7 +10,7 @@ use crate::license::LicenseExpr;
 use crate::phase::Phase;
 use crate::required_use::RequiredUseExpr;
 use crate::restrict::RestrictExpr;
-use crate::src_uri::SrcUriEntry;
+use crate::src_uri::LazySrcUriList;
 
 /// Metadata for a single ebuild, as produced by the metadata cache
 ///
@@ -43,7 +43,10 @@ where
     pub homepage: Vec<String>,
 
     /// Source URI expression
-    pub src_uri: Vec<SrcUriEntry>,
+    ///
+    /// A [`LazySrcUriList`]: only planned/selected packages ever need this
+    /// parsed (download-size accounting, `em search`), not the whole tree.
+    pub src_uri: LazySrcUriList,
 
     /// License expression
     pub license: Option<LicenseExpr>,
@@ -101,7 +104,10 @@ where
     ///
     /// See [PMS 10.1](https://projects.gentoo.org/pms/latest/pms.html#the-inherit-command)
     /// and [PMS 14.3](https://projects.gentoo.org/pms/latest/pms.html#md5-dict-cache-file-format).
-    pub inherited: Vec<String>,
+    ///
+    /// Interned, sharing keys with [`crate::cache::CacheEntry::eclasses`] —
+    /// see that field's doc for why.
+    pub inherited: Vec<Interned<I>>,
 
     /// Defined phase functions
     pub defined_phases: Vec<Phase>,

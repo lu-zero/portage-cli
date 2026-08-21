@@ -294,7 +294,10 @@ async fn resolve_ebuilds(
     let mut shell = None;
     // Eclass digests are shared across all entries of this repo — without
     // the memo every cached entry re-hashes its full eclass list.
-    let mut digests: std::collections::HashMap<String, Option<String>> = Default::default();
+    let mut digests: std::collections::HashMap<
+        portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
+        Option<md5::Digest>,
+    > = Default::default();
 
     for ebuild in ebuilds {
         let cpv = ebuild.cpv().clone();
@@ -302,15 +305,17 @@ async fn resolve_ebuilds(
             continue;
         };
         let digest = format!("{:x}", md5::compute(&bytes));
-        let valid =
-            |entry: &CacheEntry,
-             digests: &mut std::collections::HashMap<String, Option<String>>| {
-                entry
-                    .md5
-                    .as_deref()
-                    .is_some_and(|m| m.eq_ignore_ascii_case(&digest))
-                    && repo.is_fresh_cached(entry, digests)
-            };
+        let valid = |entry: &CacheEntry,
+                     digests: &mut std::collections::HashMap<
+            portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
+            Option<md5::Digest>,
+        >| {
+            entry
+                .md5
+                .as_deref()
+                .is_some_and(|m| m.eq_ignore_ascii_case(&digest))
+                && repo.is_fresh_cached(entry, digests)
+        };
 
         // Primary bulk walk (in-tree md5-cache).
         if let Some(entry) = cached.remove(&cpv)
@@ -358,9 +363,12 @@ async fn resolve_ebuilds(
                     .eclasses
                     .iter()
                     .filter_map(|(name, path)| {
-                        std::fs::read(path)
-                            .ok()
-                            .map(|b| (name.clone(), format!("{:x}", md5::compute(&b))))
+                        std::fs::read(path).ok().map(|b| {
+                            (
+                                portage_atom::interner::Interned::intern(name),
+                                md5::compute(&b),
+                            )
+                        })
                     })
                     .collect();
                 let entry = CacheEntry {

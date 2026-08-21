@@ -439,7 +439,7 @@ fn distfiles_size(repo: &Repository, cpn: &Cpn, meta: &portage_metadata::EbuildM
         })
         .collect();
     let mut filenames = Vec::new();
-    for entry in &meta.src_uri {
+    for entry in meta.src_uri.list() {
         entry.collect_filenames(&|_| true, &mut filenames);
     }
     filenames.sort();

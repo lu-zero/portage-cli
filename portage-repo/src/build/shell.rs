@@ -1078,7 +1078,10 @@ impl EbuildShell {
             .builtin_state_of::<inherit::InheritCommand>("inherit")
             .map(|s| s.inherited.clone())
             .unwrap_or_default();
-        metadata.inherited = inherited.iter().map(|e| e.name.clone()).collect();
+        metadata.inherited = inherited
+            .iter()
+            .map(|e| portage_atom::interner::Interned::intern(&e.name))
+            .collect();
         let eclasses = inherited.into_iter().map(|e| (e.name, e.path)).collect();
 
         Ok(crate::source::SourcedEbuild { metadata, eclasses })

@@ -16,7 +16,7 @@ REQUIRED_USE=|| ( python_targets_python3_6 python_targets_python3_7 )
 RESTRICT=!test? ( test )
 SLOT=0
 SRC_URI=https://github.com/llvm/llvm-project/archive/llvmorg-10.0.0-rc1.tar.gz
-_eclasses_=llvm.org\t4e92abc123\tmultibuild\t40fe456789
+_eclasses_=llvm.org\t4e92abcd4e92abcd4e92abcd4e92abcd\tmultibuild\t40fe123440fe123440fe123440fe1234
 _md5_=4539d849d3cea8ac84debad9b3154143
 ";
 
@@ -107,6 +107,7 @@ fn print_entry(entry: &CacheEntry) {
     println!(
         "SRC_URI:      {}",
         m.src_uri
+            .list()
             .iter()
             .map(|u| u.to_string())
             .collect::<Vec<_>>()
@@ -119,7 +120,7 @@ fn print_entry(entry: &CacheEntry) {
     if !entry.eclasses.is_empty() {
         println!("Eclasses:");
         for (name, checksum) in &entry.eclasses {
-            println!("  {} -> {}", name, checksum);
+            println!("  {name} -> {checksum:x}");
         }
     }
 

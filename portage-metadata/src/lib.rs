@@ -59,7 +59,7 @@ pub use metadata::EbuildMetadata;
 pub use phase::Phase;
 pub use required_use::RequiredUseExpr;
 pub use restrict::RestrictExpr;
-pub use src_uri::SrcUriEntry;
+pub use src_uri::{LazySrcUriList, SrcUriEntry};
 
 // Re-export interner module so downstream crates can use the same types
 pub use portage_atom::interner;

@@ -40,7 +40,7 @@ pub fn compute(
         let Some(cache) = find_cache(data, pkg, ver) else {
             continue;
         };
-        if cache.metadata.src_uri.is_empty() {
+        if cache.metadata.src_uri.is_empty_raw() {
             continue;
         }
 
@@ -54,7 +54,7 @@ pub fn compute(
         };
 
         let mut wanted: Vec<String> = Vec::new();
-        for entry in &cache.metadata.src_uri {
+        for entry in cache.metadata.src_uri.list() {
             entry.collect_filenames(&enabled, &mut wanted);
         }
         wanted.sort();

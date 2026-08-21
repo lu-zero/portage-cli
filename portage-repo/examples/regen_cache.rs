@@ -265,14 +265,18 @@ async fn main() {
                     metadata,
                     eclasses: eclass_paths,
                 } = metadata;
-                let eclasses: Vec<(String, String)> = eclass_paths
-                    .into_iter()
-                    .filter_map(|(name, path)| {
-                        fs::read(path.as_std_path())
-                            .ok()
-                            .map(|data| (name, format!("{:x}", md5::compute(&data))))
-                    })
-                    .collect();
+                let eclasses: Vec<(portage_atom::interner::Interned<_>, md5::Digest)> =
+                    eclass_paths
+                        .into_iter()
+                        .filter_map(|(name, path)| {
+                            fs::read(path.as_std_path()).ok().map(|data| {
+                                (
+                                    portage_atom::interner::Interned::intern(&name),
+                                    md5::compute(&data),
+                                )
+                            })
+                        })
+                        .collect();
 
                 let sourced_entry = CacheEntry {
                     metadata,

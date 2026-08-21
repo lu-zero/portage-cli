@@ -774,7 +774,10 @@ impl Repository {
     pub fn is_fresh_cached(
         &self,
         entry: &CacheEntry,
-        digests: &mut std::collections::HashMap<String, Option<String>>,
+        digests: &mut std::collections::HashMap<
+            portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
+            Option<md5::Digest>,
+        >,
     ) -> bool {
         if entry.eclasses.is_empty() {
             return true;
@@ -783,13 +786,13 @@ impl Repository {
             .chain(self.masters.iter().map(|m| m.path.join("eclass")))
             .collect();
         for (name, recorded) in &entry.eclasses {
-            let actual = digests.entry(name.clone()).or_insert_with(|| {
+            let actual = digests.entry(*name).or_insert_with(|| {
                 let path = find_eclass_in(&eclass_dirs, name)?;
                 let bytes = std::fs::read(&path).ok()?;
-                Some(format!("{:x}", md5::compute(&bytes)))
+                Some(md5::compute(&bytes))
             });
             match actual {
-                Some(d) if d.eq_ignore_ascii_case(recorded) => {}
+                Some(d) if d == recorded => {}
                 _ => return false,
             }
         }
