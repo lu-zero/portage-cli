@@ -791,6 +791,118 @@ pub struct ResolvePolicy<'a> {
     pub force_mask: &'a crate::force_mask::ForceMask,
 }
 
+/// Owns the resolved `Accept*` decisions plus the [`crate::use_env::UseEnv`]
+/// fields [`ResolvePolicy`] borrows from
+///
+/// [`AcceptKeywords`]/[`AcceptLicenses`]/[`AcceptProperties`]/
+/// [`AcceptRestrict`] all need folding once from their raw `UseEnv` form
+/// before a `ResolvePolicy` can borrow them; every caller that loads a
+/// `UseEnv` needs that same fold, so build it once via [`Self::from_use_env`]
+/// and hand out `ResolvePolicy` views via [`Self::as_policy`] rather than
+/// repeating the fold and the 12-field literal at each call site.
+pub struct ResolvedPolicy {
+    /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision
+    pub accept_keywords: AcceptKeywords,
+    /// Resolved `ACCEPT_LICENSE`/`package.license` decision
+    pub accept_licenses: AcceptLicenses,
+    /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision
+    pub accept_properties: AcceptProperties,
+    /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision
+    pub accept_restrict: AcceptRestrict,
+    /// `package.mask` atoms
+    pub package_mask: Vec<Dep>,
+    /// `package.unmask` atoms (cancel a mask per package)
+    pub package_unmask: Vec<Dep>,
+    /// Folded profile `make.defaults`
+    pub defaults: portage_atom_pubgrub::UseLayer,
+    /// `make.conf` USE delta
+    pub conf: portage_atom_pubgrub::UseLayer,
+    /// Process-environment USE layer
+    pub env_use: portage_atom_pubgrub::UseLayer,
+    /// Per-version `package.use`/`package.env`-style overrides
+    pub package_use: Vec<(Dep, Vec<UseOverride>)>,
+    /// Per-profile-node `package.use`
+    pub profile_package_use: Vec<portage_atom_pubgrub::ProfileUseNode>,
+    /// Profile USE force/mask policy
+    pub force_mask: crate::force_mask::ForceMask,
+}
+
+impl ResolvedPolicy {
+    /// Fold a loaded [`crate::use_env::UseEnv`] into a [`ResolvedPolicy`]
+    ///
+    /// `arch` is the caller's already-resolved accept-arch (a cross build's
+    /// target arch, not necessarily the host `--arch` — that selection stays
+    /// at the call site, not baked in here). Returns the leftover `UseEnv`
+    /// fields ([`UseEnvExtras`]) that aren't part of the policy but some
+    /// callers still need (`package.provided`, `USE_EXPAND` display keys,
+    /// `DISTDIR`).
+    pub fn from_use_env(env: crate::use_env::UseEnv, arch: &Arch) -> (Self, UseEnvExtras) {
+        let accept_keywords =
+            AcceptKeywords::new(arch, &env.accept_keywords, env.package_accept_keywords);
+        let accept_licenses = AcceptLicenses::new(env.accept_license, env.package_license);
+        let accept_properties =
+            AcceptProperties::new(env.accept_properties, env.package_properties);
+        let accept_restrict = AcceptRestrict::new(env.accept_restrict, env.package_restrict);
+        let resolved = Self {
+            accept_keywords,
+            accept_licenses,
+            accept_properties,
+            accept_restrict,
+            package_mask: env.package_mask,
+            package_unmask: env.package_unmask,
+            defaults: env.defaults,
+            conf: env.conf,
+            env_use: env.env_use,
+            package_use: env.package_use,
+            profile_package_use: env.profile_package_use,
+            force_mask: env.force_mask,
+        };
+        let extras = UseEnvExtras {
+            expand: env.expand,
+            expand_hidden: env.expand_hidden,
+            distdir: env.distdir,
+            provided: env.provided,
+        };
+        (resolved, extras)
+    }
+
+    /// Borrow a [`ResolvePolicy`] view over every field
+    ///
+    /// `Copy`, so a caller overriding just `package_use` (the one field that
+    /// legitimately varies mid-resolution) can do
+    /// `ResolvePolicy { package_use: &x, ..resolved.as_policy() }` instead of
+    /// restating the other 11 fields.
+    pub fn as_policy(&self) -> ResolvePolicy<'_> {
+        ResolvePolicy {
+            accept_keywords: &self.accept_keywords,
+            package_mask: &self.package_mask,
+            package_unmask: &self.package_unmask,
+            accept_licenses: &self.accept_licenses,
+            accept_properties: &self.accept_properties,
+            accept_restrict: &self.accept_restrict,
+            defaults: &self.defaults,
+            conf: &self.conf,
+            env_use: &self.env_use,
+            package_use: &self.package_use,
+            profile_package_use: &self.profile_package_use,
+            force_mask: &self.force_mask,
+        }
+    }
+}
+
+/// `UseEnv` fields not folded into [`ResolvedPolicy`]: display-only or
+/// consumed outside policy filtering
+pub struct UseEnvExtras {
+    /// `USE_EXPAND` keys — used to group expanded flags in display
+    pub expand: Vec<String>,
+    /// `USE_EXPAND_HIDDEN` keys — groups to suppress in display
+    pub expand_hidden: Vec<String>,
+    /// Resolved `DISTDIR`, for download-size accounting
+    pub distdir: String,
+    /// `package.provided` CPVs from the profile stack
+    pub provided: Vec<Cpv>,
+}
+
 /// The [`portage_atom_pubgrub::PackageRepository`] impl the solver bridge
 /// reads from — a borrowed view over [`RepoData`] plus every resolved policy
 /// input (accept keywords/mask/license, USE layers, force/mask, Level-C)

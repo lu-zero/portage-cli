@@ -7,9 +7,6 @@ use portage_atom::interner::Interned;
 use portage_atom_pubgrub::{PortagePackage, UseFlagState};
 use portage_repo::{PackageConf, UseExpand};
 use portage_resolve::effective_use::effective_use;
-use portage_resolve::repo::{
-    AcceptKeywords, AcceptLicenses, AcceptProperties, AcceptRestrict, ResolvePolicy,
-};
 use portage_resolve::use_env::build_use_env;
 
 use crate::cli::{Cli, PkgCommand};
@@ -458,35 +455,10 @@ async fn resolve_active_use(
         .await
         .context("resolving active profile")?;
 
-    let accept_keywords = AcceptKeywords::new(
-        arch,
-        &env.accept_keywords,
-        env.package_accept_keywords.clone(),
-    );
-    let accept_licenses =
-        AcceptLicenses::new(env.accept_license.clone(), env.package_license.clone());
-    let accept_properties = AcceptProperties::new(
-        env.accept_properties.clone(),
-        env.package_properties.clone(),
-    );
-    let accept_restrict =
-        AcceptRestrict::new(env.accept_restrict.clone(), env.package_restrict.clone());
-    let policy = ResolvePolicy {
-        accept_keywords: &accept_keywords,
-        package_mask: &env.package_mask,
-        package_unmask: &env.package_unmask,
-        accept_licenses: &accept_licenses,
-        accept_properties: &accept_properties,
-        accept_restrict: &accept_restrict,
-        defaults: &env.defaults,
-        conf: &env.conf,
-        env_use: &env.env_use,
-        package_use: &env.package_use,
-        profile_package_use: &env.profile_package_use,
-        force_mask: &env.force_mask,
-    };
+    let (resolved, extras) = portage_resolve::repo::ResolvedPolicy::from_use_env(env, arch);
+    let policy = resolved.as_policy();
 
-    let stable = accept_keywords.is_stable(
+    let stable = resolved.accept_keywords.is_stable(
         &entry.metadata.keywords,
         &cpv,
         Some(entry.metadata.slot.slot),
@@ -524,7 +496,7 @@ async fn resolve_active_use(
     Ok(Some(ActiveUse {
         cpv,
         flags,
-        expand: env.expand,
+        expand: extras.expand,
         required_use_violations,
     }))
 }

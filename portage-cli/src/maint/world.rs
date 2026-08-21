@@ -21,18 +21,7 @@ const DEFAULT_WORLD: &str = "/var/lib/portage/world";
 /// full of entries that can never be rebuilt.
 pub struct TreeView {
     data: portage_resolve::repo::RepoData,
-    accept_keywords: portage_resolve::repo::AcceptKeywords,
-    accept_licenses: portage_resolve::repo::AcceptLicenses,
-    accept_properties: portage_resolve::repo::AcceptProperties,
-    accept_restrict: portage_resolve::repo::AcceptRestrict,
-    package_mask: Vec<Dep>,
-    package_unmask: Vec<Dep>,
-    defaults: portage_atom_pubgrub::UseLayer,
-    conf: portage_atom_pubgrub::UseLayer,
-    env_use: portage_atom_pubgrub::UseLayer,
-    package_use: Vec<(Dep, Vec<portage_atom_pubgrub::UseOverride>)>,
-    profile_package_use: Vec<portage_atom_pubgrub::ProfileUseNode>,
-    force_mask: portage_resolve::force_mask::ForceMask,
+    resolved: portage_resolve::repo::ResolvedPolicy,
     multi_repo: bool,
 }
 
@@ -52,74 +41,21 @@ impl TreeView {
             portage_resolve::repo::load_repos(&set),
             portage_resolve::use_env::build_use_env(set.main(), roots.config(), None, None),
         );
-        let env = env?;
-        let accept_keywords = portage_resolve::repo::AcceptKeywords::new(
-            arch,
-            &env.accept_keywords,
-            env.package_accept_keywords,
-        );
-        let accept_licenses =
-            portage_resolve::repo::AcceptLicenses::new(env.accept_license, env.package_license);
-        let accept_properties = portage_resolve::repo::AcceptProperties::new(
-            env.accept_properties,
-            env.package_properties,
-        );
-        let accept_restrict =
-            portage_resolve::repo::AcceptRestrict::new(env.accept_restrict, env.package_restrict);
+        let (resolved, _extras) = portage_resolve::repo::ResolvedPolicy::from_use_env(env?, arch);
         // Same policy-then-collapse ordering as `query/depgraph/mod.rs`'s
         // `depgraph()` — see `repo::collapse_duplicates`'s own doc for why a
         // masked higher-priority repo's copy must not hide an available
         // identical version from a lower-priority one.
-        let data = portage_resolve::repo::collapse_duplicates(
-            raw_data,
-            &portage_resolve::repo::ResolvePolicy {
-                accept_keywords: &accept_keywords,
-                package_mask: &env.package_mask,
-                package_unmask: &env.package_unmask,
-                accept_licenses: &accept_licenses,
-                accept_properties: &accept_properties,
-                accept_restrict: &accept_restrict,
-                defaults: &env.defaults,
-                conf: &env.conf,
-                env_use: &env.env_use,
-                package_use: &env.package_use,
-                profile_package_use: &env.profile_package_use,
-                force_mask: &env.force_mask,
-            },
-        );
+        let data = portage_resolve::repo::collapse_duplicates(raw_data, &resolved.as_policy());
         Ok(Self {
             data,
-            accept_keywords,
-            accept_licenses,
-            accept_properties,
-            accept_restrict,
-            package_mask: env.package_mask,
-            package_unmask: env.package_unmask,
-            defaults: env.defaults,
-            conf: env.conf,
-            env_use: env.env_use,
-            package_use: env.package_use,
-            profile_package_use: env.profile_package_use,
-            force_mask: env.force_mask,
+            resolved,
             multi_repo: set.is_multi(),
         })
     }
 
     fn policy(&self) -> portage_resolve::repo::ResolvePolicy<'_> {
-        portage_resolve::repo::ResolvePolicy {
-            accept_keywords: &self.accept_keywords,
-            package_mask: &self.package_mask,
-            package_unmask: &self.package_unmask,
-            accept_licenses: &self.accept_licenses,
-            accept_properties: &self.accept_properties,
-            accept_restrict: &self.accept_restrict,
-            defaults: &self.defaults,
-            conf: &self.conf,
-            env_use: &self.env_use,
-            package_use: &self.package_use,
-            profile_package_use: &self.profile_package_use,
-            force_mask: &self.force_mask,
-        }
+        self.resolved.as_policy()
     }
 
     /// `None` when the atom has an acceptable candidate; otherwise the problem,

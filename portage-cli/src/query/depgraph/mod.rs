@@ -316,28 +316,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         ),
     );
     let use_env = use_env_result?;
-    let use_env::UseEnv {
-        defaults,
-        conf,
-        env_use,
-        expand: use_expand,
-        expand_hidden: use_expand_hidden,
-        package_use,
-        profile_package_use,
-        package_mask,
-        package_unmask,
-        force_mask,
-        accept_keywords,
-        package_accept_keywords,
-        accept_license,
-        package_license,
-        accept_properties,
-        package_properties,
-        accept_restrict,
-        package_restrict,
-        distdir,
-        provided,
-    } = use_env;
 
     // Fold global ACCEPT_KEYWORDS and per-package package.accept_keywords into a
     // single interned acceptance decision. A cross build accepts by the TARGET
@@ -346,14 +324,27 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // accepted for a riscv sysroot even though the host is arm64. Without this
     // every target package would be filtered out (NoVersions).
     let accept_arch = cross.target_arch().unwrap_or(arch);
-    let accept_keywords =
-        repo::AcceptKeywords::new(accept_arch, &accept_keywords, package_accept_keywords);
-    // Likewise fold global ACCEPT_LICENSE with per-package package.license.
-    let accept_licenses = repo::AcceptLicenses::new(accept_license, package_license);
-    // Same fold for ACCEPT_PROPERTIES/ACCEPT_RESTRICT — these reuse
-    // `AcceptLicenses`/`AcceptLicense` rather than new types.
-    let accept_properties = repo::AcceptProperties::new(accept_properties, package_properties);
-    let accept_restrict = repo::AcceptRestrict::new(accept_restrict, package_restrict);
+    let (resolved, extras) = repo::ResolvedPolicy::from_use_env(use_env, accept_arch);
+    let repo::ResolvedPolicy {
+        accept_keywords,
+        accept_licenses,
+        accept_properties,
+        accept_restrict,
+        package_mask,
+        package_unmask,
+        defaults,
+        conf,
+        env_use,
+        package_use,
+        profile_package_use,
+        force_mask,
+    } = resolved;
+    let repo::UseEnvExtras {
+        expand: use_expand,
+        expand_hidden: use_expand_hidden,
+        distdir,
+        provided,
+    } = extras;
 
     let target_installed_cpvs: std::collections::HashSet<Cpv> = target_installed
         .iter()
