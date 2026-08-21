@@ -548,7 +548,7 @@ fn effective_use_config(
         let stable = policy.accept_keywords.is_stable(&meta.keywords, cpv, slot);
         let iuse = crate::force_mask::iuse_effective_set(
             meta.eapi,
-            meta.iuse.iter().map(|iu| iu.name()),
+            meta.iuse.iter().map(Interned::from),
             &policy.force_mask.iuse_injection,
         );
         let slot_dep = slot.map(portage_atom::Slot::from_name);
@@ -1201,7 +1201,7 @@ impl PackageRepository for Adapter<'_> {
                 .map(|m| {
                     crate::force_mask::iuse_effective_set(
                         m.eapi,
-                        m.iuse.iter().map(|iu| iu.name()),
+                        m.iuse.iter().map(Interned::from),
                         &self.force_mask.iuse_injection,
                     )
                 })

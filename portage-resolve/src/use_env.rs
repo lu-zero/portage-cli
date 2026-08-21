@@ -372,13 +372,13 @@ async fn compute_use_env(
         }
     }
     let force_mask = ForceMask {
-        iuse_injection: crate::force_mask::IuseInjection {
-            iuse_implicit: split_var("IUSE_IMPLICIT"),
-            use_expand: expand.clone(),
+        iuse_injection: crate::force_mask::IuseInjection::new(
+            split_var("IUSE_IMPLICIT"),
+            expand.clone(),
             use_expand_implicit,
             use_expand_unprefixed,
             expand_values,
-        },
+        ),
         layers: stack
             .profiles()
             .iter()

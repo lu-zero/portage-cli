@@ -76,7 +76,7 @@ pub fn iuse_set(
 ) -> HashSet<Interned<DefaultInterner>> {
     iuse_effective_set(
         cache.metadata.eapi,
-        cache.metadata.iuse.iter().map(|iu| iu.name()),
+        cache.metadata.iuse.iter().map(Interned::from),
         injection,
     )
 }

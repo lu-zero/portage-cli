@@ -71,21 +71,66 @@ pub struct ForceMaskLayer {
     pub pkg_stable_mask: PkgRules,
 }
 
-/// Profile inputs for `IUSE_EFFECTIVE` (PMS 11.1.1)
+/// Profile inputs for `IUSE_EFFECTIVE` (PMS 11.1.1), precomputed
 ///
 /// Shared across packages; the per-package IUSE and EAPI come from the cache.
+///
+/// Only reachable through [`Self::new`], which precomputes both EAPI
+/// classes' profile-invariant `IUSE_EFFECTIVE` half (see
+/// [`portage_metadata::iuse_effective_profile_part`]) once — these inputs
+/// are identical for every candidate version checked during a solve, so
+/// recomputing them per candidate (as a struct literal storing the raw
+/// `IUSE_IMPLICIT`/`USE_EXPAND`/... values would invite) is pure waste.
 #[derive(Debug, Clone, Default)]
 pub struct IuseInjection {
-    /// Profile `IUSE_IMPLICIT`
-    pub iuse_implicit: Vec<String>,
-    /// Profile `USE_EXPAND`
-    pub use_expand: Vec<String>,
-    /// Profile `USE_EXPAND_IMPLICIT`
-    pub use_expand_implicit: Vec<String>,
-    /// Profile `USE_EXPAND_UNPREFIXED`
-    pub use_expand_unprefixed: Vec<String>,
-    /// `USE_EXPAND_VALUES_${v}` for each expand name
-    pub expand_values: HashMap<String, Vec<String>>,
+    /// Cached profile-invariant `IUSE_EFFECTIVE` half, injection EAPIs (≥5)
+    injected: HashSet<Flag>,
+    /// Same for non-injection EAPIs (≤4, PMS table 5.6)
+    non_injected: HashSet<Flag>,
+}
+
+impl IuseInjection {
+    /// Build from the profile's raw `IUSE_IMPLICIT`/`USE_EXPAND`/... values,
+    /// precomputing both EAPI classes' profile-invariant `IUSE_EFFECTIVE` half
+    pub fn new(
+        iuse_implicit: Vec<String>,
+        use_expand: Vec<String>,
+        use_expand_implicit: Vec<String>,
+        use_expand_unprefixed: Vec<String>,
+        expand_values: HashMap<String, Vec<String>>,
+    ) -> Self {
+        let intern_all =
+            |set: BTreeSet<String>| set.into_iter().map(|s| Interned::intern(&s)).collect();
+        let injected = intern_all(portage_metadata::iuse_effective_profile_part(
+            true,
+            &iuse_implicit,
+            &use_expand,
+            &use_expand_implicit,
+            &use_expand_unprefixed,
+            &expand_values,
+        ));
+        let non_injected = intern_all(portage_metadata::iuse_effective_profile_part(
+            false,
+            &iuse_implicit,
+            &use_expand,
+            &use_expand_implicit,
+            &use_expand_unprefixed,
+            &expand_values,
+        ));
+        Self {
+            injected,
+            non_injected,
+        }
+    }
+
+    /// The cached profile-invariant `IUSE_EFFECTIVE` half for `eapi`'s injection class
+    fn profile_part(&self, eapi: Eapi) -> &HashSet<Flag> {
+        if eapi.has_profile_iuse_injection() {
+            &self.injected
+        } else {
+            &self.non_injected
+        }
+    }
 }
 
 /// Resolved profile force/mask policy, interned once at config-read time
@@ -111,23 +156,22 @@ impl ForceMask {
 }
 
 /// `IUSE_EFFECTIVE` interned for force/mask filtering
+///
+/// `iuse` is the package's own already-interned `IUSE` flags (e.g.
+/// `meta.iuse.iter().map(Interned::from)` — a free key-wrap, not a string
+/// re-intern). The profile-derived half comes from `injection`'s cache
+/// ([`IuseInjection::new`]), so this is a union over already-interned data —
+/// no allocation or intern-table lookup beyond the result set itself.
 pub fn iuse_effective_set(
     eapi: Eapi,
-    iuse: impl IntoIterator<Item = impl AsRef<str>>,
+    iuse: impl IntoIterator<Item = Flag>,
     injection: &IuseInjection,
 ) -> HashSet<Flag> {
-    portage_metadata::iuse_effective(
-        eapi,
-        iuse,
-        &injection.iuse_implicit,
-        &injection.use_expand,
-        &injection.use_expand_implicit,
-        &injection.use_expand_unprefixed,
-        &injection.expand_values,
-    )
-    .into_iter()
-    .map(|s| Interned::intern(&s))
-    .collect()
+    let base = injection.profile_part(eapi);
+    let mut out = HashSet::with_capacity(base.len() + 32);
+    out.extend(base.iter().copied());
+    out.extend(iuse);
+    out
 }
 
 /// Parse `use.mask`/`use.force` lines to interned signed tokens
@@ -549,11 +593,14 @@ mod tests {
 
     #[test]
     fn iuse_effective_includes_profile_implicit() {
-        let inj = IuseInjection {
-            iuse_implicit: vec!["prefix".into()],
-            ..Default::default()
-        };
-        let set = iuse_effective_set(portage_metadata::Eapi::Eight, ["ssl"], &inj);
+        let inj = IuseInjection::new(
+            vec!["prefix".into()],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            HashMap::new(),
+        );
+        let set = iuse_effective_set(portage_metadata::Eapi::Eight, [flag("ssl")], &inj);
         assert!(set.contains(&flag("ssl")));
         assert!(set.contains(&flag("prefix")));
     }

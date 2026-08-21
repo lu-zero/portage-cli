@@ -13,6 +13,11 @@ use crate::eapi::Eapi;
 /// `USE_EXPAND_UNPREFIXED` and `USE_EXPAND_VALUES_${v}` token lists.
 ///
 /// Non-injection EAPIs (table 5.6) get PMS 11.1.1's narrower set instead.
+///
+/// Every argument past `iuse`/`eapi` is profile-wide and identical for every
+/// ebuild in a solve — a caller evaluating many candidates against the same
+/// profile should call [`iuse_effective_profile_part`] once and union it with
+/// each candidate's own (small) IUSE instead of re-deriving it here per call.
 pub fn iuse_effective(
     eapi: Eapi,
     iuse: impl IntoIterator<Item = impl AsRef<str>>,
@@ -22,14 +27,42 @@ pub fn iuse_effective(
     use_expand_unprefixed: impl IntoIterator<Item = impl AsRef<str>>,
     expand_values: &HashMap<String, Vec<String>>,
 ) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = iuse
+        .into_iter()
+        .filter_map(|token| {
+            let name = token.as_ref().trim_start_matches(['+', '-']);
+            (!name.is_empty()).then(|| name.to_string())
+        })
+        .collect();
+    out.extend(iuse_effective_profile_part(
+        eapi.has_profile_iuse_injection(),
+        iuse_implicit,
+        use_expand,
+        use_expand_implicit,
+        use_expand_unprefixed,
+        expand_values,
+    ));
+    out
+}
+
+/// The profile-only half of [`iuse_effective`] — everything not derived from
+/// the ebuild's own `IUSE`
+///
+/// Solve-invariant for a fixed profile: a caller checking many candidates
+/// against the same profile should compute this once (per
+/// [`injection`](Eapi::has_profile_iuse_injection) EAPI class) and union it
+/// with each candidate's own `IUSE`, rather than calling [`iuse_effective`]
+/// per candidate.
+pub fn iuse_effective_profile_part(
+    injection: bool,
+    iuse_implicit: impl IntoIterator<Item = impl AsRef<str>>,
+    use_expand: impl IntoIterator<Item = impl AsRef<str>>,
+    use_expand_implicit: impl IntoIterator<Item = impl AsRef<str>>,
+    use_expand_unprefixed: impl IntoIterator<Item = impl AsRef<str>>,
+    expand_values: &HashMap<String, Vec<String>>,
+) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    for token in iuse {
-        let name = token.as_ref().trim_start_matches(['+', '-']);
-        if !name.is_empty() {
-            out.insert(name.to_string());
-        }
-    }
-    if !eapi.has_profile_iuse_injection() {
+    if !injection {
         non_injection_extras(use_expand, expand_values, &mut out);
         return out;
     }

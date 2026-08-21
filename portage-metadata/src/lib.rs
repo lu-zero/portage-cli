@@ -52,7 +52,7 @@ pub use diagnostic::ParseDiagnostic;
 pub use eapi::Eapi;
 pub use error::{Error, Result};
 pub use iuse::{IUse, IUseDefault};
-pub use iuse_effective::iuse_effective;
+pub use iuse_effective::{iuse_effective, iuse_effective_profile_part};
 pub use keyword::{Keyword, Stability};
 pub use license::LicenseExpr;
 pub use metadata::EbuildMetadata;
