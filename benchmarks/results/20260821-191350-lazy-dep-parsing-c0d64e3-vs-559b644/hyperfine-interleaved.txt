@@ -1,0 +1,64 @@
+=== firefox ===
+Benchmark 1: anchor-559b644
+  Time (mean ± σ):      1.475 s ±  0.109 s    [User: 2.518 s, System: 28.195 s]
+  Range (min … max):    1.243 s …  1.622 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: current-c0d64e3
+  Time (mean ± σ):      1.292 s ±  0.173 s    [User: 1.717 s, System: 12.627 s]
+  Range (min … max):    1.051 s …  1.700 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  current-c0d64e3 ran
+    1.14 ± 0.17 times faster than anchor-559b644
+
+=== qtbase ===
+Benchmark 1: anchor-559b644
+  Time (mean ± σ):      1.435 s ±  0.094 s    [User: 2.496 s, System: 26.591 s]
+  Range (min … max):    1.252 s …  1.564 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: current-c0d64e3
+  Time (mean ± σ):      1.166 s ±  0.126 s    [User: 1.668 s, System: 8.778 s]
+  Range (min … max):    0.964 s …  1.414 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  current-c0d64e3 ran
+    1.23 ± 0.16 times faster than anchor-559b644
+
+=== texlive ===
+Benchmark 1: anchor-559b644
+  Time (mean ± σ):      1.410 s ±  0.106 s    [User: 2.571 s, System: 23.647 s]
+  Range (min … max):    1.231 s …  1.567 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: current-c0d64e3
+  Time (mean ± σ):      1.200 s ±  0.145 s    [User: 1.766 s, System: 7.432 s]
+  Range (min … max):    0.985 s …  1.534 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Summary
+  current-c0d64e3 ran
+    1.18 ± 0.17 times faster than anchor-559b644
+
+=== @world ===
+Benchmark 1: anchor-559b644
+  Time (mean ± σ):      1.628 s ±  0.104 s    [User: 2.808 s, System: 26.451 s]
+  Range (min … max):    1.436 s …  1.823 s    20 runs
+ 
+Benchmark 2: current-c0d64e3
+  Time (mean ± σ):      1.411 s ±  0.160 s    [User: 1.981 s, System: 9.681 s]
+  Range (min … max):    1.213 s …  1.739 s    20 runs
+ 
+Summary
+  current-c0d64e3 ran
+    1.15 ± 0.15 times faster than anchor-559b644
+

@@ -1,0 +1,11 @@
+Benchmark 1: anchor-559b644
+  Time (mean ± σ):      8.348 s ±  0.279 s    [User: 150.693 s, System: 9.052 s]
+  Range (min … max):    8.046 s …  8.687 s    5 runs
+ 
+Benchmark 2: current-c0d64e3
+  Time (mean ± σ):      8.285 s ±  0.190 s    [User: 149.945 s, System: 10.748 s]
+  Range (min … max):    8.050 s …  8.544 s    5 runs
+ 
+Summary
+  current-c0d64e3 ran
+    1.01 ± 0.04 times faster than anchor-559b644
