@@ -1921,6 +1921,7 @@ fn build_ordered_tree<'a>(
             // No open ancestor depends on `x`. Walk *up* through parent edges
             // to graft `x` onto some already-shown node, emitting each
             // intermediate as `[nomerge]` filler. `traversed` breaks cycles.
+            walk.tree_nodes.clear();
             let mut traversed: HashSet<&PortagePackage> = HashSet::new();
             traversed.insert(x);
             walk.add_parents(x, true, &mut traversed);
@@ -2487,6 +2488,26 @@ mod tests {
                 (cpn("app-foo/b"), 1, true),
                 (cpn("app-foo/c"), 2, true),
             ]
+        );
+    }
+
+    // Two independent `@world` roots, no edge between them. The open branch
+    // must be closed before grafting a fresh root, not left over from
+    // whatever the previous root's branch pushed — matching real portage's
+    // `tree_nodes = []` in `_ordered_tree_display`'s `else` arm.
+    #[test]
+    fn tree_unrelated_roots_never_nest() {
+        let a = pkg("app-foo/a");
+        let b = pkg("app-foo/b");
+        let pkgs = vec![a.clone(), b.clone()];
+        let edges: &[(&PortagePackage, &PortagePackage)] = &[];
+        // install order [a, b]; the walk reverses it (root first) so b is
+        // grafted before a.
+        let got = reshape(&pkgs, edges, &[&a, &b], &[&a, &b]);
+        let cpn = |s: &str| Cpn::parse(s).unwrap();
+        assert_eq!(
+            got,
+            vec![(cpn("app-foo/b"), 0, true), (cpn("app-foo/a"), 0, true),]
         );
     }
 
