@@ -1145,11 +1145,11 @@ impl<'a> Adapter<'a> {
 /// isn't available here — a plain function is the direct route.
 fn package_deps_from_metadata(meta: &portage_metadata::EbuildMetadata) -> PackageDeps {
     PackageDeps::new(
-        meta.depend.clone(),
-        meta.rdepend.clone(),
-        meta.bdepend.clone(),
-        meta.pdepend.clone(),
-        meta.idepend.clone(),
+        meta.depend.list().clone(),
+        meta.rdepend.list().clone(),
+        meta.bdepend.list().clone(),
+        meta.pdepend.list().clone(),
+        meta.idepend.list().clone(),
     )
 }
 
@@ -1633,11 +1633,11 @@ pub fn cpns_for(data: &RepoData, cpn: &Cpn, ver: &Version) -> Vec<Cpn> {
     let meta = &cache.metadata;
     let mut out = Vec::new();
     for deps in [
-        &meta.depend,
-        &meta.rdepend,
-        &meta.bdepend,
-        &meta.pdepend,
-        &meta.idepend,
+        meta.depend.list(),
+        meta.rdepend.list(),
+        meta.bdepend.list(),
+        meta.pdepend.list(),
+        meta.idepend.list(),
     ] {
         walk(deps, &mut out);
     }

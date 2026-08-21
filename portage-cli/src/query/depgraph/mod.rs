@@ -1577,8 +1577,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 let effective =
                     effective_use::effective_use(&final_policy, pkg, ver, cache, stable, &ceded);
                 (
-                    cache.metadata.depend.to_vec(),
-                    cache.metadata.bdepend.to_vec(),
+                    cache.metadata.depend.list().to_vec(),
+                    cache.metadata.bdepend.list().to_vec(),
                     effective.enabled_flags(),
                 )
             } else {
@@ -1786,8 +1786,8 @@ fn trigger_still_satisfied(
         return true;
     };
     let mut atoms = Vec::new();
-    collect(&cache.metadata.depend, trigger, &mut atoms);
-    collect(&cache.metadata.rdepend, trigger, &mut atoms);
+    collect(cache.metadata.depend.list(), trigger, &mut atoms);
+    collect(cache.metadata.rdepend.list(), trigger, &mut atoms);
     if atoms.is_empty() {
         return false;
     }

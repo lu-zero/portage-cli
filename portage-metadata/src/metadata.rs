@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::interner::{DefaultInterner, Interner};
-use portage_atom::{DepEntry, DepList, Slot};
+use portage_atom::{DepEntry, LazyDepList, Slot};
 
 use crate::eapi::Eapi;
 use crate::iuse::IUse;
@@ -65,26 +65,25 @@ where
 
     /// Build-time dependencies (`DEPEND`)
     ///
-    /// A [`DepList`]: this metadata is re-converted into the solver's own
-    /// dependency-tree representation on every USE-dep co-solve fixpoint
-    /// iteration (up to ~8x per invocation), and cloning a firefox-class
-    /// package's hundreds of parsed atoms every time was a measured, real
-    /// cost — `DepList`'s `Arc` clone is a refcount bump instead.
+    /// A [`LazyDepList`]: only a small fraction of a repo's ebuilds ever
+    /// have their dependencies examined by a resolve's solver, so the raw
+    /// text is parsed on first access rather than eagerly for every ebuild
+    /// `load_repos()` reads.
     ///
     /// See [PMS 8.1](https://projects.gentoo.org/pms/9/pms.html#dependency-classes).
-    pub depend: DepList,
+    pub depend: LazyDepList,
 
     /// Runtime dependencies (`RDEPEND`)
-    pub rdepend: DepList,
+    pub rdepend: LazyDepList,
 
     /// Build-host dependencies (`BDEPEND`, EAPI 7+)
-    pub bdepend: DepList,
+    pub bdepend: LazyDepList,
 
     /// Post-merge dependencies (`PDEPEND`)
-    pub pdepend: DepList,
+    pub pdepend: LazyDepList,
 
     /// Install-time dependencies (`IDEPEND`, EAPI 8)
-    pub idepend: DepList,
+    pub idepend: LazyDepList,
 
     /// Eclasses directly listed in the ebuild's `inherit` statement
     ///

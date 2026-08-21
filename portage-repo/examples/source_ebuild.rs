@@ -94,20 +94,20 @@ async fn main() {
     println!("IUSE:         {:?}", metadata.iuse);
     println!("LICENSE:      {:?}", metadata.license);
 
-    if !metadata.depend.is_empty() {
-        println!("DEPEND:       {:?}", metadata.depend);
+    if !metadata.depend.is_empty_raw() {
+        println!("DEPEND:       {:?}", metadata.depend.list());
     }
-    if !metadata.rdepend.is_empty() {
-        println!("RDEPEND:      {:?}", metadata.rdepend);
+    if !metadata.rdepend.is_empty_raw() {
+        println!("RDEPEND:      {:?}", metadata.rdepend.list());
     }
-    if !metadata.bdepend.is_empty() {
-        println!("BDEPEND:      {:?}", metadata.bdepend);
+    if !metadata.bdepend.is_empty_raw() {
+        println!("BDEPEND:      {:?}", metadata.bdepend.list());
     }
-    if !metadata.pdepend.is_empty() {
-        println!("PDEPEND:      {:?}", metadata.pdepend);
+    if !metadata.pdepend.is_empty_raw() {
+        println!("PDEPEND:      {:?}", metadata.pdepend.list());
     }
-    if !metadata.idepend.is_empty() {
-        println!("IDEPEND:      {:?}", metadata.idepend);
+    if !metadata.idepend.is_empty_raw() {
+        println!("IDEPEND:      {:?}", metadata.idepend.list());
     }
     if !metadata.restrict.is_empty() {
         println!("RESTRICT:     {:?}", metadata.restrict);

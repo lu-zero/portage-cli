@@ -89,6 +89,7 @@ fn print_entry(entry: &CacheEntry) {
     println!(
         "DEPEND:       {}",
         m.depend
+            .list()
             .iter()
             .map(|d| d.to_string())
             .collect::<Vec<_>>()
@@ -97,6 +98,7 @@ fn print_entry(entry: &CacheEntry) {
     println!(
         "RDEPEND:      {}",
         m.rdepend
+            .list()
             .iter()
             .map(|d| d.to_string())
             .collect::<Vec<_>>()

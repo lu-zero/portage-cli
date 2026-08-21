@@ -82,6 +82,106 @@ impl From<Vec<DepEntry>> for DepList {
     }
 }
 
+/// A DEPEND-class field's raw md5-cache text, parsed to a [`DepList`] on
+/// first access
+///
+/// A resolve's solver only ever examines the dependencies of the small
+/// fraction of a repo's ebuilds it actually considers as candidates —
+/// everything else is filtered by keyword/mask/slot before a dependency is
+/// needed at all. Holding the raw text and parsing on demand, memoized,
+/// avoids materializing a `DepEntry` tree for every candidate the solve
+/// never looks at.
+///
+/// A malformed field parses to an empty list rather than propagating an
+/// error: unlike eager parsing (where a bad field failed the whole
+/// `CacheEntry::parse` and made the package invisible), the package stays
+/// visible with just that one field treated as empty.
+#[derive(Debug, Default)]
+pub struct LazyDepList {
+    raw: Option<Arc<str>>,
+    parsed: std::sync::OnceLock<DepList>,
+}
+
+impl LazyDepList {
+    /// Wrap raw md5-cache field text, parsed on first [`Self::list`] call
+    pub fn from_raw(s: &str) -> Self {
+        if s.is_empty() {
+            return Self::default();
+        }
+        Self {
+            raw: Some(Arc::from(s)),
+            parsed: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Wrap an already-parsed list (sourced-ebuild metadata, tests) — no
+    /// raw text, so [`Self::list`] never has anything to parse
+    pub fn from_list(list: DepList) -> Self {
+        let parsed = std::sync::OnceLock::new();
+        let _ = parsed.set(list);
+        Self { raw: None, parsed }
+    }
+
+    /// Whether the field is empty, without forcing the parse
+    pub fn is_empty_raw(&self) -> bool {
+        self.raw.is_none() && self.parsed.get().is_none_or(|l| l.is_empty())
+    }
+
+    /// The parsed list, computed and memoized on first call
+    pub fn list(&self) -> &DepList {
+        self.parsed.get_or_init(|| match &self.raw {
+            Some(s) => DepEntry::parse(s).map(DepList::new).unwrap_or_default(),
+            None => DepList::default(),
+        })
+    }
+
+    /// Mutable access to the parsed list, forcing the parse first
+    ///
+    /// Drops the raw text: after mutation there is no source text left to
+    /// re-derive from.
+    pub fn make_mut(&mut self) -> &mut Vec<DepEntry> {
+        self.list();
+        self.raw = None;
+        self.parsed
+            .get_mut()
+            .expect("just initialized by list()")
+            .make_mut()
+    }
+}
+
+impl Clone for LazyDepList {
+    fn clone(&self) -> Self {
+        let parsed = std::sync::OnceLock::new();
+        if let Some(v) = self.parsed.get() {
+            let _ = parsed.set(v.clone());
+        }
+        Self {
+            raw: self.raw.clone(),
+            parsed,
+        }
+    }
+}
+
+impl PartialEq for LazyDepList {
+    fn eq(&self, other: &Self) -> bool {
+        self.list() == other.list()
+    }
+}
+
+impl Eq for LazyDepList {}
+
+impl From<DepList> for LazyDepList {
+    fn from(list: DepList) -> Self {
+        Self::from_list(list)
+    }
+}
+
+impl From<Vec<DepEntry>> for LazyDepList {
+    fn from(entries: Vec<DepEntry>) -> Self {
+        Self::from_list(DepList::new(entries))
+    }
+}
+
 impl std::ops::Deref for DepList {
     type Target = [DepEntry];
 
@@ -1204,5 +1304,63 @@ mod tests {
             let reparsed = DepEntry::parse(&rejoined).unwrap();
             assert_eq!(entries, reparsed, "round-trip failed for: {input}");
         }
+    }
+
+    #[test]
+    fn lazy_dep_list_parses_on_first_access_only() {
+        let lazy = LazyDepList::from_raw("dev-lang/rust");
+        assert!(!lazy.is_empty_raw());
+        assert!(lazy.parsed.get().is_none(), "must not parse eagerly");
+        assert_eq!(lazy.list().len(), 1);
+        assert!(
+            lazy.parsed.get().is_some(),
+            "must memoize after first access"
+        );
+    }
+
+    #[test]
+    fn lazy_dep_list_empty_raw_never_forces() {
+        let lazy = LazyDepList::from_raw("");
+        assert!(lazy.is_empty_raw());
+        assert!(lazy.parsed.get().is_none());
+    }
+
+    #[test]
+    fn lazy_dep_list_malformed_field_is_empty_not_an_error() {
+        // A syntactically invalid dep string parses to an empty list rather
+        // than propagating an error or panicking.
+        let lazy = LazyDepList::from_raw("( unterminated");
+        assert!(lazy.list().is_empty());
+    }
+
+    #[test]
+    fn lazy_dep_list_from_list_never_reparses() {
+        let list = DepEntry::parse("dev-lang/rust").unwrap();
+        let lazy = LazyDepList::from_list(list.clone().into());
+        assert_eq!(lazy.list(), &DepList::from(list));
+    }
+
+    #[test]
+    fn lazy_dep_list_clone_preserves_memoized_state() {
+        let lazy = LazyDepList::from_raw("dev-lang/rust");
+        lazy.list(); // force
+        let cloned = lazy.clone();
+        assert!(
+            cloned.parsed.get().is_some(),
+            "clone must carry the already-computed value, not re-parse lazily"
+        );
+        assert_eq!(lazy.list(), cloned.list());
+    }
+
+    #[test]
+    fn lazy_dep_list_eq_compares_parsed_content() {
+        // Equal content, different construction path (raw text vs. a
+        // pre-built list) must still compare equal.
+        let from_raw = LazyDepList::from_raw("dev-lang/rust");
+        let from_list = LazyDepList::from_list(DepEntry::parse("dev-lang/rust").unwrap().into());
+        assert_eq!(from_raw, from_list);
+
+        let different = LazyDepList::from_raw("dev-libs/bar");
+        assert_ne!(from_raw, different);
     }
 }

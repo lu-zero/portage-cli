@@ -53,7 +53,7 @@ pub use gentoo_interner as interner;
 pub use cpn::Cpn;
 pub use cpv::Cpv;
 pub use dep::{Blocker, Dep};
-pub use dep_entry::{DepEntry, DepList};
+pub use dep_entry::{DepEntry, DepList, LazyDepList};
 pub use error::{Error, Result};
 pub use pf::Pf;
 pub use slot::{Slot, SlotDep, SlotOperator};

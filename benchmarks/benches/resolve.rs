@@ -324,11 +324,11 @@ fn load_repo(repo_path: &str, sys: &SystemConfig) -> InMemoryRepository {
                     .collect();
 
                 let deps = PackageDeps::new(
-                    meta.depend.clone(),
-                    meta.rdepend.clone(),
-                    meta.bdepend.clone(),
-                    meta.pdepend.clone(),
-                    meta.idepend.clone(),
+                    meta.depend.list().clone(),
+                    meta.rdepend.list().clone(),
+                    meta.bdepend.list().clone(),
+                    meta.pdepend.list().clone(),
+                    meta.idepend.list().clone(),
                 );
 
                 out.add_package_versions(

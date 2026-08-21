@@ -39,7 +39,13 @@ fn reverse_deps(entries: &[portage_repo::EntryIn<'_>], target: &Dep) -> BTreeSet
     let mut matches: BTreeSet<String> = BTreeSet::new();
     for item in entries {
         let m = &item.entry.metadata;
-        let dep_trees = [&m.depend, &m.rdepend, &m.bdepend, &m.pdepend, &m.idepend];
+        let dep_trees = [
+            m.depend.list(),
+            m.rdepend.list(),
+            m.bdepend.list(),
+            m.pdepend.list(),
+            m.idepend.list(),
+        ];
 
         if dep_trees.iter().any(|tree| tree_contains(target, tree)) {
             matches.insert(item.cpv.cpn.to_string());

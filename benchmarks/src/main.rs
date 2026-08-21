@@ -181,11 +181,11 @@ mod pubgrub_solver {
                                     })
                                     .collect();
                             let deps = PackageDeps::new(
-                                meta.depend.clone(),
-                                meta.rdepend.clone(),
-                                meta.bdepend.clone(),
-                                meta.pdepend.clone(),
-                                meta.idepend.clone(),
+                                meta.depend.list().clone(),
+                                meta.rdepend.list().clone(),
+                                meta.bdepend.list().clone(),
+                                meta.pdepend.list().clone(),
+                                meta.idepend.list().clone(),
                             );
                             (
                                 cpv.clone(),
@@ -436,11 +436,11 @@ mod resolvo_solver {
                                 use_flags,
                                 repo,
                                 dependencies: PackageDeps {
-                                    depend: meta.depend.to_vec(),
-                                    rdepend: meta.rdepend.to_vec(),
-                                    bdepend: meta.bdepend.to_vec(),
-                                    pdepend: meta.pdepend.to_vec(),
-                                    idepend: meta.idepend.to_vec(),
+                                    depend: meta.depend.list().to_vec(),
+                                    rdepend: meta.rdepend.list().to_vec(),
+                                    bdepend: meta.bdepend.list().to_vec(),
+                                    pdepend: meta.pdepend.list().to_vec(),
+                                    idepend: meta.idepend.list().to_vec(),
                                 },
                             }
                         })
@@ -544,7 +544,13 @@ fn main() {
     for entries in data.versions.values() {
         for (_, cache) in entries {
             let m = &cache.metadata;
-            for cls in [&m.depend, &m.rdepend, &m.bdepend, &m.pdepend, &m.idepend] {
+            for cls in [
+                m.depend.list(),
+                m.rdepend.list(),
+                m.bdepend.list(),
+                m.pdepend.list(),
+                m.idepend.list(),
+            ] {
                 collect_cpns(cls, &mut all_dep_cpns);
             }
         }

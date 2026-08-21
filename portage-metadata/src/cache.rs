@@ -1,5 +1,5 @@
 use crate::interner::{DefaultInterner, Interner};
-use portage_atom::{DepEntry, Slot};
+use portage_atom::{DepEntry, LazyDepList, Slot};
 
 use crate::eapi::Eapi;
 use crate::error::{Error, Result};
@@ -258,12 +258,6 @@ impl<'a> ParseState<'a> {
             RestrictExpr::parse(self.properties)?
         };
 
-        let depend_val = parse_dep_field(self.depend)?;
-        let rdepend_val = parse_dep_field(self.rdepend)?;
-        let bdepend_val = parse_dep_field(self.bdepend)?;
-        let pdepend_val = parse_dep_field(self.pdepend)?;
-        let idepend_val = parse_dep_field(self.idepend)?;
-
         let eclasses = parse_eclasses(self.eclasses_raw);
 
         let inherit_val: Vec<String> = self
@@ -291,11 +285,11 @@ impl<'a> ParseState<'a> {
                 required_use: required_use_val,
                 restrict: restrict_val,
                 properties: properties_val,
-                depend: depend_val.into(),
-                rdepend: rdepend_val.into(),
-                bdepend: bdepend_val.into(),
-                pdepend: pdepend_val.into(),
-                idepend: idepend_val.into(),
+                depend: LazyDepList::from_raw(self.depend),
+                rdepend: LazyDepList::from_raw(self.rdepend),
+                bdepend: LazyDepList::from_raw(self.bdepend),
+                pdepend: LazyDepList::from_raw(self.pdepend),
+                idepend: LazyDepList::from_raw(self.idepend),
                 inherit: inherit_val,
                 inherited: inherited_val,
                 defined_phases: defined_phases_val,
@@ -329,8 +323,8 @@ impl<I: Interner> CacheEntry<I> {
             format_phases(&m.defined_phases)
         ));
 
-        if !m.depend.is_empty() {
-            lines.push(format!("DEPEND={}", format_dep_entries(&m.depend)));
+        if !m.depend.is_empty_raw() {
+            lines.push(format!("DEPEND={}", format_dep_entries(m.depend.list())));
         }
 
         lines.push(format!("DESCRIPTION={}", m.description));
@@ -354,12 +348,12 @@ impl<I: Interner> CacheEntry<I> {
             lines.push(format!("LICENSE={}", lic));
         }
 
-        if !m.pdepend.is_empty() {
-            lines.push(format!("PDEPEND={}", format_dep_entries(&m.pdepend)));
+        if !m.pdepend.is_empty_raw() {
+            lines.push(format!("PDEPEND={}", format_dep_entries(m.pdepend.list())));
         }
 
-        if !m.rdepend.is_empty() {
-            lines.push(format!("RDEPEND={}", format_dep_entries(&m.rdepend)));
+        if !m.rdepend.is_empty_raw() {
+            lines.push(format!("RDEPEND={}", format_dep_entries(m.rdepend.list())));
         }
 
         if let Some(ref ru) = m.required_use {
@@ -378,12 +372,12 @@ impl<I: Interner> CacheEntry<I> {
             lines.push(format!("SRC_URI={}", uri_str.join(" ")));
         }
 
-        if !m.bdepend.is_empty() {
-            lines.push(format!("BDEPEND={}", format_dep_entries(&m.bdepend)));
+        if !m.bdepend.is_empty_raw() {
+            lines.push(format!("BDEPEND={}", format_dep_entries(m.bdepend.list())));
         }
 
-        if !m.idepend.is_empty() {
-            lines.push(format!("IDEPEND={}", format_dep_entries(&m.idepend)));
+        if !m.idepend.is_empty_raw() {
+            lines.push(format!("IDEPEND={}", format_dep_entries(m.idepend.list())));
         }
 
         if !m.properties.is_empty() {
@@ -485,14 +479,6 @@ fn parse_slot(s: &str) -> Result<Slot> {
     }
 }
 
-/// Parse a dependency field value into `Vec<DepEntry>`
-fn parse_dep_field(s: &str) -> Result<Vec<DepEntry>> {
-    if s.is_empty() {
-        return Ok(Vec::new());
-    }
-    DepEntry::parse(s).map_err(|e| Error::DepError(format!("{e}")))
-}
-
 /// Parse the `_eclasses_` value: tab-separated pairs of `name\tchecksum`
 fn parse_eclasses(s: &str) -> Vec<(String, String)> {
     if s.is_empty() {
@@ -573,9 +559,9 @@ _md5_=4539d849d3cea8ac84debad9b3154143
         assert!(!entry.metadata.restrict.is_empty());
         assert_eq!(entry.metadata.defined_phases.len(), 3);
         assert_eq!(entry.metadata.src_uri.len(), 1);
-        assert!(!entry.metadata.depend.is_empty());
-        assert!(!entry.metadata.rdepend.is_empty());
-        assert!(entry.metadata.bdepend.is_empty()); // EAPI 7 but no BDEPEND in this example
+        assert!(!entry.metadata.depend.list().is_empty());
+        assert!(!entry.metadata.rdepend.list().is_empty());
+        assert!(entry.metadata.bdepend.list().is_empty()); // EAPI 7 but no BDEPEND in this example
         assert_eq!(
             entry.md5,
             Some("4539d849d3cea8ac84debad9b3154143".to_string())
@@ -694,7 +680,7 @@ _md5_=4539d849d3cea8ac84debad9b3154143
         let input = "EAPI=8\nDESCRIPTION=Test\nSLOT=0\nIDEPEND=sys-apps/systemd\n";
         let entry = CacheEntry::parse(input).unwrap();
         assert_eq!(entry.metadata.eapi, Eapi::Eight);
-        assert_eq!(entry.metadata.idepend.len(), 1);
+        assert_eq!(entry.metadata.idepend.list().len(), 1);
     }
 
     #[test]
@@ -880,7 +866,7 @@ _md5_=abc123";
         });
         // Spot-check that RDEPEND was actually parsed.
         assert!(
-            !entry.metadata.rdepend.is_empty(),
+            !entry.metadata.rdepend.list().is_empty(),
             "RDEPEND should not be empty"
         );
         assert_eq!(entry.metadata.iuse.len(), 8); // cjk X doc source tk luajittex xetex xindy

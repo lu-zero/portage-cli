@@ -149,27 +149,27 @@ impl EvaluatedDeps<'_> {
 
     /// `DEPEND` edges
     pub fn depend(&self) -> Vec<DepEntry> {
-        self.eval(&self.cache.metadata.depend)
+        self.eval(self.cache.metadata.depend.list())
     }
 
     /// `BDEPEND` edges
     pub fn bdepend(&self) -> Vec<DepEntry> {
-        self.eval(&self.cache.metadata.bdepend)
+        self.eval(self.cache.metadata.bdepend.list())
     }
 
     /// `RDEPEND` edges
     pub fn rdepend(&self) -> Vec<DepEntry> {
-        self.eval(&self.cache.metadata.rdepend)
+        self.eval(self.cache.metadata.rdepend.list())
     }
 
     /// `PDEPEND` edges
     pub fn pdepend(&self) -> Vec<DepEntry> {
-        self.eval(&self.cache.metadata.pdepend)
+        self.eval(self.cache.metadata.pdepend.list())
     }
 
     /// `IDEPEND` edges
     pub fn idepend(&self) -> Vec<DepEntry> {
-        self.eval(&self.cache.metadata.idepend)
+        self.eval(self.cache.metadata.idepend.list())
     }
 }
 
