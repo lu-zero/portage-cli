@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
+use itertools::Itertools as _;
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository, SourceContext, SourceOpts, source_parallel};
 
@@ -151,8 +152,10 @@ async fn main() {
         {
             Ok(r) => {
                 if !r.masters().is_empty() {
-                    let names: Vec<&str> = r.masters().iter().map(|m| m.name()).collect();
-                    eprintln!("Resolved masters: {}", names.join(", "));
+                    eprintln!(
+                        "Resolved masters: {}",
+                        r.masters().iter().map(|m| m.name()).join(", ")
+                    );
                 }
                 r
             }
