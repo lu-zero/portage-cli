@@ -114,6 +114,57 @@ where
 }
 
 impl<I: Interner + Clone> EbuildMetadata<I> {
+    /// Whether any DEPEND-class field or `SRC_URI` fell back to empty
+    /// because its raw text failed to parse, rather than genuinely having
+    /// no content
+    ///
+    /// Forces the parse of every lazy field to answer — only meant for
+    /// callers already paying that cost (writing a cache entry back out,
+    /// or re-validating an already-suspect entry), never the bulk
+    /// resolve-time read path this laziness exists for.
+    pub fn has_parse_failure(&self) -> bool {
+        self.depend.list();
+        self.rdepend.list();
+        self.bdepend.list();
+        self.pdepend.list();
+        self.idepend.list();
+        self.src_uri.list();
+        self.depend.parse_failed()
+            || self.rdepend.parse_failed()
+            || self.bdepend.parse_failed()
+            || self.pdepend.parse_failed()
+            || self.idepend.parse_failed()
+            || self.src_uri.parse_failed()
+    }
+
+    /// Which lazy fields failed to parse and why, `"NAME: message"` per
+    /// field joined with `"; "` — for a caller that already knows
+    /// [`Self::has_parse_failure`] is `true` and wants a real diagnostic
+    /// instead of a generic message. Forces the same six fields
+    /// `has_parse_failure` does (already memoized if that ran first).
+    pub fn parse_failure_summary(&self) -> String {
+        let mut parts = Vec::new();
+        macro_rules! check {
+            ($name:literal, $field:expr) => {{
+                $field.list();
+                if $field.parse_failed() {
+                    parts.push(format!(
+                        "{}: {}",
+                        $name,
+                        $field.parse_error().unwrap_or("unknown parse error")
+                    ));
+                }
+            }};
+        }
+        check!("DEPEND", self.depend);
+        check!("RDEPEND", self.rdepend);
+        check!("BDEPEND", self.bdepend);
+        check!("PDEPEND", self.pdepend);
+        check!("IDEPEND", self.idepend);
+        check!("SRC_URI", self.src_uri);
+        parts.join("; ")
+    }
+
     /// Return a copy with duplicate top-level dep entries removed (first occurrence wins)
     ///
     /// Portage and portage-repo accumulate eclass contributions by appending

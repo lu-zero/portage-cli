@@ -108,7 +108,7 @@ impl LazyDepList {
 
     /// The parsed list, computed and memoized on first call
     pub fn list(&self) -> &DepList {
-        self.get(|s| DepEntry::parse(s).map(DepList::new).unwrap_or_default())
+        self.get(|s| DepEntry::parse(s).map(DepList::new))
     }
 
     /// Mutable access to the parsed list, forcing the parse first
@@ -116,7 +116,7 @@ impl LazyDepList {
     /// Drops the raw text: after mutation there is no source text left to
     /// re-derive from.
     pub fn make_mut(&mut self) -> &mut Vec<DepEntry> {
-        self.get_mut(|s| DepEntry::parse(s).map(DepList::new).unwrap_or_default())
+        self.get_mut(|s| DepEntry::parse(s).map(DepList::new))
             .make_mut()
     }
 

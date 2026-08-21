@@ -333,6 +333,13 @@ fn build_entry(
     // This is path-accurate across master repos — a name-only lookup would
     // miss eclasses inherited from a master overlay's eclass/ directory.
     let SourcedEbuild { metadata, eclasses } = sourced;
+    if metadata.has_parse_failure() {
+        return Err(format!(
+            "{}: {}",
+            ebuild.cpv(),
+            metadata.parse_failure_summary()
+        ));
+    }
     let eclasses: Vec<(portage_atom::interner::Interned<_>, md5::Digest)> = eclasses
         .into_iter()
         .map(|(name, path)| {

@@ -81,7 +81,7 @@ impl LazySrcUriList {
 
     /// The parsed list, computed and memoized on first call
     pub fn list(&self) -> &[SrcUriEntry] {
-        self.0.get(|s| SrcUriEntry::parse(s).unwrap_or_default())
+        self.0.get(SrcUriEntry::parse)
     }
 
     /// Whether the parsed list is empty, forcing the parse first
@@ -91,6 +91,19 @@ impl LazySrcUriList {
     /// whether there is content to emit should check this instead.
     pub fn is_empty(&self) -> bool {
         self.list().is_empty()
+    }
+
+    /// Whether the raw text failed to parse cleanly — see
+    /// `Lazy::parse_failed`'s doc. `false` until [`Self::list`] has been
+    /// called at least once.
+    pub fn parse_failed(&self) -> bool {
+        self.0.parse_failed()
+    }
+
+    /// The parse error's formatted text, if [`Self::parse_failed`] would
+    /// report `true` — see `Lazy::parse_error`'s doc.
+    pub fn parse_error(&self) -> Option<&str> {
+        self.0.parse_error()
     }
 }
 

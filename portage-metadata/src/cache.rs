@@ -712,6 +712,22 @@ _md5_=4539d849d3cea8ac84debad9b3154143
     }
 
     #[test]
+    fn has_parse_failure_detects_a_malformed_depend_field() {
+        // A syntactically invalid DEPEND still lets CacheEntry::parse
+        // succeed (DEPEND is a lazy field, not validated up front) — the
+        // failure only surfaces once something forces the parse.
+        let input = "DESCRIPTION=Test\nSLOT=0\nDEFINED_PHASES=-\nDEPEND=( unterminated\n";
+        let entry = CacheEntry::parse(input).unwrap();
+        assert!(entry.metadata.has_parse_failure());
+    }
+
+    #[test]
+    fn has_parse_failure_is_false_for_a_well_formed_entry() {
+        let entry = CacheEntry::parse(EXAMPLE_CACHE).unwrap();
+        assert!(!entry.metadata.has_parse_failure());
+    }
+
+    #[test]
     fn defined_phases_dash() {
         let input = "DESCRIPTION=Test\nSLOT=0\nDEFINED_PHASES=-\n";
         let entry = CacheEntry::parse(input).unwrap();

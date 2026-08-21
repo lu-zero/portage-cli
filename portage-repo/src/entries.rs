@@ -315,6 +315,7 @@ async fn resolve_ebuilds(
                 .as_deref()
                 .is_some_and(|m| m.eq_ignore_ascii_case(&digest))
                 && repo.is_fresh_cached(entry, digests)
+                && !entry.metadata.has_parse_failure()
         };
 
         // Primary bulk walk (in-tree md5-cache).
@@ -376,6 +377,23 @@ async fn resolve_ebuilds(
                     md5: Some(digest),
                     eclasses,
                 };
+                // Sourcing is the freshest possible source of truth - if the
+                // ebuild's own DEPEND-family/SRC_URI text still fails to
+                // parse here, re-sourcing again later won't fix it. Writing
+                // the entry anyway would launder the failure: serialize()
+                // omits a parse-failed field entirely (290ce4c), and the
+                // written-back text reparses clean next time (no raw text
+                // left to fail), so the failure could never be detected
+                // again. Match build_entry's precedent instead: skip this
+                // ebuild rather than silently caching it dependency-free.
+                if entry.metadata.has_parse_failure() {
+                    tracing::error!(
+                        "repo '{}': {cpv}: {}, skipping",
+                        repo.name(),
+                        entry.metadata.parse_failure_summary()
+                    );
+                    continue;
+                }
                 if let Err(e) = repo.put_secondary(&cpv, &entry) {
                     tracing::warn!(
                         "repo '{}': failed to write secondary cache for {cpv}: {e}",
@@ -619,6 +637,42 @@ mod tests {
         assert_eq!(
             entries[0].1.metadata.description, "cached",
             "an unedited secondary entry must be trusted by mtime, not re-sourced or re-validated"
+        );
+    }
+
+    // Regression: resolve_ebuilds's "source fresh" arm used to write
+    // whatever it sourced straight to the secondary cache with no check.
+    // An ebuild whose own DEPEND text is unparseable (valid shell, invalid
+    // PMS dependency syntax) must not be cached as if it had no
+    // dependencies — that survives a serialize()/reparse round trip
+    // (290ce4c's is_empty() gate means the field is just omitted) and
+    // would then look like a clean, dependency-free entry forever, with no
+    // way to detect the original failure again.
+    #[tokio::test]
+    async fn an_unparseable_depend_is_skipped_not_cached_dependency_free() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_repo(&dir);
+
+        let pkg_dir = dir.path().join("sys-apps").join("bar");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("bar-1.0.ebuild");
+        std::fs::write(
+            &ebuild_path,
+            "EAPI=8\nDESCRIPTION=\"bar\"\nSLOT=\"0\"\nDEPEND=\"( unterminated\"\n",
+        )
+        .unwrap();
+
+        let entries = repo_entries(&repo).await;
+        assert!(
+            entries.is_empty(),
+            "an ebuild whose own DEPEND fails to parse must be skipped, not silently \
+             cached as dependency-free: {entries:?}"
+        );
+
+        let cpv = portage_atom::Cpv::parse("sys-apps/bar-1.0").unwrap();
+        assert!(
+            repo.cache_entry(&cpv).unwrap().is_none(),
+            "must not durably write a parse-failed entry to the secondary cache"
         );
     }
 }
