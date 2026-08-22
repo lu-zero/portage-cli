@@ -1,0 +1,53 @@
+Benchmark 1: anchor-c0d64e3-firefox
+  Time (mean ± σ):      1.116 s ±  0.072 s    [User: 1.400 s, System: 3.509 s]
+  Range (min … max):    0.986 s …  1.317 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: head-99f54e2-firefox
+  Time (mean ± σ):      1.085 s ±  0.090 s    [User: 1.322 s, System: 2.927 s]
+  Range (min … max):    0.977 s …  1.254 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 3: anchor-c0d64e3-qtbase
+  Time (mean ± σ):      1.100 s ±  0.068 s    [User: 1.252 s, System: 4.848 s]
+  Range (min … max):    0.973 s …  1.206 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 4: head-99f54e2-qtbase
+  Time (mean ± σ):      1.042 s ±  0.097 s    [User: 1.279 s, System: 3.199 s]
+  Range (min … max):    0.918 s …  1.210 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 5: anchor-c0d64e3-texlive
+  Time (mean ± σ):     623.1 ms ±  95.7 ms    [User: 879.2 ms, System: 5030.0 ms]
+  Range (min … max):   485.3 ms … 754.1 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 6: head-99f54e2-texlive
+  Time (mean ± σ):     478.5 ms ±  78.4 ms    [User: 745.2 ms, System: 2558.8 ms]
+  Range (min … max):   389.5 ms … 671.0 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 7: anchor-c0d64e3-world
+  Time (mean ± σ):      1.256 s ±  0.102 s    [User: 1.592 s, System: 3.567 s]
+  Range (min … max):    1.111 s …  1.442 s    20 runs
+ 
+Benchmark 8: head-99f54e2-world
+  Time (mean ± σ):      1.276 s ±  0.069 s    [User: 1.473 s, System: 3.255 s]
+  Range (min … max):    1.151 s …  1.439 s    20 runs
+ 
+Summary
+  head-99f54e2-texlive ran
+    1.30 ± 0.29 times faster than anchor-c0d64e3-texlive
+    2.18 ± 0.41 times faster than head-99f54e2-qtbase
+    2.27 ± 0.42 times faster than head-99f54e2-firefox
+    2.30 ± 0.40 times faster than anchor-c0d64e3-qtbase
+    2.33 ± 0.41 times faster than anchor-c0d64e3-firefox
+    2.63 ± 0.48 times faster than anchor-c0d64e3-world
+    2.67 ± 0.46 times faster than head-99f54e2-world

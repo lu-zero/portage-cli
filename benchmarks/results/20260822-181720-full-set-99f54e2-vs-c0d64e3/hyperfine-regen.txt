@@ -1,0 +1,11 @@
+Benchmark 1: anchor-c0d64e3-regen
+  Time (mean ± σ):      8.056 s ±  0.102 s    [User: 147.133 s, System: 8.920 s]
+  Range (min … max):    7.934 s …  8.205 s    5 runs
+ 
+Benchmark 2: head-99f54e2-regen
+  Time (mean ± σ):      8.084 s ±  0.075 s    [User: 146.938 s, System: 10.559 s]
+  Range (min … max):    7.980 s …  8.190 s    5 runs
+ 
+Summary
+  anchor-c0d64e3-regen ran
+    1.00 ± 0.02 times faster than head-99f54e2-regen
