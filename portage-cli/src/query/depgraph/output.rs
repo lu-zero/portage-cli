@@ -1691,6 +1691,53 @@ fn class_str(c: DepClass) -> &'static str {
     }
 }
 
+/// For each edge (same order as `edges`): whether `order` respects it. For
+/// DEPEND/BDEPEND/RDEPEND the target must sit earlier than the source (the
+/// direction `install_order`/`build_blockers` require). PDEPEND is the
+/// opposite by design (merged *after* its parent) and IDEPEND constrains
+/// nothing — both always "ok", same as an endpoint missing from `order`.
+fn edge_order_ok(
+    order: &[(PortagePackage, Version)],
+    edges: &[portage_atom_pubgrub::DepEdge],
+) -> Vec<bool> {
+    let order_index: HashMap<(&PortagePackage, &Version), usize> = order
+        .iter()
+        .enumerate()
+        .map(|(i, (pkg, ver))| ((pkg, ver), i))
+        .collect();
+    edges
+        .iter()
+        .map(|e| {
+            if matches!(e.class, DepClass::Idepend) {
+                return true;
+            }
+            let from = order_index.get(&(&e.from.0, &e.from.1));
+            let to = order_index.get(&(&e.to.0, &e.to.1));
+            match (from, to) {
+                (Some(&from), Some(&to)) if matches!(e.class, DepClass::Pdepend) => from < to,
+                (Some(&from), Some(&to)) => to < from,
+                _ => true,
+            }
+        })
+        .collect()
+}
+
+/// Edges that are both hard (DEPEND/BDEPEND) and order-violating — a
+/// genuine, irreducible dependency cycle, not just a soft (RDEPEND)
+/// ordering choice. Mirrors `DepgraphOutcome::hard_cycle_edges`'s own
+/// semantics. `order_ok` must be `edge_order_ok(order, edges)` for the same
+/// `edges` slice.
+fn hard_cycle_edges<'a>(
+    edges: &'a [portage_atom_pubgrub::DepEdge],
+    order_ok: &'a [bool],
+) -> impl Iterator<Item = &'a portage_atom_pubgrub::DepEdge> {
+    edges
+        .iter()
+        .zip(order_ok)
+        .filter(|(e, ok)| matches!(e.class, DepClass::Depend | DepClass::Bdepend) && !**ok)
+        .map(|(e, _)| e)
+}
+
 pub(super) fn print_json(
     data: &RepoData,
     order: &[(PortagePackage, Version)],
@@ -1757,13 +1804,30 @@ pub(super) fn print_json(
         })
         .collect();
 
+    // Same criterion `build_blockers`/`hard_cycle_edges` use downstream
+    // (`query/depgraph/mod.rs`) to decide whether an edge is respected,
+    // recomputed here (not threaded from there) since `print_json` runs
+    // before that later, differently-filtered pass.
+    let order_ok = edge_order_ok(order, edges);
+
     let dep_edges: Vec<serde_json::Value> = edges
         .iter()
-        .map(|e| {
+        .zip(&order_ok)
+        .map(|(e, &ok)| {
             serde_json::json!({
                 "from": format!("{}-{}", e.from.0.cpn(), e.from.1),
                 "to": format!("{}-{}", e.to.0.cpn(), e.to.1),
                 "class": class_str(e.class),
+                "order_ok": ok,
+            })
+        })
+        .collect();
+
+    let hard_cycle_edges: Vec<serde_json::Value> = hard_cycle_edges(edges, &order_ok)
+        .map(|e| {
+            serde_json::json!({
+                "from": format!("{}-{}", e.from.0.cpn(), e.from.1),
+                "to": format!("{}-{}", e.to.0.cpn(), e.to.1),
             })
         })
         .collect();
@@ -1771,6 +1835,8 @@ pub(super) fn print_json(
     let out = serde_json::json!({
         "packages": packages,
         "edges": dep_edges,
+        "has_hard_cycle": !hard_cycle_edges.is_empty(),
+        "hard_cycle_edges": hard_cycle_edges,
     });
 
     let json = serde_json::to_string_pretty(&out)
@@ -2610,5 +2676,122 @@ mod tests {
             ]
         );
         assert_eq!(got[0].1, 0, "root A flush-left");
+    }
+
+    fn ver(v: &str) -> Version {
+        Version::parse(v).unwrap()
+    }
+
+    fn edge(
+        from: (&str, &str),
+        to: (&str, &str),
+        class: DepClass,
+    ) -> portage_atom_pubgrub::DepEdge {
+        portage_atom_pubgrub::DepEdge {
+            from: (pkg(from.0), ver(from.1)),
+            to: (pkg(to.0), ver(to.1)),
+            class,
+            via_use_flag: None,
+        }
+    }
+
+    #[test]
+    fn edge_order_ok_true_when_dependency_precedes_dependent() {
+        let order = [
+            (pkg("dev-lang/python"), ver("3.14")),
+            (pkg("dev-build/meson-format-array"), ver("0")),
+        ];
+        let edges = [edge(
+            ("dev-build/meson-format-array", "0"),
+            ("dev-lang/python", "3.14"),
+            DepClass::Rdepend,
+        )];
+        assert_eq!(edge_order_ok(&order, &edges), [true]);
+    }
+
+    #[test]
+    fn edge_order_ok_false_when_dependency_scheduled_after_dependent() {
+        // The exact shape found live 2026-08-23: meson-format-array's real
+        // RDEPEND on python lands after python in a misordered plan.
+        let order = [
+            (pkg("dev-build/meson-format-array"), ver("0")),
+            (pkg("dev-lang/python"), ver("3.14")),
+        ];
+        let edges = [edge(
+            ("dev-build/meson-format-array", "0"),
+            ("dev-lang/python", "3.14"),
+            DepClass::Rdepend,
+        )];
+        assert_eq!(edge_order_ok(&order, &edges), [false]);
+    }
+
+    #[test]
+    fn edge_order_ok_true_for_endpoint_missing_from_order() {
+        // A virtual/solver-internal endpoint never becomes a real plan entry.
+        let order = [(pkg("dev-lang/python"), ver("3.14"))];
+        let edges = [edge(
+            ("dev-lang/python", "3.14"),
+            ("virtual/os-headers", "0"),
+            DepClass::Depend,
+        )];
+        assert_eq!(edge_order_ok(&order, &edges), [true]);
+    }
+
+    #[test]
+    fn edge_order_ok_pdepend_wants_the_opposite_direction() {
+        // PDEPEND means "merge me after my parent" -- parent first is
+        // correct here, the reverse of DEPEND/BDEPEND/RDEPEND.
+        let order = [
+            (pkg("dev-lang/python"), ver("3.14")),
+            (pkg("dev-python/ensurepip-pip"), ver("26.1.2")),
+        ];
+        let edges = [edge(
+            ("dev-lang/python", "3.14"),
+            ("dev-python/ensurepip-pip", "26.1.2"),
+            DepClass::Pdepend,
+        )];
+        assert_eq!(edge_order_ok(&order, &edges), [true]);
+    }
+
+    #[test]
+    fn edge_order_ok_idepend_never_violated() {
+        let order = [
+            (pkg("app-misc/consumer"), ver("1")),
+            (pkg("app-misc/tool"), ver("1")),
+        ];
+        let edges = [edge(
+            ("app-misc/consumer", "1"),
+            ("app-misc/tool", "1"),
+            DepClass::Idepend,
+        )];
+        assert_eq!(edge_order_ok(&order, &edges), [true]);
+    }
+
+    #[test]
+    fn print_json_flags_hard_cycle_but_not_soft_violation() {
+        // Same backwards edge as above, once as RDEPEND (soft — order_ok
+        // false, but not a hard_cycle_edges entry) and once as BDEPEND
+        // (hard — both order_ok false AND surfaced as a hard cycle).
+        let order = [
+            (pkg("app-misc/consumer"), ver("1")),
+            (pkg("app-misc/tool"), ver("1")),
+        ];
+        let edges = [
+            edge(
+                ("app-misc/consumer", "1"),
+                ("app-misc/tool", "1"),
+                DepClass::Rdepend,
+            ),
+            edge(
+                ("app-misc/consumer", "1"),
+                ("app-misc/tool", "1"),
+                DepClass::Bdepend,
+            ),
+        ];
+        let ok = edge_order_ok(&order, &edges);
+        assert_eq!(ok, [false, false]);
+        let hard_cycle: Vec<_> = hard_cycle_edges(&edges, &ok).collect();
+        assert_eq!(hard_cycle.len(), 1, "only the BDEPEND edge is a hard cycle");
+        assert_eq!(hard_cycle[0].class, DepClass::Bdepend);
     }
 }
