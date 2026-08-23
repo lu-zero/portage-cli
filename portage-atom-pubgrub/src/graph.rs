@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap};
 use portage_atom::{Cpn, Version};
 
 use crate::package::PortagePackage;
-use crate::provider::PortageDependencyProvider;
+use crate::provider::{InstalledPolicy, PortageDependencyProvider};
 use crate::version_set::PortageVersionSet;
 
 // `DepClass` (the five PMS 8.2 dependency variables) is shared vocabulary,
@@ -71,7 +71,25 @@ impl PortageDependencyProvider {
                 continue;
             };
 
+            // Mirror `compute_dependencies`'s own "kept, not being rebuilt"
+            // skip: a package the solver never expanded shouldn't manufacture
+            // ordering edges from its raw metadata either (found live
+            // 2026-08-24 — a Provided zstd's own BDEPEND on meson-format-array
+            // still showed up here and created a phantom ordering conflict
+            // the solver itself never relied on). `Provided` skips every
+            // class; a genuinely kept install skips only the build-time ones.
+            let kept = self.installed.get(pkg).filter(|(inst, policy)| {
+                inst == version && !matches!(policy, InstalledPolicy::Rebuild)
+            });
+            if kept.is_some_and(|(_, policy)| matches!(policy, InstalledPolicy::Provided)) {
+                continue;
+            }
+            let skip_build_time = kept.is_some();
+
             for (class_idx, &class) in classes.iter().enumerate() {
+                if skip_build_time && matches!(class, DepClass::Depend | DepClass::Bdepend) {
+                    continue;
+                }
                 for (dep_pkg, dep_vs, gating_flag) in &vd.by_class[class_idx] {
                     // A dep may point at a virtual choice/slot/use-decision node.
                     // Those are stripped from the solution but remain in
@@ -511,8 +529,14 @@ fn repair_soft_inversions(
     };
 
     // (dep_idx, consumer_idx) = dep must come before consumer.
+    // `bdepend_targets` = nodes something else BDEPENDs on — a build tool a
+    // sibling package actually *invokes*, not just a plain runtime dep. Its
+    // own RDEPEND inversions get promotion priority below (Q1): a build
+    // tool run before its own interpreter/runtime exists fails outright,
+    // unlike an ordinary soft RDEPEND cycle (e.g. gtk+ ↔ icon-theme).
     let mut hard: Vec<(usize, usize)> = Vec::new();
     let mut soft: Vec<(usize, usize)> = Vec::new();
+    let mut bdepend_targets: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for edge in graph {
         let Some(&from_i) = pos.get(&node_key(&edge.from.0, &edge.from.1)) else {
             continue;
@@ -524,6 +548,9 @@ fn repair_soft_inversions(
             DepClass::Depend | DepClass::Bdepend => hard.push((to_i, from_i)),
             DepClass::Rdepend => soft.push((to_i, from_i)),
             _ => {}
+        }
+        if edge.class == DepClass::Bdepend {
+            bdepend_targets.insert(to_i);
         }
     }
     hard.sort_unstable();
@@ -551,8 +578,13 @@ fn repair_soft_inversions(
         let _ = try_add(dep, consumer, &mut before_succ, &mut indeg);
     }
 
-    // 3. Fix soft inversions (empty virtual before provider, etc.).
-    soft_inv.sort_by_key(|(dep, consumer)| (*consumer, *dep));
+    // 3. Fix soft inversions (empty virtual before provider, a BDEPEND
+    // tool's own RDEPEND, etc.). A tool that's a `bdepend_targets` consumer
+    // goes first (Q1) so an unrelated, equally-promotable inversion
+    // processed earlier can't lock a path that starves it — the greedy
+    // walk otherwise depends on arbitrary index order once several
+    // inversions share one soft cycle.
+    soft_inv.sort_by_key(|(dep, consumer)| (!bdepend_targets.contains(consumer), *consumer, *dep));
     for (dep, consumer) in soft_inv {
         let _ = try_add(dep, consumer, &mut before_succ, &mut indeg);
     }
