@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-21**.
+here briefly for context). Updated **2026-08-23**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -18,16 +18,16 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 |-----|------|--------|--------|
 | **1** | **Stage production** — `--stage1` + first-class `--stage3` (emptytree `@system`) 2026-07-30; stage4 / per-arch binhost assembly still open | 🟡 | [[em-stages-and-binhosts]], [[em-stages-scenario-matrix]] |
 | **2** | **Binpkg multi-instance / build-env identity residual** — phases 1–2 landed; live S1 verify + dual PKGDIR/header harden open | 🟡 | [[binpkg-subtargets]] |
-| **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` never reaches `PkgStart` still open | 🟡 | [[activity-status]] |
+| **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` at `PkgStart` ✅ 2026-07-30; only `emerge.log` timestamp format (`chrono_like` still `unix {secs}` vs Portage's ctime-style local time) still open | 🟡 | [[activity-status]] |
 | **4** | **Distfile GENTOO_MIRRORS parity residual** — core fetch facets done; no remote `layout.conf`, no `/etc/portage/mirrors`, etc. | 🟡 | [[distfile-fetch-reliability]] |
 | **5** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
 | **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; PMS 8.3.2 unmerge 2026-08-20 | ✅ | [[blocker-enforcement]] |
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
 | **8** | **Drop `BuildClass` for cross-*** — package.env + HostCodegen allowlist; type removed 2026-08-07; live verify open | 🟡 | [[drop-buildclass]], matrix: [`docs/bash-crossdev-matrix.md`](../docs/design/bash-crossdev-matrix.md) |
-| **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` now resolves cleanly on real Debian 12 (real python step, SLOT-aware provided, linux-headers/glibc provided, a real zstd↔meson↔python cycle root-caused to a missing host `meson`); a full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [[meson-zstd-python-hard-cycle]] (resolved — real hard cycle, not an em bug) |
-| **10** | **Workdir dual-root race (P0)** — per-target builddirs + lock/schedule like Portage; dual plan entries under `--jobs` collide today | 🔴 | [[workdir-dual-root]], clang findings #3/#4 |
+| **9** | **`--local` bootstrap** — setup ladder done (repo/profile/provided); `toolchain --setup -p` resolves cleanly on Debian 12 and, confirmed 2026-08-23, on this Gentoo/arm64 host too (all 6 steps, `EXIT=0`, no cycle, ends at `sys-devel/gcc`). Residual, not a bug: `sys-libs/glibc`/`linux-headers` staying in `package.provided` means the libc stage step plans nothing — a `--local` prefix never builds its own glibc unless that's force-`Rebuild`-ed later (Luca's call, not made yet). A full non-pretend run to completion still unconfirmed | 🟡 | [[local-bootstrap-provided]], [`local-bootstrap.md`](./local-bootstrap.md), [`local-setup-prereq.md`](./local-setup-prereq.md), [[meson-zstd-python-hard-cycle]] (resolved — real hard cycle, not an em bug) |
+| **10** | **Workdir dual-root race** — per-root builddirs + builddir flock + parallel schedule barrier landed 2026-08-06; only multi-`em` plan awareness (pause/error on overlapping critical path) still future | 🟡 | [[workdir-dual-root]], clang findings #3/#4 |
 | **11** | **Factor `UseEnv` → `ResolvePolicy` construction** — `ResolvedPolicy::from_use_env`/`as_policy` landed 2026-08-21 (`5951b21`), confirmed flat vs pre-refactor across firefox/qtbase/texlive | ✅ | [[applet-policy-factoring]] |
-| **12** | **`UseExpandTable` (group/value/flag triple) for USE_EXPAND flag composition** — spun out of the `iuse_effective`/`use_env.rs`/`profile.rs` `format!("{prefix}_{v}")`+intern pattern found while fixing the `94ea5a1` perf regression (`1e9a21b`); not a perf fix (Opus: recovers ~0% of the hot-path cost, the real fix already caches the profile-invariant set), a domain-modelling cleanup for recovering the USE_EXPAND group/value split for display (`em use`/`em pkg use`/`--info -v`) — also consider a memchr-based split against the known group prefix instead of a stored triple | 🔴 | [[use-expand-triple-table]] |
+| **12** | **`UseExpandTable` (group/value/flag triple) for USE_EXPAND flag composition** — closed 2026-08-23, no code needed: the decompose-for-display need this was meant to serve is already met by `UseExpand::split`/`group` (`portage-repo/src/repo/use_expand.rs`, already used by `em use`/`em pkg use`/`--info -v`); the four originally-cited `format!` sites are all forward composition, never had the ambiguity a triple would fix | ✅ | [[use-expand-triple-table]] |
 
 ### PMS 9 compliance (audit 2026-08-20)
 
@@ -41,10 +41,10 @@ Index: [[pms-compliance]].
 | 2 | Empty `\|\|`/`^^` after USE strip is EAPI 0–6 on every EAPI | ✅ | [[pms-empty-dep-groups]] |
 | 3 | `fetch+` inverted on merge fetch | ✅ merge path | [[pms-fetch-plus]] |
 | 4 | Strong blockers still produce an installable plan | ✅ unmerge | [[blocker-enforcement]] |
-| 5 | `REQUIRED_USE` advisory, not a mask | 🔴 policy | [[pms-required-use-mask]] |
+| 5 | `REQUIRED_USE` advisory, not a mask | ✅ refuses the merge now, `-p` advisory kept | [[pms-required-use-mask]] |
 | 6 | IDEPEND native root is `merge_root`, not BROOT | ✅ | [[pms-idepend-broot]] |
 | 7 | No `D`-symlink rewrite on EAPI 0–8 | ✅ | [[pms-symlink-rewrite]] |
-| 8 | `CONFIG_PROTECT` longest-prefix vs PMS ancestor-mask | 🔴 confirm | [[pms-config-protect]] |
+| 8 | `CONFIG_PROTECT` longest-prefix vs PMS ancestor-mask | ✅ kept Portage-identical, documented | [[pms-config-protect]] |
 
 Letter-of-PMS, empty on current gentoo: [[pms-profile-stack]],
 [[pms-env-unset]], [[use-stable-in-defaults]], [[pms-rdepend-fallback]].
@@ -160,6 +160,18 @@ carry an effort estimate.
 | `portage-resolve` extraction | 2026-07-16 | stages 1–7 done |
 | inherit / `E_IUSE` (#36) | verified 2026-07-18 | brush_compat `inherit_*` |
 | `em quickpkg`, `-f`/`--fetchonly` | 2026-07-18 | |
+
+**2026-08-23 prune pass:** moved four closed/orphaned files to `todo/done/`:
+`for-sonnet.md` (live-verification handoff log — its headline open bug, the
+`EPREFIX` field-overload at old `cli.rs:282`, is fixed: `Roots::build_eprefix()`
+now exists and is wired through `dispatch.rs`/`merge/mod.rs`/`emerge.rs` exactly
+as the file's own proposed fix specified; the rest of the log's tracked bugs
+also show later in-file fixes), `for_maki.md` (order-driven `--tree` rework —
+implemented + live-verified 2026-08-10), `em-emptytree.md` ("PARITY REACHED"
+since 2026-06-19, was never moved), `for_vibe.md` (CLI subcommand/option audit
+— nearly every finding already annotated "Resolved" inline; residual items are
+UX questions for Luca, not bugs). None were linked from this file, so none of
+this doc's own text changes.
 
 **2026-08-18 prune pass:** moved fully-closed notes to `todo/done/`:
 `meson-zstd-python-hard-cycle` (resolved — genuine `::gentoo` hard cycle, not
