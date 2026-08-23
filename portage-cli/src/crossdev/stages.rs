@@ -267,6 +267,20 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
             nodeps: false,
             into_sysroot: false,
         });
+        // Same reasoning as python above: `dev-perl/*` packages built via
+        // `Module::Build`/`ExtUtils::MakeMaker` read real install paths out
+        // of perl's own `Config.pm`, which a provided (borrowed, host)
+        // perl reports without EPREFIX — files land under plain `${D}`
+        // instead of the real `${ED}`, and `perl_fix_permissions` then
+        // dies chmod'ing an `${ED}` nothing ever created (found live
+        // 2026-08-24, `dev-perl/Module-Build`).
+        steps.push(StageStep {
+            label: "perl".into(),
+            atoms: vec!["dev-lang/perl".to_string()],
+            use_override: vec![],
+            nodeps: false,
+            into_sysroot: false,
+        });
     }
 
     // Empty ROOT + debuginfod pulls elfutils→curl→…→glibc and trips
@@ -767,6 +781,7 @@ mod tests {
             [
                 "baselayout",
                 "python",
+                "perl",
                 "binutils",
                 "kernel headers",
                 "libc",
@@ -786,26 +801,30 @@ mod tests {
         // closure needs that's python-eclass-based must already be real,
         // not just depgraph-satisfied.
         assert_eq!(atoms[1], "dev-lang/python");
-        assert_eq!(atoms[2], "sys-devel/binutils");
+        // Real perl next, same reasoning: a borrowed host perl's Config.pm
+        // has no EPREFIX, so Module::Build-driven installs land outside
+        // ${ED} entirely.
+        assert_eq!(atoms[2], "dev-lang/perl");
+        assert_eq!(atoms[3], "sys-devel/binutils");
         // Native merges the virtual (registers it in the ROOT VDB for glibc's
         // DEPEND), not the bare linux-headers provider.
-        assert_eq!(atoms[3], "virtual/os-headers");
-        assert_eq!(atoms[4], "sys-libs/glibc");
-        assert_eq!(atoms[5], "sys-devel/gcc");
+        assert_eq!(atoms[4], "virtual/os-headers");
+        assert_eq!(atoms[5], "sys-libs/glibc");
+        assert_eq!(atoms[6], "sys-devel/gcc");
         assert!(atoms.iter().all(|a| !a.starts_with("cross-")));
         // The full libc step is a real (non-headers-only) build, but --nodeps:
         // glibc's own COMMON_DEPEND (`>=sys-devel/gcc-6.2`) can't be satisfied
         // from ROOT here (no gcc-stage1 landed first, unlike cross) — the seed
         // compiler at BROOT does the actual compiling instead.
-        assert!(plan.steps[4].nodeps);
-        assert!(plan.steps[4].use_override.is_empty());
+        assert!(plan.steps[5].nodeps);
+        assert!(plan.steps[5].use_override.is_empty());
         // The single gcc is full (keeps cxx — only GCC_DISABLE applies, no STAGE1).
-        assert!(!plan.steps[5].use_override.contains(&"-cxx".to_string()));
-        assert!(plan.steps[5].use_override.contains(&"-vtv".to_string()));
+        assert!(!plan.steps[6].use_override.contains(&"-cxx".to_string()));
+        assert!(plan.steps[6].use_override.contains(&"-vtv".to_string()));
         // Native binutils drops debuginfod (else its elfutils→…→glibc closure
         // explodes the binutils step into the empty ROOT).
         assert!(
-            plan.steps[2]
+            plan.steps[3]
                 .use_override
                 .contains(&"-debuginfod".to_string())
         );
@@ -821,7 +840,14 @@ mod tests {
         let plan = toolchain_plan(&BootstrapKind::Native, true, true);
         assert_eq!(
             labels(&plan),
-            ["baselayout", "python", "binutils", "kernel headers", "gcc"]
+            [
+                "baselayout",
+                "python",
+                "perl",
+                "binutils",
+                "kernel headers",
+                "gcc"
+            ]
         );
         let atoms: Vec<&str> = plan
             .steps
