@@ -114,9 +114,9 @@ terminal_size = "0.4"
 # 0.11 still pre-release; pin tip RC until stable ships. 0.10 is the last stable.
 blake2 = "0.11.0-rc.6"
 boxcar = "0.2"
-brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "24443b9d" }
-brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "24443b9d" }
-brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "24443b9d" }
+brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "967cb706" }
+brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "967cb706" }
+brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "967cb706" }
 dhat = "0.3.3"
 # Fork: bad-path mknod/chown/chmod pass through to the kernel instead of aborting
 # the supervised tree (autoconf probes hit this). Parked until crates.io 0.1.2.
