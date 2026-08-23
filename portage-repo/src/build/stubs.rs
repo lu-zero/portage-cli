@@ -56,31 +56,13 @@ debug-print()          { :; }
 debug-print-function() { :; }
 debug-print-section()  { :; }
 
-# User output (no-ops for metadata extraction)
-einfo()   { :; }
-einfon()  { :; }
-ewarn()   { :; }
-eerror()  { :; }
-elog()    { :; }
-eqawarn() { :; }
-ebegin()  { :; }
-eend()    { return "${1:-0}"; }
+# einfo/einfon/ewarn/eerror/elog/eqawarn/ebegin/eend, has_version/
+# best_version, econf/emake/einstall/unpack/eapply, docompress/dostrip, and
+# the do*/new* install helpers are DUAL_MODE builtins — see
+# commands::dual_mode::set_tool_mode. No bash stub here; that mechanism
+# registers a real Rust no-op builtin for metadata mode instead, so there
+# is nothing for the real builtin to ever get shadowed by.
 
-# ── Tier 3: has / use / in_iuse — implemented as Rust builtins ───────
-# (registered in shell.rs via pms_builtins.rs)
-
-# ── Tier 4: package query stubs ──────────────────────────────────────
-
-has_version()  { return 1; }
-best_version() { echo ""; return 1; }
-
-# ── Tier 6: build/install command stubs ──────────────────────────────
-
-econf()   { :; }
-emake()   { :; }
-einstall() { :; }
-unpack()  { :; }
-eapply()  { :; }
 eapply_user() { :; }
 default() { :; }
 default_src_unpack()    { :; }
@@ -98,32 +80,9 @@ docinto()  { :; }
 insopts()  { :; }
 exeopts()  { :; }
 
-# Install commands
-dobin()     { :; }
-newbin()    { :; }
-dosbin()    { :; }
-newsbin()   { :; }
-doins()     { :; }
-newins()    { :; }
-doexe()     { :; }
-newexe()    { :; }
-dolib.a()   { :; }
-dolib.so()  { :; }
-dodir()     { :; }
-keepdir()   { :; }
-dodoc()     { :; }
-newdoc()    { :; }
-doman()     { :; }
-newman()    { :; }
-doheader()  { :; }
-newheader() { :; }
-dosym()     { :; }
+# Install commands with no Rust builtin (permanent no-ops)
 doinitd()   { :; }
 doconfd()   { :; }
-fperms()    { :; }
-fowners()   { :; }
-docompress() { :; }
-dostrip()    { :; }
 edo()        { :; }
 
 # Unprivileged install tolerance (no fakeroot): eclasses run `chown 0:0`/`chgrp`

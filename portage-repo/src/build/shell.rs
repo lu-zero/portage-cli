@@ -421,6 +421,8 @@ pub async fn run_helper(name: &str, args: &[String]) -> i32 {
         }
     };
     shell.register_default_builtins(brush_builtins::BuiltinSet::BashMode);
+    // do*/new* helpers are install-phase-only, never dual-mode — see
+    // register_install_builtins.
     commands::register_install_builtins(&mut shell);
 
     let inst_owner = commands::inst_owner::InstOwnerDefaults::default();
@@ -513,19 +515,17 @@ impl EbuildShell {
         );
         shell.register_builtin("inherit", inherit_reg);
 
-        // Register PMS 12.3 utility builtins (has, use, usev, usex, etc.).
+        // Register PMS utility and phase-body-only builtins — always real,
+        // unconditionally. The phase-body-only ones (econf/emake/eapply/
+        // einstall/unpack/docompress/dostrip) are never called from
+        // ebuild/eclass global scope, so they're never reached during
+        // metadata-only sourcing either and need no commands::dual_mode
+        // entry (unlike einfo/has_version/etc., which eclasses do call
+        // from global scope).
         for (name, builtin) in [
             (
                 "die",
                 brush_core::builtins::builtin::<commands::DieCommand, _>(),
-            ),
-            (
-                "has_version",
-                brush_core::builtins::builtin::<commands::version_query::HasVersionCommand, _>(),
-            ),
-            (
-                "best_version",
-                brush_core::builtins::builtin::<commands::version_query::BestVersionCommand, _>(),
             ),
             (
                 "EXPORT_FUNCTIONS",
@@ -568,6 +568,26 @@ impl EbuildShell {
                 brush_core::builtins::builtin::<commands::InIuseCommand, _>(),
             ),
             (
+                "econf",
+                brush_core::builtins::builtin::<commands::EconfCommand, _>(),
+            ),
+            (
+                "emake",
+                brush_core::builtins::builtin::<commands::EmakeCommand, _>(),
+            ),
+            (
+                "eapply",
+                brush_core::builtins::builtin::<commands::EapplyCommand, _>(),
+            ),
+            (
+                "einstall",
+                brush_core::builtins::builtin::<commands::EinstallCommand, _>(),
+            ),
+            (
+                "unpack",
+                brush_core::builtins::builtin::<commands::UnpackCommand, _>(),
+            ),
+            (
                 "docompress",
                 brush_core::builtins::builtin::<commands::DocompressCommand, _>(),
             ),
@@ -593,55 +613,9 @@ impl EbuildShell {
             brush_core::builtins::builtin::<commands::EbuildPhaseFuncsCommand, _>(),
         );
 
-        // Register P1 output helper builtins (einfo, ewarn, …).
-        for &name in &["einfo", "elog", "ewarn", "eerror", "eqawarn", "einfon"] {
-            shell.register_builtin(
-                name,
-                brush_core::builtins::builtin::<commands::EchoMessageCommand, _>(),
-            );
-        }
-        shell.register_builtin(
-            "ebegin",
-            brush_core::builtins::builtin::<commands::EbeginCommand, _>(),
-        );
-        shell.register_builtin(
-            "eend",
-            brush_core::builtins::builtin::<commands::EendCommand, _>(),
-        );
-
-        // Register P2 build helper builtins (emake, econf).
-        shell.register_builtin(
-            "emake",
-            brush_core::builtins::builtin::<commands::EmakeCommand, _>(),
-        );
-        shell.register_builtin(
-            "econf",
-            brush_core::builtins::builtin::<commands::EconfCommand, _>(),
-        );
-        // einstall: pre-EAPI-6 install helper (banned in 6+); kept for
-        // completeness with legacy ebuilds.
-        shell.register_builtin(
-            "einstall",
-            brush_core::builtins::builtin::<commands::EinstallCommand, _>(),
-        );
-        // eapply (PMS 11.3.3, EAPI >= 6): migrated from bash (PHASE_DEFAULT_FUNCTIONS)
-        // to a Rust builtin — PMS's option/operand split around `--` is fragile
-        // arg parsing, the same class of bug the do*/new* helper migration targeted.
-        shell.register_builtin(
-            "eapply",
-            brush_core::builtins::builtin::<commands::EapplyCommand, _>(),
-        );
-
-        // Install helpers migrated from bash (INSTALL_HELPERS) to Rust builtins
-        // (clap arg parsing, ${ED}/dest-tree aware). The do* doers and the new*
-        // variants both live here; new* reads stdin when its source arg is `-`.
+        // Install helpers with no metadata-mode stub (no DUAL_MODE entry —
+        // see commands::dual_mode): always real, unconditionally.
         commands::install::register_install_builtins(&mut shell);
-
-        // Register P4 unpack builtin.
-        shell.register_builtin(
-            "unpack",
-            brush_core::builtins::builtin::<commands::UnpackCommand, _>(),
-        );
 
         // Register PMS 12.3.14 version manipulation builtins (ver_cut/ver_rs/
         // ver_test) as Rust builtins — avoids bash arithmetic issues in array
@@ -667,6 +641,12 @@ impl EbuildShell {
             "ver_replacing",
             brush_core::builtins::builtin::<ver_funcs::VerReplacingCommand, _>(),
         );
+
+        // Initial state for the global-scope-reachable builtins (einfo and
+        // friends, has_version/best_version) — see commands::dual_mode.
+        // source_ebuild re-asserts Metadata every call; init_build_env
+        // switches to Build for a real phase.
+        commands::set_tool_mode(&mut shell, commands::ToolMode::Metadata);
 
         let die_flag = commands::die::DieFlag::default();
         shell.set_shared(die_flag.clone());
@@ -1029,6 +1009,11 @@ impl EbuildShell {
             self.run_string("shopt -u failglob").await?;
         }
 
+        // Re-assert Metadata mode: a real phase run on this (reused) shell
+        // switches the global-scope-reachable builtins (einfo/has_version/…)
+        // to Build, and nothing else undoes that — see commands::dual_mode.
+        commands::set_tool_mode(&mut self.shell, commands::ToolMode::Metadata);
+
         // Source the ebuild — `inherit` is a Rust builtin that accumulates
         // each eclass's contribution into E_{VAR} and restores the var after
         // each eclass (PMS 10.2 / Portage B_*/E_* pattern).
@@ -1381,16 +1366,9 @@ impl EbuildShell {
             self.set_var("MAKEFLAGS", &clean);
         }
 
-        // Remove bash stub no-ops that were installed for metadata extraction.
-        // These stubs shadow the Rust builtins for econf, emake, einfo, etc.
-        // Unsetting them lets the Rust builtin registry take over during build.
-        self.run_string(
-            "unset -f econf emake einstall unpack einfo einfon elog ewarn eerror eqawarn ebegin eend nonfatal has_version best_version docompress dostrip \
-             dodir keepdir doins doexe dobin dosbin dodoc doheader doinfo doman domo dolib dolib.a dolib.so dosym fperms fowners \
-             newbin newsbin newins newexe newdoc newman newheader newlib.a newlib.so newinitd newconfd newenvd",
-        )
-        .await
-        .ok();
+        // Switch the global-scope-reachable builtins (einfo/has_version/…)
+        // to their real implementations — see commands::dual_mode.
+        commands::set_tool_mode(&mut self.shell, commands::ToolMode::Build);
 
         // Define per-EAPI default phase implementations as bash functions.
         // These are called by __ebuild_phase_funcs (a Rust builtin) to set up

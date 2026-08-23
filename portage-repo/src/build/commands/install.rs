@@ -1492,6 +1492,10 @@ pub(crate) const HELPER_NAMES: &[&str] = &[
 /// ebuild shell and the standalone `em __helper` runner so both use identical
 /// logic. One `NewCommand` is registered under every `new*` name; it dispatches
 /// on `context.command_name`.
+/// Registers every `do*`/`new*` helper, unconditionally, once. These are
+/// install-phase-only (PMS): never called from ebuild/eclass global scope,
+/// so they're never reached during metadata-only sourcing either — no
+/// `commands::dual_mode` entry needed, same as `die`/`has`/`use`.
 pub(crate) fn register_install_builtins<SE: brush_core::ShellExtensions>(
     shell: &mut brush_core::Shell<SE>,
 ) {

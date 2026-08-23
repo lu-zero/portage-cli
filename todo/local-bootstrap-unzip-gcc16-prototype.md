@@ -1,6 +1,16 @@
 # Stable `app-arch/unzip-6.0_p29-r2` fails to build under GCC 16.1.1 (strict prototype conflict)
 
-Status: 🔴 not started. Found 2026-08-23 during the first genuine, full,
+Status: 🔴 not started, still open. **Unrelated to
+[[eapply-stub-shadows-real-builtin]]** (landed 2026-08-23, same day): a
+fresh real `em --root DIR unzip` repro run to verify that fix resolved
+`app-arch/unzip-6.0_p31` (not `p29-r2`) and built cleanly, so it never
+exercised this specific bug. `p31`'s own `PATCHES` had never been applied
+by any real build before that fix either (nothing here was Gentoo-patch
+related — see that file), so it's not yet confirmed whether a fresh
+`--local` prefix's stable-keyword resolution still lands on the broken
+`p29-r2` today. If it still does, the below stands as written.
+
+Found 2026-08-23 during the first genuine, full,
 real (non-pretend) `em --local` toolchain bootstrap run
 ([[local-bootstrap-provided]]) — `dev-lang/python`'s own dependency
 closure pulls in `app-arch/unzip`, which fails to compile.

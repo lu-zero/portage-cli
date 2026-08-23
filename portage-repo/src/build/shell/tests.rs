@@ -170,9 +170,10 @@ async fn version_query_builtins_query_the_flagged_root() {
         .open(&repo_path)
         .unwrap();
     let mut shell = repo.shell().await.unwrap();
+    super::commands::set_tool_mode(&mut shell.shell, super::commands::ToolMode::Build);
     shell
         .run_string(&format!(
-            "unset -f has_version best_version; BROOT={}; \
+            "BROOT={}; \
              has_version -b '=dev-build/autoconf-2.73*' && HV=yes || HV=no; \
              BV=$(best_version -b '=dev-build/autoconf-2.73*'); \
              has_version -b 'dev-build/automake' && HV2=yes || HV2=no",
@@ -368,7 +369,7 @@ async fn einstall_enforces_eapi_ban_and_requires_a_makefile() {
     let mut shell = repo.shell().await.unwrap();
     shell
         .run_string(&format!(
-            "unset -f einstall; cd {}; \
+            "cd {}; \
              EAPI=6; einstall 2>/dev/null && BAN=ok || BAN=died; \
              EAPI=5; einstall 2>/dev/null && NOMK=ok || NOMK=died",
             empty.display()
@@ -491,9 +492,6 @@ async fn install_helpers_are_self_contained() {
     shell
         .run_string(&format!(
             "{INSTALL_HELPERS}\n\
-             unset -f dodir keepdir doins doexe dobin dosbin dodoc doheader \
-                      doinfo doman domo dolib dolib.a dolib.so dosym fperms fowners \
-                      newbin newsbin newins newexe newdoc newman newheader newlib.a newlib.so newinitd newconfd newenvd; \
              export D={d} ED={d} T={t} CATEGORY=cat PN=pkg SLOT=0 PF=pkg-1; \
              into /usr/local; dobin {src}/myprog; \
              [[ ${{DESTTREE}} == /usr/local ]] || die 'into did not set DESTTREE'; \
@@ -542,8 +540,6 @@ async fn new_helpers_read_stdin_for_dash_source() {
     shell
         .run_string(&format!(
             "{INSTALL_HELPERS}\n\
-             unset -f newbin newsbin newins newexe newdoc newman newheader \
-                      newlib.a newlib.so newinitd newconfd newenvd; \
              export D={d} ED={d} T={t} CATEGORY=cat PN=pkg SLOT=0 PF=pkg-1; \
              newins - etc.conf <<< 'KEY=value'; \
              newman - app.1 <<< '.TH app 1'",
@@ -578,12 +574,9 @@ async fn docompress_dostrip_builtins_accumulate_shared_lists() {
         .open(&repo_path)
         .unwrap();
     let mut shell = repo.shell().await.unwrap();
-    // The metadata stubs shadow the Rust builtins until init_build_env
-    // unsets them; do the same here so the builtins run.
     shell
         .run_string(
-            "unset -f docompress dostrip; \
-             docompress /opt/data /usr/share/extra; \
+            "docompress /opt/data /usr/share/extra; \
              docompress -x /usr/share/doc/foo/html; \
              dostrip /usr/lib/debug-me; \
              dostrip -x /usr/lib/keep.so",
@@ -1334,13 +1327,9 @@ async fn e_output_builtins_render_like_isolated_functions() {
         .open(&repo_path)
         .unwrap();
     let mut shell = repo.shell().await.unwrap();
-    // A fresh shell is set up for metadata sourcing, where `stubs.rs` shadows
-    // the output builtins with no-op shell functions; `run_phase` unsets those
-    // for real phases, and so must this.
-    shell
-        .run_string("unset -f einfo einfon elog ewarn eerror eqawarn ebegin eend")
-        .await
-        .unwrap();
+    // A fresh shell starts in metadata mode (no-op output builtins);
+    // switch to build mode so they render for real (commands::dual_mode).
+    super::commands::set_tool_mode(&mut shell.shell, super::commands::ToolMode::Build);
 
     // ── __unset_colors ────────────────────────────────────────────────────
     shell.set_terminal(crate::TerminalConfig {
@@ -1420,10 +1409,7 @@ async fn e_output_builtins_capture_elog_messages() {
         .open(&repo_path)
         .unwrap();
     let mut shell = repo.shell().await.unwrap();
-    shell
-        .run_string("unset -f einfo einfon elog ewarn eerror eqawarn ebegin eend")
-        .await
-        .unwrap();
+    super::commands::set_tool_mode(&mut shell.shell, super::commands::ToolMode::Build);
 
     let t = dir.path().join("temp");
     let logging = t.join("logging");
@@ -1488,10 +1474,7 @@ async fn e_output_builtins_expand_escapes_like_echo_e() {
         .open(&repo_path)
         .unwrap();
     let mut shell = repo.shell().await.unwrap();
-    shell
-        .run_string("unset -f einfo einfon elog ewarn eerror eqawarn ebegin eend")
-        .await
-        .unwrap();
+    super::commands::set_tool_mode(&mut shell.shell, super::commands::ToolMode::Build);
     shell.set_terminal(crate::TerminalConfig {
         columns: 80,
         colors: crate::PortageColors::default(),
@@ -1598,5 +1581,130 @@ async fn extra_path_dirs_lead_the_phase_path() {
     assert_eq!(
         shell.get_var("PATH").unwrap_or_default(),
         format!("/opt/bootstrap-bin:{plain}")
+    );
+}
+
+#[tokio::test]
+async fn default_src_prepare_applies_patches_set_during_an_earlier_phase() {
+    // Regression: `eapply` used to have a metadata-mode bash stub that
+    // never got unshadowed for real builds, so `default`'s PATCHES handling
+    // silently applied nothing, with no error (fixed by the dual_mode
+    // builtin registry — commands::dual_mode::set_tool_mode).
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    let filesdir = ebdir.join("files");
+    std::fs::create_dir_all(&filesdir).unwrap();
+    std::fs::write(
+        filesdir.join("x.patch"),
+        "--- a/f.txt\n+++ a/f.txt\n@@ -1 +1 @@\n-before\n+after\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         PATCHES=( \"${FILESDIR}/x.patch\" )\n\
+         src_unpack() { mkdir -p \"${S}\"; echo before > \"${S}/f.txt\"; }\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+
+    shell
+        .run_phase(&ebuild, "unpack", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+    let s = shell.get_var("S").unwrap_or_default();
+
+    // No src_prepare defined by the ebuild: the EAPI-8 default (`default() {
+    // default_src_prepare; }` -> `__eapi8_src_prepare` -> `eapply -- "${PATCHES[@]}"`)
+    // must run and actually apply the patch.
+    shell
+        .run_phase(&ebuild, "prepare", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let content = std::fs::read_to_string(format!("{s}/f.txt")).unwrap();
+    assert_eq!(
+        content.trim(),
+        "after",
+        "default_src_prepare did not apply PATCHES"
+    );
+}
+
+#[tokio::test]
+async fn metadata_scan_after_a_real_build_gets_stubs_not_real_builtins() {
+    // The reverse-direction case: a real phase run switches the
+    // global-scope-reachable builtins (einfo/has_version/…) to build mode
+    // (init_build_env); a *reused* shell that then does metadata-only work
+    // for a different package must not inherit that — source_ebuild
+    // re-asserts metadata mode on every call for exactly this reason.
+    // Confirmed live before the fix: `eapply` (dual-mode at the time)
+    // stayed real during a metadata-only scan that followed a real build on
+    // the same shell. `einfo` is the current representative — its no-op
+    // stub prints nothing, unlike the real builtin.
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         pkg_setup() { :; }\n",
+    )
+    .unwrap();
+    let ebdir2 = repo_path.join("cat/pkg2");
+    std::fs::create_dir_all(&ebdir2).unwrap();
+    std::fs::write(
+        ebdir2.join("pkg2-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t2\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+
+    // A real phase run switches eapply (and friends) to build mode.
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    // A metadata-only scan of a *different* package on the same shell.
+    let ebuild2 =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir2.join("pkg2-1.ebuild")).unwrap())
+            .unwrap();
+    shell.source_ebuild(&ebuild2).await.unwrap();
+
+    // einfo must be back to its metadata-mode no-op: the real builtin
+    // prints the message; the stub prints nothing.
+    let out = captured_stderr(&mut shell, "einfo marker-message").await;
+    assert!(
+        !out.contains("marker-message"),
+        "einfo dispatched the real builtin during metadata-only work: {out:?}"
     );
 }

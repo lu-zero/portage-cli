@@ -9,6 +9,7 @@
 //! See [PMS 12.3](https://projects.gentoo.org/pms/9/pms.html#available-commands).
 
 pub(crate) mod die;
+pub(crate) mod dual_mode;
 pub(crate) mod eapply;
 pub(crate) mod econf;
 pub(crate) mod einstall;
@@ -26,6 +27,7 @@ pub(crate) mod use_flag;
 pub(crate) mod version_query;
 
 pub(crate) use die::DieCommand;
+pub(crate) use dual_mode::{ToolMode, set_tool_mode};
 pub(crate) use eapply::EapplyCommand;
 pub(crate) use econf::EconfCommand;
 pub(crate) use einstall::EinstallCommand;
@@ -34,7 +36,6 @@ pub(crate) use export_functions::ExportFunctionsCommand;
 pub(crate) use has::{HasCommand, HasvCommand, InIuseCommand};
 pub(crate) use install::{HELPER_NAMES, register_install_builtins};
 pub(crate) use install_paths::{DocompressCommand, DostripCommand};
-pub(crate) use output::{EbeginCommand, EchoMessageCommand, EendCommand};
 pub(crate) use phase_funcs::{EAPI_PREDICATE_NAMES, EapiPredicateCommand, EbuildPhaseFuncsCommand};
 pub(crate) use unpack::UnpackCommand;
 pub(crate) use use_flag::{UseCommand, UseEnableCommand, UseWithCommand, UsevCommand, UsexCommand};
