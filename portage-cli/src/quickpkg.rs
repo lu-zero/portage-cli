@@ -391,7 +391,9 @@ fn warn_bindist(pkg: &InstalledPackage) {
     }
 }
 
-/// CONFIG_PROTECT / CONFIG_PROTECT_MASK for quickpkg (no ebuild shell needed)
+/// CONFIG_PROTECT / CONFIG_PROTECT_MASK for quickpkg (no ebuild shell needed).
+/// Same longest-prefix-wins, real-Portage-not-PMS-13.3.3 semantics as
+/// `ebuild::ConfigProtect` — see that type's doc comment.
 struct ConfigProtectLists {
     protect: Vec<String>,
     mask: Vec<String>,

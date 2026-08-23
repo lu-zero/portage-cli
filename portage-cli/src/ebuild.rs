@@ -2602,6 +2602,11 @@ fn run_clean(work_root: &Utf8Path) -> Result<()> {
 /// longer than the longest matching `CONFIG_PROTECT_MASK` prefix. Protected
 /// files that already exist and differ are diverted to `._cfgNNNN_<name>`
 /// for `dispatch-conf`/`etc-update` instead of being overwritten.
+///
+/// Deliberately real-Portage semantics, not the PMS 13.3.3 letter (which
+/// gives an ancestor `CONFIG_PROTECT_MASK` unconditional priority regardless
+/// of how deep the matching `CONFIG_PROTECT` entry is). Matching what real
+/// `emerge` actually does on a system is the intended behavior here.
 struct ConfigProtect {
     protect: Vec<String>,
     mask: Vec<String>,

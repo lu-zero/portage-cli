@@ -1,6 +1,7 @@
 # CONFIG_PROTECT longest-prefix vs PMS (13.3.3)
 
-Status: 🔴 not started. Related: [[pms-compliance]].
+Status: ✅ decided 2026-08-23 (Luca) — keep Portage-identical behavior,
+documented as a deliberate divergence. Related: [[pms-compliance]].
 
 ## PMS
 
@@ -16,9 +17,11 @@ Portage `ConfigProtect`, not the PMS walk.
 
 `/etc` is always added if missing (Portage `make.globals`). PMS-silent.
 
-## How to attack
+## Resolution (2026-08-23)
 
-Confirm product intent: PMS-letter vs Portage-identical. A live canary is
-easy (`CONFIG_PROTECT=/etc/portage`, `CONFIG_PROTECT_MASK=/etc`). If we
-keep Portage, document it next to the other PMS-silent config items and
-stop calling the walk PMS 13.3.3.
+Kept Portage-identical: `ConfigProtect::longest_match`
+(`portage-cli/src/ebuild.rs`) and its quickpkg twin
+(`portage-cli/src/quickpkg.rs`) now carry a doc comment stating this is
+deliberately real-`emerge` behavior, not the PMS-letter ancestor-mask walk.
+No behavior change — documentation only, so this stops being listed as a
+PMS 13.3.3 gap in `pms-compliance`.
