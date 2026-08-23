@@ -52,6 +52,20 @@ struct Tier1Pkg {
 }
 
 const TIER1: &[Tier1Pkg] = &[
+    // Also a stage-product (`toolchain_plan`'s own "python" step still
+    // builds a real one — same InstalledPolicy::Provided root-target
+    // override that already lets the libc step build a real glibc despite
+    // it being provided too). Needed here to break a genuine, irreducible
+    // bootstrap cycle found live 2026-08-24: dev-build/meson-format-array
+    // RDEPENDs on python (needs it to run when invoked as a BDEPEND tool),
+    // python RDEPENDs on app-arch/zstd, and zstd BDEPENDs on
+    // meson-format-array (needs it to build) — no linear order can satisfy
+    // all three from an empty prefix.
+    Tier1Pkg {
+        category: "dev-lang",
+        package: "python",
+        probe: Some(Probe::Command("python3", &["--version"])),
+    },
     Tier1Pkg {
         category: "dev-lang",
         package: "perl",
@@ -61,6 +75,17 @@ const TIER1: &[Tier1Pkg] = &[
         category: "dev-build",
         package: "meson",
         probe: Some(Probe::Command("meson", &["--version"])),
+    },
+    // Never an explicit toolchain_plan step, only ever reached transitively.
+    // Its RDEPEND on python forms a real bootstrap cycle with any real
+    // (non-provided) BDEPEND consumer whose own closure reaches python
+    // (zstd, pam, … — found live 2026-08-24); providing it removes the
+    // whole conflict class. One version ever in the tree, no version
+    // banner to parse (`--help` just echoes its args), so presence-only.
+    Tier1Pkg {
+        category: "dev-build",
+        package: "meson-format-array",
+        probe: Some(Probe::CommandSucceeds("meson-format-array", &["--help"])),
     },
     Tier1Pkg {
         category: "dev-build",
