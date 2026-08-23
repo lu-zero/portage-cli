@@ -1,7 +1,41 @@
 # USE_EXPAND flag composition: a group/value/flag triple, or memchr?
 
 Opened 2026-08-21, spun out of the `94ea5a1` `IUSE_EFFECTIVE` perf-regression
-fix (`1e9a21b`). Not started — a proposal only.
+fix (`1e9a21b`). **Closed 2026-08-23 — already solved, no code needed.**
+
+## Resolution
+
+Re-read the actual gap this proposal described: splitting an opaque composed
+flag (`python_targets_python3_13`) back into `(group, value)` for display —
+*not* the forward `format!("{prefix}_{value}")` composition the four grep
+hits below are actually doing. Those two directions have different
+ambiguity properties: composing from an already-known group key is never
+ambiguous; decomposing an opaque flag string is the part that needed a
+group-prefix table to do correctly.
+
+That decompose need is **already met**: `UseExpand::split`/`group`
+(`portage-repo/src/repo/use_expand.rs`) is exactly shape B from below — a
+zero-alloc, longest-prefix `strip_prefix` split against the known
+`USE_EXPAND` key list (functionally what "memchr the known prefix" meant,
+just via `strip_prefix` instead of a raw byte search — the compiler
+optimizes both to the same kind of scan). It's already tested
+(`groups_flags_by_prefix`, `longest_prefix_wins`, `global_fallback`, …) and
+already the thing every current display/round-trip consumer calls:
+`portage-cli/src/info.rs:267-269` (`--info -v`'s group table),
+`portage-cli/src/use_flags.rs:534-535` (`em use`'s `-e`/`--list-expand`
+grouping), `portage-cli/src/pkg.rs:534-535` (`em pkg use`'s equivalent).
+
+The three "compose via `format!` then intern" sites originally cited
+(`iuse_effective.rs:64,100`, `use_env.rs:558,568`
+`expand_use_expand_colon`, `profile.rs:495`) all build a flag *forward* from
+an already-known `(group, value)` pair — `package.use`'s `KEY: v1 v2` colon
+form already has `KEY` in hand, a profile layer already has its own group
+key, etc. None of them decompose an opaque flag, so none of them have the
+ambiguity problem a stored triple/table would solve. Combined with the two
+prior Opus passes already concluding a stored triple is mildly *negative*
+on the one genuinely hot path (`iuse_effective.rs`, now fixed by caching,
+not by this), there's no remaining call site that benefits from shape A —
+shape B already covers every real consumer, no new type needed.
 
 ## The gap this would close
 
