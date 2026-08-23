@@ -1,9 +1,9 @@
 # `--local` bootstrap via `package.provided`
 
 Status: 🟢 Phase 1a + 1b landed **2026-08-09** (repo/profile/provided ladder
-for `em --local setup`); `--profile` CLI override, Darwin policy, and
-confirming the provided set actually clears the empty-VDB hard cycle in
-`toolchain --setup` are still open — see those phases' sections below.  
+for `em --local setup`); **the empty-VDB hard cycle is confirmed cleared,
+live-verified 2026-08-23** (see Phase 1b/3 below) — `--profile` CLI override
+and Darwin policy are the remaining open pieces.  
 Companion: [`docs/local-bootstrap.md`](./local-bootstrap.md)  
 Related: [[clang-crossbuild-prefix-local-test-plan]] Scenario B,
 [[em-stages-scenario-matrix]] (`--local` KNOWN-PARTIAL),
@@ -459,11 +459,17 @@ headers / glibc / gcc.
 | `sys-devel/binutils-config`, `sys-devel/gcc-config` | if tools assume them provided |
 | `virtual/*` | **avoid** — provided is CPV, not virtual; satisfy via real package |
 
-### Explicitly **out** of provided (stage products)
+### Explicitly **out** of provided (stage products) — with a live exception
 
-`sys-apps/baselayout`, `sys-devel/binutils`, `sys-kernel/linux-headers`,
-`sys-libs/glibc` / musl, `sys-devel/gcc` — unless live forces a temporary
-exception (then document + Rebuild).
+`sys-apps/baselayout`, `sys-devel/binutils`, `sys-devel/gcc` stay out.
+**`sys-kernel/linux-headers` and `sys-libs/glibc` are the "unless live forces
+a temporary exception" case this bullet already flagged as possible** —
+confirmed 2026-08-09/2026-08-23: without them, `sys-devel/gcc`'s
+`elibc_glibc?` RDEPEND still pulls a from-scratch glibc build regardless of
+the dedicated libc step, reintroducing the real cycle. Both are in `TIER1`
+(`setup/provided.rs`) today. Documented as the temporary lie this bullet
+already said to write down; **not yet Rebuild-forced** — see the Phase
+1b/2026-08-23 acceptance note below for the open decision.
 
 ### macOS / Darwin (later)
 
@@ -581,10 +587,44 @@ the fixture tests above, not live-verified against a real non-Gentoo host.
 wrote 24 Tier-1 entries with real probed-then-tree-mapped versions (e.g.
 host `python3` 3.13.12 → tree `dev-lang/python-3.12.9999`, the correct
 closest-`<=`-host match once `9999`-suffixed live-ebuild version ordering is
-accounted for). **Not yet verified**: whether this is actually *enough*
-provided coverage to get `em -p --local DIR toolchain --setup` past the
-empty-VDB hard cycle — that's the real remaining acceptance test for this
-phase, still open.
+accounted for).
+
+**2026-08-23: the real remaining acceptance test — confirmed, live.** Fresh
+disposable prefix, `em --local DIR setup` (piggy-backed host `::gentoo`,
+mirrored `default/linux/arm64/23.0`, wrote 25 provided entries — one more
+than the Aug-9 pass since `TIER1` grew `sys-libs/glibc` and
+`sys-kernel/linux-headers` in the meantime, see the caveat below) →
+`em -p --local DIR toolchain --setup`: **`EXIT=0`**, all 6
+`toolchain_plan` steps (baselayout, python, binutils, kernel headers, libc,
+gcc) resolve with no hard-cycle error, no REQUIRED_USE die, no `!!!`
+banners, 383 merge-preview lines total, ending at `sys-devel/gcc-15.3.0`.
+The empty-VDB hard cycle this whole phase exists to clear is confirmed
+cleared by the current Tier-1 set — no further CPNs needed for this host.
+
+**Caveat found in the same pass, not a bug — a real, undocumented tension
+this file's own "Refined" text (Tier-1 table section) predicted:**
+`sys-libs/glibc` and `sys-kernel/linux-headers` are both in the generated
+provided block (confirmed: `cat DIR/etc/portage/profile/package.provided`),
+despite the design table above still listing them under "Explicitly out of
+provided (stage products)". This is not an oversight — `setup/provided.rs`
+(`TIER1`, `sys-libs/glibc` entry, comment at line ~125) documents finding
+live that skipping the dedicated libc step under `prefix-guest` does
+nothing to stop `sys-devel/gcc`'s own `elibc_glibc? ( sys-libs/glibc[...] )`
+RDEPEND edge from pulling a full from-scratch glibc build anyway, hitting
+the exact bootstrap cycle prefix-guest exists to avoid (glibc BDEPENDs on a
+gcc that doesn't exist yet). Providing glibc was the fix, and today's run
+confirms it works. **Consequence, not yet addressed:** the `[5/6] libc` step
+plans *nothing* (confirmed: empty package list in the log) — a `--local`
+prefix built this way never actually owns its own glibc; it stays a
+"temporary lie" indefinitely, exactly the scenario this file's Phase 3/4
+text already anticipated ("if live proves glibc must be provided … document
+that as a temporary lie and schedule auto-drop … or force Rebuild on the
+libc stage step") but never got a resolution once it actually happened.
+**Next real decision, not made today:** either force `InstalledPolicy::Rebuild`
+on the libc stage step so it builds a real glibc despite being provided
+(Phase 4's "force Rebuild" option), or accept the permanent-lie state and
+document it as intentional (a `--local` prefix that link-shares the host's
+libc, Prefix-tradition-style) — needs Luca's call, not a default pick.
 
 ### Phase 2 — Host CPV probing (any-linux) — merged into Phase 1b above
 
