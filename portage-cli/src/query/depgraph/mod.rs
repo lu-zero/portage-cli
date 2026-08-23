@@ -1455,7 +1455,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     //  - blockers (`!foo` / `!!foo`) and `::repo` constraints, which the solver
     //    does not model;
     //  - REQUIRED_USE, evaluated per-package against its effective USE.
-    let (hard_conflict, unmerges) = {
+    let (hard_conflict, unmerges, required_use_unsatisfied) = {
         // `dep_conflicts` was computed per-round above (settled by the
         // `--complete-graph` repair loop, or from the single round when the
         // gate is off) — reporting it here, once, is the only place this
@@ -1499,6 +1499,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         if !ru_violations.is_empty() {
             output::report_required_use(&ru_violations);
         }
+        // PMS 7.3.4: an unsatisfied REQUIRED_USE means the version "must be
+        // treated as masked" — the advisory above still prints (matching
+        // emerge's own UX), but a plan containing one is not installable,
+        // same as a hard blocker conflict.
+        let required_use_unsatisfied = !ru_violations.is_empty();
 
         // Level-C: report the flags the solver flipped from their configured
         // value to satisfy REQUIRED_USE (they appear set in the plan via the
@@ -1538,7 +1543,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         if !unsatisfiable.is_empty() {
             output::report_unsatisfiable_targets(&unsatisfiable, &data, set.is_multi());
         }
-        (hard_conflict, unmerges)
+        (hard_conflict, unmerges, required_use_unsatisfied)
     };
 
     // `Total:`/`Size of downloads:` print *after* the advisories above (not
@@ -1686,10 +1691,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 
     Ok(DepgraphOutcome {
         // Non-zero when the displayed plan is not directly installable: USE
-        // changes, unmask/keyword/license, or a PMS 8.3.2 hard blocker conflict.
+        // changes, unmask/keyword/license, a PMS 8.3.2 hard blocker conflict,
+        // or a PMS 7.3.4 unsatisfied REQUIRED_USE.
         exit_code: if use_change_entries.is_empty()
             && autounmask_candidates.is_empty()
             && !hard_conflict
+            && !required_use_unsatisfied
         {
             0
         } else {
