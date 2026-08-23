@@ -360,6 +360,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .iter()
         .map(|e| Cpv::new(*e.package.cpn(), e.version.clone()))
         .collect();
+    // `package.provided` CPVs, target-side only (BROOT satisfaction is a
+    // separate, already-independent mechanism — see `add_host_installed`
+    // below). Lets the plan-membership filter below treat a provided CPV
+    // the same way a real installed one is treated: omit it unless an
+    // explicit target/USE-rebuild pulls it back in.
+    let provided_cpvs: std::collections::HashSet<Cpv> = provided.iter().cloned().collect();
     // Under `--emptytree` the solver treats target packages as rebuilds (not
     // "already installed" for cede/ingest), while action tags still use the
     // real VDB via `target_installed_cpvs`.
@@ -651,6 +657,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 if !emptytree_native {
                     seeds.extend(target_installed.iter().map(|e| e.cpn));
                 }
+                // `package.provided` CPNs also need real tree/cache data loaded so they
+                // can be registered as installed below — unconditional, unlike the
+                // target_installed seeding above: emptytree only affects VDB selection.
+                seeds.extend(provided.iter().map(|cpv| cpv.cpn));
                 let mut provider =
                     PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
                         adapter,
@@ -705,11 +715,17 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         iuse: e.iuse.clone(),
                     });
                 }
-                // `package.provided`: CPVs the system supplies externally. A dep edge
-                // matching one is dropped before it becomes a solver constraint (like a
-                // host-satisfied BDEPEND), so the package is neither built nor reported
-                // as a dropped/autounmask candidate.
-                provider.set_provided(&provided);
+                // `package.provided`: CPVs the system supplies externally. Registered as
+                // an ordinary installed/Favor package (not a separate edge filter), so a
+                // dependency edge is satisfied normally (version-range-checked) and an
+                // explicit target naming a provided CPN still gets solved/built via the
+                // existing root_pkgs reinstall check below — same as any installed pkg.
+                // Skipped when a real VDB entry already covers the same (cpn, slot): once
+                // genuinely built, the real entry wins on every later resolve for free.
+                let target_installed_keys: HashSet<(Cpn, Option<String>)> = target_installed
+                    .iter()
+                    .map(|e| (e.cpn, e.slot.map(|s| s.to_string())))
+                    .collect();
                 // A `package.provided` CPV is supplied by the *system*, so it is present
                 // on the build host (BROOT) too: seed it as host-installed so BDEPEND on
                 // it (e.g. a build tool needing the interpreter) is satisfied without
@@ -721,6 +737,39 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         Some(s) => PortagePackage::slotted(cpv.cpn, Interned::intern(s)),
                         None => PortagePackage::unslotted(cpv.cpn),
                     };
+                    if !target_installed_keys.contains(&(cpv.cpn, slot.clone())) {
+                        let (active_use, iuse) = match repo::find_cache(&data, &pkg, &cpv.version) {
+                            Some(cache) => {
+                                use portage_atom_pubgrub::UseFlagState;
+                                let cfg = effective_use::effective_use(
+                                    &iteration_policy,
+                                    &pkg,
+                                    &cpv.version,
+                                    cache,
+                                    true,
+                                    &[],
+                                );
+                                let iuse = effective_use::iuse_set(
+                                    cache,
+                                    &iteration_policy.force_mask.iuse_injection,
+                                );
+                                let active = iuse
+                                    .iter()
+                                    .copied()
+                                    .filter(|f| matches!(cfg.get(*f), UseFlagState::Enabled))
+                                    .collect();
+                                (active, iuse.into_iter().collect())
+                            }
+                            None => (Vec::new(), Vec::new()),
+                        };
+                        provider.add_installed(SolverInstalledPackage {
+                            package: pkg.clone(),
+                            version: cpv.version.clone(),
+                            policy: InstalledPolicy::Provided,
+                            active_use,
+                            iuse,
+                        });
+                    }
                     provider.add_host_installed(pkg, cpv.version.clone(), Vec::new(), Vec::new());
                 }
                 // BROOT (the host) provides build tools: a BDEPEND already present there
@@ -898,7 +947,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     // happens to have a same-named, same-version package.
                     let already_installed = match pkg.merge_root() {
                         MergeRoot::Host => host_installed_cpvs.contains(&cpv),
-                        MergeRoot::Target => target_installed_cpvs.contains(&cpv),
+                        MergeRoot::Target => {
+                            target_installed_cpvs.contains(&cpv) || provided_cpvs.contains(&cpv)
+                        }
                     };
                     // `-N`/`-U` registers USE-drift packages as `InstalledPolicy::Rebuild`
                     // and still selects the installed CPV for a same-version rebuild —

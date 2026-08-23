@@ -98,7 +98,7 @@ impl DependencyProvider for PortageDependencyProvider {
                     }
                     return Ok(None);
                 }
-                InstalledPolicy::Favor => {
+                InstalledPolicy::Favor | InstalledPolicy::Provided => {
                     // Explicit targets are not favored: a named argument pulls
                     // the best accepted version (emerge argument semantics).
                     // Otherwise keep the installed version whenever it satisfies
@@ -276,29 +276,11 @@ impl DependencyProvider for PortageDependencyProvider {
         package: &Self::P,
         version: &Self::V,
     ) -> std::result::Result<Dependencies<Self::P, Self::VS, Self::M>, Self::Err> {
-        let deps = self.compute_dependencies(package, version);
-        // Drop edges the system provides externally (`package.provided`) so the
-        // provided package is neither built nor reported as a dropped dep. No-op
-        // (and no allocation) when nothing is provided.
-        if self.provided.is_empty() {
-            return Ok(deps);
-        }
-        Ok(match deps {
-            Dependencies::Available(cs) => Dependencies::Available(
-                cs.into_iter()
-                    .filter(|(pkg, vs)| !self.edge_is_provided(pkg, vs))
-                    .collect(),
-            ),
-            unavailable => unavailable,
-        })
+        Ok(self.compute_dependencies(package, version))
     }
 }
 
 impl PortageDependencyProvider {
-    /// The unfiltered dependency computation for a `(package, version)` node
-    ///
-    /// [`get_dependencies`](DependencyProvider::get_dependencies) wraps this
-    /// to drop `package.provided` edges.
     fn compute_dependencies(
         &self,
         package: &PortagePackage,
@@ -328,9 +310,16 @@ impl PortageDependencyProvider {
         // Only RDEPEND (1), PDEPEND (3), and IDEPEND (4) matter at install time.
         // `--emptytree` (`InstalledPolicy::Rebuild`) always expands the full
         // build-time closure even when the selected version matches the VDB.
-        if self.installed.get(package).is_some_and(|(inst, policy)| {
-            inst == version && !matches!(policy, InstalledPolicy::Rebuild)
-        }) {
+        if let Some((inst, policy)) = self.installed.get(package)
+            && inst == version
+            && !matches!(policy, InstalledPolicy::Rebuild)
+        {
+            // `package.provided`: no real VDB record backs this, so unlike a
+            // genuinely installed package there is nothing to trust past "the
+            // system claims this exists" — stop here, not even RDEPEND.
+            if matches!(policy, InstalledPolicy::Provided) {
+                return Dependencies::Available(DependencyConstraints::default());
+            }
             if self.cross_active && package.merge_root() == MergeRoot::Target {
                 // Already installed and kept (not rebuilt): mirror the native
                 // equivalent below (`runtime`), which likewise omits BDEPEND

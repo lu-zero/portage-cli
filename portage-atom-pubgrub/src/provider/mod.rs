@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::repository::IUseDefault;
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Cpv, Dep, Version};
+use portage_atom::{Cpn, Dep, Version};
 use pubgrub::{Dependencies, SelectedDependencies};
 
 use crate::convert;
@@ -30,6 +30,13 @@ pub enum InstalledPolicy {
     /// rebuilt from the repository: never favored in version selection and
     /// always expanded with full build-time deps (`emerge --emptytree`)
     Rebuild,
+    /// `package.provided`: the system claims this exists, with no real VDB
+    /// record behind it. Same version-selection as `Favor`, but — unlike a
+    /// genuinely installed package — its own dependencies are never explored
+    /// when kept (no CONTENTS/PROVIDES to trust), only when a caller forces
+    /// a real build of it (an explicit target, same as `Favor`'s reinstall
+    /// path already allows).
+    Provided,
 }
 
 /// All solver-relevant data for one package version
@@ -337,13 +344,6 @@ pub struct PortageDependencyProvider {
     ///
     /// Captured before virtual nodes are stripped from the result.
     pub(crate) solved_use_decisions: HashMap<PortagePackage, bool>,
-    /// `package.provided` versions, keyed by CPN
-    ///
-    /// A dependency edge whose target CPN is listed and whose version set
-    /// accepts one of these versions is dropped before it becomes a solver
-    /// constraint — the system supplies that package externally, so it is
-    /// neither built nor reported as a dropped dep.
-    pub(crate) provided: HashMap<Cpn, Vec<Version>>,
 }
 
 /// A USE flag the caller ceded to the solver, with the value the solver chose
@@ -704,51 +704,7 @@ impl PortageDependencyProvider {
             use_decision_prefer,
             use_decision_meta,
             solved_use_decisions: HashMap::new(),
-            provided: HashMap::new(),
         }
-    }
-
-    /// Register `package.provided` CPVs: packages the system supplies externally
-    /// (e.g. a host interpreter in a Gentoo Prefix)
-    ///
-    /// A dependency edge matching one (same CPN, version in the edge's
-    /// set) is dropped in [`pubgrub::DependencyProvider::get_dependencies`],
-    /// so the package is neither pulled into the plan nor flagged as a
-    /// dropped dep.
-    pub fn set_provided(&mut self, provided: &[Cpv]) {
-        self.provided.clear();
-        for cpv in provided {
-            self.provided
-                .entry(cpv.cpn)
-                .or_default()
-                .push(cpv.version.clone());
-        }
-        // `dropped_deps` is computed at construction (before this call): a dep to
-        // a package absent from the reachable/ingested set is recorded there and
-        // later surfaced as an autounmask candidate. Prune any a provided CPV
-        // satisfies — the system supplies it, so it is neither a real drop nor a
-        // config-change candidate.
-        if !self.provided.is_empty() {
-            let mut dropped = std::mem::take(&mut self.dropped_deps);
-            dropped.retain(|d| !self.edge_is_provided(&d.package, &d.version_set));
-            self.dropped_deps = dropped;
-        }
-    }
-
-    /// Whether a dependency edge `(target, version_set)` is satisfied by a
-    /// `package.provided` entry — the target's CPN is provided at a version the
-    /// edge accepts
-    ///
-    /// Slot is not considered (provided entries name a CPV).
-    pub(crate) fn edge_is_provided(&self, target: &PortagePackage, vs: &PortageVersionSet) -> bool {
-        // Solver-internal nodes (Choice/SlotChoice/UseDecision/…) have no CPN.
-        // Gentoo `virtual/*` packages are Real and can be provided normally.
-        if target.is_virtual() {
-            return false;
-        }
-        self.provided
-            .get(target.cpn())
-            .is_some_and(|versions| versions.iter().any(|v| vs.contains(v)))
     }
 
     /// Record an installed package's pre-evaluated blocker atoms for
