@@ -620,11 +620,30 @@ prefix built this way never actually owns its own glibc; it stays a
 text already anticipated ("if live proves glibc must be provided … document
 that as a temporary lie and schedule auto-drop … or force Rebuild on the
 libc stage step") but never got a resolution once it actually happened.
-**Next real decision, not made today:** either force `InstalledPolicy::Rebuild`
-on the libc stage step so it builds a real glibc despite being provided
-(Phase 4's "force Rebuild" option), or accept the permanent-lie state and
-document it as intentional (a `--local` prefix that link-shares the host's
-libc, Prefix-tradition-style) — needs Luca's call, not a default pick.
+
+**Resolved, same day, landed:** not a `--rebuild`-style opt-in flag, and
+not a staged-driver-specific `Rebuild` override — `package.provided` was
+architecturally the wrong mechanism (a separate dependency-edge-deletion
+filter that also deleted the synthetic solver root's own edges, so an
+*explicit* target atom naming a provided CPN — a plain `em sys-libs/glibc`,
+or the libc step's own atom — silently vanished from the plan instead of
+being solved; a second, independent bug: the deletion never checked
+whether the provided version even satisfied the constraint that reached
+it). Fixed at the actual root: `package.provided` now registers each CPV
+through the same `add_installed` pipeline real VDB-sourced installed
+packages use, under a new `InstalledPolicy::Provided` (same
+version-selection as `Favor`, but — since there's no real VDB record
+behind it — its own dependencies are never explored when kept, only when
+forced by a real build). `set_provided`/`edge_is_provided` are deleted
+outright; no CLI surface added. Live-verified: the `[5/6] libc` step now
+plans and (confirmed via a real, non-pretend `--nodeps sys-libs/glibc`
+merge) actually builds a real glibc, while every other step's plan is
+byte-for-byte unchanged from before (diffed against this session's own
+pre-fix baseline — the only difference across the whole 6-step `-p`
+sequence is the one new, correct `sys-libs/glibc` line). The "permanent
+lie" this note worried about no longer exists: once glibc is genuinely
+installed, the plan-membership filter already prefers the real VDB entry
+over the synthetic provided one for free, no file rewrite needed.
 
 ### Phase 2 — Host CPV probing (any-linux) — merged into Phase 1b above
 
