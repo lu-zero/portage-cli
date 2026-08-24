@@ -8,8 +8,19 @@
 //! - **cross** — the toolchain bootstrap into the crossdev prefix
 //!   (`/usr/<chost>`), atoms under the `cross-<tuple>` overlay. There is no
 //!   compiler for `CTARGET` yet, so it needs the classic two-stage bootstrap:
-//!   binutils → headers → libc-headers (`--nodeps`) → gcc-stage1 → libc →
-//!   gcc-stage2.
+//!   binutils → gcc-stage1 (freestanding, no libc/headers needed) → headers →
+//!   libc → gcc-stage2 — matching real crossdev's own order (verified live,
+//!   2026-08-24: a real `crossdev i586-...` run builds gcc-stage1 before even
+//!   kernel-headers, and glibc's *only* pass is the full build, no separate
+//!   headers-only step). An earlier version of this plan ran a `--nodeps`
+//!   `headers-only` libc pass *before* gcc-stage1 to "give gcc-stage1 the
+//!   headers it needs" — gcc-stage1 doesn't need them; that ordering instead
+//!   forced glibc's own `configure` (which is not skipped for `headers-only`
+//!   builds) to run its full autoconf codegen checks against the *host's*
+//!   native compiler, since no target compiler existed yet — fine on riscv64,
+//!   fatal on x86 (`sysdeps/x86`'s `-Os inlines trunc` check can't be
+//!   answered by a wrong-arch CC). See
+//!   `todo/crossdev-libc-headers-before-gcc-stage1.md`.
 //! - **native** — a self-hosting stage1 into `--root` (`CHOST == CBUILD`), plain
 //!   `::gentoo` atoms. The seed compiler at `BROOT=/` already targets this arch,
 //!   so it builds *full* glibc directly and a single full gcc links against it:
@@ -333,9 +344,23 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
     }
 
     // Cross has no compiler for CTARGET yet, so it needs the classic two-stage
-    // bootstrap: kernel headers → libc *headers* (--nodeps) → gcc-stage1 (a
-    // freestanding C compiler, `--disable-shared` via is_crosscompile) → full
-    // libc → gcc-stage2.
+    // bootstrap: gcc-stage1 (freestanding, `GCC_DISABLE_STAGE1` — no libc or
+    // headers needed) → headers → full libc → gcc-stage2. gcc-stage1 comes
+    // *first*, matching real crossdev's own order: it needs neither
+    // kernel-headers nor libc-headers, and running any glibc pass (even
+    // headers-only, which does not skip glibc's own autoconf configure)
+    // before a real target compiler exists forces that configure to run its
+    // codegen-sensitive checks against the wrong-arch host compiler — see
+    // the module doc comment.
+    let mut stage1 = owned(GCC_DISABLE);
+    stage1.extend(owned(GCC_DISABLE_STAGE1));
+    steps.push(StageStep {
+        label: "gcc-stage1".into(),
+        atoms: vec![atom("sys-devel", "gcc")],
+        use_override: stage1,
+        nodeps: false,
+        into_sysroot: false,
+    });
     if kind.has_kernel() {
         // Target `linux-headers` into the sysroot does not satisfy
         // `virtual/os-headers` on the EPREFIX installed view (glibc BDEPEND).
@@ -356,25 +381,11 @@ pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: 
             nodeps: false,
             into_sysroot: false,
         });
-        // libc headers first (--nodeps): gcc-stage1 needs them, but glibc itself
-        // may DEPEND on a newer gcc we don't have yet — break the cycle.
-        steps.push(StageStep {
-            label: "libc headers".into(),
-            atoms: vec![atom("sys-libs", kind.libc_pkg())],
-            use_override: owned(&["headers-only"]),
-            nodeps: true,
-            into_sysroot: false,
-        });
     }
-    let mut stage1 = owned(GCC_DISABLE);
-    stage1.extend(owned(GCC_DISABLE_STAGE1));
-    steps.push(StageStep {
-        label: "gcc-stage1".into(),
-        atoms: vec![atom("sys-devel", "gcc")],
-        use_override: stage1,
-        nodeps: false,
-        into_sysroot: false,
-    });
+    // Single full libc pass, no separate headers-only step: gcc-stage1
+    // already satisfies glibc's own `>=sys-devel/gcc-*` DEPEND (it merged
+    // sys-devel/gcc, just with reduced USE), so this resolves normally
+    // without `--nodeps`.
     steps.push(StageStep {
         label: "libc".into(),
         atoms: vec![atom("sys-libs", kind.libc_pkg())],
@@ -557,14 +568,20 @@ mod tests {
     fn gcc_glibc_plan_is_the_two_stage_bootstrap() {
         let t = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let plan = toolchain_plan(&BootstrapKind::Cross(t), false, false);
+        // gcc-stage1 comes right after binutils (real crossdev's own order,
+        // verified live 2026-08-24) — it needs neither kernel-headers nor a
+        // separate libc-headers pass, and running any glibc pass first forces
+        // glibc's configure against the wrong-arch host compiler (fine on
+        // riscv64, fatal on x86's sysdeps checks). No separate "libc headers"
+        // step either: a single full libc pass after gcc-stage1 resolves its
+        // `>=sys-devel/gcc-*` DEPEND normally, no `--nodeps` needed.
         assert_eq!(
             labels(&plan),
             [
                 "baselayout",
                 "binutils",
-                "kernel headers",
-                "libc headers",
                 "gcc-stage1",
+                "kernel headers",
                 "libc",
                 "gcc-stage2",
             ]
@@ -579,20 +596,15 @@ mod tests {
         // Cross builds the linux-headers provider directly (no virtual/* in the
         // overlay; the cross DEPENDs resolve against the host).
         assert_eq!(
-            plan.steps[2].atoms[0],
+            plan.steps[3].atoms[0],
             "cross-riscv64-unknown-linux-gnu/linux-headers"
         );
-        // libc headers step is the --nodeps cycle-breaker.
-        let libc_headers = &plan.steps[3];
-        assert!(libc_headers.nodeps);
-        assert!(
-            libc_headers
-                .use_override
-                .contains(&"headers-only".to_string())
-        );
+        // The full libc step is a normal resolve — no --nodeps cycle-breaker
+        // needed once gcc-stage1 already satisfies glibc's own gcc DEPEND.
+        assert!(!plan.steps[4].nodeps);
         // stage1 gcc drops cxx/libc-dependent USE; stage2 keeps them.
-        assert!(plan.steps[4].use_override.contains(&"-cxx".to_string()));
-        assert!(!plan.steps[6].use_override.contains(&"-cxx".to_string()));
+        assert!(plan.steps[2].use_override.contains(&"-cxx".to_string()));
+        assert!(!plan.steps[5].use_override.contains(&"-cxx".to_string()));
     }
 
     // **Invariant:** every `cross-<tuple>/<pkg>` atom `toolchain_plan` emits

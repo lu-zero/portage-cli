@@ -447,6 +447,35 @@ blocked by the three independent findings above, tracked separately.
 
 ## Stage building (the active goal: a real stage3)
 
+- 🔴 **`em crossdev` needs a GCC version/slot pin flag** (real crossdev's
+  `--gcc VERSION`) — found 2026-08-24 auditing whether `em` can replace
+  real `crossdev`/`emerge` in `~/Sources/crossdev-stages` (bootable board
+  images, separate project). Everything else in that audit (`--ex-pkg`
+  host-branch placement, target-profile-aware `stages --stage1`, no
+  merge-usr gap since that's ebuild/profile-driven either way) already
+  matches or beats the status quo — this is the one real `em`-side gap.
+  [[crossdev-gcc-version-flag]]. Same shape found again testing an
+  LLVM `--ex-pkg`: newest-wins picked `clang-crossdev-wrappers:23`, the
+  one slot where the wrapper *and* its whole dependency chain are all
+  pre-release/masked (cascaded through 3 `--autounmask-write` passes),
+  when slot 21 (right next to it) needed zero mask changes and slot 22
+  needed exactly one — open question whether the solver should prefer
+  the less-masked nearby version or autounmask should widen its pass,
+  tied to the same version-pin need.
+  [[autounmask-cascading-fresh-slot-vs-version-pin]]
+
+- 🔴 **`toolchain_plan`'s libc-headers-before-gcc-stage1 order breaks x86
+  glibc configure** — found 2026-08-24, same audit, live Phase 1 pilot
+  (i586/`pentium-mmx`). `em --target i586-pc-linux-gnu crossdev --setup`
+  dies at the libc-headers step (`sysdeps/x86`'s `-Os inlines trunc`
+  check, run against the wrong-arch host CC since gcc-stage1 hasn't built
+  yet). riscv64 fully works (verified: real compile+link of a correct
+  ABI ELF) since its sysdeps tree never hits that specific check — but
+  the underlying wrong-CC issue is arch-general. A real `crossdev
+  i586-pc-linux-gnu` run in the same session succeeded through the
+  equivalent steps (its own order has no separate libc-headers pass:
+  gcc-stage1 before any glibc touch at all). [[crossdev-libc-headers-before-gcc-stage1]]
+
 - 🟡 **Privilege / fakeroot for stage builds.** `sys-apps/util-linux`'s own
   Makefile `chown root:root .../bin/mount` fails unprivileged → blocks
   `sys-apps/portage` → no self-extending base. **v1 landed**: an unprivileged
