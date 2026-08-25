@@ -425,8 +425,10 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 // (mask/keyword/USE fixes) but must never write them to
                 // /etc/portage — that's `em`'s job, not a query command's.
                 autounmask_write: false,
+                autounmask_persist: query::depgraph::AutounmaskPersist::Never,
                 ask: false,
                 autosolve_use: *autosolve_use || globals.merge_flags.autosolve_use,
+                autounmask_widen: false,
                 roots: &roots,
                 host_merge_root: host_roots.merge_root(),
                 onlydeps: *onlydeps || globals.merge_flags.onlydeps,

@@ -25,10 +25,33 @@ fn atom(
     format!("={}-{}{}", cpv.cpn, cpv.version, slot_suffix)
 }
 
+/// Slot-scoped form for widened selections: `cat/pkg:SLOT` — survives
+/// point-release churn where an exact pin would go stale on the next
+/// snapshot. When the slot has live versions and the pick isn't one of them,
+/// the grant is bounded below the lowest live version (`<cat/pkg-live:SLOT`)
+/// so accepting the slot never invites a `.9999` pick on a later resolve.
+fn slot_scoped_atom(
+    cpv: &portage_atom::Cpv,
+    slot: Option<portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>>,
+    live_upper_bound: Option<&portage_atom::Version>,
+) -> String {
+    let Some(s) = slot else {
+        return cpv.cpn.to_string();
+    };
+    match live_upper_bound {
+        Some(bound) => format!("<{}-{bound}:{}", cpv.cpn, s.as_str()),
+        None => format!("{}:{}", cpv.cpn, s.as_str()),
+    }
+}
+
 fn build_entries(candidates: &[AutounmaskCandidate], kind: &str) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Vec::new();
     for c in candidates {
-        let a = atom(&c.cpv, c.slot);
+        let a = if c.widened {
+            slot_scoped_atom(&c.cpv, c.slot, c.live_upper_bound.as_ref())
+        } else {
+            atom(&c.cpv, c.slot)
+        };
         let f = filename(&c.cpv);
         for reason in &c.reasons {
             match (kind, reason) {
@@ -87,7 +110,12 @@ fn format_line(e: &Entry) -> String {
 
 /// Print autounmask changes to stderr in portage style
 /// Order: mask → keywords → license (most fundamental first).
-pub(super) fn report(candidates: &[AutounmaskCandidate]) {
+///
+/// `applied_in_memory` (widened-solve selections) switches the headline to
+/// "applied in memory" wording — the plan already resolves with these picks,
+/// so they're informational, unlike the dropped-dep advisories which mean the
+/// printed plan is incomplete until the user acts.
+pub(super) fn report(candidates: &[AutounmaskCandidate], applied_in_memory: bool) {
     use super::output::{C_DIM, C_ON, C_PKG};
 
     let unmask = build_entries(candidates, "unmask");
@@ -102,33 +130,30 @@ pub(super) fn report(candidates: &[AutounmaskCandidate]) {
     }
 
     let mut out = anstream::stderr();
+    let persist_hint = ", --autounmask-write persists them";
+    let headline = |what: &str| {
+        if applied_in_memory {
+            format!(
+                "{C_PKG}The following {what} were applied in memory to resolve \
+                 this plan{persist_hint}:{C_PKG:#}"
+            )
+        } else {
+            format!("{C_PKG}The following {what} are necessary to proceed:{C_PKG:#}")
+        }
+    };
+    let man_page =
+        |page: &str| format!(" (see \"{page}\" in the portage(5) man page for more details)");
 
     if !unmask.is_empty() {
-        writeln!(
-            out,
-            "\n{C_PKG}The following mask changes are necessary to proceed:{C_PKG:#}"
-        )
-        .ok();
-        writeln!(
-            out,
-            " (see \"package.unmask\" in the portage(5) man page for more details)"
-        )
-        .ok();
+        writeln!(out, "\n{}", headline("mask changes")).ok();
+        writeln!(out, "{}", man_page("package.unmask")).ok();
         for e in &unmask {
             writeln!(out, "{C_PKG}{}{C_PKG:#}", e.atom).ok();
         }
     }
     if !kw.is_empty() {
-        writeln!(
-            out,
-            "\n{C_PKG}The following keyword changes are necessary to proceed:{C_PKG:#}"
-        )
-        .ok();
-        writeln!(
-            out,
-            " (see \"package.accept_keywords\" in the portage(5) man page for more details)"
-        )
-        .ok();
+        writeln!(out, "\n{}", headline("keyword changes")).ok();
+        writeln!(out, "{}", man_page("package.accept_keywords")).ok();
         for e in &kw {
             let token_str = e
                 .tokens
@@ -140,16 +165,8 @@ pub(super) fn report(candidates: &[AutounmaskCandidate]) {
         }
     }
     if !lic.is_empty() {
-        writeln!(
-            out,
-            "\n{C_PKG}The following license changes are necessary to proceed:{C_PKG:#}"
-        )
-        .ok();
-        writeln!(
-            out,
-            " (see \"package.license\" in the portage(5) man page for more details)"
-        )
-        .ok();
+        writeln!(out, "\n{}", headline("license changes")).ok();
+        writeln!(out, "{}", man_page("package.license")).ok();
         for e in &lic {
             let token_str = e
                 .tokens
@@ -161,16 +178,8 @@ pub(super) fn report(candidates: &[AutounmaskCandidate]) {
         }
     }
     if !props.is_empty() {
-        writeln!(
-            out,
-            "\n{C_PKG}The following property changes are necessary to proceed:{C_PKG:#}"
-        )
-        .ok();
-        writeln!(
-            out,
-            " (see \"package.properties\" in the portage(5) man page for more details)"
-        )
-        .ok();
+        writeln!(out, "\n{}", headline("property changes")).ok();
+        writeln!(out, "{}", man_page("package.properties")).ok();
         for e in &props {
             let token_str = e
                 .tokens
@@ -182,16 +191,8 @@ pub(super) fn report(candidates: &[AutounmaskCandidate]) {
         }
     }
     if !restr.is_empty() {
-        writeln!(
-            out,
-            "\n{C_PKG}The following restrict changes are necessary to proceed:{C_PKG:#}"
-        )
-        .ok();
-        writeln!(
-            out,
-            " (see \"package.accept_restrict\" in the portage(5) man page for more details)"
-        )
-        .ok();
+        writeln!(out, "\n{}", headline("restrict changes")).ok();
+        writeln!(out, "{}", man_page("package.accept_restrict")).ok();
         for e in &restr {
             let token_str = e
                 .tokens

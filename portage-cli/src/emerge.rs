@@ -183,6 +183,11 @@ pub(crate) struct EmergeOpts<'a> {
     ///
     /// Empty for every merge but `em setup --local`'s own — see `setup::host_tools`.
     pub extra_path: &'a [camino::Utf8PathBuf],
+    /// Force widened candidate supply even without an active `--target`
+    ///
+    /// `emerge_atoms` already widens automatically under `--target` (crossdev
+    /// flows); this is for callers outside that gate.
+    pub autounmask_widen: bool,
 }
 
 /// [`EmergeOpts`] minus its borrowed `use_override` (already folded into
@@ -202,6 +207,7 @@ struct ResolvedEmergeOpts<'a> {
     activity_session: crate::activity::ActivitySessionOpts,
     extra_aliases: &'a [portage_repo::RepoEntry],
     extra_path: &'a [camino::Utf8PathBuf],
+    autounmask_widen: bool,
 }
 
 pub(crate) async fn emerge_atoms(
@@ -231,6 +237,7 @@ pub(crate) async fn emerge_atoms(
             activity_session: opts.activity_session,
             extra_aliases: opts.extra_aliases,
             extra_path: opts.extra_path,
+            autounmask_widen: opts.autounmask_widen,
         },
     )
     .await
@@ -316,6 +323,7 @@ async fn emerge_atoms_inner(
         activity_session,
         extra_aliases,
         extra_path,
+        autounmask_widen,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
     let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
@@ -484,6 +492,14 @@ async fn emerge_atoms_inner(
             cli.depgraph_flags.changed_use,
         ));
     let binpkg_index = binpkg::open_local_index_for_preview(cli, merge_flags).await;
+    // Cross-alias targets (`cross-<tuple>/pkg`) only exist under crossdev
+    // management, so they opt this resolve into widened candidate supply —
+    // the same rescue `em crossdev` gets, available to a manual merge of a
+    // cross package too.
+    let cross_alias_targets = raw_atoms
+        .iter()
+        .filter_map(|a| portage_atom::Dep::parse(a).ok())
+        .any(|d| d.cpn.category.as_str().starts_with("cross-"));
     let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
         set,
         atoms: &atoms,
@@ -493,11 +509,19 @@ async fn emerge_atoms_inner(
         verbose: cli.verbose,
         empty: merge_flags.emptytree,
         autounmask_write: merge_flags.autounmask_write,
+        autounmask_persist: if cli.pretend {
+            query::depgraph::AutounmaskPersist::Never
+        } else if merge_flags.ask {
+            query::depgraph::AutounmaskPersist::Ask
+        } else {
+            query::depgraph::AutounmaskPersist::Always
+        },
         // `--pretend` pops `--ask` in real portage; matched here by simply
         // never treating it as interactive under `-p` — a `-pa` preview must
         // never prompt.
         ask: merge_flags.ask && !cli.pretend,
         autosolve_use: merge_flags.autosolve_use,
+        autounmask_widen: autounmask_widen || cli.target.is_some() || cross_alias_targets,
         roots: &roots,
         host_merge_root: host_roots.merge_root(),
         onlydeps: merge_flags.onlydeps,
@@ -846,6 +870,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             activity_session: Default::default(),
             extra_aliases: &[],
             extra_path: &[],
+            autounmask_widen: false,
         },
     )
     .await
@@ -897,6 +922,7 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
             },
             extra_aliases: &[],
             extra_path: &[],
+            autounmask_widen: false,
         },
     )
     .await

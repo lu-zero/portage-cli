@@ -340,6 +340,7 @@ pub async fn merge_baselayout(cli: &crate::cli::Cli, extra_path: &[Utf8PathBuf])
             activity_session: Default::default(),
             extra_aliases: &[],
             extra_path,
+            autounmask_widen: false,
         },
     )
     .await

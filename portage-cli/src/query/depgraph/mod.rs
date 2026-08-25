@@ -26,8 +26,8 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Operator, Version};
 use portage_atom_pubgrub::{
     CededFlag, DepClass, DepEdge, InstalledPackage as SolverInstalledPackage, InstalledPolicy,
-    PortageDependencyProvider, PortagePackage, PortageVersionSet, UseFlagRequirement, UseOverride,
-    build_slot_map,
+    PortageDependencyProvider, PortagePackage, PortageVersionSet, SlotMap, UseFlagRequirement,
+    UseOverride, build_slot_map,
 };
 
 use crate::cli::DepgraphFormat;
@@ -100,6 +100,22 @@ pub struct DepgraphOutcome {
     pub unmerges: Vec<portage_resolve::conflicts::PlannedUnmerge>,
 }
 
+/// Whether pending autounmask changes (keyword/mask/license/…) may be
+/// persisted to disk
+///
+/// Invocation-mode-gated, not flag-gated: `-p` is [`Self::Never`], `-a` is
+/// [`Self::Ask`] (write on confirm), a real merge is [`Self::Always`] — the
+/// same policy for every subcommand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutounmaskPersist {
+    /// Report only; never touch disk (`-p`, read-only queries)
+    Never,
+    /// Preview + confirm prompt; write only on yes (`-a`)
+    Ask,
+    /// Persist unconditionally (real merge run)
+    Always,
+}
+
 pub struct DepgraphOpts<'a> {
     /// The full priority-ordered repo set for this invocation: `main` plus every `repos.conf`
     /// overlay
@@ -142,6 +158,12 @@ pub struct DepgraphOpts<'a> {
     pub verbose: u8,
     pub empty: bool,
     pub autounmask_write: bool,
+    /// Whether pending autounmask changes (keyword/mask/license/…) may be
+    /// persisted to disk, independent of invocation mode: `-p` never writes,
+    /// `-a` writes only after the confirm prompt says yes, a real merge
+    /// always writes. Same policy for every subcommand — the caller just
+    /// translates its own invocation mode.
+    pub autounmask_persist: AutounmaskPersist,
     /// `--ask`, already gated by the caller so it's only `true` for an
     /// interactive real merge (never `--pretend`, never a read-only query
     /// command). When USE changes are required and `--autounmask-write`
@@ -150,6 +172,15 @@ pub struct DepgraphOpts<'a> {
     /// offers that non-interactively via `--autounmask-write`.
     pub ask: bool,
     pub autosolve_use: bool,
+    /// Widened candidate supply (`--autounmask`-style): masked/unkeyworded
+    /// versions stay visible to the solver, tagged and strictly tiered below
+    /// accepted ones. Two-phase internally — the solve first runs strict and
+    /// only retries widened when phase 1 fails — so a `false` here is
+    /// byte-identical to strict filtering.
+    ///
+    /// Set by crossdev flows, whose job is pushing past upstream keywording
+    /// gaps; deliberately not wired to the user-facing `--autounmask` flag.
+    pub autounmask_widen: bool,
     /// The resolved root set (config / base / target / BROOT)
     ///
     /// See docs/user/root-model.md. `roots.satisfaction_root(DepClass::Bdepend)` answers the
@@ -253,8 +284,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         verbose,
         empty,
         autounmask_write,
+        autounmask_persist,
         ask,
         autosolve_use,
+        autounmask_widen,
         roots,
         onlydeps,
         with_bdeps,
@@ -530,6 +563,32 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // is never reached through this Adapter.
         rebuilding_cpvs: &empty_solver_cpvs,
         autosolve_use: false,
+        autounmask_widen: false,
+    });
+    // Widened-mode slot map: tagged-only slots rank strictly below accepted
+    // ones there. Phase 1 keeps the strict map so its graph shape stays
+    // untouched; the extra whole-tree scan is paid only by callers that
+    // request widening (crossdev flows).
+    let widened_slot_map: Option<SlotMap> = autounmask_widen.then(|| {
+        build_slot_map(&repo::Adapter {
+            data: &data,
+            accept_keywords: &accept_keywords,
+            package_mask: &package_mask,
+            package_unmask: &package_unmask,
+            accept_licenses: &accept_licenses,
+            accept_properties: &accept_properties,
+            accept_restrict: &accept_restrict,
+            defaults: &defaults,
+            conf: &conf,
+            env_use: &env_use,
+            package_use: &package_use,
+            profile_package_use: &profile_package_use,
+            force_mask: &force_mask,
+            installed_cpvs: solver_installed_cpvs,
+            rebuilding_cpvs: &empty_solver_cpvs,
+            autosolve_use: false,
+            autounmask_widen: true,
+        })
     });
 
     // Sysroot VDB entries for `DEPEND` satisfaction under a cross build:
@@ -591,6 +650,15 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         }
     }
 
+    /// One attempt = cosolve fixpoint + final solve, at the current widened
+    /// setting (see `attempt_solve` below).
+    type SolveAttempt = anyhow::Result<(
+        PortageDependencyProvider,
+        pubgrub::SelectedDependencies<PortagePackage, Version>,
+        Vec<(Dep, Vec<UseOverride>)>,
+        Vec<UseFlagRequirement>,
+    )>;
+
     /// Everything a single solve-and-plan attempt produces that the rest of
     /// [`depgraph`] needs — bundled so the `--complete-graph` repair loop
     /// below can re-run the whole pipeline with extra root targets and keep
@@ -605,6 +673,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         applied_reqs: Vec<UseFlagRequirement>,
         ceded: Vec<CededFlag>,
         autounmask_candidates: Vec<repo::AutounmaskCandidate>,
+        /// Phase-2 widened selections (chosen versions outside acceptance);
+        /// merged after the dropped-dep post-filter, which would otherwise
+        /// discard them by construction
+        widened_autounmask_candidates: Vec<repo::AutounmaskCandidate>,
         slot_op_cpns: HashSet<Cpn>,
         dep_conflicts: Vec<conflicts::Conflict>,
         // Target-routed merge plan entries, kept alongside `dep_conflicts` for
@@ -623,6 +695,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // invariant.
     let solve_round =
         |targets: Vec<(PortagePackage, PortageVersionSet)>| -> anyhow::Result<RoundOutcome> {
+            // Phase 2 flips this on: the strict solve failed, so retry (and
+            // keep) widened candidate supply. Strict-first keeps every
+            // non-crossdev resolve byte-identical.
+            let widened = std::cell::Cell::new(false);
             let build_and_solve = |autosolve_use: bool, pkg_use: &[(Dep, Vec<UseOverride>)]| {
                 let adapter = repo::Adapter {
                     data: &data,
@@ -641,6 +717,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     installed_cpvs: solver_installed_cpvs,
                     rebuilding_cpvs: &rebuilding_installed_cpvs,
                     autosolve_use,
+                    autounmask_widen: widened.get(),
+                };
+                let slot_map_ref: &SlotMap = if widened.get() {
+                    widened_slot_map
+                        .as_ref()
+                        .expect("widened phase without a widened slot map")
+                } else {
+                    &slot_map
                 };
                 // Outlives `adapter` (it borrows the same run-scoped refs, including
                 // this iteration's `pkg_use`), so it stays usable after the move below.
@@ -666,7 +750,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         adapter,
                         seeds,
                         solve_with_bdeps,
-                        &slot_map,
+                        slot_map_ref,
                     );
                 provider.set_cross_active(cross.active);
                 provider.set_is_cross_arch(cross.is_cross_arch());
@@ -798,46 +882,65 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // The fixpoint hands back the final solve it converged on, so we reuse it
             // instead of solving again; `solved` is `None` when the fixpoint
             // failed/bailed and we must re-solve.
-            let (package_use, applied_reqs, solved) = package_use::cosolve_use_deps(
-                package_use.clone(),
-                &data,
-                |pu| {
-                    let (provider, result) = build_and_solve(autosolve_use, pu);
-                    result.ok().map(|sol| (provider, sol))
-                },
-                |(provider, _)| provider.use_flag_requirements().to_vec(),
-            );
+            //
+            // One attempt = cosolve fixpoint + final solve, at the current
+            // `widened` setting. Phase 2 re-runs it with widened candidate
+            // supply when the strict attempt hard-fails (crossdev keywording
+            // gaps); the strict error is kept as the user-facing failure when
+            // even the widened attempt can't resolve.
+            let attempt_solve = || -> SolveAttempt {
+                let (pu, applied_reqs, solved) = package_use::cosolve_use_deps(
+                    package_use.clone(),
+                    &data,
+                    |pu| {
+                        let (provider, result) = build_and_solve(autosolve_use, pu);
+                        result.ok().map(|sol| (provider, sol))
+                    },
+                    |(provider, _)| provider.use_flag_requirements().to_vec(),
+                );
 
-            let (provider, solution) = match solved {
-                Some(solved) => solved,
-                None => {
-                    let (provider, result) = build_and_solve(autosolve_use, &package_use);
-                    match result {
-                        Ok(sol) => (provider, sol),
-                        Err(_) if autosolve_use => {
-                            // REQUIRED_USE could not be auto-satisfied; fall back to a
-                            // fixed-USE solve so the plan + Level-A advisory still appear.
-                            crate::style::warn_line!(
-                                "--autosolve-use could not satisfy REQUIRED_USE; \
-                             falling back to a fixed-USE plan.",
-                            );
-                            let (provider, result) = build_and_solve(false, &package_use);
-                            let sol = result.map_err(|e2| {
-                                anyhow::anyhow!(
+                let (provider, solution) = match solved {
+                    Some(solved) => solved,
+                    None => {
+                        let (provider, result) = build_and_solve(autosolve_use, &pu);
+                        match result {
+                            Ok(sol) => (provider, sol),
+                            Err(_) if autosolve_use => {
+                                // REQUIRED_USE could not be auto-satisfied; fall back to a
+                                // fixed-USE solve so the plan + Level-A advisory still appear.
+                                crate::style::warn_line!(
+                                    "--autosolve-use could not satisfy REQUIRED_USE; \
+                                 falling back to a fixed-USE plan.",
+                                );
+                                let (provider, result) = build_and_solve(false, &pu);
+                                let sol = result.map_err(|e2| {
+                                    anyhow::anyhow!(
+                                        "resolution failed:\n{}",
+                                        portage_atom_pubgrub::format_solve_error(e2)
+                                    )
+                                })?;
+                                (provider, sol)
+                            }
+                            Err(e) => {
+                                return Err(anyhow::anyhow!(
                                     "resolution failed:\n{}",
-                                    portage_atom_pubgrub::format_solve_error(e2)
-                                )
-                            })?;
-                            (provider, sol)
-                        }
-                        Err(e) => {
-                            return Err(anyhow::anyhow!(
-                                "resolution failed:\n{}",
-                                portage_atom_pubgrub::format_solve_error(e)
-                            ));
+                                    portage_atom_pubgrub::format_solve_error(e)
+                                ));
+                            }
                         }
                     }
+                };
+                Ok((provider, solution, pu, applied_reqs))
+            };
+
+            let (provider, solution, package_use, applied_reqs) = match attempt_solve() {
+                Ok(ok) => ok,
+                Err(strict_err) if autounmask_widen && !widened.get() => {
+                    widened.set(true);
+                    tracing::debug!("strict solve failed; retrying with widened candidate supply");
+                    attempt_solve().map_err(|_| strict_err)?
                 }
+                Err(e) => return Err(e),
             };
 
             // Fold Level-C ceded flag values into package.use for report/autounmask
@@ -898,6 +1001,69 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // loop settles (see below).
             let autounmask_candidates =
                 repo::find_autounmask_candidates(&data, provider.dropped_deps(), &final_policy);
+            // Widened phase-2 selections: a chosen version outside acceptance is
+            // the hard-solve-failure case the `DroppedDep` path never sees (the
+            // solve failed there instead of dropping the dep gracefully). Each
+            // selected tagged cpv becomes a regular candidate via the same
+            // reason machinery. Kept out of the dropped-dep list until after its
+            // actionable-set post-filter below — that filter's
+            // `!solution_cpns.contains` guard would discard every one of these
+            // by construction.
+            let widened_candidates: Vec<_> = if widened.get() {
+                let mut selections: Vec<(PortagePackage, Version)> = solution
+                    .iter()
+                    .filter(|(pkg, ver)| {
+                        !pkg.is_virtual() && provider.selection_needs_unmask(pkg, ver)
+                    })
+                    .map(|(pkg, ver)| (pkg.clone(), ver.clone()))
+                    .collect();
+                selections.sort_by_key(|(pkg, _)| pkg.to_string());
+                let mut cands = Vec::new();
+                for (pkg, ver) in selections {
+                    let vs = PortageVersionSet::from_operator(Operator::Equal, false, ver.clone());
+                    let is_live = ver.is_live();
+                    // Bound persisted slot grants below the slot's lowest
+                    // live version, so accepting the slot never invites a
+                    // `.9999` pick on the next resolve (newest-wins applies
+                    // to accepted candidates, where no tiering runs). A live
+                    // selection gets an unbounded grant — there is nothing
+                    // to protect.
+                    let live_upper_bound = match (is_live, pkg.slot()) {
+                        (false, Some(sel_slot)) => data
+                            .versions
+                            .get(pkg.cpn())
+                            .and_then(|versions| {
+                                versions
+                                    .iter()
+                                    .filter(|(other, cache)| {
+                                        other.version.is_live()
+                                            && cache.metadata.slot.slot == *sel_slot
+                                    })
+                                    .map(|(other, _)| &other.version)
+                                    .min()
+                            })
+                            .cloned(),
+                        _ => None,
+                    };
+                    cands.extend(
+                        repo::filter_reasons_for(&data, pkg.cpn(), &vs, &final_policy)
+                            .into_iter()
+                            .map(|mut c| {
+                                c.widened = true;
+                                c.live_upper_bound = live_upper_bound.clone();
+                                c
+                            }),
+                    );
+                }
+                let mut seen: HashSet<String> = autounmask_candidates
+                    .iter()
+                    .map(|c| c.cpv.to_string())
+                    .collect();
+                cands.retain(|c| seen.insert(c.cpv.to_string()));
+                cands
+            } else {
+                Vec::new()
+            };
 
             // Packages that need a same-version rebuild (USE change) must stay in the
             // merge list even though their installed CPV is unchanged — keep them in
@@ -1171,6 +1337,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 installed_cpvs: solver_installed_cpvs,
                 rebuilding_cpvs: &rebuilding_installed_cpvs,
                 autosolve_use: false,
+                autounmask_widen: false,
             };
             order = host_copies::compute(&order, &host_copies_adapter, roots, &cross);
 
@@ -1204,6 +1371,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 applied_reqs,
                 ceded,
                 autounmask_candidates,
+                widened_autounmask_candidates: widened_candidates,
                 slot_op_cpns,
                 dep_conflicts,
                 proposed,
@@ -1275,6 +1443,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         applied_reqs,
         ceded,
         autounmask_candidates,
+        widened_autounmask_candidates,
         slot_op_cpns,
         dep_conflicts,
         proposed,
@@ -1339,7 +1508,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .flat_map(|(pkg, ver)| repo::cpns_for(&data, pkg.cpn(), ver))
         .collect();
 
-    let autounmask_candidates: Vec<_> = autounmask_candidates
+    let dropped_autounmask: Vec<_> = autounmask_candidates
         .into_iter()
         .filter(|c| !solution_cpns.contains(&c.cpv.cpn) && new_needed_cpns.contains(&c.cpv.cpn))
         .collect();
@@ -1351,10 +1520,32 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // `--autounmask`. The flag now only governs *writing* the fix:
     // `--autounmask-write` persists the keyword/mask/license changes.
     // Report in order of severity: mask → keywords → license.
-    if !autounmask_candidates.is_empty() {
-        autounmask::report(&autounmask_candidates);
-        if autounmask_write {
-            autounmask::write(&autounmask_candidates, &portage_dir)?;
+    //
+    // Widened selections are different: the solve already applied them in
+    // memory and the plan is installable as-is, so they neither block the
+    // merge nor set the non-zero exit — they're reported as informational,
+    // with `--autounmask-write` persisting them on request.
+    let has_dropped = !dropped_autounmask.is_empty();
+    let has_widened = !widened_autounmask_candidates.is_empty();
+    if has_dropped || has_widened {
+        autounmask::report(&dropped_autounmask, false);
+        autounmask::report(&widened_autounmask_candidates, true);
+        if matches!(
+            autounmask_persist,
+            AutounmaskPersist::Always | AutounmaskPersist::Ask
+        ) {
+            let mut all = dropped_autounmask.clone();
+            all.extend(widened_autounmask_candidates);
+            let confirmed = match autounmask_persist {
+                AutounmaskPersist::Ask => crate::config_plan::confirm_config_write(all.len())?,
+                AutounmaskPersist::Always => true,
+                AutounmaskPersist::Never => false,
+            };
+            if confirmed {
+                autounmask::write(&all, &portage_dir)?;
+            } else {
+                println!(">>> Quitting.");
+            }
         }
     }
 
@@ -1415,6 +1606,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         installed_cpvs: solver_installed_cpvs,
         rebuilding_cpvs: &rebuilding_installed_cpvs,
         autosolve_use: false,
+        autounmask_widen: false,
     };
     // `order` is already exclude-filtered above, so `plan_entries` (and the
     // Pretty/JSON/Tree preview built from it) inherit the exclusion for free.
@@ -1745,7 +1937,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // changes, unmask/keyword/license, a PMS 8.3.2 hard blocker conflict,
         // or a PMS 7.3.4 unsatisfied REQUIRED_USE.
         exit_code: if use_change_entries.is_empty()
-            && autounmask_candidates.is_empty()
+            && dropped_autounmask.is_empty()
             && !hard_conflict
             && !required_use_unsatisfied
         {

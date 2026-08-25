@@ -403,6 +403,7 @@ async fn run_staged(
                 activity_session: Default::default(),
                 extra_aliases,
                 extra_path: &[],
+                autounmask_widen: true,
             },
         )
         .await?;
@@ -732,6 +733,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             activity_session: Default::default(),
             extra_aliases: &[],
             extra_path: &[],
+            autounmask_widen: true,
         },
     )
     .await?;
@@ -831,10 +833,12 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         verbose: 0,
         empty: false,
         autounmask_write: false,
+        autounmask_persist: crate::query::depgraph::AutounmaskPersist::Never,
         // Internal `sys-devel/gcc` version probe, not a user-facing merge:
         // never prompts.
         ask: false,
         autosolve_use: false,
+        autounmask_widen: false,
         roots: &roots,
         host_merge_root: host_roots.merge_root(),
         onlydeps: false,
