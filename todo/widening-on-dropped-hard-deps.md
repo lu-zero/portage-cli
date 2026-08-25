@@ -62,6 +62,43 @@ Edges settled in the recap:
   complete plan, bounded slot grants for clang/lld (not six exact pins),
   follow-up `-p` EXIT 0.
 
+## Live-ebuild policy layer — ✅ IMPLEMENTED 2026-08-25
+
+Settled with Luca and landed (portage-metadata `EbuildMetadata::is_live`,
+`PackageVersions`/`VersionData.live`, tier-filter enforcement, dropped-dep
+skip, combined-notion bounds). Tests: transitive-live rejection,
+root-explicit allowance, dropped-dep live skip, PROPERTIES conditional.
+
+## Live-ebuild policy layer (settled with Luca 2026-08-25)
+
+Discriminating signals already computed per candidate: `Version::is_live`
+(`*9999`), `PROPERTIES=live` (`RestrictExpr::Token("live")`), the
+`FilterReason::Keyword` vs `Masked` split (masked-but-keyworded =
+`Masked` without any Keyword reason), and root-target membership.
+
+| class | widened selects? | suggestion | persisted shape |
+|---|---|---|---|
+| keywordless release | yes (tagged-release tier) | keyword grant | bounded slot grant |
+| p.masked + keyworded (experimental/cross-only) | yes | unmask + keyword lines (as-is per Luca) | slot grant + unmask line |
+| live, transitively wanted | **no** — fails with guidance to name `=pkg-9999` explicitly | — | — |
+| live, explicitly asked (root target, or range admitting only lives) | yes | exact pin | **exact pin** (never slot-scoped) |
+
+Decisions:
+
+1. Transitive live-only deps hard-fail (accepted behavior change).
+2. Live detector = `.9999` **or** `PROPERTIES=live` (both supported).
+3. DroppedDep exact-pin emission skips live versions too.
+4. Masked+keyworded report/persistence stays as-is.
+5. Future escape hatch: an opt-in flag re-admits the live tier
+   (placeholder; not designed yet).
+
+Implementation notes: liveness travels as a `PackageVersions.live` /
+`VersionData.live` fact (adapter computes from version shape +
+metadata); enforcement in `filter_to_preferred_tier` (drop tagged-live
+unless the package is a root target); `find_autounmask_candidates`
+skips live candidates; widened-scan bound computation uses the combined
+notion.
+
 ## Alternatives rejected (recap)
 
 - Smarter exact pins only (pick best version): leaves plans incomplete,
