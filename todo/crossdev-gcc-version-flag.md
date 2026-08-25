@@ -24,14 +24,19 @@ Since `em crossdev` bills itself as a "crossdev workalike," lacking the one
 flag real crossdev users reach for most for a non-default toolchain is a
 real parity gap, not just crossdev-stages' problem to route around.
 
-Same underlying need surfaced again testing `--ex-pkg sys-devel/
-clang-crossdev-wrappers`: newest-wins resolution picked LLVM 23 (a
-brand-new, entirely unkeyworded major version), cascading through
-multiple `--autounmask-write` passes to accept `clang`/`clang-common`/
-`llvm` one at a time, when the stable, fully-keyworded `llvm:22` would
-have resolved cleanly with zero mask changes. See
-[[autounmask-cascading-fresh-slot-vs-version-pin]] — worth designing
-together, not separately.
+A related but distinct bug surfaced testing `--ex-pkg sys-devel/
+clang-crossdev-wrappers`: `em crossdev` correctly reaches for the
+newest version (23) and correctly unmasks it (that's intended — see
+[[autounmask-cascading-fresh-slot-vs-version-pin]]), but a transitive
+dependency three hops down (`llvm-core/clang-common`, at the matching
+pre-release point version) genuinely has no upstream KEYWORDS at all,
+and `em`'s autounmask discovery doesn't surface a suggestion for a
+masked candidate buried that deep in a compound derivation — it just
+hard-fails. That's an autounmask-discovery gap, not a version-selection
+question; a version-pin flag here would be a workaround for it (pin to
+21, which happens to avoid the whole unkeyworded subtree) rather than a
+fix, and is still independently useful for a caller who deliberately
+wants a non-default slot regardless of that gap.
 
 ## Shape (not decided yet)
 
