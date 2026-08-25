@@ -11,6 +11,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use super::{Cli, env_d};
 use crate::cli::CompilerAction;
+use crate::util::write_atomic;
 use portage_resolve::Roots;
 
 /// GCC-specific profile type
@@ -49,27 +50,35 @@ impl env_d::EnvDProfile for GccProfileType {
     }
 
     fn sync_foreign_config(roots: &Roots, vars: &BTreeMap<String, String>) -> Result<()> {
-        write_clang_gcc_install_cfg(&env_d::eprefix(roots), vars)
+        let host_chost = portage_repo::MakeConf::load_default()
+            .ok()
+            .and_then(|m| m.get("CHOST").map(str::to_owned));
+        write_clang_configs(&env_d::eprefix(roots), vars, host_chost.as_deref())
     }
 }
 
-/// Tell clang which GCC installation to use — `gcc-config`'s own last act
-/// (`gcc-config:797-806`), which reaches into *clang's* config directory
-/// because clang has no way to know that the gcc selection changed.
+/// Route clang's gcc-install hand-off to the right config file.
 ///
 /// The value is the first `:` component of the profile's `LDPATH`
-/// (gcc-config's `get_lib_path`), e.g.
-/// `/usr/lib/gcc/aarch64-unknown-linux-gnu/16`. Without it clang falls back to
-/// scanning for a GCC, which picks *a* toolchain rather than the selected one.
+/// (gcc-config's `get_lib_path`), e.g. `/usr/lib/gcc/aarch64-unknown-linux-gnu/16`.
 ///
-/// Only rewrites a file that already exists, exactly as gcc-config's `-f` guard
-/// does: the file belongs to `llvm-core/clang-common`, and creating it where
-/// clang is not installed would leave a stray config nothing owns.
-fn write_clang_gcc_install_cfg(eprefix: &Utf8Path, vars: &BTreeMap<String, String>) -> Result<()> {
-    let path = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
-    if !path.exists() {
-        return Ok(());
-    }
+/// - **Native** activation (the gcc being activated matches the host
+///   `CHOST`, or the host CHOST is undeterminable): rewrite
+///   `/etc/clang/gentoo-gcc-install.cfg` — gcc-config's own last act
+///   (`gcc-config:797-806`), which reaches into *clang's* config directory
+///   because clang has no way to know that the gcc selection changed.
+/// - **Foreign** (cross) activation: never touch that host-global file —
+///   it would break every native link ("file in wrong format", found live
+///   after an i586 crossdev setup). Instead populate
+///   `/etc/clang/cross/<chost>.cfg` with the target-specific facts clang
+///   drivers need, mirroring what real crossdev writes for its LLVM
+///   targets and what `clang-crossdev-wrappers` consume via
+///   `--config=/etc/clang/cross/${CTARGET}.cfg`.
+fn write_clang_configs(
+    eprefix: &Utf8Path,
+    vars: &BTreeMap<String, String>,
+    host_chost: Option<&str>,
+) -> Result<()> {
     let Some(lib_path) = vars
         .get("LDPATH")
         .and_then(|p| p.split(':').next())
@@ -77,6 +86,35 @@ fn write_clang_gcc_install_cfg(eprefix: &Utf8Path, vars: &BTreeMap<String, Strin
     else {
         return Ok(());
     };
+    // The gcc being activated: /usr/lib/gcc/<chost>/<version>
+    let Some(activated_chost) = lib_path
+        .strip_prefix("/usr/lib/gcc/")
+        .and_then(|rest| rest.split('/').next())
+    else {
+        return Ok(());
+    };
+
+    if let Some(host) = host_chost
+        && host != activated_chost
+    {
+        let dir = eprefix.join("etc/clang/cross");
+        std::fs::create_dir_all(&dir)?;
+        let body = format!("--gcc-install-dir=\"{lib_path}\"\n--target={activated_chost}\n");
+        return write_atomic(&dir.join(format!("{activated_chost}.cfg")), &body);
+    }
+
+    write_clang_gcc_install_cfg(eprefix, lib_path)
+}
+
+/// Native path: rewrite the existing global cfg in place, exactly as
+/// gcc-config's `-f` guard does: the file belongs to `llvm-core/clang-common`,
+/// and creating it where clang is not installed would leave a stray config
+/// nothing owns.
+fn write_clang_gcc_install_cfg(eprefix: &Utf8Path, lib_path: &str) -> Result<()> {
+    let path = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
+    if !path.exists() {
+        return Ok(());
+    }
     let body = format!(
         "# This file is maintained by gcc-config.\n\
          # It is used to specify the selected GCC installation.\n\
@@ -87,7 +125,7 @@ fn write_clang_gcc_install_cfg(eprefix: &Utf8Path, vars: &BTreeMap<String, Strin
     if std::fs::read_to_string(path.as_std_path()).is_ok_and(|old| old == body) {
         return Ok(());
     }
-    crate::util::write_atomic(&path, &body)
+    write_atomic(&path, &body)
 }
 
 /// Replicate `gcc-config`'s `usr/bin/<T>-<tool>` → `<GCC_PATH>/<T>-<tool>` symlinks
@@ -282,16 +320,17 @@ mod tests {
             "/usr/lib/gcc/aarch64-unknown-linux-gnu/16:/usr/lib/gcc/aarch64-unknown-linux-gnu/16/32"
                 .to_string(),
         );
+        let host = Some("aarch64-unknown-linux-gnu");
 
         // clang not installed ⇒ no file, and none invented.
-        write_clang_gcc_install_cfg(&eprefix, &vars).unwrap();
+        write_clang_configs(&eprefix, &vars, host).unwrap();
         let cfg = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
         assert!(!cfg.exists(), "must not create a file clang-common owns");
 
         // clang installed ⇒ the selected install dir is written.
         std::fs::create_dir_all(cfg.parent().unwrap().as_std_path()).unwrap();
         std::fs::write(cfg.as_std_path(), "# placeholder\n").unwrap();
-        write_clang_gcc_install_cfg(&eprefix, &vars).unwrap();
+        write_clang_configs(&eprefix, &vars, host).unwrap();
         let written = std::fs::read_to_string(cfg.as_std_path()).unwrap();
         assert!(
             written.ends_with("--gcc-install-dir=\"/usr/lib/gcc/aarch64-unknown-linux-gnu/16\"\n"),
@@ -303,7 +342,7 @@ mod tests {
             .unwrap()
             .modified()
             .unwrap();
-        write_clang_gcc_install_cfg(&eprefix, &vars).unwrap();
+        write_clang_configs(&eprefix, &vars, host).unwrap();
         assert_eq!(
             std::fs::metadata(cfg.as_std_path())
                 .unwrap()
@@ -313,7 +352,65 @@ mod tests {
         );
 
         // No LDPATH in the profile ⇒ nothing to say, existing file untouched.
-        write_clang_gcc_install_cfg(&eprefix, &std::collections::BTreeMap::new()).unwrap();
+        write_clang_configs(&eprefix, &std::collections::BTreeMap::new(), host).unwrap();
         assert_eq!(std::fs::read_to_string(cfg.as_std_path()).unwrap(), written);
+    }
+
+    // A foreign (cross) activation must not touch the host-global
+    // `gentoo-gcc-install.cfg` — found live: after an i586 crossdev setup,
+    // every host clang linked against i586 CRT files ("file in wrong
+    // format"). Instead it populates `/etc/clang/cross/<chost>.cfg`, the
+    // per-target config `clang-crossdev-wrappers` consume.
+    #[test]
+    fn foreign_activation_writes_cross_cfg_and_leaves_global_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let eprefix = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let cfg = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
+        std::fs::create_dir_all(cfg.parent().unwrap().as_std_path()).unwrap();
+        std::fs::write(cfg.as_std_path(), "# native\n").unwrap();
+
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert(
+            "LDPATH".to_string(),
+            "/usr/lib/gcc/i586-pc-linux-gnu/16".to_string(),
+        );
+
+        write_clang_configs(&eprefix, &vars, Some("aarch64-unknown-linux-gnu")).unwrap();
+
+        // Global untouched.
+        assert_eq!(
+            std::fs::read_to_string(cfg.as_std_path()).unwrap(),
+            "# native\n"
+        );
+        // Cross cfg carries the target-specific facts clang needs.
+        let cross = eprefix.join("etc/clang/cross/i586-pc-linux-gnu.cfg");
+        assert_eq!(
+            std::fs::read_to_string(cross.as_std_path()).unwrap(),
+            "--gcc-install-dir=\"/usr/lib/gcc/i586-pc-linux-gnu/16\"\n\
+             --target=i586-pc-linux-gnu\n"
+        );
+    }
+
+    // Undeterminable host CHOST keeps the legacy behavior (write the global),
+    // so flows that never recorded a CHOST don't lose the gcc hand-off.
+    #[test]
+    fn unknown_host_chost_falls_back_to_global() {
+        let dir = tempfile::tempdir().unwrap();
+        let eprefix = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let cfg = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
+        std::fs::create_dir_all(cfg.parent().unwrap().as_std_path()).unwrap();
+        std::fs::write(cfg.as_std_path(), "# old\n").unwrap();
+
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert(
+            "LDPATH".to_string(),
+            "/usr/lib/gcc/i586-pc-linux-gnu/16".to_string(),
+        );
+        write_clang_configs(&eprefix, &vars, None).unwrap();
+        assert!(
+            std::fs::read_to_string(cfg.as_std_path())
+                .unwrap()
+                .contains("i586-pc-linux-gnu/16")
+        );
     }
 }
