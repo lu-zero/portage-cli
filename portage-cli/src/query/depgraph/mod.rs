@@ -1021,7 +1021,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 let mut cands = Vec::new();
                 for (pkg, ver) in selections {
                     let vs = PortageVersionSet::from_operator(Operator::Equal, false, ver.clone());
-                    let is_live = ver.is_live();
+                    let is_live = provider.selection_is_live(&pkg, &ver);
                     // Bound persisted slot grants below the slot's lowest
                     // live version, so accepting the slot never invites a
                     // `.9999` pick on the next resolve (newest-wins applies
@@ -1036,7 +1036,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                                 versions
                                     .iter()
                                     .filter(|(other, cache)| {
-                                        other.version.is_live()
+                                        // Combined live notion: `*9999`
+                                        // shape or PROPERTIES=live.
+                                        (other.version.is_live() || cache.metadata.is_live())
                                             && cache.metadata.slot.slot == *sel_slot
                                     })
                                     .map(|(other, _)| &other.version)
