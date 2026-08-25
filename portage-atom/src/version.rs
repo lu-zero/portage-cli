@@ -435,6 +435,13 @@ impl Version {
         true
     }
 
+    /// Whether this is a live (VCS/snapshot-tracking) version per Gentoo's
+    /// `*9999` naming convention — not a PMS concept, but every repo treats
+    /// the trailing `.9999` component as "track upstream HEAD"
+    pub fn is_live(&self) -> bool {
+        self.numbers.last() == Some(&9999)
+    }
+
     /// Return the version without its revision, for `~` (approximate)
     /// comparison per [PMS 8.3.1]
     ///
