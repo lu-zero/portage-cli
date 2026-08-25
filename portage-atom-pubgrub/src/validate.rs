@@ -269,8 +269,16 @@ impl PortageDependencyProvider {
             };
             // Newest version the user's own atom actually accepts — a target
             // capped by its own version constraint (`<foo-2`) isn't held
-            // back just because a later upstream release exists.
-            let Some(newest) = data.versions.keys().filter(|v| requested.contains(v)).max() else {
+            // back just because a later upstream release exists. Widened
+            // candidate supply: tagged versions are not "held back" targets,
+            // they're the autounmask report's own suggestions.
+            let Some(newest) = data
+                .versions
+                .iter()
+                .filter(|(v, vd)| requested.contains(v) && !vd.needs_unmask)
+                .map(|(v, _)| v)
+                .max()
+            else {
                 continue;
             };
             if newest <= selected {

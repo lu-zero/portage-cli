@@ -66,6 +66,15 @@ impl DependencyProvider for PortageDependencyProvider {
             return Ok(None);
         }
 
+        // Widened candidate-supply tiering (`--autounmask`-style solves):
+        // untagged candidates always beat tagged ones, and among tagged ones a
+        // release ebuild beats a live `.9999` (real portage prefers live under
+        // `**`; em deliberately doesn't — crossdev's own accept_keywords pins
+        // already keep live ebuilds out where that matters). Filtering here,
+        // before every heuristic below, means the installed-preference and
+        // OR-branch paths all operate on the preferred tier for free.
+        let candidates = filter_to_preferred_tier(data, candidates);
+
         // A prior solve iteration decided to upgrade this installed package to a
         // newer version (`upgrade_to`).  Pin it so the solver actually selects
         // that version — and therefore re-solves its dependency closure — rather
@@ -684,4 +693,36 @@ fn append_unsatisfied_broot(
             out.push((stamp_root(p, unsatisfied_root), vs.clone()));
         }
     }
+}
+
+/// Restrict `candidates` to the preferred acceptance tier (see
+/// `choose_version`): untagged versions when any exist, else tagged release
+/// versions over tagged live ones.
+fn filter_to_preferred_tier<'a>(
+    data: &super::PackageData,
+    candidates: Vec<&'a Version>,
+) -> Vec<&'a Version> {
+    let untagged: Vec<&Version> = candidates
+        .iter()
+        .copied()
+        .filter(|v| !data.versions[*v].needs_unmask)
+        .collect();
+    if !untagged.is_empty() {
+        return if untagged.len() == candidates.len() {
+            candidates
+        } else {
+            untagged
+        };
+    }
+    let release_only: Vec<&Version> = candidates.iter().copied().filter(|v| !is_live(v)).collect();
+    if release_only.is_empty() || release_only.len() == candidates.len() {
+        candidates
+    } else {
+        release_only
+    }
+}
+
+/// Portage's live-ebuild convention: a `.9999` final version component
+fn is_live(v: &Version) -> bool {
+    v.numbers.last() == Some(&9999)
 }

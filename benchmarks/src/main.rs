@@ -200,6 +200,7 @@ mod pubgrub_solver {
                                     // benchmark adapter does not feed it.
                                     required_use: None,
                                     empty_any_of_matches: meta.eapi.empty_any_of_matches(),
+                                    needs_unmask: false,
                                 },
                             )
                         })

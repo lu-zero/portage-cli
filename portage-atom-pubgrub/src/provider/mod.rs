@@ -64,6 +64,15 @@ pub(crate) struct VersionData {
     /// This is the single source of truth for "is flag F on for this
     /// version" during both branch conversion and the post-solve passes.
     pub(crate) desired: UseConfig,
+    /// The repository offered this version only in widened (`--autounmask`)
+    /// candidate-supply mode: it is outside keyword/mask/license acceptance.
+    ///
+    /// Also set on a virtual `Choice`/`SlotChoice` *branch* whose targets are
+    /// all tagged, so `choose_version`'s tiering demotes it below any branch
+    /// satisfiable without an unmask (a first-listed tagged branch would
+    /// otherwise win `max()` silently — both branches being satisfiable means
+    /// PubGrub never backtracks into the alternative).
+    pub(crate) needs_unmask: bool,
 }
 
 impl VersionData {
@@ -115,6 +124,7 @@ impl VersionData {
             repo_constraints: Vec::new(),
             slot_operator_deps: Vec::new(),
             desired: UseConfig::new(),
+            needs_unmask: false,
         }
     }
 }
@@ -596,6 +606,7 @@ impl PortageDependencyProvider {
                 version_data.repo_constraints = all_repo_constraints;
                 version_data.slot_operator_deps = all_slot_operator_deps;
                 version_data.desired = cpv_use_cfg;
+                version_data.needs_unmask = meta.needs_unmask;
 
                 let entry = packages.entry(pkg).or_insert_with(|| PackageData {
                     versions: BTreeMap::new(),
@@ -605,6 +616,8 @@ impl PortageDependencyProvider {
                 register_virtual_choices(&mut packages, all_virtual_choices);
             }
         }
+
+        propagate_needs_unmask(&mut packages);
 
         // Post-process: remove dependencies on packages not present in the
         // repository.  Without this filtering, PubGrub will encounter
@@ -875,6 +888,16 @@ impl PortageDependencyProvider {
 
     pub(crate) fn package_data(&self, package: &PortagePackage) -> Option<&PackageData> {
         self.packages.get(self.package_data_key(package))
+    }
+
+    /// Whether the solved `version` of `package` came from widened
+    /// candidate supply (outside keyword/mask/license acceptance)
+    ///
+    /// `false` for anything a strict solve could have selected, and for
+    /// unknown package/version pairs.
+    pub fn selection_needs_unmask(&self, package: &PortagePackage, version: &Version) -> bool {
+        self.package_data(package)
+            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.needs_unmask))
     }
 
     /// Set whether to include BDEPEND in the resolution
@@ -1247,6 +1270,66 @@ fn register_virtual_choices(
             {
                 vd.blockers.extend(blockers);
             }
+        }
+    }
+}
+
+/// Mark a virtual `Choice`/`SlotChoice` branch as needing an unmask when
+/// every way of satisfying it does
+///
+/// A branch is tagged when any of its constraint targets has no untagged
+/// candidate in range (a real package whose accepted set is empty there, or a
+/// nested virtual that is itself fully tagged). Iterated to a fixpoint so the
+/// tag propagates outward through nested `||`-over-slot-choice shapes. Without
+/// this, a first-listed branch satisfiable only via masked versions wins
+/// `choose_version`'s `max()` silently — both branches are satisfiable, so
+/// PubGrub never backtracks into the untagged one.
+type VirtualBranch = (
+    PortagePackage,
+    Version,
+    Vec<(PortagePackage, PortageVersionSet)>,
+);
+
+fn propagate_needs_unmask(packages: &mut HashMap<PortagePackage, PackageData>) {
+    let mut branches: Vec<VirtualBranch> = Vec::new();
+    for (pkg, data) in packages.iter() {
+        if !matches!(
+            pkg,
+            PortagePackage::Choice { .. } | PortagePackage::SlotChoice { .. }
+        ) {
+            continue;
+        }
+        for (ver, vd) in &data.versions {
+            if let Dependencies::Available(cs) = &vd.merged {
+                let targets: Vec<_> = cs.iter().map(|(p, vs)| (p.clone(), vs.clone())).collect();
+                // The allow-none branch (no deps) always stays untagged.
+                if !targets.is_empty() {
+                    branches.push((pkg.clone(), ver.clone(), targets));
+                }
+            }
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        for (node, ver, targets) in &branches {
+            let tagged = targets.iter().any(|(tpkg, tvs)| {
+                packages.get(tpkg).is_none_or(|d| {
+                    !d.versions
+                        .iter()
+                        .any(|(v, vd)| tvs.contains(v) && !vd.needs_unmask)
+                })
+            });
+            if let Some(data) = packages.get_mut(node)
+                && let Some(vd) = data.versions.get_mut(ver)
+                && vd.needs_unmask != tagged
+            {
+                vd.needs_unmask = tagged;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
         }
     }
 }

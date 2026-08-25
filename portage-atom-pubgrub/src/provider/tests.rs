@@ -1,7 +1,7 @@
 use super::*;
 use crate::repository::{InMemoryRepository, PackageDeps, PackageVersions};
 use portage_atom::interner::Interned;
-use portage_atom::{Cpn, Dep, DepEntry};
+use portage_atom::{Cpn, Dep, DepEntry, DepList};
 use pubgrub::DependencyProvider as _; // for choose_version in tests
 
 fn empty_deps() -> PackageDeps {
@@ -1996,6 +1996,7 @@ fn use_flag_not_needed_when_iuse_default_on() {
             deps: empty_deps(),
             required_use: None,
             empty_any_of_matches: true,
+            needs_unmask: false,
         },
     );
     repo.add_version(
@@ -3272,5 +3273,155 @@ fn many_conditional_use_deps_on_one_atom_still_pull_it_in() {
             .iter()
             .map(|(p, v)| format!("{p}-{v}"))
             .collect::<Vec<_>>()
+    );
+}
+
+// ---- Widened candidate supply (`needs_unmask` tiering) ----
+
+fn tagged_version(cpv: &str) -> (portage_atom::Cpv, PackageVersions) {
+    (
+        portage_atom::Cpv::parse(cpv).unwrap(),
+        PackageVersions {
+            slot: Some(Interned::intern("0")),
+            subslot: None,
+            repo: None,
+            iuse: vec![],
+            iuse_defaults: Default::default(),
+            deps: empty_deps(),
+            required_use: None,
+            empty_any_of_matches: true,
+            needs_unmask: true,
+        },
+    )
+}
+
+fn accepted_version(cpv: &str) -> (portage_atom::Cpv, PackageVersions) {
+    let (cpv, mut pv) = tagged_version(cpv);
+    pv.needs_unmask = false;
+    (cpv, pv)
+}
+
+fn add_all(repo: &mut InMemoryRepository, entries: Vec<(portage_atom::Cpv, PackageVersions)>) {
+    for (cpv, pv) in entries {
+        repo.add_package_versions(cpv, pv);
+    }
+}
+
+#[test]
+fn widened_candidate_loses_to_accepted_in_range() {
+    let mut repo = InMemoryRepository::new();
+    // Accepted 1.0 must beat the masked newer 2.0 even under widening.
+    add_all(
+        &mut repo,
+        vec![
+            accepted_version("dev-libs/pkg-1.0"),
+            tagged_version("dev-libs/pkg-2.0"),
+        ],
+    );
+    repo.set_use_config(UseConfig::new());
+    let provider = PortageDependencyProvider::new(repo);
+
+    let pkg = PortagePackage::slotted(Cpn::parse("dev-libs/pkg").unwrap(), Interned::intern("0"));
+    assert_eq!(
+        provider
+            .choose_version(&pkg, &PortageVersionSet::any())
+            .unwrap(),
+        Some(Version::parse("1.0").unwrap())
+    );
+}
+
+#[test]
+fn tagged_only_range_resolves_and_reports() {
+    let mut repo = InMemoryRepository::new();
+    add_all(&mut repo, vec![tagged_version("dev-libs/pkg-2.0")]);
+    repo.set_use_config(UseConfig::new());
+    let provider = PortageDependencyProvider::new(repo);
+
+    let pkg = PortagePackage::slotted(Cpn::parse("dev-libs/pkg").unwrap(), Interned::intern("0"));
+    // Strict filtering would make this range a hard `NoVersions` failure.
+    let chosen = provider
+        .choose_version(&pkg, &PortageVersionSet::any())
+        .unwrap();
+    assert_eq!(chosen, Some(Version::parse("2.0").unwrap()));
+    assert!(provider.selection_needs_unmask(&pkg, chosen.as_ref().unwrap()));
+}
+
+#[test]
+fn tagged_release_beats_tagged_live() {
+    let mut repo = InMemoryRepository::new();
+    add_all(
+        &mut repo,
+        vec![
+            tagged_version("dev-libs/pkg-2.0"),
+            tagged_version("dev-libs/pkg-2.0.9999"),
+        ],
+    );
+    repo.set_use_config(UseConfig::new());
+    let provider = PortageDependencyProvider::new(repo);
+
+    let pkg = PortagePackage::slotted(Cpn::parse("dev-libs/pkg").unwrap(), Interned::intern("0"));
+    // Both are tagged; among them the release ebuild beats the live one
+    // (deliberate divergence from portage's `**` behaviour).
+    assert_eq!(
+        provider
+            .choose_version(&pkg, &PortageVersionSet::any())
+            .unwrap(),
+        Some(Version::parse("2.0").unwrap())
+    );
+}
+
+#[test]
+fn choice_branch_needing_unmask_loses_to_untagged_branch() {
+    let mut repo = InMemoryRepository::new();
+    // First-listed `||` branch resolves only via a masked version; the
+    // second branch has an accepted version. Without branch demotion the
+    // first-listed wins `max()` and silently pulls the masked pick.
+    add_all(
+        &mut repo,
+        vec![(
+            portage_atom::Cpv::parse("app-parent/parent-1.0").unwrap(),
+            PackageVersions {
+                slot: Some(Interned::intern("0")),
+                subslot: None,
+                repo: None,
+                iuse: vec![],
+                iuse_defaults: Default::default(),
+                deps: PackageDeps {
+                    depend: DepList::new(
+                        DepEntry::parse("|| ( dev-libs/bad dev-libs/good )").unwrap(),
+                    ),
+                    rdepend: (vec![]).into(),
+                    bdepend: (vec![]).into(),
+                    pdepend: (vec![]).into(),
+                    idepend: (vec![]).into(),
+                },
+                required_use: None,
+                empty_any_of_matches: true,
+                needs_unmask: false,
+            },
+        )],
+    );
+    add_all(&mut repo, vec![tagged_version("dev-libs/bad-1.0")]);
+    add_all(&mut repo, vec![accepted_version("dev-libs/good-1.0")]);
+    repo.set_use_config(UseConfig::new());
+    let mut provider = PortageDependencyProvider::new(repo);
+
+    let parent = PortagePackage::slotted(
+        Cpn::parse("app-parent/parent").unwrap(),
+        Interned::intern("0"),
+    );
+    let solution = provider
+        .resolve_targets(vec![(parent, PortageVersionSet::any())])
+        .unwrap();
+
+    let good = Cpn::parse("dev-libs/good").unwrap();
+    let bad = Cpn::parse("dev-libs/bad").unwrap();
+    assert!(
+        solution.iter().any(|(p, _)| p.cpn() == &good),
+        "untagged branch must win"
+    );
+    assert!(
+        !solution.iter().any(|(p, _)| p.cpn() == &bad),
+        "tagged-only branch must be demoted"
     );
 }

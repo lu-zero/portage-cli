@@ -232,7 +232,16 @@ impl PortageDependencyProvider {
                 .filter(|(pkg, _)| !upgrade_to.contains_key(*pkg))
                 .filter_map(|(pkg, (inst_ver, _, _, _))| {
                     self.package_data(pkg)
-                        .and_then(|d| d.versions.keys().filter(|v| v > &inst_ver).max())
+                        .and_then(|d| {
+                            // Widened candidate supply: never auto-upgrade an
+                            // installed package onto a tagged version — that
+                            // would silently unmask it outside the autounmask
+                            // report path.
+                            d.versions
+                                .keys()
+                                .filter(|v| v > &inst_ver && !d.versions[*v].needs_unmask)
+                                .max()
+                        })
                         .map(|new_ver| (pkg.clone(), new_ver.clone()))
                 })
                 .collect();

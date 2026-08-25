@@ -35,6 +35,14 @@ pub struct PackageVersions {
     pub required_use: Option<RequiredUse>,
     /// PMS table 8.6: empty `||` / `^^` after USE strip matches (EAPI 0–6)
     pub empty_any_of_matches: bool,
+    /// The version is outside the caller's keyword/mask/license acceptance and
+    /// is offered only because the caller runs in widened (`--autounmask`)
+    /// candidate-supply mode
+    ///
+    /// `false` for every normally-filtered repository. The solver prefers
+    /// untagged candidates whenever one satisfies the range; a tagged
+    /// selection is reported as an autounmask change after the solve.
+    pub needs_unmask: bool,
 }
 
 /// Structured dependency trees separated by PMS class
@@ -240,6 +248,7 @@ impl InMemoryRepository {
                 deps,
                 required_use: None,
                 empty_any_of_matches: true,
+                needs_unmask: false,
             },
         ));
     }
@@ -265,6 +274,7 @@ impl InMemoryRepository {
                 deps,
                 required_use: Some(required_use),
                 empty_any_of_matches: true,
+                needs_unmask: false,
             },
         ));
     }
@@ -313,6 +323,7 @@ impl PackageRepository for InMemoryRepository {
                                 deps: meta.deps.clone(),
                                 required_use: meta.required_use.clone(),
                                 empty_any_of_matches: meta.empty_any_of_matches,
+                                needs_unmask: meta.needs_unmask,
                             },
                         )
                     })
