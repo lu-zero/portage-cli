@@ -34,6 +34,18 @@ pub struct AutounmaskCandidate {
     pub slot: Option<Interned<DefaultInterner>>,
     /// Every reason this version was excluded
     pub reasons: Vec<FilterReason>,
+    /// The candidate came from a widened solve selection (chosen despite
+    /// being outside acceptance), not from a dropped-dep advisory
+    ///
+    /// Persisted entries for these are slot-scoped (`cat/pkg:SLOT **`)
+    /// instead of exact-version pins: pre-release/live ecosystems churn
+    /// versions faster than exact pins stay useful.
+    pub widened: bool,
+    /// Lowest live (`.9999`) version sharing the candidate's cpn+slot; when
+    /// persisted, the slot grant is bounded below it (`<pkg-live:SLOT **`)
+    /// so accepting the slot never invites a live ebuild. `None` when the
+    /// slot has no live version or the selection itself is live.
+    pub live_upper_bound: Option<portage_atom::Version>,
 }
 
 /// One parsed `ACCEPT_KEYWORDS` / `package.accept_keywords` token
@@ -969,6 +981,15 @@ pub struct Adapter<'a> {
     ///
     /// See `portage-atom-pubgrub/docs/required-use-level-c.md`.
     pub autosolve_use: bool,
+    /// Widened candidate supply (`--autounmask`-style): when set, versions
+    /// outside keyword/mask/license acceptance stay visible to the solver,
+    /// tagged `needs_unmask`, so a range whose accepted set is empty resolves
+    /// to the best tagged candidate instead of hard-failing
+    ///
+    /// Untagged candidates are still preferred (tiering lives in
+    /// `choose_version`). Default resolve paths keep this off and stay
+    /// byte-identical to strict filtering.
+    pub autounmask_widen: bool,
 }
 
 impl Adapter<'_> {
@@ -1226,15 +1247,28 @@ impl PackageRepository for Adapter<'_> {
         // `portage_atom_pubgrub::rank_slots_by_version`. Mirrors portage's
         // version-descending `:*` selection (e.g. `app-shells/bash:0` (5.3)
         // beats the `:5.1` compat slot).
+        //
+        // Widened mode: tagged-only slots rank strictly below every accepted
+        // slot (still version-ascending within the group), so a `:*` dep picks
+        // an accepted slot whenever one exists and only falls to a masked one
+        // when nothing accepted is in range.
         let mut best: HashMap<Interned<DefaultInterner>, Version> = HashMap::new();
+        let mut best_tagged: HashMap<Interned<DefaultInterner>, Version> = HashMap::new();
         if let Some(entries) = self.data.versions.get(cpn) {
             for (cpv, cache) in entries {
-                if !self.version_accepted(cpv, cache) {
+                let accepted = self.version_accepted(cpv, cache);
+                if !accepted && !self.autounmask_widen {
                     continue;
                 }
                 // SLOT is mandatory in md5-cache (`CacheEntry::parse` rejects a
                 // missing/empty SLOT), so every stored version has a real slot.
-                best.entry(cache.metadata.slot.slot)
+                let sink = if accepted {
+                    &mut best
+                } else {
+                    &mut best_tagged
+                };
+                let slot = cache.metadata.slot.slot;
+                sink.entry(slot)
                     .and_modify(|v| {
                         if cpv.version > *v {
                             *v = cpv.version.clone();
@@ -1243,7 +1277,9 @@ impl PackageRepository for Adapter<'_> {
                     .or_insert_with(|| cpv.version.clone());
             }
         }
-        portage_atom_pubgrub::rank_slots_by_version(best)
+        let mut ranked = portage_atom_pubgrub::rank_slots_by_version(best_tagged);
+        ranked.extend(portage_atom_pubgrub::rank_slots_by_version(best));
+        ranked
     }
 
     fn versions_for(&self, cpn: &Cpn) -> Vec<(Cpv, PackageVersions)> {
@@ -1253,8 +1289,11 @@ impl PackageRepository for Adapter<'_> {
             .map(|entries| {
                 entries
                     .iter()
-                    .filter(|(cpv, cache)| self.version_accepted(cpv, cache))
-                    .map(|(cpv, cache)| {
+                    .filter_map(|(cpv, cache)| {
+                        let accepted = self.version_accepted(cpv, cache);
+                        if !accepted && !self.autounmask_widen {
+                            return None;
+                        }
                         let meta = &cache.metadata;
                         let slot = Some(meta.slot.slot);
                         let subslot = meta.slot.subslot;
@@ -1275,7 +1314,7 @@ impl PackageRepository for Adapter<'_> {
                         // interned-flag fact vocabulary (the crate stays free of
                         // portage-metadata). Dormant until Level-C consumes it.
                         let required_use = meta.required_use.as_ref().map(translate_required_use);
-                        (
+                        Some((
                             cpv.clone(),
                             PackageVersions {
                                 slot,
@@ -1286,8 +1325,9 @@ impl PackageRepository for Adapter<'_> {
                                 deps,
                                 required_use,
                                 empty_any_of_matches: meta.eapi.empty_any_of_matches(),
+                                needs_unmask: !accepted,
                             },
-                        )
+                        ))
                     })
                     .collect()
             })
@@ -1780,6 +1820,8 @@ pub fn filter_reasons_for(
                 cpv: cpv.clone(),
                 slot,
                 reasons,
+                widened: false,
+                live_upper_bound: None,
             });
         }
     }
@@ -2815,6 +2857,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
             autosolve_use: true,
+            autounmask_widen: false,
         };
         let entry = &data.versions[&cpn][0].1;
         assert!(!adapter.version_accepted(&cpv, entry));
@@ -2901,6 +2944,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm, // a is use.force'd
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -2946,6 +2990,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -2996,6 +3041,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3042,6 +3088,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3102,6 +3149,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3158,6 +3206,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3210,6 +3259,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3262,6 +3312,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3315,6 +3366,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: true,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3373,6 +3425,7 @@ mod tests {
             profile_package_use: &[],
             force_mask: &fm,
             autosolve_use: false,
+            autounmask_widen: false,
         };
 
         let desired = adapter.desired_use(&cpv);
@@ -3386,5 +3439,74 @@ mod tests {
             UseFlagState::Disabled,
             "package.use.mask must beat the user's enable of cet"
         );
+    }
+
+    // Widened candidate supply: unaccepted versions stay visible tagged
+    // `needs_unmask`, and a slot whose versions are all unaccepted ranks
+    // strictly below every accepted slot (so `:*` deps prefer accepted slots).
+    #[test]
+    fn widened_adapter_tags_versions_and_demotes_tagged_slots() {
+        let data = repo_with_many(&[
+            (
+                "app-misc/thing-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+            (
+                "app-misc/thing-3.0",
+                "EAPI=8\nSLOT=2\nKEYWORDS=~amd64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let arch = Arch::intern("amd64");
+        let stable_only = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let cpn = Cpn::try_new("app-misc/thing").expect("cpn parses");
+        let strict_adapter = Adapter {
+            data: &data,
+            accept_keywords: &stable_only,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            defaults: empty_layer(),
+            conf: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            profile_package_use: &[],
+            force_mask: &ForceMask::default(),
+            autosolve_use: false,
+            autounmask_widen: false,
+        };
+        let widened_adapter = Adapter {
+            autounmask_widen: true,
+            ..strict_adapter
+        };
+
+        use portage_atom_pubgrub::PackageRepository as _;
+        let strict = strict_adapter.versions_for(&cpn);
+        assert_eq!(
+            strict
+                .iter()
+                .map(|(c, _)| c.version.to_string())
+                .collect::<Vec<_>>(),
+            vec!["1.0".to_string()],
+            "strict mode hides the testing-only version"
+        );
+
+        let widened = widened_adapter.versions_for(&cpn);
+        let tagged: Vec<_> = widened
+            .iter()
+            .filter(|(_, pv)| pv.needs_unmask)
+            .map(|(c, _)| c.version.to_string())
+            .collect();
+        assert_eq!(tagged, vec!["3.0".to_string()]);
+
+        assert_eq!(
+            widened_adapter.slots_for(&cpn),
+            vec![Interned::intern("2"), Interned::intern("0")],
+            "tagged-only slot must rank below the accepted slot"
+        );
+        assert_eq!(strict_adapter.slots_for(&cpn), vec![Interned::intern("0")]);
     }
 }

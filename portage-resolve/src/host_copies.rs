@@ -325,6 +325,7 @@ mod tests {
             installed_cpvs: &installed_cpvs,
             rebuilding_cpvs: &std::collections::HashSet::new(),
             autosolve_use: false,
+            autounmask_widen: false,
         };
 
         let host = tempfile::tempdir().unwrap();
@@ -407,6 +408,7 @@ mod tests {
             installed_cpvs: &installed_cpvs,
             rebuilding_cpvs: &std::collections::HashSet::new(),
             autosolve_use: false,
+            autounmask_widen: false,
         };
 
         let host = tempfile::tempdir().unwrap();
@@ -494,6 +496,7 @@ mod tests {
             installed_cpvs: &installed_cpvs,
             rebuilding_cpvs: &std::collections::HashSet::new(),
             autosolve_use: false,
+            autounmask_widen: false,
         };
 
         let host = tempfile::tempdir().unwrap();

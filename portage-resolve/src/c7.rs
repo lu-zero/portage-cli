@@ -118,6 +118,7 @@ fn solve_with(
         profile_package_use: &[],
         force_mask: &fm,
         autosolve_use: true,
+        autounmask_widen: false,
     };
     let policy = ResolvePolicy {
         accept_keywords: &accept,
