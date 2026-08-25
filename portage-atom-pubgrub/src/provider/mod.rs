@@ -73,6 +73,10 @@ pub(crate) struct VersionData {
     /// otherwise win `max()` silently — both branches being satisfiable means
     /// PubGrub never backtracks into the alternative).
     pub(crate) needs_unmask: bool,
+    /// Live ebuild (`*9999` shape or `PROPERTIES=live`): never selected
+    /// transitively under the widened-autounmask policy — only a root
+    /// target may land on one.
+    pub(crate) live: bool,
 }
 
 impl VersionData {
@@ -125,6 +129,7 @@ impl VersionData {
             slot_operator_deps: Vec::new(),
             desired: UseConfig::new(),
             needs_unmask: false,
+            live: false,
         }
     }
 }
@@ -607,6 +612,7 @@ impl PortageDependencyProvider {
                 version_data.slot_operator_deps = all_slot_operator_deps;
                 version_data.desired = cpv_use_cfg;
                 version_data.needs_unmask = meta.needs_unmask;
+                version_data.live = meta.live;
 
                 let entry = packages.entry(pkg).or_insert_with(|| PackageData {
                     versions: BTreeMap::new(),
@@ -898,6 +904,15 @@ impl PortageDependencyProvider {
     pub fn selection_needs_unmask(&self, package: &PortagePackage, version: &Version) -> bool {
         self.package_data(package)
             .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.needs_unmask))
+    }
+
+    /// Whether the solved `version` of `package` is a live ebuild
+    /// (`*9999` shape or `PROPERTIES=live`)
+    ///
+    /// `false` for unknown package/version pairs.
+    pub fn selection_is_live(&self, package: &PortagePackage, version: &Version) -> bool {
+        self.package_data(package)
+            .is_some_and(|d| d.versions.get(version).is_some_and(|vd| vd.live))
     }
 
     /// Set whether to include BDEPEND in the resolution

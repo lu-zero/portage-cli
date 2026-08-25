@@ -1326,6 +1326,7 @@ impl PackageRepository for Adapter<'_> {
                                 required_use,
                                 empty_any_of_matches: meta.eapi.empty_any_of_matches(),
                                 needs_unmask: !accepted,
+                                live: cpv.version.is_live() || meta.is_live(),
                             },
                         ))
                     })
@@ -1846,12 +1847,19 @@ pub fn find_autounmask_candidates(
         if !dep.alternatives.is_empty() {
             continue;
         }
-        candidates.extend(filter_reasons_for(
-            data,
-            dep.package.cpn(),
-            &dep.version_set,
-            policy,
-        ));
+        let mut found = filter_reasons_for(data, dep.package.cpn(), &dep.version_set, policy);
+        // Live ebuilds are never autounmasked: drop them from the exact-pin
+        // suggestions so a masked/keywordless `.9999` never lands in config
+        // through this path.
+        found.retain(|c| {
+            !c.cpv.version.is_live()
+                && !data
+                    .versions
+                    .get(&c.cpv.cpn)
+                    .and_then(|entries| entries.iter().find(|(v, _)| v.version == c.cpv.version))
+                    .is_some_and(|(_, cache)| cache.metadata.is_live())
+        });
+        candidates.extend(found);
     }
 
     // A CPV may appear from multiple DroppedDep entries; its reasons are
@@ -3508,5 +3516,49 @@ mod tests {
             "tagged-only slot must rank below the accepted slot"
         );
         assert_eq!(strict_adapter.slots_for(&cpn), vec![Interned::intern("0")]);
+    }
+
+    // DroppedDep exact-pin suggestions must never include live ebuilds
+    // (`*9999` shape or PROPERTIES=live) — live is not autounmasked.
+    #[test]
+    fn dropped_dep_suggestions_skip_live_versions() {
+        let data = repo_with_many(&[
+            ("app-misc/thing-1.0", "EAPI=8\nSLOT=0\nDESCRIPTION=t\n"),
+            (
+                "app-misc/thing-2.0.9999",
+                "EAPI=8\nSLOT=0\nPROPERTIES=live\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let arch = Arch::intern("amd64");
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let policy = ResolvePolicy {
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            defaults: empty_layer(),
+            conf: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            profile_package_use: &[],
+            force_mask: &ForceMask::default(),
+        };
+        let vs = portage_atom_pubgrub::PortageVersionSet::any();
+        let dropped = vec![DroppedDep {
+            package: portage_atom_pubgrub::PortagePackage::unslotted(
+                Cpn::try_new("app-misc/thing").unwrap(),
+            ),
+            version_set: vs.clone(),
+            alternatives: Vec::new(),
+        }];
+        let found = find_autounmask_candidates(&data, &dropped, &policy);
+        let versions: Vec<_> = found.iter().map(|c| c.cpv.version.to_string()).collect();
+        assert!(versions.contains(&"1.0".to_string()), "{versions:?}");
+        assert!(
+            !versions.iter().any(|v| v.ends_with(".9999")),
+            "live suggestion leaked: {versions:?}"
+        );
     }
 }

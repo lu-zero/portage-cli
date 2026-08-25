@@ -345,6 +345,7 @@ fn load_repo(repo_path: &str, sys: &SystemConfig) -> InMemoryRepository {
                         required_use: None,
                         empty_any_of_matches: meta.eapi.empty_any_of_matches(),
                         needs_unmask: false,
+                        live: false,
                     },
                 );
             }

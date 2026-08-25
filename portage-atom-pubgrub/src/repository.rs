@@ -43,6 +43,10 @@ pub struct PackageVersions {
     /// untagged candidates whenever one satisfies the range; a tagged
     /// selection is reported as an autounmask change after the solve.
     pub needs_unmask: bool,
+    /// Live ebuild (version-shape `*9999`, or `PROPERTIES=live`): never
+    /// autounmasked transitively — selectable only via an explicit root
+    /// target. See the widened-autounmask policy.
+    pub live: bool,
 }
 
 /// Structured dependency trees separated by PMS class
@@ -249,6 +253,7 @@ impl InMemoryRepository {
                 required_use: None,
                 empty_any_of_matches: true,
                 needs_unmask: false,
+                live: false,
             },
         ));
     }
@@ -275,6 +280,7 @@ impl InMemoryRepository {
                 required_use: Some(required_use),
                 empty_any_of_matches: true,
                 needs_unmask: false,
+                live: false,
             },
         ));
     }
@@ -324,6 +330,7 @@ impl PackageRepository for InMemoryRepository {
                                 required_use: meta.required_use.clone(),
                                 empty_any_of_matches: meta.empty_any_of_matches,
                                 needs_unmask: meta.needs_unmask,
+                                live: meta.live,
                             },
                         )
                     })

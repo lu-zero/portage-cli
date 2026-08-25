@@ -1997,6 +1997,7 @@ fn use_flag_not_needed_when_iuse_default_on() {
             required_use: None,
             empty_any_of_matches: true,
             needs_unmask: false,
+            live: false,
         },
     );
     repo.add_version(
@@ -3279,20 +3280,21 @@ fn many_conditional_use_deps_on_one_atom_still_pull_it_in() {
 // ---- Widened candidate supply (`needs_unmask` tiering) ----
 
 fn tagged_version(cpv: &str) -> (portage_atom::Cpv, PackageVersions) {
-    (
-        portage_atom::Cpv::parse(cpv).unwrap(),
-        PackageVersions {
-            slot: Some(Interned::intern("0")),
-            subslot: None,
-            repo: None,
-            iuse: vec![],
-            iuse_defaults: Default::default(),
-            deps: empty_deps(),
-            required_use: None,
-            empty_any_of_matches: true,
-            needs_unmask: true,
-        },
-    )
+    let mut pv = PackageVersions {
+        slot: Some(Interned::intern("0")),
+        subslot: None,
+        repo: None,
+        iuse: vec![],
+        iuse_defaults: Default::default(),
+        deps: empty_deps(),
+        required_use: None,
+        empty_any_of_matches: true,
+        needs_unmask: true,
+        live: false,
+    };
+    // Mirror what the real adapter computes from version shape + PROPERTIES.
+    pv.live = portage_atom::Cpv::parse(cpv).unwrap().version.is_live();
+    (portage_atom::Cpv::parse(cpv).unwrap(), pv)
 }
 
 fn accepted_version(cpv: &str) -> (portage_atom::Cpv, PackageVersions) {
@@ -3398,6 +3400,7 @@ fn choice_branch_needing_unmask_loses_to_untagged_branch() {
                 required_use: None,
                 empty_any_of_matches: true,
                 needs_unmask: false,
+                live: false,
             },
         )],
     );
@@ -3423,5 +3426,91 @@ fn choice_branch_needing_unmask_loses_to_untagged_branch() {
     assert!(
         !solution.iter().any(|(p, _)| p.cpn() == &bad),
         "tagged-only branch must be demoted"
+    );
+}
+
+fn live_tagged_version(cpv: &str) -> (portage_atom::Cpv, PackageVersions) {
+    let (cpv, mut pv) = tagged_version(cpv);
+    pv.live = true;
+    (cpv, pv)
+}
+
+#[test]
+fn tagged_live_is_never_selected_transitively() {
+    let mut repo = InMemoryRepository::new();
+    // Parent's dep range admits a release and a live; the solver must not
+    // land on the live ebuild even though it is the newest candidate.
+    add_all(
+        &mut repo,
+        vec![
+            (
+                portage_atom::Cpv::parse("app-parent/parent-1.0").unwrap(),
+                PackageVersions {
+                    slot: Some(Interned::intern("0")),
+                    subslot: None,
+                    repo: None,
+                    iuse: vec![],
+                    iuse_defaults: Default::default(),
+                    deps: PackageDeps {
+                        depend: DepList::new(DepEntry::parse("dev-libs/pkg").unwrap()),
+                        rdepend: (vec![]).into(),
+                        bdepend: (vec![]).into(),
+                        pdepend: (vec![]).into(),
+                        idepend: (vec![]).into(),
+                    },
+                    required_use: None,
+                    empty_any_of_matches: true,
+                    needs_unmask: false,
+                    live: false,
+                },
+            ),
+            accepted_version("dev-libs/pkg-1.0"),
+            live_tagged_version("dev-libs/pkg-2.0.9999"),
+        ],
+    );
+    repo.set_use_config(UseConfig::new());
+    let mut provider = PortageDependencyProvider::new(repo);
+
+    let parent = PortagePackage::slotted(
+        Cpn::parse("app-parent/parent").unwrap(),
+        Interned::intern("0"),
+    );
+    let solution = provider
+        .resolve_targets(vec![(parent, PortageVersionSet::any())])
+        .unwrap();
+
+    let pkg = Cpn::parse("dev-libs/pkg").unwrap();
+    let selected = solution
+        .iter()
+        .find(|(p, _)| p.cpn() == &pkg)
+        .map(|(_, v)| v.clone());
+    assert_eq!(selected, Some(Version::parse("1.0").unwrap()));
+}
+
+#[test]
+fn root_target_may_select_live_explicitly() {
+    let mut repo = InMemoryRepository::new();
+    add_all(
+        &mut repo,
+        vec![
+            accepted_version("dev-libs/pkg-1.0"),
+            live_tagged_version("dev-libs/pkg-2.0.9999"),
+        ],
+    );
+    repo.set_use_config(UseConfig::new());
+    let mut provider = PortageDependencyProvider::new(repo);
+
+    let pkg = PortagePackage::slotted(Cpn::parse("dev-libs/pkg").unwrap(), Interned::intern("0"));
+    // Naming the live version explicitly as a target is the "asked for"
+    // case: root-target registration is what marks it allowed.
+    let vs = PortageVersionSet::from_operator(
+        portage_atom::Operator::Equal,
+        false,
+        Version::parse("2.0.9999").unwrap(),
+    );
+    let solution = provider.resolve_targets(vec![(pkg.clone(), vs)]).unwrap();
+    assert_eq!(
+        solution.get(&pkg),
+        Some(&Version::parse("2.0.9999").unwrap())
     );
 }

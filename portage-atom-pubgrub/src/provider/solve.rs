@@ -73,7 +73,12 @@ impl DependencyProvider for PortageDependencyProvider {
         // already keep live ebuilds out where that matters). Filtering here,
         // before every heuristic below, means the installed-preference and
         // OR-branch paths all operate on the preferred tier for free.
-        let candidates = filter_to_preferred_tier(data, candidates);
+        //
+        // Live ebuilds are never autounmasked transitively: a tagged-live
+        // candidate is only selectable when the package itself is an explicit
+        // root target (naming `=pkg-9999`, or a range admitting only lives).
+        let allow_live = self.root_targets.contains_key(package);
+        let candidates = filter_to_preferred_tier(data, candidates, allow_live);
 
         // A prior solve iteration decided to upgrade this installed package to a
         // newer version (`upgrade_to`).  Pin it so the solver actually selects
@@ -701,6 +706,7 @@ fn append_unsatisfied_broot(
 fn filter_to_preferred_tier<'a>(
     data: &super::PackageData,
     candidates: Vec<&'a Version>,
+    allow_live: bool,
 ) -> Vec<&'a Version> {
     let untagged: Vec<&Version> = candidates
         .iter()
@@ -714,15 +720,25 @@ fn filter_to_preferred_tier<'a>(
             untagged
         };
     }
-    let release_only: Vec<&Version> = candidates.iter().copied().filter(|v| !is_live(v)).collect();
+    // Tagged-live ebuilds are never selected transitively: drop them even
+    // when nothing else remains (the solve then fails, pointing at the need
+    // to name `=pkg-9999` explicitly).
+    if !allow_live {
+        let no_live: Vec<&Version> = candidates
+            .iter()
+            .copied()
+            .filter(|v| !data.versions[*v].live)
+            .collect();
+        return no_live;
+    }
+    let release_only: Vec<&Version> = candidates
+        .iter()
+        .copied()
+        .filter(|v| !data.versions[*v].live)
+        .collect();
     if release_only.is_empty() || release_only.len() == candidates.len() {
         candidates
     } else {
         release_only
     }
-}
-
-/// Portage's live-ebuild convention: a `.9999` final version component
-fn is_live(v: &Version) -> bool {
-    v.numbers.last() == Some(&9999)
 }

@@ -201,6 +201,7 @@ mod pubgrub_solver {
                                     required_use: None,
                                     empty_any_of_matches: meta.eapi.empty_any_of_matches(),
                                     needs_unmask: false,
+                                    live: false,
                                 },
                             )
                         })

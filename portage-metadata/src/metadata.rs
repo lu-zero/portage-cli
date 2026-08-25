@@ -114,6 +114,22 @@ where
 }
 
 impl<I: Interner + Clone> EbuildMetadata<I> {
+    /// Whether this ebuild is *live* — tracks upstream HEAD rather than a
+    /// release
+    ///
+    /// Gentoo's convention: a `PROPERTIES="live"` token (git-r3 et al), or
+    /// the caller checks the `*9999` version-shape separately. Only
+    /// unconditional tokens count; `flag? ( live )` means live only under
+    /// that flag and reads as not-live here.
+    pub fn is_live(&self) -> bool {
+        fn unconditional_live(entries: &[RestrictExpr]) -> bool {
+            entries
+                .iter()
+                .any(|e| matches!(e, RestrictExpr::Token(t) if t == "live"))
+        }
+        unconditional_live(&self.properties)
+    }
+
     /// Whether any DEPEND-class field or `SRC_URI` fell back to empty
     /// because its raw text failed to parse, rather than genuinely having
     /// no content
@@ -201,5 +217,31 @@ fn dedup_dep(entries: &mut Vec<DepEntry>) {
             DepEntry::AtMostOneOf(children) => dedup_dep(children),
             DepEntry::Atom(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::cache::CacheEntry;
+
+    fn cache_with_properties(properties: &str) -> EbuildMetadata {
+        CacheEntry::parse(&format!(
+            "EAPI=8\nSLOT=0\nPROPERTIES={properties}\nDESCRIPTION=t\n_md5_=x\n"
+        ))
+        .unwrap()
+        .metadata
+    }
+
+    #[test]
+    fn is_live_detects_unconditional_property() {
+        assert!(cache_with_properties("live").is_live());
+        assert!(cache_with_properties("mirror live").is_live());
+    }
+
+    #[test]
+    fn is_live_ignores_conditional_and_absent_properties() {
+        assert!(!cache_with_properties("live? ( live )").is_live());
+        assert!(!cache_with_properties("").is_live());
     }
 }
