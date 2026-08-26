@@ -1,0 +1,53 @@
+Benchmark 1: anchor-c0d64e3-firefox
+  Time (mean ± σ):     986.8 ms ±  23.8 ms    [User: 1419.4 ms, System: 534.8 ms]
+  Range (min … max):   950.4 ms … 1060.2 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: head-0141c809-firefox
+  Time (mean ± σ):     894.3 ms ±  15.4 ms    [User: 1323.8 ms, System: 519.4 ms]
+  Range (min … max):   872.4 ms … 923.0 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 3: anchor-c0d64e3-qtbase
+  Time (mean ± σ):     929.2 ms ±  16.2 ms    [User: 1364.4 ms, System: 535.4 ms]
+  Range (min … max):   903.0 ms … 962.9 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 4: head-0141c809-qtbase
+  Time (mean ± σ):     841.3 ms ±  18.1 ms    [User: 1283.2 ms, System: 525.2 ms]
+  Range (min … max):   812.4 ms … 883.2 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 5: anchor-c0d64e3-texlive
+  Time (mean ± σ):     965.5 ms ±  18.1 ms    [User: 1390.8 ms, System: 529.2 ms]
+  Range (min … max):   938.1 ms … 1002.6 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 6: head-0141c809-texlive
+  Time (mean ± σ):     861.7 ms ±  19.0 ms    [User: 1294.4 ms, System: 535.8 ms]
+  Range (min … max):   827.6 ms … 896.7 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 7: anchor-c0d64e3-world
+  Time (mean ± σ):      1.151 s ±  0.019 s    [User: 1.620 s, System: 0.532 s]
+  Range (min … max):    1.115 s …  1.191 s    20 runs
+ 
+Benchmark 8: head-0141c809-world
+  Time (mean ± σ):      1.048 s ±  0.017 s    [User: 1.511 s, System: 0.543 s]
+  Range (min … max):    1.019 s …  1.082 s    20 runs
+ 
+Summary
+  head-0141c809-qtbase ran
+    1.02 ± 0.03 times faster than head-0141c809-texlive
+    1.06 ± 0.03 times faster than head-0141c809-firefox
+    1.10 ± 0.03 times faster than anchor-c0d64e3-qtbase
+    1.15 ± 0.03 times faster than anchor-c0d64e3-texlive
+    1.17 ± 0.04 times faster than anchor-c0d64e3-firefox
+    1.25 ± 0.03 times faster than head-0141c809-world
+    1.37 ± 0.04 times faster than anchor-c0d64e3-world
