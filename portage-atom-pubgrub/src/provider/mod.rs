@@ -229,6 +229,10 @@ pub struct PortageDependencyProvider {
     /// misses instead of resolving the alias (a recurring bug class, hit
     /// in `graph.rs`, `validate.rs`, and `post_solve.rs` alike).
     packages: HashMap<PortagePackage, PackageData>,
+    /// Whether ingestion saw any tagged (`needs_unmask`) or live version —
+    /// false for every strict-mode provider, letting the build-time
+    /// propagation walk bail without touching the graph
+    saw_tagged_or_live: bool,
     pub(crate) installed: HashMap<PortagePackage, (Version, InstalledPolicy)>,
     pub(crate) installed_cpns: HashSet<Cpn>,
     pub(crate) installed_use: HashMap<PortagePackage, Vec<Interned<DefaultInterner>>>,
@@ -623,8 +627,6 @@ impl PortageDependencyProvider {
             }
         }
 
-        propagate_needs_unmask(&mut packages);
-
         // Post-process: remove dependencies on packages not present in the
         // repository.  Without this filtering, PubGrub will encounter
         // `NoVersions` for any missing package and immediately declare the
@@ -697,7 +699,17 @@ impl PortageDependencyProvider {
             }
         }
 
+        // Tagging only exists under widened candidate supply; strict-mode
+        // builds (the default) skip the propagation walk entirely.
+        let saw_tagged_or_live = packages
+            .values()
+            .any(|d| d.versions.values().any(|vd| vd.needs_unmask || vd.live));
+        if saw_tagged_or_live {
+            propagate_needs_unmask(&mut packages);
+        }
+
         Self {
+            saw_tagged_or_live,
             packages,
             installed: HashMap::new(),
             installed_cpns: HashSet::new(),
