@@ -1,9 +1,32 @@
 # Widen when hard deps are dropped by acceptance filtering
 
-Status: 🔴 not started. Design recap agreed with Luca 2026-08-25
-("sounds interesting we might have to tweak a bit what we can emit as
-unmask"). Found while regenerating the pilot-i586-em llvm accepts from
-scratch — full story in [[i586-full-run-findings.md]] § design gap.
+Status: ✅ IMPLEMENTED + live-verified 2026-08-26 — escalation, the
+slot-qualified enumeration fix, cpn-level precedence for widened grants,
+and the above-selection live bound (`live_upper_bound`) all landed;
+pilot probe regenerates a fully clean config from wiped accepts (real
+merge EXIT 0, follow-up `-p` silent). Design recap agreed with Luca
+2026-08-25 ("sounds interesting we might have to tweak a bit what we can
+emit as unmask"). Found while regenerating the pilot-i586-em llvm
+accepts from scratch — full story in
+[[i586-full-run-findings.md]] § design gap.
+
+## Found during implementation
+
+Two extra defects surfaced by the first live probe:
+
+1. `find_autounmask_candidates` discarded the slot when enumerating a
+   dropped `cat/pkg:16` dep, suggesting every clang release across all
+   slots as exact pins. Fixed: slot-qualified drops enumerate only
+   matching-slot versions.
+2. Widened bounded grants lost the dedup against those poisoned
+   dropped-derived candidates (same-cpv string, dropped seen first).
+   Fixed: cpn-level precedence — a widened selection supersedes
+   exact-pin advisories for the same cpn.
+3. The bound computation took the lowest live in slot even when it sat
+   *below* the selection (clang-common: selected 24_pre, bound
+   23.1.0.9999 → grant excluded the pick itself). Extracted to
+   `repo::live_upper_bound` = lowest live strictly above the selection,
+   unit-tested.
 
 ## The gap
 

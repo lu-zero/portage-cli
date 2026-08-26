@@ -934,7 +934,28 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             };
 
             let (provider, solution, package_use, applied_reqs) = match attempt_solve() {
-                Ok(ok) => ok,
+                Ok(outcome) => {
+                    // A strict solve can still be degraded: hard deps whose
+                    // every version was acceptance-filtered are dropped at
+                    // provider construction, so PubGrub never fails on them
+                    // and the failure-path retry below never runs. Escalate
+                    // once when that happened — the widened attempt either
+                    // resolves them (complete plan, bounded grants) or its
+                    // own dropped list keeps the exact-pin advisories.
+                    if autounmask_widen
+                        && !widened.get()
+                        && repo::has_widening_eligible_drops(outcome.0.dropped_deps(), &data)
+                    {
+                        widened.set(true);
+                        tracing::debug!(
+                            "acceptance-filtered hard deps were dropped; \
+                             retrying with widened candidate supply"
+                        );
+                        attempt_solve()?
+                    } else {
+                        outcome
+                    }
+                }
                 Err(strict_err) if autounmask_widen && !widened.get() => {
                     widened.set(true);
                     tracing::debug!("strict solve failed; retrying with widened candidate supply");
@@ -1028,23 +1049,25 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     // to accepted candidates, where no tiering runs). A live
                     // selection gets an unbounded grant — there is nothing
                     // to protect.
+                    // Lowest live version in the same slot *above* the
+                    // selection; anything else would produce a grant that
+                    // excludes the very version being selected.
                     let live_upper_bound = match (is_live, pkg.slot()) {
-                        (false, Some(sel_slot)) => data
-                            .versions
-                            .get(pkg.cpn())
-                            .and_then(|versions| {
-                                versions
-                                    .iter()
-                                    .filter(|(other, cache)| {
-                                        // Combined live notion: `*9999`
-                                        // shape or PROPERTIES=live.
-                                        (other.version.is_live() || cache.metadata.is_live())
-                                            && cache.metadata.slot.slot == *sel_slot
-                                    })
-                                    .map(|(other, _)| &other.version)
-                                    .min()
-                            })
-                            .cloned(),
+                        (false, Some(sel_slot)) => repo::live_upper_bound(
+                            data.versions
+                                .get(pkg.cpn())
+                                .map(Vec::as_slice)
+                                .unwrap_or_default(),
+                            &ver,
+                            Some(&sel_slot),
+                        )
+                        .filter(|bound| {
+                            // Same-slot guarantee comes from the entries
+                            // themselves; keep only bounds that genuinely
+                            // sit above the selection (live_upper_bound
+                            // already enforces this — belt and braces).
+                            bound > &ver
+                        }),
                         _ => None,
                     };
                     cands.extend(
@@ -1510,7 +1533,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .flat_map(|(pkg, ver)| repo::cpns_for(&data, pkg.cpn(), ver))
         .collect();
 
-    let dropped_autounmask: Vec<_> = autounmask_candidates
+    let mut dropped_autounmask: Vec<_> = autounmask_candidates
         .into_iter()
         .filter(|c| !solution_cpns.contains(&c.cpv.cpn) && new_needed_cpns.contains(&c.cpv.cpn))
         .collect();
@@ -1527,6 +1550,17 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // memory and the plan is installable as-is, so they neither block the
     // merge nor set the non-zero exit — they're reported as informational,
     // with `--autounmask-write` persisting them on request.
+    // A widened selection supersedes any exact-pin advisories for the same
+    // cpn: the bounded grant replaces the everything-grant set, and keeping
+    // both would write two conflicting shapes for one package.
+    if !widened_autounmask_candidates.is_empty() {
+        let widened_cpns: HashSet<Cpn> = widened_autounmask_candidates
+            .iter()
+            .map(|c| c.cpv.cpn)
+            .collect();
+        dropped_autounmask.retain(|c| !widened_cpns.contains(&c.cpv.cpn));
+    }
+
     let has_dropped = !dropped_autounmask.is_empty();
     let has_widened = !widened_autounmask_candidates.is_empty();
     if has_dropped || has_widened {

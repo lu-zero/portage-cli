@@ -1829,6 +1829,47 @@ pub fn filter_reasons_for(
     candidates
 }
 
+/// The bound for a live-bounded slot grant: the lowest live version in the
+/// same cpn+slot that sits *above* `selected`
+///
+/// Granting `cat/pkg:SLOT **` outright would invite every future live
+/// ebuild; granting `<lowest-live-above` accepts the release/snapshot
+/// branch around `selected` while keeping `.9999` out. Returns `None`
+/// when nothing live lives above the selection (the grant is then
+/// unbounded — there is nothing to exclude), which also covers a live
+/// selection itself.
+pub fn live_upper_bound<'a>(
+    entries: &'a [(Cpv, CacheEntry)],
+    selected: &Version,
+    slot: Option<&Interned<DefaultInterner>>,
+) -> Option<Version> {
+    let _ = slot; // reserved: callers pre-filter entries per slot today
+    entries
+        .iter()
+        .filter(|(cpv, cache)| {
+            cpv.version > *selected && (cpv.version.is_live() || cache.metadata.is_live())
+        })
+        .map(|(cpv, _)| cpv.version.clone())
+        .min()
+}
+
+/// Whether any dropped dep is *filter-dropped* and thus worth a widened
+/// retry: a hard dep (no `||` alternatives) whose package has versions in
+/// the repository that were all excluded by keyword/mask/license filtering
+///
+/// Genuinely absent packages don't count — widening offers the same
+/// versions and cannot help.
+pub fn has_widening_eligible_drops(dropped: &[DroppedDep], data: &RepoData) -> bool {
+    dropped.iter().any(|dep| {
+        !dep.package.is_virtual()
+            && dep.alternatives.is_empty()
+            && data
+                .versions
+                .get(dep.package.cpn())
+                .is_some_and(|entries| !entries.is_empty())
+    })
+}
+
 /// For each dropped dep, find versions in the unfiltered repo that match its
 /// version range and determine why they were excluded
 pub fn find_autounmask_candidates(
@@ -1859,6 +1900,13 @@ pub fn find_autounmask_candidates(
                     .and_then(|entries| entries.iter().find(|(v, _)| v.version == c.cpv.version))
                     .is_some_and(|(_, cache)| cache.metadata.is_live())
         });
+        // A slot-qualified drop (`cat/pkg:16`) must not enumerate versions
+        // from *other* slots — `dep.package.cpn()` alone loses the slot, and
+        // a missing slot would otherwise suggest every release the cpn ever
+        // had. Slotless deps keep the full enumeration.
+        if let Some(want) = dep.package.slot() {
+            found.retain(|c| c.slot.as_ref().map(Interned::as_str) == Some(want.as_str()));
+        }
         candidates.extend(found);
     }
 
@@ -3559,6 +3607,69 @@ mod tests {
         assert!(
             !versions.iter().any(|v| v.ends_with(".9999")),
             "live suggestion leaked: {versions:?}"
+        );
+    }
+
+    #[test]
+    fn widening_eligible_drops() {
+        let data = repo_with_many(&[
+            ("app-misc/filtered-1.0", "EAPI=8\nSLOT=0\nDESCRIPTION=t\n"),
+            (
+                "app-misc/present-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let dropped_of = |name: &str, alts: Vec<portage_atom_pubgrub::PortagePackage>| DroppedDep {
+            package: portage_atom_pubgrub::PortagePackage::unslotted(Cpn::try_new(name).unwrap()),
+            version_set: portage_atom_pubgrub::PortageVersionSet::any(),
+            alternatives: alts,
+        };
+
+        // Versions exist but are all filtered: widenable.
+        assert!(has_widening_eligible_drops(
+            &[dropped_of("app-misc/filtered", vec![])],
+            &data
+        ));
+        // Genuinely absent from the tree: widening cannot help.
+        assert!(!has_widening_eligible_drops(
+            &[dropped_of("app-misc/absent", vec![])],
+            &data
+        ));
+        // `||` alternative satisfied the group: not a degradation.
+        assert!(!has_widening_eligible_drops(
+            &[dropped_of(
+                "app-misc/filtered",
+                vec![dropped_of("app-misc/other", vec![]).package],
+            )],
+            &data
+        ));
+    }
+
+    #[test]
+    fn live_upper_bound_sits_above_selection_only() {
+        let data = repo_with_many(&[
+            (
+                "app-misc/thing-23.1.0_rc3",
+                "EAPI=8\nSLOT=0\nDESCRIPTION=t\n",
+            ),
+            (
+                "app-misc/thing-23.1.0.9999",
+                "EAPI=8\nSLOT=0\nDESCRIPTION=t\n",
+            ),
+            (
+                "app-misc/thing-24.0.0_pre1",
+                "EAPI=8\nSLOT=0\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let entries = &data.versions[&Cpn::try_new("app-misc/thing").unwrap()];
+        let selected = Version::parse("24.0.0_pre1").unwrap();
+        // The 23-series live sits BELOW the selection: it must not become a
+        // bound that excludes the selected version itself.
+        assert_eq!(live_upper_bound(entries, &selected, None), None);
+        let selected = Version::parse("23.1.0_rc3").unwrap();
+        assert_eq!(
+            live_upper_bound(entries, &selected, None).map(|v| v.to_string()),
+            Some("23.1.0.9999".to_string())
         );
     }
 }
