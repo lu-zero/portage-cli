@@ -147,22 +147,46 @@ at this exact package. Resolution options: qemu-user + binfmt on the
 host; a config.site cache (`gl_cv_func_strcasecmp_works=...`) fed via
 CONFIG_SITE in the sysroot make.conf; or upstream gnulib fix.
 
-### dev-lang/python — eclass cross flow half-ran
+### dev-lang/python — ✅ root-caused 2026-08-26: CBUILD mini-python poisoned by target-flavored pkg-config
 
-Evidence trail (build.log 1564 lines): target configure completed
-(build=aarch64, host=i586) → `emake` died compiling `_decimal.c`:
-`#error No valid combination of CONFIG_64, CONFIG_32 and
-_PyHASH_BITS` → eclass fell back to configuring the BUILD-python tree
-(`work/python-3.14.7-aarch64-unknown-linux-gnu/`, correctly named from
-CBUILD and fully populated with Makefile/Programs/) but its `python`
-binary was never produced → second configure died at `--with-build-
-python`. Oddity: `work/Python-3.14.7/pyconfig.h` is absent post-mortem
-despite the target make having compiled against one. Needs an eclass
-cross-flow comparison under real portage to pin which phase-em
-difference starves the build-python build (suspects: BDEPEND host
-python merge handling, or the eclass's PGO/build-python sub-phase
-driving). Not a resolver/persistence issue — the plan, ordering, and
-the other 96 packages were flawless.
+Precise chronology (build.log is chronological, two full attempts):
+
+1. `src_configure` → `tc-is-cross-compiler` true → `build_cbuild_python`:
+   out-of-tree econf_build into `work/python-3.14.7-aarch64-unknown-
+   linux-gnu/` (native aarch64/aarch64 — correct), then its `emake`
+   **died compiling `Modules/_decimal/_decimal.c`: `#error No valid
+   combination of CONFIG_64, CONFIG_32 and _PyHASH_BITS`**.
+2. `build_cbuild_python` has no die-on-emake (function ends at `popd`),
+   so src_configure continued to the main target econf with
+   `--with-build-python=<cbuild>/python` — pointing at a binary that was
+   never produced — and died there. Pattern repeats ×2 (two consumers).
+
+Root cause chain for step 1, from the cbuild config.log cmdline:
+
+- `--libdir=/usr/i586-pc-linux-gnu/usr/lib` — the eclass computes
+  `cbuild_libdir` via `tc-getBUILD_PKG_CONFIG --libs-only-L libffi`,
+  and it resolved to the **target sysroot** instead of the host. So
+  BUILD-flavored pkg-config answered with target-sysroot paths under
+  em's phase env.
+- `--with-system-libmpdec` is unconditional in myeconfargs, and its
+  detection also ran through the same cross-flavored pkg-config — so the
+  internal `_decimal` build compiled without the CONFIG_64/32 defines
+  while expecting external libmpdec, producing the #error.
+
+Suspected em-side divergence (needs one live probe to close): em exports
+a single cross-flavored `PKG_CONFIG` (${chost}-pkg-config wrapper with
+the sysroot baked in) for the whole phase, and the `BUILD_*` tool
+exports (shell.rs ~1340) are gated on host-bin/PATH conditions that are
+false inside a sandboxed container (no host gcc on PATH there) — so
+`tc-getBUILD_PKG_CONFIG` fell back through to the cross flavor. Real
+portage keeps BUILD pkg-config host-resolving, which is why the same
+ebuild works under crossdev+emerge.
+
+Decisive next probes: inside the failing phase env replay
+`echo ${BUILD_PKG_CONFIG-unset}; pkg-config --libs-only-L libffi` and
+compare against real-portage phases; then either export BUILD_* into
+the child env unconditionally when cross, or give econf_build a proper
+builtin that strips target flavor.
 
 Also observed (cosmetic): baselayout's env-update logs
 `failed to redirect ... /proc/mounts` inside the bare sysroot; merge
