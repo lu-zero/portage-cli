@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-23**.
+here briefly for context). Updated **2026-08-26**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -53,12 +53,11 @@ Parser/docs: [[pms-parser-lenient]], [[pms-einstalldocs]],
 
 ### Solver correctness (found 2026-08-17)
 
-- 🔴 **Widen when hard deps are dropped by acceptance filtering** —
-  dropped deps don't fail the solve, so phase-2 widening never runs and
-  real-run persistence writes DroppedDep exact pins for *every* filtered
-  version (the stale-pin regeneration mechanism). Agreed direction:
-  escalate to widened when a dropped dep is filter-dropped (cpn has
-  versions, all excluded) — [[widening-on-dropped-hard-deps]].
+- ✅ **Widen when hard deps are dropped by acceptance filtering** —
+  landed and live-verified 2026-08-25/26 (this entry was stale; the
+  fuller writeup lives under "Stage building" below and in
+  [[widening-on-dropped-hard-deps]], including a 2026-08-26 review
+  addendum — 4 implementation bugs found and fixed, design unchanged).
 
 - 🟡 **`@system`/`@world` plans could silently pick stale versions — Phases
   1+2 landed and review-hardened.** pubgrub's `prioritize` decided packages
@@ -1175,7 +1174,12 @@ blocked by the three independent findings above, tracked separately.
   not revisited this arc): `mod.rs` itself, `output.rs`, `autounmask.rs`
   — the optional `mod.rs` compute/render split is deferred until a
   non-CLI consumer of the resolve layer actually appears.
-- 🔴 `em stages` defaults to `--buildpkg` so each run feeds the next; per-arch.
+- ✅ `em stages`/`crossdev`/`toolchain --setup` force `--buildpkg` on
+  regardless of the CLI (`merge_merge_flags_with(.., force_buildpkg:
+  true)`, `crossdev/mod.rs`), so each staged run seeds `PKGDIR` for the
+  next; `PKGDIR` resolution is itself `--target`-substituted-roots-aware
+  (`resolve_pkgdir_for_roots`, `binpkg.rs`), so different arches don't
+  share a cache. Stale entry, confirmed implemented on read 2026-08-26.
 - ✅ **Signing/verify (`BINPKG_GPG_*`) — DONE 2026-07-23.** `pgp`/rpgp crate
   (native Rust OpenPGP, no gpg-agent); clearsigned Manifest + detached
   per-member `.sig`, matching real portage's own gpkg scheme exactly;
@@ -1489,7 +1493,9 @@ blocked by the three independent findings above, tracked separately.
   (inverted `!flag?` USE-dep semantics, package.* dir dotfile/backup
   leak); the rest confirmed correct or documented as known low-severity
   divergences. [[parser-audit]]
-- 🔴 clang linker config (Option B, `gentoo-linker.cfg`). [[select-toolchain]]
+- ✅ clang linker config (Option B, `gentoo-linker.cfg`) — closed
+  2026-07-29, note moved to `todo/done/select-toolchain.md`. Stale
+  entry, confirmed on read 2026-08-26.
 - See also [[nonemptytree-bdeps-gap]], [[em-emptytree]], [[build-clean-env]],
   [[crossdev-target]], [[cross-support-self-review]] for older open threads.
 
