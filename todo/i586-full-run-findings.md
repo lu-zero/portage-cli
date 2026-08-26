@@ -128,6 +128,46 @@ mechanisms above: the `.9999` picks died at EGIT fetch (no git binary —
 dev-vcs/git had failed on `declare -I` in run3) and the `_pre`/`_rc3`
 picks died at cmake via the cfg clobber.
 
+## Stage1 pilot (2026-08-26): 95/97 ok — two cross-configure blockers triaged
+
+`em --target i586-pc-linux-gnu stages --stage1` ran the full
+packages.build core chain into the target sysroot: **95 ok, 2 failed**
+(python, diffutils). Both failures are classic pure-cross configure
+gaps, not em defects:
+
+### sys-apps/diffutils — gnulib AC_RUN_IFELSE without cross fallback
+
+`checking whether strcasecmp works...` → `cannot run test program while
+cross compiling`. configure received correct `--build=aarch64
+--host=i586` (verified in config.log); the gnulib snapshot simply lacks
+a compile-only fallback for this test, and **thalia has no qemu-user /
+binfmt-i586** (`/proc/sys/fs/binfmt_misc` empty), so target binaries
+cannot execute for anyone — real crossdev would hit the identical wall
+at this exact package. Resolution options: qemu-user + binfmt on the
+host; a config.site cache (`gl_cv_func_strcasecmp_works=...`) fed via
+CONFIG_SITE in the sysroot make.conf; or upstream gnulib fix.
+
+### dev-lang/python — eclass cross flow half-ran
+
+Evidence trail (build.log 1564 lines): target configure completed
+(build=aarch64, host=i586) → `emake` died compiling `_decimal.c`:
+`#error No valid combination of CONFIG_64, CONFIG_32 and
+_PyHASH_BITS` → eclass fell back to configuring the BUILD-python tree
+(`work/python-3.14.7-aarch64-unknown-linux-gnu/`, correctly named from
+CBUILD and fully populated with Makefile/Programs/) but its `python`
+binary was never produced → second configure died at `--with-build-
+python`. Oddity: `work/Python-3.14.7/pyconfig.h` is absent post-mortem
+despite the target make having compiled against one. Needs an eclass
+cross-flow comparison under real portage to pin which phase-em
+difference starves the build-python build (suspects: BDEPEND host
+python merge handling, or the eclass's PGO/build-python sub-phase
+driving). Not a resolver/persistence issue — the plan, ordering, and
+the other 96 packages were flawless.
+
+Also observed (cosmetic): baselayout's env-update logs
+`failed to redirect ... /proc/mounts` inside the bare sysroot; merge
+completes regardless.
+
 ## Brush completion edge (from validating the IFS fix)
 
 After the `SourceText` expansion-piece fix (IFS="\n" made literal command
