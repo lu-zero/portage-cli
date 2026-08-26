@@ -38,6 +38,14 @@ full LTO, ~4x faster to build (fresh or incremental) at real cross-crate
 optimization, unlike debug or `profiling`'s `lto=false`. Use `--release`
 for anything you'll benchmark or ship.
 
+**Never exercise `em --keep-going`.** The flag exists for portage parity
+and nothing else: a failed package must stop the run so its dependents
+don't build against missing state and the failure stays first-class in
+the log. Keep-going buries the root cause mid-tally (found live in the
+i586 stage1 pilot — python's cross-configure failure got buried under
+18 more packages before anyone looked). Don't pass it in scripts, docs,
+examples, or manual runs; fail fast, fix, re-run.
+
 ### Pre-PR / “would CI pass?” checklist
 
 | Job | Local equivalent |
