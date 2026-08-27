@@ -1277,6 +1277,11 @@ impl PackageRepository for Adapter<'_> {
                     .or_insert_with(|| cpv.version.clone());
             }
         }
+        // A slot with at least one accepted version is an accepted slot, full
+        // stop — its presence in `best_tagged` (from some other, unaccepted
+        // version of the same slot) must not also list it there, or it comes
+        // back twice.
+        best_tagged.retain(|slot, _| !best.contains_key(slot));
         let mut ranked = portage_atom_pubgrub::rank_slots_by_version(best_tagged);
         ranked.extend(portage_atom_pubgrub::rank_slots_by_version(best));
         ranked
@@ -1843,9 +1848,9 @@ pub fn live_upper_bound<'a>(
     selected: &Version,
     slot: Option<&Interned<DefaultInterner>>,
 ) -> Option<Version> {
-    let _ = slot; // reserved: callers pre-filter entries per slot today
     entries
         .iter()
+        .filter(|(_, cache)| slot.is_none_or(|s| cache.metadata.slot.slot == *s))
         .filter(|(cpv, cache)| {
             cpv.version > *selected && (cpv.version.is_live() || cache.metadata.is_live())
         })
@@ -1858,15 +1863,19 @@ pub fn live_upper_bound<'a>(
 /// the repository that were all excluded by keyword/mask/license filtering
 ///
 /// Genuinely absent packages don't count — widening offers the same
-/// versions and cannot help.
+/// versions and cannot help. Nor does a dep whose range simply matches
+/// nothing in the repo (e.g. `>=foo-99` against a repo that only has
+/// `foo-1.0`) — that miss has nothing to do with acceptance filtering, so a
+/// widened retry would reproduce the identical drop.
 pub fn has_widening_eligible_drops(dropped: &[DroppedDep], data: &RepoData) -> bool {
     dropped.iter().any(|dep| {
         !dep.package.is_virtual()
             && dep.alternatives.is_empty()
-            && data
-                .versions
-                .get(dep.package.cpn())
-                .is_some_and(|entries| !entries.is_empty())
+            && data.versions.get(dep.package.cpn()).is_some_and(|entries| {
+                entries
+                    .iter()
+                    .any(|(cpv, _)| dep.version_set.contains(&cpv.version))
+            })
     })
 }
 
@@ -3566,6 +3575,54 @@ mod tests {
         assert_eq!(strict_adapter.slots_for(&cpn), vec![Interned::intern("0")]);
     }
 
+    // A slot holding both an accepted version and an unaccepted one (a very
+    // common Gentoo layout — a stable release plus a newer ~arch one in the
+    // same slot) must appear exactly once, as accepted — not twice, once
+    // per map it was tracked in. A duplicate breaks `convert.rs`'s
+    // single-slot fast path downstream (SlotMap of length 2 for what is
+    // really one slot).
+    #[test]
+    fn widened_adapter_slot_with_mixed_versions_is_not_duplicated() {
+        let data = repo_with_many(&[
+            (
+                "app-misc/thing-1.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+            ),
+            (
+                "app-misc/thing-2.0",
+                "EAPI=8\nSLOT=0\nKEYWORDS=~amd64\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let arch = Arch::intern("amd64");
+        let stable_only = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let cpn = Cpn::try_new("app-misc/thing").expect("cpn parses");
+        let widened_adapter = Adapter {
+            data: &data,
+            accept_keywords: &stable_only,
+            package_mask: &[],
+            package_unmask: &[],
+            installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
+            accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
+            accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
+            accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
+            defaults: empty_layer(),
+            conf: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &[],
+            profile_package_use: &[],
+            force_mask: &ForceMask::default(),
+            autosolve_use: false,
+            autounmask_widen: true,
+        };
+
+        assert_eq!(
+            widened_adapter.slots_for(&cpn),
+            vec![Interned::intern("0")],
+            "slot 0 has both an accepted and a tagged version -- must list once, as accepted"
+        );
+    }
+
     // DroppedDep exact-pin suggestions must never include live ebuilds
     // (`*9999` shape or PROPERTIES=live) — live is not autounmasked.
     #[test]
@@ -3643,6 +3700,22 @@ mod tests {
             )],
             &data
         ));
+
+        // Present in the repo, but every version misses the requested
+        // range entirely (nothing to do with acceptance filtering) — a
+        // widened retry would reproduce the identical drop.
+        let out_of_range = DroppedDep {
+            package: portage_atom_pubgrub::PortagePackage::unslotted(
+                Cpn::try_new("app-misc/present").unwrap(),
+            ),
+            version_set: portage_atom_pubgrub::PortageVersionSet::from_operator(
+                Operator::GreaterOrEqual,
+                false,
+                Version::parse("99").unwrap(),
+            ),
+            alternatives: vec![],
+        };
+        assert!(!has_widening_eligible_drops(&[out_of_range], &data));
     }
 
     #[test]
@@ -3670,6 +3743,34 @@ mod tests {
         assert_eq!(
             live_upper_bound(entries, &selected, None).map(|v| v.to_string()),
             Some("23.1.0.9999".to_string())
+        );
+    }
+
+    // A live ebuild in a *different* slot must never bound the grant for
+    // the selected slot — the caller passes every version of the cpn
+    // across all slots unfiltered, so `live_upper_bound` must do its own
+    // slot filtering rather than trust the entries are pre-filtered.
+    #[test]
+    fn live_upper_bound_ignores_other_slots() {
+        let data = repo_with_many(&[
+            ("sys-devel/llvm-21.1.0", "EAPI=8\nSLOT=21\nDESCRIPTION=t\n"),
+            (
+                "sys-devel/llvm-22.0.0.9999",
+                "EAPI=8\nSLOT=22\nDESCRIPTION=t\n",
+            ),
+        ]);
+        let entries = &data.versions[&Cpn::try_new("sys-devel/llvm").unwrap()];
+        let selected = Version::parse("21.1.0").unwrap();
+
+        // Slot 22's live ebuild must not bound slot 21's grant.
+        assert_eq!(
+            live_upper_bound(entries, &selected, Some(&Interned::intern("21"))),
+            None
+        );
+        // Unfiltered (no slot given) still finds it, for comparison.
+        assert_eq!(
+            live_upper_bound(entries, &selected, None).map(|v| v.to_string()),
+            Some("22.0.0.9999".to_string())
         );
     }
 }
