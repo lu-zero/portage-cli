@@ -271,14 +271,14 @@ fn current_backend(roots: &Roots, target: &str) -> Option<(String, Utf8PathBuf)>
 /// shared script is left untouched (`FillGapsOnly`-style deference).
 /// Returns `false` if no known backend is reachable yet.
 ///
-/// `is_native` (true only for the host's own native CHOST) skips activation
-/// under `roots.is_overlay()` (`--prefix`): that topology borrows the
-/// host's already-populated system, so shadowing the host CHOST would
-/// break host BDEPEND discovery (e.g. libdebuginfod) instead of
-/// transparently using the real system pkgconf. `is_overlay()` alone isn't
-/// enough: `--prefix --target` crossdev still activates (`is_native: false`).
+/// `is_native` skips activation under `roots.is_overlay()` (`--prefix`) or
+/// `roots.base_merge_root().is_some()` (board-root `--target T --root R`):
+/// the wrapper's `SYSROOT` self-derivation can't tell "I'm the native tool"
+/// from "some other already-configured target", so it silently answers with
+/// the other target's sysroot (found live 2026-08-27: board stage1's
+/// `dev-lang/python` native sub-build got the board's `libffi`).
 pub fn activate_pkgconf(roots: &Roots, target: &str, is_native: bool) -> Result<bool> {
-    if is_native && roots.is_overlay() {
+    if is_native && (roots.is_overlay() || roots.base_merge_root().is_some()) {
         return Ok(false);
     }
     let link = wrapper_path(roots, target);
@@ -597,6 +597,30 @@ mod tests {
             "a genuine cross target must still activate under --prefix"
         );
         assert!(current_backend(&roots, "riscv64-unknown-linux-gnu").is_some());
+    }
+
+    // Regression (found live 2026-08-27): wrapping the native CHOST's own
+    // pkg-config under the board-root topology (`--target T --root R`)
+    // makes it answer with the *board root*'s sysroot instead of the real
+    // host's — dev-lang/python's native "build python" sub-build asked for
+    // native libffi and got the board's `-I` path back, `ffi.h` not found.
+    #[test]
+    fn activate_pkgconf_skips_native_chost_under_board_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let bindir = dir.path().join("bin");
+        std::fs::create_dir_all(&bindir).unwrap();
+        write_fake_backend(&bindir, "pkgconf");
+        let _path = PathGuard::set(&[&bindir]);
+
+        let sysroot = dir.path().join("sysroot");
+        let board = dir.path().join("board");
+        let roots = Roots::for_test_board_root(sysroot.to_str().unwrap(), board.to_str().unwrap());
+
+        assert!(
+            !activate_pkgconf(&roots, "aarch64-unknown-linux-gnu", true).unwrap(),
+            "native-CHOST activation must no-op under the board-root topology"
+        );
+        assert!(current_backend(&roots, "aarch64-unknown-linux-gnu").is_none());
     }
 
     // The shared script must actually work as a real shell script,
