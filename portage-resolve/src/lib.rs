@@ -13,6 +13,11 @@
 //! `portage-repo`, which pulls in the brush fork via git.
 #![warn(missing_docs)]
 
+/// Toolchain-sysroot build copies (the board-root topology, `--target T
+/// --root R`): a post-solve closure walk inserting `MergeRoot::Base`
+/// `DEPEND` copies into the shared crossdev sysroot, sibling to
+/// `host_copies`
+pub mod base_copies;
 mod bdepend_avail;
 /// Post-solve trim: drop plan entries only pulled for `BDEPEND` already
 /// satisfied on BROOT or by earlier within-run merges
