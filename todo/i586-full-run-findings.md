@@ -147,7 +147,18 @@ at this exact package. Resolution options: qemu-user + binfmt on the
 host; a config.site cache (`gl_cv_func_strcasecmp_works=...`) fed via
 CONFIG_SITE in the sysroot make.conf; or upstream gnulib fix.
 
-### dev-lang/python — ✅ root-caused 2026-08-26: CBUILD mini-python poisoned by target-flavored pkg-config
+### dev-lang/python — ✅ FIXED 2026-08-26 (see [[crossdev-pkg-config-sysroot-leak]])
+
+The narrative below is kept for the investigation trail, but its root
+cause (BUILD_PKG_CONFIG falling back to the cross flavor) turned out to
+be imprecise — the real mechanism (confirmed by direct reproduction) is
+`PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` being static, ambient exports
+in the sysroot make.conf, leaking into `econf_build`'s native
+sub-configure regardless of which pkg-config binary it resolves to. Full
+diagnosis, the fix, its accepted tradeoff, and per-topology verification
+status live in [[crossdev-pkg-config-sysroot-leak]].
+
+### dev-lang/python — original (superseded) diagnosis
 
 Precise chronology (build.log is chronological, two full attempts):
 

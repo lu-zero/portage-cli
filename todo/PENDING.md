@@ -461,6 +461,21 @@ blocked by the three independent findings above, tracked separately.
   merge-usr gap since that's ebuild/profile-driven either way) already
   matches or beats the status quo — this is the one real `em`-side gap.
   [[crossdev-gcc-version-flag]]
+- 🟡 **`PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` leaked from the
+  sysroot make.conf into `econf_build`'s native sub-configure**, breaking
+  any cross build of `dev-lang/python` — found and fixed for bare
+  `--target` 2026-08-26 (live-verified); `--prefix`/`--local` still
+  blocked on two unrelated bugs found testing this fix's topology impact.
+  [[crossdev-pkg-config-sysroot-leak]]
+- 🔴 **`cross-*/gcc` can't find target libc headers under `--prefix`**
+  (gcc stage2's own `--with-sysroot`/native-system-header-dir
+  configuration, unrelated to pkg-config) — found 2026-08-26 testing the
+  above. [[crossdev-prefix-gcc-header-dir]]
+- 🔴 **`dev-perl/Module-Build` fperms fails under `--local`** during
+  crossdev toolchain bootstrap (perl-module.eclass installs to bare
+  `${D}`, `fperms` resolves against `${ED}`) — unclear yet whether
+  `em`-side or an upstream Gentoo Prefix gap. Found 2026-08-26, same
+  session. [[crossdev-local-perl-module-eprefix]]
 - 🟡 **`em`'s autounmask never discovers a masked candidate buried
   multiple hops deep in a compound solve failure** — found and root
   caused 2026-08-24, same audit, testing `--ex-pkg
