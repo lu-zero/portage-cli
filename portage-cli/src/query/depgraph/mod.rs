@@ -8,8 +8,8 @@ mod targets;
 pub use targets::{TargetAtom, TargetOrigin};
 
 use portage_resolve::{
-    bdepend_trim, conflicts, depend_trim, download_size, effective_use, host_copies, installed,
-    repo, required_use, root_aware, subslot, use_env,
+    base_copies, bdepend_trim, conflicts, depend_trim, download_size, effective_use, host_copies,
+    installed, repo, required_use, root_aware, subslot, use_env,
 };
 // Not referenced directly here (only via a `force_mask::ForceMask` value
 // returned from `use_env`), but `c7.rs`/`host_copies.rs`'s own tests still
@@ -1362,7 +1362,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // passthrough for every non-native-offset case) — see its own
             // doc comment for why each copy is interleaved in front of its
             // first consumer, rather than spliced in as a separate step.
-            let host_copies_adapter = repo::Adapter {
+            // Reused for both walks below (renamed from `host_copies_adapter`):
+            // `accept_keywords` here is target-arch-scoped
+            // (`cross.target_arch()`), which is exactly what a
+            // `base_copies` sysroot copy needs too — it's built at the
+            // target arch, not the build host's.
+            let copies_adapter = repo::Adapter {
                 data: &data,
                 accept_keywords: &accept_keywords,
                 package_mask: &package_mask,
@@ -1381,7 +1386,17 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 autosolve_use: false,
                 autounmask_widen: false,
             };
-            order = host_copies::compute(&order, &host_copies_adapter, roots, &cross);
+            order = host_copies::compute(&order, &copies_adapter, roots, &cross);
+            // Board-root topology (`--target T --root R`): the toolchain
+            // sysroot is a separate merge destination from ROOT, so a
+            // target package's DEPEND provider must also land there (PMS
+            // 8.2 / real Portage's second entry — see base_copies' own doc
+            // comment). Runs after depend_trim (drops entries the sysroot
+            // already satisfies) and after the host_config_stage
+            // Target-only retain above, so it never schedules a copy for an
+            // entry that isn't in the plan, and its own entries are never
+            // retained away.
+            order = base_copies::compute(&order, &copies_adapter, roots);
 
             // Reverse-dependency constraints: a complete-graph check that emerge's
             // default targeted `-p` skips (e.g. upgrading docutils past an

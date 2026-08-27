@@ -543,6 +543,32 @@ impl Cli {
             .with_config_root_explicit(base.config_root_explicit().map(|p| p.to_owned()))
     }
 
+    /// The toolchain sysroot as its own merge destination, for a
+    /// `MergeRoot::Base` plan entry (`merge/mod.rs`'s `entry_roots`) —
+    /// `roots().base_merge_root()` promoted to a full `Roots` whose own
+    /// `merge_root()` is the sysroot itself, not the board root.
+    ///
+    /// `None` outside the board-root topology (`--target T --root R`, where
+    /// `base` and `target` genuinely differ): there is no separate sysroot
+    /// merge destination for a `Base` entry to route to there, and
+    /// `base_copies` never produces one.
+    pub(crate) fn sysroot_roots(&self) -> Option<Roots> {
+        let roots = self.roots();
+        let sysroot = roots.base_merge_root()?.to_owned();
+        Some(
+            Roots::default()
+                .with_config(Some(sysroot.clone()))
+                .with_base(Some(sysroot.clone()))
+                .with_target(Some(sysroot))
+                .with_broot(roots.broot().map(|p| p.to_owned()))
+                .with_cross_arch(true)
+                .with_eprefix(roots.eprefix().map(|p| p.to_owned()))
+                .with_config_overlay(roots.config_overlay().map(|p| p.to_owned()))
+                .with_relocate(roots.relocate())
+                .with_config_root_explicit(roots.config_root_explicit().map(|p| p.to_owned())),
+        )
+    }
+
     /// Reject an action (`toolchain --setup`, `stages --stage1`/`--stage3`)
     /// whose resolved destination equals the host install path
     /// (`host_roots()`) — bare `--local`, bare `--prefix`, bare host, and

@@ -184,6 +184,7 @@ struct MergeRun<'a> {
     plan: &'a [query::depgraph::PlannedMerge],
     roots: &'a portage_resolve::Roots,
     host_roots: &'a portage_resolve::Roots,
+    base_roots: &'a portage_resolve::Roots,
     work_base: &'a camino::Utf8Path,
     distdir: Option<&'a camino::Utf8Path>,
     quiet: bool,
@@ -310,12 +311,11 @@ pub(crate) fn confirm_action(action: &str) -> Result<bool> {
 
 /// Which [`portage_resolve::Roots`] a plan entry actually installs into
 ///
-/// The outer EROOT (`host_roots`) for a Host-rooted entry — an unsatisfied
-/// BDEPEND scheduled onto the build host by a `--target` solve (see
-/// `cross_target_runtime_deps` in portage-atom-pubgrub) — or the
-/// `--target`-substituted sysroot (`roots`, the resolved install target)
-/// for everything else. `host_roots` equals `roots` outside `--target`, so
-/// this is a no-op there.
+/// The outer EROOT (`host_roots`) for a Host entry (an unsatisfied BDEPEND
+/// scheduled onto the build host); the toolchain sysroot (`base_roots`) for
+/// a Base entry (`base_copies`' DEPEND copy, board-root topology only); the
+/// `--target`-substituted sysroot (`roots`) otherwise. `host_roots`/
+/// `base_roots` both equal `roots` outside `--target`, a no-op there.
 ///
 /// Before this split existed, every entry used `roots` regardless of
 /// `PlannedMerge.merge_root`, so a Host BDEPEND (e.g. `dev-python/jinja2`,
@@ -326,11 +326,12 @@ fn entry_roots<'a>(
     planned: &query::depgraph::PlannedMerge,
     roots: &'a portage_resolve::Roots,
     host_roots: &'a portage_resolve::Roots,
+    base_roots: &'a portage_resolve::Roots,
 ) -> &'a portage_resolve::Roots {
-    if planned.merge_root == query::depgraph::MergeRoot::Host {
-        host_roots
-    } else {
-        roots
+    match planned.merge_root {
+        query::depgraph::MergeRoot::Host => host_roots,
+        query::depgraph::MergeRoot::Base => base_roots,
+        query::depgraph::MergeRoot::Target => roots,
     }
 }
 
@@ -427,6 +428,11 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // "where does an ordinary package's BDEPEND resolve". Equal to `roots`
     // when `--target` isn't active, so this is a no-op outside cross builds.
     let host_roots = globals.host_roots();
+    // Board-root topology only (`--target T --root R`): where a
+    // `MergeRoot::Base` entry (`base_copies`' toolchain-sysroot DEPEND copy)
+    // actually merges. Falls back to `roots` (a no-op) everywhere else,
+    // where no plan entry is ever stamped `Base` to begin with.
+    let base_roots = globals.sysroot_roots().unwrap_or_else(|| roots.clone());
 
     // Per-entry PKGDIR: a Host entry's binpkgs live in the *host*'s PKGDIR
     // (built with host CHOST/CFLAGS), a Target entry's in the target's own —
@@ -583,6 +589,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
         plan,
         roots,
         host_roots: &host_roots,
+        base_roots: &base_roots,
         work_base,
         distdir,
         quiet,
@@ -955,7 +962,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
     let mut failures: Vec<MergeFailure> = Vec::new();
 
     for (i, planned) in run.plan.iter().enumerate() {
-        let entry_roots = entry_roots(planned, run.roots, run.host_roots);
+        let entry_roots = entry_roots(planned, run.roots, run.host_roots, run.base_roots);
         let merge_root = entry_roots.merge_root();
         let entry_index = entry_binpkg_index(planned, run.binpkg_index, run.host_binpkg_index);
 
@@ -1173,7 +1180,8 @@ async fn merge_parallel(
             }
             let Some(i) = sched.next_ready_free(|j| {
                 let planned = &run.plan[j];
-                let mr = entry_roots(planned, run.roots, run.host_roots).merge_root();
+                let mr =
+                    entry_roots(planned, run.roots, run.host_roots, run.base_roots).merge_root();
                 let key = ebuild::package_work_dir(
                     run.work_base,
                     mr,
@@ -1186,7 +1194,7 @@ async fn merge_parallel(
                 break;
             };
             let planned = &run.plan[i];
-            let entry_roots = entry_roots(planned, run.roots, run.host_roots);
+            let entry_roots = entry_roots(planned, run.roots, run.host_roots, run.base_roots);
             let merge_root = entry_roots.merge_root();
             let work_key = ebuild::package_work_dir(
                 run.work_base,
@@ -1281,7 +1289,8 @@ async fn merge_parallel(
             sched.complete(i);
         }
         let planned = &run.plan[i];
-        let merge_root = entry_roots(planned, run.roots, run.host_roots).merge_root();
+        let merge_root =
+            entry_roots(planned, run.roots, run.host_roots, run.base_roots).merge_root();
         let keep_going = record_package_outcome(
             run,
             &flags,
@@ -1328,7 +1337,9 @@ mod entry_roots_tests {
         let host_roots = portage_resolve::Roots::for_test("/var/tmp/cross-stage1");
         let p = planned(MergeRoot::Host)?;
         assert_eq!(
-            entry_roots(&p, &roots, &host_roots).merge_root().as_str(),
+            entry_roots(&p, &roots, &host_roots, &roots)
+                .merge_root()
+                .as_str(),
             "/var/tmp/cross-stage1"
         );
         Ok(())
@@ -1341,8 +1352,30 @@ mod entry_roots_tests {
         let host_roots = portage_resolve::Roots::for_test("/var/tmp/cross-stage1");
         let p = planned(MergeRoot::Target)?;
         assert_eq!(
-            entry_roots(&p, &roots, &host_roots).merge_root().as_str(),
+            entry_roots(&p, &roots, &host_roots, &roots)
+                .merge_root()
+                .as_str(),
             "/var/tmp/cross-stage1/usr/riscv64-unknown-linux-gnu"
+        );
+        Ok(())
+    }
+
+    /// The board-root topology (`--target T --root R`): a `MergeRoot::Base`
+    /// entry (`base_copies`' DEPEND copy) must merge into the toolchain
+    /// sysroot (`base_roots`), not the board root (`roots`) — the exact bug
+    /// that let the sysroot `ncurses` copy silently collide with the board
+    /// root's own copy and get skipped as "already installed".
+    #[test]
+    fn base_entry_installs_into_the_toolchain_sysroot_not_the_board_root() -> Result<()> {
+        let roots = portage_resolve::Roots::for_test("/board-fresh-check");
+        let host_roots = portage_resolve::Roots::for_test("/");
+        let base_roots = portage_resolve::Roots::for_test("/usr/i586-pc-linux-gnu");
+        let p = planned(MergeRoot::Base)?;
+        assert_eq!(
+            entry_roots(&p, &roots, &host_roots, &base_roots)
+                .merge_root()
+                .as_str(),
+            "/usr/i586-pc-linux-gnu"
         );
         Ok(())
     }
@@ -1357,7 +1390,9 @@ mod entry_roots_tests {
         let host_roots = portage_resolve::Roots::for_test_overlay("/", "/opt/p");
         let p = planned(MergeRoot::Host)?;
         assert_eq!(
-            entry_roots(&p, &roots, &host_roots).merge_root().as_str(),
+            entry_roots(&p, &roots, &host_roots, &roots)
+                .merge_root()
+                .as_str(),
             "/opt/p",
             "an unsatisfied Host-routed entry must merge into the prefix, not the real host"
         );
