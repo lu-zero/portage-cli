@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-26**.
+here briefly for context). Updated **2026-08-27**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -497,20 +497,20 @@ blocked by the three independent findings above, tracked separately.
   the board `stage1` run got 12 packages further (15/97, up from a
   dead stop at 2/97) before hitting an unrelated new bug.
   [[crossdev-stage1-board-root-header-search]]
-- 🟡 **`sys-libs/readline` can't find `ncursesw` in a board `--root`
-  stage1** — found 2026-08-27 continuing that same board `stage1` run
-  once unblocked. pkg-config layer fixed and live-verified:
-  `em-cross-pkg-config` now unions `PKG_CONFIG_LIBDIR` across `ROOT`
-  and the toolchain sysroot when they differ (a no-op everywhere else),
-  so `ncursesw --libs` resolves. Same run now gets to `src_compile` and
-  hits the same tension one level down: `ld` still can't find the real
-  `libncursesw.so`/`libtinfow.so` (installed into the board root),
-  because `gcc`'s own `--sysroot`-driven library search default is
-  still scoped to the toolchain sysroot only — not something a wrapper
-  script can patch. Also flags a structural question worth checking
-  first: `sys-libs/glibc` is package 71 of 97 in this plan, far after
-  several packages that already need to link against *something*.
-  [[crossdev-stage1-readline-ncursesw-pkgconfig]]
+- 🟢 **`sys-libs/readline` can't find `ncursesw` in a board `--root`
+  stage1 — fully fixed and live-verified 2026-08-27.** Found continuing
+  that same board `stage1` run once unblocked. The pkg-config-layer fix
+  (`em-cross-pkg-config` unions `PKG_CONFIG_LIBDIR` across `ROOT` and
+  the toolchain sysroot) landed first but was defense-in-depth, not the
+  real fix — the actual cause was one level down: real Portage
+  double-plans a `DEPEND` provider into the toolchain sysroot as a
+  second merge-list entry (PMS table 8.2), confirmed against a real
+  `crossdev`/`cross-emerge` control run; `em`'s solver never did this.
+  Fixed with a new `MergeRoot::Base` + `portage_resolve::base_copies`
+  (sibling to the existing `host_copies`), wired through both plan
+  generation and merge execution (`ee8339c`/`48e0fb3`). Live-verified:
+  `libncursesw.so`/`libtinfow.so` now land in the toolchain sysroot and
+  `readline` links successfully. [[crossdev-stage1-readline-ncursesw-pkgconfig]]
 - 🟡 **`em`'s autounmask never discovers a masked candidate buried
   multiple hops deep in a compound solve failure** — found and root
   caused 2026-08-24, same audit, testing `--ex-pkg

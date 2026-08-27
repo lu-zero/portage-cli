@@ -689,3 +689,23 @@ variant refactor's payoff is that both sides ask
 - **Deferred (out of scope here)** — Tier 3 mutable-BROOT bootstrap on a
   foreign host (`build-environment.md`), zero-config merged sysroot via
   `fuse-overlayfs` (M3).
+- **`MergeRoot::Base` / `base_copies` — landed 2026-08-27
+  (`ee8339c`/`48e0fb3`).** The board-root topology's missing half of the
+  DEPEND row above: `satisfaction_root(DepClass::Depend)` already answered
+  "base (sysroot)" for a *check*, but nothing scheduled an actual **merge**
+  there — a single-rooted solve only ever produces the `RDEPEND`-satisfying
+  target-root entry. Real Portage double-plans a `DEPEND` provider into the
+  sysroot as a second merge-list entry (PMS table 8.2, confirmed against a
+  real `crossdev`/`cross-emerge` control run); `portage_resolve::base_copies`
+  is the post-solve closure walk that does the same, sibling to the
+  pre-existing `host_copies` (BDEPEND→BROOT) — never solver-produced, always
+  a post-solve stamp, for the same "would triple the pubgrub package
+  universe" reason `host_copies` itself doesn't run inside the solver. Two
+  parts, landed as two commits: plan generation (`base_copies` wired into
+  `depgraph()`), then merge **execution** routing (`Cli::sysroot_roots()` +
+  `MergeRun.base_roots`, `merge/mod.rs`'s `entry_roots()`) — the plan looked
+  correct under `-p` after the first commit alone, but a `Base` entry
+  silently routed to the board root and got skipped as "already installed"
+  without the second. Live-verified: `sys-libs/readline`'s
+  `ld: cannot find -lncursesw` failure (todo/crossdev-stage1-readline-ncursesw-pkgconfig.md)
+  is this bug start to finish.
