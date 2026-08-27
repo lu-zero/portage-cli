@@ -530,26 +530,26 @@ mod tests {
         );
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
+        // A bare `--root`+`--target` is now a board-root override: config
+        // stays at the toolchain's real bare `/usr/<tuple>` (a fake,
+        // nonexistent tuple here, so it never collides with real host
+        // crossdev state), while merge_root becomes `root` directly —
+        // unnested, unlike the pre-board-root-decoupling behavior.
         let cli = Cli::parse_from([
             "em",
             "--root",
             root,
             "--target",
-            "riscv64-unknown-linux-gnu",
+            "riscv64-unknown-linux-gnu-test-nonexistent",
             "-p",
             "sys-libs/zlib",
         ]);
 
         let target_roots = cli.roots();
-        assert_eq!(
-            target_roots.merge_root().as_str(),
-            format!("{root}/usr/riscv64-unknown-linux-gnu")
-        );
+        assert_eq!(target_roots.merge_root().as_str(), root);
         assert_eq!(
             resolve_pkgdir_for_roots(&target_roots).await,
-            camino::Utf8Path::new(root)
-                .join("usr/riscv64-unknown-linux-gnu")
-                .join("var/cache/binpkgs")
+            camino::Utf8Path::new(root).join("var/cache/binpkgs")
         );
 
         let host_roots = cli.host_roots();
@@ -664,9 +664,14 @@ mod tests {
         )
         .unwrap();
 
+        // `--local` (not bare `--root`): a bare `--root`+`--target` now
+        // means a board-root override, so the sysroot's own config lives at
+        // the real bare `/usr/<tuple>` — a unit test can't safely write
+        // there. `--local`'s own-build-context nesting still puts the
+        // sysroot config under the prefix, as this fixture needs.
         let cli = Cli::parse_from([
             "em",
-            "--root",
+            "--local",
             root,
             "--config-root",
             root,

@@ -621,7 +621,23 @@ pub(crate) async fn stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Resu
     Ok(())
 }
 
+/// Under `--target`, `stages` must be given an explicit `--root`: the
+/// board-root override in `Cli::roots()` only kicks in for a bare
+/// `--target`+`--root` combo, so a bare `--target` alone would silently
+/// install stage1/stage3 straight into the shared toolchain sysroot.
+fn require_explicit_root_under_target(globals: &Cli, action: &str) -> Result<()> {
+    if globals.target.is_some() && globals.root.is_none() {
+        bail!(
+            "{action} requires --root under --target: pass --root <board dir> \
+             to pick where packages install, or drop --target to build into \
+             the plain --root/--local/--prefix destination instead."
+        );
+    }
+    Ok(())
+}
+
 async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
+    require_explicit_root_under_target(globals, "em stages --stage1")?;
     let roots = globals.roots();
     let merge_root = roots.merge_root();
     globals.require_root_distinct_from_host(&roots, "em stages --stage1")?;
@@ -681,7 +697,12 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
             merge_flags: stage1_merge,
             use_outer_eroot: false,
-            target_only_installed_view: false,
+            // A board root's plan must not be satisfied by the shared
+            // crossdev sysroot's own VDB (gcc/glibc/binutils, or whatever a
+            // *previous* board happened to install there) — no-op when
+            // base == target (every other topology), same fix as native
+            // toolchain bootstrap under `--local`/`--prefix` above.
+            target_only_installed_view: true,
             extra_aliases: &[],
         },
         |_| Ok(()),
@@ -695,6 +716,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
 
 /// Emptytree `@system` rebuild into `--root` (catalyst stage3)
 async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
+    require_explicit_root_under_target(globals, "em stages --stage3")?;
     let roots = globals.roots();
     let merge_root = roots.merge_root();
     globals.require_root_distinct_from_host(&roots, "em stages --stage3")?;
@@ -726,7 +748,9 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             depgraph_flags: Some(depgraph_flags),
             merge_flags: Some(merge_flags),
             use_outer_eroot: false,
-            target_only_installed_view: false,
+            // Same fix as stage1 above: a board root's @system rebuild must
+            // not be satisfied by the shared crossdev sysroot's own VDB.
+            target_only_installed_view: true,
             update_world: false,
             is_resume: false,
             activity: None,
@@ -2318,5 +2342,35 @@ mod tests {
             !body.contains(&format!("BUILD_PKG_CONFIG_LIBDIR=\"{sysroot}")),
             "BUILD_PKG_CONFIG_LIBDIR must not point into the target sysroot:\n{body}"
         );
+    }
+
+    // `stages --stage1`/`--stage3` under a bare `--target` need an explicit
+    // `--root` (the board-root override) — a bare `--target` alone would
+    // silently install straight into the shared toolchain sysroot instead.
+    #[test]
+    fn require_explicit_root_under_target_rejects_bare_target() {
+        let bare = Cli::parse_from([
+            "em",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert!(require_explicit_root_under_target(&bare, "test").is_err());
+
+        let with_root = Cli::parse_from([
+            "em",
+            "--root",
+            "/board",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert!(require_explicit_root_under_target(&with_root, "test").is_ok());
+
+        // No `--target` at all: never gated, `--root` is optional as usual.
+        let no_target = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        assert!(require_explicit_root_under_target(&no_target, "test").is_ok());
     }
 }

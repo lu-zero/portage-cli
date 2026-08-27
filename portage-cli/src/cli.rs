@@ -278,18 +278,37 @@ impl Cli {
         let Some(tuple) = self.target.as_deref() else {
             return self.outer_roots();
         };
-        // The outer EROOT the sysroot sits under: the overlay prefix when set
-        // (--prefix), else the offset (--root) or host / (bare) — never
-        // `base_roots()`/`roots()` directly, which would double-apply this
-        // same substitution if called recursively; `outer_roots()` is always
-        // the pre-substitution view.
+        // The outer EROOT the sysroot sits under. Under `--prefix`/`--local`
+        // this is `outer_roots().merge_root()` exactly as before. The fully
+        // bare case (no `--prefix`/`--local`) anchors at host `/` regardless
+        // of `--root`: the toolchain itself always lives at bare
+        // `/usr/<tuple>`, independent of any board root `stages` separately
+        // installs into.
         let outer = self.outer_roots();
-        let eroot = outer.merge_root().to_owned();
-        let sysroot = eroot.join("usr").join(tuple);
+        let has_own_build_context = outer.eprefix().is_some();
+        let anchor = if has_own_build_context {
+            outer.merge_root().to_owned()
+        } else {
+            camino::Utf8PathBuf::from("/")
+        };
+        let sysroot = anchor.join("usr").join(tuple);
+        // An explicit bare `--root` is a genuine board-root override; else
+        // plain `--target` installs into its own toolchain sysroot.
+        let merge_target = if has_own_build_context {
+            sysroot.clone()
+        } else {
+            opt_path(&self.root).unwrap_or_else(|| sysroot.clone())
+        };
+        // `base` stays the sysroot unconditionally — never `merge_target`.
+        // `build_sysroot()` returns `None` when `base == target`, which
+        // would drop the toolchain from the compiler's context (confirmed
+        // live: `sys-libs/zlib` couldn't find its sysroot's `sys/types.h`).
+        // The installed-view fix lives at the call site instead, via
+        // `Roots::with_target_only_installed_view()` (`crossdev/mod.rs`).
         Roots::default()
             .with_config(Some(sysroot.clone()))
-            .with_base(Some(sysroot.clone()))
-            .with_target(Some(sysroot))
+            .with_base(Some(sysroot))
+            .with_target(Some(merge_target))
             // BROOT never moves with `--target`: BDEPEND always resolves on
             // the true build host, carried over from the outer (pre-
             // substitution) view rather than left as the sysroot itself.
@@ -344,6 +363,15 @@ impl Cli {
                 return anchored.with_target(Some(target));
             }
             return anchored;
+        }
+        // Fully bare (no `--local`/`--prefix`) with `--target` also set: a
+        // bare `--root` here is `roots()`'s board-root override, not this
+        // function's own "true outer/host location" — every `use_outer_eroot`
+        // step (host-side `cross-*` tool installs) must keep landing on the
+        // real host `/`, or a `stages --root R --target T` run double-installs
+        // the toolchain refresh into `R` too.
+        if self.target.is_some() && self.local.is_none() && self.prefix.is_none() {
+            return base.with_target(None).with_base(None);
         }
         base
     }
@@ -681,8 +709,11 @@ mod tests {
 
     #[test]
     fn cross_targets_sysroot_under_eroot() {
-        // `--target` sits under the `--root` EROOT and pins config == base ==
-        // target to `<EROOT>/usr/<tuple>` (PORTAGE_CONFIGROOT == ROOT == SYSROOT).
+        // A bare `--root R` alongside `--target T` (no `--prefix`/`--local`)
+        // is a board-root override: config/base stay at the toolchain's own
+        // bare `/usr/<tuple>` (so `build_sysroot()` keeps returning it —
+        // dropping it broke `sys-libs/zlib`'s own sysroot header search,
+        // confirmed live), while target/merge_root become `R`.
         let cli = Cli::parse_from([
             "em",
             "--root",
@@ -693,11 +724,51 @@ mod tests {
             "sys-libs/zlib",
         ]);
         let r = cli.roots();
-        let sysroot = "/srv/x/usr/riscv64-unknown-linux-gnu";
+        let sysroot = "/usr/riscv64-unknown-linux-gnu";
         assert_eq!(r.config().unwrap().as_str(), sysroot);
-        assert_eq!(r.merge_root().as_str(), sysroot);
         assert_eq!(r.base().unwrap().as_str(), sysroot);
-        assert_eq!(r.config(), r.target());
+        assert_eq!(r.merge_root().as_str(), "/srv/x");
+        assert_eq!(r.target().unwrap().as_str(), "/srv/x");
+        assert_eq!(r.build_sysroot().unwrap().as_str(), sysroot);
+    }
+
+    // `outer_roots()` (what every `use_outer_eroot` merge step — host-side
+    // `cross-*` tool installs — actually resolves against) must keep
+    // landing on the real host `/`, not a bare `--root` board destination,
+    // once `--target` is also set. Regression for a real duplicate-install
+    // bug: `stages --root R --target T` would otherwise double-plan the
+    // cross-compiler refresh step into `R` alongside the actual board
+    // packages.
+    #[test]
+    fn outer_roots_ignores_bare_root_under_target() {
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
+        let cli = Cli::parse_from([
+            "em",
+            "--root",
+            "/board",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let outer = cli.outer_roots();
+        assert_eq!(outer.merge_root().as_str(), "/");
+        assert_eq!(outer.base(), None);
+
+        // `--target` alone (no `--root`) is unaffected either way.
+        let no_root = Cli::parse_from([
+            "em",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert_eq!(no_root.outer_roots().merge_root().as_str(), "/");
+
+        // No `--target`: a bare `--root` still redirects outer_roots() as
+        // always (ordinary, non-cross `--root` usage).
+        let no_target = Cli::parse_from(["em", "--root", "/board", "-p", "sys-libs/zlib"]);
+        assert_eq!(no_target.outer_roots().merge_root().as_str(), "/board");
     }
 
     #[test]
