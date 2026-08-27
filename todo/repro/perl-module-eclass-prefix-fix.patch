@@ -1,0 +1,12 @@
+diff --git a/eclass/perl-module.eclass b/eclass/perl-module.eclass
+index f5a2d71e1e..05485f227a 100644
+--- a/eclass/perl-module.eclass
++++ b/eclass/perl-module.eclass
+@@ -295,6 +295,7 @@ perl-module_src_configure() {
+ 		fi
+ 
+ 		set -- \
++			--prefix "${EPREFIX}"/usr \
+ 			--installdirs=vendor \
+ 			--libdoc= \
+ 			--create_packlist=1 \
