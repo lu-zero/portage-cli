@@ -244,9 +244,7 @@ impl Roots {
             }
             DepClass::Rdepend | DepClass::Pdepend => self.merge_root(),
             DepClass::Depend => {
-                if let Some(base) = self.base.as_deref()
-                    && base != self.merge_root()
-                {
+                if let Some(base) = self.base_merge_root() {
                     base
                 } else if self.is_cross_arch {
                     self.merge_root()
@@ -255,6 +253,23 @@ impl Roots {
                 }
             }
         }
+    }
+
+    /// The `DEPEND` satisfaction root when it is a genuinely separate *merge
+    /// destination* from [`merge_root`](Self::merge_root) — the shared
+    /// crossdev toolchain sysroot under the board-root topology (`--target T
+    /// --root R`).
+    ///
+    /// `None` for every other topology: `DEPEND` there resolves against
+    /// BROOT (native offset, `--prefix`) or against `ROOT` itself (plain
+    /// `--target`, `--local`, bare), and nothing needs a third merge
+    /// destination.
+    ///
+    /// The single source of truth [`satisfaction_root`](Self::satisfaction_root)'s
+    /// `DEPEND` arm reads too, so the two can never drift — and what
+    /// `base_copies` gates on.
+    pub fn base_merge_root(&self) -> Option<&Utf8Path> {
+        self.base.as_deref().filter(|b| *b != self.merge_root())
     }
 
     /// `ESYSROOT` / cross sysroot: `PORTAGE_CONFIGROOT` when set, else base
@@ -429,6 +444,22 @@ impl Roots {
             ..Default::default()
         }
     }
+
+    /// Test-only: a `Roots` shaped like the board-root topology (`--target T
+    /// --root R`) — `base`/`config` at the toolchain sysroot, `target` at
+    /// the disposable board root, `broot` the real host, `is_cross_arch: true`.
+    #[doc(hidden)]
+    pub fn for_test_board_root(sysroot: &str, board: &str) -> Self {
+        let sysroot = Utf8PathBuf::from(sysroot);
+        Roots {
+            config: Some(sysroot.clone()),
+            base: Some(sysroot),
+            target: Some(Utf8PathBuf::from(board)),
+            broot: Some(Utf8PathBuf::from("/")),
+            is_cross_arch: true,
+            ..Default::default()
+        }
+    }
 }
 
 /// `PORTDIR_OVERLAY` under `root`, checking `etc/portage/make.conf` then the legacy `etc/make.conf`
@@ -465,6 +496,34 @@ mod satisfaction_root_tests {
         assert_ne!(
             roots.satisfaction_root(DepClass::Idepend),
             roots.satisfaction_root(DepClass::Rdepend)
+        );
+    }
+
+    // The board-root topology (`--target T --root R`) is the only one where
+    // DEPEND needs a third merge destination — every other topology must
+    // report `None` so `base_copies` never activates for them.
+    #[test]
+    fn base_merge_root_is_some_only_for_the_board_root_topology() {
+        assert_eq!(Roots::for_test("/offset").base_merge_root(), None);
+        assert_eq!(
+            Roots::for_test_root_with_broot("/offset", "/host").base_merge_root(),
+            None
+        );
+        assert_eq!(
+            Roots::for_test_overlay("/host", "/prefix").base_merge_root(),
+            None
+        );
+        let board = Roots::for_test_board_root("/usr/T", "/board");
+        assert_eq!(board.base_merge_root().unwrap().as_str(), "/usr/T");
+    }
+
+    #[test]
+    fn board_root_depend_resolves_against_the_toolchain_sysroot() {
+        let roots = Roots::for_test_board_root("/usr/T", "/board");
+        assert_eq!(roots.satisfaction_root(DepClass::Depend).as_str(), "/usr/T");
+        assert_eq!(
+            roots.satisfaction_root(DepClass::Rdepend).as_str(),
+            "/board"
         );
     }
 }
