@@ -497,17 +497,19 @@ blocked by the three independent findings above, tracked separately.
   the board `stage1` run got 12 packages further (15/97, up from a
   dead stop at 2/97) before hitting an unrelated new bug.
   [[crossdev-stage1-board-root-header-search]]
-- 🔴 **`sys-libs/readline` can't find `ncursesw` via pkg-config in a
-  board `--root` stage1** — found and root-caused 2026-08-27 continuing
-  that same board `stage1` run once unblocked. Confirmed live (wrapper
-  instrumented): the header-search fix above correctly made `SYSROOT`
-  point at the crossdev toolchain sysroot again, but the
-  `<CTARGET>-pkg-config` wrapper also scopes `PKG_CONFIG_LIBDIR` off
-  that same `SYSROOT` — so it can't see sibling packages (`ncursesw`)
-  that install progressively into the board root instead. A genuine
-  design question (should the wrapper use `ROOT` instead, or should
-  `SYSROOT` not point at the toolchain for ordinary non-bootstrap
-  packages at all), not a quick patch.
+- 🟡 **`sys-libs/readline` can't find `ncursesw` in a board `--root`
+  stage1** — found 2026-08-27 continuing that same board `stage1` run
+  once unblocked. pkg-config layer fixed and live-verified:
+  `em-cross-pkg-config` now unions `PKG_CONFIG_LIBDIR` across `ROOT`
+  and the toolchain sysroot when they differ (a no-op everywhere else),
+  so `ncursesw --libs` resolves. Same run now gets to `src_compile` and
+  hits the same tension one level down: `ld` still can't find the real
+  `libncursesw.so`/`libtinfow.so` (installed into the board root),
+  because `gcc`'s own `--sysroot`-driven library search default is
+  still scoped to the toolchain sysroot only — not something a wrapper
+  script can patch. Also flags a structural question worth checking
+  first: `sys-libs/glibc` is package 71 of 97 in this plan, far after
+  several packages that already need to link against *something*.
   [[crossdev-stage1-readline-ncursesw-pkgconfig]]
 - 🟡 **`em`'s autounmask never discovers a masked candidate buried
   multiple hops deep in a compound solve failure** — found and root
