@@ -1,0 +1,53 @@
+Benchmark 1: anchor-e5344f5-firefox
+  Time (mean ± σ):      1.108 s ±  0.104 s    [User: 1.253 s, System: 4.203 s]
+  Range (min … max):    0.950 s …  1.298 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: head-4649a24-firefox
+  Time (mean ± σ):      1.056 s ±  0.068 s    [User: 1.362 s, System: 2.248 s]
+  Range (min … max):    0.968 s …  1.167 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 3: anchor-e5344f5-qtbase
+  Time (mean ± σ):     995.1 ms ±  68.9 ms    [User: 1284.7 ms, System: 2200.7 ms]
+  Range (min … max):   900.7 ms … 1101.7 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 4: head-4649a24-qtbase
+  Time (mean ± σ):      1.011 s ±  0.076 s    [User: 1.287 s, System: 2.006 s]
+  Range (min … max):    0.913 s …  1.187 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 5: anchor-e5344f5-texlive
+  Time (mean ± σ):      1.062 s ±  0.080 s    [User: 1.259 s, System: 2.900 s]
+  Range (min … max):    0.954 s …  1.242 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 6: head-4649a24-texlive
+  Time (mean ± σ):      1.060 s ±  0.070 s    [User: 1.287 s, System: 2.922 s]
+  Range (min … max):    0.938 s …  1.212 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 7: anchor-e5344f5-world
+  Time (mean ± σ):      1.229 s ±  0.082 s    [User: 1.497 s, System: 3.000 s]
+  Range (min … max):    1.118 s …  1.335 s    20 runs
+ 
+Benchmark 8: head-4649a24-world
+  Time (mean ± σ):      1.229 s ±  0.067 s    [User: 1.518 s, System: 2.172 s]
+  Range (min … max):    1.129 s …  1.377 s    20 runs
+ 
+Summary
+  anchor-e5344f5-qtbase ran
+    1.02 ± 0.10 times faster than head-4649a24-qtbase
+    1.06 ± 0.10 times faster than head-4649a24-firefox
+    1.07 ± 0.10 times faster than head-4649a24-texlive
+    1.07 ± 0.11 times faster than anchor-e5344f5-texlive
+    1.11 ± 0.13 times faster than anchor-e5344f5-firefox
+    1.23 ± 0.12 times faster than anchor-e5344f5-world
+    1.23 ± 0.11 times faster than head-4649a24-world
