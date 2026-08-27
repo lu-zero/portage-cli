@@ -9,7 +9,8 @@ use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Operator, Version};
 use thiserror::Error;
 
-/// Where a real package instance is merged — host `BROOT` or target `ROOT`
+/// Where a real package instance is merged — host `BROOT`, the shared
+/// toolchain sysroot, or target `ROOT`
 ///
 /// Under cross-compilation the same CPV can appear twice (native host tool +
 /// cross target runtime). Native builds are always [`MergeRoot::Target`].
@@ -17,6 +18,18 @@ use thiserror::Error;
 pub enum MergeRoot {
     /// Native build merged to the build host (`BROOT`, `/`)
     Host,
+    /// Cross build merged to the shared toolchain sysroot (`ESYSROOT`) when
+    /// it is a genuinely separate destination from `ROOT` — the board-root
+    /// topology (`--target T --root R`). PMS table 8.2: `DEPEND` is
+    /// satisfied against `SYSROOT`, so a target package's build-time
+    /// provider must exist *there*, not only in `ROOT`.
+    ///
+    /// Never produced by a solver [`crate::Solver`] implementation directly
+    /// — always a post-solve stamp (`portage_resolve`'s `base_copies`
+    /// module), the same way its sibling `host_copies` module stamps `Host`
+    /// build-copies after the fact rather than the solver aliasing every
+    /// package to a third node.
+    Base,
     /// Cross (or native target) build merged to `ROOT` / `EROOT`
     #[default]
     Target,
@@ -54,13 +67,16 @@ impl SelectedPackage {
 
 impl std::fmt::Display for SelectedPackage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match (self.slot, self.merge_root) {
-            (Some(slot), MergeRoot::Target) => write!(f, "{}-{}:{}", self.cpn, self.version, slot),
-            (Some(slot), MergeRoot::Host) => {
-                write!(f, "{}-{}:{}@host", self.cpn, self.version, slot)
-            }
-            (None, MergeRoot::Target) => write!(f, "{}-{}", self.cpn, self.version),
-            (None, MergeRoot::Host) => write!(f, "{}-{}@host", self.cpn, self.version),
+        // `@sysroot`, not `@base`: PMS's own name for this root, matching
+        // `@host`'s style — `base` is an internal `Roots` field name only.
+        let root_suffix = match self.merge_root {
+            MergeRoot::Target => "",
+            MergeRoot::Host => "@host",
+            MergeRoot::Base => "@sysroot",
+        };
+        match self.slot {
+            Some(slot) => write!(f, "{}-{}:{}{root_suffix}", self.cpn, self.version, slot),
+            None => write!(f, "{}-{}{root_suffix}", self.cpn, self.version),
         }
     }
 }

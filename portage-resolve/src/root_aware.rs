@@ -46,6 +46,11 @@ pub struct CrossContext {
     /// Used by [`display_root`] so the `-p` merge list matches where the merge
     /// actually goes.
     host_target: Utf8PathBuf,
+    /// Where a `MergeRoot::Base` entry lands: the shared crossdev toolchain
+    /// sysroot, only under the board-root topology
+    /// ([`Roots::base_merge_root`]) — `None` everywhere else, since a `Base`
+    /// entry can only exist when this is `Some`.
+    base_target: Option<Utf8PathBuf>,
 }
 
 impl CrossContext {
@@ -105,6 +110,7 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
         _ => false,
     };
     let host_target = host_merge_root.to_owned();
+    let base_target = roots.base_merge_root().map(|p| p.to_owned());
 
     if !dual_root && !cross_arch && !broot_differs {
         // Populate sysroot/target truthfully even when inactive (unlike the
@@ -120,6 +126,7 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
             cbuild: None,
             target_arch: None,
             host_target,
+            base_target,
         };
     }
 
@@ -132,6 +139,7 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
         cbuild,
         target_arch,
         host_target,
+        base_target,
     }
 }
 
@@ -142,7 +150,7 @@ pub struct PlanEntry {
     pub pkg: PortagePackage,
     /// The version to merge
     pub version: Version,
-    /// Where it merges (host BROOT or the target)
+    /// Where it merges (host BROOT, the toolchain sysroot, or the target)
     pub merge_root: MergeRoot,
 }
 
@@ -170,6 +178,9 @@ pub fn display_root<'a>(
 ) -> &'a Utf8Path {
     match merge_root {
         MergeRoot::Host => cross.host_target.as_path(),
+        // Defensive fallback: a `Base` entry can only exist when
+        // `base_target` is `Some` (see its doc comment).
+        MergeRoot::Base => cross.base_target.as_deref().unwrap_or(target),
         MergeRoot::Target => target,
     }
 }

@@ -617,6 +617,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     } else {
         Vec::new()
     };
+    // `sysroot_installed` as `Cpv`s: what a `MergeRoot::Base` entry (the
+    // board-root topology's toolchain-sysroot DEPEND copy) checks "already
+    // installed" against — never `target_installed_cpvs`, the board root's
+    // own, unrelated VDB.
+    let base_installed_cpvs: std::collections::HashSet<Cpv> = sysroot_installed
+        .iter()
+        .map(|(pkg, v)| Cpv::new(*pkg.cpn(), v.clone()))
+        .collect();
 
     // Only names originally targeted (never a repair target added below) are
     // "explicit" for reinstall/tree-root/onlydeps purposes — computed once,
@@ -1146,6 +1154,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     // happens to have a same-named, same-version package.
                     let already_installed = match pkg.merge_root() {
                         MergeRoot::Host => host_installed_cpvs.contains(&cpv),
+                        MergeRoot::Base => base_installed_cpvs.contains(&cpv),
                         MergeRoot::Target => {
                             target_installed_cpvs.contains(&cpv) || provided_cpvs.contains(&cpv)
                         }
@@ -1942,6 +1951,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // sysroot's unrelated same-named package.
                 reinstall: match entry.merge_root {
                     MergeRoot::Host => host_installed_cpvs.contains(&cpv),
+                    MergeRoot::Base => base_installed_cpvs.contains(&cpv),
                     MergeRoot::Target => target_installed_cpvs.contains(&cpv),
                 },
             }

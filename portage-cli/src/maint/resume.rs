@@ -61,6 +61,7 @@ struct LegacyCompletedPkg {
 fn merge_root_key(merge_root: MergeRoot) -> &'static str {
     match merge_root {
         MergeRoot::Host => "host",
+        MergeRoot::Base => "base",
         MergeRoot::Target => "target",
     }
 }
@@ -68,6 +69,7 @@ fn merge_root_key(merge_root: MergeRoot) -> &'static str {
 fn parse_merge_root(s: &str) -> Option<MergeRoot> {
     match s {
         "host" => Some(MergeRoot::Host),
+        "base" => Some(MergeRoot::Base),
         "target" => Some(MergeRoot::Target),
         _ => None,
     }
@@ -310,7 +312,7 @@ fn read_markers(root: &Utf8Path, job_id: &str) -> HashSet<(MergeRoot, String)> {
         return keys;
     }
     let base = job_done_dir(root, job_id);
-    for side in [MergeRoot::Host, MergeRoot::Target] {
+    for side in [MergeRoot::Host, MergeRoot::Base, MergeRoot::Target] {
         let side_dir = base.join(merge_root_key(side));
         let Ok(cats) = std::fs::read_dir(side_dir.as_std_path()) else {
             continue;

@@ -243,7 +243,10 @@ impl HumanStdoutSink {
         };
         let path = match root {
             ActivityMergeRoot::Host => &js.host_root,
-            ActivityMergeRoot::Target => &js.merge_root,
+            // TODO: no `base_root` wire field yet -- `Target`'s path is a
+            // harmless placeholder until a `Base` entry can actually occur
+            // (see the `base_copies` series, todo/crossdev-stage1-readline-ncursesw-pkgconfig.md).
+            ActivityMergeRoot::Base | ActivityMergeRoot::Target => &js.merge_root,
         };
         if path.is_empty() || path == "/" {
             return String::new();

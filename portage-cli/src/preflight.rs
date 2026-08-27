@@ -59,6 +59,14 @@ pub fn check(
 ) -> Result<()> {
     let mut depend_avail = Avail::initial_depend(roots);
     let mut bdepend_avail = Avail::initial_bdepend(roots);
+    // Board-root topology only — an empty, cheap `Avail` everywhere else
+    // (the `Base` arms below can never fire there, but the value still
+    // needs to exist for the match to type-check).
+    let mut base_avail = if roots.base_merge_root().is_some() {
+        Avail::initial_base_depend(roots)
+    } else {
+        Avail::default()
+    };
 
     // `package.provided` packages are supplied by the system on both roots.
     for (cpv, slot) in provided {
@@ -67,6 +75,7 @@ pub fn check(
             .map(portage_atom::interner::Interned::intern);
         depend_avail.record_provided(cpv.clone(), slot);
         bdepend_avail.record_provided(cpv.clone(), slot);
+        base_avail.record_provided(cpv.clone(), slot);
     }
 
     let mut problems: Vec<String> = Vec::new();
@@ -86,6 +95,11 @@ pub fn check(
         let mut missing: Vec<String> = Vec::new();
         match planned.merge_root {
             MergeRoot::Host => collect_unsatisfied(&depend, &bdepend_avail, &mut missing),
+            // A Base entry (the board-root topology's toolchain-sysroot
+            // DEPEND copy) is built *at* the sysroot, so its own DEPEND is
+            // checked against that same view — never `depend_avail`, the
+            // board root's.
+            MergeRoot::Base => collect_unsatisfied(&depend, &base_avail, &mut missing),
             MergeRoot::Target => collect_unsatisfied(&depend, &depend_avail, &mut missing),
         }
         collect_unsatisfied(&bdepend, &bdepend_avail, &mut missing);
@@ -117,6 +131,16 @@ pub fn check(
         // which is the right bias for a guard that must not block a valid plan.
         match planned.merge_root {
             MergeRoot::Host => bdepend_avail.record_merge_bdepend(planned.cpv.clone()),
+            // A sysroot merge satisfies both its own root's later DEPEND
+            // checks and a later Target entry's build-time DEPEND — that's
+            // the entire reason it exists. `depend_avail` (`initial_depend`)
+            // already unions the base VDB, so growing it here is consistent
+            // with its own seed. `bdepend_avail` is deliberately NOT grown:
+            // a cross-built library is not a build-host tool.
+            MergeRoot::Base => {
+                base_avail.record_merge(planned.cpv.clone(), MergeRoot::Base);
+                depend_avail.record_merge(planned.cpv.clone(), MergeRoot::Base);
+            }
             MergeRoot::Target => {
                 bdepend_avail.record_target_merge(&mut depend_avail, planned.cpv.clone())
             }

@@ -95,6 +95,24 @@ impl Avail {
         Self(vdb_avail_entries(sysroot))
     }
 
+    /// `DEPEND` availability at the toolchain sysroot alone (`ESYSROOT`),
+    /// under the board-root topology
+    ///
+    /// Unlike [`initial_depend`](Self::initial_depend), the target `ROOT`'s
+    /// own VDB is deliberately **not** woven in: this answers "does the
+    /// *sysroot* have it", the question `base_copies` schedules a merge
+    /// from. A provider present only in the board root does not satisfy a
+    /// build-time `DEPEND` there — its headers/libs/`.pc` are not on the
+    /// compiler's sysroot search path.
+    ///
+    /// Reads [`Roots::satisfaction_root`]`(DepClass::Depend)` rather than a
+    /// raw path, so it cannot drift from the rule `Roots` itself encodes.
+    pub fn initial_base_depend(roots: &Roots) -> Self {
+        Self(vdb_avail_entries(Some(
+            roots.satisfaction_root(DepClass::Depend),
+        )))
+    }
+
     /// Target `ROOT` visibility from an explicit set of installed CPVs
     pub fn from_cpvs(cpvs: Vec<(Cpv, Option<String>)>) -> Self {
         Self(
@@ -711,6 +729,43 @@ mod tests {
         assert!(
             avail.atom_satisfied(dep),
             "a DEPEND present only on BROOT (the host) must still count as satisfied"
+        );
+    }
+
+    // The root cause of the readline/ncursesw incident: a provider present
+    // only in the board root must NOT count as satisfying a build-time
+    // DEPEND that base_copies is checking against the toolchain sysroot —
+    // unlike initial_depend, this must never weave the target VDB in.
+    #[test]
+    fn initial_base_depend_ignores_the_target_vdb() {
+        let sysroot = tempfile::tempdir().unwrap();
+        let board = tempfile::tempdir().unwrap();
+        write_fake_vdb_entry(board.path(), "sys-libs/ncurses-6.5");
+
+        let roots = Roots::for_test_board_root(
+            sysroot.path().to_str().unwrap(),
+            board.path().to_str().unwrap(),
+        );
+        let avail = Avail::initial_base_depend(&roots);
+
+        let dep = parse("sys-libs/ncurses");
+        let DepEntry::Atom(dep) = &dep[0] else {
+            unreachable!()
+        };
+        assert!(
+            !avail.atom_satisfied(dep),
+            "a provider only in the board root must not satisfy the sysroot's DEPEND view"
+        );
+
+        write_fake_vdb_entry(sysroot.path(), "sys-libs/ncurses-6.5");
+        let roots = Roots::for_test_board_root(
+            sysroot.path().to_str().unwrap(),
+            board.path().to_str().unwrap(),
+        );
+        let avail = Avail::initial_base_depend(&roots);
+        assert!(
+            avail.atom_satisfied(dep),
+            "a provider in the sysroot itself must satisfy it"
         );
     }
 

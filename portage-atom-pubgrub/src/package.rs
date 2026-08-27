@@ -277,24 +277,19 @@ impl fmt::Display for PortagePackage {
         match self {
             Self::Real {
                 cpn,
-                slot: Some(slot),
-                merge_root: MergeRoot::Target,
-            } => write!(f, "{}:{}", cpn, slot),
-            Self::Real {
-                cpn,
-                slot: Some(slot),
-                merge_root: MergeRoot::Host,
-            } => write!(f, "{}:{}@host", cpn, slot),
-            Self::Real {
-                cpn,
-                slot: None,
-                merge_root: MergeRoot::Target,
-            } => write!(f, "{}", cpn),
-            Self::Real {
-                cpn,
-                slot: None,
-                merge_root: MergeRoot::Host,
-            } => write!(f, "{}@host", cpn),
+                slot,
+                merge_root,
+            } => {
+                let root_suffix = match merge_root {
+                    MergeRoot::Target => "",
+                    MergeRoot::Host => "@host",
+                    MergeRoot::Base => "@sysroot",
+                };
+                match slot {
+                    Some(slot) => write!(f, "{}:{}{root_suffix}", cpn, slot),
+                    None => write!(f, "{}{root_suffix}", cpn),
+                }
+            }
             Self::Root => write!(f, "__internal__/root"),
             Self::UseDecision { name } => write!(f, "__internal__/{}", name),
             Self::Choice { id } => write!(f, "__internal__/choice_{id}"),

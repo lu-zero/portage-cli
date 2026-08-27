@@ -34,6 +34,8 @@ pub enum PkgKind {
 #[serde(rename_all = "snake_case")]
 pub enum ActivityMergeRoot {
     Host,
+    /// The shared crossdev toolchain sysroot (board-root topology only)
+    Base,
     #[default]
     Target,
 }
@@ -42,6 +44,7 @@ impl ActivityMergeRoot {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Host => "host",
+            Self::Base => "base",
             Self::Target => "target",
         }
     }
@@ -51,6 +54,7 @@ impl From<crate::query::depgraph::MergeRoot> for ActivityMergeRoot {
     fn from(r: crate::query::depgraph::MergeRoot) -> Self {
         match r {
             crate::query::depgraph::MergeRoot::Host => Self::Host,
+            crate::query::depgraph::MergeRoot::Base => Self::Base,
             crate::query::depgraph::MergeRoot::Target => Self::Target,
         }
     }
