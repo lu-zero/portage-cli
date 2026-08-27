@@ -1538,18 +1538,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .filter(|c| !solution_cpns.contains(&c.cpv.cpn) && new_needed_cpns.contains(&c.cpv.cpn))
         .collect();
 
-    // A required dependency was filtered out of *every* version (keyword / mask
-    // / license) and had no `||` alternative, so the solver dropped it and the
-    // printed plan is silently incomplete. Surface these unconditionally — like
-    // emerge, an unsatisfiable requirement must never be hidden, regardless of
-    // `--autounmask`. The flag now only governs *writing* the fix:
-    // `--autounmask-write` persists the keyword/mask/license changes.
-    // Report in order of severity: mask → keywords → license.
-    //
-    // Widened selections are different: the solve already applied them in
-    // memory and the plan is installable as-is, so they neither block the
-    // merge nor set the non-zero exit — they're reported as informational,
-    // with `--autounmask-write` persisting them on request.
     // A widened selection supersedes any exact-pin advisories for the same
     // cpn: the bounded grant replaces the everything-grant set, and keeping
     // both would write two conflicting shapes for one package.
@@ -1559,30 +1547,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             .map(|c| c.cpv.cpn)
             .collect();
         dropped_autounmask.retain(|c| !widened_cpns.contains(&c.cpv.cpn));
-    }
-
-    let has_dropped = !dropped_autounmask.is_empty();
-    let has_widened = !widened_autounmask_candidates.is_empty();
-    if has_dropped || has_widened {
-        autounmask::report(&dropped_autounmask, false);
-        autounmask::report(&widened_autounmask_candidates, true);
-        if matches!(
-            autounmask_persist,
-            AutounmaskPersist::Always | AutounmaskPersist::Ask
-        ) {
-            let mut all = dropped_autounmask.clone();
-            all.extend(widened_autounmask_candidates);
-            let confirmed = match autounmask_persist {
-                AutounmaskPersist::Ask => crate::config_plan::confirm_config_write(all.len())?,
-                AutounmaskPersist::Always => true,
-                AutounmaskPersist::Never => false,
-            };
-            if confirmed {
-                autounmask::write(&all, &portage_dir)?;
-            } else {
-                println!(">>> Quitting.");
-            }
-        }
     }
 
     // emerge preview semantics: the plan was computed as if the needed USE
@@ -1798,6 +1762,48 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         let shared = output::shared_slot_decisions(&ceded, solution.iter());
         if !shared.is_empty() {
             output::report_shared_slot_use_decisions(&shared);
+        }
+
+        // A required dependency was filtered out of *every* version (keyword /
+        // mask / license) and had no `||` alternative, so the solver dropped
+        // it and the printed plan is silently incomplete. Surface these
+        // unconditionally — like emerge, an unsatisfiable requirement must
+        // never be hidden. Report in order of severity: mask → keywords →
+        // license.
+        //
+        // Widened selections are different: the solve already applied them
+        // in memory and the plan is installable as-is, so they neither
+        // block the merge nor set the non-zero exit — they're reported as
+        // informational.
+        //
+        // Persistence is invocation-mode-gated, not flag-gated (settled
+        // 2026-08-25, see todo/autounmask-cascading-fresh-slot-vs-version-
+        // pin.md): `-p` never writes, `-a` confirms, a real run writes
+        // unconditionally. Printed after the plan (not before, like the
+        // package.use prompt below) so the user sees what is actually
+        // being installed before being asked to confirm a config write.
+        let has_dropped = !dropped_autounmask.is_empty();
+        let has_widened = !widened_autounmask_candidates.is_empty();
+        if has_dropped || has_widened {
+            autounmask::report(&dropped_autounmask, false);
+            autounmask::report(&widened_autounmask_candidates, true);
+            if matches!(
+                autounmask_persist,
+                AutounmaskPersist::Always | AutounmaskPersist::Ask
+            ) {
+                let mut all = dropped_autounmask.clone();
+                all.extend(widened_autounmask_candidates);
+                let confirmed = match autounmask_persist {
+                    AutounmaskPersist::Ask => crate::config_plan::confirm_config_write(all.len())?,
+                    AutounmaskPersist::Always => true,
+                    AutounmaskPersist::Never => false,
+                };
+                if confirmed {
+                    autounmask::write(&all, &portage_dir)?;
+                } else {
+                    println!(">>> Quitting.");
+                }
+            }
         }
 
         package_use::report(&use_change_entries);
