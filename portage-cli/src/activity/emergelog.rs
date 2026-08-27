@@ -2,7 +2,7 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -16,7 +16,7 @@ pub struct EmergeLogSink {
     path: Utf8PathBuf,
     lock: Mutex<()>,
     /// Display ROOT for "to {root}" lines (session merge root)
-    merge_root_display: Mutex<String>,
+    merge_root_display: Mutex<Arc<str>>,
     /// Current session mode — regen skips per-item lines (thousands of ebuilds)
     mode: Mutex<ActivityMode>,
 }
@@ -43,7 +43,7 @@ impl EmergeLogSink {
         let s = Self::new(path);
         *s.merge_root_display
             .lock()
-            .unwrap_or_else(|e| e.into_inner()) = merge_root.to_string();
+            .unwrap_or_else(|e| e.into_inner()) = merge_root.as_str().into();
         s
     }
 
@@ -120,7 +120,7 @@ impl ActivitySink for EmergeLogSink {
                     return;
                 }
                 // Approximate Portage phase banners for the common cases.
-                let label = match phase.as_str() {
+                let label = match phase.as_ref() {
                     "fetch" => "Fetching",
                     "unpack" | "prepare" | "configure" | "compile" | "test" => "Compiling/Merging",
                     "install" => "Merging",

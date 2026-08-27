@@ -172,12 +172,12 @@ where
         };
         session.bus.emit(ActivityEvent::Diagnostic {
             v: ACTIVITY_EVENT_VERSION,
-            job_id: session.job_id.clone(),
+            job_id: session.job_id.as_str().into(),
             parent_job_id: None,
             level,
-            cpv,
-            phase,
-            msg,
+            cpv: cpv.map(Into::into),
+            phase: phase.map(Into::into),
+            msg: msg.into(),
             at: ActivityEvent::now(),
         });
     }
@@ -243,7 +243,7 @@ mod tests {
         } = &diags[0]
         {
             assert_eq!(*level, DiagnosticLevel::Warn);
-            assert_eq!(msg, "test warning");
+            assert_eq!(msg.as_ref(), "test warning");
             assert_eq!(cpv.as_deref(), Some("app-misc/foo-1"));
         } else {
             panic!("expected Diagnostic");
@@ -288,7 +288,7 @@ mod tests {
         let by_cpv: std::collections::HashMap<&str, &str> = events
             .iter()
             .filter_map(|e| match e {
-                ActivityEvent::Diagnostic { cpv, msg, .. } => Some((cpv.as_deref()?, msg.as_str())),
+                ActivityEvent::Diagnostic { cpv, msg, .. } => Some((cpv.as_deref()?, msg.as_ref())),
                 _ => None,
             })
             .collect();

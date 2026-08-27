@@ -56,7 +56,7 @@ parking_lot = "0.12"
 papaya = "0.2"
 pubgrub = "0.4"
 resolvo = "0.12"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1"
 smallvec = "1"
 smol_str = "0.3"

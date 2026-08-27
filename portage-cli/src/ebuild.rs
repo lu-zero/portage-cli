@@ -709,8 +709,8 @@ fn worker_activity_cli(
         return (None, None, None, None);
     };
     (
-        Some(act.job_id.clone()),
-        act.parent_job_id.clone(),
+        Some(act.job_id.to_string()),
+        act.parent_job_id.as_deref().map(str::to_string),
         Some(live.to_string()),
         Some(act.merge_root.as_str().to_string()),
     )
@@ -819,9 +819,9 @@ fn worker_activity_ctx(
     Some(
         crate::activity::ActivityPkgCtx::new(
             bus,
-            job_id.to_string(),
-            parent_job_id.filter(|s| !s.is_empty()).map(str::to_string),
-            cpv.to_string(),
+            job_id.into(),
+            parent_job_id.filter(|s| !s.is_empty()).map(Into::into),
+            cpv.into(),
             side,
         )
         .with_live_root(Utf8PathBuf::from(live_root)),

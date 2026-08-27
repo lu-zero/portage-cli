@@ -1,6 +1,7 @@
 //! Fold [`ActivityEvent`]s into a live dashboard snapshot
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::event::{
     ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg, PkgKind, SessionFlags,
@@ -10,34 +11,36 @@ use super::history::{DurationStore, EtaPkg};
 /// One package currently being acted on
 #[derive(Clone, Debug)]
 pub struct InflightPkg {
-    pub cpv: String,
-    pub cpn: String,
+    pub cpv: Arc<str>,
+    pub cpn: Arc<str>,
     pub merge_root: ActivityMergeRoot,
     pub index: u32,
     pub of: u32,
     pub kind: PkgKind,
     pub pkg_started_at: f64,
-    pub phase: String,
+    pub phase: Arc<str>,
     pub phase_started_at: f64,
-    pub phases_done: Vec<(String, f64)>,
+    pub phases_done: Vec<(Arc<str>, f64)>,
 }
 
 /// One ongoing (or just-ended) activity session
 #[derive(Clone, Debug)]
 pub struct LiveSession {
-    pub job_id: String,
-    pub parent_job_id: Option<String>,
+    pub job_id: Arc<str>,
+    pub parent_job_id: Option<Arc<str>>,
     pub pid: u32,
     pub started_at: f64,
     pub argv: Vec<String>,
-    pub merge_root: String,
-    pub host_root: String,
+    pub merge_root: Arc<str>,
+    pub host_root: Arc<str>,
+    /// The toolchain sysroot (board-root topology only) — empty otherwise
+    pub base_root: Arc<str>,
     pub mode: ActivityMode,
     pub plan_total: u32,
     pub flags: SessionFlags,
     pub completed: u32,
     pub failed: u32,
-    pub inflight: HashMap<(ActivityMergeRoot, String), InflightPkg>,
+    pub inflight: HashMap<(ActivityMergeRoot, Arc<str>), InflightPkg>,
     /// Full plan (install order) when the session recorded it
     pub plan: Vec<ActivityPlanPkg>,
     /// Build-order blockers for [`Self::plan`] (same indices as merge scheduler)
@@ -66,8 +69,8 @@ impl LiveSession {
                 .inflight_sorted()
                 .into_iter()
                 .map(|p| EtaPkg {
-                    cpn: p.cpn.clone(),
-                    cpv: p.cpv.clone(),
+                    cpn: p.cpn.to_string(),
+                    cpv: p.cpv.to_string(),
                 })
                 .collect();
             let blockers = vec![Vec::new(); pkgs.len()];
@@ -78,7 +81,7 @@ impl LiveSession {
         let mut keep_old: Vec<usize> = Vec::new();
         let mut old_to_new: Vec<Option<usize>> = vec![None; self.plan.len()];
         for (i, p) in self.plan.iter().enumerate() {
-            if finished.contains(&(p.merge_root, p.cpv.clone())) {
+            if finished.contains(&(p.merge_root, p.cpv.to_string())) {
                 continue;
             }
             old_to_new[i] = Some(keep_old.len());
@@ -89,8 +92,8 @@ impl LiveSession {
             .map(|&i| {
                 let p = &self.plan[i];
                 EtaPkg {
-                    cpn: p.cpn.clone(),
-                    cpv: p.cpv.clone(),
+                    cpn: p.cpn.to_string(),
+                    cpv: p.cpv.to_string(),
                 }
             })
             .collect();
@@ -115,7 +118,7 @@ impl LiveSession {
 /// Reducer: apply events → session map (same shape as `em log current`)
 #[derive(Clone, Debug, Default)]
 pub struct LiveProjection {
-    sessions: HashMap<String, LiveSession>,
+    sessions: HashMap<Arc<str>, LiveSession>,
 }
 
 impl LiveProjection {
@@ -133,6 +136,7 @@ impl LiveProjection {
                 argv,
                 merge_root,
                 host_root,
+                base_root,
                 mode,
                 plan_total,
                 flags,
@@ -150,6 +154,7 @@ impl LiveProjection {
                         argv: argv.clone(),
                         merge_root: merge_root.clone(),
                         host_root: host_root.clone(),
+                        base_root: base_root.clone(),
                         mode: *mode,
                         plan_total: *plan_total,
                         flags: flags.clone(),

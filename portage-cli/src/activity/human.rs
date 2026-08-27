@@ -32,12 +32,12 @@
 //! `index`/`of` live on `PkgStart`; `PhaseEnter`/`PhaseLeave` only carry
 //! `cpv`, so the sink remembers the last `PkgStart` per `(job_id, cpv)` to
 //! label them. `SessionStart` carries the actual root paths (`merge_root`/
-//! `host_root` strings) so the `for`/`to ROOT/` suffix can be reproduced —
-//! real emerge only appends it when `ROOT != "/"`.
+//! `host_root`/`base_root` strings) so the `for`/`to ROOT/` suffix can be
+//! reproduced — real emerge only appends it when `ROOT != "/"`.
 
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
@@ -93,8 +93,9 @@ struct JobStatus {
     displayed: bool,
     /// Actual root paths from `SessionStart`, for the `for`/`to ROOT/` message
     /// suffix (real emerge only adds it when the root isn't `/`).
-    host_root: String,
-    merge_root: String,
+    host_root: Arc<str>,
+    merge_root: Arc<str>,
+    base_root: Arc<str>,
     mode: ActivityMode,
     /// Regen only: an indicatif bar that owns TTY detection, redraw-rate
     /// limiting, and non-tty suppression for us — see `regen_bar_style`.
@@ -114,6 +115,9 @@ fn regen_bar_style() -> ProgressStyle {
     .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
 }
 
+/// `(job_id, cpv)` — the key `state` tracks the last `PkgStart` location by
+type PkgKey = (Arc<str>, Arc<str>);
+
 /// Terminal renderer for the activity bus
 ///
 /// Attached as a **direct** (inline) sink so banners appear immediately, not buffered
@@ -129,8 +133,8 @@ pub struct HumanStdoutSink {
     /// always reach the user, so that path can't be trusted alone and this
     /// flag picks the direct `eprintln!` fallback instead.
     stderr_is_tty: bool,
-    state: Mutex<HashMap<(String, String), PkgLoc>>,
-    jobs: Mutex<HashMap<String, JobStatus>>,
+    state: Mutex<HashMap<PkgKey, PkgLoc>>,
+    jobs: Mutex<HashMap<Arc<str>, JobStatus>>,
 }
 
 impl HumanStdoutSink {
@@ -179,7 +183,7 @@ impl HumanStdoutSink {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .keys()
-            .filter(|(j, _)| j == job_id)
+            .filter(|(j, _)| j.as_ref() == job_id)
             .count();
         let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
         let Some(js) = jobs.get_mut(job_id) else {
@@ -243,12 +247,10 @@ impl HumanStdoutSink {
         };
         let path = match root {
             ActivityMergeRoot::Host => &js.host_root,
-            // TODO: no `base_root` wire field yet -- `Target`'s path is a
-            // harmless placeholder until a `Base` entry can actually occur
-            // (see the `base_copies` series, todo/crossdev-stage1-readline-ncursesw-pkgconfig.md).
-            ActivityMergeRoot::Base | ActivityMergeRoot::Target => &js.merge_root,
+            ActivityMergeRoot::Base => &js.base_root,
+            ActivityMergeRoot::Target => &js.merge_root,
         };
-        if path.is_empty() || path == "/" {
+        if path.is_empty() || path.as_ref() == "/" {
             return String::new();
         }
         let path = path.strip_suffix('/').unwrap_or(path);
@@ -281,6 +283,7 @@ impl ActivitySink for HumanStdoutSink {
                 flags,
                 merge_root,
                 host_root,
+                base_root,
                 mode,
                 argv,
                 ..
@@ -307,6 +310,7 @@ impl ActivitySink for HumanStdoutSink {
                         displayed: false,
                         host_root: host_root.clone(),
                         merge_root: merge_root.clone(),
+                        base_root: base_root.clone(),
                         mode: *mode,
                         regen_bar,
                         regen_banner,
@@ -577,6 +581,7 @@ mod tests {
             argv: vec![],
             merge_root: merge_root.into(),
             host_root: "/".into(),
+            base_root: "/".into(),
             mode: crate::activity::ActivityMode::Merge,
             plan_total,
             flags: crate::activity::SessionFlags {
@@ -596,7 +601,7 @@ mod tests {
             cpv: cpv.into(),
             cpn: cpv
                 .split_once('/')
-                .map(|(c, _)| c.to_string())
+                .map(|(c, _)| c.into())
                 .unwrap_or_default(),
             merge_root: ActivityMergeRoot::Target,
             index,
@@ -626,7 +631,7 @@ mod tests {
             cpv: cpv.into(),
             cpn: cpv
                 .split_once('/')
-                .map(|(c, _)| c.to_string())
+                .map(|(c, _)| c.into())
                 .unwrap_or_default(),
             merge_root: ActivityMergeRoot::Target,
             kind: PkgKind::Source,
@@ -706,6 +711,40 @@ mod tests {
         assert_eq!(
             sink.root_suffix("j", ActivityMergeRoot::Target, "to"),
             " to /tmp/portage-act/"
+        );
+    }
+
+    /// A `Base`-routed entry (the board-root topology's toolchain-sysroot
+    /// copy) must show *its own* root, not silently fall back to the
+    /// Target/board-root path — the bug this test guards against let the
+    /// `>>> Emerging (2 of 3) ...` banner claim the sysroot copy was going
+    /// to the board root, when it was really going to the sysroot.
+    #[test]
+    fn root_suffix_names_the_sysroot_for_a_base_entry() {
+        let sink = HumanStdoutSink::new(false, 0);
+        sink.on_event(&ActivityEvent::SessionStart {
+            v: ACTIVITY_EVENT_VERSION,
+            job_id: "j".into(),
+            parent_job_id: None,
+            pid: 1,
+            started_at: 0.0,
+            argv: vec![],
+            merge_root: "/board-fresh-check".into(),
+            host_root: "/".into(),
+            base_root: "/usr/i586-pc-linux-gnu".into(),
+            mode: crate::activity::ActivityMode::Merge,
+            plan_total: 1,
+            flags: crate::activity::SessionFlags::default(),
+            plan: vec![],
+            blockers: vec![],
+        });
+        assert_eq!(
+            sink.root_suffix("j", ActivityMergeRoot::Base, "to"),
+            " to /usr/i586-pc-linux-gnu/"
+        );
+        assert_eq!(
+            sink.root_suffix("j", ActivityMergeRoot::Target, "to"),
+            " to /board-fresh-check/"
         );
     }
 

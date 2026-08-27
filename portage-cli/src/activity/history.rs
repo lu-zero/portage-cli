@@ -91,13 +91,13 @@ impl ActivitySink for HistorySink {
                 self.modes
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .insert(job_id.clone(), *mode);
+                    .insert(job_id.to_string(), *mode);
             }
             ActivityEvent::SessionEnd { job_id, .. } => {
                 self.modes
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .remove(job_id);
+                    .remove(job_id.as_ref());
             }
             ActivityEvent::PkgEnd {
                 job_id,
@@ -116,7 +116,7 @@ impl ActivitySink for HistorySink {
                     .modes
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .get(job_id)
+                    .get(job_id.as_ref())
                     .copied()
                     .unwrap_or(ActivityMode::Merge);
                 if mode == ActivityMode::Regen {
@@ -124,15 +124,15 @@ impl ActivitySink for HistorySink {
                 }
                 self.append(&HistoryRecord {
                     ts_end: *at,
-                    job_id: job_id.clone(),
-                    cpn: cpn.clone(),
-                    cpv: cpv.clone(),
+                    job_id: job_id.to_string(),
+                    cpn: cpn.to_string(),
+                    cpv: cpv.to_string(),
                     merge_root: *merge_root,
                     kind: *kind,
                     ok: *ok,
                     seconds: *seconds,
                     phases: phases.clone(),
-                    error: error.clone(),
+                    error: error.as_deref().map(str::to_string),
                 });
             }
             _ => {}
@@ -609,7 +609,7 @@ mod tests {
                 v: ACTIVITY_EVENT_VERSION,
                 job_id: "j".into(),
                 parent_job_id: None,
-                cpv: format!("sys-apps/foo-{i}"),
+                cpv: format!("sys-apps/foo-{i}").into(),
                 cpn: "sys-apps/foo".into(),
                 merge_root: ActivityMergeRoot::Target,
                 kind: PkgKind::Source,

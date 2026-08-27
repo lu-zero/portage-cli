@@ -716,20 +716,24 @@ async fn emerge_atoms_inner(
         .plan
         .iter()
         .map(|p| crate::activity::ActivityPlanPkg {
-            cpn: p.cpv.cpn.to_string(),
-            cpv: p.cpv.to_string(),
+            cpn: p.cpv.cpn.to_string().into(),
+            cpv: p.cpv.to_string().into(),
             merge_root: p.merge_root.into(),
         })
         .collect();
     activity.emit(crate::activity::ActivityEvent::SessionStart {
         v: crate::activity::ACTIVITY_EVENT_VERSION,
-        job_id: job_id.clone(),
-        parent_job_id: parent_job_id.clone(),
+        job_id: job_id.as_str().into(),
+        parent_job_id: parent_job_id.as_deref().map(Into::into),
         pid: std::process::id(),
         started_at: session_started,
         argv,
-        merge_root: live_root.to_string(),
-        host_root: cli.host_roots().merge_root().to_string(),
+        merge_root: live_root.as_str().into(),
+        host_root: cli.host_roots().merge_root().as_str().into(),
+        base_root: cli
+            .sysroot_roots()
+            .map(|r| r.merge_root().as_str().into())
+            .unwrap_or_default(),
         mode,
         plan_total: outcome.plan.len() as u32,
         flags: crate::activity::SessionFlags {
@@ -804,8 +808,8 @@ async fn emerge_atoms_inner(
     // Live projection/disk already tracked completed/failed via PkgEnd.
     activity.emit(crate::activity::ActivityEvent::SessionEnd {
         v: crate::activity::ACTIVITY_EVENT_VERSION,
-        job_id,
-        parent_job_id,
+        job_id: job_id.into(),
+        parent_job_id: parent_job_id.map(Into::into),
         at: crate::activity::ActivityEvent::now(),
         ok,
         completed: 0,

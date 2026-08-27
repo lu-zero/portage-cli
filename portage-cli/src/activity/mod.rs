@@ -49,9 +49,9 @@ use camino::Utf8Path;
 #[derive(Clone)]
 pub struct ActivityPkgCtx {
     pub bus: ActivityBus,
-    pub job_id: String,
-    pub parent_job_id: Option<String>,
-    pub cpv: String,
+    pub job_id: Arc<str>,
+    pub parent_job_id: Option<Arc<str>>,
+    pub cpv: Arc<str>,
     pub merge_root: ActivityMergeRoot,
     /// Session live-FS root (`None` when activity is in-process only / tests)
     pub live_root: Option<camino::Utf8PathBuf>,
@@ -61,9 +61,9 @@ pub struct ActivityPkgCtx {
 impl ActivityPkgCtx {
     pub fn new(
         bus: ActivityBus,
-        job_id: String,
-        parent_job_id: Option<String>,
-        cpv: String,
+        job_id: Arc<str>,
+        parent_job_id: Option<Arc<str>>,
+        cpv: Arc<str>,
         merge_root: ActivityMergeRoot,
     ) -> Self {
         Self {
@@ -91,7 +91,7 @@ impl ActivityPkgCtx {
             parent_job_id: self.parent_job_id.clone(),
             cpv: self.cpv.clone(),
             merge_root: self.merge_root,
-            phase: phase.to_string(),
+            phase: phase.into(),
             at,
         });
         at
@@ -104,7 +104,7 @@ impl ActivityPkgCtx {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push(PhaseTiming {
-                phase: phase.to_string(),
+                phase: phase.into(),
                 seconds,
             });
         self.bus.emit(ActivityEvent::PhaseLeave {
@@ -113,7 +113,7 @@ impl ActivityPkgCtx {
             parent_job_id: self.parent_job_id.clone(),
             cpv: self.cpv.clone(),
             merge_root: self.merge_root,
-            phase: phase.to_string(),
+            phase: phase.into(),
             at,
             seconds,
         });
@@ -347,6 +347,7 @@ mod tests {
             argv: vec!["em".into(), "foo".into()],
             merge_root: "/".into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Merge,
             plan_total: 2,
             flags: SessionFlags::default(),
@@ -375,18 +376,14 @@ mod tests {
         let t0 = pkg.phase_enter("compile");
         pkg.phase_leave("compile", t0 - 1.0); // force positive seconds
         let evs = rec.events();
-        assert!(
-            evs.iter().any(
-                |e| matches!(e, ActivityEvent::PhaseEnter { phase, .. } if phase == "compile")
-            )
-        );
-        assert!(
-            evs.iter().any(
-                |e| matches!(e, ActivityEvent::PhaseLeave { phase, .. } if phase == "compile")
-            )
-        );
+        assert!(evs.iter().any(
+            |e| matches!(e, ActivityEvent::PhaseEnter { phase, .. } if phase.as_ref() == "compile")
+        ));
+        assert!(evs.iter().any(
+            |e| matches!(e, ActivityEvent::PhaseLeave { phase, .. } if phase.as_ref() == "compile")
+        ));
         assert_eq!(pkg.phases_done().len(), 1);
-        assert_eq!(pkg.phases_done()[0].phase, "compile");
+        assert_eq!(pkg.phases_done()[0].phase.as_ref(), "compile");
     }
 
     #[test]
@@ -402,6 +399,7 @@ mod tests {
             argv: vec!["em".into()],
             merge_root: "/".into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Merge,
             plan_total: 3,
             flags: SessionFlags {
@@ -434,7 +432,7 @@ mod tests {
         });
         assert_eq!(p.active().len(), 1);
         assert_eq!(p.active()[0].inflight.len(), 1);
-        assert_eq!(p.active()[0].inflight_sorted()[0].phase, "compile");
+        assert_eq!(p.active()[0].inflight_sorted()[0].phase.as_ref(), "compile");
 
         p.apply(&ActivityEvent::PkgEnd {
             v: ACTIVITY_EVENT_VERSION,
@@ -469,6 +467,7 @@ mod tests {
             argv: vec!["em".into()],
             merge_root: "/".into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Merge,
             plan_total: 1,
             flags: SessionFlags::default(),
@@ -486,6 +485,7 @@ mod tests {
             argv: vec!["em".into()],
             merge_root: "/".into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Regen,
             plan_total: 1,
             flags: SessionFlags::default(),
@@ -538,9 +538,9 @@ mod tests {
         assert!(matches!(
             ev,
             ActivityEvent::PhaseEnter {
-                phase,
+                ref phase,
                 ..
-            } if phase == "install"
+            } if phase.as_ref() == "install"
         ));
         accept.join().unwrap();
     }
@@ -557,6 +557,7 @@ mod tests {
             argv: vec![],
             merge_root: "/".into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Merge,
             plan_total: 3,
             flags: SessionFlags {
@@ -636,6 +637,7 @@ mod tests {
             argv: vec!["em".into(), "-u".into(), "foo".into()],
             merge_root: root.as_str().into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Merge,
             plan_total: 1,
             flags: SessionFlags::default(),
@@ -675,7 +677,7 @@ mod tests {
         assert_eq!(s.plan.len(), 1);
         assert_eq!(s.blockers.len(), 1);
         assert_eq!(s.inflight.len(), 1);
-        assert_eq!(s.inflight_sorted()[0].phase, "compile");
+        assert_eq!(s.inflight_sorted()[0].phase.as_ref(), "compile");
 
         bus.emit(ActivityEvent::SessionEnd {
             v: ACTIVITY_EVENT_VERSION,
@@ -715,6 +717,7 @@ mod tests {
             argv: vec!["em".into()],
             merge_root: root.as_str().into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Merge,
             plan_total: 2,
             flags: SessionFlags::default(),
@@ -793,6 +796,7 @@ mod tests {
             argv: vec!["em".into()],
             merge_root: root.as_str().into(),
             host_root: "/".into(),
+            base_root: "".into(),
             mode: ActivityMode::Merge,
             plan_total: 0,
             flags: SessionFlags::default(),

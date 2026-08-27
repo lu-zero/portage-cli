@@ -143,13 +143,17 @@ pub async fn run(
 
         activity.emit(ActivityEvent::SessionStart {
             v: ACTIVITY_EVENT_VERSION,
-            job_id: job_id.clone(),
+            job_id: job_id.as_str().into(),
             parent_job_id: None,
             pid: std::process::id(),
             started_at: session_started,
             argv,
-            merge_root: roots.merge_root().to_string(),
-            host_root: cli.host_roots().merge_root().to_string(),
+            merge_root: roots.merge_root().as_str().into(),
+            host_root: cli.host_roots().merge_root().as_str().into(),
+            base_root: cli
+                .sysroot_roots()
+                .map(|r| r.merge_root().as_str().into())
+                .unwrap_or_default(),
             mode: ActivityMode::Regen,
             plan_total,
             flags: SessionFlags {
@@ -185,7 +189,7 @@ pub async fn run(
         let completed = plan_total.saturating_sub(stats.errors as u32);
         activity.emit(ActivityEvent::SessionEnd {
             v: ACTIVITY_EVENT_VERSION,
-            job_id,
+            job_id: job_id.into(),
             parent_job_id: None,
             at: ActivityEvent::now(),
             ok: stats.errors == 0,
@@ -218,17 +222,17 @@ fn emit_item(bus: &ActivityBus, job_id: &str, item: RegenItem) {
     // Progress / short failure line — HumanStdoutSink owns the terminal form.
     bus.emit(ActivityEvent::PkgEnd {
         v: ACTIVITY_EVENT_VERSION,
-        job_id: job_id.to_string(),
+        job_id: job_id.into(),
         parent_job_id: None,
-        cpv,
-        cpn,
+        cpv: cpv.into(),
+        cpn: cpn.into(),
         merge_root: ActivityMergeRoot::Target,
         kind: PkgKind::Source,
         ok,
         at,
         seconds: 0.0,
         phases: vec![],
-        error,
+        error: error.map(Into::into),
     });
 
     // Rich code frame stays off the wire (JSONL only has the short `error`

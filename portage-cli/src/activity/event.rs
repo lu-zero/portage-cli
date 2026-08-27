@@ -1,5 +1,7 @@
 //! Typed activity events — the wire schema for library channels and JSONL
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 /// Schema version embedded on every serialised event (`"v": 1`)
@@ -82,15 +84,15 @@ pub struct SessionFlags {
 /// One phase duration inside a finished package
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PhaseTiming {
-    pub phase: String,
+    pub phase: Arc<str>,
     pub seconds: f64,
 }
 
 /// One plan entry for live-session ETA (`SessionStart.plan` / session.json)
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivityPlanPkg {
-    pub cpn: String,
-    pub cpv: String,
+    pub cpn: Arc<str>,
+    pub cpv: Arc<str>,
     pub merge_root: ActivityMergeRoot,
 }
 
@@ -109,14 +111,18 @@ pub enum DiagnosticLevel {
 pub enum ActivityEvent {
     SessionStart {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
+        parent_job_id: Option<Arc<str>>,
         pid: u32,
         started_at: f64,
         argv: Vec<String>,
-        merge_root: String,
-        host_root: String,
+        merge_root: Arc<str>,
+        host_root: Arc<str>,
+        /// The toolchain sysroot (board-root topology only, `--target T
+        /// --root R`) — empty when there is no separate sysroot.
+        #[serde(default)]
+        base_root: Arc<str>,
         mode: ActivityMode,
         plan_total: u32,
         flags: SessionFlags,
@@ -129,18 +135,18 @@ pub enum ActivityEvent {
     },
     SessionHeartbeat {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
+        parent_job_id: Option<Arc<str>>,
         at: f64,
         completed: u32,
         failed: u32,
     },
     SessionEnd {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
+        parent_job_id: Option<Arc<str>>,
         at: f64,
         ok: bool,
         completed: u32,
@@ -149,11 +155,11 @@ pub enum ActivityEvent {
     },
     PkgStart {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
-        cpv: String,
-        cpn: String,
+        parent_job_id: Option<Arc<str>>,
+        cpv: Arc<str>,
+        cpn: Arc<str>,
         merge_root: ActivityMergeRoot,
         index: u32,
         of: u32,
@@ -162,32 +168,32 @@ pub enum ActivityEvent {
     },
     PhaseEnter {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
-        cpv: String,
+        parent_job_id: Option<Arc<str>>,
+        cpv: Arc<str>,
         merge_root: ActivityMergeRoot,
-        phase: String,
+        phase: Arc<str>,
         at: f64,
     },
     PhaseLeave {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
-        cpv: String,
+        parent_job_id: Option<Arc<str>>,
+        cpv: Arc<str>,
         merge_root: ActivityMergeRoot,
-        phase: String,
+        phase: Arc<str>,
         at: f64,
         seconds: f64,
     },
     PkgEnd {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
-        cpv: String,
-        cpn: String,
+        parent_job_id: Option<Arc<str>>,
+        cpv: Arc<str>,
+        cpn: Arc<str>,
         merge_root: ActivityMergeRoot,
         kind: PkgKind,
         ok: bool,
@@ -196,7 +202,7 @@ pub enum ActivityEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         phases: Vec<PhaseTiming>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        error: Option<Arc<str>>,
     },
     /// A free-form diagnostic surfaced onto the bus
     ///
@@ -206,15 +212,15 @@ pub enum ActivityEvent {
     /// spans when present.
     Diagnostic {
         v: u32,
-        job_id: String,
+        job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_job_id: Option<String>,
+        parent_job_id: Option<Arc<str>>,
         level: DiagnosticLevel,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        cpv: Option<String>,
+        cpv: Option<Arc<str>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        phase: Option<String>,
-        msg: String,
+        phase: Option<Arc<str>>,
+        msg: Arc<str>,
         at: f64,
     },
 }

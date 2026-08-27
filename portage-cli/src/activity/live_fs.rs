@@ -1,7 +1,7 @@
 //! On-disk live status sink — concurrent-friendly per-package files
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use serde::Serialize;
@@ -96,12 +96,14 @@ impl LiveFsSink {
         struct SessionFile<'a> {
             job_id: &'a str,
             #[serde(skip_serializing_if = "Option::is_none")]
-            parent_job_id: &'a Option<String>,
+            parent_job_id: &'a Option<Arc<str>>,
             pid: u32,
             started_at: f64,
             argv: &'a [String],
             merge_root: &'a str,
             host_root: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            base_root: &'a str,
             mode: ActivityMode,
             plan_total: u32,
             flags: &'a SessionFlags,
@@ -121,6 +123,7 @@ impl LiveFsSink {
                 argv: &s.argv,
                 merge_root: &s.merge_root,
                 host_root: &s.host_root,
+                base_root: &s.base_root,
                 mode: s.mode,
                 plan_total: s.plan_total,
                 flags: &s.flags,
@@ -160,7 +163,7 @@ impl LiveFsSink {
         let Some(s) = state.get(job_id) else {
             return;
         };
-        let Some(p) = s.inflight.get(&(merge_root, cpv.to_string())) else {
+        let Some(p) = s.inflight.get(&(merge_root, cpv.into())) else {
             return;
         };
         #[derive(Serialize)]
@@ -174,7 +177,7 @@ impl LiveFsSink {
             pkg_started_at: f64,
             phase: &'a str,
             phase_started_at: f64,
-            phases_done: &'a [(String, f64)],
+            phases_done: &'a [(Arc<str>, f64)],
         }
         let path = self.inflight_path(job_id, merge_root, cpv);
         self.write_json(
@@ -316,6 +319,7 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
             argv: meta.argv.clone(),
             merge_root: meta.merge_root.clone(),
             host_root: meta.host_root.clone(),
+            base_root: meta.base_root.clone(),
             mode: meta.mode,
             plan_total: meta.plan_total,
             flags: meta.flags.clone(),
@@ -355,14 +359,16 @@ pub fn load_live_from_disk(merge_root: &Utf8Path) -> LiveProjection {
 
 #[derive(serde::Deserialize)]
 struct SessionDisk {
-    job_id: String,
+    job_id: Arc<str>,
     #[serde(default)]
-    parent_job_id: Option<String>,
+    parent_job_id: Option<Arc<str>>,
     pid: u32,
     started_at: f64,
     argv: Vec<String>,
-    merge_root: String,
-    host_root: String,
+    merge_root: Arc<str>,
+    host_root: Arc<str>,
+    #[serde(default)]
+    base_root: Arc<str>,
     mode: ActivityMode,
     plan_total: u32,
     flags: SessionFlags,
@@ -384,17 +390,17 @@ struct ProgressDisk {
 
 #[derive(serde::Deserialize)]
 struct InflightDisk {
-    cpv: String,
-    cpn: String,
+    cpv: Arc<str>,
+    cpn: Arc<str>,
     merge_root: ActivityMergeRoot,
     index: u32,
     of: u32,
     kind: PkgKind,
     pkg_started_at: f64,
-    phase: String,
+    phase: Arc<str>,
     phase_started_at: f64,
     #[serde(default)]
-    phases_done: Vec<(String, f64)>,
+    phases_done: Vec<(Arc<str>, f64)>,
 }
 
 fn load_inflight_dir(
@@ -427,7 +433,7 @@ fn load_inflight_dir(
             };
             proj.apply(&ActivityEvent::PkgStart {
                 v: super::event::ACTIVITY_EVENT_VERSION,
-                job_id: job_id.to_string(),
+                job_id: job_id.into(),
                 parent_job_id: None,
                 cpv: p.cpv.clone(),
                 cpn: p.cpn.clone(),
@@ -440,7 +446,7 @@ fn load_inflight_dir(
             for (phase, secs) in &p.phases_done {
                 proj.apply(&ActivityEvent::PhaseLeave {
                     v: super::event::ACTIVITY_EVENT_VERSION,
-                    job_id: job_id.to_string(),
+                    job_id: job_id.into(),
                     parent_job_id: None,
                     cpv: p.cpv.clone(),
                     merge_root: p.merge_root,
@@ -451,7 +457,7 @@ fn load_inflight_dir(
             }
             proj.apply(&ActivityEvent::PhaseEnter {
                 v: super::event::ACTIVITY_EVENT_VERSION,
-                job_id: job_id.to_string(),
+                job_id: job_id.into(),
                 parent_job_id: None,
                 cpv: p.cpv.clone(),
                 merge_root: p.merge_root,

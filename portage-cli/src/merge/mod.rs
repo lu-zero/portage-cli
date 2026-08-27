@@ -121,10 +121,10 @@ fn emit_pkg_start(
     let cpn = planned.cpv.cpn.to_string();
     act.bus.emit(crate::activity::ActivityEvent::PkgStart {
         v: crate::activity::ACTIVITY_EVENT_VERSION,
-        job_id: act.job_id.clone(),
-        parent_job_id: act.parent_job_id.clone(),
-        cpv: planned.cpv.to_string(),
-        cpn,
+        job_id: act.job_id.as_str().into(),
+        parent_job_id: act.parent_job_id.as_deref().map(Into::into),
+        cpv: planned.cpv.to_string().into(),
+        cpn: cpn.into(),
         merge_root: planned.merge_root.into(),
         index,
         of,
@@ -149,17 +149,17 @@ fn emit_pkg_end(
     let at = crate::activity::ActivityEvent::now();
     act.bus.emit(crate::activity::ActivityEvent::PkgEnd {
         v: crate::activity::ACTIVITY_EVENT_VERSION,
-        job_id: act.job_id.clone(),
-        parent_job_id: act.parent_job_id.clone(),
-        cpv: planned.cpv.to_string(),
-        cpn: planned.cpv.cpn.to_string(),
+        job_id: act.job_id.as_str().into(),
+        parent_job_id: act.parent_job_id.as_deref().map(Into::into),
+        cpv: planned.cpv.to_string().into(),
+        cpn: planned.cpv.cpn.to_string().into(),
         merge_root: planned.merge_root.into(),
         kind,
         ok,
         at,
         seconds: (at - started).max(0.0),
         phases,
-        error,
+        error: error.map(Into::into),
     });
 }
 
@@ -170,9 +170,9 @@ fn activity_pkg_ctx(
     activity.as_ref().map(|act| {
         crate::activity::ActivityPkgCtx::new(
             act.bus.clone(),
-            act.job_id.clone(),
-            act.parent_job_id.clone(),
-            planned.cpv.to_string(),
+            act.job_id.as_str().into(),
+            act.parent_job_id.as_deref().map(Into::into),
+            planned.cpv.to_string().into(),
             planned.merge_root.into(),
         )
         .with_live_root(act.live_root.clone())
