@@ -1285,7 +1285,7 @@ fn sysroot_config_entries(
     // of bug just fixed for the alias-packages entry.
     entries.push(config_plan::ConfigEntry::File {
         path: portage.join("make.conf"),
-        desired: make_conf_body(target, sysroot, outer_root),
+        desired: make_conf_body(target, outer_root),
     });
 
     // Link make.profile DIRECTLY (absolute) to the target-arch profile — eselect
@@ -1348,7 +1348,14 @@ fn sysroot_repos_conf_entries(
 /// (`sys-devel/gcc` included) builds fully serial — this make.conf is the
 /// *only* one they read, so there is no other source for build parallelism.
 /// 128-core host because this was missing.
-fn make_conf_body(target: &CrossTarget, sysroot: &Utf8Path, outer_root: &Utf8Path) -> String {
+///
+/// Deliberately no static `PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` here
+/// (dropped 2026-08-26, was a net-libs/libtirpc host-`.pc`-leak fix): being
+/// ambient for the whole phase, it leaked into `econf_build`'s native
+/// sub-configures too — no override exists there — breaking
+/// `dev-lang/python`'s CBUILD mini-python under `--target` (found live).
+/// Target packages still get scoped `PKG_CONFIG` via the pkgconf wrapper.
+fn make_conf_body(target: &CrossTarget, outer_root: &Utf8Path) -> String {
     let arch = target.gentoo_arch();
     let tuple = &target.tuple;
     let cbuild = host_chost();
@@ -1363,17 +1370,9 @@ fn make_conf_body(target: &CrossTarget, sysroot: &Utf8Path, outer_root: &Utf8Pat
          MAKEOPTS=\"{makeopts}\"\n\
          CFLAGS=\"{}\"\n\
          CXXFLAGS=\"${{CFLAGS}}\"\n\
-         # The sysroot's own .pc files record paths as if it were \"/\" (e.g.\n\
-         # `prefix=/usr`, not the host-absolute sysroot path) — PKG_CONFIG_SYSROOT_DIR\n\
-         # prepends the real path onto whatever a .pc reports. PKG_CONFIG_LIBDIR\n\
-         # (unlike _PATH) *replaces* pkg-config's default search list, so the host's\n\
-         # own .pc files never leak into a foreign-arch cross build.\n\
-         PKG_CONFIG_SYSROOT_DIR=\"{sysroot}\"\n\
-         PKG_CONFIG_LIBDIR=\"{sysroot}/usr/lib64/pkgconfig:{sysroot}/usr/lib/pkgconfig:{sysroot}/usr/share/pkgconfig\"\n\
          # meson.eclass (and any buildsystem following the same convention) reads\n\
          # BUILD_PKG_CONFIG_LIBDIR for its *native* build-machine pkg-config search\n\
-         # path, falling back to the target PKG_CONFIG_LIBDIR above when unset — the\n\
-         # same host/target conflation bug as the bare zstd.m4 case in\n\
+         # path — the same host/target conflation bug as the bare zstd.m4 case in\n\
          # sys-devel/binutils, just for buildsystems that otherwise do the right\n\
          # thing. Point it at the outer EROOT's own native pkgconfig dirs (host\n\
          # BDEPEND packages build there), not the bare host `/`.\n\
@@ -2244,11 +2243,7 @@ mod tests {
     #[test]
     fn make_conf_body_never_sets_ctarget() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let body = make_conf_body(
-            &target,
-            Utf8Path::new("/usr/riscv64-unknown-linux-gnu"),
-            Utf8Path::new("/"),
-        );
+        let body = make_conf_body(&target, Utf8Path::new("/"));
         assert!(
             !body.lines().any(|l| l.starts_with("CTARGET=")),
             "sysroot make.conf must not set CTARGET:\n{body}"
@@ -2267,11 +2262,7 @@ mod tests {
     #[test]
     fn make_conf_body_sets_makeopts() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let body = make_conf_body(
-            &target,
-            Utf8Path::new("/usr/riscv64-unknown-linux-gnu"),
-            Utf8Path::new("/"),
-        );
+        let body = make_conf_body(&target, Utf8Path::new("/"));
         assert!(body.contains("MAKEOPTS="), "sysroot make.conf:\n{body}");
         assert!(
             !body.contains("MAKEOPTS=\"\""),
@@ -2279,44 +2270,33 @@ mod tests {
         );
     }
 
-    // Regression test for the iproute2 stage3 failure: `./configure` ran
-    // plain `pkg-config`, found the *host's* `net-libs/libtirpc.pc`
-    // (`net-libs/libtirpc` isn't even in DEPEND — USE=-nfs — let alone
-    // installed in the target sysroot), and linked `-ltirpc` into a build
-    // that then failed since the library genuinely isn't in the sysroot.
-    // `PKG_CONFIG_SYSROOT_DIR`/`PKG_CONFIG_LIBDIR` must scope pkg-config to
-    // the sysroot so a foreign-arch cross build never sees host `.pc` files.
+    // Was a regression test for the iproute2 stage3 failure (bare
+    // pkg-config found the host's net-libs/libtirpc.pc, linked a
+    // library not in the sysroot) — fixed then via static
+    // PKG_CONFIG_SYSROOT_DIR/PKG_CONFIG_LIBDIR. Reverted 2026-08-26:
+    // ambient for the whole phase, that leaked into econf_build's native
+    // sub-configures too, breaking dev-lang/python's CBUILD mini-python
+    // under any --target (found live) — far more common than iproute2's
+    // bare-call case. Target packages still get scoped PKG_CONFIG via
+    // em select pkgconf's wrapper; only a bare, unwrapped pkg-config
+    // call can regress again until that gets its own wrapper fix too.
     #[test]
-    fn make_conf_body_scopes_pkg_config_to_the_sysroot() {
+    fn make_conf_body_no_longer_sets_static_pkg_config_sysroot_scoping() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
-        let sysroot = "/var/tmp/cross-stage1-riscv64/usr/riscv64-unknown-linux-gnu";
-        let body = make_conf_body(
-            &target,
-            Utf8Path::new(sysroot),
-            Utf8Path::new("/var/tmp/cross-stage1-riscv64"),
+        let body = make_conf_body(&target, Utf8Path::new("/"));
+        assert!(
+            !body.contains("PKG_CONFIG_SYSROOT_DIR="),
+            "must not be ambient for the whole phase:\n{body}"
         );
         assert!(
-            body.contains(&format!("PKG_CONFIG_SYSROOT_DIR=\"{sysroot}\"")),
-            "sysroot make.conf:\n{body}"
-        );
-        assert!(
-            body.contains("PKG_CONFIG_LIBDIR=")
-                && body.contains(&format!("{sysroot}/usr/lib64/pkgconfig"))
-                && body.contains(&format!("{sysroot}/usr/share/pkgconfig")),
-            "PKG_CONFIG_LIBDIR must point into the sysroot only:\n{body}"
-        );
-        // PKG_CONFIG_LIBDIR *replaces* the default search list — the whole
-        // point is that no host pkgconfig dir leaks in.
-        assert!(
-            !body.contains("PKG_CONFIG_PATH="),
-            "must not additively leak the host's pkgconfig search path:\n{body}"
+            !body.lines().any(|l| l.starts_with("PKG_CONFIG_LIBDIR=")),
+            "must not be ambient for the whole phase:\n{body}"
         );
     }
 
     // meson.eclass (and any buildsystem following the same convention) reads
     // `BUILD_PKG_CONFIG_LIBDIR` for its native build-machine pkg-config
-    // search path, falling back to the *target* `PKG_CONFIG_LIBDIR` when
-    // unset — the same host/target conflation that broke
+    // search path — the same host/target conflation that broke
     // `sys-devel/binutils`'s bare `zstd.m4` check (#29), just for
     // buildsystems that otherwise get this right. It must point at the
     // outer EROOT (where Host BDEPEND packages actually build — see
@@ -2327,7 +2307,7 @@ mod tests {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();
         let sysroot = "/var/tmp/cross-stage1-riscv64/usr/riscv64-unknown-linux-gnu";
         let outer_root = "/var/tmp/cross-stage1-riscv64";
-        let body = make_conf_body(&target, Utf8Path::new(sysroot), Utf8Path::new(outer_root));
+        let body = make_conf_body(&target, Utf8Path::new(outer_root));
         assert!(
             body.contains(&format!(
                 "BUILD_PKG_CONFIG_LIBDIR=\"{outer_root}/usr/lib64/pkgconfig"
