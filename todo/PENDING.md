@@ -498,9 +498,16 @@ blocked by the three independent findings above, tracked separately.
   dead stop at 2/97) before hitting an unrelated new bug.
   [[crossdev-stage1-board-root-header-search]]
 - 🔴 **`sys-libs/readline` can't find `ncursesw` via pkg-config in a
-  board `--root` stage1** (`src_prepare`, not compile — a completely
-  different mechanism from the header-search bug above) — found
-  2026-08-27 continuing that same board `stage1` run once unblocked.
+  board `--root` stage1** — found and root-caused 2026-08-27 continuing
+  that same board `stage1` run once unblocked. Confirmed live (wrapper
+  instrumented): the header-search fix above correctly made `SYSROOT`
+  point at the crossdev toolchain sysroot again, but the
+  `<CTARGET>-pkg-config` wrapper also scopes `PKG_CONFIG_LIBDIR` off
+  that same `SYSROOT` — so it can't see sibling packages (`ncursesw`)
+  that install progressively into the board root instead. A genuine
+  design question (should the wrapper use `ROOT` instead, or should
+  `SYSROOT` not point at the toolchain for ordinary non-bootstrap
+  packages at all), not a quick patch.
   [[crossdev-stage1-readline-ncursesw-pkgconfig]]
 - 🟡 **`em`'s autounmask never discovers a masked candidate buried
   multiple hops deep in a compound solve failure** — found and root
