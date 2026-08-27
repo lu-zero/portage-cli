@@ -50,11 +50,28 @@ impl env_d::EnvDProfile for GccProfileType {
     }
 
     fn sync_foreign_config(roots: &Roots, vars: &BTreeMap<String, String>) -> Result<()> {
-        let host_chost = portage_repo::MakeConf::load_default()
-            .ok()
-            .and_then(|m| m.get("CHOST").map(str::to_owned));
-        write_clang_configs(&env_d::eprefix(roots), vars, host_chost.as_deref())
+        write_clang_configs(&env_d::eprefix(roots), vars, root_chost(roots).as_deref())
     }
+}
+
+/// `CHOST` for the root being operated on — root-aware the same way
+/// [`super::get_chost`] is, but taking [`Roots`] directly since crossdev's
+/// entry points hand this `Cli::base_roots`, not a `&Cli`. Reading the
+/// *host's* `/etc/portage/make.conf` unconditionally (the previous
+/// approach) misjudges a `--root`/`--local` root's own native gcc as
+/// foreign, since it compares against the wrong CHOST entirely.
+fn root_chost(roots: &Roots) -> Option<String> {
+    let mut paths = vec![super::config_portage_dir_for(roots).join("make.conf")];
+    // `--prefix`/`--local` deliberately don't carry their own CHOST (see
+    // `get_chost`'s doc comment) — fall back to the host's real make.conf.
+    if super::is_prefix_context_for(roots) {
+        paths.push(Utf8PathBuf::from("/etc/portage/make.conf"));
+    }
+    paths.iter().find_map(|p| {
+        portage_repo::MakeConf::load(p)
+            .ok()
+            .and_then(|mc| mc.get("CHOST").map(str::to_owned))
+    })
 }
 
 /// Route clang's gcc-install hand-off to the right config file.
@@ -62,18 +79,12 @@ impl env_d::EnvDProfile for GccProfileType {
 /// The value is the first `:` component of the profile's `LDPATH`
 /// (gcc-config's `get_lib_path`), e.g. `/usr/lib/gcc/aarch64-unknown-linux-gnu/16`.
 ///
-/// - **Native** activation (the gcc being activated matches the host
-///   `CHOST`, or the host CHOST is undeterminable): rewrite
-///   `/etc/clang/gentoo-gcc-install.cfg` — gcc-config's own last act
-///   (`gcc-config:797-806`), which reaches into *clang's* config directory
-///   because clang has no way to know that the gcc selection changed.
-/// - **Foreign** (cross) activation: never touch that host-global file —
-///   it would break every native link ("file in wrong format", found live
-///   after an i586 crossdev setup). Instead populate
-///   `/etc/clang/cross/<chost>.cfg` with the target-specific facts clang
-///   drivers need, mirroring what real crossdev writes for its LLVM
-///   targets and what `clang-crossdev-wrappers` consume via
-///   `--config=/etc/clang/cross/${CTARGET}.cfg`.
+/// - **Native** (matches the root's own `CHOST`): rewrite
+///   `/etc/clang/gentoo-gcc-install.cfg` (gcc-config's own last act).
+/// - **Foreign** (cross): never touch that global file — write
+///   `/etc/clang/cross/<chost>.cfg` instead (`clang-crossdev-wrappers` reads it).
+/// - **Undeterminable** CHOST: treated as native (unchanged) — flows that
+///   never recorded a CHOST must not lose the gcc hand-off.
 fn write_clang_configs(
     eprefix: &Utf8Path,
     vars: &BTreeMap<String, String>,
@@ -86,8 +97,11 @@ fn write_clang_configs(
     else {
         return Ok(());
     };
-    // The gcc being activated: /usr/lib/gcc/<chost>/<version>
-    let Some(activated_chost) = lib_path
+    // The gcc being activated: /usr/lib/gcc/<chost>/<version> — under a
+    // Prefix root LDPATH carries the EPREFIX too, so strip that first (same
+    // two-step as `install_gcc_wrappers`' `rel`).
+    let unprefixed = lib_path.strip_prefix(eprefix.as_str()).unwrap_or(lib_path);
+    let Some(activated_chost) = unprefixed
         .strip_prefix("/usr/lib/gcc/")
         .and_then(|rest| rest.split('/').next())
     else {
@@ -215,6 +229,47 @@ mod tests {
     use super::*;
     use crate::cli::Cli;
     use clap::Parser;
+
+    // `root_chost` must read the *target* root's own make.conf, not the
+    // host's — the bug this guards against: `--root`/`--config-root` at a
+    // different CHOST than the host previously got compared against the
+    // host's CHOST, misrouting that root's own native gcc as foreign.
+    #[test]
+    fn root_chost_reads_the_explicit_config_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        std::fs::create_dir_all(dir.path().join("etc/portage")).unwrap();
+        std::fs::write(
+            dir.path().join("etc/portage/make.conf"),
+            "CHOST=\"i586-pc-linux-gnu\"\n",
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
+        assert_eq!(
+            root_chost(&cli.outer_roots()),
+            Some("i586-pc-linux-gnu".to_string())
+        );
+    }
+
+    // No config root recorded at all (no `--config-root`, no `--local`
+    // overlay): `config_portage_dir_for` resolves to `/etc/portage` (the
+    // host's own), matching real eselect's own bare-`--root` behavior.
+    #[test]
+    fn root_chost_falls_back_to_host_without_an_explicit_config_root() {
+        let Ok(host) =
+            portage_repo::MakeConf::load(camino::Utf8Path::new("/etc/portage/make.conf"))
+                .map(|mc| mc.get("CHOST").map(str::to_owned))
+        else {
+            eprintln!("skipping: host /etc/portage/make.conf unreadable here");
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        let cli = Cli::parse_from(["em", "--root", root]);
+        assert_eq!(root_chost(&cli.outer_roots()), host);
+    }
 
     // `em select`'s config-root resolution deliberately does NOT infer a
     // config root from bare `--root` (matching real eselect, which only
@@ -388,6 +443,35 @@ mod tests {
             std::fs::read_to_string(cross.as_std_path()).unwrap(),
             "--gcc-install-dir=\"/usr/lib/gcc/i586-pc-linux-gnu/16\"\n\
              --target=i586-pc-linux-gnu\n"
+        );
+    }
+
+    // Under a Prefix root (`--local`), LDPATH carries the EPREFIX itself
+    // (`<EPREFIX>/usr/lib/gcc/<chost>/<ver>`) — the CHOST extraction must
+    // strip that before matching `/usr/lib/gcc/`, or every Prefix native
+    // activation silently writes nothing.
+    #[test]
+    fn native_activation_under_prefix_strips_eprefix_from_ldpath() {
+        let dir = tempfile::tempdir().unwrap();
+        let eprefix = camino::Utf8Path::from_path(dir.path()).unwrap().to_owned();
+        let cfg = eprefix.join("etc/clang/gentoo-gcc-install.cfg");
+        std::fs::create_dir_all(cfg.parent().unwrap().as_std_path()).unwrap();
+        std::fs::write(cfg.as_std_path(), "# placeholder\n").unwrap();
+
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert(
+            "LDPATH".to_string(),
+            format!("{eprefix}/usr/lib/gcc/aarch64-unknown-linux-gnu/16"),
+        );
+
+        write_clang_configs(&eprefix, &vars, Some("aarch64-unknown-linux-gnu")).unwrap();
+
+        let written = std::fs::read_to_string(cfg.as_std_path()).unwrap();
+        assert!(
+            written.contains(&format!(
+                "--gcc-install-dir=\"{eprefix}/usr/lib/gcc/aarch64-unknown-linux-gnu/16\""
+            )),
+            "{written}"
         );
     }
 
