@@ -211,8 +211,8 @@ pub async fn run(
 
 /// Map one finished ebuild onto the bus (and rich UI for parse failures)
 fn emit_item(bus: &ActivityBus, job_id: &str, item: RegenItem) {
-    let cpv = item.ebuild.cpv().to_string();
-    let cpn = item.ebuild.cpv().cpn.to_string();
+    let cpv = item.ebuild.cpv().clone();
+    let cpn = cpv.cpn;
     let at = ActivityEvent::now();
     let (ok, error) = match &item.result {
         Ok(()) => (true, None),
@@ -224,8 +224,8 @@ fn emit_item(bus: &ActivityBus, job_id: &str, item: RegenItem) {
         v: ACTIVITY_EVENT_VERSION,
         job_id: job_id.into(),
         parent_job_id: None,
-        cpv: cpv.into(),
-        cpn: cpn.into(),
+        cpv: std::sync::Arc::new(cpv),
+        cpn,
         merge_root: ActivityMergeRoot::Target,
         kind: PkgKind::Source,
         ok,

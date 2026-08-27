@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use portage_atom::{Cpn, Cpv};
 use serde::{Deserialize, Serialize};
 
 /// Schema version embedded on every serialised event (`"v": 1`)
@@ -91,8 +92,8 @@ pub struct PhaseTiming {
 /// One plan entry for live-session ETA (`SessionStart.plan` / session.json)
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivityPlanPkg {
-    pub cpn: Arc<str>,
-    pub cpv: Arc<str>,
+    pub cpn: Cpn,
+    pub cpv: Arc<Cpv>,
     pub merge_root: ActivityMergeRoot,
 }
 
@@ -158,8 +159,8 @@ pub enum ActivityEvent {
         job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_job_id: Option<Arc<str>>,
-        cpv: Arc<str>,
-        cpn: Arc<str>,
+        cpv: Arc<Cpv>,
+        cpn: Cpn,
         merge_root: ActivityMergeRoot,
         index: u32,
         of: u32,
@@ -171,7 +172,7 @@ pub enum ActivityEvent {
         job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_job_id: Option<Arc<str>>,
-        cpv: Arc<str>,
+        cpv: Arc<Cpv>,
         merge_root: ActivityMergeRoot,
         phase: Arc<str>,
         at: f64,
@@ -181,7 +182,7 @@ pub enum ActivityEvent {
         job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_job_id: Option<Arc<str>>,
-        cpv: Arc<str>,
+        cpv: Arc<Cpv>,
         merge_root: ActivityMergeRoot,
         phase: Arc<str>,
         at: f64,
@@ -192,8 +193,8 @@ pub enum ActivityEvent {
         job_id: Arc<str>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         parent_job_id: Option<Arc<str>>,
-        cpv: Arc<str>,
-        cpn: Arc<str>,
+        cpv: Arc<Cpv>,
+        cpn: Cpn,
         merge_root: ActivityMergeRoot,
         kind: PkgKind,
         ok: bool,

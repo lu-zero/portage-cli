@@ -4,9 +4,10 @@ use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use portage_atom::{Cpn, Cpv};
 use serde::{Deserialize, Serialize};
 
 use super::bus::ActivitySink;
@@ -17,8 +18,8 @@ use super::event::{ActivityEvent, ActivityMergeRoot, ActivityMode, PhaseTiming, 
 pub struct HistoryRecord {
     pub ts_end: f64,
     pub job_id: String,
-    pub cpn: String,
-    pub cpv: String,
+    pub cpn: Cpn,
+    pub cpv: Arc<Cpv>,
     pub merge_root: ActivityMergeRoot,
     pub kind: PkgKind,
     pub ok: bool,
@@ -125,8 +126,8 @@ impl ActivitySink for HistorySink {
                 self.append(&HistoryRecord {
                     ts_end: *at,
                     job_id: job_id.to_string(),
-                    cpn: cpn.to_string(),
-                    cpv: cpv.to_string(),
+                    cpn: *cpn,
+                    cpv: cpv.clone(),
                     merge_root: *merge_root,
                     kind: *kind,
                     ok: *ok,
@@ -184,11 +185,11 @@ impl DurationStore {
     /// `(merge_root, cpv)` pairs already recorded (success or failure) for
     /// `job_id` — the live tree's own `finished` set was dropped (O(N²)
     /// rewrite, see `todo/for-sonnet.md` 2026-08-09); this is its replacement.
-    pub fn finished_set(&self, job_id: &str) -> HashSet<(ActivityMergeRoot, String)> {
+    pub fn finished_set(&self, job_id: &str) -> HashSet<(ActivityMergeRoot, Cpv)> {
         self.records
             .iter()
             .filter(|r| r.job_id == job_id)
-            .map(|r| (r.merge_root, r.cpv.clone()))
+            .map(|r| (r.merge_root, (*r.cpv).clone()))
             .collect()
     }
 
@@ -199,17 +200,11 @@ impl DurationStore {
     /// triggering package actually merged — not on whether the whole run's
     /// final `Result` was `Ok`, which stays wrong on a `-jN` run where an
     /// unrelated later package fails after the trigger already succeeded.
-    ///
-    /// Parses each record's stored cpv text back into a real
-    /// [`portage_atom::Cpv`] so the caller compares its own typed `Cpv`
-    /// directly instead of `to_string()`-ing one at every check. A record
-    /// that fails to parse is skipped, not an error — it was always
-    /// written from a real `Cpv`'s own `Display`.
-    pub fn successful_set(&self, job_id: &str) -> HashSet<portage_atom::Cpv> {
+    pub fn successful_set(&self, job_id: &str) -> HashSet<Cpv> {
         self.records
             .iter()
             .filter(|r| r.job_id == job_id && r.ok)
-            .filter_map(|r| r.cpv.parse().ok())
+            .map(|r| (*r.cpv).clone())
             .collect()
     }
 
@@ -224,23 +219,30 @@ impl DurationStore {
     }
 
     /// Successful durations for `cpn` (or substring match on cpn/cpv), newest first
+    ///
+    /// `atom` is free-form user text (`em log time <atom>`, possibly a bare
+    /// substring, not necessarily a parseable atom), so this stays a text
+    /// search against each record's own `Display` form rather than a typed
+    /// comparison.
     pub fn successes_for_atom(&self, atom: &str) -> Vec<&HistoryRecord> {
         let atom = atom.trim();
         self.records
             .iter()
             .rev()
             .filter(|r| {
-                r.ok && (r.cpn == atom
-                    || r.cpv == atom
-                    || r.cpn.contains(atom)
-                    || r.cpv.contains(atom)
-                    || atom.strip_prefix('=') == Some(r.cpv.as_str()))
+                let cpn = r.cpn.to_string();
+                let cpv = r.cpv.to_string();
+                r.ok && (cpn == atom
+                    || cpv == atom
+                    || cpn.contains(atom)
+                    || cpv.contains(atom)
+                    || atom.strip_prefix('=') == Some(cpv.as_str()))
             })
             .collect()
     }
 
     /// Last `k` successful durations for exact cpn (seconds), oldest→newest in window
-    pub fn recent_success_seconds(&self, cpn: &str, k: usize) -> Vec<f64> {
+    pub fn recent_success_seconds(&self, cpn: Cpn, k: usize) -> Vec<f64> {
         let mut v: Vec<f64> = self
             .records
             .iter()
@@ -253,7 +255,7 @@ impl DurationStore {
         v
     }
 
-    pub fn median_seconds(&self, cpn: &str, k: usize) -> Option<f64> {
+    pub fn median_seconds(&self, cpn: Cpn, k: usize) -> Option<f64> {
         let mut s = self.recent_success_seconds(cpn, k);
         if s.is_empty() {
             return None;
@@ -293,7 +295,7 @@ impl DurationStore {
 /// One remaining package in a plan for ETA
 #[derive(Clone, Debug)]
 pub struct EtaPkg {
-    pub cpn: String,
+    pub cpn: Cpn,
     pub cpv: String,
 }
 
@@ -324,7 +326,7 @@ fn package_estimates(store: &DurationStore, pkgs: &[EtaPkg], k: usize) -> Packag
     let mut per_pkg = Vec::with_capacity(pkgs.len());
     let mut durations = Vec::with_capacity(pkgs.len());
     for p in pkgs {
-        let est = store.median_seconds(&p.cpn, k).or(global);
+        let est = store.median_seconds(p.cpn, k).or(global);
         match est {
             Some(s) => {
                 serial += s;
@@ -609,8 +611,8 @@ mod tests {
                 v: ACTIVITY_EVENT_VERSION,
                 job_id: "j".into(),
                 parent_job_id: None,
-                cpv: format!("sys-apps/foo-{i}").into(),
-                cpn: "sys-apps/foo".into(),
+                cpv: Arc::new(format!("sys-apps/foo-{i}").parse().unwrap()),
+                cpn: "sys-apps/foo".parse().unwrap(),
                 merge_root: ActivityMergeRoot::Target,
                 kind: PkgKind::Source,
                 ok: true,
@@ -622,15 +624,18 @@ mod tests {
         }
         let store = DurationStore::load(&root);
         assert_eq!(store.len(), 3);
-        assert_eq!(store.median_seconds("sys-apps/foo", 10), Some(20.0));
+        assert_eq!(
+            store.median_seconds("sys-apps/foo".parse().unwrap(), 10),
+            Some(20.0)
+        );
 
         let pkgs = [
             EtaPkg {
-                cpn: "sys-apps/foo".into(),
+                cpn: "sys-apps/foo".parse().unwrap(),
                 cpv: "sys-apps/foo-9".into(),
             },
             EtaPkg {
-                cpn: "sys-apps/foo".into(),
+                cpn: "sys-apps/foo".parse().unwrap(),
                 cpv: "sys-apps/foo-10".into(),
             },
         ];

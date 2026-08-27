@@ -118,13 +118,12 @@ fn emit_pkg_start(
     let Some(act) = activity else {
         return at;
     };
-    let cpn = planned.cpv.cpn.to_string();
     act.bus.emit(crate::activity::ActivityEvent::PkgStart {
         v: crate::activity::ACTIVITY_EVENT_VERSION,
         job_id: act.job_id.as_str().into(),
         parent_job_id: act.parent_job_id.as_deref().map(Into::into),
-        cpv: planned.cpv.to_string().into(),
-        cpn: cpn.into(),
+        cpv: std::sync::Arc::new(planned.cpv.clone()),
+        cpn: planned.cpv.cpn,
         merge_root: planned.merge_root.into(),
         index,
         of,
@@ -151,8 +150,8 @@ fn emit_pkg_end(
         v: crate::activity::ACTIVITY_EVENT_VERSION,
         job_id: act.job_id.as_str().into(),
         parent_job_id: act.parent_job_id.as_deref().map(Into::into),
-        cpv: planned.cpv.to_string().into(),
-        cpn: planned.cpv.cpn.to_string().into(),
+        cpv: std::sync::Arc::new(planned.cpv.clone()),
+        cpn: planned.cpv.cpn,
         merge_root: planned.merge_root.into(),
         kind,
         ok,
@@ -172,7 +171,7 @@ fn activity_pkg_ctx(
             act.bus.clone(),
             act.job_id.as_str().into(),
             act.parent_job_id.as_deref().map(Into::into),
-            planned.cpv.to_string().into(),
+            std::sync::Arc::new(planned.cpv.clone()),
             planned.merge_root.into(),
         )
         .with_live_root(act.live_root.clone())

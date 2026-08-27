@@ -258,7 +258,7 @@ fn eta_message(
         .plan
         .iter()
         .map(|p| crate::activity::EtaPkg {
-            cpn: p.cpv.cpn.to_string(),
+            cpn: p.cpv.cpn,
             cpv: p.cpv.to_string(),
         })
         .collect();
@@ -716,8 +716,8 @@ async fn emerge_atoms_inner(
         .plan
         .iter()
         .map(|p| crate::activity::ActivityPlanPkg {
-            cpn: p.cpv.cpn.to_string().into(),
-            cpv: p.cpv.to_string().into(),
+            cpn: p.cpv.cpn,
+            cpv: std::sync::Arc::new(p.cpv.clone()),
             merge_root: p.merge_root.into(),
         })
         .collect();

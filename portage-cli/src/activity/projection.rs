@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use portage_atom::{Cpn, Cpv};
+
 use super::event::{
     ActivityEvent, ActivityMergeRoot, ActivityMode, ActivityPlanPkg, PkgKind, SessionFlags,
 };
@@ -11,8 +13,8 @@ use super::history::{DurationStore, EtaPkg};
 /// One package currently being acted on
 #[derive(Clone, Debug)]
 pub struct InflightPkg {
-    pub cpv: Arc<str>,
-    pub cpn: Arc<str>,
+    pub cpv: Arc<Cpv>,
+    pub cpn: Cpn,
     pub merge_root: ActivityMergeRoot,
     pub index: u32,
     pub of: u32,
@@ -40,7 +42,7 @@ pub struct LiveSession {
     pub flags: SessionFlags,
     pub completed: u32,
     pub failed: u32,
-    pub inflight: HashMap<(ActivityMergeRoot, Arc<str>), InflightPkg>,
+    pub inflight: HashMap<(ActivityMergeRoot, Arc<Cpv>), InflightPkg>,
     /// Full plan (install order) when the session recorded it
     pub plan: Vec<ActivityPlanPkg>,
     /// Build-order blockers for [`Self::plan`] (same indices as merge scheduler)
@@ -69,7 +71,7 @@ impl LiveSession {
                 .inflight_sorted()
                 .into_iter()
                 .map(|p| EtaPkg {
-                    cpn: p.cpn.to_string(),
+                    cpn: p.cpn,
                     cpv: p.cpv.to_string(),
                 })
                 .collect();
@@ -81,7 +83,7 @@ impl LiveSession {
         let mut keep_old: Vec<usize> = Vec::new();
         let mut old_to_new: Vec<Option<usize>> = vec![None; self.plan.len()];
         for (i, p) in self.plan.iter().enumerate() {
-            if finished.contains(&(p.merge_root, p.cpv.to_string())) {
+            if finished.contains(&(p.merge_root, (*p.cpv).clone())) {
                 continue;
             }
             old_to_new[i] = Some(keep_old.len());
@@ -92,7 +94,7 @@ impl LiveSession {
             .map(|&i| {
                 let p = &self.plan[i];
                 EtaPkg {
-                    cpn: p.cpn.to_string(),
+                    cpn: p.cpn,
                     cpv: p.cpv.to_string(),
                 }
             })
@@ -210,7 +212,7 @@ impl LiveProjection {
                         (*merge_root, cpv.clone()),
                         InflightPkg {
                             cpv: cpv.clone(),
-                            cpn: cpn.clone(),
+                            cpn: *cpn,
                             merge_root: *merge_root,
                             index: *index,
                             of: *of,

@@ -58,63 +58,102 @@ enum PhaseGroup {
     /// the plan's own USE selection asks for.
     FetchOnly { all_uri: bool },
     /// Debug (`em ebuild`): run the given phases only; no clean/drop/buildpkg
-    Debug(Vec<String>),
+    Debug(Vec<RunPhase>),
+}
+
+/// A phase `em`'s own build pipeline runs — a real PMS-defined ebuild phase
+/// function, or one of `em`'s own orchestration steps around it
+///
+/// `Fetch`/`Clean`/`Qmerge` are not PMS phase functions (`run_one_phase`
+/// intercepts them before ever reaching [`portage_repo::EbuildShell::run_phase`]);
+/// every other name is looked up via [`portage_metadata::Phase`], the real
+/// PMS 9 vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum RunPhase {
+    Ebuild(portage_metadata::Phase),
+    Fetch,
+    Clean,
+    Qmerge,
+}
+
+impl RunPhase {
+    const PRETEND: Self = Self::Ebuild(portage_metadata::Phase::PkgPretend);
+    const SETUP: Self = Self::Ebuild(portage_metadata::Phase::PkgSetup);
+    const UNPACK: Self = Self::Ebuild(portage_metadata::Phase::SrcUnpack);
+    const PREPARE: Self = Self::Ebuild(portage_metadata::Phase::SrcPrepare);
+    const CONFIGURE: Self = Self::Ebuild(portage_metadata::Phase::SrcConfigure);
+    const COMPILE: Self = Self::Ebuild(portage_metadata::Phase::SrcCompile);
+    const TEST: Self = Self::Ebuild(portage_metadata::Phase::SrcTest);
+    const INSTALL: Self = Self::Ebuild(portage_metadata::Phase::SrcInstall);
+}
+
+impl std::fmt::Display for RunPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ebuild(p) => write!(f, "{p}"),
+            Self::Fetch => write!(f, "fetch"),
+            Self::Clean => write!(f, "clean"),
+            Self::Qmerge => write!(f, "qmerge"),
+        }
+    }
+}
+
+impl std::str::FromStr for RunPhase {
+    type Err = portage_metadata::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "fetch" => Ok(Self::Fetch),
+            "clean" => Ok(Self::Clean),
+            "merge" | "qmerge" => Ok(Self::Qmerge),
+            _ => s.parse().map(Self::Ebuild),
+        }
+    }
 }
 
 impl PhaseGroup {
     /// The phases this group runs, in order
-    fn phases(&self) -> Vec<String> {
+    fn phases(&self) -> Vec<RunPhase> {
+        use RunPhase as P;
         match self {
-            Self::Full => [
-                "pretend",
-                "setup",
-                "fetch",
-                "unpack",
-                "prepare",
-                "configure",
-                "compile",
-                "test",
-                "install",
-                "qmerge",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-            Self::Compile => [
-                "pretend",
-                "setup",
-                "fetch",
-                "unpack",
-                "prepare",
-                "configure",
-                "compile",
-                "test",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-            Self::Install => ["install", "qmerge"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-            Self::BinpkgMerge => vec!["qmerge".to_string()],
-            Self::BuildOnly => [
-                "pretend",
-                "setup",
-                "fetch",
-                "unpack",
-                "prepare",
-                "configure",
-                "compile",
-                "test",
-                "install",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+            Self::Full => vec![
+                P::PRETEND,
+                P::SETUP,
+                P::Fetch,
+                P::UNPACK,
+                P::PREPARE,
+                P::CONFIGURE,
+                P::COMPILE,
+                P::TEST,
+                P::INSTALL,
+                P::Qmerge,
+            ],
+            Self::Compile => vec![
+                P::PRETEND,
+                P::SETUP,
+                P::Fetch,
+                P::UNPACK,
+                P::PREPARE,
+                P::CONFIGURE,
+                P::COMPILE,
+                P::TEST,
+            ],
+            Self::Install => vec![P::INSTALL, P::Qmerge],
+            Self::BinpkgMerge => vec![P::Qmerge],
+            Self::BuildOnly => vec![
+                P::PRETEND,
+                P::SETUP,
+                P::Fetch,
+                P::UNPACK,
+                P::PREPARE,
+                P::CONFIGURE,
+                P::COMPILE,
+                P::TEST,
+                P::INSTALL,
+            ],
             // `run_fetch` sources the ebuild when needed and reads SRC_URI/USE
             // from the live shell — no pretend/setup required for download.
-            Self::FetchOnly { .. } => vec!["fetch".to_string()],
+            Self::FetchOnly { .. } => vec![P::Fetch],
             Self::Debug(p) => p.clone(),
         }
     }
@@ -360,6 +399,10 @@ pub async fn run(
     root: &Utf8Path,
     roots: RootContext<'_>,
 ) -> Result<()> {
+    let phases: Vec<RunPhase> = phases
+        .iter()
+        .map(|p| p.parse().map_err(|e| anyhow!("unknown phase {p:?}: {e}")))
+        .collect::<Result<_>>()?;
     // Standalone `em ebuild <path> <phase>`: no resolved plan entry exists, so
     // there's no authoritative Cpv to pass — `run_inner` falls back to
     // deriving one from `ebuild_path` (fine here: this debug entry point only
@@ -367,7 +410,7 @@ pub async fn run(
     run_inner(RunInner {
         ebuild_path,
         cpv: None,
-        group: &PhaseGroup::Debug(phases.to_vec()),
+        group: &PhaseGroup::Debug(phases),
         work_dir,
         repo_override,
         root,
@@ -811,6 +854,7 @@ fn worker_activity_ctx(
 ) -> Option<crate::activity::ActivityPkgCtx> {
     let job_id = job_id.filter(|s| !s.is_empty())?;
     let live_root = live_root.filter(|s| !s.is_empty())?;
+    let cpv: Cpv = cpv.parse().ok()?;
     let side = match side.unwrap_or("target") {
         "host" => crate::activity::ActivityMergeRoot::Host,
         _ => crate::activity::ActivityMergeRoot::Target,
@@ -821,7 +865,7 @@ fn worker_activity_ctx(
             bus,
             job_id.into(),
             parent_job_id.filter(|s| !s.is_empty()).map(Into::into),
-            cpv.into(),
+            std::sync::Arc::new(cpv),
             side,
         )
         .with_live_root(Utf8PathBuf::from(live_root)),
@@ -1174,9 +1218,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     // replaces (same slot), visible to pkg_pretend/setup/preinst/postinst.
     // Computed up front from the target root's VDB and the ebuild's SLOT.
     // Also for a debug `em ebuild … qmerge`, which merges without a plan.
-    if group.is_merge()
-        || matches!(group, PhaseGroup::Debug(p) if p.iter().any(|p| p == "merge" || p == "qmerge"))
-    {
+    if group.is_merge() || matches!(group, PhaseGroup::Debug(p) if p.contains(&RunPhase::Qmerge)) {
         let slot = repo
             .cache_entry(ebuild.cpv())
             .ok()
@@ -1304,7 +1346,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
         for phase in &phases {
             // In the merge chain, src_test only runs under FEATURES=test
             // (an explicit `em ebuild … test` always runs it).
-            if merge_mode && phase == "test" && !features.contains("test") {
+            if merge_mode && *phase == RunPhase::TEST && !features.contains("test") {
                 continue;
             }
 
@@ -1315,32 +1357,33 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             // The in-process gate only covers tasks in this process; parallel
             // `__worker` children serialise on the flock (design Q2 — released by
             // the kernel if a worker dies).
-            let _merge_guard = match (merge_gate, phase.as_str()) {
-                (Some(gate), "merge" | "qmerge") => Some(gate.lock().await),
+            let _merge_guard = match (merge_gate, *phase) {
+                (Some(gate), RunPhase::Qmerge) => Some(gate.lock().await),
                 _ => None,
             };
-            let _merge_flock = match (merge_mode, work_dir, phase.as_str()) {
-                (true, Some(wd), "merge" | "qmerge") => lock_merge_flock(wd).await,
+            let _merge_flock = match (merge_mode, work_dir, *phase) {
+                (true, Some(wd), RunPhase::Qmerge) => lock_merge_flock(wd).await,
                 _ => None,
             };
-            let phase_started = activity.as_ref().map(|a| a.phase_enter(phase));
+            let phase_name = phase.to_string();
+            let phase_started = activity.as_ref().map(|a| a.phase_enter(&phase_name));
             let phase_result = async {
                 run_one_phase(
                     &mut shell,
                     &ebuild,
                     &repo,
-                    phase,
+                    *phase,
                     &work_root,
                     root,
                     fetch_all_uri,
                 )
                 .await
             }
-            .instrument(tracing::info_span!("phase", phase))
+            .instrument(tracing::info_span!("phase", phase = %phase))
             .await;
             if let (Some(act), Some(started)) = (activity.as_ref(), phase_started) {
                 // Emit leave even on failure so dashboards do not stick mid-phase.
-                act.phase_leave(phase, started);
+                act.phase_leave(&phase_name, started);
             }
             phase_result?;
             drop(_merge_flock);
@@ -1350,7 +1393,7 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             // shell still holds the docompress/dostrip lists src_install built
             // up, and everything downstream (preinst, CONTENTS, qmerge) sees
             // the final image.
-            if phase == "install" {
+            if *phase == RunPhase::INSTALL {
                 post_process_after_install(&shell, &work_root, &features)?;
             }
         }
@@ -1844,17 +1887,22 @@ async fn run_one_phase(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
     repo: &Repository,
-    phase: &str,
+    phase: RunPhase,
     work_root: &Utf8Path,
     root: &Utf8Path,
     fetch_all_uri: bool,
 ) -> Result<()> {
     match phase {
-        "fetch" => run_fetch(shell, ebuild, repo, work_root, fetch_all_uri).await,
-        "clean" => run_clean(work_root),
-        "merge" | "qmerge" => run_merge(shell, ebuild, work_root, root).await,
-        _ => shell
-            .run_phase(ebuild, phase, work_root.as_std_path(), root.as_std_path())
+        RunPhase::Fetch => run_fetch(shell, ebuild, repo, work_root, fetch_all_uri).await,
+        RunPhase::Clean => run_clean(work_root),
+        RunPhase::Qmerge => run_merge(shell, ebuild, work_root, root).await,
+        RunPhase::Ebuild(p) => shell
+            .run_phase(
+                ebuild,
+                p.as_str(),
+                work_root.as_std_path(),
+                root.as_std_path(),
+            )
             .await
             .with_context(|| format!("phase {phase} failed")),
     }
@@ -3393,6 +3441,42 @@ mod tests {
         assert!(safe_dest_under(root, Utf8Path::new("/../../etc/passwd")).is_err());
         assert!(safe_dest_under(root, Utf8Path::new("../etc/passwd")).is_err());
         assert!(safe_dest_under(root, Utf8Path::new("/usr/../etc/passwd")).is_err());
+    }
+
+    #[test]
+    fn run_phase_round_trips_short_and_full_pms_names() {
+        use portage_metadata::Phase;
+        assert_eq!("compile".parse::<RunPhase>().unwrap(), RunPhase::COMPILE);
+        assert_eq!(
+            "src_compile".parse::<RunPhase>().unwrap(),
+            RunPhase::Ebuild(Phase::SrcCompile)
+        );
+        assert_eq!(
+            "preinst".parse::<RunPhase>().unwrap().to_string(),
+            "preinst"
+        );
+    }
+
+    #[test]
+    fn run_phase_accepts_merge_and_qmerge_as_the_same_phase() {
+        assert_eq!("merge".parse::<RunPhase>().unwrap(), RunPhase::Qmerge);
+        assert_eq!("qmerge".parse::<RunPhase>().unwrap(), RunPhase::Qmerge);
+        assert_eq!(RunPhase::Qmerge.to_string(), "qmerge");
+    }
+
+    #[test]
+    fn run_phase_rejects_an_unknown_name() {
+        assert!("not-a-real-phase".parse::<RunPhase>().is_err());
+    }
+
+    #[test]
+    fn full_phase_group_runs_fetch_before_unpack_and_ends_on_qmerge() {
+        let phases = PhaseGroup::Full.phases();
+        assert_eq!(phases.first(), Some(&RunPhase::PRETEND));
+        assert_eq!(phases.last(), Some(&RunPhase::Qmerge));
+        let fetch_pos = phases.iter().position(|p| *p == RunPhase::Fetch).unwrap();
+        let unpack_pos = phases.iter().position(|p| *p == RunPhase::UNPACK).unwrap();
+        assert!(fetch_pos < unpack_pos);
     }
 
     // Full/Compile/BinpkgMerge start genuinely fresh, so they wipe

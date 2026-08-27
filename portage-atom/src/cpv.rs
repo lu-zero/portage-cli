@@ -100,6 +100,29 @@ impl FromStr for Cpv {
     }
 }
 
+/// Wire form is the canonical `category/package-version` string (via
+/// [`Cpv::parse`]/[`Display`](fmt::Display)), never the internal
+/// interned/parsed representation — that's process-local and not portable.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Cpv {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Cpv {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let s = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(deserializer)?;
+        Self::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 // Winnow parsers
 
 /// Parse a `category/package-version` string (without storing the raw version)
@@ -188,6 +211,22 @@ mod tests {
 
         let cpv3 = Cpv::parse("dev-lang/rust-1.75.0-r1").unwrap();
         assert!(cpv1 < cpv3);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn cpv_serde_round_trips_through_its_display_form() {
+        let cpv = Cpv::parse("dev-lang/rust-1.75.0-r1").unwrap();
+        let json = serde_json::to_string(&cpv).unwrap();
+        assert_eq!(json, "\"dev-lang/rust-1.75.0-r1\"");
+        let back: Cpv = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cpv);
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn cpv_serde_rejects_invalid_text() {
+        assert!(serde_json::from_str::<Cpv>("\"not a cpv\"").is_err());
     }
 
     #[test]

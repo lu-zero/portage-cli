@@ -69,7 +69,7 @@ aho-corasick = { workspace = true }
 memchr = { workspace = true }
 ldconfig = { workspace = true }
 gentoo-core = { workspace = true }
-portage-atom = { workspace = true }
+portage-atom = { workspace = true, features = ["serde"] }
 portage-atom-pubgrub = { workspace = true }
 pubgrub = { workspace = true }
 portage-metadata = { workspace = true }

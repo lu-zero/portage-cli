@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use camino::{Utf8Path, Utf8PathBuf};
+use portage_atom::{Cpn, Cpv};
 use serde::Serialize;
 
 use super::bus::ActivitySink;
@@ -55,13 +56,12 @@ impl LiveFsSink {
         self.session_dir(job_id).join("progress.json")
     }
 
-    fn inflight_path(&self, job_id: &str, merge_root: ActivityMergeRoot, cpv: &str) -> Utf8PathBuf {
-        let (cat, pf) = cpv.split_once('/').unwrap_or(("_", cpv));
+    fn inflight_path(&self, job_id: &str, merge_root: ActivityMergeRoot, cpv: &Cpv) -> Utf8PathBuf {
         self.session_dir(job_id)
             .join("inflight")
             .join(merge_root.as_str())
-            .join(cat)
-            .join(format!("{pf}.json"))
+            .join(cpv.cpn.category.as_str())
+            .join(format!("{}-{}.json", cpv.cpn.package, cpv.version))
     }
 
     fn write_json(&self, path: &Utf8Path, value: &impl Serialize) {
@@ -158,18 +158,18 @@ impl LiveFsSink {
         );
     }
 
-    fn write_inflight(&self, job_id: &str, merge_root: ActivityMergeRoot, cpv: &str) {
+    fn write_inflight(&self, job_id: &str, merge_root: ActivityMergeRoot, cpv: &Arc<Cpv>) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let Some(s) = state.get(job_id) else {
             return;
         };
-        let Some(p) = s.inflight.get(&(merge_root, cpv.into())) else {
+        let Some(p) = s.inflight.get(&(merge_root, cpv.clone())) else {
             return;
         };
         #[derive(Serialize)]
         struct InflightFile<'a> {
-            cpv: &'a str,
-            cpn: &'a str,
+            cpv: &'a Cpv,
+            cpn: Cpn,
             merge_root: ActivityMergeRoot,
             index: u32,
             of: u32,
@@ -184,7 +184,7 @@ impl LiveFsSink {
             &path,
             &InflightFile {
                 cpv: &p.cpv,
-                cpn: &p.cpn,
+                cpn: p.cpn,
                 merge_root: p.merge_root,
                 index: p.index,
                 of: p.of,
@@ -197,7 +197,7 @@ impl LiveFsSink {
         );
     }
 
-    fn remove_inflight(&self, job_id: &str, merge_root: ActivityMergeRoot, cpv: &str) {
+    fn remove_inflight(&self, job_id: &str, merge_root: ActivityMergeRoot, cpv: &Cpv) {
         let path = self.inflight_path(job_id, merge_root, cpv);
         let _ = std::fs::remove_file(path.as_std_path());
     }
@@ -390,8 +390,8 @@ struct ProgressDisk {
 
 #[derive(serde::Deserialize)]
 struct InflightDisk {
-    cpv: Arc<str>,
-    cpn: Arc<str>,
+    cpv: Arc<Cpv>,
+    cpn: Cpn,
     merge_root: ActivityMergeRoot,
     index: u32,
     of: u32,
@@ -436,7 +436,7 @@ fn load_inflight_dir(
                 job_id: job_id.into(),
                 parent_job_id: None,
                 cpv: p.cpv.clone(),
-                cpn: p.cpn.clone(),
+                cpn: p.cpn,
                 merge_root: p.merge_root,
                 index: p.index,
                 of: p.of,

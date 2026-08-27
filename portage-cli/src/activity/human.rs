@@ -116,7 +116,7 @@ fn regen_bar_style() -> ProgressStyle {
 }
 
 /// `(job_id, cpv)` — the key `state` tracks the last `PkgStart` location by
-type PkgKey = (Arc<str>, Arc<str>);
+type PkgKey = (Arc<str>, Arc<portage_atom::Cpv>);
 
 /// Terminal renderer for the activity bus
 ///
@@ -594,15 +594,13 @@ mod tests {
     }
 
     fn pkg_start(job: &str, cpv: &str, index: u32, of: u32) -> ActivityEvent {
+        let cpv: portage_atom::Cpv = cpv.parse().unwrap();
         ActivityEvent::PkgStart {
             v: ACTIVITY_EVENT_VERSION,
             job_id: job.into(),
             parent_job_id: None,
-            cpv: cpv.into(),
-            cpn: cpv
-                .split_once('/')
-                .map(|(c, _)| c.into())
-                .unwrap_or_default(),
+            cpn: cpv.cpn,
+            cpv: std::sync::Arc::new(cpv),
             merge_root: ActivityMergeRoot::Target,
             index,
             of,
@@ -616,7 +614,7 @@ mod tests {
             v: ACTIVITY_EVENT_VERSION,
             job_id: job.into(),
             parent_job_id: None,
-            cpv: cpv.into(),
+            cpv: std::sync::Arc::new(cpv.parse().unwrap()),
             merge_root: ActivityMergeRoot::Target,
             phase: phase.into(),
             at: 2.0,
@@ -624,15 +622,13 @@ mod tests {
     }
 
     fn pkg_end(job: &str, cpv: &str, ok: bool) -> ActivityEvent {
+        let cpv: portage_atom::Cpv = cpv.parse().unwrap();
         ActivityEvent::PkgEnd {
             v: ACTIVITY_EVENT_VERSION,
             job_id: job.into(),
             parent_job_id: None,
-            cpv: cpv.into(),
-            cpn: cpv
-                .split_once('/')
-                .map(|(c, _)| c.into())
-                .unwrap_or_default(),
+            cpn: cpv.cpn,
+            cpv: std::sync::Arc::new(cpv),
             merge_root: ActivityMergeRoot::Target,
             kind: PkgKind::Source,
             ok,
@@ -665,7 +661,10 @@ mod tests {
         sink.on_event(&phase_enter("j", "sys-devel/gcc-14", "compile"));
         let state = sink.state.lock().unwrap_or_else(|e| e.into_inner());
         assert!(matches!(
-            state.get(&("j".into(), "sys-devel/gcc-14".into())),
+            state.get(&(
+                "j".into(),
+                std::sync::Arc::new("sys-devel/gcc-14".parse().unwrap())
+            )),
             Some(loc) if loc.index == 3 && loc.of == 9
         ));
     }

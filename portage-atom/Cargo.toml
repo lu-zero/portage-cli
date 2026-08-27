@@ -17,6 +17,7 @@ builder = ["dep:bon"]
 interner = ["gentoo-interner/interner"]
 lasso = ["gentoo-interner/lasso"]
 symbol-table = ["gentoo-interner/symbol-table"]
+serde = ["dep:serde"]
 
 [dependencies]
 gentoo-interner = { workspace = true }
@@ -25,6 +26,7 @@ thiserror = { workspace = true }
 bon = { workspace = true, optional = true }
 smallvec = { workspace = true }
 smol_str = { workspace = true }
+serde = { workspace = true, optional = true }
 
 [[example]]
 name = "parse_atoms"
@@ -36,6 +38,7 @@ path = "examples/parse_dep_string.rs"
 
 [dev-dependencies]
 criterion = { workspace = true }
+serde_json = { workspace = true }
 
 [[bench]]
 name = "parsing"

@@ -101,6 +101,28 @@ impl FromStr for Cpn {
     }
 }
 
+/// Wire form is the canonical `category/package` string — see [`Cpv`](crate::Cpv)'s
+/// own impl for why (process-local interning, not portable).
+#[cfg(feature = "serde")]
+impl serde::Serialize for Cpn {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Cpn {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let s = <std::borrow::Cow<'de, str> as serde::Deserialize>::deserialize(deserializer)?;
+        Self::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 // Winnow parsers
 
 /// Parse category name
@@ -195,6 +217,16 @@ mod tests {
         let cpn = Cpn::parse("acct-group/_cron-failure").unwrap();
         assert_eq!(cpn.category, "acct-group");
         assert_eq!(cpn.package, "_cron-failure");
+    }
+
+    #[test]
+    #[cfg(feature = "serde")]
+    fn cpn_serde_round_trips_through_its_display_form() {
+        let cpn = Cpn::parse("dev-lang/rust").unwrap();
+        let json = serde_json::to_string(&cpn).unwrap();
+        assert_eq!(json, "\"dev-lang/rust\"");
+        let back: Cpn = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cpn);
     }
 
     #[test]
