@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Usage: prefix-emerge [--prefix DIR] <emerge args...>
+#   prefix-emerge dev-perl/Module-Build
+#   prefix-emerge --prefix /tmp/scratch-prefix -v --nodeps sys-libs/zlib
+
+set -euo pipefail
+
+PREFIX="${HOME}/.local/share/prefix-emerge"
+if [[ "${1:-}" == "--prefix" ]]; then
+    PREFIX="$2"
+    shift 2
+fi
+
+GENTOO_REPO="${GENTOO_REPO:-/var/db/repos/gentoo}"
+HOST_PROFILE="$(readlink -f /etc/portage/make.profile)"
+HOST_PERL_CPVS="$(qlist -Iv dev-lang/perl 'virtual/perl-*' 'perl-core/*' 2>/dev/null)"
+HOST_CHOST="$(portageq envvar CHOST)"
+HOST_KEYWORDS="$(portageq envvar ACCEPT_KEYWORDS)"
+
+mkdir -p "$PREFIX"/etc/portage/profile
+mkdir -p "$PREFIX"/etc/portage/repos.conf
+mkdir -p "$PREFIX"/usr/share
+mkdir -p "$PREFIX"/distfiles
+
+ln -sfn /usr/share/portage "$PREFIX"/usr/share/portage
+ln -sfn "$HOST_PROFILE" "$PREFIX"/etc/portage/make.profile
+
+[[ -e "$PREFIX"/etc/portage/repos.conf/gentoo.conf ]] || \
+    printf '[gentoo]\nlocation = %s\n' "$GENTOO_REPO" \
+        > "$PREFIX"/etc/portage/repos.conf/gentoo.conf
+
+if [[ ! -e "$PREFIX"/etc/portage/make.conf ]]; then
+    cat > "$PREFIX"/etc/portage/make.conf <<EOF
+CHOST="$HOST_CHOST"
+ACCEPT_KEYWORDS="$HOST_KEYWORDS"
+DISTDIR="$PREFIX/distfiles"
+PKGDIR="$PREFIX/var/cache/binpkgs"
+PORTAGE_TMPDIR="$PREFIX/var/tmp"
+EOF
+fi
+
+if [[ -n "$HOST_PERL_CPVS" && ! -e "$PREFIX"/etc/portage/profile/package.provided ]]; then
+    echo "$HOST_PERL_CPVS" > "$PREFIX"/etc/portage/profile/package.provided
+fi
+
+echo "==> prefix-emerge: EPREFIX=$PREFIX" >&2
+exec env PORTAGE_OVERRIDE_EPREFIX="$PREFIX" emerge "$@"
