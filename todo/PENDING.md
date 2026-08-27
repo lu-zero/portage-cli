@@ -471,11 +471,37 @@ blocked by the three independent findings above, tracked separately.
   (gcc stage2's own `--with-sysroot`/native-system-header-dir
   configuration, unrelated to pkg-config) — found 2026-08-26 testing the
   above. [[crossdev-prefix-gcc-header-dir]]
-- 🔴 **`dev-perl/Module-Build` fperms fails under `--local`** during
+- 🟢 **`dev-perl/Module-Build` fperms fails under `--local`** during
   crossdev toolchain bootstrap (perl-module.eclass installs to bare
-  `${D}`, `fperms` resolves against `${ED}`) — unclear yet whether
-  `em`-side or an upstream Gentoo Prefix gap. Found 2026-08-26, same
-  session. [[crossdev-local-perl-module-eprefix]]
+  `${D}`, `fperms` resolves against `${ED}`) — root-caused and
+  live-confirmed 2026-08-26 as an upstream Gentoo eclass gap (the
+  `package.provided` bootstrap perl driving the build isn't itself
+  Prefix-aware), not an `em`-side bug; no `em` fix planned.
+  [[crossdev-local-perl-module-eprefix]]
+- 🔴 **`dev-python/flit-core` sysroot path doubling under `--local`**
+  (`/localtest/localtest/usr/...`) — found 2026-08-26 continuing the
+  above once unblocked; not yet root-caused.
+  [[crossdev-local-python-sysroot-doubling]]
+- ✅ **`stages --stage1` into a disposable board `--root` couldn't find
+  the crossdev toolchain's own libc headers — fixed and live-verified
+  2026-08-27.** Root cause: the board-root decoupling (re-landed
+  properly this time) had set `Roots::base` to the board root instead
+  of the toolchain sysroot, so `build_sysroot()` (`None` when `base ==
+  target`) silently dropped the toolchain from the compiler's build
+  context. Fixed by keeping `base` as the sysroot unconditionally and
+  solving the installed-view VDB-union problem this could reopen via
+  `Roots::with_target_only_installed_view()` instead (the same
+  mechanism already used for native toolchain bootstrap under
+  `--local`/`--prefix`) — not by corrupting `base`. Live-verified: the
+  exact `sys-libs/zlib` objects that failed before now compile clean;
+  the board `stage1` run got 12 packages further (15/97, up from a
+  dead stop at 2/97) before hitting an unrelated new bug.
+  [[crossdev-stage1-board-root-header-search]]
+- 🔴 **`sys-libs/readline` can't find `ncursesw` via pkg-config in a
+  board `--root` stage1** (`src_prepare`, not compile — a completely
+  different mechanism from the header-search bug above) — found
+  2026-08-27 continuing that same board `stage1` run once unblocked.
+  [[crossdev-stage1-readline-ncursesw-pkgconfig]]
 - 🟡 **`em`'s autounmask never discovers a masked candidate buried
   multiple hops deep in a compound solve failure** — found and root
   caused 2026-08-24, same audit, testing `--ex-pkg

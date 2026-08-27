@@ -1,7 +1,12 @@
 # `toolchain_plan`'s libc-headers-before-gcc-stage1 order breaks x86 glibc configure
 
-Status: 🔴 not started. Found 2026-08-24 during the crossdev-stages
+Status: ✅ fixed 2026-08-24 (`b8c7ea9`). Found during the crossdev-stages
 replacement retest plan (Phase 1 pilot, i586/`pentium-mmx` board).
+`toolchain_plan`'s cross branch reordered to match real crossdev
+(gcc-stage1 right after binutils; headers/libc after that; no separate
+`--nodeps` headers-only pass) — verified with real compiler builds on
+both i586 and riscv64. See `## How to attack` below for the historical
+plan; it's what was actually done.
 
 ## The bug
 
