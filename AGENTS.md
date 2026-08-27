@@ -352,6 +352,17 @@ output against `qfile`/`qlist` and are `#[ignore]` by default. On a Gentoo host:
 cargo test -p portage-cli -- --ignored
 ```
 
+## Estimating how long something will take
+
+Don't guess wall-clock time from a task's *shape* ("a full crossdev bootstrap
+sounds like hours"). Check the machine you're actually on first — `nproc`,
+`/proc/cpuinfo`, existing build/benchmark logs in this session or `todo/` —
+and scale from a real prior timing on that same host if one exists, rather
+than a generic instinct. A build that's genuinely hours on a laptop can be
+~20 minutes on a fast multi-core dev box, and the reverse also happens on a
+slow or contended one. State the estimate's basis ("X took Y on this host
+last run") instead of asserting a duration as if it were host-independent.
+
 ## Slop Warning
 
 This codebase was largely AI-generated. Be skeptical of existing code — it may
