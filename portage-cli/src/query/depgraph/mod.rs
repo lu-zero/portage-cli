@@ -272,6 +272,13 @@ pub struct DepgraphOpts<'a> {
     /// because there is no emerge parity to validate against, and the
     /// policy can revert an upgrade a dependent has no satisfying version for.
     pub complete_graph: bool,
+    /// Suppress the Pretty/JSON/Tree plan preview — for an internal probe
+    /// that only wants a field off [`DepgraphOutcome`] (e.g.
+    /// `resolve_gcc_version`'s single-atom `sys-devel/gcc` resolve), not a
+    /// user-facing display. Advisory reports (conflicts, autounmask, …)
+    /// are unaffected — pass `nodeps`/`autounmask_persist: Never`/
+    /// `ask: false` too so those paths have nothing to report.
+    pub quiet: bool,
 }
 
 pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome> {
@@ -304,6 +311,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         exclude,
         resume_completed,
         complete_graph,
+        quiet,
     } = opts;
     let exclude_atoms: Vec<Dep> = exclude
         .iter()
@@ -1661,29 +1669,37 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         requested: &root_cpns,
     };
 
-    match format {
-        DepgraphFormat::Pretty => output::print_pretty_rooted(&pretty_ctx, &plan_entries, &cross),
-        DepgraphFormat::Json => output::print_json(&data, &order, &edges, &installed, &flag_reqs)?,
-        DepgraphFormat::Tree => {
-            let roots: Vec<_> = root_pkgs
-                .iter()
-                .filter_map(|pkg| {
-                    let ver = edges
-                        .iter()
-                        .find_map(|e| {
-                            if &e.from.0 == pkg {
-                                Some(e.from.1.clone())
-                            } else if &e.to.0 == pkg {
-                                Some(e.to.1.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .or_else(|| order.iter().find(|(p, _)| p == pkg).map(|(_, v)| v.clone()));
-                    ver.map(|v| (pkg.clone(), v))
-                })
-                .collect();
-            output::print_tree(&pretty_ctx, &roots, &edges, &order, &cross)
+    if !quiet {
+        match format {
+            DepgraphFormat::Pretty => {
+                output::print_pretty_rooted(&pretty_ctx, &plan_entries, &cross)
+            }
+            DepgraphFormat::Json => {
+                output::print_json(&data, &order, &edges, &installed, &flag_reqs)?
+            }
+            DepgraphFormat::Tree => {
+                let roots: Vec<_> = root_pkgs
+                    .iter()
+                    .filter_map(|pkg| {
+                        let ver = edges
+                            .iter()
+                            .find_map(|e| {
+                                if &e.from.0 == pkg {
+                                    Some(e.from.1.clone())
+                                } else if &e.to.0 == pkg {
+                                    Some(e.to.1.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .or_else(|| {
+                                order.iter().find(|(p, _)| p == pkg).map(|(_, v)| v.clone())
+                            });
+                        ver.map(|v| (pkg.clone(), v))
+                    })
+                    .collect();
+                output::print_tree(&pretty_ctx, &roots, &edges, &order, &cross)
+            }
         }
     }
 

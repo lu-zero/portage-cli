@@ -545,6 +545,7 @@ async fn emerge_atoms_inner(
             std::collections::HashSet::new()
         },
         complete_graph: merge_flags.complete_graph,
+        quiet: false,
     })
     .await?;
 

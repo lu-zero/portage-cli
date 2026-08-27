@@ -856,6 +856,10 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         resume_completed: std::collections::HashSet::new(),
         // Single-atom --nodeps probe: no update, so the gate is off regardless.
         complete_graph: false,
+        // Only the resolved `sys-devel/gcc` version is read off `outcome`
+        // below; the plan preview `depgraph` would otherwise print is a
+        // stray merge list the user never asked for.
+        quiet: true,
     })
     .await
     .ok()?;
