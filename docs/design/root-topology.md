@@ -709,3 +709,9 @@ variant refactor's payoff is that both sides ask
   without the second. Live-verified: `sys-libs/readline`'s
   `ld: cannot find -lncursesw` failure (todo/crossdev-stage1-readline-ncursesw-pkgconfig.md)
   is this bug start to finish.
+- **`root_closure` — the two walks above, consolidated.** `base_copies` and
+  `host_copies` were one algorithm written twice; they are now
+  `portage_resolve::root_closure::base` / `::host` over a single graph
+  (`target_order` entries as immovable anchors, closure nodes appended, one
+  DFS post-order emission). The historical module names in the two entries
+  above are what those commits landed, not what the tree holds today.

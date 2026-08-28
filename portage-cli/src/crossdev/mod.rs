@@ -1445,7 +1445,7 @@ fn make_conf_body(target: &CrossTarget, outer_root: &Utf8Path) -> String {
 /// first — queried against the build host's own BROOT
 /// (`roots.satisfaction_root(DepClass::Bdepend)`), the same root a Host-arch
 /// merge actually lands on and is checked against everywhere else this
-/// session (`preflight`/`bdepend_avail`/`host_copies`).
+/// session (`preflight`/`bdepend_avail`/`root_closure`).
 fn host_installed_versions(
     roots: &portage_resolve::Roots,
     cat: &str,

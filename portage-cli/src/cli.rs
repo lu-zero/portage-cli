@@ -551,7 +551,7 @@ impl Cli {
     /// `None` outside the board-root topology (`--target T --root R`, where
     /// `base` and `target` genuinely differ): there is no separate sysroot
     /// merge destination for a `Base` entry to route to there, and
-    /// `base_copies` never produces one.
+    /// `root_closure::base` never produces one.
     pub(crate) fn sysroot_roots(&self) -> Option<Roots> {
         let roots = self.roots();
         let sysroot = roots.base_merge_root()?.to_owned();

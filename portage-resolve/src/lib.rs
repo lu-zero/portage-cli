@@ -13,11 +13,6 @@
 //! `portage-repo`, which pulls in the brush fork via git.
 #![warn(missing_docs)]
 
-/// Toolchain-sysroot build copies (the board-root topology, `--target T
-/// --root R`): a post-solve closure walk inserting `MergeRoot::Base`
-/// `DEPEND` copies into the shared crossdev sysroot, sibling to
-/// `host_copies`
-pub mod base_copies;
 mod bdepend_avail;
 /// Post-solve trim: drop plan entries only pulled for `BDEPEND` already
 /// satisfied on BROOT or by earlier within-run merges
@@ -39,10 +34,6 @@ pub mod effective_use;
 /// Profile USE `use.force`/`use.mask` (global and per-package), applied as
 /// the unconditional post-fold step real portage uses
 pub mod force_mask;
-/// Native-offset host build-copies (Tier 1 `--root` for a Gentoo host): a
-/// post-solve closure walk inserting `MergeRoot::Host` build-time copies the
-/// solver's single-rooted Target solve can't itself account for
-pub mod host_copies;
 /// VDB-backed installed-package views (target ROOT, build-host BROOT, a
 /// fixed sysroot) and the emerge-style action-tag computation
 pub mod installed;
@@ -56,6 +47,10 @@ pub mod repo;
 pub mod required_use;
 /// Cross-compilation context detection and merge-root display glue
 pub mod root_aware;
+/// Post-solve build closure for a second merge root: the toolchain sysroot's
+/// `MergeRoot::Base` entries (board-root topology) and the build host's
+/// `MergeRoot::Host` ones (native offset)
+pub mod root_closure;
 mod roots;
 /// Slot-operator (`:=`) rebuild detection
 pub mod subslot;

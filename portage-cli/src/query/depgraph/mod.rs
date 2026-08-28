@@ -8,11 +8,11 @@ mod targets;
 pub use targets::{TargetAtom, TargetOrigin};
 
 use portage_resolve::{
-    base_copies, bdepend_trim, conflicts, depend_trim, download_size, effective_use, host_copies,
-    installed, repo, required_use, root_aware, subslot, use_env,
+    bdepend_trim, conflicts, depend_trim, download_size, effective_use, installed, repo,
+    required_use, root_aware, root_closure, subslot, use_env,
 };
 // Not referenced directly here (only via a `force_mask::ForceMask` value
-// returned from `use_env`), but `c7.rs`/`host_copies.rs`'s own tests still
+// returned from `use_env`), but `c7.rs`/`root_closure.rs`'s own tests still
 // reach it through `super::force_mask`/`super::super::force_mask` — keep the
 // binding alive for them.
 #[allow(unused_imports)]
@@ -685,11 +685,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         solution: pubgrub::SelectedDependencies<PortagePackage, Version>,
         order: Vec<(PortagePackage, Version)>,
         edges: Vec<DepEdge>,
-        // `--jobs N` blocker-only edges from `host_copies`/`base_copies`'
-        // synthetic copy entries — kept separate from `edges` (which also
-        // feeds `--tree`/`--json` display) since these aren't real PMS
-        // dependency relationships, only scheduler ordering.
-        copy_blockers: Vec<(PortagePackage, PortagePackage)>,
+        // `--jobs N` blocker-only edges from `root_closure`'s synthetic
+        // entries — kept separate from `edges` (which also feeds
+        // `--tree`/`--json` display) since these aren't real PMS dependency
+        // relationships, only scheduler ordering.
+        closure_blockers: Vec<(PortagePackage, PortagePackage)>,
         package_use: Vec<(Dep, Vec<UseOverride>)>,
         applied_reqs: Vec<UseFlagRequirement>,
         ceded: Vec<CededFlag>,
@@ -1356,23 +1356,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 }
             }
 
-            // Native offset (same-arch `--root`/`--prefix`): schedule host
-            // build-copies — a target package's build edges the host lacks
-            // are merged to BROOT (`/`) so the target can build against
-            // them. Computed as a post-solve walk over the finalized
-            // Target plan, not in the solver, to keep the Target solve
-            // pristine (dual-root aliasing balloons it otherwise).
-            //
-            // `compute` returns the whole reordered plan (a no-op
-            // passthrough for every non-native-offset case) — see its own
-            // doc comment for why each copy is interleaved in front of its
-            // first consumer, rather than spliced in as a separate step.
-            // Reused for both walks below (renamed from `host_copies_adapter`):
-            // `accept_keywords` here is target-arch-scoped
-            // (`cross.target_arch()`), which is exactly what a
-            // `base_copies` sysroot copy needs too — it's built at the
-            // target arch, not the build host's.
-            let copies_adapter = repo::Adapter {
+            // Shared by both closure walks below: `accept_keywords` here is
+            // target-arch-scoped (`cross.target_arch()`), which is what a
+            // sysroot entry needs too — it builds at the target arch, not
+            // the build host's.
+            let closure_adapter = repo::Adapter {
                 data: &data,
                 accept_keywords: &accept_keywords,
                 package_mask: &package_mask,
@@ -1391,21 +1379,22 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 autosolve_use: false,
                 autounmask_widen: false,
             };
-            let (new_order, mut copy_blockers) =
-                host_copies::compute(&order, &copies_adapter, roots, &cross);
-            order = new_order;
+            // Native offset (same-arch `--root`/`--prefix`): a target
+            // package's build edges the host lacks are merged to BROOT
+            // (`/`) so the target can build against them.
+            let host_plan = root_closure::host(&order, &closure_adapter, roots, &cross);
+            order = host_plan.order;
             // Board-root topology (`--target T --root R`): the toolchain
             // sysroot is a separate merge destination from ROOT, so a
             // target package's DEPEND provider must also land there (PMS
-            // 8.2 / real Portage's second entry — see base_copies' own doc
-            // comment). Runs after depend_trim (drops entries the sysroot
-            // already satisfies) and after the host_config_stage
-            // Target-only retain above, so it never schedules a copy for an
-            // entry that isn't in the plan, and its own entries are never
-            // retained away.
-            let (new_order, base_edges) = base_copies::compute(&order, &copies_adapter, roots);
-            order = new_order;
-            copy_blockers.extend(base_edges);
+            // table 8.2). Runs after depend_trim and after the
+            // host_config_stage Target-only retain above, so it never
+            // schedules an entry the plan doesn't hold, and its own entries
+            // are never retained away.
+            let base_plan = root_closure::base(&order, &closure_adapter, roots);
+            order = base_plan.order;
+            let mut closure_blockers = host_plan.blockers;
+            closure_blockers.extend(base_plan.blockers);
 
             // Reverse-dependency constraints: a complete-graph check that emerge's
             // default targeted `-p` skips (e.g. upgrading docutils past an
@@ -1413,8 +1402,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // so the `--complete-graph` repair loop can decide whether another
             // round is needed before anything is printed or written.
             //
-            // Target-routed entries only: `order` also carries BROOT build copies
-            // (`host_copies::compute`, above), and those install into the host, not
+            // Target-routed entries only: `order` also carries BROOT build entries
+            // (`root_closure::host`, above), and those install into the host, not
             // the VDB `target_installed` was read from. Counting one as replacing a
             // target package would hide a real conflict on that name.
             let proposed: Vec<conflicts::ProposedPkg> = order
@@ -1433,7 +1422,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 solution,
                 order,
                 edges,
-                copy_blockers,
+                closure_blockers,
                 package_use,
                 applied_reqs,
                 ceded,
@@ -1506,7 +1495,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         solution,
         order,
         edges,
-        copy_blockers,
+        closure_blockers,
         package_use,
         applied_reqs,
         ceded,
@@ -2025,17 +2014,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             }
         }
     }
-    // `host_copies`/`base_copies`' own blocker edges (not real PMS
-    // dependencies, so kept out of `edges`/display — see `RoundOutcome`'s
-    // `copy_blockers` doc comment). `to < from` holds for a *newly inserted*
-    // copy (always placed strictly before its consumer), but not for a
-    // *seeded* one: a solver-placed `MergeRoot::Host`/`Base` entry already in
-    // `target_order` is never repositioned, so a consumer earlier in the plan
-    // can still (deps-first) end up pointing at it — see
-    // `host_copies::tests::seeded_host_entry_after_its_dependents_consumer_is_unsolvable_by_design`.
-    // Same guard as the real-edge loop above: drop it rather than let a
-    // backwards edge starve the `--jobs N` scheduler.
-    for (from_pkg, to_pkg) in &copy_blockers {
+    // `root_closure`'s blocker-only edges, which already point strictly
+    // backwards; same guard as the real-edge loop above, kept for symmetry.
+    for (from_pkg, to_pkg) in &closure_blockers {
         let (Some(&from), Some(&to)) = (index_of.get(from_pkg), index_of.get(to_pkg)) else {
             continue;
         };

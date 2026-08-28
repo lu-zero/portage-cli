@@ -267,7 +267,7 @@ impl Roots {
     ///
     /// The single source of truth [`satisfaction_root`](Self::satisfaction_root)'s
     /// `DEPEND` arm reads too, so the two can never drift — and what
-    /// `base_copies` gates on.
+    /// `root_closure::base` gates on.
     pub fn base_merge_root(&self) -> Option<&Utf8Path> {
         self.base.as_deref().filter(|b| *b != self.merge_root())
     }
@@ -501,7 +501,7 @@ mod satisfaction_root_tests {
 
     // The board-root topology (`--target T --root R`) is the only one where
     // DEPEND needs a third merge destination — every other topology must
-    // report `None` so `base_copies` never activates for them.
+    // report `None` so `root_closure::base` never activates for them.
     #[test]
     fn base_merge_root_is_some_only_for_the_board_root_topology() {
         assert_eq!(Roots::for_test("/offset").base_merge_root(), None);

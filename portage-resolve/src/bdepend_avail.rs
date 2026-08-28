@@ -100,7 +100,7 @@ impl Avail {
     ///
     /// Unlike [`initial_depend`](Self::initial_depend), the target `ROOT`'s
     /// own VDB is deliberately **not** woven in: this answers "does the
-    /// *sysroot* have it", the question `base_copies` schedules a merge
+    /// *sysroot* have it", the question `root_closure::base` schedules a merge
     /// from. A provider present only in the board root does not satisfy a
     /// build-time `DEPEND` there — its headers/libs/`.pc` are not on the
     /// compiler's sysroot search path.
@@ -333,7 +333,7 @@ pub fn unsatisfied_cpns(entries: &[DepEntry], avail: &Avail) -> Vec<Cpn> {
 /// Unlike [`unsatisfied_cpns`], not filtered by `Avail`: used where a caller
 /// needs to know *which provider a dependency resolves to* even when that
 /// provider was already scheduled by an earlier, unrelated consumer (e.g.
-/// `base_copies`/`host_copies` recording a blocker edge on a shared copy).
+/// `root_closure` recording a blocker edge on a shared entry).
 pub fn all_cpns(entries: &[DepEntry]) -> Vec<Cpn> {
     let mut out = Vec::new();
     for e in entries {
@@ -748,7 +748,7 @@ mod tests {
 
     // The root cause of the readline/ncursesw incident: a provider present
     // only in the board root must NOT count as satisfying a build-time
-    // DEPEND that base_copies is checking against the toolchain sysroot —
+    // DEPEND that root_closure::base is checking against the toolchain sysroot —
     // unlike initial_depend, this must never weave the target VDB in.
     #[test]
     fn initial_base_depend_ignores_the_target_vdb() {

@@ -270,7 +270,7 @@ anstream dependency (rendering stays in `portage-cli`).
 - `mod repo` — `RepoData` / `Adapter`, keyword/mask/license/properties/restrict acceptance
 - `mod use_env` / `force_mask` / `effective_use` — profile/`package.*` USE folding
 - `mod installed` / `conflicts` / `subslot` / `use_reinstall` — VDB views and rebuilds
-- `mod root_aware` / `bdepend_trim` / `depend_trim` / `host_copies` — root-aware plan
+- `mod root_aware` / `bdepend_trim` / `depend_trim` / `root_closure` — root-aware plan
 - `mod package_use` / `required_use` / `download_size` / `bdepend_avail`
 
 CLI-only pieces that stay in `portage-cli`: plan rendering (`output.rs`),

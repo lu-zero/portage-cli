@@ -126,7 +126,7 @@ pub fn effective_use(
 ///
 /// Each dep class is evaluated against that USE on demand — the
 /// `find_cache` + [`effective_use`] + `DepEntry::evaluate_use` triple
-/// shared by `host_copies`, `bdepend_trim`, and `depend_trim`.
+/// shared by `root_closure`, `bdepend_trim`, and `depend_trim`.
 ///
 /// `None` when the CPV isn't in `data` at all (a within-run merge whose cache
 /// entry vanished, e.g. across a repo reload — every caller already treats this

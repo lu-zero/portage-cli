@@ -25,10 +25,10 @@ pub enum MergeRoot {
     /// provider must exist *there*, not only in `ROOT`.
     ///
     /// Never produced by a solver [`crate::Solver`] implementation directly
-    /// — always a post-solve stamp (`portage_resolve`'s `base_copies`
-    /// module), the same way its sibling `host_copies` module stamps `Host`
-    /// build-copies after the fact rather than the solver aliasing every
-    /// package to a third node.
+    /// — always a post-solve stamp (`portage_resolve`'s `root_closure`
+    /// module), the same way that module stamps `Host` build entries after
+    /// the fact rather than the solver aliasing every package to a third
+    /// node.
     Base,
     /// Cross (or native target) build merged to `ROOT` / `EROOT`
     #[default]

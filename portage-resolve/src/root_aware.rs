@@ -91,14 +91,14 @@ pub fn detect(roots: &Roots, host_merge_root: &Utf8Path) -> CrossContext {
     let target = roots.merge_root().to_owned();
     let dual_root = sysroot.as_str() != target.as_str();
     // Dual-root solver bookkeeping ((package, merge_root) nodes, BROOT-
-    // satisfaction dropping, host_copies' post-solve walk) is needed only
+    // satisfaction dropping, root_closure's post-solve walk) is needed only
     // when BROOT is genuinely a *different filesystem* from the target —
     // true for `--root`/`--prefix`/cross, false for both the bare
     // invocation (broot == target == `/`) and `--local` (broot == target ==
     // the same prefix — structurally the same single-root shape as bare).
     //
     // Replaced the old `target != "/"` test (2026-07-16): that made
-    // `--local` spuriously "active", engaging host_copies's Tier-1 machinery
+    // `--local` spuriously "active", engaging root_closure's Tier-1 machinery
     // against a `--local` prefix's own, initially-empty BROOT, inserting a
     // parallel `@Host` copy of nearly the whole closure that preflight then
     // rejects the order of. `roots.broot() == None` means "trivially equals

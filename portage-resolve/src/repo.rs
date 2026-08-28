@@ -313,7 +313,7 @@ impl AcceptKeywords {
 
     /// Test-only constructor from a global token list (no per-package entries)
     /// `#[doc(hidden)] pub`, not `#[cfg(test)]`: this is also called from
-    /// `portage-cli`'s own tests (`c7.rs`, `host_copies.rs`), and `#[cfg(test)]`
+    /// `portage-cli`'s own tests (`c7.rs`, `root_closure.rs`), and `#[cfg(test)]`
     /// doesn't survive a crate boundary — it's only `true` while
     /// `portage-resolve` itself is under test, not for a downstream crate's
     /// tests that merely depend on it normally
@@ -1016,7 +1016,7 @@ impl Adapter<'_> {
     ///
     /// `None` when the CPN is absent from the repo or has no accepted version.
     /// Centralizes the "newest accepted version" pick so a caller can't drift from
-    /// `version_accepted` the way `host_copies`'s own inline copy once did (the
+    /// `version_accepted` the way `root_closure`'s own inline copy once did (the
     /// `dev-vcs/git-9999` selection bug).
     pub fn newest_accepted(&self, cpn: Cpn) -> Option<(&Cpv, &CacheEntry)> {
         self.data

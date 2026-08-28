@@ -312,7 +312,8 @@ pub(crate) fn confirm_action(action: &str) -> Result<bool> {
 ///
 /// The outer EROOT (`host_roots`) for a Host entry (an unsatisfied BDEPEND
 /// scheduled onto the build host); the toolchain sysroot (`base_roots`) for
-/// a Base entry (`base_copies`' DEPEND copy, board-root topology only); the
+/// a Base entry (`root_closure::base`' DEPEND entry, board-root topology
+/// only); the
 /// `--target`-substituted sysroot (`roots`) otherwise. `host_roots`/
 /// `base_roots` both equal `roots` outside `--target`, a no-op there.
 ///
@@ -428,7 +429,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // when `--target` isn't active, so this is a no-op outside cross builds.
     let host_roots = globals.host_roots();
     // Board-root topology only (`--target T --root R`): where a
-    // `MergeRoot::Base` entry (`base_copies`' toolchain-sysroot DEPEND copy)
+    // `MergeRoot::Base` entry (`root_closure::base`' toolchain-sysroot DEPEND entry)
     // actually merges. Falls back to `roots` (a no-op) everywhere else,
     // where no plan entry is ever stamped `Base` to begin with.
     let base_roots = globals.sysroot_roots().unwrap_or_else(|| roots.clone());
@@ -1360,7 +1361,7 @@ mod entry_roots_tests {
     }
 
     /// The board-root topology (`--target T --root R`): a `MergeRoot::Base`
-    /// entry (`base_copies`' DEPEND copy) must merge into the toolchain
+    /// entry (`root_closure::base`' DEPEND entry) must merge into the toolchain
     /// sysroot (`base_roots`), not the board root (`roots`) — the exact bug
     /// that let the sysroot `ncurses` copy silently collide with the board
     /// root's own copy and get skipped as "already installed".
