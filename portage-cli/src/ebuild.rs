@@ -2150,6 +2150,14 @@ async fn run_merge(
         let exclude: HashSet<Cpv> = std::iter::once(old.cpv().clone()).collect();
         let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
         let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, root);
+        // The old occupant's pkg_prerm/pkg_postrm run on this same shell, from
+        // a different ebuild path — if it shares an eclass with `ebuild` (the
+        // package actually being installed), `inherit`'s dedup list *and* the
+        // eclass's own include guard would otherwise treat it as
+        // already-sourced on the way back to pkg_postinst, silently dropping
+        // that eclass's IUSE/RDEPEND/etc. contribution (found live: awk-4's
+        // reinstall losing app-alternatives.eclass's `mawk` IUSE this way).
+        let session = shell.save_session();
         unmerge_slot_occupant(UnmergeSlotOccupant {
             shell,
             old_pkg: old,
@@ -2162,8 +2170,8 @@ async fn run_merge(
             registry: &mut registry,
         })
         .await?;
+        shell.restore_session(session);
         registry.store();
-        shell.preset_var("REPLACED_BY_VERSION", "");
     }
 
     let build_time = SystemTime::now()

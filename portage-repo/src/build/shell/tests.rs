@@ -1010,6 +1010,89 @@ async fn already_phase_sourced_iuse_includes_eclass_contribution() {
     );
 }
 
+// Regression (live 2026-08-28, a resumed board `--root` stage1 reinstalling
+// `app-alternatives/awk`): `run_merge` runs a slot occupant's pkg_prerm/
+// pkg_postrm (a different `Ebuild` path) on this same shell, between the new
+// package's preinst and postinst. A shared eclass with its own bash include
+// guard (as real `app-alternatives.eclass` has) looks already-sourced on the
+// way back: both `inherit`'s dedup list *and* the guard variable survive in
+// the live shell, so clearing only the former (an earlier, reverted fix
+// attempt) can't help. `save_session`/`restore_session` instead returns to
+// the exact pre-unmerge shell instead of re-sourcing over it.
+#[tokio::test]
+async fn session_save_restore_survives_a_slot_replaces_foreign_ebuild() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::create_dir_all(repo_path.join("eclass")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    std::fs::write(
+        repo_path.join("eclass/guardiuse.eclass"),
+        "if [[ -z ${_GUARDIUSE_ECLASS} ]]; then\n_GUARDIUSE_ECLASS=1\nIUSE=\"foo\"\nfi\n",
+    )
+    .unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    let new_path = Utf8PathBuf::from_path_buf(ebdir.join("pkg-2.ebuild")).unwrap();
+    std::fs::write(
+        &new_path,
+        "EAPI=8\ninherit guardiuse\nIUSE=\"new_only\"\nDESCRIPTION=\"t\"\n\
+         SLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         pkg_preinst() { :; }\npkg_postinst() { :; }\n",
+    )
+    .unwrap();
+    let old_path = Utf8PathBuf::from_path_buf(ebdir.join("pkg-1.ebuild")).unwrap();
+    std::fs::write(
+        &old_path,
+        "EAPI=8\ninherit guardiuse\nIUSE=\"old_only\"\nDESCRIPTION=\"t\"\n\
+         SLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         pkg_prerm() { :; }\npkg_postrm() { :; }\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let work = dir.path().join("work");
+    let old_work = dir.path().join("old_work");
+
+    let new_ebuild = Ebuild::from_path(&new_path).unwrap();
+    shell
+        .run_phase(&new_ebuild, "preinst", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let session = shell.save_session();
+
+    let old_ebuild = Ebuild::from_path(&old_path).unwrap();
+    shell
+        .run_phase(&old_ebuild, "prerm", &old_work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+    shell
+        .run_phase(&old_ebuild, "postrm", &old_work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    shell.restore_session(session);
+
+    shell
+        .run_phase(&new_ebuild, "postinst", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let effective = shell.get_var("IUSE_EFFECTIVE").unwrap_or_default();
+    assert!(
+        effective.split_whitespace().any(|f| f == "foo"),
+        "postinst's IUSE_EFFECTIVE must still include the shared eclass's \
+         guarded contribution after the foreign old-package sourcing: {effective:?}"
+    );
+}
+
 // Host cross tools under `--prefix` get `-idirafter /usr/include` so
 // host-only BDEPEND headers resolve.
 #[tokio::test]

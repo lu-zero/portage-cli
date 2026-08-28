@@ -398,6 +398,15 @@ pub struct EbuildShell {
     use_flags: HashSet<String>,
 }
 
+/// A saved snapshot from [`EbuildShell::save_session`]: the live bash state
+/// plus the bookkeeping that decides whether a later `run_phase` needs to
+/// re-source. Opaque to callers — pass it straight to `restore_session`.
+pub struct PhaseSession {
+    shell: Shell,
+    baseline: Option<Box<Shell>>,
+    phase_sourced_ebuild: Option<Utf8PathBuf>,
+}
+
 /// Run a single do*/new* install helper as a standalone process, reading build
 /// state from the (exported) environment. Backs the PATH shims `init_build_env`
 /// drops so `find -exec doman` / `xargs do*` reach helpers that are otherwise
@@ -821,6 +830,27 @@ impl EbuildShell {
     /// the next sourcing re-captures it with the new configuration included.
     fn invalidate_baseline(&mut self) {
         self.baseline = None;
+    }
+
+    /// Snapshot the live session so a different ebuild (a slot replace's
+    /// outgoing package, sharing this shell for prerm/postrm) can be sourced
+    /// without losing this package's state — `Shell::clone()` deep-clones
+    /// builtin state, so `inherit`'s dedup list and each eclass's own
+    /// include guard come along too.
+    pub fn save_session(&self) -> PhaseSession {
+        PhaseSession {
+            shell: self.shell.clone(),
+            baseline: self.baseline.clone(),
+            phase_sourced_ebuild: self.phase_sourced_ebuild.clone(),
+        }
+    }
+
+    /// Undo everything sourced onto the shell since `save_session`, restoring
+    /// the package whose session was saved.
+    pub fn restore_session(&mut self, session: PhaseSession) {
+        self.shell = session.shell;
+        self.baseline = session.baseline;
+        self.phase_sourced_ebuild = session.phase_sourced_ebuild;
     }
 
     /// Whether `ebuild` is the one already sourced into the live shell for the
