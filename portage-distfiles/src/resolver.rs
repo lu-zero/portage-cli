@@ -6,22 +6,30 @@ use portage_repo::Repository;
 
 use crate::error::{Error, Result};
 
-/// Candidate URLs for a distfile on a Gentoo mirror, in priority order: the
-/// modern content-mirror **filename-hash** layout first, the legacy flat layout
-/// as a fallback for non-conforming mirrors.
+/// Append the GLEP 75 filename-hash subdir, then the legacy flat path, to a
+/// URL that already points at a mirror's distfiles root.
 ///
 /// `distfiles.gentoo.org`'s `layout.conf` is `filename-hash BLAKE2B 8`: the file
-/// lives under `distfiles/<xx>/<filename>`, where `<xx>` is the first 8 bits (two
+/// lives under `<root>/<xx>/<filename>`, where `<xx>` is the first 8 bits (two
 /// hex chars) of `BLAKE2B-512(filename)` — the hash of the *filename string*, not
 /// the file content (GLEP 75; matches portage's `FilenameHashLayout`). The old
-/// flat `distfiles/<filename>` path now 404s on the official mirrors.
-fn gentoo_distfile_urls(mirror: &str, filename: &str) -> Vec<String> {
-    let mirror = mirror.trim_end_matches('/');
+/// flat `<root>/<filename>` path now 404s on the official mirrors and their
+/// regional copies alike, since they rsync the same on-disk layout.
+fn hash_layout_urls(distfiles_root: &str, filename: &str) -> Vec<String> {
+    let root = distfiles_root.trim_end_matches('/');
     let sub = format!("{:02x}", Blake2b512::digest(filename.as_bytes())[0]);
     vec![
-        format!("{mirror}/distfiles/{sub}/{filename}"),
-        format!("{mirror}/distfiles/{filename}"),
+        format!("{root}/{sub}/{filename}"),
+        format!("{root}/{filename}"),
     ]
+}
+
+/// Candidate URLs for a distfile on a **bare** Gentoo mirror root, as
+/// `GENTOO_MIRRORS` lists them (make.conf(5): e.g. `https://mirror.example/gentoo`,
+/// with no `/distfiles` suffix — portage appends that itself).
+fn gentoo_distfile_urls(mirror: &str, filename: &str) -> Vec<String> {
+    let root = format!("{}/distfiles", mirror.trim_end_matches('/'));
+    hash_layout_urls(&root, filename)
 }
 
 /// A fully resolved distfile: local filename + all candidate download URLs
@@ -278,42 +286,39 @@ impl DistfileResolver {
 
     /// Expand a single URL to one or more concrete download URLs
     ///
-    /// Every `mirror://name/path` — **including** `mirror://gentoo/` — is
-    /// expanded via `profiles/thirdpartymirrors` (path append), matching both
-    /// Portage client fetch and real `emirrordist` (`Config.mirrors =
-    /// thirdpartymirrors()`). Real emirrordist never consults `GENTOO_MIRRORS`
-    /// at all: that list is the *client's* preferred peer mirrors, and using
-    /// it would make a mirror-of-a-mirror.
-    ///
-    /// `GENTOO_MIRRORS` is only used here as a last-resort fallback when the
-    /// name is `gentoo` and thirdpartymirrors has no `gentoo` key (minimal test
-    /// fixtures / incomplete overlays). Production Gentoo trees always ship
-    /// that key. Callers that want GENTOO_MIRRORS as an extra peer fallback for
-    /// ordinary upstream URIs use `resolve` / `resolve_all` or
-    /// [`ResolveOpts::gentoo_mirrors_fallback`].
-    ///
-    /// Direct URLs are returned as-is.
+    /// `mirror://name/path` is expanded via `profiles/thirdpartymirrors`
+    /// (matching real emirrordist's `Config.mirrors`), except `gentoo`: its
+    /// thirdpartymirrors bases and any `GENTOO_MIRRORS` entries all serve the
+    /// GLEP 75 filename-hash layout, so they get [`hash_layout_urls`] instead
+    /// of a flat path-append. Direct URLs are returned as-is.
     fn expand_url(&self, url: &str, filename: &str) -> Vec<String> {
         if let Some(rest) = url.strip_prefix("mirror://") {
             let (mirror_name, path) = rest.split_once('/').unwrap_or((rest, filename));
-            // Official map first — including the `gentoo` entry in a real tree
-            // (`https://distfiles.gentoo.org/distfiles`, …). emirrordist's
-            // FetchTask does the same path-append expansion.
+            if mirror_name == "gentoo" {
+                let fname = path.rsplit('/').next().unwrap_or(path);
+                let mut urls = Vec::new();
+                for root in self.thirdparty.get("gentoo").into_iter().flatten() {
+                    for candidate in hash_layout_urls(root, fname) {
+                        if !urls.contains(&candidate) {
+                            urls.push(candidate);
+                        }
+                    }
+                }
+                for mirror in &self.gentoo_mirrors {
+                    for candidate in gentoo_distfile_urls(mirror, fname) {
+                        if !urls.contains(&candidate) {
+                            urls.push(candidate);
+                        }
+                    }
+                }
+                return urls;
+            }
+            // Official map — plain flat path-append for every non-gentoo
+            // thirdpartymirrors entry. emirrordist's FetchTask does the same.
             if let Some(bases) = self.thirdparty.get(mirror_name) {
                 return bases
                     .iter()
                     .map(|base| format!("{}/{path}", base.trim_end_matches('/')))
-                    .collect();
-            }
-            // Fixture / incomplete-overlay fallback only: GENTOO_MIRRORS with
-            // GLEP 75 filename-hash layout. Not used by mirrordist when
-            // GENTOO_MIRRORS is intentionally empty (no peer-mirror fallback).
-            if mirror_name == "gentoo" {
-                let fname = path.rsplit('/').next().unwrap_or(path);
-                return self
-                    .gentoo_mirrors
-                    .iter()
-                    .flat_map(|m| gentoo_distfile_urls(m, fname))
                     .collect();
             }
             // Unknown mirror name — no direct URLs; caller may add GENTOO_MIRRORS
@@ -535,11 +540,12 @@ mod tests {
         );
     }
 
-    // Real emirrordist expands `mirror://gentoo/` via thirdpartymirrors
-    // only — never GENTOO_MIRRORS (that would mirror a peer mirror). The
-    // profiles map's `gentoo` entry already ends in `/distfiles`.
+    // thirdpartymirrors' `gentoo` bases (already ending in `/distfiles`) take
+    // priority, each hashed then flat; GENTOO_MIRRORS entries come after as
+    // extra candidates, also hash-layout — never a flat path-append, since
+    // every one of these hosts serves the GLEP 75 on-disk layout.
     #[test]
-    fn mirror_gentoo_uses_thirdpartymirrors_not_gentoo_mirrors() {
+    fn mirror_gentoo_uses_filename_hash_layout_on_every_source() {
         let r = DistfileResolver::new(
             vec![(
                 "gentoo".to_owned(),
@@ -548,26 +554,24 @@ mod tests {
                     "https://gentoo.osuosl.org/distfiles".to_owned(),
                 ],
             )],
-            // Intentionally non-empty peer list: must not appear in the plan.
-            vec!["https://peer-mirror.example/".to_owned()],
+            vec!["https://peer-mirror.example".to_owned()],
         );
         let entries = SrcUriEntry::parse("mirror://gentoo/logsentry-1.1.1.tar.gz").unwrap();
         let dfs = r.resolve_uri_map(&entries, &ResolveOpts::default());
         assert_eq!(dfs.len(), 1);
-        assert_eq!(
-            dfs[0].urls,
-            [
-                "https://distfiles.gentoo.org/distfiles/logsentry-1.1.1.tar.gz",
-                "https://gentoo.osuosl.org/distfiles/logsentry-1.1.1.tar.gz",
-            ]
+        let mut expected = hash_layout_urls(
+            "https://distfiles.gentoo.org/distfiles",
+            "logsentry-1.1.1.tar.gz",
         );
-        assert!(
-            dfs[0]
-                .urls
-                .iter()
-                .all(|u| !u.contains("peer-mirror.example")),
-            "GENTOO_MIRRORS must not expand mirror://gentoo under resolve_uri_map"
-        );
+        expected.extend(hash_layout_urls(
+            "https://gentoo.osuosl.org/distfiles",
+            "logsentry-1.1.1.tar.gz",
+        ));
+        expected.extend(gentoo_distfile_urls(
+            "https://peer-mirror.example",
+            "logsentry-1.1.1.tar.gz",
+        ));
+        assert_eq!(dfs[0].urls, expected);
     }
 
     // With no thirdpartymirrors `gentoo` key and empty GENTOO_MIRRORS
