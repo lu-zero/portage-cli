@@ -21,6 +21,7 @@ pub(crate) mod inst_owner;
 pub(crate) mod install;
 pub(crate) mod install_paths;
 pub(crate) mod output;
+pub(crate) mod phase_defaults;
 pub(crate) mod phase_funcs;
 pub(crate) mod unpack;
 pub(crate) mod use_flag;
@@ -36,6 +37,13 @@ pub(crate) use export_functions::ExportFunctionsCommand;
 pub(crate) use has::{HasCommand, HasvCommand, InIuseCommand};
 pub(crate) use install::{HELPER_NAMES, register_install_builtins};
 pub(crate) use install_paths::{DocompressCommand, DostripCommand};
+pub(crate) use phase_defaults::{
+    AssertCommand, EapiPkgNofetchCommand, EapiSrcCompile0Command, EapiSrcCompile1Command,
+    EapiSrcCompile2Command, EapiSrcConfigureCommand, EapiSrcInstall4Command,
+    EapiSrcInstall6Command, EapiSrcPrepare6Command, EapiSrcPrepare8Command,
+    EapiSrcPrepareNoopCommand, EapiSrcTestCommand, EapiSrcUnpackCommand, EapplyUserCommand,
+    EinstalldocsCommand, GetLibdirCommand, NonfatalCommand,
+};
 pub(crate) use phase_funcs::{EAPI_PREDICATE_NAMES, EapiPredicateCommand, EbuildPhaseFuncsCommand};
 pub(crate) use unpack::UnpackCommand;
 pub(crate) use use_flag::{UseCommand, UseEnableCommand, UseWithCommand, UsevCommand, UsexCommand};

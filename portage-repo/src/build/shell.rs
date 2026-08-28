@@ -92,94 +92,6 @@ const PHASE_FUNCTIONS: &[(&str, Phase)] = &[
     ("pkg_nofetch", Phase::PkgNofetch),
 ];
 
-/// Per-EAPI default phase implementations loaded by `init_build_env`
-///
-/// These bash functions are called by `__ebuild_phase_funcs` (a Rust builtin)
-/// when wiring up `default()` and `default_<phase>()`.  The functions call
-/// `econf` / `emake` / `eapply` which are Rust builtins.
-const PHASE_DEFAULT_FUNCTIONS: &str = r#"
-__eapi0_pkg_nofetch() {
-    [[ -z ${A} ]] && return
-    elog "The following files cannot be fetched for ${PN}:"
-    local x
-    for x in ${A}; do elog "   ${x}"; done
-}
-__eapi0_src_unpack() { [[ -n ${A} ]] && unpack ${A}; }
-__eapi0_src_compile() {
-    if [[ -x ./configure ]]; then econf; fi
-    __eapi2_src_compile
-}
-__eapi0_src_test() {
-    # PMS: default src_test forces -j1 for EAPI ≤ 4 to avoid parallel test races.
-    local jobflag=""
-    ___eapi_default_src_test_disables_parallel_jobs && jobflag="-j1"
-    local emake_cmd="${MAKE:-make} ${MAKEOPTS} ${EXTRA_EMAKE}${jobflag:+ ${jobflag}}"
-    if ${emake_cmd} check -n &>/dev/null; then
-        ${emake_cmd} check || die "check target failed"
-    elif ${emake_cmd} test -n &>/dev/null; then
-        ${emake_cmd} test || die "test target failed"
-    fi
-}
-__eapi1_src_compile() { __eapi2_src_configure; __eapi2_src_compile; }
-__eapi2_src_prepare() { :; }
-__eapi2_src_configure() {
-    if [[ -x ${ECONF_SOURCE:-.}/configure ]]; then econf; fi
-}
-__eapi2_src_compile() {
-    if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then
-        emake || die "emake failed"
-    fi
-}
-__eapi4_src_install() {
-    if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then
-        emake DESTDIR="${D}" install || die "emake install failed"
-    fi
-    if [[ -v DOCS ]]; then
-        if [[ ${DOCS@a} == *a* ]]; then
-            [[ ${#DOCS[@]} -gt 0 ]] && dodoc "${DOCS[@]}"
-        elif [[ -n ${DOCS} ]]; then
-            dodoc ${DOCS}
-        fi
-    fi
-}
-__eapi6_src_prepare() {
-    if [[ -n ${PATCHES+set} ]]; then
-        if [[ ${PATCHES@a} == *a* ]]; then
-            [[ ${#PATCHES[@]} -gt 0 ]] && eapply "${PATCHES[@]}"
-        elif [[ -n ${PATCHES} ]]; then
-            eapply ${PATCHES}
-        fi
-    fi
-    eapply_user
-}
-__eapi6_src_install() {
-    if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then
-        emake DESTDIR="${D}" install || die "emake install failed"
-    fi
-    einstalldocs
-}
-__eapi8_src_prepare() {
-    if [[ -n ${PATCHES+set} ]]; then
-        if [[ ${PATCHES@a} == *a* ]]; then
-            [[ ${#PATCHES[@]} -gt 0 ]] && eapply -- "${PATCHES[@]}"
-        elif [[ -n ${PATCHES} ]]; then
-            eapply -- ${PATCHES}
-        fi
-    fi
-    eapply_user
-}
-nonfatal() { PORTAGE_NONFATAL=1 "$@"; local _r=$?; unset PORTAGE_NONFATAL; return $_r; }
-assert() {
-    local pipestatus=("${PIPESTATUS[@]}")
-    local x
-    for x in "${pipestatus[@]}"; do
-        (( x == 0 )) && continue
-        [[ $# -gt 0 ]] && die "$@" || die "assert: command failed"
-    done
-}
-eapply_user() { :; }
-"#;
-
 /// Sandbox path-registration functions as no-ops (real enforcement is M3)
 /// Defined so eclasses/ebuilds that call them don't abort with "command not
 /// found"; each portage equivalent only appends to a `SANDBOX_*` colon list.
@@ -246,39 +158,6 @@ doenvd() {
 edo() {
     einfo "$@"
     "$@" || die "edo: command failed: $*"
-}
-
-get_libdir() {
-    local v=lib
-    if [[ -n ${ABI} ]]; then
-        local var="LIBDIR_${ABI}"
-        [[ -n ${!var} ]] && v=${!var}
-    elif [[ -n ${CONF_LIBDIR} ]]; then
-        v=${CONF_LIBDIR}
-    fi
-    echo "${v}"
-}
-
-einstalldocs() {
-    local f
-    if [[ -v DOCS ]]; then
-        if [[ ${DOCS@a} == *a* ]]; then
-            [[ ${#DOCS[@]} -gt 0 ]] && dodoc -r "${DOCS[@]}"
-        elif [[ -n ${DOCS} ]]; then
-            dodoc -r ${DOCS}
-        fi
-    else
-        for f in README* CHANGES* ChangeLog* CHANGELOG* AUTHORS* NEWS* TODO* THANKS*; do
-            [[ -s ${f} ]] && dodoc "${f}"
-        done
-    fi
-    if [[ -v HTML_DOCS ]]; then
-        if [[ ${HTML_DOCS@a} == *a* ]]; then
-            [[ ${#HTML_DOCS[@]} -gt 0 ]] && dodoc -r "${HTML_DOCS[@]}"
-        elif [[ -n ${HTML_DOCS} ]]; then
-            dodoc -r ${HTML_DOCS}
-        fi
-    fi
 }
 "#;
 
@@ -603,6 +482,74 @@ impl EbuildShell {
             (
                 "dostrip",
                 brush_core::builtins::builtin::<commands::DostripCommand, _>(),
+            ),
+            (
+                "__eapi0_pkg_nofetch",
+                brush_core::builtins::builtin::<commands::EapiPkgNofetchCommand, _>(),
+            ),
+            (
+                "__eapi0_src_unpack",
+                brush_core::builtins::builtin::<commands::EapiSrcUnpackCommand, _>(),
+            ),
+            (
+                "__eapi0_src_compile",
+                brush_core::builtins::builtin::<commands::EapiSrcCompile0Command, _>(),
+            ),
+            (
+                "__eapi0_src_test",
+                brush_core::builtins::builtin::<commands::EapiSrcTestCommand, _>(),
+            ),
+            (
+                "__eapi1_src_compile",
+                brush_core::builtins::builtin::<commands::EapiSrcCompile1Command, _>(),
+            ),
+            (
+                "__eapi2_src_prepare",
+                brush_core::builtins::builtin::<commands::EapiSrcPrepareNoopCommand, _>(),
+            ),
+            (
+                "__eapi2_src_configure",
+                brush_core::builtins::builtin::<commands::EapiSrcConfigureCommand, _>(),
+            ),
+            (
+                "__eapi2_src_compile",
+                brush_core::builtins::builtin::<commands::EapiSrcCompile2Command, _>(),
+            ),
+            (
+                "__eapi4_src_install",
+                brush_core::builtins::builtin::<commands::EapiSrcInstall4Command, _>(),
+            ),
+            (
+                "__eapi6_src_prepare",
+                brush_core::builtins::builtin::<commands::EapiSrcPrepare6Command, _>(),
+            ),
+            (
+                "__eapi6_src_install",
+                brush_core::builtins::builtin::<commands::EapiSrcInstall6Command, _>(),
+            ),
+            (
+                "__eapi8_src_prepare",
+                brush_core::builtins::builtin::<commands::EapiSrcPrepare8Command, _>(),
+            ),
+            (
+                "nonfatal",
+                brush_core::builtins::builtin::<commands::NonfatalCommand, _>(),
+            ),
+            (
+                "assert",
+                brush_core::builtins::builtin::<commands::AssertCommand, _>(),
+            ),
+            (
+                "eapply_user",
+                brush_core::builtins::builtin::<commands::EapplyUserCommand, _>(),
+            ),
+            (
+                "get_libdir",
+                brush_core::builtins::builtin::<commands::GetLibdirCommand, _>(),
+            ),
+            (
+                "einstalldocs",
+                brush_core::builtins::builtin::<commands::EinstalldocsCommand, _>(),
             ),
         ] {
             shell.register_builtin(name, builtin);
@@ -1400,10 +1347,10 @@ impl EbuildShell {
         // to their real implementations — see commands::dual_mode.
         commands::set_tool_mode(&mut self.shell, commands::ToolMode::Build);
 
-        // Define per-EAPI default phase implementations as bash functions.
-        // These are called by __ebuild_phase_funcs (a Rust builtin) to set up
-        // default() and default_<phase>() for the currently executing phase.
-        self.run_string(PHASE_DEFAULT_FUNCTIONS).await?;
+        // Per-EAPI default phase implementations (__eapi0_pkg_nofetch, etc.)
+        // are Rust builtins registered once in `new_with_cache` — see
+        // commands::phase_defaults. __ebuild_phase_funcs wires default() and
+        // default_<phase>() to call them by name for the current phase.
 
         // Define real P3 install helpers (dobin, doins, dodoc, dosym, …).
         // These override the no-op stubs from builtins.rs that were needed

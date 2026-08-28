@@ -514,6 +514,57 @@ async fn install_helpers_are_self_contained() {
     assert!(d.join("etc/init.d/svc").exists(), "newinitd");
 }
 
+// Regression (live 2026-08-28, dev-build/make-4.4.1-r102's own
+// `DOCS="AUTHORS NEWS README*"`): a scalar DOCS containing a glob pattern
+// must still expand it, matching real bash's unquoted `dodoc -r ${DOCS}` —
+// quoting each split word (the first attempt at this einstalldocs port)
+// passed the literal string "README*" straight to dodoc as a filename.
+#[tokio::test]
+async fn einstalldocs_expands_a_glob_pattern_in_a_scalar_docs() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+
+    let d = dir.path().join("image");
+    let t = dir.path().join("temp");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::create_dir_all(&t).unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("AUTHORS"), "me\n").unwrap();
+    std::fs::write(src.join("README.rst"), "hi\n").unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell
+        .run_string(&format!(
+            "export D={d} ED={d} T={t} CATEGORY=cat PN=pkg SLOT=0 PF=pkg-1; \
+             DOCS=\"AUTHORS README*\"; \
+             cd {src}; \
+             einstalldocs",
+            d = d.display(),
+            t = t.display(),
+            src = src.display(),
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        d.join("usr/share/doc/pkg-1/AUTHORS").exists(),
+        "exact-name scalar DOCS entry"
+    );
+    assert!(
+        d.join("usr/share/doc/pkg-1/README.rst").exists(),
+        "glob-pattern scalar DOCS entry must expand, not install a literal 'README*'"
+    );
+}
+
 #[tokio::test]
 async fn new_helpers_read_stdin_for_dash_source() {
     // `newins - <name>` (and every new* with `-`) reads the file body from
