@@ -19,8 +19,7 @@
 //!   builds) to run its full autoconf codegen checks against the *host's*
 //!   native compiler, since no target compiler existed yet — fine on riscv64,
 //!   fatal on x86 (`sysdeps/x86`'s `-Os inlines trunc` check can't be
-//!   answered by a wrong-arch CC). See
-//!   `todo/crossdev-libc-headers-before-gcc-stage1.md`.
+//!   answered by a wrong-arch CC).
 //! - **native** — a self-hosting stage1 into `--root` (`CHOST == CBUILD`), plain
 //!   `::gentoo` atoms. The seed compiler at `BROOT=/` already targets this arch,
 //!   so it builds *full* glibc directly and a single full gcc links against it:

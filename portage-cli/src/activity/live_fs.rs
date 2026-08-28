@@ -84,9 +84,9 @@ impl LiveFsSink {
 
     /// Static job metadata — written once, at `SessionStart` only
     ///
-    /// `plan` and `blockers` can be large, so this must never be rewritten per-package (that
-    /// O(N) reserialize-and-rewrite, once per `PkgStart`/`PkgEnd`, is what made `em regen` hang
-    /// — see `todo/for-sonnet.md` 2026-08-09).
+    /// `plan` and `blockers` can be large, so this must never be rewritten per-package: that
+    /// O(N) reserialize-and-rewrite, once per `PkgStart`/`PkgEnd`, made a 32,637-ebuild
+    /// `em regen` hang indefinitely.
     fn write_session_file(&self, job_id: &str) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let Some(s) = state.get(job_id) else {

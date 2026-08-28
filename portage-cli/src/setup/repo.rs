@@ -1,6 +1,6 @@
 //! `em --local setup`'s repo resolution: piggy-back the host's `::gentoo` if
 //! one is usable, else write an own-tree entry and sync it — step 2 of the
-//! config-root ladder (`todo/local-bootstrap-provided.md`).
+//! config-root ladder.
 
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};

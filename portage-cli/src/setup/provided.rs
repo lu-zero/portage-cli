@@ -1,11 +1,10 @@
 //! `em --local setup`'s bootstrap `package.provided` — step 4 of the
-//! config-root ladder (`todo/local-bootstrap-provided.md`). There is no host
-//! VDB to read on a non-Gentoo host (or a Gentoo host used only through
-//! `--local`, which never weaves the host VDB into BDEPEND satisfaction —
-//! see that doc's "why provided is stronger than break cycles"), so the
-//! version for each Tier-1 cycle-fuel CPN is picked by probing the host's
-//! own tool (`meson --version`, `perl --version`, …) and mapping that to
-//! the closest tree-present version.
+//! config-root ladder. Under `--local`, BROOT is the prefix itself, so the
+//! host VDB is never woven into BDEPEND satisfaction: `package.provided` is
+//! the only way to tell the solver a host tool exists, not just a
+//! cycle-breaker. With no host VDB to pick a version from, each Tier-1
+//! cycle-fuel CPN's version is probed from the host's own tool (`meson
+//! --version`, `perl --version`, …) and mapped to the closest tree version.
 //!
 //! A tool the host does not have is left out entirely rather than claimed at
 //! some floor version: the entry exists to say "the system already supplies

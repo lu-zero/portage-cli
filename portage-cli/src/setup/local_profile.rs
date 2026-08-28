@@ -1,5 +1,5 @@
 //! `em --local setup`'s profile resolution — step 3 of the config-root
-//! ladder (`todo/local-bootstrap-provided.md`). Mirrors the host's own
+//! ladder. Mirrors the host's own
 //! `make.profile` when it resolves under the just-synced repo (a real
 //! Gentoo host), else falls back to a per-ARCH default prefix profile (any
 //! other host, e.g. Debian, has no Gentoo profile to mirror at all).

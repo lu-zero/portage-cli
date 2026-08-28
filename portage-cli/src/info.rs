@@ -126,7 +126,7 @@ struct BinaryRepoInfo {
 /// `Installed sets:` line (only the ones actually tracked in `world_sets`),
 /// this lists *every* set `KnownSets` can see, whether or not `em` can
 /// resolve it — exactly the "which sets does `em` actually support" question
-/// `todo/done/package-sets-support.md`'s audit had to answer by hand.
+/// that once had to be answered by a manual audit.
 #[derive(Serialize)]
 struct SetEntry {
     #[serde(skip_serializing_if = "Vec::is_empty")]

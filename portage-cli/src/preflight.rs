@@ -1,4 +1,4 @@
-//! Pre-flight build-dependency check (todo/build-roadmap.md, M2)
+//! Pre-flight build-dependency check
 //!
 //! Before the (potentially hours-long) build loop, verify that every plan
 //! entry's build-time dependencies are present in the set that will be visible

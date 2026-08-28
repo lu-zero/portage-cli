@@ -183,8 +183,9 @@ impl DurationStore {
     }
 
     /// `(merge_root, cpv)` pairs already recorded (success or failure) for
-    /// `job_id` — the live tree's own `finished` set was dropped (O(N²)
-    /// rewrite, see `todo/for-sonnet.md` 2026-08-09); this is its replacement.
+    /// `job_id`. Replaces a `finished` set once tracked in the live on-disk
+    /// tree, dropped after it made every `PkgStart`/`PkgEnd` rewrite an
+    /// ever-growing `Vec` (O(N²) total cost per session).
     pub fn finished_set(&self, job_id: &str) -> HashSet<(ActivityMergeRoot, Cpv)> {
         self.records
             .iter()

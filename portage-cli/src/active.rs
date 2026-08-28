@@ -520,7 +520,9 @@ fn env_d_path_entries(prefix: &Utf8Path) -> Vec<String> {
 
 /// Directories from the prefix's `etc/ld.so.conf`, via the `ldconfig` crate
 /// (same as `maint/env.rs`'s `refresh_ld_cache`). Deliberately excludes the
-/// host's own `/etc/ld.so.conf` — see todo/for-sonnet.md 2026-08-08.
+/// host's own `/etc/ld.so.conf`: this feeds a prefix-scoped
+/// `LD_LIBRARY_PATH`, and mixing in host search paths risks resolving
+/// against the wrong (host) library version.
 fn ld_so_conf_entries(prefix: &Utf8Path) -> Vec<String> {
     let conf = prefix.join("etc/ld.so.conf");
     ldconfig::SearchPaths::from_file(&conf, None)

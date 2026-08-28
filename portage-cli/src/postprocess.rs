@@ -3,8 +3,8 @@
 //! compressed (PMS 12.3.9) and ELF objects are stripped unless excluded via
 //! `dostrip`/`RESTRICT=strip`/`FEATURES=nostrip` (PMS 12.3.10).
 //!
-//! Both passes shell out (to `${PORTAGE_COMPRESS}` and `${STRIP}`); see
-//! todo/build-roadmap.md for the plan to grow Rust builtins for them.
+//! Both passes shell out, to `${PORTAGE_COMPRESS}` and `${STRIP}`, rather
+//! than being Rust builtins.
 
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};

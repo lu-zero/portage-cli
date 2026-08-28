@@ -246,8 +246,9 @@ pub struct RootContext<'a> {
 
 /// `LD_LIBRARY_PATH` for a build phase: the prefix's own `ld.so.conf`
 /// (`eprefix`), plus the host's own when sharing it for DEPEND (`sysroot`
-/// set — a `--prefix` overlay, not `--local`). See todo/for-sonnet.md
-/// 2026-08-08.
+/// set — a `--prefix` overlay, not `--local`). Without this, build-time
+/// tools like `llvm-min-tblgen` died loading shared libraries neither path
+/// had been exported for.
 pub(crate) fn build_ld_library_path(
     eprefix: Option<&Utf8Path>,
     sysroot: Option<&Utf8Path>,

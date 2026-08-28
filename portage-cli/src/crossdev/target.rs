@@ -199,7 +199,8 @@ impl CrossTarget {
 /// the package.env arch from bash-crossdev's letter split (`set_env` `K|L` →
 /// Target, `*` → Host). [`CrossTarget::packages`] and
 /// [`cross_env_entries`](super::cross_env_entries) read this table — not a
-/// BuildClass stamp (`todo/drop-buildclass.md`).
+/// planner-computed `BuildClass` stamp, removed for being a second authority
+/// that could disagree with the real `package.env` contract.
 ///
 /// LLVM runtimes (R/U/A/P) are **host** env in bash-crossdev even though
 /// ebuilds install under `/usr/${CTARGET}` — see

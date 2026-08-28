@@ -577,9 +577,9 @@ impl Cli {
     /// `--root DIR` alone, `--prefix P --target T`, and an explicit
     /// `--root B` redirecting away from `--prefix`/`--local`'s own anchor
     /// all genuinely differ from `host_roots()` and pass. Replaces an older,
-    /// narrower `merge_root == "/"` check — see todo/for-sonnet.md
-    /// 2026-08-08 for the live bug (a real `.pc` file corrupted under
-    /// `--prefix --target`) this closes off.
+    /// narrower `merge_root == "/"` check, too narrow to catch a real
+    /// `--prefix --target` bug where a package's `.pc` file baked in the
+    /// outer prefix's path even though nothing was installed there.
     pub(crate) fn require_root_distinct_from_host(
         &self,
         resolved: &Roots,

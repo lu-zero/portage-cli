@@ -236,7 +236,7 @@ pub struct EbuildShell {
     /// (host / ROOT-offset `--prefix`).
     build_eprefix: Option<Utf8PathBuf>,
     /// `LD_LIBRARY_PATH` for phases, resolved by the caller (`ebuild.rs`),
-    /// not read from disk here. See todo/for-sonnet.md 2026-08-08.
+    /// not read from disk here — matches `build_sysroot`/`build_eprefix`.
     build_ld_library_path: Option<String>,
     /// Where `BDEPEND`-class build tools actually live for this invocation
     /// — `Cli::host_roots()`'s merge root: real host `/` for a privileged
@@ -657,8 +657,7 @@ impl EbuildShell {
 
     /// Set `PORTAGE_CONFIGROOT`, `SYSROOT`/`ESYSROOT`, `broot`, and
     /// `LD_LIBRARY_PATH` for subsequent phases. All already-resolved values
-    /// from the caller — see docs/user/root-model.md and todo/for-sonnet.md
-    /// 2026-08-08.
+    /// from the caller — see docs/user/root-model.md.
     pub fn set_build_roots(
         &mut self,
         config_root: Option<&Utf8Path>,
