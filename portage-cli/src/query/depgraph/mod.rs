@@ -685,6 +685,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         solution: pubgrub::SelectedDependencies<PortagePackage, Version>,
         order: Vec<(PortagePackage, Version)>,
         edges: Vec<DepEdge>,
+        // `--jobs N` blocker-only edges from `host_copies`/`base_copies`'
+        // synthetic copy entries — kept separate from `edges` (which also
+        // feeds `--tree`/`--json` display) since these aren't real PMS
+        // dependency relationships, only scheduler ordering.
+        copy_blockers: Vec<(PortagePackage, PortagePackage)>,
         package_use: Vec<(Dep, Vec<UseOverride>)>,
         applied_reqs: Vec<UseFlagRequirement>,
         ceded: Vec<CededFlag>,
@@ -1386,7 +1391,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 autosolve_use: false,
                 autounmask_widen: false,
             };
-            order = host_copies::compute(&order, &copies_adapter, roots, &cross);
+            let (new_order, mut copy_blockers) =
+                host_copies::compute(&order, &copies_adapter, roots, &cross);
+            order = new_order;
             // Board-root topology (`--target T --root R`): the toolchain
             // sysroot is a separate merge destination from ROOT, so a
             // target package's DEPEND provider must also land there (PMS
@@ -1396,7 +1403,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // Target-only retain above, so it never schedules a copy for an
             // entry that isn't in the plan, and its own entries are never
             // retained away.
-            order = base_copies::compute(&order, &copies_adapter, roots);
+            let (new_order, base_edges) = base_copies::compute(&order, &copies_adapter, roots);
+            order = new_order;
+            copy_blockers.extend(base_edges);
 
             // Reverse-dependency constraints: a complete-graph check that emerge's
             // default targeted `-p` skips (e.g. upgrading docutils past an
@@ -1424,6 +1433,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 solution,
                 order,
                 edges,
+                copy_blockers,
                 package_use,
                 applied_reqs,
                 ceded,
@@ -1496,6 +1506,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         solution,
         order,
         edges,
+        copy_blockers,
         package_use,
         applied_reqs,
         ceded,
@@ -2012,6 +2023,24 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             if !hard_cycle_edges.contains(&pair) {
                 hard_cycle_edges.push(pair);
             }
+        }
+    }
+    // `host_copies`/`base_copies`' own blocker edges (not real PMS
+    // dependencies, so kept out of `edges`/display — see `RoundOutcome`'s
+    // `copy_blockers` doc comment). `to < from` holds for a *newly inserted*
+    // copy (always placed strictly before its consumer), but not for a
+    // *seeded* one: a solver-placed `MergeRoot::Host`/`Base` entry already in
+    // `target_order` is never repositioned, so a consumer earlier in the plan
+    // can still (deps-first) end up pointing at it — see
+    // `host_copies::tests::seeded_host_entry_after_its_dependents_consumer_is_unsolvable_by_design`.
+    // Same guard as the real-edge loop above: drop it rather than let a
+    // backwards edge starve the `--jobs N` scheduler.
+    for (from_pkg, to_pkg) in &copy_blockers {
+        let (Some(&from), Some(&to)) = (index_of.get(from_pkg), index_of.get(to_pkg)) else {
+            continue;
+        };
+        if to < from && !build_blockers[from].contains(&to) {
+            build_blockers[from].push(to);
         }
     }
 

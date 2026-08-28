@@ -43,7 +43,7 @@ use portage_atom::{Cpn, Cpv, Version};
 use portage_atom_pubgrub::{MergeRoot, PortagePackage};
 
 use crate::Roots;
-use crate::{Avail, unsatisfied_cpns};
+use crate::{Avail, all_cpns, unsatisfied_cpns};
 
 use crate::effective_use;
 use crate::repo::Adapter;
@@ -55,25 +55,42 @@ struct Ctx<'a> {
 }
 
 /// Mutable walk state: sysroot availability (VDB + already-planned `Base`
-/// entries + emitted copies) and the seen-set (also breaks dependency cycles)
+/// entries + emitted copies), the seen-set (also breaks dependency cycles),
+/// and which `Base` package ended up scheduled for each copied CPN (so a
+/// *later* consumer of an *earlier* consumer's copy still gets a blocker
+/// edge onto it, not just position-in-list — see [`compute`]'s doc comment).
 struct Walk {
     avail: Avail,
     seen: HashSet<Cpn>,
+    scheduled: HashMap<Cpn, PortagePackage>,
 }
+
+/// `(reordered plan, "(consumer, copy)" blocker pairs)` — see [`compute`]'s
+/// doc comment for what the second element is for.
+pub type CopyOrder = (
+    Vec<(PortagePackage, Version)>,
+    Vec<(PortagePackage, PortagePackage)>,
+);
 
 /// Compute the finalized plan order for the board-root topology (`--target T
 /// --root R`), inserting toolchain-sysroot (`MergeRoot::Base`) `DEPEND`
-/// copies immediately before whichever Target entry first needs each one
+/// copies immediately before whichever Target entry first needs each one.
 ///
-/// Returns `target_order` unchanged whenever [`Roots::base_merge_root`] is
-/// `None` — every topology except the board-root one.
+/// Also returns the `(consumer, copy)` blocker pairs this insertion relies
+/// on: list position alone doesn't bind `--jobs N`'s scheduler, which builds
+/// its ready-set from solver-time edges predating these synthetic entries
+/// (found live: `sys-apps/acl` racing its `sys-apps/attr` sysroot copy under
+/// `--jobs 8`). The caller folds these into `build_blockers`.
+///
+/// Returns `target_order` unchanged (and no edges) whenever
+/// [`Roots::base_merge_root`] is `None`.
 pub fn compute(
     target_order: &[(PortagePackage, Version)],
     adapter: &Adapter<'_>,
     roots: &Roots,
-) -> Vec<(PortagePackage, Version)> {
+) -> CopyOrder {
     if roots.base_merge_root().is_none() {
-        return target_order.to_vec();
+        return (target_order.to_vec(), Vec::new());
     }
 
     // CPN -> (version, target package) for version reuse: a sysroot copy of
@@ -98,6 +115,7 @@ pub fn compute(
     let mut walk = Walk {
         seen: HashSet::new(),
         avail: Avail::initial_base_depend(roots),
+        scheduled: HashMap::new(),
     };
 
     // Seed with whatever `MergeRoot::Base` entries might already be in
@@ -113,6 +131,7 @@ pub fn compute(
         walk.seen.insert(*pkg.cpn());
         walk.avail
             .record_merge(Cpv::new(*pkg.cpn(), ver.clone()), MergeRoot::Base);
+        walk.scheduled.insert(*pkg.cpn(), pkg.clone());
     }
 
     // Interleave: walk target_order in its existing order, and for each
@@ -120,13 +139,14 @@ pub fn compute(
     // (deps-first, recursively) immediately before it, then emit the entry
     // itself. Base entries pass through unchanged (already seeded above).
     let mut order: Vec<(PortagePackage, Version)> = Vec::with_capacity(target_order.len());
+    let mut edges: Vec<(PortagePackage, PortagePackage)> = Vec::new();
     for (pkg, ver) in target_order {
         if pkg.merge_root() == MergeRoot::Target {
-            visit_unsatisfied(&ctx, &mut walk, pkg, ver, &mut order, true);
+            visit_unsatisfied(&ctx, &mut walk, pkg, ver, &mut order, &mut edges, true);
         }
         order.push((pkg.clone(), ver.clone()));
     }
-    order
+    (order, edges)
 }
 
 /// Recurse into `pkg`'s unsatisfied-in-the-sysroot `DEPEND` edges (top
@@ -140,12 +160,19 @@ pub fn compute(
 /// Called just before `pkg` itself is pushed to `order`, so every copy
 /// discovered here also ends up immediately before `pkg` — its first (and
 /// closure-wide) consumer.
+///
+/// Records a `(pkg, copy)` blocker pair into `edges` for *every* copy `pkg`
+/// depends on, not only ones newly scheduled by this call: a dep already
+/// `avail`-satisfied only means some earlier, unrelated consumer already
+/// scheduled its copy — `pkg` still needs that copy finished before it can
+/// build, so it still needs the edge. See [`compute`]'s doc comment.
 fn visit_unsatisfied(
     ctx: &Ctx<'_>,
     walk: &mut Walk,
     pkg: &PortagePackage,
     ver: &Version,
     order: &mut Vec<(PortagePackage, Version)>,
+    edges: &mut Vec<(PortagePackage, PortagePackage)>,
     top_level: bool,
 ) {
     let Some(deps) =
@@ -169,10 +196,18 @@ fn visit_unsatisfied(
             continue;
         };
         let base_pkg = cpkg.at_merge_root(MergeRoot::Base);
-        visit_unsatisfied(ctx, walk, &base_pkg, &cver, order, false);
+        visit_unsatisfied(ctx, walk, &base_pkg, &cver, order, edges, false);
         walk.avail
             .record_merge(Cpv::new(cpn, cver.clone()), MergeRoot::Base);
+        walk.scheduled.insert(cpn, base_pkg.clone());
         order.push((base_pkg, cver));
+    }
+    // Every dep of `pkg` that resolves to a scheduled copy — new above, or
+    // scheduled earlier for a different consumer — blocks `pkg`.
+    for cpn in all_cpns(&entries) {
+        if let Some(base_pkg) = walk.scheduled.get(&cpn) {
+            edges.push((pkg.clone(), base_pkg.clone()));
+        }
     }
 }
 
@@ -316,7 +351,7 @@ mod tests {
         );
 
         test_adapter!(a, &data);
-        let result = compute(&target_order, &a, &roots);
+        let (result, _edges) = compute(&target_order, &a, &roots);
         let got: Vec<(String, String, MergeRoot)> = result
             .iter()
             .map(|(p, v)| (p.cpn().to_string(), v.to_string(), p.merge_root()))
@@ -371,7 +406,7 @@ mod tests {
         );
 
         test_adapter!(a, &data);
-        let result = compute(&target_order, &a, &roots);
+        let (result, _edges) = compute(&target_order, &a, &roots);
         assert_eq!(result, target_order);
     }
 
@@ -399,7 +434,7 @@ mod tests {
         );
 
         test_adapter!(a, &data);
-        let result = compute(&target_order, &a, &roots);
+        let (result, _edges) = compute(&target_order, &a, &roots);
         assert_eq!(result, target_order);
     }
 
@@ -437,7 +472,7 @@ mod tests {
         );
 
         test_adapter!(a, &data);
-        let result = compute(&target_order, &a, &roots);
+        let (result, edges) = compute(&target_order, &a, &roots);
         let names: Vec<String> = result.iter().map(|(p, _)| p.cpn().to_string()).collect();
         assert!(
             names.contains(&"dev-libs/libx".to_string()),
@@ -455,6 +490,22 @@ mod tests {
         let pos = |n: &str| names.iter().position(|x| x == n).unwrap();
         assert!(pos("dev-libs/liby") < pos("dev-libs/libx"));
         assert!(pos("dev-libs/libx") < pos("sys-apps/t"));
+
+        // The `--jobs N` scheduler needs these as real blocker edges, not
+        // just list position: t must block on its own libx copy, and libx's
+        // copy must in turn block on its own liby copy.
+        let edge_names: Vec<(String, String)> = edges
+            .iter()
+            .map(|(from, to)| (from.cpn().to_string(), to.cpn().to_string()))
+            .collect();
+        assert!(
+            edge_names.contains(&("sys-apps/t".to_string(), "dev-libs/libx".to_string())),
+            "t must block on its libx copy: {edge_names:?}"
+        );
+        assert!(
+            edge_names.contains(&("dev-libs/libx".to_string(), "dev-libs/liby".to_string())),
+            "libx's copy must block on its own liby copy: {edge_names:?}"
+        );
     }
 
     // A dep shared by two consumers (one direct, one via a copy's own
@@ -493,7 +544,7 @@ mod tests {
         );
 
         test_adapter!(a, &data);
-        let result = compute(&target_order, &a, &roots);
+        let (result, edges) = compute(&target_order, &a, &roots);
         let names: Vec<String> = result.iter().map(|(p, _)| p.cpn().to_string()).collect();
         assert_eq!(
             names.iter().filter(|n| *n == "dev-libs/liba").count(),
@@ -504,6 +555,29 @@ mod tests {
         assert!(pos("dev-libs/liba") < pos("sys-apps/t1"));
         assert!(pos("dev-libs/liba") < pos("dev-libs/libb"));
         assert!(pos("dev-libs/libb") < pos("sys-apps/t2"));
+
+        // libb's own DEPEND on liba is already `avail`-satisfied by the time
+        // t2's walk reaches it (t1 scheduled liba's copy first), so no *new*
+        // copy is inserted for it — but libb's own build still needs liba's
+        // copy finished first. Without a real edge here, `--jobs N` could
+        // start libb's copy build concurrently with liba's.
+        let edge_names: Vec<(String, String)> = edges
+            .iter()
+            .map(|(from, to)| (from.cpn().to_string(), to.cpn().to_string()))
+            .collect();
+        assert!(
+            edge_names.contains(&("sys-apps/t1".to_string(), "dev-libs/liba".to_string())),
+            "t1 must block on its liba copy: {edge_names:?}"
+        );
+        assert!(
+            edge_names.contains(&("dev-libs/libb".to_string(), "dev-libs/liba".to_string())),
+            "libb's copy must still block on liba's copy, even though it was \
+             scheduled earlier for a different consumer: {edge_names:?}"
+        );
+        assert!(
+            edge_names.contains(&("sys-apps/t2".to_string(), "dev-libs/libb".to_string())),
+            "t2 must block on its own libb copy: {edge_names:?}"
+        );
     }
 
     // Every other topology must pass `target_order` through unchanged.
@@ -518,13 +592,13 @@ mod tests {
         test_adapter!(a, &data);
         let dir = tempfile::tempdir().unwrap();
         let plain = Roots::for_test(dir.path().to_str().unwrap());
-        assert_eq!(compute(&target_order, &a, &plain), target_order);
+        assert_eq!(compute(&target_order, &a, &plain).0, target_order);
 
         let broot = tempfile::tempdir().unwrap();
         let native_offset = Roots::for_test_root_with_broot(
             dir.path().to_str().unwrap(),
             broot.path().to_str().unwrap(),
         );
-        assert_eq!(compute(&target_order, &a, &native_offset), target_order);
+        assert_eq!(compute(&target_order, &a, &native_offset).0, target_order);
     }
 }

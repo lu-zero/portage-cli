@@ -328,6 +328,20 @@ pub fn unsatisfied_cpns(entries: &[DepEntry], avail: &Avail) -> Vec<Cpn> {
     out
 }
 
+/// Every non-blocker atom CPN in `entries`, satisfied or not
+///
+/// Unlike [`unsatisfied_cpns`], not filtered by `Avail`: used where a caller
+/// needs to know *which provider a dependency resolves to* even when that
+/// provider was already scheduled by an earlier, unrelated consumer (e.g.
+/// `base_copies`/`host_copies` recording a blocker edge on a shared copy).
+pub fn all_cpns(entries: &[DepEntry]) -> Vec<Cpn> {
+    let mut out = Vec::new();
+    for e in entries {
+        cpns_of(e, &mut out);
+    }
+    out
+}
+
 fn unsat_cpns_rec(entries: &[DepEntry], avail: &Avail, out: &mut Vec<Cpn>) {
     for e in entries {
         match e {

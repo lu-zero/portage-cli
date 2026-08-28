@@ -65,5 +65,7 @@ pub mod use_env;
 /// `--newuse` / `--changed-use` reinstall detection (USE/IUSE drift)
 pub mod use_reinstall;
 
-pub use bdepend_avail::{Avail, broot_vdb_packages, collect_unsatisfied, unsatisfied_cpns};
+pub use bdepend_avail::{
+    Avail, all_cpns, broot_vdb_packages, collect_unsatisfied, unsatisfied_cpns,
+};
 pub use roots::Roots;

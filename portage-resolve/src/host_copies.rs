@@ -56,7 +56,7 @@ use portage_atom::{Cpn, Cpv, Version};
 use portage_atom_pubgrub::{MergeRoot, PortagePackage};
 
 use crate::Roots;
-use crate::{Avail, unsatisfied_cpns};
+use crate::{Avail, all_cpns, unsatisfied_cpns};
 
 use crate::effective_use;
 use crate::repo::Adapter;
@@ -68,29 +68,47 @@ struct Ctx<'a> {
     target_ver: &'a HashMap<Cpn, (Version, PortagePackage)>,
 }
 
-/// Mutable walk state: host availability (VDB + already-planned Host entries
-/// + emitted copies) and the seen-set (also breaks dependency cycles)
+/// Mutable walk state: host availability (VDB, already-planned Host entries,
+/// emitted copies), the seen-set (also breaks dependency cycles), and which
+/// `Host` package ended up scheduled for each copied CPN (so a later
+/// consumer of an earlier consumer's copy still gets a blocker edge onto it,
+/// not just position-in-list — see [`compute`]'s doc comment).
 struct Walk {
     avail: Avail,
     seen: HashSet<Cpn>,
+    scheduled: HashMap<Cpn, PortagePackage>,
 }
+
+/// `(reordered plan, "(consumer, copy)" blocker pairs)` — see [`compute`]'s
+/// doc comment for what the second element is for.
+pub type CopyOrder = (
+    Vec<(PortagePackage, Version)>,
+    Vec<(PortagePackage, PortagePackage)>,
+);
 
 /// Compute the finalized plan order for a native offset (`--root`/`--prefix`,
 /// same arch), inserting host (`MergeRoot::Host`) build-copies immediately
-/// before whichever Target entry first needs each one
+/// before whichever Target entry first needs each one.
 ///
-/// Returns `target_order` unchanged for non-native-offset builds (plain
-/// native, cross-arch, host) — cross-arch uses the solver's own dual-root
-/// path, plain native has BROOT == ROOT, and neither ever schedules host
-/// build-copies here.
+/// Also returns the `(consumer, copy)` blocker pairs this insertion relies
+/// on: list position alone doesn't bind `--jobs N`'s scheduler, which builds
+/// its ready-set from solver-time edges predating these synthetic entries
+/// (the same race `base_copies` found live between `sys-apps/acl` and its
+/// `sys-apps/attr` sysroot copy under `--jobs 8`). The caller folds these
+/// into `build_blockers`.
+///
+/// Returns `target_order` unchanged (and no edges) for non-native-offset
+/// builds (plain native, cross-arch, host) — cross-arch uses the solver's
+/// own dual-root path, plain native has BROOT == ROOT, and neither ever
+/// schedules host build-copies here.
 pub fn compute(
     target_order: &[(PortagePackage, Version)],
     adapter: &Adapter<'_>,
     roots: &Roots,
     cross: &CrossContext,
-) -> Vec<(PortagePackage, Version)> {
+) -> CopyOrder {
     if !cross.active || cross.is_cross_arch() {
-        return target_order.to_vec();
+        return (target_order.to_vec(), Vec::new());
     }
 
     // CPN -> (version, target package) for version reuse: a host copy of a
@@ -111,6 +129,7 @@ pub fn compute(
     let mut walk = Walk {
         seen: HashSet::new(),
         avail: Avail::initial_bdepend(roots),
+        scheduled: HashMap::new(),
     };
 
     // Seed with whatever `MergeRoot::Host` entries the solver already put in
@@ -128,6 +147,7 @@ pub fn compute(
         walk.seen.insert(*pkg.cpn());
         walk.avail
             .record_merge_bdepend(Cpv::new(*pkg.cpn(), ver.clone()));
+        walk.scheduled.insert(*pkg.cpn(), pkg.clone());
     }
 
     // Interleave: walk target_order in its existing order, and for each
@@ -135,13 +155,14 @@ pub fn compute(
     // recursively) immediately before it, then emit the entry itself. Host
     // entries pass through unchanged (already seeded above, never revisited).
     let mut order: Vec<(PortagePackage, Version)> = Vec::with_capacity(target_order.len());
+    let mut edges: Vec<(PortagePackage, PortagePackage)> = Vec::new();
     for (pkg, ver) in target_order {
         if pkg.merge_root() == MergeRoot::Target {
-            visit_unsatisfied(&ctx, &mut walk, pkg, ver, &mut order, true);
+            visit_unsatisfied(&ctx, &mut walk, pkg, ver, &mut order, &mut edges, true);
         }
         order.push((pkg.clone(), ver.clone()));
     }
-    order
+    (order, edges)
 }
 
 /// Recurse into `pkg`'s unsatisfied-on-host `DEPEND`/`BDEPEND`/`IDEPEND` edges
@@ -153,6 +174,12 @@ pub fn compute(
 /// Called just before `pkg` itself is pushed to `order`, so every copy
 /// discovered here also ends up immediately before `pkg` — its first (and
 /// closure-wide) consumer.
+///
+/// Records a `(pkg, copy)` blocker pair into `edges` for *every* copy `pkg`
+/// depends on, not only ones newly scheduled by this call — a dep already
+/// `avail`-satisfied only means some earlier, unrelated consumer already
+/// scheduled its copy, so `pkg` still needs the edge. See [`compute`]'s doc
+/// comment.
 ///
 /// `top_level` is `true` only for direct per-Target-package calls, not
 /// edges found recursing into an already-found copy. Under `cross.active`
@@ -169,6 +196,7 @@ fn visit_unsatisfied(
     pkg: &PortagePackage,
     ver: &Version,
     order: &mut Vec<(PortagePackage, Version)>,
+    edges: &mut Vec<(PortagePackage, PortagePackage)>,
     top_level: bool,
 ) {
     let Some(deps) =
@@ -176,6 +204,7 @@ fn visit_unsatisfied(
     else {
         return;
     };
+    let mut all_entries = Vec::new();
     for (class, entries) in [
         ("DEPEND", deps.depend()),
         ("BDEPEND", deps.bdepend()),
@@ -195,9 +224,18 @@ fn visit_unsatisfied(
                 continue;
             };
             let host_pkg = cpkg.at_merge_root(MergeRoot::Host);
-            visit_unsatisfied(ctx, walk, &host_pkg, &cver, order, false);
+            visit_unsatisfied(ctx, walk, &host_pkg, &cver, order, edges, false);
             walk.avail.record_merge_bdepend(Cpv::new(cpn, cver.clone()));
+            walk.scheduled.insert(cpn, host_pkg.clone());
             order.push((host_pkg, cver));
+        }
+        all_entries.extend(entries);
+    }
+    // Every dep of `pkg` that resolves to a scheduled copy — new above, or
+    // scheduled earlier for a different consumer — blocks `pkg`.
+    for cpn in all_cpns(&all_entries) {
+        if let Some(host_pkg) = walk.scheduled.get(&cpn) {
+            edges.push((pkg.clone(), host_pkg.clone()));
         }
     }
 }
@@ -340,7 +378,7 @@ mod tests {
             "test setup must land in the native-offset case compute() exists for"
         );
 
-        let result = compute(&target_order, &adapter, &roots, &cross);
+        let (result, _edges) = compute(&target_order, &adapter, &roots, &cross);
         assert_eq!(
             result, target_order,
             "must not re-derive a CPN the solver already scheduled @host"
@@ -419,7 +457,7 @@ mod tests {
         );
         let cross = native_offset_cross(&roots);
 
-        let result = compute(&target_order, &adapter, &roots, &cross);
+        let (result, _edges) = compute(&target_order, &adapter, &roots, &cross);
         let names: Vec<String> = result.iter().map(|(p, _)| p.cpn().to_string()).collect();
         let pos = |n: &str| names.iter().position(|x| x == n).unwrap();
         // `compute` never repositions `base` (an existing `target_order`
@@ -507,7 +545,7 @@ mod tests {
         );
         let cross = native_offset_cross(&roots);
 
-        let result = compute(&target_order, &adapter, &roots, &cross);
+        let (result, edges) = compute(&target_order, &adapter, &roots, &cross);
         let names: Vec<String> = result.iter().map(|(p, _)| p.cpn().to_string()).collect();
         // liba must appear exactly once (never re-derived for t2).
         assert_eq!(
@@ -528,6 +566,21 @@ mod tests {
         assert!(
             pos("dev-libs/libb") < pos("sys-apps/t2"),
             "libb before its consumer t2: {names:?}"
+        );
+
+        // libb's own BDEPEND on liba is already `avail`-satisfied by the
+        // time t2's walk reaches it (t1 scheduled liba's copy first), so no
+        // *new* copy is inserted for it — but libb's own build still needs
+        // liba's copy finished first. Without a real edge here, `--jobs N`
+        // could start libb's copy build concurrently with liba's.
+        let edge_names: Vec<(String, String)> = edges
+            .iter()
+            .map(|(from, to)| (from.cpn().to_string(), to.cpn().to_string()))
+            .collect();
+        assert!(
+            edge_names.contains(&("dev-libs/libb".to_string(), "dev-libs/liba".to_string())),
+            "libb's copy must still block on liba's copy, even though it was \
+             scheduled earlier for a different consumer: {edge_names:?}"
         );
     }
 }
