@@ -1062,6 +1062,9 @@ async fn init_target(
         // Sysroot baselayout is a separate step in `toolchain_plan`.
         crate::setup::merge_baselayout(globals, &[]).await?;
     }
+    if !globals.pretend {
+        ensure_config_site_packages(globals).await?;
+    }
     let gentoo_path = main_repo(globals)?.path().to_owned();
     let sysroot = sysroot(target, globals);
     let category = target.category();
@@ -1280,6 +1283,39 @@ fn prefix_profile_entries(globals: &Cli) -> Result<Vec<config_plan::ConfigEntry>
         link,
         target: host_profile,
     }])
+}
+
+/// Ensure the host has real crossdev's own config.site machinery
+///
+/// autoconf reads `${prefix}/share/config.site` automatically; `sys-apps/
+/// config-site` owns that loader, and `sys-devel/crossdev` owns the
+/// selector plus the full per-target cache-answer library that answers
+/// configure's RUN-tests while cross-compiling (e.g. gnulib's "whether
+/// strcasecmp works", dev-lang/python's `/dev/ptmx` device-file probe).
+async fn ensure_config_site_packages(globals: &Cli) -> Result<()> {
+    crate::emerge_atoms(
+        globals,
+        &[
+            "sys-apps/config-site".to_string(),
+            "sys-devel/crossdev".to_string(),
+        ],
+        crate::EmergeOpts {
+            use_override: &[],
+            nodeps: false,
+            depgraph_flags: None,
+            merge_flags: None,
+            use_outer_eroot: true,
+            target_only_installed_view: false,
+            update_world: false,
+            is_resume: false,
+            activity: None,
+            activity_session: Default::default(),
+            extra_aliases: &[],
+            extra_path: &[],
+            autounmask_widen: false,
+        },
+    )
+    .await
 }
 
 /// Write the cross sysroot `etc/portage/{make.conf,make.profile}`
