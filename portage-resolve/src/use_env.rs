@@ -6,7 +6,7 @@ use portage_atom::interner::Interned;
 use portage_atom_pubgrub::{ProfileUseNode, UseLayer, UseOverride};
 use portage_repo::{AcceptSet, LicenseGroupRegistry, MakeConf, ProfileStack, Repository};
 
-use crate::force_mask::{ForceMask, ForceMaskLayer, index_by_cpn, signed_flags};
+use crate::force_mask::{ForceMask, ForceMaskLayer, fold_signed, index_by_cpn};
 use crate::repo::AcceptToken;
 
 type Result<T> = anyhow::Result<T>;
@@ -383,10 +383,10 @@ async fn compute_use_env(
             .profiles()
             .iter()
             .map(|p| ForceMaskLayer {
-                use_force: signed_flags(p.use_force().unwrap_or_default()),
-                use_mask: signed_flags(p.use_mask().unwrap_or_default()),
-                use_stable_force: signed_flags(p.use_stable_force().unwrap_or_default()),
-                use_stable_mask: signed_flags(p.use_stable_mask().unwrap_or_default()),
+                use_force: fold_signed(p.use_force().unwrap_or_default()),
+                use_mask: fold_signed(p.use_mask().unwrap_or_default()),
+                use_stable_force: fold_signed(p.use_stable_force().unwrap_or_default()),
+                use_stable_mask: fold_signed(p.use_stable_mask().unwrap_or_default()),
                 pkg_force: index_by_cpn(p.package_use_force().unwrap_or_default()),
                 pkg_mask: index_by_cpn(p.package_use_mask().unwrap_or_default()),
                 pkg_stable_force: index_by_cpn(p.package_use_stable_force().unwrap_or_default()),

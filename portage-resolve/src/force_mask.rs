@@ -34,6 +34,12 @@ pub type Flag = Interned<DefaultInterner>;
 /// incremental removal form (`-flag`, i.e. unforce/unmask)
 pub type ForceTok = (Flag, bool);
 
+/// A node's own `use.{force,mask}`-family list, folded once at load time to
+/// its final per-flag action (`true` = remove/unforce, matching [`ForceTok`]) —
+/// a flag absent here means this node's list never mentions it at all,
+/// distinct from a folded remove.
+pub type FoldedFlags = HashMap<Flag, bool>;
+
 /// Per-atom force/mask entries grouped by `Cpn`
 ///
 /// The profile chain contributes hundreds of `package.use.{force,mask}` atoms;
@@ -54,13 +60,13 @@ pub type PkgRules = HashMap<Cpn, Vec<(Dep, Vec<ForceTok>)>>;
 #[derive(Default)]
 pub struct ForceMaskLayer {
     /// This node's `use.force` (`-flag` = unforce)
-    pub use_force: Vec<ForceTok>,
+    pub use_force: FoldedFlags,
     /// This node's `use.mask` (`-flag` = unmask)
-    pub use_mask: Vec<ForceTok>,
+    pub use_mask: FoldedFlags,
     /// This node's `use.stable.force`
-    pub use_stable_force: Vec<ForceTok>,
+    pub use_stable_force: FoldedFlags,
     /// This node's `use.stable.mask`
-    pub use_stable_mask: Vec<ForceTok>,
+    pub use_stable_mask: FoldedFlags,
     /// This node's `package.use.force`
     pub pkg_force: PkgRules,
     /// This node's `package.use.mask`
@@ -174,15 +180,18 @@ pub fn iuse_effective_set(
     out
 }
 
-/// Parse `use.mask`/`use.force` lines to interned signed tokens
-pub fn signed_flags(flags: Vec<String>) -> Vec<ForceTok> {
-    flags
-        .iter()
-        .map(|f| match f.strip_prefix('-') {
-            Some(name) => (Interned::intern(name), true),
-            None => (Interned::intern(f), false),
-        })
-        .collect()
+/// Parse `use.mask`/`use.force` lines and fold them to each flag's final
+/// action, in list order — the incremental `-flag` semantics resolved once
+/// at load time instead of on every [`ForceMask::effective`] call.
+pub fn fold_signed(flags: Vec<String>) -> FoldedFlags {
+    let mut out = FoldedFlags::with_capacity(flags.len());
+    for f in &flags {
+        match f.strip_prefix('-') {
+            Some(name) => out.insert(Interned::intern(name), true),
+            None => out.insert(Interned::intern(f), false),
+        };
+    }
+    out
 }
 
 /// Group flat per-atom entries by `Cpn` (see [`PkgRules`]), parsing each token
@@ -259,11 +268,11 @@ impl ForceMask {
         let mut masked = BTreeSet::new();
         // Same per-node order as Portage `UseManager.getUseMask`/`getUseForce`.
         for layer in &self.layers {
-            apply_signed(&layer.use_force, &mut forced, Some(iuse));
-            apply_signed(&layer.use_mask, &mut masked, Some(iuse));
+            apply_folded(&layer.use_force, &mut forced, iuse);
+            apply_folded(&layer.use_mask, &mut masked, iuse);
             if stable {
-                apply_signed(&layer.use_stable_force, &mut forced, Some(iuse));
-                apply_signed(&layer.use_stable_mask, &mut masked, Some(iuse));
+                apply_folded(&layer.use_stable_force, &mut forced, iuse);
+                apply_folded(&layer.use_stable_mask, &mut masked, iuse);
             }
             accumulate(&layer.pkg_force, cpv, slot, &mut forced);
             accumulate(&layer.pkg_mask, cpv, slot, &mut masked);
@@ -326,8 +335,8 @@ impl ForceMask {
         let mut gforce = BTreeSet::new();
         let mut gmask = BTreeSet::new();
         for layer in &self.layers {
-            apply_signed(&layer.use_force, &mut gforce, None);
-            apply_signed(&layer.use_mask, &mut gmask, None);
+            apply_folded_all(&layer.use_force, &mut gforce);
+            apply_folded_all(&layer.use_mask, &mut gmask);
         }
         pins.extend(gforce);
         pins.extend(gmask);
@@ -350,18 +359,43 @@ impl ForceMask {
     }
 }
 
-fn apply_signed(toks: &[ForceTok], set: &mut BTreeSet<Flag>, iuse: Option<&HashSet<Flag>>) {
-    for &(flag, remove) in toks {
-        if let Some(iuse) = iuse
-            && !iuse.contains(&flag)
-        {
-            continue;
+/// Apply `resolved`'s action for each flag both `resolved` and the
+/// package's `iuse` mention
+///
+/// Walks whichever side is smaller: `IUSE_EFFECTIVE` (`iuse`) includes every
+/// profile-injected `USE_EXPAND` flag (PMS 11.1.1), so it is not reliably
+/// smaller than a profile's own global `use.force`/`use.mask` list — unlike
+/// `resolved`, which is already interned-key hashing either way, so the
+/// O(package IUSE ∩ global set) win only holds by actually bounding the walk
+/// to the smaller set, not by assuming which one that is.
+fn apply_folded(resolved: &FoldedFlags, set: &mut BTreeSet<Flag>, iuse: &HashSet<Flag>) {
+    if iuse.len() <= resolved.len() {
+        for &flag in iuse {
+            if let Some(&remove) = resolved.get(&flag) {
+                apply_one(set, flag, remove);
+            }
         }
-        if remove {
-            set.remove(&flag);
-        } else {
-            set.insert(flag);
+    } else {
+        for (&flag, &remove) in resolved {
+            if iuse.contains(&flag) {
+                apply_one(set, flag, remove);
+            }
         }
+    }
+}
+
+fn apply_one(set: &mut BTreeSet<Flag>, flag: Flag, remove: bool) {
+    if remove {
+        set.remove(&flag);
+    } else {
+        set.insert(flag);
+    }
+}
+
+/// Apply every one of `resolved`'s actions, ignoring `iuse` (for [`ForceMask::pins`])
+fn apply_folded_all(resolved: &FoldedFlags, set: &mut BTreeSet<Flag>) {
+    for (&flag, &remove) in resolved {
+        apply_one(set, flag, remove);
     }
 }
 
@@ -440,7 +474,7 @@ mod tests {
     #[test]
     fn stable_sets_only_apply_when_stable() {
         let fm = ForceMask::one(ForceMaskLayer {
-            use_stable_mask: vec![(flag("risky"), false)],
+            use_stable_mask: HashMap::from([(flag("risky"), false)]),
             ..Default::default()
         });
         let c = cpv("dev-libs/foo-1");
@@ -485,7 +519,7 @@ mod tests {
         // resurrected by a `+flag` IUSE default, so it must not appear in
         // `effective()`'s masked set (the whole point of the `iuse` filter).
         let fm = ForceMask::one(ForceMaskLayer {
-            use_mask: vec![(flag("abi_x86_32"), false), (flag("unrelated_flag"), false)],
+            use_mask: HashMap::from([(flag("abi_x86_32"), false), (flag("unrelated_flag"), false)]),
             ..Default::default()
         });
         let c = cpv("dev-libs/foo-1");
@@ -517,7 +551,10 @@ mod tests {
     #[test]
     fn global_use_force_only_applies_to_packages_own_iuse() {
         let fm = ForceMask::one(ForceMaskLayer {
-            use_force: vec![(flag("abi_x86_32"), false), (flag("unrelated_flag"), false)],
+            use_force: HashMap::from([
+                (flag("abi_x86_32"), false),
+                (flag("unrelated_flag"), false),
+            ]),
             ..Default::default()
         });
         let c = cpv("dev-libs/foo-1");
@@ -559,7 +596,7 @@ mod tests {
                     ..Default::default()
                 },
                 ForceMaskLayer {
-                    use_mask: vec![(flag("sysprof"), true)],
+                    use_mask: HashMap::from([(flag("sysprof"), true)]),
                     ..Default::default()
                 },
             ],

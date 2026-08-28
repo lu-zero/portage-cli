@@ -294,7 +294,7 @@ mod tests {
         ));
 
         let fm = ForceMask::one(crate::force_mask::ForceMaskLayer {
-            use_force: crate::force_mask::signed_flags(vec!["multilib".into()]),
+            use_force: crate::force_mask::fold_signed(vec!["multilib".into()]),
             ..Default::default()
         });
         let iuse: HashSet<_> = [Interned::intern("multilib")].into_iter().collect();

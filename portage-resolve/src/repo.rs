@@ -2988,7 +2988,7 @@ mod tests {
         let pre_env = portage_atom_pubgrub::UseLayer::parse("a b"); // both on ⇒ ?? ( a b ) violated
 
         let fm = ForceMask::one(crate::force_mask::ForceMaskLayer {
-            use_force: crate::force_mask::signed_flags(vec!["a".into()]),
+            use_force: crate::force_mask::fold_signed(vec!["a".into()]),
             ..Default::default()
         });
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
