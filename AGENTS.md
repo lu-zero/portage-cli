@@ -162,6 +162,26 @@ brush".
 - Keep doctests compiling and green (`cargo test --doc`); rustdoc under
   `RUSTDOCFLAGS=-D warnings` must stay clean
 
+### Licensing — never embed a real shell script
+
+This project is MIT-licensed; real `emerge`/`portage`/`crossdev`/eclass
+shell code is GPL-2. Never copy or adapt a real GPL shell script (or a
+close paraphrase of one) into a Rust string literal as a shortcut for
+matching its behavior — that makes the literal a GPL derivative embedded
+in an MIT tree.
+
+- Implement behavior from the PMS specification text (which describes
+  *what* must happen, not portage's own internal function names/control
+  flow) or from independent understanding of the mechanism, in your own
+  structure and wording. Matching an external tool's *interface* (a file
+  naming convention, a directory layout another tool also reads) is fine;
+  matching its *source code* is not.
+- A real installed copy of `crossdev`/`portage` on the host is fine to
+  read for understanding, and fine to shell out to or read data files
+  from at runtime (the GPL work stays external, never embedded in `em`'s
+  own distributed source) — the line is copying its *text* into this
+  repository's `.rs` files.
+
 ### Unslop Rules
 
 Enforced, not just a style nit — see [Slop Warning](#slop-warning) below
