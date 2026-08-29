@@ -1638,6 +1638,15 @@ impl EbuildShell {
         self.set_var("ED", &ed);
         // EROOT = ROOT + EPREFIX, i.e. the merge root.
         self.set_var("EROOT", &root_str);
+        // Autoconf's own config.site discovery checks `${--prefix}/share/
+        // config.site`, but a board-destined package under `--target`
+        // correctly gets an empty EPREFIX, so it can never reach crossdev's
+        // cache-answer library, installed under `build_broot` instead. Set
+        // CONFIG_SITE explicitly — a no-op wherever the two already
+        // coincide, and autoconf skips a listed file that doesn't exist.
+        if let Some(broot) = self.build_broot.as_deref() {
+            self.set_var("CONFIG_SITE", broot.join("usr/share/config.site").as_str());
+        }
         if eapi >= Eapi::Seven {
             // SYSROOT = the base the build resolves DEPEND against (the host for
             // a --prefix overlay; ROOT otherwise). SYSROOT's trailing slash is
@@ -1747,6 +1756,7 @@ impl EbuildShell {
              HOME ROOT DISTDIR PORTAGE_BIN_PATH PATH LD_LIBRARY_PATH EBUILD_PHASE \
              EBUILD_PHASE_FUNC \
              MERGE_TYPE EPREFIX ED EROOT SYSROOT ESYSROOT BROOT PORTAGE_CONFIGROOT USE \
+             CONFIG_SITE \
              PORTAGE_INST_UID PORTAGE_INST_GID \
              REPLACING_VERSIONS REPLACED_BY_VERSION \
              MAKEOPTS CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CC CXX AR RANLIB NM STRIP \

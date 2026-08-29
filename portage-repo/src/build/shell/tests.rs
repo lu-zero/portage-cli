@@ -1458,6 +1458,82 @@ async fn esysroot_is_not_doubled_for_an_ordinary_target_package_under_prefix() {
     );
 }
 
+// A board-destined package under `--target` correctly gets an empty
+// EPREFIX (see the ESYSROOT test above), so autoconf's own
+// `${--prefix}/share/config.site` discovery can never reach crossdev's
+// cache-answer library — which lives under `build_broot`
+// (`Cli::host_roots()`'s merge root), not under this package's own prefix.
+#[tokio::test]
+async fn config_site_points_at_build_broot_for_a_board_destined_package() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-apps", "diffutils");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let broot_dir = dir.path().join("prefix");
+    let board_dir = dir.path().join("board");
+    std::fs::create_dir_all(&board_dir).unwrap();
+    let broot = Utf8PathBuf::from_path_buf(broot_dir.clone()).unwrap();
+
+    // eprefix: None — the board's own packages are correctly not prefixed.
+    shell.set_build_roots(None, None, None, Some(&broot), None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, board_dir.as_path())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        shell.get_var("CONFIG_SITE").as_deref(),
+        Some(broot.join("usr/share/config.site").as_str()),
+        "CONFIG_SITE must point at build_broot, not this package's own (empty) EPREFIX"
+    );
+
+    // Exported (not just set): `set_var` alone doesn't reach a real
+    // subprocess like `configure` — only names in run_phase's explicit
+    // `export` list do (caught this exact gap: the value above was already
+    // correct while the subprocess still never saw it).
+    shell
+        .run_string("_test_exported=$(export -p | grep -cE '^declare -x CONFIG_SITE=')")
+        .await
+        .unwrap();
+    assert_eq!(shell.get_var("_test_exported").as_deref(), Some("1"));
+}
+
+// No `--target`/toolchain context at all (bare `em ebuild` debug path,
+// `build_broot: None`): CONFIG_SITE must stay unset so autoconf's own
+// default `${--prefix}/share/config.site` search is unaffected.
+#[tokio::test]
+async fn config_site_unset_without_a_build_broot() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    let ebuild_path = write_minimal_ebuild(&repo_path, "sys-apps", "diffutils");
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    shell.set_build_roots(None, None, None, None, None);
+
+    let ebuild = Ebuild::from_path(&ebuild_path).unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, dir.path())
+        .await
+        .unwrap();
+
+    assert_eq!(shell.get_var("CONFIG_SITE"), None);
+}
+
 // `set_build_roots`'s `ld_library_path` is exported as-is, no filesystem
 // read here (the caller resolves it — see todo/for-sonnet.md 2026-08-08).
 #[tokio::test]
