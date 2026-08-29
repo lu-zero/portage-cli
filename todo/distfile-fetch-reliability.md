@@ -39,6 +39,22 @@ filename, not per raw URI token) — removes the possibility of two
 `Distfile`s for the same file existing at all, rather than trying to
 serialize/lock around the race after the fact.
 
+**Fixed** (`4fdc0b2`, 2026-08-29): `build_distfiles` now merges by
+filename. Verified this specific shape gone — re-running the same
+riscv64 stage1 build no longer shows a manifest-verification mismatch.
+
+**But a broader sibling race remains, 🔴 open**: `dev-build/autoconf-2.73-r2`
+is built *twice* in one plan — once for the host cross-toolchain sysroot,
+once for the target root — each its own independent `resolve()`/`Fetcher`
+call, sharing one on-disk `DISTDIR`. Under `em --jobs`, one job's fetch
+reported the file "already present" while the *other* job was still
+mid-download of that same path; unpack hit a genuinely truncated file
+(`xz: Compressed data is corrupt`). This is the same failure class as
+above but across independent package-merge tasks, not within one
+`resolve()` call — the filename-merge fix cannot close it. Needs real
+per-distfile locking across concurrent fetches (portage's own
+`FEATURES=distlocks` exists for exactly this), not a resolver-level dedup.
+
 ## E. GENTOO_MIRRORS parity vs portage (audit 2026-06-28)
 
 Audited against `gentoo/portage` `fetch.py` + `make.conf(5). What em matches and

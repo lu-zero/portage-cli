@@ -730,12 +730,14 @@ blocked by the three independent findings above, tracked separately.
   `todo/done/stage3-vs-real-comparison.md`.
 - 🔵 cosmetic: glibc post-install `failed to redirect to <root>/etc/hosts` (no
   /etc/hosts in a fresh ROOT). [[em-root-characterization]]
-- 🔴 **Concurrent same-filename `Distfile` write race corrupted a cached
-  distfile mid-build** — found 2026-08-29 during a from-scratch riscv64
-  `em stages --stage1` run (`dev-build/autoconf-2.73-r2` failed manifest
-  verification on a file that matched upstream byte-for-byte when
-  fetched by hand). Blocks any real build whose `SRC_URI` has multiple
-  entries resolving to one filename. [[distfile-fetch-reliability]] §F.
+- ✅ **Concurrent same-filename `Distfile` write race within one `resolve()`
+  call — fixed 2026-08-29** (`4fdc0b2`). Found during a from-scratch
+  riscv64 `em stages --stage1` run. [[distfile-fetch-reliability]] §F.
+- 🔴 **Sibling race across independent package-merge tasks remains open** —
+  two separate merges needing the same distfile (e.g. one package built
+  for two different roots) can still race on the shared `DISTDIR` path
+  under `em --jobs`; needs real per-distfile locking, not a resolver-level
+  dedup. [[distfile-fetch-reliability]] §F.
 - 🔴 **`--target` sysroot-missing error hints a dead CLI flag**
   (`em crossdev -t TUPLE --init-target`, superseded by the top-level
   `--target`) — found same session. [[crossdev-init-target-stale-flag-hint]]
