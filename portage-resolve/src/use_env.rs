@@ -81,6 +81,20 @@ pub struct UseEnv {
     pub provided: Vec<portage_atom::Cpv>,
 }
 
+/// In-memory override for a `--target` sysroot whose on-disk config hasn't
+/// been written yet (e.g. `em crossdev --setup -p`/an unconfirmed `-a`, on a
+/// target `--init-target` would create in the same run). Lets policy
+/// resolution proceed without the disk writes `-p` deliberately skips.
+#[derive(Clone, Copy)]
+pub struct SysrootOverride<'a> {
+    /// Real, already-existing profile directory the not-yet-written
+    /// `make.profile` symlink would point at.
+    pub profile_dir: &'a Utf8Path,
+    /// The `make.conf` content the not-yet-written file would contain,
+    /// sourced directly (see [`portage_repo::ConfSource::Str`]).
+    pub make_conf: &'a str,
+}
+
 /// Read the config/profile/environment sources (profile stack, `make.conf`,
 /// `package.use`/`.mask`/`.unmask`/`.license`/`.accept_keywords`, USE force/
 /// mask) into a resolved [`UseEnv`], the shared input every per-package
@@ -90,8 +104,16 @@ pub async fn build_use_env(
     root: Option<&Utf8Path>,
     config_overlay: Option<&Utf8Path>,
     extra_use_override: Option<&str>,
+    sysroot_override: Option<&SysrootOverride<'_>>,
 ) -> Result<UseEnv> {
-    compute_use_env(repo, root, config_overlay, extra_use_override).await
+    compute_use_env(
+        repo,
+        root,
+        config_overlay,
+        extra_use_override,
+        sysroot_override,
+    )
+    .await
 }
 
 async fn compute_use_env(
@@ -99,13 +121,23 @@ async fn compute_use_env(
     root: Option<&Utf8Path>,
     config_overlay: Option<&Utf8Path>,
     extra_use_override: Option<&str>,
+    sysroot_override: Option<&SysrootOverride<'_>>,
 ) -> Result<UseEnv> {
     let portage_dir = root.unwrap_or(Utf8Path::new("/")).join("etc/portage");
     let root_dir = root.unwrap_or(Utf8Path::new("/"));
 
-    let profile_link = portage_dir.join("make.profile");
-    let profile_path = std::fs::canonicalize(profile_link.as_std_path())
-        .map_err(|e| anyhow::anyhow!("cannot resolve {profile_link}: {e}"))?;
+    // A `--target` sysroot's `make.profile` always symlinks directly to a
+    // real, already-existing `::gentoo` profile directory (no em-generated
+    // content of its own) — under a still-pending `sysroot_override`, use
+    // that real directory straight, skipping the not-yet-written symlink.
+    let profile_path = match sysroot_override {
+        Some(ov) => ov.profile_dir.as_std_path().to_path_buf(),
+        None => {
+            let profile_link = portage_dir.join("make.profile");
+            std::fs::canonicalize(profile_link.as_std_path())
+                .map_err(|e| anyhow::anyhow!("cannot resolve {profile_link}: {e}"))?
+        }
+    };
     // Portage appends `/etc/portage/profile` as the top (highest-priority)
     // profile layer, so its use.force/use.mask/package.use*/package.mask override
     // the resolved make.profile chain. Fold it in so Level-C never cedes a flag a
@@ -121,13 +153,20 @@ async fn compute_use_env(
 
     // make.conf(5): path may be a file or a directory of Flat fragments.
     // Portage sources legacy `/etc/make.conf` first, then `/etc/portage/make.conf`
-    // so the latter overrides (config.py make_conf_paths order).
+    // so the latter overrides (config.py make_conf_paths order). A missing path
+    // (the pending-sysroot case) lists as empty, not an error.
     let conf_owned = portage_repo::expand_make_conf_paths([
         root_dir.join("etc/make.conf"),
         root_dir.join("etc/portage/make.conf"),
     ])
     .map_err(|e| anyhow::anyhow!("listing make.conf: {e}"))?;
-    let confs: Vec<&std::path::Path> = conf_owned.iter().map(|p| p.as_path()).collect();
+    let mut confs: Vec<portage_repo::ConfSource> = conf_owned
+        .iter()
+        .map(|p| portage_repo::ConfSource::File(p.as_path()))
+        .collect();
+    if let Some(ov) = sysroot_override {
+        confs.push(portage_repo::ConfSource::Str(ov.make_conf));
+    }
 
     let resolved = match extra_use_override {
         Some(content) => stack
@@ -636,11 +675,60 @@ fn load_dep_list(path: &str) -> Vec<Dep> {
 #[cfg(test)]
 mod tests {
     use super::{
-        expand_use_expand_colon, flags_have_use_clear_all, load_package_env_use,
-        load_package_keywords, load_package_use,
+        SysrootOverride, build_use_env, expand_use_expand_colon, flags_have_use_clear_all,
+        load_package_env_use, load_package_keywords, load_package_use,
     };
     use portage_atom::Dep;
     use portage_atom_pubgrub::UseOverride;
+
+    fn make_test_repo(dir: &std::path::Path) -> portage_repo::Repository {
+        std::fs::create_dir_all(dir.join("metadata")).unwrap();
+        std::fs::write(dir.join("metadata/layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.join("profiles")).unwrap();
+        portage_repo::Repository::builder()
+            .in_memory_cache()
+            .open(dir)
+            .unwrap()
+    }
+
+    // Regression: `em crossdev --setup -p` on a target that has never been
+    // `--init-target`'d for real has no `etc/portage/make.profile`/
+    // `make.conf` on disk yet. Without a `SysrootOverride`, resolving
+    // against that root must fail exactly the way it used to (proving this
+    // is a real repro, not a vacuous pass); with one, it must succeed using
+    // the real profile dir plus the synthesized make.conf content.
+    #[tokio::test]
+    async fn sysroot_override_lets_a_cold_target_resolve() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(repo_dir.path());
+        let profile_dir = repo_dir.path().join("test-profile");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        std::fs::write(profile_dir.join("make.defaults"), "").unwrap();
+        let profile_dir = camino::Utf8Path::from_path(&profile_dir).unwrap();
+
+        // A sysroot that has never been `--init-target`'d: no `etc/portage/*`
+        // at all under `root`.
+        let sysroot = tempfile::tempdir().unwrap();
+        let root = camino::Utf8Path::from_path(sysroot.path()).unwrap();
+
+        match build_use_env(&repo, Some(root), None, None, None).await {
+            Ok(_) => {
+                panic!("a cold, never-initialized target must not resolve without an override")
+            }
+            Err(e) => assert!(
+                e.to_string().contains("cannot resolve"),
+                "expected the make.profile canonicalize failure, got: {e}"
+            ),
+        }
+
+        let ov = SysrootOverride {
+            profile_dir,
+            make_conf: "CHOST=\"riscv64-unknown-linux-gnu\"\n",
+        };
+        build_use_env(&repo, Some(root), None, None, Some(&ov))
+            .await
+            .expect("a SysrootOverride must let a never-initialized target resolve");
+    }
 
     // Expected override shorthand
     fn ov(s: &str) -> UseOverride {

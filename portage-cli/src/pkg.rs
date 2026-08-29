@@ -451,7 +451,7 @@ async fn resolve_active_use(
         return Ok(None);
     };
 
-    let env = build_use_env(repo, roots.config(), roots.config_overlay(), None)
+    let env = build_use_env(repo, roots.config(), roots.config_overlay(), None, None)
         .await
         .context("resolving active profile")?;
 

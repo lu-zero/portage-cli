@@ -95,7 +95,7 @@ impl SystemConfig {
         };
         let make_conf = std::path::Path::new(DEFAULT_MAKE_CONF);
         let extra = if make_conf.exists() {
-            vec![make_conf]
+            vec![portage_repo::ConfSource::File(make_conf)]
         } else {
             vec![]
         };

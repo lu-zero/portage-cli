@@ -593,6 +593,7 @@ async fn run_fix(globals: &Cli, ids: &[String]) -> Result<()> {
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: false,
+            sysroot_override: None,
         },
     )
     .await?;

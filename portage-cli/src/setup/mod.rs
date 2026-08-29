@@ -341,6 +341,7 @@ pub async fn merge_baselayout(cli: &crate::cli::Cli, extra_path: &[Utf8PathBuf])
             extra_aliases: &[],
             extra_path,
             autounmask_widen: false,
+            sysroot_override: None,
         },
     )
     .await

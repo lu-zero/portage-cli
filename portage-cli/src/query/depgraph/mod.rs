@@ -242,6 +242,12 @@ pub struct DepgraphOpts<'a> {
     /// above `package.use` and incorrectly wipe it. See
     /// `resolve_use_flags`'s `extra_use_override` doc.
     pub extra_use_override: Option<&'a str>,
+    /// In-memory config for a `--target` sysroot whose on-disk `make.conf`/
+    /// `make.profile` haven't been written yet (e.g. `em crossdev --setup
+    /// -p` on a never-initialized target) — see
+    /// [`portage_resolve::use_env::SysrootOverride`]. `None` for every
+    /// ordinary resolve, including a `--target` sysroot that already exists.
+    pub sysroot_override: Option<&'a use_env::SysrootOverride<'a>>,
     /// See `output::PrettyCtx::binpkg_index`'s doc — passed straight through
     /// to the `Pretty` printer so `-p` can show `[binary ...]`.
     pub binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
@@ -307,6 +313,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         nodeps,
         host_merge_root,
         extra_use_override,
+        sysroot_override,
         binpkg_index,
         exclude,
         resume_completed,
@@ -353,7 +360,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             set.main(),
             config_root,
             roots.config_overlay(),
-            extra_use_override
+            extra_use_override,
+            sysroot_override
         ),
     );
     let use_env = use_env_result?;

@@ -288,6 +288,24 @@ async fn setup(
     } else {
         &[]
     };
+    // Same pretend-only gate as `extra_aliases` above: a never-initialized
+    // target's `make.conf`/`make.profile` don't exist on disk yet under `-p`
+    // (init_target only previewed them), so depgraph's own config read would
+    // otherwise hard-fail. The profile directory is real (::gentoo's own,
+    // not em-generated); only make.conf's content needs synthesizing.
+    let profile_dir_holder;
+    let make_conf_holder;
+    let sysroot_override = if globals.pretend {
+        let gentoo_path = main_repo(globals)?.path().to_owned();
+        profile_dir_holder = gentoo_path.join("profiles").join(target.profile_path());
+        make_conf_holder = make_conf_body(target, globals.outer_roots().merge_root());
+        Some(portage_resolve::use_env::SysrootOverride {
+            profile_dir: &profile_dir_holder,
+            make_conf: &make_conf_holder,
+        })
+    } else {
+        None
+    };
     run_staged(
         RunStagedOpts {
             plan: &plan,
@@ -297,6 +315,7 @@ async fn setup(
             use_outer_eroot: true,
             target_only_installed_view: false,
             extra_aliases,
+            sysroot_override,
         },
         post_step,
     )
@@ -344,6 +363,11 @@ struct RunStagedOpts<'a> {
     target_only_installed_view: bool,
     /// In-memory crossdev aliases (pretend / repos.conf not written yet)
     extra_aliases: &'a [portage_repo::RepoEntry],
+    /// In-memory sysroot `make.conf`/profile for a `--target` never
+    /// `--init-target`'d for real (staged crossdev `-p`/an unconfirmed
+    /// `-a`) — see [`portage_resolve::use_env::SysrootOverride`]. `None`
+    /// for native `toolchain --setup` and every already-initialized target.
+    sysroot_override: Option<portage_resolve::use_env::SysrootOverride<'a>>,
 }
 
 /// Run each step of a staged [`stages::StagePlan`] through [`crate::emerge_atoms`],
@@ -364,6 +388,7 @@ async fn run_staged(
         use_outer_eroot,
         target_only_installed_view,
         extra_aliases,
+        sysroot_override,
     } = opts;
     let mut out = anstream::stdout();
     for (i, step) in plan.steps.iter().enumerate() {
@@ -386,6 +411,11 @@ async fn run_staged(
         } else {
             use_outer_eroot
         };
+        // `sysroot_override` only makes sense for a step that actually
+        // resolves against the (possibly not-yet-real) sysroot — a host-side
+        // `cross-*` step resolves against the outer EROOT's own real config,
+        // which the override must never shadow.
+        let step_sysroot_override = if step_outer { None } else { sysroot_override };
         crate::emerge_atoms(
             globals,
             &step.atoms,
@@ -404,6 +434,7 @@ async fn run_staged(
                 extra_aliases,
                 extra_path: &[],
                 autounmask_widen: true,
+                sysroot_override: step_sysroot_override,
             },
         )
         .await?;
@@ -586,6 +617,7 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
             use_outer_eroot: false,
             target_only_installed_view: true,
             extra_aliases: &[],
+            sysroot_override: None,
         },
         move |step: &stages::StageStep| activate_native_toolchain(globals, step),
     )
@@ -672,6 +704,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
                 use_outer_eroot: true,
                 target_only_installed_view: false,
                 extra_aliases: &[],
+                sysroot_override: None,
             },
             post_step,
         )
@@ -704,6 +737,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             // toolchain bootstrap under `--local`/`--prefix` above.
             target_only_installed_view: true,
             extra_aliases: &[],
+            sysroot_override: None,
         },
         |_| Ok(()),
     )
@@ -758,6 +792,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: true,
+            sysroot_override: None,
         },
     )
     .await?;
@@ -875,6 +910,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         noreplace: false,
         nodeps: true,
         extra_use_override: None,
+        sysroot_override: None,
         binpkg_index: None,
         exclude: &[],
         resume_completed: std::collections::HashSet::new(),
@@ -1313,6 +1349,7 @@ async fn ensure_config_site_packages(globals: &Cli) -> Result<()> {
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: false,
+            sysroot_override: None,
         },
     )
     .await

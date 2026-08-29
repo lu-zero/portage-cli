@@ -88,7 +88,7 @@ impl ProfileStack {
     pub async fn use_flags(
         &self,
         shell: &mut EbuildShell,
-        extra_confs: &[&std::path::Path],
+        extra_confs: &[ConfSource<'_>],
     ) -> Result<ResolvedUse> {
         resolve_use_flags(shell, self, extra_confs, None).await
     }
@@ -99,7 +99,7 @@ impl ProfileStack {
     pub async fn use_flags_with_override(
         &self,
         shell: &mut EbuildShell,
-        extra_confs: &[&std::path::Path],
+        extra_confs: &[ConfSource<'_>],
         extra_use_override: &str,
     ) -> Result<ResolvedUse> {
         resolve_use_flags(shell, self, extra_confs, Some(extra_use_override)).await
@@ -274,7 +274,7 @@ impl ProfileStack {
     pub async fn configure_shell(
         &self,
         shell: &mut EbuildShell,
-        extra_confs: &[&std::path::Path],
+        extra_confs: &[ConfSource<'_>],
     ) -> Result<()> {
         configure_shell(shell, self, extra_confs).await
     }
@@ -289,7 +289,7 @@ impl ProfileStack {
 pub async fn configure_shell(
     shell: &mut EbuildShell,
     stack: &ProfileStack,
-    extra_confs: &[&std::path::Path],
+    extra_confs: &[ConfSource<'_>],
 ) -> Result<()> {
     let resolved = resolve_use_flags(shell, stack, extra_confs, None).await?;
     let refs: Vec<&str> = resolved.enabled.iter().map(|f| f.as_str()).collect();
@@ -366,7 +366,7 @@ pub struct ResolvedUse {
 async fn resolve_use_flags(
     shell: &mut EbuildShell,
     stack: &ProfileStack,
-    extra_confs: &[&std::path::Path],
+    extra_confs: &[ConfSource<'_>],
     extra_use_override: Option<&str>,
 ) -> Result<ResolvedUse> {
     let ProfileEnv { layers } = stack.profile_env(shell).await?;
@@ -377,7 +377,7 @@ async fn resolve_use_flags(
     let mut conf_expand_assigned: Vec<String> = Vec::new();
     let mut conf_deltas: Vec<String> = Vec::new();
     for conf in extra_confs {
-        let contrib = source_incremental(shell, ConfSource::File(conf)).await?;
+        let contrib = source_incremental(shell, *conf).await?;
         merge_assigned(&mut conf_expand_assigned, contrib.expand_assigned);
         if !contrib.use_delta.is_empty() {
             conf_deltas.push(contrib.use_delta);
@@ -601,6 +601,25 @@ async fn apply_env_layer(shell: &mut EbuildShell) -> Result<()> {
     Ok(())
 }
 
+/// Where one `source_incremental` layer's content comes from: a real conf
+/// file (`/etc/portage/make.conf`), or a raw string — e.g. a transient
+/// `USE="-* build ${BOOTSTRAP_USE}"` override synthesized in-process (`em
+/// stages --stage1`'s recipe), which needs the exact same conf-layer
+/// incremental treatment without needing a real file on disk.
+#[derive(Clone, Copy)]
+pub enum ConfSource<'a> {
+    /// A real conf file on disk (e.g. `/etc/portage/make.conf`).
+    File(&'a std::path::Path),
+    /// Raw conf-layer content sourced directly, no file needed.
+    Str(&'a str),
+}
+
+/// One conf-layer's own incremental contribution (not merged with saved state).
+struct IncrementalContribution {
+    expand_assigned: Vec<String>,
+    use_delta: String,
+}
+
 /// Source a single config file (e.g. `make.conf`) with incremental USE semantics
 ///
 /// `INCREMENTAL_VARS` are reset to empty before sourcing so the file's own
@@ -613,22 +632,6 @@ async fn apply_env_layer(shell: &mut EbuildShell) -> Result<()> {
 /// variables (`ARCH`, …) keep a plain incremental add — no structural prefix
 /// to strip by. See `portage-repo/docs/pms-notes.md` for the details.
 ///
-/// Where one `source_incremental` layer's content comes from: a real conf
-/// file (`/etc/portage/make.conf`), or a raw string — e.g. a transient
-/// `USE="-* build ${BOOTSTRAP_USE}"` override synthesized in-process (`em
-/// stages --stage1`'s recipe), which needs the exact same conf-layer
-/// incremental treatment without needing a real file on disk.
-enum ConfSource<'a> {
-    File(&'a std::path::Path),
-    Str(&'a str),
-}
-
-/// One conf-layer's own incremental contribution (not merged with saved state).
-struct IncrementalContribution {
-    expand_assigned: Vec<String>,
-    use_delta: String,
-}
-
 /// Returns the `USE_EXPAND`-listed variables this layer explicitly assigned,
 /// so the caller can surface them as [`ResolvedUse::conf_expand_assigned`] —
 /// the flat `USE` strip below can't reach the per-package IUSE defaults.
@@ -873,7 +876,7 @@ mod tests {
         // make.conf idiom that relies on portage's own incremental merge.
         let make_conf = dir.path().join("make.conf");
         std::fs::write(&make_conf, "FEATURES=\"candy ccache\"\n").unwrap();
-        configure_shell(&mut shell, &stack, &[&make_conf])
+        configure_shell(&mut shell, &stack, &[ConfSource::File(&make_conf)])
             .await
             .unwrap();
 
@@ -1245,7 +1248,7 @@ mod tests {
         let stack = ProfileStack::build(arch).unwrap();
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack
-            .use_flags(&mut shell, &[make_conf.as_path()])
+            .use_flags(&mut shell, &[ConfSource::File(&make_conf)])
             .await
             .unwrap();
 
@@ -1287,7 +1290,7 @@ mod tests {
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack
-            .use_flags(&mut shell, &[make_conf.as_path()])
+            .use_flags(&mut shell, &[ConfSource::File(&make_conf)])
             .await
             .unwrap();
 
@@ -1326,7 +1329,7 @@ mod tests {
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
         let resolved = stack
-            .use_flags(&mut shell, &[make_conf.as_path()])
+            .use_flags(&mut shell, &[ConfSource::File(&make_conf)])
             .await
             .unwrap();
 
@@ -1399,7 +1402,7 @@ mod tests {
 
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
-        configure_shell(&mut shell, &stack, &[make_conf.as_path()])
+        configure_shell(&mut shell, &stack, &[ConfSource::File(&make_conf)])
             .await
             .unwrap();
 

@@ -348,7 +348,10 @@ pub(crate) async fn apply_profile_env(
         base.join("etc/portage/make.conf"),
     ])
     .context("listing make.conf")?;
-    let confs: Vec<&std::path::Path> = conf_owned.iter().map(|p| p.as_path()).collect();
+    let confs: Vec<portage_repo::ConfSource> = conf_owned
+        .iter()
+        .map(|p| portage_repo::ConfSource::File(p.as_path()))
+        .collect();
     stack
         .configure_shell(shell, &confs)
         .await

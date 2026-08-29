@@ -441,6 +441,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 noreplace: globals.merge_flags.noreplace,
                 nodeps: globals.nodeps,
                 extra_use_override: None,
+                sysroot_override: None,
                 binpkg_index: binpkg_index.as_ref(),
                 exclude: &globals.merge_flags.exclude,
                 resume_completed: std::collections::HashSet::new(),

@@ -2456,7 +2456,10 @@ impl Repository {
         let path = self.path().join("profiles").join(profile_rel_path);
         let stack = ProfileStack::build(path.into())?;
         let mut shell = EbuildShell::new(self).await?;
-        let confs: Vec<&std::path::Path> = make_conf.into_iter().collect();
+        let confs: Vec<super::profile::ConfSource> = make_conf
+            .into_iter()
+            .map(super::profile::ConfSource::File)
+            .collect();
         stack.configure_shell(&mut shell, &confs).await?;
         Ok(shell)
     }

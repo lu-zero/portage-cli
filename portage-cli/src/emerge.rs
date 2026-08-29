@@ -188,6 +188,12 @@ pub(crate) struct EmergeOpts<'a> {
     /// `emerge_atoms` already widens automatically under `--target` (crossdev
     /// flows); this is for callers outside that gate.
     pub autounmask_widen: bool,
+    /// In-memory config for a `--target` sysroot pending `--init-target`'s
+    /// disk writes (see [`portage_resolve::use_env::SysrootOverride`]) —
+    /// staged crossdev `-p`/an unconfirmed `-a` on a never-initialized
+    /// target passes this so the plan can still be computed. Empty for
+    /// every normal emerge, and for a `--target` that already exists.
+    pub sysroot_override: Option<portage_resolve::use_env::SysrootOverride<'a>>,
 }
 
 /// [`EmergeOpts`] minus its borrowed `use_override` (already folded into
@@ -208,6 +214,7 @@ struct ResolvedEmergeOpts<'a> {
     extra_aliases: &'a [portage_repo::RepoEntry],
     extra_path: &'a [camino::Utf8PathBuf],
     autounmask_widen: bool,
+    sysroot_override: Option<portage_resolve::use_env::SysrootOverride<'a>>,
 }
 
 pub(crate) async fn emerge_atoms(
@@ -238,6 +245,7 @@ pub(crate) async fn emerge_atoms(
             extra_aliases: opts.extra_aliases,
             extra_path: opts.extra_path,
             autounmask_widen: opts.autounmask_widen,
+            sysroot_override: opts.sysroot_override,
         },
     )
     .await
@@ -324,6 +332,7 @@ async fn emerge_atoms_inner(
         extra_aliases,
         extra_path,
         autounmask_widen,
+        sysroot_override,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
     let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
@@ -371,8 +380,14 @@ async fn emerge_atoms_inner(
     // hint if that sysroot has not been laid down by `em crossdev --init-target`
     // (otherwise the profile/make.conf read fails with an opaque ENOENT). Skipped
     // for `use_outer_eroot`: those steps target the outer EROOT on purpose, not
-    // the sysroot this check is guarding.
-    if let Some(tuple) = cli.target.as_deref().filter(|_| !use_outer_eroot) {
+    // the sysroot this check is guarding. Also skipped when `sysroot_override`
+    // supplies the not-yet-written config in memory (staged crossdev `-p`/an
+    // unconfirmed `-a` on a never-initialized target).
+    if let Some(tuple) = cli
+        .target
+        .as_deref()
+        .filter(|_| !use_outer_eroot && sysroot_override.is_none())
+    {
         let cfg = roots.config().unwrap_or_else(|| camino::Utf8Path::new("/"));
         if !cfg.join("etc/portage/make.conf").exists() {
             bail!(
@@ -534,6 +549,7 @@ async fn emerge_atoms_inner(
         noreplace: merge_flags.noreplace,
         nodeps,
         extra_use_override,
+        sysroot_override: sysroot_override.as_ref(),
         binpkg_index: binpkg_index.as_ref(),
         exclude: &merge_flags.exclude,
         // On `-r`, drop packages already finished in a prior attempt so the
@@ -876,6 +892,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: false,
+            sysroot_override: None,
         },
     )
     .await
@@ -928,6 +945,7 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: false,
+            sysroot_override: None,
         },
     )
     .await

@@ -39,7 +39,7 @@ impl TreeView {
         let set = crate::repo_open::repo_set_from_conf(repo, roots, multi_repo);
         let (raw_data, env) = tokio::join!(
             portage_resolve::repo::load_repos(&set),
-            portage_resolve::use_env::build_use_env(set.main(), roots.config(), None, None),
+            portage_resolve::use_env::build_use_env(set.main(), roots.config(), None, None, None),
         );
         let (resolved, _extras) = portage_resolve::repo::ResolvedPolicy::from_use_env(env?, arch);
         // Same policy-then-collapse ordering as `query/depgraph/mod.rs`'s
