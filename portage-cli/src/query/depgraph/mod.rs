@@ -972,7 +972,17 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                             "acceptance-filtered hard deps were dropped; \
                              retrying with widened candidate supply"
                         );
-                        attempt_solve()?
+                        // Phase 2 can fail outright (e.g. the dropped dep's
+                        // only matching versions are tagged-live and
+                        // `filter_to_preferred_tier` empties them for a
+                        // non-root) — keep the degraded strict plan and its
+                        // exact-pin advisories rather than losing the plan.
+                        attempt_solve().unwrap_or_else(|e| {
+                            tracing::debug!(
+                                "widened retry failed ({e}); keeping the degraded strict plan"
+                            );
+                            outcome
+                        })
                     } else {
                         outcome
                     }
