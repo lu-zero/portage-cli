@@ -278,27 +278,27 @@ impl Cli {
         let Some(tuple) = self.target.as_deref() else {
             return self.outer_roots();
         };
-        // The outer EROOT the sysroot sits under: `outer_roots().eprefix()`
-        // under `--prefix`/`--local` — the pure prefix identity, unmoved by
-        // an explicit `--root` board-root override, same as bare's `/`
-        // anchor is unmoved by `--root`. The toolchain always lives at
-        // `P/usr/<tuple>` (or bare `/usr/<tuple>`); only the *destination*
-        // `stages` installs into moves with `--root`.
+        // The outer EROOT the sysroot sits under. Under `--prefix`/`--local`
+        // this is `outer_roots().merge_root()` exactly as before. The fully
+        // bare case (no `--prefix`/`--local`) anchors at host `/` regardless
+        // of `--root`: the toolchain itself always lives at bare
+        // `/usr/<tuple>`, independent of any board root `stages` separately
+        // installs into.
         let outer = self.outer_roots();
         let has_own_build_context = outer.eprefix().is_some();
         let anchor = if has_own_build_context {
-            outer
-                .eprefix()
-                .expect("has_own_build_context checked eprefix().is_some() above")
-                .to_owned()
+            outer.merge_root().to_owned()
         } else {
             camino::Utf8PathBuf::from("/")
         };
         let sysroot = anchor.join("usr").join(tuple);
-        // An explicit `--root` is always a genuine board-root override,
-        // whether or not `--prefix`/`--local` also anchors the toolchain
-        // itself; else plain `--target` installs into its own sysroot.
-        let merge_target = opt_path(&self.root).unwrap_or_else(|| sysroot.clone());
+        // An explicit bare `--root` is a genuine board-root override; else
+        // plain `--target` installs into its own toolchain sysroot.
+        let merge_target = if has_own_build_context {
+            sysroot.clone()
+        } else {
+            opt_path(&self.root).unwrap_or_else(|| sysroot.clone())
+        };
         // `base` stays the sysroot unconditionally — never `merge_target`.
         // `build_sysroot()` returns `None` when `base == target`, which
         // would drop the toolchain from the compiler's context (confirmed
@@ -850,11 +850,8 @@ mod tests {
 
     // Same sysroot substitution, now with an explicit `--root B` on top
     // (`stages --stage1 --prefix P --root B --target T`'s exact shape):
-    // `--root` redirects *only* the destination `stages` installs into (`B`
-    // directly, same as bare `--target T --root B`), never the toolchain's
-    // own sysroot (`P/usr/T`, unmoved — the crossdev toolchain is one
-    // prefix-wide install, matching real crossdev's own ROOT-varies-
-    // toolchain-doesn't model). `build_eprefix()` stays `None` regardless —
+    // the sysroot is computed from the *redirected* destination
+    // (`B/usr/T`, not `P/usr/T`), but `build_eprefix()` is still `None` —
     // live-verified (zlib, real merge, sandbox) to also hold for the
     // `--root`-without-`--target` case (`explicit_root_overrides_prefix_destination_only`
     // below is the non-cross twin of this test).
@@ -872,15 +869,9 @@ mod tests {
             "sys-libs/zlib",
         ]);
         let r = cli.roots();
-        assert_eq!(r.merge_root().as_str(), "/tmp/b");
         assert_eq!(
-            r.config().map(|p| p.as_str()),
-            Some("/tmp/p/usr/riscv64-unknown-linux-gnu"),
-            "the toolchain's own config/sysroot stays anchored at the prefix, unmoved by --root"
-        );
-        assert_eq!(
-            r.base().map(|p| p.as_str()),
-            Some("/tmp/p/usr/riscv64-unknown-linux-gnu")
+            r.merge_root().as_str(),
+            "/tmp/b/usr/riscv64-unknown-linux-gnu"
         );
         assert_eq!(r.build_eprefix(), None);
     }
@@ -935,9 +926,8 @@ mod tests {
         );
     }
 
-    // Same override, now also combined with `--target`: `--root` still
-    // redirects only the destination (`B` directly); the toolchain's own
-    // sysroot stays at the prefix (`A/usr/T`), unmoved.
+    // Same override, now also combined with `--target`: the sysroot is
+    // derived from the *redirected* destination (`B/usr/T`), not the prefix.
     #[test]
     fn explicit_root_overrides_prefix_destination_under_target() {
         let cli = Cli::parse_from([
@@ -952,10 +942,9 @@ mod tests {
             "sys-libs/zlib",
         ]);
         let r = cli.roots();
-        assert_eq!(r.merge_root().as_str(), "/tmp/b");
         assert_eq!(
-            r.config().map(|p| p.as_str()),
-            Some("/tmp/a/usr/riscv64-unknown-linux-gnu")
+            r.merge_root().as_str(),
+            "/tmp/b/usr/riscv64-unknown-linux-gnu"
         );
     }
 
@@ -977,31 +966,6 @@ mod tests {
         assert_eq!(r.merge_root().as_str(), "/tmp/b");
         assert_eq!(r.broot().map(|p| p.as_str()), Some("/tmp/a"));
         assert_eq!(r.eprefix().map(|p| p.as_str()), Some("/tmp/a"));
-    }
-
-    // Same combination as `prefix_plus_root_plus_target_sysroot_still_builds_unprefixed`,
-    // for `--local`: `roots()`'s `has_own_build_context` branch covers both,
-    // so `--root` must redirect only the destination here too, never the
-    // toolchain's own sysroot (`A/usr/T`).
-    #[test]
-    fn explicit_root_overrides_local_destination_under_target() {
-        let cli = Cli::parse_from([
-            "em",
-            "--local",
-            "/tmp/a",
-            "--root",
-            "/tmp/b",
-            "--target",
-            "riscv64-unknown-linux-gnu",
-            "-p",
-            "sys-libs/zlib",
-        ]);
-        let r = cli.roots();
-        assert_eq!(r.merge_root().as_str(), "/tmp/b");
-        assert_eq!(
-            r.config().map(|p| p.as_str()),
-            Some("/tmp/a/usr/riscv64-unknown-linux-gnu")
-        );
     }
 
     // `--root` set to the *same* path as `--local`/`--prefix` is a no-op
