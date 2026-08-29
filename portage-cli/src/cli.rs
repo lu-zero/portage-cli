@@ -618,7 +618,15 @@ impl Cli {
         // "unsatisfied BDEPEND lands in the prefix" role, `host_roots()`'s
         // doc comment) — building an entire `stages` snapshot straight into
         // it collides with that role.
-        if resolved.is_overlay() && resolved.eprefix() == Some(resolved.merge_root()) {
+        //
+        // `self.base_roots().is_overlay()`, not `resolved.is_overlay()`:
+        // under `--target`, `roots()` always sets `base = Some(sysroot)`
+        // (never `None`), so `resolved.is_overlay()` is always false there
+        // and this guard never fired — `--prefix P --root P --target T
+        // stages --stage1` sailed straight past it into the live prefix.
+        // `base_roots()` reflects "is this an overlay at all," independent
+        // of any later `--target` substitution.
+        if self.base_roots().is_overlay() && resolved.eprefix() == Some(resolved.merge_root()) {
             anyhow::bail!(
                 "{action} needs an explicit --root that doesn't equal the host \
                  install path ({})",
@@ -1213,6 +1221,28 @@ mod tests {
             prefix_root
                 .require_root_distinct_from_host(&prefix_root.outer_roots(), "test")
                 .is_ok()
+        );
+
+        // The bug this guard is for: `--prefix P --root P --target T` — the
+        // degenerate root-equals-prefix case, now also under `--target`.
+        // `resolved.is_overlay()` is always false once `--target` sets
+        // `base = Some(sysroot)`, so this used to sail straight past
+        // undetected; `self.base_roots().is_overlay()` catches it.
+        let prefix_root_target = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/a",
+            "--root",
+            "/tmp/a",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert!(
+            prefix_root_target
+                .require_root_distinct_from_host(&prefix_root_target.roots(), "test")
+                .is_err()
         );
     }
 
