@@ -229,10 +229,6 @@ pub struct PortageDependencyProvider {
     /// misses instead of resolving the alias (a recurring bug class, hit
     /// in `graph.rs`, `validate.rs`, and `post_solve.rs` alike).
     packages: HashMap<PortagePackage, PackageData>,
-    /// Whether ingestion saw any tagged (`needs_unmask`) or live version —
-    /// false for every strict-mode provider, letting the build-time
-    /// propagation walk bail without touching the graph
-    saw_tagged_or_live: bool,
     pub(crate) installed: HashMap<PortagePackage, (Version, InstalledPolicy)>,
     pub(crate) installed_cpns: HashSet<Cpn>,
     pub(crate) installed_use: HashMap<PortagePackage, Vec<Interned<DefaultInterner>>>,
@@ -709,7 +705,6 @@ impl PortageDependencyProvider {
         }
 
         Self {
-            saw_tagged_or_live,
             packages,
             installed: HashMap::new(),
             installed_cpns: HashSet::new(),

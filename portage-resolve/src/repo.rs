@@ -1843,8 +1843,8 @@ pub fn filter_reasons_for(
 /// when nothing live lives above the selection (the grant is then
 /// unbounded — there is nothing to exclude), which also covers a live
 /// selection itself.
-pub fn live_upper_bound<'a>(
-    entries: &'a [(Cpv, CacheEntry)],
+pub fn live_upper_bound(
+    entries: &[(Cpv, CacheEntry)],
     selected: &Version,
     slot: Option<&Interned<DefaultInterner>>,
 ) -> Option<Version> {
