@@ -767,6 +767,11 @@ blocked by the three independent findings above, tracked separately.
 - 🔴 **`env_d_dir` host-fallback can double-register a host profile as a
   prefix profile** — found in the same review, narrow precondition,
   lower severity. [[env-d-host-fallback-double-registration]]
+- 🔴 **gcc-stage1 missing `--without-headers` for some targets** —
+  riscv64's gcc-stage1 configure omits it (x86_64's has it), so libgcc
+  tries to use target headers that don't exist yet at that step.
+  Pre-existing, confirmed against the pre-session commit, unrelated to
+  the `--root`/`--prefix` work above. [[crossdev-gcc-stage1-missing-without-headers]]
 - 🔴 **package-level profile rules don't follow the crossdev alias
   mapping** — root cause of the ABI_X86 stage1 mismatch below:
   `real_cpn_of` is populated but never consulted, so `package.use`/

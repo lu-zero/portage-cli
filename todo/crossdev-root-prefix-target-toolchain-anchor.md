@@ -20,12 +20,18 @@ earlier attempts each broke `--setup --root B`'s own semantics instead).
   between `B` and `P/usr/T` before hitting an unrelated bug
   ([[crossdev-stage1-abi-x86-32-multilib-mismatch]]).
 - riscv64-unknown-linux-gnu: `crossdev --setup --prefix P` failed at
-  `gcc-stage1` (`stdio.h: No such file or directory` building `libgcc`
-  — matches [[crossdev-prefix-gcc-header-dir]], previously only seen on
-  i586 at gcc-stage2; now also riscv64 at gcc-stage1). The subsequent
-  `stages --stage1` run (against the broken toolchain) live-reproduced
-  the `outer_roots()` bug below for free: its woven-in gcc-stage1
-  refresh planned into `/root/board-riscv/` instead of
+  `gcc-stage1` (`stdio.h: No such file or directory` building `libgcc`)
+  — root-caused to a missing `--without-headers` configure flag
+  (present for x86_64's gcc-stage1, absent for riscv64's), pre-existing
+  (confirmed against the pre-session commit `430cf11`, unrelated to
+  today's work), filed separately:
+  [[crossdev-gcc-stage1-missing-without-headers]] (distinct from
+  [[crossdev-prefix-gcc-header-dir]] — that one is a wrong-but-present
+  path at gcc-stage2 on i586, this one is headers genuinely absent at
+  gcc-stage1 as expected, but gcc tries to use them anyway). The
+  subsequent `stages --stage1` run (against the broken toolchain)
+  live-reproduced the `outer_roots()` bug below for free: its woven-in
+  gcc-stage1 refresh planned into `/root/board-riscv/` instead of
   `/root/prefix-riscv/`.
 
 ## `Cli::outer_roots()` — real bug, full plan, not yet implemented
