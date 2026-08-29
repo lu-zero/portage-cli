@@ -1,11 +1,28 @@
 # `cross-*/gcc` stage2 can't find target libc headers under `--prefix`
 
-Status: 🟡 not reproduced 2026-08-29 with a different target/sandbox —
-possibly i586-specific or already-stale, not confirmed fixed. Found
-2026-08-26 testing `--prefix`/`--local` impact of
+Status: 🔴 reproduced again 2026-08-29, riscv64 this time, at a
+different step (gcc-**stage1**, not stage2) — not i586-specific after
+all. Found 2026-08-26 testing `--prefix`/`--local` impact of
 [[crossdev-pkg-config-sysroot-leak]] in a real crossdev-stages sandbox —
 unrelated to that fix (confirmed: happens via a completely different
 mechanism, gcc's own sysroot/header-dir configuration, not pkg-config).
+
+**2026-08-29 riscv64 recurrence**: `em --prefix P --target
+riscv64-unknown-linux-gnu crossdev --setup` failed at `[3/6]
+gcc-stage1` building `libgcc`:
+
+```
+libgcc/../gcc/tsystem.h:95:10: fatal error: stdio.h: No such file or directory
+```
+
+— same symptom family (a header search path one component short
+relative to the prefix), but at **gcc-stage1** (before glibc exists —
+libgcc here can't be looking for target libc headers the way the
+original i586 gcc-stage2 report described; needs its own trace, don't
+assume it's the identical bug). Found live-verifying
+[[crossdev-root-prefix-target-toolchain-anchor]]'s `Cli::roots()` fix;
+unrelated to that fix (x86_64 on the same host, same day, completed all
+6 steps cleanly with the identical `--prefix`-only invocation shape).
 
 **2026-08-29 update**: re-ran the exact repro shape (`em --prefix P
 --target T crossdev --setup`, no `--root`) with `x86_64-unknown-linux-gnu`

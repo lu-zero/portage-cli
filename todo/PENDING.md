@@ -747,24 +747,35 @@ blocked by the three independent findings above, tracked separately.
 - ✅ **`crossdev --setup -a` declined still ran the full build — fixed
   2026-08-29** (`0b5a901`), found investigating the item above.
   [[crossdev-setup-declined-ask-builds-anyway]]
-- 🟡 **`--root` under `--prefix`/`--local` + `--target`** — design settled
-  and mostly landed 2026-08-29: `crossdev --setup`/`--init-target` now
-  rejects `--root` outright (`8207e0f`), which cleared the way to
-  reapply the `Cli::roots()` anchor fix (`b2aaa8b`'s content,
-  cherry-picked). Live-verified real (non-`-p`) end to end on
-  aarch64→x86_64: `crossdev --setup` into `--prefix P` (6/6 steps),
-  then `stages --stage1 --prefix P --root B` correctly split 84/142
-  packages between `B` (stage1 target files) and `P/usr/T` (host-side
-  `MergeRoot::Base` copies) before hitting an unrelated multilib bug
-  ([[crossdev-stage1-abi-x86-32-multilib-mismatch]]). Still open:
-  `outer_roots()`'s bare-only `--root`-under-`--target` guard needs
-  extending to the `--prefix`/`--local` overlay branch too (Opus
-  review), and `regression-matrix.sh`/`docs/user/stages-and-testing.md`'s
-  bare `--setup --root` recipe needs updating to `--prefix` since it
-  now errors. [[crossdev-root-prefix-target-toolchain-anchor]]
-- 🔴 **cross stage1 tries `ABI_X86=32` against a non-multilib cross
-  toolchain** — found live-verifying the fix above; real bug, not
-  related to root/prefix design. [[crossdev-stage1-abi-x86-32-multilib-mismatch]]
+- 🟡 **`--root` under `--prefix`/`--local` + `--target`** —
+  `Cli::roots()` fixed and live-verified 2026-08-29 (`a427f42`, after
+  `8207e0f` made `crossdev --setup`/`--init-target` reject `--root`
+  outright). `Cli::outer_roots()` has a separate, related bug — full
+  Opus-reviewed plan filed, not yet implemented: it's 3 broken
+  topologies (`--prefix`, `--local`, and an active-local under
+  `--target`), not 1, and the sole live consequence is the woven-in
+  cross-gcc-refresh step re-polluting the board root on every stage1
+  run, not the `activate_toolchain`/`link_abi_osdirs` paths originally
+  suspected. `regression-matrix.sh`/`docs/user/stages-and-testing.md`'s
+  bare `--setup --root` recipe also still needs updating to `--prefix`
+  since it now errors. [[crossdev-root-prefix-target-toolchain-anchor]]
+- 🔴 **`require_root_distinct_from_host` dead under `--target`** — found
+  in the same review, higher severity: `--prefix P --root P --target T
+  stages --stage1` sails past the degenerate-root check and would
+  bootstrap into the live prefix. One-line fix, live-verified.
+  [[require-root-distinct-from-host-dead-under-target]]
+- 🔴 **`env_d_dir` host-fallback can double-register a host profile as a
+  prefix profile** — found in the same review, narrow precondition,
+  lower severity. [[env-d-host-fallback-double-registration]]
+- 🔴 **package-level profile rules don't follow the crossdev alias
+  mapping** — root cause of the ABI_X86 stage1 mismatch below:
+  `real_cpn_of` is populated but never consulted, so `package.use`/
+  `.force`/`.mask` entries written against the real package (e.g. real
+  Gentoo's `features/multilib/package.use.force: sys-libs/glibc
+  multilib`) silently don't apply to `cross-*` aliased packages.
+  Confirmed live by comparing forced/masked flags on the identical
+  package under both identities. Resolve-engine bug, not crossdev- or
+  multilib-specific. [[crossdev-stage1-abi-x86-32-multilib-mismatch]]
 - 🔴 **Remove `--root` from `em crossdev` at the CLI level** — today
   only rejected at runtime inside the applet body; `--root` is still
   `global = true` on `Cli` so clap itself accepts it.
