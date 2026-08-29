@@ -1,8 +1,9 @@
 # `require_root_distinct_from_host` never fires under `--target`
 
-Status: 🔴 found 2026-08-29 (Opus review of [[crossdev-root-prefix-target-toolchain-anchor]]),
-not fixed. Higher severity than that item — silent corruption of a
-live prefix, no special precondition needed.
+Status: ✅ fixed and live-verified 2026-08-29 (`c309302`). Found in an
+Opus review of [[crossdev-root-prefix-target-toolchain-anchor]].
+Higher severity than that item — silent corruption of a live prefix,
+no special precondition needed.
 
 ## The bug
 
@@ -30,11 +31,17 @@ first — meaning `--prefix P --root P --target T stages --stage1` would,
 absent that downstream config-resolution failure, actually bootstrap a
 full stage1 straight into the live prefix `P`.
 
-## Fix
+## Fix (landed)
 
-Test `self.base_roots().is_overlay()` instead of `resolved.is_overlay()`.
-Checked against every case in
-`require_root_distinct_from_host_rejects_the_degenerate_cases`
-(cli.rs:1030), including the `prefix_target` case (cli.rs:1061,
-`--prefix /tmp/a --target T`, expects `is_ok`) and the `--local`
-exemption — all stay green with this change.
+Tests `self.base_roots().is_overlay()` instead of `resolved.is_overlay()`
+— reflects "is this an overlay topology at all," independent of any
+later `--target` substitution. Every case in
+`require_root_distinct_from_host_rejects_the_degenerate_cases` stayed
+green; added a new one for `--prefix P --root P --target T`, now
+correctly rejected.
+
+**Live-verified**: `em --prefix P --root P --target x86_64-... stages
+--stage1 -p` now correctly rejects up front ("needs an explicit --root
+that doesn't equal the host install path") instead of sailing past
+into "cannot resolve make.profile"; the same command with a distinct
+`--root` still plans normally.

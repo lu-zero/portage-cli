@@ -760,11 +760,10 @@ blocked by the three independent findings above, tracked separately.
   `docs/user/stages-and-testing.md`'s bare `--setup --root` recipe
   needs updating to `--prefix` since it now errors.
   [[crossdev-root-prefix-target-toolchain-anchor]]
-- 🔴 **`require_root_distinct_from_host` dead under `--target`** — found
-  in the same review, higher severity: `--prefix P --root P --target T
-  stages --stage1` sails past the degenerate-root check and would
-  bootstrap into the live prefix. One-line fix, live-verified.
-  [[require-root-distinct-from-host-dead-under-target]]
+- ✅ **`require_root_distinct_from_host` dead under `--target` — fixed
+  2026-08-29** (`c309302`). `--prefix P --root P --target T stages
+  --stage1` sailed past the degenerate-root check; now correctly
+  rejected, live-verified. [[require-root-distinct-from-host-dead-under-target]]
 - ✅ **`env_d_dir` host-fallback can double-register a host profile as a
   prefix profile — fixed 2026-08-29** (`11f585e`). Found in the same
   review. [[env-d-host-fallback-double-registration]]
