@@ -43,9 +43,16 @@ shopt -s dotglob
 
 # die — implemented as a Rust builtin (pms_builtins.rs)
 
-# nonfatal: run command, ignore failure
-nonfatal() { "$@"; return 0; }
-
+# nonfatal — implemented as a Rust builtin (commands::NonfatalCommand,
+# registered unconditionally in shell.rs). A bash function of the same name
+# always shadows a same-named builtin in this shell (same class of bug as
+# eapply's — see todo/eapply-stub-shadows-real-builtin.md), and the real
+# builtin's job is to scope PORTAGE_NONFATAL=1 around its argument so
+# econf/emake/die's `-n` path can see it; a plain "$@" stub never sets that,
+# so `nonfatal econf ...` never actually suppressed the self-die it exists
+# for. It's also phase-body-only like eapply/econf/emake — never reachable
+# during metadata-only sourcing — so unlike Tier 2 below, it needs no stub
+# at all rather than an unset -f entry.
 
 # EXPORT_FUNCTIONS — implemented as a Rust builtin (pms_builtins.rs)
 

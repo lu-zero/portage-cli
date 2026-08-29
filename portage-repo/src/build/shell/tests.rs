@@ -351,6 +351,93 @@ async fn phase_aborts_on_die_not_on_trailing_exit() {
     );
 }
 
+// Regression: `stubs.rs` used to define a bash function `nonfatal() { "$@";
+// return 0; }`. A bash function always shadows a same-named builtin in this
+// shell (same class of bug as eapply's, todo/eapply-stub-shadows-real-
+// builtin.md), so the real `NonfatalCommand` builtin -- whose whole job is
+// scoping `PORTAGE_NONFATAL=1` around its argument -- never ran, and `die -n`
+// inside `nonfatal` always took the fatal path since `PORTAGE_NONFATAL` was
+// never set. `nonfatal die -n ...` must instead report failure without
+// aborting the phase (like a real `-n`-honouring die), and execution must
+// continue afterward.
+#[tokio::test]
+async fn nonfatal_die_dash_n_does_not_abort_the_phase() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         pkg_setup() { nonfatal die -n \"boom\"; export EM_PHASE_RAN=1; }\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .expect("`nonfatal die -n` must not abort the phase");
+    assert!(
+        shell.get_var("EM_PHASE_RAN").is_some(),
+        "pkg_setup must continue past the nonfatal die"
+    );
+}
+
+// Companion case from the same regression: `nonfatal false` must likewise
+// not abort the phase (a plain non-zero exit was never fatal on its own —
+// see `phase_aborts_on_die_not_on_trailing_exit` above — so this mainly
+// guards that the real builtin's argument dispatch doesn't itself error out).
+#[tokio::test]
+async fn nonfatal_false_does_not_abort_the_phase() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         pkg_setup() { nonfatal false; export EM_PHASE_RAN=1; }\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .expect("`nonfatal false` must not abort the phase");
+    assert!(
+        shell.get_var("EM_PHASE_RAN").is_some(),
+        "pkg_setup must continue past nonfatal false"
+    );
+}
+
 #[tokio::test]
 async fn einstall_enforces_eapi_ban_and_requires_a_makefile() {
     let dir = tempdir().unwrap();
