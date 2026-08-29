@@ -67,27 +67,14 @@ pub trait EnvDProfile: Sized + 'static {
     }
 }
 
-/// Base directory for env.d files
+/// This root's own env.d directory: `${EPREFIX}/etc/env.d/<subdir>`, a
+/// sibling of `config_portage_dir_for`'s `${EPREFIX}/etc/portage` — whether
+/// or not it exists yet (created on first use). Never falls back to the
+/// literal host `/etc/env.d/<subdir>` — a caller wanting that listing goes
+/// through [`list_all_profiles`]'s own explicit, correctly `is_host`-labeled
+/// system-dir pass instead of getting it silently mislabeled here.
 pub fn env_d_dir<T: EnvDProfile>(roots: &Roots) -> Utf8PathBuf {
-    let config_portage = config_portage_dir_for(roots);
-
-    // config_portage_dir returns ${EPREFIX}/etc/portage
-    // env.d is a sibling directory: ${EPREFIX}/etc/env.d
-    if let Some(parent) = config_portage.parent() {
-        let config_env_dir = parent.join(format!("env.d/{}", T::env_d_subdir()));
-        if config_env_dir.is_dir() {
-            return config_env_dir;
-        }
-    }
-
-    // Fall back to system location
-    let system_dir = Utf8PathBuf::from(format!("/etc/env.d/{}", T::env_d_subdir()));
-    if system_dir.is_dir() {
-        return system_dir;
-    }
-
-    // If neither exists, return the config-root env.d location (will be created on first use)
-    config_portage
+    config_portage_dir_for(roots)
         .parent()
         .unwrap_or(Utf8Path::new("/"))
         .join(format!("env.d/{}", T::env_d_subdir()))
@@ -494,6 +481,25 @@ pub fn get_default_target(globals: &Cli) -> String {
 mod tests {
     use super::*;
     use crate::select::linker::LinkerProfileType;
+
+    // A prefix whose own env.d/<subdir> doesn't exist yet must not resolve
+    // to the literal host `/etc/env.d/<subdir>` — that silently mislabeled
+    // every host profile as this root's own (`list_all_profiles` already
+    // collects the host directory itself, correctly `is_host`-labeled).
+    #[test]
+    fn env_d_dir_never_falls_back_to_the_literal_host_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = Utf8PathBuf::from_path_buf(dir.path().to_path_buf()).unwrap();
+        let roots = Roots::default().with_config_overlay(Some(dir_path.join("etc/portage")));
+
+        let result = env_d_dir::<LinkerProfileType>(&roots);
+
+        assert!(result.starts_with(&dir_path), "{result}");
+        assert!(
+            !result.is_dir(),
+            "sanity: this directory must not exist yet"
+        );
+    }
 
     // A profile file whose target line's value is a single stray quote
     // character used to panic (`target[1..target.len() - 1]` sliced
