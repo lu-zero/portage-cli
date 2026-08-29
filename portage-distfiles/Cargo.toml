@@ -28,7 +28,9 @@ httpdate = { workspace = true }
 url = { workspace = true }
 # Reused transitively via portage-repo; parsed directly here for distfiles.xml.
 roxmltree = { workspace = true }
+# Per-distfile flock, matching portage's FEATURES=distlocks.
+rustix = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tempfile = { workspace = true }

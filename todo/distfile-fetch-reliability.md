@@ -4,10 +4,10 @@ STATUS: **all four original facets FIXED.** bash root cause `8a9558b`; facet A
 (computed SRC_URI) `2965fa2` (2026-06-15); facet B fetch hardening
 (C.3/C.4/C.5) 2026-06-27. `em select mirrors` (§D) also landed. The §E
 GENTOO_MIRRORS parity audit (2026-06-28) found one fixed gap (iteration
-order) and several remaining ones. **§F (2026-08-29) is a new, live,
-🔴 open bug** — a real riscv64 stage1 build hit it.
+order) and several remaining ones. **§F (2026-08-29) — two real,
+live concurrency bugs, both found and fixed same-day.**
 
-## F. Concurrent same-filename `Distfile` write race — 🔴 open, found 2026-08-29
+## F. Concurrent same-filename `Distfile` write races — ✅ fixed 2026-08-29
 
 Live during a from-scratch riscv64 `em stages --stage1` run:
 `dev-build/autoconf-2.73-r2` failed `unpack` — the cached
@@ -43,17 +43,32 @@ serialize/lock around the race after the fact.
 filename. Verified this specific shape gone — re-running the same
 riscv64 stage1 build no longer shows a manifest-verification mismatch.
 
-**But a broader sibling race remains, 🔴 open**: `dev-build/autoconf-2.73-r2`
-is built *twice* in one plan — once for the host cross-toolchain sysroot,
-once for the target root — each its own independent `resolve()`/`Fetcher`
-call, sharing one on-disk `DISTDIR`. Under `em --jobs`, one job's fetch
-reported the file "already present" while the *other* job was still
-mid-download of that same path; unpack hit a genuinely truncated file
-(`xz: Compressed data is corrupt`). This is the same failure class as
-above but across independent package-merge tasks, not within one
-`resolve()` call — the filename-merge fix cannot close it. Needs real
-per-distfile locking across concurrent fetches (portage's own
-`FEATURES=distlocks` exists for exactly this), not a resolver-level dedup.
+**Broader sibling race, also fixed** (2026-08-29, same day): `dev-build/
+autoconf-2.73-r2` was built *twice* in one plan — once for the host
+cross-toolchain sysroot, once for the target root — each its own
+independent `resolve()`/`Fetcher` call, sharing one on-disk `DISTDIR`.
+Under `em --jobs`, one job's fetch reported the file "already present"
+while the *other* job was still mid-download of that same path; unpack
+hit a genuinely truncated file (`xz: Compressed data is corrupt`). The
+filename-merge fix above cannot close this — it's across independent
+package-merge tasks, not within one `resolve()` call.
+
+Fixed with a real per-distfile flock (`fetch_distfile_digests` now holds
+an exclusive lock on `<dest>.lock` for the whole fetch, present-check
+included), matching portage's own `FEATURES=distlocks` — covers both
+`em --jobs` concurrency and two separate `em` invocations sharing a
+`DISTDIR`. Unit-tested (`lock_distfile_serializes_concurrent_acquisitions`).
+
+**Follow-up idea, 🔵 not started**: a flock only serializes contention
+after the fact — every concurrent fetcher still independently resolves
+and attempts each distfile it needs, one lock-wait at a time. A cleaner
+long-term design: a single pre-pass over the whole build plan collects
+every distfile every package will need (already dedupable by filename,
+same as `resolve_uri_map`), fetches each exactly once up front, and only
+then starts the parallel package builds — no per-package fetch contention
+at all, and a build's real "am I ready to compile" moment is no longer
+entangled with network I/O. Worth designing once `em stages`/`--jobs`
+building is otherwise stable; out of scope for the immediate race fix.
 
 ## E. GENTOO_MIRRORS parity vs portage (audit 2026-06-28)
 

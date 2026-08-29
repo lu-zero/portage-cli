@@ -231,6 +231,15 @@ impl Fetcher {
     ) -> Result<FetchStatus> {
         let dest = self.distdir.join(&df.filename);
 
+        // Exclusive flock on `<dest>.lock` for the whole fetch (present-check
+        // included) — the same filename can be needed by two independent
+        // fetch calls at once (e.g. one package built for two different
+        // roots), and without this a "already present" check on one task can
+        // read a file the other is still writing. Matches portage's own
+        // FEATURES=distlocks; also serializes two separate em invocations
+        // sharing a DISTDIR, not just --jobs concurrency within one.
+        let _lock = lock_distfile(&dest).await;
+
         let manifest_entry = digests.get(&df.filename);
 
         // Fast path: already present and valid (writable dir first, then the
@@ -617,6 +626,26 @@ fn dist_size(entry: &ManifestEntry) -> Option<u64> {
 /// Without a known size we never resume (a blind `Range` onto an unknown
 /// body is how a corrupt cache wedges every retry); a complete-but-wrong
 /// file (`>=` expected) is refetched fresh, not appended to.
+/// Acquire the exclusive flock guarding `dest`, released on drop.
+///
+/// The lock file (`<dest>.lock`) is separate from `dest` itself so a locker
+/// never has to touch the distfile's own contents to synchronize.
+async fn lock_distfile(dest: &Utf8Path) -> Option<std::fs::File> {
+    let path = format!("{dest}.lock");
+    tokio::task::spawn_blocking(move || {
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok()?;
+        rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).ok()?;
+        Some(f)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
 fn is_resumable(expected_size: Option<u64>, existing_size: u64) -> bool {
     matches!(expected_size, Some(exp) if existing_size > 0 && existing_size < exp)
 }
@@ -908,6 +937,34 @@ mod tests {
         assert!(
             !temp.as_std_path().exists(),
             "the atomic temp file must not linger after a failed attempt"
+        );
+    }
+
+    // Regression: two independent fetch calls for the same filename (e.g. one
+    // package built for two different roots) used to race writing the same
+    // DISTDIR path with no coordination at all. `lock_distfile` must actually
+    // block a second acquisition while the first is held.
+    #[tokio::test]
+    async fn lock_distfile_serializes_concurrent_acquisitions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let distdir = Utf8Path::from_path(tmp.path()).unwrap().to_path_buf();
+        let dest = distdir.join("foo.tar.gz");
+
+        let first = lock_distfile(&dest).await.expect("first lock");
+        let dest2 = dest.clone();
+        let second = tokio::spawn(async move { lock_distfile(&dest2).await });
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !second.is_finished(),
+            "second acquisition must block while the first holds the lock"
+        );
+
+        drop(first);
+        let acquired = second.await.unwrap();
+        assert!(
+            acquired.is_some(),
+            "second acquisition must succeed once the first releases"
         );
     }
 

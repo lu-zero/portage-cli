@@ -19,7 +19,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **1** | **Stage production** — `--stage1` + first-class `--stage3` (emptytree `@system`) 2026-07-30; stage4 / per-arch binhost assembly still open | 🟡 | [[em-stages-and-binhosts]], [[em-stages-scenario-matrix]] |
 | **2** | **Binpkg multi-instance / build-env identity residual** — phases 1–2 landed; live S1 verify + dual PKGDIR/header harden open | 🟡 | [[binpkg-subtargets]] |
 | **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` at `PkgStart` ✅ 2026-07-30; only `emerge.log` timestamp format (`chrono_like` still `unix {secs}` vs Portage's ctime-style local time) still open | 🟡 | [[activity-status]] |
-| **4** | **Distfile fetch** — GENTOO_MIRRORS parity residual (no remote `layout.conf`, no `/etc/portage/mirrors`, etc.); new 2026-08-29 build-killer: concurrent same-filename `Distfile` write race | 🔴 | [[distfile-fetch-reliability]] |
+| **4** | **Distfile fetch** — GENTOO_MIRRORS parity residual (no remote `layout.conf`, no `/etc/portage/mirrors`, etc.); 2026-08-29 concurrent-write races fixed; fetch-consolidation idea filed | 🟡 | [[distfile-fetch-reliability]] |
 | **5** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
 | **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; PMS 8.3.2 unmerge 2026-08-20 | ✅ | [[blocker-enforcement]] |
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
@@ -730,14 +730,14 @@ blocked by the three independent findings above, tracked separately.
   `todo/done/stage3-vs-real-comparison.md`.
 - 🔵 cosmetic: glibc post-install `failed to redirect to <root>/etc/hosts` (no
   /etc/hosts in a fresh ROOT). [[em-root-characterization]]
-- ✅ **Concurrent same-filename `Distfile` write race within one `resolve()`
-  call — fixed 2026-08-29** (`4fdc0b2`). Found during a from-scratch
-  riscv64 `em stages --stage1` run. [[distfile-fetch-reliability]] §F.
-- 🔴 **Sibling race across independent package-merge tasks remains open** —
-  two separate merges needing the same distfile (e.g. one package built
-  for two different roots) can still race on the shared `DISTDIR` path
-  under `em --jobs`; needs real per-distfile locking, not a resolver-level
-  dedup. [[distfile-fetch-reliability]] §F.
+- ✅ **Two concurrent same-filename `Distfile` write races — both fixed
+  2026-08-29.** Found during a from-scratch riscv64 `em stages --stage1`
+  run: (1) within one `resolve()` call, multiple `SRC_URI` entries for one
+  filename (`4fdc0b2`); (2) across independent package-merge tasks sharing
+  a `DISTDIR` (a real per-distfile flock, matching portage's
+  `FEATURES=distlocks`). A follow-up consolidation idea (fetch the whole
+  plan's distfiles once up front instead of per-package) is filed but not
+  started. [[distfile-fetch-reliability]] §F.
 - 🔴 **`--target` sysroot-missing error hints a dead CLI flag**
   (`em crossdev -t TUPLE --init-target`, superseded by the top-level
   `--target`) — found same session. [[crossdev-init-target-stale-flag-hint]]
