@@ -243,44 +243,65 @@ impl DistfileResolver {
             .collect()
     }
 
+    /// One [`Distfile`] per **filename**, merging every raw URI entry that
+    /// resolves to it (URLs concatenated/deduped in `SRC_URI` order).
+    ///
+    /// Must never produce two `Distfile`s sharing a filename: concurrent
+    /// fetchers key on the filename alone, and two "different" `Distfile`s
+    /// for the same file race writing the same `DISTDIR` path.
     fn build_distfiles(
         &self,
         raw: Vec<(String, String, Option<String>)>,
         gate: RestrictGate,
     ) -> Vec<Distfile> {
-        raw.into_iter()
-            .map(|(url, filename, restriction)| {
-                // Portage tries GENTOO_MIRRORS *before* the upstream SRC_URI URLs
-                // (make.conf(5): "These locations are used to download files before
-                // the ones listed in the ebuild scripts"). Skip them when the
-                // package is `RESTRICT=mirror` and this URI is not `mirror+`,
-                // and for `mirror://gentoo/` (expanded via thirdpartymirrors —
-                // prepending GENTOO_MIRRORS again would double them).
-                let mut urls = Vec::new();
-                let package_blocks_mirrors =
-                    gate.mirror && !RestrictGate::uri_exempts_mirror(restriction.as_deref());
-                let use_gentoo_mirrors =
-                    !package_blocks_mirrors && !url.starts_with("mirror://gentoo/");
-                if use_gentoo_mirrors {
-                    for mirror in &self.gentoo_mirrors {
-                        for candidate in gentoo_distfile_urls(mirror, &filename) {
-                            if !urls.contains(&candidate) {
-                                urls.push(candidate);
-                            }
+        let mut order: Vec<String> = Vec::new();
+        let mut by_filename: HashMap<String, Distfile> = HashMap::new();
+
+        for (url, filename, restriction) in raw {
+            // Portage tries GENTOO_MIRRORS *before* the upstream SRC_URI URLs
+            // (make.conf(5): "These locations are used to download files before
+            // the ones listed in the ebuild scripts"). Skip them when the
+            // package is `RESTRICT=mirror` and this URI is not `mirror+`,
+            // and for `mirror://gentoo/` (expanded via thirdpartymirrors —
+            // prepending GENTOO_MIRRORS again would double them).
+            let package_blocks_mirrors =
+                gate.mirror && !RestrictGate::uri_exempts_mirror(restriction.as_deref());
+            let use_gentoo_mirrors =
+                !package_blocks_mirrors && !url.starts_with("mirror://gentoo/");
+
+            let df = by_filename.entry(filename.clone()).or_insert_with(|| {
+                order.push(filename.clone());
+                Distfile {
+                    filename: filename.clone(),
+                    urls: Vec::new(),
+                    restriction: restriction.clone(),
+                }
+            });
+            // First exemption seen for this filename wins — `fetch+`/`mirror+`
+            // is a per-URI marker; once one contributing URI is exempt there is
+            // at least one legitimately fetchable source under RESTRICT.
+            if df.restriction.is_none() {
+                df.restriction = restriction;
+            }
+            if use_gentoo_mirrors {
+                for mirror in &self.gentoo_mirrors {
+                    for candidate in gentoo_distfile_urls(mirror, &filename) {
+                        if !df.urls.contains(&candidate) {
+                            df.urls.push(candidate);
                         }
                     }
                 }
-                for candidate in self.expand_url(&url, &filename) {
-                    if !urls.contains(&candidate) {
-                        urls.push(candidate);
-                    }
+            }
+            for candidate in self.expand_url(&url, &filename) {
+                if !df.urls.contains(&candidate) {
+                    df.urls.push(candidate);
                 }
-                Distfile {
-                    filename,
-                    urls,
-                    restriction,
-                }
-            })
+            }
+        }
+
+        order
+            .into_iter()
+            .filter_map(|filename| by_filename.remove(&filename))
             .collect()
     }
 
@@ -610,6 +631,28 @@ mod tests {
         let mut names: Vec<&str> = dfs.iter().map(|d| d.filename.as_str()).collect();
         names.sort_unstable();
         assert_eq!(names, ["base.tar.gz", "doc.tar.gz", "dyn.tar.gz"]);
+    }
+
+    // Regression: `resolve`/`resolve_all` used to emit one `Distfile` per raw
+    // SRC_URI token, so two URIs resolving to the same filename produced two
+    // separate `Distfile`s sharing a DISTDIR destination — a concurrent
+    // fetcher racing to write both corrupts the file. Must merge into one.
+    #[test]
+    fn resolve_all_merges_multiple_uris_for_one_filename() {
+        let r = resolver(&[]);
+        let entries =
+            SrcUriEntry::parse("https://a.example.com/foo.tar.gz https://b.example.com/foo.tar.gz")
+                .unwrap();
+        let dfs = r.resolve_all(&entries);
+        assert_eq!(dfs.len(), 1, "must not split into two Distfiles: {dfs:?}");
+        assert_eq!(dfs[0].filename, "foo.tar.gz");
+        assert_eq!(
+            dfs[0].urls,
+            [
+                "https://a.example.com/foo.tar.gz",
+                "https://b.example.com/foo.tar.gz"
+            ]
+        );
     }
 
     #[test]

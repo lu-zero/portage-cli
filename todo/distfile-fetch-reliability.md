@@ -1,9 +1,43 @@
 # Distfile fetching — reliability (recurring build-killer)
 
-STATUS: **all four facets FIXED.** bash root cause `8a9558b`; facet A (computed
-SRC_URI) `2965fa2` (2026-06-15); facet B fetch hardening (C.3/C.4/C.5) 2026-06-27.
-`em select mirrors` (§D) also landed. The §E GENTOO_MIRRORS parity audit
-(2026-06-28) found one fixed gap (iteration order) and several remaining ones.
+STATUS: **all four original facets FIXED.** bash root cause `8a9558b`; facet A
+(computed SRC_URI) `2965fa2` (2026-06-15); facet B fetch hardening
+(C.3/C.4/C.5) 2026-06-27. `em select mirrors` (§D) also landed. The §E
+GENTOO_MIRRORS parity audit (2026-06-28) found one fixed gap (iteration
+order) and several remaining ones. **§F (2026-08-29) is a new, live,
+🔴 open bug** — a real riscv64 stage1 build hit it.
+
+## F. Concurrent same-filename `Distfile` write race — 🔴 open, found 2026-08-29
+
+Live during a from-scratch riscv64 `em stages --stage1` run:
+`dev-build/autoconf-2.73-r2` failed `unpack` — the cached
+`autoconf-2.73.tar.xz` failed BLAKE2B verification. Downloaded the exact
+same URL by hand: it matches the Manifest exactly. So `em` verified a
+*corrupt* local file, not a bad upstream.
+
+Root cause: `resolve`/`resolve_all` (`resolver.rs`) build **one `Distfile`
+per raw `SRC_URI` token, not merged by filename** — already flagged in
+`resolve_uri_map`'s own doc comment as "a bug for callers writing
+concurrently". `autoconf-2.73-r2`'s `SRC_URI` has three entries
+(`mirror://gnu/...`, two direct GNU-mirror URLs) that all resolve to the
+same filename, so `collect_uri_pairs_all` + `build_distfiles` produce
+three separate `Distfile` objects sharing one `filename`.
+`Fetcher::fetch_all_digests` (`fetch.rs`) runs up to `max_concurrent`
+(default **4** — a `portage-distfiles` constant, unrelated to `em
+--jobs`) of these concurrently via `buffered()`, with no dedup by
+filename, and the write itself is non-atomic (`fetch_builtin`, direct to
+`dest`, no temp+rename unless `atomic_write` is set). Two concurrent
+fetches for the same filename race writing the same `DISTDIR` path;
+the interleaved result matches neither download.
+
+Reproducible on any multi-URI `SRC_URI` whose entries share a filename,
+independent of `em --jobs` — `max_concurrent` alone is enough.
+
+**Fix direction**: merge `Distfile`s by filename in `resolve`/`resolve_all`
+the same way `resolve_uri_map` already does (build one URL list per
+filename, not per raw URI token) — removes the possibility of two
+`Distfile`s for the same file existing at all, rather than trying to
+serialize/lock around the race after the fact.
 
 ## E. GENTOO_MIRRORS parity vs portage (audit 2026-06-28)
 

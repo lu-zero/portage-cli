@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-27**.
+here briefly for context). Updated **2026-08-29**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -19,7 +19,7 @@ is the audit trail). Fully closed design notes live under `todo/done/`;
 | **1** | **Stage production** — `--stage1` + first-class `--stage3` (emptytree `@system`) 2026-07-30; stage4 / per-arch binhost assembly still open | 🟡 | [[em-stages-and-binhosts]], [[em-stages-scenario-matrix]] |
 | **2** | **Binpkg multi-instance / build-env identity residual** — phases 1–2 landed; live S1 verify + dual PKGDIR/header harden open | 🟡 | [[binpkg-subtargets]] |
 | **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` at `PkgStart` ✅ 2026-07-30; only `emerge.log` timestamp format (`chrono_like` still `unix {secs}` vs Portage's ctime-style local time) still open | 🟡 | [[activity-status]] |
-| **4** | **Distfile GENTOO_MIRRORS parity residual** — core fetch facets done; no remote `layout.conf`, no `/etc/portage/mirrors`, etc. | 🟡 | [[distfile-fetch-reliability]] |
+| **4** | **Distfile fetch** — GENTOO_MIRRORS parity residual (no remote `layout.conf`, no `/etc/portage/mirrors`, etc.); new 2026-08-29 build-killer: concurrent same-filename `Distfile` write race | 🔴 | [[distfile-fetch-reliability]] |
 | **5** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
 | **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; PMS 8.3.2 unmerge 2026-08-20 | ✅ | [[blocker-enforcement]] |
 | **7** | **Large design (not near-term)** — full root topology cleanup; availability-walk dedup; M3 sandbox | 🔴 | [[root-topology-refactor]], [[dedup-availability-walks]] |
@@ -730,6 +730,18 @@ blocked by the three independent findings above, tracked separately.
   `todo/done/stage3-vs-real-comparison.md`.
 - 🔵 cosmetic: glibc post-install `failed to redirect to <root>/etc/hosts` (no
   /etc/hosts in a fresh ROOT). [[em-root-characterization]]
+- 🔴 **Concurrent same-filename `Distfile` write race corrupted a cached
+  distfile mid-build** — found 2026-08-29 during a from-scratch riscv64
+  `em stages --stage1` run (`dev-build/autoconf-2.73-r2` failed manifest
+  verification on a file that matched upstream byte-for-byte when
+  fetched by hand). Blocks any real build whose `SRC_URI` has multiple
+  entries resolving to one filename. [[distfile-fetch-reliability]] §F.
+- 🔴 **`--target` sysroot-missing error hints a dead CLI flag**
+  (`em crossdev -t TUPLE --init-target`, superseded by the top-level
+  `--target`) — found same session. [[crossdev-init-target-stale-flag-hint]]
+- 🔴 **`crossdev --setup -p` can't preview a never-initialized target** —
+  found same session; the real (non-pretend) run works fine, this is a
+  preview-only gap. [[crossdev-setup-pretend-cold-target-gap]]
 
 ## Merge / build robustness (found in the @system shakeout)
 
