@@ -744,7 +744,9 @@ blocked by the three independent findings above, tracked separately.
   fixed 2026-08-29** (`51784c8`), via a `SysrootOverride` letting policy
   resolution use the real (soon-to-exist) profile dir + in-memory
   make.conf instead of disk. [[crossdev-setup-pretend-cold-target-gap]]
-  found the same session: `-a` declined still builds anyway, not fixed.
+- ✅ **`crossdev --setup -a` declined still ran the full build — fixed
+  2026-08-29** (`0b5a901`), found investigating the item above.
+  [[crossdev-setup-declined-ask-builds-anyway]]
 
 ## Merge / build robustness (found in the @system shakeout)
 

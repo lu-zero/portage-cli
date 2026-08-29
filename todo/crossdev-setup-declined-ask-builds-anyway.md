@@ -1,8 +1,7 @@
 # `crossdev --setup -a` declined still runs the full build
 
-Status: 🔴 not started. Found 2026-08-29 investigating
-[[crossdev-setup-pretend-cold-target-gap]], not fixed there (out of scope
-for that fix).
+Status: ✅ fixed 2026-08-29 (`0b5a901`). Found investigating
+[[crossdev-setup-pretend-cold-target-gap]].
 
 `init_target`'s only reaction to `config_plan::apply`'s outcome is:
 
@@ -27,7 +26,13 @@ telling `em` "no, don't write that config" doesn't stop it from
 attempting the full toolchain bootstrap against a target whose config
 was never actually written.
 
-**Fix direction**: not yet designed. `init_target` needs to distinguish
-"previewed" from "declined" so `setup()` can abort on the latter — either
-have `init_target` return the `Outcome` instead of `Result<()>`, or bail
-explicitly on `Outcome::Declined` before returning.
+**Fix**: `init_target` now returns `config_plan::Outcome` instead of
+`Result<()>`; `setup()` bails immediately on `Outcome::Declined` instead
+of falling through to `toolchain_plan`. The plain `em crossdev
+--init-target` action (which never needed the distinction) just discards
+it via `.map(|_| ())`.
+
+**Verified live**: `em --target x86_64-unknown-linux-gnu crossdev
+--setup -a` with a piped `n` answer (via `script` to fake a tty, since
+`--ask` requires a real terminal) stops right after `>>> Quitting.` — no
+toolchain plan or build step runs afterward.
