@@ -1,10 +1,25 @@
 # `cross-*/gcc` stage2 can't find target libc headers under `--prefix`
 
-Status: 🔴 not started, root cause narrowed but not pinned. Found
+Status: 🟡 not reproduced 2026-08-29 with a different target/sandbox —
+possibly i586-specific or already-stale, not confirmed fixed. Found
 2026-08-26 testing `--prefix`/`--local` impact of
 [[crossdev-pkg-config-sysroot-leak]] in a real crossdev-stages sandbox —
 unrelated to that fix (confirmed: happens via a completely different
 mechanism, gcc's own sysroot/header-dir configuration, not pkg-config).
+
+**2026-08-29 update**: re-ran the exact repro shape (`em --prefix P
+--target T crossdev --setup`, no `--root`) with `x86_64-unknown-linux-gnu`
+in a fresh crossdev-stages sandbox — all 6 steps, including gcc-stage2,
+completed cleanly, `stdio.h` found without issue. Did not re-test with
+`i586-pc-linux-gnu` specifically, so this isn't a confirmed fix — could
+be arch-specific (i586 multilib?) or could have been resolved
+incidentally by unrelated work since 2026-08-26. Also found a
+*different*, related, still-open problem the same day:
+[[crossdev-root-prefix-target-toolchain-anchor]] (`--root` under
+`--prefix`+`--target` needs different semantics depending on whether
+it's `--setup` building the sysroot itself or an ordinary operation
+against an existing one — two fix attempts both reverted, not the same
+failure mode as this one, but worth knowing about if re-investigating.
 
 ## The bug
 

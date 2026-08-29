@@ -747,6 +747,12 @@ blocked by the three independent findings above, tracked separately.
 - ✅ **`crossdev --setup -a` declined still ran the full build — fixed
   2026-08-29** (`0b5a901`), found investigating the item above.
   [[crossdev-setup-declined-ask-builds-anyway]]
+- 🔴 **`--root` under `--prefix`/`--local` + `--target` needs a real
+  design, not fixed** — `stages --stage1 --root B` under an active
+  `--prefix` can't find the toolchain's config; two attempts to fix
+  `Cli::roots()` globally each broke `crossdev --setup --root B`'s own
+  (different, also-correct) semantics instead. Both reverted 2026-08-29.
+  [[crossdev-root-prefix-target-toolchain-anchor]]
 
 ## Merge / build robustness (found in the @system shakeout)
 
