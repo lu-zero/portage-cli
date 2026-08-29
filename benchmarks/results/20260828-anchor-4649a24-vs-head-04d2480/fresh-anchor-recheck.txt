@@ -1,0 +1,16 @@
+Benchmark 1: anchor-fresh-world
+  Time (mean ± σ):      1.173 s ±  0.083 s    [User: 1.393 s, System: 3.365 s]
+  Range (min … max):    1.034 s …  1.307 s    20 runs
+ 
+Benchmark 2: mid-8ac0fa6-world
+  Time (mean ± σ):      1.299 s ±  0.065 s    [User: 1.458 s, System: 3.319 s]
+  Range (min … max):    1.159 s …  1.402 s    20 runs
+ 
+Benchmark 3: head-04d2480-world
+  Time (mean ± σ):      1.315 s ±  0.091 s    [User: 1.508 s, System: 4.183 s]
+  Range (min … max):    1.155 s …  1.464 s    20 runs
+ 
+Summary
+  anchor-fresh-world ran
+    1.11 ± 0.10 times faster than mid-8ac0fa6-world
+    1.12 ± 0.11 times faster than head-04d2480-world

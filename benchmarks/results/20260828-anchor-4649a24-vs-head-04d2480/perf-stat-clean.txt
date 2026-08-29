@@ -1,0 +1,36 @@
+# perf stat -e instructions,cycles,page-faults -- em -p @world
+# numactl --cpunodebind=0 --membind=0, two rounds each, 2026-08-29
+# binaries: /tmp/em-anchor-4649a24 (4649a24), /tmp/em-head-44a208d (44a208d)
+# both rebuilt --release today; load ~3.6 at start (no vllm.cpp)
+
+anchor 4649a24 round 1
+        6099887003      instructions:u
+        3996762070      cycles:u
+              8095      page-faults:u
+       1.327069024 seconds time elapsed
+       1.264300000 seconds user
+       8.790406000 seconds sys
+
+head 44a208d round 1
+        6043969783      instructions:u
+        4236435112      cycles:u
+              5734      page-faults:u
+       1.328756425 seconds time elapsed
+       1.327854000 seconds user
+       7.315219000 seconds sys
+
+anchor 4649a24 round 2
+        6092591934      instructions:u
+        3824307945      cycles:u
+              4042      page-faults:u
+       1.138669598 seconds time elapsed
+       1.554791000 seconds user
+       0.632577000 seconds sys
+
+head 44a208d round 2
+        6047536896      instructions:u
+        4045110308      cycles:u
+              4740      page-faults:u
+       1.230184547 seconds time elapsed
+       1.396877000 seconds user
+       3.826041000 seconds sys

@@ -1,0 +1,53 @@
+Benchmark 1: anchor-4649a24-firefox
+  Time (mean ± σ):      1.027 s ±  0.111 s    [User: 1.225 s, System: 3.348 s]
+  Range (min … max):    0.896 s …  1.258 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 2: head-04d2480-firefox
+  Time (mean ± σ):      1.145 s ±  0.084 s    [User: 1.321 s, System: 3.399 s]
+  Range (min … max):    1.008 s …  1.333 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 3: anchor-4649a24-qtbase
+  Time (mean ± σ):     987.2 ms ± 119.4 ms    [User: 1181.8 ms, System: 3816.3 ms]
+  Range (min … max):   847.4 ms … 1212.3 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 4: head-04d2480-qtbase
+  Time (mean ± σ):      1.094 s ±  0.092 s    [User: 1.302 s, System: 3.760 s]
+  Range (min … max):    0.938 s …  1.231 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 5: anchor-4649a24-texlive
+  Time (mean ± σ):     980.6 ms ±  80.2 ms    [User: 1244.0 ms, System: 2606.3 ms]
+  Range (min … max):   856.0 ms … 1141.7 ms    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 6: head-04d2480-texlive
+  Time (mean ± σ):      1.099 s ±  0.079 s    [User: 1.291 s, System: 3.271 s]
+  Range (min … max):    0.964 s …  1.236 s    20 runs
+ 
+  Warning: Ignoring non-zero exit code.
+ 
+Benchmark 7: anchor-4649a24-world
+  Time (mean ± σ):      1.140 s ±  0.069 s    [User: 1.414 s, System: 2.271 s]
+  Range (min … max):    1.035 s …  1.282 s    20 runs
+ 
+Benchmark 8: head-04d2480-world
+  Time (mean ± σ):      1.272 s ±  0.096 s    [User: 1.515 s, System: 2.839 s]
+  Range (min … max):    1.147 s …  1.476 s    20 runs
+ 
+Summary
+  anchor-4649a24-texlive ran
+    1.01 ± 0.15 times faster than anchor-4649a24-qtbase
+    1.05 ± 0.14 times faster than anchor-4649a24-firefox
+    1.12 ± 0.13 times faster than head-04d2480-qtbase
+    1.12 ± 0.12 times faster than head-04d2480-texlive
+    1.16 ± 0.12 times faster than anchor-4649a24-world
+    1.17 ± 0.13 times faster than head-04d2480-firefox
+    1.30 ± 0.14 times faster than head-04d2480-world

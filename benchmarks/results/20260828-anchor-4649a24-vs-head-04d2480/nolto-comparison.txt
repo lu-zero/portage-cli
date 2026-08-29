@@ -1,0 +1,11 @@
+Benchmark 1: anchor-nolto-world
+  Time (mean ± σ):      1.310 s ±  0.082 s    [User: 1.541 s, System: 2.766 s]
+  Range (min … max):    1.177 s …  1.482 s    20 runs
+ 
+Benchmark 2: head-nolto-world
+  Time (mean ± σ):      1.304 s ±  0.085 s    [User: 1.588 s, System: 2.813 s]
+  Range (min … max):    1.182 s …  1.449 s    20 runs
+ 
+Summary
+  head-nolto-world ran
+    1.00 ± 0.09 times faster than anchor-nolto-world

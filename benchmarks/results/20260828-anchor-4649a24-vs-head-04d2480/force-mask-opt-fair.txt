@@ -1,0 +1,11 @@
+Benchmark 1: anchor-4649a24-world
+  Time (mean ± σ):      1.138 s ±  0.067 s    [User: 1.465 s, System: 1.834 s]
+  Range (min … max):    1.045 s …  1.358 s    25 runs
+ 
+Benchmark 2: head-optimized-world
+  Time (mean ± σ):      1.376 s ±  0.057 s    [User: 1.626 s, System: 2.171 s]
+  Range (min … max):    1.272 s …  1.503 s    25 runs
+ 
+Summary
+  anchor-4649a24-world ran
+    1.21 ± 0.09 times faster than head-optimized-world

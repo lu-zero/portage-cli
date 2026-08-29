@@ -1,0 +1,41 @@
+Benchmark 1: anchor-4649a24-firefox
+  Time (mean ± σ):      1.017 s ±  0.081 s    [User: 1.252 s, System: 2.869 s]
+  Range (min … max):    0.900 s …  1.170 s    20 runs
+ 
+Benchmark 2: head-44a208d-firefox
+  Time (mean ± σ):      1.017 s ±  0.077 s    [User: 1.287 s, System: 2.162 s]
+  Range (min … max):    0.912 s …  1.177 s    20 runs
+ 
+Benchmark 3: anchor-4649a24-qtbase
+  Time (mean ± σ):     968.8 ms ±  84.1 ms    [User: 1224.8 ms, System: 2917.8 ms]
+  Range (min … max):   855.3 ms … 1095.6 ms    20 runs
+ 
+Benchmark 4: head-44a208d-qtbase
+  Time (mean ± σ):      1.003 s ±  0.105 s    [User: 1.226 s, System: 3.208 s]
+  Range (min … max):    0.878 s …  1.170 s    20 runs
+ 
+Benchmark 5: anchor-4649a24-texlive
+  Time (mean ± σ):     984.4 ms ±  77.4 ms    [User: 1187.7 ms, System: 2800.8 ms]
+  Range (min … max):   876.2 ms … 1161.0 ms    20 runs
+ 
+Benchmark 6: head-44a208d-texlive
+  Time (mean ± σ):      1.045 s ±  0.078 s    [User: 1.190 s, System: 3.692 s]
+  Range (min … max):    0.920 s …  1.217 s    20 runs
+ 
+Benchmark 7: anchor-4649a24-world
+  Time (mean ± σ):      1.155 s ±  0.075 s    [User: 1.432 s, System: 2.726 s]
+  Range (min … max):    1.040 s …  1.257 s    20 runs
+ 
+Benchmark 8: head-44a208d-world
+  Time (mean ± σ):      1.183 s ±  0.074 s    [User: 1.439 s, System: 2.599 s]
+  Range (min … max):    1.058 s …  1.364 s    20 runs
+ 
+Summary
+  anchor-4649a24-qtbase ran
+    1.02 ± 0.12 times faster than anchor-4649a24-texlive
+    1.03 ± 0.14 times faster than head-44a208d-qtbase
+    1.05 ± 0.12 times faster than anchor-4649a24-firefox
+    1.05 ± 0.12 times faster than head-44a208d-firefox
+    1.08 ± 0.12 times faster than head-44a208d-texlive
+    1.19 ± 0.13 times faster than anchor-4649a24-world
+    1.22 ± 0.13 times faster than head-44a208d-world
