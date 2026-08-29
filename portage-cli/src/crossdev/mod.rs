@@ -175,6 +175,9 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
         show_target_cfg(&target, globals, &extras);
         return Ok(());
     }
+    if (args.init_target || args.setup) && globals.root.is_some() {
+        bail!("em crossdev --init-target/--setup does not take --root");
+    }
     if args.init_target {
         return init_target(
             &target,
@@ -1838,6 +1841,57 @@ mod tests {
         let cli = crate::cli::Cli::parse_from(["em", "crossdev", "--show-target-cfg"]);
         let args = crossdev_args(true);
         assert!(run(&args, &cli).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn setup_with_root_is_rejected() {
+        let cli = crate::cli::Cli::parse_from([
+            "em",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/tmp/board",
+            "crossdev",
+            "--setup",
+        ]);
+        let mut args = crossdev_args(false);
+        args.setup = true;
+        let err = run(&args, &cli).await.unwrap_err();
+        assert!(err.to_string().contains("--root"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn init_target_with_root_is_rejected() {
+        let cli = crate::cli::Cli::parse_from([
+            "em",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/tmp/board",
+            "crossdev",
+            "--init-target",
+        ]);
+        let mut args = crossdev_args(false);
+        args.init_target = true;
+        let err = run(&args, &cli).await.unwrap_err();
+        assert!(err.to_string().contains("--root"), "{err}");
+    }
+
+    // --show-target-cfg is preview-only (no filesystem writes), so --root
+    // alongside it is harmless and should not be rejected.
+    #[tokio::test]
+    async fn show_target_cfg_with_root_is_allowed() {
+        let cli = crate::cli::Cli::parse_from([
+            "em",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/tmp/board",
+            "crossdev",
+            "--show-target-cfg",
+        ]);
+        let args = crossdev_args(true);
+        assert!(run(&args, &cli).await.is_ok());
     }
 
     #[test]
