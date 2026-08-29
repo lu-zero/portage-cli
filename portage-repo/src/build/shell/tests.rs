@@ -565,6 +565,98 @@ async fn einstalldocs_expands_a_glob_pattern_in_a_scalar_docs() {
     );
 }
 
+// PMS Algorithm 12.4: the README*/AUTHORS/… fallback list only applies when
+// DOCS is *unset*. A declared-but-empty DOCS must install nothing, even
+// though a real README sits right there for the fallback to find.
+#[tokio::test]
+async fn einstalldocs_empty_docs_installs_nothing() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+
+    let d = dir.path().join("image");
+    let t = dir.path().join("temp");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::create_dir_all(&t).unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("README"), "hi\n").unwrap();
+    std::fs::write(src.join("AUTHORS"), "me\n").unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell
+        .run_string(&format!(
+            "export D={d} ED={d} T={t} CATEGORY=cat PN=pkg SLOT=0 PF=pkg-1; \
+             DOCS=\"\"; \
+             cd {src}; \
+             einstalldocs",
+            d = d.display(),
+            t = t.display(),
+            src = src.display(),
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        !d.join("usr/share/doc/pkg-1").exists(),
+        "DOCS=\"\" is declared-but-empty, not unset -- fallback list must not run"
+    );
+}
+
+// Companion to the above: with DOCS genuinely unset, the fallback list does
+// run and installs whatever of it is present.
+#[tokio::test]
+async fn einstalldocs_unset_docs_uses_fallback_list() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+
+    let d = dir.path().join("image");
+    let t = dir.path().join("temp");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::create_dir_all(&t).unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("README"), "hi\n").unwrap();
+    std::fs::write(src.join("AUTHORS"), "me\n").unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    shell
+        .run_string(&format!(
+            "export D={d} ED={d} T={t} CATEGORY=cat PN=pkg SLOT=0 PF=pkg-1; \
+             cd {src}; \
+             einstalldocs",
+            d = d.display(),
+            t = t.display(),
+            src = src.display(),
+        ))
+        .await
+        .unwrap();
+
+    assert!(
+        d.join("usr/share/doc/pkg-1/README").exists(),
+        "DOCS unset -- fallback list must install README"
+    );
+    assert!(
+        d.join("usr/share/doc/pkg-1/AUTHORS").exists(),
+        "DOCS unset -- fallback list must install AUTHORS"
+    );
+}
+
 #[tokio::test]
 async fn new_helpers_read_stdin_for_dash_source() {
     // `newins - <name>` (and every new* with `-`) reads the file body from

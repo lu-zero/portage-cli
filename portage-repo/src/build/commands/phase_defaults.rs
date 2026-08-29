@@ -523,21 +523,23 @@ impl builtins::Command for EinstalldocsCommand {
         shell
             .run_string("docinto ''", &source_info, &params)
             .await?;
-        match var_shape(shell, "DOCS") {
-            VarShape::Array(_) | VarShape::Scalar(_) => {
-                install_docs_var(shell, "DOCS", "-r").await?;
-            }
-            VarShape::Empty => {
-                let cwd = shell.working_dir().to_path_buf();
-                for pattern in DEFAULT_DOC_FILES {
-                    for candidate in glob_in(&cwd, pattern) {
-                        if candidate.is_file()
-                            && candidate.metadata().map(|m| m.len()).unwrap_or(0) > 0
-                            && let Some(name) = candidate.file_name().and_then(|n| n.to_str())
-                        {
-                            let script = format!("dodoc -- {}", shell_quote(name));
-                            shell.run_string(script, &source_info, &params).await?;
-                        }
+        // PMS Algorithm 12.4: the README*-style fallback list only applies
+        // when DOCS is unset. A declared-but-empty DOCS (`DOCS=""`,
+        // `DOCS=()`) installs nothing — `install_docs_var`'s own
+        // `var_shape` check already no-ops for that case, same as
+        // `EapiSrcInstall4Command`'s identical `declared` gate.
+        if shell.env().get("DOCS").is_some() {
+            install_docs_var(shell, "DOCS", "-r").await?;
+        } else {
+            let cwd = shell.working_dir().to_path_buf();
+            for pattern in DEFAULT_DOC_FILES {
+                for candidate in glob_in(&cwd, pattern) {
+                    if candidate.is_file()
+                        && candidate.metadata().map(|m| m.len()).unwrap_or(0) > 0
+                        && let Some(name) = candidate.file_name().and_then(|n| n.to_str())
+                    {
+                        let script = format!("dodoc -- {}", shell_quote(name));
+                        shell.run_string(script, &source_info, &params).await?;
                     }
                 }
             }
