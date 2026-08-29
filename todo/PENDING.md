@@ -747,12 +747,28 @@ blocked by the three independent findings above, tracked separately.
 - ✅ **`crossdev --setup -a` declined still ran the full build — fixed
   2026-08-29** (`0b5a901`), found investigating the item above.
   [[crossdev-setup-declined-ask-builds-anyway]]
-- 🔴 **`--root` under `--prefix`/`--local` + `--target` needs a real
-  design, not fixed** — `stages --stage1 --root B` under an active
-  `--prefix` can't find the toolchain's config; two attempts to fix
-  `Cli::roots()` globally each broke `crossdev --setup --root B`'s own
-  (different, also-correct) semantics instead. Both reverted 2026-08-29.
-  [[crossdev-root-prefix-target-toolchain-anchor]]
+- 🟡 **`--root` under `--prefix`/`--local` + `--target`** — design settled
+  and mostly landed 2026-08-29: `crossdev --setup`/`--init-target` now
+  rejects `--root` outright (`8207e0f`), which cleared the way to
+  reapply the `Cli::roots()` anchor fix (`b2aaa8b`'s content,
+  cherry-picked). Live-verified real (non-`-p`) end to end on
+  aarch64→x86_64: `crossdev --setup` into `--prefix P` (6/6 steps),
+  then `stages --stage1 --prefix P --root B` correctly split 84/142
+  packages between `B` (stage1 target files) and `P/usr/T` (host-side
+  `MergeRoot::Base` copies) before hitting an unrelated multilib bug
+  ([[crossdev-stage1-abi-x86-32-multilib-mismatch]]). Still open:
+  `outer_roots()`'s bare-only `--root`-under-`--target` guard needs
+  extending to the `--prefix`/`--local` overlay branch too (Opus
+  review), and `regression-matrix.sh`/`docs/user/stages-and-testing.md`'s
+  bare `--setup --root` recipe needs updating to `--prefix` since it
+  now errors. [[crossdev-root-prefix-target-toolchain-anchor]]
+- 🔴 **cross stage1 tries `ABI_X86=32` against a non-multilib cross
+  toolchain** — found live-verifying the fix above; real bug, not
+  related to root/prefix design. [[crossdev-stage1-abi-x86-32-multilib-mismatch]]
+- 🔴 **Remove `--root` from `em crossdev` at the CLI level** — today
+  only rejected at runtime inside the applet body; `--root` is still
+  `global = true` on `Cli` so clap itself accepts it.
+  [[crossdev-remove-root-flag]]
 
 ## Merge / build robustness (found in the @system shakeout)
 
