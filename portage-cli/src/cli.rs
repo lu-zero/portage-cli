@@ -349,31 +349,54 @@ impl Cli {
     /// sysroot, by design).
     pub(crate) fn outer_roots(&self) -> Roots {
         let base = self.base_roots();
+        // Under `--target`, an explicit `--root` is `roots()`'s board-root
+        // override — where the *stage packages* install — never this
+        // function's own "true outer/host location". Suppressed here
+        // (rather than left to each branch) so every branch below stays
+        // bit-identical to its non-`--target` behavior once `--target`
+        // clears it: the toolchain and its host-side `cross-*` packages
+        // stay where `--prefix`/`--local` (flag or active registration)
+        // put them, or the real host `/` when neither applies.
+        let root_redirect = opt_path(&self.root).filter(|_| self.target.is_none());
         if let Some(prefix) = base.eprefix().filter(|_| base.is_overlay()) {
             let prefix = prefix.to_path_buf();
-            let anchored = self.overlay_anchor(&base, prefix.clone());
-            // An explicit `--root B` alongside `--prefix A` redirects only the
-            // merge *destination* — EPREFIX/BROOT/config-overlay stay anchored
-            // to the prefix itself (`--prefix` still supplies the build
-            // context: host-shared toolchain, relocatable shebangs, overlay
-            // config). Without this, `self.root` was silently discarded the
-            // instant `--prefix` matched first in `topology_source()` —
-            // todo/for-sonnet.md 2026-08-08.
-            if let Some(target) = opt_path(&self.root) {
-                return anchored.with_target(Some(target));
-            }
-            return anchored;
+            let anchored = self.overlay_anchor(&base, prefix);
+            // An explicit `--root B` alongside `--prefix A` (no `--target`)
+            // redirects only the merge *destination* — EPREFIX/BROOT/
+            // config-overlay stay anchored to the prefix itself (`--prefix`
+            // still supplies the build context: host-shared toolchain,
+            // relocatable shebangs, overlay config). Without this, `self.root`
+            // was silently discarded the instant `--prefix` matched first in
+            // `topology_source()` — todo/for-sonnet.md 2026-08-08.
+            return match root_redirect {
+                Some(target) => anchored.with_target(Some(target)),
+                None => anchored,
+            };
         }
-        // Fully bare (no `--local`/`--prefix`) with `--target` also set: a
-        // bare `--root` here is `roots()`'s board-root override, not this
-        // function's own "true outer/host location" — every `use_outer_eroot`
-        // step (host-side `cross-*` tool installs) must keep landing on the
-        // real host `/`, or a `stages --root R --target T` run double-installs
-        // the toolchain refresh into `R` too.
-        if self.target.is_some() && self.local.is_none() && self.prefix.is_none() {
-            return base.with_target(None).with_base(None);
+        // Non-overlay: `Local`/`Root`/`Host`. `--local`'s own `base_roots()`
+        // arm already bakes an explicit `--root` into its `target` (so a
+        // plain `--local L --root B` redirects correctly with no `--target`
+        // involved) — undo that here when `--target` is also set, the same
+        // way the overlay branch above suppresses its own redirect, so the
+        // toolchain stays at `L` regardless of any board-root override.
+        // Matched on `topology_source()`, not raw flags, so an `em active`-
+        // registered local is honored the same as an explicit `--local`.
+        match self.topology_source() {
+            TopologySource::Local(prefix) => base
+                .with_base(Some(prefix.clone()))
+                .with_target(Some(root_redirect.unwrap_or(prefix))),
+            // `Root`/`Host` already fold `--root` (or its absence) into both
+            // `base` and `target` identically inside `base_roots()`, so this
+            // just re-asserts the same values — a no-op outside `--target`,
+            // and exactly the existing bare-`--target` guard's board-root
+            // stripping once `root_redirect` is cleared above.
+            _ => match root_redirect {
+                Some(target) => base
+                    .with_base(Some(target.clone()))
+                    .with_target(Some(target)),
+                None => base.with_target(None).with_base(None),
+            },
         }
-        base
     }
 
     /// The overlay's own anchor, ignoring any `--root` override — always `prefix` itself
@@ -795,6 +818,109 @@ mod tests {
         // always (ordinary, non-cross `--root` usage).
         let no_target = Cli::parse_from(["em", "--root", "/board", "-p", "sys-libs/zlib"]);
         assert_eq!(no_target.outer_roots().merge_root().as_str(), "/board");
+    }
+
+    // Same bug as `outer_roots_ignores_bare_root_under_target`, for the
+    // overlay branch: `--root` under `--target` must not move the
+    // toolchain's own outer location away from the prefix either.
+    #[test]
+    fn outer_roots_ignores_prefix_root_under_target() {
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
+        let cli = Cli::parse_from([
+            "em",
+            "--prefix",
+            "/tmp/a",
+            "--root",
+            "/tmp/b",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let outer = cli.outer_roots();
+        assert_eq!(outer.merge_root().as_str(), "/tmp/a");
+        assert_eq!(outer.eprefix().map(|p| p.as_str()), Some("/tmp/a"));
+        assert_eq!(
+            outer.config_overlay().map(|p| p.as_str()),
+            Some("/tmp/a/etc/portage")
+        );
+
+        // No `--target`: ordinary `--prefix`+`--root` still redirects.
+        let no_target = Cli::parse_from(["em", "--prefix", "/tmp/a", "--root", "/tmp/b"]);
+        assert_eq!(no_target.outer_roots().merge_root().as_str(), "/tmp/b");
+    }
+
+    // `--local` is not `is_overlay()` (it has its own `base`), so it never
+    // enters the overlay branch above — a naive fix gating only that branch
+    // on `--target` would miss this row entirely. `base_roots()`'s own
+    // `Local` arm bakes an explicit `--root` into `target` unconditionally,
+    // so `outer_roots()` must undo that when `--target` is also set.
+    #[test]
+    fn outer_roots_ignores_local_root_under_target() {
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
+        let cli = Cli::parse_from([
+            "em",
+            "--local",
+            "/tmp/a",
+            "--root",
+            "/tmp/b",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let outer = cli.outer_roots();
+        assert_eq!(outer.merge_root().as_str(), "/tmp/a");
+        assert_eq!(outer.base().map(|p| p.as_str()), Some("/tmp/a"));
+
+        // No `--target`: ordinary `--local`+`--root` still redirects.
+        let no_target = Cli::parse_from(["em", "--local", "/tmp/a", "--root", "/tmp/b"]);
+        assert_eq!(no_target.outer_roots().merge_root().as_str(), "/tmp/b");
+
+        // `--local` alone under `--target` (no `--root`) is unaffected.
+        let no_root = Cli::parse_from([
+            "em",
+            "--local",
+            "/tmp/a",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        assert_eq!(no_root.outer_roots().merge_root().as_str(), "/tmp/a");
+    }
+
+    // An `em active`-registered local, with no topology flag at all, must
+    // behave the same as an explicit `--local` under `--target` — the old
+    // bare-only guard keyed on raw flags (`self.local.is_none()`), which is
+    // true here even though `topology_source()` resolves to `Local`, so it
+    // wrongly stripped to the real host `/` with no `--root` in sight.
+    #[test]
+    fn outer_roots_honours_an_active_local_under_target() {
+        let (tmp, _g) = crate::test_support::isolate_active_state();
+        let local = tmp.path().join("loc");
+        std::fs::create_dir_all(&local).unwrap();
+        let local_s = local.to_str().unwrap();
+        let cli_set = Cli::parse_from(["em", "--local", local_s, "active", "set"]);
+        crate::active::run(
+            cli_set.applet.as_ref().and_then(|a| match a {
+                Applet::Active { command } => command.as_ref(),
+                _ => None,
+            }),
+            &cli_set,
+        )
+        .unwrap();
+
+        let cli = Cli::parse_from([
+            "em",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "-p",
+            "sys-libs/zlib",
+        ]);
+        let canon = local.canonicalize().unwrap();
+        let canon_s = canon.to_str().unwrap();
+        assert_eq!(cli.outer_roots().merge_root().as_str(), canon_s);
     }
 
     #[test]

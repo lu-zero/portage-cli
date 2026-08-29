@@ -597,6 +597,13 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
              native toolchain into --root"
         );
     }
+    if globals.target.is_some() && globals.root.is_some() {
+        bail!(
+            "em toolchain --setup does not take --root together with --target: \
+             --root under --target is `stages`' board-root override, and a native \
+             toolchain has no cross sysroot — drop --target to bootstrap into --root."
+        );
+    }
     // outer_roots(), not roots(): a native toolchain bootstrap must anchor to
     // the outer EROOT even if a global --target happens to also be set.
     let roots = globals.outer_roots();
@@ -1892,6 +1899,46 @@ mod tests {
         ]);
         let args = crossdev_args(true);
         assert!(run(&args, &cli).await.is_ok());
+    }
+
+    fn toolchain_args() -> crate::cli::ToolchainArgs {
+        crate::cli::ToolchainArgs {
+            setup: true,
+            depgraph_flags: crate::cli::DepgraphFlags::default(),
+            merge_flags: crate::cli::MergeFlags::default(),
+            activity: crate::cli::ActivityArgs::default(),
+            privilege: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn toolchain_setup_rejects_root_with_target() {
+        let cli = crate::cli::Cli::parse_from([
+            "em",
+            "--root",
+            "/tmp/board",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "toolchain",
+            "--setup",
+        ]);
+        let err = toolchain(&toolchain_args(), &cli).await.unwrap_err();
+        assert!(err.to_string().contains("--root"), "{err}");
+    }
+
+    // Bare `--root` (no `--target`) is toolchain --setup's ordinary case —
+    // untouched by the new guard.
+    #[tokio::test]
+    async fn toolchain_setup_allows_bare_root() {
+        let cli = crate::cli::Cli::parse_from([
+            "em",
+            "--root",
+            "/tmp/board",
+            "toolchain",
+            "-p",
+            "--setup",
+        ]);
+        assert!(toolchain(&toolchain_args(), &cli).await.is_ok());
     }
 
     #[test]
