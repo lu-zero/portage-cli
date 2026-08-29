@@ -339,7 +339,7 @@ impl Cli {
     /// anchor to instead of `roots()`.
     ///
     /// Using `roots()` there was a real bug: if `--target T` is also set on
-    /// the same invocation as `crossdev -t T --init-target`, `roots()` is
+    /// the same invocation as `crossdev --init-target`, `roots()` is
     /// *already* the sysroot, so appending `usr/T` again doubly-nested it
     /// (`<EROOT>/usr/T/usr/T`) — reproduced live.
     ///
