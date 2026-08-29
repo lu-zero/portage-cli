@@ -137,6 +137,18 @@ gaps, not em defects:
 
 ### sys-apps/diffutils — gnulib AC_RUN_IFELSE without cross fallback
 
+**Correction 2026-08-29**: this was wrongly written off as "not an em
+defect" — it *is* one, and it's the exact case `sys-devel/crossdev`'s
+own config.site cache-answer library exists to solve. Root-caused for
+real: [[crossdev-config-site-not-found-by-board-packages]]. `em` never
+exports `CONFIG_SITE`, so autoconf's own path-based auto-search is the
+only way config.site gets found — which can never reach it for
+board-destined native packages (their `--prefix` is correctly
+`EPREFIX`-less). This test run's apparent "not em's problem" framing
+was itself an artifact of a reused sandbox whose bare host happened to
+already have `config.site` installed from unrelated prior testing.
+Original note kept below for the historical trail.
+
 `checking whether strcasecmp works...` → `cannot run test program while
 cross compiling`. configure received correct `--build=aarch64
 --host=i586` (verified in config.log); the gnulib snapshot simply lacks

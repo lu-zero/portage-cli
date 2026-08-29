@@ -785,6 +785,15 @@ blocked by the three independent findings above, tracked separately.
   Confirmed live by comparing forced/masked flags on the identical
   package under both identities. Resolve-engine bug, not crossdev- or
   multilib-specific. [[crossdev-stage1-abi-x86-32-multilib-mismatch]]
+- ✅ **`CONFIG_SITE` is never exported — board-destined native packages
+  can't find `config.site` at all — fixed 2026-08-29.** Two-part fix:
+  export `CONFIG_SITE=<build_broot>/usr/share/config.site` in
+  `shell.rs`'s per-phase env, *and* add it to `run_phase`'s explicit
+  subprocess-export whitelist (setting a shell var isn't enough — the
+  first implementation attempt missed the export list, caught by a
+  live rerun before landing). Live-verified: riscv64 real `stages
+  --stage1` in a fresh sandbox, full 102-package run, `EXIT=0`.
+  [[crossdev-config-site-not-found-by-board-packages]]
 - 🔴 **Remove `--root` from `em crossdev` at the CLI level** — today
   only rejected at runtime inside the applet body; `--root` is still
   `global = true` on `Cli` so clap itself accepts it.
