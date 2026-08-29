@@ -1,12 +1,15 @@
-# gcc-stage1 missing `--without-headers` for some targets (riscv64)
+# `has_version` piggybacks `cross-*` atoms off the host, but the consumer only ever looks under `EPREFIX`
 
-Status: 🔴 found 2026-08-29, root-caused to a specific missing configure
-flag, not fixed. Pre-existing — confirmed against the pre-session
-commit (`430cf11`), unrelated to this session's `--root`/`--prefix`
-work. Distinct from [[crossdev-prefix-gcc-header-dir]] (that one is a
-wrong-but-present header path at gcc-**stage2** on i586; this one is
-headers genuinely absent — expected at gcc-stage1, before headers/libc
-— but gcc still tries to use them).
+Status: 🔴 root cause fully confirmed 2026-08-29, not fixed. Not
+target-specific — exposed by stale sandbox VDB state, but the
+underlying mismatch is real and latent regardless: `toolchain.eclass`'s
+`has_version ${CATEGORY}/${needed_libc}` check can be satisfied from
+the host `ROOT` (deliberate host-tool piggybacking), but every branch
+that follows hardcodes `--with-sysroot=${PREFIX}/${CTARGET}` — always
+the prefix, never wherever the satisfying match actually lives.
+Distinct from [[crossdev-prefix-gcc-header-dir]] (wrong-but-present
+header path at gcc-**stage2** on i586) though it may retroactively
+explain that report too (see below).
 
 ## The failure
 
@@ -18,52 +21,117 @@ libgcc/../gcc/tsystem.h:95:10: fatal error: stdio.h: No such file or directory
 ```
 
 `stdio.h` doesn't exist anywhere under `P/usr/riscv64-unknown-linux-gnu`
-— correctly so, since gcc-stage1 runs *before* headers/libc
-(`stages.rs`'s own doc comment: "gcc-stage1 (freestanding, no libc/headers
-needed)"). Confirmed via the pre-session binary (commit `430cf11`): the
-identical build fails identically — not introduced by anything landed
-today.
+— correctly so, since gcc-stage1 runs *before* headers/libc by design.
 
-## Root cause
+## Root cause (confirmed, not speculation)
 
-Diffing the two targets' actual `configure` invocations from
-`build.log`:
+Real `toolchain.eclass` (`/var/git/gentoo/eclass/toolchain.eclass:1473`)
+decides whether to build gcc-stage1 freestanding via:
 
-- **x86_64-unknown-linux-gnu** (gcc-stage1, succeeds): `...
-  --disable-shared --disable-libquadmath --disable-libatomic
-  --disable-threads --without-headers ...`
-- **riscv64-unknown-linux-gnu** (gcc-stage1, fails): none of those five
-  flags present at all.
+```
+if ! has_version ${CATEGORY}/${needed_libc} ; then
+    confgcc+=( ... --disable-threads --without-headers )
+```
 
-`--without-headers` is what makes gcc-stage1 build freestanding; its
-absence means gcc's build assumes a full sysroot and tries to compile
-`libgcc` bits that `#include <stdio.h>`. Whatever decides this flag set
-(real `toolchain.eclass`'s own auto-detection, or an em-side stage1 USE
-override — see `crossdev/stages.rs`'s `STAGE1_GCC_USE`-equivalent list)
-computes it correctly for x86_64 but not for riscv64.
+— here `${CATEGORY}` is `cross-riscv64-unknown-linux-gnu`,
+`${needed_libc}` is `glibc`. The full branch (toolchain.eclass:1474-1500):
 
-## Where to look
+```
+if ! has_version ${CATEGORY}/${needed_libc} ; then
+    confgcc+=( ... --disable-threads --without-headers )
+elif has_version "${CATEGORY}/${needed_libc}[headers-only(-)]" ; then
+    confgcc+=( ... --with-sysroot="${PREFIX}"/${CTARGET#accel-} )
+else
+    confgcc+=( --with-sysroot="${PREFIX}"/${CTARGET#accel-} )
+fi
+```
 
-`portage-cli/src/crossdev/stages.rs` — the gcc-stage1 USE/config
-derivation (search for where `USE="-cxx -fortran -openmp ..."` gets
-built for the stage1 step, and whatever signal it uses to decide
-freestanding-ness). Compare what differs between the x86_64 and
-riscv64 code paths — likely something keyed off `elibc`/multilib/ABI
-detection (real toolchain.eclass computes `--without-headers` based on
-whether target glibc is already merged, via `has_version` against the
-target's own category — worth checking whether that check is somehow
-riscv64-specific, e.g. an ABI/multilib table lookup
-(`crossdev/multilib.rs`) that returns something unexpected for
-`riscv64-unknown-linux-gnu`'s `rv64`/`lp64d` ABI and short-circuits the
-freestanding-detection logic before it runs).
+**Both** non-freestanding branches hardcode a single
+`--with-sysroot="${PREFIX}"/${CTARGET}` — always the prefix's own path,
+never wherever the satisfying `has_version` match actually came from.
 
-## How to attack
+`em`'s `has_version` (`portage-repo/src/build/commands/version_query.rs`,
+`vdb_roots_for`, lines 16-52) queries `ROOT`'s VDB by default, **plus**
+`EROOT`'s when `EPREFIX` is set and differs — documented as deliberate
+for `--prefix`'s "overlay on host tools / seed compiler model": a
+host-side build should be able to see host-provided packages via
+`ROOT` (the bare host, `/`) as well as whatever's already built into
+the prefix (`EROOT`).
 
-1. Reproduce: `em --prefix P --target riscv64-unknown-linux-gnu crossdev --setup` in a fresh crossdev-stages sandbox (real, aarch64 host — reproduced there 2026-08-29).
-2. Compare the gcc-stage1 USE/configure derivation code path for a
-   working target (x86_64) vs riscv64 — find exactly which condition
-   diverges.
-3. Also worth checking i586 (from [[crossdev-prefix-gcc-header-dir]])
-   against this same angle — could turn out to be the same root cause
-   surfacing at a different step, or a genuinely separate bug; don't
-   assume either way without checking.
+The crossdev-stages sandbox used for today's test (`em-i586-check`) had
+**stale, pre-existing VDB records on its bare host `/`** from unrelated
+prior *bare* (non-`--prefix`) crossdev testing:
+
+```
+/var/db/pkg/cross-riscv64-unknown-linux-gnu/{binutils,gcc,glibc,linux-headers}  (dated 2026-08-28)
+/var/db/pkg/cross-i586-pc-linux-gnu/...                                         (dated 2026-08-27)
+```
+
+— both from before this session started (2026-08-29). Today's
+`--prefix P --target riscv64-... crossdev --setup` run's `has_version
+cross-riscv64-unknown-linux-gnu/glibc` check found that leftover
+`glibc-2.43-r4` record on the bare host and concluded "libc already
+exists," so `toolchain.eclass` skipped `--without-headers` — even
+though the actual `--prefix` build's own sysroot (`P/usr/riscv64-...`)
+has no libc at all yet. **Confirmed via diff against a clean target**:
+x86_64 was never bare-tested in this sandbox, has no such record, and
+correctly got `--without-headers`.
+
+This likely also explains the original 2026-08-26 i586 report
+([[crossdev-prefix-gcc-header-dir]]) via the same mechanism, given the
+matching stale `cross-i586-pc-linux-gnu` host record — worth
+re-checking that report's sandbox history rather than assuming a
+different cause.
+
+## This is not a "clean your sandbox" issue — piggybacking is real, but this eclass path can't consume it
+
+`ROOT`-piggybacking is a genuine, correct design for BDEPEND-style
+tools (autoconf, bison, pkg-config): under `--prefix`, `ROOT` really is
+the literal host filesystem, so a host-installed binary is directly
+usable in place — no path mismatch, because the *consumer* (exec'ing
+the tool) doesn't care where it physically lives.
+
+This specific `toolchain.eclass` check is different in kind: its
+consequence isn't "is a usable thing available," it's "which single
+`--with-sysroot` path do I hardcode." Both branches past the
+freestanding check point at `${PREFIX}/${CTARGET}` unconditionally.
+So even a **genuine, non-stale** host-side `cross-<tuple>/glibc`
+record would misfire here: `has_version` reports "satisfied" (correctly,
+per the piggyback design), but the only sysroot path the build will
+ever actually look under is the prefix's, which — in that same
+branch — is assumed to be where the satisfying install lives. That
+assumption is true in upstream Gentoo Prefix (one tree, `ROOT` and
+`EPREFIX` coincide) but false in `em`'s overlay `--prefix` model, where
+they're deliberately two separate, unrelated trees. The stale VDB
+record just made an always-latent mismatch visible today.
+
+## Where to fix
+
+Not a general "stop checking `ROOT`" change — that would break the
+legitimate BDEPEND-tool piggyback case. Scope it to exactly the shape
+that can't be consumed correctly: when `has_version` resolves a
+`cross-<tuple>/<pkg>` atom, and the current build has its own
+`--target` `EROOT`, prefer/require the match to come from `EROOT`'s
+VDB, not `ROOT`'s — a `cross-*` atom's only legitimate consumer here
+is code that then acts on `EPREFIX`-relative paths, so a host-side
+match for it is exactly the case that can never be safely piggybacked.
+Generic (non-`cross-*`) atoms keep checking both, unchanged.
+
+## Confirmed 2026-08-29
+
+Reran riscv64 in a genuinely fresh sandbox (`em-riscv-clean`, no prior
+`cross-*` VDB history at all): `--without-headers` correctly present
+in gcc-stage1's configure line, all 6 `crossdev --setup --prefix` steps
+completed, `EXIT=0`. Trigger mechanism confirmed. This does **not**
+mean no fix is needed — the underlying host/prefix mismatch is real
+and latent regardless of whether any given run happens to hit it (a
+future bare crossdev test against a shared sandbox will reintroduce
+exactly this failure for whoever runs `--prefix` against it next).
+
+## The actual fix
+
+Make the `cross-*`-atom `has_version` path in `vdb_roots_for` (or its
+caller) EROOT-only when the build has a `--target`, so a host-side
+match — genuine or stale — can never satisfy a check whose only
+consumer (`toolchain.eclass`'s `--with-sysroot=${PREFIX}/${CTARGET}`)
+hardcodes an `EPREFIX`-relative path.
