@@ -1107,6 +1107,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                             .map(|mut c| {
                                 c.widened = true;
                                 c.live_upper_bound = live_upper_bound.clone();
+                                c.is_live = is_live;
                                 c
                             }),
                     );
@@ -1581,14 +1582,16 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .collect();
 
     // A widened selection supersedes any exact-pin advisories for the same
-    // cpn: the bounded grant replaces the everything-grant set, and keeping
-    // both would write two conflicting shapes for one package.
+    // cpn+slot: the bounded grant replaces the everything-grant set, and
+    // keeping both would write two conflicting shapes for one package. Keyed
+    // on slot too — a widened `clang:21` must not suppress a real dropped-dep
+    // pin for `clang:16`; the two slots are independent packages.
     if !widened_autounmask_candidates.is_empty() {
-        let widened_cpns: HashSet<Cpn> = widened_autounmask_candidates
+        let widened_cpn_slots: HashSet<(Cpn, Option<_>)> = widened_autounmask_candidates
             .iter()
-            .map(|c| c.cpv.cpn)
+            .map(|c| (c.cpv.cpn, c.slot))
             .collect();
-        dropped_autounmask.retain(|c| !widened_cpns.contains(&c.cpv.cpn));
+        dropped_autounmask.retain(|c| !widened_cpn_slots.contains(&(c.cpv.cpn, c.slot)));
     }
 
     // emerge preview semantics: the plan was computed as if the needed USE

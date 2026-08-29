@@ -46,6 +46,11 @@ pub struct AutounmaskCandidate {
     /// so accepting the slot never invites a live ebuild. `None` when the
     /// slot has no live version or the selection itself is live.
     pub live_upper_bound: Option<portage_atom::Version>,
+    /// The widened selection itself is a live (`.9999`) ebuild. A live pick
+    /// always persists as an exact pin (`=cat/pkg-9999:SLOT`), never
+    /// slot-scoped — there is no point-release churn to protect against,
+    /// and a bare `cat/pkg:SLOT` grant would invite other lives in the slot.
+    pub is_live: bool,
 }
 
 /// One parsed `ACCEPT_KEYWORDS` / `package.accept_keywords` token
@@ -1828,6 +1833,7 @@ pub fn filter_reasons_for(
                 reasons,
                 widened: false,
                 live_upper_bound: None,
+                is_live: false,
             });
         }
     }
@@ -1872,9 +1878,15 @@ pub fn has_widening_eligible_drops(dropped: &[DroppedDep], data: &RepoData) -> b
         !dep.package.is_virtual()
             && dep.alternatives.is_empty()
             && data.versions.get(dep.package.cpn()).is_some_and(|entries| {
-                entries
-                    .iter()
-                    .any(|(cpv, _)| dep.version_set.contains(&cpv.version))
+                entries.iter().any(|(cpv, cache)| {
+                    dep.version_set.contains(&cpv.version)
+                        // A slot-qualified drop (`cat/pkg:16`) is only eligible
+                        // if *that slot* has an acceptance-filtered version;
+                        // some other slot's match cannot help this drop.
+                        && dep.package.slot().is_none_or(|want| {
+                            cache.metadata.slot.slot.as_str() == want.as_str()
+                        })
+                })
             })
     })
 }
@@ -3716,6 +3728,40 @@ mod tests {
             alternatives: vec![],
         };
         assert!(!has_widening_eligible_drops(&[out_of_range], &data));
+    }
+
+    // A slot-qualified drop must only count a matching version in *its own*
+    // slot — some other slot's version falling in the range cannot help a
+    // `:16` drop, even though both share one cpn.
+    #[test]
+    fn widening_eligible_drops_is_slot_scoped() {
+        let data = repo_with_many(&[
+            ("dev-lang/clang-16", "EAPI=8\nSLOT=16\nDESCRIPTION=t\n"),
+            ("dev-lang/clang-21", "EAPI=8\nSLOT=21\nDESCRIPTION=t\n"),
+        ]);
+        let cpn = Cpn::try_new("dev-lang/clang").unwrap();
+        let version_set = portage_atom_pubgrub::PortageVersionSet::from_operator(
+            Operator::GreaterOrEqual,
+            false,
+            Version::parse("20").unwrap(),
+        );
+
+        // clang:21's own version (21) satisfies the range -- eligible.
+        let dropped_21 = DroppedDep {
+            package: portage_atom_pubgrub::PortagePackage::slotted(cpn, Interned::intern("21")),
+            version_set: version_set.clone(),
+            alternatives: vec![],
+        };
+        assert!(has_widening_eligible_drops(&[dropped_21], &data));
+
+        // clang:16 (version 16) never satisfies `>=20`; only the *other*
+        // slot's version 21 does. Must not escalate on that basis.
+        let dropped_16 = DroppedDep {
+            package: portage_atom_pubgrub::PortagePackage::slotted(cpn, Interned::intern("16")),
+            version_set,
+            alternatives: vec![],
+        };
+        assert!(!has_widening_eligible_drops(&[dropped_16], &data));
     }
 
     #[test]

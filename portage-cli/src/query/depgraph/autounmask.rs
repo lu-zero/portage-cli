@@ -47,7 +47,7 @@ fn slot_scoped_atom(
 fn build_entries(candidates: &[AutounmaskCandidate], kind: &str) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Vec::new();
     for c in candidates {
-        let a = if c.widened {
+        let a = if c.widened && !c.is_live {
             slot_scoped_atom(&c.cpv, c.slot, c.live_upper_bound.as_ref())
         } else {
             atom(&c.cpv, c.slot)
@@ -292,4 +292,37 @@ fn merge_content(existing: &str, lines: Vec<&Entry>) -> String {
     let mut result = output.join("\n");
     result.push('\n');
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use portage_atom::interner::Interned;
+
+    use super::*;
+
+    fn candidate(is_live: bool) -> AutounmaskCandidate {
+        let ver = if is_live { "9999" } else { "1.0" };
+        AutounmaskCandidate {
+            cpv: portage_atom::Cpv::parse(&format!("dev-libs/foo-{ver}")).unwrap(),
+            slot: Some(Interned::intern("0")),
+            reasons: vec![FilterReason::Masked],
+            widened: true,
+            live_upper_bound: None,
+            is_live,
+        }
+    }
+
+    #[test]
+    fn widened_live_selection_persists_as_exact_pin() {
+        let entries = build_entries(&[candidate(true)], "unmask");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].atom, "=dev-libs/foo-9999:0");
+    }
+
+    #[test]
+    fn widened_non_live_selection_persists_slot_scoped() {
+        let entries = build_entries(&[candidate(false)], "unmask");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].atom, "dev-libs/foo:0");
+    }
 }
