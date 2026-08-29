@@ -183,7 +183,8 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
             &extras,
             config_plan::RefreshPolicy::Sync,
         )
-        .await;
+        .await
+        .map(|_| ());
     }
     if args.setup {
         return setup(&target, globals, args, &extras).await;
@@ -240,7 +241,11 @@ async fn setup(
     // `--setup` only creates missing files so hand edits survive. Adding
     // `--ex-pkg` to an already-init'd target needs an explicit `--init-target`
     // (see docs/user/crossdev.md).
-    init_target(
+    // A declined `-a` config write must stop here, not fall through to
+    // building the toolchain against config that was never actually
+    // written — `Outcome::applied()` alone can't tell that apart from a
+    // `-p` preview (both skip the "ready" banner), so check explicitly.
+    let init_outcome = init_target(
         target,
         globals,
         args,
@@ -248,6 +253,9 @@ async fn setup(
         config_plan::RefreshPolicy::FillGapsOnly,
     )
     .await?;
+    if matches!(init_outcome, config_plan::Outcome::Declined) {
+        return Ok(());
+    }
     // A self-contained `--root DIR` EPREFIX has no host-shared merged-usr
     // skeleton or libs, so the plan needs the same from-scratch treatment as
     // native. `outer_roots()`, not `roots()`: this must stay anchored to the
@@ -1081,7 +1089,7 @@ async fn init_target(
     args: &CrossdevArgs,
     extras: &[Cpn],
     policy: config_plan::RefreshPolicy,
-) -> Result<()> {
+) -> Result<config_plan::Outcome> {
     let ask = merge_merge_flags(globals, &args.merge_flags).ask;
     // For a retargeted prefix (`--local`/`--prefix`/`--root`) bootstrap it first:
     // `setup::bootstrap` writes the prefix `bashrc` that re-adds `<EROOT>/usr/bin`
@@ -1133,8 +1141,9 @@ async fn init_target(
         extras,
     ));
 
-    if !config_plan::apply(&entries, globals.pretend, ask, policy)?.applied() {
-        return Ok(());
+    let outcome = config_plan::apply(&entries, globals.pretend, ask, policy)?;
+    if !outcome.applied() {
+        return Ok(outcome);
     }
 
     println!(">>> cross target {} ready", target.tuple);
@@ -1146,7 +1155,7 @@ async fn init_target(
         "    toolchain: em -p {}/gcc          # host build of the cross compiler",
         target.category()
     );
-    Ok(())
+    Ok(outcome)
 }
 
 /// Write the virtual `Location::Alias` repos.conf entry that derives
