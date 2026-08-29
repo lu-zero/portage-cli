@@ -1,7 +1,7 @@
 # `--target` sysroot-missing error hints a dead CLI flag
 
-Status: 🔴 not started. Found 2026-08-29 during a from-scratch riscv64
-crossdev bootstrap in a crossdev-stages sandbox.
+Status: ✅ fixed 2026-08-29 (`7789b34`). Found during a from-scratch
+riscv64 crossdev bootstrap in a crossdev-stages sandbox.
 
 `portage-cli/src/emerge.rs:379-381`'s early-fail hint for a `--target`
 sysroot that hasn't been laid down yet:

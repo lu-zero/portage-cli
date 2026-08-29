@@ -738,12 +738,13 @@ blocked by the three independent findings above, tracked separately.
   `FEATURES=distlocks`). A follow-up consolidation idea (fetch the whole
   plan's distfiles once up front instead of per-package) is filed but not
   started. [[distfile-fetch-reliability]] §F.
-- 🔴 **`--target` sysroot-missing error hints a dead CLI flag**
-  (`em crossdev -t TUPLE --init-target`, superseded by the top-level
-  `--target`) — found same session. [[crossdev-init-target-stale-flag-hint]]
-- 🔴 **`crossdev --setup -p` can't preview a never-initialized target** —
-  found same session; the real (non-pretend) run works fine, this is a
-  preview-only gap. [[crossdev-setup-pretend-cold-target-gap]]
+- ✅ **`--target` sysroot-missing error hints a dead CLI flag — fixed
+  2026-08-29** (`7789b34`). [[crossdev-init-target-stale-flag-hint]]
+- ✅ **`crossdev --setup -p` can't preview a never-initialized target —
+  fixed 2026-08-29** (`51784c8`), via a `SysrootOverride` letting policy
+  resolution use the real (soon-to-exist) profile dir + in-memory
+  make.conf instead of disk. [[crossdev-setup-pretend-cold-target-gap]]
+  found the same session: `-a` declined still builds anyway, not fixed.
 
 ## Merge / build robustness (found in the @system shakeout)
 
