@@ -747,18 +747,19 @@ blocked by the three independent findings above, tracked separately.
 - ✅ **`crossdev --setup -a` declined still ran the full build — fixed
   2026-08-29** (`0b5a901`), found investigating the item above.
   [[crossdev-setup-declined-ask-builds-anyway]]
-- 🟡 **`--root` under `--prefix`/`--local` + `--target`** —
-  `Cli::roots()` fixed and live-verified 2026-08-29 (`a427f42`, after
-  `8207e0f` made `crossdev --setup`/`--init-target` reject `--root`
-  outright). `Cli::outer_roots()` has a separate, related bug — full
-  Opus-reviewed plan filed, not yet implemented: it's 3 broken
-  topologies (`--prefix`, `--local`, and an active-local under
-  `--target`), not 1, and the sole live consequence is the woven-in
-  cross-gcc-refresh step re-polluting the board root on every stage1
-  run, not the `activate_toolchain`/`link_abi_osdirs` paths originally
-  suspected. `regression-matrix.sh`/`docs/user/stages-and-testing.md`'s
-  bare `--setup --root` recipe also still needs updating to `--prefix`
-  since it now errors. [[crossdev-root-prefix-target-toolchain-anchor]]
+- ✅ **`--root` under `--prefix`/`--local` + `--target` — both halves
+  fixed 2026-08-29.** `Cli::roots()` in `a427f42` (after `8207e0f` made
+  `crossdev --setup`/`--init-target` reject `--root` outright);
+  `Cli::outer_roots()` in `36efe05`, implementing an Opus-reviewed plan
+  in full — it was 3 broken topologies (`--prefix`, `--local`, and an
+  active-local under `--target`), not 1, and the live consequence was
+  the woven-in cross-gcc-refresh step re-polluting the board root on
+  every stage1 run. Live-verified via a deterministic trigger (fake a
+  stale `CURRENT=` slot) — the refresh now correctly plans into the
+  prefix. Still open: `regression-matrix.sh`/
+  `docs/user/stages-and-testing.md`'s bare `--setup --root` recipe
+  needs updating to `--prefix` since it now errors.
+  [[crossdev-root-prefix-target-toolchain-anchor]]
 - 🔴 **`require_root_distinct_from_host` dead under `--target`** — found
   in the same review, higher severity: `--prefix P --root P --target T
   stages --stage1` sails past the degenerate-root check and would

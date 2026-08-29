@@ -1,9 +1,10 @@
-# `--root` under `--prefix`/`--local` + `--target`: `Cli::roots()` fixed, `outer_roots()` still open
+# `--root` under `--prefix`/`--local` + `--target`: fixed for both `roots()` and `outer_roots()`
 
-Status: 🟡 `Cli::roots()` fixed and live-verified 2026-08-29 (`a427f42`,
-after two reverted attempts — `b2aaa8b`→`bef63f4`, `c0d3dc2`→`8610863`
-earlier the same day). `Cli::outer_roots()` has a related, distinct
-bug with a full plan from an Opus review (below), not yet implemented.
+Status: ✅ both halves fixed and live-verified 2026-08-29.
+`Cli::roots()` fixed in `a427f42` (after two reverted attempts —
+`b2aaa8b`→`bef63f4`, `c0d3dc2`→`8610863` earlier the same day).
+`Cli::outer_roots()` fixed in `36efe05`, implementing an Opus review's
+plan (below) in full.
 
 ## `Cli::roots()` — fixed
 
@@ -34,7 +35,7 @@ earlier attempts each broke `--setup --root B`'s own semantics instead).
   gcc-stage1 refresh planned into `/root/board-riscv/` instead of
   `/root/prefix-riscv/`.
 
-## `Cli::outer_roots()` — real bug, full plan, not yet implemented
+## `Cli::outer_roots()` — fixed, implementing an Opus review's plan
 
 Opus review (2026-08-29, read-only) confirmed the overlay branch
 applies `--root` under `--target` when it shouldn't, but found the bug
@@ -101,20 +102,20 @@ New tests needed, all in `cli.rs`'s `mod tests` near
   `active_prefix_applies_when_no_explicit_flag`)
 - `crossdev::tests::toolchain_setup_rejects_root_with_target`
 
-### Live-verification recipe
+### Live-verification (done)
 
-`gcc_needs_refresh` reads its active slot from
-`P/etc/env.d/gcc/config-<tuple>`'s `CURRENT=` line
-(`current_compiler_slot` → `env_d::get_current_profile`) with no
-existence check — editing that file to a lower fake slot is a
-deterministic, instant, reversible trigger; no rebuild needed. Full
-before/after/restore recipe (with `-p` pre-check and real-run
-assertions on `$B/var/db/pkg/cross-$T/` vs `$P/var/db/pkg/cross-$T/`)
-is in the review transcript. Do this in a `crossdev-stages` sandbox,
-paths under `/var/tmp` not `/tmp`, and not while another build is live
-on the box.
+Used Opus's deterministic trigger: `gcc_needs_refresh` reads its active
+slot from `P/etc/env.d/gcc/config-<tuple>`'s `CURRENT=` line with no
+existence check, so editing it to a lower fake slot forces the refresh
+without a rebuild. On the known-good x86_64 toolchain in
+`em-i586-check`: backed up `config-x86_64-unknown-linux-gnu`, set
+`CURRENT=x86_64-unknown-linux-gnu-13`, then `em --prefix /root/prefix-p
+--root /root/board-refresh-probe --target x86_64-unknown-linux-gnu
+stages --stage1 -p` — the resulting "Plan cross-compiler refresh"
+block's two steps both correctly show `to /root/prefix-p/`, not the
+board root. Restored the config file afterward.
 
-## Two new bugs found during the same review
+## Two new bugs found during the same review (still open, filed separately)
 
 **`require_root_distinct_from_host` is dead under `--target`** (cli.rs
 ~line 598): it tests `resolved.is_overlay()`, but `roots()`
