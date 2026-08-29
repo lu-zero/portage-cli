@@ -163,7 +163,16 @@ particular USE selection can never change what gets mirrored.
   all (that would make a mirror-of-a-peer-mirror). `mirror://gentoo/` in
   `SRC_URI` is still expanded via `profiles/thirdpartymirrors` (the
   official distfiles hosts), same as real emirrordist's
-  `Config.mirrors = thirdpartymirrors()`.
+  `Config.mirrors = thirdpartymirrors()`. When `--gentoo-mirrors-fallback`
+  *is* passed, `mirror://gentoo/` candidates get the GLEP 75 hash-layout
+  treatment against the configured `GENTOO_MIRRORS` too, same as every
+  other URI under the flag — it is not a separate, narrower gate for this
+  one URI scheme.
+- A regular `em` fetch/build (not mirrordist) is unaffected by that flag —
+  it always reads `GENTOO_MIRRORS` (env/shell/`make.conf`) and, since GLEP
+  75, tries it for `mirror://gentoo/` URIs too (hash-layout, alongside the
+  official thirdpartymirrors bases), not only for direct/non-gentoo mirror
+  URLs as before.
 
 ## `em read` (elogv) and the elog system
 
