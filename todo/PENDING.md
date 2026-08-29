@@ -765,9 +765,9 @@ blocked by the three independent findings above, tracked separately.
   stages --stage1` sails past the degenerate-root check and would
   bootstrap into the live prefix. One-line fix, live-verified.
   [[require-root-distinct-from-host-dead-under-target]]
-- 🔴 **`env_d_dir` host-fallback can double-register a host profile as a
-  prefix profile** — found in the same review, narrow precondition,
-  lower severity. [[env-d-host-fallback-double-registration]]
+- ✅ **`env_d_dir` host-fallback can double-register a host profile as a
+  prefix profile — fixed 2026-08-29** (`11f585e`). Found in the same
+  review. [[env-d-host-fallback-double-registration]]
 - 🔴 **`has_version` piggybacks `cross-*` atoms off the host, but the
   consumer only ever looks under `EPREFIX`** — real `toolchain.eclass`'s
   `--with-sysroot` is always `${PREFIX}/${CTARGET}`, so a host-side

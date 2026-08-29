@@ -115,7 +115,10 @@ stages --stage1 -p` — the resulting "Plan cross-compiler refresh"
 block's two steps both correctly show `to /root/prefix-p/`, not the
 board root. Restored the config file afterward.
 
-## Two new bugs found during the same review (still open, filed separately)
+## Two more bugs found during the same review (filed separately)
+
+`env_d_dir`'s double-registration is now ✅ fixed (`11f585e`);
+`require_root_distinct_from_host` is still 🔴 open.
 
 **`require_root_distinct_from_host` is dead under `--target`** (cli.rs
 ~line 598): it tests `resolved.is_overlay()`, but `roots()`
