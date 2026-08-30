@@ -1913,6 +1913,21 @@ async fn run_one_phase(
     }
 }
 
+/// Append one plain-text line to a phase log, matching `run_phase`'s own
+/// create-parent-dirs-then-append pattern (`portage-repo`'s
+/// `EbuildShell::run_phase`) — for native (non-subshell) status lines like
+/// `run_fetch`'s that never go through that pty tee.
+fn append_log_line(path: &Utf8Path, line: &str) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path.as_std_path())
+        .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{line}\n").as_bytes()));
+}
+
 async fn run_fetch(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
@@ -2013,8 +2028,24 @@ async fn run_fetch(
     // `"[ !! ]"` bracket, not a log line. `crate::style::estatus_line`
     // renders that same shape in one shot instead of real portage's
     // separate begin-now/finish-later calls (see its own doc comment).
+    //
+    // Fetch runs outside `run_phase`'s pty tee, so it must honour
+    // `phase_output_quiet` itself: under `--jobs N` (`N > 1`) these lines
+    // would otherwise print straight to the console with no coordination
+    // against the persistent `Jobs: …` status line, garbling both.
     let width = crate::style::term_width();
     let ansi = crate::diag::stderr_wants_color();
+    let quiet = shell.phase_output_quiet();
+    let log_path = shell.phase_log_path().map(Utf8Path::to_owned);
+    let report_fetch_line = |msg: &str, ok: bool| {
+        if quiet {
+            if let Some(log) = &log_path {
+                append_log_line(log, &crate::style::estatus_line(msg, ok, width, false));
+            }
+        } else {
+            eprintln!("{}", crate::style::estatus_line(msg, ok, width, ansi));
+        }
+    };
     let mut seen = std::collections::HashSet::new();
     let mut any_failed = false;
     let mut any_restricted = false;
@@ -2022,41 +2053,18 @@ async fn run_fetch(
         if !seen.insert(df.filename.clone()) {
             continue;
         }
+        let msg = format!("fetch: {}", df.filename);
         match result {
             Ok(FetchStatus::AlreadyPresent | FetchStatus::Downloaded) => {
-                eprintln!(
-                    "{}",
-                    crate::style::estatus_line(
-                        &format!("fetch: {}", df.filename),
-                        true,
-                        width,
-                        ansi
-                    )
-                );
+                report_fetch_line(&msg, true);
             }
             Ok(FetchStatus::FetchRestricted) => {
-                eprintln!(
-                    "{}",
-                    crate::style::estatus_line(
-                        &format!("fetch: {}", df.filename),
-                        false,
-                        width,
-                        ansi
-                    )
-                );
+                report_fetch_line(&msg, false);
                 crate::style::error_line!("{} is fetch-restricted (RESTRICT=fetch)", df.filename);
                 any_restricted = true;
             }
             Err(e) => {
-                eprintln!(
-                    "{}",
-                    crate::style::estatus_line(
-                        &format!("fetch: {}", df.filename),
-                        false,
-                        width,
-                        ansi
-                    )
-                );
+                report_fetch_line(&msg, false);
                 crate::style::error_line!("{} failed: {e}", df.filename);
                 any_failed = true;
             }

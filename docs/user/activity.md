@@ -87,9 +87,11 @@ targets at `WARN` — brush-core traces every word it expands (`expansion`,
 the filter outright when that detail is what you want
 (`RUST_LOG=expansion=debug em …`); see `portage-cli/src/diag.rs`.
 
-Build-helper status (`>>> Unpacking …`) and ebuild-layer lines (`fetch:` …,
-`Created binary package`) honour the same quiet state via the shared
-`QuietFlag` / `EbuildShell::quiet()`, so nothing escapes verbosity. Library
+Build-helper status (`>>> Unpacking …`) honours the same quiet state via the
+activity bus above. `run_fetch`'s own `fetch: …` lines run outside `run_phase`'s
+pty tee (fetch is native Rust, not a phase function), so they check
+`EbuildShell::phase_output_quiet()` directly instead — same `--jobs N`/`-q`
+rule, redirected to `build.log` rather than dropped when quiet. Library
 callers that don't attach the sink get the events on the bus to render their own
 UI (see `attach_human_stdout`).
 

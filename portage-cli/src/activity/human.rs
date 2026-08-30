@@ -22,7 +22,10 @@
 //! - `verbose >= 1`: additionally show every phase's enter banner plus
 //!   elapsed time on [`PhaseLeave`](super::event::ActivityEvent::PhaseLeave)
 //!   — an `em`-specific extra beyond what real emerge shows interactively,
-//!   for anyone who wants the detail.
+//!   for anyone who wants the detail. Suppressed under `--jobs N` (`N > 1`,
+//!   see `is_parallel`): `N` concurrent phase chains interleaving their own
+//!   banners is unreadable and real emerge shows none of this either way, so
+//!   a parallel run falls back to the package-level banners only.
 //! - `--jobs N` (N > 1): redraw a persistent `Jobs: N of M complete, R
 //!   running` status line (real emerge's `JobStatusDisplay`), including a
 //!   right-padded `Load avg: …` suffix (same precision rules as
@@ -237,6 +240,22 @@ impl HumanStdoutSink {
         let _ = std::io::stdout().flush();
     }
 
+    /// Whether `job_id` was started with `--jobs N`, `N > 1`
+    ///
+    /// Real emerge's own interactive output never shows a per-phase banner
+    /// under `--jobs N` either — only the package-level Emerging/Installing/
+    /// Completed lines plus the persistent `Jobs: …` status line. Gating the
+    /// `em`-specific per-phase extra (`verbose >= 1`) on this too keeps a
+    /// parallel run's console to one line per phase transition instead of
+    /// `N` concurrently-interleaved phase chains.
+    fn is_parallel(&self, job_id: &str) -> bool {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(job_id)
+            .is_some_and(|js| js.jobs > 1)
+    }
+
     /// `" {preposition} {root}/"`, or empty when the root is `/` — real
     /// emerge's `if pkg.root_config.settings["ROOT"] != "/": msg += " for/to
     /// {root}"`.
@@ -443,7 +462,7 @@ impl ActivitySink for HumanStdoutSink {
                     self.draw_status(job_id);
                     return;
                 }
-                if self.verbose == 0 {
+                if self.verbose == 0 || self.is_parallel(job_id) {
                     return;
                 }
                 let Some(label) = phase_label(phase) else {
@@ -455,12 +474,13 @@ impl ActivitySink for HumanStdoutSink {
                 self.draw_status(job_id);
             }
             ActivityEvent::PhaseLeave {
+                job_id,
                 cpv,
                 phase,
                 seconds,
                 ..
             } if self.verbose >= 1 && phase_label(phase).is_some() => {
-                if self.quiet {
+                if self.quiet || self.is_parallel(job_id) {
                     return;
                 }
                 println!("  >> {cpv} {phase}: {seconds:.1}s");
@@ -675,6 +695,24 @@ mod tests {
         assert_eq!(phase_label("qmerge"), Some("Merging"));
         assert_eq!(phase_label("pkg_preinst"), None);
         assert_eq!(phase_label("someweird"), None);
+    }
+
+    // The suppression `PhaseEnter`/`PhaseLeave` gate on: only `--jobs N`
+    // with `N > 1` is "parallel" — unset and `--jobs 1` both keep the
+    // per-phase banners real emerge doesn't show, but `em`'s `-v` does.
+    #[test]
+    fn is_parallel_reflects_configured_job_count() {
+        let sink = HumanStdoutSink::new(false, 1);
+        sink.on_event(&session_start("j", 5, Some(3), "/"));
+        assert!(sink.is_parallel("j"));
+
+        let sink = HumanStdoutSink::new(false, 1);
+        sink.on_event(&session_start("j", 5, Some(1), "/"));
+        assert!(!sink.is_parallel("j"));
+
+        let sink = HumanStdoutSink::new(false, 1);
+        sink.on_event(&session_start("j", 5, None, "/"));
+        assert!(!sink.is_parallel("j"));
     }
 
     #[test]

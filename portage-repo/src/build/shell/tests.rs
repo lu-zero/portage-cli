@@ -2097,3 +2097,39 @@ async fn metadata_scan_after_a_real_build_gets_stubs_not_real_builtins() {
         "einfo dispatched the real builtin during metadata-only work: {out:?}"
     );
 }
+
+// `run_fetch` (portage-cli/src/ebuild.rs) checks these directly to decide
+// whether its own `fetch: …` status lines go to the console or the log —
+// it runs outside `run_phase`'s pty tee, so it can't rely on that path's
+// own quiet handling.
+#[tokio::test]
+async fn phase_output_quiet_reflects_the_set_phase_log_flag() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(
+        repo_path.join("metadata").join("layout.conf"),
+        "masters = \ncache-formats = md5-dict\n",
+    )
+    .unwrap();
+    std::fs::write(repo_path.join("profiles").join("repo_name"), "test-repo\n").unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    assert!(shell.phase_log_path().is_none());
+    assert!(!shell.phase_output_quiet());
+
+    let log = dir.path().join("build.log");
+    let log_path = camino::Utf8PathBuf::from_path_buf(log.clone()).unwrap();
+    shell.set_phase_log(Some((log_path.clone(), true)));
+    assert_eq!(shell.phase_log_path(), Some(log_path.as_path()));
+    assert!(shell.phase_output_quiet());
+
+    shell.set_phase_log(Some((log_path.clone(), false)));
+    assert!(!shell.phase_output_quiet());
+}

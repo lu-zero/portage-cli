@@ -736,6 +736,19 @@ impl EbuildShell {
         self.phase_log = path;
     }
 
+    /// The current phase log path, if any.
+    pub fn phase_log_path(&self) -> Option<&Utf8Path> {
+        self.phase_log.as_ref().map(|(path, _)| path.as_path())
+    }
+
+    /// Whether phase output is being captured silently (`--jobs N`, `N > 1`,
+    /// or `-q`) rather than tee'd to the console — for native (non-subshell)
+    /// operations like fetch that print their own status lines outside
+    /// [`run_phase`](Self::run_phase)'s pty tee and must honour the same rule.
+    pub fn phase_output_quiet(&self) -> bool {
+        self.phase_log.as_ref().is_some_and(|(_, quiet)| *quiet)
+    }
+
     /// Use `dir` as the writable distfiles directory for this shell (the
     /// auto-resolved location becomes a read-only fallback).
     pub fn set_distdir(&mut self, dir: Utf8PathBuf) {
