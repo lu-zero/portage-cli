@@ -2034,6 +2034,70 @@ async fn default_src_prepare_applies_patches_set_during_an_earlier_phase() {
     );
 }
 
+// Regression: `default_src_prepare`'s PATCHES handling (`phase_defaults.rs`'s
+// `apply_patches_var`) reached `eapply` via a *fresh* `default_exec_params()`,
+// bypassing the phase's own (possibly quiet-redirected) params — its
+// "Applying patches from …" line always leaked to the console regardless of
+// `set_phase_log`'s `quiet` flag. Confirmed live as `Jobs: … Load avg: …`
+// garbled together with this exact message under `--jobs N`. `eapply` only
+// emits this banner for a *directory* PATCHES entry (`eapply.rs`'s
+// `apply_all`), not a single file, matching real `sys-kernel/linux-headers`'
+// own `PATCHES=( "${WORKDIR}/${PATCH_PV}" )` directory shape.
+#[tokio::test]
+async fn default_src_prepare_honours_quiet_phase_log_for_the_applying_patches_line() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    let patchdir = ebdir.join("files/patches");
+    std::fs::create_dir_all(&patchdir).unwrap();
+    std::fs::write(
+        patchdir.join("x.patch"),
+        "--- a/f.txt\n+++ a/f.txt\n@@ -1 +1 @@\n-before\n+after\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}\"\n\
+         PATCHES=( \"${FILESDIR}/patches\" )\n\
+         src_unpack() { mkdir -p \"${S}\"; echo before > \"${S}/f.txt\"; }\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+
+    shell
+        .run_phase(&ebuild, "unpack", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let log = camino::Utf8PathBuf::from_path_buf(dir.path().join("build.log")).unwrap();
+    shell.set_phase_log(Some((log.clone(), true)));
+    shell
+        .run_phase(&ebuild, "prepare", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    let log_text = std::fs::read_to_string(log.as_std_path()).unwrap();
+    assert!(
+        log_text.contains("Applying patches from"),
+        "eapply's status line must land in the quiet phase log, not bypass \
+         it via a fresh default_exec_params(): {log_text:?}"
+    );
+}
+
 #[tokio::test]
 async fn metadata_scan_after_a_real_build_gets_stubs_not_real_builtins() {
     // The reverse-direction case: a real phase run switches the

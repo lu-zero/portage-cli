@@ -73,7 +73,6 @@ impl builtins::Command for EapplyCommand {
         .unwrap_or_else(|e| (Vec::new(), Err(format!("eapply: task panicked: {e}"))));
 
         let source_info = brush_core::SourceInfo::from("eapply");
-        let params = shell.default_exec_params();
         for event in events {
             match event {
                 Event::ApplyingFrom(dir) => {
@@ -81,7 +80,16 @@ impl builtins::Command for EapplyCommand {
                         "einfo {}",
                         shell_quote(&format!("Applying patches from {dir} ..."))
                     );
-                    let _ = shell.run_string(&script, &source_info, &params).await;
+                    // `context.params`, not `shell.default_exec_params()`: the
+                    // latter is a fresh set of open files pointing at the
+                    // real console, bypassing whatever redirection the phase
+                    // invocation is actually running under (`--jobs N`/`-q`'s
+                    // `{ func_name; } >> log 2>&1`) — this `einfo` leaked
+                    // straight to the terminal under quiet phase output,
+                    // garbling the persistent `Jobs: …` status line.
+                    let _ = shell
+                        .run_string(&script, &source_info, &context.params)
+                        .await;
                 }
                 Event::PatchOutput(text) => {
                     let _ = write!(context.params.stdout(shell), "{text}");
