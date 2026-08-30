@@ -137,7 +137,7 @@ mod tests {
         std::fs::create_dir_all(portage_dir.as_std_path()).unwrap();
         std::fs::write(portage_dir.join("make.conf").as_std_path(), "USE=\"x\"\n").unwrap();
 
-        let cli = cli::Cli::parse_from(["em", "--local", prefix.as_str(), "use"]);
+        let cli = cli::Cli::parse_from(["em", "use", "--local", prefix.as_str()]);
         let resolved = resolve_path(&cli, None).unwrap();
         assert_eq!(resolved, portage_dir.join("make.conf"));
     }

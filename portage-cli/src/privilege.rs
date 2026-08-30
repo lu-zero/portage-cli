@@ -130,13 +130,18 @@ fn will_build(cli: &Cli) -> bool {
     if cli.pretend {
         return false;
     }
-    // Removals and staged builds mutate the root even with no atoms /
-    // without going through the default emerge path.
-    if cli.unmerge || cli.depclean {
-        return true;
-    }
     match &cli.applet {
-        None => !cli.atoms.is_empty() && !cli.search && !cli.searchdesc,
+        // `main.rs`'s parse-then-retry means `None` only reaches here for a
+        // genuinely atom-less, applet-less invocation (`em --info`) — never
+        // one that will build.
+        None => false,
+        Some(Applet::Emerge(args)) => {
+            // Removals mutate the root even though they skip the merge
+            // engine entirely; search/deselect never touch it.
+            args.mode.unmerge
+                || args.mode.depclean
+                || (!args.atoms.is_empty() && !args.mode.search && !args.mode.searchdesc)
+        }
         Some(
             Applet::Ebuild { .. }
             | Applet::Crossdev(_)
@@ -185,7 +190,12 @@ pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
 /// into the GPKG still need the fake root, but there is no live-root
 /// install to scope it to).
 fn needs_whole_process_wrap(cli: &Cli) -> bool {
-    ebuild_applet_installs(cli) || cli.unmerge || cli.depclean || cli.merge_flags.buildpkgonly
+    let (unmerge, depclean) = match &cli.applet {
+        Some(Applet::Emerge(args)) => (args.mode.unmerge, args.mode.depclean),
+        Some(Applet::Depclean { .. }) => (false, true),
+        _ => (false, false),
+    };
+    ebuild_applet_installs(cli) || unmerge || depclean || cli.merge_flags().buildpkgonly
 }
 
 /// `em ebuild … <phase>` with a merge-side phase: the only build path that does
@@ -791,7 +801,14 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from(["em", "--local", prefix.as_str(), "-p", "sys-libs/zlib"]);
+        let cli = Cli::parse_from([
+            "em",
+            "emerge",
+            "--local",
+            prefix.as_str(),
+            "-p",
+            "sys-libs/zlib",
+        ]);
         assert_eq!(distdir(&cli), "/custom/distfiles");
     }
 
@@ -799,7 +816,14 @@ mod tests {
     fn distdir_falls_back_to_the_real_portage_default_when_unset() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = camino::Utf8Path::from_path(dir.path()).unwrap();
-        let cli = Cli::parse_from(["em", "--local", prefix.as_str(), "-p", "sys-libs/zlib"]);
+        let cli = Cli::parse_from([
+            "em",
+            "emerge",
+            "--local",
+            prefix.as_str(),
+            "-p",
+            "sys-libs/zlib",
+        ]);
         assert_eq!(distdir(&cli), "/var/cache/distfiles");
     }
 }

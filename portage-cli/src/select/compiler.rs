@@ -245,7 +245,7 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
+        let cli = Cli::parse_from(["em", "emerge", "--root", root, "--config-root", root]);
         assert_eq!(
             root_chost(&cli.outer_roots()),
             Some("i586-pc-linux-gnu".to_string())
@@ -267,7 +267,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
-        let cli = Cli::parse_from(["em", "--root", root]);
+        let cli = Cli::parse_from(["em", "emerge", "--root", root]);
         assert_eq!(root_chost(&cli.outer_roots()), host);
     }
 
@@ -283,7 +283,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
         let target = "riscv64-unknown-linux-gnu";
-        let cli = Cli::parse_from(["em", "--root", root, "--config-root", root]);
+        let cli = Cli::parse_from(["em", "emerge", "--root", root, "--config-root", root]);
 
         // No toolchain activated yet.
         assert_eq!(current_slot(&cli.roots(), target), None);
@@ -311,7 +311,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
         let target = "riscv64-unknown-linux-gnu";
-        let cli = Cli::parse_from(["em", "--root", root]);
+        let cli = Cli::parse_from(["em", "emerge", "--root", root]);
 
         let config_dir = dir.path().join("etc/env.d/gcc");
         std::fs::create_dir_all(&config_dir).unwrap();

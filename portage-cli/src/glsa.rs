@@ -572,7 +572,7 @@ async fn run_fix(globals: &Cli, ids: &[String]) -> Result<()> {
     );
 
     let atoms: Vec<String> = atoms.into_iter().collect();
-    let mut merge_flags = globals.merge_flags.clone();
+    let mut merge_flags = globals.merge_flags().clone();
     merge_flags.oneshot = true;
     merge_flags.complete_graph = true;
 

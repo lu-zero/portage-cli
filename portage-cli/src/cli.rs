@@ -9,10 +9,14 @@ use portage_resolve::Roots;
 
 mod activity;
 mod depgraph_flags;
+mod emerge_mode;
 mod merge_flags;
+mod topology;
 pub use activity::ActivityArgs;
 pub use depgraph_flags::DepgraphFlags;
+pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
+pub use topology::{RootArg, Topology};
 
 const fn cli_styles() -> Styles {
     Styles::styled()
@@ -37,9 +41,6 @@ pub struct Cli {
     #[command(flatten)]
     pub color: colorchoice_clap::Color,
 
-    #[command(flatten)]
-    pub depgraph_flags: DepgraphFlags,
-
     /// Show what would be done without actually performing any actions
     #[arg(short = 'p', long, global = true)]
     pub pretend: bool,
@@ -52,14 +53,6 @@ pub struct Cli {
     /// resolved atoms (neither has a real-emerge equivalent).
     #[arg(long)]
     pub info: bool,
-
-    /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/`--emergelog`) for the merge
-    /// path
-    ///
-    /// Flattened (not `global = true`) so they only appear on commands that drive an activity
-    /// bus; the merge path reads the applet-merged set via [`Cli::effective_activity`].
-    #[command(flatten)]
-    pub activity: ActivityArgs,
 
     /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
     /// `em`'s own debug/trace logs (see also `RUST_LOG`).
@@ -81,585 +74,144 @@ pub struct Cli {
     #[arg(long, value_name = "PATH")]
     pub repo: Option<String>,
 
-    /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
-    /// still from the host (use --root for a config offset).
-    #[arg(long, value_name = "DIR", global = true)]
-    pub prefix: Option<String>,
-
-    /// Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not
-    /// overlaid on the host (see --prefix for the overlay). Defaults to
-    /// ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given.
-    #[arg(long, global = true, num_args = 0..=1, default_missing_value = "", value_name = "DIR")]
-    pub local: Option<String>,
-
-    /// How an unprivileged build gets root for chown/setuid: auto (best
-    /// compiled-in fake root), pseudoroot, fakeroost, hakoniwa (userns mapped
-    /// root), sudo (real root), or none; backends unsupported on this platform
-    /// are compiled out. Ignored when already root.
-    ///
-    /// Not `global`: it is read at process start ([`crate::privilege`]'s
-    /// supervisor re-exec, before dispatch) from the top-level value; the
-    /// staged-build applets (`crossdev`/`toolchain`/`stages`) carry their own
-    /// optional override, merged by [`Cli::effective_privilege`].
-    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
-    pub privilege: Privilege,
-
-    /// Search package names (each argument is a pattern)
-    ///
-    /// Deliberately separate from the `em search` applet: this is emerge's
-    /// own `-s` (drives `crate::search::run_emerge_style`, emerge-style
-    /// output), the applet is equery-style (`crate::search::run`, `--all`/
-    /// `--desc`/`--name-only`/`--homepage`). Same split as real Portage's
-    /// `emerge -s` vs `equery`, not accidental duplication.
-    #[arg(short = 's', long)]
-    pub search: bool,
-
-    /// Search package names and descriptions
-    ///
-    /// See `search`'s doc comment for why this is separate from `em search --desc`.
-    #[arg(short = 'S', long)]
-    pub searchdesc: bool,
-
-    /// Skip dependency resolution and only merge specified packages
-    #[arg(short = 'O', long)]
-    pub nodeps: bool,
-
-    /// Remove the matching installed packages completely, without regard to dependencies
-    ///
-    /// Matches every installed slot/version of each atom. For removing unneeded dependencies
-    /// too, use `depclean` instead.
-    #[arg(short = 'C', long)]
-    pub unmerge: bool,
-
-    /// Remove installed packages that are not needed by @world (with no
-    /// atoms, cleans everything unreachable; with atoms, only considers
-    /// removing those, protecting everything else). Unlike `-C`, this walks
-    /// the installed dependency graph first — matches real emerge's safe
-    /// alternative to `-C`.
-    ///
-    /// Identical implementation to the `em depclean [atoms]` applet
-    /// (`crate::depclean::run` forwards to `run_with_targets`) — the applet
-    /// form exists for scripting clarity, not a different behavior.
-    #[arg(short = 'c', long)]
-    pub depclean: bool,
-
-    /// Remove all but the highest installed version of each atom given,
-    /// ignoring dependencies (real emerge's own historical caveat applies —
-    /// prefer `--depclean` for a dependency-aware clean).
-    #[arg(short = 'P', long)]
-    pub prune: bool,
-
-    /// Remove atoms and/or `@set`s from the world file, without unmerging
-    /// anything.
-    #[arg(short = 'W', long)]
-    pub deselect: bool,
-
-    /// Resume the last saved merge (see `em maint cleanresume` to discard it instead)
-    ///
-    /// Atoms are not accepted together with this flag — the package list comes from the saved
-    /// state. Combine with other flags (e.g. `-r --keep-going`, `-r -X stuck/atom`) to adjust
-    /// the resumed run.
-    #[arg(short = 'r', long)]
-    pub resume: bool,
-
-    #[command(flatten)]
-    pub merge_flags: MergeFlags,
-
-    /// Installation root (the offset all applets install into / query)
-    #[arg(long, env = "ROOT", value_name = "PATH", global = true)]
-    pub root: Option<String>,
-
-    /// Read config (profile, make.conf) from this root instead of `--root`
-    #[arg(long, value_name = "PATH", global = true)]
-    pub config_root: Option<String>,
-
-    /// Override VDB path (default: $ROOT/var/db/pkg)
-    #[arg(long, value_name = "PATH", global = true)]
-    pub vdb: Option<String>,
-
-    /// Cross-build/setup for a crossdev target tuple
-    ///
-    /// The single source for "which tuple" everywhere: `em --target T crossdev --init-target`
-    /// sets T up; `em --target T stages --stage1` (or any plain atom build) resolves/installs
-    /// into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for
-    /// `--config-root <sysroot> --root <sysroot>`.
-    ///
-    /// Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the
-    /// sysroot make.conf. One flag for both roles — `crossdev` no longer
-    /// has its own `-t`/`--target`.
-    #[arg(long, short = 'T', value_name = "TUPLE", global = true)]
-    pub target: Option<String>,
-
     #[command(subcommand)]
     pub applet: Option<Applet>,
-
-    #[arg(num_args = 1..)]
-    pub atoms: Vec<String>,
-}
-
-/// The user's home directory from `$HOME`, falling back to `/root` only if
-/// unset (matching how unprivileged tools resolve `~`).
-fn home_dir() -> camino::Utf8PathBuf {
-    crate::xdg::home()
-}
-
-/// Topology after resolving CLI flags + optional `em active` registration
-///
-/// Explicit `--local` / `--prefix` / `--root` always win. When none are set,
-/// a previously registered active context (see [`crate::active`]) supplies
-/// prefix/local so bare `em <pkg>` dogfooding needs no per-invocation flags.
-enum TopologySource {
-    Local(camino::Utf8PathBuf),
-    Prefix(camino::Utf8PathBuf),
-    /// `--root R`
-    ///
-    /// The path itself is read from `self.root` at the one site that needs it (`base_roots`),
-    /// so this variant carries no payload.
-    Root,
-    Host,
-}
-
-/// `s.as_deref()` parsed as a path, or `None`
-fn opt_path(s: &Option<String>) -> Option<camino::Utf8PathBuf> {
-    s.as_deref().map(camino::Utf8PathBuf::from)
 }
 
 impl Cli {
-    /// Resolve topology from explicit flags, else the `em active` registration
+    /// The active applet's own `Topology`/`RootArg`, or a harmless bare-host
+    /// default for applets that carry neither (the root-independent stubs —
+    /// `Helper`/`Worker`/`Portageq`/`Grep`/`Dispatch`/`Etc`/`Clean`/`Atom` —
+    /// and the bare "no applet at all" case, which the `main.rs` parse-then-
+    /// retry-into-`emerge` fallback never actually leaves as `None` once real
+    /// topology-shaped input is present).
     ///
-    /// Precedence: `--local` > `--prefix` > `--root` > active state > bare host.
-    /// Active state is only consulted when no root-topology flag is present, so
-    /// `em --root R …` never accidentally inherits a registered prefix.
-    fn topology_source(&self) -> TopologySource {
-        if let Some(local) = &self.local {
-            let root = if local.is_empty() {
-                home_dir().join(".gentoo")
-            } else {
-                camino::Utf8PathBuf::from(local)
-            };
-            return TopologySource::Local(root);
-        }
-        if let Some(prefix) = opt_path(&self.prefix) {
-            return TopologySource::Prefix(prefix);
-        }
-        if opt_path(&self.root).is_some() {
-            return TopologySource::Root;
-        }
-        match crate::active::load_active_context() {
-            Ok(Some(ctx)) => match ctx.kind {
-                crate::active::ActiveKind::Local => TopologySource::Local(ctx.path),
-                crate::active::ActiveKind::Prefix => TopologySource::Prefix(ctx.path),
-            },
-            // Missing or unreadable state → bare host (same as no registration).
-            _ => TopologySource::Host,
+    /// Every `Cli`-level root-resolution method below is a thin selector over
+    /// this — unlike `MergeFlags`/`DepgraphFlags`/`ActivityArgs`, there is no
+    /// second, top-level copy to reconcile against (nothing is flattened onto
+    /// `Cli`'s own root at all), so this only ever *picks* the one applet-
+    /// owned value, never merges two.
+    fn topology_and_root(&self) -> (Topology, RootArg) {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Crossdev(a)) => (a.topology.clone(), RootArg::default()),
+            Some(Applet::Toolchain(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Stages(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Setup(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Ebuild {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Maint {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Sync {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Depclean {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Regen {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Quickpkg {
+                topology, root_arg, ..
+            })
+            | Some(Applet::MirrorDist {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Query {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Use {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Pkg {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Revdep {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Read {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Log {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Search {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Select {
+                topology, root_arg, ..
+            })
+            | Some(Applet::Env {
+                topology, root_arg, ..
+            }) => (topology.clone(), root_arg.clone()),
+            Some(Applet::Active { topology, .. }) => (topology.clone(), RootArg::default()),
+            _ => (Topology::default(), RootArg::default()),
         }
     }
-}
 
-impl Cli {
-    /// Resolve the root model (docs/design/root-topology.md) from the global flags
+    /// Resolve the root model (docs/design/root-topology.md) for the active applet
     ///
     /// `--target <tuple>` layers on top of the base model: it targets the crossdev
-    /// sysroot `<EROOT>/usr/<tuple>` as both config-root and root (crossdev's
-    /// `PORTAGE_CONFIGROOT == ROOT == SYSROOT`). The `<EROOT>` it sits under still
-    /// comes from `--local`/`--prefix`/`--root`, so `em --local --target <t>`
-    /// targets `~/.gentoo/usr/<t>`.
-    ///
-    /// Under `--prefix`, the returned `Roots`'s `merge_root()` is the **prefix**
-    /// (install destination), while `base_roots()` returns a separate view whose
-    /// `merge_root()` is the **host `/`** (BROOT, for BDEPEND checks). The two
-    /// genuinely differ for an overlay; this split is what lets preflight check
-    /// BDEPEND against the host while the merge lands in the prefix.
+    /// sysroot `<EROOT>/usr/<tuple>` as both config-root and root. See
+    /// [`Topology::roots`] for the full resolution.
     pub fn roots(&self) -> Roots {
-        // --target: layer the sysroot on top of the overlay target (the prefix),
-        // not base_roots's BROOT (host /). Under --prefix the cross sysroot is
-        // <prefix>/usr/<tuple>, and base_roots's merge_root is the host — so
-        // derive the sysroot from the overlay's prefix (eprefix) when set.
-        let Some(tuple) = self.target.as_deref() else {
-            return self.outer_roots();
-        };
-        // The outer EROOT the sysroot sits under: `outer_roots().eprefix()`
-        // under `--prefix`/`--local` — the pure prefix identity, unmoved by
-        // an explicit `--root` board-root override, same as bare's `/`
-        // anchor is unmoved by `--root`. The toolchain always lives at
-        // `P/usr/<tuple>` (or bare `/usr/<tuple>`); only the *destination*
-        // `stages` installs into moves with `--root`.
-        let outer = self.outer_roots();
-        let has_own_build_context = outer.eprefix().is_some();
-        let anchor = if has_own_build_context {
-            outer
-                .eprefix()
-                .expect("has_own_build_context checked eprefix().is_some() above")
-                .to_owned()
-        } else {
-            camino::Utf8PathBuf::from("/")
-        };
-        let sysroot = anchor.join("usr").join(tuple);
-        // An explicit `--root` is always a genuine board-root override,
-        // whether or not `--prefix`/`--local` also anchors the toolchain
-        // itself; else plain `--target` installs into its own sysroot.
-        let merge_target = opt_path(&self.root).unwrap_or_else(|| sysroot.clone());
-        // `base` stays the sysroot unconditionally — never `merge_target`.
-        // `build_sysroot()` returns `None` when `base == target`, which
-        // would drop the toolchain from the compiler's context (confirmed
-        // live: `sys-libs/zlib` couldn't find its sysroot's `sys/types.h`).
-        // The installed-view fix lives at the call site instead, via
-        // `Roots::with_target_only_installed_view()` (`crossdev/mod.rs`).
-        Roots::default()
-            .with_config(Some(sysroot.clone()))
-            .with_base(Some(sysroot))
-            .with_target(Some(merge_target))
-            // BROOT never moves with `--target`: BDEPEND always resolves on
-            // the true build host, carried over from the outer (pre-
-            // substitution) view rather than left as the sysroot itself.
-            .with_broot(outer.broot().map(|p| p.to_owned()))
-            // `--target` is crossdev's cross-tuple flag; every real
-            // invocation of it is a foreign-arch build (a same-arch use
-            // would just be `--root`). No `IDepend` caller exists yet to
-            // need finer CHOST/CBUILD-derived precision than this.
-            .with_cross_arch(true)
-            // Preserve the outer overlay identity: under `--prefix`/`--local`,
-            // distfiles and work trees live under the outer EROOT (via
-            // eprefix + relocate), and user config under `config_overlay`
-            // (`P/etc/portage`). Clearing these forced host `/var/cache/
-            // distfiles` and dropped overlay package.use for target builds.
-            // eprefix stays the *outer* prefix path so relocate anchors there
-            // rather than under the sysroot (`P/usr/T/...`).
-            .with_eprefix(outer.eprefix().map(|p| p.to_owned()))
-            .with_config_overlay(outer.config_overlay().map(|p| p.to_owned()))
-            .with_relocate(outer.relocate())
-            .with_config_root_explicit(outer.config_root_explicit().map(|p| p.to_owned()))
+        let (topology, root) = self.topology_and_root();
+        topology.roots(&root)
     }
 
-    /// The root view with any `--target` sysroot substitution undone: what
-    /// [`roots`](Self::roots) returns when `--target` isn't set, computed
-    /// **unconditionally** regardless of `self.target`. This is the "outer
-    /// EROOT" every crossdev *setup* action (`crossdev/mod.rs`: `sysroot`,
-    /// `setup_root`, `ensure_self_contained_prefix`, `main_repo`) must
-    /// anchor to instead of `roots()`.
-    ///
-    /// Using `roots()` there was a real bug: if `--target T` is also set on
-    /// the same invocation as `crossdev --init-target`, `roots()` is
-    /// *already* the sysroot, so appending `usr/T` again doubly-nested it
-    /// (`<EROOT>/usr/T/usr/T`) — reproduced live.
-    ///
-    /// `stage1()`/`profile_stack()`/`resolve_gcc_version` deliberately keep
-    /// using plain `roots()` — those genuinely want `--target`'s sysroot
-    /// substitution (`em --target T stages --stage1` builds *into* the
-    /// sysroot, by design).
+    /// See [`Topology::outer_roots`].
     pub(crate) fn outer_roots(&self) -> Roots {
-        let base = self.base_roots();
-        // Under `--target`, an explicit `--root` is `roots()`'s board-root
-        // override — where the *stage packages* install — never this
-        // function's own "true outer/host location". Suppressed here
-        // (rather than left to each branch) so every branch below stays
-        // bit-identical to its non-`--target` behavior once `--target`
-        // clears it: the toolchain and its host-side `cross-*` packages
-        // stay where `--prefix`/`--local` (flag or active registration)
-        // put them, or the real host `/` when neither applies.
-        let root_redirect = opt_path(&self.root).filter(|_| self.target.is_none());
-        if let Some(prefix) = base.eprefix().filter(|_| base.is_overlay()) {
-            let prefix = prefix.to_path_buf();
-            let anchored = self.overlay_anchor(&base, prefix);
-            // An explicit `--root B` alongside `--prefix A` (no `--target`)
-            // redirects only the merge *destination* — EPREFIX/BROOT/
-            // config-overlay stay anchored to the prefix itself (`--prefix`
-            // still supplies the build context: host-shared toolchain,
-            // relocatable shebangs, overlay config). Without this, `self.root`
-            // was silently discarded the instant `--prefix` matched first in
-            // `topology_source()` — todo/for-sonnet.md 2026-08-08.
-            return match root_redirect {
-                Some(target) => anchored.with_target(Some(target)),
-                None => anchored,
-            };
-        }
-        // Non-overlay: `Local`/`Root`/`Host`. `--local`'s own `base_roots()`
-        // arm already bakes an explicit `--root` into its `target` (so a
-        // plain `--local L --root B` redirects correctly with no `--target`
-        // involved) — undo that here when `--target` is also set, the same
-        // way the overlay branch above suppresses its own redirect, so the
-        // toolchain stays at `L` regardless of any board-root override.
-        // Matched on `topology_source()`, not raw flags, so an `em active`-
-        // registered local is honored the same as an explicit `--local`.
-        match self.topology_source() {
-            TopologySource::Local(prefix) => base
-                .with_base(Some(prefix.clone()))
-                .with_target(Some(root_redirect.unwrap_or(prefix))),
-            // `Root`/`Host` already fold `--root` (or its absence) into both
-            // `base` and `target` identically inside `base_roots()`, so this
-            // just re-asserts the same values — a no-op outside `--target`,
-            // and exactly the existing bare-`--target` guard's board-root
-            // stripping once `root_redirect` is cleared above.
-            _ => match root_redirect {
-                Some(target) => base
-                    .with_base(Some(target.clone()))
-                    .with_target(Some(target)),
-                None => base.with_target(None).with_base(None),
-            },
-        }
+        let (topology, root) = self.topology_and_root();
+        topology.outer_roots(&root)
     }
 
-    /// The overlay's own anchor, ignoring any `--root` override — always `prefix` itself
-    ///
-    /// Shared by `outer_roots()` (which then applies an explicit `--root` redirect on top, for
-    /// the merge *destination* only) and `host_roots()` (which must NOT apply that redirect: it
-    /// answers "where do the overlay's own host-shared build tools live", which never moves
-    /// just because `--root` retargets where packages install).
-    fn overlay_anchor(&self, base: &Roots, prefix: camino::Utf8PathBuf) -> Roots {
-        Roots::default()
-            .with_config(base.config().map(|p| p.to_owned()))
-            .with_base(None)
-            .with_target(Some(prefix.clone()))
-            .with_broot(base.broot().map(|p| p.to_owned()))
-            .with_cross_arch(base.is_cross_arch())
-            .with_eprefix(Some(prefix.clone()))
-            .with_config_overlay(Some(prefix.join("etc/portage")))
-            .with_relocate(true)
-            .with_config_root_explicit(base.config_root_explicit().map(|p| p.to_owned()))
-    }
-
-    /// The root model from `--local`/`--prefix`/`--root`/`--config-root`, before
-    /// any `--target` sysroot override (see [`roots`](Self::roots)). Exposed at
-    /// `pub(crate)` so the staged-build driver can install `cross-*` toolchain
-    /// packages (which always live in the outer EROOT, never the sysroot
-    /// subdirectory — see `crossdev/mod.rs`'s module doc) even from a
-    /// `--target`-active invocation.
-    ///
-    /// `merge_root()` of the returned `Roots` is **the outer EROOT** (with
-    /// `--target`'s sysroot substitution undone) — where `use_outer_eroot`
-    /// toolchain-install steps land and where `write_cross_env`/
-    /// `write_sysroot_config` (`crossdev/mod.rs`) write config. Under
-    /// `--prefix` that's the host `/`; under `--local`/`--root` it's the
-    /// offset itself.
-    ///
-    /// **Not necessarily BROOT** — for plain `--root` the two differ (BROOT
-    /// is always the host, see [`host_roots`](Self::host_roots)); they only
-    /// coincide for `--prefix`/`--local`, which is why this function used
-    /// to be (mis)used for BDEPEND checks too. Use `host_roots` for that.
+    /// See [`Topology::base_roots`].
     pub(crate) fn base_roots(&self) -> Roots {
-        let path = opt_path;
-        match self.topology_source() {
-            // `--local` (or active local): standalone Gentoo-Prefix, own BROOT.
-            // Full closure (base == target == the prefix), self-contained VDB.
-            // EPREFIX makes installed scripts relocatable (shebangs reference
-            // ${EPREFIX}/usr/bin/...). See docs/design/root-topology.md § "Override
-            // semantics".
-            TopologySource::Local(prefix) => {
-                // Prefer the prefix's own make.profile when present so a
-                // bootstrapped `--local` tree is self-hosting; fall back to
-                // host config until the first `em --config-root … select
-                // profile` (or setup) lands one. Explicit `--config-root`
-                // still wins via with_config_root_explicit.
-                let prefix_profile = prefix.join("etc/portage/make.profile");
-                let config = if self.config_root.is_some() {
-                    path(&self.config_root)
-                } else if prefix_profile.exists() {
-                    Some(prefix.clone())
-                } else {
-                    None
-                };
-                // An explicit `--root B` alongside `--local` redirects only the
-                // merge *destination* — EPREFIX/BROOT/config-overlay stay
-                // anchored to the local prefix itself (own build context is
-                // the whole point of `--local`). Without this, `self.root` was
-                // silently discarded the instant `--local` matched first in
-                // `topology_source()` — todo/for-sonnet.md 2026-08-08.
-                let target = path(&self.root).unwrap_or_else(|| prefix.clone());
-                Roots::default()
-                    .with_config(config)
-                    .with_base(Some(prefix.clone()))
-                    .with_target(Some(target))
-                    .with_broot(Some(prefix.clone()))
-                    .with_cross_arch(false)
-                    .with_eprefix(Some(prefix.clone()))
-                    .with_config_overlay(Some(prefix.join("etc/portage")))
-                    .with_relocate(true)
-                    .with_config_root_explicit(path(&self.config_root))
-            }
-            // `--prefix` overlay (or active prefix): BROOT is the host `/`.
-            // The prefix is the install destination (target), but
-            // base_roots()'s merge_root() must be the host because that's
-            // what preflight/bdepend_avail check BDEPEND against. roots()
-            // reconstructs the prefix-target view on top of this.
-            TopologySource::Prefix(prefix) => Roots::default()
-                .with_config(path(&self.config_root))
-                .with_base(None)
-                .with_target(None) // BROOT = host `/`, NOT the prefix
-                .with_broot(Some(camino::Utf8PathBuf::from("/")))
-                .with_cross_arch(false)
-                .with_eprefix(Some(prefix.clone()))
-                .with_config_overlay(Some(prefix.join("etc/portage")))
-                .with_relocate(true)
-                .with_config_root_explicit(path(&self.config_root)),
-            // Bare host or `--root` offset.
-            TopologySource::Root | TopologySource::Host => Roots::default()
-                // config: --config-root, else host `/` — true portage `ROOT=`
-                // parity (`PORTAGE_CONFIGROOT` defaults to `/` regardless of
-                // `ROOT`). The 2026-07-09 "own everything" self-contained
-                // default (config following `--root` itself) was reverted
-                // benefit `--root --config-root <same dir>` didn't already
-                // give explicitly, and made a bare `--root DIR` behave unlike
-                // anything a real emerge user would expect.
-                .with_config(path(&self.config_root))
-                // base: --root; host otherwise.
-                .with_base(path(&self.root))
-                // target: --root (install destination). This is "the outer
-                // EROOT" (use_outer_eroot, write_cross_env/
-                // write_sysroot_config in crossdev/mod.rs all rely on this
-                // staying the offset for --root) — a DIFFERENT thing from
-                // BROOT, see satisfaction_root's doc comment.
-                .with_target(path(&self.root))
-                // BROOT is always the real host `/` for `--root`/bare (portage
-                // `ROOT=`/`{target}-emerge` parity) — an offset install borrows
-                // the host's BDEPEND tools, never its own copy.
-                .with_broot(Some(camino::Utf8PathBuf::from("/")))
-                .with_cross_arch(false)
-                .with_eprefix(None)
-                .with_config_overlay(None)
-                .with_relocate(false)
-                .with_config_root_explicit(path(&self.config_root)),
-        }
+        let (topology, root) = self.topology_and_root();
+        topology.base_roots(&root)
     }
 
-    /// The full `Roots` a `MergeRoot::Host`-stamped plan entry actually
-    /// merges into (`merge/mod.rs`'s `entry_roots`) — as opposed to
-    /// [`satisfaction_root`](Roots::satisfaction_root), which only gives a
-    /// bare path for checking whether one is already satisfied.
-    ///
-    /// Two different answers depending on privilege:
-    /// - `--root` (privileged offset, portage `ROOT=` parity): the real host
-    ///   `/` — an unsatisfied Host-routed BDEPEND installs there because the
-    ///   invocation has root to do so.
-    ///
-    /// - `--prefix` (unprivileged overlay): the prefix itself — it cannot
-    ///   write the real host `/`, so an unsatisfied BDEPEND must land there
-    ///   instead. Only the *satisfaction check* stays host-anchored, via
-    ///   `satisfaction_root`/`is_overlay`'s VDB-weave callers.
-    ///
-    /// - `--local`/bare: BROOT already equals the merge root, so the two
-    ///   questions coincide.
+    /// See [`Topology::host_roots`].
     pub(crate) fn host_roots(&self) -> Roots {
-        let base = self.base_roots();
-        if let Some(prefix) = base.eprefix().filter(|_| base.is_overlay()) {
-            // Deliberately the un-redirected anchor (`overlay_anchor`), not
-            // `outer_roots()` — an explicit `--root` retargets the merge
-            // *destination* but never the overlay's own host-shared build
-            // context, so this must stay stable even when `--root` is set.
-            return self.overlay_anchor(&base, prefix.to_path_buf());
-        }
-        // BROOT for a non-overlay topology: `--local` owns its own BROOT (the
-        // prefix itself, so a finished `--local` tree is self-hosting /
-        // relocatable); `--root`/bare borrow the real host `/`.
-        let broot = match self.topology_source() {
-            TopologySource::Local(prefix) => prefix,
-            _ => camino::Utf8PathBuf::from("/"),
-        };
-        Roots::default()
-            .with_config(base.config().map(|p| p.to_owned()))
-            .with_base(Some(broot.clone()))
-            .with_target(Some(broot))
-            .with_broot(base.broot().map(|p| p.to_owned()))
-            .with_cross_arch(base.is_cross_arch())
-            .with_eprefix(base.eprefix().map(|p| p.to_owned()))
-            .with_config_overlay(base.config_overlay().map(|p| p.to_owned()))
-            .with_relocate(base.relocate())
-            .with_config_root_explicit(base.config_root_explicit().map(|p| p.to_owned()))
+        let (topology, root) = self.topology_and_root();
+        topology.host_roots(&root)
     }
 
-    /// The toolchain sysroot as its own merge destination, for a
-    /// `MergeRoot::Base` plan entry (`merge/mod.rs`'s `entry_roots`) —
-    /// `roots().base_merge_root()` promoted to a full `Roots` whose own
-    /// `merge_root()` is the sysroot itself, not the board root.
-    ///
-    /// `None` outside the board-root topology (`--target T --root R`, where
-    /// `base` and `target` genuinely differ): there is no separate sysroot
-    /// merge destination for a `Base` entry to route to there, and
-    /// `root_closure::base` never produces one.
+    /// See [`Topology::sysroot_roots`].
     pub(crate) fn sysroot_roots(&self) -> Option<Roots> {
-        let roots = self.roots();
-        let sysroot = roots.base_merge_root()?.to_owned();
-        Some(
-            Roots::default()
-                .with_config(Some(sysroot.clone()))
-                .with_base(Some(sysroot.clone()))
-                .with_target(Some(sysroot))
-                .with_broot(roots.broot().map(|p| p.to_owned()))
-                .with_cross_arch(true)
-                .with_eprefix(roots.eprefix().map(|p| p.to_owned()))
-                .with_config_overlay(roots.config_overlay().map(|p| p.to_owned()))
-                .with_relocate(roots.relocate())
-                .with_config_root_explicit(roots.config_root_explicit().map(|p| p.to_owned())),
-        )
+        let (topology, root) = self.topology_and_root();
+        topology.sysroot_roots(&root)
     }
 
-    /// Reject an action (`toolchain --setup`, `stages --stage1`/`--stage3`)
-    /// whose resolved destination equals the host install path
-    /// (`host_roots()`) — bare `--local`, bare `--prefix`, bare host, and
-    /// `--local --root <the same local path>` all collapse to this.
-    ///
-    /// `--root DIR` alone, `--prefix P --target T`, and an explicit
-    /// `--root B` redirecting away from `--prefix`/`--local`'s own anchor
-    /// all genuinely differ from `host_roots()` and pass. Replaces an older,
-    /// narrower `merge_root == "/"` check, too narrow to catch a real
-    /// `--prefix --target` bug where a package's `.pc` file baked in the
-    /// outer prefix's path even though nothing was installed there.
+    /// The active applet's `--target` tuple, if any.
+    pub(crate) fn target(&self) -> Option<String> {
+        self.topology_and_root().0.target
+    }
+
+    /// The active applet's `--vdb` override, if any.
+    pub fn vdb(&self) -> Option<String> {
+        self.topology_and_root().0.vdb
+    }
+
+    /// See [`Topology::require_root_distinct_from_host`].
     pub(crate) fn require_root_distinct_from_host(
         &self,
         resolved: &Roots,
         action: &str,
     ) -> anyhow::Result<()> {
-        // `--local` is deliberately exempt: it's self-contained by
-        // construction (never shared for anything else), so bootstrapping
-        // directly into a bare `--local` — no separate `--root` — is the
-        // established, working recipe for standing one up from nothing, not
-        // a footgun. `--prefix` (the overlay case) IS the footgun this
-        // guards: an unredirected `--prefix P` shares its own tree with
-        // whatever else that overlay is used for (`is_overlay()`'s own
-        // "unsatisfied BDEPEND lands in the prefix" role, `host_roots()`'s
-        // doc comment) — building an entire `stages` snapshot straight into
-        // it collides with that role.
-        //
-        // `self.base_roots().is_overlay()`, not `resolved.is_overlay()`:
-        // under `--target`, `roots()` always sets `base = Some(sysroot)`
-        // (never `None`), so `resolved.is_overlay()` is always false there
-        // and this guard never fired — `--prefix P --root P --target T
-        // stages --stage1` sailed straight past it into the live prefix.
-        // `base_roots()` reflects "is this an overlay at all," independent
-        // of any later `--target` substitution.
-        if self.base_roots().is_overlay() && resolved.eprefix() == Some(resolved.merge_root()) {
-            anyhow::bail!(
-                "{action} needs an explicit --root that doesn't equal the host \
-                 install path ({})",
-                resolved.merge_root()
-            );
-        }
-        self.require_destination_not_bare_host(resolved, action)
+        let (topology, root) = self.topology_and_root();
+        topology.require_root_distinct_from_host(&root, resolved, action)
     }
 
-    /// Narrower guard, also used standalone by `toolchain --setup`: only
-    /// rejects the true bare-host case (no `--prefix`/`--local`/`--root`
-    /// given at all — bootstrapping a fresh compiler into the real host `/`
-    /// is meaningless).
-    ///
-    /// Unlike [`require_root_distinct_from_host`], a toolchain bootstrap
-    /// directly into a bare `--prefix`/`--local` (no separate `--root`) is
-    /// the intended, already-verified recipe for giving that overlay/tree
-    /// its own compiler.
+    /// See [`Topology::require_destination_not_bare_host`].
     pub(crate) fn require_destination_not_bare_host(
         &self,
         resolved: &Roots,
         action: &str,
     ) -> anyhow::Result<()> {
-        if resolved.merge_root().as_str() == "/"
-            && resolved.base().is_none()
-            && resolved.eprefix().is_none()
-        {
-            anyhow::bail!(
-                "{action} needs --prefix/--local/--root: a bootstrap into the bare \
-                 host / is meaningless (use the host toolchain directly)"
-            );
-        }
-        Ok(())
+        Topology::require_destination_not_bare_host(resolved, action)
     }
 
     /// Path used by single-repo applets
@@ -701,44 +253,96 @@ impl Cli {
         }
     }
 
-    /// Effective activity-output flags for the dispatched command: the
-    /// applet's own flattened [`ActivityArgs`] (Regen / the crossdev staged
-    /// builds) merged over the top-level set, subcommand winning when set —
-    /// the same precedence `crossdev::merge_merge_flags` uses for `MergeFlags`.
-    /// Applets without their own activity args just get the top-level set.
-    pub fn effective_activity(&self) -> ActivityArgs {
-        use crate::cli::activity::merge_activity_args_fields;
-        let sub = match &self.applet {
-            Some(Applet::Regen { activity, .. }) => activity,
-            Some(Applet::Crossdev(a)) => &a.activity,
-            Some(Applet::Toolchain(a)) => &a.activity,
-            Some(Applet::Stages(a)) => &a.activity,
-            _ => return self.activity.clone(),
-        };
-        merge_activity_args_fields(&self.activity, sub)
+    /// The active applet's own [`MergeFlags`], or the all-`false`/`None` default
+    /// for an applet that doesn't carry one.
+    pub fn merge_flags(&self) -> MergeFlags {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.merge_flags.clone(),
+            Some(Applet::Crossdev(a)) => a.merge_flags.clone(),
+            Some(Applet::Toolchain(a)) => a.merge_flags.clone(),
+            Some(Applet::Stages(a)) => a.merge_flags.clone(),
+            Some(Applet::Setup(a)) => a.merge_flags.clone(),
+            _ => MergeFlags::default(),
+        }
     }
 
-    /// Effective privilege backend for the dispatched command
-    ///
-    /// `--privilege` is read at process start (the supervisor re-exec, before dispatch), so the
-    /// top-level `Cli::privilege` is the base; the crossdev staged applets
-    /// (`crossdev`/`toolchain`/`stages`) carry an optional override that wins when set, so
-    /// `em crossdev --setup --privilege sudo` and `em --privilege sudo crossdev --setup` both
-    /// land on `sudo`.
+    /// The active applet's own [`DepgraphFlags`], or the all-`false` default
+    /// for an applet that doesn't carry one.
+    pub fn depgraph_flags(&self) -> DepgraphFlags {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.depgraph_flags.clone(),
+            Some(Applet::Crossdev(a)) => a.depgraph_flags.clone(),
+            Some(Applet::Toolchain(a)) => a.depgraph_flags.clone(),
+            Some(Applet::Stages(a)) => a.depgraph_flags.clone(),
+            Some(Applet::Setup(a)) => a.depgraph_flags.clone(),
+            _ => DepgraphFlags::default(),
+        }
+    }
+
+    /// Effective activity-output flags for the dispatched command: each
+    /// build-shaped applet (`emerge`/`regen`/`crossdev`/`toolchain`/`stages`/
+    /// `setup`) owns exactly one [`ActivityArgs`] now — this just selects it.
+    pub fn effective_activity(&self) -> ActivityArgs {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.activity.clone(),
+            Some(Applet::Regen { activity, .. }) => activity.clone(),
+            Some(Applet::Crossdev(a)) => a.activity.clone(),
+            Some(Applet::Toolchain(a)) => a.activity.clone(),
+            Some(Applet::Stages(a)) => a.activity.clone(),
+            Some(Applet::Setup(a)) => a.activity.clone(),
+            _ => ActivityArgs::default(),
+        }
+    }
+
+    /// Effective privilege backend for the dispatched command: each
+    /// privilege-relevant applet owns exactly one `--privilege` field
+    /// (default `Privilege::Auto`) now — this just selects it.
     pub fn effective_privilege(&self) -> Privilege {
-        let sub = match &self.applet {
-            Some(Applet::Crossdev(a)) => &a.privilege,
-            Some(Applet::Toolchain(a)) => &a.privilege,
-            Some(Applet::Stages(a)) => &a.privilege,
-            _ => return self.privilege,
-        };
-        sub.unwrap_or(self.privilege)
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.privilege,
+            Some(Applet::Crossdev(a)) => a.privilege,
+            Some(Applet::Toolchain(a)) => a.privilege,
+            Some(Applet::Stages(a)) => a.privilege,
+            Some(Applet::Setup(a)) => a.privilege,
+            _ => Privilege::Auto,
+        }
+    }
+
+    /// `Applet::Emerge`'s own mode switches, or the all-`false` default when
+    /// it isn't the active applet (unreachable in practice: `main.rs`'s
+    /// parse-then-retry always resolves a bare invocation into
+    /// `Applet::Emerge` before dispatch ever inspects it).
+    pub fn mode(&self) -> EmergeModeArgs {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.mode.clone(),
+            _ => EmergeModeArgs::default(),
+        }
+    }
+
+    /// `Applet::Emerge`'s own atom list, or empty when it isn't the active applet.
+    pub fn atoms(&self) -> Vec<String> {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.atoms.clone(),
+            _ => Vec::new(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `Topology`/`RootArg` only live on `EmergeArgs` (and the other build
+    // applets) now, not on `Cli`'s own root — so every test below that used
+    // to write `Cli::parse_from(["em", "--root", …, "atom"])` now goes
+    // through the real, explicit `emerge` applet instead. This is not a
+    // special test-only shim: `em --root R atom` and `em emerge --root R
+    // atom` parse into the exact same `EmergeArgs` (`main.rs`'s parse-then-
+    // retry makes the word `emerge` optional at the CLI), so exercising the
+    // resolution logic through the explicit form covers the bare form too.
+    fn emerge<'a>(argv: impl IntoIterator<Item = &'a str>) -> Cli {
+        Cli::parse_from(["em", "emerge"].into_iter().chain(argv))
+    }
 
     // Clap only validates a subcommand's args when that subcommand is actually
     // built, and only under debug_assertions — so a short-flag collision
@@ -753,15 +357,9 @@ mod tests {
 
     #[test]
     fn tree_and_target_have_distinct_short_flags() {
-        let cli = Cli::parse_from([
-            "em",
-            "-t",
-            "-T",
-            "riscv64-unknown-linux-gnu",
-            "sys-libs/zlib",
-        ]);
-        assert!(cli.merge_flags.tree);
-        assert_eq!(cli.target.as_deref(), Some("riscv64-unknown-linux-gnu"));
+        let cli = emerge(["-t", "-T", "riscv64-unknown-linux-gnu", "sys-libs/zlib"]);
+        assert!(cli.merge_flags().tree);
+        assert_eq!(cli.target().as_deref(), Some("riscv64-unknown-linux-gnu"));
     }
 
     #[test]
@@ -771,8 +369,7 @@ mod tests {
         // bare `/usr/<tuple>` (so `build_sysroot()` keeps returning it —
         // dropping it broke `sys-libs/zlib`'s own sysroot header search,
         // confirmed live), while target/merge_root become `R`.
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--root",
             "/srv/x",
             "--target",
@@ -799,8 +396,7 @@ mod tests {
     #[test]
     fn outer_roots_ignores_bare_root_under_target() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--root",
             "/board",
             "--target",
@@ -813,8 +409,7 @@ mod tests {
         assert_eq!(outer.base(), None);
 
         // `--target` alone (no `--root`) is unaffected either way.
-        let no_root = Cli::parse_from([
-            "em",
+        let no_root = emerge([
             "--target",
             "riscv64-unknown-linux-gnu",
             "-p",
@@ -824,7 +419,7 @@ mod tests {
 
         // No `--target`: a bare `--root` still redirects outer_roots() as
         // always (ordinary, non-cross `--root` usage).
-        let no_target = Cli::parse_from(["em", "--root", "/board", "-p", "sys-libs/zlib"]);
+        let no_target = emerge(["--root", "/board", "-p", "sys-libs/zlib"]);
         assert_eq!(no_target.outer_roots().merge_root().as_str(), "/board");
     }
 
@@ -834,8 +429,7 @@ mod tests {
     #[test]
     fn outer_roots_ignores_prefix_root_under_target() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--prefix",
             "/tmp/a",
             "--root",
@@ -854,7 +448,7 @@ mod tests {
         );
 
         // No `--target`: ordinary `--prefix`+`--root` still redirects.
-        let no_target = Cli::parse_from(["em", "--prefix", "/tmp/a", "--root", "/tmp/b"]);
+        let no_target = emerge(["--prefix", "/tmp/a", "--root", "/tmp/b"]);
         assert_eq!(no_target.outer_roots().merge_root().as_str(), "/tmp/b");
     }
 
@@ -866,8 +460,7 @@ mod tests {
     #[test]
     fn outer_roots_ignores_local_root_under_target() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--local",
             "/tmp/a",
             "--root",
@@ -882,12 +475,11 @@ mod tests {
         assert_eq!(outer.base().map(|p| p.as_str()), Some("/tmp/a"));
 
         // No `--target`: ordinary `--local`+`--root` still redirects.
-        let no_target = Cli::parse_from(["em", "--local", "/tmp/a", "--root", "/tmp/b"]);
+        let no_target = emerge(["--local", "/tmp/a", "--root", "/tmp/b"]);
         assert_eq!(no_target.outer_roots().merge_root().as_str(), "/tmp/b");
 
         // `--local` alone under `--target` (no `--root`) is unaffected.
-        let no_root = Cli::parse_from([
-            "em",
+        let no_root = emerge([
             "--local",
             "/tmp/a",
             "--target",
@@ -909,18 +501,17 @@ mod tests {
         let local = tmp.path().join("loc");
         std::fs::create_dir_all(&local).unwrap();
         let local_s = local.to_str().unwrap();
-        let cli_set = Cli::parse_from(["em", "--local", local_s, "active", "set"]);
+        let cli_set = Cli::parse_from(["em", "active", "--local", local_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command } => command.as_ref(),
+                Applet::Active { command, .. } => command.as_ref(),
                 _ => None,
             }),
             &cli_set,
         )
         .unwrap();
 
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--target",
             "riscv64-unknown-linux-gnu",
             "-p",
@@ -937,7 +528,7 @@ mod tests {
         // rewrite bare-host topology under us.
         let (_tmp, _g) = crate::test_support::isolate_active_state();
         // No `--root`: EROOT is `/`, so the sysroot is `/usr/<tuple>`.
-        let cli = Cli::parse_from(["em", "--target", "riscv64-unknown-linux-gnu", "-p", "zlib"]);
+        let cli = emerge(["--target", "riscv64-unknown-linux-gnu", "-p", "zlib"]);
         assert_eq!(
             cli.roots().merge_root().as_str(),
             "/usr/riscv64-unknown-linux-gnu"
@@ -948,8 +539,7 @@ mod tests {
     // eprefix), not fall back to host paths or nest under the sysroot.
     #[test]
     fn prefix_plus_target_preserves_overlay_relocate() {
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--prefix",
             "/tmp/p",
             "--target",
@@ -994,8 +584,7 @@ mod tests {
     // below is the non-cross twin of this test).
     #[test]
     fn prefix_plus_root_plus_target_sysroot_still_builds_unprefixed() {
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--prefix",
             "/tmp/p",
             "--root",
@@ -1027,11 +616,11 @@ mod tests {
     // files must say so.
     #[test]
     fn plain_prefix_and_local_still_report_build_eprefix() {
-        let prefix = Cli::parse_from(["em", "--prefix", "/tmp/p", "-p", "sys-libs/zlib"]);
+        let prefix = emerge(["--prefix", "/tmp/p", "-p", "sys-libs/zlib"]);
         let pr = prefix.roots();
         assert_eq!(pr.build_eprefix().map(|p| p.as_str()), Some("/tmp/p"));
 
-        let local = Cli::parse_from(["em", "--local", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let local = emerge(["--local", "/tmp/a", "-p", "sys-libs/zlib"]);
         let lr = local.roots();
         assert_eq!(lr.build_eprefix().map(|p| p.as_str()), Some("/tmp/a"));
     }
@@ -1043,8 +632,7 @@ mod tests {
     // `topology_source()` (todo/for-sonnet.md 2026-08-08).
     #[test]
     fn explicit_root_overrides_prefix_destination_only() {
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--prefix",
             "/tmp/a",
             "--root",
@@ -1074,8 +662,7 @@ mod tests {
     // sysroot stays at the prefix (`A/usr/T`), unmoved.
     #[test]
     fn explicit_root_overrides_prefix_destination_under_target() {
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--prefix",
             "/tmp/a",
             "--root",
@@ -1098,8 +685,7 @@ mod tests {
     // (still self-hosting for build-context purposes).
     #[test]
     fn explicit_root_overrides_local_destination_only() {
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--local",
             "/tmp/a",
             "--root",
@@ -1119,8 +705,7 @@ mod tests {
     // toolchain's own sysroot (`A/usr/T`).
     #[test]
     fn explicit_root_overrides_local_destination_under_target() {
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--local",
             "/tmp/a",
             "--root",
@@ -1143,8 +728,7 @@ mod tests {
     // `require_root_distinct_from_host` must still reject.
     #[test]
     fn root_matching_local_is_not_a_distinct_override() {
-        let cli = Cli::parse_from([
-            "em",
+        let cli = emerge([
             "--local",
             "/tmp/a",
             "--root",
@@ -1167,34 +751,33 @@ mod tests {
         // `--local` is exempt: self-contained by construction, bootstrapping
         // directly into it (no separate --root) is the intended recipe, not
         // a footgun — see the doc comment on the function under test.
-        let local = Cli::parse_from(["em", "--local", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let local = emerge(["--local", "/tmp/a", "-p", "sys-libs/zlib"]);
         assert!(
             local
                 .require_root_distinct_from_host(&local.roots(), "test")
                 .is_ok()
         );
 
-        let prefix = Cli::parse_from(["em", "--prefix", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let prefix = emerge(["--prefix", "/tmp/a", "-p", "sys-libs/zlib"]);
         assert!(
             prefix
                 .require_root_distinct_from_host(&prefix.roots(), "test")
                 .is_err()
         );
 
-        let bare = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        let bare = emerge(["-p", "sys-libs/zlib"]);
         assert!(
             bare.require_root_distinct_from_host(&bare.roots(), "test")
                 .is_err()
         );
 
-        let root = Cli::parse_from(["em", "--root", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let root = emerge(["--root", "/tmp/a", "-p", "sys-libs/zlib"]);
         assert!(
             root.require_root_distinct_from_host(&root.roots(), "test")
                 .is_ok()
         );
 
-        let prefix_target = Cli::parse_from([
-            "em",
+        let prefix_target = emerge([
             "--prefix",
             "/tmp/a",
             "--target",
@@ -1208,8 +791,7 @@ mod tests {
                 .is_ok()
         );
 
-        let prefix_root = Cli::parse_from([
-            "em",
+        let prefix_root = emerge([
             "--prefix",
             "/tmp/a",
             "--root",
@@ -1228,8 +810,7 @@ mod tests {
         // `resolved.is_overlay()` is always false once `--target` sets
         // `base = Some(sysroot)`, so this used to sail straight past
         // undetected; `self.base_roots().is_overlay()` catches it.
-        let prefix_root_target = Cli::parse_from([
-            "em",
+        let prefix_root_target = emerge([
             "--prefix",
             "/tmp/a",
             "--root",
@@ -1255,27 +836,27 @@ mod tests {
     fn require_destination_not_bare_host_only_rejects_true_bare_host() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
 
-        let local = Cli::parse_from(["em", "--local", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let local = emerge(["--local", "/tmp/a", "-p", "sys-libs/zlib"]);
         assert!(
             local
                 .require_destination_not_bare_host(&local.roots(), "test")
                 .is_ok()
         );
 
-        let prefix = Cli::parse_from(["em", "--prefix", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let prefix = emerge(["--prefix", "/tmp/a", "-p", "sys-libs/zlib"]);
         assert!(
             prefix
                 .require_destination_not_bare_host(&prefix.roots(), "test")
                 .is_ok()
         );
 
-        let root = Cli::parse_from(["em", "--root", "/tmp/a", "-p", "sys-libs/zlib"]);
+        let root = emerge(["--root", "/tmp/a", "-p", "sys-libs/zlib"]);
         assert!(
             root.require_destination_not_bare_host(&root.roots(), "test")
                 .is_ok()
         );
 
-        let bare = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        let bare = emerge(["-p", "sys-libs/zlib"]);
         assert!(
             bare.require_destination_not_bare_host(&bare.roots(), "test")
                 .is_err()
@@ -1285,7 +866,7 @@ mod tests {
     #[test]
     fn no_cross_keeps_base_roots() {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
-        let cli = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["-p", "sys-libs/zlib"]);
         let r = cli.roots();
         assert_eq!(r.config(), None);
         assert_eq!(r.merge_root().as_str(), "/");
@@ -1299,17 +880,17 @@ mod tests {
         let prefix = tmp.path().join("pfx");
         std::fs::create_dir_all(&prefix).unwrap();
         let prefix_s = prefix.to_str().unwrap();
-        let cli_set = Cli::parse_from(["em", "--prefix", prefix_s, "active", "set"]);
+        let cli_set = Cli::parse_from(["em", "active", "--prefix", prefix_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command } => command.as_ref(),
+                Applet::Active { command, .. } => command.as_ref(),
                 _ => None,
             }),
             &cli_set,
         )
         .unwrap();
 
-        let bare = Cli::parse_from(["em", "-p", "sys-libs/zlib"]);
+        let bare = emerge(["-p", "sys-libs/zlib"]);
         let r = bare.roots();
         let canon = prefix.canonicalize().unwrap();
         let canon_s = canon.to_str().unwrap();
@@ -1326,17 +907,17 @@ mod tests {
         let prefix = tmp.path().join("pfx");
         std::fs::create_dir_all(&prefix).unwrap();
         let prefix_s = prefix.to_str().unwrap();
-        let cli_set = Cli::parse_from(["em", "--prefix", prefix_s, "active", "set"]);
+        let cli_set = Cli::parse_from(["em", "active", "--prefix", prefix_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command } => command.as_ref(),
+                Applet::Active { command, .. } => command.as_ref(),
                 _ => None,
             }),
             &cli_set,
         )
         .unwrap();
 
-        let cli = Cli::parse_from(["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--root", "/srv/x", "-p", "sys-libs/zlib"]);
         let r = cli.roots();
         assert_eq!(r.merge_root().as_str(), "/srv/x");
         assert_eq!(
@@ -1361,7 +942,7 @@ mod tests {
         unsafe {
             std::env::set_var("HOME", "/tmp/fake-home");
         }
-        let cli = Cli::parse_from(["em", "--local", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--local", "-p", "sys-libs/zlib"]);
         let r = cli.base_roots();
         assert_eq!(
             r.base().unwrap().as_str(),
@@ -1392,7 +973,7 @@ mod tests {
         // make.profile can be a symlink or empty dir; existence is enough.
         std::fs::create_dir_all(prefix.join("etc/portage/make.profile")).unwrap();
         let prefix_s = prefix.to_str().unwrap();
-        let cli = Cli::parse_from(["em", "--local", prefix_s, "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--local", prefix_s, "-p", "sys-libs/zlib"]);
         let r = cli.base_roots();
         assert_eq!(
             r.config().map(|p| p.as_str()),
@@ -1407,7 +988,7 @@ mod tests {
     // a prefix python. See docs/design/root-topology.md § "Override semantics".
     #[test]
     fn prefix_sets_eprefix_for_relocatable_overlay() {
-        let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
         let r = cli.base_roots();
         assert_eq!(
             r.eprefix().unwrap().as_str(),
@@ -1426,7 +1007,7 @@ mod tests {
     // See docs/design/root-topology.md § "Override semantics".
     #[test]
     fn prefix_overlay_broot_is_host_not_prefix() {
-        let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
         // BROOT (base_roots) → host `/`.
         assert_eq!(
             cli.base_roots().merge_root().as_str(),
@@ -1450,7 +1031,7 @@ mod tests {
     // merge destination (`merge_root()`) differs here.
     #[test]
     fn prefix_overlay_broot_merges_into_prefix_not_host() {
-        let cli = Cli::parse_from(["em", "--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--prefix", "/opt/p", "-p", "sys-libs/zlib"]);
         let broot = cli.host_roots();
         assert_eq!(
             broot.merge_root().as_str(),
@@ -1475,7 +1056,7 @@ mod tests {
     // meaning (see both their doc comments).
     #[test]
     fn root_broot_is_host_not_offset() {
-        let cli = Cli::parse_from(["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--root", "/srv/x", "-p", "sys-libs/zlib"]);
         assert_eq!(
             cli.roots().satisfaction_root(DepClass::Bdepend).as_str(),
             "/",
@@ -1498,11 +1079,40 @@ mod tests {
     // covered by `local_is_standalone_not_overlay`).
     #[test]
     fn local_with_path_uses_dir_directly() {
-        let cli = Cli::parse_from(["em", "--local", "/tmp/x", "-p", "sys-libs/zlib"]);
+        let cli = emerge(["--local", "/tmp/x", "-p", "sys-libs/zlib"]);
         let r = cli.base_roots();
         assert_eq!(r.base().unwrap().as_str(), "/tmp/x");
         assert_eq!(r.target().unwrap().as_str(), "/tmp/x");
         assert_eq!(r.eprefix().unwrap().as_str(), "/tmp/x");
+    }
+
+    // The word `emerge` is optional at the CLI (`main.rs`'s parse-then-retry
+    // makes the bare and explicit forms parse into the exact same
+    // `EmergeArgs`) — verified structurally here rather than through
+    // `main.rs`'s process-level retry, which isn't reachable from a unit test.
+    #[test]
+    fn bare_and_explicit_emerge_agree_on_topology() {
+        let bare_style = emerge(["--root", "/srv/x", "-p", "sys-libs/zlib"]);
+        let Some(Applet::Emerge(args)) = &bare_style.applet else {
+            panic!("expected Applet::Emerge");
+        };
+        assert_eq!(args.root_arg.root.as_deref(), Some("/srv/x"));
+        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+    }
+
+    // `crossdev` deliberately never flattens `RootArg` (see `CrossdevArgs`'s
+    // doc comment) — `--root` must be a clap parse error, not merely ignored,
+    // in any position.
+    #[test]
+    fn crossdev_rejects_root_in_any_position() {
+        assert!(
+            Cli::try_parse_from(["em", "crossdev", "--setup", "--root", "/tmp/a"]).is_err(),
+            "--root after crossdev must be a clap error"
+        );
+        assert!(
+            Cli::try_parse_from(["em", "crossdev", "--root", "/tmp/a", "--setup"]).is_err(),
+            "--root anywhere in crossdev's own arg list must be a clap error"
+        );
     }
 }
 
@@ -1593,12 +1203,20 @@ pub enum Applet {
         /// Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
         #[arg(short = 'w', long, value_name = "DIR")]
         work_dir: Option<camino::Utf8PathBuf>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "System maintenance and health checks")]
     Maint {
         #[command(subcommand)]
         command: Option<MaintCommand>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Query Portage internal variables and data")]
@@ -1626,12 +1244,24 @@ pub enum Applet {
     Sync {
         /// Repo names from repos.conf (default: auto-sync enabled repos)
         repos: Vec<String>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Remove orphaned/unused packages")]
     Depclean {
         #[arg(trailing_var_arg = true)]
         atoms: Vec<String>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
+        /// `--exclude`/`--with-bdeps` only — the rest of `MergeFlags` means
+        /// nothing to depclean's own read-then-remove walk.
+        #[command(flatten)]
+        merge_flags: MergeFlags,
     },
 
     #[command(about = "Regenerate metadata cache")]
@@ -1653,6 +1283,10 @@ pub enum Applet {
         /// `--emergelog`) — `em regen` drives its own activity bus.
         #[command(flatten)]
         activity: ActivityArgs,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Create binary packages from installed files")]
@@ -1666,6 +1300,10 @@ pub enum Applet {
         /// Include unmodified CONFIG_PROTECT files
         #[arg(long)]
         include_unmodified_config: bool,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(
@@ -1725,12 +1363,20 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         /// Allow --delete even when some ebuilds had no metadata cache entry
         #[arg(long)]
         delete_allow_incomplete: bool,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Query package information")]
     Query {
         #[command(subcommand)]
         command: QueryCommand,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Clean distfiles and/or binary packages")]
@@ -1812,12 +1458,20 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         /// following --config-root/--local/--prefix)
         #[arg(long = "make-conf", value_name = "PATH")]
         make_conf: Option<camino::Utf8PathBuf>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Edit per-package configuration (package.use, .keywords, .mask, .env)")]
     Pkg {
         #[command(subcommand)]
         command: PkgCommand,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Rebuild packages with broken shared library deps")]
@@ -1825,6 +1479,10 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         /// Only consider consumers of libraries whose soname contains NAME
         #[arg(short = 'L', long, value_name = "NAME")]
         library: Option<String>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Display Portage elog files")]
@@ -1840,12 +1498,20 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         /// Remove each file once it has been shown
         #[arg(long)]
         delete: bool,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Analyze emerge.log")]
     Log {
         #[command(subcommand)]
         command: Option<LogCommand>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Search inside ebuilds and eclasses")]
@@ -1873,6 +1539,10 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         /// Pattern to search (required unless --all)
         #[arg(required_unless_present = "all")]
         pattern: Option<String>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Parse/split atom strings")]
@@ -1885,6 +1555,10 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     Select {
         #[command(subcommand)]
         command: SelectCommand,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     /// Register a default `--prefix` / `--local` so bare `em <pkg>` picks it up (dogfooding)
@@ -1895,6 +1569,10 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     Active {
         #[command(subcommand)]
         command: Option<ActiveCommand>,
+        /// `--root` is deliberately not part of this: it is never registerable
+        /// (see the module doc in `crate::active`).
+        #[command(flatten)]
+        topology: Topology,
     },
 
     #[command(about = "Bootstrap a prefix layout (use with --local or --prefix)")]
@@ -1918,7 +1596,22 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     Etc,
 
     #[command(about = "Regenerate /etc/profile.env and ld.so cache")]
-    Env,
+    Env {
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
+    },
+
+    /// Resolve and merge/unmerge packages — the same engine bare `em <atoms>` uses
+    ///
+    /// The word `emerge` is optional: `em <atoms> [flags]` and `em emerge <atoms>
+    /// [flags]` parse into the exact same [`EmergeArgs`] (see `main.rs`'s
+    /// parse-then-retry-with-`emerge`-injected fallback) — this variant exists so
+    /// the merge path is a real, self-contained applet like `crossdev`/`toolchain`/
+    /// `stages`, not a special-cased shadow copy living directly on `Cli`.
+    #[command(about = "Resolve and merge/unmerge packages (emerge workalike)")]
+    Emerge(EmergeArgs),
 }
 
 /// `em setup` — bootstrap a prefix layout
@@ -1934,12 +1627,38 @@ pub struct SetupArgs {
     /// itself; this is for anywhere else you keep them.
     #[arg(long, value_name = "DIR")]
     pub extra_path: Vec<camino::Utf8PathBuf>,
+
+    #[command(flatten)]
+    pub topology: Topology,
+
+    #[command(flatten)]
+    pub root_arg: RootArg,
+
+    #[command(flatten)]
+    pub depgraph_flags: DepgraphFlags,
+
+    #[command(flatten)]
+    pub merge_flags: MergeFlags,
+
+    #[command(flatten)]
+    pub activity: ActivityArgs,
+
+    /// Privilege backend for this setup run (see [`Privilege`])
+    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    pub privilege: Privilege,
 }
 
 /// `em crossdev` — cross-target setup, mirroring crossdev's option surface (the
 /// no-build subset for now; building the toolchain is future work).
 #[derive(clap::Args)]
 pub struct CrossdevArgs {
+    /// `--prefix`/`--local`/`--config-root`/`--vdb`/`--target` for this cross
+    /// target. Deliberately no [`RootArg`]: none of `crossdev`'s three actions
+    /// (`--init-target`/`--setup`/`--show-target-cfg`) read `--root` — it is a
+    /// clap-level parse error, in any position, when `crossdev` is active.
+    #[command(flatten)]
+    pub topology: Topology,
+
     /// Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no per-target
     /// compiler)
     ///
@@ -1985,10 +1704,9 @@ pub struct CrossdevArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Override the top-level `--privilege` for this crossdev run only (see
-    /// [`Cli::effective_privilege`]).
-    #[arg(long, value_enum, value_name = "MODE")]
-    pub privilege: Option<Privilege>,
+    /// Privilege backend for this crossdev run (see [`Privilege`])
+    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    pub privilege: Privilege,
 }
 
 /// `em toolchain` — bootstrap a self-hosting native toolchain into `--root`
@@ -2007,6 +1725,12 @@ pub struct ToolchainArgs {
     pub setup: bool,
 
     #[command(flatten)]
+    pub topology: Topology,
+
+    #[command(flatten)]
+    pub root_arg: RootArg,
+
+    #[command(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
     #[command(flatten)]
@@ -2015,10 +1739,9 @@ pub struct ToolchainArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Override the top-level `--privilege` for this toolchain run only (see
-    /// [`Cli::effective_privilege`]).
-    #[arg(long, value_enum, value_name = "MODE")]
-    pub privilege: Option<Privilege>,
+    /// Privilege backend for this toolchain run (see [`Privilege`])
+    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    pub privilege: Privilege,
 }
 
 // `em stages` — assemble stage-build artifacts (stage1/stage3/stage4) *using*
@@ -2041,6 +1764,12 @@ pub struct StagesArgs {
     pub stage3: bool,
 
     #[command(flatten)]
+    pub topology: Topology,
+
+    #[command(flatten)]
+    pub root_arg: RootArg,
+
+    #[command(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
     #[command(flatten)]
@@ -2049,10 +1778,42 @@ pub struct StagesArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Override the top-level `--privilege` for this stages run only (see
-    /// [`Cli::effective_privilege`]).
-    #[arg(long, value_enum, value_name = "MODE")]
-    pub privilege: Option<Privilege>,
+    /// Privilege backend for this stages run (see [`Privilege`])
+    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    pub privilege: Privilege,
+}
+
+/// `em emerge` — resolve and merge/unmerge packages (real emerge workalike)
+///
+/// The explicit, self-contained form of the bare `em <atoms>` path — see
+/// [`Applet::Emerge`]'s doc comment.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct EmergeArgs {
+    #[command(flatten)]
+    pub topology: Topology,
+
+    #[command(flatten)]
+    pub root_arg: RootArg,
+
+    #[command(flatten)]
+    pub mode: EmergeModeArgs,
+
+    #[command(flatten)]
+    pub merge_flags: MergeFlags,
+
+    #[command(flatten)]
+    pub depgraph_flags: DepgraphFlags,
+
+    #[command(flatten)]
+    pub activity: ActivityArgs,
+
+    /// Privilege backend for this merge (see [`Privilege`])
+    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    pub privilege: Privilege,
+
+    /// Atoms, package sets (`@world`), or ebuild paths to act on
+    #[arg(value_name = "ATOM", num_args = 1..)]
+    pub atoms: Vec<String>,
 }
 
 #[derive(Subcommand)]

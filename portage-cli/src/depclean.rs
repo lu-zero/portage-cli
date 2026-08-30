@@ -222,17 +222,17 @@ fn removal_order(cleanlist: &[InstalledPackage], with_bdeps: bool) -> Vec<Instal
         .collect()
 }
 
-/// `-c`/`--depclean`: mirrors `emerge.rs::unmerge_atoms`'s own structure
-/// (root/shell setup, `-p`/`--ask` gating, preserve-libs reporting) but
-/// computes its own removal list instead of taking it from the command
-/// line directly.
-pub async fn run(cli: &cli::Cli) -> Result<()> {
-    run_with_targets(cli, &cli.atoms).await
-}
-
-/// Same as [`run`], but takes the target atom list explicitly so the
-/// `em depclean <atoms>` applet path can forward its trailing args.
-pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<()> {
+/// `-c`/`--depclean` / `em depclean [atoms]`: mirrors `emerge.rs::unmerge_atoms`'s
+/// own structure (root/shell setup, `-p`/`--ask` gating, preserve-libs
+/// reporting) but computes its own removal list instead of taking it from
+/// the command line directly. Takes the target atom list and merge flags
+/// explicitly — both `em -c` (`EmergeArgs`'s own fields) and `em depclean
+/// <atoms>` (its own, identically-shaped fields) forward through here.
+pub async fn run_with_targets(
+    cli: &cli::Cli,
+    raw_targets: &[String],
+    merge_flags: &cli::MergeFlags,
+) -> Result<()> {
     let vdb = open_cli_vdb(cli)?;
     let roots = cli.roots();
     let root = roots.merge_root().to_owned();
@@ -247,14 +247,14 @@ pub async fn run_with_targets(cli: &cli::Cli, raw_targets: &[String]) -> Result<
     }
     // Strict parse: a typo on the command line must not degrade a targeted
     // depclean into a full-system clean (empty target_atoms ⇒ unrestricted).
-    let exclude_atoms = parse_atoms_strict(&cli.merge_flags.exclude)?;
+    let exclude_atoms = parse_atoms_strict(&merge_flags.exclude)?;
     let target_atoms = parse_atoms_strict(raw_targets)?;
     if !raw_targets.is_empty() && target_atoms.is_empty() {
         // Unreachable with strict parse (non-empty raw always yields non-empty
         // or Err), kept as a belt-and-braces guard against future refactors.
         bail!("depclean: no valid target atoms");
     }
-    let with_bdeps = cli.merge_flags.with_bdeps;
+    let with_bdeps = merge_flags.with_bdeps;
 
     let installed: Vec<InstalledPackage> = vdb.packages().into_iter().collect();
     let cleanlist = compute_cleanlist(

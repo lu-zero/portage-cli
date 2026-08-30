@@ -418,7 +418,7 @@ mod tests {
 
     fn test_roots(dir: &std::path::Path) -> Roots {
         let root = dir.join("root");
-        let cli = Cli::parse_from(["em", "--root", root.to_str().unwrap()]);
+        let cli = Cli::parse_from(["em", "emerge", "--root", root.to_str().unwrap()]);
         cli.outer_roots().with_own_config_root_if_self_contained()
     }
 
@@ -513,6 +513,7 @@ mod tests {
             },
             &Cli::parse_from([
                 "em",
+                "emerge",
                 "--root",
                 dir.path().join("root").to_str().unwrap(),
                 "--config-root",

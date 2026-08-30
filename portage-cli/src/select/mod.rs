@@ -220,7 +220,7 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from(["em", "--prefix", prefix]);
+        let cli = Cli::parse_from(["em", "emerge", "--prefix", prefix]);
         assert_eq!(get_chost(&cli), expected);
     }
 
@@ -240,7 +240,7 @@ mod tests {
         // `["em"]` alone (zero args) trips clap's `arg_required_else_help`
         // (prints help and exits the process) — pass `--root /` explicitly,
         // matching `binpkg.rs`'s own tests for the same reason.
-        let cli = Cli::parse_from(["em", "--root", "/"]);
+        let cli = Cli::parse_from(["em", "emerge", "--root", "/"]);
         assert!(!is_prefix_context(&cli));
         assert_eq!(get_chost(&cli), expected);
     }

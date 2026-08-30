@@ -14,24 +14,21 @@ use crate::vdb::open_cli_vdb;
 use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, vdb};
 
 /// Dispatch one parsed invocation to its applet or the default emerge path
+///
+/// `None` only reaches here for a genuinely applet-less invocation
+/// (`em --info`, `em -p` with nothing else) — `main.rs`'s parse-then-retry
+/// resolves any invocation carrying atoms or emerge-mode flags into
+/// `Applet::Emerge` before this ever runs.
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     match &cli.applet {
+        Some(Applet::Emerge(args)) => emerge::run_emerge(cli, args).await,
         Some(applet) => run_applet(applet, cli).await,
         None => {
             if cli.info {
                 return crate::info::run(cli).await;
             }
-            // `-c`/`--depclean` with no atoms is its primary mode ("clean
-            // everything unreachable from @world"); `-r`/`--resume` takes
-            // its package list from the saved state, never the command
-            // line — both are legitimate bare (no-atom) invocations, unlike
-            // every other bare invocation, which needs at least one atom to
-            // act on.
-            if cli.atoms.is_empty() && !cli.depclean && !cli.resume {
-                eprintln!("em: no atoms or applet specified. Use --help for usage.");
-                std::process::exit(1);
-            }
-            emerge::run_emerge(cli).await
+            eprintln!("em: no atoms or applet specified. Use --help for usage.");
+            std::process::exit(1);
         }
     }
 }
@@ -101,6 +98,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             ebuild_path,
             phase,
             work_dir,
+            ..
         } => {
             let repo_override = globals.repo.as_deref();
             let roots = globals.roots();
@@ -122,20 +120,22 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Maint { command } => run_maint(command, globals).await,
+        Applet::Maint { command, .. } => run_maint(command, globals).await,
         Applet::Portageq { command, args } => {
             eprintln!("portageq: command={} args={:?}", command, args);
             bail!("not implemented: portageq")
         }
-        Applet::Sync { repos } => maint::sync::run(repos, globals).await,
-        Applet::Depclean { atoms } => crate::depclean::run_with_targets(globals, atoms).await,
+        Applet::Sync { repos, .. } => maint::sync::run(repos, globals).await,
+        Applet::Depclean {
+            atoms, merge_flags, ..
+        } => crate::depclean::run_with_targets(globals, atoms, merge_flags).await,
         Applet::Regen {
             repos,
             output,
             repos_dir,
             jobs,
             dedup,
-            activity: _,
+            ..
         } => {
             regen::run(
                 globals,
@@ -152,6 +152,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             atoms,
             include_config,
             include_unmodified_config,
+            ..
         } => {
             crate::quickpkg::run(
                 globals,
@@ -178,6 +179,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             verify_existing_digest,
             gentoo_mirrors_fallback,
             delete_allow_incomplete,
+            ..
         } => {
             let deletion_delay = humantime::parse_duration(deletion_delay)
                 .with_context(|| format!("--deletion-delay {deletion_delay:?}"))?;
@@ -202,8 +204,8 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Pkg { command } => pkg::run(command, globals).await,
-        Applet::Query { command } => run_query(command, globals).await,
+        Applet::Pkg { command, .. } => pkg::run(command, globals).await,
+        Applet::Query { command, .. } => run_query(command, globals).await,
         Applet::Clean { target } => run_clean(target),
         Applet::Use {
             add,
@@ -216,6 +218,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             global,
             local_desc,
             make_conf,
+            ..
         } => {
             use_flags::run(
                 globals,
@@ -234,14 +237,15 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Revdep { library } => crate::revdep::run(globals, library.as_deref()).await,
+        Applet::Revdep { library, .. } => crate::revdep::run(globals, library.as_deref()).await,
         Applet::Read {
             package,
             list,
             limit,
             delete,
+            ..
         } => crate::elog::run_read(globals, package.as_deref(), *list, *limit, *delete).await,
-        Applet::Log { command } => run_log(command, globals),
+        Applet::Log { command, .. } => run_log(command, globals),
         Applet::Grep { pattern, paths } => {
             eprintln!("grep: pattern={} paths={:?}", pattern, paths);
             bail!("not implemented: grep")
@@ -252,6 +256,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             name_only,
             homepage,
             pattern,
+            ..
         } => {
             search::run(
                 &globals.search_repos(),
@@ -267,8 +272,8 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             run_atom(atoms);
             Ok(())
         }
-        Applet::Select { command } => select::run(command, globals).await,
-        Applet::Active { command } => crate::active::run(command.as_ref(), globals),
+        Applet::Select { command, .. } => select::run(command, globals).await,
+        Applet::Active { command, .. } => crate::active::run(command.as_ref(), globals),
         Applet::Setup(args) => setup::run(globals, args).await,
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
         Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
@@ -281,7 +286,8 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             eprintln!("etc-update");
             bail!("not implemented: etc-update")
         }
-        Applet::Env => maint::env::env_update(globals.roots().merge_root()),
+        Applet::Env { .. } => maint::env::env_update(globals.roots().merge_root()),
+        Applet::Emerge(args) => emerge::run_emerge(globals, args).await,
     }
 }
 
@@ -408,8 +414,12 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             // See `DepgraphOpts::host_merge_root`: `Cli::host_roots()` stays
             // overlay-aware under `--target` substitution, unlike `roots`.
             let host_roots = globals.host_roots();
-            let binpkg_index =
-                binpkg::open_local_index_for_preview(globals, &globals.merge_flags).await;
+            // `equery depgraph` has no `MergeFlags` of its own (its inline
+            // fields above are the whole surface) — an empty `MergeFlags`
+            // here, not a top-level one, since `Cli` no longer carries one to
+            // read outside `Applet::Emerge`/the staged-build applets.
+            let merge_flags = cli::MergeFlags::default();
+            let binpkg_index = binpkg::open_local_index_for_preview(globals, &merge_flags).await;
             let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
                 set,
                 atoms: &atoms,
@@ -420,32 +430,32 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 arch: &globals.arch,
                 format: *format,
                 verbose: globals.verbose,
-                empty: *emptytree || globals.merge_flags.emptytree,
+                empty: *emptytree,
                 // equery depgraph is read-only: it reports autounmask candidates
                 // (mask/keyword/USE fixes) but must never write them to
                 // /etc/portage — that's `em`'s job, not a query command's.
                 autounmask_write: false,
                 autounmask_persist: query::depgraph::AutounmaskPersist::Never,
                 ask: false,
-                autosolve_use: *autosolve_use || globals.merge_flags.autosolve_use,
+                autosolve_use: *autosolve_use,
                 autounmask_widen: false,
                 roots: &roots,
                 host_merge_root: host_roots.merge_root(),
-                onlydeps: *onlydeps || globals.merge_flags.onlydeps,
-                with_bdeps: *with_bdeps || globals.merge_flags.with_bdeps,
-                root_deps_rdeps: *root_deps || globals.merge_flags.root_deps,
-                deep: depgraph_flags.deep || globals.depgraph_flags.deep,
-                update: globals.merge_flags.update,
-                newuse: depgraph_flags.newuse || globals.depgraph_flags.newuse,
-                changed_use: depgraph_flags.changed_use || globals.depgraph_flags.changed_use,
-                noreplace: globals.merge_flags.noreplace,
-                nodeps: globals.nodeps,
+                onlydeps: *onlydeps,
+                with_bdeps: *with_bdeps,
+                root_deps_rdeps: *root_deps,
+                deep: depgraph_flags.deep,
+                update: false,
+                newuse: depgraph_flags.newuse,
+                changed_use: depgraph_flags.changed_use,
+                noreplace: false,
+                nodeps: false,
                 extra_use_override: None,
                 sysroot_override: None,
                 binpkg_index: binpkg_index.as_ref(),
-                exclude: &globals.merge_flags.exclude,
+                exclude: &merge_flags.exclude,
                 resume_completed: std::collections::HashSet::new(),
-                complete_graph: globals.merge_flags.complete_graph,
+                complete_graph: false,
                 quiet: false,
             })
             .await?;

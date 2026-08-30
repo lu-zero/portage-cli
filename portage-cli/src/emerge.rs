@@ -335,7 +335,8 @@ async fn emerge_atoms_inner(
         sysroot_override,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
-    let merge_flags = merge_flags_override.as_ref().unwrap_or(&cli.merge_flags);
+    let merge_flags = merge_flags_override.unwrap_or_else(|| cli.merge_flags());
+    let merge_flags = &merge_flags;
     let resolved = cli.repo_path();
     let repo_path = camino::Utf8Path::new(&resolved);
     if !repo_path.is_dir() {
@@ -384,8 +385,7 @@ async fn emerge_atoms_inner(
     // supplies the not-yet-written config in memory (staged crossdev `-p`/an
     // unconfirmed `-a` on a never-initialized target).
     if let Some(tuple) = cli
-        .target
-        .as_deref()
+        .target()
         .filter(|_| !use_outer_eroot && sysroot_override.is_none())
     {
         let cfg = roots.config().unwrap_or_else(|| camino::Utf8Path::new("/"));
@@ -501,11 +501,10 @@ async fn emerge_atoms_inner(
     let depgraph_flags = depgraph_flags_override
         .as_ref()
         .map(|f| (f.deep, f.newuse, f.changed_use))
-        .unwrap_or((
-            cli.depgraph_flags.deep,
-            cli.depgraph_flags.newuse,
-            cli.depgraph_flags.changed_use,
-        ));
+        .unwrap_or_else(|| {
+            let f = cli.depgraph_flags();
+            (f.deep, f.newuse, f.changed_use)
+        });
     let binpkg_index = binpkg::open_local_index_for_preview(cli, merge_flags).await;
     // Cross-alias targets (`cross-<tuple>/pkg`) only exist under crossdev
     // management, so they opt this resolve into widened candidate supply —
@@ -536,7 +535,7 @@ async fn emerge_atoms_inner(
         // never prompt.
         ask: merge_flags.ask && !cli.pretend,
         autosolve_use: merge_flags.autosolve_use,
-        autounmask_widen: autounmask_widen || cli.target.is_some() || cross_alias_targets,
+        autounmask_widen: autounmask_widen || cli.target().is_some() || cross_alias_targets,
         roots: &roots,
         host_merge_root: host_roots.merge_root(),
         onlydeps: merge_flags.onlydeps,
@@ -845,42 +844,45 @@ async fn emerge_atoms_inner(
     Ok(())
 }
 
-/// Run the default emerge path for a parsed CLI invocation
-pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
+/// Run `Applet::Emerge` (real emerge workalike) or the bare `em <atoms>` path
+/// — `cli.applet` is already `Some(Applet::Emerge(args))` by the time either
+/// reaches here (`main.rs`'s parse-then-retry makes the word `emerge` optional).
+pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
     // emerge -r/--resume: replaces the whole action, same precedence real
     // emerge gives it (checked first, ahead of every other action flag).
-    if cli.resume {
-        return resume_atoms(cli).await;
+    if args.mode.resume {
+        return resume_atoms(cli, args).await;
     }
     // emerge -C: remove the matching installed packages directly, no
     // dependency graph at all. Checked first: -C together with -s/-S makes
     // no sense, and real emerge treats -C as its own action too.
-    if cli.unmerge {
-        return unmerge_atoms(cli, &cli.atoms).await;
+    if args.mode.unmerge {
+        return unmerge_atoms(cli, &args.atoms).await;
     }
     // emerge --depclean / -c: the safe alternative to -C, walking the
     // installed dependency graph first.
-    if cli.depclean {
-        return crate::depclean::run(cli).await;
+    if args.mode.depclean {
+        return crate::depclean::run_with_targets(cli, &args.atoms, &args.merge_flags).await;
     }
     // emerge -P/--prune: like -C, but only the non-highest-version matches.
-    if cli.prune {
-        return prune_atoms(cli, &cli.atoms).await;
+    if args.mode.prune {
+        return prune_atoms(cli, &args.atoms).await;
     }
     // emerge -W/--deselect: world-file-only, no removal at all.
-    if cli.deselect {
-        return deselect_atoms(cli, &cli.atoms);
+    if args.mode.deselect {
+        return deselect_atoms(cli, &args.atoms);
     }
     // emerge -s / -S: the arguments are search patterns, not atoms.
-    if cli.search || cli.searchdesc {
-        return search::run_emerge_style(&cli.search_repos(), &cli.atoms, cli.searchdesc).await;
+    if args.mode.search || args.mode.searchdesc {
+        return search::run_emerge_style(&cli.search_repos(), &args.atoms, args.mode.searchdesc)
+            .await;
     }
     emerge_atoms(
         cli,
-        &cli.atoms,
+        &args.atoms,
         EmergeOpts {
             use_override: &[],
-            nodeps: cli.nodeps,
+            nodeps: args.mode.nodeps,
             depgraph_flags: None,
             merge_flags: None,
             use_outer_eroot: false,
@@ -910,8 +912,8 @@ pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
 /// ephemeral UI (`-a`/`--tree`/`--json`) comes only from this invocation;
 /// `-X` unions into the saved exclude list. See that function's doc for
 /// why clap cannot express "turn a saved flag off" on `-r`.
-async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
-    if !cli.atoms.is_empty() {
+async fn resume_atoms(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
+    if !args.atoms.is_empty() {
         bail!("-r/--resume replays the last saved merge; atoms are not accepted together with it");
     }
 
@@ -920,10 +922,10 @@ async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
         bail!("-r/--resume: nothing to resume");
     };
 
-    let merge_flags = maint::resume::merge_resume_flags(&state.merge_flags, &cli.merge_flags);
+    let merge_flags = maint::resume::merge_resume_flags(&state.merge_flags, &args.merge_flags);
     let depgraph_flags =
-        crate::crossdev::merge_depgraph_flags_fields(&state.depgraph_flags, &cli.depgraph_flags);
-    let nodeps = state.nodeps || cli.nodeps;
+        crate::crossdev::merge_depgraph_flags_fields(&state.depgraph_flags, &args.depgraph_flags);
+    let nodeps = state.nodeps || args.mode.nodeps;
 
     emerge_atoms(
         cli,
@@ -1175,7 +1177,7 @@ pub(crate) async fn run_unmerge_batch(
         return Ok(());
     }
 
-    if cli.merge_flags.ask
+    if cli.merge_flags().ask
         && !confirm_action(&format!("{verb} these {} package(s)", packages.len()))?
     {
         println!(">>> Quitting.");

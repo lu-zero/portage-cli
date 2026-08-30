@@ -159,7 +159,7 @@ pub async fn run(cli: &cli::Cli, library: Option<&str>) -> Result<()> {
 
     println!("\n>>> {} package(s) would be rebuilt.", atoms.len());
 
-    let mut merge_flags = cli.merge_flags.clone();
+    let mut merge_flags = cli.merge_flags().clone();
     merge_flags.oneshot = true;
     merge_flags.complete_graph = true;
 
