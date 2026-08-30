@@ -419,6 +419,37 @@ fn bootstrap_mode(roots: &Roots, mode: Mode) -> Result<()> {
     if mode == Mode::Overlay {
         link_host_pythons(eroot)?;
         link_host_base_tools(eroot)?;
+
+        // Real Gentoo Prefix's own "rpath" profile family force-sets this
+        // (`features/prefix/rpath/{use.force,use.mask}`) so toolchain.eclass
+        // and virtual/os-headers know the host, not this EPREFIX'd tree,
+        // owns the libc — without it, an EPREFIX alone makes gcc assume a
+        // self-hosted Prefix and pass `--with-sysroot=${EPREFIX}`, sending
+        // it looking for libc headers in the still-empty overlay instead of
+        // the host that actually has them (`apply_profile_env` layers this
+        // file in as an extra profile, same as `--local`'s own).
+        let profile_dir = portage.join("profile");
+        std::fs::create_dir_all(profile_dir.as_std_path())
+            .with_context(|| format!("creating {profile_dir}"))?;
+        write_if_absent(&profile_dir.join("use.force"), "prefix-guest\n")?;
+        // `use.force` alone only takes effect for a package that already
+        // declares the flag in its own IUSE — most packages checking
+        // `prefix-guest` (toolchain.eclass, virtual/os-headers) don't. Real
+        // Prefix profiles pair their `use.force` with `IUSE_IMPLICIT` so the
+        // flag is queryable everywhere, same as `elibc_*`/`kernel_*`.
+        write_if_absent(
+            &profile_dir.join("make.defaults"),
+            "IUSE_IMPLICIT=\"${IUSE_IMPLICIT} prefix-guest\"\n",
+        )?;
+        // `::gentoo`'s own `profiles/base/use.mask` masks `prefix-guest` by
+        // default (it's a no-op flag on a non-Prefix host) — mask always
+        // wins over force regardless of layer order, so without this
+        // explicit unmask the `use.force` above is silently defeated by the
+        // base profile every ordinary host inherits from. Confirmed live:
+        // `--with-sysroot=${EPREFIX}` kept firing for gcc under `--prefix`
+        // until this was added (`profiles/features/prefix/rpath/use.mask`'s
+        // own `-prefix-guest` is exactly this pairing upstream).
+        write_if_absent(&profile_dir.join("use.mask"), "-prefix-guest\n")?;
     }
 
     println!(">>> Prefix ready at {eroot}");

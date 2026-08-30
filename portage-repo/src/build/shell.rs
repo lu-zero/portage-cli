@@ -1693,9 +1693,20 @@ impl EbuildShell {
             // install target (`--local`, or a cross-arch `--target` sysroot
             // with base==target); do not append outer eprefix or ESYSROOT
             // doubles and breaks header search.
+            //
+            // `sysroot_trimmed.is_empty()` (SYSROOT is the bare host `/`) is
+            // a plain `--prefix` overlay: `build_sysroot()` fell back to `/`
+            // for lack of a separate base to nest `eprefix` under (PMS table
+            // 8.3: SYSROOT empty, ROOT non-empty and different from it ⇒
+            // ESYSROOT = BROOT, not ROOT+EPREFIX). Appending `eprefix` onto
+            // `/` here used to produce `--with-build-sysroot=<prefix>/`,
+            // sending the compiler into the still-headerless prefix.
             let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple.as_deref()) {
                 format!("{root_str}usr/{triple}/")
-            } else if eprefix.is_empty() || self.build_sysroot.is_none() {
+            } else if eprefix.is_empty()
+                || self.build_sysroot.is_none()
+                || sysroot_trimmed.is_empty()
+            {
                 sysroot.clone()
             } else {
                 format!("{}/{}/", sysroot_trimmed, eprefix.trim_start_matches('/'))

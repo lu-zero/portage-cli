@@ -142,10 +142,23 @@ async fn compute_use_env(
     // profile layer, so its use.force/use.mask/package.use*/package.mask override
     // the resolved make.profile chain. Fold it in so Level-C never cedes a flag a
     // site override pins and the plan honours site masks (portage(5)).
-    let stack = ProfileStack::build(profile_path)
+    let mut stack = ProfileStack::build(profile_path)
         .map_err(|e| anyhow::anyhow!("failed to build profile stack: {e}"))?
         .with_user_profile(portage_dir.join("profile").into_std_path_buf())
         .map_err(|e| anyhow::anyhow!("failed to load /etc/portage/profile: {e}"))?;
+    // `--prefix`'s own config overlay layers a *second* user-profile on top,
+    // same precedence rule as the per-package files below (`package.use`
+    // etc. already extend from `overlay`) — without this, a global
+    // `use.force`/`use.mask` written to the overlay (e.g. `em setup
+    // --prefix`'s `prefix-guest` force) never reached `defaults`/`conf`/
+    // `env_use` below, so the depgraph resolved IUSE_EFFECTIVE/USE as if it
+    // were never set at all, even though the *build* shell (`apply_profile_env`,
+    // portage-cli's ebuild.rs) layers the exact same file correctly.
+    if let Some(overlay) = config_overlay {
+        stack = stack
+            .with_user_profile(overlay.join("profile").into_std_path_buf())
+            .map_err(|e| anyhow::anyhow!("failed to load the prefix overlay profile: {e}"))?;
+    }
     let mut shell = repo
         .shell()
         .await

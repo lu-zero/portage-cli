@@ -337,10 +337,22 @@ pub(crate) async fn apply_profile_env(
     else {
         return Ok(false);
     };
-    let stack = portage_repo::ProfileStack::build(profile_path)
+    let mut stack = portage_repo::ProfileStack::build(profile_path)
         .context("building profile stack")?
         .with_user_profile(base.join("etc/portage/profile").into_std_path_buf())
         .context("loading the user profile")?;
+    // `--prefix`'s own config overlay (`<prefix>/etc/portage/profile`) layers
+    // on top of the host's, same as its `package.use`/`bashrc` already do —
+    // this is where `em setup --prefix` writes `use.force: prefix-guest`
+    // (real Gentoo Prefix's own `features/prefix/rpath/use.force`
+    // convention), so an eclass's `!use prefix-guest` checks (toolchain.eclass
+    // gcc configure flags, virtual/os-headers RDEPEND) see the host's libc
+    // as authoritative instead of assuming a self-hosted Prefix.
+    if let Some(overlay) = config_overlay {
+        stack = stack
+            .with_user_profile(overlay.join("profile").into_std_path_buf())
+            .context("loading the prefix overlay profile")?;
+    }
     // make.conf(5): file or Flat directory of fragments. Legacy first, then
     // `/etc/portage/make.conf` (later overrides — same order as Portage).
     let conf_owned = portage_repo::expand_make_conf_paths([
