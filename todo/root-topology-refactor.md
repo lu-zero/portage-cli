@@ -273,6 +273,20 @@ A1–A3 alone retire the crossdev guard instability the review flagged.
   (`portage-atom-pubgrub/src/provider/solve.rs`). `docs/root-topology.md`
   itself hasn't been updated to reflect this yet.
 
+**Follow-up (2026-08-30):** the resolver-side fix above had a build-phase
+counterpart that was still missing: `Roots::build_sysroot()` returned `None`
+for a same-arch self-contained `--root` (only handling the `base != target`
+overlay/`--target` case), so `shell.rs` computed `SYSROOT=/` for phase
+execution — disagreeing with the resolver, which correctly satisfies DEPEND
+against BROOT. Live symptom: `em --root DIR pkg -j 20` failed glibc's
+configure with missing kernel headers (`virtual/os-headers` resolved fine,
+but the build env searched the empty offset root, not BROOT, for the
+headers). Fixed in `69809ce`: `build_sysroot()` now also returns `Some("/")`
+for `is_self_contained_root() && !is_cross_arch`. See
+[[em-root-characterization]]'s 2026-08-30 closure note for the full story.
+This does not touch item **7**'s broader `RootTopology` enum migration —
+it's a narrow correctness fix on the current `Roots` bag.
+
 ## Why
 
 The cross/stage session exposed structural debt: `Roots` is a flat bag of five

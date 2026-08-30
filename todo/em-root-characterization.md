@@ -505,3 +505,22 @@ Remaining (lower priority): the rest of `packages.build` beyond the toolchain
 (acct-group/root, e2fsprogs, util-linux ordering) — re-test now that
 DEPEND-into-ROOT is fixed; the glibc post-install `/etc/hosts` redirect noise
 (cosmetic).
+
+**Correction/closure (2026-08-30):** the "SYSROOT=ROOT, self-hosting" design
+recorded above (2026-06-25/26) was deliberately superseded by `b9d4fbb`
+(2026-07-11) — see **`todo/root-topology-refactor.md`**'s own
+"Correction (2026-07-23)" note. `--root` DEPEND-satisfaction moved to BROOT
+(real portage `ROOT=` parity), and `solve.rs`'s `broot_filtered` +
+`host_satisfied_on_broot`/`virtual_satisfied_on_broot` checks were added to
+close the gap on the *resolver* side. What that commit didn't update was the
+*build-phase* side: `Roots::build_sysroot()` still returned `None` for a
+same-arch self-contained `--root`, so `shell.rs` computed `SYSROOT=/`
+(pointing at the empty offset root) instead of matching the resolver's BROOT
+answer. Live symptom: `em --root DIR pkg -j 20` failed glibc's configure with
+missing kernel headers, because `virtual/os-headers` was correctly resolved
+against the host/BROOT but the build environment still searched the empty
+ROOT for headers. Fixed in `69809ce`: `build_sysroot()` now returns `Some("/")`
+for `is_self_contained_root() && !is_cross_arch`, matching the resolver.
+`docs/user/root-model.md` and the doc comments in `ebuild.rs`/`shell.rs` were
+updated to match. This is a completion of the already-decided 2026-07-11
+direction, not a new design change.

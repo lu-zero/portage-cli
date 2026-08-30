@@ -109,3 +109,28 @@ first place to instrument/trace.
    works, to find exactly which variable diverges.
 3. Live-verify against a real `--prefix` + `--target` full `crossdev
    --setup` once fixed.
+
+## Related infrastructure fixed nearby (2026-08-30, does NOT resolve this)
+
+Plain `em --prefix DIR sys-devel/gcc -j 20` (no `--target`, host-codegen
+build, the case already confirmed working above) hit two separate real bugs
+in the same fragile `shell.rs` derivation chain this file already flags:
+- ESYSROOT fell back to `${sysroot_trimmed}/${eprefix}/` even when
+  `sysroot_trimmed` was empty, producing a bare `<prefix>/` instead of
+  `sysroot.clone()`; fixed in `ece1fcb` by adding a
+  `|| sysroot_trimmed.is_empty()` guard.
+- The profile-stack layering that carries `--prefix`'s own
+  `use.force`/`use.mask` (`prefix-guest`) into phase execution was missing
+  from `apply_profile_env` and, separately, from the resolver's
+  `compute_use_env` — both needed a second `.with_user_profile(overlay.join("profile"))`
+  call. Also needed: `profiles/base/use.mask` masks `prefix-guest` by
+  default (mask always beats force), so `em setup --prefix`'s bootstrap now
+  also writes an explicit `use.mask: -prefix-guest` unmask alongside the
+  `use.force`. Also fixed in `ece1fcb`.
+
+Neither of those is this file's bug — this file is specifically about
+`cross-*/gcc` (`--prefix` **+** `--target`), and the plain-`--prefix`
+gcc build was already confirmed working before and after this fix. Noted
+here only because both bugs live in the exact same EPREFIX/SYSROOT/ESYSROOT
+derivation `shell.rs` code this file's "Where to look" section points at —
+worth a look when tracing this one.
