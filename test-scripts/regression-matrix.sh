@@ -84,7 +84,7 @@ run_native_toolchain() {
     local topo_flag="$1" dir="$2" label="$3"
     fresh_dir "$dir" >/dev/null 2>&1
     local log="/root/regress-$label.log"
-    sbx "MAKEOPTS='-j16' /root/em-bin $topo_flag $dir toolchain --setup --autounmask-write --jobs $JOBS > $log 2>&1; echo EXIT=\$? >> $log"
+    sbx "MAKEOPTS='-j16' /root/em-bin toolchain $topo_flag $dir --setup --autounmask-write --jobs $JOBS > $log 2>&1; echo EXIT=\$? >> $log"
     local exit_line
     exit_line=$(sbx "grep -o 'EXIT=[0-9]*' $log | tail -1")
     echo "$exit_line" "$log"
@@ -112,7 +112,7 @@ fi
 echo "--- --local (known genuine hard-cycle partial failure expected) ---"
 LOCAL_LOG="/root/regress-toolchain-local.log"
 fresh_dir "/root/regress-toolchain-local" >/dev/null 2>&1
-sbx "/root/em-bin --local /root/regress-toolchain-local toolchain --setup --autounmask-write -p > $LOCAL_LOG 2>&1; echo EXIT=\$? >> $LOCAL_LOG"
+sbx "/root/em-bin toolchain --local /root/regress-toolchain-local --setup --autounmask-write -p > $LOCAL_LOG 2>&1; echo EXIT=\$? >> $LOCAL_LOG"
 gdbm_line=$(sbx "grep -n 'sys-libs/gdbm' $LOCAL_LOG | head -1 | cut -d: -f1")
 elt_line=$(sbx "grep -n 'app-portage/elt-patches' $LOCAL_LOG | head -1 | cut -d: -f1")
 if [[ -n "$gdbm_line" && -n "$elt_line" && "$gdbm_line" -gt "$elt_line" ]]; then
@@ -138,7 +138,7 @@ for topo in --root --prefix --local; do
     dir="/root/regress-stage1-$(echo "$topo" | tr -d '-')"
     fresh_dir "$dir" >/dev/null 2>&1
     log="/root/regress-stage1-$(echo "$topo" | tr -d '-').log"
-    sbx "/root/em-bin $topo $dir stages --stage1 -p --autosolve-use > $log 2>&1; echo EXIT=\$? >> $log"
+    sbx "/root/em-bin stages $topo $dir --stage1 -p --autosolve-use > $log 2>&1; echo EXIT=\$? >> $log"
     exit_line=$(sbx "grep -o 'EXIT=[0-9]*' $log | tail -1")
     record "stages --stage1 $topo (-p)" INFO "$exit_line — see $log"
 done
@@ -150,7 +150,7 @@ if [[ "$FULL" -eq 1 ]]; then
         topo="${topo_pair%%:*}"
         dir="${topo_pair##*:}"
         log="/root/regress-stage1-real-$(echo "$topo" | tr -d '-').log"
-        sbx "/root/em-bin $topo $dir stages --stage1 --autosolve-use --jobs $JOBS > $log 2>&1; echo EXIT=\$? >> $log"
+        sbx "/root/em-bin stages $topo $dir --stage1 --autosolve-use --jobs $JOBS > $log 2>&1; echo EXIT=\$? >> $log"
         exit_line=$(sbx "grep -o 'EXIT=[0-9]*' $log | tail -1")
         if [[ "$exit_line" == EXIT=0* ]]; then
             record "stages --stage1 $topo (real)" PASS "clean build"
@@ -186,9 +186,9 @@ run_crossdev() {
     # back to `ACCEPT_KEYWORDS="~arm64"` (the host's arch) in the riscv64
     # sysroot's own make.conf.
     if [[ -n "$dir" ]]; then
-        sbx "/root/em-bin --target $CROSS_TARGET $dir_flag $dir $extra_flags crossdev --setup > $log 2>&1; echo EXIT=\$? >> $log"
+        sbx "/root/em-bin crossdev --target $CROSS_TARGET $dir_flag $dir $extra_flags --setup > $log 2>&1; echo EXIT=\$? >> $log"
     else
-        sbx "/root/em-bin --target $CROSS_TARGET $extra_flags crossdev --setup > $log 2>&1; echo EXIT=\$? >> $log"
+        sbx "/root/em-bin crossdev --target $CROSS_TARGET $extra_flags --setup > $log 2>&1; echo EXIT=\$? >> $log"
     fi
     sbx "grep -o 'EXIT=[0-9]*' $log | tail -1"
 }
@@ -198,10 +198,10 @@ res=$(run_crossdev "" "" "" "bare")
 [[ "$res" == EXIT=0* ]] && record "crossdev --setup bare" PASS "clean build" \
     || record "crossdev --setup bare" FAIL "expected clean build, got: $res"
 
-echo "--- --root ---"
+echo "--- --root (now expected to be REJECTED: crossdev never flattens RootArg, so ---root is a clap parse error in any position) ---"
 res=$(run_crossdev "" "--root" "/root/regress-crossdev-root" "root")
-[[ "$res" == EXIT=0* ]] && record "crossdev --setup --root" PASS "clean build" \
-    || record "crossdev --setup --root" FAIL "expected clean build, got: $res"
+[[ "$res" != EXIT=0* ]] && record "crossdev --setup --root" PASS "correctly rejected: $res" \
+    || record "crossdev --setup --root" FAIL "expected --root + crossdev to be rejected, got a clean build"
 
 echo "--- --prefix ---"
 res=$(run_crossdev "" "--prefix" "/root/regress-crossdev-prefix" "prefix")
@@ -210,12 +210,12 @@ res=$(run_crossdev "" "--prefix" "/root/regress-crossdev-prefix" "prefix")
 
 echo "--- --local (open question as of 2026-07-16 — informational, not a hard pass/fail) ---"
 fresh_dir "/root/regress-crossdev-local" >/dev/null 2>&1
-sbx "/root/em-bin --local /root/regress-crossdev-local setup >/dev/null 2>&1"
+sbx "/root/em-bin setup --local /root/regress-crossdev-local >/dev/null 2>&1"
 # Known to exit non-zero (the genuine hard-cycle partial failure) — this is
 # a deliberate prerequisite step, not something we're asserting on here.
-sbx "/root/em-bin --local /root/regress-crossdev-local toolchain --setup --autounmask-write --jobs $JOBS >/dev/null 2>&1 || true"
+sbx "/root/em-bin toolchain --local /root/regress-crossdev-local --setup --autounmask-write --jobs $JOBS >/dev/null 2>&1 || true"
 log="/root/regress-crossdev-local.log"
-sbx "/root/em-bin --target $CROSS_TARGET --local /root/regress-crossdev-local crossdev --setup > $log 2>&1; echo EXIT=\$? >> $log"
+sbx "/root/em-bin crossdev --target $CROSS_TARGET --local /root/regress-crossdev-local --setup > $log 2>&1; echo EXIT=\$? >> $log"
 res=$(sbx "grep -o 'EXIT=[0-9]*' $log | tail -1")
 record "crossdev --setup --local" INFO "$res — see $log (depends on --local's own toolchain, which is known-partial)"
 

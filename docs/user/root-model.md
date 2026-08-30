@@ -25,7 +25,17 @@ unprivileged `.local` overlays, and (eventually) crossdev.
 it, config always comes from host `/` — the one exception is `--local`,
 which prefers an already-bootstrapped prefix's own profile over the host
 (still overridden by an explicit `--config-root`; see the Scenarios table
-below). **`--vdb V`** overrides the base VDB path only. All four are global.
+below). **`--vdb V`** overrides the base VDB path only.
+
+`--prefix`/`--local`/`--config-root`/`--vdb`/`--target` are each flattened
+onto every applet that resolves a root, so they work in any position for
+that applet (`em query depgraph --root R pkg` and `em query --root R
+depgraph pkg` both work). `--root` is flattened the same way everywhere
+*except* `crossdev`: none of `crossdev`'s three actions read it, so
+`--root` combined with `crossdev` is a clap parse error, not a silent
+no-op — `em toolchain`/`em stages`/`em setup`/`em emerge` (and the bare
+`em <atoms>` form, which parses into the same `Applet::Emerge`) all still
+take it.
 
 ### Derived values
 

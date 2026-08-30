@@ -794,9 +794,10 @@ blocked by the three independent findings above, tracked separately.
   live rerun before landing). Live-verified: riscv64 real `stages
   --stage1` in a fresh sandbox, full 102-package run, `EXIT=0`.
   [[crossdev-config-site-not-found-by-board-packages]]
-- 🔴 **Remove `--root` from `em crossdev` at the CLI level** — today
-  only rejected at runtime inside the applet body; `--root` is still
-  `global = true` on `Cli` so clap itself accepts it.
+- ✅ **Remove `--root` from `em crossdev` at the CLI level** — landed as
+  part of the per-applet `Topology`/`RootArg` mixin rationalization;
+  `--root` + `crossdev` is now a genuine clap parse error, in any
+  position, and the old runtime `bail!` is gone (unreachable).
   [[crossdev-remove-root-flag]]
 
 ## Merge / build robustness (found in the @system shakeout)

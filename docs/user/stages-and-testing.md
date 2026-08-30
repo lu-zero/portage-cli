@@ -110,8 +110,8 @@ path inside a sandbox).
 ### 1. Toolchain
 
 ```bash
-em --root /path/to/stage \
-   toolchain --setup \
+em toolchain --root /path/to/stage \
+   --setup \
    --autounmask-write \
    --jobs 8 \
    --privilege auto   # or EM_PRIVILEGE=pseudoroot / sudo
@@ -126,8 +126,8 @@ em --root /path/to/stage \
 ### 2. Stage1
 
 ```bash
-em --root /path/to/stage \
-   stages --stage1 \
+em stages --root /path/to/stage \
+   --stage1 \
    --autosolve-use \
    --autounmask-write \
    --jobs 8
@@ -147,8 +147,8 @@ em --root /path/to/stage \
 ### 3. Stage3
 
 ```bash
-em --root /path/to/stage \
-   stages --stage3 \
+em stages --root /path/to/stage \
+   --stage3 \
    --autosolve-use \
    --autounmask-write \
    --jobs 8
@@ -164,7 +164,7 @@ em --root /path/to/stage \
 Or both stage steps in one invocation:
 
 ```bash
-em --root /path/to/stage stages --stage1 --stage3 --autosolve-use --jobs 8
+em stages --root /path/to/stage --stage1 --stage3 --autosolve-use --jobs 8
 ```
 
 ### 4. Pretend first
@@ -172,8 +172,8 @@ em --root /path/to/stage stages --stage1 --stage3 --autosolve-use --jobs 8
 Always smoke the resolver before a multi-hour build:
 
 ```bash
-em --root /path/to/stage stages --stage1 -p --autosolve-use
-em --root /path/to/stage stages --stage3 -p --autosolve-use
+em stages --root /path/to/stage --stage1 -p --autosolve-use
+em stages --root /path/to/stage --stage3 -p --autosolve-use
 # or emptytree canary without stages:
 em --root /path/to/stage -pe @system --with-bdeps -p
 ```
@@ -189,16 +189,18 @@ Example tuple: `riscv64-unknown-linux-gnu`.
 
 ```bash
 T=riscv64-unknown-linux-gnu
-ROOT=/path/to/cross-root   # outer EROOT; sysroot will be $ROOT/usr/$T
+ROOT=/path/to/cross-root   # board destination stages installs into
 
 # 1) Cross toolchain + sysroot skeleton (implies --init-target)
-em --root "$ROOT" --target "$T" crossdev --setup --autounmask-write --jobs 8
+#    No --root here: crossdev never takes one (none of its actions read
+#    it) — bare crossdev builds the toolchain at the real host /usr/$T.
+em crossdev --target "$T" --setup --autounmask-write --jobs 8
 
 # 2) Stage1 *into the sysroot* (uses --target substitution)
-em --root "$ROOT" --target "$T" stages --stage1 --autosolve-use --jobs 8
+em stages --target "$T" --root "$ROOT" --stage1 --autosolve-use --jobs 8
 
 # 3) Stage3 emptytree @system into the sysroot
-em --root "$ROOT" --target "$T" stages --stage3 --autosolve-use --jobs 8
+em stages --target "$T" --root "$ROOT" --stage3 --autosolve-use --jobs 8
 ```
 
 Canaries (after toolchain is up):
@@ -350,7 +352,7 @@ To experiment with lean stage3 USE without a stage-spec language:
 ```bash
 # write into the stage root before --stage3
 echo 'USE="-* bindist"' >> /path/to/stage/etc/portage/make.conf
-em --root /path/to/stage stages --stage3 -p
+em stages --root /path/to/stage --stage3 -p
 ```
 
 (Whether that matches releng's private catalyst USE is a separate
@@ -389,9 +391,9 @@ question — often it will not.)
 cargo build --release -p portage-cli
 
 # Native stack (host paths)
-em --root /var/tmp/em-stage toolchain --setup --autounmask-write -j8
-em --root /var/tmp/em-stage stages --stage1 --autosolve-use -j8
-em --root /var/tmp/em-stage stages --stage3 --autosolve-use -j8
+em toolchain --root /var/tmp/em-stage --setup --autounmask-write -j8
+em stages --root /var/tmp/em-stage --stage1 --autosolve-use -j8
+em stages --root /var/tmp/em-stage --stage3 --autosolve-use -j8
 
 # Sandbox harness
 crossdev-stages sandbox setup --name em-stages-draft
