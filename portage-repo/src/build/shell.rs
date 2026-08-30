@@ -1677,9 +1677,9 @@ impl EbuildShell {
             // SYSROOT+EPREFIX (else alt_prefix doubles `/usr/<T>`).
             //
             // When `build_sysroot` is None, `sysroot` already is the full
-            // install target (plain `--root` or global `--target` with
-            // base==target); do not append outer eprefix or ESYSROOT doubles
-            // and breaks header search.
+            // install target (`--local`, or a cross-arch `--target` sysroot
+            // with base==target); do not append outer eprefix or ESYSROOT
+            // doubles and breaks header search.
             let esysroot = if let (true, Some(triple)) = (host_codegen, cross_triple.as_deref()) {
                 format!("{root_str}usr/{triple}/")
             } else if eprefix.is_empty() || self.build_sysroot.is_none() {

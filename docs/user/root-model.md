@@ -322,10 +322,12 @@ EPREFIX            = ""
 ```
 
 `SYSROOT`/`ESYSROOT` is the **base**, not the target: the build resolves
-`DEPEND` against the base system (host for `--prefix`, the offset for `--root`),
-with the target layered on top for overlays. When `base == target`
-(host, `--root`) `SYSROOT` collapses to `ROOT`. The shell stores config + the
-sysroot (when it differs from `ROOT`) via `set_build_roots`; `run_phase`
+`DEPEND` against the base system — the real host `/` for both `--prefix` and
+a same-arch `--root DIR` (matching `satisfaction_root(DepClass::Depend)` and
+real `ROOT=` emerge's own `ESYSROOT`), with the target layered on top for
+overlays. `SYSROOT` collapses to `ROOT` only for a topology with its own build
+closure: `--local`'s own BROOT, or a cross-arch `--target` sysroot building
+against itself. `Roots::build_sysroot()` returns `None` there, and `run_phase`
 defaults `SYSROOT = ROOT` when no separate base is given.
 
 The eclasses (already sourced from the host repo) translate these into

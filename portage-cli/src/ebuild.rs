@@ -1167,8 +1167,9 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     }
 
     // Root model (docs/user/root-model.md): PORTAGE_CONFIGROOT = config_root, and
-    // SYSROOT/ESYSROOT = the build-against base (only when it differs from the
-    // install target, i.e. a --prefix overlay; otherwise SYSROOT = ROOT).
+    // SYSROOT/ESYSROOT = the build-against base — the real host `/` for a
+    // --prefix overlay or a same-arch --root; SYSROOT = ROOT only for a
+    // topology with its own build closure (--local, cross --target).
     //
     // NB: in overlay mode (target ≠ base) a package merged into the target is
     // not yet visible to later builds in the run — that needs a merged sysroot,

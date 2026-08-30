@@ -188,15 +188,16 @@ impl Roots {
 
     /// The build-against sysroot (`SYSROOT`/`ESYSROOT`) to hand the shell
     ///
-    /// `None` means "same as the install target" (full offset / host), so
-    /// the shell defaults `SYSROOT = ROOT`.
-    ///
-    /// `Some` only for an overlay where the base differs from the target
-    /// (`--prefix`), where the base is the system to build against and the target
-    /// is layered on top.
+    /// `Some` for an overlay (`--prefix`) and for a same-arch self-contained
+    /// `--root DIR`: real host `/`, matching `satisfaction_root`'s own
+    /// `DEPEND` answer there (and real `ROOT=` emerge's `ESYSROOT`). `None`
+    /// (SYSROOT defaults to `ROOT`) only for a topology with its own build
+    /// closure: `--local`'s BROOT, or a cross-arch `--target` sysroot.
     pub fn build_sysroot(&self) -> Option<&Utf8Path> {
         if self.base.as_deref() != self.target.as_deref() {
             Some(self.base.as_deref().unwrap_or(Utf8Path::new("/")))
+        } else if self.is_self_contained_root() && !self.is_cross_arch {
+            Some(Utf8Path::new("/"))
         } else {
             None
         }
