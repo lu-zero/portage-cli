@@ -570,7 +570,7 @@ impl ActivitySink for HumanStdoutSink {
                     // never silences errors on `--quiet`, only progress info.
                     self.erase_status(job_id);
                     let why = error.as_deref().unwrap_or("(no message)");
-                    eprintln!(">>> failed: {cpv}: {why}");
+                    crate::style::print_failure_banner(format_args!(">>> failed: {cpv}: "), why);
                 }
                 if !self.quiet {
                     self.draw_status(job_id);

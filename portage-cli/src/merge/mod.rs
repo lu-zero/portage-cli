@@ -643,7 +643,9 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     eprintln!("\n>>> {} package(s) failed to {fail_verb}:", failures.len());
     for f in &failures {
         crate::style::ewarn_sub_bullet!("{}", f.cpv);
-        eprintln!("      {}", f.cause);
+        for line in f.cause.lines() {
+            eprintln!("      {line}");
+        }
         if f.log.exists() {
             eprintln!("      log: {}", f.log);
         }
@@ -929,14 +931,23 @@ fn record_package_outcome(
             } else {
                 "emerge"
             };
-            eprintln!(">>> Failed to {fail_verb} {} — {e:#}", planned.cpv);
+            // One line per context layer (see its own doc comment) instead
+            // of `{e:#}` squashing "build log: …: phase X failed: shell
+            // error: …: die: edo: command failed: <huge command>" onto one
+            // unreadable line — reused for every rendering of this failure
+            // below (console, activity event, end-of-run summary).
+            let rendered = crate::style::render_error_chain(&e);
+            crate::style::print_failure_banner(
+                format_args!(">>> Failed to {fail_verb} {} — ", planned.cpv),
+                &rendered,
+            );
             emit_pkg_end(
                 &run.activity,
                 planned,
                 kind,
                 pkg_started,
                 false,
-                Some(format!("{e:#}")),
+                Some(rendered.clone()),
                 phases,
             );
             failures.push(MergeFailure {
@@ -945,7 +956,7 @@ fn record_package_outcome(
                     .work_base
                     .join(planned.cpv.to_string())
                     .join("build.log"),
-                cause: format!("{e:#}"),
+                cause: rendered,
             });
             flags.keep_going
         }

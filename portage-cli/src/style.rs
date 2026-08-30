@@ -366,6 +366,54 @@ pub fn estatus_line(msg: &str, ok: bool, width: usize, ansi: bool) -> String {
     }
 }
 
+/// Render an `anyhow` chain as one line per layer instead of `{:#}`'s single
+/// `": "`-joined line
+///
+/// A build failure's context layers ("build log: …", "phase X failed",
+/// `portage-repo`'s `"shell error: …"`) squashed onto one line buried the
+/// actual failing command in an unreadable, sometimes terminal-wrapped wall
+/// of text. The deepest layer's `"<ctx>: die: edo: command failed: <cmd>"`
+/// shape (`edo`'s own die message) gets `<cmd>` split onto its own
+/// further-indented line — normally the one part worth reading in full.
+pub fn render_error_chain(e: &anyhow::Error) -> String {
+    let links: Vec<String> = e.chain().map(ToString::to_string).collect();
+    let mut lines = Vec::with_capacity(links.len() + 1);
+    for (i, link) in links.iter().enumerate() {
+        let indent = "  ".repeat(i);
+        if i + 1 == links.len()
+            && let Some((head, cmd)) = split_edo_die(link)
+        {
+            lines.push(format!("{indent}{head}:"));
+            lines.push(format!("{}{cmd}", "  ".repeat(i + 1)));
+            continue;
+        }
+        lines.push(format!("{indent}{link}"));
+    }
+    lines.join("\n")
+}
+
+/// Split `"<ctx>: die: edo: command failed: <cmd>"` into `("<ctx> (die)",
+/// "<cmd>")`, or `None` when `msg` isn't shaped like an `edo` failure
+fn split_edo_die(msg: &str) -> Option<(String, String)> {
+    let (head, rest) = msg.split_once(": die: ")?;
+    let cmd = rest.strip_prefix("edo: command failed: ")?;
+    Some((format!("{head} (die)"), cmd.to_string()))
+}
+
+/// Print a `>>> `-style failure banner whose message may be multi-line (see
+/// [`render_error_chain`]): `head` leads the first line, every further line
+/// prints beneath it, indented so the breakdown reads as subordinate.
+pub(crate) fn print_failure_banner(head: std::fmt::Arguments<'_>, message: &str) {
+    use std::io::Write;
+    let mut out = anstream::stderr();
+    let mut lines = message.lines();
+    let _ = writeln!(out, "{head}{}", lines.next().unwrap_or_default());
+    for line in lines {
+        let _ = writeln!(out, "    {line}");
+    }
+    let _ = out.flush();
+}
+
 /// Style for a profile's stability status (same palette as keyword stability)
 pub fn profile_status(status: &portage_repo::ProfileStatus) -> Style {
     use portage_repo::ProfileStatus::*;
@@ -391,6 +439,44 @@ mod tests {
     fn wraps_to_the_budget_left_after_the_indent() {
         let got = wrap_items(&items(&["aaa", "bbb", "ccc", "ddd"]), 2, 12);
         assert_eq!(got, vec!["aaa bbb", "ccc ddd"]);
+    }
+
+    // The incident this exists for: `sys-devel/gcc`'s `src_configure` dying
+    // inside `edo` squashed "build log: …: phase configure failed: shell
+    // error: src_configure: die: edo: command failed: <200-column configure
+    // invocation>" onto one unreadable line via `{e:#}`.
+    #[test]
+    fn render_error_chain_splits_the_edo_command_onto_its_own_line() {
+        let base = anyhow::anyhow!(
+            "shell error: src_configure: die: edo: command failed: \
+             //bin/sh ./configure --host=aarch64-unknown-linux-gnu --prefix=/usr"
+        );
+        let e = base
+            .context("phase configure failed")
+            .context("build log: /tmp/build.log");
+        let rendered = render_error_chain(&e);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "build log: /tmp/build.log",
+                "  phase configure failed",
+                "    shell error: src_configure (die):",
+                "      //bin/sh ./configure --host=aarch64-unknown-linux-gnu --prefix=/usr",
+            ]
+        );
+    }
+
+    // Without the `edo` shape, every layer still gets its own indented line
+    // — just no line split within the deepest one.
+    #[test]
+    fn render_error_chain_falls_back_to_one_line_per_layer_without_edo() {
+        let base = anyhow::anyhow!("no space left on device");
+        let e = base.context("phase install failed");
+        assert_eq!(
+            render_error_chain(&e),
+            "phase install failed\n  no space left on device"
+        );
     }
 
     #[test]
