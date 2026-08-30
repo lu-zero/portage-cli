@@ -392,7 +392,7 @@ async fn emerge_atoms_inner(
         if !cfg.join("etc/portage/make.conf").exists() {
             bail!(
                 "cross target '{tuple}' is not set up at {cfg}\n  \
-                 run: em --target {tuple} crossdev --init-target"
+                 run: em crossdev --target {tuple} --init-target"
             );
         }
     }
