@@ -57,8 +57,8 @@ pub struct Cli {
     #[arg(long)]
     pub info: bool,
 
-    /// Structured JSON for `--info` (merge-plan `--json` lives on [`MergeFlags`])
-    #[arg(long, requires = "info")]
+    /// Structured JSON (`em --info --json`, merge-plan `-p --json`)
+    #[arg(long)]
     pub json: bool,
 
     /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
@@ -268,7 +268,7 @@ impl Cli {
     /// The active applet's own [`MergeFlags`], or the all-`false`/`None` default
     /// for an applet that doesn't carry one.
     pub fn merge_flags(&self) -> MergeFlags {
-        match &self.applet {
+        let mut flags = match &self.applet {
             Some(Applet::Emerge(a)) => a.merge_flags.clone(),
             Some(Applet::Crossdev(a)) => a.merge_flags.clone(),
             Some(Applet::Toolchain(a)) => a.merge_flags.clone(),
@@ -277,7 +277,9 @@ impl Cli {
             Some(Applet::Revdep { merge_flags, .. }) => merge_flags.clone(),
             Some(Applet::Depclean { merge_flags, .. }) => merge_flags.clone(),
             _ => MergeFlags::default(),
-        }
+        };
+        flags.json |= self.json;
+        flags
     }
 
     /// The active applet's own [`DepgraphFlags`], or the all-`false` default
@@ -1340,11 +1342,12 @@ mod tests {
 
     #[test]
     fn json_before_emerge_word_is_merge_plan_json() {
-        let cli = parse_cli_from(["em", "--json", "emerge", "-p", "sys-libs/zlib"]).unwrap();
-        assert!(!cli.json, "--json without --info must not bind to Cli");
-        assert!(cli.merge_flags().json);
+        let before = parse_cli_from(["em", "--json", "emerge", "-p", "sys-libs/zlib"]).unwrap();
+        assert!(before.merge_flags().json);
         let explicit = parse_cli_from(["em", "emerge", "--json", "-p", "sys-libs/zlib"]).unwrap();
         assert!(explicit.merge_flags().json);
+        let bare = parse_cli_from(["em", "--json", "-p", "sys-libs/zlib"]).unwrap();
+        assert!(bare.merge_flags().json);
     }
 
     #[test]
