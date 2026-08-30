@@ -408,7 +408,7 @@ full logs into your own output when a targeted grep will do (per
 
   ```sh
   crossdev-stages sandbox run --name em-clang-prefix -- \
-    "em --prefix /root/xp --target riscv64-unknown-linux-gnu crossdev --setup --jobs N \
+    "em crossdev --prefix /root/xp --target riscv64-unknown-linux-gnu --setup --jobs N \
        > /root/crossdev-setup.log 2>&1; echo EXIT=\$? >> /root/crossdev-setup.log"
   crossdev-stages sandbox run --name em-clang-prefix -- \
     "grep -o 'EXIT=[0-9]*' /root/crossdev-setup.log | tail -1"
@@ -474,8 +474,8 @@ full logs into your own output when a targeted grep will do (per
 **Step 1 — stand up the topology alone (cheap sanity check):**
 
 ```sh
-em --prefix /root/xp setup -p
-em --prefix /root/xp setup
+em setup --prefix /root/xp -p
+em setup --prefix /root/xp
 ```
 
 **Step 2 — bootstrap the cross toolchain.** No separate `em --target T
@@ -489,8 +489,8 @@ exists at that path. Confirmed as a real bug this exact recipe hit
 2026-07-17 — don't reintroduce it.)
 
 ```sh
-em -p --prefix /root/xp --target riscv64-unknown-linux-gnu crossdev --setup
-em    --prefix /root/xp --target riscv64-unknown-linux-gnu crossdev --setup --jobs N
+em crossdev --prefix /root/xp --target riscv64-unknown-linux-gnu --setup -p
+em crossdev --prefix /root/xp --target riscv64-unknown-linux-gnu --setup --jobs N
 ```
 
 Verify the cross compiler is real and runs:
@@ -520,7 +520,7 @@ either "still broken" or "silently fixed" — run it first and read the
 actual preflight output:
 
 ```sh
-em -p --local --target riscv64-unknown-linux-gnu crossdev --setup
+em crossdev --local --target riscv64-unknown-linux-gnu --setup -p
 ```
 
 - If this now resolves cleanly: proceed directly with steps 1-3 below,
@@ -545,17 +545,17 @@ starting `--local` from a genuinely empty prefix.
 
 ```sh
 # only if step 0 shows crossdev --setup --local is still blocked:
-em --prefix /root/xl toolchain --setup --autounmask-write --jobs N
-em --local /root/xl setup -p
-em --local /root/xl setup
+em toolchain --prefix /root/xl --setup --autounmask-write --jobs N
+em setup --local /root/xl -p
+em setup --local /root/xl
 ```
 
 **Step 2 — bootstrap the cross toolchain** (same shape as Scenario A step 2,
 `--local` in place of `--prefix`):
 
 ```sh
-em -p --local /root/xl --target riscv64-unknown-linux-gnu crossdev --setup
-em    --local /root/xl --target riscv64-unknown-linux-gnu crossdev --setup --jobs N
+em crossdev --local /root/xl --target riscv64-unknown-linux-gnu --setup -p
+em crossdev --local /root/xl --target riscv64-unknown-linux-gnu --setup --jobs N
 /root/xl/usr/bin/riscv64-unknown-linux-gnu-gcc --version
 ```
 

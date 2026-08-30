@@ -454,10 +454,11 @@ to land as part of (or before) the refactor.
     check are the smell, not something to validate around. Resolved by
     **removing `crossdev`'s local `-t`/`--target` entirely** and renaming
     the global `--cross` to **`--target`/`-T`** (no clash — `t`/`T` were
-    unused everywhere). One flag now serves both roles: `em --target T
-    crossdev --init-target` sets T up; `em --target T stages --stage1` (or
-    any plain atom build) uses it. `CrossdevArgs.target` is gone;
-    `crossdev::run` reads `globals.target` directly. Verified live: `em
+    unused everywhere). One flag now serves both roles. As of 2026-08-30
+    it is per-applet, not global on `Cli`: `em crossdev --target T
+    --init-target` sets T up; `em stages --target T --stage1` (or any
+    plain atom build) uses it. `CrossdevArgs.target` is gone;
+    `crossdev::run` reads the applet's `Topology`. Verified live (then): `em
     --root R --target T crossdev --init-target` (no local `-t` at all) lays
     down the sysroot at `R/usr/T` correctly, and running with no `--target`
     at all gives a clear error instead of silently guessing.

@@ -527,7 +527,7 @@ was never meant to compose with `--prefix`/`--local`):
 | 1 | Native, `--root` | `--root <dir>` | `em toolchain --setup --root <dir>` | `em stages --stage1 --root <dir>` |
 | 2 | `--prefix` overlay | `--prefix <dir>` | `em toolchain --setup --prefix <dir>` | `em stages --stage1 --prefix <dir>` |
 | 3 | `--local` Gentoo Prefix | `--local <dir>` | `em toolchain --setup --local <dir>` | `em stages --stage1 --local <dir>` |
-| 4 | Cross (crossdev), riscv64 | `--target riscv64-unknown-linux-gnu` | `em --target <tuple> crossdev --setup` | `em --target <tuple> stages --stage1` |
+| 4 | Cross (crossdev), riscv64 | `--target riscv64-unknown-linux-gnu` | `em crossdev --target <tuple> --setup` | `em stages --target <tuple> --stage1` |
 
 Scenario 4 reuses the riscv64 tuple from prior sessions
 (`todo/stage-build-shakeout.md`) for direct comparison against the
@@ -634,9 +634,9 @@ cargo run -- sandbox run --name em-stage1-matrix -- \
 
 # Scenario 4 — cross, riscv64 (separate sandbox/subtree)
 cargo run -- sandbox run --name em-stage1-cross -- \
-  "em --target riscv64-unknown-linux-gnu crossdev --setup"
+  "em crossdev --target riscv64-unknown-linux-gnu --setup"
 cargo run -- sandbox run --name em-stage1-cross -- \
-  "em --target riscv64-unknown-linux-gnu stages --stage1 --autosolve-use --buildpkg"
+  "em stages --target riscv64-unknown-linux-gnu --stage1 --autosolve-use --buildpkg"
 ```
 
 Start with a **`-p`/pretend pass of `stages --stage1`** for every scenario
@@ -859,14 +859,10 @@ file collision before the fix, now confirmed clean.
   look the same on paper.
 
 **Also found, CLI usability**: `em --target T --local crossdev --setup`
-(global flags before the subcommand) mis-parses — clap's optional-value
-`--local [<DIR>]` greedily consumes `crossdev` as its directory argument,
-producing a confusing `unexpected argument '--setup'` error nowhere near
-the real cause. Putting the subcommand first works correctly: `em
-crossdev --target T --local --setup`. Worth a small usage-doc note or a
-clap fix (e.g. requiring `=` for `--local`'s optional value) so this
-doesn't cost someone else the same confusion — not investigated further
-this session.
+used to mis-parse because optional-value `--local [<DIR>]` ate `crossdev`
+as its directory. As of 2026-08-30 that form is a clap error anyway:
+topology flags are per-applet, not global on `Cli`. Put the applet first:
+`em crossdev --target T --local --setup`.
 
 ## `--local` bootstrap failures: two distinct bugs found, one fixed, one open
 

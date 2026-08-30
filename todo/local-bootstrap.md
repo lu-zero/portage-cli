@@ -35,15 +35,15 @@ profile — so repo and profile must be established **together**.
 |------|------|----------------|
 | **1. Layout** | dirs, `bashrc`, `make.conf` placeholder | ✅ `em setup --local` |
 | **2. Main repo (`::gentoo`)** | ebuild tree: own checkout under the prefix, synced via `em setup --local` (gix backend available, `--features sync-gix`) | ✅ live-verified 2026-08-14 |
-| **3. Profile** | `make.profile` → path under that repo’s `profiles/` | ✅ auto-resolved when upstream has a matching profile; else hard error naming the gap (not a bad guess) — `em --local DIR select profile set <path>` fixes it manually, then re-running `em setup --local DIR` picks up and completes (idempotent) |
+| **3. Profile** | `make.profile` → path under that repo’s `profiles/` | ✅ auto-resolved when upstream has a matching profile; else hard error naming the gap (not a bad guess) — `em select --local DIR profile set <path>` fixes it manually, then re-running `em setup --local DIR` picks up and completes (idempotent) |
 | **4. `package.provided`** | host tools so empty VDB plans are cycle-free | ✅ `em setup --local` writes a managed block automatically, probing host tool versions |
-| **5. Toolchain** | `em --local toolchain --setup` | 🟡 still the open piece — steps 2–4 no longer block it |
+| **5. Toolchain** | `em toolchain --local --setup` | 🟡 still the open piece — steps 2–4 no longer block it |
 
 **Target one-shot (planned):**
 
 ```sh
 em setup --local [DIR] [--profile …] [--repo-location …] [--sync]
-em --local [DIR] toolchain --setup
+em toolchain --local [DIR] --setup
 ```
 
 ### Repo (step 2) — piggy-back or own
@@ -51,7 +51,7 @@ em --local [DIR] toolchain --setup
 | Situation | Behaviour |
 |-----------|-----------|
 | Host has `::gentoo` (`repos.conf` or `/var/db/repos/gentoo`) | Write prefix `repos.conf` with `location =` that path (share the tree). |
-| No tree | `location = <prefix>/var/db/repos/gentoo` + default git `sync-uri`; run or instruct `em --local sync`. |
+| No tree | `location = <prefix>/var/db/repos/gentoo` + default git `sync-uri`; run or instruct `em sync --local`. |
 | Override | User-supplied location / existing overlay `repos.conf` wins. |
 
 ### Profile (step 3) — defaults and override
@@ -61,7 +61,7 @@ em --local [DIR] toolchain --setup
 | Gentoo, host profile resolves **into the same tree** | Mirror host’s resolved `make.profile`. |
 | Linux foreign | **Prefix profile** for host ARCH (e.g. `default/linux/<arch>/<release>/no-multilib/prefix`) — safer under EPREFIX than a plain desktop profile. |
 | macOS | Newest `prefix/darwin/macos/…` for `arm64-macos` / `x64-macos`. If host OS is newer than any tree entry, still pick newest and **warn**. |
-| Always | Override: planned `em setup --local --profile …`; after setup, `em --local DIR select profile set …` (planned — topology flags target the prefix; today only `--config-root DIR` does). |
+| Always | Override: planned `em setup --local --profile …`; after setup, `em select --local DIR profile set …` (planned — topology flags target the prefix; today only `--config-root DIR` does). |
 
 Full algorithm and gaps: the todo’s **Setup ladder** section.
 
@@ -116,16 +116,16 @@ manual recipe below works if both files are in place.
 1. em setup --local [DIR]
       skeleton + make.conf/bashrc + (planned) bootstrap package.provided
 
-2. em --local [DIR] toolchain --setup
+2. em toolchain --local [DIR] --setup
       host tools satisfy provided deps; real toolchain merges into prefix
 
 3. (optional) shrink package.provided as prefix VDB grows
       stop lying about packages the prefix now owns
 
-4. em --local [DIR] stages --stage1 / normal merges
+4. em stages --local [DIR] --stage1 / normal merges
       self-hosting; BROOT effectively the prefix once its gcc is on PATH
 
-5. (optional) em --local [DIR] --target T crossdev --setup
+5. (optional) em crossdev --local [DIR] --target T --setup
       cross toolchain on top of a bootstrapped native prefix
 ```
 
@@ -210,8 +210,8 @@ app-arch/tar-1.35
 app-arch/zstd-1.5.7
 EOF
 
-em -p --local "$PREFIX" toolchain --setup   # expect: no hard-cycle preflight
-# em --local "$PREFIX" toolchain --setup    # real run when plan looks right
+em toolchain --local "$PREFIX" --setup -p   # expect: no hard-cycle preflight
+# em toolchain --local "$PREFIX" --setup    # real run when plan looks right
 ```
 
 **Rules of thumb**
@@ -252,7 +252,7 @@ Streamlining goal: one command path —
 
 ```sh
 em setup --local              # layout + provided seed
-em --local toolchain --setup  # first real merges
+em toolchain --local --setup  # first real merges
 ```
 
 — works on a generic Linux box and (later) macOS with Xcode CLT, without

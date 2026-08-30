@@ -149,7 +149,7 @@ BuildClass.
 5. Tests: golden or structural asserts on generated `env/<cat>/<pkg>.conf`
    for at least one GCC and one LLVM target (TARGET_ABI present/absent).
 
-**Exit:** `em -p --target … crossdev --init-target` (GCC + `-L`) writes env
+**Exit:** `em crossdev --target … --init-target -p` (GCC + `-L`) writes env
 that matches the matrix; no BuildClass change required yet.
 
 ### Step 2 — Stop stamping CrossTool* from the depgraph ✅

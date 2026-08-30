@@ -2,7 +2,7 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-29**.
+here briefly for context). Updated **2026-08-30**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
@@ -135,6 +135,7 @@ carry an effort estimate.
 
 | Item | When | Notes |
 |------|------|--------|
+| Per-applet `Topology`/`RootArg`, `Applet::Emerge`, `parse_cli_from` | 2026-08-30 | Topology flags after the applet; `--root`+`crossdev` is a clap error; bare `em <atoms>` ≡ `em emerge`. `dfb6a2e`/`1fe178b`/`960fda6`/`47979fb`. [[crossdev-remove-root-flag]] |
 | `em -p`/`-t` reported wrong USE_EXPAND flags (e.g. `L10N`) for a package whose ebuild `+`-defaults every possible value (`chromium-2.eclass`'s vscode-style `IUSE="+l10n_${lang}"`) | 2026-08-19 | First pass (`9d0ef32`) suppressed a `+`-default whenever the flag matched *any* declared USE_EXPAND group — wrong: PMS itself is silent on layer-wipe semantics (only mandates incremental *profile* stacking), and real portage (`config.py` `regenerate()`) only wipes a group when the variable is *explicitly assigned* at a non-`defaults` config layer (`cur_use_expand = [x for x in use_expand if x in curdb]`); an unassigned `L10N` leaves every `+l10n_*` default enabled. Superseded by `da1f3f9`: `UseLayer` gained `group_clears`, fed from `ResolvedUse::conf_expand_assigned`/`env_expand_assigned`. Live-verified byte-for-byte against `emerge -pv app-editors/vscode` on portage 3.0.81.2 across 4 scenarios (unassigned, make.conf+package.use, env override, empty assignment). |
 | `em pkg use`'s Active USE summary applied no use.force/use.mask/REQUIRED_USE/`*.stable.*` | 2026-08-18 | Turned out cheap to do properly: `build_use_env`+`ResolvePolicy`+`effective_use` (portage-resolve) already bundle every policy input in one call, the same one `TreeView` uses outside a full depgraph — no custom plumbing needed. Live-verified: use.mask still beats package.use (`dev-debug/rr`/`multilib`), and `package.use` enabling `app-misc/ddcutil`'s `drm` without `X` reports "REQUIRED_USE not satisfied". `1d82526`/`84cc408`. |
 | `report_held_back_targets` colored only `pkg:slot`, leaving `-version` outside the span unlike every sibling report | 2026-08-18 | `68a6df6` |
@@ -211,13 +212,21 @@ of `todo/done/`.)
 **2026-07-09 (later)**: the global `--cross <tuple>` flag is now
 **`--target <tuple>`/`-T`** (no clash), and `em crossdev` no longer has its
 own `-t`/`--target` — one flag drives both "set up a target"
-(`em --target T crossdev --init-target`) and "use one"
-(`em --target T stages --stage1`). Also fixed: `crossdev`'s own setup
+and "use one". Also fixed: `crossdev`'s own setup
 helpers were using the already-`--cross`-substituted `roots()`, so a
 redundant global flag doubly-nested the sysroot — see
 [[root-topology-refactor]] for the full story (same `Roots`-accessor-
 confusion class as the `--root` BROOT fix above, one level up: flags, not
 just methods).
+
+**2026-08-30**: `--target` (and `--root`/`--prefix`/`--local`/`--config-root`/
+`--vdb`) are no longer global on `Cli`. They flatten per applet
+(`Topology`/`RootArg`); the word `emerge` is optional (`em <atoms>` ≡
+`em emerge <atoms>`). Write them after a non-emerge applet:
+`em crossdev --target T --init-target`, `em stages --target T --stage1`.
+Flags before a sibling applet (`em --target T crossdev …`) are a clap
+error. `--root` + `crossdev` is a clap error in any position.
+[[crossdev-remove-root-flag]]
 
 **Since 2026-06-27**: the cross overlay was retired —
 [[cross-derive-on-the-fly]] landed ✅ (2026-07-08, `d7ac770`+`b3df565`+
@@ -794,11 +803,10 @@ blocked by the three independent findings above, tracked separately.
   live rerun before landing). Live-verified: riscv64 real `stages
   --stage1` in a fresh sandbox, full 102-package run, `EXIT=0`.
   [[crossdev-config-site-not-found-by-board-packages]]
-- ✅ **Remove `--root` from `em crossdev` at the CLI level** — landed as
-  part of the per-applet `Topology`/`RootArg` mixin rationalization;
-  `--root` + `crossdev` is now a genuine clap parse error, in any
-  position, and the old runtime `bail!` is gone (unreachable).
-  [[crossdev-remove-root-flag]]
+- ✅ **Remove `--root` from `em crossdev` at the CLI level** — per-applet
+  `Topology`/`RootArg` mixins + `Applet::Emerge` + `parse_cli_from`
+  (`dfb6a2e`/`960fda6`/`47979fb`); `--root` + `crossdev` is a clap parse
+  error in any position; old runtime `bail!` deleted. [[crossdev-remove-root-flag]]
 
 ## Merge / build robustness (found in the @system shakeout)
 
@@ -921,8 +929,9 @@ blocked by the three independent findings above, tracked separately.
     `index_pkgdir` after each GPKG so `-k`/`-g` see new containers without a
     separate `em maint binhost`.
   - ✅ **`em stages` default `--buildpkg`** — DONE 2026-07-18.
-    `merge_merge_flags_with(..., force_buildpkg: true)` on the stage1 path so
+    `with_buildpkg(args.merge_flags.clone())` on the stage1 path so
     each stage run seeds PKGDIR (catalyst/crossdev-stages model).
+    (The old dual-copy `merge_merge_flags_with` wrapper was deleted 2026-08-30.)
   - ✅ **CHOST gate on reuse** — DONE 2026-07-18. `find_reusable` rejects a
     binpkg whose `CHOST` differs from make.conf/env CHOST (either side empty
     skips the gate). Not full ABI/PROVIDES matching.
@@ -1034,9 +1043,8 @@ blocked by the three independent findings above, tracked separately.
   anything to a merge-shaped command, so `global` inherited it into every
   config-editing subcommand's argument set whether or not that subcommand
   read it. Fix: moved `ask` into the existing `MergeFlags` mixin (already
-  flattened into `Cli`/`CrossdevArgs`/`ToolchainArgs`/`StagesArgs`, with the
-  established `merge_merge_flags` OR-merge precedence for "either position
-  works") instead of a bare `global` field — `use`/`pkg *` no longer
+  flattened into merge-shaped applets, not `Cli`) instead of a bare `global`
+  field — `use`/`pkg *` no longer
   advertise or accept `--ask` at all, and the real consumers
   (`emerge.rs`'s bare-atom flow, `crossdev/config_plan.rs`'s config-write
   confirm) read the already-merged value. `--pretend` stayed global
@@ -1294,8 +1302,8 @@ blocked by the three independent findings above, tracked separately.
   — the optional `mod.rs` compute/render split is deferred until a
   non-CLI consumer of the resolve layer actually appears.
 - ✅ `em stages`/`crossdev`/`toolchain --setup` force `--buildpkg` on
-  regardless of the CLI (`merge_merge_flags_with(.., force_buildpkg:
-  true)`, `crossdev/mod.rs`), so each staged run seeds `PKGDIR` for the
+  regardless of the CLI (`with_buildpkg(args.merge_flags.clone())` in
+  `crossdev/mod.rs`), so each staged run seeds `PKGDIR` for the
   next; `PKGDIR` resolution is itself `--target`-substituted-roots-aware
   (`resolve_pkgdir_for_roots`, `binpkg.rs`), so different arches don't
   share a cache. Stale entry, confirmed implemented on read 2026-08-26.

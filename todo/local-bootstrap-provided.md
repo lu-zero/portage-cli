@@ -72,7 +72,7 @@ hope host repos still apply.”
    sync-type = git
    sync-uri = https://github.com/gentoo-mirror/gentoo.git
    ```
-   and require `em --local sync` (or `setup --sync`) before profile/provided.
+   and require `em sync --local` (or `setup --sync`) before profile/provided.
 3. Never invent a partial tree; md5-cache + profiles must come from a real
    checkout.
 
@@ -86,7 +86,7 @@ Profile must be a real path under the **chosen** repo’s `profiles/` (from
 | Gentoo host, host `make.profile` resolves into the **same** tree we piggy-back | **Mirror host:** symlink target = host’s resolved profile (same as `--root` today). |
 | Linux, no usable host profile (foreign distro, or host profile outside our tree) | **Prefix profile for host ARCH** (decided 2026-08-07): e.g. `default/linux/<arch>/<release>/no-multilib/prefix` (or newest release dir that has a prefix leaf in `profiles.desc`). Safer under EPREFIX than a plain desktop/`23.0` profile — path/relocatable assumptions match `--local`. No desktop/systemd flavor. |
 | macOS / Darwin | **Prefix Darwin:** from `profiles.desc` arch `arm64-macos` / `x64-macos`, pick newest `prefix/darwin/macos/<ver>/<cpu>` (often `…/gcc`). If host macOS is **newer** than any tree entry: still pick the newest available and **warn** (decided 2026-08-07) — do not fail setup. Keyword arch is already `arm64-macos` / `x64-macos` in `gentoo-core`. |
-| User override from day one | `em setup --local --profile <path-or-number>` and/or `em --local select profile set …` after setup (see select ergonomics below). |
+| User override from day one | `em setup --local --profile <path-or-number>` and/or `em select --local DIR profile set …` after setup (see select ergonomics below). |
 
 **Already implemented pieces**
 
@@ -141,7 +141,7 @@ default. Same for `repos.conf` gentoo entry (`CreateOnly` / fill-gaps).
 6. Write <prefix>/etc/portage/make.profile → absolute profile path
    → config root becomes prefix on next em --local invocation
 7. Write managed package.provided (step 4 / Phase 1 of provided plan)
-8. Print next step: em --local toolchain --setup
+8. Print next step: em toolchain --local --setup
 ```
 
 Pretend (`-p`): print all of the above, write nothing.
@@ -277,7 +277,7 @@ em setup --local
    package.provided  (managed block)  ──►  solver treats as installed, never builds
         │
         ▼
-em --local toolchain --setup   (small plan, no irreducible cycle)
+em toolchain --local --setup   (small plan, no irreducible cycle)
    baselayout → binutils → headers → libc(--nodeps) → gcc
         │
         ▼
@@ -665,7 +665,7 @@ matter for debugging a bad pick.
    promote to Tier 1; re-run.
 3. Freeze the winning set in code + docs; add a regression test that
    synthetic graph + provided is cycle-free.
-4. Optional: `em --local toolchain --setup -p` hint when provided empty
+4. Optional: `em toolchain --local --setup -p` hint when provided empty
    (“run em setup --local or seed package.provided — see local-bootstrap.md”).
 
 ### Phase 4 — Lifecycle (optional but important)

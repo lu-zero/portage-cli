@@ -9,14 +9,13 @@ sysroot that hasn't been laid down yet:
 ```rust
 bail!(
     "cross target '{tuple}' is not set up at {cfg}\n  \
-     run: em crossdev -t {tuple} --init-target"
+     run: em crossdev --target {tuple} --init-target"
 );
 ```
 
 `crossdev`'s own `-t`/`--target` flag no longer exists — it was unified
-into the top-level `--target`/`-T` flag (`CrossdevArgs` in `cli.rs` has no
-`-t` field; the doc comment on the top-level flag says so explicitly:
-"crossdev no longer has its own `-t`/`--target`. One flag for both
-roles"). Following this hint verbatim fails to parse.
+into `--target`/`-T` on the `Topology` mixin (`CrossdevArgs` has no `-t`).
+An earlier hint of `em --target {tuple} crossdev --init-target` is also
+stale as of 2026-08-30: topology flags belong after the applet.
 
-**Fix**: `"run: em --target {tuple} crossdev --init-target"`.
+**Fix** (current): `"run: em crossdev --target {tuple} --init-target"`.
