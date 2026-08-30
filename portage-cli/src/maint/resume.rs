@@ -378,8 +378,7 @@ pub fn take_for_resume(root: &Utf8Path) -> Result<Option<ResumeState>> {
 
 /// Merge a *saved* job's flags with the current `-r` invocation
 ///
-/// Semantics (intentionally different from
-/// [`crate::crossdev::merge_merge_flags_fields`]'s subcommand-vs-global OR):
+/// Semantics (intentionally not a simple OR of two [`crate::cli::MergeFlags`]):
 ///
 /// - **Job shape** bools start from `saved`; a `true` on `cli` turns them
 ///   on (clap cannot express "explicitly false" for these flags, so `-r`

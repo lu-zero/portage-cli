@@ -1,7 +1,10 @@
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::str::FromStr;
 
 use clap::builder::styling::{AnsiColor as ClapAnsiColor, Styles};
-use clap::{Parser, Subcommand};
+use clap::error::ErrorKind;
+use clap::{CommandFactory, Parser, Subcommand};
 use gentoo_core::Arch;
 #[cfg(test)]
 use portage_atom_pubgrub::DepClass;
@@ -54,6 +57,10 @@ pub struct Cli {
     #[arg(long)]
     pub info: bool,
 
+    /// Structured JSON for `--info` (merge-plan `--json` lives on [`MergeFlags`])
+    #[arg(long, requires = "info")]
+    pub json: bool,
+
     /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
     /// `em`'s own debug/trace logs (see also `RUST_LOG`).
     #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
@@ -64,14 +71,20 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Target architecture for operations. Defaults to current system architecture
-    #[arg(long, value_name = "ARCH", default_value_t = Arch::current(), value_parser = parse_arch)]
+    #[arg(
+        long,
+        value_name = "ARCH",
+        default_value_t = Arch::current(),
+        value_parser = parse_arch,
+        global = true
+    )]
     pub arch: Arch,
 
     /// Pin search/query to a single repository
     ///
     /// When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for
     /// single-repo applets; search walks all of them).
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", global = true)]
     pub repo: Option<String>,
 
     #[command(subcommand)]
@@ -82,9 +95,8 @@ impl Cli {
     /// The active applet's own `Topology`/`RootArg`, or a harmless bare-host
     /// default for applets that carry neither (the root-independent stubs —
     /// `Helper`/`Worker`/`Portageq`/`Grep`/`Dispatch`/`Etc`/`Clean`/`Atom` —
-    /// and the bare "no applet at all" case, which the `main.rs` parse-then-
-    /// retry-into-`emerge` fallback never actually leaves as `None` once real
-    /// topology-shaped input is present).
+    /// and the bare "no applet at all" case, which [`parse_cli_from`] never
+    /// leaves as `None` once real topology-shaped input is present).
     ///
     /// Every `Cli`-level root-resolution method below is a thin selector over
     /// this — unlike `MergeFlags`/`DepgraphFlags`/`ActivityArgs`, there is no
@@ -262,6 +274,8 @@ impl Cli {
             Some(Applet::Toolchain(a)) => a.merge_flags.clone(),
             Some(Applet::Stages(a)) => a.merge_flags.clone(),
             Some(Applet::Setup(a)) => a.merge_flags.clone(),
+            Some(Applet::Revdep { merge_flags, .. }) => merge_flags.clone(),
+            Some(Applet::Depclean { merge_flags, .. }) => merge_flags.clone(),
             _ => MergeFlags::default(),
         }
     }
@@ -309,9 +323,8 @@ impl Cli {
     }
 
     /// `Applet::Emerge`'s own mode switches, or the all-`false` default when
-    /// it isn't the active applet (unreachable in practice: `main.rs`'s
-    /// parse-then-retry always resolves a bare invocation into
-    /// `Applet::Emerge` before dispatch ever inspects it).
+    /// it isn't the active applet (unreachable in practice: [`parse_cli_from`]
+    /// always resolves a bare invocation into `Applet::Emerge` first).
     pub fn mode(&self) -> EmergeModeArgs {
         match &self.applet {
             Some(Applet::Emerge(a)) => a.mode.clone(),
@@ -328,18 +341,146 @@ impl Cli {
     }
 }
 
+/// Parse argv, making the word `emerge` optional.
+///
+/// Try the real argv first; on failure, retry with `emerge` after argv0 so
+/// `em --root R cat/pkg` ≡ `em emerge --root R cat/pkg`. Help/version is not
+/// retried, and a sibling applet in argv is left as a parse error.
+pub fn parse_cli_from<I, T>(raw: I) -> Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString> + Clone,
+{
+    let raw: Vec<OsString> = raw.into_iter().map(Into::into).collect();
+    match Cli::try_parse_from(&raw) {
+        Ok(cli) => Ok(cli),
+        Err(err) => {
+            if is_help_or_version(err.kind()) {
+                return Err(err);
+            }
+            match known_subcommand_token(&raw) {
+                Some(name) if name != "emerge" => Err(err),
+                _ => Cli::try_parse_from(with_leading_emerge(&raw)),
+            }
+        }
+    }
+}
+
+fn is_help_or_version(kind: ErrorKind) -> bool {
+    matches!(
+        kind,
+        ErrorKind::DisplayHelp
+            | ErrorKind::DisplayVersion
+            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+    )
+}
+
+fn value_taking_flags() -> HashSet<String> {
+    let mut cmd = Cli::command();
+    cmd.build();
+    let mut out = HashSet::new();
+    fn walk(cmd: &clap::Command, out: &mut HashSet<String>) {
+        for arg in cmd.get_arguments() {
+            let Some(range) = arg.get_num_args() else {
+                continue;
+            };
+            // `--local` is `0..=1`; a following applet name is the applet, not the DIR.
+            if !range.takes_values() || range.min_values() < 1 {
+                continue;
+            }
+            if let Some(long) = arg.get_long() {
+                out.insert(format!("--{long}"));
+            }
+            if let Some(short) = arg.get_short() {
+                out.insert(format!("-{short}"));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            walk(sub, out);
+        }
+    }
+    walk(&cmd, &mut out);
+    out
+}
+
+fn consumes_next_as_value(flag: &str, next: Option<&OsString>, taking: &HashSet<String>) -> bool {
+    if flag.contains('=') {
+        return false;
+    }
+    taking.contains(flag) && next.is_some_and(|n| !n.to_string_lossy().starts_with('-'))
+}
+
+fn known_subcommand_token(raw: &[OsString]) -> Option<String> {
+    let names: HashSet<String> = Cli::command()
+        .get_subcommands()
+        .flat_map(|s| {
+            std::iter::once(s.get_name().to_string()).chain(s.get_all_aliases().map(str::to_string))
+        })
+        .collect();
+    let taking = value_taking_flags();
+    let mut i = 1;
+    while i < raw.len() {
+        let Some(s) = raw[i].to_str() else {
+            i += 1;
+            continue;
+        };
+        if s == "--" {
+            break;
+        }
+        if s.starts_with('-') {
+            if consumes_next_as_value(s, raw.get(i + 1), &taking) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if names.contains(s) {
+            return Some(s.to_string());
+        }
+        i += 1;
+    }
+    None
+}
+
+fn with_leading_emerge(raw: &[OsString]) -> Vec<OsString> {
+    let emerge = OsString::from("emerge");
+    let taking = value_taking_flags();
+    let mut out = Vec::with_capacity(raw.len() + 1);
+    out.push(raw.first().cloned().unwrap_or_else(|| "em".into()));
+    out.push(emerge.clone());
+    let mut i = 1;
+    let mut skipped_applet = false;
+    while i < raw.len() {
+        let t = &raw[i];
+        let s = t.to_string_lossy();
+        if s.starts_with('-') {
+            out.push(t.clone());
+            if consumes_next_as_value(&s, raw.get(i + 1), &taking) {
+                i += 1;
+                if i < raw.len() {
+                    out.push(raw[i].clone());
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if !skipped_applet && t == &emerge {
+            skipped_applet = true;
+            i += 1;
+            continue;
+        }
+        out.push(t.clone());
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // `Topology`/`RootArg` only live on `EmergeArgs` (and the other build
-    // applets) now, not on `Cli`'s own root — so every test below that used
-    // to write `Cli::parse_from(["em", "--root", …, "atom"])` now goes
-    // through the real, explicit `emerge` applet instead. This is not a
-    // special test-only shim: `em --root R atom` and `em emerge --root R
-    // atom` parse into the exact same `EmergeArgs` (`main.rs`'s parse-then-
-    // retry makes the word `emerge` optional at the CLI), so exercising the
-    // resolution logic through the explicit form covers the bare form too.
+    // Explicit `emerge`; `parse_cli_from` is what makes the bare form equivalent.
     fn emerge<'a>(argv: impl IntoIterator<Item = &'a str>) -> Cli {
         Cli::parse_from(["em", "emerge"].into_iter().chain(argv))
     }
@@ -1086,17 +1227,150 @@ mod tests {
         assert_eq!(r.eprefix().unwrap().as_str(), "/tmp/x");
     }
 
-    // The word `emerge` is optional at the CLI (`main.rs`'s parse-then-retry
-    // makes the bare and explicit forms parse into the exact same
-    // `EmergeArgs`) — verified structurally here rather than through
-    // `main.rs`'s process-level retry, which isn't reachable from a unit test.
     #[test]
-    fn bare_and_explicit_emerge_agree_on_topology() {
-        let bare_style = emerge(["--root", "/srv/x", "-p", "sys-libs/zlib"]);
-        let Some(Applet::Emerge(args)) = &bare_style.applet else {
+    fn bare_and_explicit_emerge_produce_identical_args() {
+        let bare = parse_cli_from(["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]).unwrap();
+        let explicit =
+            parse_cli_from(["em", "emerge", "--root", "/srv/x", "-p", "sys-libs/zlib"]).unwrap();
+        let Some(Applet::Emerge(a)) = &bare.applet else {
+            panic!("expected Applet::Emerge from bare argv");
+        };
+        let Some(Applet::Emerge(b)) = &explicit.applet else {
+            panic!("expected Applet::Emerge from explicit argv");
+        };
+        assert_eq!(a.root_arg.root, b.root_arg.root);
+        assert_eq!(a.atoms, b.atoms);
+        assert!(bare.pretend && explicit.pretend);
+    }
+
+    #[test]
+    fn flags_before_emerge_word_reorder() {
+        let cli =
+            parse_cli_from(["em", "--root", "/srv/x", "emerge", "-p", "sys-libs/zlib"]).unwrap();
+        let Some(Applet::Emerge(args)) = &cli.applet else {
             panic!("expected Applet::Emerge");
         };
         assert_eq!(args.root_arg.root.as_deref(), Some("/srv/x"));
+        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+        assert!(cli.pretend);
+    }
+
+    #[test]
+    fn unrecognized_flag_inside_a_real_subcommand_does_not_retry_as_emerge() {
+        let Err(err) = parse_cli_from(["em", "crossdev", "--bogus-flag"]) else {
+            panic!("expected parse error");
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("crossdev"),
+            "error should mention crossdev, got: {msg}"
+        );
+        assert!(
+            !msg.contains("em emerge"),
+            "must not rewrite into emerge, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn root_before_crossdev_is_not_rewritten_into_emerge() {
+        let Err(err) = parse_cli_from(["em", "--root", "/tmp/r", "crossdev", "--setup"]) else {
+            panic!("expected parse error");
+        };
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("em emerge"),
+            "must not rewrite into emerge, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn top_level_help_is_not_rewritten_into_emerge() {
+        let Err(err) = parse_cli_from(["em", "--help"]) else {
+            panic!("expected parse error");
+        };
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+        let msg = err.to_string();
+        assert!(msg.contains("query") && msg.contains("crossdev"), "{msg}");
+        assert!(!msg.contains("Usage: em emerge"), "{msg}");
+    }
+
+    #[test]
+    fn applet_help_is_not_rewritten_into_emerge() {
+        let Err(err) = parse_cli_from(["em", "toolchain", "--help"]) else {
+            panic!("expected parse error");
+        };
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
+        let msg = err.to_string();
+        assert!(msg.contains("Usage: em toolchain"), "{msg}");
+        assert!(!msg.contains("Usage: em emerge"), "{msg}");
+    }
+
+    #[test]
+    fn version_is_not_rewritten_into_emerge() {
+        let Err(err) = parse_cli_from(["em", "--version"]) else {
+            panic!("expected parse error");
+        };
+        assert_eq!(err.kind(), ErrorKind::DisplayVersion);
+    }
+
+    #[test]
+    fn info_json_parses_without_emerge() {
+        let cli = parse_cli_from(["em", "--info", "--json"]).unwrap();
+        assert!(cli.info);
+        assert!(cli.json);
+        assert!(cli.applet.is_none());
+    }
+
+    #[test]
+    fn arch_and_repo_work_on_the_bare_path() {
+        let cli = parse_cli_from(["em", "--arch", "amd64", "-p", "sys-libs/zlib"]).unwrap();
+        assert_eq!(cli.arch, Arch::from_str("amd64").unwrap());
+        let Some(Applet::Emerge(args)) = &cli.applet else {
+            panic!("expected Applet::Emerge");
+        };
+        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+
+        let via_emerge =
+            parse_cli_from(["em", "--arch", "amd64", "emerge", "-p", "sys-libs/zlib"]).unwrap();
+        assert_eq!(via_emerge.arch, cli.arch);
+
+        let repo = parse_cli_from(["em", "--repo", "/tmp/r", "-p", "sys-libs/zlib"]).unwrap();
+        assert_eq!(repo.repo.as_deref(), Some("/tmp/r"));
+    }
+
+    #[test]
+    fn json_before_emerge_word_is_merge_plan_json() {
+        let cli = parse_cli_from(["em", "--json", "emerge", "-p", "sys-libs/zlib"]).unwrap();
+        assert!(!cli.json, "--json without --info must not bind to Cli");
+        assert!(cli.merge_flags().json);
+        let explicit = parse_cli_from(["em", "emerge", "--json", "-p", "sys-libs/zlib"]).unwrap();
+        assert!(explicit.merge_flags().json);
+    }
+
+    #[test]
+    fn value_taking_flags_include_root_and_exclude() {
+        let f = value_taking_flags();
+        assert!(f.contains("--root"), "missing --root in {f:?}");
+        assert!(f.contains("-X"), "missing -X in {f:?}");
+    }
+
+    #[test]
+    fn exclude_value_matching_an_applet_name_still_retries() {
+        let cli = parse_cli_from(["em", "-X", "search", "-p", "sys-libs/zlib"]).unwrap();
+        let Some(Applet::Emerge(args)) = &cli.applet else {
+            panic!("expected Applet::Emerge");
+        };
+        assert_eq!(args.merge_flags.exclude, vec!["search".to_string()]);
+        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+    }
+
+    #[test]
+    fn root_value_named_emerge_is_kept() {
+        let cli = parse_cli_from(["em", "--root", "emerge", "-p", "sys-libs/zlib"]).unwrap();
+        let Some(Applet::Emerge(args)) = &cli.applet else {
+            panic!("expected Applet::Emerge");
+        };
+        assert_eq!(args.root_arg.root.as_deref(), Some("emerge"));
         assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
     }
 
@@ -1112,6 +1386,10 @@ mod tests {
         assert!(
             Cli::try_parse_from(["em", "crossdev", "--root", "/tmp/a", "--setup"]).is_err(),
             "--root anywhere in crossdev's own arg list must be a clap error"
+        );
+        assert!(
+            parse_cli_from(["em", "crossdev", "--setup", "--root", "/tmp/a"]).is_err(),
+            "retry path must not accept --root on crossdev either"
         );
     }
 }
@@ -1483,6 +1761,8 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         topology: Topology,
         #[command(flatten)]
         root_arg: RootArg,
+        #[command(flatten)]
+        merge_flags: MergeFlags,
     },
 
     #[command(about = "Display Portage elog files")]
@@ -1603,13 +1883,9 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         root_arg: RootArg,
     },
 
-    /// Resolve and merge/unmerge packages — the same engine bare `em <atoms>` uses
+    /// Resolve and merge/unmerge packages (emerge workalike).
     ///
-    /// The word `emerge` is optional: `em <atoms> [flags]` and `em emerge <atoms>
-    /// [flags]` parse into the exact same [`EmergeArgs`] (see `main.rs`'s
-    /// parse-then-retry-with-`emerge`-injected fallback) — this variant exists so
-    /// the merge path is a real, self-contained applet like `crossdev`/`toolchain`/
-    /// `stages`, not a special-cased shadow copy living directly on `Cli`.
+    /// `em <atoms>` and `em emerge <atoms>` parse into the same [`EmergeArgs`].
     #[command(about = "Resolve and merge/unmerge packages (emerge workalike)")]
     Emerge(EmergeArgs),
 }
@@ -1812,7 +2088,7 @@ pub struct EmergeArgs {
     pub privilege: Privilege,
 
     /// Atoms, package sets (`@world`), or ebuild paths to act on
-    #[arg(value_name = "ATOM", num_args = 1..)]
+    #[arg(value_name = "ATOM")]
     pub atoms: Vec<String>,
 }
 

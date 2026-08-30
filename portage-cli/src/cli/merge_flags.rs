@@ -1,32 +1,16 @@
-//! Merge-behavior flags: everything `emerge_atoms`/`emerge_atoms_inner`/
-//! `run_merge_plan` read to decide *how* to resolve and build a set of atoms,
-//! as opposed to root-model flags (`--root`, `--local`, `--privilege`, …,
-//! already `global = true` on [`super::Cli`]) or depgraph-shape flags
-//! ([`super::DepgraphFlags`]: `--deep`/`--newuse`).
+//! Merge-behavior flags: everything `emerge_atoms`/`run_merge_plan` read to
+//! decide *how* to resolve and build, as opposed to root-model flags
+//! ([`super::Topology`]/[`super::RootArg`]) or depgraph-shape flags
+//! ([`super::DepgraphFlags`]).
 //!
-//! Flattened both into the top-level [`super::Cli`] (for the bare `em
-//! <atoms>` path) and into [`super::ToolchainArgs`]/[`super::CrossdevArgs`]/
-//! [`super::StagesArgs`] (whose staged driver, `crossdev::run_staged`, calls
-//! the same `emerge_atoms`/`emerge_atoms_inner` chain per step) — mirroring
-//! [`super::DepgraphFlags`]'s own flattening. This lets these flags be
-//! written either before or after the subcommand name; the driver merges
-//! the two with the same subcommand-wins-when-set precedence
-//! `merge_depgraph_flags` already uses.
+//! Flattened exactly once into each merge-shaped applet (`EmergeArgs`,
+//! `CrossdevArgs`, `ToolchainArgs`, `StagesArgs`, `SetupArgs`, `Revdep`,
+//! `Depclean`). Bare `em -j8 cat/pkg` works because [`super::parse_cli_from`]
+//! retries those invocations as `em emerge …`.
 //!
-//! `--search`/`--searchdesc` are deliberately NOT here: they select an
-//! entirely different mode in the bare path (`run_emerge` branches to
-//! `search::run_emerge_style` before ever calling `emerge_atoms`), so they
-//! have no meaning for a subcommand's staged build. `--nodeps` is also NOT
-//! here: it's already threaded per call ([`crate::EmergeOpts::nodeps`])
-//! because each [`crate::crossdev::stages::StageStep`] needs its own value
-//! (the two-stage cross bootstrap's `--nodeps` libc-headers step) — folding
-//! it into this mixin would lose that per-step distinction.
-//!
-//! `--keep-going`/`--autosolve-use`/`--autounmask-write` all parsed only
-//! when placed *before* the subcommand, and `run_staged`'s driver read them
-//! straight off the top-level `Cli` regardless of where the subcommand's own
-//! flattened copy might set them — so a flag given *after* the subcommand
-//! silently had no effect even where clap did accept it.
+//! `--search`/`--searchdesc`/`--nodeps` are not here: they select a different
+//! emerge *action* ([`super::EmergeModeArgs`]), or a per-step `EmergeOpts`
+//! override in the staged bootstrap.
 #[derive(clap::Args, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MergeFlags {
@@ -38,9 +22,6 @@ pub struct MergeFlags {
     /// it. Making it global inherited that meaninglessness into every
     /// subcommand's args, which is also what caused `-a` to collide with
     /// `use`'s own `-a`/`--add` (a real crash — `em use --help` panicked).
-    ///
-    /// See `merge_merge_flags` for how this still works before or after the
-    /// subcommand name, same as every other field here.
     #[arg(short = 'a', long)]
     pub ask: bool,
 
@@ -155,9 +136,7 @@ pub struct MergeFlags {
     ///
     /// Lives here (not `global = true` on `Cli`): like `--ask`, `--eta` only
     /// means something to a merge-shaped command — `em news --eta` or
-    /// `em grep --eta` parsed fine but did nothing. The merge path reads it
-    /// off the (already-merged) `MergeFlags`, so it works before or after the
-    /// subcommand name for the staged builds too.
+    /// `em grep --eta` parsed fine but did nothing.
     #[arg(long = "eta")]
     pub eta: bool,
 

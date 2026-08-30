@@ -131,7 +131,7 @@ fn will_build(cli: &Cli) -> bool {
         return false;
     }
     match &cli.applet {
-        // `main.rs`'s parse-then-retry means `None` only reaches here for a
+        // [`crate::cli::parse_cli_from`] means `None` only reaches here for a
         // genuinely atom-less, applet-less invocation (`em --info`) — never
         // one that will build.
         None => false,
@@ -147,7 +147,8 @@ fn will_build(cli: &Cli) -> bool {
             | Applet::Crossdev(_)
             | Applet::Toolchain(_)
             | Applet::Stages(_)
-            | Applet::Depclean { .. },
+            | Applet::Depclean { .. }
+            | Applet::Revdep { .. },
         ) => true,
         Some(_) => false,
     }

@@ -65,17 +65,8 @@ use crate::cli::{Cli, CrossdevArgs, DepgraphFlags, MergeFlags};
 use crate::style::{C_LABEL, C_PKG};
 use target::CrossTarget;
 
-/// Merge a subcommand's own flattened depgraph flags with the top-level one,
-/// args taking precedence — so `--deep`/`--newuse` work whether given before
-/// or after the subcommand name.
-fn merge_depgraph_flags(globals: &Cli, args: &DepgraphFlags) -> DepgraphFlags {
-    merge_depgraph_flags_fields(&globals.depgraph_flags(), args)
-}
-
-/// Pure field-merge core of [`merge_depgraph_flags`], `over` taking
-/// precedence over `base` — factored out so `-r`/`--resume` (`emerge.rs`)
-/// can merge a *persisted* set of flags with the current invocation's own,
-/// not just a subcommand's with the top-level `Cli`.
+/// Merge two [`DepgraphFlags`]: `over` taking precedence, bools OR'd.
+/// Used by `-r`/`--resume` to overlay the current invocation on a saved job.
 pub(crate) fn merge_depgraph_flags_fields(
     base: &DepgraphFlags,
     over: &DepgraphFlags,
@@ -87,63 +78,9 @@ pub(crate) fn merge_depgraph_flags_fields(
     }
 }
 
-/// Merge merge-behavior flags (`-j`, `--keep-going`, `--buildpkg`, …) from a
-/// subcommand's own flattened [`MergeFlags`] with the top-level one, args
-/// taking precedence — the same "either position works" merge
-/// [`merge_depgraph_flags`] already does for `--deep`/`--newuse`, needed here
-/// for the same reason (`em -j 80 stages --stage1` vs `em stages --stage1 -j 80`).
-fn merge_merge_flags(globals: &Cli, args: &MergeFlags) -> MergeFlags {
-    merge_merge_flags_with(globals, args, false)
-}
-
-/// Like [`merge_merge_flags`], but `force_buildpkg` turns on `-b` even when
-/// neither position passed it — used by `em stages` so each stage run seeds
-/// PKGDIR for the next (catalyst/crossdev-stages model).
-fn merge_merge_flags_with(globals: &Cli, args: &MergeFlags, force_buildpkg: bool) -> MergeFlags {
-    let mut merged = merge_merge_flags_fields(&globals.merge_flags(), args);
-    if force_buildpkg {
-        merged.buildpkg = true;
-    }
-    merged
-}
-
-/// Pure field-merge core of [`merge_merge_flags_with`], `over` taking
-/// precedence over `base` — see [`merge_depgraph_flags_fields`]'s doc for
-/// why this is factored out separately from the `&Cli`-shaped wrapper.
-pub(crate) fn merge_merge_flags_fields(base: &MergeFlags, over: &MergeFlags) -> MergeFlags {
-    MergeFlags {
-        ask: over.ask || base.ask,
-        eta: over.eta || base.eta,
-        update: over.update || base.update,
-        autounmask_write: over.autounmask_write || base.autounmask_write,
-        oneshot: over.oneshot || base.oneshot,
-        fetchonly: over.fetchonly || base.fetchonly,
-        fetch_all_uri: over.fetch_all_uri || base.fetch_all_uri,
-        buildpkg: over.buildpkg || base.buildpkg,
-        buildpkgonly: over.buildpkgonly || base.buildpkgonly,
-        usepkg: over.usepkg || base.usepkg,
-        usepkgonly: over.usepkgonly || base.usepkgonly,
-        getbinpkg: over.getbinpkg || base.getbinpkg,
-        getbinpkgonly: over.getbinpkgonly || base.getbinpkgonly,
-        emptytree: over.emptytree || base.emptytree,
-        tree: over.tree || base.tree,
-        json: over.json || base.json,
-        onlydeps: over.onlydeps || base.onlydeps,
-        noreplace: over.noreplace || base.noreplace,
-        jobs: over.jobs.or(base.jobs),
-        load_average: over.load_average.or(base.load_average),
-        keep_going: over.keep_going || base.keep_going,
-        autounmask: over.autounmask || base.autounmask,
-        autosolve_use: over.autosolve_use || base.autosolve_use,
-        complete_graph: over.complete_graph || base.complete_graph,
-        with_bdeps: over.with_bdeps || base.with_bdeps,
-        exclude: if over.exclude.is_empty() {
-            base.exclude.clone()
-        } else {
-            over.exclude.clone()
-        },
-        root_deps: over.root_deps || base.root_deps,
-    }
+fn with_buildpkg(mut flags: MergeFlags) -> MergeFlags {
+    flags.buildpkg = true;
+    flags
 }
 
 /// The overlay name prefix crossdev uses for its `Location::Alias` repos.conf
@@ -159,10 +96,6 @@ fn overlay_name(target: &CrossTarget) -> String {
 }
 
 pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
-    // `--target` is global (`Cli`, not `CrossdevArgs`): one flag, read the
-    // same way whether it's setting a target up (here) or using an
-    // already-set-up one elsewhere (`stages --stage1`, plain atom builds) —
-    // not two separate flags that can disagree.
     let tuple = args
         .topology
         .target
@@ -287,7 +220,7 @@ async fn setup(
     };
     // Empty-target bootstrap: plain DEPEND is not satisfiable yet. Matches
     // crossdev's `<CTARGET>-emerge` (always implies `--root-deps=rdeps`).
-    let mut merge_flags = merge_merge_flags(globals, &args.merge_flags);
+    let mut merge_flags = args.merge_flags.clone();
     merge_flags.root_deps = true;
     // Host-side `cross-*` tools must resolve against the outer EROOT, not the
     // `--target` sysroot (sysroot make.conf is target-arch). Under `-p`,
@@ -322,7 +255,7 @@ async fn setup(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+            depgraph_flags: args.depgraph_flags.clone(),
             merge_flags,
             use_outer_eroot: true,
             target_only_installed_view: false,
@@ -625,13 +558,13 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     .ok();
     // Empty-ROOT bootstrap: plain DEPEND is a cycle (glibc ↔ libxcrypt ↔ …).
     // Same `--root-deps=rdeps` as crossdev --setup.
-    let mut merge_flags = merge_merge_flags(globals, &args.merge_flags);
+    let mut merge_flags = args.merge_flags.clone();
     merge_flags.root_deps = true;
     run_staged(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+            depgraph_flags: args.depgraph_flags.clone(),
             merge_flags,
             use_outer_eroot: false,
             target_only_installed_view: true,
@@ -717,9 +650,9 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             RunStagedOpts {
                 plan: refresh_plan,
                 globals,
-                depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+                depgraph_flags: args.depgraph_flags.clone(),
                 // Stages seed PKGDIR for the next re-roll (catalyst model).
-                merge_flags: merge_merge_flags_with(globals, &args.merge_flags, true),
+                merge_flags: with_buildpkg(args.merge_flags.clone()),
                 use_outer_eroot: true,
                 target_only_installed_view: false,
                 extra_aliases: &[],
@@ -740,13 +673,13 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     // packages like app-alternatives/* violate REQUIRED_USE until Level-C
     // cedes those flags. Always enable --autosolve-use; cede prefers the
     // ebuild's + IUSE default when the config left the flag off.
-    let mut stage1_merge = merge_merge_flags_with(globals, &args.merge_flags, true);
+    let mut stage1_merge = with_buildpkg(args.merge_flags.clone());
     stage1_merge.autosolve_use = true;
     run_staged(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: merge_depgraph_flags(globals, &args.depgraph_flags),
+            depgraph_flags: args.depgraph_flags.clone(),
             merge_flags: stage1_merge,
             use_outer_eroot: false,
             // A board root's plan must not be satisfied by the shared
@@ -785,11 +718,11 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     // Catalyst `stage3/chroot.sh`: emerge -e --update --deep --with-bdeps=y @system.
     // Force those knobs on top of the user's merge/depgraph flags; still seed
     // PKGDIR with -b like stage1.
-    let mut merge_flags = merge_merge_flags_with(globals, &args.merge_flags, true);
+    let mut merge_flags = with_buildpkg(args.merge_flags.clone());
     merge_flags.emptytree = true;
     merge_flags.update = true;
     merge_flags.with_bdeps = true;
-    let mut depgraph_flags = merge_depgraph_flags(globals, &args.depgraph_flags);
+    let mut depgraph_flags = args.depgraph_flags.clone();
     depgraph_flags.deep = true;
 
     crate::emerge_atoms(
@@ -1101,7 +1034,7 @@ async fn init_target(
     extras: &[Cpn],
     policy: config_plan::RefreshPolicy,
 ) -> Result<config_plan::Outcome> {
-    let ask = merge_merge_flags(globals, &args.merge_flags).ask;
+    let ask = args.merge_flags.ask;
     // For a retargeted prefix (`--local`/`--prefix`/`--root`) bootstrap it first:
     // `setup::bootstrap` writes the prefix `bashrc` that re-adds `<EROOT>/usr/bin`
     // to the build PATH (the shell sanitiser strips `$HOME` paths, so a `--local`

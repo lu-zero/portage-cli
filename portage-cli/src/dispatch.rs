@@ -16,7 +16,7 @@ use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, 
 /// Dispatch one parsed invocation to its applet or the default emerge path
 ///
 /// `None` only reaches here for a genuinely applet-less invocation
-/// (`em --info`, `em -p` with nothing else) — `main.rs`'s parse-then-retry
+/// (`em --info`, `em -p` with nothing else) — [`crate::cli::parse_cli_from`]
 /// resolves any invocation carrying atoms or emerge-mode flags into
 /// `Applet::Emerge` before this ever runs.
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {

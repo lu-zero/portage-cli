@@ -3,10 +3,8 @@
 //! `crossdev --init-target` used to write every file unconditionally and
 //! immediately, with no way to preview or confirm it — unlike every other
 //! mutating `em` path, which honours `-p`/`--pretend` (global on `Cli`) and
-//! `-a`/`--ask` (`MergeFlags`, resolved by the caller via `merge_merge_flags`
-//! — not global, since unlike `--pretend` it has no meaning outside a
-//! merge-shaped command; see `MergeFlags::ask`'s doc comment). This collects
-//! the desired state of each file/symlink/dir as a [`ConfigEntry`] (no I/O
+//! `-a`/`--ask` (`MergeFlags::ask` — not global, unlike `--pretend`). This
+//! collects the desired state of each file/symlink/dir as a [`ConfigEntry`] (no I/O
 //! beyond validation), diffs it against what's actually on disk, and only
 //! then previews (`-p`), confirms (`-a`), or applies — the config-
 //! regeneration equivalent of a merge plan. Shared between `crossdev` (cross
@@ -253,9 +251,7 @@ impl Outcome {
 /// Diff `entries` against disk under `policy` and, per `pretend`/`ask`, preview, confirm,
 /// or apply them
 ///
-/// `pretend` is `Cli`'s own `global` field (one shared value, works from any position);
-/// `ask` is the caller's already-merged `MergeFlags::ask` (see `merge_merge_flags`) — not
-/// global, so it has to be resolved by the caller instead of read straight off `&Cli`.
+/// `pretend` is `Cli`'s own global field; `ask` is the caller's `MergeFlags::ask`.
 pub(crate) fn apply(
     entries: &[ConfigEntry],
     pretend: bool,

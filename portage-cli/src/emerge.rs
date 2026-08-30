@@ -844,9 +844,10 @@ async fn emerge_atoms_inner(
     Ok(())
 }
 
-/// Run `Applet::Emerge` (real emerge workalike) or the bare `em <atoms>` path
-/// — `cli.applet` is already `Some(Applet::Emerge(args))` by the time either
-/// reaches here (`main.rs`'s parse-then-retry makes the word `emerge` optional).
+/// Run `Applet::Emerge` (real emerge workalike) or the bare `em <atoms>` path.
+///
+/// [`crate::cli::parse_cli_from`] makes the word `emerge` optional, so both
+/// reach here as `Some(Applet::Emerge(args))`.
 pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
     // emerge -r/--resume: replaces the whole action, same precedence real
     // emerge gives it (checked first, ahead of every other action flag).
@@ -876,6 +877,10 @@ pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result
     if args.mode.search || args.mode.searchdesc {
         return search::run_emerge_style(&cli.search_repos(), &args.atoms, args.mode.searchdesc)
             .await;
+    }
+    if args.atoms.is_empty() {
+        eprintln!("em: no atoms or applet specified. Use --help for usage.");
+        std::process::exit(1);
     }
     emerge_atoms(
         cli,

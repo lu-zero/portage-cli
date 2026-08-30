@@ -17,11 +17,10 @@ why probes go wrong), see [`em-prefix-experiment.md`](../design/em-prefix-experi
 
 ## The model, briefly
 
-- **`--target <tuple>` is one flag, two roles.** `em --target T crossdev
-  --init-target` *sets up* tuple `T`; `em --target T stages --stage1` (or
+- **`--target <tuple>` is one flag, two roles.** `em crossdev --target T
+  --init-target` *sets up* tuple `T`; `em stages --target T --stage1` (or
   any plain atom build) *uses* the already-set-up `T`, resolving/installing
-  into the target sysroot. There's no separate `-t` for crossdev — `--target`
-  is global.
+  into the target sysroot. There's no separate `-t` for crossdev.
 - **`cross-<tuple>/<pkg>` packages are derived on the fly**, not symlinked on
   disk. `--init-target` writes a `Location::Alias` `repos.conf` entry that
   maps the `cross-<tuple>` category onto the real `::gentoo` ebuilds

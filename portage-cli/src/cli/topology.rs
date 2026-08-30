@@ -70,7 +70,7 @@ pub struct Topology {
     /// Cross-build/setup for a crossdev target tuple
     ///
     /// The single source for "which tuple" everywhere: `em crossdev --target T --init-target`
-    /// sets T up; `em --target T stages --stage1` (or any plain atom build) resolves/installs
+    /// sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs
     /// into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for
     /// `--config-root <sysroot> --root <sysroot>`.
     ///
@@ -222,7 +222,7 @@ impl Topology {
     ///
     /// `stage1()`/`profile_stack()`/`resolve_gcc_version` deliberately keep
     /// using plain `roots()` — those genuinely want `--target`'s sysroot
-    /// substitution (`em --target T stages --stage1` builds *into* the
+    /// substitution (`em stages --target T --stage1` builds *into* the
     /// sysroot, by design).
     pub fn outer_roots(&self, root: &RootArg) -> Roots {
         let base = self.base_roots(root);
