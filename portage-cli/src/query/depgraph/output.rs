@@ -396,9 +396,11 @@ fn blocker_bracket_line(atom: &str, owner_cpv: &str, strong: bool) -> String {
 /// `PKG_BLOCKER`.
 ///
 /// Real emerge inserts this as a genuine node in the merge list itself, in
-/// dependency order; this one still prints in the advisories block (same
-/// position as the line it replaces) — full interleaving is tracked
-/// separately, not attempted here.
+/// dependency order. The *execution* side landed 2026-08-30
+/// (`merge::splice_points`/`merge::extend_blockers_with_unmerges` — the
+/// unmerge now runs at its owner's real position, not batched
+/// before/after the whole plan); this `-p` *preview* row still prints in
+/// the advisories block, not inline — display-only, not attempted here.
 fn uninstall_row(cpv: &Cpv) -> String {
     format!("[{C_ERROR}uninstall{C_ERROR:#}    ] {C_ERROR}{cpv}{C_ERROR:#}")
 }

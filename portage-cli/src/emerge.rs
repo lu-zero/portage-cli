@@ -764,11 +764,26 @@ async fn emerge_atoms_inner(
         blockers: outcome.build_blockers.clone(),
     });
 
+    // Only an unmerge whose owner(s) can't be located in `outcome.plan` at
+    // all (should not happen in practice — owners always come from the same
+    // solve's `proposed` set that produced `plan`) falls back to the coarse
+    // before/after-the-whole-plan batches below; every other unmerge is
+    // scheduled inline at its owner's actual position by `run_merge_plan`
+    // itself (see `merge::splice_points`/`merge::extend_blockers_with_unmerges`).
+    // `-f`/`-B` never install, so they must never unmerge either — same
+    // contract `skip_unmerge` already enforces for the orphan-fallback
+    // batches below (see this fn's own doc comment).
+    let (positioned_unmerges, orphaned_unmerges) = if skip_unmerge {
+        (Vec::new(), Vec::new())
+    } else {
+        crate::merge::partition_positioned_unmerges(&outcome.plan, &outcome.unmerges)
+    };
+
     let plan_result: Result<()> = async {
         if !skip_unmerge {
             unmerge_blocker_victims(
                 cli,
-                &outcome.unmerges,
+                &orphaned_unmerges,
                 portage_resolve::conflicts::UnmergeOrder::BeforeBlocker,
                 None,
             )
@@ -777,6 +792,7 @@ async fn emerge_atoms_inner(
         run_merge_plan(crate::merge::MergePlanRequest {
             plan: &outcome.plan,
             blockers: &outcome.build_blockers,
+            unmerges: &positioned_unmerges,
             roots: &roots,
             work_base: &work_base,
             distdir: distdir.as_deref(),
@@ -810,7 +826,7 @@ async fn emerge_atoms_inner(
         let done = crate::activity::DurationStore::load(roots.merge_root()).successful_set(&job_id);
         unmerge_blocker_victims(
             cli,
-            &outcome.unmerges,
+            &orphaned_unmerges,
             portage_resolve::conflicts::UnmergeOrder::AfterBlocker,
             Some(&done),
         )
@@ -1310,6 +1326,23 @@ async fn unmerge_blocker_victims(
     }
     let vdb = open_cli_vdb(cli)?;
     let packages = packages_for_unmerge(&vdb, &cpvs);
+    if packages.is_empty() {
+        return Ok(());
+    }
+    let exclude: std::collections::HashSet<portage_atom::Cpv> =
+        packages.iter().map(|p| p.cpv().clone()).collect();
+    execute_unmerge_batch(cli, &vdb, &packages, &exclude, "unmerge", "Unmerging").await
+}
+
+/// Unmerge one blocker victim at its computed position in the merge order
+/// (see `merge::splice_points`/`merge::extend_blockers_with_unmerges`) —
+/// called from inside `run_merge_plan`'s own sequential/parallel loops,
+/// interleaved with the packages that trigger it, rather than batched
+/// before/after the whole run. Already-gone is a silent no-op (resume-safe),
+/// same as [`unmerge_blocker_victims`].
+pub(crate) async fn unmerge_blocker_victim(cli: &cli::Cli, cpv: &portage_atom::Cpv) -> Result<()> {
+    let vdb = open_cli_vdb(cli)?;
+    let packages = packages_for_unmerge(&vdb, std::slice::from_ref(&cpv));
     if packages.is_empty() {
         return Ok(());
     }

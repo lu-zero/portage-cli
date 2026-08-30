@@ -124,6 +124,14 @@ carry an effort estimate.
   **confirmed still accurate 2026-08-18** (untouched by the same-day
   `f5686e8`/coloring fixes), not yet a bug in practice
 - **Later:** multi-`em` plan awareness (pause/error on overlapping critical path) — sketched under [[workdir-dual-root]] “Future”, not near-term
+- Raw `eprintln!`/`println!` still used throughout `merge/mod.rs`, `emerge.rs`
+  and elsewhere for stopping/failure banners, instead of going through the
+  `style`/`tracing` machinery the rest of the console output was moved onto
+  (see the "Later — normal-verbosity log output is ugly" section above,
+  `diag::CompactFormatter`). Noted 2026-08-30 while adding the blocker
+  auto-unmerge interleaving (`merge::run_due_unmerges`'s own new stop
+  message included) — pre-existing pattern in the file, not something to
+  spot-fix piecemeal; wants one pass across the whole crate.
 - USE fold residuals after the 2026-08-19 defaults/conf split (no live
   canary on stock gentoo — both file types are empty in gentoo/guru/pentoo
   today): `use.stable`/`package.use.stable` inside defaults

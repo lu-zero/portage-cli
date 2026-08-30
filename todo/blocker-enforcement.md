@@ -36,6 +36,18 @@ then implemented across 4 commits:
   (`query/depgraph/mod.rs`/`output.rs`), replacing the old flat
   `check_blockers` call. `PreExisting` verdicts are silently dropped, matching
   real portage's own suppression ("the damage is already done").
+- `5e3987a`/`bd2a165`/`64feadb` (2026-08-20, same day) — the display was then
+  matched to real emerge's actual formatting, not just this doc's ad-hoc
+  wording: `bd2a165` gives hard conflicts the real `[blocks B     ]` bracket
+  row (`blocker_bracket_line`, verified against
+  `_emerge/resolver/output.py::_blockers`); `64feadb` replaces the
+  `>>> would unmerge:` line described below with real emerge's
+  `[uninstall    ]` row (`"uninstall".ljust(13)`, `uninstall_row` in
+  `output.rs`) — the "resolved: ..." explanatory line stays underneath it.
+  `output.rs` still prints the uninstall row in the advisories block rather
+  than interleaving it into the merge list itself as a real node in
+  dependency order (noted as a known, deliberate simplification in
+  `uninstall_row`'s doc comment).
 
 Corrections the plan found that this doc's older prose got wrong or left
 unstated: real portage auto-resolves *both* weak and strong blockers by the
@@ -49,6 +61,46 @@ full `em -p @world` both run clean through the new path on this host's real
 tree (no crash; no real blocker pair exists here currently to exercise the
 WouldUnmerge/StillNeeded text itself, but the classifier has 7 dedicated unit
 tests plus the canonical `systemd[resolvconf]`/openresolv two-edge case).
+
+**Real-blocker-pair live verification, closing the gap above:
+`test-scripts/test-blockers-iuse-effective-sandbox.sh`** (landed alongside
+this feature, 2026-08-20). A synthetic `test-pms` overlay (`victim`/
+`attacker-weak`/`attacker-strong`/`needs-victim`/`fails-after`) exercises
+weak auto-unmerge, strong auto-unmerge, the still-needed hard-conflict path,
+`-p`'s no-side-effect preview, `-B`/`-f` never unmerging, and the F4
+regression (a pending `AfterBlocker` unmerge surviving an unrelated later
+failure) end to end through a real merge/VDB round trip, unprivileged
+(hakoniwa sandbox, no `sudo`). Rerun after any change to `conflicts.rs`/
+`emerge.rs`'s unmerge machinery — it caught a real regression in the
+2026-08-30 interleaving work below within one run.
+
+**Interleaved execution position (2026-08-30) — the residual gap
+`uninstall_row`'s own doc comment flagged ("full interleaving is tracked
+separately, not attempted here") is closed on the *execution* side.**
+Previously `emerge.rs::unmerge_blocker_victims` ran every strong (`!!`)
+victim in one batch before the *entire* merge loop, and every weak (`!`)
+victim in one batch after the *entire* loop — coarser than PMS 8.3.2 actually
+requires (before/after the specific owner's own merge). Fixed by computing
+each unmerge's real position relative to `plan`'s own topological order:
+`merge::owner_plan_indices`/`merge::partition_positioned_unmerges` (an
+unmerge whose owner(s) can't be located in `plan` — should not happen in
+practice — still falls back to the old before/after-the-whole-plan batch,
+unchanged); `merge::splice_points` for `--jobs 1` (splices the unmerge into
+`merge_sequential`'s own array walk at the owner's index); `merge::
+extend_blockers_with_unmerges` for `--jobs N>1` (adds the unmerge as a real
+node in the `Scheduler`'s precedence graph — an owner depends on its strong
+unmerge, an unmerge depends on all its weak owners — so it interleaves
+correctly with concurrent, unrelated packages instead of stalling the whole
+run). `-p`'s preview text placement is unchanged (display-only, still
+tracked separately — see `uninstall_row`'s doc comment). Unit-tested
+(`merge::unmerge_scheduling_tests`, 6 cases); live-verified both the
+`--jobs 1` sandbox script above (still all green) and `--jobs 4` manually
+(strong: unmerge ran concurrently with two unrelated packages while the
+blocking owner correctly waited for it; weak: the unmerge correctly waited
+for its owner to finish before running, even with other packages still
+mid-build) — real inputs found a genuine regression in the first pass
+(`-B`/`-f` had stopped being exempt from the new positioned path) that the
+`-B` sandbox check caught immediately, fixed before landing.
 
 ## Current state (already in place)
 
@@ -95,4 +147,4 @@ discussion: a removal-set display and richer advisory wording are the same work.
 
 `planned_unmerges` on the depgraph; `unmerge_blocker_victims` before/after
 the merge loop. Confirmation is the existing `--ask` merge prompt (the
-`>>> would unmerge:` preview already printed). No extra opt-in flag.
+`[uninstall    ]` row, `64feadb`, already printed). No extra opt-in flag.

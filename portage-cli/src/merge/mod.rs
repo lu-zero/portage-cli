@@ -1,6 +1,6 @@
 //! Parallel and sequential merge scheduling
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use anyhow::{Context, bail};
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -25,6 +25,12 @@ struct MergeFailure {
 pub(crate) struct MergePlanRequest<'a> {
     pub plan: &'a [query::depgraph::PlannedMerge],
     pub blockers: &'a [Vec<usize>],
+    /// Blocker-triggered auto-unmerges to interleave into the merge order at
+    /// their owner's actual position — every entry here must already have
+    /// every owner locatable in `plan` (see [`partition_positioned_unmerges`]);
+    /// the caller runs anything else through the old before/after-the-whole-plan
+    /// batch itself.
+    pub unmerges: &'a [portage_resolve::conflicts::PlannedUnmerge],
     pub roots: &'a portage_resolve::Roots,
     pub work_base: &'a camino::Utf8Path,
     pub distdir: Option<&'a camino::Utf8Path>,
@@ -181,6 +187,8 @@ fn activity_pkg_ctx(
 /// Plan-wide state shared by the sequential and parallel merge loops
 struct MergeRun<'a> {
     plan: &'a [query::depgraph::PlannedMerge],
+    unmerges: &'a [portage_resolve::conflicts::PlannedUnmerge],
+    globals: &'a cli::Cli,
     roots: &'a portage_resolve::Roots,
     host_roots: &'a portage_resolve::Roots,
     base_roots: &'a portage_resolve::Roots,
@@ -384,6 +392,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let MergePlanRequest {
         plan,
         blockers,
+        unmerges,
         roots,
         work_base,
         distdir,
@@ -587,6 +596,8 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
 
     let run = MergeRun {
         plan,
+        unmerges,
+        globals,
         roots,
         host_roots: &host_roots,
         base_roots: &base_roots,
@@ -610,7 +621,8 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     let (merged, skipped, failures) = if jobs <= 1 {
         merge_sequential(&run).await
     } else {
-        merge_parallel(&run, blockers, jobs, merge_flags.load_average).await
+        let extended_blockers = extend_blockers_with_unmerges(blockers, plan, unmerges);
+        merge_parallel(&run, &extended_blockers, jobs, merge_flags.load_average).await
     };
 
     // Refresh ${ROOT}/etc/profile.env and the linker cache, as emerge does
@@ -963,6 +975,142 @@ fn record_package_outcome(
     }
 }
 
+/// Plan indices of every one of `unmerge`'s owners, matched by cpv — `None`
+/// if any owner isn't present in `plan` (owners always come from the same
+/// solve's `proposed` set that produced `plan` in practice, but a caller
+/// must not assume it, and should fall back to the coarse
+/// before/after-the-whole-plan batch instead).
+fn owner_plan_indices(
+    unmerge: &portage_resolve::conflicts::PlannedUnmerge,
+    plan: &[query::depgraph::PlannedMerge],
+) -> Option<Vec<usize>> {
+    unmerge
+        .owners
+        .iter()
+        .map(|owner| plan.iter().position(|p| &p.cpv == owner))
+        .collect()
+}
+
+/// Split `unmerges` into those whose every owner is locatable in `plan`
+/// (schedulable at a real position, see [`splice_points`]/
+/// [`extend_blockers_with_unmerges`]) and those that aren't (the caller runs
+/// these through the old before/after-the-whole-plan batch instead).
+pub(crate) fn partition_positioned_unmerges(
+    plan: &[query::depgraph::PlannedMerge],
+    unmerges: &[portage_resolve::conflicts::PlannedUnmerge],
+) -> (
+    Vec<portage_resolve::conflicts::PlannedUnmerge>,
+    Vec<portage_resolve::conflicts::PlannedUnmerge>,
+) {
+    unmerges
+        .iter()
+        .cloned()
+        .partition(|u| owner_plan_indices(u, plan).is_some())
+}
+
+/// Index -> unmerges due at that splice point (see [`splice_points`]).
+type SplicePoints<'a> = BTreeMap<usize, Vec<&'a portage_resolve::conflicts::PlannedUnmerge>>;
+
+/// Where to run each already-positioned unmerge in [`merge_sequential`]'s own
+/// array walk: a strong (`!!`) victim right before its *earliest* owner's
+/// index, a weak (`!`) victim right after its *latest* owner's index — real
+/// PMS 8.3.2 scheduling relative to the specific blocking merge, not the
+/// whole plan.
+fn splice_points<'a>(
+    plan: &[query::depgraph::PlannedMerge],
+    unmerges: &'a [portage_resolve::conflicts::PlannedUnmerge],
+) -> (SplicePoints<'a>, SplicePoints<'a>) {
+    let mut before: BTreeMap<usize, Vec<&portage_resolve::conflicts::PlannedUnmerge>> =
+        BTreeMap::new();
+    let mut after: BTreeMap<usize, Vec<&portage_resolve::conflicts::PlannedUnmerge>> =
+        BTreeMap::new();
+    for u in unmerges {
+        let Some(idxs) = owner_plan_indices(u, plan) else {
+            continue;
+        };
+        match u.order {
+            portage_resolve::conflicts::UnmergeOrder::BeforeBlocker => {
+                let Some(&pos) = idxs.iter().min() else {
+                    continue;
+                };
+                before.entry(pos).or_default().push(u);
+            }
+            portage_resolve::conflicts::UnmergeOrder::AfterBlocker => {
+                let Some(&pos) = idxs.iter().max() else {
+                    continue;
+                };
+                after.entry(pos).or_default().push(u);
+            }
+        }
+    }
+    (before, after)
+}
+
+/// Extend the `--jobs N` [`Scheduler`]'s node space by one node per unmerge
+/// (indices `plan.len()..`), with real precedence edges — packages can
+/// finish out of array order under `--jobs`, so [`splice_points`]'s
+/// position-only approach isn't safe here. A strong victim's node blocks its
+/// owner(s); a weak victim's node is blocked on its owner(s).
+/// `merge_parallel` dispatches node indices `>= plan.len()` to an unmerge.
+fn extend_blockers_with_unmerges(
+    blockers: &[Vec<usize>],
+    plan: &[query::depgraph::PlannedMerge],
+    unmerges: &[portage_resolve::conflicts::PlannedUnmerge],
+) -> Vec<Vec<usize>> {
+    let mut out = blockers.to_vec();
+    out.resize(plan.len() + unmerges.len(), Vec::new());
+    for (k, u) in unmerges.iter().enumerate() {
+        let node = plan.len() + k;
+        let Some(idxs) = owner_plan_indices(u, plan) else {
+            continue;
+        };
+        match u.order {
+            portage_resolve::conflicts::UnmergeOrder::BeforeBlocker => {
+                for owner_idx in idxs {
+                    if !out[owner_idx].contains(&node) {
+                        out[owner_idx].push(node);
+                    }
+                }
+            }
+            portage_resolve::conflicts::UnmergeOrder::AfterBlocker => {
+                out[node] = idxs;
+            }
+        }
+    }
+    out
+}
+
+/// Run the unmerges scheduled at one splice point, recording any failure as a
+/// [`MergeFailure`] the same way a package failure is reported. Returns
+/// `true` if the loop should keep going — only ever `false` for a **strong**
+/// blocker's unmerge (see the call site's doc comment for why that one can't
+/// be deferred).
+async fn run_due_unmerges(
+    cli: &cli::Cli,
+    due: &[&portage_resolve::conflicts::PlannedUnmerge],
+    failures: &mut Vec<MergeFailure>,
+) -> bool {
+    let mut keep_going = true;
+    for u in due {
+        if let Err(e) = crate::emerge::unmerge_blocker_victim(cli, &u.cpv).await {
+            let rendered = crate::style::render_error_chain(&e);
+            crate::style::print_failure_banner(
+                format_args!(">>> Failed to unmerge {} — ", u.cpv),
+                &rendered,
+            );
+            failures.push(MergeFailure {
+                cpv: u.cpv.to_string(),
+                log: camino::Utf8PathBuf::new(),
+                cause: rendered,
+            });
+            if u.order == portage_resolve::conflicts::UnmergeOrder::BeforeBlocker {
+                keep_going = false;
+            }
+        }
+    }
+    keep_going
+}
+
 /// Sequential build+merge in install order (the `--jobs 1` / default path)
 /// Returns `(merged, skipped, failures)`.
 async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure>) {
@@ -971,8 +1119,18 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
     let mut merged = 0usize;
     let mut skipped = 0usize;
     let mut failures: Vec<MergeFailure> = Vec::new();
+    let (before_unmerges, after_unmerges) = splice_points(run.plan, run.unmerges);
 
     for (i, planned) in run.plan.iter().enumerate() {
+        if let Some(due) = before_unmerges.get(&i)
+            && !run_due_unmerges(run.globals, due, &mut failures).await
+        {
+            // A strong (`!!`) victim failed to unmerge: it must be gone
+            // before its owner can merge at all, so this cannot be deferred
+            // — matches the old before-the-whole-plan `?`-abort.
+            eprintln!(">>> Stopping: a required blocker unmerge failed.");
+            break;
+        }
         let entry_roots = entry_roots(planned, run.roots, run.host_roots, run.base_roots);
         let merge_root = entry_roots.merge_root();
         let entry_index = entry_binpkg_index(planned, run.binpkg_index, run.host_binpkg_index);
@@ -1034,6 +1192,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         })
         .instrument(tracing::info_span!("pkg", cpv = %planned.cpv))
         .await;
+        let succeeded = result.is_ok();
         let phases = activity_pkg
             .as_ref()
             .map(|a| a.phases_done())
@@ -1052,6 +1211,12 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             &mut merged,
             &mut failures,
         );
+        // A weak (`!`) victim is only safe to remove once its owner actually
+        // merged — matches the old `done`-filtered after-the-whole-plan
+        // batch, just checked per-owner instead of once at the very end.
+        if succeeded && let Some(due) = after_unmerges.get(&i) {
+            run_due_unmerges(run.globals, due, &mut failures).await;
+        }
         if !keep_going {
             eprintln!(">>> Stopping (pass --keep-going to continue past failures).");
             break;
@@ -1142,6 +1307,27 @@ impl Scheduler {
     }
 }
 
+/// What one `--jobs N` scheduler node turned out to be, once its future
+/// resolves — a real package merge, or a blocker-triggered unmerge node
+/// (index `>= plan.len()`, see [`extend_blockers_with_unmerges`]).
+enum FinishedNode {
+    Merge {
+        work_key: String,
+        kind: crate::activity::PkgKind,
+        pkg_started: f64,
+        phases: Vec<crate::activity::PhaseTiming>,
+    },
+    Unmerge {
+        cpv: portage_atom::Cpv,
+    },
+}
+
+/// One scheduler node's future, boxed: a merge and an unmerge node are
+/// different concrete future types, so [`FuturesUnordered`] needs them
+/// erased to run side by side.
+type NodeFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = (usize, Result<()>, FinishedNode)> + 'a>>;
+
 /// Parallel build+merge for `--jobs N > 1`
 ///
 /// Up to `jobs` packages *build* concurrently; each only starts once its in-plan build
@@ -1175,7 +1361,7 @@ async fn merge_parallel(
     let mut failures: Vec<MergeFailure> = Vec::new();
     let mut started = 0usize;
     let mut stop_new = false;
-    let mut inflight = FuturesUnordered::new();
+    let mut inflight: FuturesUnordered<NodeFuture<'_>> = FuturesUnordered::new();
     // Portage `_prevent_builddir_collisions`: never run two merges that share
     // a workdir path concurrently. Per-root builddirs make dual-ROOT same-CPV
     // keys distinct; this still guards true path collisions (and same-key
@@ -1190,7 +1376,11 @@ async fn merge_parallel(
                 break;
             }
             let Some(i) = sched.next_ready_free(|j| {
-                let planned = &run.plan[j];
+                // An unmerge node (see `extend_blockers_with_unmerges`) has
+                // no build workdir to collide on.
+                let Some(planned) = run.plan.get(j) else {
+                    return true;
+                };
                 let mr =
                     entry_roots(planned, run.roots, run.host_roots, run.base_roots).merge_root();
                 let key = ebuild::package_work_dir(
@@ -1204,6 +1394,20 @@ async fn merge_parallel(
             }) else {
                 break;
             };
+            if i >= run.plan.len() {
+                let u = &run.unmerges[i - run.plan.len()];
+                let cpv = u.cpv.clone();
+                let cli = run.globals;
+                let unmerge_span = tracing::info_span!("unmerge", cpv = %cpv);
+                inflight.push(Box::pin(
+                    async move {
+                        let res = crate::emerge::unmerge_blocker_victim(cli, &cpv).await;
+                        (i, res, FinishedNode::Unmerge { cpv })
+                    }
+                    .instrument(unmerge_span),
+                ));
+                continue;
+            }
             let planned = &run.plan[i];
             let entry_roots = entry_roots(planned, run.roots, run.host_roots, run.base_roots);
             let merge_root = entry_roots.merge_root();
@@ -1260,7 +1464,7 @@ async fn merge_parallel(
             let flags_ref = &flags;
             let activity_pkg = activity_pkg_ctx(&run.activity, planned);
             let pkg_span = tracing::info_span!("pkg", cpv = %planned.cpv);
-            inflight.push(
+            inflight.push(Box::pin(
                 async move {
                     let res = act_on_package(PackageAction {
                         planned,
@@ -1283,42 +1487,83 @@ async fn merge_parallel(
                         .as_ref()
                         .map(|a| a.phases_done())
                         .unwrap_or_default();
-                    (i, work_key, res, pkg_started, kind, phases)
+                    (
+                        i,
+                        res,
+                        FinishedNode::Merge {
+                            work_key,
+                            kind,
+                            pkg_started,
+                            phases,
+                        },
+                    )
                 }
                 .instrument(pkg_span),
-            );
+            ));
         }
 
-        let Some((i, work_key, res, pkg_started, kind, phases)) = inflight.next().await else {
+        let Some((i, res, finish)) = inflight.next().await else {
             break;
         };
-        inflight_workdirs.remove(&work_key);
         // On success the entry's dependents are unblocked; on failure they stay
         // blocked (their count never reaches 0), so a package whose build dep
+        // — or, for an unmerge node's owner, a required blocker removal —
         // failed is never started.
         if res.is_ok() {
             sched.complete(i);
         }
-        let planned = &run.plan[i];
-        let merge_root =
-            entry_roots(planned, run.roots, run.host_roots, run.base_roots).merge_root();
-        let keep_going = record_package_outcome(
-            run,
-            &flags,
-            planned,
-            merge_root,
-            PackageOutcome {
+        match finish {
+            FinishedNode::Merge {
+                work_key,
                 kind,
                 pkg_started,
                 phases,
-                result: res,
-            },
-            &mut merged,
-            &mut failures,
-        );
-        if !keep_going {
-            stop_new = true;
-            eprintln!(">>> Stopping new builds (pass --keep-going to continue past failures).");
+            } => {
+                inflight_workdirs.remove(&work_key);
+                let planned = &run.plan[i];
+                let merge_root =
+                    entry_roots(planned, run.roots, run.host_roots, run.base_roots).merge_root();
+                let keep_going = record_package_outcome(
+                    run,
+                    &flags,
+                    planned,
+                    merge_root,
+                    PackageOutcome {
+                        kind,
+                        pkg_started,
+                        phases,
+                        result: res,
+                    },
+                    &mut merged,
+                    &mut failures,
+                );
+                if !keep_going {
+                    stop_new = true;
+                    eprintln!(
+                        ">>> Stopping new builds (pass --keep-going to continue past failures)."
+                    );
+                }
+            }
+            // A failed strong (`!!`) unmerge stalls only its own owner(s) —
+            // `sched.complete` above was skipped, so they (and anything
+            // depending on them) simply never become ready; unrelated
+            // branches keep running. A failed weak (`!`) unmerge has no
+            // dependents to stall (its owner already merged). Either way the
+            // failure is recorded so the run still ends non-zero.
+            FinishedNode::Unmerge { cpv } => {
+                if let Err(e) = res {
+                    let rendered = crate::style::render_error_chain(&e);
+                    crate::style::print_failure_banner(
+                        format_args!(">>> Failed to unmerge {cpv} — "),
+                        &rendered,
+                    );
+                    failures.push(MergeFailure {
+                        cpv: cpv.to_string(),
+                        log: camino::Utf8PathBuf::new(),
+                        cause: rendered,
+                    });
+                }
+            }
         }
     }
     (merged, skipped, failures)
@@ -1484,5 +1729,135 @@ mod entry_roots_tests {
             entry_desired_env(&target_entry, (&target_env, &dirs), (&host_env, &dirs));
         assert_eq!(picked.chost, "riscv64-unknown-linux-gnu");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod unmerge_scheduling_tests {
+    use super::*;
+    use portage_resolve::conflicts::{PlannedUnmerge, UnmergeOrder};
+    use query::depgraph::{MergeRoot, PlannedMerge};
+
+    fn planned(cpv: &str) -> PlannedMerge {
+        PlannedMerge {
+            merge_root: MergeRoot::Target,
+            cpv: portage_atom::Cpv::parse(cpv).unwrap(),
+            ebuild_path: camino::Utf8PathBuf::new(),
+            use_flags: Vec::new(),
+            depend: Vec::new(),
+            bdepend: Vec::new(),
+            reinstall: false,
+        }
+    }
+
+    fn unmerge(victim: &str, order: UnmergeOrder, owners: &[&str]) -> PlannedUnmerge {
+        PlannedUnmerge {
+            cpv: portage_atom::Cpv::parse(victim).unwrap(),
+            order,
+            owners: owners
+                .iter()
+                .map(|o| portage_atom::Cpv::parse(o).unwrap())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn strong_unmerge_splices_before_its_earliest_owner() {
+        let plan = vec![
+            planned("app-misc/a-1"),
+            planned("app-misc/b-1"),
+            planned("app-misc/c-1"),
+        ];
+        let u = unmerge(
+            "app-misc/old-1",
+            UnmergeOrder::BeforeBlocker,
+            &["app-misc/b-1"],
+        );
+        let (before, after) = splice_points(&plan, std::slice::from_ref(&u));
+        assert!(after.is_empty());
+        assert_eq!(before.get(&1).map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn weak_unmerge_splices_after_its_latest_owner() {
+        let plan = vec![planned("app-misc/a-1"), planned("app-misc/b-1")];
+        let u = unmerge(
+            "app-misc/old-1",
+            UnmergeOrder::AfterBlocker,
+            &["app-misc/a-1", "app-misc/b-1"],
+        );
+        let (before, after) = splice_points(&plan, std::slice::from_ref(&u));
+        assert!(before.is_empty());
+        assert_eq!(after.get(&1).map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn two_unmerges_sharing_one_owner_both_splice_at_it() {
+        let plan = vec![planned("app-misc/a-1")];
+        let unmerges = vec![
+            unmerge(
+                "app-misc/old1-1",
+                UnmergeOrder::BeforeBlocker,
+                &["app-misc/a-1"],
+            ),
+            unmerge(
+                "app-misc/old2-1",
+                UnmergeOrder::BeforeBlocker,
+                &["app-misc/a-1"],
+            ),
+        ];
+        let (before, _after) = splice_points(&plan, &unmerges);
+        assert_eq!(before.get(&0).map(Vec::len), Some(2));
+    }
+
+    #[test]
+    fn orphaned_owner_falls_back_and_is_excluded_from_positioning() {
+        let plan = vec![planned("app-misc/a-1")];
+        // Owner "app-misc/missing-1" never appears in `plan` at all.
+        let u = unmerge(
+            "app-misc/old-1",
+            UnmergeOrder::BeforeBlocker,
+            &["app-misc/missing-1"],
+        );
+        let unmerges = vec![u.clone()];
+
+        let (positioned, orphaned) = partition_positioned_unmerges(&plan, &unmerges);
+        assert!(positioned.is_empty());
+        assert_eq!(orphaned, vec![u]);
+
+        let (before, after) = splice_points(&plan, &unmerges);
+        assert!(before.is_empty() && after.is_empty());
+    }
+
+    #[test]
+    fn extend_blockers_makes_the_owner_depend_on_a_strong_unmerge() {
+        let plan = vec![planned("app-misc/a-1"), planned("app-misc/b-1")];
+        let blockers: Vec<Vec<usize>> = vec![Vec::new(), Vec::new()];
+        let u = unmerge(
+            "app-misc/old-1",
+            UnmergeOrder::BeforeBlocker,
+            &["app-misc/b-1"],
+        );
+        let extended = extend_blockers_with_unmerges(&blockers, &plan, std::slice::from_ref(&u));
+        assert_eq!(extended.len(), 3);
+        // Node 2 is the unmerge; owner index 1 ("b") must depend on it.
+        assert_eq!(extended[1], vec![2]);
+        assert!(extended[2].is_empty());
+    }
+
+    #[test]
+    fn extend_blockers_makes_a_weak_unmerge_depend_on_every_owner() {
+        let plan = vec![planned("app-misc/a-1"), planned("app-misc/b-1")];
+        let blockers: Vec<Vec<usize>> = vec![Vec::new(), Vec::new()];
+        let u = unmerge(
+            "app-misc/old-1",
+            UnmergeOrder::AfterBlocker,
+            &["app-misc/a-1", "app-misc/b-1"],
+        );
+        let extended = extend_blockers_with_unmerges(&blockers, &plan, std::slice::from_ref(&u));
+        assert_eq!(extended.len(), 3);
+        let mut deps = extended[2].clone();
+        deps.sort_unstable();
+        assert_eq!(deps, vec![0, 1]);
     }
 }
