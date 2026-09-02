@@ -1,7 +1,8 @@
 # What is still unimplemented — survey 2026-09-02
 
-Status: 🟡 survey; `em clean dist`/`pkg` implemented 2026-09-02, the rest open. Every `bail!("not implemented")` in
-the tree, grouped by whether it actually costs a user anything.
+Status: 🟡 `em clean dist`/`pkg` implemented 2026-09-02; the rest open.
+Every `bail!("not implemented")` in the tree, grouped by whether it actually
+costs a user anything.
 
 ## 1. Config-file reconciliation — the sharpest gap
 
@@ -44,19 +45,13 @@ referenced) and cannot drift on how a DISTDIR is read. `clean` adds its own
 whitelist for portage bookkeeping a mirror dir never contains: `<file>.lock`
 (a live fetch lock) and `.layout.conf.<mirror>`.
 
+`em clean pkg` is distinct from the pre-existing `em maint binpkg prune`,
+which prunes by *build identity* (the multi-instance work in
+[[binpkg-subtargets]]) rather than by "no cpv in the tree / not installed".
+Both are useful; they answer different questions.
+
 Still not covered, if anyone wants closer `eclean` parity: the interactive
 mode, and `--destructive`'s "keep only the newest version" flavour.
-
-`em maint binpkg prune` exists but prunes by *build identity* (the
-multi-instance work in [[binpkg-subtargets]]), not by "no longer in any
-installed set / older than N / over N bytes", which is what `eclean-pkg`
-does. PENDING already notes the port gap (gentoolkit is not a dependency).
-`eclean dist` has no counterpart at all, though `portage-distfiles` owns the
-DISTDIR layout it would need.
-
-Disk-space housekeeping, so it degrades gracefully — a user can run
-gentoolkit's on a host — but the same `--root`/`--prefix` caveat as above
-applies.
 
 ## 3. `emaint` — 8 of 12 implemented
 

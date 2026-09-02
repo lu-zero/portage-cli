@@ -144,8 +144,9 @@ carry an effort estimate.
   reconciliation — `em` writes `._cfgNNNN_` sidecars on every protected
   merge and has no `etc-update`/`dispatch-conf` to consume them, which a
   host's own tools cannot do under `--root`/`--prefix`/`--local`. Then
-  `eclean pkg`/`dist` (nothing at all), `emaint` (8 of 12 done), and
-  `portageq`/`grep` (no known consumer): [[unimplemented-surface]]
+  `emaint` (8 of 12 done). `em clean dist`/`pkg` ✅ 2026-09-02 (`d28bd91`),
+  and `portageq`/`grep` measured as not worth building — zero calls from any
+  inheritable eclass or live ebuild: [[unimplemented-surface]]
 - **Full `regression-matrix.sh --full` run 2026-09-02** — `stages --stage1
   --root` PASSES (154 pkgs, a correct stage1); every `--prefix` leg fails,
   for three unrelated reasons. Run record, including two wrong theories not
