@@ -1124,6 +1124,11 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
     let (before_unmerges, after_unmerges) = splice_points(run.plan, run.unmerges);
 
     for (i, planned) in run.plan.iter().enumerate() {
+        // An interrupt stops the plan between packages; whatever is mid-merge
+        // when it arrives still finishes (see `crate::interrupt`).
+        if crate::interrupt::requested() {
+            break;
+        }
         if let Some(due) = before_unmerges.get(&i)
             && !run_due_unmerges(run.globals, due, &mut failures).await
         {
@@ -1371,7 +1376,7 @@ async fn merge_parallel(
     let mut inflight_workdirs: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     loop {
-        while !stop_new && inflight.len() < jobs {
+        while !stop_new && !crate::interrupt::requested() && inflight.len() < jobs {
             // Load throttle before pulling a ready package, so a high-load
             // machine does not even dequeue work that cannot start yet.
             if !crate::activity::can_start_under_load(load_average, inflight.len()) {

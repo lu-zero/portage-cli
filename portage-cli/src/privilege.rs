@@ -126,7 +126,7 @@ fn already_active() -> bool {
 /// installs (the plain emerge merge, plus `ebuild`/`crossdev`/`toolchain`, whose
 /// staged drivers run through the same merge code), so the unprivileged chown
 /// handling is uniformly faked and never falls back to the EPERM swallow.
-fn will_build(cli: &Cli) -> bool {
+pub(crate) fn will_build(cli: &Cli) -> bool {
     if cli.pretend {
         return false;
     }

@@ -83,7 +83,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 portage-binpkg = { workspace = true }
 clap = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
+tokio = { workspace = true, features = ["sync", "signal"] }
 futures-util = { workspace = true }
 thiserror = { workspace = true }
 mimalloc = { workspace = true, optional = true }

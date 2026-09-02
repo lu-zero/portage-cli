@@ -25,6 +25,7 @@ pub(crate) mod error;
 pub(crate) mod gix_ext;
 pub(crate) mod glsa;
 pub(crate) mod info;
+pub(crate) mod interrupt;
 pub(crate) mod maint;
 pub(crate) mod merge;
 pub(crate) mod mirrordist;
@@ -61,6 +62,12 @@ pub use error::{ConfigChangesNeeded, NoValidAtoms};
 
 /// Dispatch one parsed invocation to its applet or the default emerge path
 pub async fn run(cli: &cli::Cli) -> error::Result<()> {
+    // Only merges have a safe point to stop at, so only they get the handler.
+    // Anywhere else the default disposition is the better behaviour: a single
+    // Ctrl+C ends `em regen` or a query outright, as it always has.
+    if privilege::will_build(cli) {
+        interrupt::install();
+    }
     dispatch::run(cli).await
 }
 

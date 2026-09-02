@@ -151,9 +151,10 @@ carry an effort estimate.
   dance; not yet live-verified on a real merge; (2) suspend time inflates a
   recorded duration, but the ETA already takes a median so only
   merged-once packages are exposed — folded into (4); (3) lock waits ✅ 2026-09-02 —
-  a wait over 10s now names the holder pid from `/proc/locks`; (4) no SIGINT/SIGTERM handler at all, so
-  children are orphaned when `em` is signalled directly rather than
-  through the terminal: [[signal-handling]]
+  a wait over 10s now names the holder pid from `/proc/locks`; (4) SIGINT/SIGTERM ✅ 2026-09-02 —
+  a graceful stop that finishes in-flight packages and starts no new ones,
+  armed only for merges; orphaned children on a *direct* signal and the
+  SIGTSTP suspend accounting are what remain: [[signal-handling]]
 - Library DEPEND identity in a cross sysroot: `crossdev --setup` registers
   the libc as `cross-<tuple>/glibc`, but ordinary ebuilds DEPEND on the real
   Cpn (`sys-libs/glibc`, `virtual/libcrypt` → libxcrypt), so Favor never

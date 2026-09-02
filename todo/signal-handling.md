@@ -126,9 +126,10 @@ shelved it only because a point release could not absorb the breakage. If it
 lands, both copies collapse into it; a third caller before then should force
 a local extraction instead.
 
-**Not yet live-verified:** no real merge has run through this. The unit tests
-cover both scanners and the rebuild path, but a `-p`-then-real merge on a
-throwaway `--root` is the confirmation this still wants.
+**Live-verified 2026-09-02:** a real `em --root` merge of
+`sys-apps/gentoo-functions` published a complete 31-field entry with no
+`-MERGING-`/`-REPLACING-` left behind, and a second merge of the same cpv
+exercised the republish path with the same result.
 
 ## 3. Suspend time inflates a recorded duration — narrower than it looks
 
@@ -184,15 +185,48 @@ message just names the file. The column layout is parsed by hand, so
 `flock_holder_pid_finds_the_process_holding_the_lock` pins it against a real
 kernel entry rather than a fixture.
 
-## 5. Children are orphaned if `em` is killed directly
+## 5. Graceful interrupt — LANDED 2026-09-02 (partial)
 
-No `process_group`, `pre_exec`, `kill_on_drop`, or child-killing `Drop`
-anywhere in `portage-cli`/`portage-repo`. A terminal Ctrl+C reaches the
-whole foreground group so it mostly works out; `kill -INT <em-pid>` from
-elsewhere kills only `em` and leaves `gcc`/`make` running against a work
-directory nobody owns any more. Fixing item 1 makes the process-group
-membership deliberate, at which point signalling the group on shutdown
-becomes straightforward.
+`SIGINT`/`SIGTERM` now set a flag both merge loops check before dequeuing the
+*next* package (`crate::interrupt`): nothing new starts, whatever is already
+building finishes. A second signal exits with `128 + signum`, the status a
+shell reports for a signalled child.
+
+Deliberately *not* a cancellation. A package interrupted between its
+collision check and its VDB entry is the failure mode item 2 exists to
+avoid; declining to start one is free where unwinding one is not.
+
+The handler is armed only when `privilege::will_build(cli)` says the
+invocation actually merges. Otherwise the default disposition is better —
+one Ctrl+C should still end `em regen` or a query outright, and an earlier
+draft that armed it unconditionally made those take *two* presses while
+printing a merge-flavoured message at them.
+
+Live-verified: regen still dies on one signal; a merge prints the notice,
+completes the in-flight package, and exits; two signals in quick succession
+exit 130 with the notice printed once.
+
+### Still open
+
+Children are still orphaned if `em` is signalled *directly* rather than
+through the terminal. There is no `process_group`, `pre_exec`,
+`kill_on_drop`, or child-killing `Drop` anywhere, so `kill -INT <em-pid>`
+from another terminal now sets the flag and returns — leaving `gcc`/`make`
+running against a work directory whose owner has moved on. A terminal Ctrl+C
+is unaffected: it reaches the whole foreground process group, so the
+children get it too.
+
+Fixing that means tracking the build's children (brush spawns them in `em`'s
+own process group, see item 1) and signalling them on the way out. Worth
+doing only if direct-signalling turns out to be a real workflow; through the
+terminal, which is how a person actually interrupts a build, it already
+works.
+
+### Suspend accounting (was item 3)
+
+Still not implemented. The `SIGTSTP`/`SIGCONT` pair this would need is not
+part of the above — only `SIGINT`/`SIGTERM` are handled — so the ETA
+inflation described in item 3 stands, bounded by the median as noted there.
 
 ## Non-issues — checked, do not "fix"
 
