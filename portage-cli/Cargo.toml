@@ -108,9 +108,6 @@ tempfile = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 fakeroost = { workspace = true, optional = true }
 hakoniwa = { workspace = true, optional = true }
-# /proc/locks, for naming the process holding a contended build lock. Already
-# in the graph via brush-builtins and hakoniwa, so this costs no extra build.
-procfs = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 pseudoroot = { workspace = true, optional = true }

@@ -182,12 +182,22 @@ contention would be pure noise. Only a long wait means something is stuck.
 It is a `warn_line!`, not `tracing::info!`, so it survives `-q` and `--jobs`
 — exactly the runs where a silent hang is most confusing.
 
-The holder pid comes from `/proc/locks`: `flock` locks are invisible to
-`fcntl(F_GETLK)`, so the only way to find the holder is matching the file's
-inode against the kernel's table. Best-effort and Linux-only; elsewhere the
-message just names the file. The column layout is parsed by hand, so
-`flock_holder_pid_finds_the_process_holding_the_lock` pins it against a real
-kernel entry rather than a fixture.
+The holder identifies *itself*: once `flock` returns, the holder writes
+`pid <n>` into the lock file it already has open, and a waiter reads it.
+
+Two earlier attempts at this were worse. Hand-parsing `/proc/locks` aborted
+the whole lookup on any line whose pid was not an integer — an OFD lock's is
+`-1` — and matched on inode alone. Switching to `procfs::locks()` fixed the
+parse but not the harder problem: `/proc/locks` reports the *superblock's*
+`s_dev` while `stat` reports btrfs's per-subvolume anonymous device, so on a
+btrfs root the two never agree and matching device-plus-inode finds nothing.
+
+Writing the stamp sidesteps all of it, needs no dependency, works on the BSD
+hosts `em` also runs on, and is strictly more trustworthy: it is written only
+by the real holder, and only read by a waiter that has already blocked — so
+the process it names is alive by construction, where a `/proc/locks` row is
+merely a row. Real portage does not name the holder at all, so there is no
+parity constraint here.
 
 ## 5. Graceful interrupt — LANDED 2026-09-02 (partial)
 

@@ -104,7 +104,6 @@ httpdate = "1"
 url = "2"
 humansize = "2"
 humantime = "2"
-procfs = "0.18"
 # Already in the graph via brush-core/brush-builtins; a direct dep costs no
 # extra build. `Local` needs the default `clock` feature.
 chrono = "0.4"

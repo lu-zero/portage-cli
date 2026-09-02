@@ -1555,22 +1555,25 @@ const LOCK_NOTICE_AFTER: std::time::Duration = std::time::Duration::from_secs(10
 async fn acquire_flock(path: std::path::PathBuf, label: &str) -> Option<std::fs::File> {
     let notice_path = path.clone();
     let acquire = tokio::task::spawn_blocking(move || {
-        // append: never truncate — other processes may hold the lock fd.
+        // append: never truncate at open — that would race the holder, since
+        // the lock is not ours until `flock` returns.
         let f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
+            .read(true)
             .open(&path)
             .ok()?;
         rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).ok()?;
+        stamp_holder(&path);
         Some(f)
     });
     tokio::pin!(acquire);
     match tokio::time::timeout(LOCK_NOTICE_AFTER, &mut acquire).await {
         Ok(joined) => joined.ok().flatten(),
         Err(_) => {
-            match flock_holder_pid(&notice_path) {
-                Some(pid) => crate::style::warn_line!(
-                    "waiting for the {label} held by pid {pid} ({})",
+            match read_holder(&notice_path) {
+                Some(who) => crate::style::warn_line!(
+                    "waiting for the {label} held by {who} ({})",
                     notice_path.display()
                 ),
                 None => {
@@ -1582,46 +1585,36 @@ async fn acquire_flock(path: std::path::PathBuf, label: &str) -> Option<std::fs:
     }
 }
 
-/// Best-effort pid holding an flock on `path`, from `/proc/locks`
+/// Record who holds this lock, for a waiter to report
 ///
-/// `flock` locks are invisible to `fcntl(F_GETLK)`, so the holder can only be
-/// found by matching the file against the kernel's own table. `None` on any
-/// platform without `/proc/locks`, or for a lock the table attributes to no
-/// single process (an OFD lock) — the caller then names just the file.
-#[cfg(target_os = "linux")]
-fn flock_holder_pid(path: &std::path::Path) -> Option<u32> {
-    use std::os::unix::fs::MetadataExt;
-
-    let meta = std::fs::metadata(path).ok()?;
-    let (dev, ino) = (meta.dev(), meta.ino());
-    let flocks: Vec<_> = procfs::locks()
-        .ok()?
-        .into_iter()
-        .filter(|l| l.lock_type == procfs::LockType::FLock && l.inode == ino)
-        .collect();
-    // Inode first, device only to disambiguate. `/proc/locks` reports the
-    // *superblock's* `s_dev`, which is not `stat`'s `st_dev` on a filesystem
-    // that hands each subvolume its own anonymous device — btrfs does, so on a
-    // btrfs root the two never agree and requiring equality finds nothing.
-    // An inode number is only unique within a filesystem, so fall back to the
-    // device to pick between collisions when there is more than one candidate.
-    let hit = match flocks.len() {
-        0 => return None,
-        1 => flocks.into_iter().next(),
-        _ => flocks
-            .into_iter()
-            .find(|l| l.devmaj == rustix::fs::major(dev) && l.devmin == rustix::fs::minor(dev)),
-    };
-    hit
-        // `pid` is `None` for an OFD lock, which genuinely has no single owner.
-        .and_then(|l| l.pid)
-        .and_then(|pid| u32::try_from(pid).ok())
+/// Written *after* `flock` returns, so only the real holder ever writes, and a
+/// waiter that has already blocked is guaranteed to see a live process rather
+/// than a stale pid. Best-effort: a lock whose stamp cannot be written or read
+/// just degrades to naming the file.
+///
+/// This is deliberately not `/proc/locks`. That table reports the superblock's
+/// `s_dev`, which is not `stat`'s `st_dev` on a filesystem giving each
+/// subvolume its own anonymous device (btrfs), so matching a file to its lock
+/// there is fiddly and wrong by default — and it does not exist off Linux,
+/// where `em` also runs. The lock file is already open; it can simply say.
+fn stamp_holder(path: &std::path::Path) {
+    use std::io::{Seek, Write};
+    let line = format!("pid {}\n", std::process::id());
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|mut f| {
+            f.set_len(0)?;
+            f.rewind()?;
+            f.write_all(line.as_bytes())
+        });
 }
 
-/// See the Linux implementation — no `/proc/locks` to consult here.
-#[cfg(not(target_os = "linux"))]
-fn flock_holder_pid(_path: &std::path::Path) -> Option<u32> {
-    None
+/// The holder recorded by [`stamp_holder`], if any
+fn read_holder(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().next()?.trim();
+    (!line.is_empty()).then(|| line.to_string())
 }
 
 /// Exclusive flock on the package work directory itself (Portage
@@ -3525,40 +3518,40 @@ fn read_fetch_commands(shell: &portage_repo::EbuildShell) -> (Option<String>, Op
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use portage_vdb::ContentsKind;
+    use std::fs;
+    use std::os::unix::fs::symlink;
 
-    // Pinned against a real kernel entry rather than a fixture: this is the
-    // one place `em` depends on `/proc/locks` matching the file it is given,
-    // and an inode-only match (the bug the device comparison fixes) would
-    // still pass a fixture.
+    // The stamp is what a waiter reports, so pin that it is written only by
+    // the real holder and is readable while the lock is held. Portable by
+    // construction: no `/proc`, so this also covers the BSD hosts `em` runs on.
     #[test]
-    #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc/locks")]
-    fn flock_holder_pid_finds_the_process_holding_the_lock() {
+    fn a_held_lock_names_its_holder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("held.lock");
+
+        // Nothing recorded before anyone holds it.
+        assert_eq!(super::read_holder(&path), None);
+
         let f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .unwrap();
         rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).unwrap();
+        super::stamp_holder(&path);
 
         assert_eq!(
-            super::flock_holder_pid(&path),
-            Some(std::process::id()),
-            "should have found our own pid in /proc/locks"
+            super::read_holder(&path).as_deref(),
+            Some(format!("pid {}", std::process::id()).as_str())
         );
 
-        drop(f);
-        assert_eq!(
-            super::flock_holder_pid(&path),
-            None,
-            "no holder once the lock is released"
-        );
+        // Re-stamping replaces rather than appends, so a reused lock file
+        // never reports a previous run's pid alongside the current one.
+        super::stamp_holder(&path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
     }
-    use super::*;
-    use portage_vdb::ContentsKind;
-    use std::fs;
-    use std::os::unix::fs::symlink;
 
     // Dual-root same-CPV plan entries must not share a WORKDIR (Sonnet
     #[test]
