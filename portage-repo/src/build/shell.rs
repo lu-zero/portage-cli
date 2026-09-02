@@ -1900,6 +1900,13 @@ impl EbuildShell {
                         .append(true)
                         .open(log)
                         .and_then(|mut f| std::io::Write::write_all(&mut f, marker.as_bytes()));
+                    // `< /dev/null` on every shape below: a phase must never
+                    // reach the user's terminal. Portage redirects the same way
+                    // (outside FEATURES=interactive), and brush's `read`/
+                    // `mapfile` put whatever fd 0 names into non-canonical mode
+                    // with echo off, restored only when their guard drops — an
+                    // ebuild `read` would otherwise corrupt the real terminal.
+                    //
                     // A phase aborts only via `die` (the shared flag checked
                     // below), matching portage: the build helpers self-die on
                     // failure (`emake`/`econf`/`unpack`/the install helpers) and
@@ -1909,7 +1916,7 @@ impl EbuildShell {
                     // command (e.g. binutils' `find … -exec rmdir {} +` to trim
                     // empty dirs), which portage tolerates.
                     if *quiet {
-                        format!("{{ {func_name} ; }} >> {log} 2>&1")
+                        format!("{{ {func_name} ; }} < /dev/null >> {log} 2>&1")
                     } else {
                         // A pty on fd 1, so the phase and everything it spawns
                         // sees a real terminal — the only thing that satisfies
@@ -1921,19 +1928,24 @@ impl EbuildShell {
                         pty = pty::PhasePty::open(log);
                         match &pty {
                             Some(pty) => {
-                                format!("{{ {func_name} ; }} > {} 2>&1", pty.slave_path())
+                                format!(
+                                    "{{ {func_name} ; }} < /dev/null > {} 2>&1",
+                                    pty.slave_path()
+                                )
                             }
                             // The process-sub body may be polled after the
                             // phase (and even after the build tree is cleaned
                             // up); cd out of the cwd it cloned so the lazy
                             // `tee` spawn never starts from a deleted ${S}.
                             None => {
-                                format!("{{ {func_name} ; }} > >(cd / && tee -a {log}) 2>&1")
+                                format!(
+                                    "{{ {func_name} ; }} < /dev/null > >(cd / && tee -a {log}) 2>&1"
+                                )
                             }
                         }
                     }
                 }
-                None => func_name.to_string(),
+                None => format!("{{ {func_name} ; }} < /dev/null"),
             };
             let phase_result = self.run_string(&invocation).await;
             // Drain and close the pty before looking at how the phase went: a

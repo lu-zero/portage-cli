@@ -1,6 +1,6 @@
-# Signal handling: Ctrl+Z wedges the console, Ctrl+C corrupts the VDB
+# Signal handling: terminal state, and an interruptible VDB write
 
-Status: 🔴 not started, root-caused 2026-09-02. Reported symptom (Luca): on
+Status: 🟡 phase-stdin fix landed 2026-09-02; items 2-5 open. Reported symptom (Luca): on
 `em cat/pkg`, "I couldn't get back the console after ctrl+z, I had to use
 kill to continue again."
 
@@ -15,10 +15,20 @@ SigCgt: BUS, SEGV, RT-33          # Rust stack guard + glibc NPTL, nothing of ou
 No `tokio::signal`, no `ctrl_c`, no `sigaction` anywhere in the workspace.
 Every job-control and termination signal takes its default action.
 
-## 1. Ctrl+Z wedges the console — root cause found
+## 1. Phase stdin was the caller's terminal — FIXED 2026-09-02
 
-**Not** an `em` suspend bug. `em` itself suspends and resumes correctly;
-measured on `em regen -j 2` (258 threads):
+**A first root-cause theory was wrong and is recorded here so nobody
+re-derives it.** The theory was that brush's `ProcessGroupPolicy` default of
+`NewProcessGroup` made every build child `setpgid` + `tcsetpgrp` itself into
+the terminal's foreground group. It does not: `default_exec_params()` derives
+the policy from `options.enable_job_control`, which is `create_options
+.interactive` — false for `em`'s embedded shell — so the policy is already
+`SameProcessGroup` and brush never reaches its `take_foreground()` branch.
+Measured directly through the real phase path: a command spawned by a phase
+reports the same pgid and sid as `em` itself.
+
+`em` also suspends and resumes correctly on its own. Measured on
+`em regen -j 2` (258 threads):
 
 | | state | CPU delta |
 |---|---|---|
@@ -26,44 +36,40 @@ measured on `em regen -j 2` (258 threads):
 | after `SIGTSTP` | `Tl` (all 258 threads `T`) | 0 ticks over 4s |
 | after `SIGCONT` | `Sl` | +602 ticks over 3s |
 
-The wedge comes from the **build children**, via brush:
+**What was actually wrong:** `run_phase` built its invocation with the phase's
+stdout/stderr redirected (log, pty, or `tee` fallback) but never touched fd 0,
+so every phase inherited whatever stdin `em` was started with — in an
+interactive run, the user's terminal. `portage-repo/src/build/commands/mod.rs`
+already said so outright: "A non-redirected stdin (the real terminal) is
+inherited."
 
-- `brush_core::ProcessGroupPolicy` defaults to `NewProcessGroup`
-  (`interp.rs`, `#[default]`), and neither `portage-repo` nor `portage-cli`
-  ever sets `SameProcessGroup`.
-- Build-phase stdin is the user's real terminal — stated outright in
-  `portage-repo/src/build/commands/mod.rs`: "A non-redirected stdin (the
-  real terminal) is inherited." The pty (`build/pty.rs`) is opened `NOCTTY`
-  and only captures stdout/stderr, so it does not shield stdin.
-- So in `brush-core/src/commands.rs`, `new_pg` is true and
-  `child_stdin_is_terminal` is true for every external command a phase runs
-  (`gcc`, `make`, `install`, `patch`, …). Each one therefore gets
-  `cmd.process_group(0)` **and** `cmd.take_foreground()` — a `tcsetpgrp()`
-  making *itself* the terminal's foreground process group.
+That matters because brush's `read` and `mapfile` builtins call
+`AutoModeGuard::new(fd0)` and set `line_input(false)` with `echo_input`
+following `-s` — they put **whatever fd 0 names** into non-canonical mode with
+echo off, restored only when the guard drops. An ebuild or eclass calling
+`read` therefore reconfigured the user's real terminal, and anything that
+killed `em` before that guard dropped left the console in that state.
 
-Consequence: Ctrl+Z delivers SIGTSTP to whichever compiler currently owns
-the terminal, not to `em`. That one child stops; `em` is in a background
-process group, never sees the signal, carries on, and spawns the next
-command — which grabs the foreground again. The shell's job never registers
-as stopped, so `fg` has nothing to resume and the console stays hijacked.
-Killing `em` is the only way out, exactly as reported.
+Fixed by redirecting all four invocation shapes from `/dev/null`, which is
+what portage does outside `FEATURES=interactive`. Regression test:
+`build::shell::tests::phase_stdin_is_dev_null` — it swaps its own fd 0 first,
+because the test harness already hands tests `/dev/null` and the assertion
+would otherwise hold with or without the fix (it did, on the first attempt).
 
-### Fix
+**Still unconfirmed:** whether this is the whole of the reported Ctrl+Z wedge.
+The mechanism is real and the fix is right on its own merits, but the symptom
+was never reproduced in-session — it needs a real merge in a real terminal.
+If it recurs after this fix, capture, from a *second* terminal:
 
-Two independent changes, both worth doing:
+```sh
+stty -a < /dev/tty            # is the console left non-canonical / -echo?
+ps -o pid,pgid,sid,stat,comm -g $(ps -o pgid= -p $(pgrep -x em) | tr -d ' ')
+grep -E '^Sig(Blk|Ign|Cgt)' /proc/$(pgrep -x em)/status
+```
 
-1. **`ProcessGroupPolicy::SameProcessGroup` for build-phase execution.**
-   `em` is not an interactive shell and must not do job control: build
-   children belong in `em`'s own process group so the terminal delivers
-   SIGTSTP/SIGINT to the whole tree at once. This is the actual fix for the
-   reported symptom.
-2. **Redirect phase stdin from `/dev/null`.** Real portage does this unless
-   `FEATURES=interactive`; a build that reads stdin is a bug, and today such
-   a build silently steals the user's keystrokes instead of getting EOF. It
-   also makes `child_stdin_is_terminal` false, closing the `take_foreground`
-   path for good rather than relying on the policy alone.
-
-Neither needs a signal handler. Do these before anything below.
+A `stat` of `T` for `em` with a compiler still `R` would point back at process
+groups after all; `-icanon`/`-echo` in `stty` would mean another terminal-mode
+guard leaked somewhere.
 
 ## 2. Ctrl+C can leave a half-written VDB entry
 
@@ -151,11 +157,3 @@ grep -E '^Sig(Blk|Ign|Cgt)' /proc/$(pgrep -x em)/status
 Note that a stop signal sent to an **orphaned** process group is discarded
 by the kernel — driving this from a detached `script`/`setsid` wrapper makes
 `em` look like it ignores SIGTSTP when it does not.
-
-For item 1, the direct check is whether a build child leaves `em`'s process
-group during a real merge:
-
-```sh
-em cat/pkg &            # in a real terminal
-ps -o pid,pgid,stat,comm -g $(ps -o pgid= -p $(pgrep -x em) | tr -d ' ')
-```

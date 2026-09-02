@@ -231,6 +231,73 @@ async fn bashrc_files_are_sourced_during_a_phase() {
     );
 }
 
+// A phase must never reach the caller's stdin: brush's `read`/`mapfile`
+// put whatever fd 0 names into non-canonical mode with echo off, so an
+// ebuild `read` on an inherited terminal corrupts the console it borrowed.
+//
+// The test replaces its own fd 0 first — the harness already hands tests
+// `/dev/null`, so without that the assertion would hold either way.
+#[tokio::test]
+async fn phase_stdin_is_dev_null() {
+    use std::os::fd::AsFd;
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    let out = dir.path().join("fd0");
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        format!(
+            "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${{WORKDIR}}\"\n\
+             pkg_setup() {{ readlink /proc/self/fd/0 > {}; }}\n",
+            out.display()
+        ),
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+
+    // Point fd 0 at a real file so an unredirected phase would inherit *it*,
+    // and restore it before asserting. Serialised against any other test that
+    // touches process-global fd 0 (there is none today).
+    let stdin_marker = dir.path().join("not-dev-null");
+    std::fs::write(&stdin_marker, "x").unwrap();
+    let decoy = std::fs::File::open(&stdin_marker).unwrap();
+    let _guard = STDIN_LOCK.lock().await;
+    // SAFETY: fd 0 is a live descriptor for the life of the process; the
+    // `ManuallyDrop` keeps `dup2`'s target from closing it on scope exit.
+    let mut fd0 = std::mem::ManuallyDrop::new(unsafe {
+        <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(0)
+    });
+    let saved = rustix::io::dup(std::io::stdin()).unwrap();
+    rustix::io::dup2(decoy.as_fd(), &mut fd0).unwrap();
+    let phase = shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await;
+    rustix::io::dup2(saved.as_fd(), &mut fd0).unwrap();
+    phase.unwrap();
+
+    let fd0 = std::fs::read_to_string(&out).unwrap_or_default();
+    assert_eq!(fd0.trim(), "/dev/null", "phase fd 0 was {fd0:?}");
+}
+
+/// Serialises the one test that swaps process-global fd 0. Async because the
+/// swap has to span `run_phase`'s await.
+static STDIN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 // Profile/user bashrc `die` must abort the phase (regression: die_flag was
 // cleared after bashrc, so merged-usr checks were no-ops — 2026-08-07).
 #[tokio::test]

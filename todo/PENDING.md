@@ -139,13 +139,13 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
-- **Signal handling — Ctrl+Z wedges the console** (reported 2026-09-02,
-  root-caused): brush's default `ProcessGroupPolicy::NewProcessGroup` plus
-  terminal-inherited phase stdin makes every build child `tcsetpgrp` itself
-  into the terminal's foreground group, so Ctrl+Z stops a compiler instead
-  of `em` and `fg` has nothing to resume. Same note covers the VDB's
-  missing `-MERGING-` rename (an interrupted merge leaves a half-written
-  entry) and suspend time polluting the ETA history: [[signal-handling]]
+- **Signal handling** (reported 2026-09-02): `em` installs no signal
+  handlers at all. Build phases inherited the caller's stdin — the user's
+  real terminal — so an ebuild `read` reconfigured the console via brush's
+  terminal-mode guard; fixed by redirecting every phase from `/dev/null`.
+  Still open in the same note: the VDB's missing `-MERGING-` rename (an
+  interrupted merge leaves a half-written entry), suspend time polluting
+  the ETA history, and locks held across a suspend: [[signal-handling]]
 - Library DEPEND identity in a cross sysroot: `crossdev --setup` registers
   the libc as `cross-<tuple>/glibc`, but ordinary ebuilds DEPEND on the real
   Cpn (`sys-libs/glibc`, `virtual/libcrypt` → libxcrypt), so Favor never
