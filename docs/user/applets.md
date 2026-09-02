@@ -2,9 +2,28 @@
 
 Detail behind the summary table in the [README](../../README.md#applet-status):
 per-subcommand status, gaps against the real Portage tool, and notes on
-deliberate design differences. Applets not covered here (`active`, `setup`,
-`crossdev`, `toolchain`, `stages`, `log`, `env`) have their own docs — see
-the README's documentation index.
+deliberate design differences.
+
+**Covered here:** `query`, `use`, `maint`, `clean`, `revdep`, `mirrordist`,
+`read`, plus [what is not built on purpose](#not-built-on-purpose) and
+[the one open gap](#config-file-reconciliation-the-open-gap).
+
+**Covered by their own document:**
+
+| Applet | Document |
+|---|---|
+| `crossdev` | [`crossdev.md`](./crossdev.md) |
+| `toolchain` | [`prefix-toolchain.md`](./prefix-toolchain.md) |
+| `stages` | [`stages-and-testing.md`](./stages-and-testing.md) |
+| `log` | [`activity.md`](./activity.md) |
+| `maint binhost`, `maint binpkg` | [`binhost.md`](./binhost.md) |
+| the `--root`/`--prefix`/`--local` model the topology flags select | [`root-model.md`](./root-model.md) |
+
+**Everything else** — `active`, `atom`, `depclean`, `ebuild`, `emerge`,
+`env`, `pkg`, `quickpkg`, `regen`, `search`, `select`, `setup`, `sync` — has
+no long-form page; the README table plus `em <applet> --help` is the
+reference. `em --help` lists
+every applet, and each one's `--help` lists its subcommands.
 
 ## `em query` (equery)
 
@@ -83,7 +102,11 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
 |---|---|---|
 | `world` | Working | Checks `world` + `world_sets`; validates `@set` refs against known sets from `/usr/share/portage/config/sets/`, `/etc/portage/sets.conf`, and `/etc/portage/sets/`; `--fix` rewrites both files |
 | `revisions` | Working | Purges `repo_revisions` JSON (sync commit history); optional per-repo targeting |
-| `moveinst` | Partial | Detects packages needing rename from `profiles/updates/`; does not apply moves or scan installed dependency metadata |
+| `moveinst` | Partial | Detects installed packages needing rename from `profiles/updates/`; report-only — does not apply moves or scan installed dependency metadata |
+| `movebin` | Partial | The binpkg twin of `moveinst`, sharing its `profiles/updates/` reader. Report-only for a stronger reason: renaming a GPKG container would leave the archive metadata *and* the `Packages` index still naming the old cpv |
+| `logs` | Working | Prunes the `build.log` files a finished merge leaves under `<work_base>/<root-key>/<category>/<PF>/`. **Not portage's target** — real `emaint logs` cleans `PORTAGE_LOGDIR`, which for `em` holds only elog output that `em read --delete` owns. `--fix` removes, `-t 30d` bounds by age |
+| `cleanconfmem` | N/A | Reports a no-op. It discards stale entries from portage's config tracker (`/var/lib/portage/config`), and `em` never writes one, so there is nothing to go stale |
+| `merges` | Unavailable | `em` keeps no failed-merge registry; a failure is reported at the end of the run and in its build log |
 | `binhost` | Working | Regenerates the `Packages` index under `PKGDIR` |
 | `binpkg` | Working | em-only: `verify` / `list` / `prune` / `fingerprint` / `gpg-import` (no real `emaint` equivalent) |
 | `cleanresume` | Working | Reports / discards saved resume lists (`--fix`) |
@@ -98,7 +121,46 @@ and install-image ELF scan benches are also there (`benchmarks/bench-elfscan.sh`
   mode that writes to the VDB.
 - `world` — `@set` references are validated by name but not by content (e.g.
   `@preserved-rebuild` is accepted as long as the name is known).
-- `all`, `cleanconfmem`, `logs`, `merges`, `movebin` — not implemented.
+- `merges` — needs a failed-merge registry `em` does not keep.
+- `all` — deliberately absent. An aggregate over `maint` would mostly wrap
+  no-ops, since these subcommands are overwhelmingly checks and reports; the
+  thing worth batching is the cleaning, which is [`em clean
+  all`](#em-clean-eclean).
+
+**A bare `em maint`** prints this list and exits 2, like `em query` and
+`em select` — it has no default action.
+
+## `em clean` (eclean)
+
+| Subcommand | Status | Notes |
+|---|---|---|
+| `dist` | Working | Removes distfiles no ebuild references. The reference set is every `DIST` line in every `Manifest` across the configured repos |
+| `pkg` | Working | Removes binary packages whose cpv no longer has an ebuild |
+| `all` | Working | Both of the above plus the retained `build.log` files (`em maint logs`), announcing each step |
+
+Shared options: `--deep` narrows the reference set to what the *installed*
+packages alone still name; `--size-limit 100M` and `--time-limit 2weeks`
+filter the candidates. The global `-p` reports without removing.
+
+**Why this exists when `eclean` does.** `eclean` answers about the host's
+`DISTDIR`/`PKGDIR`. Under `em --root`/`--prefix`/`--local` those live inside
+the offset, where a host tool cannot reach them — `em clean` follows the same
+root resolution as the rest of `em`.
+
+**Safety.** Both targets refuse to act on an empty reference set: finding no
+`Manifest` entries at all means the repos were unreadable, not that every
+file is stale. `clean all` keeps going when one step fails — an unreadable
+`PKGDIR` should not cost you the distfile sweep — and returns the first error
+at the end so a script still sees a non-zero exit.
+
+Portage bookkeeping in a local `DISTDIR` is never a candidate: `<file>.lock`
+is a live fetch lock, and `.layout.conf.<mirror>` a cached mirror layout.
+The DISTDIR walk itself is shared with `em mirrordist`, so the two cannot
+drift on how a distfiles directory is read; only the reference-set policy
+differs.
+
+**Gaps vs eclean:** no interactive mode, and no `--destructive` ("keep only
+the newest version") flavour.
 
 ## `em revdep` (revdep-rebuild)
 
@@ -220,3 +282,37 @@ leave the logs unmanageable by the user who asked for them, which is the
 opposite of the point. An existing directory is never re-permissioned, so a
 system where portage already owns `/var/log/portage` keeps its own scheme
 and `em`'s files inherit the portage group from it.
+
+## Config-file reconciliation — the open gap
+
+`em dispatch` (dispatch-conf) and `em etc` (etc-update) are not implemented,
+and this is the one absence that interrupts an ordinary workflow.
+
+`em` implements the whole *producing* half of `CONFIG_PROTECT`: a protected
+file whose content changed is diverted to `._cfgNNNN_<name>` using portage's
+own numbering, `CONTENTS` records the real path rather than the sidecar, and
+the merge tells you how many were written. Nothing consumes them.
+
+On a host you can fall back to the system's own `etc-update`. Under
+`em --root`/`--prefix`/`--local` you cannot: those tools do not know about
+the offset, so the sidecars accumulate with no supported way to review or
+merge them.
+
+## Not built on purpose
+
+`em portageq` and `em grep` exist as CLI stubs and are not planned.
+
+For `portageq`, the concern was that an ebuild phase shelling out to the
+*host's* `portageq` would answer about the wrong root under
+`--root`/`--prefix`/`--local`, which would argue for providing it as a shell
+builtin. A scan of `/var/db/repos/{gentoo,guru,crossdev,pentoo}` (2026-09-02)
+found **zero** calls from any inheritable `*.eclass` and **zero** from any
+live ebuild — the only hits are `eclass/tests/` (a hand-run harness that is
+never `inherit`ed), OpenRC init scripts that run post-install, and
+maintainer scripts. Nothing `em` executes as a phase calls it, so the
+wrong-root risk is theoretical.
+
+If a real overlay ebuild ever does, `envvar`, `has_version`, `match` and
+`best_version` cover every shape found in the wild.
+
+`em grep` (a `pquery`-shaped tree search) has no known consumer at all.

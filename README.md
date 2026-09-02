@@ -39,11 +39,11 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `depclean` | `emerge --depclean` | Working — reverse-dep orphan clean (`-c`); world-aware |
 | `quickpkg` | `quickpkg` | Working — GPKG from installed files / VDB `CONTENTS`; skips `CONFIG_PROTECT` by default |
 | `mirrordist` | `emirrordist` | Working — [detail](./docs/user/applets.md#em-mirrordist-emirrordist) |
-| `clean` | `eclean` | Stub |
+| `clean` | `eclean` | Working — [detail](./docs/user/applets.md#em-clean-eclean) |
 | `revdep` | `revdep-rebuild` | Working — [detail](./docs/user/applets.md#em-revdep-revdep-rebuild) |
 | `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/user/activity.md) |
-| `grep` | `egreplite` | Stub |
-| `portageq` | `portageq` | Stub |
+| `grep` | `egreplite` | Not built — no known consumer |
+| `portageq` | `portageq` | Not built — [measured](./docs/user/applets.md#not-built-on-purpose): no eclass or ebuild calls it |
 | `read` | `elogv` / elog reader | Working — [detail](./docs/user/applets.md#em-read-elogv-and-the-elog-system) |
 | `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, `news` (`eselect news`), `glsa` (`glsa-check`), … |
 | `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
@@ -51,8 +51,8 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap; see [docs/crossdev.md](./docs/user/crossdev.md) |
 | `toolchain` | — | Working — native self-hosting toolchain bootstrap into `--root` |
 | `stages` | catalyst stage1/3 | Partial — `--stage1` (`packages.build`), `--stage3` (emptytree `@system`); no stage4 yet |
-| `dispatch` | `dispatch-conf` | Stub |
-| `etc` | `etc-update` | Stub |
+| `dispatch` | `dispatch-conf` | Planned — [the open gap](./docs/user/applets.md#config-file-reconciliation-the-open-gap) |
+| `etc` | `etc-update` | Planned — [the open gap](./docs/user/applets.md#config-file-reconciliation-the-open-gap) |
 | `env` | `env-update` | Working — `profile.env` + `ld.so.conf` from `etc/env.d` |
 
 ## Documentation
