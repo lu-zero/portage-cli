@@ -1,6 +1,7 @@
 # Signal handling: terminal state, and an interruptible VDB write
 
-Status: 🟡 phase-stdin fix landed 2026-09-02; items 2-5 open. Reported symptom (Luca): on
+Status: 🟢 items 1, 2, 4, 5 landed 2026-09-02. Open: suspend accounting
+(postponed) and children orphaned on a direct signal. Reported symptom (Luca): on
 `em cat/pkg`, "I couldn't get back the console after ctrl+z, I had to use
 kill to continue again."
 
@@ -222,11 +223,12 @@ doing only if direct-signalling turns out to be a real workflow; through the
 terminal, which is how a person actually interrupts a build, it already
 works.
 
-### Suspend accounting (was item 3)
+### Suspend accounting (was item 3) — postponed 2026-09-02
 
-Still not implemented. The `SIGTSTP`/`SIGCONT` pair this would need is not
-part of the above — only `SIGINT`/`SIGTERM` are handled — so the ETA
-inflation described in item 3 stands, bounded by the median as noted there.
+Deliberately deferred (Luca). Only `SIGINT`/`SIGTERM` are handled; the
+`SIGTSTP`/`SIGCONT` pair this needs is not, so the ETA inflation in item 3
+stands — bounded by the median, so it bites only a package merged once or
+twice. Pick it up if a real ETA complaint traces back to a suspended run.
 
 ## Non-issues — checked, do not "fix"
 
