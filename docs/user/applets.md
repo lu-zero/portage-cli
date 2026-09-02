@@ -5,8 +5,8 @@ per-subcommand status, gaps against the real Portage tool, and notes on
 deliberate design differences.
 
 **Covered here:** `query`, `use`, `maint`, `clean`, `revdep`, `mirrordist`,
-`read`, plus [what is not built on purpose](#not-built-on-purpose) and
-[the one open gap](#config-file-reconciliation-the-open-gap).
+`read`, plus [the open gaps](#config-file-reconciliation-the-open-gap) and
+[what is planned](#em-portageq-and-em-grep-planned-user-facing).
 
 **Covered by their own document:**
 
@@ -298,21 +298,29 @@ On a host you can fall back to the system's own `etc-update`. Under
 the offset, so the sidecars accumulate with no supported way to review or
 merge them.
 
-## Not built on purpose
+## `em portageq` and `em grep` — planned, user-facing
 
-`em portageq` and `em grep` exist as CLI stubs and are not planned.
+Both are CLI stubs today.
 
-For `portageq`, the concern was that an ebuild phase shelling out to the
-*host's* `portageq` would answer about the wrong root under
-`--root`/`--prefix`/`--local`, which would argue for providing it as a shell
-builtin. A scan of `/var/db/repos/{gentoo,guru,crossdev,pentoo}` (2026-09-02)
-found **zero** calls from any inheritable `*.eclass` and **zero** from any
-live ebuild — the only hits are `eclass/tests/` (a hand-run harness that is
-never `inherit`ed), OpenRC init scripts that run post-install, and
-maintainer scripts. Nothing `em` executes as a phase calls it, so the
-wrong-root risk is theoretical.
+`portageq` is a **user** tool: it answers "what does this configuration
+actually resolve to" — `envvar DISTDIR`, `get_repo_path`, `match`,
+`expand_virtual` — which is exactly the question `em`'s own
+`--root`/`--prefix`/`--local` offsets make hard to answer by hand. That
+makes it *more* useful here than on a stock host, not less, since the
+system's own `portageq` reports about `/` regardless of which root you are
+operating on.
 
-If a real overlay ebuild ever does, `envvar`, `has_version`, `match` and
-`best_version` cover every shape found in the wild.
+`grep` (a `pquery`-shaped search through ebuilds and eclasses) is likewise
+for a person looking something up.
 
-`em grep` (a `pquery`-shaped tree search) has no known consumer at all.
+A 2026-09-02 scan of `/var/db/repos/{gentoo,guru,crossdev,pentoo}` found
+zero `portageq` calls from any inheritable `*.eclass` and zero from any live
+ebuild — the only hits are `eclass/tests/` (a hand-run harness that is never
+`inherit`ed), OpenRC init scripts, and maintainer scripts. That result is
+worth keeping, but it answers a narrower question than whether to build the
+applet: it means `em` does **not** additionally need to provide `portageq`
+as a *shell builtin* for ebuild phases, because no phase calls it. The
+user-facing command is a separate question, and the answer there is yes.
+
+Whenever it is built, `envvar`, `has_version`, `match`, `best_version` and
+`get_repo_path` cover every shape found in the wild.

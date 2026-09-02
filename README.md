@@ -42,8 +42,8 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `clean` | `eclean` | Working — [detail](./docs/user/applets.md#em-clean-eclean) |
 | `revdep` | `revdep-rebuild` | Working — [detail](./docs/user/applets.md#em-revdep-revdep-rebuild) |
 | `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/user/activity.md) |
-| `grep` | `egreplite` | Not built — no known consumer |
-| `portageq` | `portageq` | Not built — [measured](./docs/user/applets.md#not-built-on-purpose): no eclass or ebuild calls it |
+| `grep` | `egreplite` | Planned — [detail](./docs/user/applets.md#em-portageq-and-em-grep-planned-user-facing) |
+| `portageq` | `portageq` | Planned — [detail](./docs/user/applets.md#em-portageq-and-em-grep-planned-user-facing) |
 | `read` | `elogv` / elog reader | Working — [detail](./docs/user/applets.md#em-read-elogv-and-the-elog-system) |
 | `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, `news` (`eselect news`), `glsa` (`glsa-check`), … |
 | `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
