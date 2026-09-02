@@ -139,6 +139,11 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
+- `gentoo-stages` keeps `variant` as a `String` while `gentoo_core::Variant`
+  sits in a crate it already depends on. Postponed deliberately: the crate is
+  consumed by `crossdev-stages`, so this is semver-visible and wants a
+  consumer survey first — and it is *not* the orphan a dependency audit makes
+  it look like: [[gentoo-stages-workspace-types]]
 - **Signal handling** (reported 2026-09-02, phase-stdin half fixed in
   `0018023`) — the remaining items are the current systematic queue, in
   order: (1) `Vdb::register`'s in-place field writes ✅ 2026-09-02 — staged
