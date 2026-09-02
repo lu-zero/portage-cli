@@ -349,6 +349,15 @@ fn merge_interactive(pending: &[Pending], globals: &Cli) -> Result<()> {
         println!(">>> No pending configuration files.");
         return Ok(());
     }
+    // `-p` is "show what would be done without performing any actions".
+    // The prompt itself is the action; honouring it by mutating is the bug.
+    if globals.pretend {
+        for p in pending {
+            println!("    would resolve: {} ({})", p.target, p.kind.label());
+        }
+        println!(">>> Would resolve {} file(s).", pending.len());
+        return Ok(());
+    }
     require_tty()?;
 
     let mut resolved = 0usize;
@@ -625,5 +634,32 @@ mod tests {
             mode, 0o640,
             "the package's mode must survive, as in dispatch-conf"
         );
+    }
+
+    #[test]
+    fn merge_interactive_pretend_does_not_mutate() {
+        use clap::Parser;
+        let dir = tempfile::tempdir().unwrap();
+        let base = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let target = base.join("hosts");
+        std::fs::write(target.as_std_path(), "old\n").unwrap();
+        let sidecar = base.join("._cfg0000_hosts");
+        std::fs::write(sidecar.as_std_path(), "new\n").unwrap();
+
+        let pending = [Pending {
+            sidecar: sidecar.clone(),
+            target: target.clone(),
+            index: 0,
+            kind: Kind::Differs,
+            bytes: 4,
+        }];
+        let globals = Cli::parse_from(["em", "-p", "etc", "merge"]);
+        merge_interactive(&pending, &globals).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(target.as_std_path()).unwrap(),
+            "old\n"
+        );
+        assert!(sidecar.exists(), "pretend must leave the sidecar in place");
     }
 }

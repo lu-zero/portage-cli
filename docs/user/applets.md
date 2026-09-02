@@ -308,8 +308,9 @@ Each pending file is classified, which is what makes `--auto` safe:
 **Why this exists when `etc-update` does.** `em` writes those sidecars under
 whatever root it merged into. A host tool only ever looks at `/`, so under
 `--root`/`--prefix`/`--local` there is otherwise no way to review them at
-all. `CONFIG_PROTECT`/`CONFIG_PROTECT_MASK` come from `roots.config()` — the
-same configuration the merge itself used to decide what to protect.
+all. `CONFIG_PROTECT`/`CONFIG_PROTECT_MASK` are the stacked profile,
+make.conf, and merge-root `env.d` lists — the same configuration the merge
+itself used to decide what to protect.
 
 **Notes.**
 
