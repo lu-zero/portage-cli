@@ -814,7 +814,7 @@ blocked by the three independent findings above, tracked separately.
   consumed. Confirmed root cause + fix identified; a clean sandbox
   confirms the trigger (riscv64 `crossdev --setup --prefix` now
   completes all 6 steps). Pre-existing, unrelated to the `--root`/
-  `--prefix` work above. [[crossdev-gcc-stage1-missing-without-headers]]
+  `--prefix` work above. [[crossdev-gcc-stage1-missing-without-headers]] (✅ 2026-09-02)
 - 🔴 **package-level profile rules don't follow the crossdev alias
   mapping** — root cause of the ABI_X86 stage1 mismatch below:
   `real_cpn_of` is populated but never consulted, so `package.use`/
