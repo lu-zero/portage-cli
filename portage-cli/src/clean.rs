@@ -76,7 +76,11 @@ fn parse_size(spec: &str) -> Result<u64> {
         .trim()
         .parse()
         .with_context(|| format!("--size-limit {spec}: not a size (try 10M, 1G)"))?;
-    Ok(n * mult)
+    // `checked_mul`, not `*`: the multiplier makes a plausible-looking argument
+    // overflow, and release builds have `overflow-checks` off, so the panic a
+    // debug build gives becomes a silently wrapped nonsense limit.
+    n.checked_mul(mult)
+        .with_context(|| format!("--size-limit {spec}: too large"))
 }
 
 pub(crate) fn human_bytes(bytes: u64) -> String {
@@ -400,16 +404,26 @@ async fn pkg_candidates(
     Ok(out)
 }
 
-/// `category/PF` from a PKGDIR-relative container path, dropping any
-/// `-<build_id>` multi-instance suffix
+/// `category/PF` from a PKGDIR-relative container path, dropping a
+/// multi-instance `-<build_id>` suffix but *only* when it really is one
+///
+/// `parse_build_id_from_name` answers "does this end in an integer", which is
+/// true of plenty of legitimate versions — `virtual/awk-1`, `acct-group/audio-0`,
+/// `sys-kernel/linux-firmware-20250101`. Stripping on that alone produced a cpv
+/// with no version, which matched nothing in the keep set, so `em clean pkg`
+/// deleted the binary package of an installed, in-tree package. The tail comes
+/// off only when the whole name is *not* a valid `PF` and the base is, which is
+/// exactly the shape a real build-id suffix has.
 pub(crate) fn cpv_from_container(rel: &str) -> Option<String> {
     let rel = rel.strip_suffix(".gpkg.tar")?;
     let (cat, file) = rel.rsplit_once('/')?;
-    let pf = match portage_binpkg::parse_build_id_from_name(&format!("{rel}.gpkg.tar")) {
-        Some(_) => file.rsplit_once('-').map_or(file, |(base, _)| base),
-        None => file,
-    };
-    Some(format!("{cat}/{pf}"))
+    if portage_atom::Pf::parse(file).is_ok() {
+        return Some(format!("{cat}/{file}"));
+    }
+    let (base, _build_id) = file.rsplit_once('-')?;
+    portage_atom::Pf::parse(base)
+        .ok()
+        .map(|_| format!("{cat}/{base}"))
 }
 
 fn installed_cpvs(globals: &Cli) -> Result<std::collections::HashSet<String>> {
@@ -465,20 +479,41 @@ mod tests {
         assert_eq!(parse_size("1G").unwrap(), 1024 * 1024 * 1024);
         assert_eq!(parse_size(" 2k ").unwrap(), 2048);
         assert!(parse_size("banana").is_err());
+        // Straight from user input; `*` panicked in debug and wrapped in release.
+        assert!(parse_size("18446744073709551615K").is_err());
+        assert!(parse_size("99999999999999999999G").is_err());
     }
 
-    // The multi-instance `-<build_id>` suffix is part of the filename but not
-    // of the cpv, so it has to come off or nothing ever matches the VDB.
+    // A real `-<build_id>` suffix comes off; a version that merely ends in an
+    // integer must not. Getting this wrong deleted the binary package of every
+    // installed `virtual/*`, `acct-*` and date-versioned package, because the
+    // stripped cpv matched nothing in the keep set.
     #[test]
-    fn container_path_yields_the_cpv_without_the_build_id() {
+    fn container_path_strips_a_build_id_but_never_a_version() {
+        let cpv = |rel| cpv_from_container(rel).unwrap_or_default();
+
+        // Genuine multi-instance suffixes.
         assert_eq!(
-            cpv_from_container("sys-libs/zlib-1.3.2-r1.gpkg.tar").as_deref(),
-            Some("sys-libs/zlib-1.3.2-r1")
+            cpv("sys-libs/zlib-1.3.2-r1-3.gpkg.tar"),
+            "sys-libs/zlib-1.3.2-r1"
         );
         assert_eq!(
-            cpv_from_container("sys-libs/zlib-1.3.2-r1-3.gpkg.tar").as_deref(),
-            Some("sys-libs/zlib-1.3.2-r1")
+            cpv("sys-devel/gcc-16.2.0-3.gpkg.tar"),
+            "sys-devel/gcc-16.2.0"
         );
+
+        // Versions that end in a bare integer — the data-loss cases.
+        assert_eq!(cpv("virtual/awk-1.gpkg.tar"), "virtual/awk-1");
+        assert_eq!(cpv("virtual/pkgconfig-3.gpkg.tar"), "virtual/pkgconfig-3");
+        assert_eq!(cpv("acct-group/audio-0.gpkg.tar"), "acct-group/audio-0");
+        assert_eq!(
+            cpv("sys-kernel/linux-firmware-20250101.gpkg.tar"),
+            "sys-kernel/linux-firmware-20250101"
+        );
+
+        // Ordinary versions are untouched.
+        assert_eq!(cpv("sys-libs/zlib-1.3.1.gpkg.tar"), "sys-libs/zlib-1.3.1");
+
         assert_eq!(cpv_from_container("not-a-container"), None);
     }
 

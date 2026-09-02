@@ -1582,26 +1582,45 @@ async fn acquire_flock(path: std::path::PathBuf, label: &str) -> Option<std::fs:
     }
 }
 
-/// Best-effort pid holding an flock on `path`, via `/proc/locks`
+/// Best-effort pid holding an flock on `path`, from `/proc/locks`
 ///
-/// `flock` locks are not visible to `fcntl(F_GETLK)`, so the holder can only
-/// be found by matching the file's inode against the kernel's own table.
-/// `None` wherever that table does not exist (any non-Linux host) — the
-/// caller degrades to naming just the file.
+/// `flock` locks are invisible to `fcntl(F_GETLK)`, so the holder can only be
+/// found by matching the file against the kernel's own table. `None` on any
+/// platform without `/proc/locks`, or for a lock the table attributes to no
+/// single process (an OFD lock) — the caller then names just the file.
+#[cfg(target_os = "linux")]
 fn flock_holder_pid(path: &std::path::Path) -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
-    let ino = std::fs::metadata(path).ok()?.ino();
-    for line in std::fs::read_to_string("/proc/locks").ok()?.lines() {
-        // `1: FLOCK  ADVISORY  WRITE 1234 08:02:1234567 0 EOF`
-        let mut f = line.split_whitespace().skip(1);
-        if f.next()? != "FLOCK" {
-            continue;
-        }
-        let pid: u32 = f.nth(2)?.parse().ok()?;
-        if f.next()?.rsplit(':').next()?.parse::<u64>().ok()? == ino {
-            return Some(pid);
-        }
-    }
+
+    let meta = std::fs::metadata(path).ok()?;
+    let (dev, ino) = (meta.dev(), meta.ino());
+    let flocks: Vec<_> = procfs::locks()
+        .ok()?
+        .into_iter()
+        .filter(|l| l.lock_type == procfs::LockType::FLock && l.inode == ino)
+        .collect();
+    // Inode first, device only to disambiguate. `/proc/locks` reports the
+    // *superblock's* `s_dev`, which is not `stat`'s `st_dev` on a filesystem
+    // that hands each subvolume its own anonymous device — btrfs does, so on a
+    // btrfs root the two never agree and requiring equality finds nothing.
+    // An inode number is only unique within a filesystem, so fall back to the
+    // device to pick between collisions when there is more than one candidate.
+    let hit = match flocks.len() {
+        0 => return None,
+        1 => flocks.into_iter().next(),
+        _ => flocks
+            .into_iter()
+            .find(|l| l.devmaj == rustix::fs::major(dev) && l.devmin == rustix::fs::minor(dev)),
+    };
+    hit
+        // `pid` is `None` for an OFD lock, which genuinely has no single owner.
+        .and_then(|l| l.pid)
+        .and_then(|pid| u32::try_from(pid).ok())
+}
+
+/// See the Linux implementation — no `/proc/locks` to consult here.
+#[cfg(not(target_os = "linux"))]
+fn flock_holder_pid(_path: &std::path::Path) -> Option<u32> {
     None
 }
 
@@ -3507,8 +3526,10 @@ fn read_fetch_commands(shell: &portage_repo::EbuildShell) -> (Option<String>, Op
 #[cfg(test)]
 mod tests {
 
-    // `/proc/locks`' column layout is parsed by hand, so pin it against a real
-    // kernel entry: take an flock and look ourselves up in the table.
+    // Pinned against a real kernel entry rather than a fixture: this is the
+    // one place `em` depends on `/proc/locks` matching the file it is given,
+    // and an inode-only match (the bug the device comparison fixes) would
+    // still pass a fixture.
     #[test]
     #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc/locks")]
     fn flock_holder_pid_finds_the_process_holding_the_lock() {
