@@ -2,13 +2,14 @@
 
 Open items from the toolchain → stage → binhost work, grouped. Each links to the
 file with the detail. Status: 🔴 not started · 🟡 partial/decided · ✅ done (kept
-here briefly for context). Updated **2026-08-30**.
+here briefly for context). Updated **2026-09-02**.
 
 **How to use this file:** start from the open queue below; jump to the linked
 note for design. Long historical narrative for the 2026-07-05 riscv shakeout
 and the full binhost/migration log remains below the `---` (do not delete — it
 is the audit trail). Fully closed design notes live under `todo/done/`;
-`[[name]]` links still resolve by filename there.
+`[[name]]` links still resolve by filename there. Milestone-level build
+progress (M0 → M4, each with its gate command) lives in [[build-roadmap]].
 
 ## RESUME HERE (2026-07-30) — open queue
 
@@ -138,6 +139,11 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
+- Library DEPEND identity in a cross sysroot: `crossdev --setup` registers
+  the libc as `cross-<tuple>/glibc`, but ordinary ebuilds DEPEND on the real
+  Cpn (`sys-libs/glibc`, `virtual/libcrypt` → libxcrypt), so Favor never
+  matches and providers stall — the "libxcrypt never scheduled" class.
+  Reframed 2026-08-07 (not "must always stage1"): [[libcrypt-never-scheduled]]
 
 ### Recently closed (2026-07-18 → 2026-08-01) — notes in `todo/done/`
 

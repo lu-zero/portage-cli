@@ -1,8 +1,11 @@
 # Factor out repeated `UseEnv` → `ResolvePolicy` construction
 
+Status: ✅ landed 2026-08-21 (`5951b21`) as
+`ResolvedPolicy::from_use_env`/`as_policy`, confirmed flat against
+firefox/qtbase/texlive. The proposal below is kept as the design record.
+
 Opened 2026-08-21, end of the package.mask `::repo` / repo-interning /
 duplicate-cpv-collapse session (commits `b3a8380`, `697de0f`, `c3a4964`).
-Not started — a proposal only.
 
 ## The duplication
 

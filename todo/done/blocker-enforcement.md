@@ -146,5 +146,7 @@ discussion: a removal-set display and richer advisory wording are the same work.
 ## Step 2 — actual enforcement (DONE, 2026-08-20)
 
 `planned_unmerges` on the depgraph; `unmerge_blocker_victims` before/after
-the merge loop. Confirmation is the existing `--ask` merge prompt (the
+the merge loop — superseded 2026-08-31 (`de53f23`), which positions each
+`PlannedUnmerge` against the plan's own topological order via its owners
+instead of batching them around the whole run. Confirmation is the existing `--ask` merge prompt (the
 `[uninstall    ]` row, `64feadb`, already printed). No extra opt-in flag.
