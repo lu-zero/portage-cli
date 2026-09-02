@@ -99,14 +99,16 @@ impl MetadataCache for DirMetadataCache {
             .parent()
             .ok_or_else(|| Error::InvalidRepository(path.clone().into_std_path_buf()))?;
         std::fs::create_dir_all(parent.as_std_path()).map_err(|e| util::io_err(parent, e))?;
-        // Atomic replace: write temp then rename (same as regen_cache).
-        let file_name = path
-            .file_name()
-            .ok_or_else(|| Error::InvalidRepository(path.clone().into_std_path_buf()))?;
-        let tmp = parent.join(format!("{file_name}.tmp"));
-        std::fs::write(tmp.as_std_path(), entry.serialize()).map_err(|e| util::io_err(&tmp, e))?;
-        std::fs::rename(tmp.as_std_path(), path.as_std_path())
+        // Atomic replace. The temp name has to be unique, not `<entry>.tmp`:
+        // two workers regenerating the same cpv would otherwise write the same
+        // scratch file and race each other's rename, and a failure would leave
+        // it behind. `persist` also cleans up on drop if the write fails.
+        let mut tmp = tempfile::NamedTempFile::new_in(parent.as_std_path())
+            .map_err(|e| util::io_err(parent, e))?;
+        std::io::Write::write_all(&mut tmp, entry.serialize().as_bytes())
             .map_err(|e| util::io_err(&path, e))?;
+        tmp.persist(path.as_std_path())
+            .map_err(|e| util::io_err(&path, e.error))?;
         self.populated.store(1, Ordering::Relaxed);
         Ok(())
     }
