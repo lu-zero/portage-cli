@@ -1,6 +1,14 @@
 # `has_version` piggybacks `cross-*` atoms off the host, but the consumer only ever looks under `EPREFIX`
 
-Status: 🔴 root cause fully confirmed 2026-08-29, not fixed. Not
+Status: 🔴 still not fixed — re-verified 2026-09-02. Does **not** reproduce
+on clean sandbox state (see "Confirmed 2026-08-29" below), which is why it
+can look fixed; the code change described under "The actual fix" has not
+landed. `vdb_roots_for` (`version_query.rs`) still has no `cross-*`
+special-casing at all, and that file is untouched since before 2026-08-20.
+`ece1fcb` fixed the *same symptom text* ("stdio.h: No such file or
+directory" from a wrong `--with-sysroot`) for a plain `--prefix` build with
+no `--target` — an adjacent gap in ESYSROOT's fallback formula, not this
+one. Original root cause, fully confirmed 2026-08-29: Not
 target-specific — exposed by stale sandbox VDB state, but the
 underlying mismatch is real and latent regardless: `toolchain.eclass`'s
 `has_version ${CATEGORY}/${needed_libc}` check can be satisfied from

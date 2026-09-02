@@ -1,7 +1,15 @@
 # Package-level profile rules (package.use.force/mask/…) don't follow the cross-alias mapping
 
-Status: 🔴 root cause found 2026-08-29, not fixed. Originally filed as an
+Status: 🔴 not fixed — re-confirmed live 2026-09-02. Originally filed as an
 ABI_X86 stage1 mismatch; root-caused while investigating why.
+
+One detail below is now stale: `real_cpn_of` **is** read back these days, at
+`query/depgraph/mod.rs:1969` and in `crossdev/target.rs` — but only to
+redirect the *ebuild file path* to the real package. `force_mask` still
+never sees it (`PkgRules` is a plain `HashMap<Cpn, …>`, and the alias
+injection at `repo.rs:1465` populates `real_cpn_of`/`cpns_set` without
+duplicating any profile rule under the cross `Cpn`), so the bug itself is
+untouched.
 
 ## Symptom (original finding)
 
@@ -69,6 +77,26 @@ aliased package (duplicate the entry at alias-injection time,
 consult `real_cpn_of` and look up under the real `Cpn` when the
 package's own `Cpn` has no direct match. The former is probably
 simpler and keeps `ForceMask` itself alias-unaware.
+
+## Re-confirmed live 2026-09-02
+
+Same method as the original, on the host's own `::crossdev` repo — no
+sandbox needed, `em -pv` is enough:
+
+```
+sys-libs/glibc                          USE="(static-libs) (-cet) (-clang) (-custom-cflags) (-multilib) (-selinux)"
+cross-riscv64-unknown-linux-gnu/glibc   USE="static-libs  (-cet)  -clang   -custom-cflags  (-multilib) (-selinux)"
+```
+
+`static-libs`/`-clang`/`-custom-cflags` lose their parentheses under the
+alias — the package-level `package.use.force`/`package.use.mask` entries
+never matched. `(-cet)`/`(-multilib)`/`(-selinux)` keep theirs in both,
+because those come from *global* `use.mask`, which is alias-independent —
+exactly the split this note predicted.
+
+That two-command reproduction is also the regression test to write.
+
+## Scope
 
 This is a resolve-engine bug, not scoped to crossdev or to `multilib`
 specifically — any `package.use`/`package.mask`/`package.use.force`/
