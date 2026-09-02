@@ -318,7 +318,10 @@ pub async fn merge_baselayout(cli: &crate::cli::Cli, extra_path: &[Utf8PathBuf])
     if eroot.as_str() == "/" {
         return Ok(());
     }
-    println!(">>> merging sys-apps/baselayout (USE=build, oneshot) into {eroot}");
+    tracing::info!(
+        target: portage_repo::ACTION_TARGET,
+        ">>> merging sys-apps/baselayout (USE=build, oneshot) into {eroot}"
+    );
     let use_override = ["build".to_string()];
     let mut merge_flags = cli.merge_flags().clone();
     merge_flags.oneshot = true;

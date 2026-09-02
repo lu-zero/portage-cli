@@ -310,13 +310,20 @@ user-facing message.
   passthrough, `config_plan`'s `-p`/`-a` preview-and-confirm prompt. If you
   are not reproducing something real `emerge`/`equery`/etc. would print,
   it is very likely a `tracing::info!`, not a `println!`.
-- **Existing `println!` calls are not proof of the right pattern.** Large
-  parts of this codebase (`setup.rs`, `dispatch.rs`, `emerge.rs`,
-  `crossdev/mod.rs`, …) predate this being spelled out and still use
-  `println!` for narration that should be `tracing::info!` — see the Slop
-  Warning below. Don't copy them into new code; fixing them in place is a
-  separate, deliberate cleanup, not something to do incidentally while
-  touching nearby code for an unrelated reason.
+- **A diagnostic that must survive `-q`/`--jobs N` is not a
+  `tracing::info!`.** Both drop the level floor to `WARN`, so an `info!`
+  event is invisible during exactly the parallel merge where a problem
+  matters. `style.rs` has the writers for those: `warn_line!` (non-fatal,
+  the caller carries on), `error_line!` (the item's operation definitively
+  failed), `ewarn_sub_bullet!` (an indented item under one of those), and
+  `einfo_line!` (a structured **stdout** report). An action banner that
+  must keep its literal `">>> "` prefix goes through `tracing::info!` on
+  `portage_repo::ACTION_TARGET`, which `diag.rs` renders bare.
+- **Existing `println!` calls are not proof of the right pattern**, but
+  most surviving ones are load-bearing: `em setup`'s "Prefix ready at …"
+  report, `emerge.rs`'s `>>> Quitting.`/`>>> Unmerging …` parity lines and
+  `dispatch.rs`'s `em log`/`em atom` results are all primary output, not
+  narration. Check what a caller actually reads before converting one.
 
 ## Commits
 
