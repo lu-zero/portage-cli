@@ -319,9 +319,16 @@ fn merging_path_for(pkg_dir: &Utf8Path) -> Utf8PathBuf {
 /// complete new one, never a mix, which is the whole point versus clearing it
 /// in place. Same shape as `portage_repo`'s regen cache swap.
 fn publish_staged_entry(staging: &Utf8Path, pkg_dir: &Utf8Path) -> Result<()> {
+    // `-MERGING-<pf>-old`, not `-REPLACING-<pf>`: portage knows only
+    // `MERGING_IDENTIFIER = "-MERGING-"` (`const.py`), and matches it as
+    // `-MERGING-.*` in `vartree.py`'s excluded-dirs regex. A name outside that
+    // pattern falls through to `invalidentry`, so real portage and `equery`
+    // print "Invalid db entry" at `noiselevel=-1` on every VDB scan for as
+    // long as the directory exists. Keeping the prefix gets it excluded from
+    // `cpv_all` and reported as an incomplete merge instead.
     let displaced = {
         let pf = pkg_dir.file_name().unwrap_or("unknown-0");
-        pkg_dir.with_file_name(format!("-REPLACING-{pf}"))
+        pkg_dir.with_file_name(format!("-MERGING-{pf}-old"))
     };
     let io = |path: &Utf8Path, source: std::io::Error| Error::Io {
         path: path.to_path_buf(),
@@ -469,7 +476,7 @@ mod tests {
         let leftovers: Vec<String> = std::fs::read_dir(root.join("app-shells"))
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with("-MERGING-") || n.starts_with("-REPLACING-"))
+            .filter(|n| n.starts_with("-MERGING-"))
             .collect();
         assert!(
             leftovers.is_empty(),

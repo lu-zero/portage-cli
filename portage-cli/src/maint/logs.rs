@@ -85,15 +85,32 @@ pub fn run(
 
 /// `<work_base>/<root-key>/<category>/<PF>/build.log`
 ///
-/// Walked by hand at a fixed depth rather than recursively: a live build tree
-/// under the same base holds an unpacked `${WORKDIR}`, and descending into it
-/// would cost far more than the three levels the layout actually uses.
+/// Two things a plain depth-3 walk gets wrong, both of which delete a log
+/// that is still being written:
+///
+/// * **A live `em` build** appends to exactly this path while it runs, so a
+///   `<PF>` directory whose `.builddir.lock` is currently flock-held is
+///   skipped. That lock is held for the whole phase chain (`ebuild.rs`'s
+///   `lock_builddir`), which is precisely the window to stay out of.
+/// * **Real portage builds in the same directory.** `default_work_base`
+///   resolves to `/var/tmp/portage` whenever it is writable — portage's own
+///   `PORTAGE_TMPDIR` — and portage's layout is
+///   `<cat>/<pf>/temp/build.log`, which puts its live `${T}/build.log` at the
+///   same depth as em's. A `<PF>` component named `temp` is therefore treated
+///   as portage's, not ours, and left alone.
 fn collect(work_base: &Utf8Path) -> Vec<Log> {
     let now = std::time::SystemTime::now();
     let mut out = Vec::new();
     for root_key in read_dirs(work_base) {
         for category in read_dirs(&root_key.1) {
             for pf in read_dirs(&category.1) {
+                // `<cat>/<pf>/temp/build.log` is portage's shape, not ours.
+                if pf.0 == "temp" {
+                    continue;
+                }
+                if build_in_progress(&pf.1) {
+                    continue;
+                }
                 let log = pf.1.join("build.log");
                 let Ok(meta) = std::fs::metadata(log.as_std_path()) else {
                     continue;
@@ -116,6 +133,33 @@ fn collect(work_base: &Utf8Path) -> Vec<Log> {
         }
     }
     out
+}
+
+/// Whether a package build currently holds this work directory
+///
+/// Probed by trying the same `.builddir.lock` non-blockingly: acquiring it
+/// means nobody is building here, and the lock is dropped again immediately.
+/// A failure to even open the file is treated as "not building" — the log is
+/// then almost certainly from a finished run.
+fn build_in_progress(work_dir: &Utf8Path) -> bool {
+    let path = work_dir.join(".builddir.lock");
+    if !path.exists() {
+        return false;
+    }
+    let Ok(f) = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path.as_std_path())
+    else {
+        return false;
+    };
+    match rustix::fs::flock(&f, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        // We got it, so no build holds it; release straight away.
+        Ok(()) => {
+            let _ = rustix::fs::flock(&f, rustix::fs::FlockOperation::Unlock);
+            false
+        }
+        Err(_) => true,
+    }
 }
 
 /// `(name, path)` for each subdirectory, or empty when unreadable
@@ -171,6 +215,50 @@ mod tests {
             ]
         );
         assert_eq!(collect(base).iter().map(|l| l.bytes).sum::<u64>(), 9000);
+    }
+
+    // Real portage builds in the same /var/tmp/portage that
+    // `default_work_base` picks, and its `<cat>/<pf>/temp/build.log` lands at
+    // em's depth. Deleting that takes out a live portage build's log.
+    #[test]
+    fn collect_leaves_portages_own_temp_build_log_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = camino::Utf8Path::from_path(dir.path()).unwrap();
+        write(&base.join("sys-devel/gcc-14.2.1/temp/build.log"), 23);
+        write(&base.join("host/sys-libs/zlib-1.3.1/build.log"), 18);
+
+        let found: Vec<String> = collect(base).into_iter().map(|l| l.label).collect();
+        assert_eq!(found, vec!["host/sys-libs/zlib-1.3.1".to_string()]);
+    }
+
+    // A build still running holds `.builddir.lock` for its whole phase chain,
+    // and is still appending to the log this would delete.
+    #[test]
+    fn collect_skips_a_work_dir_whose_builddir_lock_is_held() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = camino::Utf8Path::from_path(dir.path()).unwrap();
+        let live = base.join("host/sys-libs/zlib-1.3.1");
+        write(&live.join("build.log"), 10);
+        write(&base.join("host/app-misc/done-1.0/build.log"), 10);
+
+        let lock = live.join(".builddir.lock");
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(lock.as_std_path())
+            .unwrap();
+        rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).unwrap();
+
+        let found: Vec<String> = collect(base).into_iter().map(|l| l.label).collect();
+        assert_eq!(
+            found,
+            vec!["host/app-misc/done-1.0".to_string()],
+            "a locked work dir is a live build"
+        );
+
+        // Once the build is done the log becomes collectable.
+        drop(f);
+        assert_eq!(collect(base).len(), 2);
     }
 
     #[test]

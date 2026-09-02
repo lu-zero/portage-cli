@@ -107,6 +107,17 @@ impl MetadataCache for DirMetadataCache {
             .map_err(|e| util::io_err(parent, e))?;
         std::io::Write::write_all(&mut tmp, entry.serialize().as_bytes())
             .map_err(|e| util::io_err(&path, e))?;
+        // `NamedTempFile` creates 0600 and `persist` keeps it; the previous
+        // `fs::write` produced 0644. Portage writes these world-readable, and
+        // `get` turns a permission error into a hard `Err` rather than a cache
+        // miss, so a root-run `em regen` would break every non-root consumer.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = tmp
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o644));
+        }
         tmp.persist(path.as_std_path())
             .map_err(|e| util::io_err(&path, e.error))?;
         self.populated.store(1, Ordering::Relaxed);

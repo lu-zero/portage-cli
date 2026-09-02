@@ -1,12 +1,15 @@
 //! Graceful interrupt: stop starting work, let what is running finish
 //!
 //! `em` installs no other signal handlers — Ctrl+C on a merge otherwise kills
-//! the process outright, mid-phase or mid-qmerge, and the terminal delivers
-//! the same signal to every build child at the same instant.
+//! the process outright, mid-phase or mid-qmerge. Note this only makes `em`
+//! itself graceful: build children share its process group, so a *terminal*
+//! Ctrl+C still SIGINTs `gcc`/`make` directly. The "let what is running
+//! finish" property therefore holds for `kill -INT`/`SIGTERM`, not for the
+//! keystroke.
 //!
-//! The first `SIGINT`/`SIGTERM` sets a flag both merge loops check before
-//! dequeuing the *next* package: nothing new starts, and whatever is already
-//! building runs to completion. That is deliberately not a cancellation — a
+//! The first `SIGINT`/`SIGTERM` sets a flag every package loop checks before
+//! starting the *next* one — the two merge loops and the unmerge batch:
+//! nothing new starts, and whatever is already running finishes. That is deliberately not a cancellation — a
 //! package interrupted between its collision check and its VDB entry is the
 //! failure mode the merge critical section exists to avoid, and declining to
 //! start one is free where unwinding one is not.
@@ -25,7 +28,9 @@ static REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Whether a graceful stop has been requested
 ///
-/// Both merge loops consult this before starting another package.
+/// Consulted before starting the next package by both merge loops and by the
+/// unmerge batch — every loop `will_build` arms the handler for must check it,
+/// or the notice claims the run is winding down while work continues.
 pub(crate) fn requested() -> bool {
     REQUESTED.load(Ordering::Relaxed)
 }

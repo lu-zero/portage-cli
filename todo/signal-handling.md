@@ -109,8 +109,11 @@ The three questions this note previously listed as open are answered:
 - A stale `-MERGING-` dir is cleared before reuse, so fields from an earlier
   crashed merge cannot survive into the new entry.
 - `republishing_replaces_the_previous_entry_and_leaves_no_scratch_dirs`
-  covers the rebuild path and asserts no `-MERGING-`/`-REPLACING-` dirs are
-  left behind.
+  covers the rebuild path and asserts no `-MERGING-` dirs are left behind.
+  The displaced entry is named `-MERGING-<pf>-old` rather than
+  `-REPLACING-<pf>`: portage only knows `MERGING_IDENTIFIER = "-MERGING-"`
+  and matches it as `-MERGING-.*`, so anything outside that pattern makes
+  real portage and `equery` print "Invalid db entry" on every VDB scan.
 
 **Duplication to settle:** the dance now exists twice — here and in
 `portage_repo::cache::swap_dir_target`. `portage-repo` depends on
@@ -129,7 +132,7 @@ a local extraction instead.
 
 **Live-verified 2026-09-02:** a real `em --root` merge of
 `sys-apps/gentoo-functions` published a complete 31-field entry with no
-`-MERGING-`/`-REPLACING-` left behind, and a second merge of the same cpv
+`-MERGING-` scratch left behind, and a second merge of the same cpv
 exercised the republish path with the same result.
 
 ## 3. Suspend time inflates a recorded duration — narrower than it looks

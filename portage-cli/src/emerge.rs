@@ -1254,6 +1254,14 @@ async fn execute_unmerge_batch(
 
     let mut failures = 0usize;
     for pkg in packages {
+        // Removal is the destructive half of `em`, and `will_build` arms the
+        // interrupt handler for `-C`/`--depclean` too — without this check the
+        // handler announces "starting no new ones" while this loop keeps
+        // deleting packages at full speed.
+        if crate::interrupt::requested() {
+            crate::style::warn_line!("interrupted — stopping before {pkg}");
+            break;
+        }
         println!(">>> {gerund} {pkg}...");
         if let Err(e) = ebuild::unmerge_standalone(
             &mut shell,

@@ -254,21 +254,41 @@ impl Cli {
         "/var/db/repos/gentoo".to_string()
     }
 
-    /// Repositories to walk for `em search`
+    /// Repositories this invocation's configuration actually names, or `None`
+    /// when there is no usable `repos.conf`
     ///
-    /// Honours `--repo` when set; otherwise returns every entry from `repos.conf` (main first).
-    pub fn search_repos(&self) -> Vec<std::path::PathBuf> {
+    /// The distinction matters for anything destructive: `search_repos`
+    /// substitutes the host tree so a query still returns something, but a
+    /// command that *deletes* based on "what the tree references" must not
+    /// quietly answer from a different system's tree than the one it was
+    /// pointed at.
+    pub(crate) fn configured_repos(&self) -> Option<Vec<std::path::PathBuf>> {
         if let Some(p) = &self.repo {
-            return vec![std::path::PathBuf::from(p)];
+            return Some(vec![std::path::PathBuf::from(p)]);
         }
         match self.roots().repos_conf() {
-            Ok(rc) if !rc.repos().is_empty() => rc
-                .repos()
-                .iter()
-                .filter_map(|e| e.location.as_path().map(std::path::PathBuf::from))
-                .collect(),
-            _ => vec![std::path::PathBuf::from("/var/db/repos/gentoo")],
+            Ok(rc) if !rc.repos().is_empty() => Some(
+                rc.repos()
+                    .iter()
+                    .filter_map(|e| e.location.as_path().map(std::path::PathBuf::from))
+                    .collect(),
+            ),
+            _ => None,
         }
+    }
+
+    /// Repositories to walk for `em search`
+    ///
+    /// Honours `--repo` when set; otherwise every entry from `repos.conf`
+    /// (main first), falling back to the host's own tree so a query on a
+    /// misconfigured root still answers.
+    //
+    // That fallback is why a *deleting* caller must use `configured_repos`
+    // instead: substituting the host tree there decides what is unreferenced
+    // from a different system than the one it was pointed at.
+    pub fn search_repos(&self) -> Vec<std::path::PathBuf> {
+        self.configured_repos()
+            .unwrap_or_else(|| vec![std::path::PathBuf::from("/var/db/repos/gentoo")])
     }
 
     /// The active applet's own [`MergeFlags`], or the all-`false`/`None` default

@@ -222,12 +222,14 @@ fn distdir(globals: &Cli) -> Utf8PathBuf {
 fn referenced_distfiles(globals: &Cli, deep: bool) -> Result<std::collections::HashSet<String>> {
     let mut wanted = std::collections::HashSet::new();
     let installed = deep.then(|| installed_cpns(globals)).transpose()?;
+    let repos = configured_repos_or_bail(globals)?;
+    let mut unmanifested = 0usize;
 
-    for repo in globals.search_repos() {
+    for repo in repos {
         let Ok(repo) = Utf8PathBuf::from_path_buf(repo) else {
             continue;
         };
-        for manifest in package_manifests(&repo, installed.as_ref()) {
+        for manifest in package_manifests(&repo, installed.as_ref(), &mut unmanifested) {
             let Ok(text) = std::fs::read_to_string(manifest.as_std_path()) else {
                 continue;
             };
@@ -241,6 +243,19 @@ fn referenced_distfiles(globals: &Cli, deep: bool) -> Result<std::collections::H
             }
         }
     }
+    if unmanifested > 0 {
+        // Warn rather than refuse: on a stock ::gentoo this is dominated by
+        // live (`-9999`) ebuilds, whose `SRC_URI` sits in a `${PV}` branch a
+        // text match cannot resolve and which fetch from git anyway, so they
+        // have no distfile to lose. The case that does matter is a
+        // thin-manifest overlay with real distfiles, which this cannot see —
+        // reading the *metadata cache*'s evaluated `SRC_URI` is the actual
+        // answer, as `em mirrordist` already does.
+        crate::style::warn_line!(
+            "{unmanifested} package(s) have ebuilds but no Manifest; any distfile only they \
+             reference is not in the keep set — check with -p before removing"
+        );
+    }
     Ok(wanted)
 }
 
@@ -249,8 +264,10 @@ fn referenced_distfiles(globals: &Cli, deep: bool) -> Result<std::collections::H
 fn package_manifests(
     repo: &Utf8Path,
     only: Option<&std::collections::HashSet<(String, String)>>,
+    unmanifested: &mut usize,
 ) -> Vec<Utf8PathBuf> {
     let mut out = Vec::new();
+    let categories = declared_categories(repo);
     let Ok(cats) = std::fs::read_dir(repo.as_std_path()) else {
         return out;
     };
@@ -259,9 +276,13 @@ fn package_manifests(
             continue;
         }
         let cat_name = cat.file_name().to_string_lossy().into_owned();
-        // Skip the repo's own non-category directories rather than stat'ing
-        // every package under `metadata/`, `profiles/`, `eclass/`, `.git`.
-        if cat_name.starts_with('.') || !cat_name.contains('-') && cat_name != "virtual" {
+        // Skip the repo's own non-category directories (`metadata/`,
+        // `profiles/`, `eclass/`, `.git`) using the repo's *declared*
+        // categories. The previous heuristic — "contains a hyphen, or is
+        // `virtual`" — silently skipped any category an overlay declares
+        // without a hyphen, and every distfile under it then looked
+        // unreferenced.
+        if !categories.contains(&cat_name) {
             continue;
         }
         let Ok(pkgs) = std::fs::read_dir(cat.path()) else {
@@ -273,14 +294,75 @@ fn package_manifests(
                 continue;
             }
             let m = pkg.path().join("Manifest");
-            if m.is_file()
-                && let Ok(m) = Utf8PathBuf::from_path_buf(m)
-            {
-                out.push(m);
+            if m.is_file() {
+                if let Ok(m) = Utf8PathBuf::from_path_buf(m) {
+                    out.push(m);
+                }
+            } else if declares_src_uri(&pkg.path()) {
+                // Ebuilds but no `Manifest`, *and* something to fetch: its
+                // distfiles are invisible here, so they would look
+                // unreferenced. Count it rather than silently narrowing the
+                // reference set.
+                //
+                // A missing Manifest is normal and harmless for the ~1400
+                // metadata-only packages in ::gentoo (`acct-group`,
+                // `acct-user`, `virtual`) — nothing to hash, nothing to miss.
+                *unmanifested += 1;
             }
         }
     }
     out
+}
+
+/// Whether any ebuild in `dir` declares a non-empty `SRC_URI`
+///
+/// Text-matched rather than resolved: this only has to answer "could this
+/// package have distfiles at all". It will miss a `SRC_URI` contributed
+/// entirely by an eclass, which is why the count it feeds is a refusal rather
+/// than a silent narrowing — a wrong answer here stops the sweep instead of
+/// deleting something.
+fn declares_src_uri(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".ebuild"))
+        .any(|e| {
+            std::fs::read_to_string(e.path()).is_ok_and(|t| {
+                t.lines().any(|l| {
+                    let l = l.trim_start();
+                    l.starts_with("SRC_URI=")
+                        && !matches!(l.trim_end(), "SRC_URI=\"\"" | "SRC_URI=''" | "SRC_URI=")
+                })
+            })
+        })
+}
+
+/// A repo's `profiles/categories`, or every hyphenated directory name plus
+/// `virtual` when it has none
+///
+/// Reading the file is what portage does; the fallback only exists for a repo
+/// that omits it, where guessing is still better than walking `eclass/`.
+fn declared_categories(repo: &Utf8Path) -> std::collections::HashSet<String> {
+    if let Ok(text) = std::fs::read_to_string(repo.join("profiles/categories").as_std_path()) {
+        let set: std::collections::HashSet<String> = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(str::to_owned)
+            .collect();
+        if !set.is_empty() {
+            return set;
+        }
+    }
+    std::fs::read_dir(repo.as_std_path())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.') && (n.contains('-') || n == "virtual"))
+        .collect()
 }
 
 /// `(category, package)` of everything installed in the target root
@@ -362,7 +444,7 @@ async fn pkg_candidates(
     let keep = if opts.deep {
         installed_cpvs(globals)?
     } else {
-        tree_cpvs(globals)
+        tree_cpvs(globals)?
     };
     if keep.is_empty() {
         anyhow::bail!("no packages found to compare against — refusing to clean {pkgdir}");
@@ -437,13 +519,15 @@ fn installed_cpvs(globals: &Cli) -> Result<std::collections::HashSet<String>> {
 }
 
 /// Every cpv that still has an ebuild in some configured repo
-fn tree_cpvs(globals: &Cli) -> std::collections::HashSet<String> {
+fn tree_cpvs(globals: &Cli) -> Result<std::collections::HashSet<String>> {
     let mut out = std::collections::HashSet::new();
-    for repo in globals.search_repos() {
+    let repos = configured_repos_or_bail(globals)?;
+    let mut unmanifested = 0usize;
+    for repo in repos {
         let Ok(repo) = Utf8PathBuf::from_path_buf(repo) else {
             continue;
         };
-        for manifest in package_manifests(&repo, None) {
+        for manifest in package_manifests(&repo, None, &mut unmanifested) {
             let Some(pkg_dir) = manifest.parent() else {
                 continue;
             };
@@ -465,7 +549,23 @@ fn tree_cpvs(globals: &Cli) -> std::collections::HashSet<String> {
             }
         }
     }
-    out
+    Ok(out)
+}
+
+/// The configured repos, or an error rather than the host-tree fallback
+///
+/// `search_repos`' fallback is right for a query and wrong here: it would let
+/// `em clean --root DIR` compute "what the tree references" from the *host's*
+/// tree, so the empty-reference-set guard below could never fire on the very
+/// misconfiguration it exists for.
+fn configured_repos_or_bail(globals: &Cli) -> Result<Vec<std::path::PathBuf>> {
+    globals.configured_repos().with_context(|| {
+        format!(
+            "no usable repos.conf for {} — refusing to decide what is unreferenced \
+             from another root's tree",
+            globals.roots().merge_root()
+        )
+    })
 }
 
 #[cfg(test)]

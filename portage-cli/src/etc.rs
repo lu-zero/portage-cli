@@ -157,19 +157,30 @@ fn classify(sidecar: &Utf8Path, target: &Utf8Path) -> Kind {
     Kind::Differs
 }
 
-/// Lines with comments and blank lines dropped and whitespace collapsed —
-/// what `dispatch-conf`'s auto-merge treats as "no real change"
+/// The lines that carry meaning, for the "comments/whitespace only" test
+///
+/// Follows real `dispatch-conf`'s `replace-wscomments` rule
+/// (`bin/dispatch-conf`): a differing line counts as insignificant only when
+/// it is *entirely* blank or a **whole-line** comment — `^\s*#`. Whitespace
+/// *amount* within a kept line is normalised, which is what portage's own
+/// `diff -Bbua` does with `-b`.
+///
+/// The earlier version truncated every line at its first `#`, which silently
+/// classified `psk="secret#1"` → `psk="secret#2"` as a comment change and let
+/// `--auto` overwrite it. Truncation is the bug; whole-line filtering is not.
+///
+/// Note this shares one property with portage: `#!/bin/sh` and sudoers'
+/// `#includedir` *are* whole-line comments, so a change confined to them
+/// counts as insignificant here too. That is why `--auto` is opt-in — as
+/// `replace-wscomments=no` is portage's shipped default.
 fn significant_lines(bytes: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(bytes)
         .lines()
-        .map(|l| {
-            let l = match l.find('#') {
-                Some(i) => &l[..i],
-                None => l,
-            };
-            l.split_whitespace().collect::<Vec<_>>().join(" ")
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.is_empty() && !t.starts_with('#')
         })
-        .filter(|l| !l.is_empty())
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
         .collect()
 }
 
@@ -234,6 +245,7 @@ fn resolve_batch(pending: &[Pending], opts: &EtcOpts, globals: &Cli) -> Result<(
         println!(">>> Nothing to do.");
         return Ok(());
     }
+    let mut done = 0usize;
 
     // `--auto` keeps the *new* file for a trivial difference (it is the
     // package's current comments) and simply drops an identical one.
@@ -250,29 +262,41 @@ fn resolve_batch(pending: &[Pending], opts: &EtcOpts, globals: &Cli) -> Result<(
         if globals.pretend {
             continue;
         }
-        if verb == "install" {
-            install(p)?;
+        // Best-effort per file, like `em clean`'s sweep: one sidecar whose
+        // target cannot be replaced must not cost the user every other
+        // resolution in the batch.
+        let outcome = if verb == "install" {
+            install(p)
         } else {
             std::fs::remove_file(p.sidecar.as_std_path())
-                .with_context(|| format!("removing {}", p.sidecar))?;
+                .with_context(|| format!("removing {}", p.sidecar))
+        };
+        match outcome {
+            Ok(()) => done += 1,
+            Err(e) => crate::style::warn_line!("{e:#}"),
         }
     }
     if globals.pretend {
         println!(">>> Would resolve {} file(s).", selected.len());
     } else {
-        println!(">>> Resolved {} file(s).", selected.len());
+        println!(">>> Resolved {done} of {} file(s).", selected.len());
     }
     Ok(())
 }
 
-/// Move `sidecar` over `target`, keeping the target's permissions
+/// Move `sidecar` over `target`
 ///
-/// The target's mode wins because a package's `._cfg` copy carries whatever
-/// the image had, while the live file may have been deliberately tightened
-/// (a credentials file left `0600`, say).
+/// A plain rename, which keeps the *sidecar's* mode and ownership — and the
+/// sidecar carries the package's own, because `walk_image` applies the image's
+/// permissions when it writes the divert. That is what real `dispatch-conf`
+/// does for use-new (`os.rename(newconf, curconf)`, no `chmod`): the package's
+/// intent for its config file wins over whatever the live copy had.
 fn install(p: &Pending) -> Result<()> {
-    if let Ok(meta) = std::fs::metadata(p.target.as_std_path()) {
-        let _ = std::fs::set_permissions(p.sidecar.as_std_path(), meta.permissions());
+    // A `._cfg0000_..`-shaped name resolves its target to a directory, which
+    // `rename` refuses with EBUSY/ENOTEMPTY anyway — reject it up front so the
+    // message names the real problem.
+    if p.target.is_dir() {
+        anyhow::bail!("{} names a directory, not a config file", p.target);
     }
     std::fs::rename(p.sidecar.as_std_path(), p.target.as_std_path())
         .with_context(|| format!("installing {} over {}", p.sidecar, p.target))
@@ -409,8 +433,14 @@ fn spawn_editor(path: &Utf8Path) -> Result<()> {
 
 /// Interactive side-by-side merge into the target, `sdiff --output`
 ///
-/// Returns whether the merge completed — a user who quits `sdiff` leaves the
-/// sidecar in place so the file can be revisited.
+/// **`sdiff` exits 1 whenever the two inputs differed**, which is every real
+/// merge — only byte-identical inputs give 0. Treating non-zero as failure
+/// therefore discarded every completed merge. Real `dispatch-conf` maps
+/// `status < 2` to success (`bin/dispatch-conf`), and 2-or-more to "Failure
+/// running 'merge' command"; this follows it.
+///
+/// Returns whether the merge completed — on failure the sidecar is left in
+/// place so the file can be revisited.
 fn sdiff_merge(p: &Pending) -> Result<bool> {
     let tmp = p.target.with_file_name(format!(
         ".em-merge-{}",
@@ -422,24 +452,34 @@ fn sdiff_merge(p: &Pending) -> Result<bool> {
         .arg(p.target.as_std_path())
         .arg(p.sidecar.as_std_path())
         .status();
-    match status {
-        Ok(s) if s.success() => {
-            std::fs::rename(tmp.as_std_path(), p.target.as_std_path())
-                .with_context(|| format!("installing the merge result over {}", p.target))?;
-            let _ = std::fs::remove_file(p.sidecar.as_std_path());
-            Ok(true)
-        }
-        Ok(_) => {
-            let _ = std::fs::remove_file(tmp.as_std_path());
-            println!("    merge abandoned; {} left in place", p.sidecar);
-            Ok(false)
-        }
+    let code = match status {
+        Ok(s) => s.code().unwrap_or(2),
         Err(e) => {
             let _ = std::fs::remove_file(tmp.as_std_path());
             crate::style::warn_line!("cannot run sdiff: {e}");
-            Ok(false)
+            return Ok(false);
         }
+    };
+    if code >= 2 {
+        let _ = std::fs::remove_file(tmp.as_std_path());
+        crate::style::warn_line!("sdiff failed ({code}); {} left in place", p.sidecar);
+        return Ok(false);
     }
+
+    // `sdiff` created `tmp` with the invoking umask, so carry the sidecar's
+    // mode *and* ownership onto it before it becomes the live file — the same
+    // `chmod`/`chown` from `lstat(conf["new"])` dispatch-conf applies to its
+    // own merge result. Without this a `0600` root-owned config comes back
+    // world-readable.
+    if let Ok(meta) = std::fs::metadata(p.sidecar.as_std_path()) {
+        use std::os::unix::fs::MetadataExt;
+        let _ = std::fs::set_permissions(tmp.as_std_path(), meta.permissions());
+        let _ = std::os::unix::fs::chown(tmp.as_std_path(), Some(meta.uid()), Some(meta.gid()));
+    }
+    std::fs::rename(tmp.as_std_path(), p.target.as_std_path())
+        .with_context(|| format!("installing the merge result over {}", p.target))?;
+    let _ = std::fs::remove_file(p.sidecar.as_std_path());
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -460,16 +500,36 @@ mod tests {
         assert_eq!(parse_cfg_name(".cfg0000_hosts"), None);
     }
 
-    // The distinction `--auto` rests on: a change confined to comments or
-    // blank lines is not a change a human needs to adjudicate.
+    // The distinction `--auto` rests on. A whole-line comment or a blank line
+    // is insignificant; a `#` *inside* a value is not, and truncating there
+    // silently classified a changed secret as a comment edit.
     #[test]
-    fn comment_and_whitespace_only_edits_are_trivial() {
+    fn only_whole_line_comments_and_blank_lines_are_insignificant() {
+        // Comment text, blank lines and whitespace amount: insignificant.
         let a = b"# old comment\nFOO=\"1\"\n\nBAR=2\n";
-        let b = b"# NEW comment\n\n\nFOO=\"1\"\nBAR=2   # trailing\n";
+        let b = b"# NEW comment\n\n\nFOO=\"1\"\nBAR=2\n";
         assert_eq!(significant_lines(a), significant_lines(b));
+        // An indented comment is still a whole-line comment.
+        assert_eq!(
+            significant_lines(b"   # x\nFOO=1\n"),
+            significant_lines(b"FOO=1\n")
+        );
 
-        let c = b"FOO=\"2\"\nBAR=2\n";
-        assert_ne!(significant_lines(a), significant_lines(c));
+        // A `#` inside a quoted value is not a comment — the bug this fixes.
+        assert_ne!(
+            significant_lines(b"psk=\"secret#1\"\n"),
+            significant_lines(b"psk=\"secret#2\"\n")
+        );
+        // A real value change stays significant.
+        assert_ne!(
+            significant_lines(a),
+            significant_lines(b"FOO=\"2\"\nBAR=2\n")
+        );
+        // A dropped non-comment line stays significant.
+        assert_ne!(
+            significant_lines(b"FOO=1\nBAR=2\n"),
+            significant_lines(b"FOO=1\n")
+        );
     }
 
     #[test]
@@ -520,8 +580,13 @@ mod tests {
         assert_eq!(names, vec!["hosts"], "masked subdirectory must be skipped");
     }
 
+    // Parity with dispatch-conf's use-new (`os.rename`, no chmod): the
+    // *sidecar's* mode survives, because it is the package's own — walk_image
+    // applies the image permissions when it writes the divert. An earlier
+    // version copied the target's mode instead, which was invented, not
+    // portage behaviour.
     #[test]
-    fn install_keeps_the_targets_permissions() {
+    fn install_keeps_the_packages_permissions_not_the_targets() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let base = camino::Utf8Path::from_path(dir.path()).unwrap();
@@ -533,7 +598,7 @@ mod tests {
         std::fs::write(sidecar.as_std_path(), "new\n").unwrap();
         std::fs::set_permissions(
             sidecar.as_std_path(),
-            std::fs::Permissions::from_mode(0o644),
+            std::fs::Permissions::from_mode(0o640),
         )
         .unwrap();
 
@@ -556,6 +621,9 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(mode, 0o600, "a tightened live file must not be loosened");
+        assert_eq!(
+            mode, 0o640,
+            "the package's mode must survive, as in dispatch-conf"
+        );
     }
 }
