@@ -90,6 +90,24 @@ last step. Matching that directory-naming convention is an interface match,
 not a source copy, so it is fine under the licensing rule. A stale
 `-MERGING-` dir then becomes detectable and discardable on the next run.
 
+`pkg_dir` is used in only four places inside `register` (the `create_dir_all`,
+`write_field`'s closure, `field_cache::invalidate_entry`, and
+`InstalledPackage::from_dir`), so the change itself is small. Three things to
+settle while doing it:
+
+- `rename` onto an existing non-empty directory fails `ENOTEMPTY`, so a
+  re-merge of the same cpv has to unlink the final dir first. That shrinks the
+  vulnerable window from ~20 field writes to one unlink plus one rename, but
+  does not close it — say so rather than claiming atomicity.
+- Clear a stale `-MERGING-` dir before writing, or leftover fields from a
+  previous crash survive into the new entry.
+- Verify VDB enumeration skips it. `Category::packages` runs each directory
+  name through `parse_cpv(&self.name, pf)?`, and `-MERGING-bash-5.3` would
+  parse as pn `-MERGING-bash`, which is not a legal PMS package name — so it
+  *should* be dropped, but that is an assumption until there is a test for it.
+  Real portage's VDB carries these directories, so external tools already
+  tolerate them.
+
 ## 3. Suspend time pollutes the ETA history
 
 `ActivityEvent::now()` is `SystemTime::now()` — wall clock. Package
