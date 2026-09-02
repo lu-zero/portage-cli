@@ -226,9 +226,9 @@ fn edit_valued(
             _ => {
                 crate::style::error_line!("atom found in multiple files:");
                 for &i in &matches {
-                    eprintln!("  {}", all[i].0);
+                    crate::style::ewarn_sub_bullet!("{}", all[i].0);
                 }
-                eprintln!("Specify --path to edit one explicitly.");
+                tracing::info!("specify --path to edit one explicitly");
                 bail!("ambiguous entries for {atom}");
             }
         }
@@ -267,12 +267,12 @@ fn update_valued_entry(
         for e in &all_entries {
             let values: Vec<&str> = e.values().collect();
             if values.is_empty() {
-                eprintln!("  {}", e.atom_raw());
+                crate::style::ewarn_sub_bullet!("{}", e.atom_raw());
             } else {
-                eprintln!("  {} {}", e.atom_raw(), values.join(" "));
+                crate::style::ewarn_sub_bullet!("{} {}", e.atom_raw(), values.join(" "));
             }
         }
-        eprintln!("Use a versioned atom to edit a specific entry.");
+        tracing::info!("use a versioned atom to edit a specific entry");
         bail!("ambiguous CPN for {atom}");
     }
 
@@ -604,9 +604,9 @@ fn edit_mask(
                 _ => {
                     crate::style::error_line!("atom found in multiple files:");
                     for &i in &matches {
-                        eprintln!("  {}", all[i].0);
+                        crate::style::ewarn_sub_bullet!("{}", all[i].0);
                     }
-                    eprintln!("Specify --path to edit one explicitly.");
+                    tracing::info!("specify --path to edit one explicitly");
                     bail!("ambiguous mask entries for {atom}");
                 }
             }

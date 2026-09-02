@@ -109,9 +109,9 @@ async fn run_inner(globals: &Cli, opts: &QuickpkgOpts) -> Result<()> {
         match portage_binpkg::index_pkgdir(&pkgdir, &chost) {
             Ok((n, skipped)) => {
                 if skipped > 0 {
-                    eprintln!(">>> Packages index: {n} entries ({skipped} skipped)");
+                    println!(">>> Packages index: {n} entries ({skipped} skipped)");
                 } else {
-                    eprintln!(">>> Packages index: {n} entries -> {pkgdir}/Packages");
+                    println!(">>> Packages index: {n} entries -> {pkgdir}/Packages");
                 }
             }
             Err(e) => crate::style::warn_line!("could not refresh Packages index: {e:#}"),

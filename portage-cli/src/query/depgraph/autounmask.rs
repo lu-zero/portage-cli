@@ -261,7 +261,7 @@ fn write_kind(
         };
         let new_content = merge_content(&existing, lines);
         std::fs::write(&path, &new_content).with_context(|| format!("failed to write {path}"))?;
-        eprintln!("Written: {path}");
+        tracing::info!("wrote {path}");
     }
     Ok(())
 }

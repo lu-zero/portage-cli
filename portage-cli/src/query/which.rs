@@ -25,7 +25,7 @@ pub fn run(
 
         match best_ebuild_path(&ebuilds, &dep) {
             Some(path) => println!("{path}"),
-            None => eprintln!("em: no ebuild found for '{raw}'"),
+            None => crate::style::warn_line!("no ebuild found for '{raw}'"),
         }
     }
     Ok(())

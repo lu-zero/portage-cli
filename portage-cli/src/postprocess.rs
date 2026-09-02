@@ -176,7 +176,7 @@ pub fn post_process_image(image_dir: &Utf8Path, cfg: &PostProcess) -> Result<Pos
             compressed.insert(installed.clone());
             stats.compressed += 1;
         } else {
-            eprintln!("ecompress: {} failed on {installed}", cfg.compress_cmd);
+            crate::style::warn_line!("ecompress: {} failed on {installed}", cfg.compress_cmd);
         }
     }
 
@@ -270,7 +270,7 @@ pub fn post_process_image(image_dir: &Utf8Path, cfg: &PostProcess) -> Result<Pos
         if status.success() {
             stats.stripped += 1;
         } else {
-            eprintln!("estrip: {} failed on {installed}", cfg.strip_cmd);
+            crate::style::warn_line!("estrip: {} failed on {installed}", cfg.strip_cmd);
         }
     }
 

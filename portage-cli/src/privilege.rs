@@ -373,7 +373,10 @@ fn build_worker_command(
     let exe = std::env::current_exe()?;
     let mut cmd = match backend {
         Backend::Sudo => {
-            eprintln!(">>> install/qmerge under sudo (real root)");
+            tracing::info!(
+                target: portage_repo::ACTION_TARGET,
+                ">>> install/qmerge under sudo (real root)"
+            );
             let mut c = std::process::Command::new("sudo");
             c.arg("-E").arg(&exe);
             c
@@ -463,7 +466,7 @@ fn self_invocation() -> Option<(std::path::PathBuf, Vec<std::ffi::OsString>)> {
     match std::env::current_exe() {
         Ok(exe) => Some((exe, std::env::args_os().skip(1).collect())),
         Err(e) => {
-            eprintln!("em: cannot locate own binary to re-exec: {e}");
+            crate::style::error_line!("cannot locate own binary to re-exec: {e}");
             None
         }
     }
@@ -473,7 +476,10 @@ fn reexec_sudo() -> i32 {
     let Some((exe, args)) = self_invocation() else {
         return 1;
     };
-    eprintln!(">>> unprivileged build — re-running under sudo (real root)");
+    tracing::info!(
+        target: portage_repo::ACTION_TARGET,
+        ">>> unprivileged build — re-running under sudo (real root)"
+    );
     // `-E` preserves the environment (USE overrides, etc.); the sudoers policy may
     // still strip it, in which case the build falls back to make.conf config. The
     // root child detects euid==0 and runs in-process with real chowns.
@@ -486,7 +492,7 @@ fn reexec_sudo() -> i32 {
     {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("em: failed to re-exec under sudo: {e}");
+            crate::style::error_line!("failed to re-exec under sudo: {e}");
             1
         }
     }
@@ -524,7 +530,10 @@ mod fakeroost {
         let Some((exe, args)) = super::self_invocation() else {
             return 1;
         };
-        eprintln!(">>> unprivileged build — running under fakeroost (fake root)");
+        tracing::info!(
+            target: portage_repo::ACTION_TARGET,
+            ">>> unprivileged build — running under fakeroost (fake root)"
+        );
         match Command::new(exe)
             .args(args)
             .env(super::ACTIVE_ENV, "fakeroost")
@@ -533,7 +542,7 @@ mod fakeroost {
         {
             Ok(s) => s.code().unwrap_or(1),
             Err(e) => {
-                eprintln!("em: failed to start the fakeroost supervisor: {e}");
+                crate::style::error_line!("failed to start the fakeroost supervisor: {e}");
                 1
             }
         }
@@ -559,7 +568,10 @@ mod pseudoroot {
         let Some((exe, args)) = super::self_invocation() else {
             return 1;
         };
-        eprintln!(">>> unprivileged build — running under pseudoroot (LD_PRELOAD fake root)");
+        tracing::info!(
+            target: portage_repo::ACTION_TARGET,
+            ">>> unprivileged build — running under pseudoroot (LD_PRELOAD fake root)"
+        );
         match Command::new(exe)
             .args(args)
             .env(super::ACTIVE_ENV, "pseudoroot")
@@ -568,7 +580,7 @@ mod pseudoroot {
         {
             Ok(s) => s.code().unwrap_or(1),
             Err(e) => {
-                eprintln!("em: failed to start the pseudoroot session: {e}");
+                crate::style::error_line!("failed to start the pseudoroot session: {e}");
                 1
             }
         }
@@ -695,8 +707,8 @@ mod hakoniwa {
 
     pub fn reexec(cli: &Cli) -> i32 {
         if !userns_available() {
-            eprintln!(
-                "em: hakoniwa requires user namespaces and newuidmap/newgidmap on PATH; \
+            crate::style::error_line!(
+                "hakoniwa requires user namespaces and newuidmap/newgidmap on PATH; \
                  try --privilege pseudoroot, fakeroost, or sudo"
             );
             return 1;
@@ -705,7 +717,7 @@ mod hakoniwa {
             return 1;
         };
         let Some(program) = exe.to_str() else {
-            eprintln!("em: hakoniwa cannot run a non-UTF-8 executable path");
+            crate::style::error_line!("hakoniwa cannot run a non-UTF-8 executable path");
             return 1;
         };
 
@@ -717,7 +729,7 @@ mod hakoniwa {
         // (builds exec setuid helpers). The writable build trees (merge root, /tmp,
         // /var/tmp, …) are bound by bind_build_tree.
         if let Err(e) = container.rootfs("/") {
-            eprintln!("em: hakoniwa rootfs setup failed: {e}");
+            crate::style::error_line!("hakoniwa rootfs setup failed: {e}");
             return 1;
         }
         container
@@ -747,7 +759,7 @@ mod hakoniwa {
         let mut cmd = container.command(program);
         for arg in args {
             let Some(s) = arg.to_str() else {
-                eprintln!("em: hakoniwa cannot forward a non-UTF-8 argument");
+                crate::style::error_line!("hakoniwa cannot forward a non-UTF-8 argument");
                 return 1;
             };
             cmd.arg(s);
@@ -757,18 +769,21 @@ mod hakoniwa {
             cmd.env(&key, &val);
         }
 
-        eprintln!(">>> unprivileged build — running under hakoniwa (userns mapped root)");
+        tracing::info!(
+            target: portage_repo::ACTION_TARGET,
+            ">>> unprivileged build — running under hakoniwa (userns mapped root)"
+        );
         match cmd.status() {
             Ok(status) => {
                 // hakoniwa reports container-setup/exec failures via `reason` with a
                 // non-success code — surface it instead of swallowing it.
                 if status.code != 0 && !status.reason.is_empty() {
-                    eprintln!("em: hakoniwa: {}", status.reason);
+                    crate::style::error_line!("hakoniwa: {}", status.reason);
                 }
                 status.code
             }
             Err(e) => {
-                eprintln!("em: failed to start the hakoniwa container: {e}");
+                crate::style::error_line!("failed to start the hakoniwa container: {e}");
                 1
             }
         }

@@ -22,7 +22,7 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
         let matches = super::matching_ebuilds(&set, vdb, mode, &ebuilds, raw)?;
 
         let Some(best) = matches.last() else {
-            eprintln!("em: no ebuild found for '{raw}'");
+            crate::style::warn_line!("no ebuild found for '{raw}'");
             continue;
         };
         let cpv = best.cpv();

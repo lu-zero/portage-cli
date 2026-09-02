@@ -27,7 +27,7 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
             if cli.info {
                 return crate::info::run(cli).await;
             }
-            eprintln!("em: no atoms or applet specified. Use --help for usage.");
+            crate::style::error_line!("no atoms or applet specified. Use --help for usage.");
             std::process::exit(1);
         }
     }
@@ -121,10 +121,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             .await
         }
         Applet::Maint { command, .. } => run_maint(command, globals).await,
-        Applet::Portageq { command, args } => {
-            eprintln!("portageq: command={} args={:?}", command, args);
-            bail!("not implemented: portageq")
-        }
+        Applet::Portageq { .. } => bail!("not implemented: portageq"),
         Applet::Sync { repos, .. } => maint::sync::run(repos, globals).await,
         Applet::Depclean {
             atoms, merge_flags, ..
@@ -246,10 +243,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             ..
         } => crate::elog::run_read(globals, package.as_deref(), *list, *limit, *delete).await,
         Applet::Log { command, .. } => run_log(command, globals),
-        Applet::Grep { pattern, paths } => {
-            eprintln!("grep: pattern={} paths={:?}", pattern, paths);
-            bail!("not implemented: grep")
-        }
+        Applet::Grep { .. } => bail!("not implemented: grep"),
         Applet::Search {
             all,
             desc,
@@ -278,14 +272,8 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
         Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
         Applet::Stages(args) => crossdev::stage1(args, globals).await,
-        Applet::Dispatch => {
-            eprintln!("dispatch-conf");
-            bail!("not implemented: dispatch-conf")
-        }
-        Applet::Etc => {
-            eprintln!("etc-update");
-            bail!("not implemented: etc-update")
-        }
+        Applet::Dispatch => bail!("not implemented: dispatch-conf"),
+        Applet::Etc => bail!("not implemented: etc-update"),
         Applet::Env { .. } => maint::env::env_update(globals.roots().merge_root()),
         Applet::Emerge(args) => emerge::run_emerge(globals, args).await,
     }

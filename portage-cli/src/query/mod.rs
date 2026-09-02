@@ -109,8 +109,8 @@ fn resolve_ambiguous(
     if let ResolveMode::PreferInstalled = mode
         && let Some((dep, cpn)) = &installed
     {
-        eprintln!(
-            "note: '{C_BOLD}{raw}{C_BOLD:#}' is ambiguous ({}); using installed {C_PKG}{cpn}{C_PKG:#}",
+        tracing::info!(
+            "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous ({}); using installed {C_PKG}{cpn}{C_PKG:#}",
             candidates
                 .iter()
                 .map(|c| format!("{C_PKG}{c}{C_PKG:#}"))

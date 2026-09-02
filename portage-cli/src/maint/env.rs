@@ -123,7 +123,7 @@ pub fn env_update(root: &Utf8Path) -> Result<()> {
         // correct cache even for a foreign-arch `--root` (a cross stage), and
         // doesn't depend on an `ldconfig` being installed/on PATH.
         if let Err(e) = refresh_ld_cache(root) {
-            eprintln!("env-update: ld.so.cache not refreshed: {e:#}");
+            crate::style::warn_line!("env-update: ld.so.cache not refreshed: {e:#}");
         }
     }
 

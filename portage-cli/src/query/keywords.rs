@@ -21,7 +21,7 @@ pub fn run(repo_path: &Path, vdb: Option<&Vdb>, mode: ResolveMode, atoms: &[Stri
         let matches = super::matching_ebuilds(&set, vdb, mode, &ebuilds, raw)?;
 
         if matches.is_empty() {
-            eprintln!("em: no ebuilds found for '{raw}'");
+            crate::style::warn_line!("no ebuilds found for '{raw}'");
             continue;
         }
 

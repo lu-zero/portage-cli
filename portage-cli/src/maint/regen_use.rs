@@ -23,14 +23,14 @@ pub fn run(repo_path: &Utf8Path, output: Option<&str>) -> Result<()> {
             use_db
                 .write_use_local_desc(out_path)
                 .with_context(|| format!("writing {path}"))?;
-            eprintln!("Wrote {flag_count} use flags ({pkg_count} packages) to {path}.");
+            tracing::info!("wrote {flag_count} use flags ({pkg_count} packages) to {path}");
         }
         None => {
             let out_path = repo.path().join("profiles/use.local.desc");
             use_db
                 .write_use_local_desc(&out_path)
                 .with_context(|| format!("writing {out_path}"))?;
-            eprintln!("Wrote {flag_count} use flags ({pkg_count} packages) to {out_path}.");
+            tracing::info!("wrote {flag_count} use flags ({pkg_count} packages) to {out_path}");
         }
     }
     Ok(())

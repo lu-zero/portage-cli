@@ -18,7 +18,7 @@ fn open_repos(repo_paths: &[std::path::PathBuf]) -> Result<Vec<Repository>> {
     for p in repo_paths {
         match crate::repo_open::open(p) {
             Ok(r) => repos.push(r),
-            Err(e) => eprintln!("em: skipping {}: {e}", p.display()),
+            Err(e) => crate::style::warn_line!("skipping {}: {e}", p.display()),
         }
     }
     if repos.is_empty() {

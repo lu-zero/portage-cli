@@ -59,7 +59,7 @@ pub async fn run(
             }
         }
         if targets.is_empty() {
-            eprintln!("em regen: no overlays in repos.conf — nothing to do");
+            tracing::info!("em regen: no overlays in repos.conf — nothing to do");
             return Ok(());
         }
     } else {

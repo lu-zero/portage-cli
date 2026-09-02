@@ -2163,7 +2163,7 @@ async fn run_merge(
         .context("collision check failed")?;
     if !collisions.is_empty() {
         for c in &collisions {
-            eprintln!("collision: {} is already owned by {}", c.path, c.owner);
+            crate::style::warn_line!("collision: {} is already owned by {}", c.path, c.owner);
         }
         bail!(
             "{} file collision(s) detected — aborting merge",

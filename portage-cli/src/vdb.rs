@@ -19,7 +19,7 @@ pub fn query_belongs(vdb: &Vdb, files: &[String]) {
             println!("{}", pkg);
             continue;
         }
-        eprintln!("no package owns '{}'", file_str);
+        crate::style::warn_line!("no package owns '{}'", file_str);
     }
 }
 
@@ -27,7 +27,7 @@ pub fn query_files(vdb: &Vdb, atoms: &[String]) {
     for raw in atoms {
         let matched = find_packages(vdb, raw);
         if matched.is_empty() {
-            eprintln!("no installed package matches '{}'", raw);
+            crate::style::warn_line!("no installed package matches '{}'", raw);
             continue;
         }
         for pkg in matched {
@@ -39,7 +39,7 @@ pub fn query_files(vdb: &Vdb, atoms: &[String]) {
                         }
                     }
                 }
-                Err(e) => eprintln!("{}: {}", pkg, e),
+                Err(e) => crate::style::error_line!("{}: {}", pkg, e),
             }
         }
     }
@@ -49,7 +49,7 @@ pub fn query_size(vdb: &Vdb, atoms: &[String]) -> Result<()> {
     for raw in atoms {
         let matched = find_packages(vdb, raw);
         if matched.is_empty() {
-            eprintln!("no installed package matches '{}'", raw);
+            crate::style::warn_line!("no installed package matches '{}'", raw);
             continue;
         }
         for pkg in matched {

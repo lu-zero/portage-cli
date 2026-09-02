@@ -126,7 +126,7 @@ pub fn run(vdb: &Vdb, fix: bool, root: Option<&Utf8Path>, tree: Option<&TreeView
         return Ok(());
     }
     if counts.unbuildable > 0 {
-        eprintln!(
+        anstream::println!(
             "\n{} installed entr{} kept: still usable, but nothing in the tree can rebuild {}.",
             counts.unbuildable,
             if counts.unbuildable == 1 { "y" } else { "ies" },
@@ -138,7 +138,7 @@ pub fn run(vdb: &Vdb, fix: bool, root: Option<&Utf8Path>, tree: Option<&TreeView
         );
     }
     if removable > 0 && !fix {
-        eprintln!(
+        anstream::println!(
             "{removable} entr{} can be removed. Run with --fix.",
             if removable == 1 { "y" } else { "ies" },
         );

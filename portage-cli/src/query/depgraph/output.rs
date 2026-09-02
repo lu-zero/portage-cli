@@ -852,7 +852,7 @@ pub(super) fn report_dropped_deps(dropped: &[DroppedDep], data: &RepoData, arch:
                 alts.iter().cloned().collect::<Vec<_>>().join(" | ")
             )
         };
-        eprintln!("note: dropped {pkg_str} ({reason}){alt_str}");
+        tracing::info!("dropped {pkg_str} ({reason}){alt_str}");
     }
 }
 

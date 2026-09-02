@@ -826,7 +826,9 @@ async fn act_on_package(a: PackageAction<'_>) -> anyhow::Result<()> {
             }
             Err(e) if enforce_no_source => Err(e),
             Err(e) => {
-                eprintln!(">>> Failed to fetch binpkg {url} — {e:#}; building from source");
+                crate::style::warn_line!(
+                    "failed to fetch binpkg {url} — {e:#}; building from source"
+                );
                 ebuild::build_and_merge(ebuild::BuildAndMerge {
                     ebuild_path: &planned.ebuild_path,
                     cpv: &planned.cpv,
@@ -1128,7 +1130,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             // A strong (`!!`) victim failed to unmerge: it must be gone
             // before its owner can merge at all, so this cannot be deferred
             // — matches the old before-the-whole-plan `?`-abort.
-            eprintln!(">>> Stopping: a required blocker unmerge failed.");
+            crate::style::error_line!("stopping: a required blocker unmerge failed");
             break;
         }
         let entry_roots = entry_roots(planned, run.roots, run.host_roots, run.base_roots);
@@ -1218,7 +1220,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             run_due_unmerges(run.globals, due, &mut failures).await;
         }
         if !keep_going {
-            eprintln!(">>> Stopping (pass --keep-going to continue past failures).");
+            crate::style::error_line!("stopping (pass --keep-going to continue past failures)");
             break;
         }
     }
@@ -1539,8 +1541,8 @@ async fn merge_parallel(
                 );
                 if !keep_going {
                     stop_new = true;
-                    eprintln!(
-                        ">>> Stopping new builds (pass --keep-going to continue past failures)."
+                    crate::style::error_line!(
+                        "stopping new builds (pass --keep-going to continue past failures)"
                     );
                 }
             }

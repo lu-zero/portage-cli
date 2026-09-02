@@ -9,7 +9,7 @@ pub fn run(vdb: &Vdb, atoms: &[String]) -> Result<()> {
     for raw in atoms {
         let matched = find_packages(vdb, raw);
         if matched.is_empty() {
-            eprintln!("no installed package matches '{raw}'");
+            crate::style::warn_line!("no installed package matches '{raw}'");
             continue;
         }
         for pkg in matched {

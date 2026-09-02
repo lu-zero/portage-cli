@@ -895,7 +895,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result
             .await;
     }
     if args.atoms.is_empty() {
-        eprintln!("em: no atoms or applet specified. Use --help for usage.");
+        crate::style::error_line!("no atoms or applet specified. Use --help for usage.");
         std::process::exit(1);
     }
     emerge_atoms(
