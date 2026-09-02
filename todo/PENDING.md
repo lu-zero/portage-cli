@@ -150,8 +150,8 @@ carry an effort estimate.
   through `-MERGING-<pf>` and renamed into place, reusing regen's dir-swap
   dance; not yet live-verified on a real merge; (2) suspend time inflates a
   recorded duration, but the ETA already takes a median so only
-  merged-once packages are exposed — folded into (4); (3) a suspended `em` holds `.builddir.lock` with no
-  "waiting on pid N" diagnostic; (4) no SIGINT/SIGTERM handler at all, so
+  merged-once packages are exposed — folded into (4); (3) lock waits ✅ 2026-09-02 —
+  a wait over 10s now names the holder pid from `/proc/locks`; (4) no SIGINT/SIGTERM handler at all, so
   children are orphaned when `em` is signalled directly rather than
   through the terminal: [[signal-handling]]
 - Library DEPEND identity in a cross sysroot: `crossdev --setup` registers

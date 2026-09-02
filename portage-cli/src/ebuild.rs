@@ -1537,8 +1537,24 @@ fn filter_clean_subs(
 async fn lock_merge_flock(work_dir: &Utf8Path) -> Option<std::fs::File> {
     // work_base / root_key / category / pf
     let base = work_dir.parent()?.parent()?.parent()?;
-    let path = base.join(".merge.lock").into_std_path_buf();
-    tokio::task::spawn_blocking(move || {
+    acquire_flock(base.join(".merge.lock").into_std_path_buf(), "merge lock").await
+}
+
+/// How long to wait on a contended lock before saying so.
+///
+/// Contention is normal and brief: under `--jobs N` every worker serialises on
+/// `.merge.lock` for its own qmerge. Only a wait this long means something is
+/// actually stuck — a suspended `em`, or one wedged mid-merge — which is
+/// otherwise indistinguishable from a hang, since the acquire is silent.
+const LOCK_NOTICE_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Blocking exclusive flock on `path`, announcing the wait if it runs long
+///
+/// Released on drop, or by the kernel if the process dies — note that a
+/// *suspended* process keeps it, which is the case the notice exists to name.
+async fn acquire_flock(path: std::path::PathBuf, label: &str) -> Option<std::fs::File> {
+    let notice_path = path.clone();
+    let acquire = tokio::task::spawn_blocking(move || {
         // append: never truncate — other processes may hold the lock fd.
         let f = std::fs::OpenOptions::new()
             .create(true)
@@ -1547,31 +1563,58 @@ async fn lock_merge_flock(work_dir: &Utf8Path) -> Option<std::fs::File> {
             .ok()?;
         rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).ok()?;
         Some(f)
-    })
-    .await
-    .ok()
-    .flatten()
+    });
+    tokio::pin!(acquire);
+    match tokio::time::timeout(LOCK_NOTICE_AFTER, &mut acquire).await {
+        Ok(joined) => joined.ok().flatten(),
+        Err(_) => {
+            match flock_holder_pid(&notice_path) {
+                Some(pid) => crate::style::warn_line!(
+                    "waiting for the {label} held by pid {pid} ({})",
+                    notice_path.display()
+                ),
+                None => {
+                    crate::style::warn_line!("waiting for the {label} ({})", notice_path.display())
+                }
+            }
+            (&mut acquire).await.ok().flatten()
+        }
+    }
+}
+
+/// Best-effort pid holding an flock on `path`, via `/proc/locks`
+///
+/// `flock` locks are not visible to `fcntl(F_GETLK)`, so the holder can only
+/// be found by matching the file's inode against the kernel's own table.
+/// `None` wherever that table does not exist (any non-Linux host) — the
+/// caller degrades to naming just the file.
+fn flock_holder_pid(path: &std::path::Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let ino = std::fs::metadata(path).ok()?.ino();
+    for line in std::fs::read_to_string("/proc/locks").ok()?.lines() {
+        // `1: FLOCK  ADVISORY  WRITE 1234 08:02:1234567 0 EOF`
+        let mut f = line.split_whitespace().skip(1);
+        if f.next()? != "FLOCK" {
+            continue;
+        }
+        let pid: u32 = f.nth(2)?.parse().ok()?;
+        if f.next()?.rsplit(':').next()?.parse::<u64>().ok()? == ino {
+            return Some(pid);
+        }
+    }
+    None
 }
 
 /// Exclusive flock on the package work directory itself (Portage
 /// `EbuildBuildDir`), held for the whole phase chain so two concurrent
 /// merges never share a WORKDIR even if scheduling fails to serialize them.
 async fn lock_builddir(work_dir: &Utf8Path) -> Option<std::fs::File> {
-    let dir = work_dir.to_owned();
-    tokio::task::spawn_blocking(move || {
-        std::fs::create_dir_all(dir.as_std_path()).ok()?;
-        let path = dir.join(".builddir.lock").into_std_path_buf();
-        let f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .ok()?;
-        rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).ok()?;
-        Some(f)
-    })
+    std::fs::create_dir_all(work_dir.as_std_path()).ok()?;
+    acquire_flock(
+        work_dir.join(".builddir.lock").into_std_path_buf(),
+        "build directory lock",
+    )
     .await
-    .ok()
-    .flatten()
 }
 
 /// Build the ecompress/estrip configuration from the post-`src_install`
@@ -3418,6 +3461,34 @@ fn read_fetch_commands(shell: &portage_repo::EbuildShell) -> (Option<String>, Op
 
 #[cfg(test)]
 mod tests {
+
+    // `/proc/locks`' column layout is parsed by hand, so pin it against a real
+    // kernel entry: take an flock and look ourselves up in the table.
+    #[test]
+    #[cfg_attr(not(target_os = "linux"), ignore = "reads /proc/locks")]
+    fn flock_holder_pid_finds_the_process_holding_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("held.lock");
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        rustix::fs::flock(&f, rustix::fs::FlockOperation::LockExclusive).unwrap();
+
+        assert_eq!(
+            super::flock_holder_pid(&path),
+            Some(std::process::id()),
+            "should have found our own pid in /proc/locks"
+        );
+
+        drop(f);
+        assert_eq!(
+            super::flock_holder_pid(&path),
+            None,
+            "no holder once the lock is released"
+        );
+    }
     use super::*;
     use portage_vdb::ContentsKind;
     use std::fs;

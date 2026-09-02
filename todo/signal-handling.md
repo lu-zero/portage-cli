@@ -156,14 +156,33 @@ time, so it is not worth building on its own — **fold it into item 5**. If a
 accumulated stopped time in `emit_pkg_end` is a few extra lines. Related:
 [[activity-storage-format]], [[activity-status]].
 
-## 4. Locks are held while suspended
+## 4. Lock waits are now announced — FIXED 2026-09-02
 
 `.builddir.lock` and `.merge.lock` (`ebuild.rs`) are `flock`s on open fds.
 The kernel releases them when a process *dies*, so Ctrl+C leaks nothing —
-but a **suspended** `em` holds them indefinitely, and a second `em` on the
-same root blocks on the acquire with no message about why. A "waiting for
-the build lock held by pid N" diagnostic after a short timeout would cost
-little. Related: [[workdir-dual-root]].
+but a **suspended** `em` holds them indefinitely, and the acquire was a
+silent blocking `flock`, so a second `em` on the same root was
+indistinguishable from a hang.
+
+Both now go through `acquire_flock`, which announces a wait longer than
+`LOCK_NOTICE_AFTER` (10s) and names the holder:
+
+```
+!!! waiting for the build directory lock held by pid 1234 (…/.builddir.lock)
+```
+
+The threshold matters: contention is *normal* under `--jobs N`, where every
+worker serialises on `.merge.lock` for its own qmerge, so warning on every
+contention would be pure noise. Only a long wait means something is stuck.
+It is a `warn_line!`, not `tracing::info!`, so it survives `-q` and `--jobs`
+— exactly the runs where a silent hang is most confusing.
+
+The holder pid comes from `/proc/locks`: `flock` locks are invisible to
+`fcntl(F_GETLK)`, so the only way to find the holder is matching the file's
+inode against the kernel's table. Best-effort and Linux-only; elsewhere the
+message just names the file. The column layout is parsed by hand, so
+`flock_holder_pid_finds_the_process_holding_the_lock` pins it against a real
+kernel entry rather than a fixture.
 
 ## 5. Children are orphaned if `em` is killed directly
 
