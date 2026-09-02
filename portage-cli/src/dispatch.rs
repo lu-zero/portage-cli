@@ -203,7 +203,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         }
         Applet::Pkg { command, .. } => pkg::run(command, globals).await,
         Applet::Query { command, .. } => run_query(command, globals).await,
-        Applet::Clean { target } => run_clean(target),
+        Applet::Clean { target, .. } => run_clean(globals, target).await,
         Applet::Use {
             add,
             subtract,
@@ -520,11 +520,12 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
     }
 }
 
-fn run_clean(target: &Option<CleanTarget>) -> Result<()> {
+async fn run_clean(globals: &cli::Cli, target: &Option<CleanTarget>) -> Result<()> {
     match target {
-        None => bail!("not implemented: eclean (no target)"),
-        Some(CleanTarget::Dist) => bail!("not implemented: eclean dist"),
-        Some(CleanTarget::Pkg) => bail!("not implemented: eclean pkg"),
+        // No sensible default: `dist` and `pkg` free different things and a
+        // wrong guess deletes files.
+        None => bail!("em clean needs a target: `dist` or `pkg`"),
+        Some(t) => crate::clean::run(globals, t).await,
     }
 }
 

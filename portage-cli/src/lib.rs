@@ -7,6 +7,7 @@ pub mod activity;
 /// Shared helpers/formatters for `em select news` and `em select glsa`
 pub(crate) mod advisory;
 pub(crate) mod binpkg;
+pub(crate) mod clean;
 pub mod cli;
 pub(crate) mod config_plan;
 pub(crate) mod crossdev;

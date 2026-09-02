@@ -131,6 +131,9 @@ impl Cli {
             | Some(Applet::MirrorDist {
                 topology, root_arg, ..
             })
+            | Some(Applet::Clean {
+                topology, root_arg, ..
+            })
             | Some(Applet::Query {
                 topology, root_arg, ..
             })
@@ -1673,6 +1676,10 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     Clean {
         #[command(subcommand)]
         target: Option<CleanTarget>,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
     },
 
     #[command(about = "Enable/disable/query USE flags in make.conf")]
@@ -2673,10 +2680,44 @@ pub enum QueryCommand {
 
 #[derive(Subcommand)]
 pub enum CleanTarget {
-    #[command(about = "Clean outdated distfiles")]
-    Dist,
-    #[command(about = "Clean outdated binary packages")]
-    Pkg,
+    #[command(
+        about = "Remove distfiles no ebuild references",
+        alias = "distfiles",
+        alias = "d"
+    )]
+    Dist {
+        #[command(flatten)]
+        opts: CleanOpts,
+    },
+    #[command(
+        about = "Remove binary packages no ebuild references",
+        alias = "packages",
+        alias = "p"
+    )]
+    Pkg {
+        #[command(flatten)]
+        opts: CleanOpts,
+    },
+}
+
+/// Filters shared by both clean targets
+///
+/// Deliberately narrower than `eclean`'s: the destructive/interactive modes it
+/// grew are covered here by the global `-p` plus `--deep`, and everything else
+/// it offers is a filter on the same candidate set.
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct CleanOpts {
+    /// Keep only what installed packages still reference, rather than
+    /// everything any ebuild in the tree references
+    #[arg(short = 'd', long)]
+    pub deep: bool,
+    /// Skip files smaller than this (e.g. `10M`, `1G`) — clears the big wins
+    /// without touching a long tail of small files
+    #[arg(short = 's', long, value_name = "SIZE")]
+    pub size_limit: Option<String>,
+    /// Keep files modified more recently than this (e.g. `2weeks`, `30d`)
+    #[arg(short = 't', long, value_name = "AGE")]
+    pub time_limit: Option<String>,
 }
 
 #[derive(Subcommand)]

@@ -1,6 +1,6 @@
 # What is still unimplemented — survey 2026-09-02
 
-Status: 🔵 survey only, nothing started. Every `bail!("not implemented")` in
+Status: 🟡 survey; `em clean dist`/`pkg` implemented 2026-09-02, the rest open. Every `bail!("not implemented")` in
 the tree, grouped by whether it actually costs a user anything.
 
 ## 1. Config-file reconciliation — the sharpest gap
@@ -31,12 +31,21 @@ rather than a convenience.
 the matching half exists; what is missing is the interactive/`-a` merge tool
 over the sidecars. See [[pms-config-protect]] for the settled semantics.
 
-## 2. `eclean` — nothing at all (2 of 2)
+## 2. `eclean` — IMPLEMENTED 2026-09-02
 
-```
-dispatch.rs:526  CleanTarget::Dist => bail!("not implemented: eclean dist")
-dispatch.rs:527  CleanTarget::Pkg  => bail!("not implemented: eclean pkg")
-```
+`em clean dist` and `em clean pkg` now exist (`portage-cli/src/clean.rs`),
+with `--deep` (keep only what installed packages reference), `--size-limit`
+and `--time-limit`, honouring the global `-p`.
+
+The DISTDIR walk delegates to `mirrordist::scan_distdir` rather than
+repeating it — that function was already parameterised on the reference set,
+so the two commands differ only in *policy* (which files count as
+referenced) and cannot drift on how a DISTDIR is read. `clean` adds its own
+whitelist for portage bookkeeping a mirror dir never contains: `<file>.lock`
+(a live fetch lock) and `.layout.conf.<mirror>`.
+
+Still not covered, if anyone wants closer `eclean` parity: the interactive
+mode, and `--destructive`'s "keep only the newest version" flavour.
 
 `em maint binpkg prune` exists but prunes by *build identity* (the
 multi-instance work in [[binpkg-subtargets]]), not by "no longer in any
@@ -92,7 +101,13 @@ that `portage_repo` cannot resolve, distinguishing it from "not resolvable:
 1. `etc-update`/`dispatch-conf` — the only one that breaks a normal workflow,
    and the only one whose absence is worse under `em`'s own offset roots than
    on a host.
-2. `eclean pkg`/`dist` — real housekeeping, and most of the underlying
-   machinery (PKGDIR scan, DISTDIR layout, installed sets) already exists.
+2. ~~`eclean pkg`/`dist`~~ — done, see above.
 3. `emaint merges`, then `all`.
-4. `portageq`/`grep` only if an external consumer turns up.
+4. `portageq`/`grep`: **measured, not worth it.** A scan of
+   `/var/db/repos/{gentoo,guru,crossdev,pentoo}` found **zero** `portageq`
+   calls in any inheritable `*.eclass` and zero in any live ebuild — the only
+   hits are `eclass/tests/` (a hand-run harness that is never `inherit`ed),
+   OpenRC init scripts that run post-install, and maintainer scripts. Nothing
+   `em` executes as a phase calls it, so the wrong-root risk is theoretical.
+   Revisit only if a real overlay ebuild turns up; `envvar`, `has_version`,
+   `match` and `best_version` would cover the shapes that exist in the wild.

@@ -529,9 +529,9 @@ fn parse_whitelist(paths: &[Utf8PathBuf]) -> Result<HashSet<String>> {
 
 /// What's physically present in `distfiles`, split into referenced
 /// (`present`, with recorded size) vs. orphan candidates.
-struct DistdirState {
-    present: BTreeMap<String, u64>,
-    orphans: Vec<String>,
+pub(crate) struct DistdirState {
+    pub(crate) present: BTreeMap<String, u64>,
+    pub(crate) orphans: Vec<String>,
     /// Leftover `.__em_download__` atomic-write temp files found at scan
     /// time — always from an interrupted previous run, never legitimate
     /// (see [`is_atomic_temp_name`]). Without active cleanup these are
@@ -548,7 +548,7 @@ struct DistdirState {
 /// A leftover atomic-write temp file (`is_atomic_temp_name`) is removed
 /// when `remove_stale_partials` is set (real fetch runs; never under
 /// `-p`) and always excluded from `present`/`orphans` either way.
-fn scan_distdir(
+pub(crate) fn scan_distdir(
     distfiles: &Utf8Path,
     referenced: &HashSet<&str>,
     whitelist: &HashSet<String>,
