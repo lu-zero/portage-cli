@@ -156,9 +156,37 @@ impl ActivitySink for EmergeLogSink {
     }
 }
 
-/// Rough local time string without pulling chrono — good enough for emerge.log
+/// Local time in the shape `qlop`/`genlop` parse out of `emerge.log`'s
+/// `Started emerge on:` line — `Feb 23, 2026 16:05:01`, zero-padded day.
 fn chrono_like(unix: f64) -> String {
-    // Portage uses ctime-style; keep simple ISO-ish UTC for portability.
     let secs = unix.max(0.0) as i64;
-    format!("unix {secs}")
+    let nanos = ((unix.max(0.0) - secs as f64) * 1e9) as u32;
+    chrono::DateTime::from_timestamp(secs, nanos)
+        .map(|utc| {
+            chrono::DateTime::<chrono::Local>::from(utc)
+                .format("%b %d, %Y %H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_else(|| format!("unix {secs}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `qlop`/`genlop` parse the `Started emerge on:` line, so the shape is a
+    // wire format, not cosmetics. Asserted by parsing back rather than against
+    // a literal string, which would only hold in one timezone.
+    #[test]
+    fn started_emerge_timestamp_round_trips_through_portages_format() {
+        const EPOCH: i64 = 1_771_862_701; // Feb 2026, clear of any DST fold
+        let rendered = chrono_like(EPOCH as f64);
+        let naive = chrono::NaiveDateTime::parse_from_str(&rendered, "%b %d, %Y %H:%M:%S")
+            .unwrap_or_else(|e| panic!("{rendered:?} is not emerge.log's shape: {e}"));
+        let local = naive
+            .and_local_timezone(chrono::Local)
+            .single()
+            .expect("unambiguous local time");
+        assert_eq!(local.timestamp(), EPOCH, "rendered {rendered:?}");
+    }
 }

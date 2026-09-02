@@ -54,15 +54,6 @@ pub fn md5_cache_root() -> Utf8PathBuf {
     em_cache_dir().join("md5-cache")
 }
 
-/// Per-repo user md5-cache: [`md5_cache_root`]/`/<repo>`
-///
-/// Prefer opening repos via [`crate::repo_open`] so this path is applied as
-/// the repository secondary; call this only when you need the path itself.
-#[allow(dead_code)] // public helper for tooling; open path goes through builder
-pub fn md5_cache_dir(repo_name: &str) -> Utf8PathBuf {
-    md5_cache_root().join(repo_name)
-}
-
 /// `$XDG_STATE_HOME/em/news` — `em news`'s unread/read/skip tracking when
 /// operating on the bare host (no `--root`/`--prefix`/`--local`).
 ///
@@ -159,10 +150,7 @@ mod tests {
         let _home = EnvGuard::set("HOME", "/home/u");
         assert_eq!(cache_home().as_str(), "/custom/cache");
         assert_eq!(em_cache_dir().as_str(), "/custom/cache/em");
-        assert_eq!(
-            md5_cache_dir("gentoo").as_str(),
-            "/custom/cache/em/md5-cache/gentoo"
-        );
+        assert_eq!(md5_cache_root().as_str(), "/custom/cache/em/md5-cache");
     }
 
     #[test]
