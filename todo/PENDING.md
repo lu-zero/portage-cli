@@ -139,6 +139,17 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
+- **Under `--prefix`, baselayout's VDB entry claims `/sbin/openrc-run`**
+  (found 2026-09-02), so `openrc` then correctly refuses to collide and
+  `toolchain --setup --prefix` dies at 54/65. On the host that path belongs
+  to `sys-apps/openrc` and baselayout does not ship it:
+  [[prefix-baselayout-claims-openrc-run]]
+- **`regression-matrix.sh`'s stage1 `--prefix` legs cannot pass as written**
+  — `em stages --stage1` requires an explicit `--root` distinct from the
+  host install path, and both the `-p` and `--full` legs pass only
+  `--prefix DIR`, so they are rejected before anything runs. The `--full`
+  leg also pairs `--prefix` with the *native toolchain* dir rather than a
+  crossdev-populated one. Wants `--prefix P --root B --target T`.
 - **`crossdev --setup --prefix` aborts on a phantom blocker** (found
   2026-09-02 by `regression-matrix.sh --full`): two uninstalled packages come
   back as `[ebuild R]` and a `linux-headers`/`virtual/os-headers` block fires
