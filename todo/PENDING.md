@@ -19,7 +19,7 @@ progress (M0 → M4, each with its gate command) lives in [[build-roadmap]].
 |-----|------|--------|--------|
 | **1** | **Stage production** — `--stage1` + first-class `--stage3` (emptytree `@system`) 2026-07-30; stage4 / per-arch binhost assembly still open | 🟡 | [[em-stages-and-binhosts]], [[em-stages-scenario-matrix]] |
 | **2** | **Binpkg multi-instance / build-env identity residual** — phases 1–2 landed; live S1 verify + dual PKGDIR/header harden open | 🟡 | [[binpkg-subtargets]] |
-| **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` at `PkgStart` ✅ 2026-07-30; only `emerge.log` timestamp format (`chrono_like` still `unix {secs}` vs Portage's ctime-style local time) still open | 🟡 | [[activity-status]] |
+| **3** | **Activity residual** — bus/`em log`/ETA done; load-avg display + `--load-average` throttle ✅ 2026-07-30; `PkgKind::Binpkg` at `PkgStart` ✅ 2026-07-30; `emerge.log` timestamp now real local time via `%b %d, %Y %H:%M:%S` ✅ 2026-09-02 (`ee977f8`) — verified against the host's own log, and it is `%d` not ctime's `%e`. Suspend-time skew in the duration history moved to [[signal-handling]] | ✅ | [[activity-status]] |
 | **4** | **Distfile fetch** — GENTOO_MIRRORS parity residual (no remote `layout.conf`, no `/etc/portage/mirrors`, etc.); 2026-08-29 concurrent-write races fixed; fetch-consolidation idea filed | 🟡 | [[distfile-fetch-reliability]] |
 | **5** | **Privilege residual** — in-session binpkg/stage tar as real `root:root`; hakoniwa wall-test | 🟡 | [[fakeroot-privilege-backends]] |
 | **6** | **Blocker Tier-1 auto-unmerge** — Step 1 (classification) done 2026-08-01; PMS 8.3.2 unmerge 2026-08-20 | ✅ | [[blocker-enforcement]] |
@@ -139,13 +139,16 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
-- **Signal handling** (reported 2026-09-02): `em` installs no signal
-  handlers at all. Build phases inherited the caller's stdin — the user's
-  real terminal — so an ebuild `read` reconfigured the console via brush's
-  terminal-mode guard; fixed by redirecting every phase from `/dev/null`.
-  Still open in the same note: the VDB's missing `-MERGING-` rename (an
-  interrupted merge leaves a half-written entry), suspend time polluting
-  the ETA history, and locks held across a suspend: [[signal-handling]]
+- **Signal handling** (reported 2026-09-02, phase-stdin half fixed in
+  `0018023`) — the remaining items are the current systematic queue, in
+  order: (1) `Vdb::register` writes fields in place with no `-MERGING-`
+  rename, so an interrupted merge leaves a half-written VDB entry — the
+  one actual data-integrity bug here; (2) durations are wall-clock, so
+  suspend time is written into `merges.jsonl` and skews every future ETA
+  for that package; (3) a suspended `em` holds `.builddir.lock` with no
+  "waiting on pid N" diagnostic; (4) no SIGINT/SIGTERM handler at all, so
+  children are orphaned when `em` is signalled directly rather than
+  through the terminal: [[signal-handling]]
 - Library DEPEND identity in a cross sysroot: `crossdev --setup` registers
   the libc as `cross-<tuple>/glibc`, but ordinary ebuilds DEPEND on the real
   Cpn (`sys-libs/glibc`, `virtual/libcrypt` → libxcrypt), so Favor never
