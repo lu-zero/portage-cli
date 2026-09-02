@@ -139,6 +139,11 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
+- **Full `regression-matrix.sh --full` run 2026-09-02** — `stages --stage1
+  --root` PASSES (154 pkgs, a correct stage1); every `--prefix` leg fails,
+  for three unrelated reasons. Run record, including two wrong theories not
+  worth re-deriving and the script's own defects:
+  [[regression-matrix-run-2026-09-02]]
 - **Under `--prefix`, baselayout's VDB entry claims `/sbin/openrc-run`**
   (found 2026-09-02), so `openrc` then correctly refuses to collide and
   `toolchain --setup --prefix` dies at 54/65. On the host that path belongs
