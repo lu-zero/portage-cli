@@ -17,6 +17,7 @@ fn vdb_roots_for<SE: brush_core::ShellExtensions>(
     shell: &brush_core::Shell<SE>,
     broot: bool,
     sysroot: bool,
+    atom: &str,
 ) -> Vec<std::path::PathBuf> {
     let get = |var: &str| {
         shell
@@ -32,23 +33,50 @@ fn vdb_roots_for<SE: brush_core::ShellExtensions>(
         "ROOT"
     };
     let root = get(var).unwrap_or_else(|| "/".to_string());
-    let mut roots = vec![root.clone()];
-    // In-place `--local` (EPREFIX set): the run installs every package — build
-    // tools and libraries alike — into the prefix EROOT, which is layered on
-    // the host. So `-b`/`-d`/`-r` queries must also see the prefix, e.g.
-    // python-any-r1's `has_version -b xcb-proto` where xcb-proto was just built
-    // into the prefix, not the host. (Non-prefix builds have EROOT == ROOT, so
-    // this adds nothing.)
-    if get("EPREFIX").is_some()
-        && let Some(eroot) = get("EROOT")
-        && eroot != root
-    {
-        roots.push(eroot);
-    }
-    roots
+    let eroot = get("EPREFIX")
+        .and_then(|_| get("EROOT"))
+        .filter(|eroot| *eroot != root);
+    select_vdb_roots(root, eroot, atom)
         .into_iter()
         .map(|r| std::path::Path::new(&r).join("var/db/pkg"))
         .collect()
+}
+
+/// Which roots an atom may be satisfied from, given the query root and the
+/// prefix's `EROOT` (when there is a distinct one).
+///
+/// Ordinarily both: an in-place `--local`/`--prefix` run installs build tools
+/// and libraries alike into the prefix, which is layered on the host, so a
+/// query has to see either — e.g. python-any-r1's `has_version -b xcb-proto`
+/// where xcb-proto was just built into the prefix rather than the host.
+///
+/// A `cross-<tuple>/*` atom is the exception, and the reason this is not just
+/// `roots.push(eroot)`. Piggybacking off the host is right for a build *tool*,
+/// whose consumer only execs it and never cares where it lives. A `cross-*`
+/// atom's consumer does care: `toolchain.eclass` answers
+/// `has_version ${CATEGORY}/${needed_libc}` by hardcoding
+/// `--with-sysroot=${PREFIX}/${CTARGET}` in every non-freestanding branch. A
+/// host-side match therefore reports "libc present" while pointing the build
+/// at a prefix sysroot that has none — gcc-stage1 then fails on a missing
+/// `stdio.h` instead of correctly configuring `--without-headers`. That holds
+/// in upstream Gentoo Prefix, where ROOT and EPREFIX coincide, and breaks in
+/// `em`'s overlay model, where they are deliberately separate trees.
+fn select_vdb_roots(root: String, eroot: Option<String>, atom: &str) -> Vec<String> {
+    let Some(eroot) = eroot else {
+        return vec![root];
+    };
+    if is_cross_atom(atom) {
+        return vec![eroot];
+    }
+    vec![root, eroot]
+}
+
+/// Whether `atom` names a crossdev-aliased package (`cross-<tuple>/<pn>`)
+///
+/// Unparseable text is treated as ordinary, leaving the existing behaviour for
+/// anything this does not understand.
+fn is_cross_atom(atom: &str) -> bool {
+    portage_atom::Dep::parse(atom).is_ok_and(|dep| dep.cpn.category.as_str().starts_with("cross-"))
 }
 
 /// Best installed cpv matching `atom` across any of `vdb_paths`
@@ -186,7 +214,7 @@ impl builtins::Command for HasVersionCommand {
         &self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
-        let vdbs = vdb_roots_for(context.shell, self.broot, self.sysroot);
+        let vdbs = vdb_roots_for(context.shell, self.broot, self.sysroot, &self.atom);
         let found = best_match_any(&vdbs, &self.atom, &parent_use(context.shell)).is_some();
         Ok(brush_core::ExecutionResult::new(u8::from(!found)))
     }
@@ -216,7 +244,7 @@ impl builtins::Command for BestVersionCommand {
         &self,
         context: brush_core::ExecutionContext<'_, SE>,
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
-        let vdbs = vdb_roots_for(context.shell, self.broot, self.sysroot);
+        let vdbs = vdb_roots_for(context.shell, self.broot, self.sysroot, &self.atom);
         match best_match_any(&vdbs, &self.atom, &parent_use(context.shell)) {
             Some(cpv) => {
                 let shell = context.shell;
@@ -251,6 +279,56 @@ mod tests {
         // Parse the `[...]` body of an atom into UseDeps.
         let dep = portage_atom::Dep::parse(&format!("cat/pkg[{atom_use}]")).unwrap();
         dep.use_deps.unwrap()
+    }
+
+    // A `cross-*` atom must not be satisfiable from the host: its only
+    // consumer, toolchain.eclass, hardcodes an EPREFIX-relative
+    // `--with-sysroot`, so a host-side match points the build at a sysroot
+    // that does not contain what was matched.
+    #[test]
+    fn a_cross_atom_is_answered_from_the_prefix_alone() {
+        assert_eq!(
+            super::select_vdb_roots(
+                "/".to_string(),
+                Some("/pfx".to_string()),
+                "cross-riscv64-unknown-linux-gnu/glibc",
+            ),
+            vec!["/pfx".to_string()],
+        );
+    }
+
+    // The host piggyback stays for everything else — that is what lets a build
+    // tool installed on the host satisfy a `-b` query under `--prefix`.
+    #[test]
+    fn an_ordinary_atom_still_sees_both_roots() {
+        assert_eq!(
+            super::select_vdb_roots("/".to_string(), Some("/pfx".to_string()), "sys-libs/glibc"),
+            vec!["/".to_string(), "/pfx".to_string()],
+        );
+    }
+
+    // No prefix (a bare build, EROOT == ROOT) is unchanged for either shape.
+    #[test]
+    fn without_a_prefix_both_atom_shapes_query_the_one_root() {
+        for atom in ["sys-libs/glibc", "cross-riscv64-unknown-linux-gnu/glibc"] {
+            assert_eq!(
+                super::select_vdb_roots("/".to_string(), None, atom),
+                vec!["/".to_string()],
+                "{atom}"
+            );
+        }
+    }
+
+    // Versioned and ranged forms reach the same category, and text this cannot
+    // parse keeps the old two-root behaviour rather than silently narrowing.
+    #[test]
+    fn cross_detection_reads_the_category_not_the_raw_text() {
+        assert!(super::is_cross_atom(">=cross-i586-pc-linux-gnu/glibc-2.41"));
+        assert!(super::is_cross_atom(
+            "cross-riscv64-unknown-linux-gnu/glibc[headers-only(-)]"
+        ));
+        assert!(!super::is_cross_atom("sys-devel/crossdev"));
+        assert!(!super::is_cross_atom("not a valid atom"));
     }
 
     #[test]
