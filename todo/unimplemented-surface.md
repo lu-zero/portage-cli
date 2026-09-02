@@ -77,9 +77,33 @@ tractable and making the rest say what they actually are:
 - **`merges`** — still unavailable, but the error says why: `em` keeps no
   failed-merge registry; a failure is reported at the end of the run and in
   its build log.
-- **`all`** — deliberately deferred (Luca): what "all" covers changes with
-  every subcommand that lands, and it would have to decide per task whether
-  to check or to mutate. Pick it up once the set settles.
+- **`all`** — designed, not yet written. The earlier "defer until the
+  subcommand set settles" framing was wrong: `all` never has to mean
+  *everything*, and real `emaint` does not either. It runs a **subset**, and
+  the fix for the ambiguity is simply to **print the subset it covers** so
+  the user is never guessing.
+
+  The dividing line is check-vs-mutate, which `em`'s subcommands already
+  fall on cleanly:
+
+  | in `all` (reports only) | excluded (mutates, or needs an argument) |
+  |---|---|
+  | `world` (no `--fix`) | `binhost` — writes an index |
+  | `cleanresume` (no `--fix`) | `binpkg` — requires an action |
+  | `moveinst` — report-only | `regen-use` — writes `use.local.desc` |
+  | `movebin` — report-only | `revisions` — purges history |
+  | `logs` (no `--fix`) | `sync` — network, mutates the tree |
+  | `cleanconfmem` — no-op | `merges` — unavailable |
+
+  So `em maint all` is "every check `em` can make without changing
+  anything", which is also what makes it safe to suggest running. It should
+  open by naming the tasks it is about to run, and keep going past a task
+  that fails rather than aborting the sweep — one unreadable PKGDIR should
+  not hide the world-file result. A non-zero exit if any task reported a
+  problem, so it is usable from a cron job.
+
+  Everything it needs already exists; this is a fan-out plus a header, not
+  new machinery.
 
 ## 4. Standalone applets
 
