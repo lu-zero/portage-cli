@@ -130,20 +130,31 @@ a local extraction instead.
 cover both scanners and the rebuild path, but a `-p`-then-real merge on a
 throwaway `--root` is the confirmation this still wants.
 
-## 3. Suspend time pollutes the ETA history
+## 3. Suspend time inflates a recorded duration — narrower than it looks
 
-`ActivityEvent::now()` is `SystemTime::now()` — wall clock. Package
-durations are start/end deltas of that, appended to
-`var/cache/edb/em-activity/history/merges.jsonl` and used as ETA training
-data (`activity/history.rs`). Suspending a merge for ten minutes writes a
-ten-minute-longer duration for that package, permanently skewing every
-future estimate for it.
+`ActivityEvent::now()` is `SystemTime::now()`, and `merge/mod.rs`'s
+`emit_pkg_end` records `seconds: (at - started)` from it, so a merge
+suspended for ten minutes writes a ten-minute-longer duration into
+`merges.jsonl`.
 
-`HistorySink` already excludes `ActivityMode::Regen` "so it must not pollute
-the merge-duration history used for ETA" — the same reasoning applies to
-suspended time. Wants either a monotonic `Instant` for the duration or a
-SIGCONT-aware correction. Related: [[activity-storage-format]],
-[[activity-status]].
+**But the estimator is already outlier-tolerant**, which an earlier version
+of this note missed. `package_estimates` uses `median_seconds(cpn, 15)` with
+a `global_median_seconds(20)` fallback — a median, not a mean. One inflated
+record is absorbed completely once a package has three or more successful
+merges on record. The exposure is packages merged only once or twice, where
+the single poisoned record *is* the median until the next merge.
+
+**`Instant` is not the fix.** `CLOCK_MONOTONIC` keeps advancing while a
+process is stopped, so swapping the clock changes nothing here. Genuinely
+excluding suspended time means catching `SIGTSTP` (record the time, re-raise
+`SIGSTOP` so the default stop still happens) and `SIGCONT` (accumulate the
+stopped interval), then subtracting that from the duration.
+
+That is a signal handler for a case the median already handles most of the
+time, so it is not worth building on its own — **fold it into item 5**. If a
+`SIGTSTP`/`SIGCONT` pair goes in for orderly shutdown anyway, subtracting the
+accumulated stopped time in `emit_pkg_end` is a few extra lines. Related:
+[[activity-storage-format]], [[activity-status]].
 
 ## 4. Locks are held while suspended
 

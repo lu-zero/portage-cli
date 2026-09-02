@@ -148,9 +148,9 @@ carry an effort estimate.
   `0018023`) — the remaining items are the current systematic queue, in
   order: (1) `Vdb::register`'s in-place field writes ✅ 2026-09-02 — staged
   through `-MERGING-<pf>` and renamed into place, reusing regen's dir-swap
-  dance; not yet live-verified on a real merge; (2) durations are wall-clock, so
-  suspend time is written into `merges.jsonl` and skews every future ETA
-  for that package; (3) a suspended `em` holds `.builddir.lock` with no
+  dance; not yet live-verified on a real merge; (2) suspend time inflates a
+  recorded duration, but the ETA already takes a median so only
+  merged-once packages are exposed — folded into (4); (3) a suspended `em` holds `.builddir.lock` with no
   "waiting on pid N" diagnostic; (4) no SIGINT/SIGTERM handler at all, so
   children are orphaned when `em` is signalled directly rather than
   through the terminal: [[signal-handling]]
