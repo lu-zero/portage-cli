@@ -1,0 +1,47 @@
+[package]
+name = "cargo-ebuild"
+version = "0.1.0"
+edition = "2024"
+authors = ["Luca Barbato <lu_zero@gentoo.org>"]
+license = "MIT"
+description = "Generate Gentoo ebuilds and crate tarballs from Cargo.lock (pycargoebuild replacement, separate from em)"
+keywords = ["gentoo", "portage", "cargo", "ebuild"]
+rust-version.workspace = true
+repository.workspace = true
+categories = ["development-tools"]
+publish = false
+
+[[bin]]
+name = "pycargoebuild-rs"
+path = "src/main.rs"
+
+[lib]
+name = "cargo_ebuild"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+camino = { workspace = true }
+clap = { workspace = true }
+minijinja = { workspace = true }
+spdx = { workspace = true }
+cargo-lock = { workspace = true }
+cargo_toml = { workspace = true }
+toml = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+xz2 = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+portage-metadata = { workspace = true }
+portage-repo = { workspace = true }
+portage-distfiles = { workspace = true }
+tokio = { workspace = true }
+chrono = "0.4"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
