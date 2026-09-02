@@ -37,11 +37,7 @@ impl Filters {
         let min_bytes = opts.size_limit.as_deref().map(parse_size).transpose()?;
         let keep_newer_than = match opts.time_limit.as_deref() {
             None => None,
-            Some(spec) => {
-                let age = humantime::parse_duration(spec)
-                    .with_context(|| format!("--time-limit {spec}: not a duration"))?;
-                Some(std::time::SystemTime::now() - age)
-            }
+            Some(spec) => Some(cutoff_from(std::time::SystemTime::now(), spec)?),
         };
         Ok(Self {
             min_bytes,
@@ -61,6 +57,17 @@ impl Filters {
         }
         true
     }
+}
+
+/// Cutoff instant for `--time-limit`: `now` minus the parsed duration
+///
+/// `checked_sub`, not `-`: `Sub<Duration> for SystemTime` panics when the
+/// result cannot be represented (Windows cannot go before 1601).
+fn cutoff_from(now: std::time::SystemTime, spec: &str) -> Result<std::time::SystemTime> {
+    let age = humantime::parse_duration(spec)
+        .with_context(|| format!("--time-limit {spec}: not a duration"))?;
+    now.checked_sub(age)
+        .with_context(|| format!("--time-limit {spec}: too large"))
 }
 
 /// `10M` / `1G` / a bare byte count
@@ -259,12 +266,11 @@ fn referenced_distfiles(globals: &Cli, deep: bool) -> Result<std::collections::H
     Ok(wanted)
 }
 
-/// `<repo>/<cat>/<pn>/Manifest` for every package, or only for the installed
+/// `<repo>/<cat>/<pn>` for every package directory, or only the installed
 /// ones when `only` is given
-fn package_manifests(
+fn package_dirs(
     repo: &Utf8Path,
     only: Option<&std::collections::HashSet<(String, String)>>,
-    unmanifested: &mut usize,
 ) -> Vec<Utf8PathBuf> {
     let mut out = Vec::new();
     let categories = declared_categories(repo);
@@ -289,26 +295,43 @@ fn package_manifests(
             continue;
         };
         for pkg in pkgs.flatten() {
-            let pn = pkg.file_name().to_string_lossy().into_owned();
-            if only.is_some_and(|set| !set.contains(&(cat_name.clone(), pn.clone()))) {
+            if !pkg.file_type().is_ok_and(|t| t.is_dir()) {
                 continue;
             }
-            let m = pkg.path().join("Manifest");
-            if m.is_file() {
-                if let Ok(m) = Utf8PathBuf::from_path_buf(m) {
-                    out.push(m);
-                }
-            } else if declares_src_uri(&pkg.path()) {
-                // Ebuilds but no `Manifest`, *and* something to fetch: its
-                // distfiles are invisible here, so they would look
-                // unreferenced. Count it rather than silently narrowing the
-                // reference set.
-                //
-                // A missing Manifest is normal and harmless for the ~1400
-                // metadata-only packages in ::gentoo (`acct-group`,
-                // `acct-user`, `virtual`) — nothing to hash, nothing to miss.
-                *unmanifested += 1;
+            let pn = pkg.file_name().to_string_lossy().into_owned();
+            if only.is_some_and(|set| !set.contains(&(cat_name.clone(), pn))) {
+                continue;
             }
+            if let Ok(dir) = Utf8PathBuf::from_path_buf(pkg.path()) {
+                out.push(dir);
+            }
+        }
+    }
+    out
+}
+
+/// `<repo>/<cat>/<pn>/Manifest` for every package, or only for the installed
+/// ones when `only` is given
+fn package_manifests(
+    repo: &Utf8Path,
+    only: Option<&std::collections::HashSet<(String, String)>>,
+    unmanifested: &mut usize,
+) -> Vec<Utf8PathBuf> {
+    let mut out = Vec::new();
+    for dir in package_dirs(repo, only) {
+        let m = dir.join("Manifest");
+        if m.is_file() {
+            out.push(m);
+        } else if declares_src_uri(dir.as_std_path()) {
+            // Ebuilds but no `Manifest`, *and* something to fetch: its
+            // distfiles are invisible here, so they would look
+            // unreferenced. Count it rather than silently narrowing the
+            // reference set.
+            //
+            // A missing Manifest is normal and harmless for the ~1400
+            // metadata-only packages in ::gentoo (`acct-group`,
+            // `acct-user`, `virtual`) — nothing to hash, nothing to miss.
+            *unmanifested += 1;
         }
     }
     out
@@ -522,34 +545,38 @@ fn installed_cpvs(globals: &Cli) -> Result<std::collections::HashSet<String>> {
 fn tree_cpvs(globals: &Cli) -> Result<std::collections::HashSet<String>> {
     let mut out = std::collections::HashSet::new();
     let repos = configured_repos_or_bail(globals)?;
-    let mut unmanifested = 0usize;
     for repo in repos {
         let Ok(repo) = Utf8PathBuf::from_path_buf(repo) else {
             continue;
         };
-        for manifest in package_manifests(&repo, None, &mut unmanifested) {
-            let Some(pkg_dir) = manifest.parent() else {
-                continue;
-            };
-            let (Some(pn), Some(cat)) = (
-                pkg_dir.file_name(),
-                pkg_dir.parent().and_then(Utf8Path::file_name),
-            ) else {
-                continue;
-            };
-            let Ok(files) = std::fs::read_dir(pkg_dir.as_std_path()) else {
-                continue;
-            };
-            for f in files.flatten() {
-                let name = f.file_name().to_string_lossy().into_owned();
-                if let Some(pf) = name.strip_suffix(".ebuild") {
-                    let _ = pn;
-                    out.insert(format!("{cat}/{pf}"));
-                }
+        out.extend(tree_cpvs_in(&repo));
+    }
+    Ok(out)
+}
+
+/// Keep set for one repo: every `*.ebuild`, Manifest or not
+///
+/// Thin-manifests (::gentoo's layout) omit `Manifest` when a package has no
+/// DIST files. Walking Manifests therefore dropped every `virtual/*` and
+/// `acct-*` (and anything else with no distfiles), so `em clean pkg` treated
+/// their binpkgs as unreferenced.
+fn tree_cpvs_in(repo: &Utf8Path) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for pkg_dir in package_dirs(repo, None) {
+        let Some(cat) = pkg_dir.parent().and_then(Utf8Path::file_name) else {
+            continue;
+        };
+        let Ok(files) = std::fs::read_dir(pkg_dir.as_std_path()) else {
+            continue;
+        };
+        for f in files.flatten() {
+            let name = f.file_name().to_string_lossy().into_owned();
+            if let Some(pf) = name.strip_suffix(".ebuild") {
+                out.insert(format!("{cat}/{pf}"));
             }
         }
     }
-    Ok(out)
+    out
 }
 
 /// The configured repos, or an error rather than the host-tree fallback
@@ -582,6 +609,62 @@ mod tests {
         // Straight from user input; `*` panicked in debug and wrapped in release.
         assert!(parse_size("18446744073709551615K").is_err());
         assert!(parse_size("99999999999999999999G").is_err());
+    }
+
+    #[test]
+    fn time_limit_rejects_a_non_duration() {
+        let now = std::time::SystemTime::now();
+        assert!(cutoff_from(now, "2weeks").is_ok());
+        assert!(cutoff_from(now, "banana").is_err());
+        // Windows cannot represent times before 1601, so a huge age is a
+        // parse error rather than a panic. Linux's signed timespec can.
+        #[cfg(windows)]
+        assert!(cutoff_from(now, "500y").is_err());
+    }
+
+    // Thin-manifest packages (no DIST → no Manifest) must still stay in the
+    // keep set. Walking Manifests dropped every virtual/* and acct-*.
+    #[test]
+    fn tree_keep_set_includes_packages_with_no_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Utf8Path::from_path(dir.path()).unwrap();
+        std::fs::create_dir_all(repo.join("profiles").as_std_path()).unwrap();
+        std::fs::write(
+            repo.join("profiles/categories").as_std_path(),
+            "virtual\nacct-group\nsys-libs\n",
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(repo.join("virtual/awk").as_std_path()).unwrap();
+        std::fs::write(
+            repo.join("virtual/awk/awk-1.ebuild").as_std_path(),
+            "EAPI=8\n",
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(repo.join("acct-group/audio").as_std_path()).unwrap();
+        std::fs::write(
+            repo.join("acct-group/audio/audio-0.ebuild").as_std_path(),
+            "EAPI=8\n",
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(repo.join("sys-libs/zlib").as_std_path()).unwrap();
+        std::fs::write(
+            repo.join("sys-libs/zlib/zlib-1.3.1.ebuild").as_std_path(),
+            "EAPI=8\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo.join("sys-libs/zlib/Manifest").as_std_path(),
+            "DIST zlib-1.3.1.tar.xz 1 SHA256 aa\n",
+        )
+        .unwrap();
+
+        let keep = tree_cpvs_in(repo);
+        assert!(keep.contains("virtual/awk-1"), "{keep:?}");
+        assert!(keep.contains("acct-group/audio-0"), "{keep:?}");
+        assert!(keep.contains("sys-libs/zlib-1.3.1"), "{keep:?}");
     }
 
     // A real `-<build_id>` suffix comes off; a version that merely ends in an
