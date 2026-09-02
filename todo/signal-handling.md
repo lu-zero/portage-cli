@@ -117,7 +117,14 @@ The three questions this note previously listed as open are answered:
 filesystem helper is a poor fit for a crate whose job is the installed
 package database, and the two differ in their scratch-dir naming
 (`-MERGING-` is a portage interface convention, `.regen-old` is internal).
-Left duplicated deliberately; a third caller should force the extraction.
+Left duplicated deliberately. The real gap is upstream: `NamedTempFile`
+has `persist(dest)`, `TempDir` has only `keep()`, so "publish a populated
+directory" has no primitive. Filed as
+[tempfile#448](https://github.com/Stebalien/tempfile/issues/448) against the
+in-flight v4 (#327) — the maintainer wanted this signature back in #42 and
+shelved it only because a point release could not absorb the breakage. If it
+lands, both copies collapse into it; a third caller before then should force
+a local extraction instead.
 
 **Not yet live-verified:** no real merge has run through this. The unit tests
 cover both scanners and the rebuild path, but a `-p`-then-real merge on a
