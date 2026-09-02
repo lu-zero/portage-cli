@@ -45,6 +45,12 @@ referenced) and cannot drift on how a DISTDIR is read. `clean` adds its own
 whitelist for portage bookkeeping a mirror dir never contains: `<file>.lock`
 (a live fetch lock) and `.layout.conf.<mirror>`.
 
+`em clean all` runs all three sweeps — distfiles, binary packages, and the
+`build.log` files `em maint logs` reports on — announcing each step. It keeps
+going when a step fails (an unreadable `PKGDIR` should not cost you the
+distfile sweep) and returns the first error at the end, so a script still
+sees a non-zero exit.
+
 `em clean pkg` is distinct from the pre-existing `em maint binpkg prune`,
 which prunes by *build identity* (the multi-instance work in
 [[binpkg-subtargets]]) rather than by "no cpv in the tree / not installed".
@@ -77,33 +83,12 @@ tractable and making the rest say what they actually are:
 - **`merges`** — still unavailable, but the error says why: `em` keeps no
   failed-merge registry; a failure is reported at the end of the run and in
   its build log.
-- **`all`** — designed, not yet written. The earlier "defer until the
-  subcommand set settles" framing was wrong: `all` never has to mean
-  *everything*, and real `emaint` does not either. It runs a **subset**, and
-  the fix for the ambiguity is simply to **print the subset it covers** so
-  the user is never guessing.
-
-  The dividing line is check-vs-mutate, which `em`'s subcommands already
-  fall on cleanly:
-
-  | in `all` (reports only) | excluded (mutates, or needs an argument) |
-  |---|---|
-  | `world` (no `--fix`) | `binhost` — writes an index |
-  | `cleanresume` (no `--fix`) | `binpkg` — requires an action |
-  | `moveinst` — report-only | `regen-use` — writes `use.local.desc` |
-  | `movebin` — report-only | `revisions` — purges history |
-  | `logs` (no `--fix`) | `sync` — network, mutates the tree |
-  | `cleanconfmem` — no-op | `merges` — unavailable |
-
-  So `em maint all` is "every check `em` can make without changing
-  anything", which is also what makes it safe to suggest running. It should
-  open by naming the tasks it is about to run, and keep going past a task
-  that fails rather than aborting the sweep — one unreadable PKGDIR should
-  not hide the world-file result. A non-zero exit if any task reported a
-  problem, so it is usable from a cron job.
-
-  Everything it needs already exists; this is a fan-out plus a header, not
-  new machinery.
+- **`all`** — **removed** 2026-09-02 (Luca). An aggregate over `maint` was
+  the wrong shape: `em maint`'s subcommands are overwhelmingly checks and
+  reports, so an "all" that ran them would mostly be a no-op wrapper, while
+  the thing actually worth batching is the *cleaning*. That is
+  `em clean all`, which sweeps distfiles, binary packages and the retained
+  build logs in one pass — see §2.
 
 ## 4. Standalone applets
 

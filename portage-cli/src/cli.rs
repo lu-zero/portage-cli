@@ -2116,8 +2116,6 @@ pub struct EmergeArgs {
 
 #[derive(Subcommand)]
 pub enum MaintCommand {
-    #[command(about = "Not yet available: pending a settled subcommand set")]
-    All,
     #[command(about = "Generate binary package metadata index")]
     Binhost,
     #[command(about = "Inspect/verify/prune local binary packages (em-only, no emaint equivalent)")]
@@ -2175,11 +2173,12 @@ pub enum MaintCommand {
     },
 }
 
-/// `em maint binpkg <action>` — local `PKGDIR` maintenance built on the `Packages`
-/// index/reader substrate
-///
-/// No real-portage `emaint` module exists for this (only `emaint binhost`, which just
-/// regenerates the index); this is an em-only extension.
+/// Inspect, verify and prune the binary packages in the local `PKGDIR`
+//
+// clap renders the doc comment above as this subcommand's help, so the
+// rationale stays a plain comment: there is no real-portage `emaint` module
+// for this (only `emaint binhost`, which just regenerates the index) — it is
+// an em-only extension, built on the `Packages` index/reader substrate.
 #[derive(Subcommand)]
 pub enum BinpkgAction {
     #[command(about = "Check each indexed binpkg's size/MD5/SHA1 against the file on disk")]
@@ -2702,6 +2701,11 @@ pub enum CleanTarget {
         alias = "p"
     )]
     Pkg {
+        #[command(flatten)]
+        opts: CleanOpts,
+    },
+    #[command(about = "Everything above, plus the build logs finished merges leave behind")]
+    All {
         #[command(flatten)]
         opts: CleanOpts,
     },

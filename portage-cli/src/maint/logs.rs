@@ -19,7 +19,16 @@ struct Log {
     age: std::time::Duration,
 }
 
-pub fn run(work_base: &Utf8Path, older_than: Option<&str>, fix: bool) -> Result<()> {
+/// `remove_hint` names the flag *this caller* removes with — `em maint logs`
+/// has `--fix`, while `em clean all` removes by default and reports under
+/// `-p`, so a shared wording would tell one of them to pass a flag it has no
+/// idea about.
+pub fn run(
+    work_base: &Utf8Path,
+    older_than: Option<&str>,
+    fix: bool,
+    remove_hint: &str,
+) -> Result<()> {
     let cutoff = older_than
         .map(|spec| {
             humantime::parse_duration(spec)
@@ -49,7 +58,7 @@ pub fn run(work_base: &Utf8Path, older_than: Option<&str>, fix: bool) -> Result<
     }
     if !fix {
         println!(
-            ">>> {} build log(s), {}. Run with --fix to remove them.",
+            ">>> {} build log(s), {}. {remove_hint} to remove them.",
             logs.len(),
             crate::clean::human_bytes(total)
         );
@@ -170,6 +179,6 @@ mod tests {
         let missing = camino::Utf8Path::from_path(dir.path())
             .unwrap()
             .join("nope");
-        assert!(run(&missing, None, false).is_ok());
+        assert!(run(&missing, None, false, "Run with --fix").is_ok());
     }
 }

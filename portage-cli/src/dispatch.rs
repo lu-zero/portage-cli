@@ -282,13 +282,6 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
 async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result<()> {
     match command {
         None => bail!("not implemented: emaint (no subcommand)"),
-        // Deferred on purpose rather than stubbed: what "all" means changes
-        // every time a subcommand lands, and the set is still moving — and it
-        // would have to decide per task whether to check or to mutate.
-        Some(MaintCommand::All) => bail!(
-            "em maint all is not available yet — run the individual tasks; \
-             what it should cover is still moving"
-        ),
         Some(MaintCommand::Binhost) => maint::binhost::run(globals).await,
         Some(MaintCommand::Binpkg { action }) => maint::binpkg::run(action, globals).await,
         Some(MaintCommand::Cleanconfmem) => {
@@ -318,7 +311,7 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
         Some(MaintCommand::Logs { fix, older_than }) => {
             let roots = globals.roots();
             let work_base = crate::ebuild::default_work_base(roots.relocate_root());
-            maint::logs::run(&work_base, older_than.as_deref(), *fix)
+            maint::logs::run(&work_base, older_than.as_deref(), *fix, "Run with --fix")
         }
         Some(MaintCommand::Merges) => bail!(
             "em maint merges needs a failed-merge registry, which em does not keep yet — \

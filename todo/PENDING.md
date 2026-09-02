@@ -144,7 +144,7 @@ carry an effort estimate.
   reconciliation — `em` writes `._cfgNNNN_` sidecars on every protected
   merge and has no `etc-update`/`dispatch-conf` to consume them, which a
   host's own tools cannot do under `--root`/`--prefix`/`--local`. Then
-  `emaint` (10 of 13 done 2026-09-02 — `logs`/`movebin` landed, `all` designed as a documented read-only subset). `em clean dist`/`pkg` ✅ 2026-09-02 (`d28bd91`),
+  `emaint` (12 of 12 reachable 2026-09-02 — `logs`/`movebin` landed, `all` dropped in favour of `em clean all`, `cleanconfmem`/`merges` now say what they are). `em clean dist`/`pkg` ✅ 2026-09-02 (`d28bd91`),
   and `portageq`/`grep` measured as not worth building — zero calls from any
   inheritable eclass or live ebuild: [[unimplemented-surface]]
 - **Full `regression-matrix.sh --full` run 2026-09-02** — `stages --stage1

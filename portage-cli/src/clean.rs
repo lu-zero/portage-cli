@@ -96,22 +96,69 @@ pub(crate) fn human_bytes(bytes: u64) -> String {
 
 pub async fn run(globals: &Cli, target: &CleanTarget) -> Result<()> {
     let opts = match target {
-        CleanTarget::Dist { opts } | CleanTarget::Pkg { opts } => opts,
+        CleanTarget::Dist { opts } | CleanTarget::Pkg { opts } | CleanTarget::All { opts } => opts,
     };
     let filters = Filters::parse(opts)?;
-    let candidates = match target {
-        CleanTarget::Dist { .. } => dist_candidates(globals, opts, &filters)?,
-        CleanTarget::Pkg { .. } => pkg_candidates(globals, opts, &filters).await?,
+    match target {
+        CleanTarget::Dist { .. } => {
+            let c = dist_candidates(globals, opts, &filters)?;
+            report_and_remove(globals, &c, "distfile")
+        }
+        CleanTarget::Pkg { .. } => {
+            let c = pkg_candidates(globals, opts, &filters).await?;
+            report_and_remove(globals, &c, "binary package")
+        }
+        CleanTarget::All { .. } => run_all(globals, opts, &filters).await,
+    }
+}
+
+/// Every reclaimable thing in one pass
+///
+/// Each step is announced and run to completion even if an earlier one failed:
+/// an unreadable `PKGDIR` should not cost the user the distfile sweep. The
+/// first error is returned at the end so a script still sees a failure.
+async fn run_all(globals: &Cli, opts: &CleanOpts, filters: &Filters) -> Result<()> {
+    let mut failed: Option<anyhow::Error> = None;
+    let note = |e: anyhow::Error, failed: &mut Option<anyhow::Error>| {
+        crate::style::warn_line!("{e:#}");
+        if failed.is_none() {
+            *failed = Some(e);
+        }
     };
-    report_and_remove(globals, &candidates, target)
+
+    println!(">>> distfiles");
+    match dist_candidates(globals, opts, filters) {
+        Ok(c) => report_and_remove(globals, &c, "distfile")?,
+        Err(e) => note(e, &mut failed),
+    }
+
+    println!(">>> binary packages");
+    match pkg_candidates(globals, opts, filters).await {
+        Ok(c) => report_and_remove(globals, &c, "binary package")?,
+        Err(e) => note(e, &mut failed),
+    }
+
+    println!(">>> build logs");
+    let work_base = crate::ebuild::default_work_base(globals.roots().relocate_root());
+    if let Err(e) = crate::maint::logs::run(
+        &work_base,
+        opts.time_limit.as_deref(),
+        // `clean` is a removal command, so the logs step removes too — unlike
+        // `em maint logs`, which reports until asked with `--fix`.
+        !globals.pretend,
+        "Re-run without -p",
+    ) {
+        note(e, &mut failed);
+    }
+
+    match failed {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Print the candidate set and, unless `-p`, unlink it
-fn report_and_remove(globals: &Cli, candidates: &[Candidate], target: &CleanTarget) -> Result<()> {
-    let noun = match target {
-        CleanTarget::Dist { .. } => "distfile",
-        CleanTarget::Pkg { .. } => "binary package",
-    };
+fn report_and_remove(globals: &Cli, candidates: &[Candidate], noun: &str) -> Result<()> {
     if candidates.is_empty() {
         println!(">>> No {noun}s to clean.");
         return Ok(());
