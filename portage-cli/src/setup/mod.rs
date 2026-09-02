@@ -668,6 +668,8 @@ mod tests {
         use super::Mode;
         use crate::active::ActiveKind;
 
+        let (_tmp, _g) = crate::test_support::isolate_active_state();
+
         let mode = |args: &[&str]| {
             let cli = Cli::parse_from([&["em", "emerge"], args].concat());
             Mode::resolve(&cli.roots()).unwrap()
