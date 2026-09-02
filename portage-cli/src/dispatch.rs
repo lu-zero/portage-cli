@@ -272,8 +272,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
         Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
         Applet::Stages(args) => crossdev::stage1(args, globals).await,
-        Applet::Dispatch => bail!("not implemented: dispatch-conf"),
-        Applet::Etc => bail!("not implemented: etc-update"),
+        Applet::Etc { command, opts, .. } => crate::etc::run(globals, command.as_ref(), opts).await,
         Applet::Env { .. } => maint::env::env_update(globals.roots().merge_root()),
         Applet::Emerge(args) => emerge::run_emerge(globals, args).await,
     }

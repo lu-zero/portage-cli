@@ -2731,7 +2731,7 @@ fn run_clean(work_root: &Utf8Path) -> Result<()> {
 /// gives an ancestor `CONFIG_PROTECT_MASK` unconditional priority regardless
 /// of how deep the matching `CONFIG_PROTECT` entry is). Matching what real
 /// `emerge` actually does on a system is the intended behavior here.
-struct ConfigProtect {
+pub(crate) struct ConfigProtect {
     protect: Vec<String>,
     mask: Vec<String>,
 }
@@ -2760,6 +2760,41 @@ impl ConfigProtect {
         }
     }
 
+    /// Read the lists from the root-aware `make.conf` rather than a build
+    /// shell, for callers that only inspect the filesystem (`em etc`) and
+    /// have no reason to source an ebuild environment.
+    ///
+    /// `/etc` is always protected, the same guarantee `from_shell` relies on
+    /// portage's `make.globals` for. Paths are stored root-relative-ready
+    /// (leading `/`, no trailing one), as `is_protected` compares them
+    /// against the same shape.
+    pub(crate) async fn from_roots(roots: &portage_resolve::Roots) -> Self {
+        let read = |v: Option<String>| -> Vec<String> {
+            v.unwrap_or_default()
+                .split_whitespace()
+                .map(|s| s.trim_end_matches('/').to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+        let mut protect =
+            read(crate::binpkg::read_make_conf_var_for_roots(roots, "CONFIG_PROTECT").await);
+        if !protect.iter().any(|p| p == "/etc") {
+            protect.push("/etc".to_string());
+        }
+        Self {
+            protect,
+            mask: read(
+                crate::binpkg::read_make_conf_var_for_roots(roots, "CONFIG_PROTECT_MASK").await,
+            ),
+        }
+    }
+
+    /// The protected directories themselves, for a caller that has to walk
+    /// them rather than test a single path.
+    pub(crate) fn protected_dirs(&self) -> &[String] {
+        &self.protect
+    }
+
     /// Length of the longest entry in `list` that prefix-matches `obj` on
     /// whole components (`obj == p` or `obj` under `p/`); 0 if none.
     fn longest_match(list: &[String], obj: &str) -> usize {
@@ -2770,9 +2805,19 @@ impl ConfigProtect {
             .unwrap_or(0)
     }
 
-    fn is_protected(&self, obj: &Utf8Path) -> bool {
+    pub(crate) fn is_protected(&self, obj: &Utf8Path) -> bool {
         let obj = obj.as_str();
         Self::longest_match(&self.protect, obj) > Self::longest_match(&self.mask, obj)
+    }
+
+    /// Explicit lists, for a test that needs a specific protect/mask pair
+    /// without a shell or a `make.conf`.
+    #[cfg(test)]
+    pub(crate) fn for_test(protect: &[&str], mask: &[&str]) -> Self {
+        Self {
+            protect: protect.iter().map(|s| (*s).to_string()).collect(),
+            mask: mask.iter().map(|s| (*s).to_string()).collect(),
+        }
     }
 
     /// A config-protection set that protects nothing (for tests / contexts

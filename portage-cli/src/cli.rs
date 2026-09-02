@@ -134,6 +134,9 @@ impl Cli {
             | Some(Applet::Clean {
                 topology, root_arg, ..
             })
+            | Some(Applet::Etc {
+                topology, root_arg, ..
+            })
             | Some(Applet::Query {
                 topology, root_arg, ..
             })
@@ -1891,11 +1894,21 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     #[command(about = "Assemble stage-build artifacts (stage1 packages.build) into --root")]
     Stages(StagesArgs),
 
-    #[command(about = "Safe configuration file updates (dispatch-conf)")]
-    Dispatch,
-
-    #[command(about = "Interactive configuration file updates (etc-update)")]
-    Etc,
+    #[command(
+        about = "Reconcile pending config files (etc-update / dispatch-conf)",
+        alias = "config",
+        alias = "dispatch"
+    )]
+    Etc {
+        #[command(subcommand)]
+        command: Option<EtcCommand>,
+        #[command(flatten)]
+        opts: EtcOpts,
+        #[command(flatten)]
+        topology: Topology,
+        #[command(flatten)]
+        root_arg: RootArg,
+    },
 
     #[command(about = "Regenerate /etc/profile.env and ld.so cache")]
     Env {
@@ -2682,6 +2695,35 @@ pub enum QueryCommand {
         #[arg(required = true)]
         atom: Vec<String>,
     },
+}
+
+/// `em etc <command>`
+#[derive(Subcommand)]
+pub enum EtcCommand {
+    #[command(about = "Show what each pending file would change")]
+    Diff {
+        /// Only files whose path contains this text
+        path: Option<String>,
+    },
+    #[command(about = "Resolve each pending file interactively")]
+    Merge,
+}
+
+/// Batch resolutions for `em etc`
+///
+/// Mutually exclusive with each other; without any of them `em etc` lists.
+#[derive(clap::Args, Clone, Debug, Default)]
+pub struct EtcOpts {
+    /// Install every pending file over its target
+    #[arg(long, conflicts_with_all = ["use_old", "auto"])]
+    pub use_new: bool,
+    /// Discard every pending file, keeping what is installed
+    #[arg(long, conflicts_with_all = ["use_new", "auto"])]
+    pub use_old: bool,
+    /// Resolve only what needs no decision: identical files, and those
+    /// differing from the installed one in comments or whitespace alone
+    #[arg(long, conflicts_with_all = ["use_new", "use_old"])]
+    pub auto: bool,
 }
 
 #[derive(Subcommand)]

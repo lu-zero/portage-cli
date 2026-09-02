@@ -1,51 +1,26 @@
 # What is still unimplemented — survey 2026-09-02
 
-Status: 🟡 `em clean dist`/`pkg` implemented 2026-09-02; the rest open.
+Status: 🟡 `em clean` and `em etc` implemented 2026-09-02; `portageq`/`grep`
+and three `emaint` subcommands remain.
 Every `bail!("not implemented")` in the tree, grouped by whether it actually
 costs a user anything.
 
-## 1. Config-file reconciliation — the sharpest gap
+## 1. Config-file reconciliation — IMPLEMENTED 2026-09-02
 
-```
-dispatch.rs:275  Applet::Dispatch => bail!("not implemented: dispatch-conf")
-dispatch.rs:276  Applet::Etc      => bail!("not implemented: etc-update")
-```
+`em etc` (aliases `config`, `dispatch`) closes what was the sharpest gap:
+`em` wrote `._cfgNNNN_` sidecars on every protected merge and nothing
+consumed them, which a host's own `etc-update` could not do under an offset
+root.
 
-`em` implements the whole *producing* half of `CONFIG_PROTECT` and then has
-nothing to consume it. `ebuild.rs` diverts a protected file whose content
-changed to `._cfgNNNN_<name>` using portage's own `new_protect_filename`
-numbering (`:2727`, `:2789`), records the *real* path in `CONTENTS` rather
-than the sidecar, and tells the user about it:
+One command rather than two front-ends, since `etc-update` and
+`dispatch-conf` differ in UX and not in the job. Listing, `diff`,
+interactive `merge`, and `--auto`/`--use-new`/`--use-old` batch modes; each
+pending file classified identical / comments-only / modified / new so
+`--auto` can clear the ones needing no decision. Full writeup in
+[`docs/user/applets.md`](../docs/user/applets.md#em-etc-etc-update-dispatch-conf).
 
-```
-{} protected config file(s) were installed with a ._cfg name.        (ebuild.rs:2297)
-```
-
-So a real `em` user accumulates `._cfg0000_*` files across every merge with
-no supported way to review or merge them — they have to reach for the
-system's own `etc-update`/`dispatch-conf`, which is fine on a host but not
-under `--root`/`--prefix`/`--local`, where those tools do not know about the
-offset. This is the one unimplemented item that breaks an ordinary workflow
-rather than a convenience.
-
-`ConfigProtect::longest_match` already answers "is this path protected", so
-the matching half exists; what is missing is the merge tool over the
-sidecars. See [[pms-config-protect]] for the settled semantics.
-
-**Placement decided 2026-09-02 (Luca): one command at `em etc`**, with
-`config` and `dispatch` as aliases — not two applets mirroring
-`etc-update` and `dispatch-conf`, which do the same job with different UX
-and would leave a user picking between two front-ends over one
-implementation. `em etc` over `em config` because `em pkg`/`em use` already
-edit portage's *own* configuration, and the distinction from "the files my
-packages installed" should not need working out. Top level, because it is a
-routine post-merge step and that is where portage puts `etc-update`.
-
-Surface: bare `em etc` lists pending sidecars grouped by target file;
-`diff [PATH]`; `merge` (interactive, per-file); `--use-new`/`--use-old` to
-batch-resolve. `dispatch-conf`'s auto-merge of files differing only in
-comments or whitespace belongs behind a flag, not a second command. Full
-writeup in [`docs/user/applets.md`](../docs/user/applets.md#config-file-reconciliation-the-open-gap).
+Only `dispatch-conf`'s RCS archival of superseded versions is not carried
+over.
 
 ## 2. `eclean` — IMPLEMENTED 2026-09-02
 
