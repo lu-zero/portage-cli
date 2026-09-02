@@ -71,42 +71,51 @@ A `stat` of `T` for `em` with a compiler still `R` would point back at process
 groups after all; `-icanon`/`-echo` in `stty` would mean another terminal-mode
 guard leaked somewhere.
 
-## 2. Ctrl+C can leave a half-written VDB entry
+## 2. Interruptible VDB write — FIXED 2026-09-02
 
-`portage_vdb::Vdb::register` (`portage-vdb/src/write.rs`) creates the final
-`<cat>/<pf>/` directory and then writes `EAPI`, `CATEGORY`, `SLOT`, `USE`,
-`IUSE`, … one `std::fs::write` at a time, in place. There is no temp-dir
-plus rename, and `-MERGING-` (portage's own marker for an interrupted
-merge) appears nowhere in the workspace.
+`Vdb::register` created the final `<cat>/<pf>/` and then wrote `EAPI`,
+`CATEGORY`, `SLOT`, `USE`, … one `std::fs::write` at a time, in place, so an
+interrupt between the first and last field left a directory every later read
+treats as a real installed package with fields missing. The merge critical
+section (`lock_merge_flock` / `merge_gate`) serialises concurrent `em`
+processes but did nothing about interruption.
 
-A SIGINT between `create_dir_all` and the last field leaves a directory that
-every later read treats as a real installed package with fields missing —
-the stale-VDB shape that has bitten this project before. `ebuild.rs`'s
-merge critical section (`lock_merge_flock` / `merge_gate`) serialises
-*concurrent `em` processes* but does nothing about interruption.
+Fields now land in `<cat>/-MERGING-<pf>` and the directory is renamed into
+place once complete, reusing the rename-away/rename-in/remove-old dance
+`portage_repo`'s regen cache already uses (`cache.rs`'s `swap_dir_target`) —
+including its handling of stale scratch dirs from a previous crash.
 
-Fix: register into `<cat>/-MERGING-<pf>/` and `rename` into place as the
-last step. Matching that directory-naming convention is an interface match,
-not a source copy, so it is fine under the licensing rule. A stale
-`-MERGING-` dir then becomes detectable and discardable on the next run.
+Not atomic, and the code says so: `rename` cannot replace a non-empty
+directory (`ENOTEMPTY`), so a rebuild of the same cpv still has a window
+between the two renames where `pkg_dir` does not exist. At every other
+instant it holds the complete old entry or the complete new one, never a mix.
 
-`pkg_dir` is used in only four places inside `register` (the `create_dir_all`,
-`write_field`'s closure, `field_cache::invalidate_entry`, and
-`InstalledPackage::from_dir`), so the change itself is small. Three things to
-settle while doing it:
+The three questions this note previously listed as open are answered:
 
-- `rename` onto an existing non-empty directory fails `ENOTEMPTY`, so a
-  re-merge of the same cpv has to unlink the final dir first. That shrinks the
-  vulnerable window from ~20 field writes to one unlink plus one rename, but
-  does not close it — say so rather than claiming atomicity.
-- Clear a stale `-MERGING-` dir before writing, or leftover fields from a
-  previous crash survive into the new entry.
-- Verify VDB enumeration skips it. `Category::packages` runs each directory
-  name through `parse_cpv(&self.name, pf)?`, and `-MERGING-bash-5.3` would
-  parse as pn `-MERGING-bash`, which is not a legal PMS package name — so it
-  *should* be dropped, but that is an assumption until there is a test for it.
-  Real portage's VDB carries these directories, so external tools already
-  tolerate them.
+- Both VDB scanners reject the name. `Category::packages` and
+  `find_slot_occupant` each run the directory name through `Pf::parse`/
+  `parse_cpv` and skip on failure, and `-MERGING-<pn>` is not a legal PMS
+  package name. Tested directly rather than assumed —
+  `an_unpublished_merging_entry_is_not_an_installed_package` and
+  `a_merging_entry_is_never_a_slot_occupant`. The second matters most: a
+  false occupant match would have made the merge unmerge a real package.
+- A stale `-MERGING-` dir is cleared before reuse, so fields from an earlier
+  crashed merge cannot survive into the new entry.
+- `republishing_replaces_the_previous_entry_and_leaves_no_scratch_dirs`
+  covers the rebuild path and asserts no `-MERGING-`/`-REPLACING-` dirs are
+  left behind.
+
+**Duplication to settle:** the dance now exists twice — here and in
+`portage_repo::cache::swap_dir_target`. `portage-repo` depends on
+`portage-vdb`, so it could be shared one-directionally, but a generic
+filesystem helper is a poor fit for a crate whose job is the installed
+package database, and the two differ in their scratch-dir naming
+(`-MERGING-` is a portage interface convention, `.regen-old` is internal).
+Left duplicated deliberately; a third caller should force the extraction.
+
+**Not yet live-verified:** no real merge has run through this. The unit tests
+cover both scanners and the rebuild path, but a `-p`-then-real merge on a
+throwaway `--root` is the confirmation this still wants.
 
 ## 3. Suspend time pollutes the ETA history
 

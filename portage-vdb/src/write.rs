@@ -1,6 +1,6 @@
 //! VDB write API: package registration (merge) and removal (unmerge)
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpn, Cpv, Pf};
 
 use crate::contents::{ContentsEntry, format_contents};
@@ -113,14 +113,26 @@ impl Vdb {
         let category = spec.cpv.cpn.category.as_ref();
         let pf = format!("{}-{}", spec.cpv.cpn.package.as_ref(), spec.cpv.version);
         let pkg_dir = self.root().join(category).join(&pf);
+        // Fields land in `-MERGING-<pf>` and the whole directory is renamed
+        // into place once complete, so an interrupted merge can never leave a
+        // half-populated entry that later reads take for an installed package.
+        let staging = merging_path_for(&pkg_dir);
 
-        std::fs::create_dir_all(&pkg_dir).map_err(|source| Error::Io {
-            path: pkg_dir.clone(),
+        // Leftover from a previous interrupted merge — never published, so
+        // nothing of value lives here; clear before reuse.
+        if staging.is_dir() {
+            std::fs::remove_dir_all(&staging).map_err(|source| Error::Io {
+                path: staging.clone(),
+                source,
+            })?;
+        }
+        std::fs::create_dir_all(&staging).map_err(|source| Error::Io {
+            path: staging.clone(),
             source,
         })?;
 
         let write_field = |name: &str, content: String| -> Result<()> {
-            let p = pkg_dir.join(name);
+            let p = staging.join(name);
             std::fs::write(&p, content).map_err(|source| Error::Io { path: p, source })
         };
 
@@ -206,6 +218,8 @@ impl Vdb {
             write_field("PROVIDES", lines(&spec.provides))?;
         }
 
+        publish_staged_entry(&staging, &pkg_dir)?;
+
         // Drop any fields cached for this entry (e.g. a same-version rebuild
         // overwriting USE in place) so later reads in this process see what
         // was just written, not whatever an earlier scan cached.
@@ -286,6 +300,49 @@ impl Vdb {
     }
 }
 
+/// Portage's marker for an entry mid-merge: `<cat>/-MERGING-<pf>`.
+///
+/// A directory by this name is not a legal `<pn>-<version>`, so
+/// [`crate::Category::packages`] drops it and a crashed merge leaves nothing
+/// a reader mistakes for an installed package.
+fn merging_path_for(pkg_dir: &Utf8Path) -> Utf8PathBuf {
+    let pf = pkg_dir.file_name().unwrap_or("unknown-0");
+    pkg_dir.with_file_name(format!("-MERGING-{pf}"))
+}
+
+/// Move a fully-written `staging` entry into place at `pkg_dir`
+///
+/// `rename()` cannot replace a non-empty directory (POSIX `ENOTEMPTY`), so a
+/// rebuild of the same cpv needs the rename-away/rename-in/remove-old dance
+/// rather than one syscall — there is a brief window where `pkg_dir` does not
+/// exist. At every other instant it holds either the complete old entry or the
+/// complete new one, never a mix, which is the whole point versus clearing it
+/// in place. Same shape as `portage_repo`'s regen cache swap.
+fn publish_staged_entry(staging: &Utf8Path, pkg_dir: &Utf8Path) -> Result<()> {
+    let displaced = {
+        let pf = pkg_dir.file_name().unwrap_or("unknown-0");
+        pkg_dir.with_file_name(format!("-REPLACING-{pf}"))
+    };
+    let io = |path: &Utf8Path, source: std::io::Error| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    };
+
+    // Leftover from a previous crashed publish (rename-in or remove-old never
+    // completed) — clear before reuse.
+    if displaced.is_dir() {
+        std::fs::remove_dir_all(&displaced).map_err(|e| io(&displaced, e))?;
+    }
+    if pkg_dir.is_dir() {
+        std::fs::rename(pkg_dir, &displaced).map_err(|e| io(pkg_dir, e))?;
+    }
+    std::fs::rename(staging, pkg_dir).map_err(|e| io(staging, e))?;
+    if displaced.is_dir() {
+        std::fs::remove_dir_all(&displaced).map_err(|e| io(&displaced, e))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,6 +403,78 @@ mod tests {
             size: 12345,
             counter: 1,
         }
+    }
+
+    // An interrupted merge must leave nothing a reader takes for an installed
+    // package. Simulated by staging an entry and never publishing it, which is
+    // exactly the state a SIGINT mid-`register` leaves behind.
+    // `find_slot_occupant` scans category dirs itself rather than going through
+    // `Category::packages`, and a false match here would make the merge unmerge
+    // a real package. It must not see a staged `-MERGING-` entry as an occupant.
+    #[test]
+    fn a_merging_entry_is_never_a_slot_occupant() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root: camino::Utf8PathBuf = tmp.path().to_path_buf().try_into().unwrap();
+        let vdb = Vdb::open(root.clone()).unwrap();
+
+        let staging = super::merging_path_for(&root.join("app-shells/testsh-1.0"));
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("SLOT"), "0\n").unwrap();
+
+        let cpn = Cpn::parse("app-shells/testsh").unwrap();
+        assert!(
+            vdb.find_slot_occupant(&cpn, "0").unwrap().is_none(),
+            "a -MERGING- directory must not count as the slot occupant"
+        );
+    }
+
+    #[test]
+    fn an_unpublished_merging_entry_is_not_an_installed_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root: camino::Utf8PathBuf = tmp.path().to_path_buf().try_into().unwrap();
+        let vdb = Vdb::open(root.clone()).unwrap();
+
+        let pkg_dir = root.join("app-shells/testsh-1.0");
+        let staging = super::merging_path_for(&pkg_dir);
+        std::fs::create_dir_all(&staging).unwrap();
+        // A plausible partial write: some fields present, most missing.
+        std::fs::write(staging.join("EAPI"), "8\n").unwrap();
+        std::fs::write(staging.join("SLOT"), "0\n").unwrap();
+
+        let found: Vec<String> = vdb.packages().into_iter().map(|p| p.to_string()).collect();
+        assert!(
+            found.is_empty(),
+            "a -MERGING- directory must not enumerate as installed: {found:?}"
+        );
+    }
+
+    // Publishing over an existing entry of the same cpv (a rebuild) has to
+    // survive ENOTEMPTY and leave only the new content behind.
+    #[test]
+    fn republishing_replaces_the_previous_entry_and_leaves_no_scratch_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root: camino::Utf8PathBuf = tmp.path().to_path_buf().try_into().unwrap();
+        let vdb = Vdb::open(root.clone()).unwrap();
+
+        let cpv = Cpv::parse("app-shells/testsh-1.0").unwrap();
+        let mut first = make_spec(cpv.clone());
+        first.use_flags = vec!["old".into()];
+        vdb.register(&first).unwrap();
+
+        let mut second = make_spec(cpv);
+        second.use_flags = vec!["new".into()];
+        let pkg = vdb.register(&second).unwrap();
+
+        assert_eq!(pkg.field("USE").unwrap().as_deref(), Some("new"));
+        let leftovers: Vec<String> = std::fs::read_dir(root.join("app-shells"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("-MERGING-") || n.starts_with("-REPLACING-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "scratch dirs left behind: {leftovers:?}"
+        );
     }
 
     #[test]

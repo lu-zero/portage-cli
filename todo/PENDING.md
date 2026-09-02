@@ -141,9 +141,9 @@ carry an effort estimate.
   ([[pms-compliance]]).
 - **Signal handling** (reported 2026-09-02, phase-stdin half fixed in
   `0018023`) — the remaining items are the current systematic queue, in
-  order: (1) `Vdb::register` writes fields in place with no `-MERGING-`
-  rename, so an interrupted merge leaves a half-written VDB entry — the
-  one actual data-integrity bug here; (2) durations are wall-clock, so
+  order: (1) `Vdb::register`'s in-place field writes ✅ 2026-09-02 — staged
+  through `-MERGING-<pf>` and renamed into place, reusing regen's dir-swap
+  dance; not yet live-verified on a real merge; (2) durations are wall-clock, so
   suspend time is written into `merges.jsonl` and skews every future ETA
   for that package; (3) a suspended `em` holds `.builddir.lock` with no
   "waiting on pid N" diagnostic; (4) no SIGINT/SIGTERM handler at all, so
