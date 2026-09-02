@@ -139,6 +139,13 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
+- **Unimplemented surface** (survey 2026-09-02): 14 `bail!("not
+  implemented")` sites. The one that breaks a real workflow is config-file
+  reconciliation — `em` writes `._cfgNNNN_` sidecars on every protected
+  merge and has no `etc-update`/`dispatch-conf` to consume them, which a
+  host's own tools cannot do under `--root`/`--prefix`/`--local`. Then
+  `eclean pkg`/`dist` (nothing at all), `emaint` (8 of 12 done), and
+  `portageq`/`grep` (no known consumer): [[unimplemented-surface]]
 - **Full `regression-matrix.sh --full` run 2026-09-02** — `stages --stage1
   --root` PASSES (154 pkgs, a correct stage1); every `--prefix` leg fails,
   for three unrelated reasons. Run record, including two wrong theories not
