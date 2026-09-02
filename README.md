@@ -51,8 +51,8 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap; see [docs/crossdev.md](./docs/user/crossdev.md) |
 | `toolchain` | — | Working — native self-hosting toolchain bootstrap into `--root` |
 | `stages` | catalyst stage1/3 | Partial — `--stage1` (`packages.build`), `--stage3` (emptytree `@system`); no stage4 yet |
-| `dispatch` | `dispatch-conf` | Planned — [the open gap](./docs/user/applets.md#config-file-reconciliation-the-open-gap) |
-| `etc` | `etc-update` | Planned — [the open gap](./docs/user/applets.md#config-file-reconciliation-the-open-gap) |
+| `dispatch` | `dispatch-conf` | Planned — alias of `etc`; [decided shape](./docs/user/applets.md#config-file-reconciliation-the-open-gap) |
+| `etc` | `etc-update` / `dispatch-conf` | Planned — one command for both; [decided shape](./docs/user/applets.md#config-file-reconciliation-the-open-gap) |
 | `env` | `env-update` | Working — `profile.env` + `ld.so.conf` from `etc/env.d` |
 
 ## Documentation

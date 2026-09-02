@@ -285,18 +285,46 @@ and `em`'s files inherit the portage group from it.
 
 ## Config-file reconciliation — the open gap
 
-`em dispatch` (dispatch-conf) and `em etc` (etc-update) are not implemented,
-and this is the one absence that interrupts an ordinary workflow.
+Not implemented, and the one absence that interrupts an ordinary workflow.
 
 `em` implements the whole *producing* half of `CONFIG_PROTECT`: a protected
 file whose content changed is diverted to `._cfgNNNN_<name>` using portage's
 own numbering, `CONTENTS` records the real path rather than the sidecar, and
-the merge tells you how many were written. Nothing consumes them.
+the merge reports how many were written. Nothing consumes them.
 
 On a host you can fall back to the system's own `etc-update`. Under
 `em --root`/`--prefix`/`--local` you cannot: those tools do not know about
 the offset, so the sidecars accumulate with no supported way to review or
 merge them.
+
+### Decided shape: one command at `em etc`
+
+`etc-update` and `dispatch-conf` do the same job with different UX —
+`etc-update` is a plain interactive scanner, `dispatch-conf` adds RCS
+archiving, auto-merge of trivially-different files, and its own config file.
+Mirroring both would give two front-ends over one implementation, two help
+texts, and no answer to "which do I use".
+
+So one command, at **`em etc`** (top level, because reconciling config is a
+routine post-merge step, exactly where portage puts `etc-update`), with
+`config` and `dispatch` as aliases for muscle memory. `em etc` rather than
+`em config` deliberately: `em pkg` and `em use` already edit *portage's own*
+configuration, and a user should not have to work out which of the three
+touches the files their packages installed.
+
+Planned surface:
+
+| | |
+|---|---|
+| `em etc` | list the pending sidecars, grouped by target file |
+| `em etc diff [PATH]` | what changed, old vs new |
+| `em etc merge` | interactive, per-file |
+| `em etc --use-new` / `--use-old` | batch-resolve everything |
+
+Root-aware like the rest of `em`, which is the whole reason it has to exist
+rather than deferring to the host tool. `dispatch-conf`'s auto-merge of
+files that differ only in comments/whitespace is worth having as a flag
+rather than a second command.
 
 ## `em portageq` and `em grep` — planned, user-facing
 

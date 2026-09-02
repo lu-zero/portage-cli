@@ -29,8 +29,23 @@ offset. This is the one unimplemented item that breaks an ordinary workflow
 rather than a convenience.
 
 `ConfigProtect::longest_match` already answers "is this path protected", so
-the matching half exists; what is missing is the interactive/`-a` merge tool
-over the sidecars. See [[pms-config-protect]] for the settled semantics.
+the matching half exists; what is missing is the merge tool over the
+sidecars. See [[pms-config-protect]] for the settled semantics.
+
+**Placement decided 2026-09-02 (Luca): one command at `em etc`**, with
+`config` and `dispatch` as aliases — not two applets mirroring
+`etc-update` and `dispatch-conf`, which do the same job with different UX
+and would leave a user picking between two front-ends over one
+implementation. `em etc` over `em config` because `em pkg`/`em use` already
+edit portage's *own* configuration, and the distinction from "the files my
+packages installed" should not need working out. Top level, because it is a
+routine post-merge step and that is where portage puts `etc-update`.
+
+Surface: bare `em etc` lists pending sidecars grouped by target file;
+`diff [PATH]`; `merge` (interactive, per-file); `--use-new`/`--use-old` to
+batch-resolve. `dispatch-conf`'s auto-merge of files differing only in
+comments or whitespace belongs behind a flag, not a second command. Full
+writeup in [`docs/user/applets.md`](../docs/user/applets.md#config-file-reconciliation-the-open-gap).
 
 ## 2. `eclean` — IMPLEMENTED 2026-09-02
 
