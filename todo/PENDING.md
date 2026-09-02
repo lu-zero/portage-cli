@@ -139,6 +139,13 @@ carry an effort estimate.
   ([[use-stable-in-defaults]]); `repo` USE_ORDER layer
   ([[use-order-repo-layer]]). Folded into the 2026-08-20 PMS queue
   ([[pms-compliance]]).
+- **`crossdev --setup --prefix` aborts on a phantom blocker** (found
+  2026-09-02 by `regression-matrix.sh --full`): two uninstalled packages come
+  back as `[ebuild R]` and a `linux-headers`/`virtual/os-headers` block fires
+  for packages that are neither installed nor in the plan, while the bare run
+  resolves the same two as `[ebuild N]` and succeeds. Blocks the whole
+  `--prefix` crossdev path, so it sits upstream of the gcc-stage1 work:
+  [[crossdev-prefix-spurious-os-headers-blocker]]
 - `gentoo-stages` keeps `variant` as a `String` while `gentoo_core::Variant`
   sits in a crate it already depends on. Postponed deliberately: the crate is
   consumed by `crossdev-stages`, so this is semver-visible and wants a
