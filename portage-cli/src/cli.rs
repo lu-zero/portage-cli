@@ -1498,7 +1498,7 @@ pub enum Applet {
     #[command(about = "System maintenance and health checks")]
     Maint {
         #[command(subcommand)]
-        command: Option<MaintCommand>,
+        command: MaintCommand,
         #[command(flatten)]
         topology: Topology,
         #[command(flatten)]
@@ -1675,7 +1675,7 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
     #[command(about = "Clean distfiles and/or binary packages")]
     Clean {
         #[command(subcommand)]
-        target: Option<CleanTarget>,
+        target: CleanTarget,
         #[command(flatten)]
         topology: Topology,
         #[command(flatten)]

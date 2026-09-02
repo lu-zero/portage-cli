@@ -279,19 +279,18 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
     }
 }
 
-async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result<()> {
+async fn run_maint(command: &MaintCommand, globals: &cli::Cli) -> Result<()> {
     match command {
-        None => bail!("not implemented: emaint (no subcommand)"),
-        Some(MaintCommand::Binhost) => maint::binhost::run(globals).await,
-        Some(MaintCommand::Binpkg { action }) => maint::binpkg::run(action, globals).await,
-        Some(MaintCommand::Cleanconfmem) => {
+        MaintCommand::Binhost => maint::binhost::run(globals).await,
+        MaintCommand::Binpkg { action } => maint::binpkg::run(action, globals).await,
+        MaintCommand::Cleanconfmem => {
             // Not a stub: portage's config tracker (`/var/lib/portage/config`)
             // records which protected files a user has already merged, and
             // `em` never writes one — so there is nothing here to go stale.
             println!("em keeps no config-memory file; nothing to clean.");
             Ok(())
         }
-        Some(MaintCommand::Cleanresume { fix }) => {
+        MaintCommand::Cleanresume { fix } => {
             let roots = globals.roots();
             let report = maint::resume::cleanresume(roots.merge_root(), *fix)?;
             if report.is_empty() {
@@ -308,37 +307,37 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
             }
             Ok(())
         }
-        Some(MaintCommand::Logs { fix, older_than }) => {
+        MaintCommand::Logs { fix, older_than } => {
             let roots = globals.roots();
             let work_base = crate::ebuild::default_work_base(roots.relocate_root());
             maint::logs::run(&work_base, older_than.as_deref(), *fix, "Run with --fix")
         }
-        Some(MaintCommand::Merges) => bail!(
+        MaintCommand::Merges => bail!(
             "em maint merges needs a failed-merge registry, which em does not keep yet — \
              a failed package is reported at the end of the run and in its build log instead"
         ),
-        Some(MaintCommand::Movebin) => {
+        MaintCommand::Movebin => {
             let pkgdir = crate::binpkg::resolve_pkgdir(globals).await;
             let resolved = globals.repo_path();
             maint::movebin::run(camino::Utf8Path::new(&resolved), &pkgdir)
         }
-        Some(MaintCommand::Moveinst) => {
+        MaintCommand::Moveinst => {
             let vdb = open_cli_vdb(globals)?;
             let resolved = globals.repo_path();
             let repo_path = camino::Utf8Path::new(&resolved);
             maint::moveinst::run(repo_path, &vdb)
         }
-        Some(MaintCommand::RegenUse { output }) => {
+        MaintCommand::RegenUse { output } => {
             let resolved = globals.repo_path();
             let repo_path = camino::Utf8Path::new(&resolved);
             maint::regen_use::run(repo_path, output.as_deref())
         }
-        Some(MaintCommand::Revisions { repos }) => {
+        MaintCommand::Revisions { repos } => {
             let roots = globals.roots();
             maint::revisions::run(repos, roots.target())
         }
-        Some(MaintCommand::Sync { repos }) => maint::sync::run(repos, globals).await,
-        Some(MaintCommand::World { fix }) => {
+        MaintCommand::Sync { repos } => maint::sync::run(repos, globals).await,
+        MaintCommand::World { fix } => {
             let vdb = open_cli_vdb(globals)?;
             let roots = globals.roots();
             let resolved = globals.repo_path();
@@ -536,13 +535,8 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
     }
 }
 
-async fn run_clean(globals: &cli::Cli, target: &Option<CleanTarget>) -> Result<()> {
-    match target {
-        // No sensible default: `dist` and `pkg` free different things and a
-        // wrong guess deletes files.
-        None => bail!("em clean needs a target: `dist` or `pkg`"),
-        Some(t) => crate::clean::run(globals, t).await,
-    }
+async fn run_clean(globals: &cli::Cli, target: &CleanTarget) -> Result<()> {
+    crate::clean::run(globals, target).await
 }
 
 /// Live sessions from the real merge root plus `em regen`'s own XDG activity
