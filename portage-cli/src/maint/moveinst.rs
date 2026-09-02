@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use camino::Utf8Path;
 use portage_vdb::Vdb;
 
-enum UpdateEntry {
+pub(crate) enum UpdateEntry {
     Move {
         from: String,
         to: String,
@@ -77,7 +77,7 @@ pub fn run(repo_path: &Utf8Path, vdb: &Vdb) -> Result<()> {
     Ok(())
 }
 
-fn load_moves(updates_dir: &Utf8Path) -> Result<Vec<UpdateEntry>> {
+pub(crate) fn load_moves(updates_dir: &Utf8Path) -> Result<Vec<UpdateEntry>> {
     let mut entries = Vec::new();
 
     let mut files: Vec<_> = std::fs::read_dir(updates_dir)

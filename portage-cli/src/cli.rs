@@ -2116,7 +2116,7 @@ pub struct EmergeArgs {
 
 #[derive(Subcommand)]
 pub enum MaintCommand {
-    #[command(about = "Run all maintenance tasks")]
+    #[command(about = "Not yet available: pending a settled subcommand set")]
     All,
     #[command(about = "Generate binary package metadata index")]
     Binhost,
@@ -2125,7 +2125,7 @@ pub enum MaintCommand {
         #[command(subcommand)]
         action: BinpkgAction,
     },
-    #[command(about = "Discard stale config tracker entries")]
+    #[command(about = "No-op: em keeps no config-memory file to go stale")]
     Cleanconfmem,
     #[command(about = "Discard saved resume lists")]
     Cleanresume {
@@ -2134,9 +2134,16 @@ pub enum MaintCommand {
         #[arg(short, long)]
         fix: bool,
     },
-    #[command(about = "Clean old Portage build logs")]
-    Logs,
-    #[command(about = "Scan for and fix failed merges")]
+    #[command(about = "Prune the build.log files finished merges leave in the build tree")]
+    Logs {
+        /// Remove them; without this the logs are only listed
+        #[arg(long)]
+        fix: bool,
+        /// Only consider logs at least this old (e.g. `30d`, `2weeks`)
+        #[arg(short = 't', long, value_name = "AGE")]
+        older_than: Option<String>,
+    },
+    #[command(about = "Unavailable: em keeps no failed-merge registry")]
     Merges,
     #[command(about = "Apply package moves to binary packages")]
     Movebin,

@@ -79,7 +79,7 @@ fn parse_size(spec: &str) -> Result<u64> {
     Ok(n * mult)
 }
 
-fn human_bytes(bytes: u64) -> String {
+pub(crate) fn human_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut v = bytes as f64;
     let mut unit = 0;
@@ -355,7 +355,7 @@ async fn pkg_candidates(
 
 /// `category/PF` from a PKGDIR-relative container path, dropping any
 /// `-<build_id>` multi-instance suffix
-fn cpv_from_container(rel: &str) -> Option<String> {
+pub(crate) fn cpv_from_container(rel: &str) -> Option<String> {
     let rel = rel.strip_suffix(".gpkg.tar")?;
     let (cat, file) = rel.rsplit_once('/')?;
     let pf = match portage_binpkg::parse_build_id_from_name(&format!("{rel}.gpkg.tar")) {

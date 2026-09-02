@@ -282,10 +282,22 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
 async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result<()> {
     match command {
         None => bail!("not implemented: emaint (no subcommand)"),
-        Some(MaintCommand::All) => bail!("not implemented: emaint all"),
+        // Deferred on purpose rather than stubbed: what "all" means changes
+        // every time a subcommand lands, and the set is still moving — and it
+        // would have to decide per task whether to check or to mutate.
+        Some(MaintCommand::All) => bail!(
+            "em maint all is not available yet — run the individual tasks; \
+             what it should cover is still moving"
+        ),
         Some(MaintCommand::Binhost) => maint::binhost::run(globals).await,
         Some(MaintCommand::Binpkg { action }) => maint::binpkg::run(action, globals).await,
-        Some(MaintCommand::Cleanconfmem) => bail!("not implemented: emaint cleanconfmem"),
+        Some(MaintCommand::Cleanconfmem) => {
+            // Not a stub: portage's config tracker (`/var/lib/portage/config`)
+            // records which protected files a user has already merged, and
+            // `em` never writes one — so there is nothing here to go stale.
+            println!("em keeps no config-memory file; nothing to clean.");
+            Ok(())
+        }
         Some(MaintCommand::Cleanresume { fix }) => {
             let roots = globals.roots();
             let report = maint::resume::cleanresume(roots.merge_root(), *fix)?;
@@ -303,9 +315,20 @@ async fn run_maint(command: &Option<MaintCommand>, globals: &cli::Cli) -> Result
             }
             Ok(())
         }
-        Some(MaintCommand::Logs) => bail!("not implemented: emaint logs"),
-        Some(MaintCommand::Merges) => bail!("not implemented: emaint merges"),
-        Some(MaintCommand::Movebin) => bail!("not implemented: emaint movebin"),
+        Some(MaintCommand::Logs { fix, older_than }) => {
+            let roots = globals.roots();
+            let work_base = crate::ebuild::default_work_base(roots.relocate_root());
+            maint::logs::run(&work_base, older_than.as_deref(), *fix)
+        }
+        Some(MaintCommand::Merges) => bail!(
+            "em maint merges needs a failed-merge registry, which em does not keep yet — \
+             a failed package is reported at the end of the run and in its build log instead"
+        ),
+        Some(MaintCommand::Movebin) => {
+            let pkgdir = crate::binpkg::resolve_pkgdir(globals).await;
+            let resolved = globals.repo_path();
+            maint::movebin::run(camino::Utf8Path::new(&resolved), &pkgdir)
+        }
         Some(MaintCommand::Moveinst) => {
             let vdb = open_cli_vdb(globals)?;
             let resolved = globals.repo_path();

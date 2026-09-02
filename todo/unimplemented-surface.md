@@ -53,21 +53,33 @@ Both are useful; they answer different questions.
 Still not covered, if anyone wants closer `eclean` parity: the interactive
 mode, and `--destructive`'s "keep only the newest version" flavour.
 
-## 3. `emaint` — 8 of 12 implemented
+## 3. `emaint` — 10 of 13, and the help no longer lies
 
-Implemented: `binhost`, `binpkg`, `cleanresume`, `moveinst`, `regen-use`,
-`revisions`, `sync`, `world`.
+`em maint --help` used to list all 13 subcommands with confident
+descriptions while 5 were `bail!` stubs, so picking one from the help
+produced "not implemented". Fixed 2026-09-02 by implementing what was
+tractable and making the rest say what they actually are:
 
-```
-dispatch.rs:285  all           dispatch.rs:306  logs
-dispatch.rs:288  cleanconfmem  dispatch.rs:307  merges
-dispatch.rs:284  (no subcmd)   dispatch.rs:308  movebin
-```
-
-`all` is just a fan-out over the others and is cheap once the rest exist.
-`merges` (resume a partially-completed merge list) overlaps
-`cleanresume`/[[activity-status]]'s resume state and is the most useful of
-the remainder. `logs`, `cleanconfmem`, `movebin` are marginal.
+- **`logs`** — implemented. Deliberately *not* portage's target: real
+  `emaint logs` cleans `PORTAGE_LOGDIR`, which for `em` holds only elog
+  output (`em read` owns that, with its own `--delete`). `em` keeps each
+  package's `build.log` under
+  `<work_base>/<root-key>/<category>/<PF>/` after a successful merge on
+  purpose, and that is what accumulates — 47 logs / 85 MiB on this host at
+  the time of writing. `--fix` to remove, `-t 30d` to bound by age.
+- **`movebin`** — implemented, sharing `moveinst`'s `profiles/updates/`
+  reader and report-only for the same reason it is: renaming a GPKG
+  container is not enough, since the archive metadata and the `Packages`
+  index both name the old cpv.
+- **`cleanconfmem`** — cannot be implemented and no longer pretends to be
+  pending: it discards stale entries from portage's config tracker
+  (`/var/lib/portage/config`), which `em` never writes. Now says so.
+- **`merges`** — still unavailable, but the error says why: `em` keeps no
+  failed-merge registry; a failure is reported at the end of the run and in
+  its build log.
+- **`all`** — deliberately deferred (Luca): what "all" covers changes with
+  every subcommand that lands, and it would have to decide per task whether
+  to check or to mutate. Pick it up once the set settles.
 
 ## 4. Standalone applets
 
