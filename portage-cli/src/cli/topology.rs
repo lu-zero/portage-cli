@@ -82,11 +82,15 @@ pub struct Topology {
 }
 
 /// Installation root override — the offset an applet installs into / queries.
-///
-/// No `env = "ROOT"` here: since each applet now owns exactly one `RootArg`
-/// instance (no top-level copy to merge against), the `ROOT` env fallback is
-/// applied once, by `resolved_root`, rather than risking two independent
-/// reads of the same var if this field were ever flattened somewhere twice.
+//
+// No `env = "ROOT"` here: since each applet now owns exactly one `RootArg`
+// instance (no top-level copy to merge against), the `ROOT` env fallback is
+// applied once, by `resolved_root`, rather than risking two independent
+// reads of the same var if this field were ever flattened somewhere twice.
+//
+// Keep the rustdoc above to one paragraph: a second `///` paragraph becomes
+// this mixin's clap `long_about`, which clobbers the flattening applet's own
+// `--help` text since `RootArg` is flattened last in most of them.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct RootArg {
     /// Installation root (the offset an applet installs into / queries)

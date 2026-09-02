@@ -14,16 +14,17 @@ pub struct EmergeModeArgs {
     /// Search package names (each argument is a pattern)
     ///
     /// Deliberately separate from the `em search` applet: this is emerge's
-    /// own `-s` (drives `crate::search::run_emerge_style`, emerge-style
-    /// output), the applet is equery-style (`crate::search::run`, `--all`/
-    /// `--desc`/`--name-only`/`--homepage`). Same split as real Portage's
-    /// `emerge -s` vs `equery`, not accidental duplication.
+    /// own `-s`, emerge-style output; `em search` is the equery-style
+    /// applet (`--all`/`--desc`/`--name-only`/`--homepage`). Same split as
+    /// real Portage's `emerge -s` vs `equery`, not accidental duplication.
+    // Drives `crate::search::run_emerge_style`; the applet drives `crate::search::run`.
     #[arg(short = 's', long)]
     pub search: bool,
 
     /// Search package names and descriptions
     ///
-    /// See `search`'s doc comment for why this is separate from `em search --desc`.
+    /// Same split as `-s`/`em search` above: emerge-style output here,
+    /// `em search --desc` is the equery-style applet.
     #[arg(short = 'S', long)]
     pub searchdesc: bool,
 
@@ -44,9 +45,10 @@ pub struct EmergeModeArgs {
     /// the installed dependency graph first — matches real emerge's safe
     /// alternative to `-C`.
     ///
-    /// Identical implementation to the `em depclean [atoms]` applet
-    /// (`crate::depclean::run` forwards to `run_with_targets`) — the applet
-    /// form exists for scripting clarity, not a different behavior.
+    /// Same behavior as the `em depclean [atoms]` applet — this flag exists
+    /// for scripting convenience within a single `emerge`-style invocation.
+    // crate::depclean::run forwards to run_with_targets — identical
+    // implementation, not merely similar behavior.
     #[arg(short = 'c', long)]
     pub depclean: bool,
 

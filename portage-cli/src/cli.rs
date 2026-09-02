@@ -1477,8 +1477,10 @@ pub enum Applet {
 
     #[command(about = "Execute ebuild phases")]
     Ebuild {
+        /// Path to the `.ebuild` file to execute
         #[arg(required = true)]
         ebuild_path: String,
+        /// Phase(s) to run in order (e.g. `compile`, `install`, `qmerge`)
         #[arg(required = true)]
         phase: Vec<String>,
         /// Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
@@ -1502,8 +1504,10 @@ pub enum Applet {
 
     #[command(about = "Query Portage internal variables and data")]
     Portageq {
+        /// portageq sub-command to run (e.g. `envvar`, `get_repos`)
         #[arg(required = true)]
         command: String,
+        /// Arguments passed through to the sub-command
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
@@ -1517,10 +1521,11 @@ pub enum Applet {
     /// Default backends shell out to `git` / `rsync` (Portage parity). Build
     /// with `--features sync-gix` for the experimental pure-gix git path.
     ///
-    /// Identical implementation to `em maint sync` (both dispatch to
-    /// `crate::maint::sync::run`) — this top-level form exists only because
-    /// `sync` is common enough to deserve a short invocation, matching real
-    /// Portage having both `emerge --sync` and `emaint sync`.
+    /// Identical implementation to `em maint sync` — this top-level form
+    /// exists only because `sync` is common enough to deserve a short
+    /// invocation, matching real Portage having both `emerge --sync` and
+    /// `emaint sync`.
+    // Both dispatch to `crate::maint::sync::run`.
     #[command(about = "Sync repositories (git, rsync)")]
     Sync {
         /// Repo names from repos.conf (default: auto-sync enabled repos)
@@ -1533,6 +1538,8 @@ pub enum Applet {
 
     #[command(about = "Remove orphaned/unused packages")]
     Depclean {
+        /// Restrict cleaning to these atoms' dependency closure (every other
+        /// installed package is protected). Default: the whole `@world` set
         #[arg(trailing_var_arg = true)]
         atoms: Vec<String>,
         #[command(flatten)]
@@ -1547,6 +1554,8 @@ pub enum Applet {
 
     #[command(about = "Regenerate metadata cache")]
     Regen {
+        /// Repo names or paths to regenerate (default: every repo except the
+        /// main one, whose cache is normally maintained upstream)
         repos: Vec<String>,
         /// Write cache files to this directory instead of metadata/md5-cache
         #[arg(short = 'o', long, value_name = "DIR")]
@@ -1799,8 +1808,10 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 
     #[command(about = "Search inside ebuilds and eclasses")]
     Grep {
+        /// Pattern to search for
         #[arg(required = true)]
         pattern: String,
+        /// Restrict the search to these ebuild/eclass paths (default: the whole repo)
         #[arg(trailing_var_arg = true)]
         paths: Vec<String>,
     },
@@ -1830,6 +1841,7 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 
     #[command(about = "Parse/split atom strings")]
     Atom {
+        /// Atom strings to parse and print back in normalized form
         #[arg(required = true)]
         atoms: Vec<String>,
     },
@@ -1846,8 +1858,8 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 
     /// Register a default `--prefix` / `--local` so bare `em <pkg>` picks it up (dogfooding)
     ///
-    /// Explicit `--prefix`/`--local`/`--root` still win. State: `$XDG_STATE_HOME/em/active`.
-    /// See `em active --help`.
+    /// Explicit `--prefix`/`--local`/`--root` still win. State is stored under
+    /// `$XDG_STATE_HOME/em/active`.
     #[command(about = "Register a default --prefix/--local for bare em invocations")]
     Active {
         #[command(subcommand)]
@@ -1888,7 +1900,7 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 
     /// Resolve and merge/unmerge packages (emerge workalike).
     ///
-    /// `em <atoms>` and `em emerge <atoms>` parse into the same [`EmergeArgs`].
+    /// `em <atoms>` and `em emerge <atoms>` parse into the same arguments.
     #[command(about = "Resolve and merge/unmerge packages (emerge workalike)")]
     Emerge(EmergeArgs),
 }
@@ -1922,7 +1934,7 @@ pub struct SetupArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Privilege backend for this setup run (see [`Privilege`])
+    /// Privilege backend for this setup run
     #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
     pub privilege: Privilege,
 }
@@ -1983,7 +1995,7 @@ pub struct CrossdevArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Privilege backend for this crossdev run (see [`Privilege`])
+    /// Privilege backend for this crossdev run
     #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
     pub privilege: Privilege,
 }
@@ -2018,7 +2030,7 @@ pub struct ToolchainArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Privilege backend for this toolchain run (see [`Privilege`])
+    /// Privilege backend for this toolchain run
     #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
     pub privilege: Privilege,
 }
@@ -2057,7 +2069,7 @@ pub struct StagesArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Privilege backend for this stages run (see [`Privilege`])
+    /// Privilege backend for this stages run
     #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
     pub privilege: Privilege,
 }
@@ -2086,7 +2098,7 @@ pub struct EmergeArgs {
     #[command(flatten)]
     pub activity: ActivityArgs,
 
-    /// Privilege backend for this merge (see [`Privilege`])
+    /// Privilege backend for this merge
     #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
     pub privilege: Privilege,
 
@@ -2503,18 +2515,24 @@ pub enum PkgCommand {
     },
     #[command(about = "Edit per-package keywords in package.accept_keywords")]
     Keyword {
+        /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
+        /// Add keyword tokens (e.g. `~amd64`, `-*`)
         #[arg(short = 'a', long = "add", value_name = "KW")]
         add: Vec<String>,
+        /// Subtract keyword tokens (written with leading '-', e.g. `-~amd64`)
         #[arg(short = 's', long = "subtract", value_name = "KW")]
         subtract: Vec<String>,
+        /// Drop keyword tokens entirely (removes both the token and its negated form)
         #[arg(short = 'd', long = "drop", value_name = "KW")]
         drop: Vec<String>,
+        /// Target file inside package.accept_keywords/ (default: `<cat>-<pkg>`)
         #[arg(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,
     },
     #[command(about = "Add/remove a package from package.mask")]
     Mask {
+        /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
         /// Add the atom to package.mask
         #[arg(short = 'a', long = "add")]
@@ -2522,16 +2540,21 @@ pub enum PkgCommand {
         /// Remove the atom from package.mask
         #[arg(short = 'd', long = "drop")]
         drop: bool,
+        /// Target file inside package.mask/ (default: `<cat>-<pkg>`)
         #[arg(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,
     },
     #[command(about = "Edit per-package env files in package.env")]
     Env {
+        /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
+        /// Add env file name(s) (from `/etc/portage/env/`) to apply to this package
         #[arg(short = 'a', long = "add", value_name = "ENVFILE")]
         add: Vec<String>,
+        /// Drop env file name(s) from this package's entry
         #[arg(short = 'd', long = "drop", value_name = "ENVFILE")]
         drop: Vec<String>,
+        /// Target file inside package.env/ (default: `<cat>-<pkg>`)
         #[arg(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,
     },
@@ -2541,21 +2564,25 @@ pub enum PkgCommand {
 pub enum QueryCommand {
     #[command(about = "Find which package owns a file", alias = "b")]
     Belongs {
+        /// File path(s) to look up in the VDB contents records
         #[arg(required = true)]
         file: Vec<String>,
     },
     #[command(about = "Verify checksums of installed package", alias = "k")]
     Check {
+        /// Installed package atom(s) to verify
         #[arg(required = true)]
         atom: Vec<String>,
     },
     #[command(about = "List packages depending on an atom", alias = "d")]
     Depends {
+        /// Atom(s) whose dependents to list
         #[arg(required = true)]
         atom: Vec<String>,
     },
     #[command(about = "Display full dependency tree", alias = "g")]
     Depgraph {
+        /// Atom(s) to resolve and display the dependency tree for
         #[arg(required = true)]
         atom: Vec<String>,
         /// Output format
@@ -2569,6 +2596,7 @@ pub enum QueryCommand {
         /// Treat every atom as not-yet-installed (emerge's `-e`/`--emptytree`)
         #[arg(short = 'e', long)]
         emptytree: bool,
+        /// Only show dependencies, excluding the given atoms themselves from the tree
         #[arg(short = 'o', long)]
         onlydeps: bool,
         /// Include build-time dependencies (BDEPEND) in the resolution
@@ -2581,21 +2609,27 @@ pub enum QueryCommand {
     },
     #[command(about = "List files installed by a package", alias = "f")]
     Files {
+        /// Atom(s) whose installed file list to show
         #[arg(required = true)]
         atom: Vec<String>,
     },
-    #[command(about = "List packages matching env data", alias = "a")]
+    #[command(about = "List installed packages by a VDB field value", alias = "a")]
     Has {
-        #[arg(required = true)]
-        atom: Vec<String>,
+        /// VDB field to match, e.g. `SLOT`, `USE`, `repository`
+        field: String,
+        /// Value the field must contain; omit to list every package whose
+        /// field is set at all
+        value: Option<String>,
     },
     #[command(about = "List packages with a given USE flag in IUSE", alias = "h")]
     Hasuse {
+        /// USE flag name(s) to search for in IUSE
         #[arg(required = true)]
         flag: Vec<String>,
     },
     #[command(about = "Display keyword status across architectures", alias = "y")]
     Keywords {
+        /// Atom(s) to show keyword status for
         #[arg(required = true)]
         atom: Vec<String>,
     },
@@ -2613,21 +2647,25 @@ pub enum QueryCommand {
         alias = "m"
     )]
     Meta {
+        /// Atom(s) whose metadata to display
         #[arg(required = true)]
         atom: Vec<String>,
     },
     #[command(about = "Display total file size of a package", alias = "s")]
     Size {
+        /// Atom(s) whose installed file size to sum
         #[arg(required = true)]
         atom: Vec<String>,
     },
     #[command(about = "Display USE flags for a package", alias = "u")]
     Uses {
+        /// Atom(s) whose USE flags to display
         #[arg(required = true)]
         atom: Vec<String>,
     },
     #[command(about = "Print full path to the ebuild for a package", alias = "w")]
     Which {
+        /// Atom(s) to resolve to an ebuild path
         #[arg(required = true)]
         atom: Vec<String>,
     },
@@ -2664,9 +2702,15 @@ pub enum GlsaCommand {
     #[command(about = "List all GLSAs")]
     List,
     #[command(about = "Check for affected GLSAs")]
-    Check { ids: Vec<String> },
+    Check {
+        /// GLSA id(s) to check (default: every GLSA in the repo)
+        ids: Vec<String>,
+    },
     #[command(about = "Apply a GLSA fix")]
-    Fix { ids: Vec<String> },
+    Fix {
+        /// GLSA id(s) to fix (default: every affected GLSA)
+        ids: Vec<String>,
+    },
 }
 
 /// `em active <subcommand>` — persistent default `--prefix` / `--local`
@@ -2755,7 +2799,7 @@ pub enum LogCommand {
     },
     #[command(about = "Show merge times for a package (or global median)")]
     Time {
-        /// Package atom / Cpn / Cpv substring; omit for global median
+        /// Package name/atom substring to filter by; omit for the global median
         atom: Option<String>,
     },
     #[command(about = "ETA for remainder of a live activity session")]

@@ -11,16 +11,10 @@
 //!   em query has repository      — packages with any repository set
 //!   em query has USE lto         — packages built with the `lto` USE flag
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use portage_vdb::Vdb;
 
-pub fn run(vdb: &Vdb, args: &[String]) -> Result<()> {
-    let (field, value) = match args {
-        [] => bail!("em query has: expected <FIELD> [VALUE]"),
-        [field] => (field.as_str(), None),
-        [field, value, ..] => (field.as_str(), Some(value.as_str())),
-    };
-
+pub fn run(vdb: &Vdb, field: &str, value: Option<&str>) -> Result<()> {
     for pkg in vdb.packages() {
         let raw = match pkg.field(field) {
             Ok(Some(v)) if !v.is_empty() => v,

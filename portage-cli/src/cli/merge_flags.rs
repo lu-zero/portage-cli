@@ -15,13 +15,9 @@
 #[serde(default)]
 pub struct MergeFlags {
     /// Ask for confirmation before performing actions
-    ///
-    /// Lives here (not `global = true` on `Cli`): unlike `--root`/
-    /// `--privilege`, `--ask` only means anything to a merge-shaped command
-    /// — a config-only command like `em use`/`em pkg use add` never reads
-    /// it. Making it global inherited that meaninglessness into every
-    /// subcommand's args, which is also what caused `-a` to collide with
-    /// `use`'s own `-a`/`--add` (a real crash — `em use --help` panicked).
+    // Not `global = true` on `Cli`: unlike `--root`/`--privilege`, `--ask` only
+    // means anything to a merge-shaped command, and making it global collided
+    // with `use`'s own `-a`/`--add` (a real crash — `em use --help` panicked).
     #[arg(short = 'a', long)]
     pub ask: bool,
 
@@ -133,10 +129,8 @@ pub struct MergeFlags {
     /// activity history (median of recent successful merges per package;
     /// wall uses the build graph + `--jobs` when blockers are available).
     /// Shown even when the plan needs USE/mask changes to proceed.
-    ///
-    /// Lives here (not `global = true` on `Cli`): like `--ask`, `--eta` only
-    /// means something to a merge-shaped command — `em news --eta` or
-    /// `em grep --eta` parsed fine but did nothing.
+    // Not `global = true` on `Cli`: like `--ask`, `--eta` only means
+    // something to a merge-shaped command.
     #[arg(long = "eta")]
     pub eta: bool,
 
@@ -149,7 +143,7 @@ pub struct MergeFlags {
     #[arg(long)]
     pub complete_graph: bool,
 
-    /// Include build-time dependencies (BDEPEND) in the resolution
+    /// Include build-time dependencies (BDEPEND) in the resolution.
     /// Default is false (exclude BDEPEND), matching emerge's default.
     /// When enabled, BDEPEND are included but filtered by what's already
     /// installed on the build host (BROOT).
@@ -160,7 +154,7 @@ pub struct MergeFlags {
     #[arg(short = 'X', long, value_name = "ATOM")]
     pub exclude: Vec<String>,
 
-    /// Only require RDEPEND (not DEPEND) to be satisfied in the merge target
+    /// Only require RDEPEND (not DEPEND) to be satisfied in the merge target.
     /// Work-around for cross-compilation bootstrap: a still-empty target sysroot
     /// cannot yet satisfy plain DEPEND (e.g. virtual/os-headers, acct-group/root)
     /// while its own toolchain is being built. `em crossdev --setup` always applies

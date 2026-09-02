@@ -457,9 +457,9 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             vdb::query_files(&vdb, atom);
             Ok(())
         }
-        QueryCommand::Has { atom } => {
+        QueryCommand::Has { field, value } => {
             let vdb = open_cli_vdb(globals)?;
-            query::has::run(&vdb, atom)
+            query::has::run(&vdb, field, value.as_deref())
         }
         QueryCommand::Hasuse { flag } => {
             query::hasuse::run(&std::path::PathBuf::from(globals.repo_path()), flag)
