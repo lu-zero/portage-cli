@@ -90,6 +90,12 @@ directory (`ENOTEMPTY`), so a rebuild of the same cpv still has a window
 between the two renames where `pkg_dir` does not exist. At every other
 instant it holds the complete old entry or the complete new one, never a mix.
 
+Nor is it *durable*: nothing `fsync`s the entry or its parent directory, so
+this protects against an interrupted process, not against power loss. That
+is the same limitation `tempfile::NamedTempFile::persist` carries and
+documents (tempfile #110/#111) — worth knowing before anyone reads
+"rename into place" as crash-proof.
+
 The three questions this note previously listed as open are answered:
 
 - Both VDB scanners reject the name. `Category::packages` and
