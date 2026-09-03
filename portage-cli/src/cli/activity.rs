@@ -11,7 +11,7 @@
 #[derive(usage::Args, Debug, Clone, Default, PartialEq)]
 #[usage(
     next_help_heading = "Activity",
-    heading("Activity", help = "Where live merge progress is written.")
+    heading("Activity", help = "Where live progress is written.")
 )]
 pub struct ActivityArgs {
     /// Write activity events as JSONL to file descriptor N (subprocess front-ends)

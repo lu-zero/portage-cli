@@ -43,7 +43,8 @@ Flags:
                                (default: auto)
   -p, --pretend                Show what would be done without actually
                                performing any actions
-      --info                   Print system/build info: profile,
+      --info                   `emerge --info` workalike. Takes no atoms. Print
+                               system/build info: profile,
                                CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups
                                like VIDEO_CARDS broken out),
                                ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured
@@ -234,8 +235,8 @@ Merge:
 
                                Atoms are not accepted together with this flag —
                                the package list comes from the saved state.
-                               Combine with other flags (e.g. `-r --keep-going`,
-                               `-r -X stuck/atom`) to adjust the resumed run.
+                               Combine with other flags (e.g. `-r -X
+                               stuck/atom`) to adjust the resumed run.
       --privilege <PRIVILEGE>  Privilege backend. Redeclared on merge applets;
                                no `env` on the field.
                                [possible values: auto, fakeroost, pseudoroot,
@@ -264,7 +265,7 @@ Depgraph:
                                add/drop). Emerge's `--changed-use` / `-U`.
 
 Activity:
-  Where live merge progress is written.
+  Where live progress is written.
 
       --activity-fd <N>        Write activity events as JSONL to file descriptor
                                N (subprocess front-ends)
@@ -1859,7 +1860,7 @@ Flags:
   -h, --help                   Print help
 
 Activity:
-  Where live merge progress is written.
+  Where live progress is written.
 
       --activity-fd <N>        Write activity events as JSONL to file descriptor
                                N (subprocess front-ends)
@@ -7431,7 +7432,7 @@ Merge:
                                (default: auto)
 
 Activity:
-  Where live merge progress is written.
+  Where live progress is written.
 
       --activity-fd <N>        Write activity events as JSONL to file descriptor
                                N (subprocess front-ends)
@@ -7651,7 +7652,7 @@ Merge:
                                (default: auto)
 
 Activity:
-  Where live merge progress is written.
+  Where live progress is written.
 
       --activity-fd <N>        Write activity events as JSONL to file descriptor
                                N (subprocess front-ends)
@@ -7851,7 +7852,7 @@ Merge:
                                (default: auto)
 
 Activity:
-  Where live merge progress is written.
+  Where live progress is written.
 
       --activity-fd <N>        Write activity events as JSONL to file descriptor
                                N (subprocess front-ends)
@@ -8058,7 +8059,7 @@ Merge:
                                (default: auto)
 
 Activity:
-  Where live merge progress is written.
+  Where live progress is written.
 
       --activity-fd <N>        Write activity events as JSONL to file descriptor
                                N (subprocess front-ends)
@@ -8410,8 +8411,8 @@ Merge:
 
                                Atoms are not accepted together with this flag —
                                the package list comes from the saved state.
-                               Combine with other flags (e.g. `-r --keep-going`,
-                               `-r -X stuck/atom`) to adjust the resumed run.
+                               Combine with other flags (e.g. `-r -X
+                               stuck/atom`) to adjust the resumed run.
   -a, --ask                    Ask for confirmation before performing actions
   -u, --update                 Update installed packages to newest available
                                versions
@@ -8531,7 +8532,7 @@ Depgraph:
                                add/drop). Emerge's `--changed-use` / `-U`.
 
 Activity:
-  Where live merge progress is written.
+  Where live progress is written.
 
       --activity-fd <N>        Write activity events as JSONL to file descriptor
                                N (subprocess front-ends)

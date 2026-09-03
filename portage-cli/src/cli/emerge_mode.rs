@@ -62,8 +62,7 @@ pub struct EmergeModeArgs {
     /// Resume the last saved merge (see `em maint cleanresume` to discard it instead)
     ///
     /// Atoms are not accepted together with this flag — the package list comes from the saved
-    /// state. Combine with other flags (e.g. `-r --keep-going`, `-r -X stuck/atom`) to adjust
-    /// the resumed run.
+    /// state. Combine with other flags (e.g. `-r -X stuck/atom`) to adjust the resumed run.
     #[usage(short = 'r', long)]
     pub resume: bool,
 }

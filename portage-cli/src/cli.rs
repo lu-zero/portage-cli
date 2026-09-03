@@ -212,7 +212,7 @@ pub struct Cli {
     /// Print system/build info (`emerge --info` workalike). Takes no atoms.
     #[usage(
         long,
-        long_help = "Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent)."
+        long_help = "`emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent)."
     )]
     pub info: bool,
 
@@ -691,23 +691,48 @@ mod tests {
     fn query_flatten_help_shows_child_synopsis() {
         use usage::test::{self as harness, Page};
         let page = harness::help(Cli::spec(), &["query"], Page::Long);
-        assert!(page.contains("depgraph"), "{page}");
-        assert!(page.contains("belongs"), "{page}");
         assert!(
-            page.contains("zlib") || page.contains("<ATOM>"),
-            "flatten_help should expand child arguments: {page}"
+            page.contains("query belongs:"),
+            "flatten_help expands child synopses on the parent page: {page}"
         );
+        assert!(page.contains("<FILE>…"), "{page}");
+    }
+
+    fn kdl_cmd_line<'a>(kdl: &'a str, name: &str) -> &'a str {
+        let prefix = format!("cmd {name}");
+        kdl.lines()
+            .map(str::trim_start)
+            .find(|line| {
+                line.starts_with(&prefix)
+                    && line.as_bytes().get(prefix.len()).is_none_or(|b| *b == b' ')
+            })
+            .unwrap_or_else(|| panic!("missing `{prefix}` node"))
+    }
+
+    fn kdl_flag_line<'a>(kdl: &'a str, forms: &str) -> &'a str {
+        let prefix = format!("flag {forms}");
+        kdl.lines()
+            .map(str::trim_start)
+            .find(|line| {
+                line.starts_with(&prefix)
+                    && line.as_bytes().get(prefix.len()).is_none_or(|b| *b == b' ')
+            })
+            .unwrap_or_else(|| panic!("missing `{prefix}` node"))
     }
 
     #[test]
     fn effects_reach_the_spec() {
         let kdl = Cli::to_kdl();
-        assert!(kdl.contains("effect=write"), "{kdl}");
-        assert!(kdl.contains("effect=destructive"), "{kdl}");
-        assert!(kdl.contains("effect=read"), "{kdl}");
+        let emerge = kdl_cmd_line(&kdl, "emerge");
+        assert!(emerge.contains("effect=write"), "{emerge}");
+        let depclean = kdl_cmd_line(&kdl, "depclean");
+        assert!(depclean.contains("effect=destructive"), "{depclean}");
+        let delete = kdl_flag_line(&kdl, "--delete");
+        assert!(delete.contains("effect=destructive"), "{delete}");
+        let pretend = kdl_flag_line(&kdl, "\"-p --pretend\"");
         assert!(
-            kdl.contains("cmd emerge") && kdl.contains("effect=write"),
-            "{kdl}"
+            !pretend.contains("effect="),
+            "--pretend must not lower effect: {pretend}"
         );
     }
 
