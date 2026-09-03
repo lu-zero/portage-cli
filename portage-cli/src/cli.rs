@@ -2043,7 +2043,7 @@ mod tests {
 ///
 /// `--quiet` is the Cli global, not a field here. `--config-root` is Topology's;
 /// this child takes `--worker-config-root` so the two never share a spelling.
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct WorkerArgs {
     #[usage(long)]
     pub ebuild: String,
@@ -2101,8 +2101,9 @@ pub struct WorkerArgs {
     pub activity_reemit_path: Option<String>,
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 #[allow(clippy::large_enum_variant)] // __worker carries many CLI strings
+#[usage(run_async_with)]
 pub enum Applet {
     /// Run one do*/new* install helper standalone against the exported build env
     ///
@@ -2177,7 +2178,7 @@ pub enum Applet {
     #[usage(help = "Display Portage elog files")]
     Read(ReadArgs),
 
-    #[usage(help = "Analyze emerge.log")]
+    #[usage(help = "Analyze emerge.log", run)]
     Log(LogArgs),
 
     #[usage(help = "Search inside ebuilds and eclasses")]
@@ -2186,7 +2187,7 @@ pub enum Applet {
     #[usage(help = "Search package names and descriptions")]
     Search(SearchArgs),
 
-    #[usage(help = "Parse/split atom strings")]
+    #[usage(help = "Parse/split atom strings", run)]
     Atom(AtomArgs),
 
     #[usage(help = "Native config selectors (profile, repos) — eselect-like")]
@@ -2198,7 +2199,8 @@ pub enum Applet {
     /// `$XDG_STATE_HOME/em/active`.
     #[usage(
         help = "Register a default --prefix/--local for bare em invocations",
-        after_long_help = "Warning: `em active --local set` steals set as the directory. Put the subcommand first: `em active set --local=`."
+        after_long_help = "Warning: `em active --local set` steals set as the directory. Put the subcommand first: `em active set --local=`.",
+        run
     )]
     Active(ActiveArgs),
 
@@ -2221,7 +2223,7 @@ pub enum Applet {
     )]
     Etc(EtcArgs),
 
-    #[usage(help = "Regenerate /etc/profile.env and ld.so cache")]
+    #[usage(help = "Regenerate /etc/profile.env and ld.so cache", run)]
     Env(EnvArgs),
 
     #[usage(help = "Print a shell completion script")]
@@ -2235,7 +2237,7 @@ pub enum Applet {
 }
 
 /// Hidden `em __helper` shim — PATH helper dispatched by `find -exec`/`xargs`.
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct HelperArgs {
     /// Helper name (e.g. `doman`, `dolib.a`). Automatic so hyphen-prefixed
     /// helper args parse without a `--` (`find -exec doman -m …`).
@@ -2247,7 +2249,7 @@ pub struct HelperArgs {
 }
 
 /// `em ebuild` — execute ebuild phases
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct EbuildArgs {
     /// Path to the `.ebuild` file to execute
     pub ebuild_path: String,
@@ -2262,7 +2264,7 @@ pub struct EbuildArgs {
 }
 
 /// `em maint` — system maintenance and health checks
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(flatten_help)]
 pub struct MaintArgs {
     #[usage(subcommand)]
@@ -2272,7 +2274,7 @@ pub struct MaintArgs {
 }
 
 /// `em portageq` — query Portage internal variables and data
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct PortageqArgs {
     /// portageq sub-command to run (e.g. `envvar`, `get_repos`)
     pub command: String,
@@ -2282,7 +2284,7 @@ pub struct PortageqArgs {
 }
 
 /// `em sync` — sync repositories (git, rsync)
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct SyncArgs {
     /// Repo names from repos.conf (default: auto-sync enabled repos)
     pub repos: Vec<String>,
@@ -2291,7 +2293,7 @@ pub struct SyncArgs {
 }
 
 /// `em depclean` — remove orphaned/unused packages
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(effect = "destructive")]
 pub struct DepcleanArgs {
     /// Restrict cleaning to these atoms' dependency closure (every other
@@ -2307,7 +2309,7 @@ pub struct DepcleanArgs {
 }
 
 /// `em regen` — regenerate metadata cache
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct RegenArgs {
     /// Repo names or paths to regenerate (default: every repo except the
     /// main one, whose cache is normally maintained upstream)
@@ -2333,7 +2335,7 @@ pub struct RegenArgs {
 }
 
 /// `em quickpkg` — create binary packages from installed files
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct QuickpkgArgs {
     /// Atoms, package sets (`@system`), or VDB paths (`/var/db/pkg/cat/pf`)
     #[usage(required)]
@@ -2349,7 +2351,7 @@ pub struct QuickpkgArgs {
 }
 
 /// `em mirrordist` — build/maintain a distfiles mirror
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(effect = "write")]
 pub struct MirrorDistArgs {
     /// repos.conf name or path
@@ -2402,7 +2404,7 @@ pub struct MirrorDistArgs {
 }
 
 /// `em query` — query package information
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(
     flatten_help,
     effect = "read",
@@ -2421,7 +2423,7 @@ pub struct QueryArgs {
 }
 
 /// `em clean` — clean distfiles and/or binary packages
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(flatten_help, effect = "destructive")]
 pub struct CleanArgs {
     #[usage(subcommand)]
@@ -2431,7 +2433,7 @@ pub struct CleanArgs {
 }
 
 /// `em use` — enable/disable/query USE flags in make.conf
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct UseArgs {
     /// Add (enable) flags — euse calls this --enable/-E
     #[usage(short = 'E', short = 'a', long = "add", value_name = "FLAG")]
@@ -2500,7 +2502,7 @@ pub struct UseArgs {
 }
 
 /// `em pkg` — edit per-package configuration
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct PkgArgs {
     #[usage(subcommand)]
     pub command: PkgCommand,
@@ -2509,7 +2511,7 @@ pub struct PkgArgs {
 }
 
 /// `em revdep` — rebuild packages with broken shared library deps
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct RevdepArgs {
     /// Only consider consumers of libraries whose soname contains NAME
     #[usage(short = 'L', long, value_name = "NAME")]
@@ -2521,7 +2523,7 @@ pub struct RevdepArgs {
 }
 
 /// `em read` — display Portage elog files
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct ReadArgs {
     /// Only show packages whose `<category>/<pf>` contains this text
     pub package: Option<String>,
@@ -2539,7 +2541,7 @@ pub struct ReadArgs {
 }
 
 /// `em log` — analyze emerge.log
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(effect = "read")]
 pub struct LogArgs {
     #[usage(subcommand)]
@@ -2549,7 +2551,7 @@ pub struct LogArgs {
 }
 
 /// `em grep` — search inside ebuilds and eclasses
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct GrepArgs {
     /// Pattern to search for
     pub pattern: String,
@@ -2559,7 +2561,7 @@ pub struct GrepArgs {
 }
 
 /// `em search` — search package names and descriptions
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(effect = "read", example = "em search firefox")]
 pub struct SearchArgs {
     /// List all packages (no pattern required)
@@ -2582,7 +2584,7 @@ pub struct SearchArgs {
 }
 
 /// `em atom` — parse/split atom strings
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(effect = "read", example = "em atom >=dev-lang/python-3.10")]
 pub struct AtomArgs {
     /// Atom strings to parse and print back in normalized form
@@ -2591,7 +2593,7 @@ pub struct AtomArgs {
 }
 
 /// `em select` — native config selectors (profile, repos)
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(flatten_help)]
 pub struct SelectArgs {
     #[usage(subcommand)]
@@ -2601,7 +2603,7 @@ pub struct SelectArgs {
 }
 
 /// `em active` — register a default `--prefix`/`--local` for bare invocations
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 #[usage(example(
     "em active set --local=",
     header = "Register ~/.gentoo",
@@ -2613,7 +2615,7 @@ pub struct ActiveArgs {
 }
 
 /// `em etc` — reconcile pending config files
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct EtcArgs {
     #[usage(subcommand)]
     pub command: Option<EtcCommand>,
@@ -2624,14 +2626,14 @@ pub struct EtcArgs {
 }
 
 /// `em env` — regenerate `/etc/profile.env` and ld.so cache
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct EnvArgs {
     #[usage(flatten)]
     pub root_arg: RootArg,
 }
 
 /// `em completion` — print a shell completion script for `em`.
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct CompletionArgs {
     /// Shell to generate the script for
     #[usage(
@@ -2642,7 +2644,7 @@ pub struct CompletionArgs {
 }
 
 /// `em setup` — bootstrap a prefix layout
-#[derive(usage::Args, Default, Debug)]
+#[derive(usage::Args, Default, Debug, Clone)]
 #[usage(
     effect = "write",
     example("em setup --local", header = "Bootstrap ~/.gentoo")
@@ -2678,7 +2680,7 @@ pub struct SetupArgs {
 
 /// `em crossdev` — cross-target setup, mirroring crossdev's option surface (the
 /// no-build subset for now; building the toolchain is future work).
-#[derive(usage::Args, Debug)]
+#[derive(usage::Args, Debug, Clone)]
 pub struct CrossdevArgs {
     /// Deliberately no [`RootArg`]: none of `crossdev`'s three actions
     /// (`--init-target`/`--setup`/`--show-target-cfg`) read `--root` — it is a
@@ -2847,7 +2849,7 @@ pub struct EmergeArgs {
     pub atoms: Vec<String>,
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum MaintCommand {
     #[usage(help = "Generate binary package metadata index")]
     Binhost,
@@ -2912,7 +2914,7 @@ pub enum MaintCommand {
 // rationale stays a plain comment: there is no real-portage `emaint` module
 // for this (only `emaint binhost`, which just regenerates the index) — it is
 // an em-only extension, built on the `Packages` index/reader substrate.
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum BinpkgAction {
     #[usage(help = "Check each indexed binpkg's size/MD5/SHA1 against the file on disk")]
     Verify {
@@ -2955,7 +2957,7 @@ pub enum BinpkgAction {
 }
 
 /// `em select <module>` — native, eselect-like config selectors
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum SelectCommand {
     #[usage(help = "Select the system/sysroot profile (cross-aware)")]
     Profile {
@@ -3018,7 +3020,7 @@ pub enum SelectCommand {
 }
 
 /// `em select profile <action>`
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum ProfileAction {
     #[usage(help = "List available profiles (marks the current one)")]
     List,
@@ -3032,7 +3034,7 @@ pub enum ProfileAction {
 }
 
 /// `em select repository <action>` — local repos only (remote sync is a TODO)
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum RepositoryAction {
     #[usage(help = "List configured repositories")]
     List,
@@ -3058,7 +3060,7 @@ pub enum RepositoryAction {
 }
 
 /// `em select compiler <action>` — gcc-config workalike
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum CompilerAction {
     #[usage(help = "List available compiler profiles")]
     List {
@@ -3083,7 +3085,7 @@ pub enum CompilerAction {
 }
 
 /// `em select binutils <action>` — binutils-config workalike
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum BinutilsAction {
     #[usage(help = "List available binutils profiles")]
     List {
@@ -3108,7 +3110,7 @@ pub enum BinutilsAction {
 }
 
 /// `em select linker <action>` — linker profile selection
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum LinkerAction {
     #[usage(help = "List available linker profiles")]
     List {
@@ -3133,7 +3135,7 @@ pub enum LinkerAction {
 }
 
 /// `em select clang <action>` — LLVM/clang slot selection
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum ClangAction {
     #[usage(help = "List available LLVM/clang slots")]
     List,
@@ -3152,7 +3154,7 @@ pub enum ClangAction {
 /// and creates the `<CTARGET>-pkg-config` wrapper real crossdev provides but
 /// `em` otherwise never builds (`toolchain-funcs.eclass`'s `tc-getPKG_CONFIG`
 /// searches `$PATH` for exactly this name).
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum PkgconfAction {
     #[usage(help = "List available pkg-config backends (pkgconf, pkg-config)")]
     List {
@@ -3177,7 +3179,7 @@ pub enum PkgconfAction {
 }
 
 /// `em select mirrors <action>` — mirrorselect workalike for `GENTOO_MIRRORS`
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum MirrorAction {
     /// List available Gentoo distfile mirrors (marks those already selected)
     List {
@@ -3206,7 +3208,7 @@ pub enum MirrorAction {
     },
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum PkgCommand {
     #[usage(help = "Edit per-package USE flags in package.use")]
     Use {
@@ -3294,7 +3296,7 @@ pub enum PkgCommand {
     },
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum QueryCommand {
     #[usage(help = "Find which package owns a file", alias_hidden = "b")]
     Belongs {
@@ -3421,7 +3423,7 @@ pub enum QueryCommand {
 }
 
 /// `em etc <command>`
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum EtcCommand {
     #[usage(help = "Show what each pending file would change")]
     Diff {
@@ -3449,7 +3451,7 @@ pub struct EtcOpts {
     pub auto: bool,
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum CleanTarget {
     #[usage(
         help = "Remove distfiles no ebuild references",
@@ -3496,7 +3498,7 @@ pub struct CleanOpts {
     pub time_limit: Option<String>,
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum NewsCommand {
     #[usage(help = "Count unread news items")]
     Count,
@@ -3514,7 +3516,7 @@ pub enum NewsCommand {
     Purge,
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum GlsaCommand {
     #[usage(help = "List all GLSAs")]
     List,
@@ -3537,7 +3539,7 @@ pub enum GlsaCommand {
 /// collide with the globals.
 ///
 /// Entries can be referenced by name, index (0-based), or exact path.
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum ActiveCommand {
     /// Show the registered active context (default when no subcommand)
     #[usage(help = "Show the registered active prefix/local")]
@@ -3605,7 +3607,7 @@ pub enum ActiveCommand {
     },
 }
 
-#[derive(usage::Subcommands, Debug)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum LogCommand {
     #[usage(help = "Show currently running merges")]
     Current,

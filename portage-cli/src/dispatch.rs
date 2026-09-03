@@ -1,12 +1,20 @@
 //! CLI dispatch: applet routing and shared helpers
+//!
+//! Named applets go through generated [`usage::RunAsyncWith`] on [`Applet`].
+//! The root `Option` is decided here: generated dispatch cannot.
 
 use std::io::Write;
 use std::str::FromStr;
 
 use anyhow::{Context, bail};
+use usage::{RunAsyncWith, RunWith};
 
 use crate::cli::{
-    self, Applet, CleanTarget, EmergeModeArgs, LogCommand, MaintCommand, QueryCommand,
+    self, ActiveArgs, Applet, AtomArgs, CleanArgs, CrossdevArgs, DepcleanArgs, EbuildArgs,
+    EmergeArgs, EmergeModeArgs, EnvArgs, EtcArgs, GrepArgs, HelperArgs, LogArgs, LogCommand,
+    MaintArgs, MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, QueryArgs, QueryCommand,
+    QuickpkgArgs, ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs, StagesArgs,
+    SyncArgs, ToolchainArgs, UseArgs, WorkerArgs, CompletionArgs,
 };
 use crate::crossdev;
 use crate::ebuild;
@@ -21,18 +29,19 @@ use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, 
 /// `em --info`, `em -r`). `--info` wins only for empty-atom emerge; a named
 /// applet always wins, and `em --info firefox` emerges `firefox`.
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
-    match &cli.applet {
-        Some(Applet::Emerge(args)) => {
-            if cli.info && args.atoms.is_empty() {
-                return crate::info::run(cli).await;
-            }
-            emerge::run_emerge(cli).await
+    if cli.info
+        && match &cli.applet {
+            None => true,
+            Some(Applet::Emerge(a)) => a.atoms.is_empty(),
+            Some(_) => false,
         }
-        Some(applet) => run_applet(applet, cli).await,
+    {
+        return crate::info::run(cli).await;
+    }
+    // Clone: overlay selectors (`merge_flags()`, `roots()`, …) still read `cli.applet`.
+    match cli.applet.clone() {
+        Some(applet) => applet.run_async_with(cli).await,
         None => {
-            if cli.info {
-                return crate::info::run(cli).await;
-            }
             if cli.mode() != EmergeModeArgs::default() {
                 return emerge::run_emerge(cli).await;
             }
@@ -41,183 +50,360 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
         }
     }
 }
-async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
-    match applet {
-        // Internal helper shim entry point: run the helper and exit with its
-        // status (the shim's caller — `find -exec`/`xargs` — checks it).
-        Applet::Helper(h) => {
-            std::process::exit(portage_repo::run_helper(&h.name, &h.args).await);
-        }
-        Applet::Worker(w) => {
-            let worker_extra_path: Vec<camino::Utf8PathBuf> = w
-                .extra_path
-                .iter()
-                .flat_map(|p| p.split(':'))
-                .map(camino::Utf8PathBuf::from)
-                .collect();
-            ebuild::run_install_worker(ebuild::InstallWorker {
-                ebuild_path: &w.ebuild,
-                cpv_str: &w.cpv,
-                use_flags_str: &w.use_flags,
-                work_base: &w.work_base,
-                root: &w.root,
-                distdir: w.distdir.as_deref(),
-                roots: ebuild::RootContext {
-                    config_root: w.worker_config_root.as_deref().map(camino::Utf8Path::new),
-                    sysroot: w.sysroot.as_deref().map(camino::Utf8Path::new),
-                    eprefix: w.eprefix.as_deref().map(camino::Utf8Path::new),
-                    broot: w.broot.as_deref().map(camino::Utf8Path::new),
-                    self_contained_bootstrap: w.self_contained_bootstrap,
-                    extra_path: &worker_extra_path,
-                },
-                binpkg: w.binpkg.as_deref(),
-                force_verify_signature: w.force_verify_signature,
-                buildpkg: w.buildpkg,
-                quiet: globals.quiet,
-                activity_job_id: w.activity_job_id.as_deref(),
-                activity_parent_job_id: w.activity_parent_job_id.as_deref(),
-                activity_live_root: w.activity_live_root.as_deref(),
-                activity_side: w.activity_side.as_deref(),
-                activity_reemit_path: w.activity_reemit_path.as_deref(),
-            })
-            .await
-        }
-        Applet::Ebuild(a) => {
-            let repo_override = globals.repo.as_deref();
-            let roots = globals.roots();
-            let broot = globals.host_roots();
-            ebuild::run(
-                &a.ebuild_path,
-                &a.phase,
-                a.work_dir.as_deref(),
-                repo_override,
-                roots.merge_root(),
-                ebuild::RootContext {
-                    config_root: roots.config(),
-                    sysroot: roots.build_sysroot(),
-                    eprefix: roots.build_eprefix(),
-                    broot: Some(broot.merge_root()),
-                    self_contained_bootstrap: false,
-                    extra_path: &[],
-                },
-            )
-            .await
-        }
-        Applet::Maint(a) => run_maint(&a.command, globals).await,
-        Applet::Portageq(_) => bail!("not implemented: portageq"),
-        Applet::Sync(a) => maint::sync::run(&a.repos, globals).await,
-        Applet::Depclean(a) => {
-            let merge_flags = globals.merge_flags();
-            crate::depclean::run_with_targets(globals, &a.atoms, &merge_flags).await
-        }
-        Applet::Regen(a) => {
-            regen::run(
-                globals,
-                &a.repos,
-                &globals.repo_path(),
-                a.repos_dir.as_deref(),
-                a.output.clone(),
-                a.jobs,
-                a.dedup,
-            )
-            .await
-        }
-        Applet::Quickpkg(a) => {
-            crate::quickpkg::run(
-                globals,
-                &crate::quickpkg::QuickpkgOpts {
-                    atoms: a.atoms.clone(),
-                    include_config: a.include_config,
-                    include_unmodified_config: a.include_unmodified_config,
-                },
-            )
-            .await
-        }
-        Applet::MirrorDist(a) => {
-            let deletion_delay = humantime::parse_duration(&a.deletion_delay)
-                .with_context(|| format!("--deletion-delay {:?}", a.deletion_delay))?;
-            crate::mirrordist::run(
-                globals,
-                &crate::mirrordist::MirrorDistOpts {
-                    repo: a.repo.clone(),
-                    repos_dir: a.repos_dir.clone(),
-                    distfiles: a.distfiles.clone(),
-                    jobs: a.jobs,
-                    delete: a.delete,
-                    deletion_delay,
-                    deletion_db: a.deletion_db.clone(),
-                    success_log: a.success_log.clone(),
-                    failure_log: a.failure_log.clone(),
-                    scheduled_deletion_log: a.scheduled_deletion_log.clone(),
-                    whitelist_from: a.whitelist_from.clone(),
-                    verify_existing_digest: a.verify_existing_digest,
-                    gentoo_mirrors_fallback: a.gentoo_mirrors_fallback,
-                    delete_allow_incomplete: a.delete_allow_incomplete,
-                },
-            )
-            .await
-        }
-        Applet::Pkg(a) => pkg::run(&a.command, globals).await,
-        Applet::Query(a) => run_query(&a.command, globals).await,
-        Applet::Clean(a) => run_clean(globals, &a.target).await,
-        Applet::Use(a) => {
-            use_flags::run(
-                globals,
-                &use_flags::UseOpts {
-                    add: &a.add,
-                    subtract: &a.subtract,
-                    drop: &a.drop,
-                    dry_run: a.dry_run,
-                    expand: a.expand.as_deref(),
-                    list_expand: a.list_expand,
-                    info: &a.info,
-                    global: a.global,
-                    local_desc: a.local_desc,
-                    make_conf: a.make_conf.as_deref(),
-                },
-            )
-            .await
-        }
-        Applet::Revdep(a) => crate::revdep::run(globals, a.library.as_deref()).await,
-        Applet::Read(a) => {
-            crate::elog::run_read(globals, a.package.as_deref(), a.list, a.limit, a.delete).await
-        }
-        Applet::Log(a) => run_log(&a.command, globals),
-        Applet::Grep(_) => bail!("not implemented: grep"),
-        Applet::Search(a) => {
-            search::run(
-                &globals.search_repos(),
-                a.pattern.as_deref(),
-                a.all,
-                a.desc,
-                a.name_only,
-                a.homepage,
-            )
-            .await
-        }
-        Applet::Atom(a) => {
-            run_atom(&a.atoms);
-            Ok(())
-        }
-        Applet::Select(a) => select::run(&a.command, globals).await,
-        Applet::Active(a) => crate::active::run(a.command.as_ref(), globals),
-        Applet::Setup(args) => setup::run(globals, args).await,
-        Applet::Crossdev(args) => crossdev::run(args, globals).await,
-        Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
-        Applet::Stages(args) => crossdev::stage1(args, globals).await,
-        Applet::Etc(a) => crate::etc::run(globals, a.command.as_ref(), &a.opts).await,
-        Applet::Env(_) => maint::env::env_update(globals.roots().merge_root()),
-        Applet::Completion(a) => {
-            let Some(shell) = usage::complete::Shell::from_name(&a.shell) else {
-                bail!(
-                    "unsupported shell {:?}; expected bash, zsh, fish, nu, powershell, or elvish",
-                    a.shell
-                );
-            };
-            println!("{}", cli::Cli::completion_script(shell));
-            Ok(())
-        }
-        Applet::Emerge(_) => emerge::run_emerge(globals).await,
+
+impl RunAsyncWith<&cli::Cli> for HelperArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
+        // Internal helper shim: run the helper and exit with its status
+        // (the shim's caller — `find -exec`/`xargs` — checks it).
+        std::process::exit(portage_repo::run_helper(&self.name, &self.args).await);
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for WorkerArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        let worker_extra_path: Vec<camino::Utf8PathBuf> = self
+            .extra_path
+            .iter()
+            .flat_map(|p| p.split(':'))
+            .map(camino::Utf8PathBuf::from)
+            .collect();
+        ebuild::run_install_worker(ebuild::InstallWorker {
+            ebuild_path: &self.ebuild,
+            cpv_str: &self.cpv,
+            use_flags_str: &self.use_flags,
+            work_base: &self.work_base,
+            root: &self.root,
+            distdir: self.distdir.as_deref(),
+            roots: ebuild::RootContext {
+                config_root: self
+                    .worker_config_root
+                    .as_deref()
+                    .map(camino::Utf8Path::new),
+                sysroot: self.sysroot.as_deref().map(camino::Utf8Path::new),
+                eprefix: self.eprefix.as_deref().map(camino::Utf8Path::new),
+                broot: self.broot.as_deref().map(camino::Utf8Path::new),
+                self_contained_bootstrap: self.self_contained_bootstrap,
+                extra_path: &worker_extra_path,
+            },
+            binpkg: self.binpkg.as_deref(),
+            force_verify_signature: self.force_verify_signature,
+            buildpkg: self.buildpkg,
+            quiet: cli.quiet,
+            activity_job_id: self.activity_job_id.as_deref(),
+            activity_parent_job_id: self.activity_parent_job_id.as_deref(),
+            activity_live_root: self.activity_live_root.as_deref(),
+            activity_side: self.activity_side.as_deref(),
+            activity_reemit_path: self.activity_reemit_path.as_deref(),
+        })
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for EbuildArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        let repo_override = cli.repo.as_deref();
+        let roots = cli.roots();
+        let broot = cli.host_roots();
+        ebuild::run(
+            &self.ebuild_path,
+            &self.phase,
+            self.work_dir.as_deref(),
+            repo_override,
+            roots.merge_root(),
+            ebuild::RootContext {
+                config_root: roots.config(),
+                sysroot: roots.build_sysroot(),
+                eprefix: roots.build_eprefix(),
+                broot: Some(broot.merge_root()),
+                self_contained_bootstrap: false,
+                extra_path: &[],
+            },
+        )
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for MaintArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        run_maint(&self.command, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for PortageqArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
+        bail!("not implemented: portageq")
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for SyncArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        maint::sync::run(&self.repos, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for DepcleanArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        let merge_flags = cli.merge_flags();
+        crate::depclean::run_with_targets(cli, &self.atoms, &merge_flags).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for RegenArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        regen::run(
+            cli,
+            &self.repos,
+            &cli.repo_path(),
+            self.repos_dir.as_deref(),
+            self.output.clone(),
+            self.jobs,
+            self.dedup,
+        )
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for QuickpkgArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crate::quickpkg::run(
+            cli,
+            &crate::quickpkg::QuickpkgOpts {
+                atoms: self.atoms.clone(),
+                include_config: self.include_config,
+                include_unmodified_config: self.include_unmodified_config,
+            },
+        )
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for MirrorDistArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        let deletion_delay = humantime::parse_duration(&self.deletion_delay)
+            .with_context(|| format!("--deletion-delay {:?}", self.deletion_delay))?;
+        crate::mirrordist::run(
+            cli,
+            &crate::mirrordist::MirrorDistOpts {
+                repo: self.repo.clone(),
+                repos_dir: self.repos_dir.clone(),
+                distfiles: self.distfiles.clone(),
+                jobs: self.jobs,
+                delete: self.delete,
+                deletion_delay,
+                deletion_db: self.deletion_db.clone(),
+                success_log: self.success_log.clone(),
+                failure_log: self.failure_log.clone(),
+                scheduled_deletion_log: self.scheduled_deletion_log.clone(),
+                whitelist_from: self.whitelist_from.clone(),
+                verify_existing_digest: self.verify_existing_digest,
+                gentoo_mirrors_fallback: self.gentoo_mirrors_fallback,
+                delete_allow_incomplete: self.delete_allow_incomplete,
+            },
+        )
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for QueryArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        run_query(&self.command, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for CleanArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crate::clean::run(cli, &self.target).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for UseArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        use_flags::run(
+            cli,
+            &use_flags::UseOpts {
+                add: &self.add,
+                subtract: &self.subtract,
+                drop: &self.drop,
+                dry_run: self.dry_run,
+                expand: self.expand.as_deref(),
+                list_expand: self.list_expand,
+                info: &self.info,
+                global: self.global,
+                local_desc: self.local_desc,
+                make_conf: self.make_conf.as_deref(),
+            },
+        )
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for PkgArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        pkg::run(&self.command, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for RevdepArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crate::revdep::run(cli, self.library.as_deref()).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for ReadArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crate::elog::run_read(
+            cli,
+            self.package.as_deref(),
+            self.list,
+            self.limit,
+            self.delete,
+        )
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for GrepArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
+        bail!("not implemented: grep")
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for SearchArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        search::run(
+            &cli.search_repos(),
+            self.pattern.as_deref(),
+            self.all,
+            self.desc,
+            self.name_only,
+            self.homepage,
+        )
+        .await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for SelectArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        select::run(&self.command, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for SetupArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        setup::run(cli, &self).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for CrossdevArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crossdev::run(&self, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for ToolchainArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crossdev::toolchain(&self, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for StagesArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crossdev::stage1(&self, cli).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for EtcArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        crate::etc::run(cli, self.command.as_ref(), &self.opts).await
+    }
+}
+
+impl RunAsyncWith<&cli::Cli> for EmergeArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        emerge::run_emerge(cli).await
+    }
+}
+
+impl RunWith<&cli::Cli> for LogArgs {
+    type Output = Result<()>;
+
+    fn run_with(self, cli: &cli::Cli) -> Self::Output {
+        run_log(&self.command, cli)
+    }
+}
+
+impl RunWith<&cli::Cli> for AtomArgs {
+    type Output = Result<()>;
+
+    fn run_with(self, _cli: &cli::Cli) -> Self::Output {
+        run_atom(&self.atoms);
+        Ok(())
+    }
+}
+
+impl RunWith<&cli::Cli> for ActiveArgs {
+    type Output = Result<()>;
+
+    fn run_with(self, cli: &cli::Cli) -> Self::Output {
+        crate::active::run(self.command.as_ref(), cli)
+    }
+}
+
+impl RunWith<&cli::Cli> for EnvArgs {
+    type Output = Result<()>;
+
+    fn run_with(self, cli: &cli::Cli) -> Self::Output {
+        maint::env::env_update(cli.roots().merge_root())
     }
 }
 
@@ -475,10 +661,6 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
     }
 }
 
-async fn run_clean(globals: &cli::Cli, target: &CleanTarget) -> Result<()> {
-    crate::clean::run(globals, target).await
-}
-
 /// Live sessions from the real merge root plus `em regen`'s own XDG activity
 /// root (see `xdg::regen_activity_root`'s doc — regen's activity bus doesn't
 /// live under the merge root, unlike a real merge's).
@@ -558,6 +740,23 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
         }
     }
 }
+
+
+impl RunAsyncWith<&cli::Cli> for CompletionArgs {
+    type Output = Result<()>;
+
+    async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
+        let Some(shell) = usage::complete::Shell::from_name(&self.shell) else {
+            bail!(
+                "unsupported shell {:?}; expected bash, zsh, fish, nu, powershell, or elvish",
+                self.shell
+            );
+        };
+        println!("{}", cli::Cli::completion_script(shell));
+        Ok(())
+    }
+}
+
 fn run_atom(atoms: &[String]) {
     for raw in atoms {
         match portage_atom::Dep::from_str(raw) {
