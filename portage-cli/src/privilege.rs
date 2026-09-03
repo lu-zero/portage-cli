@@ -404,7 +404,7 @@ fn build_worker_command(
         cmd.arg("--distdir").arg(d);
     }
     if let Some(c) = args.config_root {
-        cmd.arg("--config-root").arg(c);
+        cmd.arg("--worker-config-root").arg(c);
     }
     if let Some(s) = args.sysroot {
         cmd.arg("--sysroot").arg(s);
@@ -841,5 +841,74 @@ mod tests {
             "sys-libs/zlib",
         ]);
         assert_eq!(distdir(&cli), "/var/cache/distfiles");
+    }
+}
+
+#[cfg(test)]
+mod worker_argv_tests {
+    use clap::Parser as _;
+
+    use super::*;
+    use crate::cli::Applet;
+
+    fn sample_args(quiet: bool, config_root: Option<&'static str>) -> WorkerArgs<'static> {
+        WorkerArgs {
+            ebuild_path: "/tmp/cat/pkg/pkg-1.ebuild",
+            cpv: "cat/pkg-1",
+            use_flags: "",
+            work_base: "/tmp/work",
+            root: "/tmp/root",
+            distdir: None,
+            config_root,
+            sysroot: None,
+            eprefix: None,
+            broot: None,
+            self_contained_bootstrap: false,
+            extra_path: "",
+            binpkg: None,
+            force_verify_signature: false,
+            buildpkg: false,
+            quiet,
+            activity_job_id: None,
+            activity_parent_job_id: None,
+            activity_live_root: None,
+            activity_side: None,
+            activity_reemit_path: None,
+        }
+    }
+
+    fn spawn_argv(args: &WorkerArgs<'_>) -> Vec<String> {
+        let cmd = build_worker_command(Backend::RealRoot, args, None).unwrap();
+        let mut argv = vec!["em".to_string()];
+        argv.extend(cmd.get_args().map(|a| a.to_string_lossy().into_owned()));
+        argv
+    }
+
+    #[test]
+    fn spawn_argv_parses_back_with_global_quiet() {
+        let args = sample_args(true, Some("/tmp/cfg"));
+        let argv = spawn_argv(&args);
+        assert!(
+            argv.iter().any(|a| a == "--quiet"),
+            "spawn still passes --quiet as the Cli global: {argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a == "--worker-config-root"),
+            "spawn must pass --worker-config-root: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "--config-root"),
+            "spawn must not pass Topology --config-root: {argv:?}"
+        );
+
+        let cli = Cli::try_parse_from(&argv).expect("spawn argv must parse");
+        assert!(cli.quiet, "quiet must bind the Cli global");
+        let Some(Applet::Worker(w)) = &cli.applet else {
+            panic!("expected Applet::Worker");
+        };
+        assert_eq!(w.ebuild, args.ebuild_path);
+        assert_eq!(w.cpv, args.cpv);
+        assert_eq!(w.root, args.root);
+        assert_eq!(w.worker_config_root.as_deref(), args.config_root);
     }
 }

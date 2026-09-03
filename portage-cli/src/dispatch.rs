@@ -39,58 +39,37 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         Applet::Helper { name, args } => {
             std::process::exit(portage_repo::run_helper(name, args).await);
         }
-        Applet::Worker {
-            ebuild,
-            cpv,
-            use_flags,
-            work_base,
-            root,
-            distdir,
-            config_root,
-            sysroot,
-            eprefix,
-            broot,
-            self_contained_bootstrap,
-            extra_path,
-            binpkg,
-            force_verify_signature,
-            buildpkg,
-            quiet,
-            activity_job_id,
-            activity_parent_job_id,
-            activity_live_root,
-            activity_side,
-            activity_reemit_path,
-        } => {
-            let worker_extra_path: Vec<camino::Utf8PathBuf> = extra_path
+        Applet::Worker(w) => {
+            let worker_extra_path: Vec<camino::Utf8PathBuf> = w
+                .extra_path
                 .iter()
                 .flat_map(|p| p.split(':'))
                 .map(camino::Utf8PathBuf::from)
                 .collect();
             ebuild::run_install_worker(ebuild::InstallWorker {
-                ebuild_path: ebuild,
-                cpv_str: cpv,
-                use_flags_str: use_flags,
-                work_base,
-                root,
-                distdir: distdir.as_deref(),
+                ebuild_path: &w.ebuild,
+                cpv_str: &w.cpv,
+                use_flags_str: &w.use_flags,
+                work_base: &w.work_base,
+                root: &w.root,
+                distdir: w.distdir.as_deref(),
                 roots: ebuild::RootContext {
-                    config_root: config_root.as_deref().map(camino::Utf8Path::new),
-                    sysroot: sysroot.as_deref().map(camino::Utf8Path::new),
-                    eprefix: eprefix.as_deref().map(camino::Utf8Path::new),
-                    broot: broot.as_deref().map(camino::Utf8Path::new),
-                    self_contained_bootstrap: *self_contained_bootstrap,
+                    config_root: w.worker_config_root.as_deref().map(camino::Utf8Path::new),
+                    sysroot: w.sysroot.as_deref().map(camino::Utf8Path::new),
+                    eprefix: w.eprefix.as_deref().map(camino::Utf8Path::new),
+                    broot: w.broot.as_deref().map(camino::Utf8Path::new),
+                    self_contained_bootstrap: w.self_contained_bootstrap,
                     extra_path: &worker_extra_path,
                 },
-                binpkg: binpkg.as_deref(),
-                force_verify_signature: *force_verify_signature,
-                buildpkg: *buildpkg,
-                quiet: *quiet,
-                activity_job_id: activity_job_id.as_deref(),
-                activity_parent_job_id: activity_parent_job_id.as_deref(),
-                activity_live_root: activity_live_root.as_deref(),
-                activity_side: activity_side.as_deref(),
-                activity_reemit_path: activity_reemit_path.as_deref(),
+                binpkg: w.binpkg.as_deref(),
+                force_verify_signature: w.force_verify_signature,
+                buildpkg: w.buildpkg,
+                quiet: globals.quiet,
+                activity_job_id: w.activity_job_id.as_deref(),
+                activity_parent_job_id: w.activity_parent_job_id.as_deref(),
+                activity_live_root: w.activity_live_root.as_deref(),
+                activity_side: w.activity_side.as_deref(),
+                activity_reemit_path: w.activity_reemit_path.as_deref(),
             })
             .await
         }

@@ -1421,6 +1421,111 @@ mod tests {
             "retry path must not accept --root on crossdev either"
         );
     }
+
+    fn worker_argv<'a>(extra: &'a [&'a str]) -> Vec<&'a str> {
+        let mut argv = vec![
+            "em",
+            "__worker",
+            "--ebuild",
+            "/tmp/pkg.ebuild",
+            "--cpv",
+            "cat/pkg-1",
+            "--use-flags",
+            "",
+            "--work-base",
+            "/tmp/work",
+            "--root",
+            "/tmp/root",
+        ];
+        argv.extend_from_slice(extra);
+        argv
+    }
+
+    #[test]
+    fn worker_quiet_is_the_cli_global() {
+        let cli = Cli::try_parse_from(worker_argv(&["--quiet"])).unwrap();
+        assert!(cli.quiet);
+        let Some(Applet::Worker(w)) = &cli.applet else {
+            panic!("expected Applet::Worker");
+        };
+        assert_eq!(w.root, "/tmp/root");
+        assert_eq!(w.worker_config_root, None);
+    }
+
+    #[test]
+    fn worker_config_root_is_not_the_topology_flag() {
+        let cli = Cli::try_parse_from(worker_argv(&["--worker-config-root", "/tmp/cfg"])).unwrap();
+        let Some(Applet::Worker(w)) = &cli.applet else {
+            panic!("expected Applet::Worker");
+        };
+        assert_eq!(w.worker_config_root.as_deref(), Some("/tmp/cfg"));
+        assert!(
+            Cli::try_parse_from(worker_argv(&["--config-root", "/tmp/cfg"])).is_err(),
+            "Worker must not accept Topology --config-root"
+        );
+    }
+}
+
+/// Hidden `em __worker` install child — spawned per package by `build_and_merge`.
+///
+/// `--quiet` is the Cli global, not a field here. `--config-root` is Topology's;
+/// this child takes `--worker-config-root` so the two never share a spelling.
+#[derive(clap::Args, Debug)]
+pub struct WorkerArgs {
+    #[arg(long)]
+    pub ebuild: String,
+    /// The resolved plan entry's authoritative cpv — see
+    /// `privilege::WorkerArgs::cpv`.
+    #[arg(long)]
+    pub cpv: String,
+    #[arg(long)]
+    pub use_flags: String,
+    #[arg(long)]
+    pub work_base: String,
+    #[arg(long)]
+    pub root: String,
+    #[arg(long)]
+    pub distdir: Option<String>,
+    #[arg(long)]
+    pub worker_config_root: Option<String>,
+    #[arg(long)]
+    pub sysroot: Option<String>,
+    #[arg(long)]
+    pub eprefix: Option<String>,
+    /// Where BDEPEND-class build tools live (`Cli::host_roots()`'s merge root)
+    #[arg(long)]
+    pub broot: Option<String>,
+    /// See `ebuild::RootContext::self_contained_bootstrap`
+    #[arg(long)]
+    pub self_contained_bootstrap: bool,
+    /// See `ebuild::RootContext::extra_path`, `:`-joined
+    #[arg(long)]
+    pub extra_path: Option<String>,
+    /// A pre-built GPKG to merge (`-k`/`-g`)
+    #[arg(long)]
+    pub binpkg: Option<String>,
+    /// `binpkg`'s origin forces cryptographic GPG signature
+    /// verification (a `binrepos.conf` entry with
+    /// `verify-signature = yes`), independent of
+    /// `FEATURES=binpkg-request-signature`.
+    #[arg(long)]
+    pub force_verify_signature: bool,
+    #[arg(long)]
+    pub buildpkg: bool,
+    /// Parent activity session id — live FS phase updates only
+    #[arg(long)]
+    pub activity_job_id: Option<String>,
+    #[arg(long)]
+    pub activity_parent_job_id: Option<String>,
+    /// Filesystem root of the parent's live activity sink
+    #[arg(long)]
+    pub activity_live_root: Option<String>,
+    /// `host` or `target` package side for inflight paths
+    #[arg(long)]
+    pub activity_side: Option<String>,
+    /// Unix socket path: stream phase JSONL back to the parent activity bus
+    #[arg(long)]
+    pub activity_reemit_path: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1442,64 +1547,7 @@ pub enum Applet {
     /// Internal: the privilege-wrapped install worker (install+qmerge+binpkg
     /// for one package; spawned per package by `build_and_merge`).
     #[command(name = "__worker", hide = true)]
-    Worker {
-        #[arg(long)]
-        ebuild: String,
-        /// The resolved plan entry's authoritative cpv — see
-        /// `privilege::WorkerArgs::cpv`.
-        #[arg(long)]
-        cpv: String,
-        #[arg(long)]
-        use_flags: String,
-        #[arg(long)]
-        work_base: String,
-        #[arg(long)]
-        root: String,
-        #[arg(long)]
-        distdir: Option<String>,
-        #[arg(long)]
-        config_root: Option<String>,
-        #[arg(long)]
-        sysroot: Option<String>,
-        #[arg(long)]
-        eprefix: Option<String>,
-        /// Where BDEPEND-class build tools live (`Cli::host_roots()`'s merge root)
-        #[arg(long)]
-        broot: Option<String>,
-        /// See `ebuild::RootContext::self_contained_bootstrap`
-        #[arg(long)]
-        self_contained_bootstrap: bool,
-        /// See `ebuild::RootContext::extra_path`, `:`-joined
-        #[arg(long)]
-        extra_path: Option<String>,
-        /// A pre-built GPKG to merge (`-k`/`-g`)
-        #[arg(long)]
-        binpkg: Option<String>,
-        /// `binpkg`'s origin forces cryptographic GPG signature
-        /// verification (a `binrepos.conf` entry with
-        /// `verify-signature = yes`), independent of
-        /// `FEATURES=binpkg-request-signature`.
-        #[arg(long)]
-        force_verify_signature: bool,
-        #[arg(long)]
-        buildpkg: bool,
-        #[arg(long)]
-        quiet: bool,
-        /// Parent activity session id — live FS phase updates only
-        #[arg(long)]
-        activity_job_id: Option<String>,
-        #[arg(long)]
-        activity_parent_job_id: Option<String>,
-        /// Filesystem root of the parent's live activity sink
-        #[arg(long)]
-        activity_live_root: Option<String>,
-        /// `host` or `target` package side for inflight paths
-        #[arg(long)]
-        activity_side: Option<String>,
-        /// Unix socket path: stream phase JSONL back to the parent activity bus
-        #[arg(long)]
-        activity_reemit_path: Option<String>,
-    },
+    Worker(WorkerArgs),
 
     #[command(about = "Execute ebuild phases")]
     Ebuild {
