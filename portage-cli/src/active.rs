@@ -821,10 +821,10 @@ fn run_remove(reference: &String) -> Result<()> {
 /// `--root` is intentionally not registerable — active is for unprivileged
 /// prefix/local dogfooding only.
 fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
-    let Some(crate::cli::Applet::Active { topology, .. }) = &globals.applet else {
+    let Some(crate::cli::Applet::Active(a)) = &globals.applet else {
         bail!("em active set/add: internal error, not dispatched from Applet::Active");
     };
-    if let Some(local) = topology.local.as_deref() {
+    if let Some(local) = a.topology.local.as_deref() {
         let path = if local.is_empty() {
             default_local_path()
         } else {
@@ -836,7 +836,7 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
             path,
         });
     }
-    if let Some(p) = topology.prefix.as_deref() {
+    if let Some(p) = a.topology.prefix.as_deref() {
         let path = finalize_abs_path(absolutize(Utf8Path::new(p))?)?;
         return Ok(ActiveContext {
             kind: ActiveKind::Prefix,
@@ -1114,8 +1114,8 @@ path = "/home/u/.gentoo"
 
         let cli = Cli::parse_from(["em", "active", "--prefix", prefix.as_str(), "set"]);
         match &cli.applet {
-            Some(crate::cli::Applet::Active { command, .. }) => {
-                run(command.as_ref(), &cli).unwrap();
+            Some(crate::cli::Applet::Active(a)) => {
+                run(a.command.as_ref(), &cli).unwrap();
             }
             _ => panic!("expected Active applet"),
         }

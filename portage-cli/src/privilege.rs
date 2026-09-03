@@ -143,12 +143,12 @@ pub(crate) fn will_build(cli: &Cli) -> bool {
                 || (!args.atoms.is_empty() && !args.mode.search && !args.mode.searchdesc)
         }
         Some(
-            Applet::Ebuild { .. }
+            Applet::Ebuild(_)
             | Applet::Crossdev(_)
             | Applet::Toolchain(_)
             | Applet::Stages(_)
-            | Applet::Depclean { .. }
-            | Applet::Revdep { .. },
+            | Applet::Depclean(_)
+            | Applet::Revdep(_),
         ) => true,
         Some(_) => false,
     }
@@ -193,7 +193,7 @@ pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
 fn needs_whole_process_wrap(cli: &Cli) -> bool {
     let (unmerge, depclean) = match &cli.applet {
         Some(Applet::Emerge(args)) => (args.mode.unmerge, args.mode.depclean),
-        Some(Applet::Depclean { .. }) => (false, true),
+        Some(Applet::Depclean(_)) => (false, true),
         _ => (false, false),
     };
     ebuild_applet_installs(cli) || unmerge || depclean || cli.merge_flags().buildpkgonly
@@ -202,8 +202,8 @@ fn needs_whole_process_wrap(cli: &Cli) -> bool {
 /// `em ebuild … <phase>` with a merge-side phase: the only build path that does
 /// not go through `build_and_merge` (and thus the worker seam).
 fn ebuild_applet_installs(cli: &Cli) -> bool {
-    matches!(&cli.applet, Some(Applet::Ebuild { phase, .. })
-        if phase.iter().any(|p| matches!(p.as_str(), "install" | "qmerge" | "merge")))
+    matches!(&cli.applet, Some(Applet::Ebuild(a))
+        if a.phase.iter().any(|p| matches!(p.as_str(), "install" | "qmerge" | "merge")))
 }
 
 /// The backend the install group should be wrapped with in a `__worker` child,

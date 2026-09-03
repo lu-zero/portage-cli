@@ -110,61 +110,25 @@ impl Cli {
             Some(Applet::Toolchain(a)) => (a.topology.clone(), a.root_arg.clone()),
             Some(Applet::Stages(a)) => (a.topology.clone(), a.root_arg.clone()),
             Some(Applet::Setup(a)) => (a.topology.clone(), a.root_arg.clone()),
-            Some(Applet::Ebuild {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Maint {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Sync {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Depclean {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Regen {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Quickpkg {
-                topology, root_arg, ..
-            })
-            | Some(Applet::MirrorDist {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Clean {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Etc {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Query {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Use {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Pkg {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Revdep {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Read {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Log {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Search {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Select {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Env {
-                topology, root_arg, ..
-            }) => (topology.clone(), root_arg.clone()),
-            Some(Applet::Active { topology, .. }) => (topology.clone(), RootArg::default()),
+            Some(Applet::Ebuild(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Maint(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Sync(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Depclean(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Regen(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Quickpkg(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::MirrorDist(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Clean(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Etc(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Query(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Use(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Pkg(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Revdep(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Read(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Log(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Search(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Select(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Env(a)) => (a.topology.clone(), a.root_arg.clone()),
+            Some(Applet::Active(a)) => (a.topology.clone(), RootArg::default()),
             _ => (Topology::default(), RootArg::default()),
         }
     }
@@ -300,8 +264,8 @@ impl Cli {
             Some(Applet::Toolchain(a)) => a.merge_flags.clone(),
             Some(Applet::Stages(a)) => a.merge_flags.clone(),
             Some(Applet::Setup(a)) => a.merge_flags.clone(),
-            Some(Applet::Revdep { merge_flags, .. }) => merge_flags.clone(),
-            Some(Applet::Depclean { merge_flags, .. }) => merge_flags.clone(),
+            Some(Applet::Revdep(a)) => a.merge_flags.clone(),
+            Some(Applet::Depclean(a)) => a.merge_flags.clone(),
             _ => MergeFlags::default(),
         };
         flags.json |= self.json;
@@ -327,7 +291,7 @@ impl Cli {
     pub fn effective_activity(&self) -> ActivityArgs {
         match &self.applet {
             Some(Applet::Emerge(a)) => a.activity.clone(),
-            Some(Applet::Regen { activity, .. }) => activity.clone(),
+            Some(Applet::Regen(a)) => a.activity.clone(),
             Some(Applet::Crossdev(a)) => a.activity.clone(),
             Some(Applet::Toolchain(a)) => a.activity.clone(),
             Some(Applet::Stages(a)) => a.activity.clone(),
@@ -673,7 +637,7 @@ mod tests {
         let cli_set = Cli::parse_from(["em", "active", "--local", local_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command, .. } => command.as_ref(),
+                Applet::Active(a) => a.command.as_ref(),
                 _ => None,
             }),
             &cli_set,
@@ -1052,7 +1016,7 @@ mod tests {
         let cli_set = Cli::parse_from(["em", "active", "--prefix", prefix_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command, .. } => command.as_ref(),
+                Applet::Active(a) => a.command.as_ref(),
                 _ => None,
             }),
             &cli_set,
@@ -1079,7 +1043,7 @@ mod tests {
         let cli_set = Cli::parse_from(["em", "active", "--prefix", prefix_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command, .. } => command.as_ref(),
+                Applet::Active(a) => a.command.as_ref(),
                 _ => None,
             }),
             &cli_set,
@@ -1536,13 +1500,7 @@ pub enum Applet {
     /// Internal: backs the PATH shims dropped during a build so `find -exec doman` /
     /// `xargs do*` reach helpers that are in-shell builtins. Not for direct use.
     #[command(name = "__helper", hide = true)]
-    Helper {
-        /// Helper name (e.g. `doman`, `dolib.a`)
-        name: String,
-        /// Arguments passed through to the helper
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
+    Helper(HelperArgs),
 
     /// Internal: the privilege-wrapped install worker (install+qmerge+binpkg
     /// for one package; spawned per package by `build_and_merge`).
@@ -1550,41 +1508,13 @@ pub enum Applet {
     Worker(WorkerArgs),
 
     #[command(about = "Execute ebuild phases")]
-    Ebuild {
-        /// Path to the `.ebuild` file to execute
-        #[arg(required = true)]
-        ebuild_path: String,
-        /// Phase(s) to run in order (e.g. `compile`, `install`, `qmerge`)
-        #[arg(required = true)]
-        phase: Vec<String>,
-        /// Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
-        #[arg(short = 'w', long, value_name = "DIR")]
-        work_dir: Option<camino::Utf8PathBuf>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Ebuild(EbuildArgs),
 
     #[command(about = "System maintenance and health checks")]
-    Maint {
-        #[command(subcommand)]
-        command: MaintCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Maint(MaintArgs),
 
     #[command(about = "Query Portage internal variables and data")]
-    Portageq {
-        /// portageq sub-command to run (e.g. `envvar`, `get_repos`)
-        #[arg(required = true)]
-        command: String,
-        /// Arguments passed through to the sub-command
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
-    },
+    Portageq(PortageqArgs),
 
     /// Sync ebuild repositories from `repos.conf` (`git` and `rsync`)
     ///
@@ -1601,74 +1531,16 @@ pub enum Applet {
     /// `emaint sync`.
     // Both dispatch to `crate::maint::sync::run`.
     #[command(about = "Sync repositories (git, rsync)")]
-    Sync {
-        /// Repo names from repos.conf (default: auto-sync enabled repos)
-        repos: Vec<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Sync(SyncArgs),
 
     #[command(about = "Remove orphaned/unused packages")]
-    Depclean {
-        /// Restrict cleaning to these atoms' dependency closure (every other
-        /// installed package is protected). Default: the whole `@world` set
-        #[arg(trailing_var_arg = true)]
-        atoms: Vec<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-        /// `--exclude`/`--with-bdeps` only — the rest of `MergeFlags` means
-        /// nothing to depclean's own read-then-remove walk.
-        #[command(flatten)]
-        merge_flags: MergeFlags,
-    },
+    Depclean(DepcleanArgs),
 
     #[command(about = "Regenerate metadata cache")]
-    Regen {
-        /// Repo names or paths to regenerate (default: every repo except the
-        /// main one, whose cache is normally maintained upstream)
-        repos: Vec<String>,
-        /// Write cache files to this directory instead of metadata/md5-cache
-        #[arg(short = 'o', long, value_name = "DIR")]
-        output: Option<std::path::PathBuf>,
-        /// Directory containing master repositories
-        #[arg(long, value_name = "DIR")]
-        repos_dir: Option<String>,
-        /// Number of parallel workers
-        #[arg(short = 'j', long)]
-        jobs: Option<usize>,
-        /// Deduplicate top-level dep tokens before writing
-        #[arg(long)]
-        dedup: bool,
-        /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/
-        /// `--emergelog`) — `em regen` drives its own activity bus.
-        #[command(flatten)]
-        activity: ActivityArgs,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Regen(RegenArgs),
 
     #[command(about = "Create binary packages from installed files")]
-    Quickpkg {
-        /// Atoms, package sets (`@system`), or VDB paths (`/var/db/pkg/cat/pf`)
-        #[arg(required = true)]
-        atoms: Vec<String>,
-        /// Include CONFIG_PROTECT files
-        #[arg(long)]
-        include_config: bool,
-        /// Include unmodified CONFIG_PROTECT files
-        #[arg(long)]
-        include_unmodified_config: bool,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Quickpkg(QuickpkgArgs),
 
     #[command(
         name = "mirrordist",
@@ -1681,272 +1553,47 @@ Not to be confused with `em select mirrors`, which chooses which mirrors *this* 
 machine fetches from.\n\n\
 Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays."
     )]
-    MirrorDist {
-        /// repos.conf name or path
-        ///
-        /// Defaults to the main repo (opposite default from `em regen`, which excludes it).
-        repo: Option<String>,
-        /// Directory containing master repositories
-        #[arg(long, value_name = "DIR")]
-        repos_dir: Option<String>,
-        /// Distfiles directory to populate
-        #[arg(long, value_name = "DIR", required = true)]
-        distfiles: camino::Utf8PathBuf,
-        /// Concurrent downloads
-        #[arg(short = 'j', long)]
-        jobs: Option<usize>,
-        /// Delete distfiles no longer referenced by any ebuild
-        #[arg(long)]
-        delete: bool,
-        /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`)
-        #[arg(long, value_name = "DURATION", default_value = "7d")]
-        deletion_delay: String,
-        /// Deletion-grace state file (default: `$XDG_STATE_HOME/em/mirrordist/<repo>-*.json`)
-        #[arg(long, value_name = "FILE")]
-        deletion_db: Option<camino::Utf8PathBuf>,
-        /// Tab-delimited log of fetched files (appended)
-        #[arg(long, value_name = "FILE")]
-        success_log: Option<camino::Utf8PathBuf>,
-        /// Tab-delimited log of fetch failures (appended)
-        #[arg(long, value_name = "FILE")]
-        failure_log: Option<camino::Utf8PathBuf>,
-        /// Report of files scheduled for deletion, grouped by date (rewritten)
-        #[arg(long, value_name = "FILE")]
-        scheduled_deletion_log: Option<camino::Utf8PathBuf>,
-        /// File(s) listing distfile names --delete must never remove (one
-        /// name per line, `#`-comments ignored).
-        #[arg(long, value_name = "FILE")]
-        whitelist_from: Vec<camino::Utf8PathBuf>,
-        /// Re-hash already-present files instead of trusting their size
-        #[arg(long)]
-        verify_existing_digest: bool,
-        /// Also try GENTOO_MIRRORS after the ebuild's own URIs (real
-        /// emirrordist never does this — off by default).
-        #[arg(long)]
-        gentoo_mirrors_fallback: bool,
-        /// Allow --delete even when some ebuilds had no metadata cache entry
-        #[arg(long)]
-        delete_allow_incomplete: bool,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    MirrorDist(MirrorDistArgs),
 
     #[command(about = "Query package information")]
-    Query {
-        #[command(subcommand)]
-        command: QueryCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Query(QueryArgs),
 
     #[command(about = "Clean distfiles and/or binary packages")]
-    Clean {
-        #[command(subcommand)]
-        target: CleanTarget,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Clean(CleanArgs),
 
     #[command(about = "Enable/disable/query USE flags in make.conf")]
-    Use {
-        /// Add (enable) flags — euse calls this --enable/-E
-        #[arg(
-            short = 'a',
-            long = "add",
-            visible_short_alias = 'E',
-            value_name = "FLAG"
-        )]
-        add: Vec<String>,
-        /// Subtract flags (written with leading '-', e.g. -themes) — euse
-        /// calls this --disable/-D
-        #[arg(
-            short = 's',
-            long = "subtract",
-            visible_short_alias = 'D',
-            value_name = "FLAG"
-        )]
-        subtract: Vec<String>,
-        /// Drop flags entirely (removes both flag and -flag forms) — euse
-        /// calls this --remove/-R or --prune/-P
-        #[arg(
-            short = 'd',
-            long = "drop",
-            visible_short_aliases = ['R', 'P'],
-            value_name = "FLAG"
-        )]
-        drop: Vec<String>,
-        /// Preview the resulting value without writing make.conf
-        #[arg(short = 'n', long = "dry-run")]
-        dry_run: bool,
-        /// Target a USE_EXPAND variable (e.g. VIDEO_CARDS) instead of USE —
-        /// -a/-s/-d then edit that variable's value the same way
-        #[arg(short = 'e', long = "expand", value_name = "VAR")]
-        expand: Option<String>,
-        /// List every USE_EXPAND variable known to the active profile, each
-        /// with its current make.conf value
-        #[arg(
-            short = 'L',
-            long = "list-expand",
-            conflicts_with_all = ["add", "subtract", "drop", "expand"]
-        )]
-        list_expand: bool,
-        /// Show descriptions for the given USE flags (profiles/use.desc and
-        /// use.local.desc, searching both unless -g/-l restricts it). With
-        /// no flags given, lists every flag in scope
-        #[arg(
-            short = 'i',
-            long = "info",
-            value_name = "FLAG",
-            conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand"]
-        )]
-        info: Vec<String>,
-        /// Restrict -i to global flags only (profiles/use.desc)
-        #[arg(
-            short = 'g',
-            long = "global",
-            conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand", "local_desc"]
-        )]
-        global: bool,
-        /// Restrict -i to per-package local flags only (profiles/use.local.desc,
-        /// searched across every package — see `em query uses <atom>` for a
-        /// single package's flags instead)
-        #[arg(
-            short = 'l',
-            long = "local-desc",
-            conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand", "global"]
-        )]
-        local_desc: bool,
-        /// Path to make.conf (default: resolved like other config commands,
-        /// following --config-root/--local/--prefix)
-        #[arg(long = "make-conf", value_name = "PATH")]
-        make_conf: Option<camino::Utf8PathBuf>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Use(UseArgs),
 
     #[command(about = "Edit per-package configuration (package.use, .keywords, .mask, .env)")]
-    Pkg {
-        #[command(subcommand)]
-        command: PkgCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Pkg(PkgArgs),
 
     #[command(about = "Rebuild packages with broken shared library deps")]
-    Revdep {
-        /// Only consider consumers of libraries whose soname contains NAME
-        #[arg(short = 'L', long, value_name = "NAME")]
-        library: Option<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-        #[command(flatten)]
-        merge_flags: MergeFlags,
-    },
+    Revdep(RevdepArgs),
 
     #[command(about = "Display Portage elog files")]
-    Read {
-        /// Only show packages whose `<category>/<pf>` contains this text
-        package: Option<String>,
-        /// List what is filed instead of printing the messages
-        #[arg(short, long)]
-        list: bool,
-        /// Show only this many of the most recent packages; 0 for all
-        #[arg(short = 'n', long, default_value_t = 10)]
-        limit: usize,
-        /// Remove each file once it has been shown
-        #[arg(long)]
-        delete: bool,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Read(ReadArgs),
 
     #[command(about = "Analyze emerge.log")]
-    Log {
-        #[command(subcommand)]
-        command: Option<LogCommand>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Log(LogArgs),
 
     #[command(about = "Search inside ebuilds and eclasses")]
-    Grep {
-        /// Pattern to search for
-        #[arg(required = true)]
-        pattern: String,
-        /// Restrict the search to these ebuild/eclass paths (default: the whole repo)
-        #[arg(trailing_var_arg = true)]
-        paths: Vec<String>,
-    },
+    Grep(GrepArgs),
 
     #[command(about = "Search package names and descriptions")]
-    Search {
-        /// List all packages (no pattern required)
-        #[arg(short = 'a', long)]
-        all: bool,
-        /// Search package descriptions instead of names
-        #[arg(short = 'S', long = "desc")]
-        desc: bool,
-        /// Show only package name, no description
-        #[arg(short = 'N', long = "name-only")]
-        name_only: bool,
-        /// Show homepage instead of description
-        #[arg(short = 'H', long)]
-        homepage: bool,
-        /// Pattern to search (required unless --all)
-        #[arg(required_unless_present = "all")]
-        pattern: Option<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Search(SearchArgs),
 
     #[command(about = "Parse/split atom strings")]
-    Atom {
-        /// Atom strings to parse and print back in normalized form
-        #[arg(required = true)]
-        atoms: Vec<String>,
-    },
+    Atom(AtomArgs),
 
     #[command(about = "Native config selectors (profile, repos) — eselect-like")]
-    Select {
-        #[command(subcommand)]
-        command: SelectCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Select(SelectArgs),
 
     /// Register a default `--prefix` / `--local` so bare `em <pkg>` picks it up (dogfooding)
     ///
     /// Explicit `--prefix`/`--local`/`--root` still win. State is stored under
     /// `$XDG_STATE_HOME/em/active`.
     #[command(about = "Register a default --prefix/--local for bare em invocations")]
-    Active {
-        #[command(subcommand)]
-        command: Option<ActiveCommand>,
-        /// `--root` is deliberately not part of this: it is never registerable
-        /// (see the module doc in `crate::active`).
-        #[command(flatten)]
-        topology: Topology,
-    },
+    Active(ActiveArgs),
 
     #[command(about = "Bootstrap a prefix layout (use with --local or --prefix)")]
     Setup(SetupArgs),
@@ -1967,30 +1614,439 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
         alias = "config",
         alias = "dispatch"
     )]
-    Etc {
-        #[command(subcommand)]
-        command: Option<EtcCommand>,
-        #[command(flatten)]
-        opts: EtcOpts,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Etc(EtcArgs),
 
     #[command(about = "Regenerate /etc/profile.env and ld.so cache")]
-    Env {
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Env(EnvArgs),
 
     /// Resolve and merge/unmerge packages (emerge workalike).
     ///
     /// `em <atoms>` and `em emerge <atoms>` parse into the same arguments.
     #[command(about = "Resolve and merge/unmerge packages (emerge workalike)")]
     Emerge(EmergeArgs),
+}
+
+/// Hidden `em __helper` shim — PATH helper dispatched by `find -exec`/`xargs`.
+#[derive(clap::Args, Debug)]
+pub struct HelperArgs {
+    /// Helper name (e.g. `doman`, `dolib.a`)
+    pub name: String,
+    /// Arguments passed through to the helper
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+}
+
+/// `em ebuild` — execute ebuild phases
+#[derive(clap::Args, Debug)]
+pub struct EbuildArgs {
+    /// Path to the `.ebuild` file to execute
+    #[arg(required = true)]
+    pub ebuild_path: String,
+    /// Phase(s) to run in order (e.g. `compile`, `install`, `qmerge`)
+    #[arg(required = true)]
+    pub phase: Vec<String>,
+    /// Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
+    #[arg(short = 'w', long, value_name = "DIR")]
+    pub work_dir: Option<camino::Utf8PathBuf>,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em maint` — system maintenance and health checks
+#[derive(clap::Args)]
+pub struct MaintArgs {
+    #[command(subcommand)]
+    pub command: MaintCommand,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em portageq` — query Portage internal variables and data
+#[derive(clap::Args, Debug)]
+pub struct PortageqArgs {
+    /// portageq sub-command to run (e.g. `envvar`, `get_repos`)
+    #[arg(required = true)]
+    pub command: String,
+    /// Arguments passed through to the sub-command
+    #[arg(trailing_var_arg = true)]
+    pub args: Vec<String>,
+}
+
+/// `em sync` — sync repositories (git, rsync)
+#[derive(clap::Args, Debug)]
+pub struct SyncArgs {
+    /// Repo names from repos.conf (default: auto-sync enabled repos)
+    pub repos: Vec<String>,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em depclean` — remove orphaned/unused packages
+#[derive(clap::Args, Debug)]
+pub struct DepcleanArgs {
+    /// Restrict cleaning to these atoms' dependency closure (every other
+    /// installed package is protected). Default: the whole `@world` set
+    #[arg(trailing_var_arg = true)]
+    pub atoms: Vec<String>,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+    /// `--exclude`/`--with-bdeps` only — the rest of `MergeFlags` means
+    /// nothing to depclean's own read-then-remove walk.
+    #[command(flatten)]
+    pub merge_flags: MergeFlags,
+}
+
+/// `em regen` — regenerate metadata cache
+#[derive(clap::Args, Debug)]
+pub struct RegenArgs {
+    /// Repo names or paths to regenerate (default: every repo except the
+    /// main one, whose cache is normally maintained upstream)
+    pub repos: Vec<String>,
+    /// Write cache files to this directory instead of metadata/md5-cache
+    #[arg(short = 'o', long, value_name = "DIR")]
+    pub output: Option<std::path::PathBuf>,
+    /// Directory containing master repositories
+    #[arg(long, value_name = "DIR")]
+    pub repos_dir: Option<String>,
+    /// Number of parallel workers
+    #[arg(short = 'j', long)]
+    pub jobs: Option<usize>,
+    /// Deduplicate top-level dep tokens before writing
+    #[arg(long)]
+    pub dedup: bool,
+    /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/
+    /// `--emergelog`) — `em regen` drives its own activity bus.
+    #[command(flatten)]
+    pub activity: ActivityArgs,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em quickpkg` — create binary packages from installed files
+#[derive(clap::Args, Debug)]
+pub struct QuickpkgArgs {
+    /// Atoms, package sets (`@system`), or VDB paths (`/var/db/pkg/cat/pf`)
+    #[arg(required = true)]
+    pub atoms: Vec<String>,
+    /// Include CONFIG_PROTECT files
+    #[arg(long)]
+    pub include_config: bool,
+    /// Include unmodified CONFIG_PROTECT files
+    #[arg(long)]
+    pub include_unmodified_config: bool,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em mirrordist` — build/maintain a distfiles mirror
+#[derive(clap::Args, Debug)]
+pub struct MirrorDistArgs {
+    /// repos.conf name or path
+    ///
+    /// Defaults to the main repo (opposite default from `em regen`, which excludes it).
+    pub repo: Option<String>,
+    /// Directory containing master repositories
+    #[arg(long, value_name = "DIR")]
+    pub repos_dir: Option<String>,
+    /// Distfiles directory to populate
+    #[arg(long, value_name = "DIR", required = true)]
+    pub distfiles: camino::Utf8PathBuf,
+    /// Concurrent downloads
+    #[arg(short = 'j', long)]
+    pub jobs: Option<usize>,
+    /// Delete distfiles no longer referenced by any ebuild
+    #[arg(long)]
+    pub delete: bool,
+    /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`)
+    #[arg(long, value_name = "DURATION", default_value = "7d")]
+    pub deletion_delay: String,
+    /// Deletion-grace state file (default: `$XDG_STATE_HOME/em/mirrordist/<repo>-*.json`)
+    #[arg(long, value_name = "FILE")]
+    pub deletion_db: Option<camino::Utf8PathBuf>,
+    /// Tab-delimited log of fetched files (appended)
+    #[arg(long, value_name = "FILE")]
+    pub success_log: Option<camino::Utf8PathBuf>,
+    /// Tab-delimited log of fetch failures (appended)
+    #[arg(long, value_name = "FILE")]
+    pub failure_log: Option<camino::Utf8PathBuf>,
+    /// Report of files scheduled for deletion, grouped by date (rewritten)
+    #[arg(long, value_name = "FILE")]
+    pub scheduled_deletion_log: Option<camino::Utf8PathBuf>,
+    /// File(s) listing distfile names --delete must never remove (one
+    /// name per line, `#`-comments ignored).
+    #[arg(long, value_name = "FILE")]
+    pub whitelist_from: Vec<camino::Utf8PathBuf>,
+    /// Re-hash already-present files instead of trusting their size
+    #[arg(long)]
+    pub verify_existing_digest: bool,
+    /// Also try GENTOO_MIRRORS after the ebuild's own URIs (real
+    /// emirrordist never does this — off by default).
+    #[arg(long)]
+    pub gentoo_mirrors_fallback: bool,
+    /// Allow --delete even when some ebuilds had no metadata cache entry
+    #[arg(long)]
+    pub delete_allow_incomplete: bool,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em query` — query package information
+#[derive(clap::Args)]
+pub struct QueryArgs {
+    #[command(subcommand)]
+    pub command: QueryCommand,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em clean` — clean distfiles and/or binary packages
+#[derive(clap::Args)]
+pub struct CleanArgs {
+    #[command(subcommand)]
+    pub target: CleanTarget,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em use` — enable/disable/query USE flags in make.conf
+#[derive(clap::Args, Debug)]
+pub struct UseArgs {
+    /// Add (enable) flags — euse calls this --enable/-E
+    #[arg(
+        short = 'a',
+        long = "add",
+        visible_short_alias = 'E',
+        value_name = "FLAG"
+    )]
+    pub add: Vec<String>,
+    /// Subtract flags (written with leading '-', e.g. -themes) — euse
+    /// calls this --disable/-D
+    #[arg(
+        short = 's',
+        long = "subtract",
+        visible_short_alias = 'D',
+        value_name = "FLAG"
+    )]
+    pub subtract: Vec<String>,
+    /// Drop flags entirely (removes both flag and -flag forms) — euse
+    /// calls this --remove/-R or --prune/-P
+    #[arg(
+        short = 'd',
+        long = "drop",
+        visible_short_aliases = ['R', 'P'],
+        value_name = "FLAG"
+    )]
+    pub drop: Vec<String>,
+    /// Preview the resulting value without writing make.conf
+    #[arg(short = 'n', long = "dry-run")]
+    pub dry_run: bool,
+    /// Target a USE_EXPAND variable (e.g. VIDEO_CARDS) instead of USE —
+    /// -a/-s/-d then edit that variable's value the same way
+    #[arg(short = 'e', long = "expand", value_name = "VAR")]
+    pub expand: Option<String>,
+    /// List every USE_EXPAND variable known to the active profile, each
+    /// with its current make.conf value
+    #[arg(
+        short = 'L',
+        long = "list-expand",
+        conflicts_with_all = ["add", "subtract", "drop", "expand"]
+    )]
+    pub list_expand: bool,
+    /// Show descriptions for the given USE flags (profiles/use.desc and
+    /// use.local.desc, searching both unless -g/-l restricts it). With
+    /// no flags given, lists every flag in scope
+    #[arg(
+        short = 'i',
+        long = "info",
+        value_name = "FLAG",
+        conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand"]
+    )]
+    pub info: Vec<String>,
+    /// Restrict -i to global flags only (profiles/use.desc)
+    #[arg(
+        short = 'g',
+        long = "global",
+        conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand", "local_desc"]
+    )]
+    pub global: bool,
+    /// Restrict -i to per-package local flags only (profiles/use.local.desc,
+    /// searched across every package — see `em query uses <atom>` for a
+    /// single package's flags instead)
+    #[arg(
+        short = 'l',
+        long = "local-desc",
+        conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand", "global"]
+    )]
+    pub local_desc: bool,
+    /// Path to make.conf (default: resolved like other config commands,
+    /// following --config-root/--local/--prefix)
+    #[arg(long = "make-conf", value_name = "PATH")]
+    pub make_conf: Option<camino::Utf8PathBuf>,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em pkg` — edit per-package configuration
+#[derive(clap::Args)]
+pub struct PkgArgs {
+    #[command(subcommand)]
+    pub command: PkgCommand,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em revdep` — rebuild packages with broken shared library deps
+#[derive(clap::Args, Debug)]
+pub struct RevdepArgs {
+    /// Only consider consumers of libraries whose soname contains NAME
+    #[arg(short = 'L', long, value_name = "NAME")]
+    pub library: Option<String>,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+    #[command(flatten)]
+    pub merge_flags: MergeFlags,
+}
+
+/// `em read` — display Portage elog files
+#[derive(clap::Args, Debug)]
+pub struct ReadArgs {
+    /// Only show packages whose `<category>/<pf>` contains this text
+    pub package: Option<String>,
+    /// List what is filed instead of printing the messages
+    #[arg(short, long)]
+    pub list: bool,
+    /// Show only this many of the most recent packages; 0 for all
+    #[arg(short = 'n', long, default_value_t = 10)]
+    pub limit: usize,
+    /// Remove each file once it has been shown
+    #[arg(long)]
+    pub delete: bool,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em log` — analyze emerge.log
+#[derive(clap::Args)]
+pub struct LogArgs {
+    #[command(subcommand)]
+    pub command: Option<LogCommand>,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em grep` — search inside ebuilds and eclasses
+#[derive(clap::Args, Debug)]
+pub struct GrepArgs {
+    /// Pattern to search for
+    #[arg(required = true)]
+    pub pattern: String,
+    /// Restrict the search to these ebuild/eclass paths (default: the whole repo)
+    #[arg(trailing_var_arg = true)]
+    pub paths: Vec<String>,
+}
+
+/// `em search` — search package names and descriptions
+#[derive(clap::Args, Debug)]
+pub struct SearchArgs {
+    /// List all packages (no pattern required)
+    #[arg(short = 'a', long)]
+    pub all: bool,
+    /// Search package descriptions instead of names
+    #[arg(short = 'S', long = "desc")]
+    pub desc: bool,
+    /// Show only package name, no description
+    #[arg(short = 'N', long = "name-only")]
+    pub name_only: bool,
+    /// Show homepage instead of description
+    #[arg(short = 'H', long)]
+    pub homepage: bool,
+    /// Pattern to search (required unless --all)
+    #[arg(required_unless_present = "all")]
+    pub pattern: Option<String>,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em atom` — parse/split atom strings
+#[derive(clap::Args, Debug)]
+pub struct AtomArgs {
+    /// Atom strings to parse and print back in normalized form
+    #[arg(required = true)]
+    pub atoms: Vec<String>,
+}
+
+/// `em select` — native config selectors (profile, repos)
+#[derive(clap::Args)]
+pub struct SelectArgs {
+    #[command(subcommand)]
+    pub command: SelectCommand,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em active` — register a default `--prefix`/`--local` for bare invocations
+#[derive(clap::Args)]
+pub struct ActiveArgs {
+    #[command(subcommand)]
+    pub command: Option<ActiveCommand>,
+    /// `--root` is deliberately not part of this: it is never registerable
+    /// (see the module doc in `crate::active`).
+    #[command(flatten)]
+    pub topology: Topology,
+}
+
+/// `em etc` — reconcile pending config files
+#[derive(clap::Args)]
+pub struct EtcArgs {
+    #[command(subcommand)]
+    pub command: Option<EtcCommand>,
+    #[command(flatten)]
+    pub opts: EtcOpts,
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em env` — regenerate `/etc/profile.env` and ld.so cache
+#[derive(clap::Args, Debug)]
+pub struct EnvArgs {
+    #[command(flatten)]
+    pub topology: Topology,
+    #[command(flatten)]
+    pub root_arg: RootArg,
 }
 
 /// `em setup` — bootstrap a prefix layout

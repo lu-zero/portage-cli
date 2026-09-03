@@ -36,8 +36,8 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
     match applet {
         // Internal helper shim entry point: run the helper and exit with its
         // status (the shim's caller — `find -exec`/`xargs` — checks it).
-        Applet::Helper { name, args } => {
-            std::process::exit(portage_repo::run_helper(name, args).await);
+        Applet::Helper(h) => {
+            std::process::exit(portage_repo::run_helper(&h.name, &h.args).await);
         }
         Applet::Worker(w) => {
             let worker_extra_path: Vec<camino::Utf8PathBuf> = w
@@ -73,19 +73,14 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             })
             .await
         }
-        Applet::Ebuild {
-            ebuild_path,
-            phase,
-            work_dir,
-            ..
-        } => {
+        Applet::Ebuild(a) => {
             let repo_override = globals.repo.as_deref();
             let roots = globals.roots();
             let broot = globals.host_roots();
             ebuild::run(
-                ebuild_path,
-                phase,
-                work_dir.as_deref(),
+                &a.ebuild_path,
+                &a.phase,
+                a.work_dir.as_deref(),
                 repo_override,
                 roots.merge_root(),
                 ebuild::RootContext {
@@ -99,160 +94,109 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
             )
             .await
         }
-        Applet::Maint { command, .. } => run_maint(command, globals).await,
-        Applet::Portageq { .. } => bail!("not implemented: portageq"),
-        Applet::Sync { repos, .. } => maint::sync::run(repos, globals).await,
-        Applet::Depclean {
-            atoms, merge_flags, ..
-        } => crate::depclean::run_with_targets(globals, atoms, merge_flags).await,
-        Applet::Regen {
-            repos,
-            output,
-            repos_dir,
-            jobs,
-            dedup,
-            ..
-        } => {
+        Applet::Maint(a) => run_maint(&a.command, globals).await,
+        Applet::Portageq(_) => bail!("not implemented: portageq"),
+        Applet::Sync(a) => maint::sync::run(&a.repos, globals).await,
+        Applet::Depclean(a) => {
+            crate::depclean::run_with_targets(globals, &a.atoms, &a.merge_flags).await
+        }
+        Applet::Regen(a) => {
             regen::run(
                 globals,
-                repos,
+                &a.repos,
                 &globals.repo_path(),
-                repos_dir.as_deref(),
-                output.clone(),
-                *jobs,
-                *dedup,
+                a.repos_dir.as_deref(),
+                a.output.clone(),
+                a.jobs,
+                a.dedup,
             )
             .await
         }
-        Applet::Quickpkg {
-            atoms,
-            include_config,
-            include_unmodified_config,
-            ..
-        } => {
+        Applet::Quickpkg(a) => {
             crate::quickpkg::run(
                 globals,
                 &crate::quickpkg::QuickpkgOpts {
-                    atoms: atoms.clone(),
-                    include_config: *include_config,
-                    include_unmodified_config: *include_unmodified_config,
+                    atoms: a.atoms.clone(),
+                    include_config: a.include_config,
+                    include_unmodified_config: a.include_unmodified_config,
                 },
             )
             .await
         }
-        Applet::MirrorDist {
-            repo,
-            repos_dir,
-            distfiles,
-            jobs,
-            delete,
-            deletion_delay,
-            deletion_db,
-            success_log,
-            failure_log,
-            scheduled_deletion_log,
-            whitelist_from,
-            verify_existing_digest,
-            gentoo_mirrors_fallback,
-            delete_allow_incomplete,
-            ..
-        } => {
-            let deletion_delay = humantime::parse_duration(deletion_delay)
-                .with_context(|| format!("--deletion-delay {deletion_delay:?}"))?;
+        Applet::MirrorDist(a) => {
+            let deletion_delay = humantime::parse_duration(&a.deletion_delay)
+                .with_context(|| format!("--deletion-delay {:?}", a.deletion_delay))?;
             crate::mirrordist::run(
                 globals,
                 &crate::mirrordist::MirrorDistOpts {
-                    repo: repo.clone(),
-                    repos_dir: repos_dir.clone(),
-                    distfiles: distfiles.clone(),
-                    jobs: *jobs,
-                    delete: *delete,
+                    repo: a.repo.clone(),
+                    repos_dir: a.repos_dir.clone(),
+                    distfiles: a.distfiles.clone(),
+                    jobs: a.jobs,
+                    delete: a.delete,
                     deletion_delay,
-                    deletion_db: deletion_db.clone(),
-                    success_log: success_log.clone(),
-                    failure_log: failure_log.clone(),
-                    scheduled_deletion_log: scheduled_deletion_log.clone(),
-                    whitelist_from: whitelist_from.clone(),
-                    verify_existing_digest: *verify_existing_digest,
-                    gentoo_mirrors_fallback: *gentoo_mirrors_fallback,
-                    delete_allow_incomplete: *delete_allow_incomplete,
+                    deletion_db: a.deletion_db.clone(),
+                    success_log: a.success_log.clone(),
+                    failure_log: a.failure_log.clone(),
+                    scheduled_deletion_log: a.scheduled_deletion_log.clone(),
+                    whitelist_from: a.whitelist_from.clone(),
+                    verify_existing_digest: a.verify_existing_digest,
+                    gentoo_mirrors_fallback: a.gentoo_mirrors_fallback,
+                    delete_allow_incomplete: a.delete_allow_incomplete,
                 },
             )
             .await
         }
-        Applet::Pkg { command, .. } => pkg::run(command, globals).await,
-        Applet::Query { command, .. } => run_query(command, globals).await,
-        Applet::Clean { target, .. } => run_clean(globals, target).await,
-        Applet::Use {
-            add,
-            subtract,
-            drop,
-            dry_run,
-            expand,
-            list_expand,
-            info,
-            global,
-            local_desc,
-            make_conf,
-            ..
-        } => {
+        Applet::Pkg(a) => pkg::run(&a.command, globals).await,
+        Applet::Query(a) => run_query(&a.command, globals).await,
+        Applet::Clean(a) => run_clean(globals, &a.target).await,
+        Applet::Use(a) => {
             use_flags::run(
                 globals,
                 &use_flags::UseOpts {
-                    add,
-                    subtract,
-                    drop,
-                    dry_run: *dry_run,
-                    expand: expand.as_deref(),
-                    list_expand: *list_expand,
-                    info,
-                    global: *global,
-                    local_desc: *local_desc,
-                    make_conf: make_conf.as_deref(),
+                    add: &a.add,
+                    subtract: &a.subtract,
+                    drop: &a.drop,
+                    dry_run: a.dry_run,
+                    expand: a.expand.as_deref(),
+                    list_expand: a.list_expand,
+                    info: &a.info,
+                    global: a.global,
+                    local_desc: a.local_desc,
+                    make_conf: a.make_conf.as_deref(),
                 },
             )
             .await
         }
-        Applet::Revdep { library, .. } => crate::revdep::run(globals, library.as_deref()).await,
-        Applet::Read {
-            package,
-            list,
-            limit,
-            delete,
-            ..
-        } => crate::elog::run_read(globals, package.as_deref(), *list, *limit, *delete).await,
-        Applet::Log { command, .. } => run_log(command, globals),
-        Applet::Grep { .. } => bail!("not implemented: grep"),
-        Applet::Search {
-            all,
-            desc,
-            name_only,
-            homepage,
-            pattern,
-            ..
-        } => {
+        Applet::Revdep(a) => crate::revdep::run(globals, a.library.as_deref()).await,
+        Applet::Read(a) => {
+            crate::elog::run_read(globals, a.package.as_deref(), a.list, a.limit, a.delete).await
+        }
+        Applet::Log(a) => run_log(&a.command, globals),
+        Applet::Grep(_) => bail!("not implemented: grep"),
+        Applet::Search(a) => {
             search::run(
                 &globals.search_repos(),
-                pattern.as_deref(),
-                *all,
-                *desc,
-                *name_only,
-                *homepage,
+                a.pattern.as_deref(),
+                a.all,
+                a.desc,
+                a.name_only,
+                a.homepage,
             )
             .await
         }
-        Applet::Atom { atoms } => {
-            run_atom(atoms);
+        Applet::Atom(a) => {
+            run_atom(&a.atoms);
             Ok(())
         }
-        Applet::Select { command, .. } => select::run(command, globals).await,
-        Applet::Active { command, .. } => crate::active::run(command.as_ref(), globals),
+        Applet::Select(a) => select::run(&a.command, globals).await,
+        Applet::Active(a) => crate::active::run(a.command.as_ref(), globals),
         Applet::Setup(args) => setup::run(globals, args).await,
         Applet::Crossdev(args) => crossdev::run(args, globals).await,
         Applet::Toolchain(args) => crossdev::toolchain(args, globals).await,
         Applet::Stages(args) => crossdev::stage1(args, globals).await,
-        Applet::Etc { command, opts, .. } => crate::etc::run(globals, command.as_ref(), opts).await,
-        Applet::Env { .. } => maint::env::env_update(globals.roots().merge_root()),
+        Applet::Etc(a) => crate::etc::run(globals, a.command.as_ref(), &a.opts).await,
+        Applet::Env(_) => maint::env::env_update(globals.roots().merge_root()),
         Applet::Emerge(args) => emerge::run_emerge(globals, args).await,
     }
 }
