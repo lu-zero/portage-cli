@@ -314,7 +314,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
         unset,
     };
 
-    if cli.json || cli.merge_flags().json {
+    if cli.merge_flags().json {
         println!("{}", serde_json::to_string_pretty(&info)?);
     } else {
         print_text(&info)?;

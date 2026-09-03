@@ -9,10 +9,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 use portage_cli::cli;
 
 fn parse_cli() -> cli::Cli {
-    match cli::parse_cli_from(std::env::args_os()) {
-        Ok(cli) => cli,
-        Err(err) => err.exit(),
-    }
+    cli::Cli::parse_into().0
 }
 
 fn main() {

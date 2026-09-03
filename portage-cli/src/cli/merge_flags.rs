@@ -3,101 +3,97 @@
 //! ([`super::Topology`]/[`super::RootArg`]) or depgraph-shape flags
 //! ([`super::DepgraphFlags`]).
 //!
-//! Flattened exactly once into each merge-shaped applet (`EmergeArgs`,
-//! `CrossdevArgs`, `ToolchainArgs`, `StagesArgs`, `SetupArgs`, `Revdep`,
-//! `Depclean`). Bare `em -j8 cat/pkg` works because [`super::parse_cli_from`]
-//! retries those invocations as `em emerge …`.
+//! Flattened onto [`super::Cli`] (prefix-position emerge) and each merge-shaped
+//! applet (`EmergeArgs`, `CrossdevArgs`, `ToolchainArgs`, `StagesArgs`,
+//! `SetupArgs`, `Revdep`, `Depclean`). Not global: `-a` must not reach `use`.
 //!
 //! `--search`/`--searchdesc`/`--nodeps` are not here: they select a different
 //! emerge *action* ([`super::EmergeModeArgs`]), or a per-step `EmergeOpts`
 //! override in the staged bootstrap.
-#[derive(clap::Args, Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(usage::Args, Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct MergeFlags {
     /// Ask for confirmation before performing actions
-    // Not `global = true` on `Cli`: unlike `--root`/`--privilege`, `--ask` only
-    // means anything to a merge-shaped command, and making it global collided
-    // with `use`'s own `-a`/`--add` (a real crash — `em use --help` panicked).
-    #[arg(short = 'a', long)]
+    #[usage(short = 'a', long)]
     pub ask: bool,
 
     /// Update installed packages to newest available versions
-    #[arg(short = 'u', long)]
+    #[usage(short = 'u', long)]
     pub update: bool,
 
     /// Write required USE changes to /etc/portage/package.use/
-    #[arg(long)]
+    #[usage(long)]
     pub autounmask_write: bool,
 
     /// Build and install packages but do not add them to the world file
-    #[arg(short = '1', long = "oneshot")]
+    #[usage(short = '1', long = "oneshot")]
     pub oneshot: bool,
 
     /// Only fetch distfiles, do not build or install
-    #[arg(short = 'f', long)]
+    #[usage(short = 'f', long)]
     pub fetchonly: bool,
 
     /// Instead of building, just fetch every SRC_URI file (regardless of
     /// USE setting) for the resolved packages.
-    #[arg(short = 'F', long)]
+    #[usage(short = 'F', long)]
     pub fetch_all_uri: bool,
 
     /// Build binary packages for all merged packages
-    #[arg(short = 'b', long)]
+    #[usage(short = 'b', long)]
     pub buildpkg: bool,
 
     /// Build binary packages without merging/installing them
     ///
     /// All build-time dependencies must already be satisfied on the system -- this does not
     /// resolve or install anything to make that true.
-    #[arg(short = 'B', long)]
+    #[usage(short = 'B', long)]
     pub buildpkgonly: bool,
 
     /// Use binary packages if available, otherwise fall back to source
-    #[arg(short = 'k', long)]
+    #[usage(short = 'k', long)]
     pub usepkg: bool,
 
     /// Only use binary packages, fail if none available
-    #[arg(short = 'K', long)]
+    #[usage(short = 'K', long)]
     pub usepkgonly: bool,
 
     /// Fetch binary packages for all requested packages
-    #[arg(short = 'g', long)]
+    #[usage(short = 'g', long)]
     pub getbinpkg: bool,
 
     /// Only fetch binary packages, do not install
-    #[arg(short = 'G', long)]
+    #[usage(short = 'G', long)]
     pub getbinpkgonly: bool,
 
     /// Treat every atom as not-yet-installed, rebuilding the whole dependency
     /// tree from scratch rather than only what is missing or outdated.
-    #[arg(short = 'e', long)]
+    #[usage(short = 'e', long)]
     pub emptytree: bool,
 
     /// Show the dependency tree, indenting each package under the one that
     /// pulled it in, before merging.
-    #[arg(short = 't', long)]
+    #[usage(short = 't', long)]
     pub tree: bool,
 
     /// Emit the depgraph as machine-parsable JSON instead of pretend text
     ///
     /// Takes precedence over `--tree`. Works with `-p` (including `-e`).
-    #[arg(long)]
+    #[usage(long)]
     pub json: bool,
 
     /// Only merge dependencies, not the specified packages themselves
-    #[arg(short = 'o', long)]
+    #[usage(short = 'o', long)]
     pub onlydeps: bool,
 
     /// Do not replace installed packages that are already the same version
-    #[arg(short = 'n', long)]
+    #[usage(short = 'n', long)]
     pub noreplace: bool,
 
     /// Build up to N packages in parallel, respecting build-dependency order (merges are still
     /// serialised)
     ///
     /// Default 1 (sequential).
-    #[arg(short = 'j', long, value_name = "N")]
+    #[usage(short = 'j', long, value_name = "N")]
     pub jobs: Option<u32>,
 
     /// Maximum 1-minute load average allowed when starting additional parallel builds (`--jobs`
@@ -106,22 +102,22 @@ pub struct MergeFlags {
     /// Once at least one job is running, further starts wait until load drops below LOAD
     /// (Portage `PollScheduler._can_add_job`). The first concurrent job is always allowed.
     /// Displayed on the `Jobs:` status line regardless.
-    #[arg(short = 'l', long, value_name = "LOAD")]
+    #[usage(short = 'l', long, value_name = "LOAD")]
     pub load_average: Option<f64>,
 
     /// Continue merging as much as possible even if some packages fail
-    #[arg(long)]
+    #[usage(long)]
     pub keep_going: bool,
 
     /// Automatically add required USE flags and package unmask entries to config files
-    #[arg(long)]
+    #[usage(long)]
     pub autounmask: bool,
 
     /// Let the solver choose USE flags to satisfy REQUIRED_USE (Level C) rather than only
     /// reporting violations
     ///
     /// Off by default; flips are reported.
-    #[arg(long)]
+    #[usage(long)]
     pub autosolve_use: bool,
 
     /// With `-p`/`--pretend` or `-a`/`--ask`, print an "Expected time of
@@ -129,9 +125,7 @@ pub struct MergeFlags {
     /// activity history (median of recent successful merges per package;
     /// wall uses the build graph + `--jobs` when blockers are available).
     /// Shown even when the plan needs USE/mask changes to proceed.
-    // Not `global = true` on `Cli`: like `--ask`, `--eta` only means
-    // something to a merge-shaped command.
-    #[arg(long = "eta")]
+    #[usage(long = "eta")]
     pub eta: bool,
 
     /// With `-u`/`--update` `-D`/`--deep`: when moving a version-pinned
@@ -140,18 +134,18 @@ pub struct MergeFlags {
     /// `llvm`), pull that package into the plan too instead of stopping
     /// halfway. Off by default: this can revert the upgrade instead if the
     /// retained package has no version satisfying the new pin.
-    #[arg(long)]
+    #[usage(long)]
     pub complete_graph: bool,
 
     /// Include build-time dependencies (BDEPEND) in the resolution.
     /// Default is false (exclude BDEPEND), matching emerge's default.
     /// When enabled, BDEPEND are included but filtered by what's already
     /// installed on the build host (BROOT).
-    #[arg(long)]
+    #[usage(long)]
     pub with_bdeps: bool,
 
     /// Exclude the specified atom from being merged
-    #[arg(short = 'X', long, value_name = "ATOM")]
+    #[usage(short = 'X', long, value_name = "ATOM")]
     pub exclude: Vec<String>,
 
     /// Only require RDEPEND (not DEPEND) to be satisfied in the merge target.
@@ -159,6 +153,45 @@ pub struct MergeFlags {
     /// cannot yet satisfy plain DEPEND (e.g. virtual/os-headers, acct-group/root)
     /// while its own toolchain is being built. `em crossdev --setup` always applies
     /// this unconditionally; elsewhere it defaults off.
-    #[arg(long = "root-deps")]
+    #[usage(long = "root-deps")]
     pub root_deps: bool,
+}
+
+impl MergeFlags {
+    /// Overlay a dual-mounted copy: bools OR, `Option` prefers applet, `Vec` applet-wins.
+    pub(crate) fn overlay(&self, applet: &Self) -> Self {
+        Self {
+            ask: self.ask || applet.ask,
+            update: self.update || applet.update,
+            autounmask_write: self.autounmask_write || applet.autounmask_write,
+            oneshot: self.oneshot || applet.oneshot,
+            fetchonly: self.fetchonly || applet.fetchonly,
+            fetch_all_uri: self.fetch_all_uri || applet.fetch_all_uri,
+            buildpkg: self.buildpkg || applet.buildpkg,
+            buildpkgonly: self.buildpkgonly || applet.buildpkgonly,
+            usepkg: self.usepkg || applet.usepkg,
+            usepkgonly: self.usepkgonly || applet.usepkgonly,
+            getbinpkg: self.getbinpkg || applet.getbinpkg,
+            getbinpkgonly: self.getbinpkgonly || applet.getbinpkgonly,
+            emptytree: self.emptytree || applet.emptytree,
+            tree: self.tree || applet.tree,
+            json: self.json || applet.json,
+            onlydeps: self.onlydeps || applet.onlydeps,
+            noreplace: self.noreplace || applet.noreplace,
+            jobs: applet.jobs.or(self.jobs),
+            load_average: applet.load_average.or(self.load_average),
+            keep_going: self.keep_going || applet.keep_going,
+            autounmask: self.autounmask || applet.autounmask,
+            autosolve_use: self.autosolve_use || applet.autosolve_use,
+            eta: self.eta || applet.eta,
+            complete_graph: self.complete_graph || applet.complete_graph,
+            with_bdeps: self.with_bdeps || applet.with_bdeps,
+            exclude: if applet.exclude.is_empty() {
+                self.exclude.clone()
+            } else {
+                applet.exclude.clone()
+            },
+            root_deps: self.root_deps || applet.root_deps,
+        }
+    }
 }

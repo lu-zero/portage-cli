@@ -821,10 +821,10 @@ fn run_remove(reference: &String) -> Result<()> {
 /// `--root` is intentionally not registerable — active is for unprivileged
 /// prefix/local dogfooding only.
 fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
-    let Some(crate::cli::Applet::Active(a)) = &globals.applet else {
+    let Some(crate::cli::Applet::Active(_)) = &globals.applet else {
         bail!("em active set/add: internal error, not dispatched from Applet::Active");
     };
-    if let Some(local) = a.topology.local.as_deref() {
+    if let Some(local) = globals.topology.local.as_deref() {
         let path = if local.is_empty() {
             default_local_path()
         } else {
@@ -836,7 +836,7 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
             path,
         });
     }
-    if let Some(p) = a.topology.prefix.as_deref() {
+    if let Some(p) = globals.topology.prefix.as_deref() {
         let path = finalize_abs_path(absolutize(Utf8Path::new(p))?)?;
         return Ok(ActiveContext {
             kind: ActiveKind::Prefix,
@@ -946,7 +946,6 @@ mod tests {
 
     use super::*;
     use crate::test_support::home_lock;
-    use clap::Parser;
 
     struct StateGuard {
         _home: std::sync::MutexGuard<'static, ()>,
@@ -1112,7 +1111,7 @@ path = "/home/u/.gentoo"
         std::fs::create_dir_all(prefix.as_std_path()).unwrap();
         let _g = StateGuard::new(&parent, None);
 
-        let cli = Cli::parse_from(["em", "active", "--prefix", prefix.as_str(), "set"]);
+        let cli = crate::cli::parse_cli(&["em", "active", "--prefix", prefix.as_str(), "set"]);
         match &cli.applet {
             Some(crate::cli::Applet::Active(a)) => {
                 run(a.command.as_ref(), &cli).unwrap();

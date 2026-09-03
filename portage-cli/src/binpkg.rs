@@ -467,7 +467,6 @@ pub(crate) fn next_build_id(pkgdir: &Utf8Path, cat: &str, pf: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     // Regression test for the stage3 --buildpkg failure: a non-host root
     // must never default PKGDIR to the real system's `/var/cache/binpkgs`
@@ -481,7 +480,7 @@ mod tests {
         );
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_str().unwrap();
-        let cli = Cli::parse_from(["em", "emerge", "--root", root]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root]);
         let pkgdir = resolve_pkgdir(&cli).await;
         assert_eq!(
             pkgdir,
@@ -499,9 +498,9 @@ mod tests {
             std::env::var("PKGDIR").is_err(),
             "test assumes no ambient PKGDIR override"
         );
-        // `["em"]` alone (zero args) trips clap's `arg_required_else_help`
+        // `["em"]` alone (zero args) trips `arg_required_else_help`
         // (prints help and exits the process) — pass --root explicitly.
-        let cli = Cli::parse_from(["em", "emerge", "--root", "/"]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", "/"]);
         assert_eq!(cli.roots().merge_root().as_str(), "/");
         let expected = {
             let mg = Utf8Path::new(MAKE_GLOBALS);
@@ -535,7 +534,7 @@ mod tests {
         // nonexistent tuple here, so it never collides with real host
         // crossdev state), while merge_root becomes `root` directly —
         // unnested, unlike the pre-board-root-decoupling behavior.
-        let cli = Cli::parse_from([
+        let cli = crate::cli::parse_cli(&[
             "em",
             "emerge",
             "--root",
@@ -589,7 +588,7 @@ mod tests {
 
         // `--config-root` required (see `portage_binhosts`'s own tests below):
         // a bare `--root` leaves `config()` at the real host `/`.
-        let cli = Cli::parse_from(["em", "emerge", "--root", root, "--config-root", root]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root, "--config-root", root]);
         assert_eq!(
             resolve_pkgdir_for_roots(&cli.roots()).await,
             camino::Utf8Path::new("/custom/pkgdir")
@@ -612,7 +611,7 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from(["em", "emerge", "--root", root, "--config-root", root]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root, "--config-root", root]);
         assert_eq!(
             read_make_conf_var_for_roots(&cli.roots(), "CFLAGS")
                 .await
@@ -633,7 +632,7 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from(["em", "emerge", "--root", root, "--config-root", root]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root, "--config-root", root]);
         let env = DesiredBuildEnv::for_roots(&cli.roots()).await;
         assert_eq!(env.cflags, "-O2 -march=x86-64-v3");
         let key = env.key();
@@ -670,7 +669,7 @@ mod tests {
         // the real bare `/usr/<tuple>` — a unit test can't safely write
         // there. `--local`'s own-build-context nesting still puts the
         // sysroot config under the prefix, as this fixture needs.
-        let cli = Cli::parse_from([
+        let cli = crate::cli::parse_cli(&[
             "em",
             "emerge",
             "--local",
@@ -715,7 +714,7 @@ mod tests {
             }
         }
         let root = dir.to_str().unwrap();
-        Cli::parse_from(["em", "emerge", "--root", root, "--config-root", root])
+        crate::cli::parse_cli(&["em", "emerge", "--root", root, "--config-root", root])
     }
 
     #[tokio::test]
@@ -900,7 +899,7 @@ mod tests {
         // this test reads only the tempdir's own file, never the real host's
         // `/etc/portage/binrepos.conf`.
         let root = dir.path().to_str().unwrap();
-        let cli = Cli::parse_from(["em", "emerge", "--root", root, "--config-root", root]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root, "--config-root", root]);
         let result = portage_binhosts(&cli).await;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "myhost");

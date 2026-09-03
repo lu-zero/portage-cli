@@ -869,7 +869,7 @@ async fn emerge_atoms_inner(
 
 /// Run `Applet::Emerge` (real emerge workalike) or the bare `em <atoms>` path.
 ///
-/// [`crate::cli::parse_cli_from`] makes the word `emerge` optional, so both
+/// `default_subcommand = "emerge"` makes the word `emerge` optional, so both
 /// reach here as `Some(Applet::Emerge(args))`.
 pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
     // emerge -r/--resume: replaces the whole action, same precedence real
@@ -940,7 +940,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result
 /// job and the current CLI can only *add* bools (e.g. `-r --keep-going`);
 /// ephemeral UI (`-a`/`--tree`/`--json`) comes only from this invocation;
 /// `-X` unions into the saved exclude list. See that function's doc for
-/// why clap cannot express "turn a saved flag off" on `-r`.
+/// why a bool flag cannot express "turn a saved flag off" on `-r`.
 async fn resume_atoms(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
     if !args.atoms.is_empty() {
         bail!("-r/--resume replays the last saved merge; atoms are not accepted together with it");

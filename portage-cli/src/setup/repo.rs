@@ -120,7 +120,6 @@ async fn sync_gentoo(cli: &Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
 
     use super::*;
 
@@ -208,7 +207,7 @@ mod tests {
         std::fs::create_dir_all(own_path.join("profiles")).unwrap();
         std::fs::write(own_path.join("profiles/repo_name"), "gentoo\n").unwrap();
 
-        let cli = crate::cli::Cli::parse_from(["em", "sync"]);
+        let cli = crate::cli::parse_cli(&["em", "sync"]);
         let resolved = ensure_repo_from(&cli, &prefix, &host_root).await.unwrap();
         assert_eq!(resolved, own_path);
     }

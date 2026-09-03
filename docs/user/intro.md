@@ -48,6 +48,12 @@ on your `PATH`.
 
 ### Basic Usage
 
+Documented form is `em [applet] [options] [args]`. True globals (`-p`/`-v`/`-q`,
+`--arch`, `--repo`, `--color`) and Topology (`--prefix`/`--local`/`--config-root`/
+`--vdb`/`--target`) may also appear before a named applet
+(`em --prefix P toolchain`). Prefix emerge-mixins before a non-merge applet
+(`em -a search`, `em -uD query …`) are rejected.
+
 ```bash
 # Search for a package
 em -s firefox
@@ -311,8 +317,8 @@ em --root /var/tmp/stage3 stages --stage3
 
 `em` reads configuration from several sources, in this order of precedence:
 
-1. **Command-line flags** (highest priority) — including the few that double
-   as env vars via clap (`ROOT`, `EM_PRIVILEGE`, `EM_EMERGELOG`)
+1. **Command-line flags** (highest priority) — including the few that also
+   read env vars (`ROOT`, `EM_PRIVILEGE`, `EM_EMERGELOG`)
 2. **`/etc/portage/make.conf`** (system-wide; legacy `/etc/make.conf` also
    read) — resolved from `config_root`, which defaults to `--config-root || /`.
    Neither `--root` nor `--prefix` moves it (matches real portage's `ROOT=`,

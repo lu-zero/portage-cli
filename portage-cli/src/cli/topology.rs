@@ -1,23 +1,11 @@
 //! Root-topology flags: `--prefix`/`--local`/`--config-root`/`--vdb`/`--target`
 //! ([`Topology`]) and `--root` ([`RootArg`], kept separate — see its own doc).
 //!
-//! Flattened into every applet that resolves a [`Roots`] (Emerge, Crossdev,
-//! Toolchain, Stages, Setup, and every other Roots-consuming applet), never
-//! onto `Cli`'s own root: a field marked `global = true` cascades down
-//! through every descendant of wherever it is mounted, at any depth, so
-//! mounting it on `Cli`'s true root would make it reachable from `crossdev`
-//! too, defeating the whole point of splitting `RootArg` out. Mounting it
-//! only on each applet's own struct means each mount's cascade is
-//! self-contained to that applet's own subtree (its own nested subcommand
-//! enum, if it has one) — this is what lets `crossdev` simply never carry a
-//! `RootArg` copy while `em query depgraph --root R` and `em query --root R
-//! depgraph` both still work via one flatten on `Query`.
-//!
-//! The four root-resolution methods (`topology_source`, `base_roots`,
-//! `outer_roots`, `roots`) live here as inherent methods on `Topology`,
-//! taking `&RootArg` as an ordinary parameter, rather than as `Cli` methods —
-//! `Cli` no longer holds any of these fields itself, so there is nothing left
-//! for a `Cli`-level method to read.
+//! [`Topology`] is mounted once on [`crate::cli::Cli`] with inner fields
+//! `global`. [`RootArg`] is flattened onto Roots-consuming applets (inner
+//! field `global` so `--root` cascades into `em query depgraph --root R`);
+//! `Cli` holds a raw non-global `--root` for prefix-position default emerge.
+//! Crossdev, Active, and Worker omit `RootArg`.
 
 use camino::Utf8PathBuf;
 use portage_resolve::Roots;
@@ -46,25 +34,25 @@ fn opt_path(s: &Option<String>) -> Option<Utf8PathBuf> {
 /// `--prefix`/`--local`/`--config-root`/`--vdb`/`--target`: which build
 /// context an applet resolves against. `--root` (the merge-destination
 /// override) is deliberately a separate mixin — see [`RootArg`].
-#[derive(clap::Args, Debug, Clone, Default)]
+#[derive(usage::Args, Debug, Clone, Default)]
 pub struct Topology {
     /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
     /// still from the host (use --root for a config offset).
-    #[arg(long, value_name = "DIR", global = true)]
+    #[usage(long, global, value_name = "DIR")]
     pub prefix: Option<String>,
 
     /// Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not
     /// overlaid on the host (see --prefix for the overlay). Defaults to
     /// ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given.
-    #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "DIR", global = true)]
+    #[usage(long, global, default_missing = "", value_name = "DIR")]
     pub local: Option<String>,
 
     /// Read config (profile, make.conf) from this root instead of `--root`
-    #[arg(long, value_name = "PATH", global = true)]
+    #[usage(long, global, value_name = "PATH")]
     pub config_root: Option<String>,
 
     /// Override VDB path (default: $ROOT/var/db/pkg)
-    #[arg(long, value_name = "PATH", global = true)]
+    #[usage(long, global, value_name = "PATH")]
     pub vdb: Option<String>,
 
     /// Cross-build/setup for a crossdev target tuple
@@ -77,26 +65,19 @@ pub struct Topology {
     /// Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the
     /// sysroot make.conf. One flag for both roles — `crossdev` no longer
     /// has its own `-t`/`--target`.
-    #[arg(long, short = 'T', value_name = "TUPLE", global = true)]
+    #[usage(long, short = 'T', global, value_name = "TUPLE")]
     pub target: Option<String>,
 }
 
 /// Installation root override — the offset an applet installs into / queries.
-//
-// No `env = "ROOT"` here: since each applet now owns exactly one `RootArg`
-// instance (no top-level copy to merge against), the `ROOT` env fallback is
-// applied once, by `resolved_root`, rather than risking two independent
-// reads of the same var if this field were ever flattened somewhere twice.
-//
-// Keep the rustdoc above to one paragraph: a second `///` paragraph becomes
-// this mixin's clap `long_about`, which clobbers the flattening applet's own
-// `--help` text since `RootArg` is flattened last in most of them.
-#[derive(clap::Args, Debug, Clone, Default)]
+///
+/// Also settable via `ROOT` in the environment (lowest precedence), applied
+/// once by [`resolved_root`]. Inner field is `global` so nested `--root`
+/// cascades inside an applet; not mounted on `Cli` (that copy is a raw field).
+#[derive(usage::Args, Debug, Clone, Default)]
 pub struct RootArg {
     /// Installation root (the offset an applet installs into / queries)
-    ///
-    /// Also settable via `ROOT` in the environment (lowest precedence).
-    #[arg(long, value_name = "PATH", global = true)]
+    #[usage(long, global, value_name = "PATH")]
     pub root: Option<String>,
 }
 

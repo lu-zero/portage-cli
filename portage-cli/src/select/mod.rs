@@ -87,9 +87,8 @@ pub async fn run(command: &SelectCommand, globals: &Cli) -> Result<()> {
 /// The configuration root for `etc/portage` operations: `--config-root`
 /// (cross sysroot / offset) when given, else `--prefix`/`--local` overlay, else `/`.
 ///
-/// Use `outer_roots()`, not `roots()`: clap maps a select subcommand's
-/// `--target` onto global `Cli::target` (shared long name), which would
-/// trigger sysroot substitution. Select only means "which target's
+/// Use `outer_roots()`, not `roots()`: `--target` is a Topology global, which
+/// would trigger sysroot substitution. Select only means "which target's
 /// config-root state", never "merge into this sysroot".
 pub(crate) fn config_portage_dir(globals: &Cli) -> Utf8PathBuf {
     config_portage_dir_for(&globals.outer_roots())
@@ -180,7 +179,6 @@ pub fn get_chost(globals: &Cli) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     // A CHOST= line, however it's quoted, read the same way `get_chost`
     // itself parses one — used to compute this test's expected value from
@@ -220,7 +218,7 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from(["em", "emerge", "--prefix", prefix]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--prefix", prefix]);
         assert_eq!(get_chost(&cli), expected);
     }
 
@@ -237,10 +235,10 @@ mod tests {
             );
             return;
         };
-        // `["em"]` alone (zero args) trips clap's `arg_required_else_help`
+        // `["em"]` alone (zero args) trips `arg_required_else_help`
         // (prints help and exits the process) — pass `--root /` explicitly,
         // matching `binpkg.rs`'s own tests for the same reason.
-        let cli = Cli::parse_from(["em", "emerge", "--root", "/"]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", "/"]);
         assert!(!is_prefix_context(&cli));
         assert_eq!(get_chost(&cli), expected);
     }

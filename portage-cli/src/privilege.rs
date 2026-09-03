@@ -48,8 +48,8 @@
 
 use crate::cli::{Applet, Cli, Privilege};
 
-/// The `--privilege` request parsed from the CLI (flag or `EM_PRIVILEGE` via
-/// clap), recorded by [`maybe_supervise`] so `build_and_merge` — which has no
+/// The `--privilege` request parsed from the CLI (flag or `EM_PRIVILEGE`),
+/// recorded by [`maybe_supervise`] so `build_and_merge` — which has no
 /// `Cli` — can pick the worker backend.
 static PRIVILEGE_REQUEST: std::sync::OnceLock<Privilege> = std::sync::OnceLock::new();
 
@@ -131,9 +131,7 @@ pub(crate) fn will_build(cli: &Cli) -> bool {
         return false;
     }
     match &cli.applet {
-        // [`crate::cli::parse_cli_from`] means `None` only reaches here for a
-        // genuinely atom-less, applet-less invocation (`em --info`) — never
-        // one that will build.
+        // `None` is the no-atoms path (`em --info`, `em -p`) — never a build.
         None => false,
         Some(Applet::Emerge(args)) => {
             // Removals mutate the root even though they skip the merge
@@ -792,8 +790,6 @@ mod hakoniwa {
 
 #[cfg(all(test, feature = "hakoniwa", target_os = "linux"))]
 mod tests {
-    use clap::Parser as _;
-
     use super::*;
 
     #[test]
@@ -817,7 +813,7 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from([
+        let cli = crate::cli::parse_cli(&[
             "em",
             "emerge",
             "--local",
@@ -832,7 +828,7 @@ mod tests {
     fn distdir_falls_back_to_the_real_portage_default_when_unset() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = camino::Utf8Path::from_path(dir.path()).unwrap();
-        let cli = Cli::parse_from([
+        let cli = crate::cli::parse_cli(&[
             "em",
             "emerge",
             "--local",
@@ -846,8 +842,6 @@ mod tests {
 
 #[cfg(test)]
 mod worker_argv_tests {
-    use clap::Parser as _;
-
     use super::*;
     use crate::cli::Applet;
 
@@ -901,7 +895,8 @@ mod worker_argv_tests {
             "spawn must not pass Topology --config-root: {argv:?}"
         );
 
-        let cli = Cli::try_parse_from(&argv).expect("spawn argv must parse");
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let cli = crate::cli::parse_cli(&refs);
         assert!(cli.quiet, "quiet must bind the Cli global");
         let Some(Applet::Worker(w)) = &cli.applet else {
             panic!("expected Applet::Worker");

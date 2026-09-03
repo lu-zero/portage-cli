@@ -1,15 +1,10 @@
 //! `em emerge`'s own mode switches — `-s`/`-S`/`-O`/`-C`/`-c`/`-P`/`-W`/`-r`.
 //!
-//! Flattened only into [`super::EmergeArgs`]: these select which *action*
-//! `em emerge` takes (search, unmerge, depclean, prune, deselect, resume)
-//! rather than describing how a merge behaves ([`super::MergeFlags`]) —
-//! `merge_flags.rs`'s own doc comment already explains why `--search`/
-//! `--nodeps` don't belong there. Meaningless anywhere else, so — unlike
-//! `--pretend`/`--verbose`/`--quiet` — these are not `global = true` on
-//! `Cli`.
+//! Flattened onto [`super::Cli`] (prefix-position) and [`super::EmergeArgs`]
+//! only. Not global: `-s`/`-C`/`-c` are emerge actions.
 
 /// Emerge's own action-selecting mode switches.
-#[derive(clap::Args, Debug, Clone, Default)]
+#[derive(usage::Args, Debug, Clone, Default, PartialEq)]
 pub struct EmergeModeArgs {
     /// Search package names (each argument is a pattern)
     ///
@@ -18,25 +13,25 @@ pub struct EmergeModeArgs {
     /// applet (`--all`/`--desc`/`--name-only`/`--homepage`). Same split as
     /// real Portage's `emerge -s` vs `equery`, not accidental duplication.
     // Drives `crate::search::run_emerge_style`; the applet drives `crate::search::run`.
-    #[arg(short = 's', long)]
+    #[usage(short = 's', long)]
     pub search: bool,
 
     /// Search package names and descriptions
     ///
     /// Same split as `-s`/`em search` above: emerge-style output here,
     /// `em search --desc` is the equery-style applet.
-    #[arg(short = 'S', long)]
+    #[usage(short = 'S', long)]
     pub searchdesc: bool,
 
     /// Skip dependency resolution and only merge specified packages
-    #[arg(short = 'O', long)]
+    #[usage(short = 'O', long)]
     pub nodeps: bool,
 
     /// Remove the matching installed packages completely, without regard to dependencies
     ///
     /// Matches every installed slot/version of each atom. For removing unneeded dependencies
     /// too, use `depclean` instead.
-    #[arg(short = 'C', long)]
+    #[usage(short = 'C', long)]
     pub unmerge: bool,
 
     /// Remove installed packages that are not needed by @world (with no
@@ -49,18 +44,18 @@ pub struct EmergeModeArgs {
     /// for scripting convenience within a single `emerge`-style invocation.
     // crate::depclean::run forwards to run_with_targets — identical
     // implementation, not merely similar behavior.
-    #[arg(short = 'c', long)]
+    #[usage(short = 'c', long)]
     pub depclean: bool,
 
     /// Remove all but the highest installed version of each atom given,
     /// ignoring dependencies (real emerge's own historical caveat applies —
     /// prefer `--depclean` for a dependency-aware clean).
-    #[arg(short = 'P', long)]
+    #[usage(short = 'P', long)]
     pub prune: bool,
 
     /// Remove atoms and/or `@set`s from the world file, without unmerging
     /// anything.
-    #[arg(short = 'W', long)]
+    #[usage(short = 'W', long)]
     pub deselect: bool,
 
     /// Resume the last saved merge (see `em maint cleanresume` to discard it instead)
@@ -68,6 +63,22 @@ pub struct EmergeModeArgs {
     /// Atoms are not accepted together with this flag — the package list comes from the saved
     /// state. Combine with other flags (e.g. `-r --keep-going`, `-r -X stuck/atom`) to adjust
     /// the resumed run.
-    #[arg(short = 'r', long)]
+    #[usage(short = 'r', long)]
     pub resume: bool,
+}
+
+impl EmergeModeArgs {
+    /// Overlay a dual-mounted copy: bools OR.
+    pub(crate) fn overlay(&self, applet: &Self) -> Self {
+        Self {
+            search: self.search || applet.search,
+            searchdesc: self.searchdesc || applet.searchdesc,
+            nodeps: self.nodeps || applet.nodeps,
+            unmerge: self.unmerge || applet.unmerge,
+            depclean: self.depclean || applet.depclean,
+            prune: self.prune || applet.prune,
+            deselect: self.deselect || applet.deselect,
+            resume: self.resume || applet.resume,
+        }
+    }
 }

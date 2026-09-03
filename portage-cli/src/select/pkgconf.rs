@@ -368,8 +368,6 @@ pub fn run(action: &PkgconfAction, globals: &Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::Cli;
-    use clap::Parser;
 
     struct PathGuard {
         saved: Option<std::ffi::OsString>,
@@ -418,7 +416,7 @@ mod tests {
 
     fn test_roots(dir: &std::path::Path) -> Roots {
         let root = dir.join("root");
-        let cli = Cli::parse_from(["em", "emerge", "--root", root.to_str().unwrap()]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", root.to_str().unwrap()]);
         cli.outer_roots().with_own_config_root_if_self_contained()
     }
 
@@ -511,7 +509,7 @@ mod tests {
                 backend: "pkg-config".to_string(),
                 target: Some("riscv64-unknown-linux-gnu".to_string()),
             },
-            &Cli::parse_from([
+            &crate::cli::parse_cli(&[
                 "em",
                 "emerge",
                 "--root",
