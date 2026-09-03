@@ -188,6 +188,9 @@ pub(crate) struct EmergeOpts<'a> {
     /// `emerge_atoms` already widens automatically under `--target` (crossdev
     /// flows); this is for callers outside that gate.
     pub autounmask_widen: bool,
+    /// In-memory `package.use` for this merge only — see
+    /// [`query::depgraph::DepgraphOpts::extra_package_use`]
+    pub extra_package_use: &'a [(portage_atom::Dep, Vec<portage_atom_pubgrub::UseOverride>)],
     /// In-memory config for a `--target` sysroot pending `--init-target`'s
     /// disk writes (see [`portage_resolve::use_env::SysrootOverride`]) —
     /// staged crossdev `-p`/an unconfirmed `-a` on a never-initialized
@@ -214,6 +217,7 @@ struct ResolvedEmergeOpts<'a> {
     extra_aliases: &'a [portage_repo::RepoEntry],
     extra_path: &'a [camino::Utf8PathBuf],
     autounmask_widen: bool,
+    extra_package_use: &'a [(portage_atom::Dep, Vec<portage_atom_pubgrub::UseOverride>)],
     sysroot_override: Option<portage_resolve::use_env::SysrootOverride<'a>>,
 }
 
@@ -245,6 +249,7 @@ pub(crate) async fn emerge_atoms(
             extra_aliases: opts.extra_aliases,
             extra_path: opts.extra_path,
             autounmask_widen: opts.autounmask_widen,
+            extra_package_use: opts.extra_package_use,
             sysroot_override: opts.sysroot_override,
         },
     )
@@ -332,6 +337,7 @@ async fn emerge_atoms_inner(
         extra_aliases,
         extra_path,
         autounmask_widen,
+        extra_package_use,
         sysroot_override,
     } = opts;
     let extra_use_override = extra_use_override.as_deref();
@@ -548,6 +554,7 @@ async fn emerge_atoms_inner(
         noreplace: merge_flags.noreplace,
         nodeps,
         extra_use_override,
+        extra_package_use,
         sysroot_override: sysroot_override.as_ref(),
         binpkg_index: binpkg_index.as_ref(),
         exclude: &merge_flags.exclude,
@@ -915,6 +922,7 @@ pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: false,
+            extra_package_use: &[],
             sysroot_override: None,
         },
     )
@@ -968,6 +976,7 @@ async fn resume_atoms(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: false,
+            extra_package_use: &[],
             sysroot_override: None,
         },
     )

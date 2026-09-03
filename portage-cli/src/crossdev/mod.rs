@@ -57,7 +57,7 @@ use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Dep, Pf, Version};
-use portage_atom_pubgrub::DepClass;
+use portage_atom_pubgrub::{DepClass, UseOverride};
 use portage_repo::{MakeConf, ProfileStack, ReposConf, Repository};
 use portage_vdb::{SlotName, Vdb};
 
@@ -261,6 +261,7 @@ async fn setup(
             target_only_installed_view: false,
             extra_aliases,
             sysroot_override,
+            extra_package_use: &[],
         },
         post_step,
     )
@@ -313,6 +314,9 @@ struct RunStagedOpts<'a> {
     /// `-a`) — see [`portage_resolve::use_env::SysrootOverride`]. `None`
     /// for native `toolchain --setup` and every already-initialized target.
     sysroot_override: Option<portage_resolve::use_env::SysrootOverride<'a>>,
+    /// In-memory `package.use` for this staged run only. Native toolchain
+    /// fills it; every other caller leaves it empty.
+    extra_package_use: &'a [(portage_atom::Dep, Vec<portage_atom_pubgrub::UseOverride>)],
 }
 
 /// Run each step of a staged [`stages::StagePlan`] through [`crate::emerge_atoms`],
@@ -334,6 +338,7 @@ async fn run_staged(
         target_only_installed_view,
         extra_aliases,
         sysroot_override,
+        extra_package_use,
     } = opts;
     let mut out = anstream::stdout();
     for (i, step) in plan.steps.iter().enumerate() {
@@ -379,6 +384,7 @@ async fn run_staged(
                 extra_aliases,
                 extra_path: &[],
                 autounmask_widen: true,
+                extra_package_use,
                 sysroot_override: step_sysroot_override,
             },
         )
@@ -504,6 +510,19 @@ async fn native_prefix_guest(globals: &Cli, roots: &portage_resolve::Roots) -> b
         .any(|f| f == "prefix-guest")
 }
 
+/// In-memory `package.use` for `em toolchain --setup` only — never written
+///
+/// Python RDEPEND `util-linux`, whose profile `pam` plus REQUIRED_USE
+/// `su? ( pam )` pulls pambase then openrc. Prefix-guest baselayout already
+/// owns a stub `/sbin/openrc-run`. `-pam -su` stops that chain; a prefix
+/// does not need its own `su`.
+fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseOverride>)> {
+    vec![(
+        Dep::parse("sys-apps/util-linux").expect("static atom"),
+        vec![UseOverride::parse("-pam"), UseOverride::parse("-su")],
+    )]
+}
+
 /// `em toolchain --setup`: bootstrap a self-hosting native toolchain into `--root`
 /// (`CHOST == CBUILD`)
 ///
@@ -560,6 +579,7 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     // Same `--root-deps=rdeps` as crossdev --setup.
     let mut merge_flags = args.merge_flags.clone();
     merge_flags.root_deps = true;
+    let extra_package_use = native_toolchain_package_use();
     run_staged(
         RunStagedOpts {
             plan: &plan,
@@ -570,6 +590,7 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
             target_only_installed_view: true,
             extra_aliases: &[],
             sysroot_override: None,
+            extra_package_use: &extra_package_use,
         },
         move |step: &stages::StageStep| activate_native_toolchain(globals, step),
     )
@@ -657,6 +678,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
                 target_only_installed_view: false,
                 extra_aliases: &[],
                 sysroot_override: None,
+                extra_package_use: &[],
             },
             post_step,
         )
@@ -690,6 +712,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             target_only_installed_view: true,
             extra_aliases: &[],
             sysroot_override: None,
+            extra_package_use: &[],
         },
         |_| Ok(()),
     )
@@ -744,6 +767,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: true,
+            extra_package_use: &[],
             sysroot_override: None,
         },
     )
@@ -862,6 +886,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         noreplace: false,
         nodeps: true,
         extra_use_override: None,
+        extra_package_use: &[],
         sysroot_override: None,
         binpkg_index: None,
         exclude: &[],
@@ -1302,6 +1327,7 @@ async fn ensure_config_site_packages(globals: &Cli) -> Result<()> {
             extra_aliases: &[],
             extra_path: &[],
             autounmask_widen: false,
+            extra_package_use: &[],
             sysroot_override: None,
         },
     )
@@ -1892,6 +1918,19 @@ mod tests {
                 "bare --root must not trip the --root/--target guard: {e}"
             );
         }
+    }
+
+    #[test]
+    fn native_toolchain_package_use_is_util_linux_without_pam_or_su() {
+        let entries = native_toolchain_package_use();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0.cpn.to_string(), "sys-apps/util-linux");
+        let flags: Vec<(&str, bool)> = entries[0]
+            .1
+            .iter()
+            .map(|u| (u.flag.as_str(), u.enable))
+            .collect();
+        assert_eq!(flags, [("pam", false), ("su", false)]);
     }
 
     #[test]

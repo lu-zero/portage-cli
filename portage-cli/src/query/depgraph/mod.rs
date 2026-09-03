@@ -242,6 +242,12 @@ pub struct DepgraphOpts<'a> {
     /// above `package.use` and incorrectly wipe it. See
     /// `resolve_use_flags`'s `extra_use_override` doc.
     pub extra_use_override: Option<&'a str>,
+    /// In-memory `package.use` lines for this resolve only, never written
+    ///
+    /// Appended after the on-disk host/overlay files so they win. Empty for
+    /// every ordinary emerge; `em toolchain --setup` uses this for
+    /// `util-linux -pam -su`.
+    pub extra_package_use: &'a [(Dep, Vec<UseOverride>)],
     /// In-memory config for a `--target` sysroot whose on-disk `make.conf`/
     /// `make.profile` haven't been written yet (e.g. `em crossdev --setup
     /// -p` on a never-initialized target) — see
@@ -313,6 +319,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         nodeps,
         host_merge_root,
         extra_use_override,
+        extra_package_use,
         sysroot_override,
         binpkg_index,
         exclude,
@@ -388,6 +395,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         profile_package_use,
         force_mask,
     } = resolved;
+    let mut package_use = package_use;
+    package_use.extend(extra_package_use.iter().cloned());
     let repo::UseEnvExtras {
         expand: use_expand,
         expand_hidden: use_expand_hidden,
