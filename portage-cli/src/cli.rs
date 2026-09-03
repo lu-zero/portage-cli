@@ -1723,9 +1723,89 @@ mod tests {
     }
 
     #[test]
+    fn helper_hyphen_args_without_separator() {
+        let cli = parse_cli(&["em", "__helper", "dodoc", "-foo"]);
+        match &cli.applet {
+            Some(Applet::Helper(h)) => {
+                assert_eq!(h.name, "dodoc");
+                assert_eq!(h.args, ["-foo"]);
+            }
+            other => panic!("expected helper, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn firefox_defaults_to_emerge() {
         let cli = parse_cli(&["em", "firefox"]);
         assert_eq!(emerge_applet(&cli).atoms, ["firefox"]);
+    }
+
+    #[test]
+    fn mode_flags_without_a_positional_stay_applet_none() {
+        let resume = parse_cli(&["em", "-r"]);
+        assert!(resume.applet.is_none());
+        assert!(resume.mode().resume);
+
+        let depclean = parse_cli(&["em", "-c"]);
+        assert!(depclean.applet.is_none());
+        assert!(depclean.mode().depclean);
+
+        let search = parse_cli(&["em", "-s"]);
+        assert!(search.applet.is_none());
+        assert!(search.mode().search);
+
+        let pretend = parse_cli(&["em", "-p"]);
+        assert!(pretend.applet.is_none());
+        assert_eq!(pretend.mode(), EmergeModeArgs::default());
+    }
+
+    #[test]
+    fn prefix_and_applet_mode_flags_overlay() {
+        let prefix_s = parse_cli(&["em", "-s", "firefox"]);
+        assert!(prefix_s.mode().search);
+        assert_eq!(prefix_s.atoms(), ["firefox"]);
+
+        let applet_s = parse_cli(&["em", "emerge", "-s", "firefox"]);
+        assert!(applet_s.mode().search);
+        assert_eq!(applet_s.atoms(), ["firefox"]);
+
+        let unmerge = parse_cli(&["em", "-C", "firefox"]);
+        assert!(unmerge.mode().unmerge);
+        assert_eq!(unmerge.atoms(), ["firefox"]);
+
+        let nodeps = parse_cli(&["em", "-O", "firefox"]);
+        assert!(nodeps.mode().nodeps);
+        assert_eq!(nodeps.atoms(), ["firefox"]);
+    }
+
+    #[test]
+    fn prefix_merge_flags_overlay_onto_named_merge_applets() {
+        let crossdev = parse_cli(&[
+            "em",
+            "-a",
+            "crossdev",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--setup",
+        ]);
+        assert!(crossdev.merge_flags().ask);
+        assert!(matches!(crossdev.applet, Some(Applet::Crossdev(_))));
+
+        let depclean = parse_cli(&["em", "-X", "foo", "depclean"]);
+        assert_eq!(depclean.merge_flags().exclude, ["foo"]);
+        assert!(matches!(depclean.applet, Some(Applet::Depclean(_))));
+    }
+
+    #[test]
+    fn keep_going_overlays_onto_resume() {
+        let prefix = parse_cli(&["em", "--keep-going", "-r"]);
+        assert!(prefix.mode().resume);
+        assert!(prefix.merge_flags().keep_going);
+        assert!(prefix.applet.is_none());
+
+        let applet = parse_cli(&["em", "emerge", "-r", "--keep-going"]);
+        assert!(applet.mode().resume);
+        assert!(applet.merge_flags().keep_going);
     }
 }
 /// Hidden `em __worker` install child — spawned per package by `build_and_merge`.
@@ -1920,7 +2000,9 @@ pub enum Applet {
 /// Hidden `em __helper` shim — PATH helper dispatched by `find -exec`/`xargs`.
 #[derive(usage::Args, Debug)]
 pub struct HelperArgs {
-    /// Helper name (e.g. `doman`, `dolib.a`)
+    /// Helper name (e.g. `doman`, `dolib.a`). Automatic so hyphen-prefixed
+    /// helper args parse without a `--` (`find -exec doman -m …`).
+    #[usage(double_dash = "automatic")]
     pub name: String,
     /// Arguments passed through to the helper
     #[usage(double_dash = "automatic")]

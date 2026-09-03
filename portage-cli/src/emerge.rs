@@ -869,48 +869,50 @@ async fn emerge_atoms_inner(
 
 /// Run `Applet::Emerge` (real emerge workalike) or the bare `em <atoms>` path.
 ///
-/// `default_subcommand = "emerge"` makes the word `emerge` optional, so both
-/// reach here as `Some(Applet::Emerge(args))`.
-pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
+/// Reads overlayed `cli.mode()` / `cli.atoms()` so prefix `-s`/`-C`/`-r` and
+/// `applet: None` (`em -r` with no leftover token) take the same action path.
+pub(crate) async fn run_emerge(cli: &cli::Cli) -> Result<()> {
+    let mode = cli.mode();
+    let atoms = cli.atoms();
     // emerge -r/--resume: replaces the whole action, same precedence real
     // emerge gives it (checked first, ahead of every other action flag).
-    if args.mode.resume {
-        return resume_atoms(cli, args).await;
+    if mode.resume {
+        return resume_atoms(cli).await;
     }
     // emerge -C: remove the matching installed packages directly, no
     // dependency graph at all. Checked first: -C together with -s/-S makes
     // no sense, and real emerge treats -C as its own action too.
-    if args.mode.unmerge {
-        return unmerge_atoms(cli, &args.atoms).await;
+    if mode.unmerge {
+        return unmerge_atoms(cli, &atoms).await;
     }
     // emerge --depclean / -c: the safe alternative to -C, walking the
     // installed dependency graph first.
-    if args.mode.depclean {
-        return crate::depclean::run_with_targets(cli, &args.atoms, &args.merge_flags).await;
+    if mode.depclean {
+        let merge_flags = cli.merge_flags();
+        return crate::depclean::run_with_targets(cli, &atoms, &merge_flags).await;
     }
     // emerge -P/--prune: like -C, but only the non-highest-version matches.
-    if args.mode.prune {
-        return prune_atoms(cli, &args.atoms).await;
+    if mode.prune {
+        return prune_atoms(cli, &atoms).await;
     }
     // emerge -W/--deselect: world-file-only, no removal at all.
-    if args.mode.deselect {
-        return deselect_atoms(cli, &args.atoms);
+    if mode.deselect {
+        return deselect_atoms(cli, &atoms);
     }
     // emerge -s / -S: the arguments are search patterns, not atoms.
-    if args.mode.search || args.mode.searchdesc {
-        return search::run_emerge_style(&cli.search_repos(), &args.atoms, args.mode.searchdesc)
-            .await;
+    if mode.search || mode.searchdesc {
+        return search::run_emerge_style(&cli.search_repos(), &atoms, mode.searchdesc).await;
     }
-    if args.atoms.is_empty() {
+    if atoms.is_empty() {
         crate::style::error_line!("no atoms or applet specified. Use --help for usage.");
         std::process::exit(1);
     }
     emerge_atoms(
         cli,
-        &args.atoms,
+        &atoms,
         EmergeOpts {
             use_override: &[],
-            nodeps: args.mode.nodeps,
+            nodeps: mode.nodeps,
             depgraph_flags: None,
             merge_flags: None,
             use_outer_eroot: false,
@@ -941,8 +943,8 @@ pub(crate) async fn run_emerge(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result
 /// ephemeral UI (`-a`/`--tree`/`--json`) comes only from this invocation;
 /// `-X` unions into the saved exclude list. See that function's doc for
 /// why a bool flag cannot express "turn a saved flag off" on `-r`.
-async fn resume_atoms(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
-    if !args.atoms.is_empty() {
+async fn resume_atoms(cli: &cli::Cli) -> Result<()> {
+    if !cli.atoms().is_empty() {
         bail!("-r/--resume replays the last saved merge; atoms are not accepted together with it");
     }
 
@@ -951,10 +953,12 @@ async fn resume_atoms(cli: &cli::Cli, args: &cli::EmergeArgs) -> Result<()> {
         bail!("-r/--resume: nothing to resume");
     };
 
-    let merge_flags = maint::resume::merge_resume_flags(&state.merge_flags, &args.merge_flags);
+    let overlayed = cli.merge_flags();
+    let merge_flags = maint::resume::merge_resume_flags(&state.merge_flags, &overlayed);
+    let overlayed_depgraph = cli.depgraph_flags();
     let depgraph_flags =
-        crate::crossdev::merge_depgraph_flags_fields(&state.depgraph_flags, &args.depgraph_flags);
-    let nodeps = state.nodeps || args.mode.nodeps;
+        crate::crossdev::merge_depgraph_flags_fields(&state.depgraph_flags, &overlayed_depgraph);
+    let nodeps = state.nodeps || cli.mode().nodeps;
 
     emerge_atoms(
         cli,

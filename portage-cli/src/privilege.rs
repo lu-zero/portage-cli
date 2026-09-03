@@ -131,14 +131,13 @@ pub(crate) fn will_build(cli: &Cli) -> bool {
         return false;
     }
     match &cli.applet {
-        // `None` is the no-atoms path (`em --info`, `em -p`) — never a build.
-        None => false,
-        Some(Applet::Emerge(args)) => {
+        None | Some(Applet::Emerge(_)) => {
+            let mode = cli.mode();
             // Removals mutate the root even though they skip the merge
             // engine entirely; search/deselect never touch it.
-            args.mode.unmerge
-                || args.mode.depclean
-                || (!args.atoms.is_empty() && !args.mode.search && !args.mode.searchdesc)
+            mode.unmerge
+                || mode.depclean
+                || (!cli.atoms().is_empty() && !mode.search && !mode.searchdesc)
         }
         Some(
             Applet::Ebuild(_)
@@ -189,8 +188,9 @@ pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
 /// into the GPKG still need the fake root, but there is no live-root
 /// install to scope it to).
 fn needs_whole_process_wrap(cli: &Cli) -> bool {
+    let mode = cli.mode();
     let (unmerge, depclean) = match &cli.applet {
-        Some(Applet::Emerge(args)) => (args.mode.unmerge, args.mode.depclean),
+        None | Some(Applet::Emerge(_)) => (mode.unmerge, mode.depclean),
         Some(Applet::Depclean(_)) => (false, true),
         _ => (false, false),
     };

@@ -217,7 +217,7 @@ async fn setup(
     };
     // Empty-target bootstrap: plain DEPEND is not satisfiable yet. Matches
     // crossdev's `<CTARGET>-emerge` (always implies `--root-deps=rdeps`).
-    let mut merge_flags = args.merge_flags.clone();
+    let mut merge_flags = globals.merge_flags();
     merge_flags.root_deps = true;
     // Host-side `cross-*` tools must resolve against the outer EROOT, not the
     // `--target` sysroot (sysroot make.conf is target-arch). Under `-p`,
@@ -252,7 +252,7 @@ async fn setup(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: args.depgraph_flags.clone(),
+            depgraph_flags: globals.depgraph_flags(),
             merge_flags,
             use_outer_eroot: true,
             target_only_installed_view: false,
@@ -574,14 +574,14 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     .ok();
     // Empty-ROOT bootstrap: plain DEPEND is a cycle (glibc ↔ libxcrypt ↔ …).
     // Same `--root-deps=rdeps` as crossdev --setup.
-    let mut merge_flags = args.merge_flags.clone();
+    let mut merge_flags = globals.merge_flags();
     merge_flags.root_deps = true;
     let extra_package_use = native_toolchain_package_use();
     run_staged(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: args.depgraph_flags.clone(),
+            depgraph_flags: globals.depgraph_flags(),
             merge_flags,
             use_outer_eroot: false,
             target_only_installed_view: true,
@@ -673,9 +673,9 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             RunStagedOpts {
                 plan: refresh_plan,
                 globals,
-                depgraph_flags: args.depgraph_flags.clone(),
+                depgraph_flags: globals.depgraph_flags(),
                 // Stages seed PKGDIR for the next re-roll (catalyst model).
-                merge_flags: with_buildpkg(args.merge_flags.clone()),
+                merge_flags: with_buildpkg(globals.merge_flags()),
                 use_outer_eroot: true,
                 target_only_installed_view: false,
                 extra_aliases: &[],
@@ -697,13 +697,13 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     // packages like app-alternatives/* violate REQUIRED_USE until Level-C
     // cedes those flags. Always enable --autosolve-use; cede prefers the
     // ebuild's + IUSE default when the config left the flag off.
-    let mut stage1_merge = with_buildpkg(args.merge_flags.clone());
+    let mut stage1_merge = with_buildpkg(globals.merge_flags());
     stage1_merge.autosolve_use = true;
     run_staged(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: args.depgraph_flags.clone(),
+            depgraph_flags: globals.depgraph_flags(),
             merge_flags: stage1_merge,
             use_outer_eroot: false,
             // A board root's plan must not be satisfied by the shared
@@ -743,11 +743,11 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     // Catalyst `stage3/chroot.sh`: emerge -e --update --deep --with-bdeps=y @system.
     // Force those knobs on top of the user's merge/depgraph flags; still seed
     // PKGDIR with -b like stage1.
-    let mut merge_flags = with_buildpkg(args.merge_flags.clone());
+    let mut merge_flags = with_buildpkg(globals.merge_flags());
     merge_flags.emptytree = true;
     merge_flags.update = true;
     merge_flags.with_bdeps = true;
-    let mut depgraph_flags = args.depgraph_flags.clone();
+    let mut depgraph_flags = globals.depgraph_flags();
     depgraph_flags.deep = true;
 
     crate::emerge_atoms(
@@ -1057,11 +1057,11 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
 async fn init_target(
     target: &CrossTarget,
     globals: &Cli,
-    args: &CrossdevArgs,
+    _args: &CrossdevArgs,
     extras: &[Cpn],
     policy: config_plan::RefreshPolicy,
 ) -> Result<config_plan::Outcome> {
-    let ask = args.merge_flags.ask;
+    let ask = globals.merge_flags().ask;
     // For a retargeted prefix (`--local`/`--prefix`/`--root`) bootstrap it first:
     // `setup::bootstrap` writes the prefix `bashrc` that re-adds `<EROOT>/usr/bin`
     // to the build PATH (the shell sanitiser strips `$HOME` paths, so a `--local`

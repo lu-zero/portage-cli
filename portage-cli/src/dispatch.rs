@@ -5,7 +5,9 @@ use std::str::FromStr;
 
 use anyhow::{Context, bail};
 
-use crate::cli::{self, Applet, CleanTarget, LogCommand, MaintCommand, QueryCommand};
+use crate::cli::{
+    self, Applet, CleanTarget, EmergeModeArgs, LogCommand, MaintCommand, QueryCommand,
+};
 use crate::crossdev;
 use crate::ebuild;
 use crate::emerge;
@@ -15,21 +17,24 @@ use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, 
 
 /// Dispatch one parsed invocation to its applet or the default emerge path
 ///
-/// `None` is the no-atoms path (`em -p`, `em --info`). `--info` wins only for
-/// defaulted emerge with empty atoms; a named applet always wins, and
-/// `em --info firefox` emerges `firefox`.
+/// `None` is leftover when default-subcommand emerge did not fire (`em -p`,
+/// `em --info`, `em -r`). `--info` wins only for empty-atom emerge; a named
+/// applet always wins, and `em --info firefox` emerges `firefox`.
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     match &cli.applet {
         Some(Applet::Emerge(args)) => {
             if cli.info && args.atoms.is_empty() {
                 return crate::info::run(cli).await;
             }
-            emerge::run_emerge(cli, args).await
+            emerge::run_emerge(cli).await
         }
         Some(applet) => run_applet(applet, cli).await,
         None => {
             if cli.info {
                 return crate::info::run(cli).await;
+            }
+            if cli.mode() != EmergeModeArgs::default() {
+                return emerge::run_emerge(cli).await;
             }
             crate::style::error_line!("no atoms or applet specified. Use --help for usage.");
             std::process::exit(1);
@@ -102,7 +107,8 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         Applet::Portageq(_) => bail!("not implemented: portageq"),
         Applet::Sync(a) => maint::sync::run(&a.repos, globals).await,
         Applet::Depclean(a) => {
-            crate::depclean::run_with_targets(globals, &a.atoms, &a.merge_flags).await
+            let merge_flags = globals.merge_flags();
+            crate::depclean::run_with_targets(globals, &a.atoms, &merge_flags).await
         }
         Applet::Regen(a) => {
             regen::run(
@@ -201,7 +207,7 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         Applet::Stages(args) => crossdev::stage1(args, globals).await,
         Applet::Etc(a) => crate::etc::run(globals, a.command.as_ref(), &a.opts).await,
         Applet::Env(_) => maint::env::env_update(globals.roots().merge_root()),
-        Applet::Emerge(args) => emerge::run_emerge(globals, args).await,
+        Applet::Emerge(_) => emerge::run_emerge(globals).await,
     }
 }
 
@@ -343,10 +349,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             // See `DepgraphOpts::host_merge_root`: `Cli::host_roots()` stays
             // overlay-aware under `--target` substitution, unlike `roots`.
             let host_roots = globals.host_roots();
-            // `equery depgraph` has no `MergeFlags` of its own (its inline
-            // fields above are the whole surface) — an empty `MergeFlags`
-            // here, not a top-level one, since `Cli` no longer carries one to
-            // read outside `Applet::Emerge`/the staged-build applets.
+            // Query depgraph keeps its own flatten; do not overlay Cli MergeFlags here.
             let merge_flags = cli::MergeFlags::default();
             let binpkg_index = binpkg::open_local_index_for_preview(globals, &merge_flags).await;
             let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
