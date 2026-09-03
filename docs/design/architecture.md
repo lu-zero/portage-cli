@@ -263,8 +263,8 @@ Stage3 tarball fetch and cache management.
 
 Resolution-policy and plan layer used by `em -p` / the merge path. Migrated
 out of `portage-cli`'s former `query/depgraph/*` (2026-07-16). Depends on
-`portage-repo` / `portage-vdb` / `portage-atom-pubgrub`; **no** clap or
-anstream dependency (rendering stays in `portage-cli`).
+`portage-repo` / `portage-vdb` / `portage-atom-pubgrub`; **no** usage-rs or
+anstream dependency (argv parsing and rendering stay in `portage-cli`).
 
 - `struct Roots` — multi-root topology (BROOT / config / target / EPREFIX)
 - `mod repo` — `RepoData` / `Adapter`, keyword/mask/license/properties/restrict acceptance
