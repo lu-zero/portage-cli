@@ -17,6 +17,6 @@ Select the active compiler profile (gcc-config/eselect gcc workalike)
 
 ## Subcommands
 
-- [`em select compiler list [-t --target <TARGET>]`](/select/compiler/list.md)
-- [`em select compiler set [-t --target <TARGET>] <PROFILE>`](/select/compiler/set.md)
-- [`em select compiler show [-t --target <TARGET>]`](/select/compiler/show.md)
+- [`em select compiler list [-t --target <TARGET>]`](compiler/list.md)
+- [`em select compiler set [-t --target <TARGET>] <PROFILE>`](compiler/set.md)
+- [`em select compiler show [-t --target <TARGET>]`](compiler/show.md)

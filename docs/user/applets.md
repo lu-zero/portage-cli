@@ -20,9 +20,9 @@ deliberate design differences.
 
 **Everything else** — `active`, `atom`, `depclean`, `ebuild`, `emerge`,
 `env`, `pkg`, `quickpkg`, `regen`, `search`, `select`, `setup`, `sync` — has
-no long-form page; the README table plus `em <applet> --help` is the
-reference. `em --help` lists
-every applet, and each one's `--help` lists its subcommands.
+no long-form how-to. Flag-by-flag help is in [`cli/`](./cli/index.md);
+`em <applet> --help` is the same in the terminal. `em --help` lists every
+applet, and each one's `--help` lists its subcommands.
 
 ## `em query` (equery)
 

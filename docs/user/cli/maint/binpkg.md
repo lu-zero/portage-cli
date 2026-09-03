@@ -16,8 +16,8 @@ Inspect/verify/prune local binary packages (em-only, no emaint equivalent)
 
 ## Subcommands
 
-- [`em maint binpkg fingerprint [--full] [--host]`](/maint/binpkg/fingerprint.md)
-- [`em maint binpkg gpg-import <KEYFILE>`](/maint/binpkg/gpg-import.md)
-- [`em maint binpkg list`](/maint/binpkg/list.md)
-- [`em maint binpkg prune [--dry-run]`](/maint/binpkg/prune.md)
-- [`em maint binpkg verify [--fix] [--require-signature]`](/maint/binpkg/verify.md)
+- [`em maint binpkg fingerprint [--full] [--host]`](binpkg/fingerprint.md)
+- [`em maint binpkg gpg-import <KEYFILE>`](binpkg/gpg-import.md)
+- [`em maint binpkg list`](binpkg/list.md)
+- [`em maint binpkg prune [--dry-run]`](binpkg/prune.md)
+- [`em maint binpkg verify [--fix] [--require-signature]`](binpkg/verify.md)

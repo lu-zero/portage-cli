@@ -20,6 +20,6 @@ Clean distfiles and/or binary packages
 
 ## Subcommands
 
-- [`em clean all [FLAGS]`](/clean/all.md)
-- [`em clean dist [FLAGS]`](/clean/dist.md)
-- [`em clean pkg [FLAGS]`](/clean/pkg.md)
+- [`em clean all [FLAGS]`](clean/all.md)
+- [`em clean dist [FLAGS]`](clean/dist.md)
+- [`em clean pkg [FLAGS]`](clean/pkg.md)

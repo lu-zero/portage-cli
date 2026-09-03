@@ -17,6 +17,6 @@ Manage Gentoo distfile mirrors (mirrorselect workalike)
 
 ## Subcommands
 
-- [`em select mirrors list [-c --country <COUNTRY>] [-r --region <REGION>]`](/select/mirrors/list.md)
-- [`em select mirrors set [-c --country <COUNTRY>] [-r --region <REGION>] [URL]…`](/select/mirrors/set.md)
-- [`em select mirrors show`](/select/mirrors/show.md)
+- [`em select mirrors list [-c --country <COUNTRY>] [-r --region <REGION>]`](mirrors/list.md)
+- [`em select mirrors set [-c --country <COUNTRY>] [-r --region <REGION>] [URL]…`](mirrors/set.md)
+- [`em select mirrors show`](mirrors/show.md)

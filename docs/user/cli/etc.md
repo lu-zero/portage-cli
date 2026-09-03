@@ -22,5 +22,5 @@ Reconcile pending config files (etc-update / dispatch-conf)
 
 ## Subcommands
 
-- [`em etc diff [PATH]`](/etc/diff.md)
-- [`em etc merge`](/etc/merge.md)
+- [`em etc diff [PATH]`](etc/diff.md)
+- [`em etc merge`](etc/merge.md)

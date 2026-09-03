@@ -16,6 +16,6 @@ Select the system/sysroot profile (cross-aware)
 
 ## Subcommands
 
-- [`em select profile list`](/select/profile/list.md)
-- [`em select profile set <TARGET>`](/select/profile/set.md)
-- [`em select profile show`](/select/profile/show.md)
+- [`em select profile list`](profile/list.md)
+- [`em select profile set <TARGET>`](profile/set.md)
+- [`em select profile show`](profile/show.md)

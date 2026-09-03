@@ -16,6 +16,6 @@ Check/fix Gentoo Linux Security Advisories (glsa-check workalike)
 
 ## Subcommands
 
-- [`em select glsa check [IDS]…`](/select/glsa/check.md)
-- [`em select glsa fix [IDS]…`](/select/glsa/fix.md)
-- [`em select glsa list`](/select/glsa/list.md)
+- [`em select glsa check [IDS]…`](glsa/check.md)
+- [`em select glsa fix [IDS]…`](glsa/fix.md)
+- [`em select glsa list`](glsa/list.md)

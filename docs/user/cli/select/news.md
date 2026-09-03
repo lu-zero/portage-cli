@@ -16,7 +16,7 @@ Read/manage GLEP 42 news items (eselect news workalike)
 
 ## Subcommands
 
-- [`em select news count`](/select/news/count.md)
-- [`em select news list`](/select/news/list.md)
-- [`em select news purge`](/select/news/purge.md)
-- [`em select news read [IDS]…`](/select/news/read.md)
+- [`em select news count`](news/count.md)
+- [`em select news list`](news/list.md)
+- [`em select news purge`](news/purge.md)
+- [`em select news read [IDS]…`](news/read.md)

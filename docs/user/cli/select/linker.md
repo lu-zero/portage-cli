@@ -16,6 +16,6 @@ Select the active linker profile
 
 ## Subcommands
 
-- [`em select linker list [-t --target <TARGET>]`](/select/linker/list.md)
-- [`em select linker set [-t --target <TARGET>] <PROFILE>`](/select/linker/set.md)
-- [`em select linker show [-t --target <TARGET>]`](/select/linker/show.md)
+- [`em select linker list [-t --target <TARGET>]`](linker/list.md)
+- [`em select linker set [-t --target <TARGET>] <PROFILE>`](linker/set.md)
+- [`em select linker show [-t --target <TARGET>]`](linker/show.md)

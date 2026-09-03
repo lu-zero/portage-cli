@@ -6,11 +6,12 @@
 //! Refresh committed pages with:
 //! `UPDATE_CLI_DOCS=1 cargo test -p portage-cli --test cli_docs`
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use portage_cli::cli::Cli;
+use usage::spec::CommandMeta;
 use usage_lib::docs::markdown::MarkdownRenderer;
 use usage_lib::{Spec, SpecCommand};
 
@@ -47,8 +48,58 @@ fn parse_spec() -> Spec {
         .unwrap_or_else(|err| panic!("Cli::to_kdl() must parse as a usage spec:\n{err}\n{kdl}"))
 }
 
-fn finish_page(md: &str) -> String {
-    format!("{GENERATED_HEADER}{}\n", md.trim())
+/// Site-root `/foo.md` → a path relative to `from_page`.
+fn relative_href(from_page: &str, target: &str) -> String {
+    let (path, frag) = target
+        .split_once('#')
+        .map(|(p, f)| (p, Some(f)))
+        .unwrap_or((target, None));
+    let from_dir: Vec<&str> = match from_page.rsplit_once('/') {
+        Some((dir, _)) => dir.split('/').filter(|s| !s.is_empty()).collect(),
+        None => Vec::new(),
+    };
+    let to_parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut i = 0;
+    while i < from_dir.len() && i < to_parts.len() && from_dir[i] == to_parts[i] {
+        i += 1;
+    }
+    let mut rel = vec![".."; from_dir.len() - i];
+    rel.extend(to_parts[i..].iter().copied());
+    let href = if rel.is_empty() {
+        from_page
+            .rsplit_once('/')
+            .map(|(_, name)| name)
+            .unwrap_or(from_page)
+            .to_string()
+    } else {
+        rel.join("/")
+    };
+    match frag {
+        Some(f) => format!("{href}#{f}"),
+        None => href,
+    }
+}
+
+fn relativize_links(from_page: &str, md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut rest = md;
+    while let Some(idx) = rest.find("](/") {
+        out.push_str(&rest[..idx]);
+        out.push_str("](");
+        rest = &rest[idx + 3..];
+        let end = rest
+            .find(')')
+            .unwrap_or_else(|| panic!("unclosed markdown link in {from_page}"));
+        out.push_str(&relative_href(from_page, &rest[..end]));
+        out.push(')');
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn finish_page(page: &str, md: &str) -> String {
+    format!("{GENERATED_HEADER}{}\n", relativize_links(page, md.trim()))
 }
 
 /// One page per visible command, matching `usage generate markdown --multi`.
@@ -73,19 +124,20 @@ fn generated_pages() -> BTreeMap<String, String> {
         } else {
             format!("{parent}/{}.md", cmd.name)
         };
-        pages.insert(rel, finish_page(&md));
+        pages.insert(rel.clone(), finish_page(&rel, &md));
     }
 
     let index = renderer
         .render_index()
         .unwrap_or_else(|err| panic!("render index: {err}"));
-    pages.insert("index.md".into(), finish_page(&index));
+    pages.insert("index.md".into(), finish_page("index.md", &index));
 
     let config = renderer
         .render_config()
         .unwrap_or_else(|err| panic!("render config: {err}"));
     if !config.trim().is_empty() {
-        pages.insert(renderer.config_page().into(), finish_page(&config));
+        let name = renderer.config_page();
+        pages.insert(name.into(), finish_page(name, &config));
     }
     pages
 }
@@ -173,7 +225,85 @@ fn assert_omits_hidden(pages: &BTreeMap<String, String>) {
             !body.contains("`em __helper") && !body.contains("`em __worker"),
             "hidden applet leaked into {path}"
         );
+        assert!(
+            !body.contains("](/"),
+            "site-root markdown link left in {path}"
+        );
     }
+}
+
+fn flag_longs_argv(cmd: &CommandMeta<'_>) -> BTreeSet<String> {
+    cmd.cmd
+        .flags
+        .iter()
+        .flat_map(|flag| flag.longs.iter().map(|s| (*s).to_string()))
+        .collect()
+}
+
+fn flag_longs_kdl(cmd: &SpecCommand) -> BTreeSet<String> {
+    cmd.flags
+        .iter()
+        .flat_map(|flag| flag.long.iter().cloned())
+        .collect()
+}
+
+fn declared_flag_longs(mut flags: BTreeSet<String>) -> BTreeSet<String> {
+    // usage-lib injects --help/--version when reading KDL; Cli::spec() does not list them.
+    flags.remove("help");
+    flags.remove("version");
+    flags
+}
+
+fn assert_cmd_matches(path: &str, argv: &CommandMeta<'_>, kdl: &SpecCommand) {
+    assert_eq!(argv.hide, kdl.hide, "hide mismatch at {path:?}");
+    if !path.is_empty() {
+        assert_eq!(argv.cmd.name, kdl.name, "name mismatch at {path:?}");
+    }
+    assert_eq!(
+        declared_flag_longs(flag_longs_argv(argv)),
+        declared_flag_longs(flag_longs_kdl(kdl)),
+        "flag longs mismatch at {path:?}"
+    );
+    let argv_subs: BTreeSet<&str> = argv.subcommands.iter().map(|sub| sub.cmd.name).collect();
+    let kdl_subs: BTreeSet<&str> = kdl.subcommands.keys().map(String::as_str).collect();
+    assert_eq!(argv_subs, kdl_subs, "subcommands mismatch at {path:?}");
+    for sub in argv.subcommands {
+        let child = kdl
+            .subcommands
+            .get(sub.cmd.name)
+            .unwrap_or_else(|| panic!("KDL missing subcommand {} under {path:?}", sub.cmd.name));
+        let child_path = if path.is_empty() {
+            sub.cmd.name.to_string()
+        } else {
+            format!("{path}/{}", sub.cmd.name)
+        };
+        assert_cmd_matches(&child_path, sub, child);
+    }
+}
+
+#[test]
+fn relative_href_keeps_nested_pages_in_their_directory() {
+    assert_eq!(relative_href("index.md", "emerge.md"), "emerge.md");
+    assert_eq!(
+        relative_href("index.md", "query/belongs.md"),
+        "query/belongs.md"
+    );
+    assert_eq!(
+        relative_href("query.md", "query/belongs.md"),
+        "query/belongs.md"
+    );
+    assert_eq!(
+        relative_href("select/profile.md", "select/profile/list.md"),
+        "profile/list.md"
+    );
+    assert_eq!(
+        relative_href("select/profile/list.md", "select.md"),
+        "../../select.md"
+    );
+    assert_ne!(
+        relative_href("select/profile.md", "select/profile/list.md"),
+        "./select/profile/list.md"
+    );
 }
 
 #[test]
@@ -200,12 +330,26 @@ fn spec_round_trips_through_usage_lib() {
     );
     assert!(spec.cmd.subcommands.contains_key("emerge"));
     assert!(spec.cmd.subcommands.contains_key("query"));
+
+    let argv = Cli::spec();
+    assert_eq!(argv.bin.unwrap_or(argv.name), spec.bin);
+    assert_cmd_matches("", argv.root, &spec.cmd);
 }
 
 #[test]
 fn generated_markdown_omits_hidden_applets() {
     let pages = generated_pages();
     assert_omits_hidden(&pages);
+    let profile = pages.get("select/profile.md").expect("select/profile.md");
+    assert!(
+        profile.contains("](profile/list.md)"),
+        "nested page must link a child relative to itself, not the tree root:\n{profile}"
+    );
+    let index = pages.get("index.md").expect("index.md");
+    assert!(
+        index.contains("](emerge.md)") && index.contains("](query/belongs.md)"),
+        "index links should be repo-relative from docs/user/cli:\n{index}"
+    );
 }
 
 #[test]

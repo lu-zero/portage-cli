@@ -16,6 +16,6 @@ Select the active LLVM/clang slot
 
 ## Subcommands
 
-- [`em select clang list`](/select/clang/list.md)
-- [`em select clang set <SLOT>`](/select/clang/set.md)
-- [`em select clang show`](/select/clang/show.md)
+- [`em select clang list`](clang/list.md)
+- [`em select clang set <SLOT>`](clang/set.md)
+- [`em select clang show`](clang/show.md)

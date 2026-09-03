@@ -62,6 +62,7 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | Doc | Covers |
 |-----|--------|
 | [`docs/user/intro.md`](./docs/user/intro.md) | **Start here** — what `em` is, quick start, topologies, common workflows |
+| [`docs/user/cli/`](./docs/user/cli/index.md) | Generated flag-by-flag CLI reference (`em --help` in the terminal) |
 | [`docs/user/root-model.md`](./docs/user/root-model.md) | `--root`, `--prefix`, `--config-root`, and the other location flags — read this first |
 | [`docs/user/prefix-toolchain.md`](./docs/user/prefix-toolchain.md) | How to bootstrap and use a `--prefix`'s own compiler |
 | [`docs/user/crossdev.md`](./docs/user/crossdev.md) | Cross-compilation targets (`--target`, `em crossdev`) |

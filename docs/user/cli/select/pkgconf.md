@@ -16,6 +16,6 @@ Select the pkg-config backend and create the <CTARGET>-pkg-config wrapper
 
 ## Subcommands
 
-- [`em select pkgconf list [-t --target <TARGET>]`](/select/pkgconf/list.md)
-- [`em select pkgconf set [-t --target <TARGET>] <BACKEND>`](/select/pkgconf/set.md)
-- [`em select pkgconf show [-t --target <TARGET>]`](/select/pkgconf/show.md)
+- [`em select pkgconf list [-t --target <TARGET>]`](pkgconf/list.md)
+- [`em select pkgconf set [-t --target <TARGET>] <BACKEND>`](pkgconf/set.md)
+- [`em select pkgconf show [-t --target <TARGET>]`](pkgconf/show.md)

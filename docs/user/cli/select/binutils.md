@@ -16,6 +16,6 @@ Select the active binutils profile (binutils-config/eselect binutils workalike)
 
 ## Subcommands
 
-- [`em select binutils list [-t --target <TARGET>]`](/select/binutils/list.md)
-- [`em select binutils set [-t --target <TARGET>] <PROFILE>`](/select/binutils/set.md)
-- [`em select binutils show [-t --target <TARGET>]`](/select/binutils/show.md)
+- [`em select binutils list [-t --target <TARGET>]`](binutils/list.md)
+- [`em select binutils set [-t --target <TARGET>] <PROFILE>`](binutils/set.md)
+- [`em select binutils show [-t --target <TARGET>]`](binutils/show.md)

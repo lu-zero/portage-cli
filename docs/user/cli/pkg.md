@@ -19,7 +19,7 @@ Edit per-package configuration (package.use, .keywords, .mask, .env)
 
 ## Subcommands
 
-- [`em pkg env [FLAGS] <ATOM>`](/pkg/env.md)
-- [`em pkg keyword [FLAGS] <ATOM>`](/pkg/keyword.md)
-- [`em pkg mask [FLAGS] <ATOM>`](/pkg/mask.md)
-- [`em pkg use [FLAGS] <ATOM>`](/pkg/use.md)
+- [`em pkg env [FLAGS] <ATOM>`](pkg/env.md)
+- [`em pkg keyword [FLAGS] <ATOM>`](pkg/keyword.md)
+- [`em pkg mask [FLAGS] <ATOM>`](pkg/mask.md)
+- [`em pkg use [FLAGS] <ATOM>`](pkg/use.md)

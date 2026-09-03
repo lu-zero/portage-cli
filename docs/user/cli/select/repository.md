@@ -17,7 +17,7 @@ Manage local repositories (overlays)
 
 ## Subcommands
 
-- [`em select repository add <NAME> <LOCATION>`](/select/repository/add.md)
-- [`em select repository create <NAME> [LOCATION]`](/select/repository/create.md)
-- [`em select repository list`](/select/repository/list.md)
-- [`em select repository remove <NAME>`](/select/repository/remove.md)
+- [`em select repository add <NAME> <LOCATION>`](repository/add.md)
+- [`em select repository create <NAME> [LOCATION]`](repository/create.md)
+- [`em select repository list`](repository/list.md)
+- [`em select repository remove <NAME>`](repository/remove.md)

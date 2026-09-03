@@ -20,7 +20,7 @@ Analyze emerge.log
 
 ## Subcommands
 
-- [`em log current`](/log/current.md)
-- [`em log list [LIMIT]`](/log/list.md)
-- [`em log predict`](/log/predict.md)
-- [`em log time [ATOM]`](/log/time.md)
+- [`em log current`](log/current.md)
+- [`em log list [LIMIT]`](log/list.md)
+- [`em log predict`](log/predict.md)
+- [`em log time [ATOM]`](log/time.md)
