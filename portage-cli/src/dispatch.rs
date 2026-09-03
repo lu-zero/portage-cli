@@ -207,6 +207,16 @@ async fn run_applet(applet: &Applet, globals: &cli::Cli) -> Result<()> {
         Applet::Stages(args) => crossdev::stage1(args, globals).await,
         Applet::Etc(a) => crate::etc::run(globals, a.command.as_ref(), &a.opts).await,
         Applet::Env(_) => maint::env::env_update(globals.roots().merge_root()),
+        Applet::Completion(a) => {
+            let Some(shell) = usage::complete::Shell::from_name(&a.shell) else {
+                bail!(
+                    "unsupported shell {:?}; expected bash, zsh, fish, nu, powershell, or elvish",
+                    a.shell
+                );
+            };
+            println!("{}", cli::Cli::completion_script(shell));
+            Ok(())
+        }
         Applet::Emerge(_) => emerge::run_emerge(globals).await,
     }
 }

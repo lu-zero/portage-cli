@@ -189,6 +189,7 @@ fn env_flag_true(name: &str) -> bool {
     arg_required_else_help,
     unknown_flags = "error",
     default_subcommand = "emerge",
+    completion,
     try_into = Validated,
     example("em firefox", header = "Install a package"),
     example("em -p firefox", header = "Pretend a merge"),
@@ -239,7 +240,7 @@ pub struct Cli {
     ///
     /// When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for
     /// single-repo applets; search walks all of them).
-    #[usage(long, global, value_name = "PATH")]
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub repo: Option<String>,
 
     #[usage(flatten)]
@@ -247,7 +248,12 @@ pub struct Cli {
 
     /// Prefix-position `--root` for default emerge. Not global; must not leak
     /// into crossdev/active/worker.
-    #[usage(long, value_name = "PATH", help_heading = "Roots")]
+    #[usage(
+        long,
+        value_name = "PATH",
+        help_heading = "Roots",
+        value_hint = usage::ValueHint::DirPath
+    )]
     pub root: Option<String>,
 
     #[usage(flatten)]
@@ -650,6 +656,25 @@ mod tests {
     }
 
     #[test]
+    fn completions_omit_hidden_applets_and_offer_emerge() {
+        let offered = usage::test::candidates(Cli::spec(), "em ");
+        assert!(
+            offered.iter().any(|w| w == "emerge"),
+            "emerge missing: {offered:?}"
+        );
+        assert!(
+            offered.iter().any(|w| w == "completion"),
+            "completion missing: {offered:?}"
+        );
+        assert!(
+            !offered
+                .iter()
+                .any(|w| w.contains("__helper") || w.contains("__worker")),
+            "hidden applet leaked: {offered:?}"
+        );
+    }
+
+    #[test]
     fn declared_examples_parse() {
         for argv in [
             ["em", "firefox"].as_slice(),
@@ -668,6 +693,24 @@ mod tests {
             &["em", "emerge", "firefox"],
         ] {
             let _ = parse_cli(argv);
+        }
+    }
+
+    #[test]
+    fn completions_offer_prefix_after_toolchain() {
+        let offered = usage::test::candidates(Cli::spec(), "em toolchain --");
+        assert!(
+            offered.iter().any(|w| w == "--prefix"),
+            "--prefix missing after toolchain: {offered:?}"
+        );
+    }
+
+    #[test]
+    fn completion_applet_parses_shell_name() {
+        let cli = parse_cli(&["em", "completion", "bash"]);
+        match &cli.applet {
+            Some(Applet::Completion(a)) => assert_eq!(a.shell, "bash"),
+            other => panic!("expected completion, got {other:?}"),
         }
     }
 
@@ -733,6 +776,31 @@ mod tests {
         assert!(
             !pretend.contains("effect="),
             "--pretend must not lower effect: {pretend}"
+        );
+    }
+
+    #[test]
+    fn completion_request_is_not_an_emerge_atom() {
+        let argv = vec![
+            std::ffi::OsString::from("__complete_word__"),
+            std::ffi::OsString::from("--shell"),
+            std::ffi::OsString::from("bash"),
+            std::ffi::OsString::from("--line"),
+            std::ffi::OsString::from("em "),
+        ];
+        let answer = Cli::completion_request(&argv).expect("recognized");
+        assert!(answer.contains("emerge"), "{answer}");
+        assert!(!answer.contains("__helper"), "{answer}");
+        assert!(!answer.contains("__worker"), "{answer}");
+    }
+
+    #[test]
+    fn spec_request_is_not_an_emerge_atom() {
+        let argv = [std::ffi::OsStr::new(usage::SPEC_REQUEST)];
+        let answer = Cli::spec_request(&argv).expect("recognized");
+        assert!(
+            answer.contains("bin \"em\"") || answer.contains("bin em"),
+            "{answer}"
         );
     }
 
@@ -2156,6 +2224,9 @@ pub enum Applet {
     #[usage(help = "Regenerate /etc/profile.env and ld.so cache")]
     Env(EnvArgs),
 
+    #[usage(help = "Print a shell completion script")]
+    Completion(CompletionArgs),
+
     /// Resolve and merge/unmerge packages (emerge workalike).
     ///
     /// `em <atoms>` and `em emerge <atoms>` parse into the same arguments.
@@ -2557,6 +2628,17 @@ pub struct EtcArgs {
 pub struct EnvArgs {
     #[usage(flatten)]
     pub root_arg: RootArg,
+}
+
+/// `em completion` — print a shell completion script for `em`.
+#[derive(usage::Args, Debug)]
+pub struct CompletionArgs {
+    /// Shell to generate the script for
+    #[usage(
+        value_name = "SHELL",
+        choices("bash", "zsh", "fish", "nu", "powershell", "elvish")
+    )]
+    pub shell: String,
 }
 
 /// `em setup` — bootstrap a prefix layout

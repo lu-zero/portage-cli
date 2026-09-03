@@ -42,7 +42,7 @@ fn opt_path(s: &Option<String>) -> Option<Utf8PathBuf> {
 pub struct Topology {
     /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
     /// still from the host (use --root for a config offset).
-    #[usage(long, global, value_name = "DIR")]
+    #[usage(long, global, value_name = "DIR", value_hint = usage::ValueHint::DirPath)]
     pub prefix: Option<String>,
 
     /// Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not
@@ -53,16 +53,17 @@ pub struct Topology {
         global,
         default_missing = "",
         value_name = "DIR",
-        warning = "em active --local set steals set as the directory. Put the subcommand first: em active set --local="
+        warning = "em active --local set steals set as the directory. Put the subcommand first: em active set --local=",
+        value_hint = usage::ValueHint::DirPath
     )]
     pub local: Option<String>,
 
     /// Read config (profile, make.conf) from this root instead of `--root`
-    #[usage(long, global, value_name = "PATH")]
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub config_root: Option<String>,
 
     /// Override VDB path (default: $ROOT/var/db/pkg)
-    #[usage(long, global, value_name = "PATH")]
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub vdb: Option<String>,
 
     /// Cross-build/setup for a crossdev target tuple
@@ -88,7 +89,7 @@ pub struct Topology {
 #[usage(next_help_heading = "Roots")]
 pub struct RootArg {
     /// Installation root (the offset an applet installs into / queries)
-    #[usage(long, global, value_name = "PATH")]
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub root: Option<String>,
 }
 

@@ -46,6 +46,23 @@ on a forked `brush` pulled straight from git.
 This installs the `em` binary to your `~/.cargo/bin` directory. Ensure this directory is
 on your `PATH`.
 
+### Shell completions
+
+`em completion <shell>` prints a script; eval or source it from the shell's startup file:
+
+```bash
+# bash
+eval "$(em completion bash)"
+
+# zsh
+eval "$(em completion zsh)"
+
+# fish
+em completion fish | source
+```
+
+Also `nu`, `powershell`, and `elvish`.
+
 ### Basic Usage
 
 Documented form is `em [applet] [options] [args]`. True globals (`-p`/`-v`/`-q`,

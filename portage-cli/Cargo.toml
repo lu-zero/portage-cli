@@ -82,7 +82,7 @@ roxmltree = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 portage-binpkg = { workspace = true }
-usage = { package = "usage-rs", version = "6" }
+usage = { package = "usage-rs", version = "6", features = ["completions"] }
 tokio = { workspace = true, features = ["sync", "signal"] }
 futures-util = { workspace = true }
 thiserror = { workspace = true }
