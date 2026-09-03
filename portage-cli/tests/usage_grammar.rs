@@ -6,6 +6,8 @@
 //! on applets. Variant 3 documents `args_conflicts_with_subcommands`.
 
 use std::ffi::OsStr;
+use std::path::Path;
+use std::process::Command;
 
 use usage::test::{self as harness, Outcome, Page};
 use usage::{Args, Cli, Subcommands, ValidationError, ValueEnum};
@@ -31,8 +33,8 @@ fn err_name(e: &usage::Error<'_, '_>) -> String {
     }
 }
 
-/// Shared mixins for the real twin. Inner Topology fields are `global`; RootArg's
-/// inner field is not — `#[usage(flatten, global)]` is a compile error.
+/// Shared mixins for the real twin. Topology inner fields are `global`; RootArg's
+/// inner field is not. Flatten-site `global` is locked by `flatten_site_global_is_rejected`.
 mod mixins {
     use super::*;
 
@@ -667,6 +669,58 @@ fn v3_bare_atom_still_defaults_to_emerge() {
 }
 
 // --- variant 2: unique-flags / flatten compile ---
+
+fn cargo_check_ui(src: &str) -> String {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/ui-flatten-global/crate");
+    let src_dir = crate_dir.join("src");
+    std::fs::create_dir_all(&src_dir).expect("ui crate src dir");
+    std::fs::write(
+        crate_dir.join("Cargo.toml"),
+        r#"[package]
+name = "flatten-global-ui"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+usage = { package = "usage-rs", version = "6" }
+"#,
+    )
+    .expect("ui Cargo.toml");
+    std::fs::write(src_dir.join("lib.rs"), src).expect("ui lib.rs");
+
+    let target_dir =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/ui-flatten-global/target");
+    let output = Command::new(env!("CARGO"))
+        .args(["check", "--offline", "--manifest-path"])
+        .arg(crate_dir.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .env("CARGO_TERM_COLOR", "never")
+        .output()
+        .expect("cargo check ui fixture");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success(),
+        "flatten+global was accepted; it must stay a compile error:\n{text}"
+    );
+    text
+}
+
+#[test]
+fn flatten_site_global_is_rejected() {
+    let stderr = cargo_check_ui(include_str!("ui/flatten_global.rs"));
+    assert!(
+        stderr.contains("cannot be combined with `global`"),
+        "expected flatten-site global to be rejected, got: {stderr}"
+    );
+}
 
 #[test]
 fn same_type_flatten_compiles_and_unique_flags_hold() {
