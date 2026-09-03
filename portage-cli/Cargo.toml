@@ -114,6 +114,7 @@ pseudoroot = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
+usage = { package = "usage-rs", version = "6", features = ["test"] }
 
 [[bench]]
 name = "elfscan"
