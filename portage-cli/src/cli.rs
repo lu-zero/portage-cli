@@ -189,7 +189,17 @@ fn env_flag_true(name: &str) -> bool {
     arg_required_else_help,
     unknown_flags = "error",
     default_subcommand = "emerge",
-    try_into = Validated
+    try_into = Validated,
+    example("em firefox", header = "Install a package"),
+    example("em -p firefox", header = "Pretend a merge"),
+    example("em -uD @world", header = "Upgrade @world"),
+    example("em query belongs /usr/bin/python", header = "Find a file's owner"),
+    example("em use -a png", header = "Enable a USE flag"),
+    output(
+        "json",
+        framing = "json",
+        help = "Machine-parsable JSON (`--json` with `-p` or `--info`)"
+    )
 )]
 pub struct Cli {
     #[usage(long, global, value_enum, default = "auto", value_name = "WHEN")]
@@ -199,13 +209,11 @@ pub struct Cli {
     #[usage(short = 'p', long, global)]
     pub pretend: bool,
 
-    /// Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with
-    /// USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/
-    /// ACCEPT_LICENSE, and configured repositories — `emerge --info`
-    /// workalike. Takes no atoms. Combine with `--json` for structured
-    /// output, or `-v` to also list every known `@name` set and its
-    /// resolved atoms (neither has a real-emerge equivalent).
-    #[usage(long)]
+    /// Print system/build info (`emerge --info` workalike). Takes no atoms.
+    #[usage(
+        long,
+        long_help = "Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent)."
+    )]
     pub info: bool,
 
     /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
@@ -239,7 +247,7 @@ pub struct Cli {
 
     /// Prefix-position `--root` for default emerge. Not global; must not leak
     /// into crossdev/active/worker.
-    #[usage(long, value_name = "PATH")]
+    #[usage(long, value_name = "PATH", help_heading = "Roots")]
     pub root: Option<String>,
 
     #[usage(flatten)]
@@ -252,7 +260,7 @@ pub struct Cli {
     pub activity: ActivityArgs,
 
     /// Privilege backend. Redeclared on merge applets; no `env` on the field.
-    #[usage(long, value_enum, default = "auto")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 
     #[usage(subcommand)]
@@ -571,6 +579,136 @@ mod tests {
     fn spec_is_valid() {
         let _ = Cli::to_kdl();
         let _ = Cli::spec();
+    }
+
+    #[test]
+    fn help_tree_snapshot() {
+        use usage::test::{self as harness, Page};
+        let tree = harness::help_tree(Cli::spec(), Page::Long);
+        let headers: Vec<&str> = tree
+            .lines()
+            .filter(|line| line.starts_with("=== "))
+            .collect();
+        assert!(headers.contains(&"=== em ==="), "{headers:?}");
+        assert!(headers.contains(&"=== em emerge ==="), "{headers:?}");
+        assert!(headers.contains(&"=== em query ==="), "{headers:?}");
+        assert!(
+            headers.contains(&"=== em query depgraph ==="),
+            "{headers:?}"
+        );
+        assert!(
+            headers.contains(&"=== em __worker (hidden) ==="),
+            "hidden worker must still have a page: {headers:?}"
+        );
+        assert!(
+            headers.contains(&"=== em __helper (hidden) ==="),
+            "hidden helper must still have a page: {headers:?}"
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|h| h.contains("__worker") && !h.contains("hidden")),
+            "worker must be marked hidden: {headers:?}"
+        );
+
+        assert!(tree.contains("Roots:"), "{tree}");
+        assert!(tree.contains("Merge:"), "{tree}");
+        assert!(tree.contains("Depgraph:"), "{tree}");
+        assert!(tree.contains("Activity:"), "{tree}");
+        assert!(
+            tree.contains("Which tree this invocation reads and writes."),
+            "{tree}"
+        );
+        assert!(
+            tree.contains("em active --local set steals set as the directory"),
+            "{tree}"
+        );
+        assert!(
+            tree.contains("Exists for portage parity; do not use it"),
+            "{tree}"
+        );
+        assert!(tree.contains("Examples:"), "{tree}");
+        assert!(tree.contains("em query depgraph zlib"), "{tree}");
+        assert!(tree.contains("em toolchain --prefix /p --setup"), "{tree}");
+        assert!(tree.contains("em firefox"), "{tree}");
+        assert_help_tree_snapshot(&tree);
+    }
+
+    fn assert_help_tree_snapshot(tree: &str) {
+        const SNAP: &str = include_str!("../tests/help_tree.snap");
+        if std::env::var_os("UPDATE_HELP_TREE").is_some() {
+            let path =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/help_tree.snap");
+            std::fs::write(&path, tree).expect("write help_tree.snap");
+            return;
+        }
+        assert_eq!(
+            tree, SNAP,
+            "help_tree snapshot mismatch. \
+             UPDATE_HELP_TREE=1 cargo test -p portage-cli --lib help_tree_snapshot"
+        );
+    }
+
+    #[test]
+    fn declared_examples_parse() {
+        for argv in [
+            ["em", "firefox"].as_slice(),
+            &["em", "-p", "firefox"],
+            &["em", "-uD", "@world"],
+            &["em", "query", "belongs", "/usr/bin/python"],
+            &["em", "use", "-a", "png"],
+            &["em", "query", "depgraph", "zlib"],
+            &["em", "query", "list", "-I"],
+            &["em", "search", "firefox"],
+            &["em", "atom", ">=dev-lang/python-3.10"],
+            &["em", "active", "set", "--local="],
+            &["em", "setup", "--local"],
+            &["em", "toolchain", "--prefix", "/p", "--setup"],
+            &["em", "stages", "--root", "/var/tmp/stage1", "--stage1"],
+            &["em", "emerge", "firefox"],
+        ] {
+            let _ = parse_cli(argv);
+        }
+    }
+
+    #[test]
+    fn info_essay_is_long_help_only() {
+        use usage::test::{self as harness, Page};
+        let short = harness::help(Cli::spec(), &[], Page::Short);
+        let long = harness::help(Cli::spec(), &[], Page::Long);
+        assert!(short.contains("Print system/build info"), "{short}");
+        assert!(
+            !short.contains("USE_EXPAND"),
+            "short -h must not carry the --info essay: {short}"
+        );
+        assert!(
+            long.contains("USE_EXPAND"),
+            "long --help must carry the --info essay: {long}"
+        );
+    }
+
+    #[test]
+    fn query_flatten_help_shows_child_synopsis() {
+        use usage::test::{self as harness, Page};
+        let page = harness::help(Cli::spec(), &["query"], Page::Long);
+        assert!(page.contains("depgraph"), "{page}");
+        assert!(page.contains("belongs"), "{page}");
+        assert!(
+            page.contains("zlib") || page.contains("<ATOM>"),
+            "flatten_help should expand child arguments: {page}"
+        );
+    }
+
+    #[test]
+    fn effects_reach_the_spec() {
+        let kdl = Cli::to_kdl();
+        assert!(kdl.contains("effect=write"), "{kdl}");
+        assert!(kdl.contains("effect=destructive"), "{kdl}");
+        assert!(kdl.contains("effect=read"), "{kdl}");
+        assert!(
+            kdl.contains("cmd emerge") && kdl.contains("effect=write"),
+            "{kdl}"
+        );
     }
 
     #[test]
@@ -1965,7 +2103,10 @@ pub enum Applet {
     ///
     /// Explicit `--prefix`/`--local`/`--root` still win. State is stored under
     /// `$XDG_STATE_HOME/em/active`.
-    #[usage(help = "Register a default --prefix/--local for bare em invocations")]
+    #[usage(
+        help = "Register a default --prefix/--local for bare em invocations",
+        after_long_help = "Warning: `em active --local set` steals set as the directory. Put the subcommand first: `em active set --local=`."
+    )]
     Active(ActiveArgs),
 
     #[usage(help = "Bootstrap a prefix layout (use with --local or --prefix)")]
@@ -2026,6 +2167,7 @@ pub struct EbuildArgs {
 
 /// `em maint` — system maintenance and health checks
 #[derive(usage::Args, Debug)]
+#[usage(flatten_help)]
 pub struct MaintArgs {
     #[usage(subcommand)]
     pub command: MaintCommand,
@@ -2054,6 +2196,7 @@ pub struct SyncArgs {
 
 /// `em depclean` — remove orphaned/unused packages
 #[derive(usage::Args, Debug)]
+#[usage(effect = "destructive")]
 pub struct DepcleanArgs {
     /// Restrict cleaning to these atoms' dependency closure (every other
     /// installed package is protected). Default: the whole `@world` set
@@ -2111,6 +2254,7 @@ pub struct QuickpkgArgs {
 
 /// `em mirrordist` — build/maintain a distfiles mirror
 #[derive(usage::Args, Debug)]
+#[usage(effect = "write")]
 pub struct MirrorDistArgs {
     /// repos.conf name or path
     ///
@@ -2126,7 +2270,7 @@ pub struct MirrorDistArgs {
     #[usage(short = 'j', long)]
     pub jobs: Option<usize>,
     /// Delete distfiles no longer referenced by any ebuild
-    #[usage(long)]
+    #[usage(long, effect = "destructive")]
     pub delete: bool,
     /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`)
     #[usage(long, value_name = "DURATION", default = "7d")]
@@ -2163,6 +2307,16 @@ pub struct MirrorDistArgs {
 
 /// `em query` — query package information
 #[derive(usage::Args, Debug)]
+#[usage(
+    flatten_help,
+    effect = "read",
+    example = "em query depgraph zlib",
+    example = "em query belongs /usr/bin/python",
+    example = "em query list -I",
+    output("pretty", default, help = "emerge -p style pretend output"),
+    output("json", framing = "json", help = "Machine-parsable JSON"),
+    output("tree", help = "cargo tree style dependency tree")
+)]
 pub struct QueryArgs {
     #[usage(subcommand)]
     pub command: QueryCommand,
@@ -2172,6 +2326,7 @@ pub struct QueryArgs {
 
 /// `em clean` — clean distfiles and/or binary packages
 #[derive(usage::Args, Debug)]
+#[usage(flatten_help, effect = "destructive")]
 pub struct CleanArgs {
     #[usage(subcommand)]
     pub target: CleanTarget,
@@ -2289,6 +2444,7 @@ pub struct ReadArgs {
 
 /// `em log` — analyze emerge.log
 #[derive(usage::Args, Debug)]
+#[usage(effect = "read")]
 pub struct LogArgs {
     #[usage(subcommand)]
     pub command: Option<LogCommand>,
@@ -2308,6 +2464,7 @@ pub struct GrepArgs {
 
 /// `em search` — search package names and descriptions
 #[derive(usage::Args, Debug)]
+#[usage(effect = "read", example = "em search firefox")]
 pub struct SearchArgs {
     /// List all packages (no pattern required)
     #[usage(short = 'a', long)]
@@ -2330,6 +2487,7 @@ pub struct SearchArgs {
 
 /// `em atom` — parse/split atom strings
 #[derive(usage::Args, Debug)]
+#[usage(effect = "read", example = "em atom >=dev-lang/python-3.10")]
 pub struct AtomArgs {
     /// Atom strings to parse and print back in normalized form
     #[usage(required)]
@@ -2338,6 +2496,7 @@ pub struct AtomArgs {
 
 /// `em select` — native config selectors (profile, repos)
 #[derive(usage::Args, Debug)]
+#[usage(flatten_help)]
 pub struct SelectArgs {
     #[usage(subcommand)]
     pub command: SelectCommand,
@@ -2347,6 +2506,11 @@ pub struct SelectArgs {
 
 /// `em active` — register a default `--prefix`/`--local` for bare invocations
 #[derive(usage::Args, Debug)]
+#[usage(example(
+    "em active set --local=",
+    header = "Register ~/.gentoo",
+    help = "Put set before --local; `em active --local set` steals set as the directory"
+))]
 pub struct ActiveArgs {
     #[usage(subcommand)]
     pub command: Option<ActiveCommand>,
@@ -2372,6 +2536,10 @@ pub struct EnvArgs {
 
 /// `em setup` — bootstrap a prefix layout
 #[derive(usage::Args, Default, Debug)]
+#[usage(
+    effect = "write",
+    example("em setup --local", header = "Bootstrap ~/.gentoo")
+)]
 pub struct SetupArgs {
     /// Directory holding host tools this prefix should borrow while it has
     /// none of its own, put ahead of the sanitised build `PATH`. Repeatable.
@@ -2397,7 +2565,7 @@ pub struct SetupArgs {
     pub activity: ActivityArgs,
 
     /// Privilege backend for this setup run
-    #[usage(long, value_enum, default = "auto")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
@@ -2455,7 +2623,7 @@ pub struct CrossdevArgs {
     pub activity: ActivityArgs,
 
     /// Privilege backend for this crossdev run
-    #[usage(long, value_enum, default = "auto")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
@@ -2468,6 +2636,13 @@ pub struct CrossdevArgs {
 /// `--emptytree @system`) then builds against. Kept separate from the stages on
 /// purpose (catalyst/crossdev-stages do the same: toolchain, then the stages).
 #[derive(usage::Args, Debug, Clone)]
+#[usage(
+    effect = "write",
+    example(
+        "em toolchain --prefix /p --setup",
+        header = "Bootstrap a prefix toolchain"
+    )
+)]
 pub struct ToolchainArgs {
     /// Build and install the toolchain into `--root` (the only action for now;
     /// required, mirroring `crossdev --setup`).
@@ -2487,13 +2662,20 @@ pub struct ToolchainArgs {
     pub activity: ActivityArgs,
 
     /// Privilege backend for this toolchain run
-    #[usage(long, value_enum, default = "auto")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
 // `em stages` — assemble stage-build artifacts (stage1/stage3/stage4) *using*
 // a toolchain already built by `em toolchain --setup`.
 #[derive(usage::Args, Debug, Clone)]
+#[usage(
+    effect = "write",
+    example(
+        "em stages --root /var/tmp/stage1 --stage1",
+        header = "Stage1 into a root"
+    )
+)]
 pub struct StagesArgs {
     /// Emerge the profile's `packages.build` bootstrap set into `--root`:
     /// baselayout (USE=build, --nodeps) then the minimal stage1 package list
@@ -2523,7 +2705,7 @@ pub struct StagesArgs {
     pub activity: ActivityArgs,
 
     /// Privilege backend for this stages run
-    #[usage(long, value_enum, default = "auto")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
@@ -2532,6 +2714,7 @@ pub struct StagesArgs {
 /// The explicit, self-contained form of the bare `em <atoms>` path — see
 /// [`Applet::Emerge`]'s doc comment.
 #[derive(usage::Args, Debug, Clone, Default)]
+#[usage(effect = "write", example = "em emerge firefox")]
 pub struct EmergeArgs {
     #[usage(flatten)]
     pub root_arg: RootArg,
@@ -2549,7 +2732,7 @@ pub struct EmergeArgs {
     pub activity: ActivityArgs,
 
     /// Privilege backend for this merge
-    #[usage(long, value_enum, default = "auto")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 
     /// Atoms, package sets (`@world`), or ebuild paths to act on
@@ -3024,7 +3207,11 @@ pub enum QueryCommand {
         #[usage(required)]
         atom: Vec<String>,
     },
-    #[usage(help = "Display full dependency tree", alias_hidden = "g")]
+    #[usage(
+        help = "Display full dependency tree",
+        alias_hidden = "g",
+        example = "em query depgraph zlib"
+    )]
     Depgraph {
         /// Atom(s) to resolve and display the dependency tree for
         #[usage(required)]

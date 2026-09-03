@@ -5,6 +5,7 @@
 
 /// Emerge's own action-selecting mode switches.
 #[derive(usage::Args, Debug, Clone, Default, PartialEq)]
+#[usage(next_help_heading = "Merge")]
 pub struct EmergeModeArgs {
     /// Search package names (each argument is a pattern)
     ///
@@ -31,7 +32,7 @@ pub struct EmergeModeArgs {
     ///
     /// Matches every installed slot/version of each atom. For removing unneeded dependencies
     /// too, use `depclean` instead.
-    #[usage(short = 'C', long)]
+    #[usage(short = 'C', long, effect = "destructive")]
     pub unmerge: bool,
 
     /// Remove installed packages that are not needed by @world (with no
@@ -44,13 +45,13 @@ pub struct EmergeModeArgs {
     /// for scripting convenience within a single `emerge`-style invocation.
     // crate::depclean::run forwards to run_with_targets — identical
     // implementation, not merely similar behavior.
-    #[usage(short = 'c', long)]
+    #[usage(short = 'c', long, effect = "destructive")]
     pub depclean: bool,
 
     /// Remove all but the highest installed version of each atom given,
     /// ignoring dependencies (real emerge's own historical caveat applies —
     /// prefer `--depclean` for a dependency-aware clean).
-    #[usage(short = 'P', long)]
+    #[usage(short = 'P', long, effect = "destructive")]
     pub prune: bool,
 
     /// Remove atoms and/or `@set`s from the world file, without unmerging

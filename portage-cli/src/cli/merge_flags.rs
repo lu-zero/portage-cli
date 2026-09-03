@@ -12,6 +12,10 @@
 //! override in the staged bootstrap.
 #[derive(usage::Args, Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[usage(
+    next_help_heading = "Merge",
+    heading("Merge", help = "How the solver and build scheduler behave.")
+)]
 pub struct MergeFlags {
     /// Ask for confirmation before performing actions
     #[usage(short = 'a', long)]
@@ -106,7 +110,10 @@ pub struct MergeFlags {
     pub load_average: Option<f64>,
 
     /// Continue merging as much as possible even if some packages fail
-    #[usage(long)]
+    #[usage(
+        long,
+        warning = "Exists for portage parity; do not use it. A failed package must stop the run."
+    )]
     pub keep_going: bool,
 
     /// Automatically add required USE flags and package unmask entries to config files

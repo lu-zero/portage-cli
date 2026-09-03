@@ -3,6 +3,10 @@
 /// Flags related to dependency graph resolution that can be used by multiple commands
 #[derive(usage::Args, Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
+#[usage(
+    next_help_heading = "Depgraph",
+    heading("Depgraph", help = "How far to re-examine installed dependencies.")
+)]
 pub struct DepgraphFlags {
     /// Re-examine transitive dependencies
     ///

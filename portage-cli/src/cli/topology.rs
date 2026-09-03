@@ -35,6 +35,10 @@ fn opt_path(s: &Option<String>) -> Option<Utf8PathBuf> {
 /// context an applet resolves against. `--root` (the merge-destination
 /// override) is deliberately a separate mixin — see [`RootArg`].
 #[derive(usage::Args, Debug, Clone, Default)]
+#[usage(
+    next_help_heading = "Roots",
+    heading("Roots", help = "Which tree this invocation reads and writes.")
+)]
 pub struct Topology {
     /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
     /// still from the host (use --root for a config offset).
@@ -44,7 +48,13 @@ pub struct Topology {
     /// Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not
     /// overlaid on the host (see --prefix for the overlay). Defaults to
     /// ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given.
-    #[usage(long, global, default_missing = "", value_name = "DIR")]
+    #[usage(
+        long,
+        global,
+        default_missing = "",
+        value_name = "DIR",
+        warning = "em active --local set steals set as the directory. Put the subcommand first: em active set --local="
+    )]
     pub local: Option<String>,
 
     /// Read config (profile, make.conf) from this root instead of `--root`
@@ -75,6 +85,7 @@ pub struct Topology {
 /// once by [`resolved_root`]. Inner field is `global` so nested `--root`
 /// cascades inside an applet; not mounted on `Cli` (that copy is a raw field).
 #[derive(usage::Args, Debug, Clone, Default)]
+#[usage(next_help_heading = "Roots")]
 pub struct RootArg {
     /// Installation root (the offset an applet installs into / queries)
     #[usage(long, global, value_name = "PATH")]
