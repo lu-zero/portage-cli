@@ -420,6 +420,10 @@ See [`docs/user/applets.md`](./applets.md) for detailed status of each applet.
 
 ## Getting Help
 
+A generated flag-by-flag reference lives under [`cli/`](./cli/index.md)
+(`em --help` is the same information in the terminal). The other pages in
+this directory are how-tos, not that reference.
+
 ### Reporting Issues
 
 1. Check if your issue is already known in the [pending work](https://github.com/lu-zero/portage-cli/blob/master/todo/PENDING.md)
