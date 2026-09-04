@@ -2210,7 +2210,7 @@ pub enum Applet {
     #[usage(help = "Set up a cross-compilation target (sysroot + overlay) — crossdev workalike")]
     Crossdev(CrossdevArgs),
 
-    #[usage(help = "Bootstrap a self-hosting native toolchain into --root (the stages' compiler)")]
+    #[usage(help = "Bootstrap a self-hosting native toolchain (--root / --prefix / --local)")]
     Toolchain(ToolchainArgs),
 
     #[usage(help = "Assemble stage-build artifacts (stage1 packages.build) into --root")]

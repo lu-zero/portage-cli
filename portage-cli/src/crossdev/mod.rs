@@ -14,9 +14,10 @@
 //! same `glibc ↔ gcc` cycle as a cross toolchain, broken the same staged way.
 //!
 //! The install location follows em's root model: the sysroot is
-//! `<EROOT>/usr/<CTARGET>`, so `em crossdev <t>` targets `/usr/<CTARGET>` (like
-//! crossdev), `em --local crossdev <t>` targets `~/.gentoo/usr/<CTARGET>`, and
-//! `em --prefix DIR`/`--root DIR` retarget under `DIR`.
+//! `<EROOT>/usr/<CTARGET>`, so `em crossdev --target <t>` targets `/usr/<CTARGET>`
+//! (like crossdev), `em crossdev --local --target <t>` targets
+//! `~/.gentoo/usr/<CTARGET>`, and `--prefix DIR` retargets under `DIR`.
+//! `--root` is not accepted on `crossdev`.
 //!
 //! ## `cross-<CTARGET>/gcc` vs `sys-devel/gcc` — two different packages
 //!
@@ -520,8 +521,8 @@ fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseOverride>)> {
     )]
 }
 
-/// `em toolchain --setup`: bootstrap a self-hosting native toolchain into `--root`
-/// (`CHOST == CBUILD`)
+/// `em toolchain --setup`: bootstrap a self-hosting native toolchain
+/// (`CHOST == CBUILD`) into `--root` / `--prefix` / `--local`
 ///
 /// The native twin of crossdev `--setup`, sharing its staged driver but with the *native*
 /// plan (baselayout → binutils → os-headers → full glibc → full gcc): the seed compiler at
@@ -537,14 +538,14 @@ fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseOverride>)> {
 ///
 /// This is the *toolchain* primitive only — the compiler the stages build
 /// against. The actual stage production (stage1 `packages.build`, stage3
-/// `--emptytree @system`) lives in `em stages`. Requires `--root <dir>` (a
-/// toolchain into `/` is meaningless). With `-p` each step prints its plan
-/// instead of building.
+/// `--emptytree @system`) lives in `em stages`. A toolchain into host `/`
+/// is meaningless; pass `--root`, `--prefix`, or `--local`. With `-p` each
+/// step prints its plan instead of building.
 pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -> Result<()> {
     if !args.setup {
         bail!(
             "em toolchain does setup only for now — pass --setup to bootstrap the \
-             native toolchain into --root"
+             native toolchain"
         );
     }
     if globals.target().is_some() && (args.root_arg.root.is_some() || globals.root.is_some()) {
