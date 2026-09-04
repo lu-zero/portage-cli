@@ -165,8 +165,8 @@ chroots:
 
 ```bash
 # Create a minimal stage1 into /var/tmp/stage1
-em --root /var/tmp/stage1 toolchain --setup
-em --root /var/tmp/stage1 stages --stage1
+em toolchain --root /var/tmp/stage1 --setup
+em stages --root /var/tmp/stage1 --stage1
 
 # All packages install under /var/tmp/stage1
 # - config root: / (still reads the host's profile/make.conf — matches real
@@ -205,9 +205,9 @@ config, and toolchain. This is the most powerful topology for unprivileged use:
 ```bash
 # Bootstrap a standalone prefix
 em setup --local ~/.gentoo
-em --config-root ~/.gentoo select profile set default/linux/amd64/23.0/no-multilib
-# TODO: package.provided seed (not yet automated)
-em --local ~/.gentoo toolchain --setup
+em select profile set --local ~/.gentoo default/linux/amd64/23.0/no-multilib
+# package.provided seed is not yet automated
+em toolchain --local ~/.gentoo --setup
 em --local ~/.gentoo firefox
 
 # Everything lives under ~/.gentoo
@@ -319,13 +319,13 @@ em setup --local ~/.gentoo
 em setup --prefix ~/.gentoo-overlay
 
 # Bootstrap a toolchain into an offset root
-em --root /var/tmp/stage1 toolchain --setup
+em toolchain --root /var/tmp/stage1 --setup
 
 # Build a stage1 (packages.build)
-em --root /var/tmp/stage1 stages --stage1
+em stages --root /var/tmp/stage1 --stage1
 
 # Build a stage3 (@system)
-em --root /var/tmp/stage3 stages --stage3
+em stages --root /var/tmp/stage3 --stage3
 ```
 
 ---
@@ -380,8 +380,8 @@ Use these flags to control where `em` operates:
 
 ```bash
 # Set up a cross-compilation target
-em --target riscv64-unknown-linux-gnu crossdev --init-target
-em --target riscv64-unknown-linux-gnu crossdev --setup
+em crossdev --target riscv64-unknown-linux-gnu --init-target
+em crossdev --target riscv64-unknown-linux-gnu --setup
 
 # Build packages for the target
 em --target riscv64-unknown-linux-gnu <package>
@@ -426,7 +426,7 @@ this directory are how-tos, not that reference.
 
 ### Reporting Issues
 
-1. Check if your issue is already known in the [pending work](https://github.com/lu-zero/portage-cli/blob/master/todo/PENDING.md)
+1. Check if your issue is already known in the project's issue tracker
 2. Search existing issues on GitHub
 3. File a new issue with:
    - Your command and its output

@@ -49,7 +49,7 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
 | `setup` | — | Working — bootstrap a prefix layout (`--local` / `--prefix`) |
 | `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap; see [docs/crossdev.md](./docs/user/crossdev.md) |
-| `toolchain` | — | Working — native self-hosting toolchain bootstrap into `--root` |
+| `toolchain` | — | Working — native self-hosting toolchain bootstrap (`--root` / `--prefix` / `--local`) |
 | `stages` | catalyst stage1/3 | Partial — `--stage1` (`packages.build`), `--stage3` (emptytree `@system`); no stage4 yet |
 | `dispatch` | `dispatch-conf` | Working — alias of `etc` |
 | `etc` | `etc-update` / `dispatch-conf` | Working — one command for both — [detail](./docs/user/applets.md#em-etc-etc-update-dispatch-conf) |
@@ -71,9 +71,9 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | [`docs/user/applets.md`](./docs/user/applets.md) | Per-applet detail, gaps vs. the real tool, benchmarks |
 | [`docs/user/stages-and-testing.md`](./docs/user/stages-and-testing.md) | Bootstrapping and validating a ROOT with `em stages` |
 
-There is no dedicated `--local` user guide yet — see
-[`todo/local-bootstrap.md`](./todo/local-bootstrap.md), which tracks status
-rather than walking through usage.
+There is no dedicated `--local` user guide yet;
+[`docs/user/stages-and-testing.md`](./docs/user/stages-and-testing.md) covers
+the bootstrap. Remaining gaps are tracked under `todo/`.
 
 **Design & architecture** (`docs/design/`) — how `em` is built, and why:
 

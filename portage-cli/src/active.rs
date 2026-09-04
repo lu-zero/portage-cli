@@ -616,9 +616,9 @@ fn run_show() -> Result<()> {
         Some(s) => s,
         None => {
             println!("(no active prefix/local registered)");
-            println!("Register one with: em --prefix DIR active set");
-            println!("                 or: em --local= active set");
-            println!("                 or: em --local /path active set");
+            println!("Register one with: em active set --prefix DIR");
+            println!("                 or: em active set --local=");
+            println!("                 or: em active set --local /path");
             return Ok(());
         }
     };
@@ -636,9 +636,9 @@ fn run_show() -> Result<()> {
                 }
                 println!("Activate one with: em active set <name|index|path>");
             } else {
-                println!("Register one with: em --prefix DIR active set");
-                println!("                 or: em --local= active set");
-                println!("                 or: em --local /path active set");
+                println!("Register one with: em active set --prefix DIR");
+                println!("                 or: em active set --local=");
+                println!("                 or: em active set --local /path");
             }
         }
     }
@@ -747,7 +747,7 @@ fn run_clear(all: bool) -> Result<()> {
 fn run_env() -> Result<()> {
     let store = load()?.ok_or_else(|| {
         anyhow::anyhow!(
-            "no active prefix/local registered — run \\n             `em --prefix DIR active set` (or `em --local active set`) first"
+            "no active prefix/local registered — run \\n             `em active set --prefix DIR` (or `em active set --local=`) first"
         )
     })?;
 
@@ -845,8 +845,8 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
     }
     bail!(
         "em active set/add needs a target: pass --prefix DIR or --local [DIR]\\n\
-         examples:\\n  em --prefix /home/me/prefix active set\\n  em --local= active set\\n  em --local /other active set\\n\
-         note: bare `em --local active set` steals `active` as the path — use `em --local=` or put a path"
+         examples:\\n  em active set --prefix /home/me/prefix\\n  em active set --local=\\n  em active set --local /other\\n\
+         note: `em active --local set` steals `set` as the path — put `set` first"
     );
 }
 

@@ -59,7 +59,7 @@ multi-instance handling needed on either side; `-k` only ever sees one
 board's packages.
 
 ```bash
-export PKGDIR=/var/cache/em-binpkgs/${CHOST}/$(em --target "$T" maint binpkg fingerprint)
+export PKGDIR=/var/cache/em-binpkgs/${CHOST}/$(em maint binpkg fingerprint --target "$T")
 em --target "$T" -b -k @system
 ```
 

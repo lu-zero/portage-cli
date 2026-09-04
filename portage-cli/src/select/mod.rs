@@ -102,7 +102,7 @@ pub(crate) fn config_portage_dir(globals: &Cli) -> Utf8PathBuf {
 /// Deliberately uses [`Roots::config_root_explicit`], not
 /// [`Roots::config`]: the latter also follows a bare `--root`, but real
 /// eselect never derives a config root from `ROOT` alone (only an explicit
-/// `PORTAGE_CONFIGROOT`/`EROOT`) — so a plain `em --root R select ...`
+/// `PORTAGE_CONFIGROOT`/`EROOT`) — so a plain `em select profile show --root R`
 /// operates on the host's config unless `--config-root R` is also given.
 ///
 /// `crossdev`'s own internal activation is unaffected: it always runs
@@ -214,7 +214,7 @@ mod tests {
         // make.conf template, which never sets one.
         std::fs::write(
             dir.path().join("etc/portage/make.conf"),
-            "# no CHOST here, matches a real `em --prefix ... setup` template\n",
+            "# no CHOST here, matches a real `em setup --prefix` template\n",
         )
         .unwrap();
 

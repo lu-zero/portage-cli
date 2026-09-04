@@ -58,9 +58,9 @@ impl Roots {
     /// Unlike [`config`](Self::config), never derived from `--root`.
     ///
     /// `em select` uses this instead of `config()`, matching real eselect's own
-    /// behavior — so a bare `em --root R select ...` operates on the host's config
-    /// unless `--config-root R` is also given, instead of silently picking up
-    /// whatever `--root`'s bootstrap default resolved `config()` to.
+    /// behavior — so a bare `em select profile show --root R` operates on the
+    /// host's config unless `--config-root R` is also given, instead of silently
+    /// picking up whatever `--root`'s bootstrap default resolved `config()` to.
     pub fn config_root_explicit(&self) -> Option<&Utf8Path> {
         self.config_root_explicit.as_deref()
     }

@@ -1,4 +1,4 @@
-//! `em --local setup`'s repo resolution: piggy-back the host's `::gentoo` if
+//! `em setup --local`'s repo resolution: piggy-back the host's `::gentoo` if
 //! one is usable, else write an own-tree entry and sync it — step 2 of the
 //! config-root ladder.
 

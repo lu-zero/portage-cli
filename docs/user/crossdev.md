@@ -42,8 +42,8 @@ why probes go wrong), see [`em-prefix-experiment.md`](../design/em-prefix-experi
   R/U/A/P) — `em` still marks them target-env today; see the
   [matrix](../design/bash-crossdev-matrix.md).
 - **The sysroot** is `<EROOT>/usr/<tuple>` — `/usr/<tuple>` for a bare/
-  privileged setup, `<prefix>/usr/<tuple>` under `--prefix`/`--local`/
-  `--root <dir>`.
+  privileged setup, `<prefix>/usr/<tuple>` under `--prefix`/`--local`.
+  `crossdev` does not take `--root`.
 
 ## Flags
 
@@ -61,10 +61,9 @@ em crossdev [OPTIONS]
 | `--ex-pkg CATEGORY/PN` | build an extra package onto the target (repeatable); see [Extra packages](#extra-packages-ex-pkg---ex-gdb) below |
 | `--ex-gdb` | shorthand for `--ex-pkg dev-debug/gdb` |
 
-Plus the usual global flags: `-p`/`--pretend` (preview, write nothing),
-`-a`/`--ask` (preview and confirm before writing), `--prefix DIR`/`--local`/
-`--root DIR` (where the target lands — see `root-topology.md` for the full
-matrix).
+Plus `-p`/`--pretend` (preview, write nothing), `-a`/`--ask` (preview and
+confirm before writing), `--prefix DIR`/`--local` (where the target lands —
+see `root-topology.md`). `--root` is a parse error on `crossdev`.
 
 ### Supported tuples
 
@@ -84,7 +83,7 @@ can't currently build glibc); use a musl or bare-metal tuple with `-L`.
 ### Preview a target before touching anything
 
 ```
-$ em --target riscv64-unknown-linux-gnu crossdev --show-target-cfg
+$ em crossdev --target riscv64-unknown-linux-gnu --show-target-cfg
   Target    riscv64-unknown-linux-gnu
   Model     GCC
   Category  cross-riscv64-unknown-linux-gnu
@@ -105,7 +104,7 @@ No writes happen — this is purely informational, and works before
 ### Set up a target (privileged, classic crossdev layout)
 
 ```
-em --target riscv64-unknown-linux-gnu crossdev --init-target
+em crossdev --target riscv64-unknown-linux-gnu --init-target
 ```
 
 Writes the alias `repos.conf` entry and the sysroot's own
@@ -115,7 +114,7 @@ Nothing is built yet.
 ### Bootstrap the full cross-toolchain
 
 ```
-em --target riscv64-unknown-linux-gnu crossdev --setup
+em crossdev --target riscv64-unknown-linux-gnu --setup
 ```
 
 Implies `--init-target`, then runs the staged bootstrap (binutils → headers
@@ -123,18 +122,17 @@ Implies `--init-target`, then runs the staged bootstrap (binutils → headers
 first with `-p`:
 
 ```
-em -p --target riscv64-unknown-linux-gnu crossdev --setup
+em crossdev -p --target riscv64-unknown-linux-gnu --setup
 ```
 
 ### Unprivileged, under `--prefix`
 
-Everything above works identically under `--prefix`/`--local`/`--root DIR` —
-the sysroot and config just move under the prefix instead of the real host
-`/`:
+Everything above works identically under `--prefix`/`--local` — the sysroot
+and config just move under the prefix instead of the real host `/`:
 
 ```
-em --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --init-target
-em --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --setup
+em crossdev --prefix /opt/xp --target riscv64-unknown-linux-gnu --init-target
+em crossdev --prefix /opt/xp --target riscv64-unknown-linux-gnu --setup
 ```
 
 Sysroot lands at `/opt/xp/usr/riscv64-unknown-linux-gnu`; the alias/env
@@ -147,11 +145,11 @@ about to write against what's already there, so it's safe to re-run and
 plays along with `-p`/`-a`:
 
 ```
-$ em -p --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --init-target
+$ em crossdev -p --prefix /opt/xp --target riscv64-unknown-linux-gnu --init-target
 >>> config changes:
   update /opt/xp/etc/portage/repos.conf/crossdev.conf
 
-$ em -a --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --init-target
+$ em crossdev -a --prefix /opt/xp --target riscv64-unknown-linux-gnu --init-target
 >>> config changes:
   update /opt/xp/etc/portage/repos.conf/crossdev.conf
 
@@ -169,7 +167,7 @@ Once the toolchain exists, use the same `--target` flag with the ordinary
 `em` commands — no separate entry point:
 
 ```
-em --target riscv64-unknown-linux-gnu stages --stage1     # packages.build (@system seed)
+em stages --target riscv64-unknown-linux-gnu --stage1     # packages.build (@system seed)
 em --target riscv64-unknown-linux-gnu --emptytree @system # full target-native @system
 em --target riscv64-unknown-linux-gnu sys-apps/coreutils  # one target package
 ```
@@ -214,7 +212,7 @@ End-to-end recipe, unprivileged (`riscv64-unknown-linux-gnu`, GCC model):
 ```
 # 1. Cross toolchain (binutils → headers → gcc-stage1 → libc → gcc-stage2).
 #    Files under sysroot; VDB identities are cross-<tuple>/… today.
-em --prefix /opt/xp --target riscv64-unknown-linux-gnu crossdev --setup --jobs 8
+em crossdev --prefix /opt/xp --target riscv64-unknown-linux-gnu --setup --jobs 8
 
 # 2. Ordinary target package (real target-arch atoms into the sysroot).
 #    Needs library DEPEND satisfaction (see above) — not a full @system.
@@ -251,15 +249,15 @@ that omits the flag drops the extra again, exactly like real crossdev.
 
 ```
 # Build a cross-gdb (dev-debug/gdb) alongside the toolchain:
-em --target riscv64-unknown-linux-gnu crossdev --init-target --ex-gdb
+em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-gdb
 
 # The Rust standard library for this target (sys-devel/rust-std — its own
 # ::gentoo DESCRIPTION literally says "standalone (for crossdev)"), needed
 # to cross-compile Rust code targeting the tuple:
-em --target riscv64-unknown-linux-gnu crossdev --init-target --ex-pkg sys-devel/rust-std
+em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-pkg sys-devel/rust-std
 
 # Multiple extras, repeatable:
-em --target riscv64-unknown-linux-gnu crossdev --init-target --ex-gdb --ex-pkg sys-devel/rust-std
+em crossdev --target riscv64-unknown-linux-gnu --init-target --ex-gdb --ex-pkg sys-devel/rust-std
 ```
 
 Pick a genuine standalone host-arch tool for `--ex-pkg` — something that
@@ -286,8 +284,8 @@ than surfacing later as an opaque resolver failure.
 ### LLVM/Clang model
 
 ```
-em --target aarch64-unknown-linux-musl -L crossdev --show-target-cfg
-em --target aarch64-unknown-linux-musl -L crossdev --setup
+em crossdev --target aarch64-unknown-linux-musl -L --show-target-cfg
+em crossdev --target aarch64-unknown-linux-musl -L --setup
 ```
 
 No per-target compiler build — clang already cross-targets. The category is
@@ -299,9 +297,9 @@ clang wrapper + LLVM runtimes (`compiler-rt`/`libunwind`/`libcxxabi`/
 
 - **`--local` needs a native seed before crossdev.** A fresh `--local` prefix
   has an empty VDB; `toolchain --setup` / `crossdev --setup` hit a genuine
-  hard cycle unless `package.provided` declares host-supplied tools. See
-  [`local-bootstrap.md`](../../todo/local-bootstrap.md). Prefer `--prefix` on a fat
-  Gentoo host when you only need an overlay.
+  hard cycle unless `package.provided` declares host-supplied tools. Prefer
+  `--prefix` on a Gentoo host when you only need an overlay; see
+  [`stages-and-testing.md`](./stages-and-testing.md).
 - **`--target` alone doesn't imply a config has been set up.** Run
   `--init-target` (or `--setup`, which implies it) at least once before
   using `--target T` for ordinary builds — otherwise the sysroot has no

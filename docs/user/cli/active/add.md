@@ -6,9 +6,9 @@
 Add a new entry without activating it
 
 Examples:
-  `em --prefix /home/me/prefix active add my-prefix`
-  `em --local /home/me/.gentoo active add my-gentoo`
-  `em --local= active add`  # adds ~/.gentoo with auto-generated name
+  `em active add --prefix /home/me/prefix my-prefix`
+  `em active add --local /home/me/.gentoo my-gentoo`
+  `em active add --local=`  # adds ~/.gentoo with auto-generated name
 
 ## Arguments
 - **`[NAME]`** — Optional name for the entry. If not provided, uses path basename

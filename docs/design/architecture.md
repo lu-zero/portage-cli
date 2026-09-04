@@ -8,7 +8,8 @@ validation, and known divergences from emerge.
 > against the code before relying on it; update this file when it drifts.
 
 Related: [`docs/testing.md`](./testing.md) (how correctness is established),
-[`docs/benchmarks.md`](./benchmarks.md) (how performance is measured).
+[`docs/benchmarks.md`](./benchmarks.md) (how performance is measured),
+[`usage-rs.md`](./usage-rs.md) (`em` CLI: clap → usage-rs).
 
 ## Crate layering
 

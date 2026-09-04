@@ -316,9 +316,8 @@ itself used to decide what to protect.
 
 - Multiple sidecars for one target are offered oldest-first: accepting the
   newest would silently discard the versions behind it.
-- Installing a pending file keeps the *target's* permissions, so a live file
-  someone deliberately tightened does not get loosened back to whatever the
-  package image carried.
+- Installing a pending file keeps the *sidecar's* mode (the package image),
+  matching `dispatch-conf`'s use-new rename. Global `-p` lists without writing.
 - `diff` and `sdiff` are shelled out to, as the real tools do — your own
   `diff` options and merge habits keep working, and `$EDITOR` is honoured by
   `[e]dit`.
@@ -346,14 +345,8 @@ operating on.
 `grep` (a `pquery`-shaped search through ebuilds and eclasses) is likewise
 for a person looking something up.
 
-A 2026-09-02 scan of `/var/db/repos/{gentoo,guru,crossdev,pentoo}` found
-zero `portageq` calls from any inheritable `*.eclass` and zero from any live
-ebuild — the only hits are `eclass/tests/` (a hand-run harness that is never
-`inherit`ed), OpenRC init scripts, and maintainer scripts. That result is
-worth keeping, but it answers a narrower question than whether to build the
-applet: it means `em` does **not** additionally need to provide `portageq`
-as a *shell builtin* for ebuild phases, because no phase calls it. The
-user-facing command is a separate question, and the answer there is yes.
+No inheritable eclass or live ebuild calls `portageq`, so `em` does not need
+it as a phase builtin. The user-facing command is still wanted.
 
 Whenever it is built, `envvar`, `has_version`, `match`, `best_version` and
 `get_repo_path` cover every shape found in the wild.

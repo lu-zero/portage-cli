@@ -3535,7 +3535,7 @@ pub enum GlsaCommand {
 /// `em active <subcommand>` — persistent default `--prefix` / `--local`
 ///
 /// `set` reads the global `--prefix` / `--local` flags (same shape as
-/// `em --prefix DIR setup`), so there is no second set of flag names to
+/// `em setup --prefix DIR`), so there is no second set of flag names to
 /// collide with the globals.
 ///
 /// Entries can be referenced by name, index (0-based), or exact path.
@@ -3547,17 +3547,17 @@ pub enum ActiveCommand {
     /// Register the invocation's `--prefix` or `--local` as the active context
     ///
     /// Without arguments, reads from `--prefix`/`--local` flags:
-    ///   `em --prefix /home/me/prefix active set`
-    ///   `em --local= active set`           (default `~/.gentoo`)
-    ///   `em --local /other active set`
+    ///   `em active set --prefix /home/me/prefix`
+    ///   `em active set --local=`           (default `~/.gentoo`)
+    ///   `em active set --local /other`
     ///
     /// With a reference argument, activates an existing entry:
     ///   `em active set my-name`     # by name
     ///   `em active set 0`           # by index
     ///   `em active set /path/to/dir` # by exact path
     ///
-    /// Note: `em --local active set` is wrong — `--local` takes `active` as the
-    /// `--local` path. Use `em --local=` or pass an explicit directory.
+    /// Note: `em active --local set` is wrong — `--local` takes `set` as the
+    /// `--local` path. Put `set` first, or use `em active set --local=`.
     #[usage(help = "Register --prefix/--local as active or activate an existing entry")]
     Set {
         /// Reference to an existing entry (name, index, or path) to activate
@@ -3584,9 +3584,9 @@ pub enum ActiveCommand {
     /// Add a new entry without activating it
     ///
     /// Examples:
-    ///   `em --prefix /home/me/prefix active add my-prefix`
-    ///   `em --local /home/me/.gentoo active add my-gentoo`
-    ///   `em --local= active add`  # adds ~/.gentoo with auto-generated name
+    ///   `em active add --prefix /home/me/prefix my-prefix`
+    ///   `em active add --local /home/me/.gentoo my-gentoo`
+    ///   `em active add --local=`  # adds ~/.gentoo with auto-generated name
     #[usage(help = "Add a new prefix/local entry")]
     Add {
         /// Optional name for the entry. If not provided, uses path basename

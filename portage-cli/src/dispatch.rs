@@ -10,11 +10,11 @@ use anyhow::{Context, bail};
 use usage::{RunAsyncWith, RunWith};
 
 use crate::cli::{
-    self, ActiveArgs, Applet, AtomArgs, CleanArgs, CrossdevArgs, DepcleanArgs, EbuildArgs,
-    EmergeArgs, EmergeModeArgs, EnvArgs, EtcArgs, GrepArgs, HelperArgs, LogArgs, LogCommand,
-    MaintArgs, MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, QueryArgs, QueryCommand,
-    QuickpkgArgs, ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs, StagesArgs,
-    SyncArgs, ToolchainArgs, UseArgs, WorkerArgs, CompletionArgs,
+    self, ActiveArgs, Applet, AtomArgs, CleanArgs, CompletionArgs, CrossdevArgs, DepcleanArgs,
+    EbuildArgs, EmergeArgs, EmergeModeArgs, EnvArgs, EtcArgs, GrepArgs, HelperArgs, LogArgs,
+    LogCommand, MaintArgs, MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, QueryArgs,
+    QueryCommand, QuickpkgArgs, ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs,
+    StagesArgs, SyncArgs, ToolchainArgs, UseArgs, WorkerArgs,
 };
 use crate::crossdev;
 use crate::ebuild;
@@ -740,7 +740,6 @@ fn run_log(command: &Option<LogCommand>, globals: &cli::Cli) -> Result<()> {
         }
     }
 }
-
 
 impl RunAsyncWith<&cli::Cli> for CompletionArgs {
     type Output = Result<()>;
