@@ -19,8 +19,8 @@ use crate::preserve_libs;
 /// Which phases a [`run_inner`] call owns — the single source of truth for the
 /// build-tree epilogues (clean, env-dump/restore, buildpkg, tree-drop).
 ///
-/// The fakeroost/sudo scoping (Q6: the ptrace tax / real root must stay off
-/// the compile) splits a source build into [`PhaseGroup::Compile`] (parent,
+/// The pseudoroot/sudo scoping (Q6: the per-syscall tax / real root must
+/// stay off the compile) splits a source build into [`PhaseGroup::Compile`] (parent,
 /// un-wrapped) + [`PhaseGroup::Install`] (wrapped `__worker` child). The other
 /// backends (real root, hakoniwa umbrella) use [`PhaseGroup::Full`] — one
 /// process. [`PhaseGroup::Debug`] backs `em ebuild`.
@@ -3276,7 +3276,7 @@ fn walk_image(
 
 /// Set the merged path's owner to the image entry's uid/gid (`lchown`, so a
 /// symlink's own ownership is set, not its target). Succeeds as real root
-/// and under a fake root (fakeroost records the intended owner); an
+/// and under a fake root (pseudoroot records the intended owner); an
 /// unprivileged merge can't set foreign ownership, so the error is ignored
 /// and the file keeps the build user (portage's own behaviour).
 ///

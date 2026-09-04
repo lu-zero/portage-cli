@@ -22,12 +22,11 @@ name = "em"
 path = "src/main.rs"
 
 [features]
-default = ["mimalloc", "fakeroost", "pseudoroot", "hakoniwa"]
+default = ["mimalloc", "pseudoroot", "hakoniwa"]
 mimalloc = ["dep:mimalloc"]
 # Off by default, investigation-only: swaps in dhat's counting allocator and
 # writes dhat-heap.json on exit (view at https://nnethercote.github.io/dh_view/dh_view.html).
 dhat-heap = ["dep:dhat"]
-fakeroost = ["dep:fakeroost"]
 pseudoroot = ["dep:pseudoroot"]
 hakoniwa = ["dep:hakoniwa"]
 # Optional pure-gix git sync backend (heavy compile). Default is shell `git` +
@@ -106,7 +105,6 @@ toml = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-fakeroost = { workspace = true, optional = true }
 hakoniwa = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]

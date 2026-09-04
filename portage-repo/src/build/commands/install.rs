@@ -87,7 +87,7 @@ fn db_lookup_target_or_host(
 ///
 /// When the target has no passwd/group yet (empty stage, pre-baselayout), names
 /// fall back to the host `/etc` so `fowners root:portage` can still resolve
-/// under `--privilege pseudoroot|fakeroost`. Once the target db exists, a
+/// under `--privilege pseudoroot`. Once the target db exists, a
 /// missing name is a hard error (same as portage).
 fn resolve_owner(owner: &str, pwdb_etc: &Path) -> Result<String, String> {
     let (user, group) = match owner.split_once(':') {

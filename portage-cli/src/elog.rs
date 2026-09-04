@@ -502,9 +502,9 @@ fn pf(cpv: &portage_atom::Cpv) -> String {
 /// written by a privileged run (`--privilege sudo`, real root worker)
 /// manageable afterwards by the unprivileged user who ran `em`.
 ///
-/// Every other backend already writes as that user (`pseudoroot`/
-/// `fakeroost` only fake `chown`, hakoniwa maps the container's root back
-/// to the caller) — so this is specifically the `sudo` case.
+/// Every other backend already writes as that user (`pseudoroot` only
+/// fakes `chown`, hakoniwa maps the container's root back to the caller)
+/// — so this is specifically the `sudo` case.
 ///
 /// The group is the *invoking user's*, not `portage`. Naming portage's
 /// group looks like the faithful choice and is wrong here: under

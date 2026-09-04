@@ -21,12 +21,9 @@ fn main() {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
-    // Must be the first thing in main: on a fakeroost/pseudoroot supervisor
-    // re-exec these run the session and exit; on a normal launch they are
-    // no-ops. Kept ahead of the tokio runtime so the supervisor never spins
-    // one up.
-    #[cfg(all(feature = "fakeroost", target_os = "linux"))]
-    fakeroost::init();
+    // Must be the first thing in main: on a pseudoroot supervisor re-exec
+    // this runs the session and exits; on a normal launch it is a no-op.
+    // Kept ahead of the tokio runtime so the supervisor never spins one up.
     #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
     pseudoroot::init();
 

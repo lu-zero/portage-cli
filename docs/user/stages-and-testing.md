@@ -363,7 +363,7 @@ question — often it will not.)
 ## Privilege and jobs
 
 - Unprivileged stage roots: prefer `--privilege auto` (defaults toward
-  pseudoroot) or explicit `--privilege pseudoroot` / `fakeroost` / `sudo`.
+  pseudoroot) or explicit `--privilege pseudoroot` / `hakoniwa` / `sudo`.
 - Parallelism: `-j` / `--jobs` on stages/toolchain; load throttle via
   `-l` / `--load-average` (1-minute load; first job always starts).
 - `MAKEOPTS` for the ebuild compile is still make.conf / package.env;

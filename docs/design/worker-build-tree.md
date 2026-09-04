@@ -1,14 +1,14 @@
 # The Compile/Install worker split and the per-package build tree
 
 `em` splits an unprivileged source build into two processes
-(`portage-cli/src/ebuild.rs`'s `PhaseGroup`), to keep the fakeroost
-per-syscall ptrace tax (and sudo's real root) off the compile:
+(`portage-cli/src/ebuild.rs`'s `PhaseGroup`), to keep pseudoroot's
+per-syscall tax (and sudo's real root) off the compile:
 
 - **`PhaseGroup::Compile`** (the un-wrapped parent): `pretend`, `setup`,
   `fetch`, `unpack`, `prepare`, `configure`, `compile`, `test`. Runs
   unprivileged, no fake/real root involved.
 - **`PhaseGroup::Install`** (a spawned, hidden `em __worker` child): `install`,
-  `qmerge`. Runs under whichever privilege backend is active (fakeroost,
+  `qmerge`. Runs under whichever privilege backend is active (pseudoroot,
   sudo, hakoniwa, …) — the only phases that actually need root-like
   behaviour (`chown`, device nodes, `setuid`, …).
 

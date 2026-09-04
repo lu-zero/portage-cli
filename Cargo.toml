@@ -121,9 +121,6 @@ brush-builtins = { git = "https://github.com/lu-zero/brush.git", rev = "967cb706
 brush-core = { git = "https://github.com/lu-zero/brush.git", rev = "967cb706" }
 brush-parser = { git = "https://github.com/lu-zero/brush.git", rev = "967cb706" }
 dhat = "0.3.3"
-# Fork: bad-path mknod/chown/chmod pass through to the kernel instead of aborting
-# the supervised tree (autoconf probes hit this). Parked until crates.io 0.1.2.
-fakeroost = { git = "https://github.com/lu-zero/fakeroost.git", rev = "3f2539f" }
 # LD_PRELOAD fake root (same FakerootCommandExt API), for --privilege pseudoroot.
 pseudoroot = "0.2.2"
 flume = "0.12.0"

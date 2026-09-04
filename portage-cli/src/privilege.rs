@@ -2,8 +2,8 @@
 //! `chown`/setuid succeed and ownership is recorded, instead of swallowing the
 //! EPERM and losing it.
 //!
-//! Fakeroost, pseudoroot and sudo are *scoped*, not umbrellas (Q6 in
-//! fakeroot-privilege-backends.md: the ptrace tax / real root must stay off
+//! Pseudoroot and sudo are *scoped*, not umbrellas (Q6 in
+//! fakeroot-privilege-backends.md: the ptrace/real-root tax must stay off
 //! the compile): the un-wrapped parent runs `pretend..compile`, then
 //! `build_and_merge` delegates install+qmerge(+binpkg) to a wrapped
 //! `em __worker` child per package ([`install_wrap_backend`] /
@@ -14,27 +14,17 @@
 //! serialised across worker processes by an flock in `ebuild.rs`.
 //!
 //! Each fake-root backend is a default-on cargo feature compiled only where
-//! it works — fakeroost and hakoniwa are Linux kernel interfaces, pseudoroot
-//! covers Linux and macOS. The cfg gates pair the feature with the target
-//! because default features stay enabled on targets where the dependency
-//! table drops the crate.
+//! it works — hakoniwa is a Linux kernel interface, pseudoroot covers Linux
+//! and macOS. The cfg gates pair the feature with the target because default
+//! features stay enabled on targets where the dependency table drops the
+//! crate.
 //!
 //! Backend selection (`--privilege`, or `EM_PRIVILEGE`; default `auto`):
-//! - `auto` — the best compiled-in fake root: pseudoroot, else fakeroost, else
-//!   `none`.
-//! - `pseudoroot` — LD_PRELOAD fake root: faked ownership without the
-//!   per-syscall ptrace tax, but interposition only covers dynamically linked
+//! - `auto` — the best compiled-in fake root: pseudoroot, else `none`.
+//! - `pseudoroot` — LD_PRELOAD fake root: faked ownership without a
+//!   per-syscall tax, but interposition only covers dynamically linked
 //!   libc callers (static binaries / raw syscalls escape it). The `auto`
-//!   default: a real stage3 `--buildpkg` run under fakeroost hit a rare,
-//!   non-reproducible-in-isolation ptrace race (`fakeroost: syscall failed:
-//!   ENOENT`) that silently killed ~1/3 of packages' install workers *after*
-//!   qmerge had already succeeded.
-//!
-//! pseudoroot doesn't share that failure mode.
-//! - `fakeroost` — pure-Rust ptrace+seccomp fake root (no privilege):
-//!   ownership is faked in-session, on-disk stays the build user. Covers every
-//!   caller (no libc-interposition gap), at a higher per-syscall cost and the
-//!   rare crash above.
+//!   default.
 //! - `hakoniwa` — user-namespace sandbox with build-user→0 map ("real-in-a-box"):
 //!   real `chown`/`setuid` syscalls inside the box; on-disk owners are the
 //!   mapped host ids (same family as `sudo`, without host root).
@@ -61,12 +51,9 @@ const ACTIVE_ENV: &str = "EM_PRIVILEGE_ACTIVE";
 pub enum Backend {
     /// Already root, or already inside a session: real chowns, no wrapping
     RealRoot,
-    /// Pure-Rust ptrace+seccomp fake root (`fakeroost`)
-    #[cfg(all(feature = "fakeroost", target_os = "linux"))]
-    Fakeroost,
-    /// LD_PRELOAD fake root (`pseudoroot`) — same faked-ownership model as
-    /// fakeroost without the ptrace tax (libc-interposed, so static binaries
-    /// and raw syscalls escape it) — the default unprivileged backend.
+    /// LD_PRELOAD fake root (`pseudoroot`) — faked ownership without a
+    /// per-syscall tax (libc-interposed, so static binaries and raw
+    /// syscalls escape it) — the default unprivileged backend.
     #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
     Pseudoroot,
     /// User-namespace sandbox (`hakoniwa`) with build-user→0 map
@@ -86,8 +73,6 @@ impl Backend {
         }
         match requested {
             Privilege::Auto => Self::auto_backend(),
-            #[cfg(all(feature = "fakeroost", target_os = "linux"))]
-            Privilege::Fakeroost => Backend::Fakeroost,
             #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
             Privilege::Pseudoroot => Backend::Pseudoroot,
             #[cfg(all(feature = "hakoniwa", target_os = "linux"))]
@@ -98,17 +83,12 @@ impl Backend {
     }
 
     /// `auto`: the best compiled-in fake root — pseudoroot (LD_PRELOAD, no
-    /// ptrace tax, and doesn't share fakeroost's rare buildpkg-phase crash;
-    /// see the module doc comment) over fakeroost (ptrace, covers every
-    /// caller but not macOS); neither compiled in ⇒ no wrapping, the chown
+    /// per-syscall tax); not compiled in ⇒ no wrapping, the chown
     /// workarounds degrade gracefully.
     fn auto_backend() -> Self {
         std::cfg_select! {
             all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")) => {
                 Backend::Pseudoroot
-            }
-            all(feature = "fakeroost", target_os = "linux") => {
-                Backend::Fakeroost
             }
             _ => {
                 Backend::RealRoot
@@ -166,13 +146,11 @@ pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
     }
     match Backend::detect(privilege) {
         Backend::RealRoot => None,
-        // Fakeroost/pseudoroot/sudo are scoped, not umbrellas (Q6): the ptrace
+        // Pseudoroot/sudo are scoped, not umbrellas (Q6): the per-syscall
         // tax / real root must stay off the compile. build_and_merge delegates
         // only install+qmerge to a wrapped __worker child. The exceptions
         // (see `needs_whole_process_wrap`) run without that worker seam and
         // are wrapped whole instead.
-        #[cfg(all(feature = "fakeroost", target_os = "linux"))]
-        Backend::Fakeroost => needs_whole_process_wrap(cli).then(fakeroost::reexec),
         #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
         Backend::Pseudoroot => needs_whole_process_wrap(cli).then(pseudoroot::reexec),
         Backend::Sudo => needs_whole_process_wrap(cli).then(reexec_sudo),
@@ -277,7 +255,7 @@ pub struct WorkerArgs<'a> {
 /// When `reemit` is `Some`, the parent binds a Unix socket under `work_base`,
 /// the worker writes JSONL phase events there, and the parent re-emits them on
 /// the given bus (so `--activity-fd` / emergelog / subscribers see install
-/// phases). Path-based (not FD inheritance) so sudo/fakeroost wraps work.
+/// phases). Path-based (not FD inheritance) so sudo/pseudoroot wraps work.
 pub async fn spawn_install_worker(
     backend: Backend,
     args: &WorkerArgs<'_>,
@@ -443,11 +421,6 @@ fn build_worker_command(
         cmd.arg("--activity-reemit-path").arg(p);
     }
     Ok(match backend {
-        #[cfg(all(feature = "fakeroost", target_os = "linux"))]
-        Backend::Fakeroost => {
-            cmd.env(ACTIVE_ENV, "fakeroost");
-            fakeroost::wrap(&cmd)
-        }
         #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
         Backend::Pseudoroot => {
             cmd.env(ACTIVE_ENV, "pseudoroot");
@@ -509,44 +482,6 @@ fn distdir(cli: &Cli) -> String {
         .ok()
         .and_then(|mc| mc.get("DISTDIR").map(str::to_string))
         .unwrap_or_else(|| "/var/cache/distfiles".to_string())
-}
-
-#[cfg(all(feature = "fakeroost", target_os = "linux"))]
-mod fakeroost {
-    use std::process::Command;
-
-    use ::fakeroost::FakerootCommandExt;
-
-    /// The supervisor re-exec command wrapping `cmd`; running `cmd` itself
-    /// would execute unwrapped.
-    pub fn wrap(cmd: &Command) -> Command {
-        cmd.fakeroot()
-    }
-
-    /// Umbrella re-exec — only for `em ebuild … install/qmerge` (see
-    /// [`maybe_supervise`](super::maybe_supervise)); merge runs use the
-    /// per-package install worker.
-    pub fn reexec() -> i32 {
-        let Some((exe, args)) = super::self_invocation() else {
-            return 1;
-        };
-        tracing::info!(
-            target: portage_repo::ACTION_TARGET,
-            ">>> unprivileged build — running under fakeroost (fake root)"
-        );
-        match Command::new(exe)
-            .args(args)
-            .env(super::ACTIVE_ENV, "fakeroost")
-            .fakeroot()
-            .status()
-        {
-            Ok(s) => s.code().unwrap_or(1),
-            Err(e) => {
-                crate::style::error_line!("failed to start the fakeroost supervisor: {e}");
-                1
-            }
-        }
-    }
 }
 
 #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
@@ -709,7 +644,7 @@ mod hakoniwa {
         if !userns_available() {
             crate::style::error_line!(
                 "hakoniwa requires user namespaces and newuidmap/newgidmap on PATH; \
-                 try --privilege pseudoroot, fakeroost, or sudo"
+                 try --privilege pseudoroot or sudo"
             );
             return 1;
         }

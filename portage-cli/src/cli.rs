@@ -2923,14 +2923,11 @@ pub enum LogCommand {
 /// How an unprivileged build gets root for `chown`/setuid (see `--privilege`)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum Privilege {
-    /// Best compiled-in fake root (pseudoroot, else fakeroost, else none) when
+    /// Best compiled-in fake root (pseudoroot, else none) when
     /// unprivileged, real chowns when already root (default).
     #[default]
     Auto,
-    /// Pure-Rust ptrace+seccomp fake root; ownership faked in-session
-    #[cfg(all(feature = "fakeroost", target_os = "linux"))]
-    Fakeroost,
-    /// LD_PRELOAD fake root (`pseudoroot`); ownership faked in-session, no ptrace tax
+    /// LD_PRELOAD fake root (`pseudoroot`); ownership faked in-session, no per-syscall tax
     #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
     Pseudoroot,
     /// User-namespace sandbox with build-user→0 map; real chowns in-box
