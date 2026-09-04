@@ -175,6 +175,29 @@ carry an effort estimate.
   consumed by `crossdev-stages`, so this is semver-visible and wants a
   consumer survey first — and it is *not* the orphan a dependency audit makes
   it look like: [[gentoo-stages-workspace-types]]
+- **usage-rs CLI migration (clap → usage-rs 6) — postponed 2026-09-04, not
+  abandoned.** Grok executed the full 9-PR design-doc plan
+  (`docs/design/usage-rs.md`) on branch `usage-rs`
+  (`~/Sources/portage-cli-usage-rs`); the hard architectural questions
+  (default-subcommand, Topology-as-root-global, same-type dual-mount of
+  MergeFlags/RootArg) are answered and correct. Held back on review: a
+  real bug (`em --info -r` silently drops the `-r` action), and — the real
+  reason to wait — a usage-rs 6 API limitation with no clean workaround
+  (`ValidationError` has no `.value()`, so every cross-field reject prints
+  `invalid value ''` instead of naming what's wrong). The failing test
+  (stale `help_tree.snap` + stale `docs/user/cli/` pages) is fixed
+  (`cc06a82c`); branch still needs a rebase onto current `master` (which
+  since dropped fakeroost, see below — this branch's `Privilege` enum
+  will need the same trim). Revisit in a few months.
+  [[usage-rs-cli-migration]]
+- **Dropped the `fakeroost` privilege backend — 2026-09-04 (`31c90e42`).**
+  Fork-pinned (no crates.io release upstream with the bad-path
+  mknod/chown/chmod fix) and superseded in practice: `auto` has picked
+  pseudoroot over it since 2026-07-05 anyway, and hakoniwa covers full
+  user-namespace segregation. Removed the feature/dependency, `Backend::
+  Fakeroost`/`Privilege::Fakeroost`, and the `mod fakeroost` wrapper from
+  `privilege.rs`. `--privilege fakeroost` / `EM_PRIVILEGE=fakeroost` no
+  longer parse. [[fakeroot-privilege-backends]]
 - **Signal handling** (reported 2026-09-02, phase-stdin half fixed in
   `0018023`) — the remaining items are the current systematic queue, in
   order: (1) `Vdb::register`'s in-place field writes ✅ 2026-09-02 — staged

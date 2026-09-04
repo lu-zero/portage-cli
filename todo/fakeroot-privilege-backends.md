@@ -1,5 +1,18 @@
 # Unprivileged builds: consolidate the chown workarounds behind a privilege backend
 
+**2026-09-04: the `fakeroost` backend is dropped (`31c90e42`).** No time
+to chase fakeroost upstream getting a crates.io release with the
+bad-path passthrough fix (still git-fork-only after the `feat/fakeroost`
+"park it" attempt below never landed); pseudoroot already covers
+unprivileged builds without fakeroost's rare buildpkg-phase crash, and
+hakoniwa covers full user-namespace segregation, so there's no gap left
+for fakeroost to fill. `Backend::Fakeroost`/`Privilege::Fakeroost`, the
+`fakeroost` cargo feature/dependency, and `mod fakeroost` in
+`privilege.rs` are gone; `--privilege fakeroost` no longer parses. The
+rest of this file (fakeroost design/history below) is kept as record —
+revisit only if fakeroost ships a real release and there's a reason to
+want the ptrace-covers-everything property pseudoroot lacks.
+
 STATUS: **v1.1 landed (2026-06-27)** — umbrella fakeroost session + merge chown +
 facet-2 name resolution, all validated on `sys-apps/util-linux`; **hakoniwa backend
 sketched** (opt-in `--privilege hakoniwa`, not yet wall-tested). **2026-06-28:
