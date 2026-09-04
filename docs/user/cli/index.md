@@ -262,4 +262,5 @@ Where live progress is written.
 - [`em etc diff [PATH]`](etc/diff.md)
 - [`em etc merge`](etc/merge.md)
 - [`em env [--root <PATH>]`](env.md)
+- [`em completion <SHELL>`](completion.md)
 - [`em emerge [FLAGS] [ATOM]…`](emerge.md)
