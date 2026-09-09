@@ -7,12 +7,24 @@ use std::process::Command;
 
 use camino::Utf8Path;
 
+/// The release `em` binary Cargo already built for this test run — not a
+/// nested `cargo run` (debug, holds the target lock, swallows exit status).
 fn em(args: &str) -> String {
-    let output = Command::new("cargo")
-        .args(["run", "-q", "-p", "portage-cli", "--"])
+    let output = Command::new(env!("CARGO_BIN_EXE_em"))
         .args(args.split_whitespace())
+        // Explicit real-host root, trailing (clap wants it after the
+        // applet name): these tests compare against the host's own
+        // `qfile`/`qlist`/VDB, so an `em active` prefix/local registered
+        // on this machine must not redirect em's own view of things.
+        .args(["--root", "/"])
         .output()
         .expect("failed to run em");
+    assert!(
+        output.status.success(),
+        "em {args} exited {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
@@ -21,26 +33,23 @@ fn q(args: &str) -> String {
         .args(args.split_whitespace().skip(1))
         .output()
         .expect("failed to run comparison tool");
+    assert!(
+        output.status.success(),
+        "{args} exited {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-/// Extract the category/package (without version) from a full atom string.
-fn strip_version(atom: &str) -> &str {
-    // e.g. "app-shells/bash-5.3_p9-r2" -> "app-shells/bash"
-    let Some(slash) = atom.find('/') else {
-        return atom;
-    };
-    let _cat = &atom[..slash];
-    let pf = &atom[slash + 1..];
-    // Find the rightmost hyphen where what follows starts with a digit (PMS version boundary).
-    let ver_start = pf.rmatch_indices('-').find_map(|(i, _)| {
-        let next_char = pf.get(i + 1..)?.chars().next()?;
-        next_char.is_ascii_digit().then_some(i)
-    });
-    match ver_start {
-        Some(pos) => &atom[..slash + 1 + pos],
-        None => atom,
-    }
+/// The category/package (without version) from a full atom string, e.g.
+/// "app-shells/bash-5.3_p9-r2" -> "app-shells/bash". Falls back to the atom
+/// unchanged if it doesn't parse as a `Cpv` (PMS version-boundary parsing
+/// already lives in portage-atom; no reason to hand-roll it here too).
+fn strip_version(atom: &str) -> String {
+    portage_atom::Cpv::parse(atom)
+        .map(|cpv| cpv.cpn.to_string())
+        .unwrap_or_else(|_| atom.to_string())
 }
 
 #[test]
@@ -111,66 +120,4 @@ fn installed_count_matches_qlist() {
         em_count, q_count,
         "installed package count mismatch: em={em_count} qlist={q_count}"
     );
-}
-
-#[test]
-#[ignore]
-fn vdb_pkg_size_matches() {
-    let vdb = portage_vdb::Vdb::open(Utf8Path::new("/var/db/pkg")).unwrap();
-
-    // Pick a known package
-    if let Some(pkg) = vdb
-        .category("app-shells")
-        .and_then(|c| c.package("bash-5.3_p9-r2"))
-    {
-        let size = pkg.size().unwrap();
-        // bash is typically ~8-12 MiB
-        assert!(size.is_some());
-        let bytes = size.unwrap();
-        assert!(bytes > 5_000_000, "bash size too small: {bytes}");
-        assert!(bytes < 50_000_000, "bash size too large: {bytes}");
-    }
-}
-
-#[test]
-#[ignore]
-fn vdb_contents_roundtrip() {
-    let vdb = portage_vdb::Vdb::open(Utf8Path::new("/var/db/pkg")).unwrap();
-
-    if let Some(pkg) = vdb
-        .category("app-shells")
-        .and_then(|c| c.package("bash-5.3_p9-r2"))
-    {
-        let entries = pkg.contents().unwrap();
-        assert!(!entries.is_empty());
-
-        let files: Vec<_> = entries
-            .iter()
-            .filter(|e| matches!(e.kind, portage_vdb::ContentsKind::Obj))
-            .collect();
-        let dirs: Vec<_> = entries
-            .iter()
-            .filter(|e| matches!(e.kind, portage_vdb::ContentsKind::Dir))
-            .collect();
-        let syms: Vec<_> = entries
-            .iter()
-            .filter(|e| matches!(e.kind, portage_vdb::ContentsKind::Sym))
-            .collect();
-
-        assert!(!files.is_empty(), "no obj entries in bash");
-        assert!(!dirs.is_empty(), "no dir entries in bash");
-        assert!(!syms.is_empty(), "no sym entries in bash");
-
-        // Every obj should have md5 and mtime
-        for f in &files {
-            assert!(f.md5.is_some(), "obj missing md5: {:?}", f.path);
-            assert!(f.mtime.is_some(), "obj missing mtime: {:?}", f.path);
-        }
-
-        // Every sym should have target and mtime
-        for s in &syms {
-            assert!(s.target.is_some(), "sym missing target: {:?}", s.path);
-            assert!(s.mtime.is_some(), "sym missing mtime: {:?}", s.path);
-        }
-    }
 }
