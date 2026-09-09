@@ -58,19 +58,14 @@ this isn't ready to merge:
    system info instead of running the requested action. Untested
    combination — the design doc's must-preserve table never covers
    `--info` + a mode flag.
-3. **A usage-rs 6 library limitation with no clean workaround found**:
-   `usage::ValidationError::field(name).reason(...)` has no way to
-   attach the actual offending value, so every cross-field `try_into`
-   reject (the mechanism this whole migration hinges on for rejecting
-   e.g. `em crossdev --root R` or `em -a search`) renders to the user as
-   `invalid value '' for '--root': not valid with this applet` — reads
-   like an empty string was passed, not "this flag isn't valid with
-   this applet." Functionally correct (exit 2, correctly rejected), but
-   materially worse UX than clap's messages for exactly the class of
-   error this migration exists to make cleaner. This is the single
-   biggest reason to wait: it's not an `em`-side bug to fix, it's
-   upstream API surface that would need to mature (or `em` would need
-   to post-process `render_failure`'s string output, which is fragile).
+3. ~~**A usage-rs 6 library limitation with no clean workaround found**~~
+   **Wrong diagnosis, fixed 2026-09-09.** `ValidationError::value(...)`
+   has existed since at least 6.6.1 — `em`'s own `validate()` in `cli.rs`
+   just never called it, so every cross-field `try_into` reject rendered
+   as `invalid value '' for '--root': not valid with this applet`.
+   Fixed: every reject site now calls `.value(...)` with the real
+   offending value/applet, via a new `applet_kind()` helper. Locked by
+   `try_into_reject_messages_name_the_actual_conflict`.
 4. **One design question the doc explicitly flagged as needing a locked
    test never got one**: `em --info firefox` (Open Question #4 in the
    design doc). Live behavior: silently drops `--info`, runs a full
@@ -112,9 +107,12 @@ polish, not a redesign.
   ValueEnum snippet, which lists `fakeroost`/`pseudoroot`/`hakoniwa`
   cfg-gated variants, is now stale in the same way — drop `fakeroost`
   from it too when next touching that doc).
-- Item 1 (stale test snapshots) is fixed. Fix item 2 (small). Decide on
-  item 3 (either accept the UX regression, or write a thin wrapper
-  around `Cli::render_failure`'s output for the small, enumerable set of
-  `validate()` rejects — doable, just not attempted yet). Lock a test
-  for item 4. Clean up item 5's duplication (or accept it and move on —
-  none of the five are functionally wrong today).
+- Items 1 and 3 (stale test snapshots; `ValidationError` UX) are fixed.
+  Fix item 2 (small, still open). Lock a test for item 4. Clean up item
+  5's duplication (or accept it and move on — none of the five are
+  functionally wrong today).
+- **2026-09-09: bumped to usage-rs/usage-lib 6.8.0** (from 6.6.1, via
+  6.7.0/6.7.1). No exact pin anymore (dropped the same day) — a plain
+  `cargo update -p usage-rs -p usage-lib` picks up the latest compatible
+  6.x. 6.8.0 also fixed an unrelated synopsis-rendering bug
+  (`<SUBCOMMAND>` → `[SUBCOMMAND]` for optional-subcommand commands).

@@ -155,6 +155,28 @@ permanently dropped (the F4 regression).
 ./test-scripts/test-blockers-iuse-effective-sandbox.sh --keep
 ```
 
+### `test-prefix-sandbox.sh`
+
+Fast, real (non-`-p`) smoke test that `--prefix` still works: `em setup
+--prefix` bootstraps a layout, a real `--nodeps` build+install of
+`sys-libs/zlib` (small, dependency-light — enough to exercise compile →
+install → VDB without a full toolchain bootstrap), a check that the files
+actually landed under the prefix and not the sandbox root, and the `em
+active set`/`env`/`list` flow. Sandbox-run-only, same as
+`test-blockers-iuse-effective-sandbox.sh` above — no `sudo`, no `chroot`.
+Takes a `--worktree DIR` so it can test a *different* checkout's `em`
+without touching your own — built for checking a branch that changes CLI
+parsing (e.g. the `usage-rs` clap migration, `todo/usage-rs-cli-migration.md`)
+didn't silently break `--prefix`. See also the `em-prefix-sandbox-test`
+Claude Code skill (`.claude/skills/`), which wraps this with guidance on
+reading a failure.
+
+```sh
+./test-scripts/test-prefix-sandbox.sh
+./test-scripts/test-prefix-sandbox.sh --worktree ../portage-cli-usage-rs
+./test-scripts/test-prefix-sandbox.sh --sandbox my-name --keep
+```
+
 ## Known `crossdev-stages` gotchas
 
 - **Never hand-patch, bind-mount, or `sudo chroot` into an *existing*
