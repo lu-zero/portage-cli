@@ -97,3 +97,14 @@ jobs:
         with:
           toolchain: stable
       - run: cargo doc --workspace --exclude portage-bench --no-deps
+
+  cli-docs:
+    name: CLI reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      # In-process Cli::to_kdl() → usage-lib markdown. Does not invoke em __usage_spec__.
+      - run: cargo test -p portage-cli --test cli_docs
