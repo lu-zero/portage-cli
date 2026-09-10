@@ -14,7 +14,6 @@ workarounds** (baselayout, host-tool links, wrong probes) see
 > `satisfaction_root(DepClass)` directly. Historical dead ends: `RootSet` /
 > `RootTopology` enums (removed), and **`BuildClass`** (landed then dropped —
 > dual authority next to package.env; see
-> [`todo/drop-buildclass.md`](../../todo/drop-buildclass.md) and
 > [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md)). Older "variant enum"
 > sections below are historical; the **Override semantics** table and
 > `cli.rs` `base_roots` are the live contract.
@@ -216,9 +215,9 @@ read+write.
 C=/  B=T=<offset>  S=T  BR=/        CBUILD==CHOST
 ```
 
-- `em --root /var/tmp/stage1 toolchain --setup` (builds binutils/glibc/gcc into
+- `em toolchain --root /var/tmp/stage1 --setup` (builds binutils/glibc/gcc into
   the offset, single-pass since `CHOST==CBUILD`), then
-  `em --root /var/tmp/stage1 stages --stage1` (the `packages.build` set).
+  `em stages --root /var/tmp/stage1 --stage1` (the `packages.build` set).
 - BROOT is the real host `/`; every BDEPEND edge is host-satisfied and dropped.
 - Topology: **`Dual { broot: /, target: <offset> }`** + `SameArch`. (`Single` is only
   the bare `em <atom>` case where every role is `/`; any offset splits BROOT from
@@ -238,7 +237,7 @@ C=/ (ro)  B=T=<offset>  S=T  BR=/ (ro)    CBUILD==CHOST
 
 - Same topology as (1) — **`Dual { broot: /, target: <offset> }`**; the only
   difference is we can't *write* `/`, but we never need to — BDEPEND is satisfied
-  by *reading* the host VDB + host binaries. `em --root /var/tmp/stage1 stages
+  by *reading* the host VDB + host binaries. `em stages --root /var/tmp/stage1
   --stage1` works unchanged.
 - **This is just (1) minus root.** For a delta-only deployment into `~/.gentoo`
   on a Gentoo host, use `em --prefix ~/.gentoo` (overlay: host stays base).
@@ -258,7 +257,7 @@ C=/ (ro)  B=T=<offset>  S=T  BR=/ (ro)    CBUILD==CHOST
 config, and (after bootstrap) its own toolchain. Works on a Gentoo host *and*
 on a foreign host (Debian/Arch/Fedora). Bootstrapping a toolchain into an
 **empty** prefix needs a host-tool seed via `package.provided` (empty VDB
-hard cycle otherwise) — see [`local-bootstrap.md`](../../todo/local-bootstrap.md).
+hard cycle otherwise) — see [`stages-and-testing.md`](../user/stages-and-testing.md).
 
 ```
 C=~/.gentoo/etc/portage  B=T=~/.gentoo  S=~/.gentoo  EPREFIX=~/.gentoo   CBUILD==CHOST
@@ -292,9 +291,9 @@ Crossdev's classic flow, into `/usr/<CTARGET>`.
 C=B=T=/usr/<T>  S=/usr/<T>  BR=/     CBUILD≠CHOST
 ```
 
-- `em --target <tuple> toolchain --setup` → binutils → headers → libc-headers
-  (`--nodeps`) → gcc-stage1 → libc → gcc-stage2. Atoms live under the
-  `cross-<tuple>/` overlay; the real `::gentoo` ebuilds are symlinked in.
+- `em crossdev --target <tuple> --setup` → binutils → headers → gcc-stage1 →
+  libc → gcc-stage2. Atoms live under the `cross-<tuple>/` alias onto
+  `::gentoo`.
 - BROOT is the real host `/` (native cmake/perl/python). Every BDEPEND edge
   resolves against the host VDB.
 - Topology: **`Dual { broot: /, target: /usr/<T> }`** + `ForeignArch`.
@@ -398,20 +397,20 @@ shadowing a package's own version-matched headers with the root's libc
 ### Plain unprivileged toolchain (`em toolchain --setup`)
 
 Builds a native `baselayout → binutils → os-headers → glibc → gcc` into `--root`
-(`BootstrapKind::Native`, single-pass since `CHOST==CBUILD`). The compiler this
-produces is what `em stages --stage1` then builds `packages.build` against.
+(`BootstrapKind::Native`, single-pass since `CHOST==CBUILD`). Under `--prefix`
+(`USE=prefix-guest`) the libc step is skipped. The compiler this produces is
+what `em stages --stage1` then builds `packages.build` against.
 
 ```
-em --root /var/tmp/stage1 toolchain --setup
-em --root /var/tmp/stage1 stages --stage1
+em toolchain --root /var/tmp/stage1 --setup
+em stages --root /var/tmp/stage1 --stage1
 ```
 
 `toolchain --setup` calls `ensure_self_contained_prefix` first
-([`crossdev/mod.rs:710`](../../portage-cli/src/crossdev/mod.rs)) — runs `em setup`
-if the root is non-`/`, writes `repos.conf`/`make.profile` — so it is
-self-sufficient: a fresh empty `--root` becomes a buildable toolchain in one
-command. Requires `--root <dir>`; a toolchain into `/` is meaningless (use the
-host's own).
+([`crossdev/mod.rs`](../../portage-cli/src/crossdev/mod.rs)) — runs `em setup`
+if the destination is non-host, writes `repos.conf`/`make.profile` — so it is
+self-sufficient: a fresh empty `--root`/`--prefix`/`--local` becomes a
+buildable toolchain in one command. A toolchain into `/` is rejected.
 
 **Footgun — do not add `--config-root` to this invocation.** `Roots::config()`
 already defaults to `config_root.or(root)`, so a bare `--root DIR` reads
@@ -467,7 +466,7 @@ the `--local` lifecycle silently depends on this.** Confirmed live
   `root-topology.md` used to claim here — that was fixed already (see
   `setup.rs`'s own "Previously gated on `is_local` — exactly backwards"
   comment). Don't re-diagnose it.
-- `em --local DIR setup` writes the layout correctly (own `bashrc`,
+- `em setup --local DIR` writes the layout correctly (own `bashrc`,
   `make.conf` — commentary-only, no `MAKEOPTS`, matching `--prefix`), but
   writes **no `make.profile`** — unlike bare `--root`, which gets one
   auto-symlinked to the host's resolved profile as part of
@@ -483,12 +482,12 @@ the `--local` lifecycle silently depends on this.** Confirmed live
   (`Roots::config_overlay()`), else the host's `/etc/portage`. Fixed in
   `7a8c5bc` (2026-06-23), predating the "confirmed live 2026-07-11" note this
   section used to carry — that note was already stale when written. Live
-  re-verified 2026-08-09: `em --local DIR select profile show` resolves
+  re-verified 2026-08-09: `em select profile show --local DIR` resolves
   `DIR/etc/portage`, not the host's. A bare `--root DIR` still does **not**
   count (only `--config-root`, `--local`, `--prefix` do) — that part matches
   real `eselect`'s `profile.eselect` on purpose, see `select/mod.rs`'s doc
   comment on `config_portage_dir_for`.
-- `em --local DIR toolchain --setup` reads the prefix's own profile once
+- `em toolchain --local DIR --setup` reads the prefix's own profile once
   `select profile set` has pointed `make.profile` at it (via the same
   `--local`-aware resolution above); skip that step and it falls back to the
   host's real `/etc/portage`, which is what produced the much larger, more
@@ -508,16 +507,15 @@ These don't run `toolchain --setup` themselves — they assume the host (or, for
 
 ```
 # --prefix (overlay on a Gentoo host): host provides everything
-em --prefix /opt/prefix setup          # layout + overlay config + host-python symlinks
+em setup --prefix /opt/prefix          # layout + overlay config + host-python symlinks
 em --prefix /opt/prefix <pkg>          # host compiler builds into P
 
 # --local (standalone): seed host tools, then bootstrap the prefix toolchain
-em --local setup                             # layout + own config, no python symlinks
-em --local select profile set <profile>      # required — see below
+em setup --local                             # layout + own config, no python symlinks
+em select profile set --local DIR <profile>  # required — see below
 # Empty VDB ⇒ hard cycle unless package.provided seeds host tools
-# (hand-write today; setup automation planned — docs/local-bootstrap.md)
-em --local toolchain --setup                 # build native toolchain INTO ~/.gentoo
-em --local stages --stage1                   # packages.build using the prefix's own gcc
+em toolchain --local --setup                 # build native toolchain INTO ~/.gentoo
+em stages --local --stage1                   # packages.build using the prefix's own gcc
 em --local <pkg>                             # now self-hosting
 ```
 
@@ -527,11 +525,11 @@ section used to describe is **already fixed** in `setup.rs` (see its own
 correctly gets no host-python symlinks, `--prefix` correctly does. Don't
 re-diagnose that; it's done.
 
-What's still real: `em --local setup` writes layout + config but **no
+What's still real: `em setup --local` writes layout + config but **no
 `make.profile`** — deliberate, since `--local` must also work on a
 non-Gentoo host where auto-symlinking a Gentoo profile isn't possible. The
 `select profile set <profile>` step above is required to give it one; a
-plain `em --local select profile set <profile>` now targets the prefix
+plain `em select profile set --local DIR <profile>` now targets the prefix
 correctly (see the "Known gap" writeup above — fixed in `7a8c5bc`, no
 `--config-root` override needed for the common `--local`/`--prefix` case,
 only for targeting a foreign sysroot). Skipping the step entirely still
@@ -552,15 +550,15 @@ Cross needs three things the native cases don't: a way to see
 
 ```
 # Privileged: classic crossdev into /usr/<T>  (config writes to /etc/portage)
-em --target <tuple> crossdev --init-target   # alias repos.conf + sysroot make.conf/profile
-em --target <tuple> crossdev --setup         # binutils→headers→gcc1→libc→gcc2 (implies --init-target)
-em --target <tuple> stages --stage1          # target packages.build
+em crossdev --target <tuple> --init-target   # alias repos.conf + sysroot make.conf/profile
+em crossdev --target <tuple> --setup         # binutils→headers→gcc1→libc→gcc2 (implies --init-target)
+em stages --target <tuple> --stage1          # target packages.build
 em --target <tuple> --emptytree @system      # stage3 (target-native @system)
 
 # Unprivileged: same, under --prefix (config writes to <prefix>/etc/portage)
-em --prefix <P> --target <tuple> crossdev --init-target
-em --prefix <P> --target <tuple> crossdev --setup
-em --prefix <P> --target <tuple> stages --stage1
+em crossdev --prefix <P> --target <tuple> --init-target
+em crossdev --prefix <P> --target <tuple> --setup
+em stages --prefix <P> --target <tuple> --stage1
 ...
 ```
 
@@ -583,10 +581,10 @@ disagree (crossdev used to have its own local `-t`; retired 2026-07-09).
 |---|---|---|
 | `em setup --prefix P` | `Overlayed` | `/` (host) |
 | `em setup --local` | `Single { ~/.gentoo }` | `/` → `~/.gentoo` (after toolchain) |
-| `em --root R toolchain --setup` | `Dual { broot: /, target: R }` | `/` |
-| `em --local toolchain --setup` | `Single { ~/.gentoo }` | `~/.gentoo` |
-| `em --target T crossdev --init-target` | `Dual { broot: EROOT, target: EROOT/usr/T }` | EROOT |
-| `em --local --target T ...` | `Dual { broot: ~/.gentoo, target: ~/.gentoo/usr/T }` | `~/.gentoo` |
+| `em toolchain --root R --setup` | `Dual { broot: /, target: R }` | `/` |
+| `em toolchain --local --setup` | `Single { ~/.gentoo }` | `~/.gentoo` |
+| `em crossdev --target T --init-target` | `Dual { broot: EROOT, target: EROOT/usr/T }` | EROOT |
+| `em … --local --target T` | `Dual { broot: ~/.gentoo, target: ~/.gentoo/usr/T }` | `~/.gentoo` |
 
 The BROOT column shows axis 2 in action: `--local`'s BROOT *moves* from `/`
 (host seed) to `~/.gentoo` (self-hosting) over its lifecycle, without the
@@ -669,8 +667,7 @@ variant refactor's payoff is that both sides ask
   `BuildClass` on plan entries; re-review against bash-crossdev concluded it
   was dual authority next to **package.env** and was removed. Host-vs-target
   for cross packages is package.env + `host_codegen` PN specials (see
-  [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md),
-  [`todo/drop-buildclass.md`](../../todo/drop-buildclass.md)).
+  [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md)).
   `bypass_cross_root` was renamed `use_outer_eroot`.
 - **Removed (2026-08, was "Not pursued")** — the `RootSet` enum
   (`Single`/`Dual`/`Overlayed`): it was a lossy path-only summary whose
@@ -707,8 +704,7 @@ variant refactor's payoff is that both sides ask
   correct under `-p` after the first commit alone, but a `Base` entry
   silently routed to the board root and got skipped as "already installed"
   without the second. Live-verified: `sys-libs/readline`'s
-  `ld: cannot find -lncursesw` failure (todo/crossdev-stage1-readline-ncursesw-pkgconfig.md)
-  is this bug start to finish.
+  `ld: cannot find -lncursesw` is this bug start to finish.
 - **`root_closure` — the two walks above, consolidated.** `base_copies` and
   `host_copies` were one algorithm written twice; they are now
   `portage_resolve::root_closure::base` / `::host` over a single graph

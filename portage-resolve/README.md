@@ -9,7 +9,7 @@ solver bridge: USE/keyword/mask/license/properties/restrict policy,
 root-aware post-solve trimming, and plan assembly. Used by the
 [`em`](https://github.com/lu-zero/portage-cli) Portage CLI.
 
-Computes policy; renders nothing (no clap / anstream dependency — that
+Computes policy; renders nothing (no usage-rs / anstream dependency — that
 boundary is deliberate). CLI presentation lives in `portage-cli`.
 
 ## Status

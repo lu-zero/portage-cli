@@ -1,6 +1,6 @@
 # Stages setup and testing (with crossdev-stages)
 
-**Status: draft (2026-07-30).** Operator-facing how-to for bootstrapping a
+Operator-facing how-to for bootstrapping a
 ROOT with `em` and validating it inside a
 [crossdev-stages](https://github.com/lu-zero/crossdev-stages) sandbox.
 Stage **specs** (catalyst-style stage4 recipes with package lists, USE
@@ -24,7 +24,7 @@ catalyst / crossdev-stages):
 | Step | Command | What it does | USE |
 |------|---------|--------------|-----|
 | **Toolchain** | `em toolchain --setup --root R` | Native self-hosting compiler + libc into `R`: baselayout → binutils → headers → glibc → gcc | step-local overrides inside the staged driver (not a stage recipe) |
-| **Cross toolchain** | `em --target T crossdev --setup` | Cross tools into `/usr/<T>` (host-side) + sysroot skeleton | eclass/crossdev model |
+| **Cross toolchain** | `em crossdev --target T --setup` | Cross tools into `/usr/<T>` (host-side) + sysroot skeleton | eclass/crossdev model |
 | **Stage1** | `em stages --stage1 --root R` | Bootstrap set: baselayout (`USE=build`, `--nodeps`) then profile `packages.build` | **forced** conf-layer `USE="-* build ${BOOTSTRAP_USE}"`; **`--autosolve-use` always on** (IUSE `+` defaults preferred when `-*` wiped them) |
 | **Stage3** | `em stages --stage3 --root R` | Emptytree rebuild of `@system` | **none injected** — profile + ROOT `make.conf` + `package.use` only |
 | **Stage4** | *(not implemented)* | Would need a stage specification language | TBD |
@@ -214,7 +214,7 @@ em -p cross-riscv64-unknown-linux-gnu/linux-headers
 em --root "$ROOT" --target "$T" -pe sys-apps/systemd-utils --with-bdeps
 ```
 
-Do **not** run a bare `em --target T setup` before `crossdev --setup`: with
+Do **not** run `em setup --target T` before `crossdev --setup`: with
 `--target` set, `setup` writes into the **sysroot** and can poison
 `ACCEPT_KEYWORDS` with the host arch (caught live; documented in
 `regression-matrix.sh`).
@@ -266,13 +266,13 @@ $CDS sandbox run --name "$NAME" -- /root/em-bin --version
 
 # Native full stack (paths are *inside* the sandbox)
 $CDS sandbox run --name "$NAME" -- \
-  /root/em-bin --root /root/my-stage toolchain --setup --autounmask-write --jobs 8
+  /root/em-bin toolchain --root /root/my-stage --setup --autounmask-write --jobs 8
 
 $CDS sandbox run --name "$NAME" -- \
-  /root/em-bin --root /root/my-stage stages --stage1 --autosolve-use --jobs 8
+  /root/em-bin stages --root /root/my-stage --stage1 --autosolve-use --jobs 8
 
 $CDS sandbox run --name "$NAME" -- \
-  /root/em-bin --root /root/my-stage stages --stage3 -p --autosolve-use
+  /root/em-bin stages --root /root/my-stage --stage3 -p --autosolve-use
 # drop -p for a real stage3 (long)
 ```
 
@@ -400,7 +400,7 @@ crossdev-stages sandbox setup --name em-stages-draft
 crossdev-stages sandbox prepare --name em-stages-draft --bare
 # copy em-bin as above, then:
 crossdev-stages sandbox run --name em-stages-draft -- \
-  /root/em-bin --root /root/s stages --stage3 -p --autosolve-use
+  /root/em-bin stages --root /root/s --stage3 -p --autosolve-use
 
 # Repo regression matrix
 ./test-scripts/regression-matrix.sh
