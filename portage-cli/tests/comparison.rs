@@ -12,10 +12,9 @@ use camino::Utf8Path;
 fn em(args: &str) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_em"))
         .args(args.split_whitespace())
-        // Explicit real-host root, trailing (clap wants it after the
-        // applet name): these tests compare against the host's own
-        // `qfile`/`qlist`/VDB, so an `em active` prefix/local registered
-        // on this machine must not redirect em's own view of things.
+        // `--root` is not global, so it sits after the applet. These tests
+        // compare against the host VDB; an `em active` prefix/local on this
+        // machine must not redirect that.
         .args(["--root", "/"])
         .output()
         .expect("failed to run em");

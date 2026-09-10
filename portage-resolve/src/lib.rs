@@ -6,8 +6,8 @@
 //! solver bridge — USE/keyword/mask policy, root-aware post-solve trimming,
 //! and plan assembly — currently being migrated out of `portage-cli`'s
 //! `query::depgraph` module in stages.
-//! Computes policy; renders nothing (no clap, no anstream/anstyle dependency
-//! — that boundary is deliberate).
+//! Computes policy; renders nothing (no usage-rs, no anstream/anstyle
+//! dependency — that boundary is deliberate).
 //!
 //! Unpublishable past its placeholder `v0.0.1` (see `Cargo.toml`): depends on
 //! `portage-repo`, which pulls in the brush fork via git.

@@ -6,13 +6,23 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+use std::ffi::{OsStr, OsString};
+
 use portage_cli::cli;
 
 fn parse_cli() -> cli::Cli {
-    match cli::parse_cli_from(std::env::args_os()) {
-        Ok(cli) => cli,
-        Err(err) => err.exit(),
+    // Answered before parse so these words never become emerge atoms.
+    let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if let Some(answer) = cli::Cli::completion_request(&argv) {
+        print!("{answer}");
+        std::process::exit(0);
     }
+    let refs: Vec<&OsStr> = argv.iter().map(OsString::as_os_str).collect();
+    if let Some(answer) = cli::Cli::spec_request(&refs) {
+        print!("{answer}");
+        std::process::exit(0);
+    }
+    cli::parse_cli_or_exit().0
 }
 
 fn main() {

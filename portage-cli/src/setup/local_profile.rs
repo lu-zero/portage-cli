@@ -1,4 +1,4 @@
-//! `em --local setup`'s profile resolution — step 3 of the config-root
+//! `em setup --local`'s profile resolution — step 3 of the config-root
 //! ladder. Mirrors the host's own
 //! `make.profile` when it resolves under the just-synced repo (a real
 //! Gentoo host), else falls back to a per-ARCH default prefix profile (any

@@ -620,16 +620,11 @@ fn link_host_entries(dst_dir: &Utf8Path, host_dir: &str, prefix: &str) -> Result
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
-
-    use crate::cli::Cli;
-
     #[tokio::test]
     async fn pretend_run_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().to_str().unwrap();
-        let cli =
-            crate::cli::Cli::try_parse_from(["em", "-p", "setup", "--prefix", prefix]).unwrap();
+        let cli = crate::cli::parse_cli(&["em", "-p", "setup", "--prefix", prefix]);
         let Some(crate::cli::Applet::Setup(args)) = cli.applet.as_ref() else {
             unreachable!("parsed as `setup`")
         };
@@ -652,8 +647,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().to_str().unwrap();
         let cli =
-            Cli::try_parse_from(["em", "setup", "--prefix", prefix, "--extra-path", "/opt/b"])
-                .unwrap();
+            crate::cli::parse_cli(&["em", "setup", "--prefix", prefix, "--extra-path", "/opt/b"]);
         let Some(crate::cli::Applet::Setup(args)) = cli.applet.as_ref() else {
             unreachable!("parsed as `setup`")
         };
@@ -675,7 +669,7 @@ mod tests {
         let (_tmp, _g) = crate::test_support::isolate_active_state();
 
         let mode = |args: &[&str]| {
-            let cli = Cli::parse_from([&["em", "emerge"], args].concat());
+            let cli = crate::cli::parse_cli(&[&["em", "emerge"], args].concat());
             Mode::resolve(&cli.roots()).unwrap()
         };
 
@@ -689,13 +683,13 @@ mod tests {
         );
         assert_eq!(mode(&["--root", "/root"]).registrable(), None);
         assert!(
-            Mode::resolve(&Cli::parse_from(["em", "setup"]).roots()).is_err(),
+            Mode::resolve(&crate::cli::parse_cli(&["em", "setup"]).roots()).is_err(),
             "the host / is never bootstrapped"
         );
     }
 
     fn bashrc_body(flag: &str, dir: &str) -> String {
-        let cli = Cli::parse_from(["em", "emerge", flag, dir]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", flag, dir]);
         super::bootstrap(&cli.roots()).unwrap();
         std::fs::read_to_string(cli.roots().merge_root().join("etc/portage/bashrc")).unwrap()
     }
@@ -994,7 +988,7 @@ mod tests {
         // serial (no host make.conf to inherit MAKEOPTS from) — found
         // an hour on a 128-core box.
         let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::parse_from(["em", "emerge", "--root", dir.path().to_str().unwrap()]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", dir.path().to_str().unwrap()]);
         super::bootstrap(&cli.roots()).unwrap();
         let make_conf =
             std::fs::read_to_string(cli.roots().merge_root().join("etc/portage/make.conf"))
@@ -1014,7 +1008,7 @@ mod tests {
             return; // nothing to assert if the test host itself has none set
         };
         let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::parse_from(["em", "emerge", "--root", dir.path().to_str().unwrap()]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", dir.path().to_str().unwrap()]);
         super::bootstrap(&cli.roots()).unwrap();
         let make_conf =
             std::fs::read_to_string(cli.roots().merge_root().join("etc/portage/make.conf"))
@@ -1027,7 +1021,8 @@ mod tests {
         // Unaffected by the self-contained fix — --prefix already inherits
         // the host's real MAKEOPTS via config sharing.
         let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::parse_from(["em", "emerge", "--prefix", dir.path().to_str().unwrap()]);
+        let cli =
+            crate::cli::parse_cli(&["em", "emerge", "--prefix", dir.path().to_str().unwrap()]);
         super::bootstrap(&cli.roots()).unwrap();
         let make_conf =
             std::fs::read_to_string(cli.roots().merge_root().join("etc/portage/make.conf"))
@@ -1042,7 +1037,8 @@ mod tests {
     #[test]
     fn overlay_prefix_symlinks_host_base_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::parse_from(["em", "emerge", "--prefix", dir.path().to_str().unwrap()]);
+        let cli =
+            crate::cli::parse_cli(&["em", "emerge", "--prefix", dir.path().to_str().unwrap()]);
         super::bootstrap(&cli.roots()).unwrap();
         let bin = cli.roots().merge_root().join("usr/bin");
         // HOST_BASE_TOOLS includes find/xargs; the test host should have at least one.
@@ -1060,7 +1056,7 @@ mod tests {
     #[test]
     fn self_contained_root_does_not_symlink_host_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::parse_from(["em", "emerge", "--root", dir.path().to_str().unwrap()]);
+        let cli = crate::cli::parse_cli(&["em", "emerge", "--root", dir.path().to_str().unwrap()]);
         super::bootstrap(&cli.roots()).unwrap();
         let bin = cli.roots().merge_root().join("usr/bin");
         let has_symlink = ["find", "xargs"]

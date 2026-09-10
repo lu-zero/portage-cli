@@ -38,8 +38,8 @@
 
 use crate::cli::{Applet, Cli, Privilege};
 
-/// The `--privilege` request parsed from the CLI (flag or `EM_PRIVILEGE` via
-/// clap), recorded by [`maybe_supervise`] so `build_and_merge` — which has no
+/// The `--privilege` request parsed from the CLI (flag or `EM_PRIVILEGE`),
+/// recorded by [`maybe_supervise`] so `build_and_merge` — which has no
 /// `Cli` — can pick the worker backend.
 static PRIVILEGE_REQUEST: std::sync::OnceLock<Privilege> = std::sync::OnceLock::new();
 
@@ -111,24 +111,21 @@ pub(crate) fn will_build(cli: &Cli) -> bool {
         return false;
     }
     match &cli.applet {
-        // [`crate::cli::parse_cli_from`] means `None` only reaches here for a
-        // genuinely atom-less, applet-less invocation (`em --info`) — never
-        // one that will build.
-        None => false,
-        Some(Applet::Emerge(args)) => {
+        None | Some(Applet::Emerge(_)) => {
+            let mode = cli.mode();
             // Removals mutate the root even though they skip the merge
             // engine entirely; search/deselect never touch it.
-            args.mode.unmerge
-                || args.mode.depclean
-                || (!args.atoms.is_empty() && !args.mode.search && !args.mode.searchdesc)
+            mode.unmerge
+                || mode.depclean
+                || (!cli.atoms().is_empty() && !mode.search && !mode.searchdesc)
         }
         Some(
-            Applet::Ebuild { .. }
+            Applet::Ebuild(_)
             | Applet::Crossdev(_)
             | Applet::Toolchain(_)
             | Applet::Stages(_)
-            | Applet::Depclean { .. }
-            | Applet::Revdep { .. },
+            | Applet::Depclean(_)
+            | Applet::Revdep(_),
         ) => true,
         Some(_) => false,
     }
@@ -169,9 +166,10 @@ pub fn maybe_supervise(cli: &Cli) -> Option<i32> {
 /// into the GPKG still need the fake root, but there is no live-root
 /// install to scope it to).
 fn needs_whole_process_wrap(cli: &Cli) -> bool {
+    let mode = cli.mode();
     let (unmerge, depclean) = match &cli.applet {
-        Some(Applet::Emerge(args)) => (args.mode.unmerge, args.mode.depclean),
-        Some(Applet::Depclean { .. }) => (false, true),
+        None | Some(Applet::Emerge(_)) => (mode.unmerge, mode.depclean),
+        Some(Applet::Depclean(_)) => (false, true),
         _ => (false, false),
     };
     ebuild_applet_installs(cli) || unmerge || depclean || cli.merge_flags().buildpkgonly
@@ -180,8 +178,8 @@ fn needs_whole_process_wrap(cli: &Cli) -> bool {
 /// `em ebuild … <phase>` with a merge-side phase: the only build path that does
 /// not go through `build_and_merge` (and thus the worker seam).
 fn ebuild_applet_installs(cli: &Cli) -> bool {
-    matches!(&cli.applet, Some(Applet::Ebuild { phase, .. })
-        if phase.iter().any(|p| matches!(p.as_str(), "install" | "qmerge" | "merge")))
+    matches!(&cli.applet, Some(Applet::Ebuild(a))
+        if a.phase.iter().any(|p| matches!(p.as_str(), "install" | "qmerge" | "merge")))
 }
 
 /// The backend the install group should be wrapped with in a `__worker` child,
@@ -382,7 +380,7 @@ fn build_worker_command(
         cmd.arg("--distdir").arg(d);
     }
     if let Some(c) = args.config_root {
-        cmd.arg("--config-root").arg(c);
+        cmd.arg("--worker-config-root").arg(c);
     }
     if let Some(s) = args.sysroot {
         cmd.arg("--sysroot").arg(s);
@@ -727,8 +725,6 @@ mod hakoniwa {
 
 #[cfg(all(test, feature = "hakoniwa", target_os = "linux"))]
 mod tests {
-    use clap::Parser as _;
-
     use super::*;
 
     #[test]
@@ -752,7 +748,7 @@ mod tests {
         )
         .unwrap();
 
-        let cli = Cli::parse_from([
+        let cli = crate::cli::parse_cli(&[
             "em",
             "emerge",
             "--local",
@@ -767,7 +763,7 @@ mod tests {
     fn distdir_falls_back_to_the_real_portage_default_when_unset() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = camino::Utf8Path::from_path(dir.path()).unwrap();
-        let cli = Cli::parse_from([
+        let cli = crate::cli::parse_cli(&[
             "em",
             "emerge",
             "--local",
@@ -776,5 +772,73 @@ mod tests {
             "sys-libs/zlib",
         ]);
         assert_eq!(distdir(&cli), "/var/cache/distfiles");
+    }
+}
+
+#[cfg(test)]
+mod worker_argv_tests {
+    use super::*;
+    use crate::cli::Applet;
+
+    fn sample_args(quiet: bool, config_root: Option<&'static str>) -> WorkerArgs<'static> {
+        WorkerArgs {
+            ebuild_path: "/tmp/cat/pkg/pkg-1.ebuild",
+            cpv: "cat/pkg-1",
+            use_flags: "",
+            work_base: "/tmp/work",
+            root: "/tmp/root",
+            distdir: None,
+            config_root,
+            sysroot: None,
+            eprefix: None,
+            broot: None,
+            self_contained_bootstrap: false,
+            extra_path: "",
+            binpkg: None,
+            force_verify_signature: false,
+            buildpkg: false,
+            quiet,
+            activity_job_id: None,
+            activity_parent_job_id: None,
+            activity_live_root: None,
+            activity_side: None,
+            activity_reemit_path: None,
+        }
+    }
+
+    fn spawn_argv(args: &WorkerArgs<'_>) -> Vec<String> {
+        let cmd = build_worker_command(Backend::RealRoot, args, None).unwrap();
+        let mut argv = vec!["em".to_string()];
+        argv.extend(cmd.get_args().map(|a| a.to_string_lossy().into_owned()));
+        argv
+    }
+
+    #[test]
+    fn spawn_argv_parses_back_with_global_quiet() {
+        let args = sample_args(true, Some("/tmp/cfg"));
+        let argv = spawn_argv(&args);
+        assert!(
+            argv.iter().any(|a| a == "--quiet"),
+            "spawn still passes --quiet as the Cli global: {argv:?}"
+        );
+        assert!(
+            argv.iter().any(|a| a == "--worker-config-root"),
+            "spawn must pass --worker-config-root: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "--config-root"),
+            "spawn must not pass Topology --config-root: {argv:?}"
+        );
+
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let cli = crate::cli::parse_cli(&refs);
+        assert!(cli.quiet, "quiet must bind the Cli global");
+        let Some(Applet::Worker(w)) = &cli.applet else {
+            panic!("expected Applet::Worker");
+        };
+        assert_eq!(w.ebuild, args.ebuild_path);
+        assert_eq!(w.cpv, args.cpv);
+        assert_eq!(w.root, args.root);
+        assert_eq!(w.worker_config_root.as_deref(), args.config_root);
     }
 }

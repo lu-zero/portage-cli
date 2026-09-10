@@ -1,14 +1,11 @@
 use std::collections::HashSet;
-use std::ffi::OsString;
-use std::str::FromStr;
+use std::ffi::{OsStr, OsString};
 
-use clap::builder::styling::{AnsiColor as ClapAnsiColor, Styles};
-use clap::error::ErrorKind;
-use clap::{CommandFactory, Parser, Subcommand};
 use gentoo_core::Arch;
 #[cfg(test)]
 use portage_atom_pubgrub::DepClass;
 use portage_resolve::Roots;
+use usage::ValidationError;
 
 mod activity;
 mod depgraph_flags;
@@ -21,62 +18,317 @@ pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
 pub use topology::{RootArg, Topology};
 
-const fn cli_styles() -> Styles {
-    Styles::styled()
-        .header(ClapAnsiColor::Yellow.on_default().bold())
-        .usage(ClapAnsiColor::Green.on_default().bold())
-        .literal(ClapAnsiColor::Green.on_default())
-        .placeholder(ClapAnsiColor::Cyan.on_default())
-        .error(ClapAnsiColor::Red.on_default().bold())
-        .valid(ClapAnsiColor::Green.on_default())
-        .invalid(ClapAnsiColor::Red.on_default())
+fn default_arch() -> Arch {
+    Arch::current()
 }
 
-#[derive(Parser)]
-#[command(
-    name = "em",
+/// When to colour terminal output (`--color`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, usage::ValueEnum)]
+pub enum ColorChoice {
+    /// Colour when stdout is a terminal.
+    #[default]
+    Auto,
+    /// Always colour.
+    Always,
+    /// Never colour.
+    Never,
+}
+
+impl ColorChoice {
+    /// Apply this choice as the process-wide [`anstream`] colour setting.
+    pub fn write_global(self) {
+        let mapped = match self {
+            Self::Auto => anstream::ColorChoice::Auto,
+            Self::Always => anstream::ColorChoice::Always,
+            Self::Never => anstream::ColorChoice::Never,
+        };
+        mapped.write_global();
+    }
+}
+
+/// Parsed `em` invocation after `try_into` validation.
+pub struct Validated(pub Cli);
+
+impl TryFrom<Cli> for Validated {
+    type Error = ValidationError;
+
+    fn try_from(cli: Cli) -> Result<Self, Self::Error> {
+        validate(&cli)?;
+        Ok(Validated(cli))
+    }
+}
+
+fn validate(cli: &Cli) -> Result<(), ValidationError> {
+    let Some(root) = cli.root.as_deref() else {
+        return Ok(());
+    };
+    let name = match &cli.applet {
+        Some(Applet::Crossdev(_)) => "crossdev",
+        Some(Applet::Active(_)) => "active",
+        _ => return Ok(()),
+    };
+    Err(ValidationError::field("--root")
+        .value(root)
+        .reason(format!("not valid with the '{name}' applet")))
+}
+
+fn overlay_root(applet: &RootArg, cli_root: Option<&str>) -> RootArg {
+    RootArg {
+        root: applet.root.clone().or_else(|| cli_root.map(str::to_string)),
+    }
+}
+
+fn privilege_from_env() -> Option<Privilege> {
+    let raw = std::env::var("EM_PRIVILEGE").ok()?;
+    match raw.to_ascii_lowercase().as_str() {
+        "auto" => Some(Privilege::Auto),
+        "sudo" => Some(Privilege::Sudo),
+        "none" => Some(Privilege::None),
+        #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
+        "pseudoroot" => Some(Privilege::Pseudoroot),
+        #[cfg(all(feature = "hakoniwa", target_os = "linux"))]
+        "hakoniwa" => Some(Privilege::Hakoniwa),
+        _ => None,
+    }
+}
+
+fn env_flag_true(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(v) => matches!(
+            v.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on" | "t"
+        ),
+        Err(_) => false,
+    }
+}
+
+fn is_help_or_version(e: &usage::Error<'_, '_>) -> bool {
+    matches!(
+        e,
+        usage::Error::Help { .. }
+            | usage::Error::HelpAll { .. }
+            | usage::Error::MissingArgsHelp { .. }
+            | usage::Error::Version { .. }
+    )
+}
+
+/// Spellings that always take a detached value, including applet-only ones
+/// like `--exclude`. A spelling that is a switch anywhere (`-a` is `--ask` on
+/// emerge and `--add` on `use`) is omitted, as are optional-value flags
+/// (`--local`), so a following applet name is still the leading word.
+fn value_taking_flags() -> &'static HashSet<String> {
+    static FLAGS: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+    FLAGS.get_or_init(|| {
+        let mut takes = HashSet::new();
+        let mut switch = HashSet::new();
+        collect_flag_spellings(Cli::command(), &mut takes, &mut switch);
+        takes.retain(|s| !switch.contains(s));
+        takes
+    })
+}
+
+fn collect_flag_spellings(
+    cmd: &usage::Command<'_>,
+    takes: &mut HashSet<String>,
+    switch: &mut HashSet<String>,
+) {
+    for f in cmd.flags.iter().copied() {
+        let required_value = f.takes_value && !f.value_optional;
+        for long in f.longs {
+            let s = format!("--{long}");
+            if required_value {
+                takes.insert(s);
+            } else {
+                switch.insert(s);
+            }
+        }
+        for short in f.shorts {
+            let s = format!("-{}", *short as char);
+            if required_value {
+                takes.insert(s);
+            } else {
+                switch.insert(s);
+            }
+        }
+    }
+    for sub in cmd.subcommands.iter().copied() {
+        collect_flag_spellings(sub, takes, switch);
+    }
+}
+
+fn consumes_next_as_value(flag: &str, next: Option<&OsString>, taking: &HashSet<String>) -> bool {
+    if flag.contains('=') {
+        return false;
+    }
+    taking.contains(flag) && next.is_some_and(|n| !n.to_string_lossy().starts_with('-'))
+}
+
+/// First non-flag token after argv0. A flag's value is not a candidate.
+fn leading_word(raw: &[OsString]) -> Option<&str> {
+    let taking = value_taking_flags();
+    let mut i = 1;
+    while i < raw.len() {
+        let Some(s) = raw[i].to_str() else {
+            i += 1;
+            continue;
+        };
+        if s == "--" {
+            return None;
+        }
+        if s.starts_with('-') {
+            if consumes_next_as_value(s, raw.get(i + 1), taking) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        return Some(s);
+    }
+    None
+}
+
+fn is_known_subcommand(word: &str) -> bool {
+    Cli::command()
+        .subcommands
+        .iter()
+        .any(|c| c.name == word || c.aliases.contains(&word))
+}
+
+/// Splice `emerge` after argv0, dropping a duplicate `emerge` word if present.
+fn with_leading_emerge(raw: &[OsString]) -> Vec<OsString> {
+    let emerge = OsString::from("emerge");
+    let taking = value_taking_flags();
+    let mut out = Vec::with_capacity(raw.len() + 1);
+    out.push(raw.first().cloned().unwrap_or_else(|| "em".into()));
+    out.push(emerge.clone());
+    let mut i = 1;
+    let mut skipped_applet = false;
+    while i < raw.len() {
+        let t = &raw[i];
+        let s = t.to_string_lossy();
+        if s.starts_with('-') {
+            out.push(t.clone());
+            if consumes_next_as_value(&s, raw.get(i + 1), taking) {
+                i += 1;
+                if i < raw.len() {
+                    out.push(raw[i].clone());
+                }
+            }
+            i += 1;
+            continue;
+        }
+        if !skipped_applet && t == &emerge {
+            skipped_applet = true;
+            i += 1;
+            continue;
+        }
+        out.push(t.clone());
+        i += 1;
+    }
+    out
+}
+
+/// Retry into emerge unless the leading word already names another subcommand.
+/// `default_subcommand` does not bind prefix merge flags (`em -uD @world`).
+fn should_retry(raw: &[OsString]) -> bool {
+    !matches!(
+        leading_word(raw),
+        Some(word) if word != "emerge" && is_known_subcommand(word)
+    )
+}
+
+#[cfg(test)]
+fn resolve_argv(raw: Vec<OsString>) -> Vec<OsString> {
+    let refs: Vec<&OsStr> = raw.iter().map(OsString::as_os_str).collect();
+    match Cli::try_parse_from(&refs) {
+        Ok(_) => raw,
+        Err(e) if is_help_or_version(&e) => raw,
+        Err(_) if !should_retry(&raw) => raw,
+        Err(_) => with_leading_emerge(&raw),
+    }
+}
+
+fn finish_parse(argv: &[OsString]) -> Validated {
+    match Cli::embedded_outcome_into(&argv[1..]) {
+        usage::embedded::Outcome::Parsed(validated) => validated,
+        usage::embedded::Outcome::Exit(exit) => {
+            if exit.stderr {
+                eprint!("{}", exit.text);
+            } else {
+                print!("{}", exit.text);
+            }
+            std::process::exit(exit.code);
+        }
+    }
+}
+
+/// Parse process argv into `Validated`. Exits on `--help`/`--version`/failure.
+pub fn parse_cli_or_exit() -> Validated {
+    let raw: Vec<OsString> = std::env::args_os().collect();
+    let refs: Vec<&OsStr> = raw.iter().map(OsString::as_os_str).collect();
+    match Cli::try_parse_into_from(&refs) {
+        Ok(v) => v,
+        Err(e) if is_help_or_version(&e) => finish_parse(&raw),
+        Err(_) if !should_retry(&raw) => finish_parse(&raw),
+        Err(_) => finish_parse(&with_leading_emerge(&raw)),
+    }
+}
+
+#[derive(usage::Cli, Debug)]
+#[usage(
+    bin = "em",
     version,
     about = "Gentoo Portage package manager workalike",
-    arg_required_else_help = true,
-    styles = cli_styles()
+    arg_required_else_help,
+    unknown_flags = "error",
+    default_subcommand = "emerge",
+    completion,
+    try_into = Validated,
+    example("em -ua @world", header = "Update @world"),
+    example("em query belongs /usr/bin/python", header = "Find a file's owner"),
+    example("em select profile list", header = "List profiles"),
+    output(
+        "json",
+        framing = "json",
+        help = "Machine-parsable JSON (`--json` with `-p` or `--info`)"
+    )
 )]
 pub struct Cli {
-    #[command(flatten)]
-    pub color: colorchoice_clap::Color,
+    #[usage(long, global, value_enum, default = "auto", value_name = "WHEN")]
+    pub color: ColorChoice,
 
     /// Show what would be done without actually performing any actions
-    #[arg(short = 'p', long, global = true)]
+    #[usage(short = 'p', long, global)]
     pub pretend: bool,
 
-    /// Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with
-    /// USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/
-    /// ACCEPT_LICENSE, and configured repositories — `emerge --info`
-    /// workalike. Takes no atoms. Combine with `--json` for structured
-    /// output, or `-v` to also list every known `@name` set and its
-    /// resolved atoms (neither has a real-emerge equivalent).
-    #[arg(long)]
+    /// Print system/build info (`emerge --info` workalike). Takes no atoms.
+    #[usage(
+        long,
+        long_help = "`emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent)."
+    )]
     pub info: bool,
 
     /// Structured JSON (`em --info --json`, merge-plan `-p --json`)
-    #[arg(long)]
+    #[usage(long)]
     pub json: bool,
 
     /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
     /// `em`'s own debug/trace logs (see also `RUST_LOG`).
-    #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
+    #[usage(short = 'v', long, count, global)]
     pub verbose: u8,
 
     /// Suppress non-error output
-    #[arg(short = 'q', long, global = true)]
+    #[usage(short = 'q', long, global)]
     pub quiet: bool,
 
-    /// Target architecture for operations. Defaults to current system architecture
-    #[arg(
+    /// Target architecture for operations
+    #[usage(
         long,
+        global,
         value_name = "ARCH",
-        default_value_t = Arch::current(),
-        value_parser = parse_arch,
-        global = true
+        default_fn = default_arch,
+        default_note = "current system architecture"
     )]
     pub arch: Arch,
 
@@ -84,89 +336,63 @@ pub struct Cli {
     ///
     /// When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for
     /// single-repo applets; search walks all of them).
-    #[arg(long, value_name = "PATH", global = true)]
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub repo: Option<String>,
 
-    #[command(subcommand)]
+    #[usage(flatten)]
+    pub topology: Topology,
+
+    /// Prefix-position `--root` for default emerge. Not global; must not leak
+    /// into crossdev/active/worker.
+    #[usage(
+        long,
+        value_name = "PATH",
+        help_heading = "Roots",
+        value_hint = usage::ValueHint::DirPath
+    )]
+    pub root: Option<String>,
+
+    #[usage(subcommand)]
     pub applet: Option<Applet>,
 }
 
 impl Cli {
-    /// The active applet's own `Topology`/`RootArg`, or a harmless bare-host
-    /// default for applets that carry neither (the root-independent stubs —
-    /// `Helper`/`Worker`/`Portageq`/`Grep`/`Dispatch`/`Etc`/`Clean`/`Atom` —
-    /// and the bare "no applet at all" case, which [`parse_cli_from`] never
-    /// leaves as `None` once real topology-shaped input is present).
-    ///
-    /// Every `Cli`-level root-resolution method below is a thin selector over
-    /// this — unlike `MergeFlags`/`DepgraphFlags`/`ActivityArgs`, there is no
-    /// second, top-level copy to reconcile against (nothing is flattened onto
-    /// `Cli`'s own root at all), so this only ever *picks* the one applet-
-    /// owned value, never merges two.
-    fn topology_and_root(&self) -> (Topology, RootArg) {
+    fn applet_root_arg(&self) -> Option<&RootArg> {
         match &self.applet {
-            Some(Applet::Emerge(a)) => (a.topology.clone(), a.root_arg.clone()),
-            Some(Applet::Crossdev(a)) => (a.topology.clone(), RootArg::default()),
-            Some(Applet::Toolchain(a)) => (a.topology.clone(), a.root_arg.clone()),
-            Some(Applet::Stages(a)) => (a.topology.clone(), a.root_arg.clone()),
-            Some(Applet::Setup(a)) => (a.topology.clone(), a.root_arg.clone()),
-            Some(Applet::Ebuild {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Maint {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Sync {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Depclean {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Regen {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Quickpkg {
-                topology, root_arg, ..
-            })
-            | Some(Applet::MirrorDist {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Clean {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Etc {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Query {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Use {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Pkg {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Revdep {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Read {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Log {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Search {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Select {
-                topology, root_arg, ..
-            })
-            | Some(Applet::Env {
-                topology, root_arg, ..
-            }) => (topology.clone(), root_arg.clone()),
-            Some(Applet::Active { topology, .. }) => (topology.clone(), RootArg::default()),
-            _ => (Topology::default(), RootArg::default()),
+            Some(Applet::Emerge(a)) => Some(&a.root_arg),
+            Some(Applet::Toolchain(a)) => Some(&a.root_arg),
+            Some(Applet::Stages(a)) => Some(&a.root_arg),
+            Some(Applet::Setup(a)) => Some(&a.root_arg),
+            Some(Applet::Ebuild(a)) => Some(&a.root_arg),
+            Some(Applet::Maint(a)) => Some(&a.root_arg),
+            Some(Applet::Sync(a)) => Some(&a.root_arg),
+            Some(Applet::Depclean(a)) => Some(&a.root_arg),
+            Some(Applet::Regen(a)) => Some(&a.root_arg),
+            Some(Applet::Quickpkg(a)) => Some(&a.root_arg),
+            Some(Applet::MirrorDist(a)) => Some(&a.root_arg),
+            Some(Applet::Clean(a)) => Some(&a.root_arg),
+            Some(Applet::Etc(a)) => Some(&a.root_arg),
+            Some(Applet::Query(a)) => Some(&a.root_arg),
+            Some(Applet::Use(a)) => Some(&a.root_arg),
+            Some(Applet::Pkg(a)) => Some(&a.root_arg),
+            Some(Applet::Revdep(a)) => Some(&a.root_arg),
+            Some(Applet::Read(a)) => Some(&a.root_arg),
+            Some(Applet::Log(a)) => Some(&a.root_arg),
+            Some(Applet::Search(a)) => Some(&a.root_arg),
+            Some(Applet::Select(a)) => Some(&a.root_arg),
+            Some(Applet::Env(a)) => Some(&a.root_arg),
+            _ => None,
         }
+    }
+
+    fn topology_and_root(&self) -> (Topology, RootArg) {
+        let root = match self.applet_root_arg() {
+            Some(applet) => overlay_root(applet, self.root.as_deref()),
+            None => RootArg {
+                root: self.root.clone(),
+            },
+        };
+        (self.topology.clone(), root)
     }
 
     /// Resolve the root model (docs/design/root-topology.md) for the active applet
@@ -203,14 +429,14 @@ impl Cli {
         topology.sysroot_roots(&root)
     }
 
-    /// The active applet's `--target` tuple, if any.
+    /// The active `--target` tuple, if any.
     pub(crate) fn target(&self) -> Option<String> {
-        self.topology_and_root().0.target
+        self.topology.target.clone()
     }
 
-    /// The active applet's `--vdb` override, if any.
+    /// The active `--vdb` override, if any.
     pub fn vdb(&self) -> Option<String> {
-        self.topology_and_root().0.vdb
+        self.topology.vdb.clone()
     }
 
     /// See [`Topology::require_root_distinct_from_host`].
@@ -291,25 +517,22 @@ impl Cli {
             .unwrap_or_else(|| vec![std::path::PathBuf::from("/var/db/repos/gentoo")])
     }
 
-    /// The active applet's own [`MergeFlags`], or the all-`false`/`None` default
+    /// The dispatched applet's own [`MergeFlags`], or the all-default value
     /// for an applet that doesn't carry one.
     pub fn merge_flags(&self) -> MergeFlags {
-        let mut flags = match &self.applet {
+        match &self.applet {
             Some(Applet::Emerge(a)) => a.merge_flags.clone(),
             Some(Applet::Crossdev(a)) => a.merge_flags.clone(),
             Some(Applet::Toolchain(a)) => a.merge_flags.clone(),
             Some(Applet::Stages(a)) => a.merge_flags.clone(),
             Some(Applet::Setup(a)) => a.merge_flags.clone(),
-            Some(Applet::Revdep { merge_flags, .. }) => merge_flags.clone(),
-            Some(Applet::Depclean { merge_flags, .. }) => merge_flags.clone(),
+            Some(Applet::Revdep(a)) => a.merge_flags.clone(),
+            Some(Applet::Depclean(a)) => a.merge_flags.clone(),
             _ => MergeFlags::default(),
-        };
-        flags.json |= self.json;
-        flags
+        }
     }
 
-    /// The active applet's own [`DepgraphFlags`], or the all-`false` default
-    /// for an applet that doesn't carry one.
+    /// The dispatched applet's own [`DepgraphFlags`], for merge applets only — not query.
     pub fn depgraph_flags(&self) -> DepgraphFlags {
         match &self.applet {
             Some(Applet::Emerge(a)) => a.depgraph_flags.clone(),
@@ -321,38 +544,43 @@ impl Cli {
         }
     }
 
-    /// Effective activity-output flags for the dispatched command: each
-    /// build-shaped applet (`emerge`/`regen`/`crossdev`/`toolchain`/`stages`/
-    /// `setup`) owns exactly one [`ActivityArgs`] now — this just selects it.
+    /// The dispatched applet's own activity-output flags, then `EM_EMERGELOG`
+    /// once if still off.
     pub fn effective_activity(&self) -> ActivityArgs {
-        match &self.applet {
+        let mut activity = match &self.applet {
             Some(Applet::Emerge(a)) => a.activity.clone(),
-            Some(Applet::Regen { activity, .. }) => activity.clone(),
+            Some(Applet::Regen(a)) => a.activity.clone(),
             Some(Applet::Crossdev(a)) => a.activity.clone(),
             Some(Applet::Toolchain(a)) => a.activity.clone(),
             Some(Applet::Stages(a)) => a.activity.clone(),
             Some(Applet::Setup(a)) => a.activity.clone(),
             _ => ActivityArgs::default(),
+        };
+        if !activity.emergelog && env_flag_true("EM_EMERGELOG") {
+            activity.emergelog = true;
         }
+        activity
     }
 
-    /// Effective privilege backend for the dispatched command: each
-    /// privilege-relevant applet owns exactly one `--privilege` field
-    /// (default `Privilege::Auto`) now — this just selects it.
+    /// The dispatched applet's own `--privilege`, then `EM_PRIVILEGE` once if still `Auto`.
     pub fn effective_privilege(&self) -> Privilege {
-        match &self.applet {
+        let applet = match &self.applet {
             Some(Applet::Emerge(a)) => a.privilege,
             Some(Applet::Crossdev(a)) => a.privilege,
             Some(Applet::Toolchain(a)) => a.privilege,
             Some(Applet::Stages(a)) => a.privilege,
             Some(Applet::Setup(a)) => a.privilege,
             _ => Privilege::Auto,
+        };
+        if applet != Privilege::Auto {
+            applet
+        } else {
+            privilege_from_env().unwrap_or(Privilege::Auto)
         }
     }
 
     /// `Applet::Emerge`'s own mode switches, or the all-`false` default when
-    /// it isn't the active applet (unreachable in practice: [`parse_cli_from`]
-    /// always resolves a bare invocation into `Applet::Emerge` first).
+    /// it isn't the active applet.
     pub fn mode(&self) -> EmergeModeArgs {
         match &self.applet {
             Some(Applet::Emerge(a)) => a.mode.clone(),
@@ -369,159 +597,244 @@ impl Cli {
     }
 }
 
-/// Parse argv, making the word `emerge` optional.
-///
-/// Try the real argv first; on failure, retry with `emerge` after argv0 so
-/// `em --root R cat/pkg` ≡ `em emerge --root R cat/pkg`. Help/version is not
-/// retried, and a sibling applet in argv is left as a parse error.
-pub fn parse_cli_from<I, T>(raw: I) -> Result<Cli, clap::Error>
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
-{
-    let raw: Vec<OsString> = raw.into_iter().map(Into::into).collect();
-    match Cli::try_parse_from(&raw) {
-        Ok(cli) => Ok(cli),
-        Err(err) => {
-            if is_help_or_version(err.kind()) {
-                return Err(err);
-            }
-            match known_subcommand_token(&raw) {
-                Some(name) if name != "emerge" => Err(err),
-                _ => Cli::try_parse_from(with_leading_emerge(&raw)),
-            }
+#[cfg(test)]
+pub(crate) fn os_argv<'a>(argv: &'a [&'a str]) -> Vec<&'a OsStr> {
+    argv.iter().copied().map(OsStr::new).collect()
+}
+
+/// Parse argv including argv0, through the same retry `parse_cli_or_exit` uses.
+#[cfg(test)]
+pub(crate) fn parse_cli(argv: &[&str]) -> Cli {
+    let raw: Vec<OsString> = argv.iter().map(OsString::from).collect();
+    let final_argv = resolve_argv(raw);
+    let refs: Vec<&OsStr> = final_argv.iter().map(OsString::as_os_str).collect();
+    Cli::try_parse_from(&refs).unwrap_or_else(|e| {
+        panic!(
+            "expected parse of {argv:?} (final argv {final_argv:?}): {}",
+            Cli::render_failure(&refs, &e)
+        )
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn parse_cli_into(argv: &[&str]) -> Result<Cli, String> {
+    let raw: Vec<OsString> = argv.iter().map(OsString::from).collect();
+    let final_argv = resolve_argv(raw);
+    let refs: Vec<&OsStr> = final_argv.iter().map(OsString::as_os_str).collect();
+    Cli::try_parse_into_from(&refs)
+        .map(|Validated(cli)| cli)
+        .map_err(|e| err_name(&e))
+}
+
+#[cfg(test)]
+fn err_name(e: &usage::Error<'_, '_>) -> String {
+    match e {
+        usage::Error::UnknownFlag { token } => {
+            format!("UnknownFlag {}", String::from_utf8_lossy(token))
         }
+        usage::Error::Help { .. } => "Help".into(),
+        usage::Error::Version { .. } => "Version".into(),
+        usage::Error::MissingArgsHelp { .. } => "MissingArgsHelp".into(),
+        usage::Error::InvalidValue(v) => format!("InvalidValue {} {}", v.name, v.reason),
+        usage::Error::MissingRequired { name } => format!("MissingRequired {name}"),
+        other => format!("{other:?}"),
     }
 }
 
-fn is_help_or_version(kind: ErrorKind) -> bool {
-    matches!(
-        kind,
-        ErrorKind::DisplayHelp
-            | ErrorKind::DisplayVersion
-            | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-    )
-}
-
-fn value_taking_flags() -> HashSet<String> {
-    let mut cmd = Cli::command();
-    cmd.build();
-    let mut out = HashSet::new();
-    fn walk(cmd: &clap::Command, out: &mut HashSet<String>) {
-        for arg in cmd.get_arguments() {
-            let Some(range) = arg.get_num_args() else {
-                continue;
-            };
-            // `--local` is `0..=1`; a following applet name is the applet, not the DIR.
-            if !range.takes_values() || range.min_values() < 1 {
-                continue;
-            }
-            if let Some(long) = arg.get_long() {
-                out.insert(format!("--{long}"));
-            }
-            if let Some(short) = arg.get_short() {
-                out.insert(format!("-{short}"));
-            }
-        }
-        for sub in cmd.get_subcommands() {
-            walk(sub, out);
-        }
-    }
-    walk(&cmd, &mut out);
-    out
-}
-
-fn consumes_next_as_value(flag: &str, next: Option<&OsString>, taking: &HashSet<String>) -> bool {
-    if flag.contains('=') {
-        return false;
-    }
-    taking.contains(flag) && next.is_some_and(|n| !n.to_string_lossy().starts_with('-'))
-}
-
-fn known_subcommand_token(raw: &[OsString]) -> Option<String> {
-    let names: HashSet<String> = Cli::command()
-        .get_subcommands()
-        .flat_map(|s| {
-            std::iter::once(s.get_name().to_string()).chain(s.get_all_aliases().map(str::to_string))
-        })
-        .collect();
-    let taking = value_taking_flags();
-    let mut i = 1;
-    while i < raw.len() {
-        let Some(s) = raw[i].to_str() else {
-            i += 1;
-            continue;
-        };
-        if s == "--" {
-            break;
-        }
-        if s.starts_with('-') {
-            if consumes_next_as_value(s, raw.get(i + 1), &taking) {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        if names.contains(s) {
-            return Some(s.to_string());
-        }
-        i += 1;
-    }
-    None
-}
-
-fn with_leading_emerge(raw: &[OsString]) -> Vec<OsString> {
-    let emerge = OsString::from("emerge");
-    let taking = value_taking_flags();
-    let mut out = Vec::with_capacity(raw.len() + 1);
-    out.push(raw.first().cloned().unwrap_or_else(|| "em".into()));
-    out.push(emerge.clone());
-    let mut i = 1;
-    let mut skipped_applet = false;
-    while i < raw.len() {
-        let t = &raw[i];
-        let s = t.to_string_lossy();
-        if s.starts_with('-') {
-            out.push(t.clone());
-            if consumes_next_as_value(&s, raw.get(i + 1), &taking) {
-                i += 1;
-                if i < raw.len() {
-                    out.push(raw[i].clone());
-                }
-            }
-            i += 1;
-            continue;
-        }
-        if !skipped_applet && t == &emerge {
-            skipped_applet = true;
-            i += 1;
-            continue;
-        }
-        out.push(t.clone());
-        i += 1;
-    }
-    out
+#[cfg(test)]
+fn parse_err(argv: &[&str]) -> String {
+    parse_cli_into(argv).expect_err(&format!("expected error for {argv:?}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
-    // Explicit `emerge`; `parse_cli_from` is what makes the bare form equivalent.
     fn emerge<'a>(argv: impl IntoIterator<Item = &'a str>) -> Cli {
-        Cli::parse_from(["em", "emerge"].into_iter().chain(argv))
+        let v: Vec<&str> = ["em", "emerge"].into_iter().chain(argv).collect();
+        parse_cli(&v)
     }
 
-    // Clap only validates a subcommand's args when that subcommand is actually
-    // built, and only under debug_assertions — so a short-flag collision
-    // introduced by a flattened mixin stays invisible in release builds until
-    // someone runs the one subcommand that has it (this is how `-a` vs `em
-    // use`'s `--add` shipped). `debug_assert()` walks the whole tree at once.
     #[test]
-    fn every_subcommand_has_unique_flags() {
-        use clap::CommandFactory;
-        Cli::command().debug_assert();
+    fn spec_is_valid() {
+        let _ = Cli::to_kdl();
+        let _ = Cli::spec();
+    }
+
+    #[test]
+    fn help_tree_snapshot() {
+        use usage::test::{self as harness, Page};
+        let tree = harness::help_tree(Cli::spec(), Page::Long);
+        let headers: Vec<&str> = tree
+            .lines()
+            .filter(|line| line.starts_with("=== "))
+            .collect();
+        assert!(headers.contains(&"=== em ==="), "{headers:?}");
+        assert!(headers.contains(&"=== em emerge ==="), "{headers:?}");
+        assert!(headers.contains(&"=== em query ==="), "{headers:?}");
+        assert!(
+            headers.contains(&"=== em query depgraph ==="),
+            "{headers:?}"
+        );
+        assert!(
+            headers.contains(&"=== em __worker (hidden) ==="),
+            "hidden worker must still have a page: {headers:?}"
+        );
+        assert!(
+            headers.contains(&"=== em __helper (hidden) ==="),
+            "hidden helper must still have a page: {headers:?}"
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|h| h.contains("__worker") && !h.contains("hidden")),
+            "worker must be marked hidden: {headers:?}"
+        );
+
+        assert!(tree.contains("Roots:"), "{tree}");
+        assert!(tree.contains("Merge:"), "{tree}");
+        assert!(tree.contains("Depgraph:"), "{tree}");
+        assert!(tree.contains("Activity:"), "{tree}");
+        assert!(
+            tree.contains("Which tree this invocation reads and writes."),
+            "{tree}"
+        );
+        assert!(
+            tree.contains("A bare `--local` takes the next word as DIR"),
+            "{tree}"
+        );
+        assert!(
+            tree.contains("Exists for portage parity; do not use it"),
+            "{tree}"
+        );
+    }
+
+    #[test]
+    fn completions_omit_hidden_applets_and_offer_emerge() {
+        let offered = usage::test::candidates(Cli::spec(), "em ");
+        assert!(
+            offered.iter().any(|w| w == "emerge"),
+            "emerge missing: {offered:?}"
+        );
+        assert!(
+            offered.iter().any(|w| w == "completion"),
+            "completion missing: {offered:?}"
+        );
+        assert!(
+            !offered
+                .iter()
+                .any(|w| w.contains("__helper") || w.contains("__worker")),
+            "hidden applet leaked: {offered:?}"
+        );
+    }
+
+    #[test]
+    fn completions_offer_prefix_after_toolchain() {
+        let offered = usage::test::candidates(Cli::spec(), "em toolchain --");
+        assert!(
+            offered.iter().any(|w| w == "--prefix"),
+            "--prefix missing after toolchain: {offered:?}"
+        );
+    }
+
+    #[test]
+    fn completion_applet_parses_shell_name() {
+        let cli = parse_cli(&["em", "completion", "bash"]);
+        match &cli.applet {
+            Some(Applet::Completion(a)) => assert_eq!(a.shell, "bash"),
+            other => panic!("expected completion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn info_essay_is_long_help_only() {
+        use usage::test::{self as harness, Page};
+        let short = harness::help(Cli::spec(), &[], Page::Short);
+        let long = harness::help(Cli::spec(), &[], Page::Long);
+        assert!(short.contains("Print system/build info"), "{short}");
+        assert!(
+            !short.contains("USE_EXPAND"),
+            "short -h must not carry the --info essay: {short}"
+        );
+        assert!(
+            long.contains("USE_EXPAND"),
+            "long --help must carry the --info essay: {long}"
+        );
+    }
+
+    #[test]
+    fn query_flatten_help_shows_child_synopsis() {
+        use usage::test::{self as harness, Page};
+        let page = harness::help(Cli::spec(), &["query"], Page::Long);
+        assert!(
+            page.contains("query belongs:"),
+            "flatten_help expands child synopses on the parent page: {page}"
+        );
+        assert!(page.contains("<FILE>…"), "{page}");
+    }
+
+    fn kdl_cmd_line<'a>(kdl: &'a str, name: &str) -> &'a str {
+        let prefix = format!("cmd {name}");
+        kdl.lines()
+            .map(str::trim_start)
+            .find(|line| {
+                line.starts_with(&prefix)
+                    && line.as_bytes().get(prefix.len()).is_none_or(|b| *b == b' ')
+            })
+            .unwrap_or_else(|| panic!("missing `{prefix}` node"))
+    }
+
+    fn kdl_flag_line<'a>(kdl: &'a str, forms: &str) -> &'a str {
+        let prefix = format!("flag {forms}");
+        kdl.lines()
+            .map(str::trim_start)
+            .find(|line| {
+                line.starts_with(&prefix)
+                    && line.as_bytes().get(prefix.len()).is_none_or(|b| *b == b' ')
+            })
+            .unwrap_or_else(|| panic!("missing `{prefix}` node"))
+    }
+
+    #[test]
+    fn effects_reach_the_spec() {
+        let kdl = Cli::to_kdl();
+        let emerge = kdl_cmd_line(&kdl, "emerge");
+        assert!(emerge.contains("effect=write"), "{emerge}");
+        let depclean = kdl_cmd_line(&kdl, "depclean");
+        assert!(depclean.contains("effect=destructive"), "{depclean}");
+        let delete = kdl_flag_line(&kdl, "--delete");
+        assert!(delete.contains("effect=destructive"), "{delete}");
+        let pretend = kdl_flag_line(&kdl, "\"-p --pretend\"");
+        assert!(
+            !pretend.contains("effect="),
+            "--pretend must not lower effect: {pretend}"
+        );
+    }
+
+    #[test]
+    fn completion_request_is_not_an_emerge_atom() {
+        let argv = vec![
+            std::ffi::OsString::from("__complete_word__"),
+            std::ffi::OsString::from("--shell"),
+            std::ffi::OsString::from("bash"),
+            std::ffi::OsString::from("--line"),
+            std::ffi::OsString::from("em "),
+        ];
+        let answer = Cli::completion_request(&argv).expect("recognized");
+        assert!(answer.contains("emerge"), "{answer}");
+        assert!(!answer.contains("__helper"), "{answer}");
+        assert!(!answer.contains("__worker"), "{answer}");
+    }
+
+    #[test]
+    fn spec_request_is_not_an_emerge_atom() {
+        let argv = [std::ffi::OsStr::new(usage::SPEC_REQUEST)];
+        let answer = Cli::spec_request(&argv).expect("recognized");
+        assert!(
+            answer.contains("bin \"em\"") || answer.contains("bin em"),
+            "{answer}"
+        );
     }
 
     #[test]
@@ -670,10 +983,10 @@ mod tests {
         let local = tmp.path().join("loc");
         std::fs::create_dir_all(&local).unwrap();
         let local_s = local.to_str().unwrap();
-        let cli_set = Cli::parse_from(["em", "active", "--local", local_s, "set"]);
+        let cli_set = parse_cli(&["em", "active", "--local", local_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command, .. } => command.as_ref(),
+                Applet::Active(a) => a.command.as_ref(),
                 _ => None,
             }),
             &cli_set,
@@ -1049,10 +1362,10 @@ mod tests {
         let prefix = tmp.path().join("pfx");
         std::fs::create_dir_all(&prefix).unwrap();
         let prefix_s = prefix.to_str().unwrap();
-        let cli_set = Cli::parse_from(["em", "active", "--prefix", prefix_s, "set"]);
+        let cli_set = parse_cli(&["em", "active", "--prefix", prefix_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command, .. } => command.as_ref(),
+                Applet::Active(a) => a.command.as_ref(),
                 _ => None,
             }),
             &cli_set,
@@ -1076,10 +1389,10 @@ mod tests {
         let prefix = tmp.path().join("pfx");
         std::fs::create_dir_all(&prefix).unwrap();
         let prefix_s = prefix.to_str().unwrap();
-        let cli_set = Cli::parse_from(["em", "active", "--prefix", prefix_s, "set"]);
+        let cli_set = parse_cli(&["em", "active", "--prefix", prefix_s, "set"]);
         crate::active::run(
             cli_set.applet.as_ref().and_then(|a| match a {
-                Applet::Active { command, .. } => command.as_ref(),
+                Applet::Active(a) => a.command.as_ref(),
                 _ => None,
             }),
             &cli_set,
@@ -1255,288 +1568,685 @@ mod tests {
         assert_eq!(r.eprefix().unwrap().as_str(), "/tmp/x");
     }
 
+    fn emerge_applet(cli: &Cli) -> &EmergeArgs {
+        match &cli.applet {
+            Some(Applet::Emerge(a)) => a,
+            other => panic!("expected emerge, got {other:?}"),
+        }
+    }
+
+    fn overlay_root_of(cli: &Cli) -> Option<&str> {
+        match cli.applet_root_arg() {
+            Some(a) => a.root.as_deref().or(cli.root.as_deref()),
+            None => cli.root.as_deref(),
+        }
+    }
+
     #[test]
     fn bare_and_explicit_emerge_produce_identical_args() {
-        let bare = parse_cli_from(["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]).unwrap();
-        let explicit =
-            parse_cli_from(["em", "emerge", "--root", "/srv/x", "-p", "sys-libs/zlib"]).unwrap();
-        let Some(Applet::Emerge(a)) = &bare.applet else {
-            panic!("expected Applet::Emerge from bare argv");
-        };
-        let Some(Applet::Emerge(b)) = &explicit.applet else {
-            panic!("expected Applet::Emerge from explicit argv");
-        };
-        assert_eq!(a.root_arg.root, b.root_arg.root);
-        assert_eq!(a.atoms, b.atoms);
+        let bare = parse_cli(&["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
+        let explicit = parse_cli(&["em", "emerge", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
+        assert_eq!(overlay_root_of(&bare), Some("/srv/x"));
+        assert_eq!(overlay_root_of(&explicit), Some("/srv/x"));
+        assert_eq!(emerge_applet(&bare).atoms, emerge_applet(&explicit).atoms);
         assert!(bare.pretend && explicit.pretend);
     }
 
     #[test]
     fn flags_before_emerge_word_reorder() {
-        let cli =
-            parse_cli_from(["em", "--root", "/srv/x", "emerge", "-p", "sys-libs/zlib"]).unwrap();
-        let Some(Applet::Emerge(args)) = &cli.applet else {
-            panic!("expected Applet::Emerge");
-        };
-        assert_eq!(args.root_arg.root.as_deref(), Some("/srv/x"));
-        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+        let cli = parse_cli(&["em", "--root", "/srv/x", "emerge", "-p", "sys-libs/zlib"]);
+        assert_eq!(overlay_root_of(&cli), Some("/srv/x"));
+        assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
         assert!(cli.pretend);
     }
 
     #[test]
     fn unrecognized_flag_inside_a_real_subcommand_does_not_retry_as_emerge() {
-        let Err(err) = parse_cli_from(["em", "crossdev", "--bogus-flag"]) else {
-            panic!("expected parse error");
-        };
-        let msg = err.to_string();
-        assert!(
-            msg.contains("crossdev"),
-            "error should mention crossdev, got: {msg}"
-        );
-        assert!(
-            !msg.contains("em emerge"),
-            "must not rewrite into emerge, got: {msg}"
-        );
+        let err = parse_err(&["em", "crossdev", "--bogus-flag"]);
+        assert_eq!(err, "UnknownFlag --bogus-flag");
     }
 
     #[test]
-    fn root_before_crossdev_is_not_rewritten_into_emerge() {
-        let Err(err) = parse_cli_from(["em", "--root", "/tmp/r", "crossdev", "--setup"]) else {
-            panic!("expected parse error");
-        };
-        let msg = err.to_string();
+    fn prefix_root_then_crossdev_is_try_into_reject() {
+        let cli = parse_cli(&["em", "--root", "/tmp/r", "crossdev", "--setup"]);
+        assert_eq!(cli.root.as_deref(), Some("/tmp/r"));
+        assert!(matches!(cli.applet, Some(Applet::Crossdev(_))));
+        let err = parse_cli_into(&["em", "--root", "/tmp/r", "crossdev", "--setup"]).unwrap_err();
         assert!(
-            !msg.contains("em emerge"),
-            "must not rewrite into emerge, got: {msg}"
+            err.contains("InvalidValue --root"),
+            "try_into must reject prefix --root with crossdev, got {err}"
         );
     }
 
     #[test]
-    fn top_level_help_is_not_rewritten_into_emerge() {
-        let Err(err) = parse_cli_from(["em", "--help"]) else {
-            panic!("expected parse error");
+    fn try_into_reject_messages_name_the_actual_conflict() {
+        let words = os_argv(&["em", "--root", "/tmp/r", "crossdev", "--setup"]);
+        let err = match Cli::try_parse_into_from(&words) {
+            Ok(_) => panic!("expected a try_into reject"),
+            Err(e) => e,
         };
-        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
-        let msg = err.to_string();
-        assert!(msg.contains("query") && msg.contains("crossdev"), "{msg}");
-        assert!(!msg.contains("Usage: em emerge"), "{msg}");
+        let rendered = Cli::render_failure(&words, &err);
+        assert!(
+            rendered.contains("invalid value '/tmp/r' for '--root'")
+                && rendered.contains("'crossdev' applet"),
+            "got {rendered}"
+        );
     }
 
     #[test]
-    fn applet_help_is_not_rewritten_into_emerge() {
-        let Err(err) = parse_cli_from(["em", "toolchain", "--help"]) else {
-            panic!("expected parse error");
+    fn top_level_help_is_root_help() {
+        use usage::test::{self as harness, Outcome};
+        let words = harness::argv(["--help"]);
+        let Outcome::Help(printed) = harness::outcome(Cli::spec(), &words.words(), Cli::parse_from)
+        else {
+            panic!("--help should be Help");
         };
-        assert_eq!(err.kind(), ErrorKind::DisplayHelp);
-        let msg = err.to_string();
-        assert!(msg.contains("Usage: em toolchain"), "{msg}");
-        assert!(!msg.contains("Usage: em emerge"), "{msg}");
+        assert!(!printed.stderr);
+        assert_eq!(printed.code, 0);
+        assert!(
+            printed.text.contains("query") && printed.text.contains("crossdev"),
+            "{}",
+            printed.text
+        );
+        assert!(
+            !printed.text.contains("Usage: em emerge"),
+            "{}",
+            printed.text
+        );
     }
 
     #[test]
-    fn version_is_not_rewritten_into_emerge() {
-        let Err(err) = parse_cli_from(["em", "--version"]) else {
-            panic!("expected parse error");
+    fn applet_help_is_toolchain_help() {
+        use usage::test::{self as harness, Outcome};
+        let words = harness::argv(["toolchain", "--help"]);
+        let Outcome::Help(printed) = harness::outcome(Cli::spec(), &words.words(), Cli::parse_from)
+        else {
+            panic!("toolchain --help should be Help");
         };
-        assert_eq!(err.kind(), ErrorKind::DisplayVersion);
+        assert!(printed.text.contains("toolchain"), "{}", printed.text);
+        assert!(
+            !printed.text.contains("Usage: em emerge"),
+            "{}",
+            printed.text
+        );
+    }
+
+    #[test]
+    fn version_is_not_emerge() {
+        use usage::test::{self as harness, Outcome};
+        let words = harness::argv(["--version"]);
+        let Outcome::Version(_) = harness::outcome(Cli::spec(), &words.words(), Cli::parse_from)
+        else {
+            panic!("--version should be Version");
+        };
+    }
+
+    #[test]
+    fn bare_em_is_root_help() {
+        use usage::test::{self as harness, Outcome};
+        let words = harness::argv([] as [&str; 0]);
+        let Outcome::Help(printed) = harness::outcome(Cli::spec(), &words.words(), Cli::parse_from)
+        else {
+            panic!("bare em should be MissingArgsHelp");
+        };
+        assert!(printed.stderr);
+        assert_eq!(printed.code, 2);
+        assert!(printed.text.contains("query"), "{}", printed.text);
+        assert!(printed.text.contains("crossdev"), "{}", printed.text);
+        assert!(
+            !printed.text.contains("Usage: em emerge"),
+            "{}",
+            printed.text
+        );
+        assert!(
+            !printed.text.contains("__worker"),
+            "hidden worker leaked: {}",
+            printed.text
+        );
+    }
+
+    #[test]
+    fn dash_p_alone_parses_without_defaulting_to_emerge() {
+        let cli = parse_cli(&["em", "-p"]);
+        assert!(cli.pretend);
+        assert!(cli.applet.is_none());
     }
 
     #[test]
     fn info_json_parses_without_emerge() {
-        let cli = parse_cli_from(["em", "--info", "--json"]).unwrap();
+        let cli = parse_cli(&["em", "--info", "--json"]);
         assert!(cli.info);
         assert!(cli.json);
         assert!(cli.applet.is_none());
     }
 
     #[test]
-    fn arch_and_repo_work_on_the_bare_path() {
-        let cli = parse_cli_from(["em", "--arch", "amd64", "-p", "sys-libs/zlib"]).unwrap();
-        assert_eq!(cli.arch, Arch::from_str("amd64").unwrap());
-        let Some(Applet::Emerge(args)) = &cli.applet else {
-            panic!("expected Applet::Emerge");
-        };
-        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+    fn info_use_selects_use() {
+        let cli = parse_cli(&["em", "--info", "use"]);
+        assert!(cli.info);
+        assert!(matches!(cli.applet, Some(Applet::Use(_))));
+    }
 
-        let via_emerge =
-            parse_cli_from(["em", "--arch", "amd64", "emerge", "-p", "sys-libs/zlib"]).unwrap();
+    #[test]
+    fn info_firefox_is_emerge_not_info_only() {
+        let cli = parse_cli(&["em", "--info", "firefox"]);
+        assert!(cli.info);
+        assert_eq!(emerge_applet(&cli).atoms, ["firefox"]);
+    }
+
+    #[test]
+    fn emerge_info_is_unknown_flag() {
+        assert_eq!(parse_err(&["em", "emerge", "--info"]), "UnknownFlag --info");
+    }
+
+    #[test]
+    fn arch_and_repo_work_on_the_bare_path() {
+        let cli = parse_cli(&["em", "--arch", "amd64", "-p", "sys-libs/zlib"]);
+        assert_eq!(cli.arch, Arch::from_str("amd64").unwrap());
+        assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
+
+        let via_emerge = parse_cli(&["em", "--arch", "amd64", "emerge", "-p", "sys-libs/zlib"]);
         assert_eq!(via_emerge.arch, cli.arch);
 
-        let repo = parse_cli_from(["em", "--repo", "/tmp/r", "-p", "sys-libs/zlib"]).unwrap();
+        let repo = parse_cli(&["em", "--repo", "/tmp/r", "-p", "sys-libs/zlib"]);
         assert_eq!(repo.repo.as_deref(), Some("/tmp/r"));
     }
 
     #[test]
     fn json_before_emerge_word_is_merge_plan_json() {
-        let before = parse_cli_from(["em", "--json", "emerge", "-p", "sys-libs/zlib"]).unwrap();
-        assert!(before.merge_flags().json);
-        let explicit = parse_cli_from(["em", "emerge", "--json", "-p", "sys-libs/zlib"]).unwrap();
+        // `--json` lives on `Cli` (for `--info --json`) as well as MergeFlags.
+        let before = parse_cli(&["em", "--json", "emerge", "-p", "sys-libs/zlib"]);
+        assert!(before.json);
+        let explicit = parse_cli(&["em", "emerge", "--json", "-p", "sys-libs/zlib"]);
         assert!(explicit.merge_flags().json);
-        let bare = parse_cli_from(["em", "--json", "-p", "sys-libs/zlib"]).unwrap();
-        assert!(bare.merge_flags().json);
+        let bare = parse_cli(&["em", "--json", "-p", "sys-libs/zlib"]);
+        assert!(bare.json);
     }
 
     #[test]
-    fn value_taking_flags_include_root_and_exclude() {
-        let f = value_taking_flags();
-        assert!(f.contains("--root"), "missing --root in {f:?}");
-        assert!(f.contains("-X"), "missing -X in {f:?}");
-    }
-
-    #[test]
-    fn exclude_value_matching_an_applet_name_still_retries() {
-        let cli = parse_cli_from(["em", "-X", "search", "-p", "sys-libs/zlib"]).unwrap();
-        let Some(Applet::Emerge(args)) = &cli.applet else {
-            panic!("expected Applet::Emerge");
-        };
-        assert_eq!(args.merge_flags.exclude, vec!["search".to_string()]);
-        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+    fn exclude_value_matching_an_applet_name_is_not_the_search_applet() {
+        let cli = parse_cli(&["em", "emerge", "-X", "search", "-p", "sys-libs/zlib"]);
+        assert_eq!(cli.merge_flags().exclude, vec!["search".to_string()]);
+        assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
+        assert!(matches!(cli.applet, Some(Applet::Emerge(_))));
     }
 
     #[test]
     fn root_value_named_emerge_is_kept() {
-        let cli = parse_cli_from(["em", "--root", "emerge", "-p", "sys-libs/zlib"]).unwrap();
-        let Some(Applet::Emerge(args)) = &cli.applet else {
-            panic!("expected Applet::Emerge");
-        };
-        assert_eq!(args.root_arg.root.as_deref(), Some("emerge"));
-        assert_eq!(args.atoms, vec!["sys-libs/zlib".to_string()]);
+        let cli = parse_cli(&["em", "--root", "emerge", "-p", "sys-libs/zlib"]);
+        assert_eq!(overlay_root_of(&cli), Some("emerge"));
+        assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
     }
 
-    // `crossdev` deliberately never flattens `RootArg` (see `CrossdevArgs`'s
-    // doc comment) — `--root` must be a clap parse error, not merely ignored,
-    // in any position.
     #[test]
-    fn crossdev_rejects_root_in_any_position() {
-        assert!(
-            Cli::try_parse_from(["em", "crossdev", "--setup", "--root", "/tmp/a"]).is_err(),
-            "--root after crossdev must be a clap error"
+    fn crossdev_rejects_root_after_the_applet() {
+        assert_eq!(
+            parse_err(&["em", "crossdev", "--setup", "--root", "/tmp/a"]),
+            "UnknownFlag --root"
         );
-        assert!(
-            Cli::try_parse_from(["em", "crossdev", "--root", "/tmp/a", "--setup"]).is_err(),
-            "--root anywhere in crossdev's own arg list must be a clap error"
+        assert_eq!(
+            parse_err(&["em", "crossdev", "--root", "/tmp/a", "--setup"]),
+            "UnknownFlag --root"
         );
-        assert!(
-            parse_cli_from(["em", "crossdev", "--setup", "--root", "/tmp/a"]).is_err(),
-            "retry path must not accept --root on crossdev either"
+    }
+
+    #[test]
+    fn prefix_before_named_applet_is_topology() {
+        let cli = parse_cli(&["em", "--prefix", "P", "firefox"]);
+        assert_eq!(cli.topology.prefix.as_deref(), Some("P"));
+        assert_eq!(emerge_applet(&cli).atoms, ["firefox"]);
+
+        let tc = parse_cli(&["em", "--prefix", "P", "toolchain", "--setup"]);
+        assert_eq!(tc.topology.prefix.as_deref(), Some("P"));
+        assert!(matches!(tc.applet, Some(Applet::Toolchain(_))));
+
+        let canon = parse_cli(&["em", "toolchain", "--prefix", "P", "--setup"]);
+        assert_eq!(canon.topology.prefix.as_deref(), Some("P"));
+        assert!(matches!(canon.applet, Some(Applet::Toolchain(_))));
+    }
+
+    #[test]
+    fn query_depgraph_nested_root_and_prefix() {
+        let prefix = parse_cli(&["em", "query", "depgraph", "--prefix", "P", "zlib"]);
+        assert_eq!(prefix.topology.prefix.as_deref(), Some("P"));
+        assert!(matches!(prefix.applet, Some(Applet::Query(_))));
+
+        let root = parse_cli(&["em", "query", "depgraph", "--root", "R", "zlib"]);
+        match &root.applet {
+            Some(Applet::Query(q)) => assert_eq!(q.root_arg.root.as_deref(), Some("R")),
+            other => panic!("expected query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_pretend_both_orders() {
+        let before = parse_cli(&["em", "-p", "toolchain"]);
+        assert!(before.pretend);
+        assert!(matches!(before.applet, Some(Applet::Toolchain(_))));
+        let after = parse_cli(&["em", "toolchain", "-p"]);
+        assert!(after.pretend);
+        assert!(matches!(after.applet, Some(Applet::Toolchain(_))));
+    }
+
+    #[test]
+    fn use_dash_a_is_add_not_ask() {
+        let cli = parse_cli(&["em", "use", "-a", "png"]);
+        match &cli.applet {
+            Some(Applet::Use(u)) => assert_eq!(u.add, ["png"]),
+            other => panic!("expected use, got {other:?}"),
+        }
+        assert!(!cli.merge_flags().ask);
+    }
+
+    #[test]
+    fn use_dash_e_is_add() {
+        let cli = parse_cli(&["em", "use", "-E", "png"]);
+        match &cli.applet {
+            Some(Applet::Use(u)) => assert_eq!(u.add, ["png"]),
+            other => panic!("expected use, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn search_dash_a_is_all() {
+        let cli = parse_cli(&["em", "search", "-a"]);
+        match &cli.applet {
+            Some(Applet::Search(s)) => assert!(s.all),
+            other => panic!("expected search, got {other:?}"),
+        }
+        assert!(!cli.merge_flags().ask);
+    }
+
+    #[test]
+    fn prefix_ask_before_an_applet_is_an_unknown_flag() {
+        assert_eq!(parse_err(&["em", "-a", "search", "zlib"]), "UnknownFlag -a");
+    }
+
+    #[test]
+    fn emerge_dash_a_is_ask() {
+        let cli = parse_cli_into(&["em", "emerge", "-a", "pkg"]).expect("ask");
+        assert!(cli.merge_flags().ask);
+        assert_eq!(emerge_applet(&cli).atoms, ["pkg"]);
+    }
+
+    #[test]
+    fn prefix_deep_before_an_applet_is_an_unknown_flag() {
+        let err = parse_cli_into(&["em", "--deep", "query", "depgraph", "zlib"]).unwrap_err();
+        assert_eq!(err, "UnknownFlag --deep");
+        let ok = parse_cli(&["em", "query", "depgraph", "--deep", "zlib"]);
+        match &ok.applet {
+            Some(Applet::Query(q)) => match &q.command {
+                QueryCommand::Depgraph { depgraph_flags, .. } => assert!(depgraph_flags.deep),
+                other => panic!("expected depgraph, got {other:?}"),
+            },
+            other => panic!("expected query, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bundled_update_deep_before_an_applet_is_an_unknown_flag() {
+        let err =
+            parse_cli_into(&["em", "-uD", "query", "belongs", "/usr/bin/python"]).unwrap_err();
+        assert_eq!(err, "UnknownFlag -uD");
+    }
+
+    #[test]
+    fn merge_flags_before_an_explicit_emerge_word_accumulate() {
+        let cli = parse_cli(&["em", "-X", "foo", "emerge", "-X", "bar", "pkg"]);
+        assert_eq!(
+            cli.merge_flags().exclude,
+            vec!["foo".to_string(), "bar".to_string()]
         );
+
+        let or_flags = parse_cli(&["em", "-u", "emerge", "-D", "pkg"]);
+        assert!(or_flags.merge_flags().update);
+        assert!(or_flags.depgraph_flags().deep);
+    }
+
+    #[test]
+    fn privilege_prefix_none_beats_env_sudo() {
+        // Same lock local_is_standalone_not_overlay takes: the hazard isn't
+        // another writer of *this* var, it's any concurrent env read on
+        // another thread while this one mutates the process environ.
+        let _env_lock = crate::test_support::home_lock();
+        let saved = std::env::var("EM_PRIVILEGE").ok();
+        unsafe { std::env::set_var("EM_PRIVILEGE", "sudo") };
+        let cli = parse_cli(&["em", "--privilege", "none", "emerge", "pkg"]);
+        assert_eq!(cli.effective_privilege(), Privilege::None);
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("EM_PRIVILEGE", v),
+                None => std::env::remove_var("EM_PRIVILEGE"),
+            }
+        }
+    }
+
+    #[test]
+    fn local_default_missing_and_the_set_trap() {
+        let ok = parse_cli(&["em", "active", "set", "--local="]);
+        assert_eq!(ok.topology.local.as_deref(), Some(""));
+        match &ok.applet {
+            Some(Applet::Active(a)) => {
+                assert!(matches!(a.command, Some(ActiveCommand::Set { .. })))
+            }
+            other => panic!("expected active set, got {other:?}"),
+        }
+
+        // A detached `--local` still takes the next word as DIR. `--local=`
+        // (or `--local` at end of argv) does not, so `set` can follow.
+        let stolen = parse_cli(&["em", "active", "--local", "set"]);
+        assert_eq!(stolen.topology.local.as_deref(), Some("set"));
+        match &stolen.applet {
+            Some(Applet::Active(a)) => assert!(a.command.is_none()),
+            other => panic!("expected active, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn active_set_does_not_require_subcommand_first() {
+        for argv in [
+            ["em", "active", "set", "--local="].as_slice(),
+            &["em", "active", "--local=", "set"],
+            &["em", "--local=", "active", "set"],
+            &["em", "active", "set", "--local"],
+        ] {
+            let cli = parse_cli(argv);
+            assert_eq!(cli.topology.local.as_deref(), Some(""), "{argv:?}");
+            match &cli.applet {
+                Some(Applet::Active(a)) => {
+                    assert!(
+                        matches!(a.command, Some(ActiveCommand::Set { .. })),
+                        "{argv:?} -> {a:?}"
+                    );
+                }
+                other => panic!("expected active set for {argv:?}, got {other:?}"),
+            }
+        }
+    }
+
+    fn worker_argv<'a>(extra: &'a [&'a str]) -> Vec<&'a str> {
+        let mut argv = vec![
+            "em",
+            "__worker",
+            "--ebuild",
+            "/tmp/pkg.ebuild",
+            "--cpv",
+            "cat/pkg-1",
+            "--use-flags",
+            "",
+            "--work-base",
+            "/tmp/work",
+            "--root",
+            "/tmp/root",
+        ];
+        argv.extend_from_slice(extra);
+        argv
+    }
+
+    #[test]
+    fn worker_quiet_is_the_cli_global() {
+        let argv = worker_argv(&["--quiet"]);
+        let cli = parse_cli(&argv);
+        assert!(cli.quiet);
+        let Some(Applet::Worker(w)) = &cli.applet else {
+            panic!("expected Applet::Worker");
+        };
+        assert_eq!(w.root, "/tmp/root");
+        assert_eq!(w.worker_config_root, None);
+    }
+
+    #[test]
+    fn worker_config_root_is_not_the_topology_flag() {
+        let argv = worker_argv(&["--worker-config-root", "/tmp/cfg"]);
+        let cli = parse_cli(&argv);
+        let Some(Applet::Worker(w)) = &cli.applet else {
+            panic!("expected Applet::Worker");
+        };
+        assert_eq!(w.worker_config_root.as_deref(), Some("/tmp/cfg"));
+        let bad = worker_argv(&["--config-root", "/tmp/cfg"]);
+        // Topology --config-root is a global, so it binds Cli.topology rather than failing.
+        let global = parse_cli(&bad);
+        assert_eq!(global.topology.config_root.as_deref(), Some("/tmp/cfg"));
+        let Some(Applet::Worker(w)) = &global.applet else {
+            panic!("expected Applet::Worker");
+        };
+        assert!(w.worker_config_root.is_none());
+    }
+
+    #[test]
+    fn helper_hyphen_args_after_double_dash() {
+        let cli = parse_cli(&["em", "__helper", "dodoc", "--", "-foo"]);
+        match &cli.applet {
+            Some(Applet::Helper(h)) => {
+                assert_eq!(h.name, "dodoc");
+                assert_eq!(h.args, ["-foo"]);
+            }
+            other => panic!("expected helper, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn helper_hyphen_args_without_separator() {
+        let cli = parse_cli(&["em", "__helper", "dodoc", "-foo"]);
+        match &cli.applet {
+            Some(Applet::Helper(h)) => {
+                assert_eq!(h.name, "dodoc");
+                assert_eq!(h.args, ["-foo"]);
+            }
+            other => panic!("expected helper, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn firefox_defaults_to_emerge() {
+        let cli = parse_cli(&["em", "firefox"]);
+        assert_eq!(emerge_applet(&cli).atoms, ["firefox"]);
+    }
+
+    #[test]
+    fn mode_flags_without_a_positional_retry_into_emerge() {
+        let resume = parse_cli(&["em", "-r"]);
+        assert!(matches!(resume.applet, Some(Applet::Emerge(_))));
+        assert!(resume.mode().resume);
+
+        let depclean = parse_cli(&["em", "-c"]);
+        assert!(matches!(depclean.applet, Some(Applet::Emerge(_))));
+        assert!(depclean.mode().depclean);
+
+        let search = parse_cli(&["em", "-s"]);
+        assert!(matches!(search.applet, Some(Applet::Emerge(_))));
+        assert!(search.mode().search);
+
+        // `-p` is a Cli global, so it parses without retry and leaves applet unset.
+        let pretend = parse_cli(&["em", "-p"]);
+        assert!(pretend.applet.is_none());
+        assert_eq!(pretend.mode(), EmergeModeArgs::default());
+    }
+
+    #[test]
+    fn mode_flags_before_or_after_emerge_word() {
+        let prefix_s = parse_cli(&["em", "-s", "firefox"]);
+        assert!(prefix_s.mode().search);
+        assert_eq!(prefix_s.atoms(), ["firefox"]);
+
+        let applet_s = parse_cli(&["em", "emerge", "-s", "firefox"]);
+        assert!(applet_s.mode().search);
+        assert_eq!(applet_s.atoms(), ["firefox"]);
+
+        let unmerge = parse_cli(&["em", "-C", "firefox"]);
+        assert!(unmerge.mode().unmerge);
+        assert_eq!(unmerge.atoms(), ["firefox"]);
+
+        let nodeps = parse_cli(&["em", "-O", "firefox"]);
+        assert!(nodeps.mode().nodeps);
+        assert_eq!(nodeps.atoms(), ["firefox"]);
+    }
+
+    #[test]
+    fn merge_flags_need_the_explicit_applet_word() {
+        assert_eq!(
+            parse_cli_into(&[
+                "em",
+                "-a",
+                "crossdev",
+                "--target",
+                "riscv64-unknown-linux-gnu",
+                "--setup"
+            ])
+            .unwrap_err(),
+            "UnknownFlag -a"
+        );
+        // `-X` takes a value, so `depclean` is the exclude atom, not the applet.
+        let just_x = parse_cli(&["em", "-X", "depclean"]);
+        assert!(matches!(just_x.applet, Some(Applet::Emerge(_))));
+        assert_eq!(just_x.merge_flags().exclude, ["depclean"]);
+        assert!(just_x.atoms().is_empty());
+
+        // After the value, `depclean` is the leading word — a real applet — so
+        // the retry must not fire. Same as `-a search`.
+        assert_eq!(
+            parse_cli_into(&["em", "-X", "foo", "depclean"]).unwrap_err(),
+            "UnknownFlag -X"
+        );
+
+        // A value that spells an applet name is still the flag's value, so this
+        // retries into emerge rather than selecting `search`.
+        let excluded = parse_cli(&["em", "-X", "search", "zlib"]);
+        assert!(matches!(excluded.applet, Some(Applet::Emerge(_))));
+        assert_eq!(excluded.merge_flags().exclude, ["search"]);
+        assert_eq!(excluded.atoms(), ["zlib"]);
+
+        let crossdev = parse_cli(&[
+            "em",
+            "crossdev",
+            "-a",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--setup",
+        ]);
+        assert!(crossdev.merge_flags().ask);
+        assert!(matches!(crossdev.applet, Some(Applet::Crossdev(_))));
+
+        let depclean = parse_cli(&["em", "depclean", "-X", "foo"]);
+        assert_eq!(depclean.merge_flags().exclude, ["foo"]);
+        assert!(matches!(depclean.applet, Some(Applet::Depclean(_))));
+    }
+
+    #[test]
+    fn keep_going_retries_into_emerge() {
+        let prefix = parse_cli(&["em", "--keep-going", "-r"]);
+        assert!(prefix.mode().resume);
+        assert!(prefix.merge_flags().keep_going);
+        assert!(matches!(prefix.applet, Some(Applet::Emerge(_))));
+
+        let applet = parse_cli(&["em", "emerge", "-r", "--keep-going"]);
+        assert!(applet.mode().resume);
+        assert!(applet.merge_flags().keep_going);
+    }
+
+    #[test]
+    fn leading_word_skips_exclude_value_not_optional_local() {
+        let exclude = ["em", "-X", "search", "zlib"].map(OsString::from);
+        assert_eq!(leading_word(&exclude), Some("zlib"));
+
+        let local = ["em", "--local", "toolchain", "--setup"].map(OsString::from);
+        assert_eq!(leading_word(&local), Some("toolchain"));
+
+        let attached = ["em", "--exclude=search", "query"].map(OsString::from);
+        assert_eq!(leading_word(&attached), Some("query"));
+
+        // `-a` is `--ask` (switch) on emerge and `--add` (value) on `use`.
+        let ask = ["em", "-a", "search", "zlib"].map(OsString::from);
+        assert_eq!(leading_word(&ask), Some("search"));
     }
 }
 
-#[derive(Subcommand)]
+/// Hidden `em __worker` install child — spawned per package by `build_and_merge`.
+///
+/// `--quiet` is the Cli global, not a field here. `--config-root` is Topology's;
+/// this child takes `--worker-config-root` so the two never share a spelling.
+#[derive(usage::Args, Debug, Clone)]
+pub struct WorkerArgs {
+    #[usage(long)]
+    pub ebuild: String,
+    /// The resolved plan entry's authoritative cpv — see
+    /// `privilege::WorkerArgs::cpv`.
+    #[usage(long)]
+    pub cpv: String,
+    #[usage(long)]
+    pub use_flags: String,
+    #[usage(long)]
+    pub work_base: String,
+    #[usage(long)]
+    pub root: String,
+    #[usage(long)]
+    pub distdir: Option<String>,
+    #[usage(long)]
+    pub worker_config_root: Option<String>,
+    #[usage(long)]
+    pub sysroot: Option<String>,
+    #[usage(long)]
+    pub eprefix: Option<String>,
+    /// Where BDEPEND-class build tools live (`Cli::host_roots()`'s merge root)
+    #[usage(long)]
+    pub broot: Option<String>,
+    /// See `ebuild::RootContext::self_contained_bootstrap`
+    #[usage(long)]
+    pub self_contained_bootstrap: bool,
+    /// See `ebuild::RootContext::extra_path`, `:`-joined
+    #[usage(long)]
+    pub extra_path: Option<String>,
+    /// A pre-built GPKG to merge (`-k`/`-g`)
+    #[usage(long)]
+    pub binpkg: Option<String>,
+    /// `binpkg`'s origin forces cryptographic GPG signature
+    /// verification (a `binrepos.conf` entry with
+    /// `verify-signature = yes`), independent of
+    /// `FEATURES=binpkg-request-signature`.
+    #[usage(long)]
+    pub force_verify_signature: bool,
+    #[usage(long)]
+    pub buildpkg: bool,
+    /// Parent activity session id — live FS phase updates only
+    #[usage(long)]
+    pub activity_job_id: Option<String>,
+    #[usage(long)]
+    pub activity_parent_job_id: Option<String>,
+    /// Filesystem root of the parent's live activity sink
+    #[usage(long)]
+    pub activity_live_root: Option<String>,
+    /// `host` or `target` package side for inflight paths
+    #[usage(long)]
+    pub activity_side: Option<String>,
+    /// Unix socket path: stream phase JSONL back to the parent activity bus
+    #[usage(long)]
+    pub activity_reemit_path: Option<String>,
+}
+
+#[derive(usage::Subcommands, Debug, Clone)]
 #[allow(clippy::large_enum_variant)] // __worker carries many CLI strings
+#[usage(run_async_with)]
 pub enum Applet {
     /// Run one do*/new* install helper standalone against the exported build env
     ///
     /// Internal: backs the PATH shims dropped during a build so `find -exec doman` /
     /// `xargs do*` reach helpers that are in-shell builtins. Not for direct use.
-    #[command(name = "__helper", hide = true)]
-    Helper {
-        /// Helper name (e.g. `doman`, `dolib.a`)
-        name: String,
-        /// Arguments passed through to the helper
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
+    #[usage(name = "__helper", hide)]
+    Helper(HelperArgs),
 
     /// Internal: the privilege-wrapped install worker (install+qmerge+binpkg
     /// for one package; spawned per package by `build_and_merge`).
-    #[command(name = "__worker", hide = true)]
-    Worker {
-        #[arg(long)]
-        ebuild: String,
-        /// The resolved plan entry's authoritative cpv — see
-        /// `privilege::WorkerArgs::cpv`.
-        #[arg(long)]
-        cpv: String,
-        #[arg(long)]
-        use_flags: String,
-        #[arg(long)]
-        work_base: String,
-        #[arg(long)]
-        root: String,
-        #[arg(long)]
-        distdir: Option<String>,
-        #[arg(long)]
-        config_root: Option<String>,
-        #[arg(long)]
-        sysroot: Option<String>,
-        #[arg(long)]
-        eprefix: Option<String>,
-        /// Where BDEPEND-class build tools live (`Cli::host_roots()`'s merge root)
-        #[arg(long)]
-        broot: Option<String>,
-        /// See `ebuild::RootContext::self_contained_bootstrap`
-        #[arg(long)]
-        self_contained_bootstrap: bool,
-        /// See `ebuild::RootContext::extra_path`, `:`-joined
-        #[arg(long)]
-        extra_path: Option<String>,
-        /// A pre-built GPKG to merge (`-k`/`-g`)
-        #[arg(long)]
-        binpkg: Option<String>,
-        /// `binpkg`'s origin forces cryptographic GPG signature
-        /// verification (a `binrepos.conf` entry with
-        /// `verify-signature = yes`), independent of
-        /// `FEATURES=binpkg-request-signature`.
-        #[arg(long)]
-        force_verify_signature: bool,
-        #[arg(long)]
-        buildpkg: bool,
-        #[arg(long)]
-        quiet: bool,
-        /// Parent activity session id — live FS phase updates only
-        #[arg(long)]
-        activity_job_id: Option<String>,
-        #[arg(long)]
-        activity_parent_job_id: Option<String>,
-        /// Filesystem root of the parent's live activity sink
-        #[arg(long)]
-        activity_live_root: Option<String>,
-        /// `host` or `target` package side for inflight paths
-        #[arg(long)]
-        activity_side: Option<String>,
-        /// Unix socket path: stream phase JSONL back to the parent activity bus
-        #[arg(long)]
-        activity_reemit_path: Option<String>,
-    },
+    #[usage(name = "__worker", hide)]
+    Worker(WorkerArgs),
 
-    #[command(about = "Execute ebuild phases")]
-    Ebuild {
-        /// Path to the `.ebuild` file to execute
-        #[arg(required = true)]
-        ebuild_path: String,
-        /// Phase(s) to run in order (e.g. `compile`, `install`, `qmerge`)
-        #[arg(required = true)]
-        phase: Vec<String>,
-        /// Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
-        #[arg(short = 'w', long, value_name = "DIR")]
-        work_dir: Option<camino::Utf8PathBuf>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Execute ebuild phases")]
+    Ebuild(EbuildArgs),
 
-    #[command(about = "System maintenance and health checks")]
-    Maint {
-        #[command(subcommand)]
-        command: MaintCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "System maintenance and health checks")]
+    Maint(MaintArgs),
 
-    #[command(about = "Query Portage internal variables and data")]
-    Portageq {
-        /// portageq sub-command to run (e.g. `envvar`, `get_repos`)
-        #[arg(required = true)]
-        command: String,
-        /// Arguments passed through to the sub-command
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
-    },
+    #[usage(help = "Query Portage internal variables and data")]
+    Portageq(PortageqArgs),
 
     /// Sync ebuild repositories from `repos.conf` (`git` and `rsync`)
     ///
@@ -1552,401 +2262,513 @@ pub enum Applet {
     /// invocation, matching real Portage having both `emerge --sync` and
     /// `emaint sync`.
     // Both dispatch to `crate::maint::sync::run`.
-    #[command(about = "Sync repositories (git, rsync)")]
-    Sync {
-        /// Repo names from repos.conf (default: auto-sync enabled repos)
-        repos: Vec<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Sync repositories (git, rsync)")]
+    Sync(SyncArgs),
 
-    #[command(about = "Remove orphaned/unused packages")]
-    Depclean {
-        /// Restrict cleaning to these atoms' dependency closure (every other
-        /// installed package is protected). Default: the whole `@world` set
-        #[arg(trailing_var_arg = true)]
-        atoms: Vec<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-        /// `--exclude`/`--with-bdeps` only — the rest of `MergeFlags` means
-        /// nothing to depclean's own read-then-remove walk.
-        #[command(flatten)]
-        merge_flags: MergeFlags,
-    },
+    #[usage(help = "Remove orphaned/unused packages")]
+    Depclean(DepcleanArgs),
 
-    #[command(about = "Regenerate metadata cache")]
-    Regen {
-        /// Repo names or paths to regenerate (default: every repo except the
-        /// main one, whose cache is normally maintained upstream)
-        repos: Vec<String>,
-        /// Write cache files to this directory instead of metadata/md5-cache
-        #[arg(short = 'o', long, value_name = "DIR")]
-        output: Option<std::path::PathBuf>,
-        /// Directory containing master repositories
-        #[arg(long, value_name = "DIR")]
-        repos_dir: Option<String>,
-        /// Number of parallel workers
-        #[arg(short = 'j', long)]
-        jobs: Option<usize>,
-        /// Deduplicate top-level dep tokens before writing
-        #[arg(long)]
-        dedup: bool,
-        /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/
-        /// `--emergelog`) — `em regen` drives its own activity bus.
-        #[command(flatten)]
-        activity: ActivityArgs,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Regenerate metadata cache")]
+    Regen(RegenArgs),
 
-    #[command(about = "Create binary packages from installed files")]
-    Quickpkg {
-        /// Atoms, package sets (`@system`), or VDB paths (`/var/db/pkg/cat/pf`)
-        #[arg(required = true)]
-        atoms: Vec<String>,
-        /// Include CONFIG_PROTECT files
-        #[arg(long)]
-        include_config: bool,
-        /// Include unmodified CONFIG_PROTECT files
-        #[arg(long)]
-        include_unmodified_config: bool,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Create binary packages from installed files")]
+    Quickpkg(QuickpkgArgs),
 
-    #[command(
+    #[usage(
         name = "mirrordist",
-        alias = "emirrordist",
-        about = "Build/maintain a distfiles mirror (emirrordist workalike)",
-        long_about = "Walks every ebuild in a repository, fetches every distfile its \
-SRC_URI references (all versions, all USE branches), and verifies each against \
-the repo Manifest — the server side of a Gentoo mirror.\n\n\
-Not to be confused with `em select mirrors`, which chooses which mirrors *this* \
-machine fetches from.\n\n\
-Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays."
+        alias_hidden = "emirrordist",
+        help = "Build/maintain a distfiles mirror (emirrordist workalike)",
+        long_help = "Walks every ebuild in a repository, fetches every distfile its SRC_URI references (all versions, all USE branches), and verifies each against the repo Manifest — the server side of a Gentoo mirror.\n\nNot to be confused with `em select mirrors`, which chooses which mirrors *this* machine fetches from.\n\nRequires an up-to-date metadata cache: run `em regen <repo>` first for overlays."
     )]
-    MirrorDist {
-        /// repos.conf name or path
-        ///
-        /// Defaults to the main repo (opposite default from `em regen`, which excludes it).
-        repo: Option<String>,
-        /// Directory containing master repositories
-        #[arg(long, value_name = "DIR")]
-        repos_dir: Option<String>,
-        /// Distfiles directory to populate
-        #[arg(long, value_name = "DIR", required = true)]
-        distfiles: camino::Utf8PathBuf,
-        /// Concurrent downloads
-        #[arg(short = 'j', long)]
-        jobs: Option<usize>,
-        /// Delete distfiles no longer referenced by any ebuild
-        #[arg(long)]
-        delete: bool,
-        /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`)
-        #[arg(long, value_name = "DURATION", default_value = "7d")]
-        deletion_delay: String,
-        /// Deletion-grace state file (default: `$XDG_STATE_HOME/em/mirrordist/<repo>-*.json`)
-        #[arg(long, value_name = "FILE")]
-        deletion_db: Option<camino::Utf8PathBuf>,
-        /// Tab-delimited log of fetched files (appended)
-        #[arg(long, value_name = "FILE")]
-        success_log: Option<camino::Utf8PathBuf>,
-        /// Tab-delimited log of fetch failures (appended)
-        #[arg(long, value_name = "FILE")]
-        failure_log: Option<camino::Utf8PathBuf>,
-        /// Report of files scheduled for deletion, grouped by date (rewritten)
-        #[arg(long, value_name = "FILE")]
-        scheduled_deletion_log: Option<camino::Utf8PathBuf>,
-        /// File(s) listing distfile names --delete must never remove (one
-        /// name per line, `#`-comments ignored).
-        #[arg(long, value_name = "FILE")]
-        whitelist_from: Vec<camino::Utf8PathBuf>,
-        /// Re-hash already-present files instead of trusting their size
-        #[arg(long)]
-        verify_existing_digest: bool,
-        /// Also try GENTOO_MIRRORS after the ebuild's own URIs (real
-        /// emirrordist never does this — off by default).
-        #[arg(long)]
-        gentoo_mirrors_fallback: bool,
-        /// Allow --delete even when some ebuilds had no metadata cache entry
-        #[arg(long)]
-        delete_allow_incomplete: bool,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    MirrorDist(MirrorDistArgs),
 
-    #[command(about = "Query package information")]
-    Query {
-        #[command(subcommand)]
-        command: QueryCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Query package information")]
+    Query(QueryArgs),
 
-    #[command(about = "Clean distfiles and/or binary packages")]
-    Clean {
-        #[command(subcommand)]
-        target: CleanTarget,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Clean distfiles and/or binary packages")]
+    Clean(CleanArgs),
 
-    #[command(about = "Enable/disable/query USE flags in make.conf")]
-    Use {
-        /// Add (enable) flags — euse calls this --enable/-E
-        #[arg(
-            short = 'a',
-            long = "add",
-            visible_short_alias = 'E',
-            value_name = "FLAG"
-        )]
-        add: Vec<String>,
-        /// Subtract flags (written with leading '-', e.g. -themes) — euse
-        /// calls this --disable/-D
-        #[arg(
-            short = 's',
-            long = "subtract",
-            visible_short_alias = 'D',
-            value_name = "FLAG"
-        )]
-        subtract: Vec<String>,
-        /// Drop flags entirely (removes both flag and -flag forms) — euse
-        /// calls this --remove/-R or --prune/-P
-        #[arg(
-            short = 'd',
-            long = "drop",
-            visible_short_aliases = ['R', 'P'],
-            value_name = "FLAG"
-        )]
-        drop: Vec<String>,
-        /// Preview the resulting value without writing make.conf
-        #[arg(short = 'n', long = "dry-run")]
-        dry_run: bool,
-        /// Target a USE_EXPAND variable (e.g. VIDEO_CARDS) instead of USE —
-        /// -a/-s/-d then edit that variable's value the same way
-        #[arg(short = 'e', long = "expand", value_name = "VAR")]
-        expand: Option<String>,
-        /// List every USE_EXPAND variable known to the active profile, each
-        /// with its current make.conf value
-        #[arg(
-            short = 'L',
-            long = "list-expand",
-            conflicts_with_all = ["add", "subtract", "drop", "expand"]
-        )]
-        list_expand: bool,
-        /// Show descriptions for the given USE flags (profiles/use.desc and
-        /// use.local.desc, searching both unless -g/-l restricts it). With
-        /// no flags given, lists every flag in scope
-        #[arg(
-            short = 'i',
-            long = "info",
-            value_name = "FLAG",
-            conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand"]
-        )]
-        info: Vec<String>,
-        /// Restrict -i to global flags only (profiles/use.desc)
-        #[arg(
-            short = 'g',
-            long = "global",
-            conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand", "local_desc"]
-        )]
-        global: bool,
-        /// Restrict -i to per-package local flags only (profiles/use.local.desc,
-        /// searched across every package — see `em query uses <atom>` for a
-        /// single package's flags instead)
-        #[arg(
-            short = 'l',
-            long = "local-desc",
-            conflicts_with_all = ["add", "subtract", "drop", "expand", "list_expand", "global"]
-        )]
-        local_desc: bool,
-        /// Path to make.conf (default: resolved like other config commands,
-        /// following --config-root/--local/--prefix)
-        #[arg(long = "make-conf", value_name = "PATH")]
-        make_conf: Option<camino::Utf8PathBuf>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Enable/disable/query USE flags in make.conf")]
+    Use(UseArgs),
 
-    #[command(about = "Edit per-package configuration (package.use, .keywords, .mask, .env)")]
-    Pkg {
-        #[command(subcommand)]
-        command: PkgCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Edit per-package configuration (package.use, .keywords, .mask, .env)")]
+    Pkg(PkgArgs),
 
-    #[command(about = "Rebuild packages with broken shared library deps")]
-    Revdep {
-        /// Only consider consumers of libraries whose soname contains NAME
-        #[arg(short = 'L', long, value_name = "NAME")]
-        library: Option<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-        #[command(flatten)]
-        merge_flags: MergeFlags,
-    },
+    #[usage(help = "Rebuild packages with broken shared library deps")]
+    Revdep(RevdepArgs),
 
-    #[command(about = "Display Portage elog files")]
-    Read {
-        /// Only show packages whose `<category>/<pf>` contains this text
-        package: Option<String>,
-        /// List what is filed instead of printing the messages
-        #[arg(short, long)]
-        list: bool,
-        /// Show only this many of the most recent packages; 0 for all
-        #[arg(short = 'n', long, default_value_t = 10)]
-        limit: usize,
-        /// Remove each file once it has been shown
-        #[arg(long)]
-        delete: bool,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Display Portage elog files")]
+    Read(ReadArgs),
 
-    #[command(about = "Analyze emerge.log")]
-    Log {
-        #[command(subcommand)]
-        command: Option<LogCommand>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Analyze emerge.log", run)]
+    Log(LogArgs),
 
-    #[command(about = "Search inside ebuilds and eclasses")]
-    Grep {
-        /// Pattern to search for
-        #[arg(required = true)]
-        pattern: String,
-        /// Restrict the search to these ebuild/eclass paths (default: the whole repo)
-        #[arg(trailing_var_arg = true)]
-        paths: Vec<String>,
-    },
+    #[usage(help = "Search inside ebuilds and eclasses")]
+    Grep(GrepArgs),
 
-    #[command(about = "Search package names and descriptions")]
-    Search {
-        /// List all packages (no pattern required)
-        #[arg(short = 'a', long)]
-        all: bool,
-        /// Search package descriptions instead of names
-        #[arg(short = 'S', long = "desc")]
-        desc: bool,
-        /// Show only package name, no description
-        #[arg(short = 'N', long = "name-only")]
-        name_only: bool,
-        /// Show homepage instead of description
-        #[arg(short = 'H', long)]
-        homepage: bool,
-        /// Pattern to search (required unless --all)
-        #[arg(required_unless_present = "all")]
-        pattern: Option<String>,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Search package names and descriptions")]
+    Search(SearchArgs),
 
-    #[command(about = "Parse/split atom strings")]
-    Atom {
-        /// Atom strings to parse and print back in normalized form
-        #[arg(required = true)]
-        atoms: Vec<String>,
-    },
+    #[usage(help = "Parse/split atom strings", run)]
+    Atom(AtomArgs),
 
-    #[command(about = "Native config selectors (profile, repos) — eselect-like")]
-    Select {
-        #[command(subcommand)]
-        command: SelectCommand,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Native config selectors (profile, repos) — eselect-like")]
+    Select(SelectArgs),
 
     /// Register a default `--prefix` / `--local` so bare `em <pkg>` picks it up (dogfooding)
     ///
     /// Explicit `--prefix`/`--local`/`--root` still win. State is stored under
     /// `$XDG_STATE_HOME/em/active`.
-    #[command(about = "Register a default --prefix/--local for bare em invocations")]
-    Active {
-        #[command(subcommand)]
-        command: Option<ActiveCommand>,
-        /// `--root` is deliberately not part of this: it is never registerable
-        /// (see the module doc in `crate::active`).
-        #[command(flatten)]
-        topology: Topology,
-    },
+    #[usage(
+        help = "Register a default --prefix/--local for bare em invocations",
+        run
+    )]
+    Active(ActiveArgs),
 
-    #[command(about = "Bootstrap a prefix layout (use with --local or --prefix)")]
+    #[usage(help = "Bootstrap a prefix layout (use with --local or --prefix)")]
     Setup(SetupArgs),
 
-    #[command(about = "Set up a cross-compilation target (sysroot + overlay) — crossdev workalike")]
+    #[usage(help = "Set up a cross-compilation target (sysroot + overlay) — crossdev workalike")]
     Crossdev(CrossdevArgs),
 
-    #[command(
-        about = "Bootstrap a self-hosting native toolchain into --root (the stages' compiler)"
-    )]
+    #[usage(help = "Bootstrap a self-hosting native toolchain (--root / --prefix / --local)")]
     Toolchain(ToolchainArgs),
 
-    #[command(about = "Assemble stage-build artifacts (stage1 packages.build) into --root")]
+    #[usage(help = "Assemble stage-build artifacts (stage1 packages.build) into --root")]
     Stages(StagesArgs),
 
-    #[command(
-        about = "Reconcile pending config files (etc-update / dispatch-conf)",
-        alias = "config",
-        alias = "dispatch"
+    #[usage(
+        help = "Reconcile pending config files (etc-update / dispatch-conf)",
+        alias_hidden = "config",
+        alias_hidden = "dispatch"
     )]
-    Etc {
-        #[command(subcommand)]
-        command: Option<EtcCommand>,
-        #[command(flatten)]
-        opts: EtcOpts,
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    Etc(EtcArgs),
 
-    #[command(about = "Regenerate /etc/profile.env and ld.so cache")]
-    Env {
-        #[command(flatten)]
-        topology: Topology,
-        #[command(flatten)]
-        root_arg: RootArg,
-    },
+    #[usage(help = "Regenerate /etc/profile.env and ld.so cache", run)]
+    Env(EnvArgs),
+
+    #[usage(help = "Print a shell completion script")]
+    Completion(CompletionArgs),
 
     /// Resolve and merge/unmerge packages (emerge workalike).
     ///
     /// `em <atoms>` and `em emerge <atoms>` parse into the same arguments.
-    #[command(about = "Resolve and merge/unmerge packages (emerge workalike)")]
+    #[usage(help = "Resolve and merge/unmerge packages (emerge workalike)")]
     Emerge(EmergeArgs),
 }
 
+/// Hidden `em __helper` shim — PATH helper dispatched by `find -exec`/`xargs`.
+#[derive(usage::Args, Debug, Clone)]
+pub struct HelperArgs {
+    /// Helper name (e.g. `doman`, `dolib.a`). Automatic so hyphen-prefixed
+    /// helper args parse without a `--` (`find -exec doman -m …`).
+    #[usage(double_dash = "automatic")]
+    pub name: String,
+    /// Arguments passed through to the helper
+    #[usage(double_dash = "automatic")]
+    pub args: Vec<String>,
+}
+
+/// `em ebuild` — execute ebuild phases
+#[derive(usage::Args, Debug, Clone)]
+pub struct EbuildArgs {
+    /// Path to the `.ebuild` file to execute
+    pub ebuild_path: String,
+    /// Phase(s) to run in order (e.g. `compile`, `install`, `qmerge`)
+    #[usage(required)]
+    pub phase: Vec<String>,
+    /// Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
+    #[usage(short = 'w', long, value_name = "DIR")]
+    pub work_dir: Option<camino::Utf8PathBuf>,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em maint` — system maintenance and health checks
+#[derive(usage::Args, Debug, Clone)]
+#[usage(flatten_help)]
+pub struct MaintArgs {
+    #[usage(subcommand)]
+    pub command: MaintCommand,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em portageq` — query Portage internal variables and data
+#[derive(usage::Args, Debug, Clone)]
+pub struct PortageqArgs {
+    /// portageq sub-command to run (e.g. `envvar`, `get_repos`)
+    pub command: String,
+    /// Arguments passed through to the sub-command
+    #[usage(double_dash = "automatic")]
+    pub args: Vec<String>,
+}
+
+/// `em sync` — sync repositories (git, rsync)
+#[derive(usage::Args, Debug, Clone)]
+pub struct SyncArgs {
+    /// Repo names from repos.conf (default: auto-sync enabled repos)
+    pub repos: Vec<String>,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em depclean` — remove orphaned/unused packages
+#[derive(usage::Args, Debug, Clone)]
+#[usage(effect = "destructive")]
+pub struct DepcleanArgs {
+    /// Restrict cleaning to these atoms' dependency closure (every other
+    /// installed package is protected). Default: the whole `@world` set
+    #[usage(double_dash = "automatic")]
+    pub atoms: Vec<String>,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+    /// `--exclude`/`--with-bdeps` only — the rest of `MergeFlags` means
+    /// nothing to depclean's own read-then-remove walk.
+    #[usage(flatten)]
+    pub merge_flags: MergeFlags,
+}
+
+/// `em regen` — regenerate metadata cache
+#[derive(usage::Args, Debug, Clone)]
+pub struct RegenArgs {
+    /// Repo names or paths to regenerate (default: every repo except the
+    /// main one, whose cache is normally maintained upstream)
+    pub repos: Vec<String>,
+    /// Write cache files to this directory instead of metadata/md5-cache
+    #[usage(short = 'o', long, value_name = "DIR")]
+    pub output: Option<std::path::PathBuf>,
+    /// Directory containing master repositories
+    #[usage(long, value_name = "DIR")]
+    pub repos_dir: Option<String>,
+    /// Number of parallel workers
+    #[usage(short = 'j', long)]
+    pub jobs: Option<usize>,
+    /// Deduplicate top-level dep tokens before writing
+    #[usage(long)]
+    pub dedup: bool,
+    /// Activity-output flags (`--activity-fd`/`--activity-jsonl`/
+    /// `--emergelog`) — `em regen` drives its own activity bus.
+    #[usage(flatten)]
+    pub activity: ActivityArgs,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em quickpkg` — create binary packages from installed files
+#[derive(usage::Args, Debug, Clone)]
+pub struct QuickpkgArgs {
+    /// Atoms, package sets (`@system`), or VDB paths (`/var/db/pkg/cat/pf`)
+    #[usage(required)]
+    pub atoms: Vec<String>,
+    /// Include CONFIG_PROTECT files
+    #[usage(long)]
+    pub include_config: bool,
+    /// Include unmodified CONFIG_PROTECT files
+    #[usage(long)]
+    pub include_unmodified_config: bool,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em mirrordist` — build/maintain a distfiles mirror
+#[derive(usage::Args, Debug, Clone)]
+#[usage(effect = "write")]
+pub struct MirrorDistArgs {
+    /// repos.conf name or path
+    ///
+    /// Defaults to the main repo (opposite default from `em regen`, which excludes it).
+    pub repo: Option<String>,
+    /// Directory containing master repositories
+    #[usage(long, value_name = "DIR")]
+    pub repos_dir: Option<String>,
+    /// Distfiles directory to populate
+    #[usage(long, value_name = "DIR")]
+    pub distfiles: camino::Utf8PathBuf,
+    /// Concurrent downloads
+    #[usage(short = 'j', long)]
+    pub jobs: Option<usize>,
+    /// Delete distfiles no longer referenced by any ebuild
+    #[usage(long, effect = "destructive")]
+    pub delete: bool,
+    /// Grace period before an orphaned file is deleted (e.g. `7d`, `72h`)
+    #[usage(long, value_name = "DURATION", default = "7d")]
+    pub deletion_delay: String,
+    /// Deletion-grace state file (default: `$XDG_STATE_HOME/em/mirrordist/<repo>-*.json`)
+    #[usage(long, value_name = "FILE")]
+    pub deletion_db: Option<camino::Utf8PathBuf>,
+    /// Tab-delimited log of fetched files (appended)
+    #[usage(long, value_name = "FILE")]
+    pub success_log: Option<camino::Utf8PathBuf>,
+    /// Tab-delimited log of fetch failures (appended)
+    #[usage(long, value_name = "FILE")]
+    pub failure_log: Option<camino::Utf8PathBuf>,
+    /// Report of files scheduled for deletion, grouped by date (rewritten)
+    #[usage(long, value_name = "FILE")]
+    pub scheduled_deletion_log: Option<camino::Utf8PathBuf>,
+    /// File(s) listing distfile names --delete must never remove (one
+    /// name per line, `#`-comments ignored).
+    #[usage(long, value_name = "FILE")]
+    pub whitelist_from: Vec<camino::Utf8PathBuf>,
+    /// Re-hash already-present files instead of trusting their size
+    #[usage(long)]
+    pub verify_existing_digest: bool,
+    /// Also try GENTOO_MIRRORS after the ebuild's own URIs (real
+    /// emirrordist never does this — off by default).
+    #[usage(long)]
+    pub gentoo_mirrors_fallback: bool,
+    /// Allow --delete even when some ebuilds had no metadata cache entry
+    #[usage(long)]
+    pub delete_allow_incomplete: bool,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em query` — query package information
+#[derive(usage::Args, Debug, Clone)]
+#[usage(
+    flatten_help,
+    effect = "read",
+    example = "em query depgraph zlib",
+    example = "em query belongs /usr/bin/python",
+    example = "em query list -I",
+    output("pretty", default, help = "emerge -p style pretend output"),
+    output("json", framing = "json", help = "Machine-parsable JSON"),
+    output("tree", help = "cargo tree style dependency tree")
+)]
+pub struct QueryArgs {
+    #[usage(subcommand)]
+    pub command: QueryCommand,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em clean` — clean distfiles and/or binary packages
+#[derive(usage::Args, Debug, Clone)]
+#[usage(flatten_help, effect = "destructive")]
+pub struct CleanArgs {
+    #[usage(subcommand)]
+    pub target: CleanTarget,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em use` — enable/disable/query USE flags in make.conf
+#[derive(usage::Args, Debug, Clone)]
+pub struct UseArgs {
+    /// Add (enable) flags — euse calls this --enable/-E
+    #[usage(short = 'E', short = 'a', long = "add", value_name = "FLAG")]
+    pub add: Vec<String>,
+    /// Subtract flags (written with leading '-', e.g. -themes) — euse
+    /// calls this --disable/-D
+    #[usage(short = 'D', short = 's', long = "subtract", value_name = "FLAG")]
+    pub subtract: Vec<String>,
+    /// Drop flags entirely (removes both flag and -flag forms) — euse
+    /// calls this --remove/-R or --prune/-P
+    #[usage(
+        short = 'R',
+        short = 'P',
+        short = 'd',
+        long = "drop",
+        value_name = "FLAG"
+    )]
+    pub drop: Vec<String>,
+    /// Preview the resulting value without writing make.conf
+    #[usage(short = 'n', long = "dry-run")]
+    pub dry_run: bool,
+    /// Target a USE_EXPAND variable (e.g. VIDEO_CARDS) instead of USE —
+    /// -a/-s/-d then edit that variable's value the same way
+    #[usage(short = 'e', long = "expand", value_name = "VAR")]
+    pub expand: Option<String>,
+    /// List every USE_EXPAND variable known to the active profile, each
+    /// with its current make.conf value
+    #[usage(
+        short = 'L',
+        long = "list-expand",
+        conflicts("add", "subtract", "drop", "expand")
+    )]
+    pub list_expand: bool,
+    /// Show descriptions for the given USE flags (profiles/use.desc and
+    /// use.local.desc, searching both unless -g/-l restricts it). With
+    /// no flags given, lists every flag in scope
+    #[usage(
+        short = 'i',
+        long = "info",
+        value_name = "FLAG",
+        conflicts("add", "subtract", "drop", "expand", "list_expand")
+    )]
+    pub info: Vec<String>,
+    /// Restrict -i to global flags only (profiles/use.desc)
+    #[usage(
+        short = 'g',
+        long = "global",
+        conflicts("add", "subtract", "drop", "expand", "list_expand", "local_desc")
+    )]
+    pub global: bool,
+    /// Restrict -i to per-package local flags only (profiles/use.local.desc,
+    /// searched across every package — see `em query uses <atom>` for a
+    /// single package's flags instead)
+    #[usage(
+        short = 'l',
+        long = "local-desc",
+        conflicts("add", "subtract", "drop", "expand", "list_expand", "global")
+    )]
+    pub local_desc: bool,
+    /// Path to make.conf (default: resolved like other config commands,
+    /// following --config-root/--local/--prefix)
+    #[usage(long = "make-conf", value_name = "PATH")]
+    pub make_conf: Option<camino::Utf8PathBuf>,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em pkg` — edit per-package configuration
+#[derive(usage::Args, Debug, Clone)]
+pub struct PkgArgs {
+    #[usage(subcommand)]
+    pub command: PkgCommand,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em revdep` — rebuild packages with broken shared library deps
+#[derive(usage::Args, Debug, Clone)]
+pub struct RevdepArgs {
+    /// Only consider consumers of libraries whose soname contains NAME
+    #[usage(short = 'L', long, value_name = "NAME")]
+    pub library: Option<String>,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub merge_flags: MergeFlags,
+}
+
+/// `em read` — display Portage elog files
+#[derive(usage::Args, Debug, Clone)]
+pub struct ReadArgs {
+    /// Only show packages whose `<category>/<pf>` contains this text
+    pub package: Option<String>,
+    /// List what is filed instead of printing the messages
+    #[usage(short, long)]
+    pub list: bool,
+    /// Show only this many of the most recent packages; 0 for all
+    #[usage(short = 'n', long, default = "10")]
+    pub limit: usize,
+    /// Remove each file once it has been shown
+    #[usage(long)]
+    pub delete: bool,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em log` — analyze emerge.log
+#[derive(usage::Args, Debug, Clone)]
+#[usage(effect = "read")]
+pub struct LogArgs {
+    #[usage(subcommand)]
+    pub command: Option<LogCommand>,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em grep` — search inside ebuilds and eclasses
+#[derive(usage::Args, Debug, Clone)]
+pub struct GrepArgs {
+    /// Pattern to search for
+    pub pattern: String,
+    /// Restrict the search to these ebuild/eclass paths (default: the whole repo)
+    #[usage(double_dash = "automatic")]
+    pub paths: Vec<String>,
+}
+
+/// `em search` — search package names and descriptions
+#[derive(usage::Args, Debug, Clone)]
+#[usage(effect = "read", example = "em search firefox")]
+pub struct SearchArgs {
+    /// List all packages (no pattern required)
+    #[usage(short = 'a', long)]
+    pub all: bool,
+    /// Search package descriptions instead of names
+    #[usage(short = 'S', long = "desc")]
+    pub desc: bool,
+    /// Show only package name, no description
+    #[usage(short = 'N', long = "name-only")]
+    pub name_only: bool,
+    /// Show homepage instead of description
+    #[usage(short = 'H', long)]
+    pub homepage: bool,
+    /// Pattern to search (required unless --all)
+    #[usage(required_unless = "all")]
+    pub pattern: Option<String>,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em atom` — parse/split atom strings
+#[derive(usage::Args, Debug, Clone)]
+#[usage(effect = "read", example = "em atom >=dev-lang/python-3.10")]
+pub struct AtomArgs {
+    /// Atom strings to parse and print back in normalized form
+    #[usage(required)]
+    pub atoms: Vec<String>,
+}
+
+/// `em select` — native config selectors (profile, repos)
+#[derive(usage::Args, Debug, Clone)]
+#[usage(flatten_help)]
+pub struct SelectArgs {
+    #[usage(subcommand)]
+    pub command: SelectCommand,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em active` — register a default `--prefix`/`--local` for bare invocations
+#[derive(usage::Args, Debug, Clone)]
+#[usage(
+    example("em active set --local=", header = "Register ~/.gentoo"),
+    example("em active --local= set", header = "Flags may precede set")
+)]
+pub struct ActiveArgs {
+    #[usage(subcommand)]
+    pub command: Option<ActiveCommand>,
+}
+
+/// `em etc` — reconcile pending config files
+#[derive(usage::Args, Debug, Clone)]
+pub struct EtcArgs {
+    #[usage(subcommand)]
+    pub command: Option<EtcCommand>,
+    #[usage(flatten)]
+    pub opts: EtcOpts,
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em env` — regenerate `/etc/profile.env` and ld.so cache
+#[derive(usage::Args, Debug, Clone)]
+pub struct EnvArgs {
+    #[usage(flatten)]
+    pub root_arg: RootArg,
+}
+
+/// `em completion` — print a shell completion script for `em`.
+#[derive(usage::Args, Debug, Clone)]
+pub struct CompletionArgs {
+    /// Shell to generate the script for
+    #[usage(
+        value_name = "SHELL",
+        choices("bash", "zsh", "fish", "nu", "powershell", "elvish")
+    )]
+    pub shell: String,
+}
+
 /// `em setup` — bootstrap a prefix layout
-#[derive(clap::Args, Default)]
+#[derive(usage::Args, Default, Debug, Clone)]
+#[usage(
+    effect = "write",
+    example("em setup --local", header = "Bootstrap ~/.gentoo")
+)]
 pub struct SetupArgs {
     /// Directory holding host tools this prefix should borrow while it has
     /// none of its own, put ahead of the sanitised build `PATH`. Repeatable.
@@ -1956,59 +2778,53 @@ pub struct SetupArgs {
     /// Gentoo toolchain, which also hides a hand-installed GNU sed/grep from
     /// the very first merges. `em setup --local` finds the usual locations by
     /// itself; this is for anywhere else you keep them.
-    #[arg(long, value_name = "DIR")]
+    #[usage(long, value_name = "DIR")]
     pub extra_path: Vec<camino::Utf8PathBuf>,
 
-    #[command(flatten)]
-    pub topology: Topology,
-
-    #[command(flatten)]
+    #[usage(flatten)]
     pub root_arg: RootArg,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub merge_flags: MergeFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub activity: ActivityArgs,
 
     /// Privilege backend for this setup run
-    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
 /// `em crossdev` — cross-target setup, mirroring crossdev's option surface (the
 /// no-build subset for now; building the toolchain is future work).
-#[derive(clap::Args)]
+///
+/// Deliberately no [`RootArg`]: none of `crossdev`'s three actions
+/// (`--init-target`/`--setup`/`--show-target-cfg`) read `--root` — it is a
+/// parse error after the applet, and a try_into reject in prefix position.
+#[derive(usage::Args, Debug, Clone)]
 pub struct CrossdevArgs {
-    /// `--prefix`/`--local`/`--config-root`/`--vdb`/`--target` for this cross
-    /// target. Deliberately no [`RootArg`]: none of `crossdev`'s three actions
-    /// (`--init-target`/`--setup`/`--show-target-cfg`) read `--root` — it is a
-    /// clap-level parse error, in any position, when `crossdev` is active.
-    #[command(flatten)]
-    pub topology: Topology,
-
     /// Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no per-target
     /// compiler)
     ///
     /// Rejects glibc — use musl or a bare-metal target.
-    #[arg(short = 'L', long)]
+    #[usage(short = 'L', long)]
     pub llvm: bool,
 
     /// Lay down the overlay + sysroot config without building anything
-    #[arg(long)]
+    #[usage(long)]
     pub init_target: bool,
 
     /// Bootstrap the cross toolchain into the prefix (`/usr/<tuple>`): the full
     /// intertwined sequence (binutils → headers → gcc-stage1 → libc →
     /// gcc-stage2). Implies `--init-target`.
-    #[arg(long)]
+    #[usage(long)]
     pub setup: bool,
 
     /// Print the derived target configuration and exit (no writes)
-    #[arg(long)]
+    #[usage(long)]
     pub show_target_cfg: bool,
 
     /// Build an extra package onto the established cross target (may be given multiple times)
@@ -2018,25 +2834,25 @@ pub struct CrossdevArgs {
     ///
     /// Applies to `--init-target`/`--setup` only; named per invocation,
     /// like real crossdev — not remembered across a later run that omits it.
-    #[arg(long, value_name = "CATEGORY/PN")]
+    #[usage(long, value_name = "CATEGORY/PN")]
     pub ex_pkg: Vec<String>,
 
     /// Build a cross gdb (`dev-debug/gdb`) — shorthand for `--ex-pkg
     /// dev-debug/gdb`, crossdev's own `--ex-gdb`.
-    #[arg(long)]
+    #[usage(long)]
     pub ex_gdb: bool,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub merge_flags: MergeFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub activity: ActivityArgs,
 
     /// Privilege backend for this crossdev run
-    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
@@ -2048,42 +2864,53 @@ pub struct CrossdevArgs {
 /// the compiler the `em stages` production (stage1 `packages.build`, stage3
 /// `--emptytree @system`) then builds against. Kept separate from the stages on
 /// purpose (catalyst/crossdev-stages do the same: toolchain, then the stages).
-#[derive(clap::Args, Debug, Clone)]
+#[derive(usage::Args, Debug, Clone)]
+#[usage(
+    effect = "write",
+    example(
+        "em toolchain --prefix /p --setup",
+        header = "Bootstrap a prefix toolchain"
+    )
+)]
 pub struct ToolchainArgs {
     /// Build and install the toolchain into `--root` (the only action for now;
     /// required, mirroring `crossdev --setup`).
-    #[arg(long)]
+    #[usage(long)]
     pub setup: bool,
 
-    #[command(flatten)]
-    pub topology: Topology,
-
-    #[command(flatten)]
+    #[usage(flatten)]
     pub root_arg: RootArg,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub merge_flags: MergeFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub activity: ActivityArgs,
 
     /// Privilege backend for this toolchain run
-    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
 // `em stages` — assemble stage-build artifacts (stage1/stage3/stage4) *using*
 // a toolchain already built by `em toolchain --setup`.
-#[derive(clap::Args, Debug, Clone)]
+#[derive(usage::Args, Debug, Clone)]
+#[usage(
+    effect = "write",
+    example(
+        "em stages --root /var/tmp/stage1 --stage1",
+        header = "Stage1 into a root"
+    )
+)]
 pub struct StagesArgs {
     /// Emerge the profile's `packages.build` bootstrap set into `--root`:
     /// baselayout (USE=build, --nodeps) then the minimal stage1 package list
     /// (USE="-* build"), mirroring catalyst's `stage1/chroot.sh`. Requires a
     /// working toolchain already in the root (`em toolchain --setup`).
-    #[arg(long)]
+    #[usage(long)]
     pub stage1: bool,
 
     /// Emptytree rebuild of `@system` into `--root` (catalyst `stage3/chroot.sh`:
@@ -2091,26 +2918,23 @@ pub struct StagesArgs {
     /// --with-bdeps` on top of other merge flags; seeds PKGDIR with `-b` like
     /// stage1. No stage2 (crossdev model). Requires a usable root (typically
     /// after `--stage1` or an unpacked seed).
-    #[arg(long)]
+    #[usage(long)]
     pub stage3: bool,
 
-    #[command(flatten)]
-    pub topology: Topology,
-
-    #[command(flatten)]
+    #[usage(flatten)]
     pub root_arg: RootArg,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub merge_flags: MergeFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub activity: ActivityArgs,
 
     /// Privilege backend for this stages run
-    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 }
 
@@ -2118,135 +2942,133 @@ pub struct StagesArgs {
 ///
 /// The explicit, self-contained form of the bare `em <atoms>` path — see
 /// [`Applet::Emerge`]'s doc comment.
-#[derive(clap::Args, Debug, Clone, Default)]
+#[derive(usage::Args, Debug, Clone, Default)]
+#[usage(effect = "write", example = "em emerge firefox")]
 pub struct EmergeArgs {
-    #[command(flatten)]
-    pub topology: Topology,
-
-    #[command(flatten)]
+    #[usage(flatten)]
     pub root_arg: RootArg,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub mode: EmergeModeArgs,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub merge_flags: MergeFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub depgraph_flags: DepgraphFlags,
 
-    #[command(flatten)]
+    #[usage(flatten)]
     pub activity: ActivityArgs,
 
     /// Privilege backend for this merge
-    #[arg(long, value_enum, default_value_t = Privilege::Auto, env = "EM_PRIVILEGE")]
+    #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
 
     /// Atoms, package sets (`@world`), or ebuild paths to act on
-    #[arg(value_name = "ATOM")]
+    #[usage(value_name = "ATOM")]
     pub atoms: Vec<String>,
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum MaintCommand {
-    #[command(about = "Generate binary package metadata index")]
+    #[usage(help = "Generate binary package metadata index")]
     Binhost,
-    #[command(about = "Inspect/verify/prune local binary packages (em-only, no emaint equivalent)")]
+    #[usage(help = "Inspect/verify/prune local binary packages (em-only, no emaint equivalent)")]
     Binpkg {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: BinpkgAction,
     },
-    #[command(about = "No-op: em keeps no config-memory file to go stale")]
+    #[usage(help = "No-op: em keeps no config-memory file to go stale")]
     Cleanconfmem,
-    #[command(about = "Discard saved resume lists")]
+    #[usage(help = "Discard saved resume lists")]
     Cleanresume {
         /// Actually delete the saved resume/resume-backup lists (default:
         /// just report what's there).
-        #[arg(short, long)]
+        #[usage(short, long)]
         fix: bool,
     },
-    #[command(about = "Prune the build.log files finished merges leave in the build tree")]
+    #[usage(help = "Prune the build.log files finished merges leave in the build tree")]
     Logs {
         /// Remove them; without this the logs are only listed
-        #[arg(long)]
+        #[usage(long)]
         fix: bool,
         /// Only consider logs at least this old (e.g. `30d`, `2weeks`)
-        #[arg(short = 't', long, value_name = "AGE")]
+        #[usage(short = 't', long, value_name = "AGE")]
         older_than: Option<String>,
     },
-    #[command(about = "Unavailable: em keeps no failed-merge registry")]
+    #[usage(help = "Unavailable: em keeps no failed-merge registry")]
     Merges,
-    #[command(about = "Apply package moves to binary packages")]
+    #[usage(help = "Apply package moves to binary packages")]
     Movebin,
-    #[command(about = "Apply package moves to installed packages")]
+    #[usage(help = "Apply package moves to installed packages")]
     Moveinst,
-    #[command(about = "Regenerate profiles/use.local.desc from metadata.xml")]
+    #[usage(help = "Regenerate profiles/use.local.desc from metadata.xml")]
     RegenUse {
         /// Write output here instead of profiles/use.local.desc ('-' for stdout)
-        #[arg(short, long, value_name = "PATH")]
+        #[usage(short, long, value_name = "PATH")]
         output: Option<String>,
     },
-    #[command(about = "Purge repo revision history from repo_revisions")]
+    #[usage(help = "Purge repo revision history from repo_revisions")]
     Revisions {
         /// Purge only these repos (default: all)
-        #[arg(value_name = "REPO")]
+        #[usage(value_name = "REPO")]
         repos: Vec<String>,
     },
     /// Same as `em sync` — shared implementation
-    #[command(about = "Sync repositories (git, rsync)")]
+    #[usage(help = "Sync repositories (git, rsync)")]
     Sync {
         /// Repo names from repos.conf (default: auto-sync enabled repos)
         repos: Vec<String>,
     },
-    #[command(about = "Check (and optionally fix) problems in the world file")]
+    #[usage(help = "Check (and optionally fix) problems in the world file")]
     World {
         /// Remove orphaned entries from the world file
-        #[arg(short, long)]
+        #[usage(short, long)]
         fix: bool,
     },
 }
 
 /// Inspect, verify and prune the binary packages in the local `PKGDIR`
 //
-// clap renders the doc comment above as this subcommand's help, so the
+// the doc comment above is this subcommand's help, so the
 // rationale stays a plain comment: there is no real-portage `emaint` module
 // for this (only `emaint binhost`, which just regenerates the index) — it is
 // an em-only extension, built on the `Packages` index/reader substrate.
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum BinpkgAction {
-    #[command(about = "Check each indexed binpkg's size/MD5/SHA1 against the file on disk")]
+    #[usage(help = "Check each indexed binpkg's size/MD5/SHA1 against the file on disk")]
     Verify {
         /// Quarantine corrupt containers (rename to `.corrupt`) and drop
         /// missing/corrupt entries from the index by regenerating it.
-        #[arg(long)]
+        #[usage(long)]
         fix: bool,
         /// Reject a container with no OpenPGP signature at all (matches
         /// FEATURES=binpkg-request-signature); with a verify keyring
         /// present (`em maint binpkg gpg-import`), signatures are always
         /// cryptographically checked regardless of this flag.
-        #[arg(long)]
+        #[usage(long)]
         require_signature: bool,
     },
-    #[command(about = "List indexed binary packages (cpv, build-id, size, path)")]
+    #[usage(help = "List indexed binary packages (cpv, build-id, size, path)")]
     List,
-    #[command(about = "Keep only the newest BUILD_ID per package, deleting older ones")]
+    #[usage(help = "Keep only the newest BUILD_ID per package, deleting older ones")]
     Prune {
         /// Report what would be deleted without deleting or reindexing
-        #[arg(long)]
+        #[usage(long)]
         dry_run: bool,
     },
-    #[command(about = "Print the build-env key for the current roots' make.conf flags")]
+    #[usage(help = "Print the build-env key for the current roots' make.conf flags")]
     Fingerprint {
         /// Print the full key (space-joined sokgi hashes) instead of the
         /// short path-safe slug.
-        #[arg(long)]
+        #[usage(long)]
         full: bool,
         /// Fingerprint the host (BROOT) config instead of the target roots
         /// (only differs under --target).
-        #[arg(long)]
+        #[usage(long)]
         host: bool,
     },
-    #[command(about = "Import an armored OpenPGP public key into the GPG verify keyring")]
+    #[usage(help = "Import an armored OpenPGP public key into the GPG verify keyring")]
     GpgImport {
         /// Path to an armored public-key file (e.g. exported via
         /// `gpg --armor --export <key-id>`).
@@ -2255,79 +3077,76 @@ pub enum BinpkgAction {
 }
 
 /// `em select <module>` — native, eselect-like config selectors
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum SelectCommand {
-    #[command(about = "Select the system/sysroot profile (cross-aware)")]
+    #[usage(help = "Select the system/sysroot profile (cross-aware)")]
     Profile {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: ProfileAction,
     },
-    #[command(
-        visible_alias = "repos",
-        about = "Manage local repositories (overlays)"
-    )]
+    #[usage(alias = "repos", help = "Manage local repositories (overlays)")]
     Repository {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: RepositoryAction,
     },
-    #[command(
-        visible_alias = "gcc",
-        about = "Select the active compiler profile (gcc-config/eselect gcc workalike)"
+    #[usage(
+        alias = "gcc",
+        help = "Select the active compiler profile (gcc-config/eselect gcc workalike)"
     )]
     Compiler {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: CompilerAction,
     },
-    #[command(
-        about = "Select the active binutils profile (binutils-config/eselect binutils workalike)"
+    #[usage(
+        help = "Select the active binutils profile (binutils-config/eselect binutils workalike)"
     )]
     Binutils {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: BinutilsAction,
     },
-    #[command(about = "Select the active linker profile")]
+    #[usage(help = "Select the active linker profile")]
     Linker {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: LinkerAction,
     },
-    #[command(about = "Select the active LLVM/clang slot")]
+    #[usage(help = "Select the active LLVM/clang slot")]
     Clang {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: ClangAction,
     },
-    #[command(about = "Select the pkg-config backend and create the <CTARGET>-pkg-config wrapper")]
+    #[usage(help = "Select the pkg-config backend and create the <CTARGET>-pkg-config wrapper")]
     Pkgconf {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: PkgconfAction,
     },
-    #[command(
-        visible_alias = "mirror",
-        about = "Manage Gentoo distfile mirrors (mirrorselect workalike)"
+    #[usage(
+        alias = "mirror",
+        help = "Manage Gentoo distfile mirrors (mirrorselect workalike)"
     )]
     Mirrors {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: MirrorAction,
     },
-    #[command(about = "Read/manage GLEP 42 news items (eselect news workalike)")]
+    #[usage(help = "Read/manage GLEP 42 news items (eselect news workalike)")]
     News {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         command: Option<NewsCommand>,
     },
-    #[command(about = "Check/fix Gentoo Linux Security Advisories (glsa-check workalike)")]
+    #[usage(help = "Check/fix Gentoo Linux Security Advisories (glsa-check workalike)")]
     Glsa {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         command: Option<GlsaCommand>,
     },
 }
 
 /// `em select profile <action>`
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum ProfileAction {
-    #[command(about = "List available profiles (marks the current one)")]
+    #[usage(help = "List available profiles (marks the current one)")]
     List,
-    #[command(about = "Show the current profile")]
+    #[usage(help = "Show the current profile")]
     Show,
-    #[command(about = "Set the profile by list number or path (cross-aware: no arch check)")]
+    #[usage(help = "Set the profile by list number or path (cross-aware: no arch check)")]
     Set {
         /// Profile list number (from `list`) or path (e.g. `default/linux/riscv/23.0/rv64/lp64d`)
         target: String,
@@ -2335,23 +3154,23 @@ pub enum ProfileAction {
 }
 
 /// `em select repository <action>` — local repos only (remote sync is a TODO)
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum RepositoryAction {
-    #[command(about = "List configured repositories")]
+    #[usage(help = "List configured repositories")]
     List,
-    #[command(about = "Register an existing local repository")]
+    #[usage(help = "Register an existing local repository")]
     Add {
         /// Repository name
         name: String,
         /// Existing local path to the repository
         location: String,
     },
-    #[command(visible_alias = "rm", about = "Remove a repository's repos.conf entry")]
+    #[usage(alias = "rm", help = "Remove a repository's repos.conf entry")]
     Remove {
         /// Repository name
         name: String,
     },
-    #[command(about = "Create a new local overlay (skeleton + repos.conf entry)")]
+    #[usage(help = "Create a new local overlay (skeleton + repos.conf entry)")]
     Create {
         /// Repository name
         name: String,
@@ -2361,88 +3180,88 @@ pub enum RepositoryAction {
 }
 
 /// `em select compiler <action>` — gcc-config workalike
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum CompilerAction {
-    #[command(about = "List available compiler profiles")]
+    #[usage(help = "List available compiler profiles")]
     List {
         /// Target tuple (CTARGET) to list profiles for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Show the current compiler profile")]
+    #[usage(help = "Show the current compiler profile")]
     Show {
         /// Target tuple (CTARGET) to show profile for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Set the active compiler profile")]
+    #[usage(help = "Set the active compiler profile")]
     Set {
         /// Compiler profile to activate (e.g., `riscv64-unknown-linux-gnu-16` or `1` for list number)
         profile: String,
         /// Target tuple (CTARGET) for cross-compiler selection
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
 }
 
 /// `em select binutils <action>` — binutils-config workalike
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum BinutilsAction {
-    #[command(about = "List available binutils profiles")]
+    #[usage(help = "List available binutils profiles")]
     List {
         /// Target tuple (CTARGET) to list profiles for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Show the current binutils profile")]
+    #[usage(help = "Show the current binutils profile")]
     Show {
         /// Target tuple (CTARGET) to show profile for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Set the active binutils profile")]
+    #[usage(help = "Set the active binutils profile")]
     Set {
         /// Binutils profile to activate (e.g., `riscv64-unknown-linux-gnu-2.46.0` or `1` for list number)
         profile: String,
         /// Target tuple (CTARGET) for cross-binutils selection
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
 }
 
 /// `em select linker <action>` — linker profile selection
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum LinkerAction {
-    #[command(about = "List available linker profiles")]
+    #[usage(help = "List available linker profiles")]
     List {
         /// Target tuple (CTARGET) to list profiles for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Show the current linker profile")]
+    #[usage(help = "Show the current linker profile")]
     Show {
         /// Target tuple (CTARGET) to show profile for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Set the active linker profile")]
+    #[usage(help = "Set the active linker profile")]
     Set {
         /// Linker profile to activate (e.g., `riscv64-unknown-linux-gnu-lld-18` or `1` for list number)
         profile: String,
         /// Target tuple (CTARGET) for cross-linker selection
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
 }
 
 /// `em select clang <action>` — LLVM/clang slot selection
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum ClangAction {
-    #[command(about = "List available LLVM/clang slots")]
+    #[usage(help = "List available LLVM/clang slots")]
     List,
-    #[command(about = "Show the current LLVM/clang slot")]
+    #[usage(help = "Show the current LLVM/clang slot")]
     Show,
-    #[command(about = "Set the active LLVM/clang slot")]
+    #[usage(help = "Set the active LLVM/clang slot")]
     Set {
         /// LLVM slot to activate: a slot (`22`), a slot qualified by where it
         /// lives (`22@host`, `22@prefix`), or a `list` number. A bare slot present
@@ -2455,40 +3274,40 @@ pub enum ClangAction {
 /// and creates the `<CTARGET>-pkg-config` wrapper real crossdev provides but
 /// `em` otherwise never builds (`toolchain-funcs.eclass`'s `tc-getPKG_CONFIG`
 /// searches `$PATH` for exactly this name).
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum PkgconfAction {
-    #[command(about = "List available pkg-config backends (pkgconf, pkg-config)")]
+    #[usage(help = "List available pkg-config backends (pkgconf, pkg-config)")]
     List {
         /// Target tuple (CTARGET) to show the wrapper for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Show the backend the <target>-pkg-config wrapper currently points at")]
+    #[usage(help = "Show the backend the <target>-pkg-config wrapper currently points at")]
     Show {
         /// Target tuple (CTARGET) to show the wrapper for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
-    #[command(about = "Create/update the <target>-pkg-config wrapper")]
+    #[usage(help = "Create/update the <target>-pkg-config wrapper")]
     Set {
         /// Backend to wrap (`pkgconf`, `pkg-config`, or a list number from `list`)
         backend: String,
         /// Target tuple (CTARGET) to create the wrapper for
-        #[arg(short, long)]
+        #[usage(short, long)]
         target: Option<String>,
     },
 }
 
 /// `em select mirrors <action>` — mirrorselect workalike for `GENTOO_MIRRORS`
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum MirrorAction {
     /// List available Gentoo distfile mirrors (marks those already selected)
     List {
         /// Keep only mirrors in this ISO country code (e.g. `US`, `DE`)
-        #[arg(short, long)]
+        #[usage(short, long)]
         country: Option<String>,
         /// Keep only mirrors in this region (e.g. `Europe`, `North America`)
-        #[arg(short, long)]
+        #[usage(short, long)]
         region: Option<String>,
     },
     /// Show the currently configured `GENTOO_MIRRORS` value
@@ -2498,168 +3317,166 @@ pub enum MirrorAction {
         /// Explicit mirror URLs to use
         ///
         /// If omitted, mirrors are picked from `--country`/`--region` instead.
-        #[arg(value_name = "URL")]
+        #[usage(value_name = "URL")]
         urls: Vec<String>,
         /// Use every mirror in this ISO country code
-        #[arg(short, long)]
+        #[usage(short, long)]
         country: Option<String>,
         /// Use every mirror in this region
-        #[arg(short, long)]
+        #[usage(short, long)]
         region: Option<String>,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum PkgCommand {
-    #[command(about = "Edit per-package USE flags in package.use")]
+    #[usage(help = "Edit per-package USE flags in package.use")]
     Use {
         /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
         /// Add flags (written verbatim, e.g. truetype) — euse calls this
         /// --enable/-E
-        #[arg(
-            short = 'a',
-            long = "add",
-            visible_short_alias = 'E',
-            value_name = "FLAG"
-        )]
+        #[usage(short = 'E', short = 'a', long = "add", value_name = "FLAG")]
         add: Vec<String>,
         /// Subtract flags (written with leading '-', e.g. -themes) — euse
         /// calls this --disable/-D
-        #[arg(
-            short = 's',
-            long = "subtract",
-            visible_short_alias = 'D',
-            value_name = "FLAG"
-        )]
+        #[usage(short = 'D', short = 's', long = "subtract", value_name = "FLAG")]
         subtract: Vec<String>,
         /// Drop flags entirely (removes both flag and -flag forms) — euse
         /// calls this --remove/-R or --prune/-P
-        #[arg(
+        #[usage(
+            short = 'R',
+            short = 'P',
             short = 'd',
             long = "drop",
-            visible_short_aliases = ['R', 'P'],
             value_name = "FLAG"
         )]
         drop: Vec<String>,
         /// Preview the resulting entry without writing package.use
-        #[arg(short = 'n', long = "dry-run")]
+        #[usage(short = 'n', long = "dry-run")]
         dry_run: bool,
         /// Show descriptions for the given USE flags on this package
         /// (metadata.xml/use.local.desc first, falling back to the global
         /// profiles/use.desc)
-        #[arg(
+        #[usage(
             short = 'i',
             long = "info",
             value_name = "FLAG",
-            conflicts_with_all = ["add", "subtract", "drop"]
+            conflicts("add", "subtract", "drop")
         )]
         info: Vec<String>,
         /// Target file inside package.use/ (default: `<cat>-<pkg>`)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,
     },
-    #[command(about = "Edit per-package keywords in package.accept_keywords")]
+    #[usage(help = "Edit per-package keywords in package.accept_keywords")]
     Keyword {
         /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
         /// Add keyword tokens (e.g. `~amd64`, `-*`)
-        #[arg(short = 'a', long = "add", value_name = "KW")]
+        #[usage(short = 'a', long = "add", value_name = "KW")]
         add: Vec<String>,
         /// Subtract keyword tokens (written with leading '-', e.g. `-~amd64`)
-        #[arg(short = 's', long = "subtract", value_name = "KW")]
+        #[usage(short = 's', long = "subtract", value_name = "KW")]
         subtract: Vec<String>,
         /// Drop keyword tokens entirely (removes both the token and its negated form)
-        #[arg(short = 'd', long = "drop", value_name = "KW")]
+        #[usage(short = 'd', long = "drop", value_name = "KW")]
         drop: Vec<String>,
         /// Target file inside package.accept_keywords/ (default: `<cat>-<pkg>`)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,
     },
-    #[command(about = "Add/remove a package from package.mask")]
+    #[usage(help = "Add/remove a package from package.mask")]
     Mask {
         /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
         /// Add the atom to package.mask
-        #[arg(short = 'a', long = "add")]
+        #[usage(short = 'a', long = "add")]
         add: bool,
         /// Remove the atom from package.mask
-        #[arg(short = 'd', long = "drop")]
+        #[usage(short = 'd', long = "drop")]
         drop: bool,
         /// Target file inside package.mask/ (default: `<cat>-<pkg>`)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,
     },
-    #[command(about = "Edit per-package env files in package.env")]
+    #[usage(help = "Edit per-package env files in package.env")]
     Env {
         /// Package atom (e.g. sys-boot/grub or >=dev-libs/foo-1.0)
         atom: String,
         /// Add env file name(s) (from `/etc/portage/env/`) to apply to this package
-        #[arg(short = 'a', long = "add", value_name = "ENVFILE")]
+        #[usage(short = 'a', long = "add", value_name = "ENVFILE")]
         add: Vec<String>,
         /// Drop env file name(s) from this package's entry
-        #[arg(short = 'd', long = "drop", value_name = "ENVFILE")]
+        #[usage(short = 'd', long = "drop", value_name = "ENVFILE")]
         drop: Vec<String>,
         /// Target file inside package.env/ (default: `<cat>-<pkg>`)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         path: Option<camino::Utf8PathBuf>,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum QueryCommand {
-    #[command(about = "Find which package owns a file", alias = "b")]
+    #[usage(help = "Find which package owns a file", alias_hidden = "b")]
     Belongs {
         /// File path(s) to look up in the VDB contents records
-        #[arg(required = true)]
+        #[usage(required)]
         file: Vec<String>,
     },
-    #[command(about = "Verify checksums of installed package", alias = "k")]
+    #[usage(help = "Verify checksums of installed package", alias_hidden = "k")]
     Check {
         /// Installed package atom(s) to verify
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
-    #[command(about = "List packages depending on an atom", alias = "d")]
+    #[usage(help = "List packages depending on an atom", alias_hidden = "d")]
     Depends {
         /// Atom(s) whose dependents to list
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
-    #[command(about = "Display full dependency tree", alias = "g")]
+    #[usage(
+        help = "Display full dependency tree",
+        alias_hidden = "g",
+        example = "em query depgraph zlib"
+    )]
     Depgraph {
         /// Atom(s) to resolve and display the dependency tree for
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
         /// Output format
-        #[arg(long, short, value_enum, default_value = "pretty")]
+        #[usage(long, short, value_enum, default = "pretty")]
         format: DepgraphFormat,
         /// Let the solver choose USE flags to satisfy REQUIRED_USE (Level C)
-        #[arg(long)]
+        #[usage(long)]
         autosolve_use: bool,
-        #[command(flatten)]
+        #[usage(flatten)]
         depgraph_flags: DepgraphFlags,
         /// Treat every atom as not-yet-installed (emerge's `-e`/`--emptytree`)
-        #[arg(short = 'e', long)]
+        #[usage(short = 'e', long)]
         emptytree: bool,
         /// Only show dependencies, excluding the given atoms themselves from the tree
-        #[arg(short = 'o', long)]
+        #[usage(short = 'o', long)]
         onlydeps: bool,
         /// Include build-time dependencies (BDEPEND) in the resolution
-        #[arg(long)]
+        #[usage(long)]
         with_bdeps: bool,
         /// emerge's `--root-deps[=rdeps]`: only require RDEPEND (not DEPEND)
         /// to be satisfiable in the merge target.
-        #[arg(long = "root-deps")]
+        #[usage(long = "root-deps")]
         root_deps: bool,
     },
-    #[command(about = "List files installed by a package", alias = "f")]
+    #[usage(help = "List files installed by a package", alias_hidden = "f")]
     Files {
         /// Atom(s) whose installed file list to show
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
-    #[command(about = "List installed packages by a VDB field value", alias = "a")]
+    #[usage(
+        help = "List installed packages by a VDB field value",
+        alias_hidden = "a"
+    )]
     Has {
         /// VDB field to match, e.g. `SLOT`, `USE`, `repository`
         field: String,
@@ -2667,108 +3484,116 @@ pub enum QueryCommand {
         /// field is set at all
         value: Option<String>,
     },
-    #[command(about = "List packages with a given USE flag in IUSE", alias = "h")]
+    #[usage(
+        help = "List packages with a given USE flag in IUSE",
+        alias_hidden = "h"
+    )]
     Hasuse {
         /// USE flag name(s) to search for in IUSE
-        #[arg(required = true)]
+        #[usage(required)]
         flag: Vec<String>,
     },
-    #[command(about = "Display keyword status across architectures", alias = "y")]
+    #[usage(
+        help = "Display keyword status across architectures",
+        alias_hidden = "y"
+    )]
     Keywords {
         /// Atom(s) to show keyword status for
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
-    #[command(about = "List installed/available packages matching a pattern")]
+    #[usage(help = "List installed/available packages matching a pattern")]
     List {
         /// List only installed packages (from VDB), not available ones
-        #[arg(short = 'I', long = "installed")]
+        #[usage(short = 'I', long = "installed")]
         installed: bool,
         /// Glob or substring pattern(s); omit to list all packages
-        #[arg()]
         pattern: Vec<String>,
     },
-    #[command(
-        about = "Display package metadata (maintainer, homepage, etc.)",
-        alias = "m"
+    #[usage(
+        help = "Display package metadata (maintainer, homepage, etc.)",
+        alias_hidden = "m"
     )]
     Meta {
         /// Atom(s) whose metadata to display
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
-    #[command(about = "Display total file size of a package", alias = "s")]
+    #[usage(help = "Display total file size of a package", alias_hidden = "s")]
     Size {
         /// Atom(s) whose installed file size to sum
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
-    #[command(about = "Display USE flags for a package", alias = "u")]
+    #[usage(help = "Display USE flags for a package", alias_hidden = "u")]
     Uses {
         /// Atom(s) whose USE flags to display
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
-    #[command(about = "Print full path to the ebuild for a package", alias = "w")]
+    #[usage(
+        help = "Print full path to the ebuild for a package",
+        alias_hidden = "w"
+    )]
     Which {
         /// Atom(s) to resolve to an ebuild path
-        #[arg(required = true)]
+        #[usage(required)]
         atom: Vec<String>,
     },
 }
 
 /// `em etc <command>`
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum EtcCommand {
-    #[command(about = "Show what each pending file would change")]
+    #[usage(help = "Show what each pending file would change")]
     Diff {
         /// Only files whose path contains this text
         path: Option<String>,
     },
-    #[command(about = "Resolve each pending file interactively")]
+    #[usage(help = "Resolve each pending file interactively")]
     Merge,
 }
 
 /// Batch resolutions for `em etc`
 ///
 /// Mutually exclusive with each other; without any of them `em etc` lists.
-#[derive(clap::Args, Clone, Debug, Default)]
+#[derive(usage::Args, Clone, Debug, Default)]
 pub struct EtcOpts {
     /// Install every pending file over its target
-    #[arg(long, conflicts_with_all = ["use_old", "auto"])]
+    #[usage(long, conflicts("use_old", "auto"))]
     pub use_new: bool,
     /// Discard every pending file, keeping what is installed
-    #[arg(long, conflicts_with_all = ["use_new", "auto"])]
+    #[usage(long, conflicts("use_new", "auto"))]
     pub use_old: bool,
     /// Resolve only what needs no decision: identical files, and those
     /// differing from the installed one in comments or whitespace alone
-    #[arg(long, conflicts_with_all = ["use_new", "use_old"])]
+    #[usage(long, conflicts("use_new", "use_old"))]
     pub auto: bool,
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum CleanTarget {
-    #[command(
-        about = "Remove distfiles no ebuild references",
-        alias = "distfiles",
-        alias = "d"
+    #[usage(
+        help = "Remove distfiles no ebuild references",
+        alias_hidden = "distfiles",
+        alias_hidden = "d"
     )]
     Dist {
-        #[command(flatten)]
+        #[usage(flatten)]
         opts: CleanOpts,
     },
-    #[command(
-        about = "Remove binary packages no ebuild references",
-        alias = "packages",
-        alias = "p"
+    #[usage(
+        help = "Remove binary packages no ebuild references",
+        alias_hidden = "packages",
+        alias_hidden = "p"
     )]
     Pkg {
-        #[command(flatten)]
+        #[usage(flatten)]
         opts: CleanOpts,
     },
-    #[command(about = "Everything above, plus the build logs finished merges leave behind")]
+    #[usage(help = "Everything above, plus the build logs finished merges leave behind")]
     All {
-        #[command(flatten)]
+        #[usage(flatten)]
         opts: CleanOpts,
     },
 }
@@ -2778,49 +3603,49 @@ pub enum CleanTarget {
 /// Deliberately narrower than `eclean`'s: the destructive/interactive modes it
 /// grew are covered here by the global `-p` plus `--deep`, and everything else
 /// it offers is a filter on the same candidate set.
-#[derive(clap::Args, Clone, Debug, Default)]
+#[derive(usage::Args, Clone, Debug, Default)]
 pub struct CleanOpts {
     /// Keep only what installed packages still reference, rather than
     /// everything any ebuild in the tree references
-    #[arg(short = 'd', long)]
+    #[usage(short = 'd', long)]
     pub deep: bool,
     /// Skip files smaller than this (e.g. `10M`, `1G`) — clears the big wins
     /// without touching a long tail of small files
-    #[arg(short = 's', long, value_name = "SIZE")]
+    #[usage(short = 's', long, value_name = "SIZE")]
     pub size_limit: Option<String>,
     /// Keep files modified more recently than this (e.g. `2weeks`, `30d`)
-    #[arg(short = 't', long, value_name = "AGE")]
+    #[usage(short = 't', long, value_name = "AGE")]
     pub time_limit: Option<String>,
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum NewsCommand {
-    #[command(about = "Count unread news items")]
+    #[usage(help = "Count unread news items")]
     Count,
-    #[command(about = "List news items")]
+    #[usage(help = "List news items")]
     List,
-    #[command(
-        about = "Read news items (numbers/names from `list`; \"new\"/\"all\", or none for all unread)"
+    #[usage(
+        help = "Read news items (numbers/names from `list`; \"new\"/\"all\", or none for all unread)"
     )]
     Read {
         /// Item numbers/names from `list`, the single keyword "new" (every
         /// unread item) or "all" (every item), or omit for "new".
         ids: Vec<String>,
     },
-    #[command(about = "Purge read news items")]
+    #[usage(help = "Purge read news items")]
     Purge,
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum GlsaCommand {
-    #[command(about = "List all GLSAs")]
+    #[usage(help = "List all GLSAs")]
     List,
-    #[command(about = "Check for affected GLSAs")]
+    #[usage(help = "Check for affected GLSAs")]
     Check {
         /// GLSA id(s) to check (default: every GLSA in the repo)
         ids: Vec<String>,
     },
-    #[command(about = "Apply a GLSA fix")]
+    #[usage(help = "Apply a GLSA fix")]
     Fix {
         /// GLSA id(s) to fix (default: every affected GLSA)
         ids: Vec<String>,
@@ -2830,62 +3655,60 @@ pub enum GlsaCommand {
 /// `em active <subcommand>` — persistent default `--prefix` / `--local`
 ///
 /// `set` reads the global `--prefix` / `--local` flags (same shape as
-/// `em --prefix DIR setup`), so there is no second set of flag names to
+/// `em setup --prefix DIR`), so there is no second set of flag names to
 /// collide with the globals.
 ///
 /// Entries can be referenced by name, index (0-based), or exact path.
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum ActiveCommand {
     /// Show the registered active context (default when no subcommand)
-    #[command(about = "Show the registered active prefix/local")]
+    #[usage(help = "Show the registered active prefix/local")]
     Show,
     /// Register the invocation's `--prefix` or `--local` as the active context
     ///
     /// Without arguments, reads from `--prefix`/`--local` flags:
-    ///   `em --prefix /home/me/prefix active set`
-    ///   `em --local= active set`           (default `~/.gentoo`)
-    ///   `em --local /other active set`
+    ///   `em active set --prefix /home/me/prefix`
+    ///   `em active set --local=`           (default `~/.gentoo`)
+    ///   `em active --local= set`           (same; flags may precede set)
+    ///   `em active set --local /other`
     ///
     /// With a reference argument, activates an existing entry:
     ///   `em active set my-name`     # by name
     ///   `em active set 0`           # by index
     ///   `em active set /path/to/dir` # by exact path
-    ///
-    /// Note: `em --local active set` is wrong — clap takes `active` as the
-    /// `--local` path. Use `em --local=` or pass an explicit directory.
-    #[command(about = "Register --prefix/--local as active or activate an existing entry")]
+    #[usage(help = "Register --prefix/--local as active or activate an existing entry")]
     Set {
         /// Reference to an existing entry (name, index, or path) to activate
         ///
         /// If not provided, creates a new entry from --prefix/--local flags.
-        #[arg(value_name = "REF")]
+        #[usage(value_name = "REF")]
         reference: Option<String>,
     },
     /// Clear the registered active context
     ///
     /// Use `--all` to remove all entries, not just the active pointer.
-    #[command(about = "Clear the active context (or all entries with --all)")]
+    #[usage(help = "Clear the active context (or all entries with --all)")]
     Clear {
         /// Clear all entries, not just the active pointer
-        #[arg(long)]
+        #[usage(long)]
         all: bool,
     },
     /// Print shell exports for `eval "$(em active env)"` (PATH + markers)
-    #[command(about = "Print shell exports for the active context")]
+    #[usage(help = "Print shell exports for the active context")]
     Env,
     /// List all registered entries
-    #[command(about = "List all registered prefix/local entries")]
+    #[usage(help = "List all registered prefix/local entries")]
     List,
     /// Add a new entry without activating it
     ///
     /// Examples:
-    ///   `em --prefix /home/me/prefix active add my-prefix`
-    ///   `em --local /home/me/.gentoo active add my-gentoo`
-    ///   `em --local= active add`  # adds ~/.gentoo with auto-generated name
-    #[command(about = "Add a new prefix/local entry")]
+    ///   `em active add --prefix /home/me/prefix my-prefix`
+    ///   `em active add --local /home/me/.gentoo my-gentoo`
+    ///   `em active add --local=`  # adds ~/.gentoo with auto-generated name
+    #[usage(help = "Add a new prefix/local entry")]
     Add {
         /// Optional name for the entry. If not provided, uses path basename
-        #[arg(value_name = "NAME")]
+        #[usage(value_name = "NAME")]
         name: Option<String>,
     },
     /// Remove an entry by name, index, or path
@@ -2894,34 +3717,34 @@ pub enum ActiveCommand {
     ///   `em active remove my-name`
     ///   `em active remove 0`           # by index
     ///   `em active remove /path/to/dir` # by exact path
-    #[command(about = "Remove a registered entry")]
+    #[usage(help = "Remove a registered entry")]
     Remove {
         /// Reference to the entry to remove (name, index, or path)
-        #[arg(value_name = "REF")]
+        #[usage(value_name = "REF")]
         reference: String,
     },
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands, Debug, Clone)]
 pub enum LogCommand {
-    #[command(about = "Show currently running merges")]
+    #[usage(help = "Show currently running merges")]
     Current,
-    #[command(about = "Show recent merge history from activity JSONL")]
+    #[usage(help = "Show recent merge history from activity JSONL")]
     List {
         /// Max rows (default 20)
         limit: Option<u32>,
     },
-    #[command(about = "Show merge times for a package (or global median)")]
+    #[usage(help = "Show merge times for a package (or global median)")]
     Time {
         /// Package name/atom substring to filter by; omit for the global median
         atom: Option<String>,
     },
-    #[command(about = "ETA for remainder of a live activity session")]
+    #[usage(help = "ETA for remainder of a live activity session")]
     Predict,
 }
 
 /// How an unprivileged build gets root for `chown`/setuid (see `--privilege`)
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, usage::ValueEnum)]
 pub enum Privilege {
     /// Best compiled-in fake root (pseudoroot, else none) when
     /// unprivileged, real chowns when already root (default).
@@ -2940,7 +3763,7 @@ pub enum Privilege {
 }
 
 /// Output format for `em query depgraph`
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, usage::ValueEnum)]
 pub enum DepgraphFormat {
     /// emerge -p style pretend output
     Pretty,
@@ -2948,8 +3771,4 @@ pub enum DepgraphFormat {
     Json,
     /// cargo tree style dependency tree
     Tree,
-}
-
-fn parse_arch(s: &str) -> std::result::Result<Arch, String> {
-    Arch::from_str(s).map_err(|e| e.to_string())
 }

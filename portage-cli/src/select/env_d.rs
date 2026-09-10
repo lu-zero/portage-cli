@@ -337,7 +337,7 @@ pub(super) fn symlink_force(content: &Utf8Path, link: &Utf8Path) -> Result<()> {
 
 /// Run a list action
 ///
-/// Use `outer_roots()`, not `roots()` — same clap `--target` collision as
+/// Use `outer_roots()`, not `roots()` — same `--target` collision as
 /// [`crate::select::config_portage_dir`]: select must not trigger sysroot
 /// substitution.
 pub fn run_list<T: EnvDProfile>(globals: &Cli) -> Result<()> {
