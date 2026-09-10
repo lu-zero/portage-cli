@@ -108,8 +108,6 @@ fn resolve_path(cli: &cli::Cli, override_path: Option<&Utf8Path>) -> Result<Utf8
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser as _;
-
     use super::*;
 
     fn opts() -> UseOpts<'static> {
@@ -137,7 +135,7 @@ mod tests {
         std::fs::create_dir_all(portage_dir.as_std_path()).unwrap();
         std::fs::write(portage_dir.join("make.conf").as_std_path(), "USE=\"x\"\n").unwrap();
 
-        let cli = cli::Cli::parse_from(["em", "use", "--local", prefix.as_str()]);
+        let cli = crate::cli::parse_cli(&["em", "use", "--local", prefix.as_str()]);
         let resolved = resolve_path(&cli, None).unwrap();
         assert_eq!(resolved, portage_dir.join("make.conf"));
     }
@@ -146,7 +144,7 @@ mod tests {
     fn resolve_path_explicit_override_wins() {
         let dir = tempfile::tempdir().unwrap();
         let explicit = Utf8Path::from_path(dir.path()).unwrap().join("custom.conf");
-        let cli = cli::Cli::parse_from(["em", "use"]);
+        let cli = crate::cli::parse_cli(&["em", "use"]);
         let resolved = resolve_path(&cli, Some(&explicit)).unwrap();
         assert_eq!(resolved, explicit);
     }
@@ -159,7 +157,7 @@ mod tests {
         let path = Utf8Path::from_path(dir.path()).unwrap().join("make.conf");
         std::fs::write(path.as_std_path(), "USE=\"ssl\"\n").unwrap();
 
-        let cli = cli::Cli::parse_from(["em", "use"]);
+        let cli = crate::cli::parse_cli(&["em", "use"]);
         run(
             &cli,
             &UseOpts {
@@ -184,7 +182,7 @@ mod tests {
         let path = Utf8Path::from_path(dir.path()).unwrap().join("make.conf");
         std::fs::write(path.as_std_path(), "USE=\"ssl themes bar\"\n").unwrap();
 
-        let cli = cli::Cli::parse_from(["em", "use"]);
+        let cli = crate::cli::parse_cli(&["em", "use"]);
         run(
             &cli,
             &UseOpts {
@@ -211,7 +209,7 @@ mod tests {
         let path = Utf8Path::from_path(dir.path()).unwrap().join("make.conf");
         std::fs::write(path.as_std_path(), "USE=\"ssl\"\nVIDEO_CARDS=\"intel\"\n").unwrap();
 
-        let cli = cli::Cli::parse_from(["em", "use"]);
+        let cli = crate::cli::parse_cli(&["em", "use"]);
         run(
             &cli,
             &UseOpts {

@@ -14,9 +14,10 @@
 //! same `glibc ↔ gcc` cycle as a cross toolchain, broken the same staged way.
 //!
 //! The install location follows em's root model: the sysroot is
-//! `<EROOT>/usr/<CTARGET>`, so `em crossdev <t>` targets `/usr/<CTARGET>` (like
-//! crossdev), `em --local crossdev <t>` targets `~/.gentoo/usr/<CTARGET>`, and
-//! `em --prefix DIR`/`--root DIR` retarget under `DIR`.
+//! `<EROOT>/usr/<CTARGET>`, so `em crossdev --target <t>` targets `/usr/<CTARGET>`
+//! (like crossdev), `em crossdev --local --target <t>` targets
+//! `~/.gentoo/usr/<CTARGET>`, and `--prefix DIR` retargets under `DIR`.
+//! `--root` is not accepted on `crossdev`.
 //!
 //! ## `cross-<CTARGET>/gcc` vs `sys-devel/gcc` — two different packages
 //!
@@ -96,10 +97,8 @@ fn overlay_name(target: &CrossTarget) -> String {
 }
 
 pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
-    let tuple = args
-        .topology
-        .target
-        .clone()
+    let tuple = globals
+        .target()
         .ok_or_else(|| anyhow::anyhow!("em crossdev needs a target tuple: pass --target/-T"))?;
     let target = CrossTarget::parse(&tuple, args.llvm)?;
 
@@ -109,9 +108,8 @@ pub async fn run(args: &CrossdevArgs, globals: &Cli) -> Result<()> {
         show_target_cfg(&target, globals, &extras);
         return Ok(());
     }
-    // `--root` is no longer reachable here at all — `CrossdevArgs` never
-    // flattens `RootArg`, so it's a clap parse error in any position (see
-    // `CrossdevArgs`'s doc comment), not something to catch at runtime.
+    // `--root` after `crossdev` is a parse error; prefix `--root` is a try_into
+    // reject. Neither reaches this function.
     if args.init_target {
         return init_target(
             &target,
@@ -220,7 +218,7 @@ async fn setup(
     };
     // Empty-target bootstrap: plain DEPEND is not satisfiable yet. Matches
     // crossdev's `<CTARGET>-emerge` (always implies `--root-deps=rdeps`).
-    let mut merge_flags = args.merge_flags.clone();
+    let mut merge_flags = globals.merge_flags();
     merge_flags.root_deps = true;
     // Host-side `cross-*` tools must resolve against the outer EROOT, not the
     // `--target` sysroot (sysroot make.conf is target-arch). Under `-p`,
@@ -255,7 +253,7 @@ async fn setup(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: args.depgraph_flags.clone(),
+            depgraph_flags: globals.depgraph_flags(),
             merge_flags,
             use_outer_eroot: true,
             target_only_installed_view: false,
@@ -523,8 +521,8 @@ fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseOverride>)> {
     )]
 }
 
-/// `em toolchain --setup`: bootstrap a self-hosting native toolchain into `--root`
-/// (`CHOST == CBUILD`)
+/// `em toolchain --setup`: bootstrap a self-hosting native toolchain
+/// (`CHOST == CBUILD`) into `--root` / `--prefix` / `--local`
 ///
 /// The native twin of crossdev `--setup`, sharing its staged driver but with the *native*
 /// plan (baselayout → binutils → os-headers → full glibc → full gcc): the seed compiler at
@@ -540,17 +538,17 @@ fn native_toolchain_package_use() -> Vec<(Dep, Vec<UseOverride>)> {
 ///
 /// This is the *toolchain* primitive only — the compiler the stages build
 /// against. The actual stage production (stage1 `packages.build`, stage3
-/// `--emptytree @system`) lives in `em stages`. Requires `--root <dir>` (a
-/// toolchain into `/` is meaningless). With `-p` each step prints its plan
-/// instead of building.
+/// `--emptytree @system`) lives in `em stages`. A toolchain into host `/`
+/// is meaningless; pass `--root`, `--prefix`, or `--local`. With `-p` each
+/// step prints its plan instead of building.
 pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -> Result<()> {
     if !args.setup {
         bail!(
             "em toolchain does setup only for now — pass --setup to bootstrap the \
-             native toolchain into --root"
+             native toolchain"
         );
     }
-    if args.topology.target.is_some() && args.root_arg.root.is_some() {
+    if globals.target().is_some() && (args.root_arg.root.is_some() || globals.root.is_some()) {
         bail!(
             "em toolchain --setup does not take --root together with --target: \
              --root under --target is `stages`' board-root override, and a native \
@@ -577,14 +575,14 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     .ok();
     // Empty-ROOT bootstrap: plain DEPEND is a cycle (glibc ↔ libxcrypt ↔ …).
     // Same `--root-deps=rdeps` as crossdev --setup.
-    let mut merge_flags = args.merge_flags.clone();
+    let mut merge_flags = globals.merge_flags();
     merge_flags.root_deps = true;
     let extra_package_use = native_toolchain_package_use();
     run_staged(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: args.depgraph_flags.clone(),
+            depgraph_flags: globals.depgraph_flags(),
             merge_flags,
             use_outer_eroot: false,
             target_only_installed_view: true,
@@ -630,8 +628,13 @@ pub(crate) async fn stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Resu
 /// board-root override in `Cli::roots()` only kicks in for a bare
 /// `--target`+`--root` combo, so a bare `--target` alone would silently
 /// install stage1/stage3 straight into the shared toolchain sysroot.
-fn require_explicit_root_under_target(args: &crate::cli::StagesArgs, action: &str) -> Result<()> {
-    if args.topology.target.is_some() && args.root_arg.root.is_none() {
+fn require_explicit_root_under_target(
+    globals: &Cli,
+    args: &crate::cli::StagesArgs,
+    action: &str,
+) -> Result<()> {
+    let root = args.root_arg.root.as_deref().or(globals.root.as_deref());
+    if globals.target().is_some() && root.is_none() {
         bail!(
             "{action} requires --root under --target: pass --root <board dir> \
              to pick where packages install, or drop --target to build into \
@@ -642,7 +645,7 @@ fn require_explicit_root_under_target(args: &crate::cli::StagesArgs, action: &st
 }
 
 async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
-    require_explicit_root_under_target(args, "em stages --stage1")?;
+    require_explicit_root_under_target(globals, args, "em stages --stage1")?;
     let roots = globals.roots();
     let merge_root = roots.merge_root();
     globals.require_root_distinct_from_host(&roots, "em stages --stage1")?;
@@ -671,9 +674,9 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
             RunStagedOpts {
                 plan: refresh_plan,
                 globals,
-                depgraph_flags: args.depgraph_flags.clone(),
+                depgraph_flags: globals.depgraph_flags(),
                 // Stages seed PKGDIR for the next re-roll (catalyst model).
-                merge_flags: with_buildpkg(args.merge_flags.clone()),
+                merge_flags: with_buildpkg(globals.merge_flags()),
                 use_outer_eroot: true,
                 target_only_installed_view: false,
                 extra_aliases: &[],
@@ -695,13 +698,13 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     // packages like app-alternatives/* violate REQUIRED_USE until Level-C
     // cedes those flags. Always enable --autosolve-use; cede prefers the
     // ebuild's + IUSE default when the config left the flag off.
-    let mut stage1_merge = with_buildpkg(args.merge_flags.clone());
+    let mut stage1_merge = with_buildpkg(globals.merge_flags());
     stage1_merge.autosolve_use = true;
     run_staged(
         RunStagedOpts {
             plan: &plan,
             globals,
-            depgraph_flags: args.depgraph_flags.clone(),
+            depgraph_flags: globals.depgraph_flags(),
             merge_flags: stage1_merge,
             use_outer_eroot: false,
             // A board root's plan must not be satisfied by the shared
@@ -725,7 +728,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
 
 /// Emptytree `@system` rebuild into `--root` (catalyst stage3)
 async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> {
-    require_explicit_root_under_target(args, "em stages --stage3")?;
+    require_explicit_root_under_target(globals, args, "em stages --stage3")?;
     let roots = globals.roots();
     let merge_root = roots.merge_root();
     globals.require_root_distinct_from_host(&roots, "em stages --stage3")?;
@@ -741,11 +744,11 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     // Catalyst `stage3/chroot.sh`: emerge -e --update --deep --with-bdeps=y @system.
     // Force those knobs on top of the user's merge/depgraph flags; still seed
     // PKGDIR with -b like stage1.
-    let mut merge_flags = with_buildpkg(args.merge_flags.clone());
+    let mut merge_flags = with_buildpkg(globals.merge_flags());
     merge_flags.emptytree = true;
     merge_flags.update = true;
     merge_flags.with_bdeps = true;
-    let mut depgraph_flags = args.depgraph_flags.clone();
+    let mut depgraph_flags = globals.depgraph_flags();
     depgraph_flags.deep = true;
 
     crate::emerge_atoms(
@@ -1055,11 +1058,11 @@ fn show_target_cfg(target: &CrossTarget, globals: &Cli, extras: &[Cpn]) {
 async fn init_target(
     target: &CrossTarget,
     globals: &Cli,
-    args: &CrossdevArgs,
+    _args: &CrossdevArgs,
     extras: &[Cpn],
     policy: config_plan::RefreshPolicy,
 ) -> Result<config_plan::Outcome> {
-    let ask = args.merge_flags.ask;
+    let ask = globals.merge_flags().ask;
     // For a retargeted prefix (`--local`/`--prefix`/`--root`) bootstrap it first:
     // `setup::bootstrap` writes the prefix `bashrc` that re-adds `<EROOT>/usr/bin`
     // to the build PATH (the shell sanitiser strips `$HOME` paths, so a `--local`
@@ -1734,7 +1737,6 @@ fn host_chost() -> String {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
 
     use super::*;
 
@@ -1746,7 +1748,6 @@ mod tests {
             show_target_cfg,
             ex_pkg: Vec::new(),
             ex_gdb: false,
-            topology: crate::cli::Topology::default(),
             depgraph_flags: crate::cli::DepgraphFlags::default(),
             merge_flags: crate::cli::MergeFlags::default(),
             activity: crate::cli::ActivityArgs::default(),
@@ -1762,7 +1763,7 @@ mod tests {
     fn parse_crossdev(argv: &[&str]) -> Cli {
         let mut full = vec!["em", "crossdev"];
         full.extend_from_slice(argv);
-        Cli::parse_from(full)
+        crate::cli::parse_cli(&full)
     }
 
     // Test-only compatibility shim: build the alias `ConfigEntry` and apply
@@ -1824,56 +1825,49 @@ mod tests {
     #[tokio::test]
     async fn setup_with_root_is_rejected() {
         // `--root` after `crossdev` has nowhere to land at all now
-        // (`CrossdevArgs` never flattens `RootArg`) — a clap parse error,
+        // (`CrossdevArgs` never flattens `RootArg`) — a parse error,
         // not a runtime one.
-        assert!(
-            Cli::try_parse_from([
-                "em",
-                "crossdev",
-                "--target",
-                "riscv64-unknown-linux-gnu",
-                "--root",
-                "/tmp/board",
-                "--setup",
-            ])
-            .is_err()
-        );
+        let argv = crate::cli::os_argv(&[
+            "em",
+            "crossdev",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/tmp/board",
+            "--setup",
+        ]);
+        assert!(Cli::try_parse_from(&argv).is_err());
     }
 
     #[tokio::test]
     async fn init_target_with_root_is_rejected() {
-        assert!(
-            Cli::try_parse_from([
-                "em",
-                "crossdev",
-                "--target",
-                "riscv64-unknown-linux-gnu",
-                "--root",
-                "/tmp/board",
-                "--init-target",
-            ])
-            .is_err()
-        );
+        let argv = crate::cli::os_argv(&[
+            "em",
+            "crossdev",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/tmp/board",
+            "--init-target",
+        ]);
+        assert!(Cli::try_parse_from(&argv).is_err());
     }
 
     // `--root` alongside `--show-target-cfg` used to be harmlessly ignored;
-    // now it's a clap parse error like every other `crossdev` + `--root`
-    // combination, in any position (see `CrossdevArgs`'s doc comment) — a
-    // deliberate small tightening, not a regression in anything that mattered.
+    // now it's a parse error like every other `crossdev` + `--root`
+    // combination after the applet — a deliberate small tightening.
     #[tokio::test]
     async fn show_target_cfg_with_root_is_rejected() {
-        assert!(
-            Cli::try_parse_from([
-                "em",
-                "crossdev",
-                "--target",
-                "riscv64-unknown-linux-gnu",
-                "--root",
-                "/tmp/board",
-                "--show-target-cfg",
-            ])
-            .is_err()
-        );
+        let argv = crate::cli::os_argv(&[
+            "em",
+            "crossdev",
+            "--target",
+            "riscv64-unknown-linux-gnu",
+            "--root",
+            "/tmp/board",
+            "--show-target-cfg",
+        ]);
+        assert!(Cli::try_parse_from(&argv).is_err());
     }
 
     /// Parse `["em", "toolchain", ...argv]`; callers destructure `cli.applet`
@@ -1881,7 +1875,7 @@ mod tests {
     fn parse_toolchain(argv: &[&str]) -> Cli {
         let mut full = vec!["em", "toolchain"];
         full.extend_from_slice(argv);
-        Cli::parse_from(full)
+        crate::cli::parse_cli(&full)
     }
 
     #[tokio::test]
@@ -2385,9 +2379,8 @@ mod tests {
     // Build a `Cli` whose roots resolve under `root`, so `setup_root`/config
     // helpers used by the writer land inside the tempdir.
     fn test_cli_at_root(root: &camino::Utf8Path) -> Cli {
-        use clap::Parser;
         // `--config-root` scopes both config reads and `setup_root` writes.
-        Cli::parse_from([
+        crate::cli::parse_cli(&[
             "em",
             "emerge",
             "--config-root",
@@ -2523,11 +2516,14 @@ mod tests {
     // `stages --stage1`/`--stage3` under a bare `--target` need an explicit
     // `--root` (the board-root override) — a bare `--target` alone would
     // silently install straight into the shared toolchain sysroot instead.
-    fn stages_args(argv: &[&str]) -> crate::cli::StagesArgs {
+    fn stages_cli(argv: &[&str]) -> Cli {
         let mut full = vec!["em", "stages"];
         full.extend_from_slice(argv);
-        let cli = Cli::parse_from(full);
-        match cli.applet {
+        crate::cli::parse_cli(&full)
+    }
+
+    fn stages_args_of(cli: &Cli) -> &crate::cli::StagesArgs {
+        match &cli.applet {
             Some(crate::cli::Applet::Stages(args)) => args,
             _ => panic!("expected Applet::Stages"),
         }
@@ -2535,10 +2531,10 @@ mod tests {
 
     #[test]
     fn require_explicit_root_under_target_rejects_bare_target() {
-        let bare = stages_args(&["--stage1", "--target", "riscv64-unknown-linux-gnu", "-p"]);
-        assert!(require_explicit_root_under_target(&bare, "test").is_err());
+        let bare = stages_cli(&["--stage1", "--target", "riscv64-unknown-linux-gnu", "-p"]);
+        assert!(require_explicit_root_under_target(&bare, stages_args_of(&bare), "test").is_err());
 
-        let with_root = stages_args(&[
+        let with_root = stages_cli(&[
             "--stage1",
             "--root",
             "/board",
@@ -2546,10 +2542,16 @@ mod tests {
             "riscv64-unknown-linux-gnu",
             "-p",
         ]);
-        assert!(require_explicit_root_under_target(&with_root, "test").is_ok());
+        assert!(
+            require_explicit_root_under_target(&with_root, stages_args_of(&with_root), "test")
+                .is_ok()
+        );
 
         // No `--target` at all: never gated, `--root` is optional as usual.
-        let no_target = stages_args(&["--stage1", "-p"]);
-        assert!(require_explicit_root_under_target(&no_target, "test").is_ok());
+        let no_target = stages_cli(&["--stage1", "-p"]);
+        assert!(
+            require_explicit_root_under_target(&no_target, stages_args_of(&no_target), "test")
+                .is_ok()
+        );
     }
 }

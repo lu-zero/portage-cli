@@ -616,9 +616,9 @@ fn run_show() -> Result<()> {
         Some(s) => s,
         None => {
             println!("(no active prefix/local registered)");
-            println!("Register one with: em --prefix DIR active set");
-            println!("                 or: em --local= active set");
-            println!("                 or: em --local /path active set");
+            println!("Register one with: em active set --prefix DIR");
+            println!("                 or: em active set --local=");
+            println!("                 or: em active set --local /path");
             return Ok(());
         }
     };
@@ -636,9 +636,9 @@ fn run_show() -> Result<()> {
                 }
                 println!("Activate one with: em active set <name|index|path>");
             } else {
-                println!("Register one with: em --prefix DIR active set");
-                println!("                 or: em --local= active set");
-                println!("                 or: em --local /path active set");
+                println!("Register one with: em active set --prefix DIR");
+                println!("                 or: em active set --local=");
+                println!("                 or: em active set --local /path");
             }
         }
     }
@@ -747,7 +747,7 @@ fn run_clear(all: bool) -> Result<()> {
 fn run_env() -> Result<()> {
     let store = load()?.ok_or_else(|| {
         anyhow::anyhow!(
-            "no active prefix/local registered — run \\n             `em --prefix DIR active set` (or `em --local active set`) first"
+            "no active prefix/local registered — run \\n             `em active set --prefix DIR` (or `em active set --local=`) first"
         )
     })?;
 
@@ -821,10 +821,10 @@ fn run_remove(reference: &String) -> Result<()> {
 /// `--root` is intentionally not registerable — active is for unprivileged
 /// prefix/local dogfooding only.
 fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
-    let Some(crate::cli::Applet::Active { topology, .. }) = &globals.applet else {
+    let Some(crate::cli::Applet::Active(_)) = &globals.applet else {
         bail!("em active set/add: internal error, not dispatched from Applet::Active");
     };
-    if let Some(local) = topology.local.as_deref() {
+    if let Some(local) = globals.topology.local.as_deref() {
         let path = if local.is_empty() {
             default_local_path()
         } else {
@@ -836,7 +836,7 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
             path,
         });
     }
-    if let Some(p) = topology.prefix.as_deref() {
+    if let Some(p) = globals.topology.prefix.as_deref() {
         let path = finalize_abs_path(absolutize(Utf8Path::new(p))?)?;
         return Ok(ActiveContext {
             kind: ActiveKind::Prefix,
@@ -845,8 +845,7 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
     }
     bail!(
         "em active set/add needs a target: pass --prefix DIR or --local [DIR]\\n\
-         examples:\\n  em --prefix /home/me/prefix active set\\n  em --local= active set\\n  em --local /other active set\\n\
-         note: bare `em --local active set` steals `active` as the path — use `em --local=` or put a path"
+         examples:\\n  em active set --prefix /home/me/prefix\\n  em active set --local=\\n  em active --local= set\\n  em active set --local /other"
     );
 }
 
@@ -946,7 +945,6 @@ mod tests {
 
     use super::*;
     use crate::test_support::home_lock;
-    use clap::Parser;
 
     struct StateGuard {
         _home: std::sync::MutexGuard<'static, ()>,
@@ -1112,10 +1110,10 @@ path = "/home/u/.gentoo"
         std::fs::create_dir_all(prefix.as_std_path()).unwrap();
         let _g = StateGuard::new(&parent, None);
 
-        let cli = Cli::parse_from(["em", "active", "--prefix", prefix.as_str(), "set"]);
+        let cli = crate::cli::parse_cli(&["em", "active", "--prefix", prefix.as_str(), "set"]);
         match &cli.applet {
-            Some(crate::cli::Applet::Active { command, .. }) => {
-                run(command.as_ref(), &cli).unwrap();
+            Some(crate::cli::Applet::Active(a)) => {
+                run(a.command.as_ref(), &cli).unwrap();
             }
             _ => panic!("expected Active applet"),
         }

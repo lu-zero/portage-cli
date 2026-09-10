@@ -638,7 +638,6 @@ mod tests {
 
     #[test]
     fn merge_interactive_pretend_does_not_mutate() {
-        use clap::Parser;
         let dir = tempfile::tempdir().unwrap();
         let base = camino::Utf8Path::from_path(dir.path()).unwrap();
         let target = base.join("hosts");
@@ -653,7 +652,7 @@ mod tests {
             kind: Kind::Differs,
             bytes: 4,
         }];
-        let globals = Cli::parse_from(["em", "-p", "etc", "merge"]);
+        let globals = crate::cli::parse_cli(&["em", "-p", "etc", "merge"]);
         merge_interactive(&pending, &globals).unwrap();
 
         assert_eq!(

@@ -1,4 +1,4 @@
-//! `em --local setup`'s bootstrap `package.provided` — step 4 of the
+//! `em setup --local`'s bootstrap `package.provided` — step 4 of the
 //! config-root ladder. Under `--local`, BROOT is the prefix itself, so the
 //! host VDB is never woven into BDEPEND satisfaction: `package.provided` is
 //! the only way to tell the solver a host tool exists, not just a

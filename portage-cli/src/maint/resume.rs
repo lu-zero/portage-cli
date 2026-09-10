@@ -381,7 +381,7 @@ pub fn take_for_resume(root: &Utf8Path) -> Result<Option<ResumeState>> {
 /// Semantics (intentionally not a simple OR of two [`crate::cli::MergeFlags`]):
 ///
 /// - **Job shape** bools start from `saved`; a `true` on `cli` turns them
-///   on (clap cannot express "explicitly false" for these flags, so `-r`
+///   on (a bool flag cannot express "explicitly false", so `-r`
 ///   can only *add* shape flags — e.g. `-r --keep-going`). To change the
 ///   job shape in a way that needs a flag *off*, clear the list and
 ///   re-invoke (`em maint cleanresume --fix`).

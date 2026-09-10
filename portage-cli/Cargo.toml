@@ -63,7 +63,7 @@ chrono = { workspace = true }
 indicatif = { workspace = true }
 prodash = { workspace = true, optional = true }
 terminal_size = { workspace = true }
-colorchoice-clap = { workspace = true }
+
 camino = { workspace = true }
 aho-corasick = { workspace = true }
 memchr = { workspace = true }
@@ -81,7 +81,7 @@ roxmltree = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 portage-binpkg = { workspace = true }
-clap = { workspace = true }
+usage = { package = "usage-rs", version = "=6.8.0", features = ["completions"] }
 tokio = { workspace = true, features = ["sync", "signal"] }
 futures-util = { workspace = true }
 thiserror = { workspace = true }
@@ -112,6 +112,11 @@ pseudoroot = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
+usage = { package = "usage-rs", version = "=6.8.0", features = ["test"] }
+# Alias: usage-lib's crate name is also `usage`, which would collide with the facade.
+# Exact pin: help_tree_snapshot and cli_docs catch renderer drift. Bump this
+# and regenerate goldens together.
+usage_lib = { package = "usage-lib", version = "=6.8.0", default-features = false, features = ["docs"] }
 
 [[bench]]
 name = "elfscan"

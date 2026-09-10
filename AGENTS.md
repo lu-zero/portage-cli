@@ -67,7 +67,7 @@ Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/design/
 ## Architecture
 
 - Binary crate producing the `em` command; CLI built with
-  [clap](https://crates.io/crates/clap) derive macros, subcommands of the
+  [usage-rs](https://usage.jdx.dev/rust/) derive macros, subcommands of the
   top-level `Cli` struct. Keep `main.rs` thin; extract modules as complexity grows.
 - Business logic is delegated to the library crates (`portage-atom`,
   `portage-metadata`, `portage-solver`, `portage-resolve`, `portage-repo`,
@@ -97,7 +97,9 @@ Workspace members (14 library/binary crates + `portage-bench`):
 - `portage-cli` — the `em` binary (unpublished)
 - `portage-bench` — benchmark harness (excluded from most CI jobs; compile smoke only)
 
-CLI/runtime deps: `clap`, `tokio`, `anyhow`, `thiserror`.
+CLI/runtime deps: `usage` (usage-rs 6), `tokio`, `anyhow`, `thiserror`.
+Workspace `clap` stays for `portage-repo` (ebuild helpers + examples) and
+`portage-bench`.
 
 ## Local dependency overrides
 
