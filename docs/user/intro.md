@@ -46,7 +46,30 @@ on a forked `brush` pulled straight from git.
 This installs the `em` binary to your `~/.cargo/bin` directory. Ensure this directory is
 on your `PATH`.
 
+### Shell completions
+
+`em completion <shell>` prints a script; eval or source it from the shell's startup file:
+
+```bash
+# bash
+eval "$(em completion bash)"
+
+# zsh
+eval "$(em completion zsh)"
+
+# fish
+em completion fish | source
+```
+
+Also `nu`, `powershell`, and `elvish`.
+
 ### Basic Usage
+
+Documented form is `em [applet] [options] [args]`. True globals (`-p`/`-v`/`-q`,
+`--arch`, `--repo`, `--color`) and Topology (`--prefix`/`--local`/`--config-root`/
+`--vdb`/`--target`) may also appear before a named applet
+(`em --prefix P toolchain`). Prefix emerge-mixins before a non-merge applet
+(`em -a search`, `em -uD query …`) are rejected.
 
 ```bash
 # Search for a package
@@ -142,8 +165,8 @@ chroots:
 
 ```bash
 # Create a minimal stage1 into /var/tmp/stage1
-em --root /var/tmp/stage1 toolchain --setup
-em --root /var/tmp/stage1 stages --stage1
+em toolchain --root /var/tmp/stage1 --setup
+em stages --root /var/tmp/stage1 --stage1
 
 # All packages install under /var/tmp/stage1
 # - config root: / (still reads the host's profile/make.conf — matches real
@@ -182,9 +205,9 @@ config, and toolchain. This is the most powerful topology for unprivileged use:
 ```bash
 # Bootstrap a standalone prefix
 em setup --local ~/.gentoo
-em --config-root ~/.gentoo select profile set default/linux/amd64/23.0/no-multilib
-# TODO: package.provided seed (not yet automated)
-em --local ~/.gentoo toolchain --setup
+em select profile set --local ~/.gentoo default/linux/amd64/23.0/no-multilib
+# package.provided seed is not yet automated
+em toolchain --local ~/.gentoo --setup
 em --local ~/.gentoo firefox
 
 # Everything lives under ~/.gentoo
@@ -296,13 +319,13 @@ em setup --local ~/.gentoo
 em setup --prefix ~/.gentoo-overlay
 
 # Bootstrap a toolchain into an offset root
-em --root /var/tmp/stage1 toolchain --setup
+em toolchain --root /var/tmp/stage1 --setup
 
 # Build a stage1 (packages.build)
-em --root /var/tmp/stage1 stages --stage1
+em stages --root /var/tmp/stage1 --stage1
 
 # Build a stage3 (@system)
-em --root /var/tmp/stage3 stages --stage3
+em stages --root /var/tmp/stage3 --stage3
 ```
 
 ---
@@ -311,8 +334,8 @@ em --root /var/tmp/stage3 stages --stage3
 
 `em` reads configuration from several sources, in this order of precedence:
 
-1. **Command-line flags** (highest priority) — including the few that double
-   as env vars via clap (`ROOT`, `EM_PRIVILEGE`, `EM_EMERGELOG`)
+1. **Command-line flags** (highest priority) — including the few that also
+   read env vars (`ROOT`, `EM_PRIVILEGE`, `EM_EMERGELOG`)
 2. **`/etc/portage/make.conf`** (system-wide; legacy `/etc/make.conf` also
    read) — resolved from `config_root`, which defaults to `--config-root || /`.
    Neither `--root` nor `--prefix` moves it (matches real portage's `ROOT=`,
@@ -357,8 +380,8 @@ Use these flags to control where `em` operates:
 
 ```bash
 # Set up a cross-compilation target
-em --target riscv64-unknown-linux-gnu crossdev --init-target
-em --target riscv64-unknown-linux-gnu crossdev --setup
+em crossdev --target riscv64-unknown-linux-gnu --init-target
+em crossdev --target riscv64-unknown-linux-gnu --setup
 
 # Build packages for the target
 em --target riscv64-unknown-linux-gnu <package>
@@ -397,9 +420,13 @@ See [`docs/user/applets.md`](./applets.md) for detailed status of each applet.
 
 ## Getting Help
 
+A generated flag-by-flag reference lives under [`cli/`](./cli/index.md)
+(`em --help` is the same information in the terminal). The other pages in
+this directory are how-tos, not that reference.
+
 ### Reporting Issues
 
-1. Check if your issue is already known in the [pending work](https://github.com/lu-zero/portage-cli/blob/master/todo/PENDING.md)
+1. Check if your issue is already known in the project's issue tracker
 2. Search existing issues on GitHub
 3. File a new issue with:
    - Your command and its output

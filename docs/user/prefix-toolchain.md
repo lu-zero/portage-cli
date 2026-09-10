@@ -1,79 +1,52 @@
-# Bootstrapping a usable compiler under `em --prefix`
+# Bootstrapping a usable compiler under `--prefix`
 
-How to give a `--prefix` overlay its own real toolchain (gcc, and anything
-built on top of it, e.g. `llvm-core/clang`) and actually **use** the result —
-not just install it. Live-verified end to end 2026-08-08 (commit `2db6198`):
-`llvm-core/clang` built successfully under a `--prefix`'s own gcc, and the
-installed `clang-22` compiled, linked, and ran a real hello-world.
+Give a `--prefix` overlay its own gcc (and anything built on it, e.g. clang)
+and actually **use** the result.
 
-Topology background: [`root-topology.md`](../design/root-topology.md). Design
-context for the wider multi-root bug class:
-[`em-prefix-experiment.md`](../design/em-prefix-experiment.md). For `--local`
-(standalone, no host sharing) see
-[`local-bootstrap.md`](../../todo/local-bootstrap.md).
-
----
+Topology: [`root-topology.md`](../design/root-topology.md). EPREFIX / multi-root
+pitfalls: [`em-prefix-experiment.md`](../design/em-prefix-experiment.md).
 
 ## The ladder
 
 ```sh
-em --prefix P toolchain --setup    # bootstrap baselayout → binutils → headers → glibc → gcc into P
-em --prefix P select gcc set N     # activate P's own gcc (also wires clang's toolchain-detection cfg)
-em --prefix P llvm-core/clang      # (or any package) — now builds using P's own gcc, not the host's
-em --prefix P active set           # register P as the active context
-eval "$(em active env)"            # PATH + LD_LIBRARY_PATH for the current shell
-clang-22 --version                 # works: found on PATH, runs without missing-library errors
+em setup --prefix P
+em toolchain --prefix P --setup    # baselayout → binutils → headers → gcc
+                                   # (no glibc: USE=prefix-guest links the host libc)
+em select gcc set --prefix P N     # activate P's gcc
+em --prefix P llvm-core/clang      # builds with P's gcc, not the host's
+em active set --prefix P           # register P as the active context
+eval "$(em active env)"            # PATH + LD_LIBRARY_PATH for this shell
 ```
 
-No `package.provided` seeding needed here — unlike `--local`, `--prefix`
-shares the host's VDB for `DEPEND`/`BDEPEND` satisfaction, so there's no
-hard-cycle bootstrap problem to solve first.
+`em toolchain --setup` resolves against the prefix VDB only (host packages do
+not count as already installed). `--prefix` still borrows the host libc via
+`prefix-guest`; it does not need `package.provided`.
 
-## Why the last two steps matter
+## Why `em active env` matters
 
-A binary installed under `P` (e.g. `P/usr/lib/llvm/22/bin/clang-22`) uses the
-plain **host** ELF interpreter — `--prefix` is not a true relocatable EPREFIX
-Gentoo Prefix with its own patched loader. That means:
+A binary under `P` uses the **host** ELF interpreter — this is not a relocatable
+Gentoo Prefix with its own loader:
 
-- **`PATH`**: without `em active`, the binary isn't even findable (it isn't
-  under `/usr/bin`; e.g. LLVM installs under `usr/lib/llvm/<slot>/bin`, only
-  reachable via the prefix's own `etc/env.d`).
-- **`LD_LIBRARY_PATH`**: even once found, the binary needs its own
-  just-installed libraries (e.g. `libstdc++.so.6` from `P`'s own gcc) — the
-  host's own `/etc/ld.so.cache` doesn't know about `P` at all. `em active
-  env` exports this too, read from `P/etc/ld.so.conf`.
+- **`PATH`**: LLVM installs under `usr/lib/llvm/<slot>/bin`, only reachable
+  via the prefix's `etc/env.d`.
+- **`LD_LIBRARY_PATH`**: the host `ld.so.cache` does not know `P`'s
+  `libstdc++`. `em active env` exports this from `P/etc/ld.so.conf`.
 
-Skipping `em active` and just invoking `P/usr/lib/llvm/22/bin/clang-22`
-directly reproduces the classic "prefix-confined, unusable" failure
-(`error while loading shared libraries: libstdc++.so.6`) even after a
-successful build — this was the entire 2026-08-05 finding, since superseded.
+Invoking `P/usr/lib/llvm/22/bin/clang-22` without that environment fails with
+`error while loading shared libraries: libstdc++.so.6`. The same gap hits a
+build-time tool a package compiles and re-executes (e.g. `llvm-min-tblgen`);
+`em`'s build shell applies the prefix `ld.so.conf` there — see
+[`em-prefix-experiment.md`](../design/em-prefix-experiment.md).
 
-The same `LD_LIBRARY_PATH` gap also broke the **build itself**: a build-time
-tool a package compiles and re-executes mid-build (e.g. `llvm-core/llvm`'s
-own `llvm-min-tblgen`) hit the identical error. Fixed the same way, in
-`em`'s own build shell (not `em active`'s concern — see
-[`em-prefix-experiment.md`](../design/em-prefix-experiment.md)'s "Related code"
-table).
+## `em select gcc` is not optional
 
-## Negative control: `em select gcc` isn't optional
+Without `toolchain --setup`, `llvm-core/clang` still builds under `--prefix`,
+but with the **host** compiler. The result cannot link against a libc of its
+own. Giving `P` its own gcc is what makes the difference.
 
-Without `toolchain --setup` first (no gcc of its own), `llvm-core/clang`
-still builds under `--prefix` — but using the **host's** clang/gcc for the
-build-time bits, and the result is the original 2026-08-05 "prefix-confined"
-compiler: builds fine, structurally unusable (no libc of its own to link
-against). Giving `P` its own gcc is what makes the difference.
+## `--local`
 
-## `--local` gets the same fix
-
-`em active env`'s `LD_LIBRARY_PATH` export isn't `--prefix`-specific — it's
-keyed purely on the activated path's own `ld.so.conf`. Confirmed live: the
-same already-bootstrapped toolchain, activated via `em --local DIR active
-set` instead of `--prefix`, ran `clang-22 --version` and compiled+linked+ran
-a hello-world identically. See [`local-bootstrap.md`](../../todo/local-bootstrap.md)
-for how a `--local` gets its own gcc in the first place (harder than
-`--prefix`: no host `DEPEND` sharing, needs `package.provided` seeding to
-bootstrap from empty).
-
-## Status
-
-Live-verified 2026-08-08, both `--prefix` and `--local`.
+`em active env`'s `LD_LIBRARY_PATH` export is keyed on the activated path's
+`ld.so.conf`, so `--local` gets the same fix. A standalone `--local` prefix
+does not share the host VDB and needs its own libc; see
+[`stages-and-testing.md`](./stages-and-testing.md).

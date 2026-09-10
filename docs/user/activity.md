@@ -174,12 +174,12 @@ em --root $ROOT -p --eta app-misc/foo
 
 # 3. While a build runs in one terminal, watch it from another:
 em --root $ROOT -1v sys-apps/foo &
-em --root $ROOT log current     # in-flight packages + phase + elapsed
-em --root $ROOT log predict     # ETA for the running session
+em log current --root $ROOT     # in-flight packages + phase + elapsed
+em log predict --root $ROOT     # ETA for the running session
 
 # 4. After it finishes:
-em --root $ROOT log list -n 10
-em --root $ROOT log time sys-apps/foo
+em log list --root $ROOT -n 10
+em log time --root $ROOT sys-apps/foo
 
 # 5. Stream the typed event feed to a file and inspect it:
 em --root $ROOT -1 app-misc/foo --activity-jsonl=/tmp/ev.jsonl

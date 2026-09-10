@@ -1,9 +1,8 @@
 # bash-crossdev package matrix (and how `em` maps today)
 
 Reference for reasoning about `em crossdev` fidelity — especially later
-**clang / LLVM (`-L`)** work. Companion plan: drop the planner-stamped
-`BuildClass` re-classifier for cross-category packages
-([`todo/drop-buildclass.md`](../../todo/drop-buildclass.md)).
+**clang / LLVM (`-L`)** work. Host-vs-target for cross-category packages is
+package.env, not a planner-stamped classifier.
 
 > **Names.** **bash-crossdev** = Gentoo’s `/usr/bin/crossdev`. **`em
 > crossdev`** = this project. **host emerge** = ordinary emerge/`em` of
@@ -104,7 +103,7 @@ package.env).
 | libcxx | **P** | **host** | **Host** | host | no |
 
 em package.env for llvm-runtimes matches bash-crossdev host-env letters as of
-2026-08-07 (`todo/drop-buildclass.md`).
+2026-08-07.
 
 Ebuilds still install target bits into `/usr/${CTARGET}/…` via
 `is_crosspkg` / cmake install prefixes; that is **not** the same as
@@ -140,8 +139,7 @@ This matches bash-crossdev’s K|L vs `*` marker without a second classifier.
 Planner-stamped `BuildClass` was dual authority next to package.env and has
 been removed. Tool selection uses the package.env CTARGET/`TARGET_ABI` sniff;
 PATH/EPREFIX/ESYSROOT specials use a narrow host-codegen PN allowlist
-(`EbuildShell::is_cross_host_codegen`). See
-[`todo/drop-buildclass.md`](../../todo/drop-buildclass.md).
+(`EbuildShell::is_cross_host_codegen`).
 
 ---
 
@@ -156,8 +154,7 @@ When revisiting LLVM/clang cross under `--prefix` / `--local` / bare host:
 4. Compare generated `env/cross_llvm-<T>/*.conf` to a real bash-crossdev `-L`
    tree on the same tuple if available.
 5. Ordinary `em --target T -b llvm-core/clang` is the **other** job
-   (cross-emerge-shaped), not this matrix — keep scenarios separate
-   ([`todo/clang-crossbuild-prefix-local-test-plan.md`](../../todo/clang-crossbuild-prefix-local-test-plan.md)).
+   (cross-emerge-shaped), not this matrix — keep scenarios separate.
 
 ---
 
@@ -181,6 +178,4 @@ rg -n 'cross_llvm|cross-\*' /var/db/repos/gentoo/eclass/crossdev.eclass
 ## See also
 
 - [`docs/crossdev.md`](../user/crossdev.md) — user-facing `em crossdev`  
-- [`docs/root-topology.md`](./root-topology.md) — roots / outer EROOT / use_outer_eroot  
-- [`todo/drop-buildclass.md`](../../todo/drop-buildclass.md) — removal plan  
-- [`todo/root-topology-refactor.md`](../../todo/root-topology-refactor.md) — Track A history  
+- [`docs/root-topology.md`](./root-topology.md) — roots / outer EROOT / use_outer_eroot

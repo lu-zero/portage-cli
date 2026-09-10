@@ -10,8 +10,7 @@ letters see [`bash-crossdev-matrix.md`](./bash-crossdev-matrix.md); for the
 user how-to (bootstrap + use a `--prefix`'s own compiler) see
 [`prefix-toolchain.md`](../user/prefix-toolchain.md).
 
-> **Slop warning.** Prefer the code when this disagrees. Status of live
-> findings may lag in [`todo/for-sonnet.md`](../../todo/for-sonnet.md).
+> **Slop warning.** Prefer the code when this disagrees.
 
 ---
 

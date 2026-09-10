@@ -27,15 +27,13 @@ which prefers an already-bootstrapped prefix's own profile over the host
 (still overridden by an explicit `--config-root`; see the Scenarios table
 below). **`--vdb V`** overrides the base VDB path only.
 
-`--prefix`/`--local`/`--config-root`/`--vdb`/`--target` are each flattened
-onto every applet that resolves a root, so they work in any position for
-that applet (`em query depgraph --root R pkg` and `em query --root R
-depgraph pkg` both work). `--root` is flattened the same way everywhere
-*except* `crossdev`: none of `crossdev`'s three actions read it, so
-`--root` combined with `crossdev` is a clap parse error, not a silent
-no-op — `em toolchain`/`em stages`/`em setup`/`em emerge` (and the bare
-`em <atoms>` form, which parses into the same `Applet::Emerge`) all still
-take it.
+Canonical form is `em [applet] [options] [args]`. Topology flags
+(`--prefix`/`--local`/`--config-root`/`--vdb`/`--target`) and true globals
+may also appear before a named applet (`em --prefix P toolchain` parses).
+`--root` after `crossdev` is a parse error; prefix `em --root R crossdev`
+is rejected. `em toolchain`/`em stages`/`em setup`/`em emerge` (and the
+bare `em <atoms>` form) all still take `--root`. Prefix emerge-mixins
+before a non-merge applet (`em -uD query …`) are rejected.
 
 ### Derived values
 
