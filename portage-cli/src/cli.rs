@@ -250,7 +250,10 @@ fn resolve_argv(raw: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn finish_parse(argv: &[OsString]) -> Validated {
-    match Cli::embedded_outcome_into(&argv[1..]) {
+    match Cli::embedded_outcome_into_paletted(
+        &argv[1..],
+        usage::help::Palette::DEFAULT.metavar("cyan+bold"),
+    ) {
         usage::embedded::Outcome::Parsed(validated) => validated,
         usage::embedded::Outcome::Exit(exit) => {
             if exit.stderr {
