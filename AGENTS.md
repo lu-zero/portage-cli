@@ -101,13 +101,23 @@ CLI/runtime deps: `usage` (usage-rs 6), `tokio`, `anyhow`, `thiserror`.
 Workspace `clap` stays for `portage-repo` (ebuild helpers + examples) and
 `portage-bench`.
 
+Crates.io deps take a semver requirement (`version = "6"`), never an exact
+pin (`=6.8.0`). `Cargo.lock` is gitignored; floating within the requirement
+is intended.
+
+Do not rewrite a crates.io dep as `git = "…", rev = "…"` in `Cargo.toml`.
+Unpublished commits and local checkouts go in gitignored `.cargo/config.toml`
+as `[patch.crates-io]` (`git` + `rev`, or a path).
+
+Git-source workspace deps (`brush-*`, `pkgcraft`, `hakoniwa`) keep a `rev`
+in `Cargo.toml` — that is the source, not a crates.io pin.
+
 ## Local dependency overrides
 
 `brush`/`pkgcraft` are ordinary git dependencies in the workspace `Cargo.toml`
 — a plain `cargo build`/`cargo test` fetches them itself, no sibling checkout
-needed. A path patch in **gitignored** `.cargo/config.toml` is only for
-iterating on local, uncommitted changes to one of those forks (sibling
-`brush` / `pkgcraft` worktrees). Do not commit it. Example shape:
+needed. Path or git-rev patches in **gitignored** `.cargo/config.toml` override
+those (or crates.io) for unpublished work. Do not commit it. Example shape:
 
 ```toml
 [patch."https://github.com/lu-zero/brush.git"]
@@ -117,6 +127,10 @@ brush-parser = { path = "../brush/brush-parser" }
 
 [patch."https://github.com/pkgcraft/pkgcraft.git"]
 pkgcraft = { path = "../pkgcraft/crates/pkgcraft" }
+
+[patch.crates-io]
+usage-rs = { git = "https://github.com/jdx/usage.git", rev = "<rev>" }
+usage-lib = { git = "https://github.com/jdx/usage.git", rev = "<rev>" }
 ```
 
 ## Bumping the brush fork (routine, like a bench run)
