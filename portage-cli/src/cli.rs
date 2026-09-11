@@ -6,6 +6,7 @@ use gentoo_core::Arch;
 use portage_atom_pubgrub::DepClass;
 use portage_resolve::Roots;
 use usage::ValidationError;
+use usage::spec::ValueEnum;
 
 mod activity;
 mod depgraph_flags;
@@ -59,17 +60,26 @@ impl TryFrom<Cli> for Validated {
 }
 
 fn validate(cli: &Cli) -> Result<(), ValidationError> {
-    let Some(root) = cli.root.as_deref() else {
-        return Ok(());
-    };
-    let name = match &cli.applet {
-        Some(Applet::Crossdev(_)) => "crossdev",
-        Some(Applet::Active(_)) => "active",
-        _ => return Ok(()),
-    };
-    Err(ValidationError::field("--root")
-        .value(root)
-        .reason(format!("not valid with the '{name}' applet")))
+    if let Some(root) = cli.root.as_deref() {
+        let name = match &cli.applet {
+            Some(Applet::Crossdev(_)) => Some("crossdev"),
+            Some(Applet::Active(_)) => Some("active"),
+            Some(Applet::Worker(_)) => Some("__worker"),
+            _ => None,
+        };
+        if let Some(name) = name {
+            return Err(ValidationError::field("--root")
+                .value(root)
+                .reason(format!("not valid with the '{name}' applet")));
+        }
+    }
+    if applet_privilege(cli) == Privilege::Auto {
+        privilege_from_env()?;
+    }
+    if !applet_activity(cli).emergelog {
+        env_bool("EM_EMERGELOG")?;
+    }
+    Ok(())
 }
 
 fn overlay_root(applet: &RootArg, cli_root: Option<&str>) -> RootArg {
@@ -78,27 +88,51 @@ fn overlay_root(applet: &RootArg, cli_root: Option<&str>) -> RootArg {
     }
 }
 
-fn privilege_from_env() -> Option<Privilege> {
-    let raw = std::env::var("EM_PRIVILEGE").ok()?;
-    match raw.to_ascii_lowercase().as_str() {
-        "auto" => Some(Privilege::Auto),
-        "sudo" => Some(Privilege::Sudo),
-        "none" => Some(Privilege::None),
-        #[cfg(all(feature = "pseudoroot", any(target_os = "linux", target_os = "macos")))]
-        "pseudoroot" => Some(Privilege::Pseudoroot),
-        #[cfg(all(feature = "hakoniwa", target_os = "linux"))]
-        "hakoniwa" => Some(Privilege::Hakoniwa),
-        _ => None,
+fn privilege_from_env() -> Result<Option<Privilege>, ValidationError> {
+    let Ok(raw) = std::env::var("EM_PRIVILEGE") else {
+        return Ok(None);
+    };
+    match Privilege::from_choice(&raw.to_ascii_lowercase()) {
+        Some(privilege) => Ok(Some(privilege)),
+        None => Err(ValidationError::field("EM_PRIVILEGE")
+            .value(raw)
+            .reason(format!("expected one of {}", Privilege::CHOICES.join(", ")))),
     }
 }
 
-fn env_flag_true(name: &str) -> bool {
-    match std::env::var(name) {
-        Ok(v) => matches!(
-            v.to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on" | "t"
-        ),
-        Err(_) => false,
+fn env_bool(name: &'static str) -> Result<Option<bool>, ValidationError> {
+    let Ok(raw) = std::env::var(name) else {
+        return Ok(None);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" | "t" | "y" => Ok(Some(true)),
+        "0" | "false" | "no" | "off" | "f" | "n" => Ok(Some(false)),
+        _ => Err(ValidationError::field(name)
+            .value(raw)
+            .reason("expected a boolean (1/true/yes or 0/false/no)")),
+    }
+}
+
+fn applet_privilege(cli: &Cli) -> Privilege {
+    match &cli.applet {
+        Some(Applet::Emerge(a)) => a.privilege,
+        Some(Applet::Crossdev(a)) => a.privilege,
+        Some(Applet::Toolchain(a)) => a.privilege,
+        Some(Applet::Stages(a)) => a.privilege,
+        Some(Applet::Setup(a)) => a.privilege,
+        _ => Privilege::Auto,
+    }
+}
+
+fn applet_activity(cli: &Cli) -> ActivityArgs {
+    match &cli.applet {
+        Some(Applet::Emerge(a)) => a.activity.clone(),
+        Some(Applet::Regen(a)) => a.activity.clone(),
+        Some(Applet::Crossdev(a)) => a.activity.clone(),
+        Some(Applet::Toolchain(a)) => a.activity.clone(),
+        Some(Applet::Stages(a)) => a.activity.clone(),
+        Some(Applet::Setup(a)) => a.activity.clone(),
+        _ => ActivityArgs::default(),
     }
 }
 
@@ -523,7 +557,7 @@ impl Cli {
     /// The dispatched applet's own [`MergeFlags`], or the all-default value
     /// for an applet that doesn't carry one.
     pub fn merge_flags(&self) -> MergeFlags {
-        match &self.applet {
+        let mut flags = match &self.applet {
             Some(Applet::Emerge(a)) => a.merge_flags.clone(),
             Some(Applet::Crossdev(a)) => a.merge_flags.clone(),
             Some(Applet::Toolchain(a)) => a.merge_flags.clone(),
@@ -532,7 +566,9 @@ impl Cli {
             Some(Applet::Revdep(a)) => a.merge_flags.clone(),
             Some(Applet::Depclean(a)) => a.merge_flags.clone(),
             _ => MergeFlags::default(),
-        }
+        };
+        flags.json |= self.json;
+        flags
     }
 
     /// The dispatched applet's own [`DepgraphFlags`], for merge applets only — not query.
@@ -550,16 +586,8 @@ impl Cli {
     /// The dispatched applet's own activity-output flags, then `EM_EMERGELOG`
     /// once if still off.
     pub fn effective_activity(&self) -> ActivityArgs {
-        let mut activity = match &self.applet {
-            Some(Applet::Emerge(a)) => a.activity.clone(),
-            Some(Applet::Regen(a)) => a.activity.clone(),
-            Some(Applet::Crossdev(a)) => a.activity.clone(),
-            Some(Applet::Toolchain(a)) => a.activity.clone(),
-            Some(Applet::Stages(a)) => a.activity.clone(),
-            Some(Applet::Setup(a)) => a.activity.clone(),
-            _ => ActivityArgs::default(),
-        };
-        if !activity.emergelog && env_flag_true("EM_EMERGELOG") {
+        let mut activity = applet_activity(self);
+        if !activity.emergelog && env_bool("EM_EMERGELOG").ok().flatten() == Some(true) {
             activity.emergelog = true;
         }
         activity
@@ -567,18 +595,14 @@ impl Cli {
 
     /// The dispatched applet's own `--privilege`, then `EM_PRIVILEGE` once if still `Auto`.
     pub fn effective_privilege(&self) -> Privilege {
-        let applet = match &self.applet {
-            Some(Applet::Emerge(a)) => a.privilege,
-            Some(Applet::Crossdev(a)) => a.privilege,
-            Some(Applet::Toolchain(a)) => a.privilege,
-            Some(Applet::Stages(a)) => a.privilege,
-            Some(Applet::Setup(a)) => a.privilege,
-            _ => Privilege::Auto,
-        };
+        let applet = applet_privilege(self);
         if applet != Privilege::Auto {
             applet
         } else {
-            privilege_from_env().unwrap_or(Privilege::Auto)
+            privilege_from_env()
+                .ok()
+                .flatten()
+                .unwrap_or(Privilege::Auto)
         }
     }
 
@@ -1622,6 +1646,18 @@ mod tests {
     }
 
     #[test]
+    fn prefix_root_then_worker_is_try_into_reject() {
+        let mut argv = worker_argv(&[]);
+        argv.insert(1, "--root");
+        argv.insert(2, "/srv");
+        let err = parse_cli_into(&argv).unwrap_err();
+        assert!(
+            err.contains("InvalidValue --root"),
+            "try_into must reject prefix --root with __worker, got {err}"
+        );
+    }
+
+    #[test]
     fn try_into_reject_messages_name_the_actual_conflict() {
         let words = os_argv(&["em", "--root", "/tmp/r", "crossdev", "--setup"]);
         let err = match Cli::try_parse_into_from(&words) {
@@ -1760,10 +1796,12 @@ mod tests {
         // `--json` lives on `Cli` (for `--info --json`) as well as MergeFlags.
         let before = parse_cli(&["em", "--json", "emerge", "-p", "sys-libs/zlib"]);
         assert!(before.json);
+        assert!(before.merge_flags().json);
         let explicit = parse_cli(&["em", "emerge", "--json", "-p", "sys-libs/zlib"]);
         assert!(explicit.merge_flags().json);
         let bare = parse_cli(&["em", "--json", "-p", "sys-libs/zlib"]);
         assert!(bare.json);
+        assert!(bare.merge_flags().json);
     }
 
     #[test]
@@ -1922,6 +1960,59 @@ mod tests {
                 None => std::env::remove_var("EM_PRIVILEGE"),
             }
         }
+    }
+
+    #[test]
+    fn invalid_em_privilege_is_try_into_reject() {
+        let _env_lock = crate::test_support::home_lock();
+        let saved = std::env::var("EM_PRIVILEGE").ok();
+        unsafe { std::env::set_var("EM_PRIVILEGE", "typo") };
+        let err = parse_cli_into(&["em", "emerge", "-p", "pkg"]);
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("EM_PRIVILEGE", v),
+                None => std::env::remove_var("EM_PRIVILEGE"),
+            }
+        }
+        let err = err.unwrap_err();
+        assert!(
+            err.contains("InvalidValue EM_PRIVILEGE"),
+            "bad EM_PRIVILEGE must fail try_into, got {err}"
+        );
+    }
+
+    #[test]
+    fn invalid_em_privilege_is_ignored_when_the_flag_is_set() {
+        let _env_lock = crate::test_support::home_lock();
+        let saved = std::env::var("EM_PRIVILEGE").ok();
+        unsafe { std::env::set_var("EM_PRIVILEGE", "typo") };
+        let cli = parse_cli_into(&["em", "--privilege", "none", "emerge", "pkg"]);
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("EM_PRIVILEGE", v),
+                None => std::env::remove_var("EM_PRIVILEGE"),
+            }
+        }
+        assert_eq!(cli.unwrap().effective_privilege(), Privilege::None);
+    }
+
+    #[test]
+    fn invalid_em_emergelog_is_try_into_reject() {
+        let _env_lock = crate::test_support::home_lock();
+        let saved = std::env::var("EM_EMERGELOG").ok();
+        unsafe { std::env::set_var("EM_EMERGELOG", "nope") };
+        let err = parse_cli_into(&["em", "emerge", "-p", "pkg"]);
+        unsafe {
+            match saved {
+                Some(v) => std::env::set_var("EM_EMERGELOG", v),
+                None => std::env::remove_var("EM_EMERGELOG"),
+            }
+        }
+        let err = err.unwrap_err();
+        assert!(
+            err.contains("InvalidValue EM_EMERGELOG"),
+            "bad EM_EMERGELOG must fail try_into, got {err}"
+        );
     }
 
     #[test]
