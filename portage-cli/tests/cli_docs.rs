@@ -1,7 +1,7 @@
 //! Generate `docs/user/cli/` from `Cli::to_kdl()` in-process.
 //!
-//! Hidden applets (`__helper`, `__worker`) must not appear. Native `hide` is
-//! the first cut; names are stripped too if a renderer still lists them.
+//! Hidden applets must not appear. Omission is driven by the spec `hide`
+//! flag, not an applet-name allowlist.
 //!
 //! Refresh committed pages with `UPDATE_CLI_DOCS=1 cargo test -p portage-cli --test cli_docs`.
 
@@ -28,7 +28,7 @@ fn cli_docs_dir() -> PathBuf {
 }
 
 fn is_hidden_applet(cmd: &SpecCommand) -> bool {
-    cmd.hide || cmd.name == "__helper" || cmd.name == "__worker"
+    cmd.hide
 }
 
 fn omit_hidden(spec: &mut Spec) {
