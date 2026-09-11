@@ -497,7 +497,7 @@ async fn emerge_atoms_inner(
     } else {
         Vec::new()
     };
-    let format = if cli.json || merge_flags.json {
+    let format = if merge_flags.json {
         cli::DepgraphFormat::Json
     } else if merge_flags.tree {
         cli::DepgraphFormat::Tree
