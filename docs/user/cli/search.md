@@ -14,6 +14,9 @@ Search package names and descriptions
 - **`-S --desc`** — Search package descriptions instead of names
 - **`-N --name-only`** — Show only package name, no description
 - **`-H --homepage`** — Show homepage instead of description
+- **`--repo <PATH>`** — Pin search/query to a single repository
+
+  When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-h --help`** — Print help
 
 ## Roots

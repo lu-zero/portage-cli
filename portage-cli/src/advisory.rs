@@ -39,7 +39,7 @@ pub(crate) fn effective_arch(globals: &Cli) -> String {
     {
         return arch.to_string();
     }
-    globals.arch.as_str().to_string()
+    globals.arch().as_str().to_string()
 }
 
 /// Every installed package as `(cpv, main_slot)`, or empty if the VDB can't

@@ -1,9 +1,15 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em select`
 
-- **Usage:** `em select [--root <PATH>] <SUBCOMMAND>`
+- **Usage:** `em select [FLAGS] <SUBCOMMAND>`
 
 Native config selectors (profile, repos) — eselect-like
+
+## Global Flags
+- **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
+- **`--repo <PATH>`** — Pin search/query to a single repository
+
+  When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 
 ## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)

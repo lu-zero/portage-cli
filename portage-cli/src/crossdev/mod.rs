@@ -856,7 +856,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
     // under `--target` substitution, unlike `roots`.
     let host_roots = globals.host_roots();
     let repo = crate::repo_open::open(&repo_path_str).ok()?;
-    let set = crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo.is_none());
+    let set = crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo_flag().is_none());
     let outcome = crate::query::depgraph::depgraph(crate::query::depgraph::DepgraphOpts {
         set,
         atoms: &[crate::query::depgraph::TargetAtom::explicit(
@@ -866,7 +866,7 @@ async fn resolve_gcc_version(globals: &Cli) -> Option<String> {
         // file, so no row is bold for "would be added" (see the `ask: false`
         // note below).
         world_additions: &[],
-        arch: &globals.arch,
+        arch: &globals.arch(),
         format: crate::cli::DepgraphFormat::Pretty,
         verbose: 0,
         empty: false,
@@ -1753,6 +1753,8 @@ mod tests {
             activity: crate::cli::ActivityArgs::default(),
             verbose_arg: crate::cli::VerboseArg::default(),
             quiet_arg: crate::cli::QuietArg::default(),
+            arch_arg: crate::cli::ArchArg::default(),
+            repo_arg: crate::cli::RepoArg::default(),
             privilege: crate::cli::Privilege::Auto,
         }
     }

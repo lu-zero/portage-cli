@@ -11,6 +11,10 @@ Assemble stage-build artifacts (stage1 packages.build) into --root
 - **`--stage3`** — Emptytree rebuild of `@system` into `--root` (catalyst `stage3/chroot.sh`: `emerge -e --update --deep --with-bdeps=y @system`). Forces `-e -uD --with-bdeps` on top of other merge flags; seeds PKGDIR with `-b` like stage1. No stage2 (crossdev model). Requires a usable root (typically after `--stage1` or an unpacked seed).
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 - **`-q --quiet`** — Suppress non-error output
+- **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
+- **`--repo <PATH>`** — Pin search/query to a single repository
+
+  When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-h --help`** — Print help
 
 ## Roots

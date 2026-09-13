@@ -12,6 +12,10 @@ The native twin of `crossdev --setup` (`CHOST == CBUILD`): the staged `baselayou
 - **`--setup`** — Build and install the toolchain into `--root` (the only action for now; required, mirroring `crossdev --setup`).
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 - **`-q --quiet`** — Suppress non-error output
+- **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
+- **`--repo <PATH>`** — Pin search/query to a single repository
+
+  When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-h --help`** — Print help
 
 ## Roots

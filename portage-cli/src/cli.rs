@@ -16,7 +16,7 @@ mod emerge_mode;
 mod merge_flags;
 mod topology;
 pub use activity::ActivityArgs;
-pub use context::{QuietArg, VerboseArg};
+pub use context::{ArchArg, QuietArg, RepoArg, VerboseArg};
 pub use depgraph_flags::DepgraphFlags;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
@@ -201,23 +201,6 @@ pub struct Cli {
     #[usage(short = 'p', long, global)]
     pub pretend: bool,
 
-    /// Target architecture for operations
-    #[usage(
-        long,
-        global,
-        value_name = "ARCH",
-        default_fn = default_arch,
-        default_note = "current system architecture"
-    )]
-    pub arch: Arch,
-
-    /// Pin search/query to a single repository
-    ///
-    /// When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for
-    /// single-repo applets; search walks all of them).
-    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
-    pub repo: Option<String>,
-
     #[usage(flatten)]
     pub topology: Topology,
 
@@ -342,8 +325,8 @@ impl Cli {
     /// Falls back to `/var/db/repos/gentoo` when neither `--repo` nor `repos.conf` is
     /// available.
     pub fn repo_path(&self) -> String {
-        if let Some(p) = &self.repo {
-            return p.clone();
+        if let Some(p) = self.repo_flag() {
+            return p;
         }
         if let Ok(rc) = self.roots().repos_conf()
             && let Some(main) = rc.main_repo()
@@ -368,7 +351,7 @@ impl Cli {
     /// quietly answer from a different system's tree than the one it was
     /// pointed at.
     pub(crate) fn configured_repos(&self) -> Option<Vec<std::path::PathBuf>> {
-        if let Some(p) = &self.repo {
+        if let Some(p) = self.repo_flag() {
             return Some(vec![std::path::PathBuf::from(p)]);
         }
         match self.roots().repos_conf() {
@@ -428,6 +411,41 @@ impl Cli {
             Some(Applet::Etc(a)) => a.quiet_arg.quiet,
             Some(Applet::Regen(a)) => a.quiet_arg.quiet,
             _ => false,
+        }
+    }
+
+    /// The dispatched applet's own `--arch`, or [`default_arch`] for an
+    /// applet that doesn't carry [`ArchArg`].
+    pub fn arch(&self) -> Arch {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.arch_arg.arch,
+            Some(Applet::Crossdev(a)) => a.arch_arg.arch,
+            Some(Applet::Toolchain(a)) => a.arch_arg.arch,
+            Some(Applet::Stages(a)) => a.arch_arg.arch,
+            Some(Applet::Setup(a)) => a.arch_arg.arch,
+            Some(Applet::Select(a)) => a.arch_arg.arch,
+            Some(Applet::Query(a)) => a.arch_arg.arch,
+            Some(Applet::Maint(a)) => a.arch_arg.arch,
+            Some(Applet::Pkg(a)) => a.arch_arg.arch,
+            _ => default_arch(),
+        }
+    }
+
+    /// The dispatched applet's own `--repo`, or `None` for an applet that
+    /// doesn't carry [`RepoArg`].
+    pub(crate) fn repo_flag(&self) -> Option<String> {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Crossdev(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Toolchain(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Stages(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Setup(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Select(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Query(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Maint(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Search(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Ebuild(a)) => a.repo_arg.repo.clone(),
+            _ => None,
         }
     }
 
@@ -1521,14 +1539,17 @@ mod tests {
     #[test]
     fn arch_and_repo_work_on_the_bare_path() {
         let cli = parse_cli(&["em", "--arch", "amd64", "-p", "sys-libs/zlib"]);
-        assert_eq!(cli.arch, Arch::from_str("amd64").unwrap());
+        assert_eq!(cli.arch(), Arch::from_str("amd64").unwrap());
         assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
 
-        let via_emerge = parse_cli(&["em", "--arch", "amd64", "emerge", "-p", "sys-libs/zlib"]);
-        assert_eq!(via_emerge.arch, cli.arch);
+        // Leading with the explicit "emerge" word works too, as long as no
+        // flag precedes it (see the Cli doc comment for the flag-then-"emerge"
+        // caveat).
+        let via_emerge = parse_cli(&["em", "emerge", "--arch", "amd64", "-p", "sys-libs/zlib"]);
+        assert_eq!(via_emerge.arch(), cli.arch());
 
         let repo = parse_cli(&["em", "--repo", "/tmp/r", "-p", "sys-libs/zlib"]);
-        assert_eq!(repo.repo.as_deref(), Some("/tmp/r"));
+        assert_eq!(repo.repo_flag().as_deref(), Some("/tmp/r"));
     }
 
     #[test]
@@ -2229,6 +2250,8 @@ pub struct EbuildArgs {
     pub work_dir: Option<camino::Utf8PathBuf>,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
 }
 
 /// `em maint` — system maintenance and health checks
@@ -2243,6 +2266,10 @@ pub struct MaintArgs {
     pub verbose_arg: VerboseArg,
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
 }
 
 /// `em portageq` — query Portage internal variables and data
@@ -2402,6 +2429,10 @@ pub struct QueryArgs {
     pub root_arg: RootArg,
     #[usage(flatten)]
     pub verbose_arg: VerboseArg,
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
 }
 
 /// `em clean` — clean distfiles and/or binary packages
@@ -2490,6 +2521,8 @@ pub struct PkgArgs {
     pub command: PkgCommand,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
 }
 
 /// `em revdep` — rebuild packages with broken shared library deps
@@ -2563,6 +2596,8 @@ pub struct SearchArgs {
     pub pattern: Option<String>,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
 }
 
 /// `em atom` — parse/split atom strings
@@ -2582,6 +2617,10 @@ pub struct SelectArgs {
     pub command: SelectCommand,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
 }
 
 /// `em active` — register a default `--prefix`/`--local` for bare invocations
@@ -2662,6 +2701,12 @@ pub struct SetupArgs {
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
 
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
+
     /// Privilege backend for this setup run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2726,6 +2771,12 @@ pub struct CrossdevArgs {
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
 
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
+
     /// Privilege backend for this crossdev run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2770,6 +2821,12 @@ pub struct ToolchainArgs {
 
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
+
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
 
     /// Privilege backend for this toolchain run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
@@ -2820,6 +2877,12 @@ pub struct StagesArgs {
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
 
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
+
     /// Privilege backend for this stages run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2852,6 +2915,12 @@ pub struct EmergeArgs {
 
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
+
+    #[usage(flatten)]
+    pub arch_arg: ArchArg,
+
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
 
     /// Privilege backend for this merge
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]

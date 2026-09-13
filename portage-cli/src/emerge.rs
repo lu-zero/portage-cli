@@ -422,7 +422,7 @@ async fn emerge_atoms_inner(
     }
     // So bare-name atoms (not just `cat/pkg`) can resolve to an overlay-only
     // package, not just the main repo — see `query::resolve_atom`'s doc.
-    let mut set = crate::repo_open::repo_set_from_conf(repo, &roots, cli.repo.is_none());
+    let mut set = crate::repo_open::repo_set_from_conf(repo, &roots, cli.repo_flag().is_none());
     // Caller-supplied aliases first so a pretend crossdev plan can inject the
     // target about to be written; on-disk entries with the same name still
     // apply (load_repos skips already-seen CPVs). Prepended here (not inside
@@ -524,7 +524,7 @@ async fn emerge_atoms_inner(
         set,
         atoms: &atoms,
         world_additions: &world_additions,
-        arch: &cli.arch,
+        arch: &cli.arch(),
         format,
         verbose: cli.verbose(),
         empty: merge_flags.emptytree,

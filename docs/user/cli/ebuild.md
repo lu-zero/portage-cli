@@ -1,7 +1,7 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em ebuild`
 
-- **Usage:** `em ebuild [-w --work-dir <DIR>] [--root <PATH>] <EBUILD_PATH> <PHASE>…`
+- **Usage:** `em ebuild [FLAGS] <EBUILD_PATH> <PHASE>…`
 
 Execute ebuild phases
 
@@ -11,6 +11,9 @@ Execute ebuild phases
 
 ## Flags
 - **`-w --work-dir <DIR>`** — Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
+- **`--repo <PATH>`** — Pin search/query to a single repository
+
+  When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-h --help`** — Print help
 
 ## Roots

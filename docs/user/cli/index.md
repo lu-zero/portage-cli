@@ -12,10 +12,6 @@
 
   **Default:** `auto`
 - **`-p --pretend`** — Show what would be done without actually performing any actions
-- **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
-- **`--repo <PATH>`** — Pin search/query to a single repository
-
-  When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 
 ## Roots
 - **`--prefix <DIR>`** — Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config still from the host (use --root for a config offset).
@@ -47,7 +43,7 @@ Which tree this invocation reads and writes.
 
 ## Subcommands
 
-- [`em ebuild [-w --work-dir <DIR>] [--root <PATH>] <EBUILD_PATH> <PHASE>…`](ebuild.md)
+- [`em ebuild [FLAGS] <EBUILD_PATH> <PHASE>…`](ebuild.md)
 - [`em maint [FLAGS] <SUBCOMMAND>`](maint.md)
 - [`em maint binhost`](maint/binhost.md)
 - [`em maint binpkg <SUBCOMMAND>`](maint/binpkg.md)
@@ -72,7 +68,7 @@ Which tree this invocation reads and writes.
 - [`em regen [FLAGS] [REPOS]…`](regen.md)
 - [`em quickpkg [FLAGS] <ATOMS>…`](quickpkg.md)
 - [`em mirrordist <FLAGS> [REPO]`](mirrordist.md)
-- [`em query [--root <PATH>] [-v --verbose] <SUBCOMMAND>`](query.md)
+- [`em query [FLAGS] <SUBCOMMAND>`](query.md)
 - [`em query belongs <FILE>…`](query/belongs.md)
 - [`em query check <ATOM>…`](query/check.md)
 - [`em query depends <ATOM>…`](query/depends.md)
@@ -91,7 +87,7 @@ Which tree this invocation reads and writes.
 - [`em clean pkg [FLAGS]`](clean/pkg.md)
 - [`em clean all [FLAGS]`](clean/all.md)
 - [`em use [FLAGS]`](use.md)
-- [`em pkg [--root <PATH>] <SUBCOMMAND>`](pkg.md)
+- [`em pkg [--root <PATH>] [--arch <ARCH>] <SUBCOMMAND>`](pkg.md)
 - [`em pkg use [FLAGS] <ATOM>`](pkg/use.md)
 - [`em pkg keyword [FLAGS] <ATOM>`](pkg/keyword.md)
 - [`em pkg mask [FLAGS] <ATOM>`](pkg/mask.md)
@@ -106,7 +102,7 @@ Which tree this invocation reads and writes.
 - [`em grep <PATTERN> [PATHS]…`](grep.md)
 - [`em search [FLAGS] [PATTERN]`](search.md)
 - [`em atom <ATOMS>…`](atom.md)
-- [`em select [--root <PATH>] <SUBCOMMAND>`](select.md)
+- [`em select [FLAGS] <SUBCOMMAND>`](select.md)
 - [`em select profile <SUBCOMMAND>`](select/profile.md)
 - [`em select profile list`](select/profile/list.md)
 - [`em select profile show`](select/profile/show.md)

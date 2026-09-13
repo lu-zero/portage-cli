@@ -509,7 +509,7 @@ async fn show_active_use(cli: &Cli, atom_str: &str) -> Result<()> {
 
     let repo = crate::crossdev::main_repo(cli).context("opening main repo")?;
     let roots = cli.roots();
-    let Some(result) = resolve_active_use(repo, &roots, &cli.arch, atom_str).await? else {
+    let Some(result) = resolve_active_use(repo, &roots, &cli.arch(), atom_str).await? else {
         return Ok(());
     };
     let ActiveUse {

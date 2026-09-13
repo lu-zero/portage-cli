@@ -115,7 +115,8 @@ impl RunAsyncWith<&cli::Cli> for EbuildArgs {
     type Output = Result<()>;
 
     async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
-        let repo_override = cli.repo.as_deref();
+        let repo_override = cli.repo_flag();
+        let repo_override = repo_override.as_deref();
         let roots = cli.roots();
         let broot = cli.host_roots();
         ebuild::run(
@@ -482,8 +483,8 @@ async fn run_maint(command: &MaintCommand, globals: &cli::Cli) -> Result<()> {
             let tree = maint::world::TreeView::load(
                 camino::Utf8Path::new(&resolved),
                 &roots,
-                &globals.arch,
-                globals.repo.is_none(),
+                &globals.arch(),
+                globals.repo_flag().is_none(),
             )
             .await
             .map_err(|e| {
@@ -515,7 +516,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let set = crate::repo_open::repo_set_from_conf(
                 repo,
                 &globals.roots(),
-                globals.repo.is_none(),
+                globals.repo_flag().is_none(),
             );
             query::depends::run(&set, vdb.as_ref(), query::ResolveMode::Error, atom).await
         }
@@ -539,7 +540,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let roots = globals.roots();
             // So bare-name atoms can resolve to an overlay-only package, not
             // just the main repo — see `query::resolve_atom`'s doc.
-            let set = crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo.is_none());
+            let set = crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo_flag().is_none());
             let parsed = query::resolve_atoms(atom, &set, vdb.as_ref(), query::ResolveMode::Error);
             let atoms: Vec<query::depgraph::TargetAtom> = parsed
                 .iter()
@@ -562,7 +563,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 // file, so only literal `@selected` membership bolds a row —
                 // exactly how a `--oneshot` merge renders.
                 world_additions: &[],
-                arch: &globals.arch,
+                arch: &globals.arch(),
                 format: *format,
                 verbose: globals.verbose(),
                 empty: *emptytree,
@@ -661,7 +662,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let set = crate::repo_open::repo_set_from_conf(
                 repo,
                 &globals.roots(),
-                globals.repo.is_none(),
+                globals.repo_flag().is_none(),
             );
             query::which::run(&set, vdb.as_ref(), query::ResolveMode::Error, atom)
         }

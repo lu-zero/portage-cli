@@ -28,7 +28,7 @@ fn effective_arch(globals: &Cli) -> String {
     {
         return arch.to_string();
     }
-    globals.arch.as_str().to_string()
+    globals.arch().as_str().to_string()
 }
 
 /// Profiles matching `arch` (the eselect-like filter), in `profiles.desc` order

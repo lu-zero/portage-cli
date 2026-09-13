@@ -172,8 +172,8 @@ pub fn get_chost(globals: &Cli) -> String {
             return chost.to_string();
         }
     }
-    let arch = globals.arch.as_str();
-    format!("{arch}-unknown-linux-gnu")
+    let arch = globals.arch();
+    format!("{}-unknown-linux-gnu", arch.as_str())
 }
 
 #[cfg(test)]

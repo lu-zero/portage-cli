@@ -1,13 +1,17 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em query`
 
-- **Usage:** `em query [--root <PATH>] [-v --verbose] <SUBCOMMAND>`
+- **Usage:** `em query [FLAGS] <SUBCOMMAND>`
 - **Effect:** read-only
 
 Query package information
 
 ## Global Flags
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
+- **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
+- **`--repo <PATH>`** — Pin search/query to a single repository
+
+  When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 
 ## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
