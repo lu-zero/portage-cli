@@ -33,12 +33,8 @@
   Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
 
 ## Flags
-- **`--json`** — Structured JSON (`em --info --json`, merge-plan `-p --json`)
 - **`-h --help`** — Print help
 - **`-V --version`** — Print version
-
-## Actions
-- **`--info`** — `emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent).
 
 ## Roots
 

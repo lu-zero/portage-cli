@@ -25,9 +25,10 @@ use crate::{binpkg, maint, pkg, query, regen, search, select, setup, use_flags, 
 
 /// Dispatch one parsed invocation to its applet or the default emerge path.
 ///
-/// `None` is leftover when default-subcommand emerge did not fire (`em -p`,
-/// `em --info`). `--info` wins only for empty-atom emerge; a named applet
-/// always wins, and `em --info firefox` emerges `firefox`.
+/// `None` is leftover when default-subcommand emerge did not fire (`em -p`
+/// with nothing else). `--info` (an `EmergeModeArgs` field) wins only for
+/// empty-atom emerge with no other mode flag; a named applet always wins, and
+/// `em --info firefox` emerges `firefox`.
 pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     if info_wins(cli) {
         return crate::info::run(cli).await;
@@ -42,17 +43,20 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     }
 }
 
-/// `--info` with no atoms and no mode flag (`-r`/`-s`/`-C`/...), so
+/// `--info` with no atoms and no other mode flag (`-r`/`-s`/`-C`/...), so
 /// `em --info -r` doesn't silently drop `-r` in favor of printing info.
 fn info_wins(cli: &cli::Cli) -> bool {
-    cli.info
-        && match &cli.applet {
-            None => true,
-            Some(Applet::Emerge(a)) => {
-                a.atoms.is_empty() && cli.mode() == cli::EmergeModeArgs::default()
-            }
-            Some(_) => false,
+    match &cli.applet {
+        Some(Applet::Emerge(a)) => {
+            a.mode.info
+                && a.atoms.is_empty()
+                && cli::EmergeModeArgs {
+                    info: false,
+                    ..a.mode.clone()
+                } == cli::EmergeModeArgs::default()
         }
+        _ => false,
+    }
 }
 
 impl RunAsyncWith<&cli::Cli> for HelperArgs {

@@ -41,6 +41,7 @@ Pick a different operation than a merge.
 - **`-r --resume`** — Resume the last saved merge (see `em maint cleanresume` to discard it instead)
 
   Atoms are not accepted together with this flag — the package list comes from the saved state. Combine with other flags (e.g. `-r -X stuck/atom`) to adjust the resumed run.
+- **`--info`** — `emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent).
 
 ## Merge
 

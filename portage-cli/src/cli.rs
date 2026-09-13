@@ -163,6 +163,13 @@ pub fn parse_cli_or_exit() -> Validated {
     }
 }
 
+/// `default_subcommand_flags` routes a prefix flag (`em -ua @world`) into
+/// `emerge` without the word "emerge" itself. Once such a flag commits the
+/// line to the default command, a later word is always swallowed as an
+/// emerge argument — even the literal word `emerge` (`em --json emerge -p
+/// pkg` emerges a package named "emerge", not `pkg`). Write either the fully
+/// prefixed form or lead with `emerge` explicitly (`em emerge --json -p
+/// pkg`); don't mix a leading flag with a later explicit `emerge` word.
 #[derive(usage::Cli, Debug)]
 #[usage(
     bin = "em",
@@ -191,18 +198,6 @@ pub struct Cli {
     /// Show what would be done without actually performing any actions
     #[usage(short = 'p', long, global)]
     pub pretend: bool,
-
-    /// Print system/build info (`emerge --info` workalike). Takes no atoms.
-    #[usage(
-        long,
-        help_heading = "Actions",
-        long_help = "`emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent)."
-    )]
-    pub info: bool,
-
-    /// Structured JSON (`em --info --json`, merge-plan `-p --json`)
-    #[usage(long)]
-    pub json: bool,
 
     /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
     /// `em`'s own debug/trace logs (see also `RUST_LOG`).
@@ -411,7 +406,7 @@ impl Cli {
     /// The dispatched applet's own [`MergeFlags`], or the all-default value
     /// for an applet that doesn't carry one.
     pub fn merge_flags(&self) -> MergeFlags {
-        let mut flags = match &self.applet {
+        match &self.applet {
             Some(Applet::Emerge(a)) => a.merge_flags.clone(),
             Some(Applet::Crossdev(a)) => a.merge_flags.clone(),
             Some(Applet::Toolchain(a)) => a.merge_flags.clone(),
@@ -420,9 +415,7 @@ impl Cli {
             Some(Applet::Revdep(a)) => a.merge_flags.clone(),
             Some(Applet::Depclean(a)) => a.merge_flags.clone(),
             _ => MergeFlags::default(),
-        };
-        flags.json |= self.json;
-        flags
+        }
     }
 
     /// The dispatched applet's own [`DepgraphFlags`], for merge applets only — not query.
@@ -1465,30 +1458,36 @@ mod tests {
     }
 
     #[test]
-    fn info_json_parses_without_emerge() {
+    fn info_json_parses_as_emerge_with_no_atoms() {
         let cli = parse_cli(&["em", "--info", "--json"]);
-        assert!(cli.info);
-        assert!(cli.json);
-        assert!(cli.applet.is_none());
+        assert!(cli.mode().info);
+        assert!(cli.merge_flags().json);
+        assert!(emerge_applet(&cli).atoms.is_empty());
     }
 
     #[test]
-    fn info_use_selects_use() {
+    fn info_before_a_word_naming_an_applet_is_swallowed_as_an_atom() {
+        // `--info` now lives on EmergeModeArgs (default-child-only), so it
+        // commits the line to emerge before `use` is considered as a
+        // possible applet word — same reasoning as -a/-X in
+        // merge_flags_need_the_explicit_applet_word.
         let cli = parse_cli(&["em", "--info", "use"]);
-        assert!(cli.info);
-        assert!(matches!(cli.applet, Some(Applet::Use(_))));
+        assert!(cli.mode().info);
+        assert_eq!(emerge_applet(&cli).atoms, ["use"]);
     }
 
     #[test]
     fn info_firefox_is_emerge_not_info_only() {
         let cli = parse_cli(&["em", "--info", "firefox"]);
-        assert!(cli.info);
+        assert!(cli.mode().info);
         assert_eq!(emerge_applet(&cli).atoms, ["firefox"]);
     }
 
     #[test]
-    fn emerge_info_is_unknown_flag() {
-        assert_eq!(parse_err(&["em", "emerge", "--info"]), "UnknownFlag --info");
+    fn emerge_info_parses() {
+        let cli = parse_cli(&["em", "emerge", "--info"]);
+        assert!(cli.mode().info);
+        assert!(emerge_applet(&cli).atoms.is_empty());
     }
 
     #[test]
@@ -1506,15 +1505,20 @@ mod tests {
 
     #[test]
     fn json_before_emerge_word_is_merge_plan_json() {
-        // `--json` lives on `Cli` (for `--info --json`) as well as MergeFlags.
-        let before = parse_cli(&["em", "--json", "emerge", "-p", "sys-libs/zlib"]);
-        assert!(before.json);
-        assert!(before.merge_flags().json);
         let explicit = parse_cli(&["em", "emerge", "--json", "-p", "sys-libs/zlib"]);
         assert!(explicit.merge_flags().json);
         let bare = parse_cli(&["em", "--json", "-p", "sys-libs/zlib"]);
-        assert!(bare.json);
         assert!(bare.merge_flags().json);
+    }
+
+    #[test]
+    fn a_prefix_flag_before_an_explicit_emerge_word_swallows_it_as_an_atom() {
+        // Known, accepted limitation (see the Cli doc comment): once --json
+        // commits the line to the default command, the later literal word
+        // "emerge" is just another atom, not a no-op restating the applet.
+        let cli = parse_cli(&["em", "--json", "emerge", "-p", "sys-libs/zlib"]);
+        assert!(cli.merge_flags().json);
+        assert_eq!(emerge_applet(&cli).atoms, ["emerge", "sys-libs/zlib"]);
     }
 
     #[test]
