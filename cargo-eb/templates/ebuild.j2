@@ -9,10 +9,11 @@ EAPI=8
 inherit cargo
 
 DESCRIPTION="{{ description }}"
+{% if homepage %}
 HOMEPAGE="{{ homepage }}"
+{% endif %}
 
 {% if crate_tarball %}
-SRC_URI="${CARGO_CRATE_URIS}"
 # Crate tarball
 SRC_URI+=" {{ crate_tarball }}"
 {% else %}

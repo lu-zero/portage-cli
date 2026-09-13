@@ -204,7 +204,12 @@ pub fn render_ebuild(input: RenderInput<'_>) -> Result<String> {
         crates => crates_str,
         git_crates => git_str,
         description => bash_escape(&collapse_ws(&pkg_description(input.pkg))),
-        homepage => url_escape(input.pkg.homepage.as_deref().unwrap_or("")),
+        homepage => input
+            .pkg
+            .homepage
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(url_escape),
         crate_tarball => input.crate_tarball.unwrap_or(""),
         pkg_license => pkg_license,
         crate_licenses => crate_licenses,

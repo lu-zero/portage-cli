@@ -85,17 +85,13 @@ async fn main() -> Result<()> {
     let distdir = resolve_distdir(cli.distdir.clone());
     let mapping_path = resolve_license_mapping_path(cli.license_mapping.clone());
 
-    let lock = cargomod::ensure_lockfile(dir)
-        .with_context(|| format!("lockfile for {}", dir.display()))?;
-    let manifest = dir.join("Cargo.toml");
-    let manifest = if manifest.is_file() {
-        manifest
-    } else {
-        lock.parent().unwrap_or(dir).join("Cargo.toml")
-    };
-    let pkg = cargomod::package_from_toml(&manifest)
+    let prepared =
+        cargomod::prepare_package(dir).with_context(|| format!("preparing {}", dir.display()))?;
+    let lock = &prepared.lock;
+    let manifest = &prepared.manifest;
+    let pkg = cargomod::package_from_toml(manifest)
         .with_context(|| format!("reading {}", manifest.display()))?;
-    let crates = cargomod::crates_from_lockfile(&lock)
+    let crates = cargomod::crates_from_lockfile(lock)
         .with_context(|| format!("parsing {}", lock.display()))?;
 
     let outfile = if let Some(out) = cli.output {
@@ -122,7 +118,7 @@ async fn main() -> Result<()> {
         std::fs::create_dir_all(&distdir)
             .with_context(|| format!("creating DISTDIR {}", distdir.display()))?;
         let vendor_dir = distdir.join("cargo_home").join("gentoo");
-        vendor::vendor_to_tarball(&manifest, &[], &vendor_dir, &tarball_path)
+        vendor::vendor_to_tarball(manifest, &[], &vendor_dir, &tarball_path)
             .context("vendoring crates")?;
         (
             Some(

@@ -227,7 +227,7 @@ pub fn spdx_to_ebuild(spdx: &str, mapping: &HashMap<String, String>) -> Result<S
     Ok(joined)
 }
 
-/// Wrap license var `LICENSE="..."` with `~80` col wrapping — mirrors `pycargoebuild/format.py:format_license_var`
+/// Wrap license var `LICENSE="..."` at ~80 cols without splitting `|| ( ... )` groups.
 pub fn format_license_var(value: &str, prefix: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -236,8 +236,46 @@ pub fn format_license_var(value: &str, prefix: &str) -> String {
     if full.len() <= 80 {
         return value.to_string();
     }
-    // multiline: `\n\t...` per `portage_metadata` formatting
-    format!("\n\t{}", value.replace(' ', "\n\t"))
+    format!("\n\t{}", top_level_license_items(value).join("\n\t"))
+}
+
+fn top_level_license_items(value: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0i32;
+    for ch in value.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                cur.push(ch);
+            }
+            ' ' if depth == 0 => {
+                if !cur.is_empty() {
+                    items.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        items.push(cur);
+    }
+    let mut merged = Vec::new();
+    let mut i = 0;
+    while i < items.len() {
+        if items[i] == "||" && i + 1 < items.len() {
+            merged.push(format!("|| {}", items[i + 1]));
+            i += 2;
+        } else {
+            merged.push(items[i].clone());
+            i += 1;
+        }
+    }
+    merged
 }
 
 #[cfg(test)]
@@ -290,5 +328,14 @@ mod tests {
     fn and_nested_inside_or_gets_explicit_group() {
         let out = spdx_to_ebuild("(MIT AND BSD-2-Clause) OR Apache-2.0", &mapping()).unwrap();
         assert_eq!(out, "|| ( ( MIT BSD-2 ) Apache-2.0 )");
+    }
+
+    #[test]
+    fn format_license_var_does_not_split_or_groups() {
+        let value = "|| ( MIT Apache-2.0 ) Unicode-3.0 MIT Apache-2.0 ISC BSD BSD-2";
+        let out = format_license_var(value, "LICENSE+=\" ");
+        assert!(out.contains("|| ( MIT Apache-2.0 )"), "{out}");
+        assert!(!out.contains("||\n"), "{out}");
+        assert!(out.contains("Unicode-3.0"), "{out}");
     }
 }

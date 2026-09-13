@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use cargo_lock::Lockfile;
+use serde_json::Value;
 use thiserror::Error;
 
 const CRATE_REGISTRY: &str = "registry+https://github.com/rust-lang/crates.io-index";
@@ -374,7 +376,217 @@ pub fn package_directory_in_archive(krate: &Crate, distdir: &Path) -> Option<Str
     name_only_fallback.filter(|s| !s.is_empty())
 }
 
-/// Workspace-aware crate discovery — walk parents for `Cargo.lock` like `pycargoebuild/__main__.py:get_workspace_root`
+/// Package manifest + lockfile, possibly in an isolated workspace so a
+/// workspace member does not vendor sibling binaries (em, benches, …).
+pub struct PreparedPackage {
+    _scratch: Option<tempfile::TempDir>,
+    pub manifest: PathBuf,
+    pub lock: PathBuf,
+}
+
+fn cargo_bin() -> std::ffi::OsString {
+    std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into())
+}
+
+fn cargo_metadata(manifest: &Path) -> Result<Value, CargoError> {
+    let out = std::process::Command::new(cargo_bin())
+        .args(["metadata", "--format-version", "1", "--manifest-path"])
+        .arg(manifest)
+        .output()?;
+    if !out.status.success() {
+        return Err(CargoError::Io(std::io::Error::other(format!(
+            "cargo metadata failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))));
+    }
+    serde_json::from_slice(&out.stdout)
+        .map_err(|e| CargoError::Io(std::io::Error::other(e.to_string())))
+}
+
+/// Workspace members reachable from `manifest` via path deps. `None` if this
+/// package is standalone or already the full workspace.
+fn workspace_member_closure(
+    manifest: &Path,
+) -> Result<Option<(PathBuf, Vec<PathBuf>)>, CargoError> {
+    let meta = cargo_metadata(manifest)?;
+    let ws_root =
+        PathBuf::from(meta["workspace_root"].as_str().ok_or_else(|| {
+            CargoError::Io(std::io::Error::other("metadata missing workspace_root"))
+        })?);
+    let ws_members = meta["workspace_members"].as_array();
+    let Some(ws_members) = ws_members else {
+        return Ok(None);
+    };
+    if ws_members.len() <= 1 {
+        return Ok(None);
+    }
+    let target = manifest.canonicalize()?;
+    let packages = meta["packages"]
+        .as_array()
+        .ok_or_else(|| CargoError::Io(std::io::Error::other("metadata missing packages")))?;
+    let target_id = packages
+        .iter()
+        .find_map(|p| {
+            let mp = PathBuf::from(p["manifest_path"].as_str()?);
+            (mp == target).then(|| p["id"].as_str())?
+        })
+        .ok_or_else(|| {
+            CargoError::Io(std::io::Error::other(format!(
+                "{} is not in cargo metadata",
+                manifest.display()
+            )))
+        })?;
+
+    let mut by_id = HashMap::new();
+    if let Some(nodes) = meta["resolve"]["nodes"].as_array() {
+        for node in nodes {
+            if let Some(id) = node["id"].as_str() {
+                by_id.insert(id, node);
+            }
+        }
+    }
+    let mut needed = HashSet::new();
+    let mut stack = vec![target_id];
+    while let Some(id) = stack.pop() {
+        if !needed.insert(id) {
+            continue;
+        }
+        let Some(node) = by_id.get(id) else {
+            continue;
+        };
+        let Some(deps) = node["deps"].as_array() else {
+            continue;
+        };
+        for dep in deps {
+            if let Some(pkg) = dep["pkg"].as_str() {
+                stack.push(pkg);
+            }
+        }
+    }
+
+    let mut dirs = Vec::new();
+    for p in packages {
+        let Some(id) = p["id"].as_str() else {
+            continue;
+        };
+        if !needed.contains(id) || !p["source"].is_null() {
+            continue;
+        }
+        let mp = PathBuf::from(p["manifest_path"].as_str().unwrap_or_default());
+        if let Some(parent) = mp.parent() {
+            dirs.push(parent.to_path_buf());
+        }
+    }
+    if dirs.len() >= ws_members.len() {
+        return Ok(None);
+    }
+    Ok(Some((ws_root, dirs)))
+}
+
+fn isolate_workspace(ws_root: &Path, members: &[PathBuf]) -> Result<tempfile::TempDir, CargoError> {
+    let scratch = tempfile::TempDir::new()?;
+    let names: Vec<String> = members
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .ok_or_else(|| {
+                    CargoError::Io(std::io::Error::other(format!(
+                        "member {} has no file name",
+                        p.display()
+                    )))
+                })
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .collect::<Result<_, _>>()?;
+    for (member, name) in members.iter().zip(&names) {
+        let dest = scratch.path().join(name);
+        std::os::unix::fs::symlink(member, &dest).map_err(CargoError::Io)?;
+    }
+    let orig = std::fs::read_to_string(ws_root.join("Cargo.toml"))?;
+    let mut doc: toml::Value =
+        toml::from_str(&orig).map_err(|e| CargoError::Io(std::io::Error::other(e.to_string())))?;
+    if let Some(ws) = doc.get_mut("workspace").and_then(|v| v.as_table_mut()) {
+        ws.insert(
+            "members".into(),
+            toml::Value::Array(names.into_iter().map(toml::Value::String).collect()),
+        );
+        ws.remove("default-members");
+        ws.remove("exclude");
+    }
+    let serialized =
+        toml::to_string(&doc).map_err(|e| CargoError::Io(std::io::Error::other(e.to_string())))?;
+    std::fs::write(scratch.path().join("Cargo.toml"), serialized)?;
+    let cargo_dir = ws_root.join(".cargo");
+    if cargo_dir.is_dir() {
+        let dest = scratch.path().join(".cargo");
+        std::fs::create_dir_all(&dest)?;
+        if let Ok(cfg) = std::fs::read(cargo_dir.join("config.toml")) {
+            std::fs::write(dest.join("config.toml"), cfg)?;
+        }
+    }
+    Ok(scratch)
+}
+
+fn generate_lockfile_at(manifest: &Path) -> Result<(), CargoError> {
+    let cwd = manifest
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap_or(manifest);
+    let out = std::process::Command::new(cargo_bin())
+        .args(["generate-lockfile", "--manifest-path"])
+        .arg(manifest)
+        .current_dir(cwd)
+        .output()?;
+    if !out.status.success() {
+        return Err(CargoError::Io(std::io::Error::other(format!(
+            "cargo generate-lockfile failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))));
+    }
+    Ok(())
+}
+
+/// Lock and manifest for `dir`, isolating a workspace member from sibling crates.
+pub fn prepare_package(dir: &Path) -> Result<PreparedPackage, CargoError> {
+    let manifest = dir.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(CargoError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no Cargo.toml under {}", dir.display()),
+        )));
+    }
+    match workspace_member_closure(&manifest)? {
+        None => {
+            let lock = ensure_lockfile(dir)?;
+            Ok(PreparedPackage {
+                _scratch: None,
+                manifest,
+                lock,
+            })
+        }
+        Some((ws_root, members)) => {
+            let scratch = isolate_workspace(&ws_root, &members)?;
+            let name = dir
+                .file_name()
+                .ok_or_else(|| CargoError::Io(std::io::Error::other("package dir has no name")))?;
+            let isolated_manifest = scratch.path().join(name).join("Cargo.toml");
+            generate_lockfile_at(&isolated_manifest)?;
+            let lock = scratch.path().join("Cargo.lock");
+            if !lock.is_file() {
+                return Err(CargoError::Io(std::io::Error::other(
+                    "isolated generate-lockfile did not produce Cargo.lock",
+                )));
+            }
+            Ok(PreparedPackage {
+                manifest: isolated_manifest,
+                lock,
+                _scratch: Some(scratch),
+            })
+        }
+    }
+}
+
+/// Workspace-aware crate discovery — walk parents for `Cargo.lock`.
 pub fn find_lock(start: &Path) -> Option<PathBuf> {
     let mut cur = start.canonicalize().ok()?;
     loop {
@@ -476,5 +688,17 @@ mod tests {
         let lock = ensure_lockfile(tmp.path()).unwrap();
         assert!(lock.is_file());
         assert!(std::fs::read_to_string(lock).unwrap().contains("version"));
+    }
+
+    #[test]
+    fn prepare_package_omits_sibling_workspace_binaries() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let prepared = prepare_package(&dir).unwrap();
+        let lock = std::fs::read_to_string(&prepared.lock).unwrap();
+        assert!(
+            !lock.contains("name = \"portage-cli\""),
+            "workspace isolation still locked em"
+        );
+        assert!(lock.contains("name = \"cargo-eb\""), "{lock}");
     }
 }

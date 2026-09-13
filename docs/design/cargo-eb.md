@@ -31,6 +31,10 @@ tool is for: one distfile, git deps included, no thousand-line `CRATES=`.
 
 `CARGO` from the environment (Cargo sets this when invoking an applet).
 
+A workspace member does not inherit the root `Cargo.lock`. `cargo eb` builds
+an isolated workspace of that package's path-dep closure so the vendor
+tarball is not the whole repo (em, benches, …).
+
 ## CLI
 
 ```
