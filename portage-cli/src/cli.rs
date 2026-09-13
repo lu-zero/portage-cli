@@ -10,11 +10,13 @@ use usage::ValidationError;
 use usage::spec::ValueEnum;
 
 mod activity;
+mod context;
 mod depgraph_flags;
 mod emerge_mode;
 mod merge_flags;
 mod topology;
 pub use activity::ActivityArgs;
+pub use context::{QuietArg, VerboseArg};
 pub use depgraph_flags::DepgraphFlags;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
@@ -198,15 +200,6 @@ pub struct Cli {
     /// Show what would be done without actually performing any actions
     #[usage(short = 'p', long, global)]
     pub pretend: bool,
-
-    /// Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add
-    /// `em`'s own debug/trace logs (see also `RUST_LOG`).
-    #[usage(short = 'v', long, count, global)]
-    pub verbose: u8,
-
-    /// Suppress non-error output
-    #[usage(short = 'q', long, global)]
-    pub quiet: bool,
 
     /// Target architecture for operations
     #[usage(
@@ -401,6 +394,41 @@ impl Cli {
     pub fn search_repos(&self) -> Vec<std::path::PathBuf> {
         self.configured_repos()
             .unwrap_or_else(|| vec![std::path::PathBuf::from("/var/db/repos/gentoo")])
+    }
+
+    /// The dispatched applet's own `-v`/`--verbose` count, or `0` for an
+    /// applet that doesn't carry [`VerboseArg`].
+    pub fn verbose(&self) -> u8 {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.verbose_arg.verbose,
+            Some(Applet::Crossdev(a)) => a.verbose_arg.verbose,
+            Some(Applet::Toolchain(a)) => a.verbose_arg.verbose,
+            Some(Applet::Stages(a)) => a.verbose_arg.verbose,
+            Some(Applet::Setup(a)) => a.verbose_arg.verbose,
+            Some(Applet::Maint(a)) => a.verbose_arg.verbose,
+            Some(Applet::Sync(a)) => a.verbose_arg.verbose,
+            Some(Applet::Regen(a)) => a.verbose_arg.verbose,
+            Some(Applet::Query(a)) => a.verbose_arg.verbose,
+            _ => 0,
+        }
+    }
+
+    /// The dispatched applet's own `-q`/`--quiet`, or `false` for an applet
+    /// that doesn't carry [`QuietArg`] (or its own field, for `__worker`).
+    pub fn quiet(&self) -> bool {
+        match &self.applet {
+            Some(Applet::Worker(w)) => w.quiet,
+            Some(Applet::Emerge(a)) => a.quiet_arg.quiet,
+            Some(Applet::Crossdev(a)) => a.quiet_arg.quiet,
+            Some(Applet::Toolchain(a)) => a.quiet_arg.quiet,
+            Some(Applet::Stages(a)) => a.quiet_arg.quiet,
+            Some(Applet::Setup(a)) => a.quiet_arg.quiet,
+            Some(Applet::Maint(a)) => a.quiet_arg.quiet,
+            Some(Applet::Sync(a)) => a.quiet_arg.quiet,
+            Some(Applet::Etc(a)) => a.quiet_arg.quiet,
+            Some(Applet::Regen(a)) => a.quiet_arg.quiet,
+            _ => false,
+        }
     }
 
     /// The dispatched applet's own [`MergeFlags`], or the all-default value
@@ -1809,13 +1837,14 @@ mod tests {
     }
 
     #[test]
-    fn worker_quiet_is_the_cli_global() {
+    fn worker_quiet_is_its_own_field() {
         let argv = worker_argv(&["--quiet"]);
         let cli = parse_cli(&argv);
-        assert!(cli.quiet);
+        assert!(cli.quiet());
         let Some(Applet::Worker(w)) = &cli.applet else {
             panic!("expected Applet::Worker");
         };
+        assert!(w.quiet);
         assert_eq!(w.root, "/tmp/root");
         assert_eq!(w.worker_config_root, None);
     }
@@ -1977,10 +2006,14 @@ mod tests {
 
 /// Hidden `em __worker` install child — spawned per package by `build_and_merge`.
 ///
-/// `--quiet` is the Cli global, not a field here. `--config-root` is Topology's;
-/// this child takes `--worker-config-root` so the two never share a spelling.
+/// `--quiet` is its own field, not [`QuietArg`] — this is machine-generated
+/// argv from `privilege.rs`'s re-exec, not something a person types. `--config-root`
+/// is Topology's; this child takes `--worker-config-root` so the two never
+/// share a spelling.
 #[derive(usage::Args, Debug, Clone)]
 pub struct WorkerArgs {
+    #[usage(long)]
+    pub quiet: bool,
     #[usage(long)]
     pub ebuild: String,
     /// The resolved plan entry's authoritative cpv — see
@@ -2206,6 +2239,10 @@ pub struct MaintArgs {
     pub command: MaintCommand,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
 }
 
 /// `em portageq` — query Portage internal variables and data
@@ -2225,6 +2262,10 @@ pub struct SyncArgs {
     pub repos: Vec<String>,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
 }
 
 /// `em depclean` — remove orphaned/unused packages
@@ -2267,6 +2308,10 @@ pub struct RegenArgs {
     pub activity: ActivityArgs,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
 }
 
 /// `em quickpkg` — create binary packages from installed files
@@ -2355,6 +2400,8 @@ pub struct QueryArgs {
     pub command: QueryCommand,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
 }
 
 /// `em clean` — clean distfiles and/or binary packages
@@ -2557,6 +2604,8 @@ pub struct EtcArgs {
     pub opts: EtcOpts,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
 }
 
 /// `em env` — regenerate `/etc/profile.env` and ld.so cache
@@ -2606,6 +2655,12 @@ pub struct SetupArgs {
 
     #[usage(flatten)]
     pub activity: ActivityArgs,
+
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
 
     /// Privilege backend for this setup run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
@@ -2665,6 +2720,12 @@ pub struct CrossdevArgs {
     #[usage(flatten)]
     pub activity: ActivityArgs,
 
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
+
     /// Privilege backend for this crossdev run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2703,6 +2764,12 @@ pub struct ToolchainArgs {
 
     #[usage(flatten)]
     pub activity: ActivityArgs,
+
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
 
     /// Privilege backend for this toolchain run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
@@ -2747,6 +2814,12 @@ pub struct StagesArgs {
     #[usage(flatten)]
     pub activity: ActivityArgs,
 
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
+
     /// Privilege backend for this stages run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2773,6 +2846,12 @@ pub struct EmergeArgs {
 
     #[usage(flatten)]
     pub activity: ActivityArgs,
+
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
+
+    #[usage(flatten)]
+    pub quiet_arg: QuietArg,
 
     /// Privilege backend for this merge
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]

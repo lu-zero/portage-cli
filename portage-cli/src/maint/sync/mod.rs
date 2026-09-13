@@ -38,7 +38,7 @@ pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
     let conf = globals.roots().repos_conf().context("reading repos.conf")?;
     let selected = select_repos(&conf, repos)?;
     if selected.is_empty() {
-        if globals.quiet {
+        if globals.quiet() {
             return Ok(());
         }
         info_line("Nothing to sync.");
@@ -49,7 +49,7 @@ pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
     for entry in &selected {
         match sync_one(entry, globals).await {
             Ok(SyncOutcome::Skipped(why)) => {
-                if !globals.quiet {
+                if !globals.quiet() {
                     info_repo(&entry.name, &format!("Skipping — {why}"));
                 }
             }
@@ -57,7 +57,7 @@ pub async fn run(repos: &[String], globals: &Cli) -> Result<()> {
                 info_repo(&entry.name, &format!("Would sync — {msg}"));
             }
             Ok(SyncOutcome::Synced { changed }) => {
-                if !globals.quiet {
+                if !globals.quiet() {
                     if changed {
                         info_repo(&entry.name, "Synced (updated)");
                     } else {
@@ -164,14 +164,14 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
         return Ok(SyncOutcome::Pretend(action));
     }
 
-    if !globals.quiet {
+    if !globals.quiet() {
         let mut out = anstream::stdout();
         let _ = writeln!(
             out,
             ">>> Syncing repository '{C_BOLD}{}{C_BOLD:#}' into '{path}'...",
             entry.name
         );
-        if globals.verbose > 0 {
+        if globals.verbose() > 0 {
             let _ = writeln!(
                 out,
                 ">>> sync-type={sync_type} sync-uri={sync_uri} backend={}",
@@ -181,7 +181,7 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
         let _ = out.flush();
     }
 
-    let quiet = globals.quiet;
+    let quiet = globals.quiet();
     let path_c = path.clone();
     let uri = sync_uri.to_string();
     let changed = tokio::task::spawn_blocking(move || match kind {

@@ -260,7 +260,7 @@ pub(crate) async fn run(cli: &Cli) -> Result<()> {
     .map(str::to_string)
     .collect();
 
-    let sets = (cli.verbose > 0).then(|| resolve_all_sets(&roots));
+    let sets = (cli.verbose() > 0).then(|| resolve_all_sets(&roots));
 
     let use_expand_names = shell.get_var("USE_EXPAND").unwrap_or_default();
     let use_str = shell.get_var("USE").unwrap_or_default();

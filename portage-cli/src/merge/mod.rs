@@ -409,7 +409,7 @@ pub(crate) async fn run_merge_plan(req: MergePlanRequest<'_>) -> Result<()> {
     // under `--jobs`: the tee comes off, the one-line banners stay — those are
     // now rendered from the activity bus by `HumanStdoutSink`). `-q` silences
     // the sink too. So this `quiet` (phase-log only) is `-q || -j>1`.
-    let quiet = globals.quiet || jobs > 1;
+    let quiet = globals.quiet() || jobs > 1;
     let buildpkg = merge_flags.buildpkg;
     let buildpkgonly = merge_flags.buildpkgonly;
     // `-F`/`--fetch-all-uri` is fetch-only too (just a different SRC_URI

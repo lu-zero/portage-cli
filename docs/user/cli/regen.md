@@ -13,6 +13,8 @@ Regenerate metadata cache
 - **`--repos-dir <DIR>`** — Directory containing master repositories
 - **`-j --jobs <JOBS>`** — Number of parallel workers
 - **`--dedup`** — Deduplicate top-level dep tokens before writing
+- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
+- **`-q --quiet`** — Suppress non-error output
 - **`-h --help`** — Print help
 
 ## Activity

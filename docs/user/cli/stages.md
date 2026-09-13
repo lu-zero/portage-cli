@@ -9,6 +9,8 @@ Assemble stage-build artifacts (stage1 packages.build) into --root
 ## Flags
 - **`--stage1`** — Emerge the profile's `packages.build` bootstrap set into `--root`: baselayout (USE=build, --nodeps) then the minimal stage1 package list (USE="-* build"), mirroring catalyst's `stage1/chroot.sh`. Requires a working toolchain already in the root (`em toolchain --setup`).
 - **`--stage3`** — Emptytree rebuild of `@system` into `--root` (catalyst `stage3/chroot.sh`: `emerge -e --update --deep --with-bdeps=y @system`). Forces `-e -uD --with-bdeps` on top of other merge flags; seeds PKGDIR with `-b` like stage1. No stage2 (crossdev model). Requires a usable root (typically after `--stage1` or an unpacked seed).
+- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
+- **`-q --quiet`** — Suppress non-error output
 - **`-h --help`** — Print help
 
 ## Roots

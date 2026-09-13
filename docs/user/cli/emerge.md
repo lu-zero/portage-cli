@@ -12,6 +12,8 @@ Resolve and merge/unmerge packages (emerge workalike).
 - **`[ATOM]…`** — Atoms, package sets (`@world`), or ebuild paths to act on
 
 ## Flags
+- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
+- **`-q --quiet`** — Suppress non-error output
 - **`-h --help`** — Print help
 
 ## Actions

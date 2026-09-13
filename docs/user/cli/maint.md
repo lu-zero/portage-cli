@@ -1,9 +1,13 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em maint`
 
-- **Usage:** `em maint [--root <PATH>] <SUBCOMMAND>`
+- **Usage:** `em maint [FLAGS] <SUBCOMMAND>`
 
 System maintenance and health checks
+
+## Global Flags
+- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
+- **`-q --quiet`** — Suppress non-error output
 
 ## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)

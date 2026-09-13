@@ -12,8 +12,6 @@
 
   **Default:** `auto`
 - **`-p --pretend`** — Show what would be done without actually performing any actions
-- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
-- **`-q --quiet`** — Suppress non-error output
 - **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
 - **`--repo <PATH>`** — Pin search/query to a single repository
 
@@ -50,7 +48,7 @@ Which tree this invocation reads and writes.
 ## Subcommands
 
 - [`em ebuild [-w --work-dir <DIR>] [--root <PATH>] <EBUILD_PATH> <PHASE>…`](ebuild.md)
-- [`em maint [--root <PATH>] <SUBCOMMAND>`](maint.md)
+- [`em maint [FLAGS] <SUBCOMMAND>`](maint.md)
 - [`em maint binhost`](maint/binhost.md)
 - [`em maint binpkg <SUBCOMMAND>`](maint/binpkg.md)
 - [`em maint binpkg verify [--fix] [--require-signature]`](maint/binpkg/verify.md)
@@ -69,12 +67,12 @@ Which tree this invocation reads and writes.
 - [`em maint sync [REPOS]…`](maint/sync.md)
 - [`em maint world [-f --fix]`](maint/world.md)
 - [`em portageq <COMMAND> [ARGS]…`](portageq.md)
-- [`em sync [--root <PATH>] [REPOS]…`](sync.md)
+- [`em sync [FLAGS] [REPOS]…`](sync.md)
 - [`em depclean [FLAGS] [ATOMS]…`](depclean.md)
 - [`em regen [FLAGS] [REPOS]…`](regen.md)
 - [`em quickpkg [FLAGS] <ATOMS>…`](quickpkg.md)
 - [`em mirrordist <FLAGS> [REPO]`](mirrordist.md)
-- [`em query [--root <PATH>] <SUBCOMMAND>`](query.md)
+- [`em query [--root <PATH>] [-v --verbose] <SUBCOMMAND>`](query.md)
 - [`em query belongs <FILE>…`](query/belongs.md)
 - [`em query check <ATOM>…`](query/check.md)
 - [`em query depends <ATOM>…`](query/depends.md)

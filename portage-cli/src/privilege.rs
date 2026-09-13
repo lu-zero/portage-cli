@@ -814,12 +814,12 @@ mod worker_argv_tests {
     }
 
     #[test]
-    fn spawn_argv_parses_back_with_global_quiet() {
+    fn spawn_argv_parses_back_with_its_own_quiet() {
         let args = sample_args(true, Some("/tmp/cfg"));
         let argv = spawn_argv(&args);
         assert!(
             argv.iter().any(|a| a == "--quiet"),
-            "spawn still passes --quiet as the Cli global: {argv:?}"
+            "spawn still passes --quiet: {argv:?}"
         );
         assert!(
             argv.iter().any(|a| a == "--worker-config-root"),
@@ -832,10 +832,10 @@ mod worker_argv_tests {
 
         let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
         let cli = crate::cli::parse_cli(&refs);
-        assert!(cli.quiet, "quiet must bind the Cli global");
         let Some(Applet::Worker(w)) = &cli.applet else {
             panic!("expected Applet::Worker");
         };
+        assert!(w.quiet, "quiet must bind WorkerArgs' own field");
         assert_eq!(w.ebuild, args.ebuild_path);
         assert_eq!(w.cpv, args.cpv);
         assert_eq!(w.root, args.root);

@@ -72,7 +72,7 @@ impl RunAsyncWith<&cli::Cli> for HelperArgs {
 impl RunAsyncWith<&cli::Cli> for WorkerArgs {
     type Output = Result<()>;
 
-    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+    async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
         let worker_extra_path: Vec<camino::Utf8PathBuf> = self
             .extra_path
             .iter()
@@ -100,7 +100,7 @@ impl RunAsyncWith<&cli::Cli> for WorkerArgs {
             binpkg: self.binpkg.as_deref(),
             force_verify_signature: self.force_verify_signature,
             buildpkg: self.buildpkg,
-            quiet: cli.quiet,
+            quiet: self.quiet,
             activity_job_id: self.activity_job_id.as_deref(),
             activity_parent_job_id: self.activity_parent_job_id.as_deref(),
             activity_live_root: self.activity_live_root.as_deref(),
@@ -564,7 +564,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 world_additions: &[],
                 arch: &globals.arch,
                 format: *format,
-                verbose: globals.verbose,
+                verbose: globals.verbose(),
                 empty: *emptytree,
                 // equery depgraph is read-only: it reports autounmask candidates
                 // (mask/keyword/USE fixes) but must never write them to

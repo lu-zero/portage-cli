@@ -1,7 +1,7 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em sync`
 
-- **Usage:** `em sync [--root <PATH>] [REPOS]…`
+- **Usage:** `em sync [FLAGS] [REPOS]…`
 
 Sync ebuild repositories from `repos.conf` (`git` and `rsync`)
 
@@ -15,6 +15,8 @@ Identical implementation to `em maint sync` — this top-level form exists only 
 - **`[REPOS]…`** — Repo names from repos.conf (default: auto-sync enabled repos)
 
 ## Flags
+- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
+- **`-q --quiet`** — Suppress non-error output
 - **`-h --help`** — Print help
 
 ## Roots

@@ -1751,6 +1751,8 @@ mod tests {
             depgraph_flags: crate::cli::DepgraphFlags::default(),
             merge_flags: crate::cli::MergeFlags::default(),
             activity: crate::cli::ActivityArgs::default(),
+            verbose_arg: crate::cli::VerboseArg::default(),
+            quiet_arg: crate::cli::QuietArg::default(),
             privilege: crate::cli::Privilege::Auto,
         }
     }

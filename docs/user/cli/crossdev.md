@@ -20,6 +20,8 @@ Deliberately no [`RootArg`]: none of `crossdev`'s three actions (`--init-target`
 
   Applies to `--init-target`/`--setup` only; named per invocation, like real crossdev — not remembered across a later run that omits it.
 - **`--ex-gdb`** — Build a cross gdb (`dev-debug/gdb`) — shorthand for `--ex-pkg dev-debug/gdb`, crossdev's own `--ex-gdb`.
+- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
+- **`-q --quiet`** — Suppress non-error output
 - **`-h --help`** — Print help
 
 ## Merge

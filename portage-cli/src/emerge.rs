@@ -526,7 +526,7 @@ async fn emerge_atoms_inner(
         world_additions: &world_additions,
         arch: &cli.arch,
         format,
-        verbose: cli.verbose,
+        verbose: cli.verbose(),
         empty: merge_flags.emptytree,
         autounmask_write: merge_flags.autounmask_write,
         autounmask_persist: if cli.pretend {
@@ -705,7 +705,7 @@ async fn emerge_atoms_inner(
     // Terminal banners render from the bus (one verbosity decision point); the
     // `quiet` here is the user's `-q`, NOT the jobs-derived phase-log quiet —
     // `-j>1` keeps banners while still sending build output to build.log.
-    crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
+    crate::activity::attach_human_stdout(&activity, cli.quiet(), cli.verbose());
     let activity_args = cli.effective_activity();
     crate::activity::attach_jsonl_outputs(
         &activity,

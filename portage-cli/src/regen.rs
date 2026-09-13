@@ -101,7 +101,7 @@ pub async fn run(
     // `xdg::regen_activity_root`'s doc), unlike a real merge's activity bus.
     let activity_root = crate::xdg::regen_activity_root();
     let activity = crate::activity::regen_activity_bus(&activity_root);
-    crate::activity::attach_human_stdout(&activity, cli.quiet, cli.verbose);
+    crate::activity::attach_human_stdout(&activity, cli.quiet(), cli.verbose());
     let activity_args = cli.effective_activity();
     crate::activity::attach_jsonl_outputs(
         &activity,

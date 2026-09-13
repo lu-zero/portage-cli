@@ -330,7 +330,7 @@ fn diff(pending: &[Pending], only: Option<&str>, globals: &Cli) -> Result<()> {
 fn run_diff(target: &Utf8Path, sidecar: &Utf8Path, globals: &Cli) -> Result<()> {
     let mut cmd = std::process::Command::new("diff");
     cmd.arg("-u");
-    if crate::diag::stderr_wants_color() && !globals.quiet {
+    if crate::diag::stderr_wants_color() && !globals.quiet() {
         cmd.arg("--color=always");
     }
     cmd.arg(target.as_std_path()).arg(sidecar.as_std_path());

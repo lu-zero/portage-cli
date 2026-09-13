@@ -52,8 +52,8 @@ fn main() {
     // activity bus once the bus layer is stacked on). `parallel` drops info
     // noise so `-j>1` doesn't interleave per-package status.
     portage_cli::diag::init(
-        cli.quiet,
-        cli.verbose,
+        cli.quiet(),
+        cli.verbose(),
         cli.merge_flags().jobs.unwrap_or(1) > 1,
     );
 

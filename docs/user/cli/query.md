@@ -1,10 +1,13 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em query`
 
-- **Usage:** `em query [--root <PATH>] <SUBCOMMAND>`
+- **Usage:** `em query [--root <PATH>] [-v --verbose] <SUBCOMMAND>`
 - **Effect:** read-only
 
 Query package information
+
+## Global Flags
+- **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 
 ## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
