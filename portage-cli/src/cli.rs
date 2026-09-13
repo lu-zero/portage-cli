@@ -264,7 +264,8 @@ fn with_leading_emerge(raw: &[OsString]) -> Vec<OsString> {
 }
 
 /// Retry into emerge unless the leading word already names another subcommand.
-/// `default_subcommand` does not bind prefix merge flags (`em -uD @world`).
+/// usage 6.9's `default_subcommand_flags` still treats a later sibling name as a
+/// selector, so `em -u pkg` is UnknownFlag `-u`. Wait for the next usage release.
 fn should_retry(raw: &[OsString]) -> bool {
     !matches!(
         leading_word(raw),
