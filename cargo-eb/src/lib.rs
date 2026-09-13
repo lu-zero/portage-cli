@@ -6,6 +6,7 @@ pub mod cargo;
 pub mod ebuild;
 pub mod fetch;
 pub mod license;
+pub mod snapshot;
 pub mod vendor;
 
 pub use cargo::{Crate, FileCrate, GitCrate, GitHost, PackageMetadata};

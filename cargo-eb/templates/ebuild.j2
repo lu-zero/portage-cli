@@ -13,6 +13,10 @@ DESCRIPTION="{{ description }}"
 HOMEPAGE="{{ homepage }}"
 {% endif %}
 
+{% if source_tarball %}
+# Source snapshot
+SRC_URI="{{ source_tarball }}"
+{% endif %}
 {% if crate_tarball %}
 # Crate tarball
 SRC_URI+=" {{ crate_tarball }}"

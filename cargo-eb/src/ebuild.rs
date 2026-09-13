@@ -157,6 +157,7 @@ pub struct RenderInput<'a> {
     pub pkg: &'a PackageMetadata,
     pub crates: &'a [Crate],
     pub crate_tarball: Option<&'a str>,
+    pub source_tarball: Option<&'a str>,
     pub prog_version: &'a str,
     pub distdir: &'a Path,
     pub mapping_path: &'a Path,
@@ -211,6 +212,7 @@ pub fn render_ebuild(input: RenderInput<'_>) -> Result<String> {
             .filter(|s| !s.is_empty())
             .map(url_escape),
         crate_tarball => input.crate_tarball.unwrap_or(""),
+        source_tarball => input.source_tarball.unwrap_or(""),
         pkg_license => pkg_license,
         crate_licenses => crate_licenses,
         iuse_plus => iuse,
@@ -222,6 +224,7 @@ pub fn render_ebuild(input: RenderInput<'_>) -> Result<String> {
 const CARGO_FEATURES_MARKER: &str = "# Cargo features\nIUSE+=\"";
 const CRATE_LICENSES_MARKER: &str = "# Dependent crate licenses\nLICENSE+=\"";
 const CRATE_TARBALL_MARKER: &str = "# Crate tarball\nSRC_URI+=\"";
+const SOURCE_SNAPSHOT_MARKER: &str = "# Source snapshot\nSRC_URI=\"";
 
 fn replace_quoted(hay: &mut String, marker: &str, replacement: &str) -> Result<()> {
     let start = hay
@@ -253,6 +256,7 @@ pub struct UpdateInput<'a> {
     pub pkg: &'a PackageMetadata,
     pub crates: &'a [Crate],
     pub crate_tarball: Option<&'a str>,
+    pub source_tarball: Option<&'a str>,
     pub distdir: &'a Path,
     pub mapping_path: &'a Path,
     pub crate_license_spdx: &'a [String],
@@ -268,6 +272,14 @@ pub fn update_ebuild(input: UpdateInput<'_>) -> Result<String> {
     };
     let iuse = iuse_plus(input.pkg);
     let mut out = input.existing.to_string();
+
+    if let Some(src) = input.source_tarball {
+        replace_quoted(
+            &mut out,
+            SOURCE_SNAPSHOT_MARKER,
+            &format!("{SOURCE_SNAPSHOT_MARKER}{src}\""),
+        )?;
+    }
 
     if let Some(tarball) = input.crate_tarball {
         replace_quoted(
@@ -340,6 +352,7 @@ mod tests {
             description: description.map(str::to_string),
             homepage: None,
             features: Default::default(),
+            publish: true,
         }
     }
 
@@ -385,6 +398,7 @@ src_configure() {
             pkg: &pkg_with_features(),
             crates: &[],
             crate_tarball: None,
+            source_tarball: None,
             distdir: Path::new("/nonexistent"),
             mapping_path: Path::new("/nonexistent"),
             crate_license_spdx: &[],
@@ -403,6 +417,7 @@ src_configure() {
             pkg: &pkg_with_features(),
             crates: &[],
             crate_tarball: None,
+            source_tarball: None,
             distdir: Path::new("/nonexistent"),
             mapping_path: Path::new("/nonexistent"),
             crate_license_spdx: &[],

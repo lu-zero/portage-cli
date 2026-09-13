@@ -43,12 +43,19 @@ cargo eb [PATH]
     -o, --output FILE        new ebuild (default {name}-{version}.ebuild)
     --tarball FILE           vendor tarball (default {name}-{version}-crates.tar.xz)
     --no-tarball             CRATES=/GIT_CRATES= instead
+    --snapshot               pack a source tarball of the package (isolated workspace)
+    --no-snapshot            never pack a source tarball
     -d, --distdir DIR
     -l, --license-mapping FILE
     -f, --force
 ```
 
 `--update` and `-o` together: read `--update`, write `-o`.
+
+A source snapshot (`{name}-{version}.tar.xz`) is packed automatically when the
+crate is not a release (`publish = false` or a semver pre-release). `--snapshot`
+forces it; `--no-snapshot` skips it. For a workspace member the snapshot is the
+isolated path-dep tree so `workspace = true` still resolves.
 
 ## IUSE from Cargo features
 

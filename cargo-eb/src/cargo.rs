@@ -16,6 +16,8 @@ pub struct PackageMetadata {
     pub description: Option<String>,
     pub homepage: Option<String>,
     pub features: std::collections::BTreeMap<String, bool>,
+    /// `false` when `publish = false` (or an empty registry list).
+    pub publish: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -274,7 +276,23 @@ pub fn package_from_toml(path: &Path) -> Result<PackageMetadata, CargoError> {
         description,
         homepage,
         features,
+        publish: publish_allowed(&pkg),
     })
+}
+
+fn publish_allowed(pkg: &cargo_toml::Package) -> bool {
+    match pkg.publish.get() {
+        Ok(cargo_toml::Publish::Flag(flag)) => *flag,
+        Ok(cargo_toml::Publish::Registry(regs)) => !regs.is_empty(),
+        Err(_) => true,
+    }
+}
+
+impl PackageMetadata {
+    /// Crates.io-style release: publishable and no semver pre-release suffix.
+    pub fn is_release(&self) -> bool {
+        self.publish && !self.version.contains('-')
+    }
 }
 
 /// Open the fetched crate archive at `distdir/<filename>` for scanning.
@@ -382,6 +400,8 @@ pub struct PreparedPackage {
     _scratch: Option<tempfile::TempDir>,
     pub manifest: PathBuf,
     pub lock: PathBuf,
+    /// Directory to pack for a source snapshot (isolated workspace or the package).
+    pub source_root: PathBuf,
 }
 
 fn cargo_bin() -> std::ffi::OsString {
@@ -560,6 +580,7 @@ pub fn prepare_package(dir: &Path) -> Result<PreparedPackage, CargoError> {
             let lock = ensure_lockfile(dir)?;
             Ok(PreparedPackage {
                 _scratch: None,
+                source_root: dir.to_path_buf(),
                 manifest,
                 lock,
             })
@@ -577,9 +598,11 @@ pub fn prepare_package(dir: &Path) -> Result<PreparedPackage, CargoError> {
                     "isolated generate-lockfile did not produce Cargo.lock",
                 )));
             }
+            let source_root = scratch.path().to_path_buf();
             Ok(PreparedPackage {
                 manifest: isolated_manifest,
                 lock,
+                source_root,
                 _scratch: Some(scratch),
             })
         }
@@ -700,5 +723,24 @@ mod tests {
             "workspace isolation still locked em"
         );
         assert!(lock.contains("name = \"cargo-eb\""), "{lock}");
+    }
+
+    #[test]
+    fn unpublished_is_not_a_release() {
+        let mut p = PackageMetadata {
+            name: "t".into(),
+            version: "0.1.0".into(),
+            license: None,
+            license_file: None,
+            description: None,
+            homepage: None,
+            features: Default::default(),
+            publish: false,
+        };
+        assert!(!p.is_release());
+        p.publish = true;
+        assert!(p.is_release());
+        p.version = "0.1.0-dev".into();
+        assert!(!p.is_release());
     }
 }

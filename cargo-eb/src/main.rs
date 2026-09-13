@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use usage::Cli;
 
-use cargo_eb::{cargo as cargomod, ebuild, fetch, vendor};
+use cargo_eb::{cargo as cargomod, ebuild, fetch, snapshot, vendor};
 
 #[derive(Debug, Cli)]
 #[usage(
@@ -44,6 +44,14 @@ struct Args {
     /// Overwrite existing ebuild/tarball
     #[usage(short, long)]
     force: bool,
+
+    /// Pack a source snapshot tarball (default when the crate is not a release)
+    #[usage(long)]
+    snapshot: bool,
+
+    /// Do not pack a source snapshot, even for unpublished/pre-release crates
+    #[usage(long)]
+    no_snapshot: bool,
 }
 
 fn resolve_distdir(cli_distdir: Option<Utf8PathBuf>) -> PathBuf {
@@ -114,6 +122,21 @@ async fn main() -> Result<()> {
         refuse_existing(&tarball_path, cli.force)?;
     }
 
+    let want_snapshot = if cli.no_snapshot {
+        false
+    } else if cli.snapshot {
+        true
+    } else {
+        !pkg.is_release()
+    };
+    let source_tarball_path = outfile
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(format!("{}-{}.tar.xz", pkg.name, pkg.version));
+    if want_snapshot && cli.update.is_none() {
+        refuse_existing(&source_tarball_path, cli.force)?;
+    }
+
     let (crate_tarball_name, crate_license_spdx) = if want_tarball {
         std::fs::create_dir_all(&distdir)
             .with_context(|| format!("creating DISTDIR {}", distdir.display()))?;
@@ -148,6 +171,21 @@ async fn main() -> Result<()> {
         )
     };
 
+    let source_tarball_name = if want_snapshot {
+        let prefix = format!("{}-{}", pkg.name, pkg.version);
+        snapshot::pack_source_tarball(&prepared.source_root, &prefix, &source_tarball_path)
+            .context("packing source snapshot")?;
+        Some(
+            source_tarball_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        None
+    };
+
     let ebuild_str = if let Some(inp) = &cli.update {
         let existing = std::fs::read_to_string(inp).with_context(|| format!("reading {inp}"))?;
         ebuild::update_ebuild(ebuild::UpdateInput {
@@ -155,6 +193,7 @@ async fn main() -> Result<()> {
             pkg: &pkg,
             crates: &crates,
             crate_tarball: crate_tarball_name.as_deref(),
+            source_tarball: source_tarball_name.as_deref(),
             distdir: &distdir,
             mapping_path: &mapping_path,
             crate_license_spdx: &crate_license_spdx,
@@ -164,6 +203,7 @@ async fn main() -> Result<()> {
             pkg: &pkg,
             crates: &crates,
             crate_tarball: crate_tarball_name.as_deref(),
+            source_tarball: source_tarball_name.as_deref(),
             prog_version: env!("CARGO_PKG_VERSION"),
             distdir: &distdir,
             mapping_path: &mapping_path,
