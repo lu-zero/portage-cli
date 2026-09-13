@@ -203,7 +203,7 @@ async fn setup(
         false,
     );
     let mut out = anstream::stdout();
-    let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
     writeln!(
         out,
         "\n{C_LABEL}{verb} cross toolchain{C_LABEL:#} ({}) — {} steps:",
@@ -225,7 +225,7 @@ async fn setup(
     // init_target only previews config — pass the alias in-memory so the
     // staged plan still sees `cross-*` packages.
     let pretend_alias;
-    let extra_aliases: &[portage_repo::RepoEntry] = if globals.pretend {
+    let extra_aliases: &[portage_repo::RepoEntry] = if globals.pretend() {
         pretend_alias = [alias_repo_entry(target, extras)];
         &pretend_alias
     } else {
@@ -238,7 +238,7 @@ async fn setup(
     // not em-generated); only make.conf's content needs synthesizing.
     let profile_dir_holder;
     let make_conf_holder;
-    let sysroot_override = if globals.pretend {
+    let sysroot_override = if globals.pretend() {
         let gentoo_path = main_repo(globals)?.path().to_owned();
         profile_dir_holder = gentoo_path.join("profiles").join(target.profile_path());
         make_conf_holder = make_conf_body(target, globals.outer_roots().merge_root());
@@ -265,7 +265,7 @@ async fn setup(
     )
     .await?;
 
-    if !globals.pretend {
+    if !globals.pretend() {
         writeln!(
             out,
             "\n>>> cross toolchain {} ready in {}/usr/{}",
@@ -388,7 +388,7 @@ async fn run_staged(
         )
         .await?;
 
-        if !globals.pretend {
+        if !globals.pretend() {
             post_step(step)?;
         }
     }
@@ -560,13 +560,13 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     let roots = globals.outer_roots();
     let merge_root = roots.merge_root();
     globals.require_destination_not_bare_host(&roots, "em toolchain --setup")?;
-    if !globals.pretend {
+    if !globals.pretend() {
         ensure_self_contained_prefix(globals)?;
     }
     let prefix_guest = native_prefix_guest(globals, &roots).await;
     let plan = stages::toolchain_plan(&stages::BootstrapKind::Native, true, prefix_guest);
     let mut out = anstream::stdout();
-    let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
     writeln!(
         out,
         "\n{C_LABEL}{verb} native toolchain{C_LABEL:#} into {merge_root} — {} steps:",
@@ -593,7 +593,7 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
         move |step: &stages::StageStep| activate_native_toolchain(globals, step),
     )
     .await?;
-    if !globals.pretend {
+    if !globals.pretend() {
         writeln!(out, "\n>>> native toolchain ready in {merge_root}").ok();
     }
     Ok(())
@@ -654,7 +654,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     let plan = stages::stage1_plan(&stack, &bootstrap_use)?;
     let refresh = maybe_weave_in_gcc_update(&stack, globals).await;
     let mut out = anstream::stdout();
-    let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
 
     // Cross-compiler refresh installs into the outer EROOT, never the
     // `--target` sysroot that stage1 packages below use.
@@ -720,7 +720,7 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
         |_| Ok(()),
     )
     .await?;
-    if !globals.pretend {
+    if !globals.pretend() {
         writeln!(out, "\n>>> stage1 ready in {merge_root}").ok();
     }
     Ok(())
@@ -733,7 +733,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     let merge_root = roots.merge_root();
     globals.require_root_distinct_from_host(&roots, "em stages --stage3")?;
     let mut out = anstream::stdout();
-    let verb = if globals.pretend { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
     writeln!(
         out,
         "\n{C_LABEL}{verb} stage3{C_LABEL:#} into {merge_root} — emptytree @system (-e -uD --with-bdeps)"
@@ -776,7 +776,7 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     )
     .await?;
 
-    if !globals.pretend {
+    if !globals.pretend() {
         writeln!(out, "\n>>> stage3 ready in {merge_root}").ok();
     }
     Ok(())
@@ -1071,14 +1071,14 @@ async fn init_target(
     // Kept outside the config plan below (a separate, already pretend-aware
     // subsystem) — only actually bootstraps for real when not previewing.
     let roots = globals.outer_roots();
-    if roots.merge_root().as_str() != "/" && !globals.pretend {
+    if roots.merge_root().as_str() != "/" && !globals.pretend() {
         crate::setup::bootstrap(&roots)?;
         // Outer EPREFIX layout via real baselayout (not mkdir), so
         // `${EPREFIX}/bin/bash` etc. work before toolchain packages merge.
         // Sysroot baselayout is a separate step in `toolchain_plan`.
         crate::setup::merge_baselayout(globals, &[]).await?;
     }
-    if !globals.pretend {
+    if !globals.pretend() {
         ensure_config_site_packages(globals).await?;
     }
     let gentoo_path = main_repo(globals)?.path().to_owned();
@@ -1113,7 +1113,7 @@ async fn init_target(
         extras,
     ));
 
-    let outcome = config_plan::apply(&entries, globals.pretend, ask, policy)?;
+    let outcome = config_plan::apply(&entries, globals.pretend(), ask, policy)?;
     if !outcome.applied() {
         return Ok(outcome);
     }
@@ -1245,7 +1245,7 @@ fn self_contained_prefix_entries(
 /// Native toolchain (`em toolchain --setup`) entry point: bootstrap the
 /// EPREFIX skeleton and apply the self-contained-`--root`-only config
 /// entries eagerly, no preview/confirm — this path is already externally
-/// gated by `!globals.pretend` at its one call site. Returns the resolved
+/// gated by `!globals.pretend()` at its one call site. Returns the resolved
 /// `::gentoo` repo path.
 fn ensure_self_contained_prefix(globals: &Cli) -> Result<Utf8PathBuf> {
     let roots = globals.outer_roots();
@@ -1753,6 +1753,7 @@ mod tests {
             activity: crate::cli::ActivityArgs::default(),
             verbose_arg: crate::cli::VerboseArg::default(),
             quiet_arg: crate::cli::QuietArg::default(),
+            pretend_arg: crate::cli::PretendArg::default(),
             arch_arg: crate::cli::ArchArg::default(),
             repo_arg: crate::cli::RepoArg::default(),
             privilege: crate::cli::Privilege::Auto,

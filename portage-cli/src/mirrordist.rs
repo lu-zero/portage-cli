@@ -101,8 +101,8 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
     // Only actually remove stale atomic-write temp files on a real run —
     // `-p` must leave the filesystem untouched even though it still reports
     // the count (see print_report).
-    let state = scan_distdir(&opts.distfiles, &referenced, &whitelist, !cli.pretend)?;
-    if !cli.pretend && state.stale_partials > 0 {
+    let state = scan_distdir(&opts.distfiles, &referenced, &whitelist, !cli.pretend())?;
+    if !cli.pretend() && state.stale_partials > 0 {
         println!(
             ">>> Removed {} stale partial download(s) left over from an interrupted run.",
             state.stale_partials
@@ -125,7 +125,7 @@ pub async fn run(cli: &cli::Cli, opts: &MirrorDistOpts) -> Result<()> {
     let (delete_now, scheduled) =
         deletion_decisions(&mut db, &state.orphans, now, opts.deletion_delay);
 
-    if cli.pretend {
+    if cli.pretend() {
         print_report(&plan, &state, &delete_now, &scheduled, opts.delete);
         return Ok(());
     }

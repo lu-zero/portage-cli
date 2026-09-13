@@ -11,7 +11,6 @@
   **Choices:** `auto`, `always`, `never`
 
   **Default:** `auto`
-- **`-p --pretend`** — Show what would be done without actually performing any actions
 
 ## Roots
 - **`--prefix <DIR>`** — Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config still from the host (use --root for a config offset).
@@ -82,7 +81,7 @@ Which tree this invocation reads and writes.
 - [`em query size <ATOM>…`](query/size.md)
 - [`em query uses <ATOM>…`](query/uses.md)
 - [`em query which <ATOM>…`](query/which.md)
-- [`em clean [--root <PATH>] <SUBCOMMAND>`](clean.md)
+- [`em clean [--root <PATH>] [-p --pretend] <SUBCOMMAND>`](clean.md)
 - [`em clean dist [FLAGS]`](clean/dist.md)
 - [`em clean pkg [FLAGS]`](clean/pkg.md)
 - [`em clean all [FLAGS]`](clean/all.md)

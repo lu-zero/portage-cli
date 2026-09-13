@@ -156,7 +156,7 @@ async fn run_all(globals: &Cli, opts: &CleanOpts, filters: &Filters) -> Result<(
         opts.time_limit.as_deref(),
         // `clean` is a removal command, so the logs step removes too — unlike
         // `em maint logs`, which reports until asked with `--fix`.
-        !globals.pretend,
+        !globals.pretend(),
         "Re-run without -p",
     ) {
         note(e, &mut failed);
@@ -178,7 +178,7 @@ fn report_and_remove(globals: &Cli, candidates: &[Candidate], noun: &str) -> Res
     for c in candidates {
         println!("    {} ({})", c.label, human_bytes(c.bytes));
     }
-    if globals.pretend {
+    if globals.pretend() {
         println!(
             ">>> Would remove {} {noun}(s), freeing {}.",
             candidates.len(),

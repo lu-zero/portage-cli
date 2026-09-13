@@ -33,6 +33,20 @@ pub struct QuietArg {
     pub quiet: bool,
 }
 
+/// `-p`/`--pretend`, for applets that can preview their action instead of
+/// performing it.
+///
+/// Prefix position (`em -p pkg`) only reaches the *default* subcommand once
+/// this moves off root — see the caveat on `Cli` about a flag committing the
+/// line before a named applet is considered. `em -p toolchain` no longer
+/// selects `toolchain`; write `em toolchain -p` instead.
+#[derive(usage::Args, Debug, Clone, Default)]
+pub struct PretendArg {
+    /// Show what would be done without actually performing any actions
+    #[usage(short = 'p', long, global)]
+    pub pretend: bool,
+}
+
 /// `--arch`, for applets whose logic branches on target architecture.
 #[derive(usage::Args, Debug, Clone)]
 pub struct ArchArg {

@@ -10,6 +10,7 @@ Remove orphaned/unused packages
 - **`[ATOMS]…`** — Restrict cleaning to these atoms' dependency closure (every other installed package is protected). Default: the whole `@world` set
 
 ## Flags
+- **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
 
 ## Roots

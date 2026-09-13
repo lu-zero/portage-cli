@@ -7,6 +7,7 @@ Reconcile pending config files (etc-update / dispatch-conf)
 
 ## Global Flags
 - **`-q --quiet`** — Suppress non-error output
+- **`-p --pretend`** — Show what would be done without actually performing any actions
 
 ## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)

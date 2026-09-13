@@ -259,7 +259,7 @@ fn resolve_batch(pending: &[Pending], opts: &EtcOpts, globals: &Cli) -> Result<(
             "discard"
         };
         println!("    {verb}: {}", p.sidecar);
-        if globals.pretend {
+        if globals.pretend() {
             continue;
         }
         // Best-effort per file, like `em clean`'s sweep: one sidecar whose
@@ -276,7 +276,7 @@ fn resolve_batch(pending: &[Pending], opts: &EtcOpts, globals: &Cli) -> Result<(
             Err(e) => crate::style::warn_line!("{e:#}"),
         }
     }
-    if globals.pretend {
+    if globals.pretend() {
         println!(">>> Would resolve {} file(s).", selected.len());
     } else {
         println!(">>> Resolved {done} of {} file(s).", selected.len());
@@ -351,7 +351,7 @@ fn merge_interactive(pending: &[Pending], globals: &Cli) -> Result<()> {
     }
     // `-p` is "show what would be done without performing any actions".
     // The prompt itself is the action; honouring it by mutating is the bug.
-    if globals.pretend {
+    if globals.pretend() {
         for p in pending {
             println!("    would resolve: {} ({})", p.target, p.kind.label());
         }

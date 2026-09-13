@@ -156,7 +156,7 @@ async fn sync_one(entry: &RepoEntry, globals: &Cli) -> Result<SyncOutcome> {
 
     let volatile = resolve_volatile(entry, path.as_std_path());
 
-    if globals.pretend {
+    if globals.pretend() {
         let action = match kind {
             SyncKind::Git => git_pretend(&path, sync_uri, volatile),
             SyncKind::Rsync => rsync_cmd::pretend(&path, sync_uri),

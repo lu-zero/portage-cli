@@ -16,7 +16,7 @@ mod emerge_mode;
 mod merge_flags;
 mod topology;
 pub use activity::ActivityArgs;
-pub use context::{ArchArg, QuietArg, RepoArg, VerboseArg};
+pub use context::{ArchArg, PretendArg, QuietArg, RepoArg, VerboseArg};
 pub use depgraph_flags::DepgraphFlags;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
@@ -172,6 +172,12 @@ pub fn parse_cli_or_exit() -> Validated {
 /// pkg` emerges a package named "emerge", not `pkg`). Write either the fully
 /// prefixed form or lead with `emerge` explicitly (`em emerge --json -p
 /// pkg`); don't mix a leading flag with a later explicit `emerge` word.
+///
+/// This also means `-p`/`--pretend` (a [`PretendArg`], like every other
+/// per-applet flag below) only reaches a *named* applet in prefix
+/// position by coincidentally also being the default's flag: `em -p pkg`
+/// previews an emerge, but `em -p toolchain` no longer selects `toolchain` —
+/// write `em toolchain -p` instead.
 #[derive(usage::Cli, Debug)]
 #[usage(
     bin = "em",
@@ -196,10 +202,6 @@ pub fn parse_cli_or_exit() -> Validated {
 pub struct Cli {
     #[usage(long, global, value_enum, default = "auto", value_name = "WHEN")]
     pub color: ColorChoice,
-
-    /// Show what would be done without actually performing any actions
-    #[usage(short = 'p', long, global)]
-    pub pretend: bool,
 
     #[usage(flatten)]
     pub topology: Topology,
@@ -410,6 +412,28 @@ impl Cli {
             Some(Applet::Sync(a)) => a.quiet_arg.quiet,
             Some(Applet::Etc(a)) => a.quiet_arg.quiet,
             Some(Applet::Regen(a)) => a.quiet_arg.quiet,
+            _ => false,
+        }
+    }
+
+    /// The dispatched applet's own `-p`/`--pretend`, or `false` for an
+    /// applet that doesn't carry [`PretendArg`].
+    pub fn pretend(&self) -> bool {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.pretend_arg.pretend,
+            Some(Applet::Crossdev(a)) => a.pretend_arg.pretend,
+            Some(Applet::Toolchain(a)) => a.pretend_arg.pretend,
+            Some(Applet::Stages(a)) => a.pretend_arg.pretend,
+            Some(Applet::Setup(a)) => a.pretend_arg.pretend,
+            Some(Applet::Depclean(a)) => a.pretend_arg.pretend,
+            Some(Applet::Revdep(a)) => a.pretend_arg.pretend,
+            Some(Applet::Ebuild(a)) => a.pretend_arg.pretend,
+            Some(Applet::MirrorDist(a)) => a.pretend_arg.pretend,
+            Some(Applet::Clean(a)) => a.pretend_arg.pretend,
+            Some(Applet::Select(a)) => a.pretend_arg.pretend,
+            Some(Applet::Sync(a)) => a.pretend_arg.pretend,
+            Some(Applet::Maint(a)) => a.pretend_arg.pretend,
+            Some(Applet::Etc(a)) => a.pretend_arg.pretend,
             _ => false,
         }
     }
@@ -1430,7 +1454,7 @@ mod tests {
         assert_eq!(overlay_root_of(&bare), Some("/srv/x"));
         assert_eq!(overlay_root_of(&explicit), Some("/srv/x"));
         assert_eq!(emerge_applet(&bare).atoms, emerge_applet(&explicit).atoms);
-        assert!(bare.pretend && explicit.pretend);
+        assert!(bare.pretend() && explicit.pretend());
     }
 
     #[test]
@@ -1438,7 +1462,7 @@ mod tests {
         let cli = parse_cli(&["em", "--root", "/srv/x", "emerge", "-p", "sys-libs/zlib"]);
         assert_eq!(overlay_root_of(&cli), Some("/srv/x"));
         assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
-        assert!(cli.pretend);
+        assert!(cli.pretend());
     }
 
     #[test]
@@ -1497,10 +1521,14 @@ mod tests {
     }
 
     #[test]
-    fn dash_p_alone_parses_without_defaulting_to_emerge() {
+    fn dash_p_alone_defaults_to_an_empty_emerge_preview() {
+        // -p is now a per-applet flag (PretendArg on EmergeArgs), so it
+        // reaches the default subcommand the same way -u/-a do: `em -p`
+        // commits to `emerge` with no atoms, rather than leaving `applet`
+        // unset.
         let cli = parse_cli(&["em", "-p"]);
-        assert!(cli.pretend);
-        assert!(cli.applet.is_none());
+        assert!(cli.pretend());
+        assert!(emerge_applet(&cli).atoms.is_empty());
     }
 
     #[test]
@@ -1626,12 +1654,17 @@ mod tests {
     }
 
     #[test]
-    fn global_pretend_both_orders() {
+    fn pretend_only_selects_toolchain_in_postfix_position() {
+        // Known, accepted limitation (see the Cli doc comment): `-p` is now
+        // per-applet, so a leading `-p` commits to the default (emerge)
+        // subcommand before "toolchain" is considered — it's swallowed as an
+        // atom, not routed to Toolchain. Postfix position still works.
         let before = parse_cli(&["em", "-p", "toolchain"]);
-        assert!(before.pretend);
-        assert!(matches!(before.applet, Some(Applet::Toolchain(_))));
+        assert!(before.pretend());
+        assert_eq!(emerge_applet(&before).atoms, ["toolchain"]);
+
         let after = parse_cli(&["em", "toolchain", "-p"]);
-        assert!(after.pretend);
+        assert!(after.pretend());
         assert!(matches!(after.applet, Some(Applet::Toolchain(_))));
     }
 
@@ -1932,9 +1965,11 @@ mod tests {
         assert!(matches!(search.applet, Some(Applet::Emerge(_))));
         assert!(search.mode().search);
 
-        // `-p` is a Cli global, so it parses without retry and leaves applet unset.
+        // `-p` is a per-applet flag like the others above now, so it retries
+        // into emerge the same way.
         let pretend = parse_cli(&["em", "-p"]);
-        assert!(pretend.applet.is_none());
+        assert!(matches!(pretend.applet, Some(Applet::Emerge(_))));
+        assert!(pretend.pretend());
         assert_eq!(pretend.mode(), EmergeModeArgs::default());
     }
 
@@ -2252,6 +2287,8 @@ pub struct EbuildArgs {
     pub root_arg: RootArg,
     #[usage(flatten)]
     pub repo_arg: RepoArg,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em maint` — system maintenance and health checks
@@ -2270,6 +2307,8 @@ pub struct MaintArgs {
     pub arch_arg: ArchArg,
     #[usage(flatten)]
     pub repo_arg: RepoArg,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em portageq` — query Portage internal variables and data
@@ -2293,6 +2332,8 @@ pub struct SyncArgs {
     pub verbose_arg: VerboseArg,
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em depclean` — remove orphaned/unused packages
@@ -2309,6 +2350,8 @@ pub struct DepcleanArgs {
     /// nothing to depclean's own read-then-remove walk.
     #[usage(flatten)]
     pub merge_flags: MergeFlags,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em regen` — regenerate metadata cache
@@ -2408,6 +2451,8 @@ pub struct MirrorDistArgs {
     pub delete_allow_incomplete: bool,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em query` — query package information
@@ -2443,6 +2488,8 @@ pub struct CleanArgs {
     pub target: CleanTarget,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em use` — enable/disable/query USE flags in make.conf
@@ -2535,6 +2582,8 @@ pub struct RevdepArgs {
     pub root_arg: RootArg,
     #[usage(flatten)]
     pub merge_flags: MergeFlags,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em read` — display Portage elog files
@@ -2621,6 +2670,8 @@ pub struct SelectArgs {
     pub arch_arg: ArchArg,
     #[usage(flatten)]
     pub repo_arg: RepoArg,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em active` — register a default `--prefix`/`--local` for bare invocations
@@ -2645,6 +2696,8 @@ pub struct EtcArgs {
     pub root_arg: RootArg,
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 }
 
 /// `em env` — regenerate `/etc/profile.env` and ld.so cache
@@ -2706,6 +2759,9 @@ pub struct SetupArgs {
 
     #[usage(flatten)]
     pub repo_arg: RepoArg,
+
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 
     /// Privilege backend for this setup run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
@@ -2777,6 +2833,9 @@ pub struct CrossdevArgs {
     #[usage(flatten)]
     pub repo_arg: RepoArg,
 
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
+
     /// Privilege backend for this crossdev run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2827,6 +2886,9 @@ pub struct ToolchainArgs {
 
     #[usage(flatten)]
     pub repo_arg: RepoArg,
+
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 
     /// Privilege backend for this toolchain run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
@@ -2883,6 +2945,9 @@ pub struct StagesArgs {
     #[usage(flatten)]
     pub repo_arg: RepoArg,
 
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
+
     /// Privilege backend for this stages run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2921,6 +2986,9 @@ pub struct EmergeArgs {
 
     #[usage(flatten)]
     pub repo_arg: RepoArg,
+
+    #[usage(flatten)]
+    pub pretend_arg: PretendArg,
 
     /// Privilege backend for this merge
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]

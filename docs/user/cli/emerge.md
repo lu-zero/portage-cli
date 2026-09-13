@@ -18,6 +18,7 @@ Resolve and merge/unmerge packages (emerge workalike).
 - **`--repo <PATH>`** — Pin search/query to a single repository
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
+- **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
 
 ## Actions

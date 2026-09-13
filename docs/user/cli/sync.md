@@ -17,6 +17,7 @@ Identical implementation to `em maint sync` — this top-level form exists only 
 ## Flags
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 - **`-q --quiet`** — Suppress non-error output
+- **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
 
 ## Roots

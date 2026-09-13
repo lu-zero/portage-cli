@@ -7,6 +7,7 @@ Rebuild packages with broken shared library deps
 
 ## Flags
 - **`-L --library <NAME>`** — Only consider consumers of libraries whose soname contains NAME
+- **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
 
 ## Roots

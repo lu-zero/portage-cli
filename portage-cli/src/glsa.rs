@@ -601,7 +601,7 @@ async fn run_fix(globals: &Cli, ids: &[String]) -> Result<()> {
 
     // `--pretend` doesn't actually merge anything — don't record GLSAs as
     // resolved for a run that resolved nothing.
-    if globals.pretend {
+    if globals.pretend() {
         return Ok(());
     }
     mark_injected(&eroot, &fixed_ids)

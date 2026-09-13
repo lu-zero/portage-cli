@@ -262,7 +262,7 @@ pub async fn run(cli: &crate::cli::Cli, args: &crate::cli::SetupArgs) -> Result<
             mode.label()
         );
     }
-    if cli.pretend {
+    if cli.pretend() {
         return preview(&roots, mode);
     }
     // The host has to supply the tools a still-empty prefix builds with, so
@@ -624,7 +624,10 @@ mod tests {
     async fn pretend_run_writes_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let prefix = dir.path().to_str().unwrap();
-        let cli = crate::cli::parse_cli(&["em", "-p", "setup", "--prefix", prefix]);
+        // -p is a per-applet flag now (PretendArg); leading with it would
+        // commit the line to the default `emerge` and swallow "setup" as an
+        // atom, so lead with the explicit applet word instead.
+        let cli = crate::cli::parse_cli(&["em", "setup", "-p", "--prefix", prefix]);
         let Some(crate::cli::Applet::Setup(args)) = cli.applet.as_ref() else {
             unreachable!("parsed as `setup`")
         };

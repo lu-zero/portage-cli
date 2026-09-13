@@ -477,7 +477,7 @@ async fn emerge_atoms_inner(
     // skips the write for, `--pretend` included. `world_set_refs` shares
     // this same narrower gate directly (no display half): a `@set` ref never
     // appears as a plan row of its own, so there is nothing for it to bold.
-    let world_atoms: Vec<portage_atom::Dep> = if !cli.pretend
+    let world_atoms: Vec<portage_atom::Dep> = if !cli.pretend()
         && !merge_flags.buildpkgonly
         && !merge_flags.fetchonly
         && !merge_flags.onlydeps
@@ -488,7 +488,7 @@ async fn emerge_atoms_inner(
     };
     let world_set_refs: Vec<String> = if update_world
         && !merge_flags.oneshot
-        && !cli.pretend
+        && !cli.pretend()
         && !merge_flags.buildpkgonly
         && !merge_flags.fetchonly
         && !merge_flags.onlydeps
@@ -529,7 +529,7 @@ async fn emerge_atoms_inner(
         verbose: cli.verbose(),
         empty: merge_flags.emptytree,
         autounmask_write: merge_flags.autounmask_write,
-        autounmask_persist: if cli.pretend {
+        autounmask_persist: if cli.pretend() {
             query::depgraph::AutounmaskPersist::Never
         } else if merge_flags.ask {
             query::depgraph::AutounmaskPersist::Ask
@@ -539,7 +539,7 @@ async fn emerge_atoms_inner(
         // `--pretend` pops `--ask` in real portage; matched here by simply
         // never treating it as interactive under `-p` — a `-pa` preview must
         // never prompt.
-        ask: merge_flags.ask && !cli.pretend,
+        ask: merge_flags.ask && !cli.pretend(),
         autosolve_use: merge_flags.autosolve_use,
         autounmask_widen: autounmask_widen || cli.target().is_some() || cross_alias_targets,
         roots: &roots,
@@ -588,7 +588,7 @@ async fn emerge_atoms_inner(
     // needs config changes must still show it — previously it silently never
     // printed in that case, since the old call site was below this
     // early-return.
-    if cli.pretend && merge_flags.eta && !outcome.plan.is_empty() {
+    if cli.pretend() && merge_flags.eta && !outcome.plan.is_empty() {
         print_eta();
     }
 
@@ -634,7 +634,7 @@ async fn emerge_atoms_inner(
         )?;
     }
 
-    if cli.pretend {
+    if cli.pretend() {
         return Ok(());
     }
 
@@ -1194,7 +1194,7 @@ pub(crate) async fn run_unmerge_batch(
     let roots = cli.roots();
     let root = roots.merge_root().to_owned();
 
-    if cli.pretend {
+    if cli.pretend() {
         // Preview what preserve-libs would keep, without registering or
         // touching disk (read-only load, no store). One shared graph for
         // the whole batch — see `preserve_libs::build_link_graph`'s doc.
