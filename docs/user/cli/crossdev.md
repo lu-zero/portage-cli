@@ -22,17 +22,6 @@ Deliberately no [`RootArg`]: none of `crossdev`'s three actions (`--init-target`
 - **`--ex-gdb`** — Build a cross gdb (`dev-debug/gdb`) — shorthand for `--ex-pkg dev-debug/gdb`, crossdev's own `--ex-gdb`.
 - **`-h --help`** — Print help
 
-## Depgraph
-
-How far to re-examine installed dependencies.
-- **`-D --deep`** — Re-examine transitive dependencies
-
-  With `--update` (`-uD`), upgrades installed packages in the depgraph to the newest accepted in-slot version (emerge `-uD`). Alone, still bumps `:*` any-slot deps to the newest slot rather than keeping a satisfying installed slot.
-- **`-N --newuse`** — Reinstall installed packages when their planned USE or IUSE differs from the VDB (emerge `--newuse`)
-
-  Applies to packages that appear in the depgraph; pairs with `--deep` for a full-tree USE recheck.
-- **`-U --changed-use`** — Like `--newuse`, but only rebuild when an *enabled* USE flag changed among flags present in both installed and current IUSE (ignore pure IUSE add/drop). Emerge's `--changed-use` / `-U`.
-
 ## Merge
 
 How the solver and build scheduler behave.
@@ -80,6 +69,17 @@ How the solver and build scheduler behave.
   **Choices:** `auto`, `pseudoroot`, `hakoniwa`, `sudo`, `none`
 
   **Default:** `auto`
+
+## Depgraph
+
+How far to re-examine installed dependencies.
+- **`-D --deep`** — Re-examine transitive dependencies
+
+  With `--update` (`-uD`), upgrades installed packages in the depgraph to the newest accepted in-slot version (emerge `-uD`). Alone, still bumps `:*` any-slot deps to the newest slot rather than keeping a satisfying installed slot.
+- **`-N --newuse`** — Reinstall installed packages when their planned USE or IUSE differs from the VDB (emerge `--newuse`)
+
+  Applies to packages that appear in the depgraph; pairs with `--deep` for a full-tree USE recheck.
+- **`-U --changed-use`** — Like `--newuse`, but only rebuild when an *enabled* USE flag changed among flags present in both installed and current IUSE (ignore pure IUSE add/drop). Emerge's `--changed-use` / `-U`.
 
 ## Activity
 

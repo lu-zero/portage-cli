@@ -14,12 +14,9 @@ Resolve and merge/unmerge packages (emerge workalike).
 ## Flags
 - **`-h --help`** — Print help
 
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
+## Actions
 
-## Merge
-
-How the solver and build scheduler behave.
+Pick a different operation than a merge.
 - **`-s --search`** — Search package names (each argument is a pattern)
 
   Deliberately separate from the `em search` applet: this is emerge's own `-s`, emerge-style output; `em search` is the equery-style applet (`--all`/`--desc`/`--name-only`/`--homepage`). Same split as real Portage's `emerge -s` vs `equery`, not accidental duplication.
@@ -44,6 +41,10 @@ How the solver and build scheduler behave.
 - **`-r --resume`** — Resume the last saved merge (see `em maint cleanresume` to discard it instead)
 
   Atoms are not accepted together with this flag — the package list comes from the saved state. Combine with other flags (e.g. `-r -X stuck/atom`) to adjust the resumed run.
+
+## Merge
+
+How the solver and build scheduler behave.
 - **`-a --ask`** — Ask for confirmation before performing actions
 - **`-u --update`** — Update installed packages to newest available versions
 - **`--autounmask-write`** — Write required USE changes to /etc/portage/package.use/
@@ -99,6 +100,9 @@ How far to re-examine installed dependencies.
 
   Applies to packages that appear in the depgraph; pairs with `--deep` for a full-tree USE recheck.
 - **`-U --changed-use`** — Like `--newuse`, but only rebuild when an *enabled* USE flag changed among flags present in both installed and current IUSE (ignore pure IUSE add/drop). Emerge's `--changed-use` / `-U`.
+
+## Roots
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Activity
 

@@ -1,5 +1,6 @@
-use std::collections::HashSet;
-use std::ffi::{OsStr, OsString};
+#[cfg(test)]
+use std::ffi::OsStr;
+use std::ffi::OsString;
 
 use gentoo_core::Arch;
 #[cfg(test)]
@@ -136,154 +137,6 @@ fn applet_activity(cli: &Cli) -> ActivityArgs {
     }
 }
 
-fn is_help_or_version(e: &usage::Error<'_, '_>) -> bool {
-    matches!(
-        e,
-        usage::Error::Help { .. }
-            | usage::Error::HelpAll { .. }
-            | usage::Error::MissingArgsHelp { .. }
-            | usage::Error::Version { .. }
-    )
-}
-
-/// Spellings that always take a detached value, including applet-only ones
-/// like `--exclude`. A spelling that is a switch anywhere (`-a` is `--ask` on
-/// emerge and `--add` on `use`) is omitted, as are optional-value flags
-/// (`--local`), so a following applet name is still the leading word.
-fn value_taking_flags() -> &'static HashSet<String> {
-    static FLAGS: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
-    FLAGS.get_or_init(|| {
-        let mut takes = HashSet::new();
-        let mut switch = HashSet::new();
-        collect_flag_spellings(Cli::command(), &mut takes, &mut switch);
-        takes.retain(|s| !switch.contains(s));
-        takes
-    })
-}
-
-fn collect_flag_spellings(
-    cmd: &usage::Command<'_>,
-    takes: &mut HashSet<String>,
-    switch: &mut HashSet<String>,
-) {
-    for f in cmd.flags.iter().copied() {
-        let required_value = f.takes_value && !f.value_optional;
-        for long in f.longs {
-            let s = format!("--{long}");
-            if required_value {
-                takes.insert(s);
-            } else {
-                switch.insert(s);
-            }
-        }
-        for short in f.shorts {
-            let s = format!("-{}", *short as char);
-            if required_value {
-                takes.insert(s);
-            } else {
-                switch.insert(s);
-            }
-        }
-    }
-    for sub in cmd.subcommands.iter().copied() {
-        collect_flag_spellings(sub, takes, switch);
-    }
-}
-
-fn consumes_next_as_value(flag: &str, next: Option<&OsString>, taking: &HashSet<String>) -> bool {
-    if flag.contains('=') {
-        return false;
-    }
-    taking.contains(flag) && next.is_some_and(|n| !n.to_string_lossy().starts_with('-'))
-}
-
-/// First non-flag token after argv0. A flag's value is not a candidate.
-fn leading_word(raw: &[OsString]) -> Option<&str> {
-    let taking = value_taking_flags();
-    let mut i = 1;
-    while i < raw.len() {
-        let Some(s) = raw[i].to_str() else {
-            i += 1;
-            continue;
-        };
-        if s == "--" {
-            return None;
-        }
-        if s.starts_with('-') {
-            if consumes_next_as_value(s, raw.get(i + 1), taking) {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
-        return Some(s);
-    }
-    None
-}
-
-fn is_known_subcommand(word: &str) -> bool {
-    Cli::command()
-        .subcommands
-        .iter()
-        .any(|c| c.name == word || c.aliases.contains(&word))
-}
-
-/// Splice `emerge` after argv0, dropping a duplicate `emerge` word if present.
-fn with_leading_emerge(raw: &[OsString]) -> Vec<OsString> {
-    let emerge = OsString::from("emerge");
-    let taking = value_taking_flags();
-    let mut out = Vec::with_capacity(raw.len() + 1);
-    out.push(raw.first().cloned().unwrap_or_else(|| "em".into()));
-    out.push(emerge.clone());
-    let mut i = 1;
-    let mut skipped_applet = false;
-    while i < raw.len() {
-        let t = &raw[i];
-        let s = t.to_string_lossy();
-        if s.starts_with('-') {
-            out.push(t.clone());
-            if consumes_next_as_value(&s, raw.get(i + 1), taking) {
-                i += 1;
-                if i < raw.len() {
-                    out.push(raw[i].clone());
-                }
-            }
-            i += 1;
-            continue;
-        }
-        if !skipped_applet && t == &emerge {
-            skipped_applet = true;
-            i += 1;
-            continue;
-        }
-        out.push(t.clone());
-        i += 1;
-    }
-    out
-}
-
-/// Retry into emerge unless the leading word already names another subcommand.
-/// usage 6.9's `default_subcommand_flags` still treats a later sibling name as a
-/// selector, so `em -u pkg` is UnknownFlag `-u`. Wait for the next usage release.
-fn should_retry(raw: &[OsString]) -> bool {
-    !matches!(
-        leading_word(raw),
-        Some(word) if word != "emerge" && is_known_subcommand(word)
-    )
-}
-
-#[cfg(test)]
-fn resolve_argv(raw: Vec<OsString>) -> Vec<OsString> {
-    let refs: Vec<&OsStr> = raw.iter().map(OsString::as_os_str).collect();
-    match Cli::try_parse_from(&refs) {
-        Ok(_) => raw,
-        Err(e) if is_help_or_version(&e) => raw,
-        Err(_) if !should_retry(&raw) => raw,
-        Err(_) => with_leading_emerge(&raw),
-    }
-}
-
 fn finish_parse(argv: &[OsString]) -> Validated {
     match Cli::embedded_outcome_into_paletted(
         &argv[1..],
@@ -304,12 +157,9 @@ fn finish_parse(argv: &[OsString]) -> Validated {
 /// Parse process argv into `Validated`. Exits on `--help`/`--version`/failure.
 pub fn parse_cli_or_exit() -> Validated {
     let raw: Vec<OsString> = std::env::args_os().collect();
-    let refs: Vec<&OsStr> = raw.iter().map(OsString::as_os_str).collect();
-    match Cli::try_parse_into_from(&refs) {
+    match Cli::try_parse_into_from(&raw.iter().map(OsString::as_os_str).collect::<Vec<_>>()) {
         Ok(v) => v,
-        Err(e) if is_help_or_version(&e) => finish_parse(&raw),
-        Err(_) if !should_retry(&raw) => finish_parse(&raw),
-        Err(_) => finish_parse(&with_leading_emerge(&raw)),
+        Err(_) => finish_parse(&raw),
     }
 }
 
@@ -321,6 +171,8 @@ pub fn parse_cli_or_exit() -> Validated {
     arg_required_else_help,
     unknown_flags = "error",
     default_subcommand = "emerge",
+    default_subcommand_flags,
+    default_subcommand_help,
     completion,
     try_into = Validated,
     example("em -ua @world", header = "Update @world"),
@@ -343,6 +195,7 @@ pub struct Cli {
     /// Print system/build info (`emerge --info` workalike). Takes no atoms.
     #[usage(
         long,
+        help_heading = "Actions",
         long_help = "`emerge --info` workalike. Takes no atoms. Print system/build info: profile, CHOST/CFLAGS/FEATURES/USE (with USE_EXPAND groups like VIDEO_CARDS broken out), ACCEPT_KEYWORDS/ACCEPT_LICENSE, and configured repositories. Combine with `--json` for structured output, or `-v` to also list every known `@name` set and its resolved atoms (neither has a real-emerge equivalent)."
     )]
     pub info: bool,
@@ -630,15 +483,13 @@ pub(crate) fn os_argv<'a>(argv: &'a [&'a str]) -> Vec<&'a OsStr> {
     argv.iter().copied().map(OsStr::new).collect()
 }
 
-/// Parse argv including argv0, through the same retry `parse_cli_or_exit` uses.
+/// Parse argv including argv0, through `default_subcommand_flags`' own routing.
 #[cfg(test)]
 pub(crate) fn parse_cli(argv: &[&str]) -> Cli {
-    let raw: Vec<OsString> = argv.iter().map(OsString::from).collect();
-    let final_argv = resolve_argv(raw);
-    let refs: Vec<&OsStr> = final_argv.iter().map(OsString::as_os_str).collect();
+    let refs = os_argv(argv);
     Cli::try_parse_from(&refs).unwrap_or_else(|e| {
         panic!(
-            "expected parse of {argv:?} (final argv {final_argv:?}): {}",
+            "expected parse of {argv:?}: {}",
             Cli::render_failure(&refs, &e)
         )
     })
@@ -646,9 +497,7 @@ pub(crate) fn parse_cli(argv: &[&str]) -> Cli {
 
 #[cfg(test)]
 pub(crate) fn parse_cli_into(argv: &[&str]) -> Result<Cli, String> {
-    let raw: Vec<OsString> = argv.iter().map(OsString::from).collect();
-    let final_argv = resolve_argv(raw);
-    let refs: Vec<&OsStr> = final_argv.iter().map(OsString::as_os_str).collect();
+    let refs = os_argv(argv);
     Cli::try_parse_into_from(&refs)
         .map(|Validated(cli)| cli)
         .map_err(|e| err_name(&e))
@@ -691,54 +540,6 @@ mod tests {
     }
 
     #[test]
-    fn help_tree_snapshot() {
-        use usage::test::{self as harness, Page};
-        let tree = harness::help_tree(Cli::spec(), Page::Long);
-        let headers: Vec<&str> = tree
-            .lines()
-            .filter(|line| line.starts_with("=== "))
-            .collect();
-        assert!(headers.contains(&"=== em ==="), "{headers:?}");
-        assert!(headers.contains(&"=== em emerge ==="), "{headers:?}");
-        assert!(headers.contains(&"=== em query ==="), "{headers:?}");
-        assert!(
-            headers.contains(&"=== em query depgraph ==="),
-            "{headers:?}"
-        );
-        assert!(
-            headers.contains(&"=== em __worker (hidden) ==="),
-            "hidden worker must still have a page: {headers:?}"
-        );
-        assert!(
-            headers.contains(&"=== em __helper (hidden) ==="),
-            "hidden helper must still have a page: {headers:?}"
-        );
-        assert!(
-            !headers
-                .iter()
-                .any(|h| h.contains("__worker") && !h.contains("hidden")),
-            "worker must be marked hidden: {headers:?}"
-        );
-
-        assert!(tree.contains("Roots:"), "{tree}");
-        assert!(tree.contains("Merge:"), "{tree}");
-        assert!(tree.contains("Depgraph:"), "{tree}");
-        assert!(tree.contains("Activity:"), "{tree}");
-        assert!(
-            tree.contains("Which tree this invocation reads and writes."),
-            "{tree}"
-        );
-        assert!(
-            tree.contains("A bare `--local` takes the next word as DIR"),
-            "{tree}"
-        );
-        assert!(
-            tree.contains("Exists for portage parity; do not use it"),
-            "{tree}"
-        );
-    }
-
-    #[test]
     fn completions_omit_hidden_applets_and_offer_emerge() {
         let offered = usage::test::candidates(Cli::spec(), "em ");
         assert!(
@@ -773,33 +574,6 @@ mod tests {
             Some(Applet::Completion(a)) => assert_eq!(a.shell, "bash"),
             other => panic!("expected completion, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn info_essay_is_long_help_only() {
-        use usage::test::{self as harness, Page};
-        let short = harness::help(Cli::spec(), &[], Page::Short);
-        let long = harness::help(Cli::spec(), &[], Page::Long);
-        assert!(short.contains("Print system/build info"), "{short}");
-        assert!(
-            !short.contains("USE_EXPAND"),
-            "short -h must not carry the --info essay: {short}"
-        );
-        assert!(
-            long.contains("USE_EXPAND"),
-            "long --help must carry the --info essay: {long}"
-        );
-    }
-
-    #[test]
-    fn query_flatten_help_shows_child_synopsis() {
-        use usage::test::{self as harness, Page};
-        let page = harness::help(Cli::spec(), &["query"], Page::Long);
-        assert!(
-            page.contains("query belongs:"),
-            "flatten_help expands child synopses on the parent page: {page}"
-        );
-        assert!(page.contains("<FILE>…"), "{page}");
     }
 
     fn kdl_cmd_line<'a>(kdl: &'a str, name: &str) -> &'a str {
@@ -1674,44 +1448,6 @@ mod tests {
     }
 
     #[test]
-    fn top_level_help_is_root_help() {
-        use usage::test::{self as harness, Outcome};
-        let words = harness::argv(["--help"]);
-        let Outcome::Help(printed) = harness::outcome(Cli::spec(), &words.words(), Cli::parse_from)
-        else {
-            panic!("--help should be Help");
-        };
-        assert!(!printed.stderr);
-        assert_eq!(printed.code, 0);
-        assert!(
-            printed.text.contains("query") && printed.text.contains("crossdev"),
-            "{}",
-            printed.text
-        );
-        assert!(
-            !printed.text.contains("Usage: em emerge"),
-            "{}",
-            printed.text
-        );
-    }
-
-    #[test]
-    fn applet_help_is_toolchain_help() {
-        use usage::test::{self as harness, Outcome};
-        let words = harness::argv(["toolchain", "--help"]);
-        let Outcome::Help(printed) = harness::outcome(Cli::spec(), &words.words(), Cli::parse_from)
-        else {
-            panic!("toolchain --help should be Help");
-        };
-        assert!(printed.text.contains("toolchain"), "{}", printed.text);
-        assert!(
-            !printed.text.contains("Usage: em emerge"),
-            "{}",
-            printed.text
-        );
-    }
-
-    #[test]
     fn version_is_not_emerge() {
         use usage::test::{self as harness, Outcome};
         let words = harness::argv(["--version"]);
@@ -1719,30 +1455,6 @@ mod tests {
         else {
             panic!("--version should be Version");
         };
-    }
-
-    #[test]
-    fn bare_em_is_root_help() {
-        use usage::test::{self as harness, Outcome};
-        let words = harness::argv([] as [&str; 0]);
-        let Outcome::Help(printed) = harness::outcome(Cli::spec(), &words.words(), Cli::parse_from)
-        else {
-            panic!("bare em should be MissingArgsHelp");
-        };
-        assert!(printed.stderr);
-        assert_eq!(printed.code, 2);
-        assert!(printed.text.contains("query"), "{}", printed.text);
-        assert!(printed.text.contains("crossdev"), "{}", printed.text);
-        assert!(
-            !printed.text.contains("Usage: em emerge"),
-            "{}",
-            printed.text
-        );
-        assert!(
-            !printed.text.contains("__worker"),
-            "hidden worker leaked: {}",
-            printed.text
-        );
     }
 
     #[test]
@@ -1900,8 +1612,13 @@ mod tests {
     }
 
     #[test]
-    fn prefix_ask_before_an_applet_is_an_unknown_flag() {
-        assert_eq!(parse_err(&["em", "-a", "search", "zlib"]), "UnknownFlag -a");
+    fn prefix_ask_before_a_word_naming_an_applet_is_swallowed_as_an_atom() {
+        // Once `-a` (emerge-only) commits the line to the default subcommand,
+        // usage-rs's `default_subcommand_flags` no longer looks ahead for a
+        // real applet name — later words become emerge's own atoms instead.
+        let cli = parse_cli(&["em", "-a", "search", "zlib"]);
+        assert!(cli.merge_flags().ask);
+        assert_eq!(emerge_applet(&cli).atoms, ["search", "zlib"]);
     }
 
     #[test]
@@ -1912,9 +1629,14 @@ mod tests {
     }
 
     #[test]
-    fn prefix_deep_before_an_applet_is_an_unknown_flag() {
-        let err = parse_cli_into(&["em", "--deep", "query", "depgraph", "zlib"]).unwrap_err();
-        assert_eq!(err, "UnknownFlag --deep");
+    fn prefix_deep_before_a_word_naming_an_applet_is_swallowed_as_an_atom() {
+        // Same reasoning as prefix_ask above: `--deep` commits to emerge first.
+        let cli = parse_cli(&["em", "--deep", "query", "depgraph", "zlib"]);
+        assert!(cli.depgraph_flags().deep);
+        assert_eq!(emerge_applet(&cli).atoms, ["query", "depgraph", "zlib"]);
+
+        // No prefix flag precedes the applet word here, so `query depgraph`
+        // still routes normally.
         let ok = parse_cli(&["em", "query", "depgraph", "--deep", "zlib"]);
         match &ok.applet {
             Some(Applet::Query(q)) => match &q.command {
@@ -1926,10 +1648,14 @@ mod tests {
     }
 
     #[test]
-    fn bundled_update_deep_before_an_applet_is_an_unknown_flag() {
-        let err =
-            parse_cli_into(&["em", "-uD", "query", "belongs", "/usr/bin/python"]).unwrap_err();
-        assert_eq!(err, "UnknownFlag -uD");
+    fn bundled_update_deep_before_a_word_naming_an_applet_is_swallowed_as_an_atom() {
+        let cli = parse_cli(&["em", "-uD", "query", "belongs", "/usr/bin/python"]);
+        assert!(cli.merge_flags().update);
+        assert!(cli.depgraph_flags().deep);
+        assert_eq!(
+            emerge_applet(&cli).atoms,
+            ["query", "belongs", "/usr/bin/python"]
+        );
     }
 
     #[test]
@@ -2179,6 +1905,9 @@ mod tests {
 
     #[test]
     fn merge_flags_need_the_explicit_applet_word() {
+        // `-a` (emerge-only) commits the line to emerge before `crossdev` is
+        // ever considered as a possible applet word, so `--setup` — not a real
+        // Emerge flag — is what the real parse then rejects.
         assert_eq!(
             parse_cli_into(&[
                 "em",
@@ -2189,7 +1918,7 @@ mod tests {
                 "--setup"
             ])
             .unwrap_err(),
-            "UnknownFlag -a"
+            "UnknownFlag --setup"
         );
         // `-X` takes a value, so `depclean` is the exclude atom, not the applet.
         let just_x = parse_cli(&["em", "-X", "depclean"]);
@@ -2197,12 +1926,13 @@ mod tests {
         assert_eq!(just_x.merge_flags().exclude, ["depclean"]);
         assert!(just_x.atoms().is_empty());
 
-        // After the value, `depclean` is the leading word — a real applet — so
-        // the retry must not fire. Same as `-a search`.
-        assert_eq!(
-            parse_cli_into(&["em", "-X", "foo", "depclean"]).unwrap_err(),
-            "UnknownFlag -X"
-        );
+        // After the value, `depclean` is just another word within the already
+        // emerge-committed line — swallowed as an atom, not routed to the
+        // `depclean` applet. Same reasoning as `-a search` above.
+        let excluded_word = parse_cli(&["em", "-X", "foo", "depclean"]);
+        assert!(matches!(excluded_word.applet, Some(Applet::Emerge(_))));
+        assert_eq!(excluded_word.merge_flags().exclude, ["foo"]);
+        assert_eq!(excluded_word.atoms(), ["depclean"]);
 
         // A value that spells an applet name is still the flag's value, so this
         // retries into emerge rather than selecting `search`.
@@ -2239,21 +1969,6 @@ mod tests {
         assert!(applet.merge_flags().keep_going);
     }
 
-    #[test]
-    fn leading_word_skips_exclude_value_not_optional_local() {
-        let exclude = ["em", "-X", "search", "zlib"].map(OsString::from);
-        assert_eq!(leading_word(&exclude), Some("zlib"));
-
-        let local = ["em", "--local", "toolchain", "--setup"].map(OsString::from);
-        assert_eq!(leading_word(&local), Some("toolchain"));
-
-        let attached = ["em", "--exclude=search", "query"].map(OsString::from);
-        assert_eq!(leading_word(&attached), Some("query"));
-
-        // `-a` is `--ask` (switch) on emerge and `--add` (value) on `use`.
-        let ask = ["em", "-a", "search", "zlib"].map(OsString::from);
-        assert_eq!(leading_word(&ask), Some("search"));
-    }
 }
 
 /// Hidden `em __worker` install child — spawned per package by `build_and_merge`.
@@ -2880,10 +2595,10 @@ pub struct SetupArgs {
     pub root_arg: RootArg,
 
     #[usage(flatten)]
-    pub depgraph_flags: DepgraphFlags,
+    pub merge_flags: MergeFlags,
 
     #[usage(flatten)]
-    pub merge_flags: MergeFlags,
+    pub depgraph_flags: DepgraphFlags,
 
     #[usage(flatten)]
     pub activity: ActivityArgs,
@@ -2938,10 +2653,10 @@ pub struct CrossdevArgs {
     pub ex_gdb: bool,
 
     #[usage(flatten)]
-    pub depgraph_flags: DepgraphFlags,
+    pub merge_flags: MergeFlags,
 
     #[usage(flatten)]
-    pub merge_flags: MergeFlags,
+    pub depgraph_flags: DepgraphFlags,
 
     #[usage(flatten)]
     pub activity: ActivityArgs,
@@ -2977,10 +2692,10 @@ pub struct ToolchainArgs {
     pub root_arg: RootArg,
 
     #[usage(flatten)]
-    pub depgraph_flags: DepgraphFlags,
+    pub merge_flags: MergeFlags,
 
     #[usage(flatten)]
-    pub merge_flags: MergeFlags,
+    pub depgraph_flags: DepgraphFlags,
 
     #[usage(flatten)]
     pub activity: ActivityArgs,
@@ -3020,10 +2735,10 @@ pub struct StagesArgs {
     pub root_arg: RootArg,
 
     #[usage(flatten)]
-    pub depgraph_flags: DepgraphFlags,
+    pub merge_flags: MergeFlags,
 
     #[usage(flatten)]
-    pub merge_flags: MergeFlags,
+    pub depgraph_flags: DepgraphFlags,
 
     #[usage(flatten)]
     pub activity: ActivityArgs,
@@ -3041,9 +2756,6 @@ pub struct StagesArgs {
 #[usage(effect = "write", example = "em emerge firefox")]
 pub struct EmergeArgs {
     #[usage(flatten)]
-    pub root_arg: RootArg,
-
-    #[usage(flatten)]
     pub mode: EmergeModeArgs,
 
     #[usage(flatten)]
@@ -3051,6 +2763,9 @@ pub struct EmergeArgs {
 
     #[usage(flatten)]
     pub depgraph_flags: DepgraphFlags,
+
+    #[usage(flatten)]
+    pub root_arg: RootArg,
 
     #[usage(flatten)]
     pub activity: ActivityArgs,

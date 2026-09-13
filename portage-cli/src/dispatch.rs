@@ -42,13 +42,15 @@ pub(crate) async fn run(cli: &cli::Cli) -> Result<()> {
     }
 }
 
-/// `--info` with no atoms. Mode flags are emerge-only, so `em --info -r` is a
-/// parse error rather than a silently-dropped `-r`.
+/// `--info` with no atoms and no mode flag (`-r`/`-s`/`-C`/...), so
+/// `em --info -r` doesn't silently drop `-r` in favor of printing info.
 fn info_wins(cli: &cli::Cli) -> bool {
     cli.info
         && match &cli.applet {
             None => true,
-            Some(Applet::Emerge(a)) => a.atoms.is_empty(),
+            Some(Applet::Emerge(a)) => {
+                a.atoms.is_empty() && cli.mode() == cli::EmergeModeArgs::default()
+            }
             Some(_) => false,
         }
 }
@@ -777,8 +779,11 @@ mod tests {
     }
 
     #[test]
-    fn info_with_an_unrelated_mode_flag_fails_to_parse() {
-        assert!(crate::cli::parse_cli_into(&["em", "--info", "-r"]).is_err());
+    fn info_loses_to_an_unrelated_mode_flag() {
+        // `em --info -r` now parses (both flags are recognized), but `-r`
+        // means `--info` must not win — `info_wins` checks the mode flags,
+        // not just the atom list.
+        assert!(!info_wins(&parse_cli(&["em", "--info", "-r"])));
     }
 
     #[test]

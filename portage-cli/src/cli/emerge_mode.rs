@@ -5,7 +5,10 @@
 
 /// Emerge's own action-selecting mode switches.
 #[derive(usage::Args, Debug, Clone, Default, PartialEq)]
-#[usage(next_help_heading = "Merge")]
+#[usage(
+    next_help_heading = "Actions",
+    heading("Actions", help = "Pick a different operation than a merge.")
+)]
 pub struct EmergeModeArgs {
     /// Search package names (each argument is a pattern)
     ///
