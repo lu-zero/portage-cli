@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
-description = "Generate Gentoo ebuilds and crate tarballs from Cargo.lock (pycargoebuild replacement, separate from em)"
+description = "cargo ebuild: Gentoo ebuild + cargo.eclass vendor tarball from a Cargo package"
 keywords = ["gentoo", "portage", "cargo", "ebuild"]
 rust-version.workspace = true
 repository.workspace = true
@@ -12,7 +12,7 @@ categories = ["development-tools"]
 publish = false
 
 [[bin]]
-name = "pycargoebuild-rs"
+name = "cargo-ebuild"
 path = "src/main.rs"
 
 [lib]

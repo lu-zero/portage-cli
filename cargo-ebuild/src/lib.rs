@@ -1,9 +1,6 @@
-//! cargo-ebuild — pycargoebuild replacement as a `portage-cli` workspace crate.
+//! `cargo ebuild` — Gentoo ebuild + cargo.eclass vendor tarball from a Cargo package.
 //!
-//! Separate binary `pycargoebuild-rs` (not an `em` applet) that generates
-//! `CRATES`/`GIT_CRATES` ebuilds and `cargo_home/gentoo` tarballs from
-//! `Cargo.lock`/`Cargo.toml`. Uses `minijinja` to keep the Jinja2 template
-//! verbatim from `pycargoebuild/ebuild.py:EBUILD_TEMPLATE`.
+//! Standalone binary `cargo-ebuild` (Cargo applet lookup), not an `em` applet.
 
 pub mod cargo;
 pub mod ebuild;

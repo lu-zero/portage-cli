@@ -388,3 +388,93 @@ pub fn find_lock(start: &Path) -> Option<PathBuf> {
     }
     None
 }
+
+/// `Cargo.lock` under `dir`, or `cargo generate-lockfile` from `Cargo.toml`.
+pub fn ensure_lockfile(dir: &Path) -> Result<PathBuf, CargoError> {
+    if let Some(lock) = find_lock(dir) {
+        return Ok(lock);
+    }
+    let manifest = dir.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(CargoError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no Cargo.lock or Cargo.toml under {}", dir.display()),
+        )));
+    }
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .args(["generate-lockfile", "--manifest-path"])
+        .arg(&manifest)
+        .output()?;
+    if !out.status.success() {
+        return Err(CargoError::Io(std::io::Error::other(format!(
+            "cargo generate-lockfile failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))));
+    }
+    find_lock(dir).ok_or_else(|| {
+        CargoError::Io(std::io::Error::other(
+            "cargo generate-lockfile did not produce Cargo.lock",
+        ))
+    })
+}
+
+/// SPDX license strings from `Cargo.toml` files under a `cargo vendor` directory.
+pub fn licenses_from_vendor_dir(vendor_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(vendor_dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let toml = entry.path().join("Cargo.toml");
+        if !toml.is_file() {
+            continue;
+        }
+        let Ok(s) = std::fs::read_to_string(&toml) else {
+            continue;
+        };
+        let Ok(manifest) = cargo_toml::Manifest::from_str(&s) else {
+            continue;
+        };
+        let Some(pkg) = manifest.package else {
+            continue;
+        };
+        if let Some(lic) = pkg.license.and_then(|l| l.get().ok().cloned()) {
+            out.push(lic.replace('/', " OR "));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_lockfile_uses_existing_lock() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("Cargo.lock"), "# existing\n").unwrap();
+        let lock = ensure_lockfile(tmp.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(lock).unwrap(), "# existing\n");
+    }
+
+    #[test]
+    fn ensure_lockfile_generates_from_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"t\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.rs"), "").unwrap();
+        let lock = ensure_lockfile(tmp.path()).unwrap();
+        assert!(lock.is_file());
+        assert!(std::fs::read_to_string(lock).unwrap().contains("version"));
+    }
+}
