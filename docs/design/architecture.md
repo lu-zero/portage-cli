@@ -68,6 +68,7 @@ Versions below are the **workspace** package versions in each crate's
 | `portage-distfiles` | 0.1.0 | Source distfile fetching & resolution | Depends on `portage-repo` |
 | `portage-bench` | 0.1.0 | Benchmark harness | Dev tool, not a library |
 | `portage-cli` | 0.1.0 | The `em` binary | Unpublished binary crate |
+| `cargo-eb` | 0.1.0 | `cargo eb` (Cargo.lock → ebuild + vendor tarball) | Unpublished; not an `em` applet |
 
 ## Per-crate public API
 

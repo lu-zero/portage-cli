@@ -1,10 +1,10 @@
 [package]
-name = "cargo-ebuild"
+name = "cargo-eb"
 version = "0.1.0"
 edition = "2024"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
 license = "MIT"
-description = "cargo ebuild: Gentoo ebuild + cargo.eclass vendor tarball from a Cargo package"
+description = "cargo eb: Gentoo ebuild + cargo.eclass vendor tarball from a Cargo package"
 keywords = ["gentoo", "portage", "cargo", "ebuild"]
 rust-version.workspace = true
 repository.workspace = true
@@ -12,11 +12,11 @@ categories = ["development-tools"]
 publish = false
 
 [[bin]]
-name = "cargo-ebuild"
+name = "cargo-eb"
 path = "src/main.rs"
 
 [lib]
-name = "cargo_ebuild"
+name = "cargo_eb"
 path = "src/lib.rs"
 
 [dependencies]

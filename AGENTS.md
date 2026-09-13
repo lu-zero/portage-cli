@@ -95,7 +95,7 @@ Workspace members (15 library/binary crates + `portage-bench`):
 - `portage-distfiles` — distfile fetch and mirror resolution
 - `gentoo-stages` — stage3 tarball fetch/cache
 - `portage-cli` — the `em` binary (unpublished)
-- `cargo-ebuild` — `cargo ebuild` applet (unpublished; not an `em` applet)
+- `cargo-eb` — `cargo eb` applet (unpublished; not an `em` applet)
 - `portage-bench` — benchmark harness (excluded from most CI jobs; compile smoke only)
 
 CLI/runtime deps: `usage` (usage-rs 6), `tokio`, `anyhow`, `thiserror`.

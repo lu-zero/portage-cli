@@ -4,11 +4,11 @@ use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use usage::Cli;
 
-use cargo_ebuild::{cargo as cargomod, ebuild, fetch, vendor};
+use cargo_eb::{cargo as cargomod, ebuild, fetch, vendor};
 
 #[derive(Debug, Cli)]
 #[usage(
-    bin = "cargo-ebuild",
+    bin = "cargo-eb",
     version,
     about = "Gentoo ebuild + cargo.eclass vendor tarball from a Cargo package"
 )]

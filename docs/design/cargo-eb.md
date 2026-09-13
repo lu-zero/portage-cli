@@ -1,8 +1,8 @@
-# cargo-ebuild
+# cargo-eb
 
-Standalone workspace crate. Binary name `cargo-ebuild` so Cargo's applet
-lookup makes `cargo ebuild` work. Not an `em` applet. CLI is usage-rs, same
-as `em`. MIT; no GPL source.
+Standalone workspace crate. Binary name `cargo-eb` so Cargo's applet lookup
+makes `cargo eb` work. Not an `em` applet. CLI is usage-rs, same as `em`.
+MIT; no GPL source.
 
 ## What it produces
 
@@ -23,7 +23,7 @@ tool is for: one distfile, git deps included, no thousand-line `CRATES=`.
 
 ## Input
 
-`cargo ebuild [PATH]` (`PATH` defaults to `.`):
+`cargo eb [PATH]` (`PATH` defaults to `.`):
 
 - `Cargo.lock` present → use it.
 - only `Cargo.toml` → `cargo generate-lockfile` in that tree, then use the
@@ -34,7 +34,7 @@ tool is for: one distfile, git deps included, no thousand-line `CRATES=`.
 ## CLI
 
 ```
-cargo ebuild [PATH]
+cargo eb [PATH]
     --update FILE.ebuild     rewrite generated CRATES/GIT_CRATES/SRC_URI/LICENSE/IUSE
     -o, --output FILE        new ebuild (default {name}-{version}.ebuild)
     --tarball FILE           vendor tarball (default {name}-{version}-crates.tar.xz)
@@ -88,7 +88,8 @@ guess which `IUSE=` is ours). Fresh generate always writes the marker.
 
 ## Drop
 
-- Binary name `pycargoebuild-rs`.
+- Binary names `pycargoebuild-rs` and `cargo-ebuild` (`cargo-ebuild` is
+  already a crates.io crate).
 - Fetching every crate into DISTDIR when the tarball is the product
   (`cargo vendor` already fetches).
 - Flag soup copied from pycargoebuild (`-c`, `--no-write-crate-tarball`,
