@@ -410,7 +410,6 @@ src_configure() {
     }
 
     #[test]
-    #[test]
     fn render_snapshot_src_uri_skips_empty_homepage() {
         let out = render_ebuild(RenderInput {
             pkg: &pkg(None),
