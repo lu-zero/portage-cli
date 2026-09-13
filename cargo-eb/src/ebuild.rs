@@ -410,6 +410,27 @@ src_configure() {
     }
 
     #[test]
+    #[test]
+    fn render_snapshot_src_uri_skips_empty_homepage() {
+        let out = render_ebuild(RenderInput {
+            pkg: &pkg(None),
+            crates: &[],
+            crate_tarball: Some("cargo-eb-0.1.0-crates.tar.xz"),
+            source_tarball: Some("cargo-eb-0.1.0.tar.xz"),
+            prog_version: "0.1.0",
+            distdir: Path::new("/nonexistent"),
+            mapping_path: Path::new("/nonexistent"),
+            crate_license_spdx: &[],
+        })
+        .unwrap();
+        assert!(out.contains("# Source snapshot\nSRC_URI=\"cargo-eb-0.1.0.tar.xz\""));
+        assert!(out.contains("# Crate tarball\nSRC_URI+=\" cargo-eb-0.1.0-crates.tar.xz\""));
+        assert!(!out.contains("HOMEPAGE="), "{out}");
+        assert!(!out.contains("CARGO_CRATE_URIS"), "{out}");
+        assert!(!out.contains("CRATES="), "{out}");
+    }
+
+    #[test]
     fn update_without_feature_marker_errors() {
         let existing = "CRATES=\"\n\"\nIUSE=\"debug\"\n";
         let err = update_ebuild(UpdateInput {

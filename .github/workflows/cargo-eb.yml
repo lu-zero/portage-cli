@@ -1,0 +1,52 @@
+name: cargo-eb
+
+on:
+  pull_request:
+    paths:
+      - "cargo-eb/**"
+      - ".github/workflows/cargo-eb.yml"
+  push:
+    branches: [cargo-ebuild, master, main]
+    paths:
+      - "cargo-eb/**"
+      - ".github/workflows/cargo-eb.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo test -p cargo-eb
+      - run: cargo clippy -p cargo-eb --all-targets -- -D warnings
+
+  dogfood:
+    name: Snapshot itself
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - run: cargo build -p cargo-eb
+      - name: cargo eb cargo-eb
+        run: |
+          mkdir -p artifacts
+          ./target/debug/cargo-eb cargo-eb \
+            -d "$RUNNER_TEMP/dist" \
+            -o artifacts/cargo-eb.ebuild \
+            --tarball artifacts/cargo-eb-crates.tar.xz \
+            -f
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-eb-snapshot
+          path: artifacts/
