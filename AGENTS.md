@@ -79,7 +79,7 @@ Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/design/
 
 ## Dependencies
 
-Workspace members (14 library/binary crates + `portage-bench`):
+Workspace members (15 library/binary crates + `portage-bench`):
 
 - `gentoo-interner` — string interning
 - `gentoo-core` — architecture and variant types
@@ -95,6 +95,7 @@ Workspace members (14 library/binary crates + `portage-bench`):
 - `portage-distfiles` — distfile fetch and mirror resolution
 - `gentoo-stages` — stage3 tarball fetch/cache
 - `portage-cli` — the `em` binary (unpublished)
+- `cargo-ebuild` — `cargo ebuild` applet (unpublished; not an `em` applet)
 - `portage-bench` — benchmark harness (excluded from most CI jobs; compile smoke only)
 
 CLI/runtime deps: `usage` (usage-rs 6), `tokio`, `anyhow`, `thiserror`.

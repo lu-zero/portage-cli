@@ -1,53 +1,54 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use camino::Utf8PathBuf;
+use usage::Cli;
 
 use cargo_ebuild::{cargo as cargomod, ebuild, fetch, vendor};
 
-#[derive(Parser)]
-#[command(
-    name = "cargo-ebuild",
-    bin_name = "cargo ebuild",
+#[derive(Debug, Cli)]
+#[usage(
+    bin = "cargo-ebuild",
     version,
     about = "Gentoo ebuild + cargo.eclass vendor tarball from a Cargo package"
 )]
-struct Cli {
+struct Args {
     /// Package directory (Cargo.lock or Cargo.toml)
-    #[arg(default_value = ".")]
-    path: PathBuf,
+    #[usage(default = ".", value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    path: Utf8PathBuf,
 
     /// Rewrite generated bits of an existing ebuild
-    #[arg(long, value_name = "FILE")]
-    update: Option<PathBuf>,
+    #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
+    update: Option<Utf8PathBuf>,
 
     /// Write a new ebuild here (default {name}-{version}.ebuild)
-    #[arg(short, long)]
-    output: Option<PathBuf>,
+    #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
+    output: Option<Utf8PathBuf>,
 
     /// Vendor tarball path (default {name}-{version}-crates.tar.xz)
-    #[arg(long)]
-    tarball: Option<PathBuf>,
+    #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
+    tarball: Option<Utf8PathBuf>,
 
     /// Emit CRATES=/GIT_CRATES= instead of a vendor tarball
-    #[arg(long)]
+    #[usage(long)]
     no_tarball: bool,
 
     /// DISTDIR (make.conf, then /var/cache/distfiles)
-    #[arg(short = 'd', long)]
-    distdir: Option<PathBuf>,
+    #[usage(short = 'd', long, value_name = "DIR", value_hint = usage::ValueHint::DirPath)]
+    distdir: Option<Utf8PathBuf>,
 
     /// SPDX → Gentoo mapping (default: main repo license-mapping.conf)
-    #[arg(short = 'l', long)]
-    license_mapping: Option<PathBuf>,
+    #[usage(short = 'l', long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
+    license_mapping: Option<Utf8PathBuf>,
 
     /// Overwrite existing ebuild/tarball
-    #[arg(short, long)]
+    #[usage(short, long)]
     force: bool,
 }
 
-fn resolve_distdir(cli_distdir: Option<PathBuf>) -> PathBuf {
+fn resolve_distdir(cli_distdir: Option<Utf8PathBuf>) -> PathBuf {
     cli_distdir
+        .map(|p| p.into_std_path_buf())
         .or_else(|| std::env::var_os("DISTDIR").map(PathBuf::from))
         .or_else(|| {
             portage_repo::MakeConf::load_default()
@@ -57,8 +58,9 @@ fn resolve_distdir(cli_distdir: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/var/cache/distfiles"))
 }
 
-fn resolve_license_mapping_path(cli_path: Option<PathBuf>) -> PathBuf {
+fn resolve_license_mapping_path(cli_path: Option<Utf8PathBuf>) -> PathBuf {
     cli_path
+        .map(|p| p.into_std_path_buf())
         .or_else(|| {
             portage_repo::ReposConf::load().ok().and_then(|rc| {
                 rc.main_repo()
@@ -78,8 +80,8 @@ fn refuse_existing(path: &Path, force: bool) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    let dir = &cli.path;
+    let cli = Args::parse();
+    let dir = cli.path.as_std_path();
     let distdir = resolve_distdir(cli.distdir.clone());
     let mapping_path = resolve_license_mapping_path(cli.license_mapping.clone());
 
@@ -89,17 +91,17 @@ async fn main() -> Result<()> {
     let manifest = if manifest.is_file() {
         manifest
     } else {
-        lock.parent().unwrap_or(dir.as_path()).join("Cargo.toml")
+        lock.parent().unwrap_or(dir).join("Cargo.toml")
     };
     let pkg = cargomod::package_from_toml(&manifest)
         .with_context(|| format!("reading {}", manifest.display()))?;
     let crates = cargomod::crates_from_lockfile(&lock)
         .with_context(|| format!("parsing {}", lock.display()))?;
 
-    let outfile = if let Some(out) = &cli.output {
-        out.clone()
+    let outfile = if let Some(out) = cli.output {
+        out.into_std_path_buf()
     } else if let Some(update) = &cli.update {
-        update.clone()
+        update.clone().into_std_path_buf()
     } else {
         PathBuf::from(format!("{}-{}.ebuild", pkg.name, pkg.version))
     };
@@ -110,7 +112,7 @@ async fn main() -> Result<()> {
     let want_tarball = !cli.no_tarball;
     let tarball_path = cli
         .tarball
-        .clone()
+        .map(|p| p.into_std_path_buf())
         .unwrap_or_else(|| PathBuf::from(format!("{}-{}-crates.tar.xz", pkg.name, pkg.version)));
     if want_tarball && cli.update.is_none() {
         refuse_existing(&tarball_path, cli.force)?;
@@ -151,8 +153,7 @@ async fn main() -> Result<()> {
     };
 
     let ebuild_str = if let Some(inp) = &cli.update {
-        let existing =
-            std::fs::read_to_string(inp).with_context(|| format!("reading {}", inp.display()))?;
+        let existing = std::fs::read_to_string(inp).with_context(|| format!("reading {inp}"))?;
         ebuild::update_ebuild(ebuild::UpdateInput {
             existing: &existing,
             pkg: &pkg,

@@ -22,7 +22,7 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = { workspace = true }
 camino = { workspace = true }
-clap = { workspace = true }
+usage = { package = "usage-rs", version = "6" }
 minijinja = { workspace = true }
 spdx = { workspace = true }
 cargo-lock = { workspace = true }
@@ -40,7 +40,7 @@ portage-metadata = { workspace = true }
 portage-repo = { workspace = true }
 portage-distfiles = { workspace = true }
 tokio = { workspace = true }
-chrono = "0.4"
+chrono = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }

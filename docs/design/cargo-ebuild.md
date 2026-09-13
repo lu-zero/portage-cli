@@ -1,7 +1,8 @@
 # cargo-ebuild
 
 Standalone workspace crate. Binary name `cargo-ebuild` so Cargo's applet
-lookup makes `cargo ebuild` work. Not an `em` applet. MIT; no GPL source.
+lookup makes `cargo ebuild` work. Not an `em` applet. CLI is usage-rs, same
+as `em`. MIT; no GPL source.
 
 ## What it produces
 
