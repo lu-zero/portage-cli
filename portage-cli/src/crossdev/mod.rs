@@ -548,7 +548,9 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
              native toolchain"
         );
     }
-    if globals.target().is_some() && (args.root_arg.root.is_some() || globals.root.is_some()) {
+    if globals.target().is_some()
+        && (args.topology.root.is_some() || globals.root_topology.root.is_some())
+    {
         bail!(
             "em toolchain --setup does not take --root together with --target: \
              --root under --target is `stages`' board-root override, and a native \
@@ -633,7 +635,7 @@ fn require_explicit_root_under_target(
     args: &crate::cli::StagesArgs,
     action: &str,
 ) -> Result<()> {
-    let root = args.root_arg.root.as_deref().or(globals.root.as_deref());
+    let root = args.topology.root.as_deref().or(globals.root_topology.root.as_deref());
     if globals.target().is_some() && root.is_none() {
         bail!(
             "{action} requires --root under --target: pass --root <board dir> \
@@ -1756,6 +1758,7 @@ mod tests {
             pretend_arg: crate::cli::PretendArg::default(),
             arch_arg: crate::cli::ArchArg::default(),
             repo_arg: crate::cli::RepoArg::default(),
+            topology: crate::cli::Topology::default(),
             privilege: crate::cli::Privilege::Auto,
         }
     }

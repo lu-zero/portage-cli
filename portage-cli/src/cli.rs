@@ -20,7 +20,7 @@ pub use context::{ArchArg, PretendArg, QuietArg, RepoArg, VdbArg, VerboseArg};
 pub use depgraph_flags::DepgraphFlags;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
-pub use topology::{RootArg, Topology};
+pub use topology::{RootArg, RootTopology, RootedTopology, Topology};
 
 fn default_arch() -> Arch {
     Arch::current()
@@ -63,7 +63,7 @@ impl TryFrom<Cli> for Validated {
 }
 
 fn validate(cli: &Cli) -> Result<(), ValidationError> {
-    if let Some(root) = cli.root.as_deref() {
+    if let Some(root) = cli.root_topology.root.as_deref() {
         let name = match &cli.applet {
             Some(Applet::Crossdev(_)) => Some("crossdev"),
             Some(Applet::Active(_)) => Some("active"),
@@ -83,12 +83,6 @@ fn validate(cli: &Cli) -> Result<(), ValidationError> {
         env_bool("EM_EMERGELOG")?;
     }
     Ok(())
-}
-
-fn overlay_root(applet: &RootArg, cli_root: Option<&str>) -> RootArg {
-    RootArg {
-        root: applet.root.clone().or_else(|| cli_root.map(str::to_string)),
-    }
 }
 
 fn privilege_from_env() -> Result<Option<Privilege>, ValidationError> {
@@ -204,59 +198,109 @@ pub struct Cli {
     pub color: ColorChoice,
 
     #[usage(flatten)]
-    pub topology: Topology,
-
-    /// Prefix-position `--root` for default emerge. Not global; must not leak
-    /// into crossdev/active/worker.
-    #[usage(
-        long,
-        value_name = "PATH",
-        help_heading = "Roots",
-        value_hint = usage::ValueHint::DirPath
-    )]
-    pub root: Option<String>,
+    pub root_topology: RootTopology,
 
     #[usage(subcommand)]
     pub applet: Option<Applet>,
 }
 
+/// `applet.field.clone().or_else(|| cli.field.clone())`, for every field.
+fn overlay_topology(applet: &Topology, cli: &RootTopology) -> Topology {
+    Topology {
+        prefix: applet.prefix.clone().or_else(|| cli.prefix.clone()),
+        local: applet.local.clone().or_else(|| cli.local.clone()),
+        config_root: applet
+            .config_root
+            .clone()
+            .or_else(|| cli.config_root.clone()),
+        target: applet.target.clone().or_else(|| cli.target.clone()),
+    }
+}
+
 impl Cli {
-    fn applet_root_arg(&self) -> Option<&RootArg> {
+    /// The dispatched applet's own topology group (`prefix`/`local`/
+    /// `config_root`/`target`), regardless of whether it carries `--root`
+    /// alongside it ([`RootedTopology`]) or not ([`Topology`], bare, on
+    /// `Crossdev`/`Active`).
+    fn applet_topology(&self) -> Option<Topology> {
         match &self.applet {
-            Some(Applet::Emerge(a)) => Some(&a.root_arg),
-            Some(Applet::Toolchain(a)) => Some(&a.root_arg),
-            Some(Applet::Stages(a)) => Some(&a.root_arg),
-            Some(Applet::Setup(a)) => Some(&a.root_arg),
-            Some(Applet::Ebuild(a)) => Some(&a.root_arg),
-            Some(Applet::Maint(a)) => Some(&a.root_arg),
-            Some(Applet::Sync(a)) => Some(&a.root_arg),
-            Some(Applet::Depclean(a)) => Some(&a.root_arg),
-            Some(Applet::Regen(a)) => Some(&a.root_arg),
-            Some(Applet::Quickpkg(a)) => Some(&a.root_arg),
-            Some(Applet::MirrorDist(a)) => Some(&a.root_arg),
-            Some(Applet::Clean(a)) => Some(&a.root_arg),
-            Some(Applet::Etc(a)) => Some(&a.root_arg),
-            Some(Applet::Query(a)) => Some(&a.root_arg),
-            Some(Applet::Use(a)) => Some(&a.root_arg),
-            Some(Applet::Pkg(a)) => Some(&a.root_arg),
-            Some(Applet::Revdep(a)) => Some(&a.root_arg),
-            Some(Applet::Read(a)) => Some(&a.root_arg),
-            Some(Applet::Log(a)) => Some(&a.root_arg),
-            Some(Applet::Search(a)) => Some(&a.root_arg),
-            Some(Applet::Select(a)) => Some(&a.root_arg),
-            Some(Applet::Env(a)) => Some(&a.root_arg),
+            Some(Applet::Emerge(a)) => Some(a.topology.split().0),
+            Some(Applet::Toolchain(a)) => Some(a.topology.split().0),
+            Some(Applet::Stages(a)) => Some(a.topology.split().0),
+            Some(Applet::Setup(a)) => Some(a.topology.split().0),
+            Some(Applet::Ebuild(a)) => Some(a.topology.split().0),
+            Some(Applet::Maint(a)) => Some(a.topology.split().0),
+            Some(Applet::Sync(a)) => Some(a.topology.split().0),
+            Some(Applet::Depclean(a)) => Some(a.topology.split().0),
+            Some(Applet::Regen(a)) => Some(a.topology.split().0),
+            Some(Applet::Quickpkg(a)) => Some(a.topology.split().0),
+            Some(Applet::MirrorDist(a)) => Some(a.topology.split().0),
+            Some(Applet::Clean(a)) => Some(a.topology.split().0),
+            Some(Applet::Etc(a)) => Some(a.topology.split().0),
+            Some(Applet::Query(a)) => Some(a.topology.split().0),
+            Some(Applet::Use(a)) => Some(a.topology.split().0),
+            Some(Applet::Pkg(a)) => Some(a.topology.split().0),
+            Some(Applet::Revdep(a)) => Some(a.topology.split().0),
+            Some(Applet::Read(a)) => Some(a.topology.split().0),
+            Some(Applet::Log(a)) => Some(a.topology.split().0),
+            Some(Applet::Search(a)) => Some(a.topology.split().0),
+            Some(Applet::Select(a)) => Some(a.topology.split().0),
+            Some(Applet::Env(a)) => Some(a.topology.split().0),
+            Some(Applet::Crossdev(a)) => Some(a.topology.clone()),
+            Some(Applet::Active(a)) => Some(a.topology.clone()),
             _ => None,
         }
     }
 
-    fn topology_and_root(&self) -> (Topology, RootArg) {
-        let root = match self.applet_root_arg() {
-            Some(applet) => overlay_root(applet, self.root.as_deref()),
-            None => RootArg {
-                root: self.root.clone(),
+    /// The dispatched applet's own `--root`, if it carries one at all
+    /// ([`RootedTopology`] applets only — `Crossdev`/`Active` have no root
+    /// field to bind to, which is what keeps `--root` a hard parse error for
+    /// them, not just a `validate()` rejection).
+    fn applet_root(&self) -> Option<&str> {
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.topology.root.as_deref(),
+            Some(Applet::Toolchain(a)) => a.topology.root.as_deref(),
+            Some(Applet::Stages(a)) => a.topology.root.as_deref(),
+            Some(Applet::Setup(a)) => a.topology.root.as_deref(),
+            Some(Applet::Ebuild(a)) => a.topology.root.as_deref(),
+            Some(Applet::Maint(a)) => a.topology.root.as_deref(),
+            Some(Applet::Sync(a)) => a.topology.root.as_deref(),
+            Some(Applet::Depclean(a)) => a.topology.root.as_deref(),
+            Some(Applet::Regen(a)) => a.topology.root.as_deref(),
+            Some(Applet::Quickpkg(a)) => a.topology.root.as_deref(),
+            Some(Applet::MirrorDist(a)) => a.topology.root.as_deref(),
+            Some(Applet::Clean(a)) => a.topology.root.as_deref(),
+            Some(Applet::Etc(a)) => a.topology.root.as_deref(),
+            Some(Applet::Query(a)) => a.topology.root.as_deref(),
+            Some(Applet::Use(a)) => a.topology.root.as_deref(),
+            Some(Applet::Pkg(a)) => a.topology.root.as_deref(),
+            Some(Applet::Revdep(a)) => a.topology.root.as_deref(),
+            Some(Applet::Read(a)) => a.topology.root.as_deref(),
+            Some(Applet::Log(a)) => a.topology.root.as_deref(),
+            Some(Applet::Search(a)) => a.topology.root.as_deref(),
+            Some(Applet::Select(a)) => a.topology.root.as_deref(),
+            Some(Applet::Env(a)) => a.topology.root.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn topology_and_root(&self) -> (Topology, RootArg) {
+        let topology = match self.applet_topology() {
+            Some(t) => overlay_topology(&t, &self.root_topology),
+            None => Topology {
+                prefix: self.root_topology.prefix.clone(),
+                local: self.root_topology.local.clone(),
+                config_root: self.root_topology.config_root.clone(),
+                target: self.root_topology.target.clone(),
             },
         };
-        (self.topology.clone(), root)
+        let root = RootArg {
+            root: self
+                .applet_root()
+                .map(str::to_string)
+                .or_else(|| self.root_topology.root.clone()),
+        };
+        (topology, root)
     }
 
     /// Resolve the root model (docs/design/root-topology.md) for the active applet
@@ -295,7 +339,7 @@ impl Cli {
 
     /// The active `--target` tuple, if any.
     pub(crate) fn target(&self) -> Option<String> {
-        self.topology.target.clone()
+        self.topology_and_root().0.target
     }
 
     /// The dispatched applet's own `--vdb` override, if any — a read-only
@@ -1450,19 +1494,20 @@ mod tests {
         }
     }
 
-    fn overlay_root_of(cli: &Cli) -> Option<&str> {
-        match cli.applet_root_arg() {
-            Some(a) => a.root.as_deref().or(cli.root.as_deref()),
-            None => cli.root.as_deref(),
-        }
+    fn overlay_root_of(cli: &Cli) -> Option<String> {
+        cli.topology_and_root().1.root
+    }
+
+    fn merged_topology(cli: &Cli) -> Topology {
+        cli.topology_and_root().0
     }
 
     #[test]
     fn bare_and_explicit_emerge_produce_identical_args() {
         let bare = parse_cli(&["em", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
         let explicit = parse_cli(&["em", "emerge", "--root", "/srv/x", "-p", "sys-libs/zlib"]);
-        assert_eq!(overlay_root_of(&bare), Some("/srv/x"));
-        assert_eq!(overlay_root_of(&explicit), Some("/srv/x"));
+        assert_eq!(overlay_root_of(&bare).as_deref(), Some("/srv/x"));
+        assert_eq!(overlay_root_of(&explicit).as_deref(), Some("/srv/x"));
         assert_eq!(emerge_applet(&bare).atoms, emerge_applet(&explicit).atoms);
         assert!(bare.pretend() && explicit.pretend());
     }
@@ -1470,7 +1515,7 @@ mod tests {
     #[test]
     fn flags_before_emerge_word_reorder() {
         let cli = parse_cli(&["em", "--root", "/srv/x", "emerge", "-p", "sys-libs/zlib"]);
-        assert_eq!(overlay_root_of(&cli), Some("/srv/x"));
+        assert_eq!(overlay_root_of(&cli).as_deref(), Some("/srv/x"));
         assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
         assert!(cli.pretend());
     }
@@ -1484,7 +1529,7 @@ mod tests {
     #[test]
     fn prefix_root_then_crossdev_is_try_into_reject() {
         let cli = parse_cli(&["em", "--root", "/tmp/r", "crossdev", "--setup"]);
-        assert_eq!(cli.root.as_deref(), Some("/tmp/r"));
+        assert_eq!(cli.root_topology.root.as_deref(), Some("/tmp/r"));
         assert!(matches!(cli.applet, Some(Applet::Crossdev(_))));
         let err = parse_cli_into(&["em", "--root", "/tmp/r", "crossdev", "--setup"]).unwrap_err();
         assert!(
@@ -1619,7 +1664,7 @@ mod tests {
     #[test]
     fn root_value_named_emerge_is_kept() {
         let cli = parse_cli(&["em", "--root", "emerge", "-p", "sys-libs/zlib"]);
-        assert_eq!(overlay_root_of(&cli), Some("emerge"));
+        assert_eq!(overlay_root_of(&cli).as_deref(), Some("emerge"));
         assert_eq!(emerge_applet(&cli).atoms, vec!["sys-libs/zlib".to_string()]);
     }
 
@@ -1638,27 +1683,27 @@ mod tests {
     #[test]
     fn prefix_before_named_applet_is_topology() {
         let cli = parse_cli(&["em", "--prefix", "P", "firefox"]);
-        assert_eq!(cli.topology.prefix.as_deref(), Some("P"));
+        assert_eq!(merged_topology(&cli).prefix.as_deref(), Some("P"));
         assert_eq!(emerge_applet(&cli).atoms, ["firefox"]);
 
         let tc = parse_cli(&["em", "--prefix", "P", "toolchain", "--setup"]);
-        assert_eq!(tc.topology.prefix.as_deref(), Some("P"));
+        assert_eq!(merged_topology(&tc).prefix.as_deref(), Some("P"));
         assert!(matches!(tc.applet, Some(Applet::Toolchain(_))));
 
         let canon = parse_cli(&["em", "toolchain", "--prefix", "P", "--setup"]);
-        assert_eq!(canon.topology.prefix.as_deref(), Some("P"));
+        assert_eq!(merged_topology(&canon).prefix.as_deref(), Some("P"));
         assert!(matches!(canon.applet, Some(Applet::Toolchain(_))));
     }
 
     #[test]
     fn query_depgraph_nested_root_and_prefix() {
         let prefix = parse_cli(&["em", "query", "depgraph", "--prefix", "P", "zlib"]);
-        assert_eq!(prefix.topology.prefix.as_deref(), Some("P"));
+        assert_eq!(merged_topology(&prefix).prefix.as_deref(), Some("P"));
         assert!(matches!(prefix.applet, Some(Applet::Query(_))));
 
         let root = parse_cli(&["em", "query", "depgraph", "--root", "R", "zlib"]);
         match &root.applet {
-            Some(Applet::Query(q)) => assert_eq!(q.root_arg.root.as_deref(), Some("R")),
+            Some(Applet::Query(q)) => assert_eq!(q.topology.root.as_deref(), Some("R")),
             other => panic!("expected query, got {other:?}"),
         }
     }
@@ -1841,7 +1886,7 @@ mod tests {
     #[test]
     fn local_default_missing_and_the_set_trap() {
         let ok = parse_cli(&["em", "active", "set", "--local="]);
-        assert_eq!(ok.topology.local.as_deref(), Some(""));
+        assert_eq!(merged_topology(&ok).local.as_deref(), Some(""));
         match &ok.applet {
             Some(Applet::Active(a)) => {
                 assert!(matches!(a.command, Some(ActiveCommand::Set { .. })))
@@ -1852,7 +1897,7 @@ mod tests {
         // A detached `--local` still takes the next word as DIR. `--local=`
         // (or `--local` at end of argv) does not, so `set` can follow.
         let stolen = parse_cli(&["em", "active", "--local", "set"]);
-        assert_eq!(stolen.topology.local.as_deref(), Some("set"));
+        assert_eq!(merged_topology(&stolen).local.as_deref(), Some("set"));
         match &stolen.applet {
             Some(Applet::Active(a)) => assert!(a.command.is_none()),
             other => panic!("expected active, got {other:?}"),
@@ -1868,7 +1913,7 @@ mod tests {
             &["em", "active", "set", "--local"],
         ] {
             let cli = parse_cli(argv);
-            assert_eq!(cli.topology.local.as_deref(), Some(""), "{argv:?}");
+            assert_eq!(merged_topology(&cli).local.as_deref(), Some(""), "{argv:?}");
             match &cli.applet {
                 Some(Applet::Active(a)) => {
                     assert!(
@@ -1921,14 +1966,15 @@ mod tests {
             panic!("expected Applet::Worker");
         };
         assert_eq!(w.worker_config_root.as_deref(), Some("/tmp/cfg"));
+
+        // `--config-root` (RootTopology's raw parent-flag copy, for
+        // `em --config-root X toolchain --setup`-style routing) is NOT
+        // global, so unlike before this mixin split it no longer leaks into
+        // Worker's own parsing scope at all — Worker flattens neither
+        // `Topology` nor `RootedTopology`, so this is now a real
+        // `UnknownFlag`, not a silently-accepted-but-ignored bind.
         let bad = worker_argv(&["--config-root", "/tmp/cfg"]);
-        // Topology --config-root is a global, so it binds Cli.topology rather than failing.
-        let global = parse_cli(&bad);
-        assert_eq!(global.topology.config_root.as_deref(), Some("/tmp/cfg"));
-        let Some(Applet::Worker(w)) = &global.applet else {
-            panic!("expected Applet::Worker");
-        };
-        assert!(w.worker_config_root.is_none());
+        assert_eq!(parse_err(&bad), "UnknownFlag --config-root");
     }
 
     #[test]
@@ -2294,7 +2340,7 @@ pub struct EbuildArgs {
     #[usage(short = 'w', long, value_name = "DIR")]
     pub work_dir: Option<camino::Utf8PathBuf>,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub repo_arg: RepoArg,
     #[usage(flatten)]
@@ -2308,7 +2354,7 @@ pub struct MaintArgs {
     #[usage(subcommand)]
     pub command: MaintCommand,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub verbose_arg: VerboseArg,
     #[usage(flatten)]
@@ -2339,7 +2385,7 @@ pub struct SyncArgs {
     /// Repo names from repos.conf (default: auto-sync enabled repos)
     pub repos: Vec<String>,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub verbose_arg: VerboseArg,
     #[usage(flatten)]
@@ -2357,7 +2403,7 @@ pub struct DepcleanArgs {
     #[usage(double_dash = "automatic")]
     pub atoms: Vec<String>,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     /// `--exclude`/`--with-bdeps` only — the rest of `MergeFlags` means
     /// nothing to depclean's own read-then-remove walk.
     #[usage(flatten)]
@@ -2391,7 +2437,7 @@ pub struct RegenArgs {
     #[usage(flatten)]
     pub activity: ActivityArgs,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub verbose_arg: VerboseArg,
     #[usage(flatten)]
@@ -2411,7 +2457,7 @@ pub struct QuickpkgArgs {
     #[usage(long)]
     pub include_unmodified_config: bool,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub vdb_arg: VdbArg,
 }
@@ -2466,7 +2512,7 @@ pub struct MirrorDistArgs {
     #[usage(long)]
     pub delete_allow_incomplete: bool,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
 }
@@ -2487,7 +2533,7 @@ pub struct QueryArgs {
     #[usage(subcommand)]
     pub command: QueryCommand,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub verbose_arg: VerboseArg,
     #[usage(flatten)]
@@ -2505,7 +2551,7 @@ pub struct CleanArgs {
     #[usage(subcommand)]
     pub target: CleanTarget,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
 }
@@ -2576,7 +2622,7 @@ pub struct UseArgs {
     #[usage(long = "make-conf", value_name = "PATH")]
     pub make_conf: Option<camino::Utf8PathBuf>,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 }
 
 /// `em pkg` — edit per-package configuration
@@ -2585,7 +2631,7 @@ pub struct PkgArgs {
     #[usage(subcommand)]
     pub command: PkgCommand,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub arch_arg: ArchArg,
 }
@@ -2597,7 +2643,7 @@ pub struct RevdepArgs {
     #[usage(short = 'L', long, value_name = "NAME")]
     pub library: Option<String>,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub merge_flags: MergeFlags,
     #[usage(flatten)]
@@ -2621,7 +2667,7 @@ pub struct ReadArgs {
     #[usage(long)]
     pub delete: bool,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 }
 
 /// `em log` — analyze emerge.log
@@ -2631,7 +2677,7 @@ pub struct LogArgs {
     #[usage(subcommand)]
     pub command: Option<LogCommand>,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 }
 
 /// `em grep` — search inside ebuilds and eclasses
@@ -2664,7 +2710,7 @@ pub struct SearchArgs {
     #[usage(required_unless = "all")]
     pub pattern: Option<String>,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub repo_arg: RepoArg,
 }
@@ -2685,7 +2731,7 @@ pub struct SelectArgs {
     #[usage(subcommand)]
     pub command: SelectCommand,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub arch_arg: ArchArg,
     #[usage(flatten)]
@@ -2705,6 +2751,11 @@ pub struct SelectArgs {
 pub struct ActiveArgs {
     #[usage(subcommand)]
     pub command: Option<ActiveCommand>,
+
+    /// No `--root` — active is for unprivileged prefix/local dogfooding
+    /// only (see `resolve_set_target` in active.rs).
+    #[usage(flatten)]
+    pub topology: Topology,
 }
 
 /// `em etc` — reconcile pending config files
@@ -2715,7 +2766,7 @@ pub struct EtcArgs {
     #[usage(flatten)]
     pub opts: EtcOpts,
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
     #[usage(flatten)]
     pub quiet_arg: QuietArg,
     #[usage(flatten)]
@@ -2726,7 +2777,7 @@ pub struct EtcArgs {
 #[derive(usage::Args, Debug, Clone)]
 pub struct EnvArgs {
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 }
 
 /// `em completion` — print a shell completion script for `em`.
@@ -2759,7 +2810,7 @@ pub struct SetupArgs {
     pub extra_path: Vec<camino::Utf8PathBuf>,
 
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 
     #[usage(flatten)]
     pub merge_flags: MergeFlags,
@@ -2858,6 +2909,11 @@ pub struct CrossdevArgs {
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
 
+    /// No `--root` — see `Topology`'s own doc for why this needs the bare
+    /// (root-less) mixin instead of `RootedTopology`.
+    #[usage(flatten)]
+    pub topology: Topology,
+
     /// Privilege backend for this crossdev run
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]
     pub privilege: Privilege,
@@ -2886,7 +2942,7 @@ pub struct ToolchainArgs {
     pub setup: bool,
 
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 
     #[usage(flatten)]
     pub merge_flags: MergeFlags,
@@ -2944,7 +3000,7 @@ pub struct StagesArgs {
     pub stage3: bool,
 
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 
     #[usage(flatten)]
     pub merge_flags: MergeFlags,
@@ -2992,7 +3048,7 @@ pub struct EmergeArgs {
     pub depgraph_flags: DepgraphFlags,
 
     #[usage(flatten)]
-    pub root_arg: RootArg,
+    pub topology: RootedTopology,
 
     #[usage(flatten)]
     pub activity: ActivityArgs,

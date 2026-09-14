@@ -824,7 +824,8 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
     let Some(crate::cli::Applet::Active(_)) = &globals.applet else {
         bail!("em active set/add: internal error, not dispatched from Applet::Active");
     };
-    if let Some(local) = globals.topology.local.as_deref() {
+    let (topology, _root) = globals.topology_and_root();
+    if let Some(local) = topology.local.as_deref() {
         let path = if local.is_empty() {
             default_local_path()
         } else {
@@ -836,7 +837,7 @@ fn resolve_set_target(globals: &Cli) -> Result<ActiveContext> {
             path,
         });
     }
-    if let Some(p) = globals.topology.prefix.as_deref() {
+    if let Some(p) = topology.prefix.as_deref() {
         let path = finalize_abs_path(absolutize(Utf8Path::new(p))?)?;
         return Ok(ActiveContext {
             kind: ActiveKind::Prefix,

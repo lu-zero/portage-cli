@@ -1,12 +1,30 @@
-//! Root-topology flags: `--prefix`/`--local`/`--config-root`/`--target`
-//! ([`Topology`]) and `--root` ([`RootArg`], kept separate — see its own doc).
-//! `--vdb` is a different, narrower thing — see [`super::context::VdbArg`].
+//! Root-topology flags: `--prefix`/`--local`/`--config-root`/`--target`, and
+//! `--root`. `--vdb` is a different, narrower thing — see
+//! [`super::context::VdbArg`].
 //!
-//! [`Topology`] is mounted once on [`crate::cli::Cli`] with inner fields
-//! `global`. [`RootArg`] is flattened onto Roots-consuming applets (inner
-//! field `global` so `--root` cascades into `em query depgraph --root R`);
-//! `Cli` holds a raw non-global `--root` for prefix-position default emerge.
-//! Crossdev, Active, and Worker omit `RootArg`.
+//! Three applet-facing shapes, not one:
+//! - [`RootedTopology`] — all 5 fields, `global` inner fields, flattened onto
+//!   the 22 applets that accept `--root` (everything [`crate::cli::Cli::applet_root_arg`]
+//!   used to list).
+//! - [`Topology`] — the same 4 fields minus `--root`, `global` inner fields,
+//!   flattened bare onto `Crossdev`/`Active` — the 2 applets that need the
+//!   topology group but must keep `--root` a hard parse error (never even
+//!   reach a per-applet flag table to reject at runtime).
+//! - [`RootTopology`] — the same 5 fields as `RootedTopology` again, but
+//!   **not** `global`, mounted once directly on `Cli`. This is the raw
+//!   parent-flag/bare-prefix-routing copy (`em --prefix X toolchain --setup`
+//!   still routes to `Toolchain`); see its own doc for why it has to exist
+//!   separately from the per-applet copies.
+//!
+//! [`RootArg`] is what's left of the old single-field `--root` mixin — no
+//! longer flattened onto anything directly, purely the resolution-parameter
+//! type this module's methods take (`RootedTopology::split()` produces one).
+//! `Cli::topology_and_root()` is the one place that reconciles whichever of
+//! the three applet-facing shapes applies (or none) into the
+//! `(Topology, RootArg)` pair these methods expect — nothing in this module
+//! needed to change to support that.
+//!
+//! `Helper`/`Worker`/`Portageq`/`Grep`/`Atom`/`Completion` get none of this.
 
 use camino::Utf8PathBuf;
 use portage_resolve::Roots;
@@ -83,28 +101,144 @@ pub struct Topology {
 /// Installation root override — the offset an applet installs into / queries.
 ///
 /// Also settable via `ROOT` in the environment (lowest precedence), applied
-/// once by [`resolved_root`]. Inner field is `global` so nested `--root`
-/// cascades inside an applet; not mounted on `Cli` (that copy is a raw field).
-///
-/// Deliberately no `next_help_heading` — unlike `Topology`, `--root` isn't
-/// universally applicable (crossdev/active/worker reject it; see `Cli`'s own
-/// `validate`), so it can't be blanket `global` at the root the way
-/// `Topology` is. Giving it its own "Roots" heading here would collide with
-/// `Topology`'s real "Roots" section — visible on `em --help` once
-/// `default_subcommand_help` appends the default command's own page right
-/// after it. It renders as an ordinary flag instead, like every other
-/// per-applet mixin (`ArchArg`, `RepoArg`, `QuietArg`, `VerboseArg`,
-/// `PretendArg`).
-#[derive(usage::Args, Debug, Clone, Default)]
+/// once by [`resolved_root`]. Purely an internal resolution-parameter type
+/// now (not flattened onto any applet directly): `--root` isn't universally
+/// applicable the way `Topology`'s fields are (`crossdev`/`active`/`worker`
+/// reject it; see `Cli::validate`), so it travels bundled into
+/// [`RootedTopology`] (the 22 applets that accept it) or is simply absent
+/// (`Topology`, flattened bare onto `crossdev`/`active`, and `RootTopology`,
+/// `Cli`'s own raw parent-flag copy) — `Cli::topology_and_root()` derives a
+/// `RootArg` from whichever shape applies before calling into this module's
+/// resolution methods, which all still take it as a separate parameter.
+#[derive(Debug, Clone, Default)]
 pub struct RootArg {
-    /// Installation root (the offset an applet installs into / queries)
-    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub root: Option<String>,
 }
 
 /// `root.root`, falling back to the `ROOT` environment variable.
 pub fn resolved_root(root: &RootArg) -> Option<String> {
     root.root.clone().or_else(|| std::env::var("ROOT").ok())
+}
+
+/// [`Topology`]'s 4 fields plus `--root`, flattened as one mixin on the 22
+/// applets that need both (everything [`Cli::applet_root_arg`] used to list —
+/// `RootArg` is no longer flattened on its own anywhere). Inner fields stay
+/// `global` so they cascade into e.g. `em maint sync --root R`, same as
+/// `Topology`'s did and `RootArg`'s used to.
+///
+/// [`Cli::applet_root_arg`]: crate::cli::Cli::applet_root_arg
+#[derive(usage::Args, Debug, Clone, Default)]
+#[usage(
+    next_help_heading = "Roots",
+    heading("Roots", help = "Which tree this invocation reads and writes.")
+)]
+pub struct RootedTopology {
+    /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
+    /// still from the host (use --root for a config offset).
+    #[usage(long, global, value_name = "DIR", value_hint = usage::ValueHint::DirPath)]
+    pub prefix: Option<String>,
+
+    /// Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not
+    /// overlaid on the host (see --prefix for the overlay). Defaults to
+    /// ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given (`--local=`).
+    ///
+    /// A bare `--local` takes the next word as DIR.
+    #[usage(
+        long,
+        global,
+        default_missing = "",
+        value_name = "DIR",
+        value_hint = usage::ValueHint::DirPath
+    )]
+    pub local: Option<String>,
+
+    /// Read config (profile, make.conf) from this root instead of `--root`
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    pub config_root: Option<String>,
+
+    /// Cross-build/setup for a crossdev target tuple
+    ///
+    /// The single source for "which tuple" everywhere: `em crossdev --target T --init-target`
+    /// sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs
+    /// into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for
+    /// `--config-root <sysroot> --root <sysroot>`.
+    ///
+    /// Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the
+    /// sysroot make.conf. One flag for both roles — `crossdev` no longer
+    /// has its own `-t`/`--target`.
+    #[usage(long, short = 'T', global, value_name = "TUPLE")]
+    pub target: Option<String>,
+
+    /// Installation root (the offset an applet installs into / queries)
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    pub root: Option<String>,
+}
+
+impl RootedTopology {
+    /// Split into the internal `(Topology, RootArg)` pair the resolution
+    /// methods in this module take.
+    pub fn split(&self) -> (Topology, RootArg) {
+        (
+            Topology {
+                prefix: self.prefix.clone(),
+                local: self.local.clone(),
+                config_root: self.config_root.clone(),
+                target: self.target.clone(),
+            },
+            RootArg {
+                root: self.root.clone(),
+            },
+        )
+    }
+}
+
+/// `Cli`'s own raw copy of [`RootedTopology`]'s 5 fields — **not** `global`.
+///
+/// Exists purely so these flags keep *parent-flag* status in
+/// `default_subcommand_flags` routing (e.g. `em --prefix X toolchain --setup`
+/// must still recognize `toolchain` as a real subcommand, not swallow it as
+/// an emerge atom — confirmed live, and only flags reachable from the root
+/// command's own table get that treatment; `global` alone doesn't grant it).
+/// Reconciled with whichever per-applet copy (if any) applies by
+/// `Cli::topology_and_root()`; never read directly anywhere else. Keeps the
+/// same `"Roots"` heading text as `RootedTopology`/`Topology` — this is what
+/// `em --help` itself shows.
+#[derive(usage::Args, Debug, Clone, Default)]
+#[usage(
+    next_help_heading = "Roots",
+    heading("Roots", help = "Which tree this invocation reads and writes.")
+)]
+pub struct RootTopology {
+    /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
+    /// still from the host (use --root for a config offset).
+    #[usage(long, value_name = "DIR", value_hint = usage::ValueHint::DirPath)]
+    pub prefix: Option<String>,
+
+    /// Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not
+    /// overlaid on the host (see --prefix for the overlay). Defaults to
+    /// ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given (`--local=`).
+    ///
+    /// A bare `--local` takes the next word as DIR.
+    #[usage(
+        long,
+        default_missing = "",
+        value_name = "DIR",
+        value_hint = usage::ValueHint::DirPath
+    )]
+    pub local: Option<String>,
+
+    /// Read config (profile, make.conf) from this root instead of `--root`
+    #[usage(long, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    pub config_root: Option<String>,
+
+    /// Cross-build/setup for a crossdev target tuple
+    #[usage(long, short = 'T', value_name = "TUPLE")]
+    pub target: Option<String>,
+
+    /// Prefix-position `--root` for default emerge. Not global; must not
+    /// leak into crossdev/active/worker.
+    #[usage(long, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    pub root: Option<String>,
 }
 
 impl Topology {

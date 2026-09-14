@@ -12,18 +12,6 @@
 
   **Default:** `auto`
 
-## Roots
-- **`--prefix <DIR>`** — Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config still from the host (use --root for a config offset).
-- **`--local [DIR]`** — Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not overlaid on the host (see --prefix for the overlay). Defaults to ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given (`--local=`).
-
-  A bare `--local` takes the next word as DIR.
-- **`--config-root <PATH>`** — Read config (profile, make.conf) from this root instead of `--root`
-- **`-T --target <TUPLE>`** — Cross-build/setup for a crossdev target tuple
-
-  The single source for "which tuple" everywhere: `em crossdev --target T --init-target` sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for `--config-root <sysroot> --root <sysroot>`.
-
-  Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
-
 ## Flags
 - **`-h --help`** — Print help
 - **`-V --version`** — Print version
@@ -31,6 +19,12 @@
 ## Roots
 
 Which tree this invocation reads and writes.
+- **`--prefix <DIR>`** — Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config still from the host (use --root for a config offset).
+- **`--local [DIR]`** — Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not overlaid on the host (see --prefix for the overlay). Defaults to ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given (`--local=`).
+
+  A bare `--local` takes the next word as DIR.
+- **`--config-root <PATH>`** — Read config (profile, make.conf) from this root instead of `--root`
+- **`-T --target <TUPLE>`** — Cross-build/setup for a crossdev target tuple
 - **`--root <PATH>`** — Prefix-position `--root` for default emerge. Not global; must not leak into crossdev/active/worker.
 
 ## Output Formats
@@ -80,19 +74,19 @@ Which tree this invocation reads and writes.
 - [`em query size <ATOM>…`](query/size.md)
 - [`em query uses <ATOM>…`](query/uses.md)
 - [`em query which <ATOM>…`](query/which.md)
-- [`em clean [--root <PATH>] [-p --pretend] <SUBCOMMAND>`](clean.md)
+- [`em clean [FLAGS] <SUBCOMMAND>`](clean.md)
 - [`em clean dist [FLAGS]`](clean/dist.md)
 - [`em clean pkg [FLAGS]`](clean/pkg.md)
 - [`em clean all [FLAGS]`](clean/all.md)
 - [`em use [FLAGS]`](use.md)
-- [`em pkg [--root <PATH>] [--arch <ARCH>] <SUBCOMMAND>`](pkg.md)
+- [`em pkg [FLAGS] <SUBCOMMAND>`](pkg.md)
 - [`em pkg use [FLAGS] <ATOM>`](pkg/use.md)
 - [`em pkg keyword [FLAGS] <ATOM>`](pkg/keyword.md)
 - [`em pkg mask [FLAGS] <ATOM>`](pkg/mask.md)
 - [`em pkg env [FLAGS] <ATOM>`](pkg/env.md)
 - [`em revdep [FLAGS]`](revdep.md)
 - [`em read [FLAGS] [PACKAGE]`](read.md)
-- [`em log [--root <PATH>] [SUBCOMMAND]`](log.md)
+- [`em log [FLAGS] [SUBCOMMAND]`](log.md)
 - [`em log current`](log/current.md)
 - [`em log list [LIMIT]`](log/list.md)
 - [`em log time [ATOM]`](log/time.md)
@@ -143,7 +137,7 @@ Which tree this invocation reads and writes.
 - [`em select glsa list`](select/glsa/list.md)
 - [`em select glsa check [IDS]…`](select/glsa/check.md)
 - [`em select glsa fix [IDS]…`](select/glsa/fix.md)
-- [`em active [SUBCOMMAND]`](active.md)
+- [`em active [FLAGS] [SUBCOMMAND]`](active.md)
 - [`em active show`](active/show.md)
 - [`em active set [REF]`](active/set.md)
 - [`em active clear [--all]`](active/clear.md)
@@ -158,6 +152,6 @@ Which tree this invocation reads and writes.
 - [`em etc [FLAGS] [SUBCOMMAND]`](etc.md)
 - [`em etc diff [PATH]`](etc/diff.md)
 - [`em etc merge`](etc/merge.md)
-- [`em env [--root <PATH>]`](env.md)
+- [`em env [FLAGS]`](env.md)
 - [`em completion <SHELL>`](completion.md)
 - [`em emerge [FLAGS] [ATOM]…`](emerge.md) (default)
