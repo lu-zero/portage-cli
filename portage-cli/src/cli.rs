@@ -16,7 +16,7 @@ mod emerge_mode;
 mod merge_flags;
 mod topology;
 pub use activity::ActivityArgs;
-pub use context::{ArchArg, PretendArg, QuietArg, RepoArg, VerboseArg};
+pub use context::{ArchArg, PretendArg, QuietArg, RepoArg, VdbArg, VerboseArg};
 pub use depgraph_flags::DepgraphFlags;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
@@ -298,9 +298,19 @@ impl Cli {
         self.topology.target.clone()
     }
 
-    /// The active `--vdb` override, if any.
+    /// The dispatched applet's own `--vdb` override, if any — a read-only
+    /// query override, not part of topology resolution (see [`VdbArg`]).
     pub fn vdb(&self) -> Option<String> {
-        self.topology.vdb.clone()
+        match &self.applet {
+            Some(Applet::Emerge(a)) => a.vdb_arg.vdb.clone(),
+            Some(Applet::Maint(a)) => a.vdb_arg.vdb.clone(),
+            Some(Applet::Depclean(a)) => a.vdb_arg.vdb.clone(),
+            Some(Applet::Quickpkg(a)) => a.vdb_arg.vdb.clone(),
+            Some(Applet::Query(a)) => a.vdb_arg.vdb.clone(),
+            Some(Applet::Revdep(a)) => a.vdb_arg.vdb.clone(),
+            Some(Applet::Select(a)) => a.vdb_arg.vdb.clone(),
+            _ => None,
+        }
     }
 
     /// See [`Topology::require_root_distinct_from_host`].
@@ -2309,6 +2319,8 @@ pub struct MaintArgs {
     pub repo_arg: RepoArg,
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
+    #[usage(flatten)]
+    pub vdb_arg: VdbArg,
 }
 
 /// `em portageq` — query Portage internal variables and data
@@ -2352,6 +2364,8 @@ pub struct DepcleanArgs {
     pub merge_flags: MergeFlags,
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
+    #[usage(flatten)]
+    pub vdb_arg: VdbArg,
 }
 
 /// `em regen` — regenerate metadata cache
@@ -2398,6 +2412,8 @@ pub struct QuickpkgArgs {
     pub include_unmodified_config: bool,
     #[usage(flatten)]
     pub root_arg: RootArg,
+    #[usage(flatten)]
+    pub vdb_arg: VdbArg,
 }
 
 /// `em mirrordist` — build/maintain a distfiles mirror
@@ -2478,6 +2494,8 @@ pub struct QueryArgs {
     pub arch_arg: ArchArg,
     #[usage(flatten)]
     pub repo_arg: RepoArg,
+    #[usage(flatten)]
+    pub vdb_arg: VdbArg,
 }
 
 /// `em clean` — clean distfiles and/or binary packages
@@ -2584,6 +2602,8 @@ pub struct RevdepArgs {
     pub merge_flags: MergeFlags,
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
+    #[usage(flatten)]
+    pub vdb_arg: VdbArg,
 }
 
 /// `em read` — display Portage elog files
@@ -2672,6 +2692,8 @@ pub struct SelectArgs {
     pub repo_arg: RepoArg,
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
+    #[usage(flatten)]
+    pub vdb_arg: VdbArg,
 }
 
 /// `em active` — register a default `--prefix`/`--local` for bare invocations
@@ -2989,6 +3011,9 @@ pub struct EmergeArgs {
 
     #[usage(flatten)]
     pub pretend_arg: PretendArg,
+
+    #[usage(flatten)]
+    pub vdb_arg: VdbArg,
 
     /// Privilege backend for this merge
     #[usage(long, value_enum, default = "auto", help_heading = "Merge")]

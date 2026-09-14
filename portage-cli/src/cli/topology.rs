@@ -1,5 +1,6 @@
-//! Root-topology flags: `--prefix`/`--local`/`--config-root`/`--vdb`/`--target`
+//! Root-topology flags: `--prefix`/`--local`/`--config-root`/`--target`
 //! ([`Topology`]) and `--root` ([`RootArg`], kept separate — see its own doc).
+//! `--vdb` is a different, narrower thing — see [`super::context::VdbArg`].
 //!
 //! [`Topology`] is mounted once on [`crate::cli::Cli`] with inner fields
 //! `global`. [`RootArg`] is flattened onto Roots-consuming applets (inner
@@ -31,9 +32,11 @@ fn opt_path(s: &Option<String>) -> Option<Utf8PathBuf> {
     s.as_deref().map(Utf8PathBuf::from)
 }
 
-/// `--prefix`/`--local`/`--config-root`/`--vdb`/`--target`: which build
-/// context an applet resolves against. `--root` (the merge-destination
-/// override) is deliberately a separate mixin — see [`RootArg`].
+/// `--prefix`/`--local`/`--config-root`/`--target`: which build context an
+/// applet resolves against. `--root` (the merge-destination override) is
+/// deliberately a separate mixin — see [`RootArg`]. `--vdb` is narrower still
+/// (a read-only query override, not part of this resolution at all) — see
+/// [`super::context::VdbArg`].
 #[derive(usage::Args, Debug, Clone, Default)]
 #[usage(
     next_help_heading = "Roots",
@@ -62,10 +65,6 @@ pub struct Topology {
     /// Read config (profile, make.conf) from this root instead of `--root`
     #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub config_root: Option<String>,
-
-    /// Override VDB path (default: $ROOT/var/db/pkg)
-    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
-    pub vdb: Option<String>,
 
     /// Cross-build/setup for a crossdev target tuple
     ///

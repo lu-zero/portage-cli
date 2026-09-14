@@ -14,6 +14,7 @@ System maintenance and health checks
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-p --pretend`** — Show what would be done without actually performing any actions
+- **`--vdb <PATH>`** — Override VDB path (default: $ROOT/var/db/pkg)
 
 ## Flags
 - **`-h --help`** — Print help

@@ -18,7 +18,6 @@
 
   A bare `--local` takes the next word as DIR.
 - **`--config-root <PATH>`** — Read config (profile, make.conf) from this root instead of `--root`
-- **`--vdb <PATH>`** — Override VDB path (default: $ROOT/var/db/pkg)
 - **`-T --target <TUPLE>`** — Cross-build/setup for a crossdev target tuple
 
   The single source for "which tuple" everywhere: `em crossdev --target T --init-target` sets T up; `em stages --target T --stage1` (or any plain atom build) resolves/installs into the target sysroot `<EROOT>/usr/<TUPLE>` — sugar for `--config-root <sysroot> --root <sysroot>`.

@@ -79,3 +79,18 @@ pub struct RepoArg {
     #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub repo: Option<String>,
 }
+
+/// `--vdb`, for applets that query an alternate installed-package database.
+///
+/// Deliberately narrow: this only overrides the *read-only query* path
+/// (`vdb.rs`'s `open_cli_vdb`) used by applets that inspect installed
+/// packages. The real install/merge write path (`ebuild.rs`'s
+/// `vdb_root_for`) always computes the VDB location from `--root`/`--prefix`/
+/// `--local` and never consults this — giving it to e.g. `em ebuild`/
+/// `em toolchain` would parse but do nothing, since neither reads it.
+#[derive(usage::Args, Debug, Clone, Default)]
+pub struct VdbArg {
+    /// Override VDB path (default: $ROOT/var/db/pkg)
+    #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    pub vdb: Option<String>,
+}

@@ -12,6 +12,7 @@ Remove orphaned/unused packages
 ## Flags
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-p --pretend`** — Show what would be done without actually performing any actions
+- **`--vdb <PATH>`** — Override VDB path (default: $ROOT/var/db/pkg)
 - **`-h --help`** — Print help
 
 ## Merge

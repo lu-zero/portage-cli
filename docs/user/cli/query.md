@@ -13,6 +13,7 @@ Query package information
 - **`--repo <PATH>`** — Pin search/query to a single repository
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
+- **`--vdb <PATH>`** — Override VDB path (default: $ROOT/var/db/pkg)
 
 ## Flags
 - **`-h --help`** — Print help

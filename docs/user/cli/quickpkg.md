@@ -12,6 +12,7 @@ Create binary packages from installed files
 - **`--include-config`** — Include CONFIG_PROTECT files
 - **`--include-unmodified-config`** — Include unmodified CONFIG_PROTECT files
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
+- **`--vdb <PATH>`** — Override VDB path (default: $ROOT/var/db/pkg)
 - **`-h --help`** — Print help
 
 ## Output Formats
