@@ -22,10 +22,8 @@ Enable/disable/query USE flags in make.conf
 - **`-g --global`** — Restrict -i to global flags only (profiles/use.desc)
 - **`-l --local-desc`** — Restrict -i to per-package local flags only (profiles/use.local.desc, searched across every package — see `em query uses <atom>` for a single package's flags instead)
 - **`--make-conf <PATH>`** — Path to make.conf (default: resolved like other config commands, following --config-root/--local/--prefix)
-- **`-h --help`** — Print help
-
-## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
+- **`-h --help`** — Print help
 
 ## Output Formats
 

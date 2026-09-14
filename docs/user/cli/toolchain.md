@@ -10,6 +10,7 @@ The native twin of `crossdev --setup` (`CHOST == CBUILD`): the staged `baselayou
 
 ## Flags
 - **`--setup`** — Build and install the toolchain into `--root` (the only action for now; required, mirroring `crossdev --setup`).
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 - **`-q --quiet`** — Suppress non-error output
 - **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
@@ -18,9 +19,6 @@ The native twin of `crossdev --setup` (`CHOST == CBUILD`): the staged `baselayou
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Merge
 

@@ -11,14 +11,12 @@ Execute ebuild phases
 
 ## Flags
 - **`-w --work-dir <DIR>`** — Override the build work directory (default: `/var/tmp/portage/<cat>/<pf>`)
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`--repo <PATH>`** — Pin search/query to a single repository
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Output Formats
 

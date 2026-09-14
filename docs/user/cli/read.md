@@ -14,10 +14,8 @@ Display Portage elog files
 
   **Default:** `10`
 - **`--delete`** — Remove each file once it has been shown
-- **`-h --help`** — Print help
-
-## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
+- **`-h --help`** — Print help
 
 ## Output Formats
 

@@ -7,10 +7,8 @@
 Clean distfiles and/or binary packages
 
 ## Global Flags
-- **`-p --pretend`** — Show what would be done without actually performing any actions
-
-## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
+- **`-p --pretend`** — Show what would be done without actually performing any actions
 
 ## Flags
 - **`-h --help`** — Print help

@@ -7,11 +7,9 @@ Rebuild packages with broken shared library deps
 
 ## Flags
 - **`-L --library <NAME>`** — Only consider consumers of libraries whose soname contains NAME
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Merge
 

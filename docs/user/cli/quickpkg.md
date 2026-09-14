@@ -11,10 +11,8 @@ Create binary packages from installed files
 ## Flags
 - **`--include-config`** — Include CONFIG_PROTECT files
 - **`--include-unmodified-config`** — Include unmodified CONFIG_PROTECT files
-- **`-h --help`** — Print help
-
-## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
+- **`-h --help`** — Print help
 
 ## Output Formats
 

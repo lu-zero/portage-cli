@@ -15,13 +15,11 @@ Identical implementation to `em maint sync` — this top-level form exists only 
 - **`[REPOS]…`** — Repo names from repos.conf (default: auto-sync enabled repos)
 
 ## Flags
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 - **`-q --quiet`** — Suppress non-error output
 - **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Output Formats
 

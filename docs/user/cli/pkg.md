@@ -6,10 +6,8 @@
 Edit per-package configuration (package.use, .keywords, .mask, .env)
 
 ## Global Flags
-- **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
-
-## Roots
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
+- **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
 
 ## Flags
 - **`-h --help`** — Print help

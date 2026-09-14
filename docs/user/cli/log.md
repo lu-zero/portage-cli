@@ -6,7 +6,7 @@
 
 Analyze emerge.log
 
-## Roots
+## Global Flags
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Flags

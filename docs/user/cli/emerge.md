@@ -12,6 +12,7 @@ Resolve and merge/unmerge packages (emerge workalike).
 - **`[ATOM]…`** — Atoms, package sets (`@world`), or ebuild paths to act on
 
 ## Flags
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 - **`-q --quiet`** — Suppress non-error output
 - **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
@@ -108,9 +109,6 @@ How far to re-examine installed dependencies.
 
   Applies to packages that appear in the depgraph; pairs with `--deep` for a full-tree USE recheck.
 - **`-U --changed-use`** — Like `--newuse`, but only rebuild when an *enabled* USE flag changed among flags present in both installed and current IUSE (ignore pure IUSE add/drop). Emerge's `--changed-use` / `-U`.
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Activity
 

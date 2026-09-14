@@ -33,11 +33,9 @@ Requires an up-to-date metadata cache: run `em regen <repo>` first for overlays.
 - **`--verify-existing-digest`** — Re-hash already-present files instead of trusting their size
 - **`--gentoo-mirrors-fallback`** — Also try GENTOO_MIRRORS after the ebuild's own URIs (real emirrordist never does this — off by default).
 - **`--delete-allow-incomplete`** — Allow --delete even when some ebuilds had no metadata cache entry
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Output Formats
 

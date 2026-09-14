@@ -86,8 +86,17 @@ pub struct Topology {
 /// Also settable via `ROOT` in the environment (lowest precedence), applied
 /// once by [`resolved_root`]. Inner field is `global` so nested `--root`
 /// cascades inside an applet; not mounted on `Cli` (that copy is a raw field).
+///
+/// Deliberately no `next_help_heading` — unlike `Topology`, `--root` isn't
+/// universally applicable (crossdev/active/worker reject it; see `Cli`'s own
+/// `validate`), so it can't be blanket `global` at the root the way
+/// `Topology` is. Giving it its own "Roots" heading here would collide with
+/// `Topology`'s real "Roots" section — visible on `em --help` once
+/// `default_subcommand_help` appends the default command's own page right
+/// after it. It renders as an ordinary flag instead, like every other
+/// per-applet mixin (`ArchArg`, `RepoArg`, `QuietArg`, `VerboseArg`,
+/// `PretendArg`).
 #[derive(usage::Args, Debug, Clone, Default)]
-#[usage(next_help_heading = "Roots")]
 pub struct RootArg {
     /// Installation root (the offset an applet installs into / queries)
     #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]

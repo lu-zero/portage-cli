@@ -10,6 +10,7 @@ Bootstrap a prefix layout (use with --local or --prefix)
 - **`--extra-path <DIR>`** — Directory holding host tools this prefix should borrow while it has none of its own, put ahead of the sanitised build `PATH`. Repeatable.
 
   `--local` only, and only for the setup itself: builds sanitise `$HOME` and `/usr/local` off `PATH` so a local install cannot shadow the Gentoo toolchain, which also hides a hand-installed GNU sed/grep from the very first merges. `em setup --local` finds the usual locations by itself; this is for anywhere else you keep them.
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-v --verbose`** — Increase verbosity: `-v` labels each build phase, `-vv`/`-vvv` add `em`'s own debug/trace logs (see also `RUST_LOG`).
 - **`-q --quiet`** — Suppress non-error output
 - **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
@@ -18,9 +19,6 @@ Bootstrap a prefix layout (use with --local or --prefix)
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Merge
 

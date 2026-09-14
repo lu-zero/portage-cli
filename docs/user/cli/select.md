@@ -6,14 +6,12 @@
 Native config selectors (profile, repos) — eselect-like
 
 ## Global Flags
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`--arch <ARCH>`** — Target architecture for operations (default: current system architecture)
 - **`--repo <PATH>`** — Pin search/query to a single repository
 
   When unset, repositories are auto-discovered from `repos.conf` (the main repo wins for single-repo applets; search walks all of them).
 - **`-p --pretend`** — Show what would be done without actually performing any actions
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Flags
 - **`-h --help`** — Print help

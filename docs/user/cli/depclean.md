@@ -10,11 +10,9 @@ Remove orphaned/unused packages
 - **`[ATOMS]…`** — Restrict cleaning to these atoms' dependency closure (every other installed package is protected). Default: the whole `@world` set
 
 ## Flags
+- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 - **`-p --pretend`** — Show what would be done without actually performing any actions
 - **`-h --help`** — Print help
-
-## Roots
-- **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
 
 ## Merge
 
