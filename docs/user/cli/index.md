@@ -3,7 +3,7 @@
 
 **Version:** 0.1.0
 
-- **Usage:** `em [FLAGS] [SUBCOMMAND]`
+- **Usage:** `em [--color <WHEN>] [SUBCOMMAND]`
 
 ## Global Flags
 - **`--color <WHEN>`**
@@ -15,17 +15,6 @@
 ## Flags
 - **`-h --help`** — Print help
 - **`-V --version`** — Print version
-
-## Roots
-
-Which tree this invocation reads and writes.
-- **`--prefix <DIR>`** — Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config still from the host (use --root for a config offset).
-- **`--local [DIR]`** — Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not overlaid on the host (see --prefix for the overlay). Defaults to ~/.gentoo (EPREFIX=~/.gentoo) when no DIR is given (`--local=`).
-
-  A bare `--local` takes the next word as DIR.
-- **`--config-root <PATH>`** — Read config (profile, make.conf) from this root instead of `--root`
-- **`-T --target <TUPLE>`** — Cross-build/setup for a crossdev target tuple
-- **`--root <PATH>`** — Prefix-position `--root` for default emerge. Not global; must not leak into crossdev/active/worker.
 
 ## Output Formats
 

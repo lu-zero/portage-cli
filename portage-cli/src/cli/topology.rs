@@ -11,10 +11,13 @@
 //!   topology group but must keep `--root` a hard parse error (never even
 //!   reach a per-applet flag table to reject at runtime).
 //! - [`RootTopology`] — the same 5 fields as `RootedTopology` again, but
-//!   **not** `global`, mounted once directly on `Cli`. This is the raw
-//!   parent-flag/bare-prefix-routing copy (`em --prefix X toolchain --setup`
-//!   still routes to `Toolchain`); see its own doc for why it has to exist
-//!   separately from the per-applet copies.
+//!   **not** `global` and `hide`-d from help/completion, mounted once
+//!   directly on `Cli`. This is the raw parent-flag/bare-prefix-routing copy
+//!   (`em --prefix X toolchain --setup` still routes to `Toolchain`); see its
+//!   own doc for why it has to exist separately from the per-applet copies,
+//!   and why it stays out of `em --help`'s own page (the appended default
+//!   subcommand's page already shows the same 5 fields, via
+//!   `RootedTopology`).
 //!
 //! [`RootArg`] is what's left of the old single-field `--root` mixin — no
 //! longer flattened onto anything directly, purely the resolution-parameter
@@ -192,7 +195,8 @@ impl RootedTopology {
     }
 }
 
-/// `Cli`'s own raw copy of [`RootedTopology`]'s 5 fields — **not** `global`.
+/// `Cli`'s own raw copy of [`RootedTopology`]'s 5 fields — **not** `global`,
+/// and hidden from help/completion.
 ///
 /// Exists purely so these flags keep *parent-flag* status in
 /// `default_subcommand_flags` routing (e.g. `em --prefix X toolchain --setup`
@@ -200,18 +204,26 @@ impl RootedTopology {
 /// an emerge atom — confirmed live, and only flags reachable from the root
 /// command's own table get that treatment; `global` alone doesn't grant it).
 /// Reconciled with whichever per-applet copy (if any) applies by
-/// `Cli::topology_and_root()`; never read directly anywhere else. Keeps the
-/// same `"Roots"` heading text as `RootedTopology`/`Topology` — this is what
-/// `em --help` itself shows.
+/// `Cli::topology_and_root()`; never read directly anywhere else.
+///
+/// `hide` on every field: `default_subcommand_help` already appends emerge's
+/// *entire* own `--help` page below root's (marked "Default command:
+/// emerge"), and emerge flattens the same 5 fields via `RootedTopology` — so
+/// showing them again here, verbatim, in root's own top section just before
+/// that appended page repeats them, produced a literal duplicate "Roots:"
+/// block on `em --help` (confirmed live). `hide` is display/completion-only
+/// (verified against `derive/src/codegen.rs` and `argv/src/help.rs`/
+/// `complete.rs`: no `.hide` check anywhere near flag *parsing* or
+/// `default_subcommand_flags` routing) — these fields stay fully functional
+/// for prefix-position parsing, and bare-root completion for `--prefix`
+/// etc. already comes from the merged default-subcommand flag set, not from
+/// this struct's own metadata (confirmed via `em __complete_word__ --line
+/// "em --"`, which lists them before this struct even existed).
 #[derive(usage::Args, Debug, Clone, Default)]
-#[usage(
-    next_help_heading = "Roots",
-    heading("Roots", help = "Which tree this invocation reads and writes.")
-)]
 pub struct RootTopology {
     /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
     /// still from the host (use --root for a config offset).
-    #[usage(long, value_name = "DIR", value_hint = usage::ValueHint::DirPath)]
+    #[usage(long, hide, value_name = "DIR", value_hint = usage::ValueHint::DirPath)]
     pub prefix: Option<String>,
 
     /// Unprivileged, standalone Gentoo-Prefix: own VDB/BROOT/config, not
@@ -221,6 +233,7 @@ pub struct RootTopology {
     /// A bare `--local` takes the next word as DIR.
     #[usage(
         long,
+        hide,
         default_missing = "",
         value_name = "DIR",
         value_hint = usage::ValueHint::DirPath
@@ -228,16 +241,16 @@ pub struct RootTopology {
     pub local: Option<String>,
 
     /// Read config (profile, make.conf) from this root instead of `--root`
-    #[usage(long, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    #[usage(long, hide, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub config_root: Option<String>,
 
     /// Cross-build/setup for a crossdev target tuple
-    #[usage(long, short = 'T', value_name = "TUPLE")]
+    #[usage(long, short = 'T', hide, value_name = "TUPLE")]
     pub target: Option<String>,
 
     /// Prefix-position `--root` for default emerge. Not global; must not
     /// leak into crossdev/active/worker.
-    #[usage(long, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
+    #[usage(long, hide, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub root: Option<String>,
 }
 
