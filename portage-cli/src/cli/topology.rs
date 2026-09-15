@@ -628,15 +628,20 @@ impl Topology {
         )
     }
 
-    /// Reject an action (`toolchain --setup`, `stages --stage1`/`--stage3`)
-    /// whose resolved destination equals the host install path
-    /// (`host_roots()`) — bare `--local`, bare `--prefix`, bare host, and
-    /// `--local --root <the same local path>` all collapse to this.
+    /// Reject an action (`stages --stage1`/`--stage3` — see call sites in
+    /// `crossdev/mod.rs`; `toolchain --setup` uses the narrower
+    /// [`require_destination_not_bare_host`](Self::require_destination_not_bare_host)
+    /// instead, so a bare `--prefix P` toolchain build is fine on its own)
+    /// whose resolved destination equals `--prefix`'s own overlay anchor —
+    /// only a bare `--prefix P` (no separate `--root`) collapses to this;
+    /// see the body's own comment for why `--local` does **not**, live-
+    /// verified (`stages --local D --stage1` reaches real dependency
+    /// resolution, not this rejection).
     ///
     /// `--root DIR` alone, `--prefix P --target T`, and an explicit
-    /// `--root B` redirecting away from `--prefix`/`--local`'s own anchor
-    /// all genuinely differ from `host_roots()` and pass. Replaces an older,
-    /// narrower `merge_root == "/"` check, too narrow to catch a real
+    /// `--root B` redirecting away from `--prefix`'s own anchor all
+    /// genuinely differ from the overlay's own tree and pass. Replaces an
+    /// older, narrower `merge_root == "/"` check, too narrow to catch a real
     /// `--prefix --target` bug where a package's `.pc` file baked in the
     /// outer prefix's path even though nothing was installed there.
     pub fn require_root_distinct_from_host(

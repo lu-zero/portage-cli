@@ -100,6 +100,33 @@ crossdev-stages (see topology matrix below).
 
 Stage builds into `/` are rejected (`em stages` bails if merge root is `/`).
 
+**`--prefix` alone is not enough for `em stages`.** `em toolchain --setup`
+only rejects a true bare host (`/`) — `em toolchain --setup --prefix P` works
+standalone, building the seed compiler straight into `P`. `em stages
+--stage1`/`--stage3` are stricter: they reject whenever the resolved
+destination equals `--prefix`'s own anchor, i.e. a bare `--prefix P` with no
+separate `--root` — the guard against building a full stage snapshot into the
+same tree the overlay uses for other purposes (`require_root_distinct_from_host`
+in `cli/topology.rs`; `--root` genuinely redirects the merge destination away
+from `P`, so `--prefix P --root R` passes). Live-verified:
+
+```bash
+em stages --prefix /tmp/native-prefix --stage1
+# !!! em stages --stage1 needs an explicit --root that doesn't equal the
+#     host install path (/tmp/native-prefix)
+
+em stages --prefix /tmp/native-prefix --root /tmp/native-stage1-prefix --stage1
+# >>> stage1 ready in /tmp/native-stage1-prefix
+```
+
+`--root` alone already satisfies this (base and destination are the same
+path, so there's no host tree to collide with), and `--local` is exempt too
+(self-contained by construction — bootstrapping straight into a bare
+`--local` is the intended recipe, not a footgun; see
+[`root-topology.md`](../design/root-topology.md#--local-and---prefix-setup)
+for the full `--local` lifecycle, including the known hard-cycle limit on
+completing a `--local` toolchain).
+
 ---
 
 ## Full setup — native (em only)
@@ -177,6 +204,24 @@ em stages --root /path/to/stage --stage3 -p --autosolve-use
 # or emptytree canary without stages:
 em --root /path/to/stage -pe @system --with-bdeps -p
 ```
+
+### 5. Using `--prefix` instead of `--root`
+
+An unprivileged, Gentoo-host overlay follows the same three steps, but
+`--stage1`/`--stage3` need an explicit `--root` too (see "Topology flags"
+above — `toolchain --setup` doesn't need it, `stages` does):
+
+```bash
+em setup --prefix /path/to/prefix                       # layout + overlay config
+em toolchain --setup --prefix /path/to/prefix \
+   --autounmask-write --jobs 8                           # host compiler builds the seed toolchain into the prefix
+em stages --prefix /path/to/prefix --root /path/to/stage \
+   --stage1 --autosolve-use --jobs 8                      # destination redirected to a separate --root
+```
+
+`em setup --prefix` on its own (no toolchain, no stage) is also a complete,
+standalone smoke test of the layout bootstrap — useful to confirm topology
+routing before committing to a real toolchain build.
 
 Exit code 1 with a printed “changes needed” block means
 `--autounmask-write` / config fix, then re-run (same as emerge).
