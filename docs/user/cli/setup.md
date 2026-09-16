@@ -63,7 +63,7 @@ How the solver and build scheduler behave.
   Default 1 (sequential).
 - **`-l --load-average <LOAD>`** — Maximum 1-minute load average allowed when starting additional parallel builds (`--jobs` > 1)
 
-  Once at least one job is running, further starts wait until load drops below LOAD (Portage `PollScheduler._can_add_job`). The first concurrent job is always allowed. Displayed on the `Jobs:` status line regardless.
+  Once at least one job is running, further starts wait until load drops below LOAD (matches real Portage's own load-average throttling). The first concurrent job is always allowed. Displayed on the `Jobs:` status line regardless.
 - **`--keep-going`** — Continue merging as much as possible even if some packages fail
 
   > **Warning:** Exists for portage parity; do not use it. A failed package must stop the run.

@@ -105,8 +105,8 @@ pub struct MergeFlags {
     /// > 1)
     ///
     /// Once at least one job is running, further starts wait until load drops below LOAD
-    /// (Portage `PollScheduler._can_add_job`). The first concurrent job is always allowed.
-    /// Displayed on the `Jobs:` status line regardless.
+    /// (matches real Portage's own load-average throttling). The first concurrent job is
+    /// always allowed. Displayed on the `Jobs:` status line regardless.
     #[usage(short = 'l', long, value_name = "LOAD")]
     pub load_average: Option<f64>,
 

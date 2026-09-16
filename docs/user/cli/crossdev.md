@@ -5,7 +5,7 @@
 
 `em crossdev` — cross-target setup, mirroring crossdev's option surface (the no-build subset for now; building the toolchain is future work).
 
-Deliberately no [`RootArg`]: none of `crossdev`'s three actions (`--init-target`/`--setup`/`--show-target-cfg`) read `--root` — it is a parse error after the applet, and a try_into reject in prefix position.
+`--root` is not accepted by `crossdev` — the cross toolchain always installs into `/usr/<tuple>` (or the target sysroot under `--target`); there is no separate destination to redirect.
 
 ## Flags
 - **`-L --llvm`** — Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no per-target compiler)
@@ -58,7 +58,7 @@ How the solver and build scheduler behave.
   Default 1 (sequential).
 - **`-l --load-average <LOAD>`** — Maximum 1-minute load average allowed when starting additional parallel builds (`--jobs` > 1)
 
-  Once at least one job is running, further starts wait until load drops below LOAD (Portage `PollScheduler._can_add_job`). The first concurrent job is always allowed. Displayed on the `Jobs:` status line regardless.
+  Once at least one job is running, further starts wait until load drops below LOAD (matches real Portage's own load-average throttling). The first concurrent job is always allowed. Displayed on the `Jobs:` status line regardless.
 - **`--keep-going`** — Continue merging as much as possible even if some packages fail
 
   > **Warning:** Exists for portage parity; do not use it. A failed package must stop the run.

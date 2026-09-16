@@ -159,17 +159,16 @@ pub fn parse_cli_or_exit() -> Validated {
     }
 }
 
-/// `default_subcommand_flags` routes a prefix flag (`em -ua @world`) into
-/// `emerge` without the word "emerge" itself. Once such a flag commits the
-/// line to the default command, a later word is always swallowed as an
-/// emerge argument — even the literal word `emerge` (`em --json emerge -p
-/// pkg` emerges a package named "emerge", not `pkg`). Write either the fully
-/// prefixed form or lead with `emerge` explicitly (`em emerge --json -p
-/// pkg`); don't mix a leading flag with a later explicit `emerge` word.
+/// A leading flag before any subcommand name routes into `emerge` (the
+/// default command) — e.g. `em -ua @world`. Once a flag does this, every
+/// later word is swallowed as an emerge argument, even the literal word
+/// `emerge` (`em --json emerge -p pkg` emerges a package named "emerge", not
+/// `pkg`). Write either the fully prefixed form or lead with `emerge`
+/// explicitly (`em emerge --json -p pkg`); don't mix a leading flag with a
+/// later explicit `emerge` word.
 ///
-/// This also means `-p`/`--pretend` (a [`PretendArg`], like every other
-/// per-applet flag below) only reaches a *named* applet in prefix
-/// position by coincidentally also being the default's flag: `em -p pkg`
+/// This also means `-p`/`--pretend` only reaches a *named* applet in prefix
+/// position by coincidentally also being emerge's own flag: `em -p pkg`
 /// previews an emerge, but `em -p toolchain` no longer selects `toolchain` —
 /// write `em toolchain -p` instead.
 #[derive(usage::Cli, Debug)]
@@ -2213,13 +2212,11 @@ pub enum Applet {
     /// default) and a usable `sync-type`/`sync-uri`. Named repos are synced
     /// regardless of `auto-sync`.
     ///
-    /// Default backends shell out to `git` / `rsync` (Portage parity). Build
-    /// with `--features sync-gix` for the experimental pure-gix git path.
+    /// Uses `git` / `rsync` (Portage parity) for the actual transfer.
     ///
-    /// Identical implementation to `em maint sync` — this top-level form
-    /// exists only because `sync` is common enough to deserve a short
-    /// invocation, matching real Portage having both `emerge --sync` and
-    /// `emaint sync`.
+    /// Same command as `em maint sync` — this top-level form exists only
+    /// because `sync` is common enough to deserve a short invocation,
+    /// matching real Portage having both `emerge --sync` and `emaint sync`.
     // Both dispatch to `crate::maint::sync::run`.
     #[usage(help = "Sync repositories (git, rsync)")]
     Sync(SyncArgs),
@@ -2844,9 +2841,9 @@ pub struct SetupArgs {
 /// `em crossdev` — cross-target setup, mirroring crossdev's option surface (the
 /// no-build subset for now; building the toolchain is future work).
 ///
-/// Deliberately no [`RootArg`]: none of `crossdev`'s three actions
-/// (`--init-target`/`--setup`/`--show-target-cfg`) read `--root` — it is a
-/// parse error after the applet, and a try_into reject in prefix position.
+/// `--root` is not accepted by `crossdev` — the cross toolchain always
+/// installs into `/usr/<tuple>` (or the target sysroot under `--target`);
+/// there is no separate destination to redirect.
 #[derive(usage::Args, Debug, Clone)]
 pub struct CrossdevArgs {
     /// Use the LLVM/Clang model (`cross_llvm-*`: host clang cross-targets, no per-target
