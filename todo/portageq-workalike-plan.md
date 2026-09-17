@@ -1,13 +1,29 @@
 # `em portageq` — implementation plan
 
-STATUS: plan drafted 2026-09-16, not started. `em portageq` currently exists
-only as a CLI shape (`PortageqArgs { command: String, args: Vec<String> }`)
-whose dispatch (`dispatch.rs`) does `bail!("not implemented: portageq")`. See
+STATUS: **partially implemented 2026-09-17** — the VDB group (step 2 of the
+implementation order below) is done: `has_version`, `best_version`, `match`,
+`mass_best_version`, in `portage-cli/src/portageq.rs`, wired as a real
+`#[usage(subcommand)]` enum on `PortageqArgs` (`cli.rs`). Unit-tested
+(`portageq::tests`, a throwaway `TestVdb` fixture) and live-verified against
+the real installed `portageq` (portage 3.0.82.2) for every documented case —
+hit, miss, invalid atom, missing `<EROOT>` — all byte-exact, including the
+`"Not a directory: '<x>'" / "Run portageq with --help for info"` error text.
+
+**Not yet done:** steps 3–7 below (settings/`envvar` group, repos group,
+metadata/contents/owners, `best_visible`, protect/eclass/license/
+`repos_config` tail) — still bare, not stubbed. `match`'s glob-style extended
+syntax (`cat/*`, `*/*`) is also not yet supported (falls through to
+"invalid atom" today); only plain dependency atoms and the empty-atom
+"match everything" case work so far. Comparison-test parity (§5's
+`#[ignore]` live-parity tests) has not been added yet either — only the
+manual live checks above.
+
+Original plan below, produced by reading real portage's `portageq` source
+(host portage 3.0.82.2) and verifying every format live, not from memory —
+still the design reference for the remaining tiers. See also
 [`unimplemented-surface.md`](./unimplemented-surface.md)'s "Standalone
-applets" section for the original "no known consumer" framing — this plan
-supersedes that with a concrete scope decision and implementation path,
-produced by reading real portage's `portageq` source (host portage 3.0.82.2)
-and verifying every format live, not from memory.
+applets" section for the original "no known consumer" framing this
+supersedes.
 
 ## 1. Survey: what real `portageq` actually is (host portage 3.0.82.2)
 

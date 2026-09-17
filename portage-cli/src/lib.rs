@@ -34,6 +34,7 @@ pub(crate) mod merge;
 pub(crate) mod mirrordist;
 pub(crate) mod news;
 pub(crate) mod pkg;
+pub(crate) mod portageq;
 pub(crate) mod postprocess;
 pub(crate) mod preflight;
 pub(crate) mod preserve_libs;

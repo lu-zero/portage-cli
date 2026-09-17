@@ -2370,14 +2370,66 @@ pub struct MaintArgs {
     pub vdb_arg: VdbArg,
 }
 
-/// `em portageq` — query Portage internal variables and data
+/// `em portageq` — a subset of Portage's own query interface (byte-compatible
+/// where implemented; see `todo/portageq-workalike-plan.md` for the full
+/// design and the tiers not yet implemented)
 #[derive(usage::Args, Debug, Clone)]
+#[usage(
+    effect = "read",
+    exit_code(0, "query succeeded"),
+    exit_code(1, "no match / unset variable"),
+    exit_code(2, "invalid atom"),
+    exit_code(64, "<EROOT> is not a directory"),
+    example = "em portageq has_version / sys-apps/portage"
+)]
 pub struct PortageqArgs {
-    /// portageq sub-command to run (e.g. `envvar`, `get_repos`)
-    pub command: String,
-    /// Arguments passed through to the sub-command
-    #[usage(double_dash = "automatic")]
-    pub args: Vec<String>,
+    #[usage(subcommand)]
+    pub command: PortageqCommand,
+}
+
+#[derive(usage::Subcommands, Debug, Clone)]
+pub enum PortageqCommand {
+    #[usage(
+        name = "has_version",
+        help = "Exit 0 if ATOM is installed under EROOT, 1 otherwise"
+    )]
+    HasVersion {
+        #[usage(value_name = "EROOT")]
+        eroot: String,
+        #[usage(value_name = "ATOM")]
+        atom: String,
+    },
+    #[usage(
+        name = "best_version",
+        help = "Print the highest installed version matching ATOM under EROOT"
+    )]
+    BestVersion {
+        #[usage(value_name = "EROOT")]
+        eroot: String,
+        #[usage(value_name = "ATOM")]
+        atom: String,
+    },
+    #[usage(
+        name = "match",
+        help = "List every installed CPV matching ATOM under EROOT, one per line"
+    )]
+    Match {
+        #[usage(value_name = "EROOT")]
+        eroot: String,
+        /// Empty string matches every installed package
+        #[usage(value_name = "ATOM")]
+        atom: String,
+    },
+    #[usage(
+        name = "mass_best_version",
+        help = "Print `atom:cpv` for each of several atoms' best installed version"
+    )]
+    MassBestVersion {
+        #[usage(value_name = "EROOT")]
+        eroot: String,
+        #[usage(value_name = "ATOM")]
+        atoms: Vec<String>,
+    },
 }
 
 /// `em sync` — sync repositories (git, rsync)

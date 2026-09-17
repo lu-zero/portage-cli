@@ -80,7 +80,7 @@ tractable and making the rest say what they actually are:
   `em clean all`, which sweeps distfiles, binary packages and the retained
   build logs in one pass — see §2.
 
-## 4. Standalone applets — `grep` IMPLEMENTED 2026-09-17, `portageq` still open
+## 4. Standalone applets — `grep` IMPLEMENTED 2026-09-17, `portageq` partial (VDB group only)
 
 ```
 dispatch.rs:124  portageq   dispatch.rs:246  grep
@@ -101,13 +101,16 @@ survey of the real binaries (`portageq`, `qgrep`) found most of the surface
 is a thin adapter over internals `em` already has, which changes the cost
 side of that tradeoff.
 
-**Update 2026-09-17 — `em grep` implemented.** See
-[`grep-qgrep-workalike-plan.md`](./grep-qgrep-workalike-plan.md) for the
+**Update 2026-09-17 — `em grep` implemented, `em portageq` started.** See
+[`grep-qgrep-workalike-plan.md`](./grep-qgrep-workalike-plan.md) for grep's
 full design and live parity-test results; `grep` is no longer a stub.
-`portageq` is still not implemented — see
-[`portageq-workalike-plan.md`](./portageq-workalike-plan.md) (tiered scope,
-byte-exact output/exit-code spec per subcommand, verified against host
-portage 3.0.82.2) if it's picked up.
+`portageq` now implements its VDB group (`has_version`/`best_version`/
+`match`/`mass_best_version`, live-verified byte-exact against real
+`portageq`) — see
+[`portageq-workalike-plan.md`](./portageq-workalike-plan.md) for what
+that covers and what's still missing (settings/`envvar`, repos,
+metadata/contents/owners, `best_visible`, and the protect/eclass/license
+tail).
 
 ## Not a gap
 

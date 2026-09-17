@@ -12,7 +12,8 @@ use usage::{RunAsyncWith, RunWith};
 use crate::cli::{
     self, ActiveArgs, Applet, AtomArgs, CleanArgs, CompletionArgs, CrossdevArgs, DepcleanArgs,
     EbuildArgs, EmergeArgs, EnvArgs, EtcArgs, GrepArgs, HelperArgs, LogArgs, LogCommand, MaintArgs,
-    MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, QueryArgs, QueryCommand, QuickpkgArgs,
+    MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, PortageqCommand, QueryArgs, QueryCommand,
+    QuickpkgArgs,
     ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs, StagesArgs, SyncArgs,
     ToolchainArgs, UseArgs, WorkerArgs,
 };
@@ -150,7 +151,19 @@ impl RunAsyncWith<&cli::Cli> for PortageqArgs {
     type Output = Result<()>;
 
     async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
-        bail!("not implemented: portageq")
+        let status = match &self.command {
+            PortageqCommand::HasVersion { eroot, atom } => crate::portageq::has_version(eroot, atom),
+            PortageqCommand::BestVersion { eroot, atom } => crate::portageq::best_version(eroot, atom),
+            PortageqCommand::Match { eroot, atom } => crate::portageq::run_match(eroot, atom),
+            PortageqCommand::MassBestVersion { eroot, atoms } => {
+                crate::portageq::mass_best_version(eroot, atoms)
+            }
+        }?;
+        if status != 0 {
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            std::process::exit(status as i32);
+        }
+        Ok(())
     }
 }
 
