@@ -1,7 +1,7 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em query check`
 
-- **Usage:** `em query check <ATOM>…`
+- **Usage:** `em query check [--format <FORMAT>] <ATOM>…`
 
 Verify checksums of installed package
 
@@ -9,6 +9,11 @@ Verify checksums of installed package
 - **`<ATOM>…`** — Installed package atom(s) to verify
 
 ## Flags
+- **`--format <FORMAT>`**
+
+  **Choices:** `pretty`, `json`
+
+  **Default:** `pretty`
 - **`-h --help`** — Print help
 
 ## Output Formats

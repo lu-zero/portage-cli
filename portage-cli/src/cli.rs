@@ -16,7 +16,7 @@ mod emerge_mode;
 mod merge_flags;
 mod topology;
 pub use activity::ActivityArgs;
-pub use context::{ArchArg, PretendArg, QuietArg, RepoArg, VdbArg, VerboseArg};
+pub use context::{ArchArg, FormatArg, OutputFormat, PretendArg, QuietArg, RepoArg, VdbArg, VerboseArg};
 pub use depgraph_flags::DepgraphFlags;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
@@ -3668,6 +3668,8 @@ pub enum QueryCommand {
         /// Installed package atom(s) to verify
         #[usage(required)]
         atom: Vec<String>,
+        #[usage(flatten)]
+        format_arg: FormatArg,
     },
     #[usage(help = "List packages depending on an atom", alias_hidden = "d")]
     Depends {
@@ -3740,6 +3742,8 @@ pub enum QueryCommand {
         /// Atom(s) to show keyword status for
         #[usage(required)]
         atom: Vec<String>,
+        #[usage(flatten)]
+        format_arg: FormatArg,
     },
     #[usage(help = "List installed/available packages matching a pattern")]
     List {
@@ -3757,6 +3761,8 @@ pub enum QueryCommand {
         /// Atom(s) whose metadata to display
         #[usage(required)]
         atom: Vec<String>,
+        #[usage(flatten)]
+        format_arg: FormatArg,
     },
     #[usage(help = "Display total file size of a package", alias_hidden = "s")]
     Size {

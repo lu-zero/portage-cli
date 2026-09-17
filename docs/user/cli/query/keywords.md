@@ -1,7 +1,7 @@
 <!-- @generated from em's usage spec; do not edit -->
 # `em query keywords`
 
-- **Usage:** `em query keywords <ATOM>…`
+- **Usage:** `em query keywords [--format <FORMAT>] <ATOM>…`
 
 Display keyword status across architectures
 
@@ -9,6 +9,11 @@ Display keyword status across architectures
 - **`<ATOM>…`** — Atom(s) to show keyword status for
 
 ## Flags
+- **`--format <FORMAT>`**
+
+  **Choices:** `pretty`, `json`
+
+  **Default:** `pretty`
 - **`-h --help`** — Print help
 
 ## Output Formats

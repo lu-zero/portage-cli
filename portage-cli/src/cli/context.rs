@@ -94,3 +94,26 @@ pub struct VdbArg {
     #[usage(long, global, value_name = "PATH", value_hint = usage::ValueHint::DirPath)]
     pub vdb: Option<String>,
 }
+
+/// `--format`, for subcommands whose output has a genuinely structured shape
+/// (a matrix, a multi-field record, a list of pass/fail results) worth
+/// offering as JSON alongside the human-readable default. A lighter sibling
+/// of `query::depgraph`'s own `DepgraphFormat` (which also has `tree`, a
+/// shape specific to dependency graphs) for the common two-way case;
+/// extend `OutputFormat` with more variants here if another shape becomes
+/// useful across more than one subcommand.
+#[derive(usage::Args, Debug, Clone, Default)]
+pub struct FormatArg {
+    #[usage(long, value_enum, default = "pretty")]
+    pub format: OutputFormat,
+}
+
+/// See [`FormatArg`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, usage::ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable text (default)
+    #[default]
+    Pretty,
+    /// Machine-parsable JSON
+    Json,
+}

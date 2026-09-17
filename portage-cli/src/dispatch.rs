@@ -536,9 +536,9 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             vdb::query_belongs(&vdb, file);
             Ok(())
         }
-        QueryCommand::Check { atom } => {
+        QueryCommand::Check { atom, format_arg } => {
             let vdb = open_cli_vdb(globals)?;
-            query::check::run(&vdb, atom)
+            query::check::run(&vdb, atom, format_arg.format)
         }
         QueryCommand::Depends { atom } => {
             let vdb = open_cli_vdb(globals).ok();
@@ -646,13 +646,14 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
         QueryCommand::Hasuse { flag } => {
             query::hasuse::run(&std::path::PathBuf::from(globals.repo_path()), flag)
         }
-        QueryCommand::Keywords { atom } => {
+        QueryCommand::Keywords { atom, format_arg } => {
             let vdb = open_cli_vdb(globals).ok();
             query::keywords::run(
                 &std::path::PathBuf::from(globals.repo_path()),
                 vdb.as_ref(),
                 query::ResolveMode::Error,
                 atom,
+                format_arg.format,
             )
         }
         QueryCommand::List { installed, pattern } => {
@@ -664,13 +665,14 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 query::list::run(&std::path::PathBuf::from(globals.repo_path()), pattern)
             }
         }
-        QueryCommand::Meta { atom } => {
+        QueryCommand::Meta { atom, format_arg } => {
             let vdb = open_cli_vdb(globals).ok();
             query::meta::run(
                 &std::path::PathBuf::from(globals.repo_path()),
                 vdb.as_ref(),
                 query::ResolveMode::Error,
                 atom,
+                format_arg.format,
             )
         }
         QueryCommand::Size { atom } => {
