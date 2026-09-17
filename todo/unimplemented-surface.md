@@ -80,7 +80,7 @@ tractable and making the rest say what they actually are:
   `em clean all`, which sweeps distfiles, binary packages and the retained
   build logs in one pass — see §2.
 
-## 4. Standalone applets
+## 4. Standalone applets — `grep` IMPLEMENTED 2026-09-17, `portageq` still open
 
 ```
 dispatch.rs:124  portageq   dispatch.rs:246  grep
@@ -94,6 +94,20 @@ eclasses call the *installed* portage's `portageq`, not ours. `grep` is a
 
 Both currently bail cleanly (the debug lines they used to print before
 bailing were dropped in `2b753fc`).
+
+**Update 2026-09-16 — concrete implementation plans drafted.** The
+"measured, not worth it" call below stands on *demand*, but a follow-up
+survey of the real binaries (`portageq`, `qgrep`) found most of the surface
+is a thin adapter over internals `em` already has, which changes the cost
+side of that tradeoff.
+
+**Update 2026-09-17 — `em grep` implemented.** See
+[`grep-qgrep-workalike-plan.md`](./grep-qgrep-workalike-plan.md) for the
+full design and live parity-test results; `grep` is no longer a stub.
+`portageq` is still not implemented — see
+[`portageq-workalike-plan.md`](./portageq-workalike-plan.md) (tiered scope,
+byte-exact output/exit-code spec per subcommand, verified against host
+portage 3.0.82.2) if it's picked up.
 
 ## Not a gap
 

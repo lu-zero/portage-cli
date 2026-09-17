@@ -67,6 +67,7 @@ terminal_size = { workspace = true }
 camino = { workspace = true }
 aho-corasick = { workspace = true }
 memchr = { workspace = true }
+regex = { workspace = true }
 ldconfig = { workspace = true }
 gentoo-core = { workspace = true }
 portage-atom = { workspace = true, features = ["serde"] }

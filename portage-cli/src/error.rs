@@ -23,3 +23,10 @@ pub struct ConfigChangesNeeded;
 #[derive(Debug, thiserror::Error)]
 #[error("no valid atoms (see warnings above)")]
 pub struct NoValidAtoms;
+
+/// `em grep` found no matches — same pattern as [`NoValidAtoms`]: drives a
+/// quiet, non-zero exit (grep convention) without an extra "no matches"
+/// line on top of the (empty) search output.
+#[derive(Debug, thiserror::Error)]
+#[error("no matches")]
+pub struct NoMatches;

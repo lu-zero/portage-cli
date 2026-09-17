@@ -90,6 +90,7 @@ fn main() {
         if e.downcast_ref::<portage_cli::ConfigChangesNeeded>()
             .is_none()
             && e.downcast_ref::<portage_cli::NoValidAtoms>().is_none()
+            && e.downcast_ref::<portage_cli::NoMatches>().is_none()
         {
             portage_cli::print_fatal_error(&e);
         }

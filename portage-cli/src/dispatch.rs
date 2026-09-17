@@ -306,8 +306,28 @@ impl RunAsyncWith<&cli::Cli> for ReadArgs {
 impl RunAsyncWith<&cli::Cli> for GrepArgs {
     type Output = Result<()>;
 
-    async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
-        bail!("not implemented: grep")
+    async fn run_async_with(self, cli: &cli::Cli) -> Self::Output {
+        let opts = crate::grep::Options {
+            pattern: self.pattern,
+            targets: self.targets,
+            invert_match: self.invert_match,
+            ignore_case: self.ignore_case,
+            atom_name: self.atom_name,
+            count: self.count,
+            list: self.list,
+            list_invert: self.list_invert,
+            regexp: self.regexp,
+            installed: self.installed,
+            eclass: self.eclass,
+            skip_comments: self.skip_comments,
+            show_repo: self.show_repo,
+            skip: self.skip,
+            before: self.before.unwrap_or(0),
+            after: self.after.unwrap_or(0),
+            no_filename: self.no_filename,
+            line_numbers: cli.verbose() >= 1,
+        };
+        crate::grep::run(cli, opts).await
     }
 }
 

@@ -245,6 +245,7 @@ impl Cli {
             Some(Applet::Search(a)) => Some(a.topology.split().0),
             Some(Applet::Select(a)) => Some(a.topology.split().0),
             Some(Applet::Env(a)) => Some(a.topology.split().0),
+            Some(Applet::Grep(a)) => Some(a.topology.split().0),
             Some(Applet::Crossdev(a)) => Some(a.topology.clone()),
             Some(Applet::Active(a)) => Some(a.topology.clone()),
             _ => None,
@@ -279,6 +280,7 @@ impl Cli {
             Some(Applet::Search(a)) => a.topology.root.as_deref(),
             Some(Applet::Select(a)) => a.topology.root.as_deref(),
             Some(Applet::Env(a)) => a.topology.root.as_deref(),
+            Some(Applet::Grep(a)) => a.topology.root.as_deref(),
             _ => None,
         }
     }
@@ -447,6 +449,7 @@ impl Cli {
             Some(Applet::Sync(a)) => a.verbose_arg.verbose,
             Some(Applet::Regen(a)) => a.verbose_arg.verbose,
             Some(Applet::Query(a)) => a.verbose_arg.verbose,
+            Some(Applet::Grep(a)) => a.verbose_arg.verbose,
             _ => 0,
         }
     }
@@ -522,6 +525,7 @@ impl Cli {
             Some(Applet::Maint(a)) => a.repo_arg.repo.clone(),
             Some(Applet::Search(a)) => a.repo_arg.repo.clone(),
             Some(Applet::Ebuild(a)) => a.repo_arg.repo.clone(),
+            Some(Applet::Grep(a)) => a.repo_arg.repo.clone(),
             _ => None,
         }
     }
@@ -2677,14 +2681,89 @@ pub struct LogArgs {
     pub topology: RootedTopology,
 }
 
-/// `em grep` — search inside ebuilds and eclasses
+/// `em grep` — search inside ebuilds and eclasses (qgrep workalike)
 #[derive(usage::Args, Debug, Clone)]
+#[usage(effect = "read", example = "em grep PYTHON_COMPAT dev-python/setuptools")]
 pub struct GrepArgs {
-    /// Pattern to search for
+    /// Pattern to search for (a literal substring unless -e/-x)
     pub pattern: String,
-    /// Restrict the search to these ebuild/eclass paths (default: the whole repo)
+
+    /// Restrict the search to these atoms (`cat/pkg`, `cat/`, a bare package
+    /// name, or a full dependency atom like `>=cat/pkg-1.2`); default: every
+    /// package in scope
     #[usage(double_dash = "automatic")]
-    pub paths: Vec<String>,
+    pub targets: Vec<String>,
+
+    /// Invert the match: print lines that do NOT match
+    #[usage(short = 'I', long = "invert-match")]
+    pub invert_match: bool,
+
+    /// Case-insensitive match
+    #[usage(short = 'i', long = "ignore-case")]
+    pub ignore_case: bool,
+
+    /// Label matches with `cat/pkg-ver` instead of the ebuild's path
+    #[usage(short = 'N', long = "atom-name")]
+    pub atom_name: bool,
+
+    /// Print each matching file's label and its match count instead of the
+    /// matching lines
+    #[usage(short = 'c', long = "count", conflicts("list", "list_invert"))]
+    pub count: bool,
+
+    /// Print only the labels of files that match
+    #[usage(short = 'l', long = "list", conflicts("count", "list_invert"))]
+    pub list: bool,
+
+    /// Print only the labels of files that do NOT match
+    #[usage(short = 'L', long = "invert-list", conflicts("count", "list"))]
+    pub list_invert: bool,
+
+    /// Treat PATTERN (and -S) as a regular expression instead of a literal
+    /// substring
+    #[usage(short = 'e', long = "regexp", short = 'x', long = "extended")]
+    pub regexp: bool,
+
+    /// Search installed packages' own ebuild copies (under
+    /// --root/--prefix/--local) instead of the repo tree
+    #[usage(short = 'J', long = "installed")]
+    pub installed: bool,
+
+    /// Search eclasses instead of ebuilds (targets are ignored)
+    #[usage(short = 'E', long = "eclass")]
+    pub eclass: bool,
+
+    /// Skip lines that are comments (first non-blank character is `#`)
+    #[usage(short = 's', long = "skip-comments")]
+    pub skip_comments: bool,
+
+    /// Label matches with `cat/pkg-ver::repo` instead of a path; implies -N
+    #[usage(short = 'R', long = "show-repo")]
+    pub show_repo: bool,
+
+    /// Also skip lines matching this pattern (same literal/regex/case mode
+    /// as PATTERN)
+    #[usage(short = 'S', long = "skip", value_name = "PATTERN")]
+    pub skip: Option<String>,
+
+    /// Print N lines of context before each match
+    #[usage(short = 'B', long = "before", value_name = "N")]
+    pub before: Option<usize>,
+
+    /// Print N lines of context after each match
+    #[usage(short = 'A', long = "after", value_name = "N")]
+    pub after: Option<usize>,
+
+    /// Print bare matching lines with no label
+    #[usage(short = 'q', long = "no-filename")]
+    pub no_filename: bool,
+
+    #[usage(flatten)]
+    pub topology: RootedTopology,
+    #[usage(flatten)]
+    pub repo_arg: RepoArg,
+    #[usage(flatten)]
+    pub verbose_arg: VerboseArg,
 }
 
 /// `em search` — search package names and descriptions

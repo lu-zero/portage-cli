@@ -27,6 +27,20 @@ fn em(args: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// Like [`q`], but doesn't assert exit status: `qgrep` exits 1 whenever it
+/// is given atom targets at all, matches or not (confirmed live, portage-utils
+/// 0.97.1: `qgrep -l EAPI=8 dev-python/setuptools` prints real hits and still
+/// exits 1; the same query with no targets exits 0) — a real quirk, not a
+/// grep-style "no match" signal, so target-restricted `qgrep` comparisons
+/// must only compare stdout.
+fn q_output_only(args: &str) -> String {
+    let output = Command::new(args.split_whitespace().next().unwrap())
+        .args(args.split_whitespace().skip(1))
+        .output()
+        .expect("failed to run comparison tool");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
 fn q(args: &str) -> String {
     let output = Command::new(args.split_whitespace().next().unwrap())
         .args(args.split_whitespace().skip(1))
@@ -119,4 +133,51 @@ fn installed_count_matches_qlist() {
         em_count, q_count,
         "installed package count mismatch: em={em_count} qlist={q_count}"
     );
+}
+
+#[test]
+#[ignore]
+fn grep_default_matches_qgrep() {
+    let em_out = em("grep PYTHON_COMPAT dev-python/setuptools");
+    let q_out = q_output_only("qgrep PYTHON_COMPAT dev-python/setuptools");
+    assert_eq!(em_out, q_out);
+}
+
+#[test]
+#[ignore]
+fn grep_atom_name_matches_qgrep() {
+    let em_out = em("grep -N EAPI=8 dev-python/setuptools");
+    let q_out = q_output_only("qgrep -N EAPI=8 dev-python/setuptools");
+    assert_eq!(em_out, q_out);
+}
+
+#[test]
+#[ignore]
+fn grep_list_matches_qgrep() {
+    let em_out = em("grep -l PYTHON_COMPAT dev-python/setuptools");
+    let q_out = q_output_only("qgrep -l PYTHON_COMPAT dev-python/setuptools");
+    assert_eq!(em_out, q_out);
+}
+
+#[test]
+#[ignore]
+fn grep_count_matches_qgrep() {
+    let em_out = em("grep -c PYTHON_COMPAT dev-python/setuptools");
+    let q_out = q_output_only("qgrep -c PYTHON_COMPAT dev-python/setuptools");
+    assert_eq!(em_out, q_out);
+}
+
+#[test]
+#[ignore]
+fn grep_eclass_matches_qgrep() {
+    // Same line set, different order: `em grep -E` walks eclasses sorted by
+    // name (deterministic); qgrep's own order is directory-iteration order.
+    // Sort both before comparing.
+    let em_out = em("grep -E EXPORT_FUNCTIONS");
+    let q_out = q("qgrep -E EXPORT_FUNCTIONS");
+    let mut em_lines: Vec<&str> = em_out.lines().collect();
+    let mut q_lines: Vec<&str> = q_out.lines().collect();
+    em_lines.sort_unstable();
+    q_lines.sort_unstable();
+    assert_eq!(em_lines, q_lines);
 }

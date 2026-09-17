@@ -26,6 +26,7 @@ pub(crate) mod etc;
 #[cfg(feature = "sync-gix")]
 pub(crate) mod gix_ext;
 pub(crate) mod glsa;
+pub(crate) mod grep;
 pub(crate) mod info;
 pub(crate) mod interrupt;
 pub(crate) mod maint;
@@ -60,7 +61,7 @@ pub use activity::{
     estimate_remaining, estimate_remaining_with_blockers,
 };
 pub(crate) use emerge::{EmergeOpts, emerge_atoms};
-pub use error::{ConfigChangesNeeded, NoValidAtoms};
+pub use error::{ConfigChangesNeeded, NoMatches, NoValidAtoms};
 
 /// Dispatch one parsed invocation to its applet or the default emerge path
 pub async fn run(cli: &cli::Cli) -> error::Result<()> {

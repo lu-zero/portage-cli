@@ -80,7 +80,7 @@
 - [`em log list [LIMIT]`](log/list.md)
 - [`em log time [ATOM]`](log/time.md)
 - [`em log predict`](log/predict.md)
-- [`em grep <PATTERN> [PATHS]…`](grep.md)
+- [`em grep [FLAGS] <PATTERN> [TARGETS]…`](grep.md)
 - [`em search [FLAGS] [PATTERN]`](search.md)
 - [`em atom <ATOMS>…`](atom.md)
 - [`em select [FLAGS] <SUBCOMMAND>`](select.md)
