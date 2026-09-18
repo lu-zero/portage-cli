@@ -150,6 +150,16 @@ inherits = "release"
 debug = 1
 lto = false
 
+# Unreleased usage-rs (default_subcommand_help, jdx/usage#1424, plus the
+# global-flag dedup fix for the appended page). Drop this once the next
+# release ships. The untracked .cargo/config.toml path patch overrides it locally.
+[patch.crates-io]
+usage-rs = { git = "https://github.com/lu-zero/usage", rev = "c46e1259" }
+usage-lib = { git = "https://github.com/lu-zero/usage", rev = "c46e1259" }
+usage-argv = { git = "https://github.com/lu-zero/usage", rev = "c46e1259" }
+usage-derive = { git = "https://github.com/lu-zero/usage", rev = "c46e1259" }
+usage-test = { git = "https://github.com/lu-zero/usage", rev = "c46e1259" }
+
 # Thin LTO: real cross-crate optimization (unlike profiling's lto=false)
 # at a fraction of release's full-LTO link cost. Use `--profile quick`
 # while iterating; switch to `--release` for anything you'll benchmark or
