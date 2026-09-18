@@ -16,6 +16,7 @@ use crate::cli::Cli;
 /// routes through `Regex` (an escaped, case-insensitive pattern) so there is
 /// exactly one case-folding code path.
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)] // built once or twice per run; boxing only adds a hop per line
 enum Matcher {
     Literal(memchr::memmem::Finder<'static>),
     Regex(regex::Regex),
