@@ -4,7 +4,7 @@
 //!
 //! Three applet-facing shapes, not one:
 //! - [`RootedTopology`] — all 5 fields, `global` inner fields, flattened onto
-//!   the 22 applets that accept `--root` (everything [`crate::cli::Cli::applet_root_arg`]
+//!   the 22 applets that accept `--root` (everything `Cli::applet_root_arg`
 //!   used to list).
 //! - [`Topology`] — the same 4 fields minus `--root`, `global` inner fields,
 //!   flattened bare onto `Crossdev`/`Active` — the 2 applets that need the
@@ -104,7 +104,7 @@ pub struct Topology {
 /// Installation root override — the offset an applet installs into / queries.
 ///
 /// Also settable via `ROOT` in the environment (lowest precedence), applied
-/// once by [`resolved_root`]. Purely an internal resolution-parameter type
+/// once by `resolved_root`. Purely an internal resolution-parameter type
 /// now (not flattened onto any applet directly): `--root` isn't universally
 /// applicable the way `Topology`'s fields are (`crossdev`/`active`/`worker`
 /// reject it; see `Cli::validate`), so it travels bundled into
@@ -124,12 +124,10 @@ pub fn resolved_root(root: &RootArg) -> Option<String> {
 }
 
 /// [`Topology`]'s 4 fields plus `--root`, flattened as one mixin on the 22
-/// applets that need both (everything [`Cli::applet_root_arg`] used to list —
+/// applets that need both (everything `Cli::applet_root_arg` used to list —
 /// `RootArg` is no longer flattened on its own anywhere). Inner fields stay
 /// `global` so they cascade into e.g. `em maint sync --root R`, same as
 /// `Topology`'s did and `RootArg`'s used to.
-///
-/// [`Cli::applet_root_arg`]: crate::cli::Cli::applet_root_arg
 #[derive(usage::Args, Debug, Clone, Default)]
 #[usage(
     next_help_heading = "Roots",
