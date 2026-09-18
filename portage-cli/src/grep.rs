@@ -578,7 +578,12 @@ mod tests {
         let mut opts = scan_opts(&matcher, None);
         opts.before = 1;
         opts.after = 1;
-        scan_file(&mut out, "pkg/pkg-1.ebuild", "before\nhit here\nafter", &opts);
+        scan_file(
+            &mut out,
+            "pkg/pkg-1.ebuild",
+            "before\nhit here\nafter",
+            &opts,
+        );
         assert_eq!(
             out,
             "pkg/pkg-1.ebuild-before\npkg/pkg-1.ebuild:hit here\npkg/pkg-1.ebuild-after\n"

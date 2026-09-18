@@ -16,7 +16,9 @@ mod emerge_mode;
 mod merge_flags;
 mod topology;
 pub use activity::ActivityArgs;
-pub use context::{ArchArg, FormatArg, OutputFormat, PretendArg, QuietArg, RepoArg, VdbArg, VerboseArg};
+pub use context::{
+    ArchArg, FormatArg, OutputFormat, PretendArg, QuietArg, RepoArg, VdbArg, VerboseArg,
+};
 pub use depgraph_flags::DepgraphFlags;
 pub use emerge_mode::EmergeModeArgs;
 pub use merge_flags::MergeFlags;
@@ -494,7 +496,7 @@ impl Cli {
         }
     }
 
-    /// The dispatched applet's own `--arch`, or [`default_arch`] for an
+    /// The dispatched applet's own `--arch`, or `default_arch` for an
     /// applet that doesn't carry [`ArchArg`].
     pub fn arch(&self) -> Arch {
         match &self.applet {
@@ -2116,7 +2118,6 @@ mod tests {
         assert!(applet.mode().resume);
         assert!(applet.merge_flags().keep_going);
     }
-
 }
 
 /// Hidden `em __worker` install child — spawned per package by `build_and_merge`.
@@ -2735,7 +2736,10 @@ pub struct LogArgs {
 
 /// `em grep` — search inside ebuilds and eclasses (qgrep workalike)
 #[derive(usage::Args, Debug, Clone)]
-#[usage(effect = "read", example = "em grep PYTHON_COMPAT dev-python/setuptools")]
+#[usage(
+    effect = "read",
+    example = "em grep PYTHON_COMPAT dev-python/setuptools"
+)]
 pub struct GrepArgs {
     /// Pattern to search for (a literal substring unless -e/-x)
     pub pattern: String,

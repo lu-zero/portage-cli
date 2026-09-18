@@ -13,9 +13,8 @@ use crate::cli::{
     self, ActiveArgs, Applet, AtomArgs, CleanArgs, CompletionArgs, CrossdevArgs, DepcleanArgs,
     EbuildArgs, EmergeArgs, EnvArgs, EtcArgs, GrepArgs, HelperArgs, LogArgs, LogCommand, MaintArgs,
     MaintCommand, MirrorDistArgs, PkgArgs, PortageqArgs, PortageqCommand, QueryArgs, QueryCommand,
-    QuickpkgArgs,
-    ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs, StagesArgs, SyncArgs,
-    ToolchainArgs, UseArgs, WorkerArgs,
+    QuickpkgArgs, ReadArgs, RegenArgs, RevdepArgs, SearchArgs, SelectArgs, SetupArgs, StagesArgs,
+    SyncArgs, ToolchainArgs, UseArgs, WorkerArgs,
 };
 use crate::crossdev;
 use crate::ebuild;
@@ -152,8 +151,12 @@ impl RunAsyncWith<&cli::Cli> for PortageqArgs {
 
     async fn run_async_with(self, _cli: &cli::Cli) -> Self::Output {
         let status = match &self.command {
-            PortageqCommand::HasVersion { eroot, atom } => crate::portageq::has_version(eroot, atom),
-            PortageqCommand::BestVersion { eroot, atom } => crate::portageq::best_version(eroot, atom),
+            PortageqCommand::HasVersion { eroot, atom } => {
+                crate::portageq::has_version(eroot, atom)
+            }
+            PortageqCommand::BestVersion { eroot, atom } => {
+                crate::portageq::best_version(eroot, atom)
+            }
             PortageqCommand::Match { eroot, atom } => crate::portageq::run_match(eroot, atom),
             PortageqCommand::MassBestVersion { eroot, atoms } => {
                 crate::portageq::mass_best_version(eroot, atoms)
@@ -573,7 +576,8 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
             let roots = globals.roots();
             // So bare-name atoms can resolve to an overlay-only package, not
             // just the main repo — see `query::resolve_atom`'s doc.
-            let set = crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo_flag().is_none());
+            let set =
+                crate::repo_open::repo_set_from_conf(repo, &roots, globals.repo_flag().is_none());
             let parsed = query::resolve_atoms(atom, &set, vdb.as_ref(), query::ResolveMode::Error);
             let atoms: Vec<query::depgraph::TargetAtom> = parsed
                 .iter()

@@ -203,7 +203,11 @@ async fn setup(
         false,
     );
     let mut out = anstream::stdout();
-    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() {
+        "Plan"
+    } else {
+        "Bootstrap"
+    };
     writeln!(
         out,
         "\n{C_LABEL}{verb} cross toolchain{C_LABEL:#} ({}) — {} steps:",
@@ -568,7 +572,11 @@ pub(crate) async fn toolchain(args: &crate::cli::ToolchainArgs, globals: &Cli) -
     let prefix_guest = native_prefix_guest(globals, &roots).await;
     let plan = stages::toolchain_plan(&stages::BootstrapKind::Native, true, prefix_guest);
     let mut out = anstream::stdout();
-    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() {
+        "Plan"
+    } else {
+        "Bootstrap"
+    };
     writeln!(
         out,
         "\n{C_LABEL}{verb} native toolchain{C_LABEL:#} into {merge_root} — {} steps:",
@@ -635,7 +643,11 @@ fn require_explicit_root_under_target(
     args: &crate::cli::StagesArgs,
     action: &str,
 ) -> Result<()> {
-    let root = args.topology.root.as_deref().or(globals.root_topology.root.as_deref());
+    let root = args
+        .topology
+        .root
+        .as_deref()
+        .or(globals.root_topology.root.as_deref());
     if globals.target().is_some() && root.is_none() {
         bail!(
             "{action} requires --root under --target: pass --root <board dir> \
@@ -656,7 +668,11 @@ async fn run_stage1(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     let plan = stages::stage1_plan(&stack, &bootstrap_use)?;
     let refresh = maybe_weave_in_gcc_update(&stack, globals).await;
     let mut out = anstream::stdout();
-    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() {
+        "Plan"
+    } else {
+        "Bootstrap"
+    };
 
     // Cross-compiler refresh installs into the outer EROOT, never the
     // `--target` sysroot that stage1 packages below use.
@@ -735,7 +751,11 @@ async fn run_stage3(args: &crate::cli::StagesArgs, globals: &Cli) -> Result<()> 
     let merge_root = roots.merge_root();
     globals.require_root_distinct_from_host(&roots, "em stages --stage3")?;
     let mut out = anstream::stdout();
-    let verb = if globals.pretend() { "Plan" } else { "Bootstrap" };
+    let verb = if globals.pretend() {
+        "Plan"
+    } else {
+        "Bootstrap"
+    };
     writeln!(
         out,
         "\n{C_LABEL}{verb} stage3{C_LABEL:#} into {merge_root} — emptytree @system (-e -uD --with-bdeps)"

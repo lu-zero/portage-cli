@@ -126,9 +126,12 @@ pub(crate) fn mass_best_version(eroot: &str, atoms: &[String]) -> Result<u8> {
     }
     let pkgs = installed_packages(eroot);
     for atom in atoms {
-        let best = Dep::parse(atom)
-            .ok()
-            .and_then(|dep| pkgs.iter().filter(|p| matches(&dep, p)).map(|p| p.cpv()).max());
+        let best = Dep::parse(atom).ok().and_then(|dep| {
+            pkgs.iter()
+                .filter(|p| matches(&dep, p))
+                .map(|p| p.cpv())
+                .max()
+        });
         match best {
             Some(cpv) => println!("{atom}:{cpv}"),
             None => println!("{atom}:"),
@@ -173,10 +176,7 @@ mod tests {
     fn has_version_hit_and_miss() {
         let vdb = TestVdb::new();
         vdb.add("dev-python/setuptools-83.0.0", "0");
-        assert_eq!(
-            has_version(&vdb.eroot, "dev-python/setuptools").unwrap(),
-            0
-        );
+        assert_eq!(has_version(&vdb.eroot, "dev-python/setuptools").unwrap(), 0);
         assert_eq!(has_version(&vdb.eroot, "dev-python/pip").unwrap(), 1);
     }
 
@@ -188,7 +188,10 @@ mod tests {
 
     #[test]
     fn has_version_missing_eroot() {
-        assert_eq!(has_version("/no/such/eroot", "dev-lang/python").unwrap(), 64);
+        assert_eq!(
+            has_version("/no/such/eroot", "dev-lang/python").unwrap(),
+            64
+        );
     }
 
     #[test]
@@ -199,13 +202,19 @@ mod tests {
         let vdb = TestVdb::new();
         vdb.add("dev-python/setuptools-79.0.1", "0");
         vdb.add("dev-python/setuptools-83.0.0", "0");
-        assert_eq!(best_version(&vdb.eroot, "dev-python/setuptools").unwrap(), 0);
+        assert_eq!(
+            best_version(&vdb.eroot, "dev-python/setuptools").unwrap(),
+            0
+        );
     }
 
     #[test]
     fn best_version_no_match_still_exits_zero() {
         let vdb = TestVdb::new();
-        assert_eq!(best_version(&vdb.eroot, "dev-python/setuptools").unwrap(), 0);
+        assert_eq!(
+            best_version(&vdb.eroot, "dev-python/setuptools").unwrap(),
+            0
+        );
     }
 
     #[test]

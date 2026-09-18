@@ -22,7 +22,10 @@ struct VersionKeywords {
 /// Every version's keyword row for one resolved atom, and the full arch set
 /// seen across all of them (a version missing an arch just has no entry —
 /// "unkeyworded there", not `Disabled`).
-fn collect_keywords(repo: &portage_repo::Repository, matches: &[&portage_repo::Ebuild]) -> Vec<VersionKeywords> {
+fn collect_keywords(
+    repo: &portage_repo::Repository,
+    matches: &[&portage_repo::Ebuild],
+) -> Vec<VersionKeywords> {
     matches
         .iter()
         .map(|ebuild| {
@@ -60,7 +63,12 @@ fn print_pretty(rows: &[VersionKeywords]) {
     }
     let arches: Vec<&str> = all_arches.into_iter().collect();
     let col_w = arches.iter().map(|a| a.len()).max().unwrap_or(4).max(4);
-    let ver_w = rows.iter().map(|r| r.version.len()).max().unwrap_or(7).max(7);
+    let ver_w = rows
+        .iter()
+        .map(|r| r.version.len())
+        .max()
+        .unwrap_or(7)
+        .max(7);
 
     let mut out = anstream::stdout();
     writeln!(out, "{C_PKG}{:<ver_w$}{C_PKG:#}", "version").ok();
