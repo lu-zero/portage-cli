@@ -270,6 +270,21 @@ pub(crate) fn einfo_line_impl(args: std::fmt::Arguments<'_>) {
     let _ = out.flush();
 }
 
+/// Underlying writer for [`einfo_stderr_line!`] — [`einfo_line_impl`]'s
+/// shape on **stderr**, for an ordinary note that belongs beside the
+/// `!!!` warnings/errors rather than in the stdout report.
+///
+/// Unlike a `tracing::info!` event, `args` may carry [`C_PKG`]/[`C_BOLD`]/…
+/// styling: `anstream` handles it, where `tracing-subscriber` sanitizes ESC
+/// bytes in event messages. Nothing here consults the log level or `-q`, so
+/// a caller that should stay quiet under `-q` checks that itself.
+pub(crate) fn einfo_stderr_line_impl(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let mut out = anstream::stderr();
+    let _ = writeln!(out, "{C_MARKER_INFO} * {C_MARKER_INFO:#}{args}");
+    let _ = out.flush();
+}
+
 /// Underlying writer for [`ewarn_sub_bullet!`] — print an indented `einfo`
 /// sub-bullet to **stderr** with the marker in [`C_WARN`] (`ewarn`'s own
 /// colour): `"  * {args}"`, plain when stderr is not a terminal. Used for
@@ -321,6 +336,13 @@ macro_rules! einfo_line {
     };
 }
 
+/// `einfo_stderr_line!("…", args…)` — see [`einfo_stderr_line_impl`] (the writer)
+macro_rules! einfo_stderr_line {
+    ($($arg:tt)*) => {
+        $crate::style::einfo_stderr_line_impl(::std::format_args!($($arg)*))
+    };
+}
+
 /// `ewarn_sub_bullet!("…", args…)` — see [`ewarn_sub_bullet_impl`] (the writer)
 macro_rules! ewarn_sub_bullet {
     ($($arg:tt)*) => {
@@ -328,7 +350,7 @@ macro_rules! ewarn_sub_bullet {
     };
 }
 
-pub(crate) use {einfo_line, error_line, ewarn_sub_bullet, warn_line};
+pub(crate) use {einfo_line, einfo_stderr_line, error_line, ewarn_sub_bullet, warn_line};
 
 /// Render one line in real portage's `ebegin`/`eend` shape (`portage/
 /// output.py`'s `EOutput`): `" * {msg} ..."` immediately followed by a

@@ -435,11 +435,21 @@ async fn emerge_atoms_inner(
     let atoms: Vec<TargetAtom> = expanded
         .iter()
         .filter_map(
-            |t| match query::resolve_atom(&set, vdb.as_ref(), mode, &t.atom) {
-                Ok(dep) => Some(TargetAtom {
-                    atom: dep.to_string(),
-                    origin: t.origin.clone(),
-                }),
+            |t| match query::resolve_atom_noted(&set, vdb.as_ref(), mode, &t.atom) {
+                Ok(resolved) => {
+                    if let Some(note) = &resolved.note
+                        && !cli.quiet()
+                    {
+                        crate::style::einfo_stderr_line!(
+                            "{}",
+                            note.render(query::Outcome::UsedInstalled)
+                        );
+                    }
+                    Some(TargetAtom {
+                        atom: resolved.dep.to_string(),
+                        origin: t.origin.clone(),
+                    })
+                }
                 Err(e) => {
                     crate::style::warn_line!("{e}");
                     None

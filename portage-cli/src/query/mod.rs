@@ -26,8 +26,8 @@ pub enum ResolveMode {
     Error,
     /// Prefer the installed package (if exactly one matches)
     ///
-    /// Otherwise error (same as [`Error`](Self::Error), hint included). A note is printed when
-    /// disambiguation occurs.
+    /// Otherwise error (same as [`Error`](Self::Error), hint included). The
+    /// disambiguation is reported through [`Resolved::note`].
     PreferInstalled,
     /// Interactively prompt for which candidate was meant (`--ask`) — real
     /// emerge has no equivalent (it just hard-errors); this is `em`'s own
@@ -48,6 +48,83 @@ fn is_pseudo_category(cpn: &portage_atom::Cpn) -> bool {
     PSEUDO_CATEGORIES.contains(&cpn.category.as_ref())
 }
 
+/// A bare name that matched more than one real package
+///
+/// One value renders both ways a caller can meet it: refused as an error
+/// ([`Outcome::Refused`], via `Display`) or resolved with `-u`
+/// ([`Outcome::UsedInstalled`], the note [`Resolved::note`] carries), so the
+/// two read as siblings.
+#[derive(Debug, Clone)]
+pub struct Ambiguity {
+    raw: String,
+    candidates: Vec<portage_atom::Cpn>,
+    installed: Option<portage_atom::Cpn>,
+}
+
+/// What became of an [`Ambiguity`]
+#[derive(Debug, Clone, Copy)]
+pub enum Outcome {
+    /// The name was refused; the hint names the flag that would resolve it
+    Refused,
+    /// The single installed candidate was used
+    UsedInstalled,
+}
+
+impl Ambiguity {
+    /// Styled text for this ambiguity, ready for a `style::*_line!` macro
+    pub fn render(&self, outcome: Outcome) -> impl std::fmt::Display + '_ {
+        struct Rendered<'a>(&'a Ambiguity, Outcome);
+        impl std::fmt::Display for Rendered<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let Ambiguity {
+                    raw,
+                    candidates,
+                    installed,
+                } = self.0;
+                write!(f, "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous, matching: ")?;
+                for (i, cpn) in candidates.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{C_PKG}{cpn}{C_PKG:#}")?;
+                }
+                if let Some(cpn) = installed {
+                    write!(f, "\n    {C_PKG}{cpn}{C_PKG:#} is installed — ")?;
+                    match self.1 {
+                        Outcome::Refused => write!(f, "pass {C_BOLD}-u{C_BOLD:#} to update it")?,
+                        Outcome::UsedInstalled => f.write_str("using it")?,
+                    }
+                }
+                Ok(())
+            }
+        }
+        Rendered(self, outcome)
+    }
+}
+
+impl std::fmt::Display for Ambiguity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.render(Outcome::Refused).fmt(f)
+    }
+}
+
+impl std::error::Error for Ambiguity {}
+
+/// A resolved atom, plus the ambiguity that `-u` settled on the way
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    pub dep: portage_atom::Dep,
+    /// Set when [`ResolveMode::PreferInstalled`] picked among several
+    /// candidates; the caller decides whether to say so
+    pub note: Option<Ambiguity>,
+}
+
+impl From<portage_atom::Dep> for Resolved {
+    fn from(dep: portage_atom::Dep) -> Self {
+        Self { dep, note: None }
+    }
+}
+
 /// Resolve a raw atom string, expanding bare package names via `set`
 ///
 /// * `cat/pkg` — parsed as a standard atom.
@@ -64,7 +141,7 @@ fn is_pseudo_category(cpn: &portage_atom::Cpn) -> bool {
 /// - [`Error`](ResolveMode::Error) — error listing candidates (naming the
 ///   installed one and suggesting `-u`, if exactly one is installed).
 /// - [`PreferInstalled`](ResolveMode::PreferInstalled) — if exactly one
-///   candidate is installed, use it (with a note); otherwise same as `Error`.
+///   candidate is installed, use it and return the [`Ambiguity`] as a note; otherwise same as `Error`.
 /// - [`Ask`](ResolveMode::Ask) — interactively prompt for a choice; same as
 ///   `Error` if that doesn't resolve it (EOF, invalid answer).
 pub fn resolve_atom(
@@ -73,8 +150,21 @@ pub fn resolve_atom(
     mode: ResolveMode,
     raw: &str,
 ) -> anyhow::Result<portage_atom::Dep> {
+    resolve_atom_noted(set, vdb, mode, raw).map(|r| r.dep)
+}
+
+/// [`resolve_atom`], keeping the [`Ambiguity`] that `-u` settled so the
+/// caller can report it
+pub fn resolve_atom_noted(
+    set: &RepoSet,
+    vdb: Option<&Vdb>,
+    mode: ResolveMode,
+    raw: &str,
+) -> anyhow::Result<Resolved> {
     if raw.contains('/') {
-        return portage_atom::Dep::from_str(raw).with_context(|| format!("bad atom '{raw}'"));
+        return portage_atom::Dep::from_str(raw)
+            .map(Resolved::from)
+            .with_context(|| format!("bad atom '{raw}'"));
     }
     let cpns = set.find_cpns(raw);
     match cpns.as_slice() {
@@ -82,6 +172,7 @@ pub fn resolve_atom(
             "no package found for '{raw}' — try specifying the category (e.g. cat/{raw})"
         )),
         [cpn] => portage_atom::Dep::from_str(&cpn.to_string())
+            .map(Resolved::from)
             .with_context(|| format!("bad resolved atom '{cpn}'")),
         candidates => {
             let real: Vec<&portage_atom::Cpn> = candidates
@@ -90,6 +181,7 @@ pub fn resolve_atom(
                 .collect();
             if let [cpn] = real.as_slice() {
                 return portage_atom::Dep::from_str(&cpn.to_string())
+                    .map(Resolved::from)
                     .with_context(|| format!("bad resolved atom '{cpn}'"));
             }
             resolve_ambiguous(vdb, mode, raw, candidates)
@@ -103,48 +195,34 @@ fn resolve_ambiguous(
     mode: ResolveMode,
     raw: &str,
     candidates: &[portage_atom::Cpn],
-) -> anyhow::Result<portage_atom::Dep> {
+) -> anyhow::Result<Resolved> {
     let installed = vdb.and_then(|vdb| pick_installed(vdb, candidates));
+    let ambiguity = Ambiguity {
+        raw: raw.to_string(),
+        candidates: candidates.to_vec(),
+        installed: installed.as_ref().map(|(_, cpn)| **cpn),
+    };
 
     if let ResolveMode::PreferInstalled = mode
-        && let Some((dep, cpn)) = &installed
+        && let Some((dep, _)) = installed
     {
-        tracing::info!(
-            "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous ({}); using installed {C_PKG}{cpn}{C_PKG:#}",
-            candidates
-                .iter()
-                .map(|c| format!("{C_PKG}{c}{C_PKG:#}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        return Ok(dep.clone());
+        return Ok(Resolved {
+            dep,
+            note: Some(ambiguity),
+        });
     }
 
     if let ResolveMode::Ask = mode
         && let Some(dep) = ask_which_candidate(vdb, raw, candidates)
     {
-        return Ok(dep);
+        return Ok(dep.into());
     }
 
-    let names: Vec<String> = candidates
-        .iter()
-        .map(|c| format!("{C_PKG}{c}{C_PKG:#}"))
-        .collect();
     // Even under Error (or a failed Ask), tell the user the one thing that
     // would have resolved it — real emerge just dumps the candidate list and
     // leaves you to retype the full atom; naming the installed one and the
     // flag that would pick it is strictly more helpful.
-    let hint = installed
-        .map(|(_, cpn)| {
-            format!(
-                "\n    {C_PKG}{cpn}{C_PKG:#} is installed — pass {C_BOLD}-u{C_BOLD:#} to update it"
-            )
-        })
-        .unwrap_or_default();
-    Err(anyhow!(
-        "'{C_BOLD}{raw}{C_BOLD:#}' is ambiguous, matching: {}{hint}",
-        names.join(", ")
-    ))
+    Err(ambiguity.into())
 }
 
 /// Whether `cpn` has an installed entry in `vdb`
@@ -278,6 +356,11 @@ mod tests {
     use portage_repo::Repository;
 
     use super::*;
+
+    /// Rendered text with its ANSI styling stripped
+    fn plain(d: impl std::fmt::Display) -> String {
+        anstream::adapter::strip_str(&d.to_string()).to_string()
+    }
 
     // Build a minimal repo on disk with the given `(category, package)` pairs
     fn make_repo(packages: &[(&str, &str)]) -> (tempfile::TempDir, Repository) {
@@ -488,6 +571,72 @@ mod tests {
         )
         .unwrap();
         assert_eq!(dep.cpn.category.as_ref(), "sys-apps");
+    }
+
+    // `-u` settles the ambiguity but hands it back, so the caller can say so
+    // in the same words the refusal would have used.
+    #[test]
+    fn resolve_atom_noted_prefer_installed_returns_the_ambiguity() {
+        let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
+        let (_vdir, vdb) = make_vdb(&[("sys-apps", "foo", "1.0")]);
+
+        let resolved = resolve_atom_noted(
+            &single(repo),
+            Some(&vdb),
+            ResolveMode::PreferInstalled,
+            "foo",
+        )
+        .unwrap();
+        assert_eq!(resolved.dep.cpn.category.as_ref(), "sys-apps");
+        let note = resolved.note.expect("an ambiguity was settled");
+        let text = plain(note.render(Outcome::UsedInstalled));
+        assert_eq!(
+            text,
+            "'foo' is ambiguous, matching: app-misc/foo, sys-apps/foo\n    \
+             sys-apps/foo is installed — using it"
+        );
+    }
+
+    // Unambiguous names carry no note, whatever the mode.
+    #[test]
+    fn resolve_atom_noted_has_no_note_when_unambiguous() {
+        let (_dir, repo) = make_repo(&[("sys-apps", "foo")]);
+        let resolved =
+            resolve_atom_noted(&single(repo), None, ResolveMode::PreferInstalled, "foo").unwrap();
+        assert!(resolved.note.is_none());
+    }
+
+    // The refusal and the note share their first line and the installed
+    // candidate; only the closing clause differs.
+    #[test]
+    fn refusal_and_note_render_from_the_same_ambiguity() {
+        let (_rdir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
+        let (_vdir, vdb) = make_vdb(&[("sys-apps", "foo", "1.0")]);
+        let err = resolve_atom(&single(repo), Some(&vdb), ResolveMode::Error, "foo").unwrap_err();
+        let amb = err
+            .downcast_ref::<Ambiguity>()
+            .expect("the refusal is a typed Ambiguity");
+        assert_eq!(
+            plain(amb.render(Outcome::Refused)),
+            "'foo' is ambiguous, matching: app-misc/foo, sys-apps/foo\n    \
+             sys-apps/foo is installed — pass -u to update it"
+        );
+        assert_eq!(plain(&err), plain(amb.render(Outcome::Refused)));
+        assert!(plain(amb.render(Outcome::UsedInstalled)).ends_with("is installed — using it"));
+    }
+
+    // Both renderings style the names themselves (a plain-text tracing
+    // message would lose this): the bold raw name and green candidates.
+    #[test]
+    fn ambiguity_rendering_carries_its_own_styles() {
+        let (_dir, repo) = make_repo(&[("sys-apps", "foo"), ("app-misc", "foo")]);
+        let err = resolve_atom(&single(repo), None, ResolveMode::Error, "foo").unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains(&format!("{C_BOLD}foo{C_BOLD:#}")), "{text:?}");
+        assert!(
+            text.contains(&format!("{C_PKG}sys-apps/foo{C_PKG:#}")),
+            "{text:?}"
+        );
     }
 
     #[test]
