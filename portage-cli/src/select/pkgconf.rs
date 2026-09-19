@@ -420,6 +420,31 @@ mod tests {
         cli.outer_roots().with_own_config_root_if_self_contained()
     }
 
+    /// Run the freshly written wrapper with `--cflags fake`.
+    ///
+    /// Retries `ETXTBSY`: another test thread can fork while this one still
+    /// holds the script open for writing, and the child keeps that write fd
+    /// until it execs, so the exec here fails with "Text file busy".
+    fn run_wrapper(
+        wrapper: &std::path::Path,
+        envs: &[(&str, &std::path::Path)],
+    ) -> std::process::Output {
+        for _ in 0..50 {
+            match std::process::Command::new(wrapper)
+                .arg("fake")
+                .arg("--cflags")
+                .envs(envs.iter().copied())
+                .output()
+            {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                out => return out.unwrap(),
+            }
+        }
+        panic!("{} stayed busy", wrapper.display());
+    }
+
     #[test]
     fn activate_pkgconf_creates_shared_script_preferring_pkgconf() {
         let dir = tempfile::tempdir().unwrap();
@@ -669,13 +694,13 @@ mod tests {
         let wrapper = bindir.join("riscv64-unknown-linux-gnu-pkg-config");
         std::os::unix::fs::symlink(SHARED_SCRIPT_NAME, &wrapper).unwrap();
 
-        let output = std::process::Command::new(&wrapper)
-            .arg("fake")
-            .arg("--cflags")
-            .env("ESYSROOT", &sysroot)
-            .env("SYSROOT", &sysroot)
-            .output()
-            .unwrap();
+        let output = run_wrapper(
+            &wrapper,
+            &[
+                ("ESYSROOT", sysroot.as_path()),
+                ("SYSROOT", sysroot.as_path()),
+            ],
+        );
         assert!(
             output.status.success(),
             "wrapper failed: {}",
@@ -728,14 +753,14 @@ mod tests {
         let wrapper = bindir.join("riscv64-unknown-linux-gnu-pkg-config");
         std::os::unix::fs::symlink(SHARED_SCRIPT_NAME, &wrapper).unwrap();
 
-        let output = std::process::Command::new(&wrapper)
-            .arg("fake")
-            .arg("--cflags")
-            .env("ESYSROOT", &sysroot)
-            .env("SYSROOT", &sysroot)
-            .env("ROOT", &root)
-            .output()
-            .unwrap();
+        let output = run_wrapper(
+            &wrapper,
+            &[
+                ("ESYSROOT", sysroot.as_path()),
+                ("SYSROOT", sysroot.as_path()),
+                ("ROOT", root.as_path()),
+            ],
+        );
         assert!(output.status.success());
         let libdir = String::from_utf8_lossy(&output.stdout);
         assert!(
@@ -781,14 +806,14 @@ mod tests {
         let wrapper = bindir.join("riscv64-unknown-linux-gnu-pkg-config");
         std::os::unix::fs::symlink(SHARED_SCRIPT_NAME, &wrapper).unwrap();
 
-        let output = std::process::Command::new(&wrapper)
-            .arg("fake")
-            .arg("--cflags")
-            .env("ESYSROOT", &sysroot)
-            .env("SYSROOT", &sysroot)
-            .env("ROOT", &sysroot)
-            .output()
-            .unwrap();
+        let output = run_wrapper(
+            &wrapper,
+            &[
+                ("ESYSROOT", sysroot.as_path()),
+                ("SYSROOT", sysroot.as_path()),
+                ("ROOT", sysroot.as_path()),
+            ],
+        );
         assert!(output.status.success());
         let libdir = String::from_utf8_lossy(&output.stdout);
         assert_eq!(
