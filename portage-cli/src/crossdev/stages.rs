@@ -183,15 +183,11 @@ impl BootstrapKind {
 /// self-contained and ignores this flag; it only changes
 /// `BootstrapKind::Cross`'s plan (baselayout skeleton, dropping debuginfod).
 ///
-/// `prefix_guest` is `BootstrapKind::Native`-only (`Cross` ignores it — a
-/// host-OS concept, not a cross-target one). `virtual/libc`'s RDEPEND
-/// already collapses to a bare blocker under it, so the *kernel-headers*
-/// step needs no change — it just resolves to an empty merge. Only the
-/// *libc* step needs an explicit skip: it merges `sys-libs/<libc>` directly
-/// under `--nodeps` (to break the glibc-needs-gcc cycle), bypassing
-/// `virtual/libc`'s conditional RDEPEND entirely, so the flag must be read
-/// explicitly instead. See [prefix-guest is
-/// host-OS-agnostic](../../docs/user/root-model.md) for the flag itself.
+/// `prefix_guest` is `BootstrapKind::Native`-only (`Cross` ignores it).
+/// `virtual/libc`'s RDEPEND already collapses to a bare blocker under it, so
+/// kernel-headers needs no change; the libc step merges `sys-libs/<libc>`
+/// with `--nodeps` (breaking the glibc-needs-gcc cycle), bypassing that
+/// RDEPEND, so it reads the flag itself. See [prefix-guest is host-OS-agnostic](../../../docs/user/root-model.md).
 pub fn toolchain_plan(kind: &BootstrapKind, self_contained: bool, prefix_guest: bool) -> StagePlan {
     let atom = |real_cat: &str, pkg: &str| kind.atom(real_cat, pkg);
     let owned = |toks: &[&str]| toks.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -459,12 +455,10 @@ pub fn gcc_refresh_plan(target: &CrossTarget, version: &str) -> StagePlan {
 }
 
 /// The native **stage1** plan (catalyst `stage1/chroot.sh`): baselayout first
-/// (`USE=build`, `--nodeps` — the bare FS skeleton), then the profile's
+/// (`USE=build`, `--nodeps`), then the profile's
 /// [`packages.build`](ProfileStack::stage1_packages) set with
-/// `USE="-* build ${BOOTSTRAP_USE}"`, matching catalyst's own recipe. See
-/// [Stage1](../../docs/user/stages-and-testing.md) for why `BOOTSTRAP_USE`
-/// must be spliced back in explicitly (it isn't part of the profile's `USE`
-/// fold itself) and why `--autosolve-use` is always on for this step.
+/// `USE="-* build ${BOOTSTRAP_USE}"`. See [Stage1](../../../docs/user/stages-and-testing.md)
+/// for why `BOOTSTRAP_USE` is spliced in explicitly and `--autosolve-use` is always on.
 ///
 /// Distinct from [`toolchain_plan`]'s `BootstrapKind::Native`, which builds
 /// the *compiler* itself (binutils/glibc/gcc) — stage1 assumes that

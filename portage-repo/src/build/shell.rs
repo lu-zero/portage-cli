@@ -1591,9 +1591,8 @@ impl EbuildShell {
         // A `cross-<tuple>/*` host toolchain tool (binutils/gcc/gdb/
         // clang-crossdev-wrappers, `host_codegen`) needs an EPREFIX-style
         // offset regardless of `--local`. See [the EPREFIX-flip
-        // rationale](../../docs/design/em-prefix-experiment.md) for why
-        // this isn't just cosmetic (unlike ESYSROOT below) and why
-        // SYSROOT/ESYSROOT stay untouched by it.
+        // rationale](../../../docs/design/em-prefix-experiment.md) for why
+        // this isn't cosmetic and why SYSROOT/ESYSROOT stay untouched.
         //
         // NOTE for future refactoring: this function derives `ROOT`,
         // `EPREFIX`, `ED`, `EROOT`, `SYSROOT`, `ESYSROOT` through a chain of
@@ -1769,12 +1768,10 @@ impl EbuildShell {
         }
 
         // Export all PM-provided variables so external processes (make,
-        // ./configure, …) inherit them; our do*/new* install helpers read
-        // these in-shell directly. Bash `export` on an unset/empty name is
-        // harmless. CHOST/CBUILD/CTARGET must be here: see [the sourced-env
-        // sweep doc](../../docs/design/build-environment.md) for why em's
-        // `source`d (non-exported) assignments need this and the openssl
-        // `gentoo.config` host-arch-autodetect breakage omitting CHOST caused.
+        // ./configure, …) inherit them; our do*/new* install helpers read them
+        // in-shell. CHOST/CBUILD/CTARGET must be here: see [the sourced-env
+        // sweep](../../../docs/design/build-environment.md) for why `source`d
+        // assignments need it, and the openssl `gentoo.config` breakage.
         self.run_string(
             "export CATEGORY PN PV PR PVR P PF FILESDIR WORKDIR S T D TMPDIR EAPI EBUILD \
              HOME ROOT DISTDIR PORTAGE_BIN_PATH PATH LD_LIBRARY_PATH EBUILD_PHASE \
@@ -2027,15 +2024,11 @@ impl EbuildShell {
         Ok(())
     }
 
-    /// Export every variable currently in the shell's environment, so a real
-    /// subprocess an ebuild/eclass spawns directly (`bash
-    /// "${FILESDIR}/gentoo.config"`, any raw `$(external-tool)`) inherits it
-    /// — `source`d make.conf/profile assignments are plain (non-exported)
-    /// otherwise, unlike real portage's `config.environ()`. Call this right
-    /// after `apply_profile_env` so every profile-derived variable is
-    /// covered generically. See [the sourced-env sweep design
-    /// doc](../../docs/design/build-environment.md) for why, and the
-    /// `CHOST`/`gentoo.config` breakage this replaced.
+    /// Export every variable in the shell's environment so a real subprocess an
+    /// ebuild/eclass spawns (`bash "${FILESDIR}/gentoo.config"`, `$(external-tool)`)
+    /// inherits it; `source`d make.conf/profile assignments are otherwise plain,
+    /// unlike real portage's `config.environ()`. Call right after `apply_profile_env`;
+    /// see [the sourced-env sweep](../../../docs/design/build-environment.md).
     ///
     /// Flips the export bit directly via brush's
     /// `ResolvedVarRefMut::base_var_mut` rather than round-tripping through

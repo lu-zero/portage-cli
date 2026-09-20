@@ -11,15 +11,3 @@ List installed/available packages matching a pattern
 ## Flags
 - **`-I --installed`** — List only installed packages (from VDB), not available ones
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON
-
-  **Framing:** `json`
-- **`pretty`** (default) — emerge -p style pretend output
-
-  **Framing:** `text`
-- **`tree`** — cargo tree style dependency tree
-
-  **Framing:** `text`

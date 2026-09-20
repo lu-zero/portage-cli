@@ -29,12 +29,6 @@ Native config selectors (profile, repos) — eselect-like
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em select binutils <SUBCOMMAND>`](select/binutils.md)

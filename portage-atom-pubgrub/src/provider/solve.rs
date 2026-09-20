@@ -551,7 +551,7 @@ fn host_native_deps(
 /// whatever machine does the actual compiling, same as BDEPEND
 ///
 /// See [the gcc→perl→rsync explosion this
-/// closed](../../docs/design/root-topology.md) for why DEPEND had to join
+/// closed](../../../docs/design/root-topology.md) for why DEPEND had to join
 /// BDEPEND/IDEPEND's host-satisfied filtering.
 fn broot_filtered(
     provider: &PortageDependencyProvider,

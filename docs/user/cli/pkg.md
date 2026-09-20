@@ -24,12 +24,6 @@ Edit per-package configuration (package.use, .keywords, .mask, .env)
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em pkg env [FLAGS] <ATOM>`](pkg/env.md)

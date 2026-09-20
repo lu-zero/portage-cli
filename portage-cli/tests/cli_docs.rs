@@ -390,7 +390,7 @@ fn generated_markdown_omits_hidden_applets() {
 /// Structural staleness, not byte-exact rendering. Deliberately does NOT
 /// compare rendered bytes — a pure upstream `usage-lib` rendering change
 /// isn't a staleness bug and shouldn't fail this; a new/removed applet
-/// without a matching regen is. See docs/testing.md or ask before
+/// without a matching regen is. See docs/design/testing.md or ask before
 /// tightening this back to an exact-match assertion.
 #[test]
 fn committed_cli_docs_match_spec() {

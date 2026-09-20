@@ -8,12 +8,6 @@ Inspect/verify/prune local binary packages (em-only, no emaint equivalent)
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em maint binpkg fingerprint [--full] [--host]`](binpkg/fingerprint.md)

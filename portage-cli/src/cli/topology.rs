@@ -3,29 +3,22 @@
 //! [`super::context::VdbArg`].
 //!
 //! Three applet-facing shapes, not one:
-//! - [`RootedTopology`] — all 5 fields, `global` inner fields, flattened onto
-//!   the 22 applets that accept `--root` (everything `Cli::applet_root_arg`
-//!   used to list).
-//! - [`Topology`] — the same 4 fields minus `--root`, `global` inner fields,
-//!   flattened bare onto `Crossdev`/`Active` — the 2 applets that need the
-//!   topology group but must keep `--root` a hard parse error (never even
-//!   reach a per-applet flag table to reject at runtime).
-//! - [`RootTopology`] — the same 5 fields as `RootedTopology` again, but
-//!   **not** `global` and `hide`-d from help/completion, mounted once
-//!   directly on `Cli`. This is the raw parent-flag/bare-prefix-routing copy
-//!   (`em --prefix X toolchain --setup` still routes to `Toolchain`); see its
-//!   own doc for why it has to exist separately from the per-applet copies,
-//!   and why it stays out of `em --help`'s own page (the appended default
-//!   subcommand's page already shows the same 5 fields, via
-//!   `RootedTopology`).
 //!
-//! [`RootArg`] is what's left of the old single-field `--root` mixin — no
-//! longer flattened onto anything directly, purely the resolution-parameter
-//! type this module's methods take (`RootedTopology::split()` produces one).
-//! `Cli::topology_and_root()` is the one place that reconciles whichever of
-//! the three applet-facing shapes applies (or none) into the
-//! `(Topology, RootArg)` pair these methods expect — nothing in this module
-//! needed to change to support that.
+//! - [`RootedTopology`]: all 5 fields, `global` inner fields, flattened onto
+//!   the 22 applets that accept `--root`.
+//!
+//! - [`Topology`]: the same 4 fields minus `--root`, flattened bare onto
+//!   `Crossdev`/`Active`, which must keep `--root` a hard parse error.
+//!
+//! - [`RootTopology`]: the 5 fields again, not `global` and `hide`-d from
+//!   help, mounted once on `Cli` as the parent-flag copy that keeps
+//!   `em --prefix X toolchain --setup` routing to `Toolchain`; see its doc.
+//!
+//! [`RootArg`] is what's left of the old `--root` mixin: not flattened onto
+//! anything, only the resolution parameter this module's methods take
+//! (`RootedTopology::split()` produces one). `Cli::topology_and_root()`
+//! reconciles whichever applet-facing shape applies into the
+//! `(Topology, RootArg)` pair they expect.
 //!
 //! `Helper`/`Worker`/`Portageq`/`Grep`/`Atom`/`Completion` get none of this.
 
@@ -104,15 +97,10 @@ pub struct Topology {
 /// Installation root override — the offset an applet installs into / queries.
 ///
 /// Also settable via `ROOT` in the environment (lowest precedence), applied
-/// once by `resolved_root`. Purely an internal resolution-parameter type
-/// now (not flattened onto any applet directly): `--root` isn't universally
-/// applicable the way `Topology`'s fields are (`crossdev`/`active`/`worker`
-/// reject it; see `Cli::validate`), so it travels bundled into
-/// [`RootedTopology`] (the 22 applets that accept it) or is simply absent
-/// (`Topology`, flattened bare onto `crossdev`/`active`, and `RootTopology`,
-/// `Cli`'s own raw parent-flag copy) — `Cli::topology_and_root()` derives a
-/// `RootArg` from whichever shape applies before calling into this module's
-/// resolution methods, which all still take it as a separate parameter.
+/// once by `resolved_root`. Not flattened onto any applet: `--root` isn't
+/// accepted everywhere (`crossdev`/`active`/`worker` reject it), so it
+/// travels inside [`RootedTopology`] and `Cli::topology_and_root()` derives
+/// a `RootArg` from whichever shape applies.
 #[derive(Debug, Clone, Default)]
 pub struct RootArg {
     pub root: Option<String>,
@@ -196,27 +184,17 @@ impl RootedTopology {
 /// `Cli`'s own raw copy of [`RootedTopology`]'s 5 fields — **not** `global`,
 /// and hidden from help/completion.
 ///
-/// Exists purely so these flags keep *parent-flag* status in
-/// `default_subcommand_flags` routing (e.g. `em --prefix X toolchain --setup`
-/// must still recognize `toolchain` as a real subcommand, not swallow it as
-/// an emerge atom — confirmed live, and only flags reachable from the root
-/// command's own table get that treatment; `global` alone doesn't grant it).
-/// Reconciled with whichever per-applet copy (if any) applies by
-/// `Cli::topology_and_root()`; never read directly anywhere else.
+/// Exists so these flags keep *parent-flag* status in
+/// `default_subcommand_flags` routing: `em --prefix X toolchain --setup` must
+/// see `toolchain` as a subcommand, not an emerge atom, and only flags on the
+/// root command's own table get that (`global` alone doesn't). Reconciled
+/// with the per-applet copy by `Cli::topology_and_root()`; read nowhere else.
 ///
 /// `hide` on every field: `default_subcommand_help` already appends emerge's
-/// *entire* own `--help` page below root's (marked "Default command:
-/// emerge"), and emerge flattens the same 5 fields via `RootedTopology` — so
-/// showing them again here, verbatim, in root's own top section just before
-/// that appended page repeats them, produced a literal duplicate "Roots:"
-/// block on `em --help` (confirmed live). `hide` is display/completion-only
-/// (verified against `derive/src/codegen.rs` and `argv/src/help.rs`/
-/// `complete.rs`: no `.hide` check anywhere near flag *parsing* or
-/// `default_subcommand_flags` routing) — these fields stay fully functional
-/// for prefix-position parsing, and bare-root completion for `--prefix`
-/// etc. already comes from the merged default-subcommand flag set, not from
-/// this struct's own metadata (confirmed via `em __complete_word__ --line
-/// "em --"`, which lists them before this struct even existed).
+/// whole `--help` page below root's, and emerge flattens the same 5 fields
+/// via `RootedTopology`, so showing them here duplicated the "Roots:" block
+/// on `em --help`. `hide` only affects help and completion, not parsing or
+/// routing; completion still lists them via the merged default-subcommand flags.
 #[derive(usage::Args, Debug, Clone, Default)]
 pub struct RootTopology {
     /// Unprivileged offset: ROOT/VDB/distfiles/build trees under DIR; config
@@ -626,22 +604,11 @@ impl Topology {
         )
     }
 
-    /// Reject an action (`stages --stage1`/`--stage3` — see call sites in
-    /// `crossdev/mod.rs`; `toolchain --setup` uses the narrower
-    /// [`require_destination_not_bare_host`](Self::require_destination_not_bare_host)
-    /// instead, so a bare `--prefix P` toolchain build is fine on its own)
-    /// whose resolved destination equals `--prefix`'s own overlay anchor —
-    /// only a bare `--prefix P` (no separate `--root`) collapses to this;
-    /// see the body's own comment for why `--local` does **not**, live-
-    /// verified (`stages --local D --stage1` reaches real dependency
-    /// resolution, not this rejection).
-    ///
-    /// `--root DIR` alone, `--prefix P --target T`, and an explicit
-    /// `--root B` redirecting away from `--prefix`'s own anchor all
-    /// genuinely differ from the overlay's own tree and pass. Replaces an
-    /// older, narrower `merge_root == "/"` check, too narrow to catch a real
-    /// `--prefix --target` bug where a package's `.pc` file baked in the
-    /// outer prefix's path even though nothing was installed there.
+    /// Reject an action (`stages --stage1`/`--stage3`) whose destination is
+    /// `--prefix`'s own overlay anchor, i.e. a bare `--prefix P` with no separate
+    /// `--root`. `--local`, `--root DIR` alone, `--prefix P --target T` and an
+    /// explicit `--root B` all differ from the overlay's tree and pass;
+    /// `toolchain --setup` uses the narrower [`require_destination_not_bare_host`](Self::require_destination_not_bare_host).
     pub fn require_root_distinct_from_host(
         &self,
         root: &RootArg,

@@ -28,11 +28,9 @@ fn em(args: &str) -> String {
 }
 
 /// Like [`q`], but doesn't assert exit status: `qgrep` exits 1 whenever it
-/// is given atom targets at all, matches or not (confirmed live, portage-utils
-/// 0.97.1: `qgrep -l EAPI=8 dev-python/setuptools` prints real hits and still
-/// exits 1; the same query with no targets exits 0) — a real quirk, not a
-/// grep-style "no match" signal, so target-restricted `qgrep` comparisons
-/// must only compare stdout.
+/// is given atom targets, matches or not (portage-utils 0.97.1: `qgrep -l
+/// EAPI=8 dev-python/setuptools` prints hits and exits 1; without targets it
+/// exits 0), so target-restricted comparisons must only compare stdout.
 fn q_output_only(args: &str) -> String {
     let output = Command::new(args.split_whitespace().next().unwrap())
         .args(args.split_whitespace().skip(1))

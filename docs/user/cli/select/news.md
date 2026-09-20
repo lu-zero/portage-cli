@@ -8,12 +8,6 @@ Read/manage GLEP 42 news items (eselect news workalike)
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em select news count`](news/count.md)

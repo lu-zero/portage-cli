@@ -8,12 +8,6 @@ Check/fix Gentoo Linux Security Advisories (glsa-check workalike)
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em select glsa check [IDS]…`](glsa/check.md)

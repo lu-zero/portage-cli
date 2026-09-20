@@ -25,12 +25,6 @@ Clean distfiles and/or binary packages
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em clean all [FLAGS]`](clean/all.md)

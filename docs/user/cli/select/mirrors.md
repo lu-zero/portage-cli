@@ -9,12 +9,6 @@ Manage Gentoo distfile mirrors (mirrorselect workalike)
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em select mirrors list [-c --country <COUNTRY>] [-r --region <REGION>]`](mirrors/list.md)

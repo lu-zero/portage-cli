@@ -10,9 +10,3 @@ Purge repo revision history from repo_revisions
 
 ## Flags
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

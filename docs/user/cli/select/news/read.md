@@ -10,9 +10,3 @@ Read news items (numbers/names from `list`; "new"/"all", or none for all unread)
 
 ## Flags
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

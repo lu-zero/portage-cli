@@ -22,9 +22,3 @@ Edit per-package USE flags in package.use
 - **`-i --info <FLAG>`** — Show descriptions for the given USE flags on this package (metadata.xml/use.local.desc first, falling back to the global profiles/use.desc)
 - **`--path <FILE>`** — Target file inside package.use/ (default: `<cat>-<pkg>`)
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

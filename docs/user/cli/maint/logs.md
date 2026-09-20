@@ -9,9 +9,3 @@ Prune the build.log files finished merges leave in the build tree
 - **`--fix`** — Remove them; without this the logs are only listed
 - **`-t --older-than <AGE>`** — Only consider logs at least this old (e.g. `30d`, `2weeks`)
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

@@ -14,9 +14,3 @@ Edit per-package keywords in package.accept_keywords
 - **`-d --drop <KW>`** — Drop keyword tokens entirely (removes both the token and its negated form)
 - **`--path <FILE>`** — Target file inside package.accept_keywords/ (default: `<cat>-<pkg>`)
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

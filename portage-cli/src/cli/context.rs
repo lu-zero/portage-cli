@@ -1,11 +1,8 @@
-//! Small, single-purpose flag mixins flattened onto the specific applets that
-//! need each one — the same convention [`super::RootArg`] already follows,
-//! extended to `--verbose`/`--quiet`/`--arch`/`--repo`. None of these live on
-//! [`crate::cli::Cli`] itself: the root stays a minimal dispatcher (subcommand
-//! list, `--color`, `--help`, `--version`), and each flag is recognized only
-//! where an applet actually reads it. The inner field is `global` so it still
-//! cascades into an applet's own nested subcommands (e.g. `em maint sync
-//! --quiet`), matching `RootArg`'s `root` field.
+//! Small single-purpose flag mixins, each flattened only onto the applets that
+//! read it (`--verbose`/`--quiet`/`--arch`/`--repo`, like [`super::RootArg`]
+//! before them). The root [`crate::cli::Cli`] stays a minimal dispatcher:
+//! subcommand list, `--color`, `--help`, `--version`. Inner fields are `global`
+//! so they cascade into an applet's nested subcommands (`em maint sync --quiet`).
 //!
 //! `em __worker` gets its own plain `quiet` field instead of [`QuietArg`] —
 //! it's machine-generated argv from `privilege.rs`'s re-exec, not something a
@@ -82,12 +79,11 @@ pub struct RepoArg {
 
 /// `--vdb`, for applets that query an alternate installed-package database.
 ///
-/// Deliberately narrow: this only overrides the *read-only query* path
-/// (`vdb.rs`'s `open_cli_vdb`) used by applets that inspect installed
-/// packages. The real install/merge write path (`ebuild.rs`'s
-/// `vdb_root_for`) always computes the VDB location from `--root`/`--prefix`/
-/// `--local` and never consults this — giving it to e.g. `em ebuild`/
-/// `em toolchain` would parse but do nothing, since neither reads it.
+/// Deliberately narrow: overrides only the *read-only query* path
+/// (`vdb.rs`'s `open_cli_vdb`) for applets that inspect installed packages.
+/// The install/merge write path (`ebuild.rs`'s `vdb_root_for`) always derives
+/// the VDB from `--root`/`--prefix`/`--local`, so this flag on `em ebuild` or
+/// `em toolchain` would parse but do nothing.
 #[derive(usage::Args, Debug, Clone, Default)]
 pub struct VdbArg {
     /// Override VDB path (default: $ROOT/var/db/pkg)
@@ -95,14 +91,15 @@ pub struct VdbArg {
     pub vdb: Option<String>,
 }
 
-/// `--format`, for subcommands whose output has a genuinely structured shape
+/// `--format`, for subcommands whose output is a genuinely structured shape
 /// (a matrix, a multi-field record, a list of pass/fail results) worth
-/// offering as JSON alongside the human-readable default. A lighter sibling
-/// of `query::depgraph`'s own `DepgraphFormat` (which also has `tree`, a
-/// shape specific to dependency graphs) for the common two-way case;
-/// extend `OutputFormat` with more variants here if another shape becomes
-/// useful across more than one subcommand.
+/// offering as JSON beside the human-readable default. The two-way sibling
+/// of `query::depgraph`'s `DepgraphFormat`, which also has `tree`.
 #[derive(usage::Args, Debug, Clone, Default)]
+#[usage(
+    output("pretty", default, help = "Human-readable text"),
+    output("json", framing = "json", help = "Machine-parsable JSON")
+)]
 pub struct FormatArg {
     #[usage(long, value_enum, default = "pretty")]
     pub format: OutputFormat,

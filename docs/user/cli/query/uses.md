@@ -10,15 +10,3 @@ Display USE flags for a package
 
 ## Flags
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON
-
-  **Framing:** `json`
-- **`pretty`** (default) — emerge -p style pretend output
-
-  **Framing:** `text`
-- **`tree`** — cargo tree style dependency tree
-
-  **Framing:** `text`

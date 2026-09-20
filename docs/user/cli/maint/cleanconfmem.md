@@ -7,9 +7,3 @@ No-op: em keeps no config-memory file to go stale
 
 ## Flags
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

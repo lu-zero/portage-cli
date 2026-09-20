@@ -8,9 +8,3 @@ Keep only the newest BUILD_ID per package, deleting older ones
 ## Flags
 - **`--dry-run`** — Report what would be deleted without deleting or reindexing
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

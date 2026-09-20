@@ -1,11 +1,9 @@
 //! `em portageq` — Portage's own query interface (subset)
 //!
 //! Implements the "VDB group" of real `portageq`'s subcommands
-//! (`has_version`/`best_version`/`match`/`mass_best_version`) — the ones
-//! with real-world consumers, per the survey in
-//! `todo/portageq-workalike-plan.md`. The remaining tiers (settings, repos,
-//! metadata/contents/owners, best_visible, protect/eclass/license) are not
-//! yet implemented; see that plan for the full design.
+//! (`has_version`/`best_version`/`match`/`mass_best_version`), the ones
+//! with real-world consumers. The settings, repos, metadata/contents/owners,
+//! best_visible and protect/eclass/license groups are not implemented.
 //!
 //! Every command here takes `<EROOT>` as its own positional argument (real
 //! portageq's `uses_eroot` convention), independent of `em`'s own
@@ -95,7 +93,7 @@ pub(crate) fn best_version(eroot: &str, atom: &str) -> Result<u8> {
 
 /// `atom` empty matches every installed package. A non-empty atom that
 /// isn't a plain dependency atom (e.g. `qgrep`-style `cat/*` glob syntax)
-/// is not yet supported — see `todo/portageq-workalike-plan.md`.
+/// is not supported.
 pub(crate) fn run_match(eroot: &str, atom: &str) -> Result<u8> {
     if let Err(code) = validate_eroot(eroot) {
         return Ok(code);

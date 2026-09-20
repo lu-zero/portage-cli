@@ -28,12 +28,6 @@ Reconcile pending config files (etc-update / dispatch-conf)
 - **`--auto`** — Resolve only what needs no decision: identical files, and those differing from the installed one in comments or whitespace alone
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em etc diff [PATH]`](etc/diff.md)

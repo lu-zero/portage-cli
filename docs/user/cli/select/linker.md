@@ -8,12 +8,6 @@ Select the active linker profile
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em select linker list [-t --target <TARGET>]`](linker/list.md)

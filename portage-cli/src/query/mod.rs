@@ -140,10 +140,9 @@ impl From<portage_atom::Dep> for Resolved {
 ///
 /// - [`Error`](ResolveMode::Error) — error listing candidates (naming the
 ///   installed one and suggesting `-u`, if exactly one is installed).
-/// - [`PreferInstalled`](ResolveMode::PreferInstalled) — if exactly one
-///   candidate is installed, use it and return the [`Ambiguity`] as a note; otherwise same as `Error`.
-/// - [`Ask`](ResolveMode::Ask) — interactively prompt for a choice; same as
-///   `Error` if that doesn't resolve it (EOF, invalid answer).
+/// - [`PreferInstalled`](ResolveMode::PreferInstalled) — use the single
+///   installed candidate, returning the [`Ambiguity`] as a note; else `Error`.
+/// - [`Ask`](ResolveMode::Ask) — prompt for a choice; `Error` if that fails.
 pub fn resolve_atom(
     set: &RepoSet,
     vdb: Option<&Vdb>,

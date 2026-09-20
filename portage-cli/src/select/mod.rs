@@ -147,14 +147,11 @@ pub fn get_chost(globals: &Cli) -> String {
     let make_conf_path = config_portage_dir(globals).join("make.conf");
 
     let mut paths_to_check = vec![make_conf_path];
-    // `--prefix`/`--local` deliberately don't carry their own CHOST — base
-    // profile/make.conf come from the host (see `setup.rs`'s bashrc comment
-    // and the generated prefix make.conf's own header, "Profile and base
-    // make.conf come from the host"). Without this fallback, a prefix's own
-    // (CHOST-less) make.conf overlay left `get_chost` with nothing to find,
-    // so `select compiler show`/`set` with no explicit `--target` silently
-    // derived a bogus target (`arm64-unknown-linux-gnu` from `Cli::arch`'s
-    // Gentoo arch name, not the real `aarch64-unknown-linux-gnu` CHOST).
+    // `--prefix`/`--local` don't carry their own CHOST: base profile/make.conf
+    // come from the host. Without this fallback a prefix's CHOST-less make.conf
+    // overlay left `get_chost` with nothing, so `select compiler show`/`set`
+    // without `--target` derived a bogus target (`arm64-unknown-linux-gnu`
+    // from `Cli::arch`'s Gentoo arch name, not `aarch64-unknown-linux-gnu`).
     if is_prefix_context(globals) {
         paths_to_check.push(Utf8PathBuf::from("/etc/portage/make.conf"));
     }
@@ -193,7 +190,7 @@ mod tests {
     }
 
     // Under `--prefix`, the prefix's own make.conf overlay never sets
-    // CHOST by design (`setup.rs`'s generated template: "Profile and base
+    // CHOST by design (`setup/mod.rs`'s generated template: "Profile and base
     // make.conf come from the host") — `get_chost` must fall back to the
     // host's real `/etc/portage/make.conf`, not silently derive a bogus
     // Prefix make.conf without CHOST falls back to the host's real CHOST.

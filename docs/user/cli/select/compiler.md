@@ -9,12 +9,6 @@ Select the active compiler profile (gcc-config/eselect gcc workalike)
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em select compiler list [-t --target <TARGET>]`](compiler/list.md)

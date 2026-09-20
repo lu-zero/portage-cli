@@ -23,9 +23,3 @@ With a reference argument, activates an existing entry:
 
 ## Flags
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

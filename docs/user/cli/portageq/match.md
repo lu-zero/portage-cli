@@ -12,12 +12,6 @@ List every installed CPV matching ATOM under EROOT, one per line
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Exit Status
 
 | Code | Meaning |

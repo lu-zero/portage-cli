@@ -12,12 +12,6 @@ Print the highest installed version matching ATOM under EROOT
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Exit Status
 
 | Code | Meaning |

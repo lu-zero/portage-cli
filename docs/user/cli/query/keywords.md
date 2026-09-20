@@ -18,12 +18,9 @@ Display keyword status across architectures
 
 ## Output Formats
 
+- **`pretty`** (default) — Human-readable text
+
+  **Framing:** `text`
 - **`json`** — Machine-parsable JSON
 
   **Framing:** `json`
-- **`pretty`** (default) — emerge -p style pretend output
-
-  **Framing:** `text`
-- **`tree`** — cargo tree style dependency tree
-
-  **Framing:** `text`

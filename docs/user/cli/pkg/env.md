@@ -13,9 +13,3 @@ Edit per-package env files in package.env
 - **`-d --drop <ENVFILE>`** — Drop env file name(s) from this package's entry
 - **`--path <FILE>`** — Target file inside package.env/ (default: `<cat>-<pkg>`)
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

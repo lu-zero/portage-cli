@@ -16,12 +16,6 @@
 - **`-h --help`** — Print help
 - **`-V --version`** — Print version
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em ebuild [FLAGS] <EBUILD_PATH> <PHASE>…`](ebuild.md)

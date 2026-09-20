@@ -162,12 +162,10 @@ pub fn parse_cli_or_exit() -> Validated {
 }
 
 /// A leading flag before any subcommand name routes into `emerge` (the
-/// default command) — e.g. `em -ua @world`. Once a flag does this, every
-/// later word is swallowed as an emerge argument, even the literal word
-/// `emerge` (`em --json emerge -p pkg` emerges a package named "emerge", not
-/// `pkg`). Write either the fully prefixed form or lead with `emerge`
-/// explicitly (`em emerge --json -p pkg`); don't mix a leading flag with a
-/// later explicit `emerge` word.
+/// default command) — e.g. `em -ua @world` — and every later word is then an
+/// emerge argument, even the literal word `emerge` (`em --json emerge -p pkg`
+/// emerges a package named "emerge"). Write `em emerge --json -p pkg` rather
+/// than mixing a leading flag with a later `emerge` word.
 ///
 /// This also means `-p`/`--pretend` only reaches a *named* applet in prefix
 /// position by coincidentally also being emerge's own flag: `em -p pkg`
@@ -187,12 +185,7 @@ pub fn parse_cli_or_exit() -> Validated {
     try_into = Validated,
     example("em -ua @world", header = "Update @world"),
     example("em query belongs /usr/bin/python", header = "Find a file's owner"),
-    example("em select profile list", header = "List profiles"),
-    output(
-        "json",
-        framing = "json",
-        help = "Machine-parsable JSON (`--json` with `-p` or `--info`)"
-    )
+    example("em select profile list", header = "List profiles")
 )]
 pub struct Cli {
     #[usage(long, global, value_enum, default = "auto", value_name = "WHEN")]
@@ -1390,7 +1383,7 @@ mod tests {
 
     // `--prefix` sets EPREFIX: the installed tree is relocatable, so ebuilds
     // bake ${EPREFIX}/usr/bin/pythonX.Y into shebangs. The overlay then
-    // symlinks host python there (setup.rs) to satisfy them without building
+    // symlinks host python there (setup/mod.rs) to satisfy them without building
     // a prefix python. See docs/design/root-topology.md § "Override semantics".
     #[test]
     fn prefix_sets_eprefix_for_relocatable_overlay() {
@@ -1972,12 +1965,10 @@ mod tests {
         };
         assert_eq!(w.worker_config_root.as_deref(), Some("/tmp/cfg"));
 
-        // `--config-root` (RootTopology's raw parent-flag copy, for
-        // `em --config-root X toolchain --setup`-style routing) is NOT
-        // global, so unlike before this mixin split it no longer leaks into
-        // Worker's own parsing scope at all — Worker flattens neither
-        // `Topology` nor `RootedTopology`, so this is now a real
-        // `UnknownFlag`, not a silently-accepted-but-ignored bind.
+        // `--config-root` (RootTopology's parent-flag copy, for `em --config-root X
+        // toolchain --setup` routing) is not global, so it doesn't reach Worker's
+        // parsing scope: Worker flattens neither `Topology` nor `RootedTopology`,
+        // so it is an `UnknownFlag`, not a silently ignored bind.
         let bad = worker_argv(&["--config-root", "/tmp/cfg"]);
         assert_eq!(parse_err(&bad), "UnknownFlag --config-root");
     }
@@ -2372,8 +2363,7 @@ pub struct MaintArgs {
 }
 
 /// `em portageq` — a subset of Portage's own query interface (byte-compatible
-/// where implemented; see `todo/portageq-workalike-plan.md` for the full
-/// design and the tiers not yet implemented)
+/// where implemented; only the installed-package query group exists)
 #[derive(usage::Args, Debug, Clone)]
 #[usage(
     effect = "read",
@@ -2578,10 +2568,7 @@ pub struct MirrorDistArgs {
     effect = "read",
     example = "em query depgraph zlib",
     example = "em query belongs /usr/bin/python",
-    example = "em query list -I",
-    output("pretty", default, help = "emerge -p style pretend output"),
-    output("json", framing = "json", help = "Machine-parsable JSON"),
-    output("tree", help = "cargo tree style dependency tree")
+    example = "em query list -I"
 )]
 pub struct QueryArgs {
     #[usage(subcommand)]
@@ -3168,7 +3155,15 @@ pub struct StagesArgs {
 /// The explicit, self-contained form of the bare `em <atoms>` path — see
 /// [`Applet::Emerge`]'s doc comment.
 #[derive(usage::Args, Debug, Clone, Default)]
-#[usage(effect = "write", example = "em emerge firefox")]
+#[usage(
+    effect = "write",
+    example = "em emerge firefox",
+    output(
+        "json",
+        framing = "json",
+        help = "Machine-parsable JSON (`--json` with `-p` or `--info`)"
+    )
+)]
 pub struct EmergeArgs {
     #[usage(flatten)]
     pub mode: EmergeModeArgs,
@@ -3690,9 +3685,8 @@ pub enum QueryCommand {
         /// Atom(s) to resolve and display the dependency tree for
         #[usage(required)]
         atom: Vec<String>,
-        /// Output format
-        #[usage(long, short, value_enum, default = "pretty")]
-        format: DepgraphFormat,
+        #[usage(flatten)]
+        format_arg: DepgraphFormatArg,
         /// Let the solver choose USE flags to satisfy REQUIRED_USE (Level C)
         #[usage(long)]
         autosolve_use: bool,
@@ -4009,6 +4003,19 @@ pub enum Privilege {
     Sudo,
     /// No wrapping; run unprivileged (chowns best-effort, may not stick)
     None,
+}
+
+/// `--format` for `em query depgraph`
+#[derive(usage::Args, Debug, Clone, Copy)]
+#[usage(
+    output("pretty", default, help = "emerge -p style pretend output"),
+    output("json", framing = "json", help = "Machine-parsable JSON"),
+    output("tree", help = "cargo tree style dependency tree")
+)]
+pub struct DepgraphFormatArg {
+    /// Output format
+    #[usage(long, short, value_enum, default = "pretty")]
+    pub format: DepgraphFormat,
 }
 
 /// Output format for `em query depgraph`

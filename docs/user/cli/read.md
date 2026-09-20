@@ -30,9 +30,3 @@ Which tree this invocation reads and writes.
 
   Cross context (CHOST/CBUILD, `--root-deps=rdeps`) is read from the sysroot make.conf. One flag for both roles — `crossdev` no longer has its own `-t`/`--target`.
 - **`--root <PATH>`** — Installation root (the offset an applet installs into / queries)
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

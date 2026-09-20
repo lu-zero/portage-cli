@@ -14,9 +14,3 @@ Set `GENTOO_MIRRORS`
 - **`-c --country <COUNTRY>`** — Use every mirror in this ISO country code
 - **`-r --region <REGION>`** — Use every mirror in this region
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

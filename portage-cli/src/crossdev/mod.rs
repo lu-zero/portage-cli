@@ -480,12 +480,11 @@ fn step_flags(step: &stages::StageStep) -> String {
     }
 }
 
-/// Whether the active profile has `USE=prefix-guest` set — Gentoo Prefix's
-/// own "the host, not `::gentoo`, owns this OS's libc" signal:
-/// `virtual/libc`/`virtual/os-headers`'s RDEPEND collapse to a bare blocker
-/// under it, and `toolchain.eclass` gates gcc's libc-linking on the same
-/// flag. See [prefix-guest is host-OS-agnostic](../../docs/user/root-model.md)
-/// for why this reads `true` on Linux too, not just BSD/Darwin.
+/// Whether the active profile has `USE=prefix-guest` set: Gentoo Prefix's
+/// signal that the host, not `::gentoo`, owns the libc. `virtual/libc` and
+/// `virtual/os-headers` RDEPEND collapse to a bare blocker under it, and
+/// `toolchain.eclass` gates gcc's libc-linking on it. See [prefix-guest is
+/// host-OS-agnostic](../../../docs/user/root-model.md) for why it reads `true` on Linux too.
 ///
 /// Read the same way `info.rs` reads USE for its own display (`main_repo` →
 /// `repo.shell()` → `apply_profile_env` → `shell.get_var`) rather than a
@@ -2472,14 +2471,11 @@ mod tests {
         assert!(body.contains("CHOST=riscv64-unknown-linux-gnu"));
     }
 
-    // The sysroot make.conf is the *only* config `sys-devel/gcc` and every
-    // other ordinary stage1 package resolved against `--target` ever reads —
-    // unlike the self-contained `--root`'s own make.conf
-    // (`setup::host_makeopts`'s doc comment), there is no fallback host
-    // config to inherit build parallelism from. Missing this made a real
-    // stage1 build run fully serial (one `cc1plus` at a time on a 128-core
-    // host) bug, the same class of gap as `self_contained_root_gets_real_makeopts`
-    // in `setup.rs`.
+    // The sysroot make.conf is the only config a stage1 package resolves
+    // against `--target`, and unlike a self-contained `--root`'s make.conf
+    // (`setup::host_makeopts`) there is no host config to inherit MAKEOPTS from.
+    // Without it a stage1 build ran fully serial; `self_contained_root_gets_real_makeopts`
+    // in `setup/mod.rs` guards the same gap.
     #[test]
     fn make_conf_body_sets_makeopts() {
         let target = CrossTarget::parse("riscv64-unknown-linux-gnu", false).unwrap();

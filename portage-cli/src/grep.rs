@@ -2,8 +2,7 @@
 //!
 //! Two discovery modes feed one shared matcher/emitter pipeline: the repo
 //! tree (ebuilds or, with `-E`, eclasses) or, with `-J`, the installed
-//! packages' own ebuild copies under the resolved VDB. See
-//! `todo/grep-qgrep-workalike-plan.md` for the design this follows.
+//! packages' own ebuild copies under the resolved VDB.
 
 use std::io::Write as _;
 

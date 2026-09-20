@@ -11,9 +11,3 @@ Create/update the <target>-pkg-config wrapper
 ## Flags
 - **`-t --target <TARGET>`** — Target tuple (CTARGET) to create the wrapper for
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

@@ -8,12 +8,6 @@ Select the active binutils profile (binutils-config/eselect binutils workalike)
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Subcommands
 
 - [`em select binutils list [-t --target <TARGET>]`](binutils/list.md)

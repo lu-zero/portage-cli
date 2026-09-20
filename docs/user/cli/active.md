@@ -22,12 +22,6 @@ Explicit `--prefix`/`--local`/`--root` still win. State is stored under `$XDG_ST
 ## Flags
 - **`-h --help`** — Print help
 
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
-
 ## Examples
 
 **Register ~/.gentoo**

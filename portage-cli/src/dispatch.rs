@@ -558,7 +558,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
         }
         QueryCommand::Depgraph {
             atom,
-            format,
+            format_arg,
             autosolve_use,
             depgraph_flags,
             emptytree,
@@ -601,7 +601,7 @@ async fn run_query(command: &QueryCommand, globals: &cli::Cli) -> Result<()> {
                 // exactly how a `--oneshot` merge renders.
                 world_additions: &[],
                 arch: &globals.arch(),
-                format: *format,
+                format: format_arg.format,
                 verbose: globals.verbose(),
                 empty: *emptytree,
                 // equery depgraph is read-only: it reports autounmask candidates

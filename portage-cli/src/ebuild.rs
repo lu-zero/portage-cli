@@ -229,12 +229,11 @@ pub struct RootContext<'a> {
     /// topology — it must not source the `--prefix` overlay's
     /// config-overlay `bashrc`.
     ///
-    /// That recipe's `CPPFLAGS="-I<prefix>/usr/include ..."` is right for an
-    /// ordinary package layered over an already-populated prefix, but for
-    /// THIS bootstrap it can shadow a version-matched local header with an
-    /// incompatible one from the freshly-installed target libc — the same
-    /// class of bug already fixed for `--root` on 2026-07-03 (see
-    /// `setup.rs`'s `BASHRC_PREFIX`/`self_contained`).
+    /// That recipe's `CPPFLAGS="-I<prefix>/usr/include ..."` suits an ordinary
+    /// package layered over a populated prefix, but for THIS bootstrap it can
+    /// shadow a version-matched local header with an incompatible one from the
+    /// freshly installed target libc (the `--root` case is fixed the same way;
+    /// see `setup/mod.rs`'s `BASHRC_PREFIX`).
     pub self_contained_bootstrap: bool,
     /// Directories ahead of the sanitised phase `PATH` ([`portage_repo::phase_path_dirs`]),
     /// resolved by the caller

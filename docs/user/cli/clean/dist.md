@@ -10,9 +10,3 @@ Remove distfiles no ebuild references
 - **`-s --size-limit <SIZE>`** — Skip files smaller than this (e.g. `10M`, `1G`) — clears the big wins without touching a long tail of small files
 - **`-t --time-limit <AGE>`** — Keep files modified more recently than this (e.g. `2weeks`, `30d`)
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

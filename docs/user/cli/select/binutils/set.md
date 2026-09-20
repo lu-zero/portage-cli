@@ -11,9 +11,3 @@ Set the active binutils profile
 ## Flags
 - **`-t --target <TARGET>`** — Target tuple (CTARGET) for cross-binutils selection
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`

@@ -13,9 +13,3 @@ Add/remove a package from package.mask
 - **`-d --drop`** — Remove the atom from package.mask
 - **`--path <FILE>`** — Target file inside package.mask/ (default: `<cat>-<pkg>`)
 - **`-h --help`** — Print help
-
-## Output Formats
-
-- **`json`** — Machine-parsable JSON (`--json` with `-p` or `--info`)
-
-  **Framing:** `json`
