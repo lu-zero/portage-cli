@@ -65,11 +65,13 @@ Also `nu`, `powershell`, and `elvish`.
 
 ### Basic Usage
 
-Documented form is `em [applet] [options] [args]`. True globals (`-p`/`-v`/`-q`,
-`--arch`, `--repo`, `--color`) and Topology (`--prefix`/`--local`/`--config-root`/
-`--vdb`/`--target`) may also appear before a named applet
-(`em --prefix P toolchain`). Prefix emerge-mixins before a non-merge applet
-(`em -a search`, `em -uD query …`) are rejected.
+Documented form is `em [applet] [options] [args]`. `--color` is the only
+true global. The topology flags (`--prefix`/`--local`/`--config-root`/`--target`)
+may also appear before a named applet (`em --prefix P toolchain`). Any other
+leading flag (`-p`, `-v`, `-q`, `--arch`, `--repo`, `--vdb`, `-uD`) routes into
+`emerge`, the default applet, and swallows every later word as an emerge
+argument: `em -p toolchain` previews an emerge of a package named
+`toolchain`; write `em toolchain -p` to reach the applet.
 
 ```bash
 # Search for a package

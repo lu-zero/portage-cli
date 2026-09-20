@@ -378,7 +378,7 @@ on the topology being bootstrapped.
 
 Creates the directory skeleton, `make.conf`, `bashrc`, and (for self-contained
 roots) `repos.conf` + `make.profile`. Implemented in
-[`setup.rs`](../../portage-cli/src/setup.rs); never touches `/`.
+[`setup/mod.rs`](../../portage-cli/src/setup/mod.rs); never touches `/`.
 
 | target | what `em setup` writes |
 |---|---|
@@ -387,7 +387,7 @@ roots) `repos.conf` + `make.profile`. Implemented in
 | `--root R` (self-contained offset) | skeleton + self-contained `make.conf` (with real `MAKEOPTS`/`ACCEPT_KEYWORDS` — this is the *only* make.conf it reads) + `repos.conf` + `make.profile` symlinked to the host's resolved profile |
 
 The `bashrc` distinction is load-bearing
-([`setup.rs:131-157`](../../portage-cli/src/setup.rs)): an overlay (`--prefix`,
+(`BASHRC_PREFIX` vs the self-contained recipe in [`setup/mod.rs`](../../portage-cli/src/setup/mod.rs)): an overlay (`--prefix`,
 `--local`-as-overlay) needs CPPFLAGS/LDFLAGS injection so the compiler sees the
 delta layered over the host; a self-contained root (`--root`, `--local`-as-
 standalone) must **not** get that injection — it actively breaks builds by
@@ -462,9 +462,9 @@ bootstrapped a genuinely empty `--root` from absolute zero before.
 **Known gap — `--config-root` resolution is not uniform across commands, and
 the `--local` lifecycle silently depends on this.** Confirmed live
 2026-07-11, in order:
-- `setup.rs`'s `is_local`/overlay symlink split is *not* the bug
+- `setup/mod.rs`'s `is_local`/overlay symlink split is *not* the bug
   `root-topology.md` used to claim here — that was fixed already (see
-  `setup.rs`'s own "Previously gated on `is_local` — exactly backwards"
+  `setup/mod.rs`'s own "Previously gated on `is_local` — exactly backwards"
   comment). Don't re-diagnose it.
 - `em setup --local DIR` writes the layout correctly (own `bashrc`,
   `make.conf` — commentary-only, no `MAKEOPTS`, matching `--prefix`), but
@@ -520,7 +520,7 @@ em --local <pkg>                             # now self-hosting
 ```
 
 The `link_host_pythons`/`link_host_base_tools` `is_local` inversion this
-section used to describe is **already fixed** in `setup.rs` (see its own
+section used to describe is **already fixed** in `setup/mod.rs` (see its own
 "Previously gated on `is_local` — exactly backwards" comment) — `--local`
 correctly gets no host-python symlinks, `--prefix` correctly does. Don't
 re-diagnose that; it's done.

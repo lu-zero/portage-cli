@@ -182,7 +182,7 @@ real `ROOT=<dir> emerge -vp sys-devel/gcc` does not include; post-fix, the
 two plans match exactly (16/16 packages, byte-identical USE flags).
 
 Repro: `cargo build --release -p portage-cli`, then the two-binary
-`hyperfine` recipe in [`docs/benchmarks.md`](../docs/design/benchmarks.md#before-after-comparisons-for-a-specific-change).
+`hyperfine` recipe in [`docs/design/benchmarks.md`](../docs/design/benchmarks.md#before-after-comparisons-for-a-specific-change).
 
 ## Locations of Benchmarks
 
@@ -206,9 +206,8 @@ Repro: `cargo build --release -p portage-cli`, then the two-binary
 **No benches** in: portage-repo, portage-metadata, gentoo-core, gentoo-stages, portage-distfiles (they are exercised via the central ones or examples).
 
 See also:
-- `docs/benchmarks.md` — quick-start map of what to run and where (this file is the historical record/data)
-- `docs/architecture.md` (mentions portage-bench)
-- `docs/build-roadmap.md` (references bench-em-vs-emerge.sh for parity milestones)
+- `docs/design/benchmarks.md` — quick-start map of what to run and where (this file is the historical record/data)
+- `docs/design/architecture.md` (mentions portage-bench)
 
 ## How to Run / Reproduce (current workspace)
 

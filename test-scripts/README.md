@@ -1,7 +1,7 @@
 # test-scripts/
 
 Live, privileged, "layer 5" regression tests — see
-[`docs/testing.md`](../docs/design/testing.md#5-manual--privileged-live-testing-not-automatable-in-ci)
+[`docs/design/testing.md`](../docs/design/testing.md#5-manual--privileged-live-testing-not-automatable-in-ci)
 for where these fit relative to unit tests / CI. Nothing here runs in CI: it
 needs `sudo` (chroot, mount), a real network fetch for distfiles, and a
 [`crossdev-stages`](https://github.com/lu-zero/crossdev-stages) checkout
@@ -22,7 +22,7 @@ it down (mounts + directory) on exit.
 ### `regression-matrix.sh`
 
 Root-topology regression matrix for the toolchain/crossdev/stages bootstrap
-paths (`docs/root-topology.md`'s three modes: bare, `--root`, `--prefix`,
+paths (`docs/design/root-topology.md`'s three modes: bare, `--root`, `--prefix`,
 `--local`). Exists because "`-p`/pretend passes" was not enough to catch
 real bugs that only manifest during an actual build (installed-view VDB
 sharing, a CPPFLAGS-injecting bashrc) — quick mode still runs the fast `-p`

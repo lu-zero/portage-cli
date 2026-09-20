@@ -11,7 +11,7 @@
 # drives `em maint binpkg list/fingerprint/prune` for real against them, and
 # proves the reuse gate picks the *matching* variant, not just "a" variant.
 #
-# Uses a real crossdev-stages sandbox (see docs/testing.md's recipe) rather
+# Uses a real crossdev-stages sandbox (see docs/design/testing.md's recipe) rather
 # than a synthetic --root scratch dir: a real chroot exercises the actual
 # build shell sourcing make.conf for real (brush, not a test harness), which
 # is what the make_conf.rs rewrite (see git log) is meant to be correct

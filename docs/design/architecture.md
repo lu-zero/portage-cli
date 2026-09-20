@@ -7,8 +7,8 @@ validation, and known divergences from emerge.
 > **Slop warning.** This codebase is largely AI-generated. Verify a claim
 > against the code before relying on it; update this file when it drifts.
 
-Related: [`docs/testing.md`](./testing.md) (how correctness is established),
-[`docs/benchmarks.md`](./benchmarks.md) (how performance is measured),
+Related: [`docs/design/testing.md`](./testing.md) (how correctness is established),
+[`docs/design/benchmarks.md`](./benchmarks.md) (how performance is measured),
 [`usage-rs.md`](./usage-rs.md) (`em` CLI: clap → usage-rs).
 
 ## Crate layering
@@ -36,7 +36,7 @@ USE/keyword/mask policy, root-aware post-solve trimming, and plan assembly.
 It depends on `portage-repo` (brush), so it is unpublishable.
 
 `portage-bench` (in `benchmarks/`) depends on both solver bridges plus
-`portage-repo` for benchmarking. See [`docs/benchmarks.md`](./benchmarks.md)
+`portage-repo` for benchmarking. See [`docs/design/benchmarks.md`](./benchmarks.md)
 for how to run benchmarks across the workspace.
 
 ## Crate catalog
@@ -330,9 +330,10 @@ Intended target semantics (all match emerge):
   - `Error` — plain `em <name>` (a mutating command shouldn't silently guess).
     Still names the installed candidate and suggests `-u` when exactly one
     matches, unlike real emerge's bare list.
-  - `PreferInstalled` — `em -u <name>`: silently takes the installed candidate
-    when exactly one matches (with a `note:`), same hard-error-with-hint
-    otherwise.
+  - `PreferInstalled` — `em -u <name>`: takes the installed candidate when
+    exactly one matches and says so on stderr (an ` * ` note, hidden by `-q`),
+    same hard-error-with-hint otherwise. The note and the error are two
+    renderings of one `Ambiguity` value, so they share wording and styling.
   - `Ask` — `em -a <name>` (takes precedence over `-u`): interactively prompts
     with a numbered list, installed candidate marked and offered as the
     empty-input default; falls through to `Error`'s hard-error-with-hint on

@@ -3,7 +3,7 @@
 ## Build Commands
 
 Match CI (`.github/workflows/ci.yml`) before opening a PR. Locally, prefer
-`cargo nextest` for the unit/integration suite (see [docs/testing.md](./docs/design/testing.md));
+`cargo nextest` for the unit/integration suite (see [docs/design/testing.md](./docs/design/testing.md));
 still run plain `cargo test` at least once if you need CI-identical behaviour
 (doctests + default libtest scheduling).
 
@@ -62,7 +62,7 @@ examples, or manual runs; fail fast, fix, re-run.
 doc examples fail CI’s `test` job even when nextest is green. Rustdoc warnings
 (broken links, invalid codeblocks, etc.) fail the separate `doc` job.
 
-Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/design/testing.md).
+Full testing strategy and live-`emerge` parity: [docs/design/testing.md](./docs/design/testing.md).
 
 ## Architecture
 
@@ -72,7 +72,7 @@ Full testing strategy and live-`emerge` parity: [docs/testing.md](./docs/design/
 - Business logic is delegated to the library crates (`portage-atom`,
   `portage-metadata`, `portage-solver`, `portage-resolve`, `portage-repo`,
   `portage-atom-pubgrub`, `portage-vdb`, `portage-binpkg`, `portage-distfiles`, …).
-- **Read [`docs/architecture.md`](./docs/design/architecture.md) first** — it is the
+- **Read [`docs/design/architecture.md`](./docs/design/architecture.md) first** — it is the
   main architecture reference (crate catalog, the `em -p` resolution pipeline,
   USE stacking precedence, the USE/solver boundary, post-solve validation, and
   known divergences from emerge). Keep it updated as the design changes.
@@ -105,9 +105,13 @@ Crates.io deps take a semver requirement (`version = "6"`), never an exact
 pin (`=6.8.0`). `Cargo.lock` is gitignored; floating within the requirement
 is intended.
 
-Do not rewrite a crates.io dep as `git = "…", rev = "…"` in `Cargo.toml`.
-Unpublished commits and local checkouts go in gitignored `.cargo/config.toml`
-as `[patch.crates-io]` (`git` + `rev`, or a path).
+Do not rewrite a crates.io dep as `git = "…", rev = "…"` in a `Cargo.toml`
+dependency table. Local checkouts and experiments go in gitignored
+`.cargo/config.toml` as `[patch.crates-io]` (`git` + `rev`, or a path). When
+committed code needs an unpublished commit that CI must also build, use a
+workspace `[patch.crates-io]` (`git` + `rev`) and delete it once the release
+ships; today that is `usage-*` at the `lu-zero/usage` fork. A config patch
+takes precedence over the manifest one.
 
 Git-source workspace deps (`brush-*`, `pkgcraft`, `hakoniwa`) keep a `rev`
 in `Cargo.toml` — that is the source, not a crates.io pin.
@@ -166,7 +170,7 @@ running official benchmarks:
 6. Restore the local path patch for day-to-day work if you still have a live
    brush worktree.
 
-Full notes and failure modes: [`docs/testing.md`](./docs/design/testing.md) § "Bumping
+Full notes and failure modes: [`docs/design/testing.md`](./docs/design/testing.md) § "Bumping
 brush".
 
 ## Coding Style
@@ -380,7 +384,7 @@ When a dependency bump needs a newer compiler, raise `rust-version` in
 
 ## Testing strategy
 
-See [`docs/testing.md`](./docs/design/testing.md) for the full picture: why
+See [`docs/design/testing.md`](./docs/design/testing.md) for the full picture: why
 `cargo nextest` is preferred locally over plain `cargo test` (known
 `portage-repo` flakiness), that nextest skips doctests, the
 live-parity-against-real-`emerge` workflow that has caught most of this

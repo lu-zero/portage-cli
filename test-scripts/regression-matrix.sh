@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # regression-matrix.sh — root-topology regression matrix for the toolchain/
-# crossdev/stages bootstrap paths (docs/root-topology.md's three modes: bare,
+# crossdev/stages bootstrap paths (docs/design/root-topology.md's three modes: bare,
 # --root, --prefix, --local).
 #
 # Exists because "-p/pretend passes" was NOT enough to catch the two real

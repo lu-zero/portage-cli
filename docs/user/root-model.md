@@ -27,13 +27,13 @@ which prefers an already-bootstrapped prefix's own profile over the host
 (still overridden by an explicit `--config-root`; see the Scenarios table
 below). **`--vdb V`** overrides the base VDB path only.
 
-Canonical form is `em [applet] [options] [args]`. Topology flags
-(`--prefix`/`--local`/`--config-root`/`--vdb`/`--target`) and true globals
-may also appear before a named applet (`em --prefix P toolchain` parses).
-`--root` after `crossdev` is a parse error; prefix `em --root R crossdev`
-is rejected. `em toolchain`/`em stages`/`em setup`/`em emerge` (and the
-bare `em <atoms>` form) all still take `--root`. Prefix emerge-mixins
-before a non-merge applet (`em -uD query …`) are rejected.
+Canonical form is `em [applet] [options] [args]`. The topology flags
+(`--prefix`/`--local`/`--config-root`/`--target`) and `--color` may also
+appear before a named applet (`em --prefix P toolchain` parses). Any other
+leading flag, `--vdb` and the emerge flags included, routes into `emerge`
+instead. `--root` after `crossdev` is a parse error, and so is prefix
+`em --root R crossdev`. `em toolchain`/`em stages`/`em setup`/`em emerge`
+(and the bare `em <atoms>` form) all still take `--root`.
 
 ### Derived values
 
@@ -485,5 +485,5 @@ userland" property). It reuses Tier 1/2's dep-class routing and
 `--setup` ceremony that bootstraps the subset. Deferred because the "host is
 Gentoo and provides `BROOT=/`" assumption that makes Tiers 1–2 tractable does
 not hold here, so it is the most work and the least general. Today `--setup`
-*borrows* host tools via symlinks (`portage-cli/src/setup.rs`) rather than
+*borrows* host tools via symlinks (`portage-cli/src/setup/mod.rs`) rather than
 building a real subset; making the prefix self-hosting is this tier.

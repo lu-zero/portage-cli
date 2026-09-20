@@ -222,7 +222,7 @@ em --prefix /opt/xp --target riscv64-unknown-linux-gnu -b llvm-core/clang --jobs
 
 Step 2 is different from step 1’s `cross-<tuple>/*` packages (see "Two package
 classes"): real Cpns, sysroot `CHOST`/`CFLAGS`. Host vs target search paths:
-`setup.rs` `BASHRC_PREFIX`, `shell.rs` `ESYSROOT`.
+`setup/mod.rs` `BASHRC_PREFIX`, `shell.rs` `ESYSROOT`.
 
 ### Build one cross-category package directly (no `--target` needed)
 

@@ -15,7 +15,7 @@ crate (test-function count, not a quality signal, just where the mass is):
 `portage-repo` (197), `portage-cli` (193), `portage-metadata` (161),
 `portage-atom` (146), `portage-atom-pubgrub` (141), `portage-atom-resolvo`
 (82). This is where the USE-flag/solver-boundary logic
-(`docs/architecture.md`'s "USE/solver boundary" section), atom parsing, and
+(`docs/design/architecture.md`'s "USE/solver boundary" section), atom parsing, and
 CLI plumbing get their fast, deterministic coverage.
 
 Run: `cargo test --workspace --exclude portage-bench` (matches CI exactly —
@@ -61,7 +61,7 @@ mystery to re-investigate each time.
 
 ### 4. Live parity against real `emerge` — the strongest oracle this project has
 
-`benchmarks/bench-em-vs-emerge.sh` (see `docs/benchmarks.md`) resolves a
+`benchmarks/bench-em-vs-emerge.sh` (see `docs/design/benchmarks.md`) resolves a
 fixed basket of real-world targets (qtbase, texlive-core, firefox,
 qtwebengine, thunderbird, libreoffice, qemu, a crossdev target) with both
 `em -p` and real `emerge -p` and diffs the package sets. `SKIP_TIMING=1`
@@ -176,7 +176,7 @@ sudo chroot "$SB" /usr/local/bin/em --help   # sanity check before anything real
 ```
 
 From there, drive scenarios exactly as documented in
-`docs/root-model.md`: e.g.
+`docs/user/root-model.md`: e.g.
 `sudo chroot "$SB" /usr/local/bin/em toolchain --setup --root /root/x -p`
 first (fast, catches resolution regressions), then the real (non-`-p`) run.
 
@@ -332,7 +332,7 @@ individual commands):
    `-vp`/`-p` comparison against real `emerge` for the specific case the
    change targets, reading the *entire* output.
 7. For anything touching performance-sensitive code: the two-binary
-   `hyperfine` recipe in `docs/benchmarks.md`, on a target big enough for
+   `hyperfine` recipe in `docs/design/benchmarks.md`, on a target big enough for
    the effect to clear the noise floor.
 7. For anything touching the ebuild shell / `../brush`: the **Bumping
    brush** recipe above (nextest `portage-repo` + pin + push), not a one-off

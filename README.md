@@ -19,7 +19,7 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 
 > **Pre-release git checkout**: This is development source from `git` before the
 > first release of `portage-cli` / the `em` binary on crates.io. See
-> [`docs/architecture.md`](./docs/design/architecture.md) for the per-crate
+> [`docs/design/architecture.md`](./docs/design/architecture.md) for the per-crate
 > published/local-only breakdown.
 
 ## Applet status
@@ -41,14 +41,14 @@ dispatches to subcommands corresponding to the traditional tools (`emerge`,
 | `mirrordist` | `emirrordist` | Working — [detail](./docs/user/applets.md#em-mirrordist-emirrordist) |
 | `clean` | `eclean` | Working — [detail](./docs/user/applets.md#em-clean-eclean) |
 | `revdep` | `revdep-rebuild` | Working — [detail](./docs/user/applets.md#em-revdep-revdep-rebuild) |
-| `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/activity.md](./docs/user/activity.md) |
-| `grep` | `egreplite` | Planned — [detail](./docs/user/applets.md#em-portageq-and-em-grep-planned-user-facing) |
-| `portageq` | `portageq` | Planned — [detail](./docs/user/applets.md#em-portageq-and-em-grep-planned-user-facing) |
+| `log` | `genlop` | Working — `current`/`list`/`time`/`predict`; see [docs/user/activity.md](./docs/user/activity.md) |
+| `grep` | `qgrep` | Working — search ebuilds, eclasses or installed ebuild copies — [detail](./docs/user/applets.md#em-grep-qgrep) |
+| `portageq` | `portageq` | Partial — the installed-package group (`has_version`, `best_version`, `match`, `mass_best_version`) — [detail](./docs/user/applets.md#em-portageq-portageq) |
 | `read` | `elogv` / elog reader | Working — [detail](./docs/user/applets.md#em-read-elogv-and-the-elog-system) |
 | `select` | `eselect` | Partial — `profile`, `repository`, `compiler`, `binutils`, `linker`, `clang`, `pkgconf`, `mirrors`, `news` (`eselect news`), `glsa` (`glsa-check`), … |
 | `active` | — | Working — register default `--prefix`/`--local` for bare `em` |
 | `setup` | — | Working — bootstrap a prefix layout (`--local` / `--prefix`) |
-| `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap; see [docs/crossdev.md](./docs/user/crossdev.md) |
+| `crossdev` | `crossdev` | Working — cross sysroot + staged toolchain bootstrap; see [docs/user/crossdev.md](./docs/user/crossdev.md) |
 | `toolchain` | — | Working — native self-hosting toolchain bootstrap (`--root` / `--prefix` / `--local`) |
 | `stages` | catalyst stage1/3 | Partial — `--stage1` (`packages.build`), `--stage3` (emptytree `@system`); no stage4 yet |
 | `dispatch` | `dispatch-conf` | Working — alias of `etc` |

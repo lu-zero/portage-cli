@@ -117,7 +117,7 @@ already encodes layout policy (and split-usr when the profile says so).
 
 ### Content under EPREFIX (overlay only)
 
-**`HOST_BASE_TOOLS` / host python symlinks** (`setup.rs`): put real **host
+**`HOST_BASE_TOOLS` / host python symlinks** (`setup/mod.rs`): put real **host
 binaries** at `${EPREFIX}/usr/bin/…` so shebangs and hardcoded tool paths
 resolve **without** building a full Prefix userland under `P`.
 
@@ -262,7 +262,7 @@ sysroot is out of order, not a pure solver bug.
 
 | Concern | Location |
 |---------|----------|
-| Setup + outer baselayout + host links | `portage-cli/src/setup.rs` |
+| Setup + outer baselayout + host links | `portage-cli/src/setup/mod.rs` |
 | Cross plan baselayout / stage1 plan | `portage-cli/src/crossdev/stages.rs` |
 | Staged driver, BOOTSTRAP_USE, stage1 autosolve | `portage-cli/src/crossdev/mod.rs` |
 | `use_outer_eroot` routing | `portage-cli/src/emerge.rs` |

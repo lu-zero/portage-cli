@@ -177,5 +177,5 @@ rg -n 'cross_llvm|cross-\*' /var/db/repos/gentoo/eclass/crossdev.eclass
 
 ## See also
 
-- [`docs/crossdev.md`](../user/crossdev.md) — user-facing `em crossdev`  
-- [`docs/root-topology.md`](./root-topology.md) — roots / outer EROOT / use_outer_eroot
+- [`docs/user/crossdev.md`](../user/crossdev.md) — user-facing `em crossdev`  
+- [`docs/design/root-topology.md`](./root-topology.md) — roots / outer EROOT / use_outer_eroot

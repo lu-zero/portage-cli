@@ -5,7 +5,7 @@ per-subcommand status, gaps against the real Portage tool, and notes on
 deliberate design differences.
 
 **Covered here:** `query`, `use`, `maint`, `clean`, `etc`, `revdep`,
-`mirrordist`, `read`, plus [what is still planned](#em-portageq-and-em-grep-planned-user-facing).
+`mirrordist`, `read`, `portageq`, `grep`.
 
 **Covered by their own document:**
 
@@ -47,7 +47,7 @@ applet, and each one's `--help` lists its subcommands.
 - **VDB awareness** — installed packages use `InstalledPolicy::Favor` (keep satisfying versions); already-installed exact CPVs are filtered from the merge list; installed-and-kept packages expand runtime deps only
 - **`-uD` / `--update --deep`** — transitive **in-slot upgrades** (`prefer_update`); host-satisfied build tools still enter the graph so they can upgrade (emerge deep-update). `-u` alone does not mass-upgrade deps; `-D` alone still bumps `:*` slots (`prefer_newest_slot`)
 - **`-N` / `--newuse` and `-U` / `--changed-use`** — same-CPV rebuild when planned USE/IUSE differs from the VDB; with `-uD`, prefer newest when USE drift forces a rebuild
-- **Profile USE flags** — `make.defaults` / `make.conf` through brush with portage-style incremental USE stacking (see `docs/architecture.md`)
+- **Profile USE flags** — `make.defaults` / `make.conf` through brush with portage-style incremental USE stacking (see `docs/design/architecture.md`)
 - **USE_EXPAND** — `PYTHON_TARGETS`, `CPU_FLAGS_*`, `ABI_X86`, etc. expanded and grouped in output
 - **OR-group branch selection** — prefer branches whose USE deps are already satisfied (avoids gratuitous rebuilds)
 - **Post-solve USE-dep rebuilds** — violated USE deps on installed packages force rebuild / `upgrade_to` fixpoint (not full `--newuse`)
@@ -330,23 +330,43 @@ itself used to decide what to protect.
 
 **Gaps vs dispatch-conf:** no RCS/archival history of superseded versions.
 
-## `em portageq` and `em grep` — planned, user-facing
+## `em portageq` (portageq)
 
-Both are CLI stubs today.
+Portage's own query interface, for a person asking "what is installed under
+this root". Only the installed-package group is implemented:
+`has_version`, `best_version`, `match` and `mass_best_version`. Output and
+exit codes (0 hit, 1 no match, 2 invalid atom, 64 `<EROOT>` is not a
+directory) follow real `portageq`, error text included.
 
-`portageq` is a **user** tool: it answers "what does this configuration
-actually resolve to" — `envvar DISTDIR`, `get_repo_path`, `match`,
-`expand_virtual` — which is exactly the question `em`'s own
-`--root`/`--prefix`/`--local` offsets make hard to answer by hand. That
-makes it *more* useful here than on a stock host, not less, since the
-system's own `portageq` reports about `/` regardless of which root you are
-operating on.
+Every command takes `<EROOT>` as its own argument, as real `portageq`
+does, and ignores `em`'s `--root`/`--prefix`/`--local`: the root you name is
+the root you query.
 
-`grep` (a `pquery`-shaped search through ebuilds and eclasses) is likewise
-for a person looking something up.
+**Gaps vs portageq:**
+- The settings (`envvar`), repository (`get_repo_path`), metadata,
+  `contents`/`owners`, `best_visible` and `expand_virtual` groups do not
+  exist.
+- `match` takes plain dependency atoms or the empty string (every installed
+  package). Glob atoms such as `cat/*` are rejected as invalid.
 
-No inheritable eclass or live ebuild calls `portageq`, so `em` does not need
-it as a phase builtin. The user-facing command is still wanted.
+No inheritable eclass or ebuild calls `portageq`, so it is not a phase
+builtin; this is the command-line tool only.
 
-Whenever it is built, `envvar`, `has_version`, `match`, `best_version` and
-`get_repo_path` cover every shape found in the wild.
+Reference: [`em portageq`](./cli/portageq.md).
+
+## `em grep` (qgrep)
+
+Search inside ebuilds (default), eclasses (`-E`) or the ebuild copies
+under the installed-package database (`-J`). `PATTERN` is a literal
+substring unless `-e` makes it a regular expression; `-i`, `-I`, `-s`, `-S`,
+`-B`/`-A` context, and the `-N`/`-R`/`-c`/`-l`/`-L`/`-q` output shapes
+follow `qgrep`. Trailing arguments restrict the search to atoms (`cat/pkg`,
+`cat/`, a bare name or a full dependency atom).
+
+**Differences from qgrep:**
+- The exit status is the `grep(1)` convention: 0 when any file matched, 1
+  when none did. Real `qgrep` exits 1 whenever atom targets are given, even
+  with matches.
+- `-E` lists eclasses sorted by name; `qgrep` uses directory order.
+
+Reference: [`em grep`](./cli/grep.md).
