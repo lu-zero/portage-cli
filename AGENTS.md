@@ -7,6 +7,10 @@ Match CI (`.github/workflows/ci.yml`) before opening a PR. Locally, prefer
 still run plain `cargo test` at least once if you need CI-identical behaviour
 (doctests + default libtest scheduling).
 
+`just check` runs the fmt, clippy, doc and test jobs plus the documentation
+checks (dead links, and whether `docs/user/cli` matches the spec). `just docs`
+regenerates that CLI reference; never edit its pages by hand.
+
 ```bash
 # Core suite — CI `test` job (includes unit, integration, *and* doctests)
 cargo test --workspace --exclude portage-bench
@@ -54,6 +58,7 @@ examples, or manual runs; fail fast, fix, re-run.
 | `clippy` | `cargo clippy --workspace --exclude portage-bench -- -D warnings` |
 | `fmt` | `cargo fmt --all -- --check` |
 | `doc` | `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --exclude portage-bench --no-deps` |
+| `cli-reference` | `just docs-check` (stricter than CI: compares content, not just the page set) |
 | `bench-smoke` | `cargo check -p portage-bench --benches --features pkgcraft-compare` |
 | `msrv` | `cargo msrv verify --rust-version 1.95 --path portage-cli` |
 | `coverage` | optional locally (`cargo llvm-cov …`); uploads to Codecov in CI |

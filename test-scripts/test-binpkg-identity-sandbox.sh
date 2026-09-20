@@ -21,9 +21,8 @@
 #   --keep           Don't destroy the sandbox on exit (for follow-up manual
 #                     poking). Mounts are still torn down.
 #   --sandbox NAME   Sandbox name (default: em-binpkg-identity). Always
-#                     destroyed-then-recreated fresh — never reused as-is,
-#                     see the 2026-07-12 stale-sandbox incident note in
-#                     memory/docs/testing.md.
+#                     destroyed-then-recreated fresh — never reused as-is
+#                     (see the sandbox recipe in docs/design/testing.md).
 #
 #   CROSSDEV_STAGES_DIR   path to the crossdev-stages checkout
 #                         (default: ~/Sources/crossdev-stages)
