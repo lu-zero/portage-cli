@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use gentoo_core::Arch;
-use portage_repo::{ProfileDesc, Repository};
+use portage_repo::Repository;
 
 use crate::config_plan::{self, ConfigEntry};
 
@@ -34,15 +34,45 @@ fn release_key(path: &str) -> Option<portage_atom::Version> {
         .find_map(|seg| portage_atom::Version::parse(seg).ok())
 }
 
+/// `default/linux/<arch>/**/prefix` leaves on disk, as paths relative to `profiles/`.
+///
+/// `profiles.desc` is pkgcheck's scan list, not an inventory: only amd64 and
+/// x86 register their `.../prefix` leaves, though arm, arm64, ppc64le and
+/// riscv ship them too. `split-usr` variants are skipped, as in the registered case.
+fn on_disk_prefix_leaves(profiles: &Utf8Path, arch: &str) -> Vec<String> {
+    fn walk(dir: &Utf8Path, rel: &str, out: &mut Vec<String>) {
+        let Ok(entries) = dir.read_dir_utf8() else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) || name == "split-usr" {
+                continue;
+            }
+            let path = format!("{rel}/{name}");
+            if name == "prefix" {
+                out.push(path);
+            } else {
+                walk(entry.path(), &path, out);
+            }
+        }
+    }
+    let rel = format!("default/linux/{arch}");
+    let mut leaves = Vec::new();
+    walk(&profiles.join(&rel), &rel, &mut leaves);
+    leaves
+}
+
 /// This host's ARCH's default standalone-prefix profile: the newest
 /// `.../prefix` leaf for `Arch::current()`, excluding `split-usr` (merged-usr
 /// is the modern default) and kernel-version-pinned sub-leaves (`.../prefix/
 /// kernel-3.2+`, which don't end in plain `/prefix`). Status is deliberately
 /// not filtered to `stable` — every amd64 prefix profile in `::gentoo` today
 /// is `exp`, which is simply what a Prefix profile is, not a quality signal.
+/// Registered profiles win; only an arch with none registered is scanned on disk.
 fn default_profile_for_arch(repo: &Repository) -> Result<String> {
     let arch = Arch::current();
-    let mut candidates: Vec<ProfileDesc> = repo
+    let mut candidates: Vec<String> = repo
         .profiles_desc()
         .context("reading profiles.desc")?
         .into_iter()
@@ -51,12 +81,17 @@ fn default_profile_for_arch(repo: &Repository) -> Result<String> {
                 && d.path().ends_with("/prefix")
                 && !d.path().contains("split-usr")
         })
-        .collect();
-    candidates.sort_by_key(|d| release_key(d.path()));
-    candidates
-        .pop()
         .map(|d| d.path().to_owned())
-        .with_context(|| format!("no {arch} prefix profile found in ::gentoo — pass --profile"))
+        .collect();
+    if candidates.is_empty() {
+        candidates = on_disk_prefix_leaves(&repo.path().join("profiles"), arch.as_str());
+    }
+    candidates.sort_by_key(|p| release_key(p));
+    candidates.pop().with_context(|| {
+        format!(
+            "no {arch} prefix profile found in ::gentoo — choose one with `em select profile set`"
+        )
+    })
 }
 
 /// Symlink `<eroot>/etc/portage/make.profile` to the resolved profile
@@ -169,6 +204,62 @@ mod tests {
                 ))
                 .as_std_path()
         );
+    }
+
+    fn make_dirs(repo: &Repository, rels: &[&str]) {
+        for rel in rels {
+            std::fs::create_dir_all(repo.path().join("profiles").join(rel)).unwrap();
+        }
+    }
+
+    // arm64 ships `default/linux/arm64/23.0/prefix` but profiles.desc registers none.
+    #[test]
+    fn falls_back_to_an_unregistered_on_disk_prefix_leaf() {
+        let arch = Arch::current();
+        let (_repo_dir, repo) = fixture_repo(&format!("{arch} default/linux/{arch}/23.0 stable\n"));
+        let base = format!("default/linux/{arch}");
+        make_dirs(
+            &repo,
+            &[
+                &format!("{base}/17.0/prefix"),
+                &format!("{base}/23.0/prefix/kernel-3.2+"),
+                &format!("{base}/23.0/split-usr/prefix"),
+                &format!("{base}/23.0/systemd"),
+            ],
+        );
+        let (_host_dir, host_root) = utf8_tempdir();
+        let (_eroot_dir, eroot) = utf8_tempdir();
+
+        ensure_profile_from(&eroot, &repo, &host_root).unwrap();
+
+        let link_target = std::fs::read_link(eroot.join("etc/portage/make.profile")).unwrap();
+        assert_eq!(
+            link_target,
+            repo.path()
+                .join(format!("profiles/{base}/23.0/prefix"))
+                .as_std_path()
+        );
+    }
+
+    // A registered leaf is used as-is; the disk is only consulted when none is.
+    #[test]
+    fn registered_prefix_profiles_win_over_the_disk_scan() {
+        let arch = Arch::current();
+        let (_repo_dir, repo) =
+            fixture_repo(&format!("{arch} default/linux/{arch}/17.0/prefix exp\n"));
+        make_dirs(&repo, &[&format!("default/linux/{arch}/23.0/prefix")]);
+
+        assert_eq!(
+            default_profile_for_arch(&repo).unwrap(),
+            format!("default/linux/{arch}/17.0/prefix")
+        );
+    }
+
+    #[test]
+    fn no_prefix_profile_anywhere_points_at_select_profile() {
+        let (_repo_dir, repo) = fixture_repo("");
+        let err = default_profile_for_arch(&repo).unwrap_err().to_string();
+        assert!(err.contains("em select profile set"), "{err}");
     }
 
     #[test]
