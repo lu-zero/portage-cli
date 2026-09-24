@@ -11,6 +11,8 @@ use crate::version_set::PortageVersionSet;
 // defined once in `portage-solver`.
 pub use portage_solver::DepClass;
 
+type OrderedNode = (String, (PortagePackage, Version));
+
 /// A labeled edge in the dependency graph: (from_pkg, from_version) depends on
 /// (to_pkg, to_version) via the given class
 #[derive(Debug, Clone)]
@@ -239,20 +241,21 @@ impl PortageDependencyProvider {
     ) -> InstallOrderResult {
         let (graph, mut stats) = self.dependency_graph_with_stats(solution);
 
-        // Index nodes deterministically (sorted by key) so SCC discovery and all
+        // Index nodes deterministically (sorted by cached key) so SCC discovery and all
         // tie-breaks are reproducible.
-        let mut node_pv: Vec<(String, (PortagePackage, Version))> = solution
+        let mut node_pv: Vec<OrderedNode> = solution
             .iter()
             .map(|(pkg, ver)| (format!("{}-{}", pkg, ver), (pkg.clone(), ver.clone())))
             .collect();
         node_pv.sort_by(|a, b| a.0.cmp(&b.0));
         let n = node_pv.len();
         stats.graph_nodes = n;
-        let idx: HashMap<&str, usize> = node_pv
+        let idx: HashMap<(&PortagePackage, &Version), usize> = node_pv
             .iter()
             .enumerate()
-            .map(|(i, (k, _))| (k.as_str(), i))
+            .map(|(i, (_, (pkg, ver)))| ((pkg, ver), i))
             .collect();
+        let node_id = |pkg: &PortagePackage, ver: &Version| idx.get(&(pkg, ver)).copied();
 
         // Adjacency: dependency → dependent ("dependency comes first").
         // `succ_all` = hard (DEPEND/BDEPEND) + soft (RDEPEND); `succ_hard` only
@@ -266,9 +269,10 @@ impl PortageDependencyProvider {
                 // PDEPEND (merged after parent) / IDEPEND: no ordering constraint.
                 _ => continue,
             };
-            let to = format!("{}-{}", edge.to.0, edge.to.1);
-            let from = format!("{}-{}", edge.from.0, edge.from.1);
-            let (Some(&u), Some(&v)) = (idx.get(to.as_str()), idx.get(from.as_str())) else {
+            let (Some(u), Some(v)) = (
+                node_id(&edge.to.0, &edge.to.1),
+                node_id(&edge.from.0, &edge.from.1),
+            ) else {
                 continue;
             };
             succ_all[u].push(v);
@@ -278,6 +282,11 @@ impl PortageDependencyProvider {
         }
         for adj in succ_all.iter_mut() {
             adj.sort_unstable();
+            adj.dedup();
+        }
+        for adj in succ_hard.iter_mut() {
+            adj.sort_unstable();
+            adj.dedup();
         }
 
         // Strongly-connected components via iterative Tarjan.  Nodes in different
@@ -305,21 +314,13 @@ impl PortageDependencyProvider {
             }
         }
 
-        // The component key (max member node key) drives a deterministic
-        // max-heap tie-break, preserving the "largest ready first" ordering and
-        // keeping the requested target — which has no dependents and so becomes
-        // ready last — near the end.
-        let comp_key = |c: usize| -> &str {
-            members[c]
-                .iter()
-                .map(|&i| node_pv[i].0.as_str())
-                .max()
-                .unwrap_or("")
-        };
+        // The component key (max member node index, with nodes already sorted by
+        // key) drives a deterministic max-heap tie-break.
+        let comp_key = |c: usize| -> usize { members[c].iter().copied().max().unwrap_or(0) };
 
-        let mut comp_ready: BinaryHeap<(String, usize)> = (0..num_comps)
+        let mut comp_ready: BinaryHeap<(usize, usize)> = (0..num_comps)
             .filter(|&c| comp_indeg[c] == 0)
-            .map(|c| (comp_key(c).to_string(), c))
+            .map(|c| (comp_key(c), c))
             .collect();
 
         let mut result = Vec::with_capacity(n);
@@ -338,7 +339,7 @@ impl PortageDependencyProvider {
             for &cv in &comp_succ[c] {
                 comp_indeg[cv] -= 1;
                 if comp_indeg[cv] == 0 {
-                    comp_ready.push((comp_key(cv).to_string(), cv));
+                    comp_ready.push((comp_key(cv), cv));
                 }
             }
         }
@@ -435,7 +436,7 @@ fn order_cycle(
     members: &[usize],
     succ_hard: &[Vec<usize>],
     succ_all: &[Vec<usize>],
-    node_pv: &[(String, (PortagePackage, Version))],
+    node_pv: &[OrderedNode],
 ) -> Vec<usize> {
     use std::collections::HashSet;
     let set: HashSet<usize> = members.iter().copied().collect();
@@ -575,11 +576,12 @@ fn repair_soft_inversions(
         return order;
     }
 
-    let node_key = |p: &PortagePackage, v: &Version| format!("{p}-{v}");
-    let mut pos: HashMap<String, usize> = HashMap::with_capacity(n);
+    let mut pos: HashMap<(&PortagePackage, &Version), usize> = HashMap::with_capacity(n);
     for (i, (p, v)) in order.iter().enumerate() {
-        pos.insert(node_key(p, v), i);
+        pos.insert((p, v), i);
     }
+    let mut reach_marks = vec![0u32; n];
+    let mut reach_epoch = 0u32;
 
     // `before_succ[u]` = nodes that must come *after* u (u before them).
     let mut before_succ: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -602,7 +604,7 @@ fn repair_soft_inversions(
             return true;
         }
         // Adding u→v (u before v) cycles if v can already reach u.
-        if reaches(v, u, succ, stats) {
+        if reaches(v, u, succ, &mut reach_marks, &mut reach_epoch, stats) {
             return false;
         }
         succ[u].push(v);
@@ -620,10 +622,10 @@ fn repair_soft_inversions(
     let mut soft: Vec<(usize, usize)> = Vec::new();
     let mut bdepend_targets: std::collections::HashSet<usize> = std::collections::HashSet::new();
     for edge in graph {
-        let Some(&from_i) = pos.get(&node_key(&edge.from.0, &edge.from.1)) else {
+        let Some(&from_i) = pos.get(&(&edge.from.0, &edge.from.1)) else {
             continue;
         };
-        let Some(&to_i) = pos.get(&node_key(&edge.to.0, &edge.to.1)) else {
+        let Some(&to_i) = pos.get(&(&edge.to.0, &edge.to.1)) else {
             continue;
         };
         match edge.class {
@@ -635,6 +637,7 @@ fn repair_soft_inversions(
             bdepend_targets.insert(to_i);
         }
     }
+    drop(pos);
     hard.sort_unstable();
     hard.dedup();
     soft.sort_unstable();
@@ -697,22 +700,34 @@ fn repair_soft_inversions(
 }
 
 /// Whether `start` can reach `target` following `succ` edges
-fn reaches(start: usize, target: usize, succ: &[Vec<usize>], stats: &mut GraphStats) -> bool {
+fn reaches(
+    start: usize,
+    target: usize,
+    succ: &[Vec<usize>],
+    marks: &mut [u32],
+    epoch: &mut u32,
+    stats: &mut GraphStats,
+) -> bool {
     stats.repair_reachability_calls += 1;
     if start == target {
         return true;
     }
+    *epoch = epoch.wrapping_add(1);
+    if *epoch == 0 {
+        marks.fill(0);
+        *epoch = 1;
+    }
+    let generation = *epoch;
     let mut stack = vec![start];
-    let mut visited = vec![false; succ.len()];
-    visited[start] = true;
+    marks[start] = generation;
     while let Some(u) = stack.pop() {
         stats.repair_reachability_nodes += 1;
         for &v in &succ[u] {
             if v == target {
                 return true;
             }
-            if !visited[v] {
-                visited[v] = true;
+            if marks[v] != generation {
+                marks[v] = generation;
                 stack.push(v);
             }
         }
@@ -790,6 +805,50 @@ mod tests {
         assert_eq!(measured.stats.graph_builds, 1);
         assert_eq!(measured.stats.graph_nodes, solution.iter().count());
         assert_eq!(measured.stats.graph_edges, edges.len());
+    }
+
+    #[test]
+    fn duplicate_adjacency_keeps_labels_without_changing_order() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+        repo.add_version(
+            Cpv::parse("dev-libs/bottom-1.0").unwrap(),
+            None,
+            None,
+            empty(),
+        );
+        repo.add_version(
+            Cpv::parse("app-misc/top-1.0").unwrap(),
+            None,
+            None,
+            PackageDeps {
+                depend: (DepEntry::parse("dev-libs/bottom").unwrap()).into(),
+                rdepend: (DepEntry::parse("dev-libs/bottom").unwrap()).into(),
+                ..empty()
+            },
+        );
+        let mut provider = PortageDependencyProvider::new(repo);
+        let top = PortagePackage::unslotted(Cpn::parse("app-misc/top").unwrap());
+        let solution = provider
+            .resolve_targets(vec![(top, PortageVersionSet::any())])
+            .unwrap();
+
+        let edges = provider.dependency_graph(&solution);
+        assert_eq!(edges.len(), 2);
+        assert!(edges.iter().any(|edge| edge.class == DepClass::Depend));
+        assert!(edges.iter().any(|edge| edge.class == DepClass::Rdepend));
+        let order = provider.install_order(&solution);
+        let names: Vec<&str> = order
+            .iter()
+            .map(|(package, _)| package.cpn().package.as_str())
+            .collect();
+        assert_eq!(names, ["bottom", "top"]);
     }
 
     #[test]

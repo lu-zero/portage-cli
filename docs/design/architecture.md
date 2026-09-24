@@ -397,8 +397,10 @@ Stages, in order:
 7. **Post-solve checks** — see [Post-solve validation](#post-solve-validation).
 8. **Install order** (`install_order`) — SCC condensation (iterative Tarjan) +
    lexicographic Kahn; hard (DEPEND/BDEPEND) edges before soft (RDEPEND); cycles
-   broken on soft edges. Explicitly-requested targets are listed last when
-   nothing depends on them (emerge convention).
+   broken on soft edges. The lexical key is cached once per selected node, while
+   edge and repair lookups use typed node indices and reusable reachability marks.
+   Explicitly-requested targets are listed last when nothing depends on them
+   (emerge convention).
 8b. **Post-order rewrite** — for everything except native `--emptytree`,
     `--with-bdeps` triggers the within-run BDEPEND trim (`bdepend_trim.rs`),
     dropping edges already satisfied on BROOT or by earlier plan entries. Native

@@ -590,6 +590,26 @@ cargo bench -p portage-bench --bench repo_cache_lookup -- --noplot --warm-up-tim
 
 The baseline was run from a detached worktree at `d737929e` with the same fixture and raw-list lookup implementation.
 
+### 17. Typed graph node indices (thalia, 2026-09-25)
+
+`graph_scaling` uses the existing soft-cycle/OR fixture. BF-210 keeps one cached lexical key per selected node, maps graph edges and repair positions through typed `(PortagePackage, Version)` indices, deduplicates ordering adjacency, and reuses generation-stamped reachability marks. The baseline is the same fixture at `b122fc18`.
+
+| Selected nodes | Baseline order | Indexed order | Reduction |
+|---------------:|---------------:|--------------:|----------:|
+| 33 | 154.5 µs | 148.8 µs | 3.7% |
+| 65 | 467.2 µs | 457.5 µs | 2.1% |
+| 129 | 1.548 ms | 1.522 ms | 1.7% |
+
+The fixture reports one repair reachability probe and the same 33/65/129-edge graph at each size. This is an isolated graph-order measurement; it does not claim an end-to-end resolve speedup. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench graph_scaling -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline was run from a detached worktree at `b122fc18` with the same fixture.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
