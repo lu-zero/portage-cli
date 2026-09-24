@@ -103,3 +103,7 @@ harness = false
 [[bench]]
 name = "policy_lists"
 harness = false
+
+[[bench]]
+name = "repo_cache_lookup"
+harness = false

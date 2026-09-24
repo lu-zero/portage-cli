@@ -564,6 +564,32 @@ cargo bench -p portage-bench --bench policy_lists -- --noplot --warm-up-time 1 -
 
 The baseline was run from a detached worktree at `ac54eb1c` with the same fixture and raw-list adapter.
 
+### 16. Exact CPV cache lookup (thalia, 2026-09-25)
+
+`repo_cache_lookup` builds a synthetic repository with 128/512/2,048 CPNs and 8/32/128 versions per CPN, then warms three exact-version lookups per CPN. The baseline is the same fixture at `d737929e` (after BF-207, before BF-208), using the former linear vector scans; the indexed side builds its CPV index once per fixture.
+
+| Fixture | Baseline lookup | Indexed lookup | Change |
+|---------|----------------:|---------------:|-------:|
+| 128×8 | 29.1 µs | 54.8 µs | +88.3% |
+| 128×32 | 78.8 µs | 55.4 µs | −29.7% |
+| 128×128 | 302.5 µs | 56.0 µs | −81.5% |
+| 512×8 | 122.7 µs | 221.2 µs | +80.2% |
+| 512×32 | 380.5 µs | 226.1 µs | −40.6% |
+| 512×128 | 1.506 ms | 227.7 µs | −84.9% |
+| 2,048×8 | 704.9 µs | 1.168 ms | +65.7% |
+| 2,048×32 | 1.926 ms | 1.231 ms | −36.1% |
+| 2,048×128 | 11.242 ms | 1.344 ms | −88.0% |
+
+The eight-version rows show the expected hash-index setup/lookup overhead; the index is not a universal win for tiny per-CPN vectors. At 32 versions it reduces lookup time by 29.7–40.6%, and at 128 versions by 81.5–88.0%. Index construction adds roughly 2.5–15% to the isolated build fixture. This is an exact-lookup measurement, not an end-to-end resolve claim; raw duplicate-repository scans remain unchanged.
+
+Criterion used 30 samples, a one-second warm-up, and a two-second measurement window. Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench repo_cache_lookup -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 30
+```
+
+The baseline was run from a detached worktree at `d737929e` with the same fixture and raw-list lookup implementation.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

@@ -358,7 +358,9 @@ newest slot while `:slot` / `=…-ver*` pin the matching one.
 Stages, in order:
 
 1. **Load facts** (`repo.rs`) — parse the repo's md5-cache into `RepoData`
-   (CPN → versions → `CacheEntry`), filtered by keywords/mask/license.
+   (CPN → versions → `CacheEntry`), filtered by keywords/mask/license. After
+   duplicate-repo collapse, `RepoData` owns an exact-CPV → vector-position
+   index for cache lookups; intentional version-range scans remain linear.
 2. **Build the USE environment** (`use_env.rs` → `portage-repo`) — see
    [USE stacking](#use-stacking-precedence) below. Produces the global
    `UseConfig`, `package.use`, `USE_EXPAND` groups, masks, `ACCEPT_KEYWORDS`,

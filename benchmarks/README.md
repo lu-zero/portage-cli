@@ -18,6 +18,7 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 | `vdb_snapshot` | Shared versus independent BROOT/prefix VDB enumeration |
 | `policy_facts` | Uncached, cold/warm cached, and multi-generation policy facts |
 | `policy_lists` | Full acceptance filtering with CPN-indexed policy lists |
+| `repo_cache_lookup` | Exact CPV cache construction and lookup scaling |
 
 `pkgcraft-compare` is off by default (it pulls in `gix`, a sizeable compile) —
 enable it explicitly whenever you actually want the pkgcraft comparison
