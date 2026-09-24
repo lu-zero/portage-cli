@@ -404,6 +404,96 @@ Real resolve load:
 
 See individual source .md files for full context, caveats, and raw data.
 
+### 9. Repository loading (thalia, 2026-09-24)
+
+The new `portage-bench --bench repo_load` benchmark exercises `Repository::repo_entries`
+against the real 33,121-entry Gentoo tree, including cache parsing and freshness checks.
+
+| Benchmark | Median |
+|-----------|--------|
+| `repository/load/repo_entries` | 0.766 s |
+
+Reproduction:
+
+```sh
+GENTOO_REPO=/var/db/repos/gentoo cargo bench -p portage-bench --bench repo_load -- --noplot
+```
+
+This is a baseline for subsequent repository-loading changes; it is not directly
+comparable with the older in-memory `resolve/load_repo` numbers.
+
+### 10. Availability lookup (thalia, 2026-09-24)
+
+The indexed `Avail::atom_satisfied` path is effectively constant-time across
+synthetic set sizes:
+
+| Entries | Median |
+|---------|--------|
+| 100 | 16.82 ns |
+| 1,000 | 16.83 ns |
+| 10,000 | 16.85 ns |
+
+Reproduction:
+
+```sh
+cargo bench -p portage-bench --bench avail_lookup -- --noplot
+```
+
+This benchmark was added with the index; the pre-index linear baseline is not
+claimed as a measured number.
+
+### 11. Trim scaling (thalia, 2026-09-24)
+
+`trim_scaling` builds synthetic plans with one dependency edge per package and
+matching synthetic VDBs. The 128-entry fixture performs 8,128 BDEPEND consumer
+checks and 16,256 DEPEND consumer checks.
+
+| Trim | Pre-change median | Prefix-view only | Cache + snapshot | Consumer index |
+|------|------------------:|-----------------:|-----------------:|---------------:|
+| BDEPEND, 128 packages / 128 VDB entries | 197.42 ms | 3.09 ms | 0.57 ms | 0.54 ms |
+| DEPEND, 128 packages / 128 VDB entries | 3.76 ms | 3.64 ms | 0.39 ms | 0.18 ms |
+
+The isolated BDEPEND baseline ranged from 197–222 ms across runs; the table uses
+the allocator-matched 197.42 ms sample. The pre-change values came from an isolated `HEAD` worktree running the same
+fixture; the middle column uses only the prefix-availability view; the next
+column adds the evaluated-dependency snapshot; the final column adds the
+consumer index. Criterion uses 10 samples, a one-second warm-up, and a
+three-second measurement window for this benchmark.
+The steady-state allocation counts for the same 128-package fixture fell from
+about 1,082,465 to 2,225 for BDEPEND and from 16,390 to 270 for DEPEND.
+
+Reproduction:
+
+```sh
+cargo bench -p portage-bench --bench trim_scaling -- --noplot
+```
+
+The benchmark reports plan-pair and VDB sizes. Allocation attribution for
+larger real plans still belongs in the `dhat-heap` run rather than being
+inferred from wall time.
+
+### 12. Graph/order scaling (thalia, 2026-09-24)
+
+`graph_scaling` builds a cyclic RDEPEND chain with one solver-decided virtual
+choice and measures `install_order_with_stats`. The PubGrub solver adapter and
+CLI now consume this one graph/order result, so the reported build count is one
+per pass.
+
+| Packages | Selected nodes | Edges | Virtual expansions | SCCs / largest | Repair probes / nodes | Median |
+|---------:|---------------:|------:|-------------------:|----------------:|----------------------:|-------:|
+| 32 | 33 | 33 | 1 | 2 / 32 | 1 / 31 | 156.68 µs |
+| 64 | 65 | 65 | 1 | 2 / 64 | 1 / 63 | 475.86 µs |
+| 128 | 129 | 129 | 1 | 2 / 128 | 1 / 127 | 1.56 ms |
+
+Reproduction:
+
+```sh
+cargo bench -p portage-bench --bench graph_scaling -- --noplot
+```
+
+The benchmark is intentionally a soft-cycle scaling fixture; it is not a
+replacement for a real-repository resolve timing.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

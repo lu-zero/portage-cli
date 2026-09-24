@@ -31,9 +31,11 @@ dhat-heap = ["dep:dhat"]
 pkgcraft-compare = ["dep:pkgcraft"]
 
 [dependencies]
+gentoo-core = { workspace = true }
 portage-atom = { workspace = true }
 portage-metadata = { workspace = true }
 portage-repo = { workspace = true }
+portage-resolve = { workspace = true }
 portage-atom-pubgrub = { workspace = true }
 portage-atom-resolvo = { workspace = true }
 
@@ -72,4 +74,20 @@ harness = false
 
 [[bench]]
 name = "dedup"
+harness = false
+
+[[bench]]
+name = "repo_load"
+harness = false
+
+[[bench]]
+name = "avail_lookup"
+harness = false
+
+[[bench]]
+name = "trim_scaling"
+harness = false
+
+[[bench]]
+name = "graph_scaling"
 harness = false
