@@ -204,6 +204,7 @@ pub struct EbuildShell {
     /// The auto-resolved primary joins the read-only fallbacks so shared
     /// caches keep being found.
     distdir_override: Option<Utf8PathBuf>,
+    resolved_distdir_cache: Option<(String, Vec<String>)>,
     /// Phase-output log. `Some((path, quiet))`: phase function output is
     /// appended to `path` — tee'd to the console, or captured silently when
     /// `quiet`.
@@ -613,6 +614,7 @@ impl EbuildShell {
         let mut ebuild_shell = EbuildShell {
             shell,
             distdir_override: None,
+            resolved_distdir_cache: None,
             phase_log: None,
             die_flag,
             install_paths,
@@ -747,14 +749,18 @@ impl EbuildShell {
     /// auto-resolved location becomes a read-only fallback).
     pub fn set_distdir(&mut self, dir: Utf8PathBuf) {
         self.invalidate_baseline();
+        self.resolved_distdir_cache = None;
         std::fs::create_dir_all(&dir).ok();
         self.distdir_override = Some(dir);
     }
 
     /// The effective `(DISTDIR, PORTAGE_RO_DISTDIRS)` pair: the override when
     /// set (auto-resolved primary demoted to read-only), else the resolved one.
-    fn effective_distdir(&self) -> (String, Vec<String>) {
-        let (resolved, mut ro) = Self::resolved_distdir();
+    fn effective_distdir(&mut self) -> (String, Vec<String>) {
+        let (resolved, mut ro) = self
+            .resolved_distdir_cache
+            .get_or_insert_with(Self::resolve_distdir)
+            .clone();
         match &self.distdir_override {
             Some(dir) => {
                 ro.insert(0, resolved);
@@ -2254,7 +2260,7 @@ impl EbuildShell {
     /// else `~/.cache/distfiles` (created), with the unwritable system
     /// directory kept as a read-only fallback so already-fetched files are
     /// still found by `fetch`-presence checks and `unpack`.
-    fn resolved_distdir() -> (String, Vec<String>) {
+    fn resolve_distdir() -> (String, Vec<String>) {
         const SYSTEM: &str = "/var/cache/distfiles";
         let writable = |dir: &str| {
             std::fs::create_dir_all(dir).is_ok() && {

@@ -653,6 +653,29 @@ cargo bench -p portage-bench --bench source_reuse -- --noplot --warm-up-time 1 -
 
 The baseline was run from a detached worktree at `de02498f` with the same fixture.
 
+### 20. Per-shell distdir resolution (thalia, 2026-09-25)
+
+The same `source_reuse` fixture isolates BF-302 from BF-301 by comparing the BF-301 parent (`cd0b37d2`) with the distdir cache. The shell now probes and creates the writable distdir once, then reuses the resolved pair for later ebuilds.
+
+| Ebuilds × workers | BF-301 parent | Cached distdir | Reduction |
+|------------------:|--------------:|---------------:|----------:|
+| 32 × 1 | 3.175 ms | 2.967 ms | 6.6% |
+| 32 × 4 | 4.645 ms | 4.394 ms | 5.4% |
+| 128 × 1 | 13.425 ms | 12.616 ms | 6.0% |
+| 128 × 4 | 14.477 ms | 13.531 ms | 6.5% |
+| 512 × 1 | 52.623 ms | 49.241 ms | 6.4% |
+| 512 × 4 | 53.536 ms | 50.706 ms | 5.3% |
+
+This is an isolated synthetic sourcing measurement. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench source_reuse -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline was run from a detached worktree at `cd0b37d2` with the same fixture.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
