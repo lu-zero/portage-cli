@@ -7,18 +7,17 @@ use portage_atom::{Cpn, Cpv, DepEntry, Version};
 use portage_atom_pubgrub::PortagePackage;
 
 use crate::Avail;
-use crate::Roots;
+use crate::installed::BrootSnapshot;
 
 use crate::effective_use;
 use crate::repo::{RepoData, ResolvePolicy};
 
 /// Context for [`trim_within_run_bdepend`]
 pub struct TrimCtx<'a> {
-    /// See [`crate::Avail::initial_bdepend`] — carries BROOT
-    /// via `satisfaction_root(DepClass::Bdepend)` even under an active
-    /// `--target` sysroot substitution, so this is the same `Roots` the
-    /// caller already has for `DEPEND`, not a separately-picked one
-    pub roots: &'a Roots,
+    /// Raw BROOT/prefix rows captured once for this resolver invocation.
+    /// The snapshot carries the root selection and ordering, so this context
+    /// has no second `Roots` authority.
+    pub broot_snapshot: &'a BrootSnapshot,
     /// The loaded repository facts
     pub data: &'a RepoData,
     /// The run's keyword/mask/license/USE policy (the trim only reads its
@@ -59,7 +58,7 @@ pub fn trim_within_run_bdepend(
     let consumers = bdepend_consumers(&evaluated_order);
     // The VDB is stable for this filtering pass; the prefix view below shares
     // this base and adds only plan entries earlier than the consumer.
-    let base_avail = Avail::initial_bdepend(ctx.roots);
+    let base_avail = Avail::initial_bdepend_from_snapshot(ctx.broot_snapshot);
     let mut kept_cpvs: Vec<Cpv> = Vec::with_capacity(order.len());
     let mut kept_indices: Vec<usize> = Vec::with_capacity(order.len());
 
@@ -300,10 +299,11 @@ mod tests {
         let root_cpns: HashSet<Cpn> = [*consumer.0.cpn()].into_iter().collect();
         let reinstall = HashSet::new();
         let roots = empty_roots();
+        let broot_snapshot = BrootSnapshot::load(&roots);
         let fm = ForceMask::default();
         let (ak, al) = (accept_amd64(), accept_all_licenses());
         let ctx = TrimCtx {
-            roots: &roots,
+            broot_snapshot: &broot_snapshot,
             data: &data,
             policy: test_policy(&ak, &al, &fm),
             root_cpns: &root_cpns,
@@ -342,10 +342,11 @@ mod tests {
         let root_cpns = HashSet::new();
         let reinstall = HashSet::new();
         let roots = empty_roots();
+        let broot_snapshot = BrootSnapshot::load(&roots);
         let fm = ForceMask::default();
         let (ak, al) = (accept_amd64(), accept_all_licenses());
         let ctx = TrimCtx {
-            roots: &roots,
+            broot_snapshot: &broot_snapshot,
             data: &data,
             policy: test_policy(&ak, &al, &fm),
             root_cpns: &root_cpns,

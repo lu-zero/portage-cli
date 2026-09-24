@@ -530,7 +530,7 @@ async fn emerge_atoms_inner(
         .iter()
         .filter_map(|a| portage_atom::Dep::parse(a).ok())
         .any(|d| d.cpn.category.as_str().starts_with("cross-"));
-    let outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
+    let mut outcome = query::depgraph::depgraph(query::depgraph::DepgraphOpts {
         set,
         atoms: &atoms,
         world_additions: &world_additions,
@@ -585,9 +585,9 @@ async fn emerge_atoms_inner(
     // down — same "bind, write, flush" shape `activity/human.rs` uses for
     // every styled stdout write, so ANSI codes still strip cleanly on
     // non-tty output.
-    let print_eta = || {
+    let print_eta = |outcome: &query::depgraph::DepgraphOutcome| {
         let mut out = anstream::stdout();
-        let _ = write!(out, "{}", eta_message(&roots, merge_flags, &outcome));
+        let _ = write!(out, "{}", eta_message(&roots, merge_flags, outcome));
         let _ = out.flush();
     };
 
@@ -599,7 +599,7 @@ async fn emerge_atoms_inner(
     // printed in that case, since the old call site was below this
     // early-return.
     if cli.pretend() && merge_flags.eta && !outcome.plan.is_empty() {
-        print_eta();
+        print_eta(&outcome);
     }
 
     // Non-zero resolver exit: printed plan is not installable (USE/mask/license
@@ -635,14 +635,20 @@ async fn emerge_atoms_inner(
     // own `--nodeps`) — the guard-rail would otherwise still block on real
     // BDEPEND that `--nodeps` opted out of (a genuine bootstrap cycle with
     // no valid dependency order that must be seeded out of order somewhere).
+    let broot_snapshot = outcome
+        .broot_snapshot
+        .take()
+        .expect("depgraph outcome missing BROOT snapshot");
     if !nodeps {
-        preflight::check(
+        preflight::check_with_snapshot(
             &outcome.plan,
             &roots,
+            &broot_snapshot,
             &outcome.provided,
             &outcome.hard_cycle_edges,
         )?;
     }
+    drop(broot_snapshot);
 
     if cli.pretend() {
         return Ok(());
@@ -670,7 +676,7 @@ async fn emerge_atoms_inner(
         merge_flags.fetchonly || merge_flags.fetch_all_uri || merge_flags.buildpkgonly;
     if merge_flags.ask {
         if merge_flags.eta {
-            print_eta();
+            print_eta(&outcome);
         }
         if !confirm_merge(verb, &outcome, skip_unmerge)? {
             println!(">>> Quitting.");

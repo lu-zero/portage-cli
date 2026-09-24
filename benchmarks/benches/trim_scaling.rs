@@ -17,6 +17,7 @@ use portage_resolve::Roots;
 use portage_resolve::bdepend_trim::{TrimCtx, trim_within_run_bdepend};
 use portage_resolve::depend_trim::trim_sysroot_satisfied_depend;
 use portage_resolve::force_mask::ForceMask;
+use portage_resolve::installed::BrootSnapshot;
 use portage_resolve::repo::{AcceptKeywords, AcceptOverlay, RepoData, ResolvePolicy};
 
 struct CountingAllocator;
@@ -50,7 +51,7 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 struct Fixture {
     root: Utf8PathBuf,
     data: RepoData,
-    roots: Roots,
+    broot_snapshot: BrootSnapshot,
     order: Vec<(PortagePackage, Version)>,
     root_cpns: HashSet<Cpn>,
     reinstall_cpns: HashSet<Cpn>,
@@ -94,6 +95,7 @@ impl Fixture {
         }
 
         let roots = Roots::for_test(root.as_str());
+        let broot_snapshot = BrootSnapshot::load(&roots);
         let data = RepoData {
             cpns,
             versions,
@@ -109,7 +111,7 @@ impl Fixture {
         Self {
             root,
             data,
-            roots,
+            broot_snapshot,
             order,
             root_cpns: HashSet::new(),
             reinstall_cpns: HashSet::new(),
@@ -121,7 +123,7 @@ impl Fixture {
 
     fn ctx(&self) -> TrimCtx<'_> {
         TrimCtx {
-            roots: &self.roots,
+            broot_snapshot: &self.broot_snapshot,
             data: &self.data,
             policy: ResolvePolicy {
                 accept_keywords: &self.accept_keywords,

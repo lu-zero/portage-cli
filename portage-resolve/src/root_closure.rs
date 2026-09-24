@@ -12,6 +12,7 @@ use portage_atom_pubgrub::{DepClass, MergeRoot, PortagePackage};
 
 use crate::Roots;
 use crate::effective_use;
+use crate::installed::BrootSnapshot;
 use crate::repo::Adapter;
 use crate::root_aware::CrossContext;
 use crate::{Avail, all_cpns, unsatisfied_cpns};
@@ -86,7 +87,26 @@ pub fn host(
     if !cross.active || cross.is_cross_arch() {
         return passthrough(target_order);
     }
-    run(target_order, adapter, Avail::initial_bdepend(roots), &HOST)
+    let snapshot = BrootSnapshot::load(roots);
+    host_with_snapshot(target_order, adapter, cross, &snapshot)
+}
+
+/// [`host`] using the raw BROOT/prefix rows already captured for this invocation.
+pub fn host_with_snapshot(
+    target_order: &[(PortagePackage, Version)],
+    adapter: &Adapter<'_>,
+    cross: &CrossContext,
+    snapshot: &BrootSnapshot,
+) -> Plan {
+    if !cross.active || cross.is_cross_arch() {
+        return passthrough(target_order);
+    }
+    run(
+        target_order,
+        adapter,
+        Avail::initial_bdepend_from_snapshot(snapshot),
+        &HOST,
+    )
 }
 
 fn passthrough(target_order: &[(PortagePackage, Version)]) -> Plan {

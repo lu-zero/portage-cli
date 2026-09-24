@@ -55,10 +55,11 @@ dependency resolution) and the wall-clock comparison scripts against real
 parsing, and freshness validation; `avail_lookup` measures indexed availability
 lookups; `trim_scaling` measures BDEPEND/DEPEND trim growth over synthetic plans
 and VDBs; `graph_scaling` measures graph/order work on synthetic cyclic plans;
+`vdb_snapshot` compares shared and independent BROOT/prefix VDB enumeration;
 `resolve` measures the in-memory adapter and solver path:
 
 ```sh
-# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling)
+# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot)
 cargo bench -p portage-bench
 
 # One
@@ -67,6 +68,7 @@ cargo bench -p portage-bench --bench repo_load
 cargo bench -p portage-bench --bench avail_lookup
 cargo bench -p portage-bench --bench trim_scaling
 cargo bench -p portage-bench --bench graph_scaling
+cargo bench -p portage-bench --bench vdb_snapshot
 
 # Alternative interner (see benchmarks/Cargo.toml's [features])
 cargo bench -p portage-bench --no-default-features --features lasso

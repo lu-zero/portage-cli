@@ -188,7 +188,7 @@ Repro: `cargo build --release -p portage-cli`, then the two-binary
 
 ### Central harness & scripts
 - `benchmarks/` (member `portage-bench`)
-  - `benches/*.rs`: dep_parsing, realworld_dep_parsing, resolve, dedup (criterion)
+  - `benches/*.rs`: dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot (criterion)
   - `src/main.rs`: custom solver comparison tool (used for profiling)
   - `scripts/`: bench-sweep.sh, bench-eval.sh, compare-*.sh, maint.sh
   - `bench-em-vs-emerge.sh`: parity + timing vs real emerge (plain `-p`/`-s`)
@@ -215,7 +215,7 @@ From the portage-cli root:
 
 ```sh
 # Microbenchmarks only (fast)
-cargo bench -p portage-bench                    # all 4
+cargo bench -p portage-bench                    # all central criterion benches
 cargo bench -p portage-bench --bench resolve    # solver on real Gentoo data
 
 # With different interner (see features in benchmarks/Cargo.toml)
@@ -493,6 +493,38 @@ cargo bench -p portage-bench --bench graph_scaling -- --noplot
 
 The benchmark is intentionally a soft-cycle scaling fixture; it is not a
 replacement for a real-repository resolve timing.
+
+### 13. VDB snapshot sharing (thalia, 2026-09-24)
+
+`vdb_snapshot` builds a synthetic BROOT/prefix VDB and compares one captured
+raw snapshot with the independent-adapter path. `load_once` enumerates the roots
+once and derives both views; `reuse` holds the snapshot across iterations;
+`scan_each_view` lets the availability and host-installed adapters enumerate
+independently. The fixture has 1.5 raw rows per requested package because every
+other package also has a prefix row.
+
+| Host entries | Raw rows | `scan_each_view` | `load_once` | `reuse` | `load_once` reduction |
+|--------------:|---------:|-----------------:|------------:|--------:|----------------------:|
+| 128 | 192 | 1.294 ms | 0.873 ms | 0.674 ms | 32.5% |
+| 512 | 768 | 5.572 ms | 4.179 ms | 2.748 ms | 25.0% |
+| 2,048 | 3,072 | 24.985 ms | 24.111 ms | 13.348 ms | 3.5% |
+
+Criterion used 10 samples, a one-second warm-up, and a three-second measurement
+window. The 2,048-entry result is close to run-to-run variation, so the smaller
+fixtures are the directional evidence. This is an isolated enumeration/adapter
+measurement, not an end-to-end resolve claim; the field cache still applies to
+lazy VDB field reads.
+
+Reproduction:
+
+```sh
+cargo bench -p portage-bench --bench vdb_snapshot -- --noplot
+```
+
+The owner-boundary regressions remove both VDB roots after capture and verify
+that the host adapter retains host-then-prefix order while availability retains
+both union rows. Broader target/sysroot snapshot sharing is tracked separately
+as BF-404.
 
 ---
 

@@ -271,6 +271,7 @@ anstream dependency (argv parsing and rendering stay in `portage-cli`).
 - `mod repo` — `RepoData` / `Adapter`, keyword/mask/license/properties/restrict acceptance
 - `mod use_env` / `force_mask` / `effective_use` — profile/`package.*` USE folding
 - `mod installed` / `conflicts` / `subslot` / `use_reinstall` — VDB views and rebuilds
+  `BrootSnapshot` captures ordered BROOT/prefix rows once per resolve.
 - `mod root_aware` / `bdepend_trim` / `depend_trim` / `root_closure` — root-aware plan
 - `mod package_use` / `required_use` / `download_size` / `bdepend_avail`
 
@@ -366,7 +367,11 @@ Stages, in order:
    (`Favor`/`Lock`, or `Rebuild` under native `--emptytree`), action tags
    (`N`/`R`/`U`/`D`), and reverse-dep checks. Under `--emptytree` the real VDB
    stays loaded (for tags/display) but the solver sees an empty installed set so
-   target packages are re-selected as rebuilds.
+   target packages are re-selected as rebuilds. The host branch captures one
+   `BrootSnapshot`; its ordered host-then-prefix rows feed host-installed state,
+   BDEPEND availability, trims, root closure, and preflight without rescanning;
+   preflight consumes the snapshot before any merge writes. Availability keeps
+   the host/prefix union; keyed host insertion keeps the prefix row.
 4. **Build the provider** (`PortageDependencyProvider::new_for_targets(adapter, seeds)`)
    — the cli `Adapter` implements `PackageRepository`, handing the solver each
    version's facts (`versions_for`) and its resolved **desired** USE (`desired_use`).

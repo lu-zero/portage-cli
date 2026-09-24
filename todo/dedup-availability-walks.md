@@ -5,7 +5,8 @@ Follow-up to the `dev-perl/Digest-HMAC` duplicate-plan-entry incident
 fixed in `5989eb1`). That fix made `host_copies::compute` seed itself from the
 solver's own `MergeRoot::Host` output instead of re-deriving it — a correct
 patch, but it left the underlying triplication in place. This file is the
-design proposal for reducing it. Status: proposal, nothing implemented.
+design proposal for reducing it. Step 1's shared BROOT/prefix snapshot landed
+as BF-205; broader resolver/closure/preflight snapshot sharing remains BF-404.
 
 ## Why
 

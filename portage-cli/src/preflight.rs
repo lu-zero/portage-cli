@@ -33,6 +33,7 @@ use portage_atom::{Cpv, DepEntry};
 
 use portage_atom_pubgrub::MergeRoot;
 use portage_resolve::Roots;
+use portage_resolve::installed::BrootSnapshot;
 use portage_resolve::{Avail, collect_unsatisfied};
 
 use crate::query::depgraph::PlannedMerge;
@@ -51,14 +52,35 @@ use crate::query::depgraph::PlannedMerge;
 ///
 /// Returns an error listing every unsatisfied requirement (package → missing
 /// atoms) when the check fails; `Ok(())` otherwise.
+#[cfg(test)]
 pub fn check(
     plan: &[PlannedMerge],
     roots: &Roots,
     provided: &[(Cpv, Option<String>)],
     hard_cycle_edges: &[(Cpv, Cpv)],
 ) -> Result<()> {
+    check_with_snapshot(
+        plan,
+        roots,
+        &BrootSnapshot::load(roots),
+        provided,
+        hard_cycle_edges,
+    )
+}
+
+/// Run the pre-flight check with the BROOT rows captured by the resolver.
+///
+/// The DEPEND view still follows its own root-selection rules; only the
+/// BROOT/prefix seed is shared with the preceding resolve pass.
+pub fn check_with_snapshot(
+    plan: &[PlannedMerge],
+    roots: &Roots,
+    broot_snapshot: &BrootSnapshot,
+    provided: &[(Cpv, Option<String>)],
+    hard_cycle_edges: &[(Cpv, Cpv)],
+) -> Result<()> {
     let mut depend_avail = Avail::initial_depend(roots);
-    let mut bdepend_avail = Avail::initial_bdepend(roots);
+    let mut bdepend_avail = Avail::initial_bdepend_from_snapshot(broot_snapshot);
     // Board-root topology only — an empty, cheap `Avail` everywhere else
     // (the `Base` arms below can never fire there, but the value still
     // needs to exist for the match to type-check).
@@ -251,6 +273,26 @@ mod tests {
             err.contains("real hard-dependency cycle"),
             "expected the cycle note, got: {err}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn preflight_uses_the_captured_broot_snapshot() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let pkg_dir = tmp.path().join("var/db/pkg/dev-build/tool-1.0");
+        std::fs::create_dir_all(&pkg_dir)?;
+        std::fs::write(pkg_dir.join("EAPI"), "8")?;
+        std::fs::write(pkg_dir.join("SLOT"), "0")?;
+        std::fs::write(pkg_dir.join("CONTENTS"), "")?;
+        std::fs::write(pkg_dir.join("USE"), "")?;
+
+        let roots = roots_at(&tmp)?;
+        let snapshot = BrootSnapshot::load(&roots);
+        std::fs::remove_dir_all(tmp.path())?;
+
+        let mut entry = planned(MergeRoot::Host, Cpv::parse("app-misc/consumer-1.0")?, "")?;
+        entry.bdepend = DepEntry::parse("dev-build/tool")?;
+        assert!(check_with_snapshot(&[entry], &roots, &snapshot, &[], &[]).is_ok());
         Ok(())
     }
 

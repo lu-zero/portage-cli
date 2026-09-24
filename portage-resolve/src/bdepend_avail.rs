@@ -14,6 +14,7 @@ use portage_atom_pubgrub::{DepClass, MergeRoot};
 use portage_vdb::{InstalledPackage, Vdb};
 
 use crate::Roots;
+use crate::installed::BrootSnapshot;
 
 /// Interned `(enabled, iuse)` USE state — see `AvailEntry::interned_use`
 type InternedUse = (
@@ -87,7 +88,15 @@ impl Avail {
     /// satisfied. Not done for `--root`/`--local`: nothing is ever merged
     /// anywhere but the single satisfaction root there.
     pub fn initial_bdepend(roots: &Roots) -> Self {
-        Self::from_entries(avail_entries_from(broot_vdb_packages(roots)))
+        Self::initial_bdepend_from_snapshot(&BrootSnapshot::load(roots))
+    }
+
+    /// `BDEPEND` availability from one raw BROOT/prefix snapshot.
+    ///
+    /// Both roots remain visible: the permissive availability view treats a
+    /// package as present if either installed row satisfies the atom.
+    pub fn initial_bdepend_from_snapshot(snapshot: &BrootSnapshot) -> Self {
+        Self::from_entries(avail_entries_from(snapshot.packages()))
     }
 
     /// `DEPEND` availability
@@ -342,41 +351,24 @@ fn vdb_avail_entries(root: Option<&Utf8Path>) -> Vec<AvailEntry> {
     let Ok(vdb) = vdb else {
         return Vec::new();
     };
-    avail_entries_from(vdb.packages().collect_vec())
+    let packages = vdb.packages().collect_vec();
+    avail_entries_from(packages.iter())
 }
 
-fn avail_entries_from(pkgs: Vec<InstalledPackage>) -> Vec<AvailEntry> {
-    pkgs.into_iter()
+fn avail_entries_from<'a>(packages: impl Iterator<Item = &'a InstalledPackage>) -> Vec<AvailEntry> {
+    packages
         .map(|p| AvailEntry {
             cpv: p.cpv().clone(),
             slot: p.slot_main().ok(),
-            installed: Some(p),
+            installed: Some(p.clone()),
             interned_use: OnceCell::new(),
         })
         .collect()
 }
 
-/// Raw installed-package rows for the BROOT-availability seed shared by
-/// [`Avail::initial_bdepend`] and the solver's `host_installed` view — both
-/// need the same root selection (see [`Avail::initial_bdepend`]), only
-/// converting the resulting rows differently
-///
-/// Read once here; each caller keeps its own merge semantics (union for
-/// `Avail`, last-wins insert for `add_host_installed`) — host entries come
-/// first, then prefix, so both behaviours fall out of iteration order.
+/// Compatibility loader for callers that do not yet hold a shared snapshot.
 pub fn broot_vdb_packages(roots: &Roots) -> Vec<InstalledPackage> {
-    let mut out = vdb_packages_at(roots.satisfaction_root(DepClass::Bdepend));
-    if roots.is_overlay() {
-        out.extend(vdb_packages_at(roots.merge_root()));
-    }
-    out
-}
-
-fn vdb_packages_at(root: &Utf8Path) -> Vec<InstalledPackage> {
-    let Ok(vdb) = Vdb::open(root.join("var/db/pkg")) else {
-        return Vec::new();
-    };
-    vdb.packages().collect_vec()
+    BrootSnapshot::load(roots).into_vec()
 }
 
 /// The CPNs of every unsatisfied (non-blocker) atom in `entries`
@@ -539,8 +531,8 @@ mod tests {
         std::fs::write(pkg_dir.join("USE"), enabled.join(" ")).unwrap();
         std::fs::write(pkg_dir.join("IUSE"), iuse.join(" ")).unwrap();
 
-        let root = Utf8Path::from_path(&tmp).unwrap();
-        Avail::from_entries(avail_entries_from(vdb_packages_at(root)))
+        let roots = Roots::for_test(tmp.to_str().unwrap());
+        Avail::initial_bdepend(&roots)
     }
 
     fn parse(dep: &str) -> Vec<DepEntry> {
@@ -803,6 +795,31 @@ mod tests {
             avail.atom_satisfied(dep),
             "a BDEPEND present only in the prefix's own VDB must count as satisfied"
         );
+    }
+
+    #[test]
+    fn initial_bdepend_snapshot_keeps_the_host_prefix_union() {
+        let host = tempfile::tempdir().unwrap();
+        let prefix = tempfile::tempdir().unwrap();
+        write_fake_vdb_entry(host.path(), "dev-libs/foo-1.0");
+        write_fake_vdb_entry(prefix.path(), "dev-libs/foo-2.0");
+
+        let roots = Roots::for_test_overlay(
+            host.path().to_str().unwrap(),
+            prefix.path().to_str().unwrap(),
+        );
+        let snapshot = BrootSnapshot::load(&roots);
+        std::fs::remove_dir_all(host.path()).unwrap();
+        std::fs::remove_dir_all(prefix.path()).unwrap();
+
+        let avail = Avail::initial_bdepend_from_snapshot(&snapshot);
+        for version in ["1.0", "2.0"] {
+            let dep = Dep::parse(&format!("=dev-libs/foo-{version}")).unwrap();
+            assert!(
+                avail.atom_satisfied(&dep),
+                "the snapshot must retain both union rows for {version}"
+            );
+        }
     }
 
     // Regression test: `initial_depend` must weave in the *target's* own

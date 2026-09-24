@@ -182,6 +182,7 @@ mod tests {
 
     use super::*;
     use crate::Roots;
+    use crate::installed::BrootSnapshot;
     use crate::repo::{AcceptKeywords, AcceptOverlay, RepoData, ResolvePolicy};
 
     fn empty_roots() -> Roots {
@@ -211,6 +212,7 @@ mod tests {
         let root_cpns = HashSet::new();
         let reinstall = HashSet::new();
         let roots = empty_roots();
+        let broot_snapshot = BrootSnapshot::load(&roots);
         let fm = crate::force_mask::ForceMask::default();
         let arch = gentoo_core::Arch::intern("amd64");
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
@@ -219,7 +221,7 @@ mod tests {
             Vec::new(),
         );
         let ctx = TrimCtx {
-            roots: &roots,
+            broot_snapshot: &broot_snapshot,
             data: &data,
             policy: ResolvePolicy {
                 accept_keywords: &ak,

@@ -3,9 +3,12 @@ use std::collections::HashMap;
 use portage_atom::DepEntry;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Version};
+use portage_atom_pubgrub::DepClass;
 use portage_atom_pubgrub::PortagePackage;
 use portage_metadata::Eapi;
-use portage_vdb::Vdb;
+use portage_vdb::{InstalledPackage, Vdb};
+
+use crate::Roots;
 
 /// One VDB-installed package, as the depgraph's post-solve passes need it
 pub struct VdbEntry {
@@ -33,6 +36,61 @@ pub struct VdbEntry {
     pub eapi: Eapi,
     /// RDEPEND + DEPEND as stored in the VDB (pre-USE evaluation)
     pub deps: Vec<DepEntry>,
+}
+
+/// Raw VDB rows visible to the build host during one resolver invocation.
+///
+/// The BROOT rows are followed by the prefix rows when `--prefix` is active.
+/// Consumers choose how to combine the two ordered streams: availability keeps
+/// both rows, while solver host-installed state relies on its later insert to
+/// make the prefix row win. VDB fields remain lazy on each `InstalledPackage`.
+#[derive(Debug, Clone)]
+pub struct BrootSnapshot {
+    host: Vec<InstalledPackage>,
+    prefix: Option<Vec<InstalledPackage>>,
+}
+
+impl BrootSnapshot {
+    /// Enumerate the BROOT and optional prefix VDBs once for this invocation.
+    pub fn load(roots: &Roots) -> Self {
+        let host = vdb_packages_at(roots.satisfaction_root(DepClass::Bdepend));
+        let prefix = roots
+            .is_overlay()
+            .then(|| vdb_packages_at(roots.merge_root()));
+        Self { host, prefix }
+    }
+
+    /// Visit the raw rows in host-then-prefix order.
+    pub fn packages(&self) -> impl Iterator<Item = &InstalledPackage> + '_ {
+        self.host
+            .iter()
+            .chain(self.prefix.iter().flat_map(|packages| packages.iter()))
+    }
+
+    /// Number of raw rows in the snapshot.
+    pub fn len(&self) -> usize {
+        self.host.len() + self.prefix.as_ref().map_or(0, |packages| packages.len())
+    }
+
+    /// Whether the snapshot contains no installed rows.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<InstalledPackage> {
+        let Self { host, prefix } = self;
+        let mut out = host;
+        if let Some(prefix) = prefix {
+            out.extend(prefix);
+        }
+        out
+    }
+}
+
+fn vdb_packages_at(root: &camino::Utf8Path) -> Vec<InstalledPackage> {
+    Vdb::open(root.join("var/db/pkg"))
+        .map(|vdb| vdb.packages().collect_vec())
+        .unwrap_or_default()
 }
 
 /// Installed view for **ROOT** / RDEPEND / merge filtering / action tags
@@ -123,34 +181,42 @@ pub struct HostInstalledEntry {
 /// in the prefix drives" for a package present in both (host entries come
 /// first, prefix second).
 pub fn load_host_installed(roots: &crate::Roots) -> Vec<HostInstalledEntry> {
-    crate::broot_vdb_packages(roots)
+    let snapshot = BrootSnapshot::load(roots);
+    load_host_installed_from_snapshot(&snapshot)
+}
+
+/// Derive the solver's host-installed view from one raw BROOT snapshot.
+///
+/// Rows remain in host-then-prefix order. The provider's keyed insert therefore
+/// keeps the prefix row when both roots contain the same package.
+pub fn load_host_installed_from_snapshot(snapshot: &BrootSnapshot) -> Vec<HostInstalledEntry> {
+    snapshot.packages().map(host_installed_entry).collect()
+}
+
+fn host_installed_entry(pkg: &InstalledPackage) -> HostInstalledEntry {
+    let slot = pkg.slot_main().ok().filter(|s| !s.is_empty());
+    let package = match slot {
+        Some(slot) => PortagePackage::slotted(*pkg.cpn(), slot),
+        None => PortagePackage::unslotted(*pkg.cpn()),
+    };
+    let active_use = pkg
+        .use_flags()
+        .unwrap_or_default()
         .into_iter()
-        .map(|pkg| {
-            let slot = pkg.slot_main().ok().filter(|s| !s.is_empty());
-            let package = match slot {
-                Some(slot) => PortagePackage::slotted(*pkg.cpn(), slot),
-                None => PortagePackage::unslotted(*pkg.cpn()),
-            };
-            let active_use = pkg
-                .use_flags()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|f| Interned::intern(&f))
-                .collect();
-            let iuse = pkg
-                .iuse()
-                .unwrap_or_default()
-                .iter()
-                .map(Interned::from)
-                .collect();
-            HostInstalledEntry {
-                package,
-                version: pkg.cpv().version.clone(),
-                active_use,
-                iuse,
-            }
-        })
-        .collect()
+        .map(|f| Interned::intern(&f))
+        .collect();
+    let iuse = pkg
+        .iuse()
+        .unwrap_or_default()
+        .iter()
+        .map(Interned::from)
+        .collect();
+    HostInstalledEntry {
+        package,
+        version: pkg.cpv().version.clone(),
+        active_use,
+        iuse,
+    }
 }
 
 /// VDB entries from a cross sysroot (`ESYSROOT`) for `DEPEND` satisfaction
@@ -337,6 +403,34 @@ mod tests {
         let entries = load_host_installed(&roots);
 
         assert_eq!(entries.len(), 1, "must still find the host-only entry");
+    }
+
+    #[test]
+    fn snapshot_adapters_reuse_raw_rows_after_the_roots_change() {
+        let host = tempfile::tempdir().unwrap();
+        let prefix = tempfile::tempdir().unwrap();
+        write_fake_vdb_entry(host.path(), "dev-libs/foo-1.0", "");
+        write_fake_vdb_entry(prefix.path(), "dev-libs/foo-2.0", "");
+
+        let roots = crate::Roots::for_test_overlay(
+            host.path().to_str().unwrap(),
+            prefix.path().to_str().unwrap(),
+        );
+        let snapshot = BrootSnapshot::load(&roots);
+        assert_eq!(snapshot.len(), 2);
+
+        std::fs::remove_dir_all(host.path()).unwrap();
+        std::fs::remove_dir_all(prefix.path()).unwrap();
+
+        let entries = load_host_installed_from_snapshot(&snapshot);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.version.to_string())
+                .collect::<Vec<_>>(),
+            ["1.0", "2.0"],
+            "the host adapter must retain host-then-prefix order for last-wins insertion"
+        );
     }
 
     // Regression test: `load_installed`'s target-shadows-base union must

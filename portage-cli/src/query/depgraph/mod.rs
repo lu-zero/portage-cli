@@ -153,6 +153,8 @@ pub struct DepgraphOutcome {
     /// package (e.g. the host interpreter, `dev-lang/python:3.14`) is not
     /// reported missing — the solver already treats it as satisfied.
     pub provided: Vec<(Cpv, Option<String>)>,
+    /// Raw BROOT/prefix rows retained until the real-merge preflight check consumes them.
+    pub(crate) broot_snapshot: Option<installed::BrootSnapshot>,
     /// Installed packages the merge will unmerge to satisfy blockers (PMS 8.3.2).
     /// Strong `!!` entries run before the merge loop; weak `!` after.
     pub unmerges: Vec<portage_resolve::conflicts::PlannedUnmerge>,
@@ -413,7 +415,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let (
         (raw_data, repo_load_elapsed),
         ((target_installed, installed_blockers), target_load_elapsed),
-        (host_installed, host_load_elapsed),
+        (broot_snapshot, host_installed, host_load_elapsed),
         (use_env_result, use_env_elapsed),
     ) = tokio::join!(
         async {
@@ -433,8 +435,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         },
         async {
             let start = Instant::now();
-            let installed = installed::load_host_installed(roots);
-            (installed, start.elapsed())
+            let snapshot = installed::BrootSnapshot::load(roots);
+            let host = installed::load_host_installed_from_snapshot(&snapshot);
+            (snapshot, host, start.elapsed())
         },
         async {
             let start = Instant::now();
@@ -1381,7 +1384,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             }
 
             let trim_ctx = bdepend_trim::TrimCtx {
-                roots,
+                broot_snapshot: &broot_snapshot,
                 data: &data,
                 policy: final_policy,
                 root_cpns: &root_cpns,
@@ -1529,7 +1532,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // Native offset (same-arch `--root`/`--prefix`): a target
             // package's build edges the host lacks are merged to BROOT
             // (`/`) so the target can build against them.
-            let host_plan = root_closure::host(&order, &closure_adapter, roots, &cross);
+            let host_plan =
+                root_closure::host_with_snapshot(&order, &closure_adapter, &cross, &broot_snapshot);
             order = host_plan.order;
             // Board-root topology (`--target T --root R`): the toolchain
             // sysroot is a separate merge destination from ROOT, so a
@@ -2199,6 +2203,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         build_blockers,
         hard_cycle_edges,
         provided: provided_avail,
+        broot_snapshot: Some(broot_snapshot),
         unmerges,
     })
 }
