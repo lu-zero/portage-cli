@@ -60,11 +60,12 @@ and VDBs; `graph_scaling` measures graph/order work on synthetic cyclic plans;
 policy-fact evaluation; `policy_lists` measures full acceptance filtering with
 CPN-indexed final policy lists; `repo_cache_lookup` measures exact-CPV cache
 construction and lookup scaling; `provider_postprocess` measures provider
-construction with complete versus missing branches; `resolve` measures the
+construction with complete versus missing branches; `source_reuse` measures
+worker-local shell reuse during synthetic sourcing; `resolve` measures the
 in-memory adapter and solver path:
 
 ```sh
-# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess)
+# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess, source_reuse)
 cargo bench -p portage-bench
 
 # One
@@ -78,6 +79,7 @@ cargo bench -p portage-bench --bench policy_facts
 cargo bench -p portage-bench --bench policy_lists
 cargo bench -p portage-bench --bench repo_cache_lookup
 cargo bench -p portage-bench --bench provider_postprocess
+cargo bench -p portage-bench --bench source_reuse
 
 # Alternative interner (see benchmarks/Cargo.toml's [features])
 cargo bench -p portage-bench --no-default-features --features lasso

@@ -111,3 +111,7 @@ harness = false
 [[bench]]
 name = "provider_postprocess"
 harness = false
+
+[[bench]]
+name = "source_reuse"
+harness = false

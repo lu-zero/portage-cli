@@ -630,6 +630,29 @@ cargo bench -p portage-bench --bench provider_postprocess -- --noplot --warm-up-
 
 The baseline was run from a detached worktree at `b122fc18` with the same fixture.
 
+### 19. Worker-local shell reuse (thalia, 2026-09-25)
+
+`source_reuse` creates 32/128/512 trivial ebuilds and drains `source_parallel` with one or four workers. BF-301 creates one shell per worker and relies on the existing baseline reset before each ebuild; the baseline is the same fixture at `de02498f`, where every ebuild constructed a fresh shell.
+
+| Ebuilds × workers | Baseline | Worker-local shell | Reduction |
+|------------------:|---------:|-------------------:|----------:|
+| 32 × 1 | 11.914 ms | 3.189 ms | 73.2% |
+| 32 × 4 | 13.160 ms | 4.665 ms | 64.6% |
+| 128 × 1 | 52.277 ms | 13.580 ms | 74.0% |
+| 128 × 4 | 52.261 ms | 14.478 ms | 72.3% |
+| 512 × 1 | 209.53 ms | 53.096 ms | 74.7% |
+| 512 × 4 | 209.55 ms | 54.124 ms | 74.2% |
+
+The source-worker regression covers two ebuilds through the one-worker path and confirms the reused shell remains hermetic. This is an isolated synthetic sourcing measurement, not an end-to-end regen claim. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench source_reuse -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline was run from a detached worktree at `de02498f` with the same fixture.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
