@@ -8,7 +8,9 @@
 //! checks `DEPEND` against the sysroot VDB only — within-run target merges do
 //! not satisfy build-time `DEPEND` on a foreign sysroot.
 
-use portage_atom::{Cpn, Cpv, Version};
+use std::collections::{HashMap, HashSet};
+
+use portage_atom::{Cpn, Cpv, DepEntry, Version};
 use portage_atom_pubgrub::PortagePackage;
 
 use crate::Avail;
@@ -29,9 +31,12 @@ pub fn trim_sysroot_satisfied_depend(
         return order;
     }
 
-    let mut kept: Vec<(PortagePackage, Version)> = Vec::with_capacity(order.len());
+    let mut kept_cpvs: Vec<Cpv> = Vec::with_capacity(order.len());
     let mut kept_indices: Vec<usize> = Vec::with_capacity(order.len());
     let sysroot_avail = Avail::initial_sysroot_depend(sysroot);
+    let mut evaluated = effective_use::EvaluatedDepsCache::new(ctx.data, ctx.policy, false);
+    let evaluated_order = evaluated.snapshot(&order);
+    let consumers = depend_consumers(&evaluated_order);
 
     for (i, (pkg, ver)) in order.iter().enumerate() {
         let cand = TrimCandidate {
@@ -39,18 +44,56 @@ pub fn trim_sysroot_satisfied_depend(
             pkg,
             ver,
             order: &order,
-            kept: &kept,
+            kept_cpvs: &kept_cpvs,
             kept_indices: &kept_indices,
             ctx,
             sysroot_avail: &sysroot_avail,
+            evaluated: &evaluated_order,
+            consumers: &consumers,
         };
         if should_keep(&cand) {
-            kept.push((pkg.clone(), ver.clone()));
+            kept_cpvs.push(Cpv::new(*pkg.cpn(), ver.clone()));
             kept_indices.push(i);
         }
     }
 
-    kept
+    kept_indices
+        .iter()
+        .map(|&index| order[index].clone())
+        .collect()
+}
+
+fn depend_consumers<'a, 'b>(
+    evaluated: &'a [Option<&'a effective_use::EvaluatedDeps<'b>>],
+) -> HashMap<Cpn, Vec<usize>> {
+    let mut out: HashMap<Cpn, Vec<usize>> = HashMap::new();
+    for (index, deps) in evaluated.iter().enumerate() {
+        let Some(deps) = deps else {
+            continue;
+        };
+        // Keep every mentioned CPN; group satisfaction remains authoritative.
+        let mut cpns = HashSet::new();
+        for entries in [
+            deps.depend(),
+            deps.rdepend(),
+            deps.pdepend(),
+            deps.idepend(),
+        ] {
+            collect_cpns(entries, &mut cpns);
+        }
+        for cpn in cpns {
+            out.entry(cpn).or_default().push(index);
+        }
+    }
+    out
+}
+
+fn collect_cpns(entries: &[DepEntry], out: &mut HashSet<Cpn>) {
+    DepEntry::walk_atoms(entries, &mut |dep| {
+        if dep.blocker.is_none() {
+            out.insert(dep.cpn);
+        }
+    });
 }
 
 struct TrimCandidate<'a, 'b> {
@@ -58,10 +101,12 @@ struct TrimCandidate<'a, 'b> {
     pkg: &'a PortagePackage,
     ver: &'a Version,
     order: &'a [(PortagePackage, Version)],
-    kept: &'a [(PortagePackage, Version)],
+    kept_cpvs: &'a [Cpv],
     kept_indices: &'a [usize],
     ctx: &'a TrimCtx<'b>,
     sysroot_avail: &'a Avail,
+    evaluated: &'a [Option<&'a effective_use::EvaluatedDeps<'b>>],
+    consumers: &'a HashMap<Cpn, Vec<usize>>,
 }
 
 fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
@@ -91,50 +136,36 @@ fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
 
     // DEPEND providers can appear after their consumer in install order (e.g.
     // bootstrap `gcc-11` after `gcc-16`), so every other plan entry is checked.
-    for (j, (consumer, consumer_ver)) in cand.order.iter().enumerate() {
+    let Some(consumers) = cand.consumers.get(&cpn) else {
+        return false;
+    };
+    for &j in consumers {
         if j == cand.index {
             continue;
         }
-        let Some(deps) = effective_use::evaluated_deps(
-            cand.ctx.data,
-            &cand.ctx.policy,
-            consumer,
-            consumer_ver,
-            false,
-        ) else {
+        let Some(deps) = cand.evaluated.get(j).and_then(Option::as_ref) else {
             continue;
         };
         if cand
             .sysroot_avail
-            .has_unsatisfied_atom_for_cpn(&deps.depend(), cpn)
+            .has_unsatisfied_atom_for_cpn(deps.depend(), cpn)
         {
             return true;
         }
 
-        let runtime_avail = target_avail_for_consumer(j, cand.kept, cand.kept_indices);
-        if runtime_avail.has_unsatisfied_atom_for_cpn(&deps.rdepend(), cpn)
-            || runtime_avail.has_unsatisfied_atom_for_cpn(&deps.pdepend(), cpn)
-            || runtime_avail.has_unsatisfied_atom_for_cpn(&deps.idepend(), cpn)
+        // Kept indices are appended in plan order, so entries before `j` form a prefix.
+        let prefix_len = cand.kept_indices.partition_point(|&index| index < j);
+        let runtime_avail =
+            crate::bdepend_avail::AvailPrefix::new(None, &cand.kept_cpvs[..prefix_len]);
+        if runtime_avail.has_unsatisfied_atom_for_cpn(deps.rdepend(), cpn)
+            || runtime_avail.has_unsatisfied_atom_for_cpn(deps.pdepend(), cpn)
+            || runtime_avail.has_unsatisfied_atom_for_cpn(deps.idepend(), cpn)
         {
             return true;
         }
     }
 
     false
-}
-
-fn target_avail_for_consumer(
-    consumer_index: usize,
-    kept: &[(PortagePackage, Version)],
-    kept_indices: &[usize],
-) -> Avail {
-    let mut out = Vec::new();
-    for (k, (pkg, ver)) in kept.iter().enumerate() {
-        if kept_indices[k] < consumer_index {
-            out.push((Cpv::new(*pkg.cpn(), ver.clone()), None));
-        }
-    }
-    Avail::from_cpvs(out)
 }
 
 #[cfg(test)]

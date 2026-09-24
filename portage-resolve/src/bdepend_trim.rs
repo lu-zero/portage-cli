@@ -1,7 +1,7 @@
 //! Post-solve trim: drop plan entries only pulled for `BDEPEND` already
 //! satisfied on BROOT or by earlier within-run merges
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use portage_atom::{Cpn, Cpv, DepEntry, Version};
 use portage_atom_pubgrub::PortagePackage;
@@ -53,46 +53,47 @@ pub fn trim_within_run_bdepend(
         return order;
     }
 
-    let runtime_required = runtime_required_cpns(full_solution_order, ctx);
-    // Computed once: the BROOT/prefix VDB scan this pass checks BDEPEND
-    // satisfaction against never changes across the whole trim (no merges
-    // happen here, just filtering decisions) — `avail_for_consumer` used to
-    // rebuild this from scratch (a fresh VDB directory scan) for every
-    // (candidate, consumer) pair it examined, up to O(n²) scans for an
-    // n-package plan. Measured as the single largest allocation source in
-    // this codebase (dhat: 110MB across 322 calls on a real firefox
-    // resolve). Cloning this cheap, lazy (`AvailEntry::installed` isn't
-    // eagerly read) base is far cheaper than re-scanning the VDB directory
-    // each time.
+    let mut evaluated = effective_use::EvaluatedDepsCache::new(ctx.data, ctx.policy, false);
+    let runtime_required = runtime_required_cpns(full_solution_order, &mut evaluated);
+    let evaluated_order = evaluated.snapshot(&order);
+    let consumers = bdepend_consumers(&evaluated_order);
+    // The VDB is stable for this filtering pass; the prefix view below shares
+    // this base and adds only plan entries earlier than the consumer.
     let base_avail = Avail::initial_bdepend(ctx.roots);
-    let mut kept: Vec<(PortagePackage, Version)> = Vec::with_capacity(order.len());
+    let mut kept_cpvs: Vec<Cpv> = Vec::with_capacity(order.len());
     let mut kept_indices: Vec<usize> = Vec::with_capacity(order.len());
 
     for (i, (pkg, ver)) in order.iter().enumerate() {
         let cand = TrimCandidate {
             index: i,
             pkg,
-            order: &order,
-            kept: &kept,
+            kept_cpvs: &kept_cpvs,
             kept_indices: &kept_indices,
             ctx,
             runtime_required: &runtime_required,
             base_avail: &base_avail,
+            evaluated: &evaluated_order,
+            consumers: &consumers,
         };
         if should_keep(&cand) {
-            kept.push((pkg.clone(), ver.clone()));
+            kept_cpvs.push(Cpv::new(*pkg.cpn(), ver.clone()));
             kept_indices.push(i);
         }
     }
 
-    kept
+    kept_indices
+        .iter()
+        .map(|&index| order[index].clone())
+        .collect()
 }
 
-fn runtime_required_cpns(order: &[(PortagePackage, Version)], ctx: &TrimCtx<'_>) -> HashSet<Cpn> {
+fn runtime_required_cpns(
+    order: &[(PortagePackage, Version)],
+    evaluated: &mut effective_use::EvaluatedDepsCache<'_>,
+) -> HashSet<Cpn> {
     let mut out = HashSet::new();
     for (pkg, ver) in order {
-        let Some(deps) = effective_use::evaluated_deps(ctx.data, &ctx.policy, pkg, ver, false)
-        else {
+        let Some(deps) = evaluated.get(pkg, ver) else {
             continue;
         };
         for entries in [
@@ -101,36 +102,48 @@ fn runtime_required_cpns(order: &[(PortagePackage, Version)], ctx: &TrimCtx<'_>)
             deps.pdepend(),
             deps.idepend(),
         ] {
-            collect_cpns_from_entries(&entries, &mut out);
+            collect_cpns_from_entries(entries, &mut out);
         }
     }
     out
 }
 
 fn collect_cpns_from_entries(entries: &[DepEntry], out: &mut HashSet<Cpn>) {
-    for e in entries {
-        match e {
-            DepEntry::Atom(dep) if dep.blocker.is_none() => {
-                out.insert(dep.cpn);
-            }
-            DepEntry::AllOf(c) | DepEntry::AnyOf(c) => collect_cpns_from_entries(c, out),
-            DepEntry::ExactlyOneOf(c) | DepEntry::AtMostOneOf(c) => {
-                collect_cpns_from_entries(c, out);
-            }
-            _ => {}
+    DepEntry::walk_atoms(entries, &mut |dep| {
+        if dep.blocker.is_none() {
+            out.insert(dep.cpn);
+        }
+    });
+}
+
+fn bdepend_consumers<'a, 'b>(
+    evaluated: &'a [Option<&'a effective_use::EvaluatedDeps<'b>>],
+) -> HashMap<Cpn, Vec<usize>> {
+    let mut out: HashMap<Cpn, Vec<usize>> = HashMap::new();
+    for (index, deps) in evaluated.iter().enumerate() {
+        let Some(deps) = deps else {
+            continue;
+        };
+        // Keep every mentioned CPN; group satisfaction remains authoritative.
+        let mut cpns = HashSet::new();
+        collect_cpns_from_entries(deps.bdepend(), &mut cpns);
+        for cpn in cpns {
+            out.entry(cpn).or_default().push(index);
         }
     }
+    out
 }
 
 struct TrimCandidate<'a, 'b> {
     index: usize,
     pkg: &'a PortagePackage,
-    order: &'a [(PortagePackage, Version)],
-    kept: &'a [(PortagePackage, Version)],
+    kept_cpvs: &'a [Cpv],
     kept_indices: &'a [usize],
     ctx: &'a TrimCtx<'b>,
     runtime_required: &'a HashSet<Cpn>,
     base_avail: &'a Avail,
+    evaluated: &'a [Option<&'a effective_use::EvaluatedDeps<'b>>],
+    consumers: &'a HashMap<Cpn, Vec<usize>>,
 }
 
 fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
@@ -142,39 +155,28 @@ fn should_keep(cand: &TrimCandidate<'_, '_>) -> bool {
         return true;
     }
 
-    for (j, (consumer, consumer_ver)) in cand.order.iter().enumerate().skip(cand.index + 1) {
-        let avail = avail_for_consumer(j, cand.kept, cand.kept_indices, cand.base_avail);
-        let Some(deps) = effective_use::evaluated_deps(
-            cand.ctx.data,
-            &cand.ctx.policy,
-            consumer,
-            consumer_ver,
-            false,
-        ) else {
+    let Some(consumers) = cand.consumers.get(&cpn) else {
+        return false;
+    };
+    for &j in consumers {
+        if j <= cand.index {
+            continue;
+        }
+        // Kept indices are appended in plan order, so entries before `j` form a prefix.
+        let prefix_len = cand.kept_indices.partition_point(|&index| index < j);
+        let avail = crate::bdepend_avail::AvailPrefix::new(
+            Some(cand.base_avail),
+            &cand.kept_cpvs[..prefix_len],
+        );
+        let Some(deps) = cand.evaluated.get(j).and_then(Option::as_ref) else {
             continue;
         };
-        if avail.has_unsatisfied_atom_for_cpn(&deps.bdepend(), cpn) {
+        if avail.has_unsatisfied_atom_for_cpn(deps.bdepend(), cpn) {
             return true;
         }
     }
 
     false
-}
-
-fn avail_for_consumer(
-    consumer_index: usize,
-    kept: &[(PortagePackage, Version)],
-    kept_indices: &[usize],
-    base_avail: &Avail,
-) -> Avail {
-    let mut avail = base_avail.clone();
-    for (k, (pkg, ver)) in kept.iter().enumerate() {
-        if kept_indices[k] < consumer_index {
-            let cpv = Cpv::new(*pkg.cpn(), ver.clone());
-            avail.record_merge(cpv, pkg.merge_root());
-        }
-    }
-    avail
 }
 
 #[cfg(test)]

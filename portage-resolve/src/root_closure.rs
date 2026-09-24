@@ -186,7 +186,7 @@ fn visit(
             DepClass::Pdepend => deps.pdepend(),
             DepClass::Idepend => deps.idepend(),
         };
-        for cpn in unsatisfied_cpns(&listed, avail) {
+        for cpn in unsatisfied_cpns(listed, avail) {
             if graph.of_cpn.contains_key(&cpn) {
                 continue;
             }
@@ -212,7 +212,7 @@ fn visit(
             avail.record_merge(Cpv::new(cpn, cver), ctx.spec.stamp);
             visit(ctx, graph, avail, v, ctx.spec.deep, false);
         }
-        entries.extend(listed);
+        entries.extend_from_slice(listed);
     }
     // Source dependency-string order, never sorted or routed through a set:
     // the emission DFS follows this list, so the final plan order depends on

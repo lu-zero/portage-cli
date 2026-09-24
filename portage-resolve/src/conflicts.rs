@@ -369,26 +369,17 @@ pub fn installed_blocker_atoms(entry: &VdbEntry) -> Vec<Dep> {
 
 /// Whether any atom anywhere in the (unevaluated) dep tree is a blocker
 fn has_blocker_atom(entries: &[DepEntry]) -> bool {
-    entries.iter().any(|entry| match entry {
-        DepEntry::Atom(dep) => dep.blocker.is_some(),
-        DepEntry::UseConditional { children, .. }
-        | DepEntry::AllOf(children)
-        | DepEntry::AnyOf(children)
-        | DepEntry::ExactlyOneOf(children)
-        | DepEntry::AtMostOneOf(children) => has_blocker_atom(children),
-    })
+    let mut found = false;
+    DepEntry::walk_atoms(entries, &mut |dep| found |= dep.blocker.is_some());
+    found
 }
 
 fn collect_blocker_atoms(entries: &[DepEntry], out: &mut Vec<Dep>) {
-    for entry in entries {
-        match entry {
-            DepEntry::Atom(dep) if dep.blocker.is_some() => out.push(dep.clone()),
-            DepEntry::AllOf(children) | DepEntry::AnyOf(children) => {
-                collect_blocker_atoms(children, out)
-            }
-            _ => {}
+    DepEntry::walk_atoms(entries, &mut |dep| {
+        if dep.blocker.is_some() {
+            out.push(dep.clone());
         }
-    }
+    });
 }
 
 /// Translate a dep atom's version constraint into the solver's

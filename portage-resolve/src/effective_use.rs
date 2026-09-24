@@ -1,5 +1,6 @@
 //! Effective per-package USE after profile/env overrides and IUSE defaults
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use portage_atom::interner::{DefaultInterner, Interned};
@@ -134,42 +135,53 @@ pub fn effective_use(
 pub struct EvaluatedDeps<'a> {
     cache: &'a CacheEntry,
     effective: UseConfig,
+    depend: OnceCell<Vec<DepEntry>>,
+    bdepend: OnceCell<Vec<DepEntry>>,
+    rdepend: OnceCell<Vec<DepEntry>>,
+    pdepend: OnceCell<Vec<DepEntry>>,
+    idepend: OnceCell<Vec<DepEntry>>,
 }
 
 /// One USE-evaluated dep-class accessor per PMS dep class; each just picks
-/// the field and hands it to `DepEntry::evaluate_use`
+/// the field and evaluates it once for the lifetime of this value.
 impl EvaluatedDeps<'_> {
-    fn eval(&self, deps: &[DepEntry]) -> Vec<DepEntry> {
-        DepEntry::evaluate_use_groups(
-            deps,
-            &self.effective,
-            self.cache.metadata.eapi.empty_any_of_matches(),
-        )
+    fn eval<'cell>(
+        &self,
+        deps: &[DepEntry],
+        cell: &'cell OnceCell<Vec<DepEntry>>,
+    ) -> &'cell [DepEntry] {
+        cell.get_or_init(|| {
+            DepEntry::evaluate_use_groups(
+                deps,
+                &self.effective,
+                self.cache.metadata.eapi.empty_any_of_matches(),
+            )
+        })
     }
 
     /// `DEPEND` edges
-    pub fn depend(&self) -> Vec<DepEntry> {
-        self.eval(self.cache.metadata.depend.list())
+    pub fn depend(&self) -> &[DepEntry] {
+        self.eval(self.cache.metadata.depend.list(), &self.depend)
     }
 
     /// `BDEPEND` edges
-    pub fn bdepend(&self) -> Vec<DepEntry> {
-        self.eval(self.cache.metadata.bdepend.list())
+    pub fn bdepend(&self) -> &[DepEntry] {
+        self.eval(self.cache.metadata.bdepend.list(), &self.bdepend)
     }
 
     /// `RDEPEND` edges
-    pub fn rdepend(&self) -> Vec<DepEntry> {
-        self.eval(self.cache.metadata.rdepend.list())
+    pub fn rdepend(&self) -> &[DepEntry] {
+        self.eval(self.cache.metadata.rdepend.list(), &self.rdepend)
     }
 
     /// `PDEPEND` edges
-    pub fn pdepend(&self) -> Vec<DepEntry> {
-        self.eval(self.cache.metadata.pdepend.list())
+    pub fn pdepend(&self) -> &[DepEntry] {
+        self.eval(self.cache.metadata.pdepend.list(), &self.pdepend)
     }
 
     /// `IDEPEND` edges
-    pub fn idepend(&self) -> Vec<DepEntry> {
-        self.eval(self.cache.metadata.idepend.list())
+    pub fn idepend(&self) -> &[DepEntry] {
+        self.eval(self.cache.metadata.idepend.list(), &self.idepend)
     }
 }
 
@@ -188,7 +200,65 @@ pub fn evaluated_deps<'a>(
     // construction) — the solver's ceded (`--autosolve-use`) decisions don't
     // exist yet at this point, so there is nothing to apply here.
     let effective = effective_use(policy, pkg, ver, cache, stable, &[]);
-    Some(EvaluatedDeps { cache, effective })
+    Some(EvaluatedDeps {
+        cache,
+        effective,
+        depend: OnceCell::new(),
+        bdepend: OnceCell::new(),
+        rdepend: OnceCell::new(),
+        pdepend: OnceCell::new(),
+        idepend: OnceCell::new(),
+    })
+}
+
+/// Per-pass cache for effective USE and evaluated dependency classes.
+pub(crate) struct EvaluatedDepsCache<'a> {
+    data: &'a RepoData,
+    policy: ResolvePolicy<'a>,
+    stable: bool,
+    entries: HashMap<(PortagePackage, Version), Option<EvaluatedDeps<'a>>>,
+}
+
+impl<'a> EvaluatedDepsCache<'a> {
+    pub(crate) fn new(data: &'a RepoData, policy: ResolvePolicy<'a>, stable: bool) -> Self {
+        Self {
+            data,
+            policy,
+            stable,
+            entries: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn get(
+        &mut self,
+        pkg: &PortagePackage,
+        ver: &Version,
+    ) -> Option<&EvaluatedDeps<'a>> {
+        let key = (pkg.clone(), ver.clone());
+        if !self.entries.contains_key(&key) {
+            let value = evaluated_deps(self.data, &self.policy, pkg, ver, self.stable);
+            self.entries.insert(key.clone(), value);
+        }
+        self.entries.get(&key).and_then(Option::as_ref)
+    }
+
+    /// Fill the cache and return one evaluated entry per plan position.
+    pub(crate) fn snapshot(
+        &mut self,
+        order: &[(PortagePackage, Version)],
+    ) -> Vec<Option<&EvaluatedDeps<'a>>> {
+        for (pkg, ver) in order {
+            let _ = self.get(pkg, ver);
+        }
+        order
+            .iter()
+            .map(|(pkg, ver)| {
+                self.entries
+                    .get(&(pkg.clone(), ver.clone()))
+                    .and_then(Option::as_ref)
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

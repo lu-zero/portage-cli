@@ -4,6 +4,7 @@
 //! `BDEPEND` trim pass.
 
 use std::cell::OnceCell;
+use std::collections::HashMap;
 
 use camino::Utf8Path;
 use portage_atom::Slot;
@@ -52,9 +53,26 @@ struct AvailEntry {
 
 /// Installed `(cpv, main-slot)` pairs visible for dependency presence checks
 #[derive(Debug, Clone, Default)]
-pub struct Avail(Vec<AvailEntry>);
+pub struct Avail {
+    entries: Vec<AvailEntry>,
+    by_cpn: HashMap<Cpn, Vec<usize>>,
+}
 
 impl Avail {
+    fn from_entries(entries: Vec<AvailEntry>) -> Self {
+        let mut by_cpn: HashMap<Cpn, Vec<usize>> = HashMap::with_capacity(entries.len());
+        for (index, entry) in entries.iter().enumerate() {
+            by_cpn.entry(entry.cpv.cpn).or_default().push(index);
+        }
+        Self { entries, by_cpn }
+    }
+
+    fn push(&mut self, entry: AvailEntry) {
+        let index = self.entries.len();
+        self.by_cpn.entry(entry.cpv.cpn).or_default().push(index);
+        self.entries.push(entry);
+    }
+
     /// `BDEPEND` availability at the start of a run: the build host's own
     /// `BROOT` — `roots.satisfaction_root(DepClass::Bdepend)`, carried
     /// correctly on `roots` even under an active `--target` sysroot
@@ -69,7 +87,7 @@ impl Avail {
     /// satisfied. Not done for `--root`/`--local`: nothing is ever merged
     /// anywhere but the single satisfaction root there.
     pub fn initial_bdepend(roots: &Roots) -> Self {
-        Self(avail_entries_from(broot_vdb_packages(roots)))
+        Self::from_entries(avail_entries_from(broot_vdb_packages(roots)))
     }
 
     /// `DEPEND` availability
@@ -85,14 +103,14 @@ impl Avail {
         if roots.merge_root() != depend_root {
             out.extend(vdb_avail_entries(Some(roots.merge_root())));
         }
-        Self(out)
+        Self::from_entries(out)
     }
 
     /// `DEPEND` availability against a fixed sysroot (`ESYSROOT`)
     ///
     /// `None` is the host `/var/db/pkg`.
     pub fn initial_sysroot_depend(sysroot: Option<&camino::Utf8Path>) -> Self {
-        Self(vdb_avail_entries(sysroot))
+        Self::from_entries(vdb_avail_entries(sysroot))
     }
 
     /// `DEPEND` availability at the toolchain sysroot alone (`ESYSROOT`),
@@ -108,14 +126,14 @@ impl Avail {
     /// Reads [`Roots::satisfaction_root`]`(DepClass::Depend)` rather than a
     /// raw path, so it cannot drift from the rule `Roots` itself encodes.
     pub fn initial_base_depend(roots: &Roots) -> Self {
-        Self(vdb_avail_entries(Some(
+        Self::from_entries(vdb_avail_entries(Some(
             roots.satisfaction_root(DepClass::Depend),
         )))
     }
 
     /// Target `ROOT` visibility from an explicit set of installed CPVs
     pub fn from_cpvs(cpvs: Vec<(Cpv, Option<String>)>) -> Self {
-        Self(
+        Self::from_entries(
             cpvs.into_iter()
                 .map(|(cpv, slot)| AvailEntry {
                     cpv,
@@ -136,7 +154,7 @@ impl Avail {
     /// satisfied (`installed: None`), matching the solver, which counts the
     /// provided package as present regardless of flags.
     pub fn record_provided(&mut self, cpv: Cpv, slot: Option<Interned<DefaultInterner>>) {
-        self.0.push(AvailEntry {
+        self.push(AvailEntry {
             cpv,
             slot,
             installed: None,
@@ -146,7 +164,7 @@ impl Avail {
 
     /// Record a host merge visible to later `BDEPEND` checks
     pub fn record_merge_bdepend(&mut self, cpv: Cpv) {
-        self.0.push(AvailEntry {
+        self.push(AvailEntry {
             cpv,
             slot: None,
             installed: None,
@@ -156,13 +174,13 @@ impl Avail {
 
     /// Record a target merge for both DEPEND and BDEPEND views (preflight)
     pub fn record_target_merge(&mut self, depend: &mut Self, cpv: Cpv) {
-        depend.0.push(AvailEntry {
+        depend.push(AvailEntry {
             cpv: cpv.clone(),
             slot: None,
             installed: None,
             interned_use: OnceCell::new(),
         });
-        self.0.push(AvailEntry {
+        self.push(AvailEntry {
             cpv,
             slot: None,
             installed: None,
@@ -172,7 +190,7 @@ impl Avail {
 
     /// Record a merge for within-run `BDEPEND` trim (host or target)
     pub fn record_merge(&mut self, cpv: Cpv, _merge_root: MergeRoot) {
-        self.0.push(AvailEntry {
+        self.push(AvailEntry {
             cpv,
             slot: None,
             installed: None,
@@ -184,18 +202,63 @@ impl Avail {
     /// version, slot, and any USE-dep brackets — see the `use_deps_satisfied`
     /// function)
     pub fn atom_satisfied(&self, dep: &Dep) -> bool {
-        self.0.iter().any(|e| {
-            let slot = e.slot.map(Slot::from_name);
-            dep.matches_cpv(&e.cpv, slot.as_ref()) && use_deps_satisfied(dep, e)
+        self.by_cpn.get(&dep.cpn).is_some_and(|indices| {
+            indices.iter().any(|&index| {
+                let entry = &self.entries[index];
+                let slot = entry.slot.map(Slot::from_name);
+                dep.matches_cpv(&entry.cpv, slot.as_ref()) && use_deps_satisfied(dep, entry)
+            })
         })
     }
 
     /// `true` when `entries` contain an unsatisfied atom on `cpn`
     pub fn has_unsatisfied_atom_for_cpn(&self, entries: &[DepEntry], cpn: Cpn) -> bool {
-        entries
-            .iter()
-            .any(|e| entry_unsatisfied_for_cpn(e, cpn, self))
+        has_unsatisfied_atom_for_cpn(self, entries, cpn)
     }
+}
+
+/// Availability source used by dependency-tree checks.
+pub(crate) trait Availability {
+    fn atom_satisfied(&self, dep: &Dep) -> bool;
+}
+
+impl Availability for Avail {
+    fn atom_satisfied(&self, dep: &Dep) -> bool {
+        Avail::atom_satisfied(self, dep)
+    }
+}
+
+/// A read-only availability view over a base set and earlier plan entries.
+pub(crate) struct AvailPrefix<'a> {
+    base: Option<&'a Avail>,
+    extra: &'a [Cpv],
+}
+
+impl<'a> AvailPrefix<'a> {
+    pub(crate) fn new(base: Option<&'a Avail>, extra: &'a [Cpv]) -> Self {
+        Self { base, extra }
+    }
+
+    pub(crate) fn has_unsatisfied_atom_for_cpn(&self, entries: &[DepEntry], cpn: Cpn) -> bool {
+        has_unsatisfied_atom_for_cpn(self, entries, cpn)
+    }
+}
+
+impl Availability for AvailPrefix<'_> {
+    fn atom_satisfied(&self, dep: &Dep) -> bool {
+        self.base.is_some_and(|base| base.atom_satisfied(dep))
+            || self.extra.iter().any(|cpv| dep.matches_cpv(cpv, None))
+    }
+}
+
+fn has_unsatisfied_atom_for_cpn<A: Availability + ?Sized>(
+    avail: &A,
+    entries: &[DepEntry],
+    cpn: Cpn,
+) -> bool {
+    entries
+        .iter()
+        .any(|e| entry_unsatisfied_for_cpn(e, cpn, avail))
 }
 
 /// Whether `dep`'s USE-dep brackets (if any) are satisfied by `entry`
@@ -318,8 +381,9 @@ fn vdb_packages_at(root: &Utf8Path) -> Vec<InstalledPackage> {
 
 /// The CPNs of every unsatisfied (non-blocker) atom in `entries`
 ///
-/// An `AnyOf` (`||`) group contributes its branch CPNs only when the whole
-/// group is unsatisfied. `UseConditional`s are assumed already resolved by
+/// An `AnyOf` (`||`) or `ExactlyOneOf` (`^^`) group contributes its branch CPNs
+/// only when no member is available. `AtMostOneOf` (`??`) is optional and
+/// contributes none. `UseConditional`s are assumed already resolved by
 /// `evaluate_use`. Used to find build-dep edges a root lacks (e.g. the native
 /// offset host build-closure walk).
 pub fn unsatisfied_cpns(entries: &[DepEntry], avail: &Avail) -> Vec<Cpn> {
@@ -349,7 +413,7 @@ fn unsat_cpns_rec(entries: &[DepEntry], avail: &Avail, out: &mut Vec<Cpn>) {
                 out.push(dep.cpn);
             }
             DepEntry::AllOf(c) => unsat_cpns_rec(c, avail, out),
-            DepEntry::AnyOf(c) if !group_satisfied(c, avail) => {
+            DepEntry::AnyOf(c) | DepEntry::ExactlyOneOf(c) if !group_satisfied(c, avail) => {
                 for branch in c {
                     cpns_of(branch, out);
                 }
@@ -362,11 +426,11 @@ fn unsat_cpns_rec(entries: &[DepEntry], avail: &Avail, out: &mut Vec<Cpn>) {
 /// Collect every non-blocker atom CPN mentioned in `e` (for an unsatisfied
 /// `||`-group's branches)
 fn cpns_of(e: &DepEntry, out: &mut Vec<Cpn>) {
-    match e {
-        DepEntry::Atom(dep) if dep.blocker.is_none() => out.push(dep.cpn),
-        DepEntry::AllOf(c) | DepEntry::AnyOf(c) => c.iter().for_each(|b| cpns_of(b, out)),
-        _ => {}
-    }
+    DepEntry::walk_atoms(std::slice::from_ref(e), &mut |dep| {
+        if dep.blocker.is_none() {
+            out.push(dep.cpn);
+        }
+    });
 }
 
 /// Append the display form of each unsatisfied requirement in `entries` to `out`
@@ -382,67 +446,62 @@ pub fn collect_unsatisfied(entries: &[DepEntry], avail: &Avail, out: &mut Vec<St
                 }
             }
             DepEntry::AllOf(children) => collect_unsatisfied(children, avail, out),
-            any @ DepEntry::AnyOf(children) => {
+            DepEntry::AnyOf(children) => {
                 if !group_satisfied(children, avail) {
-                    out.push(any.to_string());
+                    out.push(e.to_string());
                 }
             }
-            DepEntry::ExactlyOneOf(_) | DepEntry::AtMostOneOf(_) => {}
+            DepEntry::ExactlyOneOf(children) => {
+                if !group_satisfied(children, avail) {
+                    out.push(e.to_string());
+                }
+            }
+            DepEntry::AtMostOneOf(_) => {}
             DepEntry::UseConditional { .. } => {}
         }
     }
 }
 
-fn group_satisfied(entries: &[DepEntry], avail: &Avail) -> bool {
+fn group_satisfied<A: Availability + ?Sized>(entries: &[DepEntry], avail: &A) -> bool {
     entries.iter().any(|e| entry_satisfied(e, avail))
 }
 
 /// Whether `e` is satisfied on `avail` (blockers count as satisfied)
-fn entry_satisfied(e: &DepEntry, avail: &Avail) -> bool {
+fn entry_satisfied<A: Availability + ?Sized>(e: &DepEntry, avail: &A) -> bool {
     match e {
         DepEntry::Atom(dep) => dep.blocker.is_some() || avail.atom_satisfied(dep),
         DepEntry::AllOf(c) => c.iter().all(|e| entry_satisfied(e, avail)),
-        DepEntry::AnyOf(c) => group_satisfied(c, avail),
-        DepEntry::ExactlyOneOf(_) | DepEntry::AtMostOneOf(_) => true,
+        DepEntry::AnyOf(c) | DepEntry::ExactlyOneOf(c) => group_satisfied(c, avail),
+        DepEntry::AtMostOneOf(c) => {
+            c.iter()
+                .filter(|child| entry_satisfied(child, avail))
+                .count()
+                <= 1
+        }
         DepEntry::UseConditional { .. } => true,
     }
 }
 
-fn entry_unsatisfied_for_cpn(e: &DepEntry, cpn: Cpn, avail: &Avail) -> bool {
+fn entry_unsatisfied_for_cpn<A: Availability + ?Sized>(e: &DepEntry, cpn: Cpn, avail: &A) -> bool {
     match e {
         DepEntry::Atom(dep) if dep.blocker.is_some() => false,
         DepEntry::Atom(dep) if dep.cpn != cpn => false,
         DepEntry::Atom(dep) => !avail.atom_satisfied(dep),
         DepEntry::AllOf(c) => c.iter().any(|e| entry_unsatisfied_for_cpn(e, cpn, avail)),
-        DepEntry::AnyOf(c) => {
-            // Unsatisfied || group only if every branch that mentions `cpn` fails
-            // and at least one branch mentions `cpn`.
-            let mut mentions = false;
-            let mut any_sat = false;
-            for child in c {
-                if branch_mentions_cpn(child, cpn) {
-                    mentions = true;
-                    if entry_satisfied(child, avail) {
-                        any_sat = true;
-                    }
-                }
-            }
-            mentions && !any_sat
+        DepEntry::AnyOf(c) | DepEntry::ExactlyOneOf(c) => {
+            !group_satisfied(c, avail) && c.iter().any(|child| branch_mentions_cpn(child, cpn))
         }
-        DepEntry::ExactlyOneOf(_) | DepEntry::AtMostOneOf(_) => false,
+        DepEntry::AtMostOneOf(_) => false,
         DepEntry::UseConditional { .. } => false,
     }
 }
 
 fn branch_mentions_cpn(e: &DepEntry, cpn: Cpn) -> bool {
-    match e {
-        DepEntry::Atom(dep) => dep.cpn == cpn,
-        DepEntry::AllOf(c) | DepEntry::AnyOf(c) => c.iter().any(|e| branch_mentions_cpn(e, cpn)),
-        DepEntry::ExactlyOneOf(c) | DepEntry::AtMostOneOf(c) => {
-            c.iter().any(|e| branch_mentions_cpn(e, cpn))
-        }
-        DepEntry::UseConditional { .. } => false,
-    }
+    let mut found = false;
+    DepEntry::walk_atoms(std::slice::from_ref(e), &mut |dep| {
+        found |= dep.cpn == cpn;
+    });
+    found
 }
 
 #[cfg(test)]
@@ -481,7 +540,7 @@ mod tests {
         std::fs::write(pkg_dir.join("IUSE"), iuse.join(" ")).unwrap();
 
         let root = Utf8Path::from_path(&tmp).unwrap();
-        Avail(avail_entries_from(vdb_packages_at(root)))
+        Avail::from_entries(avail_entries_from(vdb_packages_at(root)))
     }
 
     fn parse(dep: &str) -> Vec<DepEntry> {
@@ -578,6 +637,20 @@ mod tests {
     }
 
     #[test]
+    fn prefix_view_keeps_base_and_only_selected_plan_entries() {
+        let base = atoms(&["dev-build/base-1"]);
+        let extra = vec![Cpv::parse("dev-build/later-1").unwrap()];
+        let entries = parse("|| ( dev-build/later dev-build/other )");
+        let cpn = Cpn::parse("dev-build/later").unwrap();
+
+        let with_extra = AvailPrefix::new(Some(&base), &extra);
+        assert!(!with_extra.has_unsatisfied_atom_for_cpn(&entries, cpn));
+
+        let without_extra = AvailPrefix::new(Some(&base), &[]);
+        assert!(without_extra.has_unsatisfied_atom_for_cpn(&entries, cpn));
+    }
+
+    #[test]
     fn version_too_low_is_reported() {
         let avail = atoms(&["dev-libs/foo-1.2"]);
         let mut out = Vec::new();
@@ -629,7 +702,49 @@ mod tests {
         assert!(cpns.is_empty());
     }
 
-    // Regression test for the riscv64 stage3 shakeout (#28/#30): the same
+    #[test]
+    fn exactly_one_of_reports_missing_branches() {
+        let avail = Avail::default();
+        let deps = parse("^^ ( dev-libs/a dev-libs/b )");
+        assert_eq!(
+            unsatisfied_cpns(&deps, &avail)
+                .into_iter()
+                .map(|cpn| cpn.to_string())
+                .collect::<Vec<_>>(),
+            ["dev-libs/a", "dev-libs/b"]
+        );
+        assert!(avail.has_unsatisfied_atom_for_cpn(&deps, Cpn::parse("dev-libs/a").unwrap()));
+
+        let mut out = Vec::new();
+        collect_unsatisfied(&deps, &avail, &mut out);
+        assert_eq!(out, ["^^ ( dev-libs/a dev-libs/b )"]);
+
+        let optional = parse("?? ( dev-libs/c dev-libs/d )");
+        assert!(unsatisfied_cpns(&optional, &avail).is_empty());
+        assert!(!avail.has_unsatisfied_atom_for_cpn(&optional, Cpn::parse("dev-libs/c").unwrap()));
+    }
+
+    #[test]
+    fn all_cpns_walks_exactly_one_and_at_most_one_groups() {
+        let cpns = all_cpns(&parse(
+            "^^ ( dev-libs/a dev-libs/b ) ?? ( dev-libs/c dev-libs/d )",
+        ))
+        .into_iter()
+        .map(|cpn| cpn.to_string())
+        .collect::<Vec<_>>();
+        assert_eq!(
+            cpns,
+            ["dev-libs/a", "dev-libs/b", "dev-libs/c", "dev-libs/d"]
+        );
+    }
+
+    #[test]
+    fn any_of_does_not_require_a_branch_when_another_is_available() {
+        let avail = atoms(&["dev-libs/b-1"]);
+        let deps = parse("|| ( dev-libs/a dev-libs/b )");
+        assert!(!avail.has_unsatisfied_atom_for_cpn(&deps, Cpn::parse("dev-libs/a").unwrap()));
+    }
+
     // bug class as `load_host_installed` (installed.rs) — `initial_bdepend`
     // must read `host_roots`'s VDB, not unconditionally the bare host's
     #[test]

@@ -1002,19 +1002,7 @@ impl Adapter<'_> {
     /// `versions_for` and `slots_for` must agree, or the slot map would carry
     /// phantom slots for versions the solver can never select
     pub fn version_accepted(&self, cpv: &Cpv, cache: &portage_metadata::CacheEntry) -> bool {
-        let meta = &cache.metadata;
-        self.accept_keywords
-            .accepts(&meta.keywords, cpv, Some(meta.slot.slot))
-            && !is_masked(
-                self.package_mask,
-                self.package_unmask,
-                cpv,
-                &meta.slot,
-                repo_name_of(self.data, cpv),
-            )
-            && self.license_ok(cpv, meta)
-            && properties_ok_for(cpv, meta, &self.policy())
-            && restrict_ok_for(cpv, meta, &self.policy())
+        version_accepted_for(&self.policy(), cpv, cache, repo_name_of(self.data, cpv))
     }
 
     /// The newest keyword/mask/license-accepted version of `cpn`, with its cache entry
@@ -1031,13 +1019,6 @@ impl Adapter<'_> {
             .filter(|(cpv, cache)| self.version_accepted(cpv, cache))
             .max_by(|a, b| a.0.version.cmp(&b.0.version))
             .map(|(cpv, cache)| (cpv, cache))
-    }
-
-    /// License acceptance for a version, evaluating any `use? ( … )` LICENSE
-    /// branch against the version's effective USE (computed only when the
-    /// expression actually has conditionals)
-    fn license_ok(&self, cpv: &Cpv, meta: &portage_metadata::EbuildMetadata) -> bool {
-        license_ok_for(cpv, meta, &self.policy())
     }
 
     /// Level-C cede: hand REQUIRED_USE flags to the solver as preferences
@@ -1627,19 +1608,7 @@ pub fn target_package(
         .iter()
         .filter(|(cpv, cache)| {
             dep.matches_cpv(cpv, Some(&cache.metadata.slot))
-                && policy.accept_keywords.accepts(
-                    &cache.metadata.keywords,
-                    cpv,
-                    Some(cache.metadata.slot.slot),
-                )
-                && !is_masked(
-                    policy.package_mask,
-                    policy.package_unmask,
-                    cpv,
-                    &cache.metadata.slot,
-                    repo_name_of(data, cpv),
-                )
-                && license_ok_for(cpv, &cache.metadata, policy)
+                && version_accepted_for(policy, cpv, cache, repo_name_of(data, cpv))
         })
         .max_by(|a, b| a.0.version.cmp(&b.0.version))
         .map(|(_, cache)| cache.metadata.slot.slot);
@@ -1659,22 +1628,6 @@ pub fn target_package(
 /// group nodes) so that masked transitive deps are captured regardless of USE
 /// flag state at detection time.
 pub fn cpns_for(data: &RepoData, cpn: &Cpn, ver: &Version) -> Vec<Cpn> {
-    use portage_atom::DepEntry;
-
-    fn walk(entries: &[DepEntry], out: &mut Vec<Cpn>) {
-        for e in entries {
-            match e {
-                DepEntry::Atom(dep) if dep.blocker.is_none() => out.push(dep.cpn),
-                DepEntry::UseConditional { children, .. }
-                | DepEntry::AnyOf(children)
-                | DepEntry::AllOf(children)
-                | DepEntry::ExactlyOneOf(children)
-                | DepEntry::AtMostOneOf(children) => walk(children, out),
-                _ => {}
-            }
-        }
-    }
-
     let Some(entries) = data.versions.get(cpn) else {
         return vec![];
     };
@@ -1690,7 +1643,11 @@ pub fn cpns_for(data: &RepoData, cpn: &Cpn, ver: &Version) -> Vec<Cpn> {
         meta.pdepend.list(),
         meta.idepend.list(),
     ] {
-        walk(deps, &mut out);
+        portage_atom::DepEntry::walk_atoms(deps, &mut |dep| {
+            if dep.blocker.is_none() {
+                out.push(dep.cpn);
+            }
+        });
     }
     out
 }
@@ -2790,6 +2747,68 @@ mod tests {
         // version glob picks the matching slot, not the newest
         assert_eq!(slot("=dev-lang/python-3.13*").as_deref(), Some("3.13"));
         assert_eq!(slot("=dev-lang/python-3.14*").as_deref(), Some("3.14"));
+    }
+
+    #[test]
+    fn target_package_uses_properties_and_restrict_acceptance() {
+        for (field, rejected) in [
+            ("RESTRICT=bindist\n", "bindist"),
+            ("PROPERTIES=live\n", "live"),
+        ] {
+            let data = repo_with_many(&[
+                (
+                    "app-misc/thing-2",
+                    &format!("EAPI=8\nSLOT=0\nKEYWORDS=amd64\n{field}DESCRIPTION=t\n"),
+                ),
+                (
+                    "app-misc/thing-1",
+                    "EAPI=8\nSLOT=1\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+                ),
+            ]);
+            let arch = Arch::intern("amd64");
+            let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+            let licenses = AcceptOverlay::new(accept_all_licenses(), Vec::new());
+            let all = || AcceptSet::from_tokens_plain(&["*".into()]);
+            let properties = AcceptProperties::new(
+                if field.starts_with("PROPERTIES") {
+                    AcceptSet::from_tokens_plain(&["*".into(), format!("-{rejected}")])
+                } else {
+                    all()
+                },
+                Vec::new(),
+            );
+            let restrict = AcceptRestrict::new(
+                if field.starts_with("RESTRICT") {
+                    AcceptSet::from_tokens_plain(&["*".into(), format!("-{rejected}")])
+                } else {
+                    all()
+                },
+                Vec::new(),
+            );
+            let force_mask = ForceMask::default();
+            let policy = ResolvePolicy {
+                accept_keywords: &ak,
+                package_mask: &[],
+                package_unmask: &[],
+                accept_licenses: &licenses,
+                accept_properties: &properties,
+                accept_restrict: &restrict,
+                defaults: empty_layer(),
+                conf: empty_layer(),
+                env_use: empty_layer(),
+                package_use: &[],
+                profile_package_use: &[],
+                force_mask: &force_mask,
+            };
+
+            let selected = target_package(&data, &dep("app-misc/thing"), &policy);
+            let selected_slot = selected.slot().map(|slot| slot.as_str().to_owned());
+            assert_eq!(
+                selected_slot.as_deref(),
+                Some("1"),
+                "{field} must not select the rejected slot"
+            );
+        }
     }
 
     #[test]

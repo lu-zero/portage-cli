@@ -197,7 +197,24 @@ impl DepEntry {
             .map_err(|e| Error::InvalidDepString(format!("{e}")))
     }
 
-    /// Evaluate USE conditionals using a predicate
+    /// Visit every atom in a dependency tree, including atoms nested in all
+    /// conditional and choice groups.
+    ///
+    /// The callback controls which atoms matter; traversal itself includes
+    /// every [`DepEntry`] variant from the [PMS 8.2 dependency grammar].
+    pub fn walk_atoms(entries: &[Self], visit: &mut impl FnMut(&Dep)) {
+        for entry in entries {
+            match entry {
+                Self::Atom(dep) => visit(dep),
+                Self::UseConditional { children, .. }
+                | Self::AllOf(children)
+                | Self::AnyOf(children)
+                | Self::ExactlyOneOf(children)
+                | Self::AtMostOneOf(children) => Self::walk_atoms(children, visit),
+            }
+        }
+    }
+
     ///
     /// Resolves every `UseConditional` node: active `flag? ( ... )` and inactive
     /// `!flag? ( ... )` are replaced by their (recursively evaluated) children;
@@ -533,6 +550,29 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert!(matches!(&entries[0], DepEntry::Atom(dep) if dep.package() == "rust"));
         assert!(matches!(&entries[1], DepEntry::Atom(dep) if dep.package() == "bar"));
+    }
+
+    #[test]
+    fn walk_atoms_visits_nested_groups() {
+        let entries = DepEntry::parse(
+            "( dev-libs/a dev-libs/b ) ssl? ( || ( dev-libs/c dev-libs/d ) ^^ ( dev-libs/e dev-libs/f ) ) ?? ( dev-libs/g dev-libs/h )",
+        )
+        .unwrap();
+        let mut atoms = Vec::new();
+        DepEntry::walk_atoms(&entries, &mut |dep| atoms.push(dep.to_string()));
+        assert_eq!(
+            atoms,
+            [
+                "dev-libs/a",
+                "dev-libs/b",
+                "dev-libs/c",
+                "dev-libs/d",
+                "dev-libs/e",
+                "dev-libs/f",
+                "dev-libs/g",
+                "dev-libs/h",
+            ]
+        );
     }
 
     #[test]
