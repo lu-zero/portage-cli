@@ -32,7 +32,8 @@ pub struct SourcedEbuild {
 /// One finished source attempt, in completion order
 pub type SourceItem = (Ebuild, Result<SourcedEbuild>);
 
-type AstCache = Arc<papaya::HashMap<String, brush_parser::ast::Program>>;
+type AstCache =
+    Arc<papaya::HashMap<String, std::result::Result<brush_parser::ast::Program, String>>>;
 
 /// Shared eclass AST cache
 ///
@@ -61,6 +62,7 @@ pub struct SourceOpts {
 ///
 /// Must be called from a Tokio runtime. Drain the receiver until it
 /// disconnects. Per-ebuild failures are `Err` items; the pool keeps going.
+/// A worker-pool failure is logged before the receiver disconnects.
 ///
 /// Internally this is the classic feed-then-join worker pool (same shape that
 /// used an `on_result` callback): the result stream is just the hand-off to
@@ -77,11 +79,14 @@ pub fn source_parallel(
     let ctx = ctx.clone();
 
     tokio::spawn(async move {
-        let _ = source_parallel_join(&repo, ebuilds, &opts, &ctx, move |ebuild, result| {
+        if let Err(e) = source_parallel_join(&repo, ebuilds, &opts, &ctx, move |ebuild, result| {
             // Unbounded + sync send: never park a worker on the hand-off.
             let _ = out_tx.send((ebuild, result));
         })
-        .await;
+        .await
+        {
+            tracing::error!("source worker pool failed: {e}");
+        }
     });
 
     out_rx
@@ -137,11 +142,13 @@ where
     }
     drop(work_tx);
 
+    let mut worker_error = None;
     for h in handles {
-        let _ = h.await;
+        if let Err(e) = h.await {
+            worker_error.get_or_insert_with(|| crate::Error::SourceWorker(e.to_string()));
+        }
     }
-
-    Ok(())
+    worker_error.map_or(Ok(()), Err)
 }
 
 /// Source a single ebuild and return its metadata
@@ -171,4 +178,72 @@ pub(crate) async fn source_one(
         sourced.metadata = sourced.metadata.dedup();
     }
     Ok(sourced)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::{RegenOpts, RegenWriteTarget, regen_cache};
+    use camino::Utf8Path;
+
+    fn repo_with_eclass(eclass: &str) -> (tempfile::TempDir, Repository, Vec<Ebuild>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "test\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "cat\n").unwrap();
+        std::fs::create_dir_all(root.join("eclass")).unwrap();
+        std::fs::write(root.join("eclass/broken.eclass"), eclass).unwrap();
+
+        let pkg = root.join("cat/pkg");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let ebuild_path = pkg.join("pkg-1.0.ebuild");
+        std::fs::write(
+            &ebuild_path,
+            "EAPI=8\ninherit broken\nDESCRIPTION=\"t\"\nSLOT=\"0\"\n",
+        )
+        .unwrap();
+        let repo = Repository::builder().in_memory_cache().open(root).unwrap();
+        let ebuild = Ebuild::from_path(Utf8Path::from_path(&ebuild_path).unwrap()).unwrap();
+        (tmp, repo, vec![ebuild])
+    }
+
+    #[tokio::test]
+    async fn malformed_eclass_is_reported_without_publishing_missing_output() {
+        let (_tmp, repo, ebuilds) = repo_with_eclass("if true; then\n");
+        let output = tempfile::tempdir().unwrap();
+        let (tx, _rx) = flume::unbounded();
+        let opts = RegenOpts {
+            source: SourceOpts {
+                jobs: Some(1),
+                dedup: false,
+            },
+            write: RegenWriteTarget::Dir(output.path().to_owned()),
+        };
+
+        let stats = regen_cache(&repo, ebuilds, &opts, tx).await.unwrap();
+
+        assert_eq!(stats.errors, 1);
+        assert!(!output.path().join("cat/pkg-1.0").exists());
+    }
+
+    #[tokio::test]
+    async fn source_worker_panics_are_reported() {
+        let (_tmp, repo, ebuilds) = repo_with_eclass("");
+        let result = source_parallel_join(
+            &repo,
+            ebuilds,
+            &SourceOpts {
+                jobs: Some(1),
+                dedup: false,
+            },
+            &SourceContext::new(),
+            |_, _| panic!("test worker panic"),
+        )
+        .await;
+
+        assert!(matches!(result, Err(crate::Error::SourceWorker(_))));
+    }
 }

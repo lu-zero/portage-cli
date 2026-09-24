@@ -190,6 +190,46 @@ async fn version_query_builtins_query_the_flagged_root() {
 }
 
 #[tokio::test]
+async fn run_phase_keeps_the_process_working_directory_unchanged() {
+    let dir = tempdir().unwrap();
+    let repo_path = dir.path().join("repo");
+    std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+    std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+    std::fs::write(repo_path.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::write(repo_path.join("profiles/repo_name"), "t\n").unwrap();
+    let ebdir = repo_path.join("cat/pkg");
+    std::fs::create_dir_all(&ebdir).unwrap();
+    std::fs::write(
+        ebdir.join("pkg-1.ebuild"),
+        "EAPI=8\nDESCRIPTION=\"t\"\nSLOT=\"0\"\nLICENSE=\"MIT\"\nS=\"${WORKDIR}/src\"\n\
+         pkg_setup() { pwd > \"${WORKDIR}/phase-pwd\"; }\n",
+    )
+    .unwrap();
+
+    let repo = Repository::builder()
+        .in_memory_cache()
+        .open(&repo_path)
+        .unwrap();
+    let mut shell = repo.shell().await.unwrap();
+    let ebuild =
+        Ebuild::from_path(camino::Utf8Path::from_path(&ebdir.join("pkg-1.ebuild")).unwrap())
+            .unwrap();
+    let work = dir.path().join("work");
+    let process_cwd = std::env::current_dir().unwrap();
+
+    shell
+        .run_phase(&ebuild, "setup", &work, std::path::Path::new("/"))
+        .await
+        .unwrap();
+
+    assert_eq!(std::env::current_dir().unwrap(), process_cwd);
+    assert_eq!(
+        std::fs::read_to_string(work.join("work/phase-pwd")).unwrap(),
+        format!("{}\n", work.join("work").display())
+    );
+}
+
+#[tokio::test]
 async fn bashrc_files_are_sourced_during_a_phase() {
     let dir = tempdir().unwrap();
     let repo_path = dir.path().join("repo");

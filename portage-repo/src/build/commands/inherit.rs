@@ -19,6 +19,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use brush_core::builtins;
+
+use super::die::DieFlag;
 use brush_parser::ast::Program;
 use clap::Parser;
 
@@ -95,7 +97,7 @@ pub(crate) struct InheritState {
     /// Transitive eclasses sourced so far in this shell, in inheritance order
     pub(crate) inherited: Vec<InheritedEclass>,
     /// Shared AST cache keyed by eclass name
-    pub(crate) cache: Arc<papaya::HashMap<String, Program>>,
+    pub(crate) cache: Arc<papaya::HashMap<String, std::result::Result<Program, String>>>,
 }
 
 impl Default for InheritState {
@@ -143,7 +145,8 @@ impl builtins::Command for InheritCommand {
         let is_top_level = get_var(context.shell, "ECLASS").is_empty();
         let mut inherit = get_var(context.shell, "INHERIT");
 
-        let cache: Arc<papaya::HashMap<String, Program>> = self.state(&context)?.cache.clone();
+        let cache: Arc<papaya::HashMap<String, std::result::Result<Program, String>>> =
+            self.state(&context)?.cache.clone();
 
         for eclass in &self.eclasses {
             let already_inherited = {
@@ -163,10 +166,11 @@ impl builtins::Command for InheritCommand {
 
             let eclass_file = find_eclass(context.shell, eclass);
             let Some(eclass_file) = eclass_file else {
-                let _ = writeln!(
-                    context.params.stderr(context.shell),
-                    "die: inherit: eclass not found: {eclass}"
-                );
+                let message = format!("inherit: eclass not found: {eclass}");
+                if let Ok(flag) = context.shared::<DieFlag>() {
+                    flag.raise(&message);
+                }
+                let _ = writeln!(context.params.stderr(context.shell), "die: {message}");
                 return Ok(brush_core::ExecutionResult::new(1));
             };
 
@@ -193,7 +197,7 @@ impl builtins::Command for InheritCommand {
             // even under concurrent worker access, avoiding duplicate parses.
             let pinned = cache.pin_owned();
             let mut was_miss = false;
-            let program = pinned.get_or_insert_with(eclass.clone(), || {
+            let cached = pinned.get_or_insert_with(eclass.clone(), || {
                 was_miss = true;
                 parse_eclass_file(&eclass_file, &parser_options)
             });
@@ -202,6 +206,17 @@ impl builtins::Command for InheritCommand {
             } else {
                 CACHE_HITS.fetch_add(1, Ordering::Relaxed);
             }
+            let program = match cached {
+                Ok(program) => program,
+                Err(error) => {
+                    let message = format!("inherit: failed to parse {eclass}: {error}");
+                    if let Ok(flag) = context.shared::<DieFlag>() {
+                        flag.raise(&message);
+                    }
+                    let _ = writeln!(context.params.stderr(context.shell), "die: {message}");
+                    return Ok(brush_core::ExecutionResult::new(1));
+                }
+            };
 
             let result = context
                 .shell
@@ -271,16 +286,15 @@ pub fn cache_stats() -> (u64, u64) {
 pub(crate) fn parse_eclass_file(
     path: &Utf8PathBuf,
     options: &brush_parser::ParserOptions,
-) -> Program {
+) -> std::result::Result<Program, String> {
     let mut buf = String::new();
-    let mut file =
-        std::fs::File::open(path).unwrap_or_else(|e| panic!("cannot open {}: {e}", path));
+    let mut file = std::fs::File::open(path).map_err(|e| format!("cannot open {}: {e}", path))?;
     file.read_to_string(&mut buf)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path));
+        .map_err(|e| format!("cannot read {}: {e}", path))?;
     let mut parser = brush_parser::Parser::new(buf.as_bytes(), options);
     parser
         .parse_program()
-        .unwrap_or_else(|e| panic!("parse error in {}: {e}", path))
+        .map_err(|e| format!("parse error in {}: {e}", path))
 }
 
 fn get_var<SE: brush_core::ShellExtensions>(shell: &brush_core::Shell<SE>, name: &str) -> String {

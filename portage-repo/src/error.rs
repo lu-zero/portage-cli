@@ -74,6 +74,10 @@ pub enum Error {
     /// Failed to write a sourced cache entry (regen path)
     #[error("cache write failed: {0}")]
     CacheWrite(String),
+
+    /// A source worker terminated unexpectedly
+    #[error("source worker failed: {0}")]
+    SourceWorker(String),
 }
 
 impl Error {

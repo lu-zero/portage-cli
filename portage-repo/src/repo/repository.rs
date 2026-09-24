@@ -495,25 +495,33 @@ impl Repository {
         self.path.join("metadata").join("timestamp.chk").is_file()
     }
 
-    /// A cheap stamp that changes when the tree is synced
+    /// A stamp that changes when the tree is synced
     ///
     /// `metadata/timestamp.chk` is what rsync rewrites on every sync, and a git
-    /// checkout moves the repo directory's own mtime. Both are consulted, so a
-    /// tree maintained either way invalidates. Content is deliberately not
-    /// hashed: this decides whether a cached *derived* index may be reused, and
-    /// the fallback on a miss is to recompute, not to be wrong.
+    /// checkout moves the repo directory's own mtime. Both are consulted, with
+    /// nanosecond mtimes and the marker's content digest so same-second,
+    /// same-length rewrites cannot reuse a derived index.
     ///
     /// `None` when neither can be read — treat that as "always recompute".
     pub fn sync_stamp(&self) -> Option<String> {
         let stamp_of = |p: Utf8PathBuf| -> Option<String> {
             let m = std::fs::metadata(p.as_std_path()).ok()?;
-            let secs = m
+            let modified = m
                 .modified()
                 .ok()?
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()?
-                .as_secs();
-            Some(format!("{secs}:{}", m.len()))
+                .as_nanos();
+            let content = if m.is_file() {
+                let bytes = std::fs::read(p.as_std_path()).ok()?;
+                Some(format!("{:x}", md5::compute(bytes)))
+            } else {
+                None
+            };
+            Some(match content {
+                Some(digest) => format!("{modified}:{}:{digest}", m.len()),
+                None => format!("{modified}:{}", m.len()),
+            })
         };
         let chk = stamp_of(self.path.join("metadata").join("timestamp.chk"));
         let root = stamp_of(self.path.clone());
@@ -1371,6 +1379,30 @@ mod tests {
 
         std::fs::write(dir.path().join("metadata").join("timestamp.chk"), "1\n").unwrap();
         assert!(repo.has_sync_marker());
+    }
+
+    #[test]
+    fn sync_stamp_tracks_same_length_marker_changes_at_the_same_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let marker = dir.path().join("metadata/timestamp.chk");
+        let mtime = std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123);
+
+        std::fs::write(&marker, "1\\n").unwrap();
+        std::fs::File::open(&marker)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        let first = repo.sync_stamp().expect("stamp");
+
+        std::fs::write(&marker, "2\\n").unwrap();
+        std::fs::File::open(&marker)
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        let second = repo.sync_stamp().expect("stamp");
+
+        assert_ne!(first, second);
     }
 
     #[test]

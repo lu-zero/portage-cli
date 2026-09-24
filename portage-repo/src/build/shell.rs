@@ -369,14 +369,8 @@ impl EbuildShell {
             .profile(ProfileLoadBehavior::Skip)
             .rc(RcLoadBehavior::Skip)
             .parser(ParserImpl::Winnow)
-            // Pinned rather than left to the process's ambient cwd (brush
-            // falls back to `std::env::current_dir()` when unset):
-            // `run_phase` later anchors the process cwd to `work_root`,
-            // process-global, so a concurrently running test/shell can
-            // observe a stale or just-deleted cwd between one test's
-            // tempdir dropping and another's shell construction, surfacing
-            // as `Shell("... No such file or directory")` from `getcwd()`.
-            // The repo root always exists.
+            // Keep each shell anchored to the repository rather than the
+            // process's ambient cwd, which may belong to another phase.
             .working_dir(repo.path().as_std_path().to_path_buf())
             .build()
             .await
@@ -1007,7 +1001,8 @@ impl EbuildShell {
         // each eclass's contribution into E_{VAR} and restores the var after
         // each eclass (PMS 10.2 / Portage B_*/E_* pattern).
         let params = self.shell.default_exec_params();
-        self.shell
+        let source_result = self
+            .shell
             .source_script(
                 ebuild.path().as_std_path(),
                 std::iter::empty::<&str>(),
@@ -1015,6 +1010,16 @@ impl EbuildShell {
             )
             .await
             .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?;
+        if !source_result.exit_code.is_success() {
+            return Err(Error::Shell(format!(
+                "sourcing {} returned status {}",
+                ebuild.path(),
+                u8::from(source_result.exit_code)
+            )));
+        }
+        if let Some(message) = self.die_flag.take() {
+            return Err(Error::Shell(format!("die: {message}")));
+        }
 
         // PMS 10.2: combine ebuild-defined values with eclass contributions.
         // After sourcing, `var` holds only what the ebuild set; `E_{var}` holds
@@ -1494,17 +1499,14 @@ impl EbuildShell {
             std::fs::create_dir_all(dir)
                 .map_err(|e| Error::Shell(format!("creating {}: {e}", dir.display())))?;
         }
-        // Anchor the *process* working directory inside the build tree. The brush
-        // shell tracks its own `working_dir` and sets it on each spawned command,
-        // but some eclass helpers (notably autotools' `eautoconf`/`eaclocal`, which
-        // run `autoconf -o configure.sh` etc.) reach the process cwd directly — and
-        // that would otherwise be wherever `em` was launched (e.g. the user's source
-        // checkout), where they drop `aclocal.m4`/`config.h.in`/symlinks. Anchor to
-        // `work_root` (not WORKDIR): it survives the post-merge cleanup, which wipes
-        // work/image/temp/homedir — anchoring to WORKDIR would leave the process cwd
-        // a *deleted* dir, and the next package's shell init `getcwd()`s and fails
-        // with ENOENT. The per-phase `cd "${S}"` still moves the shell into the tree.
-        let _ = std::env::set_current_dir(work_root);
+        // Keep the phase cwd on the shell instance. The process cwd is shared by
+        // every concurrent merge and must not be used as package state.
+        self.shell.set_working_dir(work_root).map_err(|e| {
+            Error::Shell(format!(
+                "setting working directory {}: {e}",
+                work_root.display()
+            ))
+        })?;
         self.set_var("WORKDIR", &workdir.to_string_lossy());
         // S defaults to ${WORKDIR}/${P}; the ebuild may override it at global
         // scope while sourcing. Only (re)assert the default when about to source,

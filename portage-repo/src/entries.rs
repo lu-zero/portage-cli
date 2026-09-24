@@ -57,6 +57,11 @@ use crate::cache::{
 };
 use crate::repo::Repository;
 
+type EclassDigests = HashMap<
+    portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
+    Option<md5::Digest>,
+>;
+
 /// Name of the sidecar listing the CPVs the in-tree cache does not serve
 const GAP_INDEX: &str = "gap-index";
 
@@ -76,6 +81,7 @@ const GAP_INDEX: &str = "gap-index";
 pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     let stamp = repo.sync_stamp();
     let index = repo.sidecar_path(GAP_INDEX);
+    let mut eclass_digests = EclassDigests::new();
 
     // Unchanged tree: the suspects are known, and their entries are already in
     // the secondary store from the run that discovered them. Gated on
@@ -88,31 +94,49 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         && let Some(cpvs) = read_gap_index(index, stamp)
     {
         let opts = CacheReadOpts::default();
+        let mut stale = false;
         let mut out: Vec<(Cpv, CacheEntry)> =
             cache_entries_parallel(std::slice::from_ref(repo), &opts, |text| {
                 CacheEntry::parse(text).map_err(crate::Error::from)
             })
             .await
             .into_iter()
-            .filter_map(|(cpv, e)| e.ok().map(|e| (cpv, e)))
+            .filter_map(|(cpv, e)| {
+                let entry = e.ok()?;
+                if repo.is_fresh_cached(&entry, &mut eclass_digests) {
+                    Some((cpv, entry))
+                } else {
+                    stale = true;
+                    None
+                }
+            })
             .collect();
         let mut recovered = 0usize;
         for cpv in &cpvs {
-            if let Ok(Some(entry)) = repo.cache_entry(cpv) {
+            if let Ok(Some(entry)) = repo.cache_entry(cpv)
+                && repo.is_fresh_cached(&entry, &mut eclass_digests)
+            {
                 recovered += 1;
                 out.push((cpv.clone(), entry));
             }
         }
         // A pruned secondary would silently re-hide packages; fall through and
         // rebuild rather than resolve against a tree we can only partly see.
-        if recovered == cpvs.len() {
+        if !stale && recovered == cpvs.len() {
             return out;
         }
-        tracing::debug!(
-            "repo '{}': gap index stale ({recovered}/{} entries present), rescanning",
-            repo.name(),
-            cpvs.len()
-        );
+        if stale {
+            tracing::debug!(
+                "repo '{}': cached eclass metadata changed, rescanning",
+                repo.name()
+            );
+        } else {
+            tracing::debug!(
+                "repo '{}': gap index stale ({recovered}/{} entries present), rescanning",
+                repo.name(),
+                cpvs.len()
+            );
+        }
         out.clear();
     }
 
@@ -167,7 +191,9 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         if let Some(m) = mtime {
             cache_mtime.insert(cpv.clone(), m);
         }
-        if let Ok(entry) = entry {
+        if let Ok(entry) = entry
+            && repo.is_fresh_cached(&entry, &mut eclass_digests)
+        {
             covered.insert(cpv.clone());
             out.push((cpv, entry));
         }
@@ -201,7 +227,13 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         .map(|(cpv, e)| (cpv.clone(), e.md5.clone()))
         .collect();
 
-    let gap = gap_entries(repo, suspects, &std::collections::HashSet::new()).await;
+    let gap = gap_entries_with_digests(
+        repo,
+        suspects,
+        &std::collections::HashSet::new(),
+        &mut eclass_digests,
+    )
+    .await;
 
     // Index only what the in-tree cache cannot serve: absent, or serving a
     // different build than the ebuild on disk. A suspect that merely looked new
@@ -267,6 +299,15 @@ pub async fn gap_entries(
     ebuilds: Vec<crate::repo::Ebuild>,
     covered: &std::collections::HashSet<Cpv>,
 ) -> Vec<(Cpv, CacheEntry)> {
+    gap_entries_with_digests(repo, ebuilds, covered, &mut EclassDigests::new()).await
+}
+
+async fn gap_entries_with_digests(
+    repo: &Repository,
+    ebuilds: Vec<crate::repo::Ebuild>,
+    covered: &std::collections::HashSet<Cpv>,
+    digests: &mut EclassDigests,
+) -> Vec<(Cpv, CacheEntry)> {
     let missing: Vec<_> = ebuilds
         .into_iter()
         .filter(|e| !covered.contains(e.cpv()))
@@ -279,7 +320,7 @@ pub async fn gap_entries(
         repo.name(),
         missing.len()
     );
-    resolve_ebuilds(repo, missing, &mut HashMap::new()).await
+    resolve_ebuilds(repo, missing, &mut HashMap::new(), digests).await
 }
 
 /// Run the four-step chain over `ebuilds`, consuming matching entries out of
@@ -288,16 +329,11 @@ async fn resolve_ebuilds(
     repo: &Repository,
     ebuilds: impl IntoIterator<Item = crate::repo::Ebuild>,
     cached: &mut HashMap<Cpv, CacheEntry>,
+    digests: &mut EclassDigests,
 ) -> Vec<(Cpv, CacheEntry)> {
     let masters = repo.masters();
     let mut out: Vec<(Cpv, CacheEntry)> = Vec::new();
     let mut shell = None;
-    // Eclass digests are shared across all entries of this repo — without
-    // the memo every cached entry re-hashes its full eclass list.
-    let mut digests: std::collections::HashMap<
-        portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
-        Option<md5::Digest>,
-    > = Default::default();
 
     for ebuild in ebuilds {
         let cpv = ebuild.cpv().clone();
@@ -305,11 +341,7 @@ async fn resolve_ebuilds(
             continue;
         };
         let digest = format!("{:x}", md5::compute(&bytes));
-        let valid = |entry: &CacheEntry,
-                     digests: &mut std::collections::HashMap<
-            portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>,
-            Option<md5::Digest>,
-        >| {
+        let valid = |entry: &CacheEntry, digests: &mut EclassDigests| {
             entry
                 .md5
                 .as_deref()
@@ -320,7 +352,7 @@ async fn resolve_ebuilds(
 
         // Primary bulk walk (in-tree md5-cache).
         if let Some(entry) = cached.remove(&cpv)
-            && valid(&entry, &mut digests)
+            && valid(&entry, digests)
         {
             out.push((cpv, entry));
             continue;
@@ -329,7 +361,7 @@ async fn resolve_ebuilds(
         // Layered lookup: primary miss path already tried above for bulk;
         // this hits secondary (and any primary entry not in the bulk map).
         if let Ok(Some(entry)) = repo.cache_entry(&cpv)
-            && valid(&entry, &mut digests)
+            && valid(&entry, digests)
         {
             out.push((cpv, entry));
             continue;
@@ -509,6 +541,75 @@ mod tests {
         assert_eq!(
             entries[0].1.metadata.description, "new",
             "per-entry suspect rule must catch a hand-edit a repo-wide sync marker misses"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_changed_eclass_invalidates_an_otherwise_covered_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata/layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles/categories"), "sys-apps\n").unwrap();
+        std::fs::write(dir.path().join("metadata/timestamp.chk"), "1\n").unwrap();
+        let repo = Repository::builder()
+            .user_cache_root(
+                camino::Utf8PathBuf::from_path_buf(cache_root.path().to_owned()).unwrap(),
+            )
+            .open(dir.path())
+            .unwrap();
+
+        let eclass_dir = dir.path().join("eclass");
+        std::fs::create_dir_all(&eclass_dir).unwrap();
+        let eclass_path = eclass_dir.join("test.eclass");
+        let old_eclass = "IUSE=\"old\"\n";
+        std::fs::write(&eclass_path, old_eclass).unwrap();
+        let eclass_digest = format!("{:x}", md5::compute(old_eclass.as_bytes()));
+
+        let pkg_dir = dir.path().join("sys-apps").join("foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("foo-1.0.ebuild");
+        let ebuild = "EAPI=8\ninherit test\nDESCRIPTION=\"base\"\nSLOT=0\n";
+        std::fs::write(&ebuild_path, ebuild).unwrap();
+        let ebuild_digest = format!("{:x}", md5::compute(ebuild.as_bytes()));
+
+        let cache_dir = dir.path().join("metadata/md5-cache/sys-apps");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache_path = cache_dir.join("foo-1.0");
+        std::fs::write(
+            &cache_path,
+            format!(
+                "EAPI=8\nDESCRIPTION=base\nIUSE=old\nSLOT=0\n_eclasses_=test\t{eclass_digest}\n_md5_={ebuild_digest}\n"
+            ),
+        )
+        .unwrap();
+
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        set_mtime(&ebuild_path, base);
+        set_mtime(&cache_path, base + Duration::from_secs(60));
+
+        let first = repo_entries(&repo).await;
+        assert_eq!(first[0].1.metadata.description, "base");
+        assert!(
+            first[0]
+                .1
+                .metadata
+                .iuse
+                .iter()
+                .any(|flag| flag.name() == "old")
+        );
+
+        std::fs::write(&eclass_path, "IUSE=\"new\"\n").unwrap();
+        let second = repo_entries(&repo).await;
+        assert_eq!(second[0].1.metadata.description, "base");
+        assert!(
+            second[0]
+                .1
+                .metadata
+                .iuse
+                .iter()
+                .any(|flag| flag.name() == "new")
         );
     }
 
