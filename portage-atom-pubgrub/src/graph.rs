@@ -1,4 +1,5 @@
 use std::collections::{BinaryHeap, HashMap};
+use std::time::{Duration, Instant};
 
 use portage_atom::{Cpn, Version};
 
@@ -25,6 +26,45 @@ pub struct DepEdge {
         Option<portage_atom::interner::Interned<portage_atom::interner::DefaultInterner>>,
 }
 
+/// Measurements collected while building and ordering a PMS 8.3 dependency graph.
+/// See [PMS 8.3](https://projects.gentoo.org/pms/9/pms.html#package-dependency-specifications).
+///
+/// The counters describe work performed by the graph pass; they do not affect
+/// the selected packages or ordering.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GraphStats {
+    /// Number of dependency-graph builds performed for this result.
+    pub graph_builds: usize,
+    /// Number of selected solution nodes considered by the graph pass.
+    pub graph_nodes: usize,
+    /// Number of virtual nodes expanded while resolving dependency edges.
+    pub virtual_expansions: usize,
+    /// Number of labeled edges emitted by the graph pass.
+    pub graph_edges: usize,
+    /// Number of strongly connected components in the hard/soft graph.
+    pub scc_count: usize,
+    /// Size of the largest strongly connected component.
+    pub largest_scc: usize,
+    /// Number of reachability probes made while repairing soft-edge inversions.
+    pub repair_reachability_calls: usize,
+    /// Number of graph nodes visited by soft-repair reachability probes.
+    pub repair_reachability_nodes: usize,
+    /// Time spent constructing the dependency graph.
+    pub graph_build_time: Duration,
+}
+
+/// The result of building and ordering the PMS 8.3 dependency graph.
+/// See [PMS 8.3](https://projects.gentoo.org/pms/9/pms.html#package-dependency-specifications).
+#[derive(Debug)]
+pub struct InstallOrderResult {
+    /// The dependency-respecting install order.
+    pub order: Vec<(PortagePackage, Version)>,
+    /// The labeled graph used to produce the order.
+    pub edges: Vec<DepEdge>,
+    /// Graph and soft-repair measurements for this pass.
+    pub stats: GraphStats,
+}
+
 impl PortageDependencyProvider {
     /// Build the labeled dependency graph from a solution
     ///
@@ -34,6 +74,18 @@ impl PortageDependencyProvider {
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
     ) -> Vec<DepEdge> {
+        self.dependency_graph_with_stats(solution).0
+    }
+
+    fn dependency_graph_with_stats(
+        &self,
+        solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
+    ) -> (Vec<DepEdge>, GraphStats) {
+        let graph_start = Instant::now();
+        let mut stats = GraphStats {
+            graph_builds: 1,
+            ..GraphStats::default()
+        };
         let mut edges = Vec::new();
         let classes = [
             DepClass::Depend,
@@ -110,6 +162,7 @@ impl PortageDependencyProvider {
                             if !seen.insert(dp) {
                                 continue;
                             }
+                            stats.virtual_expansions += 1;
                             if let Some(vdata) = self.package_data(dp) {
                                 for vver in vdata.versions.values() {
                                     for (idp, idvs, _) in vver.by_class.iter().flatten() {
@@ -137,7 +190,9 @@ impl PortageDependencyProvider {
             }
         }
 
-        edges
+        stats.graph_edges = edges.len();
+        stats.graph_build_time = graph_start.elapsed();
+        (edges, stats)
     }
 
     /// Compute an installation order from a solution
@@ -164,7 +219,15 @@ impl PortageDependencyProvider {
         &self,
         solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
     ) -> Vec<(PortagePackage, Version)> {
-        let graph = self.dependency_graph(solution);
+        self.install_order_with_stats(solution).order
+    }
+
+    /// Compute an installation order and return its graph measurements.
+    pub fn install_order_with_stats(
+        &self,
+        solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
+    ) -> InstallOrderResult {
+        let (graph, mut stats) = self.dependency_graph_with_stats(solution);
 
         // Index nodes deterministically (sorted by key) so SCC discovery and all
         // tie-breaks are reproducible.
@@ -174,6 +237,7 @@ impl PortageDependencyProvider {
             .collect();
         node_pv.sort_by(|a, b| a.0.cmp(&b.0));
         let n = node_pv.len();
+        stats.graph_nodes = n;
         let idx: HashMap<&str, usize> = node_pv
             .iter()
             .enumerate()
@@ -215,6 +279,8 @@ impl PortageDependencyProvider {
         for (node, &c) in comp_of.iter().enumerate() {
             members[c].push(node);
         }
+        stats.scc_count = num_comps;
+        stats.largest_scc = members.iter().map(Vec::len).max().unwrap_or(0);
 
         // Condensation edges + in-degrees (deduplicated).
         let mut comp_succ: Vec<std::collections::BTreeSet<usize>> =
@@ -268,7 +334,12 @@ impl PortageDependencyProvider {
         }
 
         // Pass 2: restore inverted soft edges that remain acyclic (bug #3).
-        repair_soft_inversions(result, &graph)
+        let order = repair_soft_inversions(result, &graph, &mut stats);
+        InstallOrderResult {
+            order,
+            edges: graph,
+            stats,
+        }
     }
 }
 
@@ -487,6 +558,7 @@ fn order_cycle(
 fn repair_soft_inversions(
     order: Vec<(PortagePackage, Version)>,
     graph: &[DepEdge],
+    stats: &mut GraphStats,
 ) -> Vec<(PortagePackage, Version)> {
     let n = order.len();
     if n <= 1 {
@@ -512,7 +584,7 @@ fn repair_soft_inversions(
         indeg[v] += 1;
     };
 
-    let try_add = |u: usize, v: usize, succ: &mut [Vec<usize>], indeg: &mut [usize]| -> bool {
+    let mut try_add = |u: usize, v: usize, succ: &mut [Vec<usize>], indeg: &mut [usize]| -> bool {
         if u == v {
             return false;
         }
@@ -520,7 +592,7 @@ fn repair_soft_inversions(
             return true;
         }
         // Adding u→v (u before v) cycles if v can already reach u.
-        if reaches(v, u, succ) {
+        if reaches(v, u, succ, stats) {
             return false;
         }
         succ[u].push(v);
@@ -615,7 +687,8 @@ fn repair_soft_inversions(
 }
 
 /// Whether `start` can reach `target` following `succ` edges
-fn reaches(start: usize, target: usize, succ: &[Vec<usize>]) -> bool {
+fn reaches(start: usize, target: usize, succ: &[Vec<usize>], stats: &mut GraphStats) -> bool {
+    stats.repair_reachability_calls += 1;
     if start == target {
         return true;
     }
@@ -623,6 +696,7 @@ fn reaches(start: usize, target: usize, succ: &[Vec<usize>]) -> bool {
     let mut visited = vec![false; succ.len()];
     visited[start] = true;
     while let Some(u) = stack.pop() {
+        stats.repair_reachability_nodes += 1;
         for &v in &succ[u] {
             if v == target {
                 return true;
@@ -699,6 +773,13 @@ mod tests {
             "bottom must come before top in install order, got: {:?}",
             names
         );
+
+        let measured = provider.install_order_with_stats(&solution);
+        assert_eq!(measured.order, order);
+        assert_eq!(measured.edges.len(), edges.len());
+        assert_eq!(measured.stats.graph_builds, 1);
+        assert_eq!(measured.stats.graph_nodes, solution.iter().count());
+        assert_eq!(measured.stats.graph_edges, edges.len());
     }
 
     // Regression test for the riscv64 stage3 shakeout: `dependency_graph`

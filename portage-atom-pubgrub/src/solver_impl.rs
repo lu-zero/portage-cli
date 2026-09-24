@@ -106,17 +106,15 @@ impl Solver for PortageDependencyProvider {
                 .map(map_violation),
         );
 
+        let graph_result = PortageDependencyProvider::install_order_with_stats(self, &solution);
         Ok(Plan {
             selected: solution
                 .iter()
                 .filter_map(|(p, v)| to_selected(p, v))
                 .collect(),
-            graph: self
-                .dependency_graph(&solution)
-                .iter()
-                .filter_map(map_dep_edge)
-                .collect(),
-            install_order: PortageDependencyProvider::install_order(self, &solution)
+            graph: graph_result.edges.iter().filter_map(map_dep_edge).collect(),
+            install_order: graph_result
+                .order
                 .into_iter()
                 .filter_map(|(p, v)| to_selected(&p, &v))
                 .collect(),

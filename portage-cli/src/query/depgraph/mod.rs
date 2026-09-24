@@ -19,6 +19,7 @@ use portage_resolve::{
 use portage_resolve::force_mask;
 
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use camino::Utf8Path;
 use gentoo_core::Arch;
@@ -62,6 +63,63 @@ pub struct PlannedMerge {
     /// same-version USE rebuild. The merge loop must build it rather than treat
     /// the VDB entry as a resume-skip.
     pub reinstall: bool,
+}
+
+#[derive(Default)]
+struct ResolveMetrics {
+    phases: HashMap<&'static str, Duration>,
+    solve_rounds: usize,
+    graph_builds: usize,
+    graph_nodes: usize,
+    virtual_expansions: usize,
+    graph_edges: usize,
+    scc_count: usize,
+    largest_scc: usize,
+    repair_reachability_calls: usize,
+    repair_reachability_nodes: usize,
+    depend_trimmed: usize,
+    bdepend_trimmed: usize,
+}
+
+impl ResolveMetrics {
+    fn record(&mut self, phase: &'static str, elapsed: Duration) {
+        *self.phases.entry(phase).or_default() += elapsed;
+    }
+
+    fn merge(&mut self, other: &Self) {
+        for (phase, elapsed) in &other.phases {
+            *self.phases.entry(*phase).or_default() += *elapsed;
+        }
+        self.graph_builds += other.graph_builds;
+        self.graph_nodes += other.graph_nodes;
+        self.virtual_expansions += other.virtual_expansions;
+        self.graph_edges += other.graph_edges;
+        self.scc_count += other.scc_count;
+        self.largest_scc = self.largest_scc.max(other.largest_scc);
+        self.repair_reachability_calls += other.repair_reachability_calls;
+        self.repair_reachability_nodes += other.repair_reachability_nodes;
+        self.depend_trimmed += other.depend_trimmed;
+        self.bdepend_trimmed += other.bdepend_trimmed;
+    }
+
+    fn log(&self, resolve_secs: f64) {
+        tracing::debug!(
+            resolve_secs,
+            solve_rounds = self.solve_rounds,
+            graph_builds = self.graph_builds,
+            graph_nodes = self.graph_nodes,
+            virtual_expansions = self.virtual_expansions,
+            graph_edges = self.graph_edges,
+            scc_count = self.scc_count,
+            largest_scc = self.largest_scc,
+            repair_reachability_calls = self.repair_reachability_calls,
+            repair_reachability_nodes = self.repair_reachability_nodes,
+            depend_trimmed = self.depend_trimmed,
+            bdepend_trimmed = self.bdepend_trimmed,
+            phases = ?self.phases,
+            "resolve phase timings"
+        );
+    }
 }
 
 /// What [`depgraph`] resolved
@@ -327,6 +385,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         complete_graph,
         quiet,
     } = opts;
+    let mut metrics = ResolveMetrics::default();
     let exclude_atoms: Vec<Dep> = exclude
         .iter()
         .filter_map(|s| match Dep::parse(s) {
@@ -351,26 +410,49 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // `set` is built once by the caller (shared with the atom-resolution step)
     // and already carries any caller-supplied aliases prepended onto it.
 
-    let (raw_data, (target_installed, installed_blockers), host_installed, use_env_result) = tokio::join!(
-        repo::load_repos(&set),
+    let (
+        (raw_data, repo_load_elapsed),
+        ((target_installed, installed_blockers), target_load_elapsed),
+        (host_installed, host_load_elapsed),
+        (use_env_result, use_env_elapsed),
+    ) = tokio::join!(
+        async {
+            let start = Instant::now();
+            let data = repo::load_repos(&set).await;
+            (data, start.elapsed())
+        },
         // Also precompute each installed package's blocker atoms on this task
         // (for `check_blockers`): the walk only needs the VDB, so it overlaps the
         // other concurrent loads instead of running serially before the solve.
         async {
+            let start = Instant::now();
             let ti = installed::load_target_installed(roots);
             let blockers: Vec<Vec<Dep>> =
                 ti.iter().map(conflicts::installed_blocker_atoms).collect();
-            (ti, blockers)
+            ((ti, blockers), start.elapsed())
         },
-        async { installed::load_host_installed(roots) },
-        use_env::build_use_env(
-            set.main(),
-            config_root,
-            roots.config_overlay(),
-            extra_use_override,
-            sysroot_override
-        ),
+        async {
+            let start = Instant::now();
+            let installed = installed::load_host_installed(roots);
+            (installed, start.elapsed())
+        },
+        async {
+            let start = Instant::now();
+            let result = use_env::build_use_env(
+                set.main(),
+                config_root,
+                roots.config_overlay(),
+                extra_use_override,
+                sysroot_override,
+            )
+            .await;
+            (result, start.elapsed())
+        },
     );
+    metrics.record("repo_load", repo_load_elapsed);
+    metrics.record("target_installed_load", target_load_elapsed);
+    metrics.record("host_installed_load", host_load_elapsed);
+    metrics.record("use_env_load", use_env_elapsed);
     let use_env = use_env_result?;
 
     // Fold global ACCEPT_KEYWORDS and per-package package.accept_keywords into a
@@ -471,7 +553,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // keywords/license decide the winner instead of an arbitrary priority-only
     // pick, so a masked higher-priority repo's copy can't hide an otherwise-
     // available identical version from a lower-priority one.
+    let collapse_start = Instant::now();
     let data = repo::collapse_duplicates(raw_data, &target_policy);
+    metrics.record("collapse_duplicates", collapse_start.elapsed());
 
     // Map each `package.provided` CPV onto the repo slot(s) a `:slot` dep would
     // reference (the version sharing its major.minor series), so both the solver
@@ -568,6 +652,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // flips because of a flag the fixpoint later cedes would see a stale
     // slot entry here. PMS-legal but vanishingly rare, not worth
     // recomputing the whole map every iteration to cover.
+    let slot_map_start = Instant::now();
     let slot_map = build_slot_map(&repo::Adapter {
         data: &data,
         accept_keywords: &accept_keywords,
@@ -590,6 +675,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         autosolve_use: false,
         autounmask_widen: false,
     });
+    metrics.record("slot_map", slot_map_start.elapsed());
     // Widened-mode slot map: tagged-only slots rank strictly below accepted
     // ones there. Phase 1 keeps the strict map so its graph shape stays
     // untouched; the extra whole-tree scan is paid only by callers that
@@ -723,6 +809,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         proposed: Vec<conflicts::ProposedPkg>,
         exclude_omitted: usize,
         resume_omitted: usize,
+        round_metrics: ResolveMetrics,
     }
 
     // Build a provider (with the given cede policy) and run the solve against
@@ -733,6 +820,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // invariant.
     let solve_round =
         |targets: Vec<(PortagePackage, PortageVersionSet)>| -> anyhow::Result<RoundOutcome> {
+            let mut round_metrics = ResolveMetrics::default();
             // Phase 2 flips this on: the strict solve failed, so retry (and
             // keep) widened candidate supply. Strict-first keeps every
             // non-crossdev resolve byte-identical.
@@ -783,6 +871,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // can be registered as installed below — unconditional, unlike the
                 // target_installed seeding above: emptytree only affects VDB selection.
                 seeds.extend(provided.iter().map(|cpv| cpv.cpn));
+                let provider_start = Instant::now();
                 let mut provider =
                     PortageDependencyProvider::new_for_targets_with_bdeps_and_slot_map(
                         adapter,
@@ -790,6 +879,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         solve_with_bdeps,
                         slot_map_ref,
                     );
+                tracing::debug!(
+                    elapsed_ms = provider_start.elapsed().as_secs_f64() * 1000.0,
+                    "provider build"
+                );
                 provider.set_cross_active(cross.active);
                 provider.set_is_cross_arch(cross.is_cross_arch());
                 // crossdev `--root-deps=rdeps`: caller-supplied (see `DepgraphOpts::
@@ -906,7 +999,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                         e.iuse.clone(),
                     );
                 }
+                let resolve_start = Instant::now();
                 let result = provider.resolve_targets(targets.clone());
+                tracing::debug!(
+                    elapsed_ms = resolve_start.elapsed().as_secs_f64() * 1000.0,
+                    "solver resolve"
+                );
                 (provider, result)
             };
 
@@ -1165,11 +1263,16 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // plan when already installed — keep `full_order` so bdepend_trim
             // still sees their RDEPEND (e.g. libxcrypt only required via the
             // virtual) and does not treat providers as orphaned.
-            let full_order: Vec<(PortagePackage, Version)> = provider
-                .install_order(&solution)
+            let install_order_start = Instant::now();
+            let graph_result = provider.install_order_with_stats(&solution);
+            let graph_stats = graph_result.stats;
+            let full_order: Vec<(PortagePackage, Version)> = graph_result
+                .order
                 .into_iter()
                 .filter(|(pkg, _)| !pkg.is_virtual())
                 .collect();
+            round_metrics.record("install_order", install_order_start.elapsed());
+            round_metrics.record("dependency_graph", graph_stats.graph_build_time);
 
             let mut order: Vec<_> = full_order
                 .iter()
@@ -1292,12 +1395,16 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // `build_sysroot()` is `None` there, which we map to the target so the
                 // trim is a no-op (nothing host-satisfied). Only a `--prefix` overlay
                 // (base != target) has a distinct build sysroot to trim against.
+                let before = order.len();
+                let trim_start = Instant::now();
                 order = depend_trim::trim_sysroot_satisfied_depend(
                     order,
                     roots.build_sysroot().or(Some(cross.target.as_path())),
                     cross.target.as_path(),
                     &trim_ctx,
                 );
+                round_metrics.depend_trimmed += before.saturating_sub(order.len());
+                round_metrics.record("depend_trim", trim_start.elapsed());
             }
 
             // `-uD` only: do not post-trim host-satisfied BDEPEND tools (deep update
@@ -1310,7 +1417,11 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // for BDEPEND already satisfied on BROOT or by an earlier kept entry —
                 // matching emerge, which trims a built package's redundant build tools
                 // regardless of `--with-bdeps`.
+                let before = order.len();
+                let trim_start = Instant::now();
                 order = bdepend_trim::trim_within_run_bdepend(order, &full_order, true, &trim_ctx);
+                round_metrics.bdepend_trimmed += before.saturating_sub(order.len());
+                round_metrics.record("bdepend_trim", trim_start.elapsed());
             }
             // Native --emptytree lists the full deep closure straight from the solve
             // (the provider returns un-pruned deps under `rebuild_tree`); no post-solve
@@ -1321,11 +1432,19 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // `PortagePackage::is_virtual`) — not Gentoo `virtual/*` packages,
             // which are `Real` and must keep RDEPEND edges (e.g.
             // `virtual/libcrypt` → `sys-libs/libxcrypt`) for scheduling.
-            let edges: Vec<_> = provider
-                .dependency_graph(&solution)
+            let edges: Vec<_> = graph_result
+                .edges
                 .into_iter()
                 .filter(|e| !e.from.0.is_virtual() && !e.to.0.is_virtual())
                 .collect();
+            round_metrics.graph_builds += graph_stats.graph_builds;
+            round_metrics.graph_nodes += graph_stats.graph_nodes;
+            round_metrics.virtual_expansions += graph_stats.virtual_expansions;
+            round_metrics.graph_edges += edges.len();
+            round_metrics.scc_count += graph_stats.scc_count;
+            round_metrics.largest_scc = round_metrics.largest_scc.max(graph_stats.largest_scc);
+            round_metrics.repair_reachability_calls += graph_stats.repair_reachability_calls;
+            round_metrics.repair_reachability_nodes += graph_stats.repair_reachability_nodes;
 
             // Emerge convention: list the explicitly-requested target(s) last.  Only
             // move a target that nothing else depends on (not a `to` in any edge), so
@@ -1461,6 +1580,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 proposed,
                 exclude_omitted,
                 resume_omitted,
+                round_metrics,
             })
         };
 
@@ -1473,7 +1593,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let resolve_start = std::time::Instant::now();
     let mut solve_targets: Vec<(PortagePackage, PortageVersionSet)> = root_deps.clone();
     let mut repaired: HashSet<Cpn> = HashSet::new();
+    metrics.solve_rounds += 1;
     let mut outcome = solve_round(solve_targets.clone())?;
+    metrics.merge(&outcome.round_metrics);
     let mut repair_completed: Vec<Cpn> = Vec::new();
     let mut repair_incomplete: Vec<Cpn> = Vec::new();
     if complete_graph && update && !empty {
@@ -1500,8 +1622,10 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             }
             let mut next_targets = solve_targets.clone();
             next_targets.extend(candidates.iter().cloned());
+            metrics.solve_rounds += 1;
             match solve_round(next_targets.clone()) {
                 Ok(next) => {
+                    metrics.merge(&next.round_metrics);
                     repair_completed.extend(candidates.iter().map(|(pkg, _)| *pkg.cpn()));
                     solve_targets = next_targets;
                     outcome = next;
@@ -1534,6 +1658,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         proposed,
         exclude_omitted,
         resume_omitted,
+        round_metrics: _,
     } = outcome;
 
     if exclude_omitted > 0 {
@@ -2054,6 +2179,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             build_blockers[from].push(to);
         }
     }
+
+    metrics.log(resolve_secs);
 
     Ok(DepgraphOutcome {
         // Non-zero when the displayed plan is not directly installable: USE
