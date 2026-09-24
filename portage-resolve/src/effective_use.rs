@@ -84,7 +84,7 @@ pub fn iuse_set(
 
 /// The full effective USE fold for one `(pkg, ver)`: IUSE defaults, `pre_env`,
 /// `package_use`, `env_use`, then profile force/mask, then any
-/// `--autosolve-use` ceded flags on top
+/// `--autosolve-use` ceded flags on top.
 ///
 /// Force/mask is applied post-fold (not as synthetic `package.use`) so a
 /// process-env `USE="-* …"` cannot clear forced flags — matching
@@ -96,6 +96,25 @@ pub fn effective_use(
     cache: &CacheEntry,
     stable: bool,
     ceded: &[CededFlag],
+) -> UseConfig {
+    let mut cfg = policy
+        .facts
+        .map(|facts| facts.effective(*policy, pkg, ver, cache))
+        .unwrap_or_else(|| effective_use_base(policy, pkg, ver, cache, stable));
+    apply_ceded(&mut cfg, *pkg.cpn(), ceded);
+    cfg
+}
+
+/// Build the pre-cede effective USE fold for one `(pkg, ver)`.
+///
+/// Keeping this separate lets policy-fact caching stop at the ceding boundary;
+/// each caller applies its own solver decisions after the shared base.
+pub(crate) fn effective_use_base(
+    policy: &ResolvePolicy,
+    pkg: &PortagePackage,
+    ver: &Version,
+    cache: &CacheEntry,
+    stable: bool,
 ) -> UseConfig {
     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
     let iuse_map = iuse_defaults(cache);
@@ -119,7 +138,6 @@ pub fn effective_use(
         stable,
         &iuse,
     );
-    apply_ceded(&mut cfg, *pkg.cpn(), ceded);
     cfg
 }
 

@@ -536,6 +536,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             .insert(slot_key, e.version.clone());
     }
 
+    let policy_facts = repo::PolicyFactsCache::new();
     let target_policy = repo::ResolvePolicy {
         accept_keywords: &accept_keywords,
         package_mask: &package_mask,
@@ -549,6 +550,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
+        facts: None,
     };
 
     // Collapse each repo's own copy of a duplicate cpv (see
@@ -559,6 +561,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     let collapse_start = Instant::now();
     let data = repo::collapse_duplicates(raw_data, &target_policy);
     metrics.record("collapse_duplicates", collapse_start.elapsed());
+    let target_policy = target_policy.with_package_use(&policy_facts, &package_use);
 
     // Map each `package.provided` CPV onto the repo slot(s) a `:slot` dep would
     // reference (the version sharing its major.minor series), so both the solver
@@ -670,6 +673,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
+        facts: target_policy.facts,
         installed_cpvs: solver_installed_cpvs,
         // Computed later (needs `root_pkgs`, not yet built here); inert
         // anyway since `autosolve_use: false` below means `cede_required_use`
@@ -698,6 +702,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             package_use: &package_use,
             profile_package_use: &profile_package_use,
             force_mask: &force_mask,
+            facts: target_policy.facts,
             installed_cpvs: solver_installed_cpvs,
             rebuilding_cpvs: &empty_solver_cpvs,
             autosolve_use: false,
@@ -843,6 +848,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                     package_use: pkg_use,
                     profile_package_use: &profile_package_use,
                     force_mask: &force_mask,
+                    facts: Some(policy_facts.generation_for(pkg_use)),
                     installed_cpvs: solver_installed_cpvs,
                     rebuilding_cpvs: &rebuilding_installed_cpvs,
                     autosolve_use,
@@ -1164,7 +1170,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 package_use: &package_use,
                 profile_package_use: &profile_package_use,
                 force_mask: &force_mask,
-            };
+                facts: None,
+            }
+            .with_package_use(&policy_facts, &package_use);
 
             // Autounmask: detect filtered candidates from dropped deps. Filtered
             // to just this round's actionable set and reported once the repair
@@ -1524,6 +1532,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 package_use: &package_use,
                 profile_package_use: &profile_package_use,
                 force_mask: &force_mask,
+                facts: final_policy.facts,
                 installed_cpvs: solver_installed_cpvs,
                 rebuilding_cpvs: &rebuilding_installed_cpvs,
                 autosolve_use: false,
@@ -1698,7 +1707,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
-    };
+        facts: None,
+    }
+    .with_package_use(&policy_facts, &package_use);
 
     let flag_reqs: HashMap<&PortagePackage, &UseFlagRequirement> = provider
         .use_flag_requirements()
@@ -1794,6 +1805,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         package_use: &package_use,
         profile_package_use: &profile_package_use,
         force_mask: &force_mask,
+        facts: final_policy.facts,
         installed_cpvs: solver_installed_cpvs,
         rebuilding_cpvs: &rebuilding_installed_cpvs,
         autosolve_use: false,

@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use gentoo_core::Arch;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Operator, Version};
 use portage_atom_pubgrub::{
     DroppedDep, IUseDefault, PackageDeps, PackageRepository, PackageVersions, RequiredUse,
-    UseOverride,
+    UseConfig, UseOverride,
 };
 use portage_metadata::{CacheEntry, Keyword, LicenseExpr, RequiredUseExpr, Stability};
 
@@ -591,6 +592,7 @@ fn license_ok_for(
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
     policy: &ResolvePolicy,
+    effective: Option<&UseConfig>,
 ) -> bool {
     let Some(lic) = &meta.license else {
         return true;
@@ -599,6 +601,9 @@ fn license_ok_for(
     let accept = policy.accept_licenses.effective_for(cpv, slot);
     if !license_has_conditional(lic) {
         return license_accepted(lic, &accept, &|_| false);
+    }
+    if let Some(cfg) = effective {
+        return license_accepted(lic, &accept, &use_predicate(cfg));
     }
     let cfg = effective_use_config(policy, cpv, meta, slot);
     license_accepted(lic, &accept, &use_predicate(&cfg))
@@ -625,6 +630,7 @@ fn restrict_family_ok_for(
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
     policy: &ResolvePolicy,
+    effective: Option<&UseConfig>,
 ) -> bool {
     if entries.is_empty() {
         return true;
@@ -633,6 +639,9 @@ fn restrict_family_ok_for(
     let a = accept.effective_for(cpv, slot);
     if !restrict_has_conditional(entries) {
         return a.accepts_restrict(entries, &|_| false);
+    }
+    if let Some(cfg) = effective {
+        return a.accepts_restrict(entries, &use_predicate(cfg));
     }
     let cfg = effective_use_config(policy, cpv, meta, slot);
     a.accepts_restrict(entries, &use_predicate(&cfg))
@@ -644,6 +653,7 @@ fn properties_ok_for(
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
     policy: &ResolvePolicy,
+    effective: Option<&UseConfig>,
 ) -> bool {
     restrict_family_ok_for(
         &meta.properties,
@@ -651,6 +661,7 @@ fn properties_ok_for(
         cpv,
         meta,
         policy,
+        effective,
     )
 }
 
@@ -660,8 +671,16 @@ fn restrict_ok_for(
     cpv: &Cpv,
     meta: &portage_metadata::EbuildMetadata,
     policy: &ResolvePolicy,
+    effective: Option<&UseConfig>,
 ) -> bool {
-    restrict_family_ok_for(&meta.restrict, policy.accept_restrict, cpv, meta, policy)
+    restrict_family_ok_for(
+        &meta.restrict,
+        policy.accept_restrict,
+        cpv,
+        meta,
+        policy,
+        effective,
+    )
 }
 
 /// Check whether `mask_dep` matches the given `cpv` (version + CPN, no slot check)
@@ -766,6 +785,249 @@ pub fn repo_name_of(data: &RepoData, cpv: &Cpv) -> Interned<DefaultInterner> {
     data.repo_of.get(cpv).copied().unwrap_or(data.repo_name)
 }
 
+/// A generation-scoped view of cached policy facts for one invocation.
+///
+/// The generation changes only when the co-solve's `package.use` vector
+/// changes; repository metadata and parsed cache entries remain shared.
+#[derive(Debug, Clone, Copy)]
+pub struct PolicyFactsRef<'a> {
+    cache: &'a PolicyFactsCache,
+    generation: u64,
+}
+
+/// Cache for policy-dependent facts derived from parsed repository versions.
+///
+/// This is deliberately separate from [`RepoData`]: the repository facts are
+/// immutable for the invocation, while acceptance, stable-keyword status, and
+/// pre-cede USE depend on the current policy generation.
+#[derive(Debug, Default)]
+pub struct PolicyFactsCache {
+    state: Mutex<PolicyFactsState>,
+}
+
+#[derive(Debug, Default)]
+struct PolicyFactsState {
+    current_package_use: Option<Vec<(Dep, Vec<UseOverride>)>>,
+    current_generation: u64,
+    facts: HashMap<(u64, Cpv), PolicyVersionFacts>,
+}
+
+#[derive(Debug, Clone)]
+struct PolicyVersionFacts {
+    accepted: Option<bool>,
+    stable: bool,
+    effective: Option<UseConfig>,
+}
+
+impl PolicyFactsCache {
+    /// Create an empty policy-fact cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Return the generation for `package_use`, advancing it only on change.
+    pub fn generation_for(&self, package_use: &[(Dep, Vec<UseOverride>)]) -> PolicyFactsRef<'_> {
+        let mut state = self.lock();
+        let generation = match &state.current_package_use {
+            Some(current) if current.as_slice() == package_use => state.current_generation,
+            _ => {
+                state.current_generation += 1;
+                state.current_package_use = Some(package_use.to_vec());
+                state.current_generation
+            }
+        };
+        PolicyFactsRef {
+            cache: self,
+            generation,
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, PolicyFactsState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl<'a> PolicyFactsRef<'a> {
+    /// Numeric generation used for this policy view.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn version(
+        &self,
+        policy: ResolvePolicy<'_>,
+        cpv: &Cpv,
+        cache: &CacheEntry,
+    ) -> PolicyVersionFacts {
+        let key = (self.generation, cpv.clone());
+        if let Some(facts) = self.cache.lock().facts.get(&key) {
+            return facts.clone();
+        }
+
+        let raw_policy = ResolvePolicy {
+            facts: None,
+            ..policy
+        };
+        let meta = &cache.metadata;
+        let stable =
+            raw_policy
+                .accept_keywords
+                .is_stable(&meta.keywords, cpv, Some(meta.slot.slot));
+        let facts = PolicyVersionFacts {
+            accepted: None,
+            stable,
+            effective: None,
+        };
+        let mut state = self.cache.lock();
+        state.facts.entry(key).or_insert(facts).clone()
+    }
+
+    pub(crate) fn accepted(
+        &self,
+        policy: ResolvePolicy<'_>,
+        cpv: &Cpv,
+        cache: &CacheEntry,
+        repo: Interned<DefaultInterner>,
+    ) -> bool {
+        let key = (self.generation, cpv.clone());
+        if let Some(accepted) = self
+            .cache
+            .lock()
+            .facts
+            .get(&key)
+            .and_then(|facts| facts.accepted)
+        {
+            return accepted;
+        }
+        let facts = self.version(policy, cpv, cache);
+        if let Some(accepted) = facts.accepted {
+            return accepted;
+        }
+
+        let raw_policy = ResolvePolicy {
+            facts: None,
+            ..policy
+        };
+        let meta = &cache.metadata;
+        let base_accepted =
+            raw_policy
+                .accept_keywords
+                .accepts(&meta.keywords, cpv, Some(meta.slot.slot))
+                && !is_masked(
+                    raw_policy.package_mask,
+                    raw_policy.package_unmask,
+                    cpv,
+                    &meta.slot,
+                    repo,
+                );
+        let (accepted, effective) = if !base_accepted {
+            (false, None)
+        } else {
+            let effective = if let Some(effective) = facts.effective.clone() {
+                Some(effective)
+            } else if version_needs_effective(meta) {
+                Some(effective_use_config(
+                    &raw_policy,
+                    cpv,
+                    meta,
+                    Some(meta.slot.slot),
+                ))
+            } else {
+                None
+            };
+            (
+                version_accepted_uncached(&raw_policy, cpv, cache, repo, effective.as_ref()),
+                effective,
+            )
+        };
+
+        let mut state = self.cache.lock();
+        let entry = state.facts.entry(key).or_insert_with(|| facts.clone());
+        if entry.accepted.is_none() {
+            entry.accepted = Some(accepted);
+        }
+        if entry.effective.is_none() {
+            entry.effective = effective;
+        }
+        entry.accepted.unwrap_or(accepted)
+    }
+
+    pub(crate) fn is_stable(
+        &self,
+        policy: ResolvePolicy<'_>,
+        cpv: &Cpv,
+        cache: &CacheEntry,
+    ) -> bool {
+        let key = (self.generation, cpv.clone());
+        if let Some(stable) = self.cache.lock().facts.get(&key).map(|facts| facts.stable) {
+            return stable;
+        }
+        self.version(policy, cpv, cache).stable
+    }
+
+    pub(crate) fn effective(
+        &self,
+        policy: ResolvePolicy<'_>,
+        pkg: &portage_atom_pubgrub::PortagePackage,
+        ver: &Version,
+        cache: &CacheEntry,
+    ) -> UseConfig {
+        let cpv = Cpv::new(*pkg.cpn(), ver.clone());
+        let key = (self.generation, cpv.clone());
+        let cached = {
+            let state = self.cache.lock();
+            state
+                .facts
+                .get(&key)
+                .map(|facts| (facts.stable, facts.effective.clone()))
+        };
+        let (stable, effective) = match cached {
+            Some(cached) => cached,
+            None => {
+                let raw_policy = ResolvePolicy {
+                    facts: None,
+                    ..policy
+                };
+                let stable = raw_policy.accept_keywords.is_stable(
+                    &cache.metadata.keywords,
+                    &cpv,
+                    Some(cache.metadata.slot.slot),
+                );
+                (stable, None)
+            }
+        };
+        if let Some(cfg) = effective {
+            return cfg;
+        }
+        let cfg = crate::effective_use::effective_use_base(&policy, pkg, ver, cache, stable);
+        let mut state = self.cache.lock();
+        let entry = state
+            .facts
+            .entry(key)
+            .or_insert_with(|| PolicyVersionFacts {
+                accepted: None,
+                stable,
+                effective: None,
+            });
+        if entry.effective.is_none() {
+            entry.effective = Some(cfg.clone());
+        }
+        entry.effective.clone().unwrap_or(cfg)
+    }
+}
+
+fn version_needs_effective(meta: &portage_metadata::EbuildMetadata) -> bool {
+    meta.license.as_ref().is_some_and(license_has_conditional)
+        || meta
+            .properties
+            .iter()
+            .any(|entry| restrict_has_conditional(std::slice::from_ref(entry)))
+        || meta
+            .restrict
+            .iter()
+            .any(|entry| restrict_has_conditional(std::slice::from_ref(entry)))
+}
+
 /// The resolved keyword/mask/license/USE policy
 ///
 /// Shared by every version filter and USE-config computation so each takes
@@ -777,8 +1039,8 @@ pub fn repo_name_of(data: &RepoData, cpv: &Cpv) -> Interned<DefaultInterner> {
 ///
 /// `Copy` so a caller can build one base value and override just
 /// `package_use` per call site (the one field that legitimately varies
-/// mid-resolution, e.g. across a Level-C co-solve fixpoint) via
-/// `ResolvePolicy { package_use: X, ..base }`.
+/// mid-resolution, e.g. across a Level-C co-solve fixpoint). Use
+/// [`Self::with_package_use`] when a policy-fact cache is attached.
 #[derive(Clone, Copy)]
 pub struct ResolvePolicy<'a> {
     /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision
@@ -806,6 +1068,23 @@ pub struct ResolvePolicy<'a> {
     pub profile_package_use: &'a [portage_atom_pubgrub::ProfileUseNode],
     /// Profile USE force/mask policy — see [`Adapter::force_mask`]
     pub force_mask: &'a crate::force_mask::ForceMask,
+    /// Optional generation-scoped policy-fact cache
+    pub facts: Option<PolicyFactsRef<'a>>,
+}
+
+impl<'a> ResolvePolicy<'a> {
+    /// Rebind `package_use` and its policy-fact generation together.
+    pub fn with_package_use(
+        self,
+        cache: &'a PolicyFactsCache,
+        package_use: &'a [(Dep, Vec<UseOverride>)],
+    ) -> Self {
+        Self {
+            package_use,
+            facts: Some(cache.generation_for(package_use)),
+            ..self
+        }
+    }
 }
 
 /// Owns the resolved `Accept*` decisions plus the [`crate::use_env::UseEnv`]
@@ -903,6 +1182,7 @@ impl ResolvedPolicy {
             package_use: &self.package_use,
             profile_package_use: &self.profile_package_use,
             force_mask: &self.force_mask,
+            facts: None,
         }
     }
 }
@@ -959,6 +1239,8 @@ pub struct Adapter<'a> {
     /// Profile USE force/mask policy: applied to each version's effective USE and
     /// consulted by the Level-C cede gate (pinned flags are never ceded)
     pub force_mask: &'a crate::force_mask::ForceMask,
+    /// Optional generation-scoped policy-fact cache
+    pub facts: Option<PolicyFactsRef<'a>>,
     /// Exact installed cpvs
     ///
     /// A version that is installed and staying installed never has its
@@ -1138,6 +1420,7 @@ impl<'a> Adapter<'a> {
             package_use: self.package_use,
             profile_package_use: self.profile_package_use,
             force_mask: self.force_mask,
+            facts: self.facts,
         }
     }
 }
@@ -1168,61 +1451,53 @@ impl PackageRepository for Adapter<'_> {
     fn desired_use(&self, cpv: &Cpv) -> portage_atom_pubgrub::UseConfig {
         use portage_atom_pubgrub::resolve_effective_use;
 
-        let meta = self
+        let cache = self
             .data
             .versions
             .get(&cpv.cpn)
             .and_then(|entries| entries.iter().find(|(c, _)| c.version == cpv.version))
-            .map(|(_, cache)| &cache.metadata);
+            .map(|(_, cache)| cache);
+        let Some(cache) = cache else {
+            let mut cfg = resolve_effective_use(
+                &HashMap::new(),
+                self.defaults,
+                cpv,
+                None,
+                self.package_use,
+                self.env_use,
+                self.profile_package_use,
+                self.conf,
+            );
+            if !self.force_mask.is_empty() {
+                self.force_mask.apply(
+                    &mut cfg,
+                    cpv,
+                    None,
+                    false,
+                    &std::collections::HashSet::new(),
+                );
+            }
+            return cfg;
+        };
 
-        let slot = meta.map(|m| m.slot.slot);
-
-        // Caller-resolved policy: the full ordered fold (IUSE defaults, then
-        // pre_env, then package.use, then env_use) → the authoritative
-        // desired set.
-        let iuse_defaults = meta.map(iuse_defaults_map).unwrap_or_default();
-        let mut cfg = resolve_effective_use(
-            &iuse_defaults,
-            self.defaults,
-            cpv,
-            slot,
-            self.package_use,
-            self.env_use,
-            self.profile_package_use,
-            self.conf,
+        let meta = &cache.metadata;
+        let slot = Some(meta.slot.slot);
+        let policy = self.policy();
+        let stable = policy.facts.map_or_else(
+            || policy.accept_keywords.is_stable(&meta.keywords, cpv, slot),
+            |facts| facts.is_stable(policy, cpv, cache),
         );
+        let pkg = match slot {
+            Some(slot) => portage_atom_pubgrub::PortagePackage::slotted(cpv.cpn, slot),
+            None => portage_atom_pubgrub::PortagePackage::unslotted(cpv.cpn),
+        };
+        let mut cfg =
+            crate::effective_use::effective_use(&policy, &pkg, &cpv.version, cache, stable, &[]);
 
-        // Profile USE force/mask override package.use and the configured value
-        // (Portage semantics), applied as the final post-fold step, matching
-        // real portage's `use.force`/`use.mask` (outside the layer stack).
-        // This layers the package-level sets plus the *.stable.* sets, the
-        // latter only when this version is merged due to a stable keyword.
-        // This is what makes crossdev's package.use.force/mask (multilib/cet/…)
-        // take effect on cross-* packages.
-        let stable = meta.is_some_and(|m| {
-            self.accept_keywords
-                .is_stable(&m.keywords, cpv, Some(m.slot.slot))
-        });
-        if !self.force_mask.is_empty() {
-            let iuse = meta
-                .map(|m| {
-                    crate::force_mask::iuse_effective_set(
-                        m.eapi,
-                        m.iuse.iter().map(Interned::from),
-                        &self.force_mask.iuse_injection,
-                    )
-                })
-                .unwrap_or_default();
-            let slot_dep = slot.map(portage_atom::Slot::from_name);
-            self.force_mask
-                .apply(&mut cfg, cpv, slot_dep.as_ref(), stable, &iuse);
-        }
-
-        // Level-C: cede this package's REQUIRED_USE flags to the solver.
-        if self.autosolve_use
-            && let Some(m) = meta
-        {
-            self.cede_required_use(&mut cfg, m, cpv, slot, stable);
+        // Level-C: cede this package's REQUIRED_USE flags to the solver after
+        // the shared pre-cede base has been materialized.
+        if self.autosolve_use {
+            self.cede_required_use(&mut cfg, meta, cpv, slot, stable);
         }
         cfg
     }
@@ -1523,6 +1798,10 @@ pub struct RawRepoData {
 /// entirely would break `filter_reasons_for`'s "why is this masked"
 /// reporting, which needs a real entry to explain.
 pub fn collapse_duplicates(raw: RawRepoData, policy: &ResolvePolicy) -> RepoData {
+    let policy = ResolvePolicy {
+        facts: None,
+        ..*policy
+    };
     let mut versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>> = HashMap::new();
     let mut repo_of: HashMap<Cpv, Interned<DefaultInterner>> = HashMap::new();
 
@@ -1534,8 +1813,8 @@ pub fn collapse_duplicates(raw: RawRepoData, policy: &ResolvePolicy) -> RepoData
                     continue;
                 }
                 let existing_ok =
-                    version_accepted_for(policy, &existing.0, &existing.1, existing.2);
-                let candidate_ok = version_accepted_for(policy, &cpv, &cache, repo);
+                    version_accepted_for(&policy, &existing.0, &existing.1, existing.2);
+                let candidate_ok = version_accepted_for(&policy, &cpv, &cache, repo);
                 if !existing_ok && candidate_ok {
                     *existing = (cpv, cache, repo);
                 }
@@ -1572,6 +1851,19 @@ fn version_accepted_for(
     cache: &CacheEntry,
     repo: Interned<DefaultInterner>,
 ) -> bool {
+    policy.facts.map_or_else(
+        || version_accepted_uncached(policy, cpv, cache, repo, None),
+        |facts| facts.accepted(*policy, cpv, cache, repo),
+    )
+}
+
+fn version_accepted_uncached(
+    policy: &ResolvePolicy,
+    cpv: &Cpv,
+    cache: &CacheEntry,
+    repo: Interned<DefaultInterner>,
+    effective: Option<&UseConfig>,
+) -> bool {
     let meta = &cache.metadata;
     policy
         .accept_keywords
@@ -1583,9 +1875,9 @@ fn version_accepted_for(
             &meta.slot,
             repo,
         )
-        && license_ok_for(cpv, meta, policy)
-        && properties_ok_for(cpv, meta, policy)
-        && restrict_ok_for(cpv, meta, policy)
+        && license_ok_for(cpv, meta, policy, effective)
+        && properties_ok_for(cpv, meta, policy, effective)
+        && restrict_ok_for(cpv, meta, policy, effective)
 }
 
 /// Map a dep atom to a `PortagePackage` for the solver
@@ -2325,6 +2617,195 @@ mod tests {
         );
     }
 
+    #[test]
+    fn policy_facts_generation_changes_only_with_package_use() {
+        let cache = PolicyFactsCache::new();
+        let empty: Vec<(Dep, Vec<UseOverride>)> = Vec::new();
+        let first = cache.generation_for(&empty);
+        assert_eq!(first.generation(), 1);
+        assert_eq!(
+            cache.generation_for(&empty).generation(),
+            first.generation()
+        );
+
+        let changed = vec![(
+            dep("cat/pkg"),
+            vec![UseOverride {
+                flag: Interned::intern("flag"),
+                enable: true,
+            }],
+        )];
+        assert_ne!(
+            cache.generation_for(&changed).generation(),
+            first.generation()
+        );
+    }
+
+    #[test]
+    fn conditional_license_acceptance_follows_policy_generation() {
+        let (data, cpv) = repo_with(
+            "cat/pkg-1.0",
+            "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nIUSE=licensed\nLICENSE=licensed? ( GPL-2 )\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let licenses =
+            AcceptLicenses::new(AcceptSet::from_tokens_plain(&["MIT".into()]), Vec::new());
+        let properties = AcceptProperties::new(accept_all_licenses(), Vec::new());
+        let restrict = AcceptRestrict::new(accept_all_licenses(), Vec::new());
+        let force_mask = ForceMask::default();
+        let cache = PolicyFactsCache::new();
+        let off: Vec<(Dep, Vec<UseOverride>)> = Vec::new();
+        let on = vec![(
+            dep("cat/pkg"),
+            vec![UseOverride {
+                flag: Interned::intern("licensed"),
+                enable: true,
+            }],
+        )];
+        let off_policy = ResolvePolicy {
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses: &licenses,
+            accept_properties: &properties,
+            accept_restrict: &restrict,
+            defaults: empty_layer(),
+            conf: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &off,
+            profile_package_use: &[],
+            force_mask: &force_mask,
+            facts: Some(cache.generation_for(&off)),
+        };
+        let on_policy = ResolvePolicy {
+            package_use: &on,
+            facts: Some(cache.generation_for(&on)),
+            ..off_policy
+        };
+        let entry = &data.versions[&cpv.cpn][0].1;
+        let repo = repo_name_of(&data, &cpv);
+        assert!(version_accepted_for(&off_policy, &cpv, entry, repo));
+        assert!(!version_accepted_for(&on_policy, &cpv, entry, repo));
+        assert!(version_accepted_for(&off_policy, &cpv, entry, repo));
+    }
+
+    #[test]
+    fn collapse_duplicates_does_not_reuse_cpv_policy_facts() {
+        let cpv = Cpv::parse("cat/pkg-1.0").unwrap();
+        let main_cache =
+            CacheEntry::parse("EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=main\n").unwrap();
+        let overlay_cache =
+            CacheEntry::parse("EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=overlay\n").unwrap();
+        let main = Interned::intern("main");
+        let overlay = Interned::intern("overlay");
+        let mask = vec![Dep::parse("cat/pkg::main").unwrap()];
+        let ak = AcceptKeywords::from_global(&Arch::intern("amd64"), &["amd64"]);
+        let base = permissive_policy(&ak, &mask, &[]);
+        let cache = PolicyFactsCache::new();
+        let policy = ResolvePolicy {
+            facts: Some(cache.generation_for(&[])),
+            ..base
+        };
+        assert!(!version_accepted_for(&policy, &cpv, &main_cache, main));
+
+        let mut versions = HashMap::new();
+        versions.insert(
+            cpv.cpn,
+            vec![
+                (cpv.clone(), main_cache, main),
+                (cpv.clone(), overlay_cache, overlay),
+            ],
+        );
+        let raw = RawRepoData {
+            cpns: vec![cpv.cpn],
+            versions,
+            repo_name: main,
+            real_cpn_of: HashMap::new(),
+        };
+        let data = collapse_duplicates(raw, &policy);
+        assert_eq!(data.versions[&cpv.cpn][0].1.metadata.description, "overlay");
+    }
+
+    #[test]
+    fn cached_pre_cede_use_is_not_mutated_by_ceding() {
+        let (data, cpv) = repo_with(
+            "cat/pkg-1.0",
+            "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nIUSE=a b\nREQUIRED_USE=?? ( a b )\nDESCRIPTION=t\n",
+        );
+        let arch = Arch::intern("amd64");
+        let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
+        let defaults = portage_atom_pubgrub::UseLayer::parse("a b");
+        let force_mask = ForceMask::default();
+        let package_use: Vec<(Dep, Vec<UseOverride>)> = Vec::new();
+        let cache = PolicyFactsCache::new();
+        let facts = cache.generation_for(&package_use);
+        let licenses = AcceptLicenses::new(accept_all_licenses(), Vec::new());
+        let properties = AcceptProperties::new(accept_all_licenses(), Vec::new());
+        let restrict = AcceptRestrict::new(accept_all_licenses(), Vec::new());
+        let policy = ResolvePolicy {
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses: &licenses,
+            accept_properties: &properties,
+            accept_restrict: &restrict,
+            defaults: &defaults,
+            conf: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &package_use,
+            profile_package_use: &[],
+            force_mask: &force_mask,
+            facts: Some(facts),
+        };
+        let adapter = Adapter {
+            data: &data,
+            accept_keywords: &ak,
+            package_mask: &[],
+            package_unmask: &[],
+            accept_licenses: &licenses,
+            accept_properties: &properties,
+            accept_restrict: &restrict,
+            defaults: &defaults,
+            conf: empty_layer(),
+            env_use: empty_layer(),
+            package_use: &package_use,
+            profile_package_use: &[],
+            force_mask: &force_mask,
+            facts: Some(facts),
+            installed_cpvs: &std::collections::HashSet::new(),
+            rebuilding_cpvs: &std::collections::HashSet::new(),
+            autosolve_use: true,
+            autounmask_widen: false,
+        };
+        let entry = &data.versions[&cpv.cpn][0].1;
+        let pkg = portage_atom_pubgrub::PortagePackage::slotted(cpv.cpn, entry.metadata.slot.slot);
+        let stable = ak.is_stable(
+            &entry.metadata.keywords,
+            &cpv,
+            Some(entry.metadata.slot.slot),
+        );
+        let base =
+            crate::effective_use::effective_use(&policy, &pkg, &cpv.version, entry, stable, &[]);
+        assert_eq!(base.get(Interned::intern("a")), UseFlagState::Enabled);
+        assert_eq!(base.get(Interned::intern("b")), UseFlagState::Enabled);
+
+        let desired = adapter.desired_use(&cpv);
+        assert!(matches!(
+            desired.get(Interned::intern("a")),
+            UseFlagState::SolverDecided { .. }
+        ));
+        assert!(matches!(
+            desired.get(Interned::intern("b")),
+            UseFlagState::SolverDecided { .. }
+        ));
+
+        let base_again =
+            crate::effective_use::effective_use(&policy, &pkg, &cpv.version, entry, stable, &[]);
+        assert_eq!(base_again.get(Interned::intern("a")), UseFlagState::Enabled);
+        assert_eq!(base_again.get(Interned::intern("b")), UseFlagState::Enabled);
+    }
+
     // Build a one-package `RepoData` from md5-cache text
     fn repo_with(cpv: &str, cache_text: &str) -> (RepoData, Cpv) {
         let cpv = Cpv::parse(cpv).unwrap();
@@ -2432,6 +2913,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: Box::leak(Box::default()),
+            facts: None,
         }
     }
 
@@ -2732,6 +3214,7 @@ mod tests {
                     package_use: &[],
                     profile_package_use: &[],
                     force_mask: &ForceMask::default(),
+                    facts: None,
                 },
             )
             .slot()
@@ -2799,6 +3282,7 @@ mod tests {
                 package_use: &[],
                 profile_package_use: &[],
                 force_mask: &force_mask,
+                facts: None,
             };
 
             let selected = target_package(&data, &dep("app-misc/thing"), &policy);
@@ -2844,6 +3328,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
         };
         let found = filter_reasons_for(
             &data,
@@ -2891,6 +3376,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
         };
         let vs = portage_atom_pubgrub::PortageVersionSet::any();
         let cpn = Cpn::try_new("app-misc/thing").expect("cpn parses");
@@ -2927,6 +3413,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
         };
         let cpn = Cpn::try_new("net-misc/thing").expect("cpn parses");
         let vs = portage_atom_pubgrub::PortageVersionSet::any();
@@ -2952,6 +3439,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -2991,6 +3479,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
         };
         assert!(
             target_package(&data, &dep("app-misc/thing"), &policy)
@@ -3039,6 +3528,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm, // a is use.force'd
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3085,6 +3575,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3136,6 +3627,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3183,6 +3675,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3244,6 +3737,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3301,6 +3795,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3354,6 +3849,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3407,6 +3903,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3461,6 +3958,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: true,
             autounmask_widen: false,
         };
@@ -3520,6 +4018,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &fm,
+            facts: None,
             autosolve_use: false,
             autounmask_widen: false,
         };
@@ -3571,6 +4070,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
             autosolve_use: false,
             autounmask_widen: false,
         };
@@ -3643,6 +4143,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
             autosolve_use: false,
             autounmask_widen: true,
         };
@@ -3680,6 +4181,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask: &ForceMask::default(),
+            facts: None,
         };
         let vs = portage_atom_pubgrub::PortageVersionSet::any();
         let dropped = vec![DroppedDep {

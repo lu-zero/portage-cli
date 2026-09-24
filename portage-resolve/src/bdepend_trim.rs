@@ -219,6 +219,7 @@ mod tests {
             package_use: &[],
             profile_package_use: &[],
             force_mask,
+            facts: None,
         }
     }
 

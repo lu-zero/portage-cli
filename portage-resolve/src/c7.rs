@@ -117,6 +117,7 @@ fn solve_with(
         package_use: pu,
         profile_package_use: &[],
         force_mask: &fm,
+        facts: None,
         autosolve_use: true,
         autounmask_widen: false,
     };
@@ -133,6 +134,7 @@ fn solve_with(
         package_use: pu,
         profile_package_use: &[],
         force_mask: &fm,
+        facts: None,
     };
     let mut provider = PortageDependencyProvider::new(adapter);
     let roots: Vec<_> = targets

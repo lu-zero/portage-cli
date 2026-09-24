@@ -406,6 +406,7 @@ mod tests {
                 package_use: &[],
                 profile_package_use: &[],
                 force_mask: &force_mask,
+                facts: None,
                 installed_cpvs: &installed_cpvs,
                 rebuilding_cpvs: &rebuilding_cpvs,
                 autosolve_use: false,
