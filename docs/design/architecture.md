@@ -375,6 +375,11 @@ Stages, in order:
 4. **Build the provider** (`PortageDependencyProvider::new_for_targets(adapter, seeds)`)
    — the cli `Adapter` implements `PackageRepository`, handing the solver each
    version's facts (`versions_for`) and its resolved **desired** USE (`desired_use`).
+   The invocation shares a `PolicyFactsCache` across provider rebuilds. It keys
+   acceptance, stable-keyword status, and the pre-cede effective USE by CPV and
+   `package.use` generation; the raw `RepoData` remains immutable. Duplicate-repo
+   collapse deliberately bypasses this cache until one entry per CPV remains.
+   Level-C ceding is applied to a clone after the cached base is read.
 5. **Resolve** (`resolve_targets`) — PubGrub selects one version per package,
    modelling OR/`^^`/`??` groups, slots/subslots, USE-conditional deps, and
    USE-dep constraints (the latter via virtual `UseDecision` packages). When the

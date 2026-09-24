@@ -138,6 +138,7 @@ impl Fixture {
                 package_use: &[],
                 profile_package_use: &[],
                 force_mask: &self.force_mask,
+                facts: None,
             },
             root_cpns: &self.root_cpns,
             reinstall_cpns: &self.reinstall_cpns,

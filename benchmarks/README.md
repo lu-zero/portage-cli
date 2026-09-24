@@ -13,6 +13,10 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 | `realworld_dep_parsing` | Real ebuild RDEPEND strings, portage-atom vs pkgcraft — needs `--features pkgcraft-compare` |
 | `resolve` | PubGrub dependency resolution on full repo |
 | `dedup` | Deduplication of parsed dep/license/required-use trees |
+| `trim_scaling` | BDEPEND/DEPEND trim scaling over synthetic plans and VDBs |
+| `graph_scaling` | Dependency graph and install-order scaling |
+| `vdb_snapshot` | Shared versus independent BROOT/prefix VDB enumeration |
+| `policy_facts` | Uncached, cold/warm cached, and multi-generation policy facts |
 
 `pkgcraft-compare` is off by default (it pulls in `gix`, a sizeable compile) —
 enable it explicitly whenever you actually want the pkgcraft comparison
@@ -67,6 +71,7 @@ cargo bench --features pkgcraft-compare
 
 # Specific bench
 cargo bench --bench resolve
+cargo bench --bench policy_facts
 
 # With alternative interner
 cargo bench --no-default-features --features lasso

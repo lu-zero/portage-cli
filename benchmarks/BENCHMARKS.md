@@ -526,6 +526,24 @@ that the host adapter retains host-then-prefix order while availability retains
 both union rows. Broader target/sysroot snapshot sharing is tracked separately
 as BF-404.
 
+### 14. Policy-scoped version facts (thalia, 2026-09-24)
+
+`policy_facts` feeds the real `repo::Adapter` a synthetic repository with 2 versions per CPN, 16 IUSE flags, a USE-conditional license, and a non-empty force/mask policy. `cached_warm` reuses one policy generation; `cached_reuse_4` performs four effective-USE reads per version to model the repeated post-solve consumers. The cold rows include cache allocation and first-use bookkeeping.
+
+| CPNs | Uncached | Cached cold | Cached warm | Uncached ×4 | Cached ×4 |
+|------:|---------:|------------:|------------:|------------:|----------:|
+| 128 | 847.23 µs | 862.66 µs | 289.28 µs | 2.066 ms | 810.23 µs |
+| 512 | 3.422 ms | 3.706 ms | 1.266 ms | 8.378 ms | 3.337 ms |
+| 2,048 | 14.312 ms | 15.466 ms | 5.462 ms | 33.473 ms | 13.925 ms |
+
+The warm path is 61.9–65.9% faster than the uncached control in this isolated fixture; the four-read path is 58.4–60.8% faster. Cold-cache overhead is visible and expected. The `generations` rows deliberately advance through four policy generations and are not a warm-cache claim. This measures policy-fact reuse, not end-to-end resolve time.
+
+Reproduction (30 samples, one-second warm-up, two-second measurement window):
+
+```sh
+cargo bench -p portage-bench --bench policy_facts -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 30
+```
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

@@ -95,3 +95,7 @@ harness = false
 [[bench]]
 name = "vdb_snapshot"
 harness = false
+
+[[bench]]
+name = "policy_facts"
+harness = false
