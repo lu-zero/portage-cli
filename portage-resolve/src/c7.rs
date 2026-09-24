@@ -51,13 +51,13 @@ fn repo_from(entries: &[(&str, &str)]) -> RepoData {
         }
         versions.entry(cpv.cpn).or_default().push((cpv, entry));
     }
-    RepoData {
-        repo_of: Default::default(),
+    RepoData::from_parts(
         cpns,
         versions,
-        repo_name: "test".into(),
-        real_cpn_of: Default::default(),
-    }
+        "test".into(),
+        HashMap::new(),
+        HashMap::new(),
+    )
 }
 
 /// The outcome of a solve: the cross-package USE-flag requirements the solver

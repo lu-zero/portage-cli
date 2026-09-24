@@ -51,13 +51,13 @@ impl BenchRepo {
         }
         let arch = gentoo_core::Arch::intern("amd64");
         Self {
-            data: RepoData {
+            data: RepoData::from_parts(
                 cpns,
                 versions,
-                repo_name: Interned::intern("bench"),
-                repo_of: HashMap::new(),
-                real_cpn_of: HashMap::new(),
-            },
+                Interned::intern("bench"),
+                HashMap::new(),
+                HashMap::new(),
+            ),
             accept_keywords: AcceptKeywords::from_global(&arch, &["amd64"]),
             accept_licenses: AcceptLicenses::new(
                 AcceptSet::from_tokens_plain(&["MIT".into()]),

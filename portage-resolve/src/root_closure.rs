@@ -360,13 +360,13 @@ mod tests {
             cpns.push(cpv.cpn);
             versions.entry(cpv.cpn).or_default().push((cpv, entry));
         }
-        repo::RepoData {
+        repo::RepoData::from_parts(
             cpns,
             versions,
-            repo_name: "test".into(),
-            repo_of: HashMap::new(),
-            real_cpn_of: HashMap::new(),
-        }
+            "test".into(),
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     fn write_fake_vdb_entry(root: &std::path::Path, cpv: &str) {

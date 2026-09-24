@@ -202,13 +202,13 @@ mod tests {
         let pkg = PortagePackage::unslotted(Cpn::parse("app-misc/a").unwrap());
         let ver = Version::parse("1.0").unwrap();
         let order = vec![(pkg, ver)];
-        let data = RepoData {
-            cpns: Vec::new(),
-            versions: HashMap::new(),
-            repo_name: "gentoo".into(),
-            repo_of: HashMap::new(),
-            real_cpn_of: HashMap::new(),
-        };
+        let data = RepoData::from_parts(
+            Vec::new(),
+            HashMap::new(),
+            "gentoo".into(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         let root_cpns = HashSet::new();
         let reinstall = HashSet::new();
         let roots = empty_roots();

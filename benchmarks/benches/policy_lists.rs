@@ -81,13 +81,13 @@ impl Fixture {
         unmask_entries.push(target);
 
         Self {
-            data: RepoData {
-                cpns: vec![cpn],
+            data: RepoData::from_parts(
+                vec![cpn],
                 versions,
-                repo_name: Interned::intern("bench"),
-                repo_of: HashMap::new(),
-                real_cpn_of: HashMap::new(),
-            },
+                Interned::intern("bench"),
+                HashMap::new(),
+                HashMap::new(),
+            ),
             cpn,
             accept_keywords: AcceptKeywords::new(
                 &arch,

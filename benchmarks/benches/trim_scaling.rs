@@ -96,13 +96,13 @@ impl Fixture {
 
         let roots = Roots::for_test(root.as_str());
         let broot_snapshot = BrootSnapshot::load(&roots);
-        let data = RepoData {
+        let data = RepoData::from_parts(
             cpns,
             versions,
-            repo_name: "bench".into(),
-            repo_of: HashMap::new(),
-            real_cpn_of: HashMap::new(),
-        };
+            "bench".into(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         let accept_keywords = AcceptKeywords::from_global(&Arch::intern("amd64"), &["amd64"]);
         let accept_licenses = AcceptOverlay::new(
             AcceptSet::from_tokens(&["*".into()], &LicenseGroupRegistry::default()),

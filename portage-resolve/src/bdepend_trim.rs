@@ -245,13 +245,13 @@ mod tests {
             cpns.push(cpv.cpn);
             versions.entry(cpv.cpn).or_default().push((cpv, entry));
         }
-        RepoData {
+        RepoData::from_parts(
             cpns,
             versions,
-            repo_name: "test".into(),
-            repo_of: HashMap::new(),
-            real_cpn_of: HashMap::new(),
-        }
+            "test".into(),
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     // Regression test for the bug found chasing `sys-apps/shadow` missing
@@ -333,13 +333,13 @@ mod tests {
         let pkg = PortagePackage::unslotted(Cpn::parse("app-misc/a").unwrap());
         let ver = Version::parse("1.0").unwrap();
         let order = vec![(pkg, ver)];
-        let data = RepoData {
-            cpns: Vec::new(),
-            versions: HashMap::new(),
-            repo_name: "gentoo".into(),
-            repo_of: HashMap::new(),
-            real_cpn_of: HashMap::new(),
-        };
+        let data = RepoData::from_parts(
+            Vec::new(),
+            HashMap::new(),
+            "gentoo".into(),
+            HashMap::new(),
+            HashMap::new(),
+        );
         let root_cpns = HashSet::new();
         let reinstall = HashSet::new();
         let roots = empty_roots();

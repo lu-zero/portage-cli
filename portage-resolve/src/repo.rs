@@ -798,6 +798,44 @@ pub struct RepoData {
     /// that path's text, losing the cross category on an actual merge; resolve
     /// before wiring a real `Location::Alias` producer.
     pub real_cpn_of: HashMap<Cpn, Cpn>,
+    cache_index: HashMap<Cpv, usize>,
+}
+
+impl RepoData {
+    /// Build immutable repository data and its exact-CPV lookup index.
+    pub fn from_parts(
+        cpns: Vec<Cpn>,
+        versions: HashMap<Cpn, Vec<(Cpv, CacheEntry)>>,
+        repo_name: Interned<DefaultInterner>,
+        repo_of: HashMap<Cpv, Interned<DefaultInterner>>,
+        real_cpn_of: HashMap<Cpn, Cpn>,
+    ) -> Self {
+        let capacity = versions.values().map(Vec::len).sum();
+        let mut cache_index = HashMap::with_capacity(capacity);
+        for entries in versions.values() {
+            for (position, (cpv, _)) in entries.iter().enumerate() {
+                cache_index.entry(cpv.clone()).or_insert(position);
+            }
+        }
+        Self {
+            cpns,
+            versions,
+            repo_name,
+            repo_of,
+            real_cpn_of,
+            cache_index,
+        }
+    }
+
+    /// Return the parsed cache entry for one exact CPV, if present.
+    pub fn cache_entry(&self, cpn: &Cpn, version: &Version) -> Option<&CacheEntry> {
+        let key = Cpv::new(*cpn, version.clone());
+        let position = *self.cache_index.get(&key)?;
+        self.versions
+            .get(cpn)?
+            .get(position)
+            .map(|(_, cache)| cache)
+    }
 }
 
 /// The repo a version comes from (for `::repo` display and constraints)
@@ -1513,12 +1551,7 @@ impl PackageRepository for Adapter<'_> {
     fn desired_use(&self, cpv: &Cpv) -> portage_atom_pubgrub::UseConfig {
         use portage_atom_pubgrub::resolve_effective_use;
 
-        let cache = self
-            .data
-            .versions
-            .get(&cpv.cpn)
-            .and_then(|entries| entries.iter().find(|(c, _)| c.version == cpv.version))
-            .map(|(_, cache)| cache);
+        let cache = self.data.cache_entry(&cpv.cpn, &cpv.version);
         let Some(cache) = cache else {
             let mut cfg = resolve_effective_use(
                 &HashMap::new(),
@@ -1892,13 +1925,7 @@ pub fn collapse_duplicates(raw: RawRepoData, policy: &ResolvePolicy) -> RepoData
         }
     }
 
-    RepoData {
-        cpns: raw.cpns,
-        versions,
-        repo_name: raw.repo_name,
-        repo_of,
-        real_cpn_of: raw.real_cpn_of,
-    }
+    RepoData::from_parts(raw.cpns, versions, raw.repo_name, repo_of, raw.real_cpn_of)
 }
 
 /// Whether `cpv`/`cache` from `repo` passes keyword/mask/license/
@@ -1982,10 +2009,7 @@ pub fn target_package(
 /// group nodes) so that masked transitive deps are captured regardless of USE
 /// flag state at detection time.
 pub fn cpns_for(data: &RepoData, cpn: &Cpn, ver: &Version) -> Vec<Cpn> {
-    let Some(entries) = data.versions.get(cpn) else {
-        return vec![];
-    };
-    let Some((_, cache)) = entries.iter().find(|(cpv, _)| &cpv.version == ver) else {
+    let Some(cache) = data.cache_entry(cpn, ver) else {
         return vec![];
     };
     let meta = &cache.metadata;
@@ -2012,11 +2036,7 @@ pub fn find_cache<'a>(
     pkg: &portage_atom_pubgrub::PortagePackage,
     ver: &Version,
 ) -> Option<&'a CacheEntry> {
-    data.versions
-        .get(pkg.cpn())?
-        .iter()
-        .find(|(cpv, _)| &cpv.version == ver)
-        .map(|(_, e)| e)
+    data.cache_entry(pkg.cpn(), ver)
 }
 
 /// Why a version was filtered, as displayed text — one phrase per reason
@@ -2227,10 +2247,8 @@ pub fn find_autounmask_candidates(
         found.retain(|c| {
             !c.cpv.version.is_live()
                 && !data
-                    .versions
-                    .get(&c.cpv.cpn)
-                    .and_then(|entries| entries.iter().find(|(v, _)| v.version == c.cpv.version))
-                    .is_some_and(|(_, cache)| cache.metadata.is_live())
+                    .cache_entry(&c.cpv.cpn, &c.cpv.version)
+                    .is_some_and(|cache| cache.metadata.is_live())
         });
         // A slot-qualified drop (`cat/pkg:16`) must not enumerate versions
         // from *other* slots — `dep.package.cpn()` alone loses the slot, and
@@ -2263,6 +2281,76 @@ mod tests {
 
     fn dep(s: &str) -> Dep {
         Dep::parse(s).unwrap()
+    }
+
+    #[test]
+    fn cache_entry_index_handles_unsorted_cpn_scoped_versions() {
+        let a = Cpn::parse("cat/a").unwrap();
+        let b = Cpn::parse("cross-cat/b").unwrap();
+        let a1 = Cpv::parse("cat/a-1").unwrap();
+        let a2 = Cpv::parse("cat/a-2").unwrap();
+        let a3 = Cpv::parse("cat/a-3").unwrap();
+        let b1 = Cpv::parse("cross-cat/b-1").unwrap();
+        let cache = |description: &str| {
+            CacheEntry::parse(&format!(
+                "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION={description}\n"
+            ))
+            .unwrap()
+        };
+        let mut versions = HashMap::new();
+        versions.insert(
+            a,
+            vec![
+                (a3.clone(), cache("a3")),
+                (a1.clone(), cache("a1")),
+                (a2.clone(), cache("a2")),
+            ],
+        );
+        versions.insert(b, vec![(b1.clone(), cache("b1"))]);
+        let data = RepoData::from_parts(
+            vec![a, b],
+            versions,
+            "test".into(),
+            HashMap::new(),
+            HashMap::new(),
+        );
+
+        assert_eq!(
+            data.cache_entry(&a, &a3.version)
+                .unwrap()
+                .metadata
+                .description,
+            "a3"
+        );
+        assert_eq!(
+            data.cache_entry(&a, &a1.version)
+                .unwrap()
+                .metadata
+                .description,
+            "a1"
+        );
+        assert!(
+            data.cache_entry(&a, &Version::parse("4").unwrap())
+                .is_none()
+        );
+        assert_eq!(
+            data.cache_entry(&b, &b1.version)
+                .unwrap()
+                .metadata
+                .description,
+            "b1"
+        );
+        assert_eq!(
+            find_cache(
+                &data,
+                &portage_atom_pubgrub::PortagePackage::unslotted(a),
+                &a2.version,
+            )
+            .unwrap()
+            .metadata
+            .description,
+            "a2"
+        );
     }
 
     #[test]
@@ -2856,6 +2944,14 @@ mod tests {
         };
         let data = collapse_duplicates(raw, &policy);
         assert_eq!(data.versions[&cpv.cpn][0].1.metadata.description, "overlay");
+        assert_eq!(repo_name_of(&data, &cpv), overlay);
+        assert_eq!(
+            data.cache_entry(&cpv.cpn, &cpv.version)
+                .unwrap()
+                .metadata
+                .description,
+            "overlay"
+        );
     }
 
     #[test]
@@ -2971,13 +3067,13 @@ mod tests {
         let mut versions = HashMap::new();
         versions.insert(cpv.cpn, vec![(cpv.clone(), entry)]);
         (
-            RepoData {
-                repo_of: Default::default(),
-                cpns: vec![cpv.cpn],
+            RepoData::from_parts(
+                vec![cpv.cpn],
                 versions,
-                repo_name: "test".into(),
-                real_cpn_of: Default::default(),
-            },
+                "test".into(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
             cpv,
         )
     }
@@ -2992,13 +3088,13 @@ mod tests {
             let entry = CacheEntry::parse(cache_text).unwrap();
             versions.entry(cpv.cpn).or_default().push((cpv, entry));
         }
-        RepoData {
-            repo_of: Default::default(),
-            cpns: vec![cpn.unwrap()],
+        RepoData::from_parts(
+            vec![cpn.unwrap()],
             versions,
-            repo_name: "test".into(),
-            real_cpn_of: Default::default(),
-        }
+            "test".into(),
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     // Build a minimal on-disk repo with one ebuild's md5-cache entry, so
