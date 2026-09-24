@@ -225,8 +225,8 @@ mod tests {
             data: &data,
             policy: ResolvePolicy {
                 accept_keywords: &ak,
-                package_mask: &[],
-                package_unmask: &[],
+                package_mask: &crate::repo::PolicyMaskList::EMPTY,
+                package_unmask: &crate::repo::PolicyMaskList::EMPTY,
                 accept_licenses: &al,
                 accept_properties: &al,
                 accept_restrict: &al,

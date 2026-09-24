@@ -208,8 +208,8 @@ mod tests {
     ) -> ResolvePolicy<'a> {
         ResolvePolicy {
             accept_keywords,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &crate::repo::PolicyMaskList::EMPTY,
+            package_unmask: &crate::repo::PolicyMaskList::EMPTY,
             accept_licenses,
             accept_properties: accept_licenses,
             accept_restrict: accept_licenses,

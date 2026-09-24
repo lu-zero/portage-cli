@@ -395,8 +395,8 @@ mod tests {
             let $name = Adapter {
                 data: $data,
                 accept_keywords: &accept_keywords,
-                package_mask: &[],
-                package_unmask: &[],
+                package_mask: &crate::repo::PolicyMaskList::EMPTY,
+                package_unmask: &crate::repo::PolicyMaskList::EMPTY,
                 accept_licenses: &accept_licenses,
                 accept_properties: &accept_properties,
                 accept_restrict: &accept_restrict,

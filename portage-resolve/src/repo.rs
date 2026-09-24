@@ -275,6 +275,8 @@ pub struct AcceptKeywords {
     /// A bare atom is pre-expanded to `~arch` (portage(5)). Empty ⇒ no per-package
     /// work in the hot path.
     per_package: Vec<(Dep, Vec<AcceptToken>)>,
+    /// Original-order indexes into `per_package`, grouped by CPN.
+    per_package_by_cpn: HashMap<Cpn, Vec<usize>>,
 }
 
 impl AcceptKeywords {
@@ -300,7 +302,7 @@ impl AcceptKeywords {
         if global.is_empty() {
             global_accept.stable.insert(arch_key);
         }
-        let per_package = per_package
+        let per_package: Vec<_> = per_package
             .into_iter()
             .map(|(dep, mut toks)| {
                 if toks.is_empty() {
@@ -310,10 +312,15 @@ impl AcceptKeywords {
                 (dep, toks)
             })
             .collect();
+        let mut per_package_by_cpn: HashMap<Cpn, Vec<usize>> = HashMap::new();
+        for (index, (dep, _)) in per_package.iter().enumerate() {
+            per_package_by_cpn.entry(dep.cpn).or_default().push(index);
+        }
         Self {
             arch: arch_key,
             global: global_accept,
             per_package,
+            per_package_by_cpn,
         }
     }
 
@@ -348,8 +355,12 @@ impl AcceptKeywords {
         }
         let slot = slot.map(portage_atom::Slot::from_name);
         let slot_str = slot.as_ref();
+        let Some(indices) = self.per_package_by_cpn.get(&cpv.cpn) else {
+            return Cow::Borrowed(&self.global);
+        };
         let mut acc: Option<KeywordAccept> = None;
-        for (dep, toks) in &self.per_package {
+        for &index in indices {
+            let (dep, toks) = &self.per_package[index];
             if dep.matches_cpv(cpv, slot_str) {
                 let set = acc.get_or_insert_with(|| self.global.clone());
                 for &t in toks {
@@ -422,6 +433,8 @@ pub struct AcceptOverlay {
     /// `(atom, overlay)` — each overlay is the per-line tokens parsed into an
     /// `AcceptSet`, merged onto the global decision for matching versions
     per_package: Vec<(Dep, portage_repo::AcceptSet)>,
+    /// Original-order indexes into `per_package`, grouped by CPN.
+    per_package_by_cpn: HashMap<Cpn, Vec<usize>>,
 }
 
 impl AcceptOverlay {
@@ -431,9 +444,14 @@ impl AcceptOverlay {
         global: portage_repo::AcceptSet,
         per_package: Vec<(Dep, portage_repo::AcceptSet)>,
     ) -> Self {
+        let mut per_package_by_cpn: HashMap<Cpn, Vec<usize>> = HashMap::new();
+        for (index, (dep, _)) in per_package.iter().enumerate() {
+            per_package_by_cpn.entry(dep.cpn).or_default().push(index);
+        }
         Self {
             global,
             per_package,
+            per_package_by_cpn,
         }
     }
 
@@ -450,8 +468,12 @@ impl AcceptOverlay {
         }
         let slot = slot.map(portage_atom::Slot::from_name);
         let slot_str = slot.as_ref();
+        let Some(indices) = self.per_package_by_cpn.get(&cpv.cpn) else {
+            return Cow::Borrowed(&self.global);
+        };
         let mut merged: Option<portage_repo::AcceptSet> = None;
-        for (dep, overlay) in &self.per_package {
+        for &index in indices {
+            let (dep, overlay) = &self.per_package[index];
             if dep.matches_cpv(cpv, slot_str) {
                 merged
                     .get_or_insert_with(|| self.global.clone())
@@ -692,15 +714,13 @@ fn restrict_ok_for(
 /// qualified with `::reponame` (PMS 8.3.5) only masks that repo's versions,
 /// not every repo providing the same cpn/version.
 pub fn is_masked(
-    masks: &[Dep],
-    unmasks: &[Dep],
+    masks: &PolicyMaskList,
+    unmasks: &PolicyMaskList,
     cpv: &Cpv,
     slot: &portage_atom::Slot,
     repo: Interned<DefaultInterner>,
 ) -> bool {
-    let hit =
-        |m: &Dep| mask_matches(m, cpv) && mask_slot_matches(m, slot) && mask_repo_matches(m, repo);
-    masks.iter().any(hit) && !unmasks.iter().any(hit)
+    masks.is_masked(cpv, slot, repo) && !unmasks.is_masked(cpv, slot, repo)
 }
 
 /// Whether a mask atom's `:slot[/subslot]` component (if any) matches the candidate's slot
@@ -793,6 +813,48 @@ pub fn repo_name_of(data: &RepoData, cpv: &Cpv) -> Interned<DefaultInterner> {
 pub struct PolicyFactsRef<'a> {
     cache: &'a PolicyFactsCache,
     generation: u64,
+}
+
+/// Final package mask/unmask atoms indexed by CPN while retaining file order.
+#[derive(Debug, Default, Clone)]
+pub struct PolicyMaskList {
+    by_cpn: Option<HashMap<Cpn, Vec<Dep>>>,
+}
+
+impl PolicyMaskList {
+    /// An empty list that can be borrowed without allocation.
+    pub const EMPTY: Self = Self { by_cpn: None };
+
+    /// Build a list from the final, already-folded policy entries.
+    pub fn new(entries: Vec<Dep>) -> Self {
+        if entries.is_empty() {
+            return Self::EMPTY;
+        }
+        let mut by_cpn: HashMap<Cpn, Vec<Dep>> = HashMap::new();
+        for dep in entries {
+            by_cpn.entry(dep.cpn).or_default().push(dep);
+        }
+        Self {
+            by_cpn: Some(by_cpn),
+        }
+    }
+
+    fn is_masked(
+        &self,
+        cpv: &Cpv,
+        slot: &portage_atom::Slot,
+        repo: Interned<DefaultInterner>,
+    ) -> bool {
+        let Some(by_cpn) = &self.by_cpn else {
+            return false;
+        };
+        let hit = |dep: &Dep| {
+            mask_matches(dep, cpv) && mask_slot_matches(dep, slot) && mask_repo_matches(dep, repo)
+        };
+        by_cpn
+            .get(&cpv.cpn)
+            .is_some_and(|entries| entries.iter().any(hit))
+    }
 }
 
 /// Cache for policy-dependent facts derived from parsed repository versions.
@@ -1046,9 +1108,9 @@ pub struct ResolvePolicy<'a> {
     /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision
     pub accept_keywords: &'a AcceptKeywords,
     /// `package.mask` atoms
-    pub package_mask: &'a [Dep],
+    pub package_mask: &'a PolicyMaskList,
     /// `package.unmask` atoms (cancel a mask per package)
-    pub package_unmask: &'a [Dep],
+    pub package_unmask: &'a PolicyMaskList,
     /// Resolved `ACCEPT_LICENSE`/`package.license` decision
     pub accept_licenses: &'a AcceptOverlay,
     /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision
@@ -1106,9 +1168,9 @@ pub struct ResolvedPolicy {
     /// Resolved `ACCEPT_RESTRICT`/`package.accept_restrict` decision
     pub accept_restrict: AcceptRestrict,
     /// `package.mask` atoms
-    pub package_mask: Vec<Dep>,
+    pub package_mask: PolicyMaskList,
     /// `package.unmask` atoms (cancel a mask per package)
-    pub package_unmask: Vec<Dep>,
+    pub package_unmask: PolicyMaskList,
     /// Folded profile `make.defaults`
     pub defaults: portage_atom_pubgrub::UseLayer,
     /// `make.conf` USE delta
@@ -1144,8 +1206,8 @@ impl ResolvedPolicy {
             accept_licenses,
             accept_properties,
             accept_restrict,
-            package_mask: env.package_mask,
-            package_unmask: env.package_unmask,
+            package_mask: PolicyMaskList::new(env.package_mask),
+            package_unmask: PolicyMaskList::new(env.package_unmask),
             defaults: env.defaults,
             conf: env.conf,
             env_use: env.env_use,
@@ -1209,9 +1271,9 @@ pub struct Adapter<'a> {
     /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision
     pub accept_keywords: &'a AcceptKeywords,
     /// `package.mask` atoms
-    pub package_mask: &'a [Dep],
+    pub package_mask: &'a PolicyMaskList,
     /// `package.unmask` atoms (cancel a mask per package)
-    pub package_unmask: &'a [Dep],
+    pub package_unmask: &'a PolicyMaskList,
     /// Resolved `ACCEPT_LICENSE`/`package.license` decision
     pub accept_licenses: &'a AcceptOverlay,
     /// Resolved `ACCEPT_PROPERTIES`/`package.properties` decision
@@ -2204,6 +2266,47 @@ mod tests {
     }
 
     #[test]
+    fn policy_keyword_index_preserves_matching_token_order() {
+        let arch = Arch::intern("amd64");
+        let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
+        let keywords = Keyword::parse_line("~amd64").unwrap();
+        let global = [AcceptToken::parse("amd64").unwrap()];
+        let ordered = AcceptKeywords::new(
+            &arch,
+            &global,
+            vec![
+                (
+                    dep("dev-libs/foo"),
+                    vec![AcceptToken::parse("~amd64").unwrap()],
+                ),
+                (dep("other/pkg"), vec![AcceptToken::parse("-*").unwrap()]),
+                (
+                    dep("dev-libs/foo"),
+                    vec![AcceptToken::parse("-~amd64").unwrap()],
+                ),
+            ],
+        );
+        assert!(!ordered.accepts(&keywords, &cpv, None));
+
+        let reversed = AcceptKeywords::new(
+            &arch,
+            &global,
+            vec![
+                (
+                    dep("dev-libs/foo"),
+                    vec![AcceptToken::parse("-~amd64").unwrap()],
+                ),
+                (dep("other/pkg"), vec![AcceptToken::parse("-*").unwrap()]),
+                (
+                    dep("dev-libs/foo"),
+                    vec![AcceptToken::parse("~amd64").unwrap()],
+                ),
+            ],
+        );
+        assert!(reversed.accepts(&keywords, &cpv, None));
+    }
+
+    #[test]
     fn accept_keywords_per_package_override() {
         let arch = Arch::intern("arm64");
         let tok = |s: &str| AcceptToken::parse(s).unwrap();
@@ -2538,6 +2641,34 @@ mod tests {
     }
 
     #[test]
+    fn policy_overlay_index_preserves_matching_merge_order() {
+        let cpv = Cpv::parse("dev-libs/foo-1").unwrap();
+        let target = dep("dev-libs/foo");
+        let unrelated = dep("other/pkg");
+        let clear = AcceptSet::from_tokens_plain(&["-*".into()]);
+        let allow = AcceptSet::from_tokens_plain(&["MIT".into()]);
+        let ordered = AcceptOverlay::new(
+            AcceptSet::from_tokens_plain(&["*".into()]),
+            vec![
+                (unrelated.clone(), clear.clone()),
+                (target.clone(), clear.clone()),
+                (target.clone(), allow.clone()),
+            ],
+        );
+        assert!(ordered.effective_for(&cpv, None).accepts("MIT"));
+
+        let reversed = AcceptOverlay::new(
+            AcceptSet::from_tokens_plain(&["*".into()]),
+            vec![
+                (target.clone(), allow),
+                (target, clear),
+                (unrelated, AcceptSet::from_tokens_plain(&["-*".into()])),
+            ],
+        );
+        assert!(!reversed.effective_for(&cpv, None).accepts("MIT"));
+    }
+
+    #[test]
     fn accept_license_per_package_override() {
         let groups = LicenseGroupRegistry::default();
         let global = AcceptSet::from_tokens(&["MIT".into()], &groups);
@@ -2665,8 +2796,8 @@ mod tests {
         )];
         let off_policy = ResolvePolicy {
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &licenses,
             accept_properties: &properties,
             accept_restrict: &restrict,
@@ -2728,6 +2859,33 @@ mod tests {
     }
 
     #[test]
+    fn policy_mask_index_preserves_unmask_behavior() {
+        let (data, cpv) = repo_with(
+            "cat/pkg-1.0",
+            "EAPI=8\nSLOT=0\nKEYWORDS=amd64\nDESCRIPTION=t\n",
+        );
+        let ak = AcceptKeywords::from_global(&Arch::intern("amd64"), &["amd64"]);
+        let masks = vec![dep("other/pkg"), dep("cat/pkg")];
+        let unmasks = vec![dep("cat/pkg")];
+        let entry = &data.versions[&cpv.cpn][0].1;
+        let repo = repo_name_of(&data, &cpv);
+        let base = permissive_policy(&ak, &masks, &unmasks);
+        let cache = PolicyFactsCache::new();
+        let policy = ResolvePolicy {
+            facts: Some(cache.generation_for(&[])),
+            ..base
+        };
+        assert!(version_accepted_for(&policy, &cpv, entry, repo));
+
+        let masked_cache = PolicyFactsCache::new();
+        let masked_policy = ResolvePolicy {
+            facts: Some(masked_cache.generation_for(&[])),
+            ..permissive_policy(&ak, &masks, &[])
+        };
+        assert!(!version_accepted_for(&masked_policy, &cpv, entry, repo));
+    }
+
+    #[test]
     fn cached_pre_cede_use_is_not_mutated_by_ceding() {
         let (data, cpv) = repo_with(
             "cat/pkg-1.0",
@@ -2745,8 +2903,8 @@ mod tests {
         let restrict = AcceptRestrict::new(accept_all_licenses(), Vec::new());
         let policy = ResolvePolicy {
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &licenses,
             accept_properties: &properties,
             accept_restrict: &restrict,
@@ -2761,8 +2919,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &licenses,
             accept_properties: &properties,
             accept_restrict: &restrict,
@@ -2893,8 +3051,8 @@ mod tests {
     ) -> ResolvePolicy<'a> {
         ResolvePolicy {
             accept_keywords: ak,
-            package_mask: mask,
-            package_unmask: unmask,
+            package_mask: Box::leak(Box::new(PolicyMaskList::new(mask.to_vec()))),
+            package_unmask: Box::leak(Box::new(PolicyMaskList::new(unmask.to_vec()))),
             accept_licenses: Box::leak(Box::new(AcceptOverlay::new(
                 accept_all_licenses(),
                 Vec::new(),
@@ -3086,12 +3244,20 @@ mod tests {
         );
         let raw = load_repos(&set).await;
 
-        let mask = vec![Dep::parse(&format!("dev-libs/foo::{overlay_name}")).unwrap()];
+        let mask = PolicyMaskList::new(vec![
+            Dep::parse(&format!("dev-libs/foo::{overlay_name}")).unwrap(),
+        ]);
         let cpn = Cpn::parse("dev-libs/foo").unwrap();
         let entries = raw.versions.get(&cpn).unwrap();
 
         for (cpv, cache, repo) in entries {
-            let masked = is_masked(&mask, &[], cpv, &cache.metadata.slot, *repo);
+            let masked = is_masked(
+                &mask,
+                &PolicyMaskList::EMPTY,
+                cpv,
+                &cache.metadata.slot,
+                *repo,
+            );
             if cpv.version == Version::parse("2").unwrap() {
                 assert!(masked, "overlay's own version must be masked");
             } else {
@@ -3203,8 +3369,8 @@ mod tests {
                 &dep(atom),
                 &ResolvePolicy {
                     accept_keywords: &ak,
-                    package_mask: &[],
-                    package_unmask: &[],
+                    package_mask: &PolicyMaskList::EMPTY,
+                    package_unmask: &PolicyMaskList::EMPTY,
                     accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
                     accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
                     accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -3271,8 +3437,8 @@ mod tests {
             let force_mask = ForceMask::default();
             let policy = ResolvePolicy {
                 accept_keywords: &ak,
-                package_mask: &[],
-                package_unmask: &[],
+                package_mask: &PolicyMaskList::EMPTY,
+                package_unmask: &PolicyMaskList::EMPTY,
                 accept_licenses: &licenses,
                 accept_properties: &properties,
                 accept_restrict: &restrict,
@@ -3314,11 +3480,11 @@ mod tests {
         let arch = Arch::intern("arm64");
         let ak = AcceptKeywords::from_global(&arch, &["arm64"]);
         let cpn = Cpn::try_new("app-misc/thing").expect("cpn parses");
-        let mask = vec![dep("=app-misc/thing-3.0")];
+        let mask = PolicyMaskList::new(vec![dep("=app-misc/thing-3.0")]);
         let policy = ResolvePolicy {
             accept_keywords: &ak,
             package_mask: &mask,
-            package_unmask: &[],
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -3365,8 +3531,8 @@ mod tests {
         let ak = AcceptKeywords::from_global(&arch, &["arm64"]);
         let policy = ResolvePolicy {
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -3402,8 +3568,8 @@ mod tests {
         );
         let policy = ResolvePolicy {
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &deny_bindist,
@@ -3426,8 +3592,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3468,8 +3634,8 @@ mod tests {
         let ak = AcceptKeywords::from_global(&arch, &["arm64"]);
         let policy = ResolvePolicy {
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),
@@ -3515,8 +3681,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3562,8 +3728,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3614,8 +3780,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3662,8 +3828,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3724,8 +3890,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &installed,
             rebuilding_cpvs: &rebuilding,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3782,8 +3948,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &installed,
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3836,8 +4002,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &installed,
             rebuilding_cpvs: &rebuilding,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3890,8 +4056,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &rebuilding,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -3945,8 +4111,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -4005,8 +4171,8 @@ mod tests {
         let adapter = Adapter {
             data: &data,
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -4057,8 +4223,8 @@ mod tests {
         let strict_adapter = Adapter {
             data: &data,
             accept_keywords: &stable_only,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -4130,8 +4296,8 @@ mod tests {
         let widened_adapter = Adapter {
             data: &data,
             accept_keywords: &stable_only,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             installed_cpvs: &std::collections::HashSet::new(),
             rebuilding_cpvs: &std::collections::HashSet::new(),
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
@@ -4170,8 +4336,8 @@ mod tests {
         let ak = AcceptKeywords::from_global(&arch, &["amd64"]);
         let policy = ResolvePolicy {
             accept_keywords: &ak,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &PolicyMaskList::EMPTY,
+            package_unmask: &PolicyMaskList::EMPTY,
             accept_licenses: &AcceptOverlay::new(accept_all_licenses(), Vec::new()),
             accept_properties: &AcceptProperties::new(accept_all_licenses(), Vec::new()),
             accept_restrict: &AcceptRestrict::new(accept_all_licenses(), Vec::new()),

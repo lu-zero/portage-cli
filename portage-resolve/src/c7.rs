@@ -104,8 +104,8 @@ fn solve_with(
     let adapter = Adapter {
         data,
         accept_keywords: &accept,
-        package_mask: &[],
-        package_unmask: &[],
+        package_mask: &crate::repo::PolicyMaskList::EMPTY,
+        package_unmask: &crate::repo::PolicyMaskList::EMPTY,
         installed_cpvs: &std::collections::HashSet::new(),
         rebuilding_cpvs: &std::collections::HashSet::new(),
         accept_licenses: &lic,
@@ -123,8 +123,8 @@ fn solve_with(
     };
     let policy = ResolvePolicy {
         accept_keywords: &accept,
-        package_mask: &[],
-        package_unmask: &[],
+        package_mask: &crate::repo::PolicyMaskList::EMPTY,
+        package_unmask: &crate::repo::PolicyMaskList::EMPTY,
         accept_licenses: &lic,
         accept_properties: &lic,
         accept_restrict: &lic,

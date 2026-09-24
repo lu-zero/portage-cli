@@ -100,8 +100,8 @@ impl BenchRepo {
         let adapter = Adapter {
             data: &self.data,
             accept_keywords: &self.accept_keywords,
-            package_mask: &[],
-            package_unmask: &[],
+            package_mask: &portage_resolve::repo::PolicyMaskList::EMPTY,
+            package_unmask: &portage_resolve::repo::PolicyMaskList::EMPTY,
             accept_licenses: &self.accept_licenses,
             accept_properties: &self.accept_properties,
             accept_restrict: &self.accept_restrict,

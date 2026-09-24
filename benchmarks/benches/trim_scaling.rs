@@ -127,8 +127,8 @@ impl Fixture {
             data: &self.data,
             policy: ResolvePolicy {
                 accept_keywords: &self.accept_keywords,
-                package_mask: &[],
-                package_unmask: &[],
+                package_mask: &portage_resolve::repo::PolicyMaskList::EMPTY,
+                package_unmask: &portage_resolve::repo::PolicyMaskList::EMPTY,
                 accept_licenses: &self.accept_licenses,
                 accept_properties: &self.accept_licenses,
                 accept_restrict: &self.accept_licenses,
