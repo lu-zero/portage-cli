@@ -1095,7 +1095,7 @@ impl<'a> ResolvePolicy<'a> {
 /// before a `ResolvePolicy` can borrow them; every caller that loads a
 /// `UseEnv` needs that same fold, so build it once via [`Self::from_use_env`]
 /// and hand out `ResolvePolicy` views via [`Self::as_policy`] rather than
-/// repeating the fold and the 12-field literal at each call site.
+/// repeating the fold and the full policy literal at each call site.
 pub struct ResolvedPolicy {
     /// Resolved `ACCEPT_KEYWORDS`/`package.accept_keywords` decision
     pub accept_keywords: AcceptKeywords,
