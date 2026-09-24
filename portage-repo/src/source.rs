@@ -188,7 +188,7 @@ pub(crate) async fn source_one(
 mod tests {
     use super::*;
     use crate::cache::{RegenOpts, RegenWriteTarget, regen_cache};
-    use camino::Utf8Path;
+    use camino::{Utf8Path, Utf8PathBuf};
 
     fn repo_with_eclass(eclass: &str) -> (tempfile::TempDir, Repository, Vec<Ebuild>) {
         let tmp = tempfile::tempdir().unwrap();
@@ -217,20 +217,22 @@ mod tests {
     #[tokio::test]
     async fn malformed_eclass_is_reported_without_publishing_missing_output() {
         let (_tmp, repo, ebuilds) = repo_with_eclass("if true; then\n");
-        let output = tempfile::tempdir().unwrap();
+        let output_root = tempfile::tempdir().unwrap();
+        let output = output_root.path().join("out");
         let (tx, _rx) = flume::unbounded();
         let opts = RegenOpts {
             source: SourceOpts {
                 jobs: Some(1),
                 dedup: false,
             },
-            write: RegenWriteTarget::Dir(output.path().to_owned()),
+            write: RegenWriteTarget::Dir(output.clone()),
         };
 
         let stats = regen_cache(&repo, ebuilds, &opts, tx).await.unwrap();
 
         assert_eq!(stats.errors, 1);
-        assert!(!output.path().join("cat/pkg-1.0").exists());
+        assert!(!output.exists());
+        assert!(!output.join("cat/pkg-1.0").exists());
     }
 
     #[tokio::test]
@@ -250,6 +252,50 @@ mod tests {
 
         assert_eq!(stats.errors, 0);
         assert!(output.path().join("cat/pkg-1.0").is_file());
+    }
+
+    #[tokio::test]
+    async fn successful_repository_regen_reconciles_gap_index() {
+        let root = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("metadata")).unwrap();
+        std::fs::write(root.path().join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::create_dir_all(root.path().join("profiles")).unwrap();
+        std::fs::write(root.path().join("profiles/repo_name"), "test\n").unwrap();
+        std::fs::write(root.path().join("profiles/categories"), "cat\n").unwrap();
+        std::fs::write(root.path().join("metadata/timestamp.chk"), "1\n").unwrap();
+        let pkg_dir = root.path().join("cat/pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("pkg-1.0.ebuild");
+        std::fs::write(&ebuild_path, "EAPI=8\nDESCRIPTION=\"base\"\nSLOT=0\n").unwrap();
+        let ebuild = Ebuild::from_path(Utf8Path::from_path(&ebuild_path).unwrap()).unwrap();
+        let cpv = ebuild.cpv().clone();
+        let repo = Repository::builder()
+            .user_cache_root(Utf8PathBuf::from_path_buf(cache_root.path().to_owned()).unwrap())
+            .open(root.path())
+            .unwrap();
+        let stamp = repo.sync_stamp().unwrap();
+        let sidecar = repo.sidecar_path("gap-index").unwrap();
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, format!("{stamp}\n{cpv}\n")).unwrap();
+        let (tx, _rx) = flume::unbounded();
+        let opts = RegenOpts {
+            source: SourceOpts {
+                jobs: Some(1),
+                dedup: false,
+            },
+            write: RegenWriteTarget::Repository,
+        };
+
+        let stats = regen_cache(&repo, vec![ebuild], &opts, tx).await.unwrap();
+
+        assert_eq!(stats.errors, 0);
+        assert!(repo.cache_entry(&cpv).unwrap().is_some());
+        assert!(
+            !std::fs::read_to_string(sidecar)
+                .unwrap()
+                .contains(&cpv.to_string())
+        );
     }
 
     #[tokio::test]

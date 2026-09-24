@@ -46,7 +46,7 @@
 //! digests), never mtime; mtime only selects *which* files to digest. That
 //! matches the md5-cache format's own contract.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use portage_atom::Cpv;
 use portage_metadata::CacheEntry;
@@ -111,8 +111,13 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
                 }
             })
             .collect();
+        let primary_covered: HashSet<Cpv> = out.iter().map(|(cpv, _)| cpv.clone()).collect();
         let mut recovered = 0usize;
         for cpv in &cpvs {
+            if primary_covered.contains(cpv) {
+                recovered += 1;
+                continue;
+            }
             if let Ok(Some(entry)) = repo.cache_entry(cpv)
                 && repo.is_fresh_cached(&entry, &mut eclass_digests)
             {
@@ -123,6 +128,14 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         // A pruned secondary would silently re-hide packages; fall through and
         // rebuild rather than resolve against a tree we can only partly see.
         if !stale && recovered == cpvs.len() {
+            if cpvs.iter().any(|cpv| primary_covered.contains(cpv)) {
+                let remaining: Vec<Cpv> = cpvs
+                    .iter()
+                    .filter(|cpv| !primary_covered.contains(cpv))
+                    .cloned()
+                    .collect();
+                write_gap_index(index, stamp, remaining.iter());
+            }
             return out;
         }
         if stale {
@@ -287,6 +300,27 @@ fn write_gap_index<'a>(path: &camino::Utf8Path, stamp: &str, cpvs: impl Iterator
     if let Err(e) = std::fs::write(path.as_std_path(), text) {
         tracing::debug!("could not write gap index {path}: {e}");
     }
+}
+
+/// Remove entries now served by the in-tree cache from a valid gap sidecar.
+pub(crate) fn reconcile_gap_index(repo: &Repository, covered: &HashSet<Cpv>) {
+    if !repo.has_sync_marker() {
+        return;
+    }
+    let Some(stamp) = repo.sync_stamp() else {
+        return;
+    };
+    let Some(path) = repo.sidecar_path(GAP_INDEX) else {
+        return;
+    };
+    let Some(cpvs) = read_gap_index(&path, &stamp) else {
+        return;
+    };
+    let remaining: Vec<Cpv> = cpvs
+        .into_iter()
+        .filter(|cpv| !covered.contains(cpv))
+        .collect();
+    write_gap_index(&path, &stamp, remaining.iter());
 }
 
 /// The same chain over only the CPVs `covered` does not already contain
@@ -610,6 +644,54 @@ mod tests {
                 .iuse
                 .iter()
                 .any(|flag| flag.name() == "new")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_covered_gap_index_entry_is_not_duplicated_or_retained() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata/layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles/categories"), "sys-apps\n").unwrap();
+        std::fs::write(dir.path().join("metadata/timestamp.chk"), "1\n").unwrap();
+        let repo = Repository::builder()
+            .user_cache_root(
+                camino::Utf8PathBuf::from_path_buf(cache_root.path().to_owned()).unwrap(),
+            )
+            .open(dir.path())
+            .unwrap();
+
+        let pkg_dir = dir.path().join("sys-apps/foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("foo-1.0.ebuild");
+        let ebuild = "EAPI=8\nDESCRIPTION=\"base\"\nSLOT=0\n";
+        std::fs::write(&ebuild_path, ebuild).unwrap();
+        let digest = format!("{:x}", md5::compute(ebuild.as_bytes()));
+        let cache_file = dir.path().join("metadata/md5-cache/sys-apps/foo-1.0");
+        std::fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cache_file,
+            format!("EAPI=8\nDESCRIPTION=base\nSLOT=0\n_md5_={digest}\n"),
+        )
+        .unwrap();
+
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        set_mtime(&ebuild_path, base);
+        set_mtime(&cache_file, base + Duration::from_secs(60));
+        let stamp = repo.sync_stamp().unwrap();
+        let sidecar = repo.sidecar_path(GAP_INDEX).unwrap();
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, format!("{stamp}\nsys-apps/foo-1.0\n")).unwrap();
+
+        let entries = repo_entries(&repo).await;
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.metadata.description, "base");
+        assert_eq!(
+            std::fs::read_to_string(sidecar).unwrap(),
+            format!("{stamp}\n")
         );
     }
 

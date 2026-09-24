@@ -9,8 +9,8 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use camino::{Utf8Path, Utf8PathBuf};
@@ -119,6 +119,8 @@ pub async fn regen_cache(
     // staging dir, falling back to staging secondary instead. No staging
     // at all only when secondary isn't a durable on-disk store either
     // (in-memory secondary, tests only).
+    let requested_repository = matches!(&write, RegenWriteTarget::Repository);
+    let primary_dir = repo.primary_cache_dir();
     let (write, dir_swap) = match write {
         RegenWriteTarget::Dir(ref dir) => {
             let cats = ebuilds.iter().map(Ebuild::category);
@@ -129,7 +131,6 @@ pub async fn regen_cache(
             )
         }
         RegenWriteTarget::Repository => {
-            let primary_dir = repo.primary_cache_dir();
             let staged_primary = stage_dir_target(
                 primary_dir.as_std_path(),
                 ebuilds.iter().map(Ebuild::category),
@@ -137,7 +138,7 @@ pub async fn regen_cache(
             match staged_primary {
                 Ok(staging) => (
                     RegenWriteTarget::Dir(staging.clone().into_std_path_buf()),
-                    Some((primary_dir.into_std_path_buf(), staging)),
+                    Some((primary_dir.clone().into_std_path_buf(), staging)),
                 ),
                 Err(_) => match repo.secondary_cache_dir() {
                     Some(secondary_dir) => {
@@ -157,11 +158,18 @@ pub async fn regen_cache(
         other => (other, None),
     };
 
+    let reconcile_repo_cache = requested_repository
+        && dir_swap
+            .as_ref()
+            .is_some_and(|(dir, _)| dir == primary_dir.as_std_path());
     let ctx = SourceContext::new();
     let checksum_cache: ChecksumCache = Arc::new(papaya::HashMap::new());
     let done = Arc::new(AtomicUsize::new(0));
     let errors = Arc::new(AtomicUsize::new(0));
     let errors_cb = Arc::clone(&errors);
+    let covered = Arc::new(Mutex::new(HashSet::new()));
+    let covered_cb = Arc::clone(&covered);
+    let reconcile_cb = reconcile_repo_cache;
     let repo_for_write = repo.clone();
 
     crate::source::source_parallel_join(
@@ -194,6 +202,12 @@ pub async fn regen_cache(
                     }
                 }
             };
+            if reconcile_cb
+                && item_result.is_ok()
+                && let Ok(mut covered) = covered_cb.lock()
+            {
+                covered.insert(ebuild.cpv().clone());
+            }
             if item_result.is_err() {
                 errors_cb.fetch_add(1, Ordering::Relaxed);
             }
@@ -211,13 +225,19 @@ pub async fn regen_cache(
     )
     .await?;
 
-    if let Some((dir, staging)) = dir_swap {
+    let error_count = errors.load(Ordering::Relaxed);
+    if let Some((dir, staging)) = dir_swap
+        && error_count == 0
+    {
         swap_dir_target(&dir, &staging)?;
+        if reconcile_repo_cache && let Ok(covered) = covered.lock() {
+            crate::entries::reconcile_gap_index(repo, &covered);
+        }
     }
 
     Ok(RegenStats {
         total,
-        errors: errors.load(Ordering::Relaxed),
+        errors: error_count,
     })
 }
 

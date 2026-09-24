@@ -68,7 +68,7 @@ Status markers: `[ ]` open · `[~]` in progress · `[x]` complete · `[!]` block
 - [ ] **BF-307 — Move cache discovery into blocking work.** Do not perform synchronous jwalk before the first await; use a shared job budget and move descriptor chunks instead of cloning them.
 - [ ] **BF-308 — Bound and share worker budgets.** Stop defaulting every cache/source stage to all available CPUs. Benchmark conservative worker counts and one budget across overlapping stages.
 - [x] **BF-309 — Validate `jobs = 0`.** Source and cache worker counts now normalize values below one to one; regressions cover a zero-worker regen publishing a real entry and a zero-worker cache read returning every descriptor instead of dividing by zero or silently producing no work.
-- [ ] **BF-310 — Reconcile gap-index lifecycle.** Ensure successful regen updates/removes the sidecar and does not append already-covered CPVs.
+- [x] **BF-310 — Reconcile gap-index lifecycle.** The gap fast path no longer duplicates CPVs already served by the primary cache, rewrites the sidecar when coverage changes, and successful repository-target regen records newly covered CPVs and reconciles the sidecar. Failed regen no longer swaps its staging directory, with regressions for duplicate suppression, successful reconciliation, and no partial publication.
 
 **Phase 3 gate:** cache-less/overlay and regen benchmarks complete correctly with lower system time/allocation, and no partial cache is published after worker failure.
 
