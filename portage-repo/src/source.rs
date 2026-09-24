@@ -131,8 +131,18 @@ where
 
         handles.push(tokio::spawn(async move {
             let master_refs: Vec<&Repository> = repo.masters().iter().collect();
+            let mut shell = match repo.shell_with_masters_and_cache(&master_refs, &ctx).await {
+                Ok(shell) => shell,
+                Err(_) => {
+                    while let Ok(ebuild) = work_rx.recv_async().await {
+                        let result = source_one(&repo, &master_refs, &ebuild, &ctx, dedup).await;
+                        on_result(ebuild, result);
+                    }
+                    return;
+                }
+            };
             while let Ok(ebuild) = work_rx.recv_async().await {
-                let result = source_one(&repo, &master_refs, &ebuild, &ctx, dedup).await;
+                let result = source_with_shell(&mut shell, &ebuild, dedup).await;
                 on_result(ebuild, result);
             }
         }));
@@ -177,6 +187,14 @@ pub(crate) async fn source_one(
     dedup: bool,
 ) -> Result<SourcedEbuild> {
     let mut shell = repo.shell_with_masters_and_cache(masters, ctx).await?;
+    source_with_shell(&mut shell, ebuild, dedup).await
+}
+
+async fn source_with_shell(
+    shell: &mut crate::EbuildShell,
+    ebuild: &Ebuild,
+    dedup: bool,
+) -> Result<SourcedEbuild> {
     let mut sourced = shell.source_ebuild(ebuild).await?;
     if dedup {
         sourced.metadata = sourced.metadata.dedup();
@@ -252,6 +270,45 @@ mod tests {
 
         assert_eq!(stats.errors, 0);
         assert!(output.path().join("cat/pkg-1.0").is_file());
+    }
+
+    #[tokio::test]
+    async fn source_worker_reuse_keeps_each_ebuild_hermetic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "test\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "cat\n").unwrap();
+        let mut ebuilds = Vec::new();
+        for (name, description) in [("first", "one"), ("second", "two")] {
+            let dir = root.join("cat").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(format!("{name}-1.0.ebuild"));
+            std::fs::write(
+                &path,
+                format!("EAPI=8\nDESCRIPTION=\"{description}\"\nSLOT=0\n"),
+            )
+            .unwrap();
+            ebuilds.push(Ebuild::from_path(Utf8Path::from_path(&path).unwrap()).unwrap());
+        }
+        let repo = Repository::builder().in_memory_cache().open(root).unwrap();
+        let receiver = source_parallel(
+            &repo,
+            ebuilds,
+            &SourceOpts {
+                jobs: Some(1),
+                dedup: false,
+            },
+            &SourceContext::new(),
+        );
+        let mut descriptions = Vec::new();
+        while let Ok((_, result)) = receiver.recv_async().await {
+            descriptions.push(result.unwrap().metadata.description);
+        }
+        descriptions.sort();
+        assert_eq!(descriptions, ["one", "two"]);
     }
 
     #[tokio::test]

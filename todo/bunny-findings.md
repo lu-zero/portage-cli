@@ -59,7 +59,7 @@ Status markers: `[ ]` open · `[~]` in progress · `[x]` complete · `[!]` block
 
 ## Phase 3 — repository loading and sourcing
 
-- [ ] **BF-301 — Reuse one shell per source worker.** `source_parallel_join()` currently constructs a shell per ebuild through `source_one()`. Use the existing hermetic baseline behavior to reuse a worker-local shell; keep `source_single()` fresh-shell semantics.
+- [x] **BF-301 — Reuse one shell per source worker.** `source_parallel_join()` now creates one shell per worker and reuses the existing hermetic baseline reset for each ebuild; `source_single()` still creates a fresh shell. The synthetic `source_reuse` benchmark measures 64.6–74.7% lower sourcing time across 32/128/512 ebuilds at one or four workers, with a two-ebuild hermeticity regression.
 - [ ] **BF-302 — Resolve distdir writability once per shell/context.** Avoid repeated probe-file create/write/remove operations for every sourced ebuild and phase. Invalidate only when configuration changes.
 - [ ] **BF-303 — Share eclass digest/path memo during live sourcing.** Use the existing AST/digest caches for newly sourced entries and avoid repeated directory probes when ASTs are already cached.
 - [ ] **BF-304 — Avoid repeated ebuild reads.** Carry pre-read bytes or MD5 through EAPI detection, sourcing, and cache construction where practical; measure the regen I/O change.
