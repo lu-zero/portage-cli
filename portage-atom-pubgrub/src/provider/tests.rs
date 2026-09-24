@@ -749,6 +749,41 @@ fn or_group_prefers_installed_alternative() {
     );
 }
 
+#[test]
+fn complete_or_groups_do_not_create_dropped_dependencies() {
+    let mut repo = InMemoryRepository::new();
+    for cpv in [
+        "dev-libs/a-1.0",
+        "dev-libs/b-1.0",
+        "dev-libs/c-1.0",
+        "dev-libs/d-1.0",
+    ] {
+        repo.add_version(
+            portage_atom::Cpv::parse(cpv).unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            empty_deps(),
+        );
+    }
+    for (name, alternatives) in [
+        ("app-misc/first", "dev-libs/a dev-libs/b"),
+        ("app-misc/second", "dev-libs/c dev-libs/d"),
+    ] {
+        repo.add_version(
+            portage_atom::Cpv::parse(&format!("{name}-1.0")).unwrap(),
+            Some(Interned::intern("0")),
+            None,
+            PackageDeps {
+                depend: (DepEntry::parse(&format!("|| ( {alternatives} )")).unwrap()).into(),
+                ..empty_deps()
+            },
+        );
+    }
+
+    let provider = PortageDependencyProvider::new(repo);
+    assert!(provider.dropped_deps().is_empty());
+}
+
 // A dropped `||` branch must keep a *multi-slot* sibling as an alternative.
 // Regression for glibc's `BDEPEND=|| ( >=sys-devel/gcc-6.2
 // >=llvm-runtimes/libgcc-18 )`: gcc is multi-slot (a `SlotChoice` virtual),

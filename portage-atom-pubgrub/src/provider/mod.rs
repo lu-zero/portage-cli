@@ -630,69 +630,87 @@ impl PortageDependencyProvider {
         // `NoVersions` for any missing package and immediately declare the
         // problem unsolvable.
         let known: HashSet<PortagePackage> = packages.keys().cloned().collect();
+        let missing_merged = packages.values().any(|data| {
+            data.versions.values().any(|vd| {
+                matches!(
+                    &vd.merged,
+                    Dependencies::Available(constraints)
+                        if constraints.iter().any(|(pkg, _)| !known.contains(pkg))
+                )
+            })
+        });
+        let needs_filtering = missing_merged
+            || packages.values().any(|data| {
+                data.versions.values().any(|vd| {
+                    vd.by_class
+                        .iter()
+                        .flatten()
+                        .any(|(pkg, _, _)| !known.contains(pkg))
+                })
+            });
 
-        // Build a map from each branch of a || group (Choice node) to its sibling
-        // branches.  Used to populate DroppedDep::alternatives so a dropped branch
-        // with an available sibling is not reported by autounmask.  Virtual
-        // siblings are kept: a multi-slot branch (e.g. `>=sys-devel/gcc-6.2` over
-        // gcc's many slots) is represented as a `SlotChoice` node, and its
-        // presence in `known` is exactly the "an alternative is available" signal
-        // — dropping it left a single-version sibling (e.g. `llvm-runtimes/libgcc`,
-        // masked for this arch) looking alternative-less and falsely reported.
+        // Build alternatives before filtering so a missing branch still sees its
+        // siblings. Complete repositories do not need this materialization.
         let mut or_alternatives: HashMap<PortagePackage, Vec<PortagePackage>> = HashMap::new();
-        for (pkg, data) in packages.iter_mut() {
-            if !matches!(pkg, PortagePackage::Choice { .. }) {
-                continue;
-            }
-            let mut branch_deps: Vec<PortagePackage> = Vec::new();
-            for vd in data.versions.values_mut() {
-                if let Dependencies::Available(constraints) = &mut vd.merged {
-                    let taken = std::mem::take(constraints);
-                    let items: Vec<_> = taken.into_iter().collect();
-                    for (dep, _) in &items {
-                        branch_deps.push(dep.clone());
-                    }
-                    *constraints = items.into_iter().collect();
+        if missing_merged {
+            for (pkg, data) in packages.iter_mut() {
+                if !matches!(pkg, PortagePackage::Choice { .. }) {
+                    continue;
                 }
-            }
-            for i in 0..branch_deps.len() {
-                let others: Vec<_> = branch_deps
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, d)| d.clone())
-                    .collect();
-                or_alternatives
-                    .entry(branch_deps[i].clone())
-                    .or_default()
-                    .extend(others);
+                let mut branch_deps: Vec<PortagePackage> = Vec::new();
+                for vd in data.versions.values_mut() {
+                    if let Dependencies::Available(constraints) = &mut vd.merged {
+                        let taken = std::mem::take(constraints);
+                        let items: Vec<_> = taken.into_iter().collect();
+                        for (dep, _) in &items {
+                            branch_deps.push(dep.clone());
+                        }
+                        *constraints = items.into_iter().collect();
+                    }
+                }
+                for i in 0..branch_deps.len() {
+                    let others: Vec<_> = branch_deps
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, d)| d.clone())
+                        .collect();
+                    or_alternatives
+                        .entry(branch_deps[i].clone())
+                        .or_default()
+                        .extend(others);
+                }
             }
         }
 
         let mut dropped_deps = Vec::new();
-        for data in packages.values_mut() {
-            for vd in data.versions.values_mut() {
-                if let Dependencies::Available(constraints) = &mut vd.merged {
-                    let taken = std::mem::take(constraints);
-                    let (kept, dropped): (Vec<_>, Vec<_>) =
-                        taken.into_iter().partition(|(pkg, _)| known.contains(pkg));
-                    dropped_deps.extend(dropped.into_iter().map(|(pkg, vs)| {
-                        let alternatives = or_alternatives
-                            .get(&pkg)
-                            .map(|alts| {
-                                alts.iter().filter(|a| known.contains(a)).cloned().collect()
-                            })
-                            .unwrap_or_default();
-                        DroppedDep {
-                            package: pkg,
-                            version_set: vs,
-                            alternatives,
-                        }
-                    }));
-                    *constraints = kept.into_iter().collect();
-                }
-                for class in &mut vd.by_class {
-                    class.retain(|(pkg, _, _)| known.contains(pkg));
+        if needs_filtering {
+            for data in packages.values_mut() {
+                for vd in data.versions.values_mut() {
+                    if let Dependencies::Available(constraints) = &mut vd.merged
+                        && constraints.iter().any(|(pkg, _)| !known.contains(pkg))
+                    {
+                        let taken = std::mem::take(constraints);
+                        let (kept, dropped): (Vec<_>, Vec<_>) =
+                            taken.into_iter().partition(|(pkg, _)| known.contains(pkg));
+                        dropped_deps.extend(dropped.into_iter().map(|(pkg, vs)| {
+                            let alternatives = or_alternatives
+                                .get(&pkg)
+                                .map(|alts| {
+                                    alts.iter().filter(|a| known.contains(a)).cloned().collect()
+                                })
+                                .unwrap_or_default();
+                            DroppedDep {
+                                package: pkg,
+                                version_set: vs,
+                                alternatives,
+                            }
+                        }));
+                        *constraints = kept.into_iter().collect();
+                    }
+                    for class in &mut vd.by_class {
+                        class.retain(|(pkg, _, _)| known.contains(pkg));
+                    }
                 }
             }
         }
