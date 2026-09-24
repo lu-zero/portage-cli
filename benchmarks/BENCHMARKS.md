@@ -544,6 +544,26 @@ Reproduction (30 samples, one-second warm-up, two-second measurement window):
 cargo bench -p portage-bench --bench policy_facts -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 30
 ```
 
+### 15. CPN-indexed policy lists (thalia, 2026-09-24)
+
+`policy_lists` runs the full acceptance filter over a synthetic target with matching entries at the end of keyword, license, property, restrict, mask, and unmask lists. The current fixture uses the production CPN indexes; the baseline is the same fixture at `ac54eb1c`, before BF-207, with raw list scans.
+
+| Noise entries per list | Baseline full filter | Indexed full filter | Reduction |
+|----------------------:|---------------------:|----------------------:|----------:|
+| 128 | 1.948 µs | 0.812 µs | 58.3% |
+| 512 | 5.675 µs | 0.816 µs | 85.6% |
+| 2,048 | 20.550 µs | 0.815 µs | 96.0% |
+
+The fixture has one candidate and measures policy-list lookup/index construction trade-offs, not provider construction or end-to-end resolve time. Criterion used 30 samples, a one-second warm-up, and a two-second measurement window.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench policy_lists -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 30
+```
+
+The baseline was run from a detached worktree at `ac54eb1c` with the same fixture and raw-list adapter.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

@@ -57,10 +57,12 @@ lookups; `trim_scaling` measures BDEPEND/DEPEND trim growth over synthetic plans
 and VDBs; `graph_scaling` measures graph/order work on synthetic cyclic plans;
 `vdb_snapshot` compares shared and independent BROOT/prefix VDB enumeration;
 `policy_facts` measures uncached, cold-cached, warm-cached, and multi-generation
-policy-fact evaluation; `resolve` measures the in-memory adapter and solver path:
+policy-fact evaluation; `policy_lists` measures full acceptance filtering with
+CPN-indexed final policy lists; `resolve` measures the in-memory adapter and
+solver path:
 
 ```sh
-# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts)
+# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists)
 cargo bench -p portage-bench
 
 # One
@@ -71,6 +73,7 @@ cargo bench -p portage-bench --bench trim_scaling
 cargo bench -p portage-bench --bench graph_scaling
 cargo bench -p portage-bench --bench vdb_snapshot
 cargo bench -p portage-bench --bench policy_facts
+cargo bench -p portage-bench --bench policy_lists
 
 # Alternative interner (see benchmarks/Cargo.toml's [features])
 cargo bench -p portage-bench --no-default-features --features lasso

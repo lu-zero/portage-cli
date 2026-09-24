@@ -99,3 +99,7 @@ harness = false
 [[bench]]
 name = "policy_facts"
 harness = false
+
+[[bench]]
+name = "policy_lists"
+harness = false

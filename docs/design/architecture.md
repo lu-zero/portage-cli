@@ -379,7 +379,10 @@ Stages, in order:
    acceptance, stable-keyword status, and the pre-cede effective USE by CPV and
    `package.use` generation; the raw `RepoData` remains immutable. Duplicate-repo
    collapse deliberately bypasses this cache until one entry per CPV remains.
-   Level-C ceding is applied to a clone after the cached base is read.
+   Level-C ceding is applied to a clone after the cached base is read. Final
+   per-package keyword, accept-set, and mask lists are indexed by CPN while
+   retaining their original matching-entry order; version/slot/repository
+   predicates still run for each candidate.
 5. **Resolve** (`resolve_targets`) — PubGrub selects one version per package,
    modelling OR/`^^`/`??` groups, slots/subslots, USE-conditional deps, and
    USE-dep constraints (the latter via virtual `UseDecision` packages). When the
