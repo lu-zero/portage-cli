@@ -359,6 +359,8 @@ pub struct PortageDependencyProvider {
     ///
     /// Captured before virtual nodes are stripped from the result.
     pub(crate) solved_use_decisions: HashMap<PortagePackage, bool>,
+    /// Solver-selected version for each virtual node in the last successful solve.
+    pub(crate) selected_virtuals: HashMap<PortagePackage, Version>,
 }
 
 /// A USE flag the caller ceded to the solver, with the value the solver chose
@@ -730,6 +732,7 @@ impl PortageDependencyProvider {
             use_decision_prefer,
             use_decision_meta,
             solved_use_decisions: HashMap::new(),
+            selected_virtuals: HashMap::new(),
         }
     }
 
@@ -1066,6 +1069,11 @@ impl PortageDependencyProvider {
             }
         }
 
+        self.selected_virtuals = solution
+            .iter()
+            .filter(|(package, _)| package.is_virtual())
+            .map(|(package, version)| (package.clone(), version.clone()))
+            .collect();
         self.packages.remove(&root);
 
         // Capture the solver's choice for every ceded flag before the virtual

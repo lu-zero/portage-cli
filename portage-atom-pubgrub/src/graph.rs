@@ -164,9 +164,19 @@ impl PortageDependencyProvider {
                             }
                             stats.virtual_expansions += 1;
                             if let Some(vdata) = self.package_data(dp) {
-                                for vver in vdata.versions.values() {
-                                    for (idp, idvs, _) in vver.by_class.iter().flatten() {
-                                        work.push((idp, idvs));
+                                let selected_version =
+                                    solution.get(dp).or_else(|| self.selected_virtuals.get(dp));
+                                if let Some(version) = selected_version {
+                                    if let Some(vver) = vdata.versions.get(version) {
+                                        for (idp, idvs, _) in vver.by_class.iter().flatten() {
+                                            work.push((idp, idvs));
+                                        }
+                                    }
+                                } else {
+                                    for vver in vdata.versions.values() {
+                                        for (idp, idvs, _) in vver.by_class.iter().flatten() {
+                                            work.push((idp, idvs));
+                                        }
                                     }
                                 }
                             }
@@ -780,6 +790,140 @@ mod tests {
         assert_eq!(measured.stats.graph_builds, 1);
         assert_eq!(measured.stats.graph_nodes, solution.iter().count());
         assert_eq!(measured.stats.graph_edges, edges.len());
+    }
+
+    #[test]
+    fn selected_or_branch_does_not_expand_an_unselected_real_target() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+        let slot = Interned::intern("0");
+        repo.add_version(
+            Cpv::parse("dev-libs/a-1.0").unwrap(),
+            Some(slot),
+            None,
+            empty(),
+        );
+        repo.add_version(
+            Cpv::parse("dev-libs/b-1.0").unwrap(),
+            Some(slot),
+            None,
+            empty(),
+        );
+        repo.add_version(
+            Cpv::parse("app-misc/consumer-1.0").unwrap(),
+            Some(slot),
+            None,
+            PackageDeps {
+                depend: (DepEntry::parse("|| ( dev-libs/a dev-libs/b )").unwrap()).into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("app-misc/other-1.0").unwrap(),
+            Some(slot),
+            None,
+            PackageDeps {
+                depend: (DepEntry::parse("dev-libs/b").unwrap()).into(),
+                ..empty()
+            },
+        );
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let consumer = PortagePackage::slotted(Cpn::parse("app-misc/consumer").unwrap(), slot);
+        let other = PortagePackage::slotted(Cpn::parse("app-misc/other").unwrap(), slot);
+        let solution = provider
+            .resolve_targets(vec![
+                (consumer, PortageVersionSet::any()),
+                (other, PortageVersionSet::any()),
+            ])
+            .unwrap();
+        assert!(solution.iter().all(|(package, _)| !package.is_virtual()));
+
+        let edges = provider.dependency_graph(&solution);
+        let has_edge = |from: &str, to: &str| {
+            edges.iter().any(|edge| {
+                edge.from.0.cpn().package.as_str() == from && edge.to.0.cpn().package.as_str() == to
+            })
+        };
+        assert!(has_edge("consumer", "a"));
+        assert!(!has_edge("consumer", "b"));
+        assert!(has_edge("other", "b"));
+    }
+
+    #[test]
+    fn selected_use_decision_does_not_expand_an_unselected_branch() {
+        let mut repo = InMemoryRepository::new();
+        let empty = || PackageDeps {
+            depend: (vec![]).into(),
+            rdepend: (vec![]).into(),
+            bdepend: (vec![]).into(),
+            pdepend: (vec![]).into(),
+            idepend: (vec![]).into(),
+        };
+        let slot = Interned::intern("0");
+        repo.add_version(
+            Cpv::parse("dev-libs/on-1.0").unwrap(),
+            Some(slot),
+            None,
+            empty(),
+        );
+        repo.add_version(
+            Cpv::parse("dev-libs/off-1.0").unwrap(),
+            Some(slot),
+            None,
+            empty(),
+        );
+        repo.add_version_with_iuse(
+            Cpv::parse("app-misc/conditional-1.0").unwrap(),
+            Some(slot),
+            None,
+            vec![Interned::intern("flag")],
+            PackageDeps {
+                depend: (DepEntry::parse("flag? ( || ( dev-libs/on dev-libs/off ) )").unwrap())
+                    .into(),
+                ..empty()
+            },
+        );
+        repo.add_version(
+            Cpv::parse("app-misc/other-1.0").unwrap(),
+            Some(slot),
+            None,
+            PackageDeps {
+                depend: (DepEntry::parse("dev-libs/off").unwrap()).into(),
+                ..empty()
+            },
+        );
+        let mut config = crate::use_config::UseConfig::new();
+        config.solver_decide(Interned::intern("flag"), true);
+        repo.set_use_config(config);
+
+        let mut provider = PortageDependencyProvider::new(repo);
+        let conditional =
+            PortagePackage::slotted(Cpn::parse("app-misc/conditional").unwrap(), slot);
+        let other = PortagePackage::slotted(Cpn::parse("app-misc/other").unwrap(), slot);
+        let solution = provider
+            .resolve_targets(vec![
+                (conditional, PortageVersionSet::any()),
+                (other, PortageVersionSet::any()),
+            ])
+            .unwrap();
+        assert!(solution.iter().all(|(package, _)| !package.is_virtual()));
+
+        let edges = provider.dependency_graph(&solution);
+        let has_edge = |from: &str, to: &str| {
+            edges.iter().any(|edge| {
+                edge.from.0.cpn().package.as_str() == from && edge.to.0.cpn().package.as_str() == to
+            })
+        };
+        assert!(has_edge("conditional", "on"));
+        assert!(!has_edge("conditional", "off"));
+        assert!(has_edge("other", "off"));
     }
 
     // Regression test for the riscv64 stage3 shakeout: `dependency_graph`
