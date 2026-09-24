@@ -374,7 +374,8 @@ fn write_entry_to_dir(
 /// Options for [`cache_entries_parallel`]
 #[derive(Debug, Clone, Default)]
 pub struct CacheReadOpts {
-    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`]
+    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`].
+    /// Values below one are treated as one worker.
     pub jobs: Option<usize>,
     /// When `true`, only the highest-cpv entry per Cpn is parsed
     ///
@@ -605,11 +606,14 @@ where
     if items.is_empty() {
         return Vec::new();
     }
-    let jobs = opts.jobs.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-    });
+    let jobs = opts
+        .jobs
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        })
+        .max(1);
 
     let total = items.len();
     let chunk_size = total.div_ceil(jobs);
@@ -649,6 +653,28 @@ mod tests {
 
     fn utf8_root(dir: &tempfile::TempDir, rel: &str) -> Utf8PathBuf {
         Utf8Path::from_path(dir.path()).unwrap().join(rel)
+    }
+
+    #[tokio::test]
+    async fn zero_jobs_reads_all_cache_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        let items = vec![
+            (portage_atom::Cpv::parse("cat/a-1.0").unwrap(), first, None),
+            (portage_atom::Cpv::parse("cat/b-1.0").unwrap(), second, None),
+        ];
+        let opts = CacheReadOpts {
+            jobs: Some(0),
+            ..CacheReadOpts::default()
+        };
+
+        let out = read_and_decode(items, &opts, |text| Ok(text.to_owned())).await;
+
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|(_, _, entry)| entry.is_ok()));
     }
 
     #[test]

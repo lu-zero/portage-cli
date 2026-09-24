@@ -67,7 +67,7 @@ Status markers: `[ ]` open · `[~]` in progress · `[x]` complete · `[!]` block
 - [ ] **BF-306 — Avoid redundant staging directory creation.** Reuse prepared category directories and a prepared staging writer instead of creating a new `DirMetadataCache` and calling `create_dir_all` per entry.
 - [ ] **BF-307 — Move cache discovery into blocking work.** Do not perform synchronous jwalk before the first await; use a shared job budget and move descriptor chunks instead of cloning them.
 - [ ] **BF-308 — Bound and share worker budgets.** Stop defaulting every cache/source stage to all available CPUs. Benchmark conservative worker counts and one budget across overlapping stages.
-- [ ] **BF-309 — Validate `jobs = 0`.** Reject or normalize zero workers in source and cache paths; add a regression for the current divide-by-zero/deadlock behavior.
+- [x] **BF-309 — Validate `jobs = 0`.** Source and cache worker counts now normalize values below one to one; regressions cover a zero-worker regen publishing a real entry and a zero-worker cache read returning every descriptor instead of dividing by zero or silently producing no work.
 - [ ] **BF-310 — Reconcile gap-index lifecycle.** Ensure successful regen updates/removes the sidecar and does not append already-covered CPVs.
 
 **Phase 3 gate:** cache-less/overlay and regen benchmarks complete correctly with lower system time/allocation, and no partial cache is published after worker failure.

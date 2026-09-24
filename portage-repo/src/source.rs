@@ -52,7 +52,8 @@ impl SourceContext {
 /// Options for sourcing operations
 #[derive(Debug, Clone, Default)]
 pub struct SourceOpts {
-    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`]
+    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`].
+    /// Values below one are treated as one worker.
     pub jobs: Option<usize>,
     /// Deduplicate top-level dep tokens before returning metadata
     pub dedup: bool,
@@ -106,11 +107,14 @@ pub(crate) async fn source_parallel_join<F>(
 where
     F: Fn(Ebuild, Result<SourcedEbuild>) + Send + Sync + 'static,
 {
-    let jobs = opts.jobs.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-    });
+    let jobs = opts
+        .jobs
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        })
+        .max(1);
     let dedup = opts.dedup;
     let repo = Arc::new(repo.clone());
     let ctx = ctx.clone();
@@ -227,6 +231,25 @@ mod tests {
 
         assert_eq!(stats.errors, 1);
         assert!(!output.path().join("cat/pkg-1.0").exists());
+    }
+
+    #[tokio::test]
+    async fn zero_jobs_still_writes_a_sourced_entry() {
+        let (_tmp, repo, ebuilds) = repo_with_eclass("");
+        let output = tempfile::tempdir().unwrap();
+        let (tx, _rx) = flume::unbounded();
+        let opts = RegenOpts {
+            source: SourceOpts {
+                jobs: Some(0),
+                dedup: false,
+            },
+            write: RegenWriteTarget::Dir(output.path().to_owned()),
+        };
+
+        let stats = regen_cache(&repo, ebuilds, &opts, tx).await.unwrap();
+
+        assert_eq!(stats.errors, 0);
+        assert!(output.path().join("cat/pkg-1.0").is_file());
     }
 
     #[tokio::test]
