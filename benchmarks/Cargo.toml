@@ -107,3 +107,7 @@ harness = false
 [[bench]]
 name = "repo_cache_lookup"
 harness = false
+
+[[bench]]
+name = "provider_postprocess"
+harness = false

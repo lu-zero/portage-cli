@@ -610,6 +610,26 @@ cargo bench -p portage-bench --bench graph_scaling -- --noplot --warm-up-time 1 
 
 The baseline was run from a detached worktree at `b122fc18` with the same fixture.
 
+### 18. Provider post-processing fast path (thalia, 2026-09-25)
+
+`provider_postprocess` constructs synthetic providers with 128/512/2,048 packages. The all-known fixture exercises the new no-drop path; the missing-branch fixture includes complete OR siblings plus one absent target. The baseline is the same fixture at `b122fc18`.
+
+| Packages | All-known baseline | All-known fast path | Missing baseline | Missing fast path |
+|---------:|-------------------:|--------------------:|----------------:|-------------------:|
+| 128 | 222.6 µs | 218.6 µs | 1.313 ms | 1.104 ms |
+| 512 | 1.246 ms | 1.080 ms | 8.498 ms | 6.299 ms |
+| 2,048 | 8.648 ms | 6.868 ms | 46.181 ms | 32.906 ms |
+
+The complete-repository path is 1.8–20.6% faster; the missing-branch path is 15.9–28.7% faster in this fixture because short-circuit detection avoids the old unconditional pairwise/partition work. This is isolated provider construction, not an end-to-end resolve claim. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench provider_postprocess -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline was run from a detached worktree at `b122fc18` with the same fixture.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
