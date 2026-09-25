@@ -175,7 +175,7 @@ async fn stacked_protect_mask(roots: &portage_resolve::Roots) -> Option<(String,
 }
 
 /// Space-separated CONFIG_PROTECT / MASK accumulated from `root/etc/env.d`
-pub(crate) fn env_d_protect_mask(root: &Utf8Path) -> (String, String) {
+fn env_d_protect_mask(root: &Utf8Path) -> (String, String) {
     let env_d = root.join("etc/env.d");
     let mut entries: Vec<_> = match std::fs::read_dir(env_d.as_std_path()) {
         Ok(rd) => rd
@@ -225,7 +225,7 @@ pub(crate) fn env_d_protect_mask(root: &Utf8Path) -> (String, String) {
     (protect, mask)
 }
 
-pub(crate) fn merge_protect_layers<'a>(layers: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+fn merge_protect_layers<'a>(layers: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut acc = Vec::new();
     for layer in layers {

@@ -51,7 +51,7 @@ pub(crate) fn filter_clean_subs(
 /// critical section so parallel `__worker` processes — and concurrent em
 /// instances sharing the tree — cannot interleave qmerge.
 ///
-/// `work_dir` is [`package_work_dir`] (`$work_base/<root-key>/<cat>/<pf>`), so
+/// `work_dir` is `package_work_dir` (`$work_base/<root-key>/<cat>/<pf>`), so
 /// the work base is three parents up. Blocking acquire runs off the async
 /// executor; released on drop (or by the kernel on process exit).
 pub(crate) async fn lock_merge_flock(work_dir: &Utf8Path) -> Option<std::fs::File> {

@@ -120,7 +120,7 @@ pub(crate) async fn build_binpkg_standalone(
 /// VDB-shaped directory -- the real VDB entry for a normal `-b` merge via
 /// [`build_binpkg`], or a scratch one for `-B` via
 /// [`build_binpkg_standalone`]) into a GPKG under `PKGDIR`.
-pub(crate) fn write_binpkg(
+fn write_binpkg(
     shell: &portage_repo::EbuildShell,
     ebuild: &Ebuild,
     work_root: &Utf8Path,
