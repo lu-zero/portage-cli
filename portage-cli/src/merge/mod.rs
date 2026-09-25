@@ -1226,7 +1226,13 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             break;
         }
     }
-    merge_gate.finish(run.work_base).await;
+    if let Err(e) = merge_gate.finish(run.work_base).await {
+        failures.push(MergeFailure {
+            cpv: "(preserve-libs)".to_string(),
+            log: camino::Utf8PathBuf::new(),
+            cause: crate::style::render_error_chain(&e),
+        });
+    }
     (merged, skipped, failures)
 }
 
@@ -1582,7 +1588,13 @@ async fn merge_parallel(
             }
         }
     }
-    merge_gate.finish(run.work_base).await;
+    if let Err(e) = merge_gate.finish(run.work_base).await {
+        failures.push(MergeFailure {
+            cpv: "(preserve-libs)".to_string(),
+            log: camino::Utf8PathBuf::new(),
+            cause: crate::style::render_error_chain(&e),
+        });
+    }
     (merged, skipped, failures)
 }
 
