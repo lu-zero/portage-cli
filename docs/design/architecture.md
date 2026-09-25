@@ -284,7 +284,7 @@ anstream dependency (argv parsing and rendering stay in `portage-cli`).
 
 - `struct Roots` — multi-root topology (BROOT / config / target / EPREFIX)
 - `mod repo` — `RepoData` / `Adapter`, keyword/mask/license/properties/restrict acceptance
-- `mod use_env` / `force_mask` / `effective_use` — profile/`package.*` USE folding
+- `mod use_env` / `force_mask` / `effective_use` — profile/`package.*` USE folding; the shared pre-cede fold feeds acceptance checks, solver ingestion, and the cede gate
 - `mod installed` / `conflicts` / `subslot` / `use_reinstall` — VDB views and rebuilds
   `BrootSnapshot` captures ordered BROOT/prefix rows once per resolve.
 - `mod root_aware` / `bdepend_trim` / `depend_trim` / `root_closure` — root-aware plan

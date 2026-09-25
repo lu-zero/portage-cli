@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, DepEntry, Version};
 use portage_atom_pubgrub::{CededFlag, IUseDefault, PortagePackage, UseConfig, UseFlagState};
-use portage_metadata::{CacheEntry, IUseDefault as MetaIUseDefault};
+use portage_metadata::{CacheEntry, EbuildMetadata, IUseDefault as MetaIUseDefault};
 
 use crate::force_mask::{ForceMask, IuseInjection, iuse_effective_set};
 use crate::repo::{self, RepoData, ResolvePolicy};
@@ -32,9 +32,13 @@ pub fn apply_ceded(cfg: &mut UseConfig, cpn: Cpn, ceded: &[CededFlag]) {
 /// Build the `iuse_defaults` map `resolve_effective_use` needs from a cache
 /// entry's parsed `IUSE` list (`+flag`/`-flag` → enabled/disabled default)
 pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
-    cache
-        .metadata
-        .iuse
+    iuse_defaults_from_metadata(&cache.metadata)
+}
+
+pub(crate) fn iuse_defaults_from_metadata(
+    meta: &EbuildMetadata,
+) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
+    meta.iuse
         .iter()
         .filter_map(|iuse| {
             iuse.default.map(|def| {
@@ -46,6 +50,22 @@ pub fn iuse_defaults(cache: &CacheEntry) -> HashMap<Interned<DefaultInterner>, I
                     },
                 )
             })
+        })
+        .collect()
+}
+
+/// Enabled-only IUSE defaults for solver fact ingestion.
+///
+/// Disabled defaults are implicit in `UseConfig` lookups and must not be
+/// materialized as solver facts.
+pub(crate) fn enabled_iuse_defaults_from_metadata(
+    meta: &EbuildMetadata,
+) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
+    meta.iuse
+        .iter()
+        .filter_map(|iuse| {
+            (iuse.default == Some(MetaIUseDefault::Enabled))
+                .then_some((iuse.into(), IUseDefault::Enabled))
         })
         .collect()
 }
@@ -75,10 +95,87 @@ pub fn iuse_set(
     cache: &CacheEntry,
     injection: &IuseInjection,
 ) -> HashSet<Interned<DefaultInterner>> {
-    iuse_effective_set(
-        cache.metadata.eapi,
-        cache.metadata.iuse.iter().map(Interned::from),
-        injection,
+    iuse_set_from_metadata(&cache.metadata, injection)
+}
+
+fn iuse_set_from_metadata(
+    meta: &EbuildMetadata,
+    injection: &IuseInjection,
+) -> HashSet<Interned<DefaultInterner>> {
+    iuse_effective_set(meta.eapi, meta.iuse.iter().map(Interned::from), injection)
+}
+
+fn fold_effective_use(
+    policy: &ResolvePolicy,
+    cpv: &Cpv,
+    slot: Option<Interned<DefaultInterner>>,
+    iuse_defaults: &HashMap<Interned<DefaultInterner>, IUseDefault>,
+    iuse: &HashSet<Interned<DefaultInterner>>,
+    stable: bool,
+) -> UseConfig {
+    let mut cfg = portage_atom_pubgrub::resolve_effective_use(
+        iuse_defaults,
+        policy.defaults,
+        cpv,
+        slot,
+        policy.package_use,
+        policy.env_use,
+        policy.profile_package_use,
+        policy.conf,
+    );
+    let slot_dep = slot.map(portage_atom::Slot::from_name);
+    apply_force_mask(
+        &mut cfg,
+        policy.force_mask,
+        cpv,
+        slot_dep.as_ref(),
+        stable,
+        iuse,
+    );
+    cfg
+}
+
+/// Effective USE for parsed metadata, used by acceptance checks that do not
+/// have a solver [`PortagePackage`].
+pub(crate) fn effective_use_metadata(
+    policy: &ResolvePolicy,
+    cpv: &Cpv,
+    meta: &EbuildMetadata,
+    slot: Option<Interned<DefaultInterner>>,
+) -> UseConfig {
+    let iuse_defaults = iuse_defaults_from_metadata(meta);
+    let (iuse, stable) = if policy.force_mask.is_empty() {
+        (HashSet::new(), false)
+    } else {
+        (
+            iuse_set_from_metadata(meta, &policy.force_mask.iuse_injection),
+            policy.accept_keywords.is_stable(&meta.keywords, cpv, slot),
+        )
+    };
+    fold_effective_use(policy, cpv, slot, &iuse_defaults, &iuse, stable)
+}
+
+/// Effective USE for a CPV whose repository metadata is unavailable.
+pub(crate) fn effective_use_without_metadata(policy: &ResolvePolicy, cpv: &Cpv) -> UseConfig {
+    fold_effective_use(policy, cpv, None, &HashMap::new(), &HashSet::new(), false)
+}
+
+/// Package-use pins only, for the cede gate's "user pinned this" check.
+pub(crate) fn pinned_package_use(
+    policy: &ResolvePolicy,
+    cpv: &Cpv,
+    slot: Option<Interned<DefaultInterner>>,
+) -> UseConfig {
+    let empty = portage_atom_pubgrub::UseLayer::default();
+    portage_atom_pubgrub::resolve_effective_use(
+        &HashMap::new(),
+        &empty,
+        cpv,
+        slot,
+        policy.package_use,
+        &empty,
+        policy.profile_package_use,
+        &empty,
     )
 }
 
@@ -118,27 +215,8 @@ pub(crate) fn effective_use_base(
 ) -> UseConfig {
     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
     let iuse_map = iuse_defaults(cache);
-    let mut cfg = portage_atom_pubgrub::resolve_effective_use(
-        &iuse_map,
-        policy.defaults,
-        &cpv,
-        pkg.slot(),
-        policy.package_use,
-        policy.env_use,
-        policy.profile_package_use,
-        policy.conf,
-    );
     let iuse = iuse_set(cache, &policy.force_mask.iuse_injection);
-    let slot_key = pkg.slot().map(portage_atom::Slot::from_name);
-    apply_force_mask(
-        &mut cfg,
-        policy.force_mask,
-        &cpv,
-        slot_key.as_ref(),
-        stable,
-        &iuse,
-    );
-    cfg
+    fold_effective_use(policy, &cpv, pkg.slot(), &iuse_map, &iuse, stable)
 }
 
 /// A `(pkg, ver)`'s cache entry plus its effective USE

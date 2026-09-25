@@ -6,8 +6,8 @@ use gentoo_core::Arch;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
-    DroppedDep, IUseDefault, PackageDeps, PackageRepository, PackageVersions, RequiredUse,
-    UseConfig, UseOverride,
+    DroppedDep, PackageDeps, PackageRepository, PackageVersions, RequiredUse, UseConfig,
+    UseOverride,
 };
 use portage_metadata::{CacheEntry, Keyword, LicenseExpr, RequiredUseExpr, Stability};
 
@@ -535,70 +535,6 @@ fn license_has_conditional(expr: &LicenseExpr) -> bool {
     }
 }
 
-/// Build the `iuse_defaults` map `resolve_effective_use`/`PackageVersions`
-/// need from an ebuild's parsed `IUSE` list — shared by every call site that
-/// resolves a package's effective USE, so the `+`/`-` default conversion
-/// lives in exactly one place
-///
-/// Only **`+flag` / enabled** defaults are collected: disabled defaults match
-/// `UseConfig::get`'s unset→Disabled, and `resolve_effective_use` only
-/// overlays enabled IUSE flags not already set by `pre_env`.
-fn iuse_defaults_map(
-    meta: &portage_metadata::EbuildMetadata,
-) -> HashMap<Interned<DefaultInterner>, IUseDefault> {
-    meta.iuse
-        .iter()
-        .filter_map(|iu| match iu.default {
-            Some(portage_metadata::IUseDefault::Enabled) => {
-                Some((Interned::from(iu), IUseDefault::Enabled))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Build the effective USE config for `cpv`
-///
-/// From the resolved global USE, per-version `package.use`, the ebuild's
-/// IUSE defaults and the profile force/mask sets — the same layering
-/// `Adapter::desired_use` does, minus the Level-C cede.
-///
-/// Used to evaluate USE-conditional `LICENSE` expressions both in the version
-/// filter and the autounmask reasons (which have no `Adapter`).
-fn effective_use_config(
-    policy: &ResolvePolicy,
-    cpv: &Cpv,
-    meta: &portage_metadata::EbuildMetadata,
-    slot: Option<Interned<DefaultInterner>>,
-) -> portage_atom_pubgrub::UseConfig {
-    use portage_atom_pubgrub::resolve_effective_use;
-
-    let iuse_defaults = iuse_defaults_map(meta);
-    let mut cfg = resolve_effective_use(
-        &iuse_defaults,
-        policy.defaults,
-        cpv,
-        slot,
-        policy.package_use,
-        policy.env_use,
-        policy.profile_package_use,
-        policy.conf,
-    );
-    if !policy.force_mask.is_empty() {
-        let stable = policy.accept_keywords.is_stable(&meta.keywords, cpv, slot);
-        let iuse = crate::force_mask::iuse_effective_set(
-            meta.eapi,
-            meta.iuse.iter().map(Interned::from),
-            &policy.force_mask.iuse_injection,
-        );
-        let slot_dep = slot.map(portage_atom::Slot::from_name);
-        policy
-            .force_mask
-            .apply(&mut cfg, cpv, slot_dep.as_ref(), stable, &iuse);
-    }
-    cfg
-}
-
 /// A USE-flag predicate (`enabled`) over an effective `UseConfig`
 fn use_predicate(cfg: &portage_atom_pubgrub::UseConfig) -> impl Fn(&str) -> bool + '_ {
     use portage_atom_pubgrub::UseFlagState;
@@ -627,7 +563,7 @@ fn license_ok_for(
     if let Some(cfg) = effective {
         return license_accepted(lic, &accept, &use_predicate(cfg));
     }
-    let cfg = effective_use_config(policy, cpv, meta, slot);
+    let cfg = crate::effective_use::effective_use_metadata(policy, cpv, meta, slot);
     license_accepted(lic, &accept, &use_predicate(&cfg))
 }
 
@@ -665,7 +601,7 @@ fn restrict_family_ok_for(
     if let Some(cfg) = effective {
         return a.accepts_restrict(entries, &use_predicate(cfg));
     }
-    let cfg = effective_use_config(policy, cpv, meta, slot);
+    let cfg = crate::effective_use::effective_use_metadata(policy, cpv, meta, slot);
     a.accepts_restrict(entries, &use_predicate(&cfg))
 }
 
@@ -1007,7 +943,7 @@ impl<'a> PolicyFactsRef<'a> {
             let effective = if let Some(effective) = facts.effective.clone() {
                 Some(effective)
             } else if version_needs_effective(meta) {
-                Some(effective_use_config(
+                Some(crate::effective_use::effective_use_metadata(
                     &raw_policy,
                     cpv,
                     meta,
@@ -1413,7 +1349,7 @@ impl Adapter<'_> {
         slot: Option<Interned<DefaultInterner>>,
         stable: bool,
     ) {
-        use portage_atom_pubgrub::{UseFlagState, resolve_effective_use};
+        use portage_atom_pubgrub::UseFlagState;
 
         if self.installed_cpvs.contains(cpv) && !self.rebuilding_cpvs.contains(cpv) {
             return;
@@ -1430,18 +1366,7 @@ impl Adapter<'_> {
         // Flags the user pinned via package.use: folding it against an empty
         // base (no IUSE defaults, no pre_env, no env_use) leaves exactly
         // those flags set.
-        let empty = portage_atom_pubgrub::UseLayer::default();
-        let pins = resolve_effective_use(
-            &HashMap::new(),
-            &empty,
-            cpv,
-            slot,
-            self.package_use,
-            &empty,
-            self.profile_package_use,
-            &empty,
-        );
-        let iuse: std::collections::HashSet<&str> = m.iuse.iter().map(|iu| iu.name()).collect();
+        let pins = crate::effective_use::pinned_package_use(&self.policy(), cpv, slot);
         let iuse_flags: std::collections::HashSet<Interned<DefaultInterner>> =
             m.iuse.iter().map(Interned::from).collect();
         // Flags pinned by use.force/use.mask (global, package-level and the stable
@@ -1467,7 +1392,7 @@ impl Adapter<'_> {
             let flag = Interned::intern(&name);
             // Only cede real flags the user has not pinned or the profile has not
             // forced/masked.
-            if !iuse.contains(name.as_str())
+            if !iuse_flags.contains(&flag)
                 || pins.get_opt(flag).is_some()
                 || forced_masked.contains(&flag)
             {
@@ -1530,30 +1455,9 @@ impl PackageRepository for Adapter<'_> {
     }
 
     fn desired_use(&self, cpv: &Cpv) -> portage_atom_pubgrub::UseConfig {
-        use portage_atom_pubgrub::resolve_effective_use;
-
         let cache = self.data.cache_entry(&cpv.cpn, &cpv.version);
         let Some(cache) = cache else {
-            let mut cfg = resolve_effective_use(
-                &HashMap::new(),
-                self.defaults,
-                cpv,
-                None,
-                self.package_use,
-                self.env_use,
-                self.profile_package_use,
-                self.conf,
-            );
-            if !self.force_mask.is_empty() {
-                self.force_mask.apply(
-                    &mut cfg,
-                    cpv,
-                    None,
-                    false,
-                    &std::collections::HashSet::new(),
-                );
-            }
-            return cfg;
+            return crate::effective_use::effective_use_without_metadata(&self.policy(), cpv);
         };
 
         let meta = &cache.metadata;
@@ -1650,7 +1554,8 @@ impl PackageRepository for Adapter<'_> {
                         // already in hand.
                         let iuse: Vec<Interned<DefaultInterner>> =
                             meta.iuse.iter().map(Interned::from).collect();
-                        let iuse_defaults = iuse_defaults_map(meta);
+                        let iuse_defaults =
+                            crate::effective_use::enabled_iuse_defaults_from_metadata(meta);
                         let deps = package_deps_from_metadata(meta);
                         // Translate the parsed metadata grammar into the solver's
                         // interned-flag fact vocabulary (the crate stays free of
@@ -2104,7 +2009,7 @@ pub fn filter_reasons_for(
             // Evaluate `use? ( … )` branches against the version's effective
             // USE so a non-FREE license behind a disabled flag is not flagged.
             let needed = if license_has_conditional(lic) {
-                let cfg = effective_use_config(policy, cpv, meta, slot);
+                let cfg = crate::effective_use::effective_use_metadata(policy, cpv, meta, slot);
                 licenses_needed(lic, &accept, &use_predicate(&cfg))
             } else {
                 licenses_needed(lic, &accept, &|_| false)
@@ -2116,7 +2021,7 @@ pub fn filter_reasons_for(
         if !meta.properties.is_empty() {
             let accept = policy.accept_properties.effective_for(cpv, slot);
             let needed = if restrict_has_conditional(&meta.properties) {
-                let cfg = effective_use_config(policy, cpv, meta, slot);
+                let cfg = crate::effective_use::effective_use_metadata(policy, cpv, meta, slot);
                 accept.restrict_needed(&meta.properties, &use_predicate(&cfg))
             } else {
                 accept.restrict_needed(&meta.properties, &|_| false)
@@ -2128,7 +2033,7 @@ pub fn filter_reasons_for(
         if !meta.restrict.is_empty() {
             let accept = policy.accept_restrict.effective_for(cpv, slot);
             let needed = if restrict_has_conditional(&meta.restrict) {
-                let cfg = effective_use_config(policy, cpv, meta, slot);
+                let cfg = crate::effective_use::effective_use_metadata(policy, cpv, meta, slot);
                 accept.restrict_needed(&meta.restrict, &use_predicate(&cfg))
             } else {
                 accept.restrict_needed(&meta.restrict, &|_| false)
