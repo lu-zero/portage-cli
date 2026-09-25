@@ -33,7 +33,7 @@ use portage_atom::{Cpv, DepEntry};
 
 use portage_atom_pubgrub::MergeRoot;
 use portage_resolve::Roots;
-use portage_resolve::installed::BrootSnapshot;
+use portage_resolve::installed::{BrootSnapshot, VdbSnapshotCache};
 use portage_resolve::{Avail, collect_unsatisfied};
 
 use crate::query::depgraph::PlannedMerge;
@@ -59,10 +59,11 @@ pub fn check(
     provided: &[(Cpv, Option<String>)],
     hard_cycle_edges: &[(Cpv, Cpv)],
 ) -> Result<()> {
-    check_with_snapshot(
+    check_with_snapshot_and_cache(
         plan,
         roots,
         &BrootSnapshot::load(roots),
+        &VdbSnapshotCache::default(),
         provided,
         hard_cycle_edges,
     )
@@ -72,20 +73,22 @@ pub fn check(
 ///
 /// The DEPEND view still follows its own root-selection rules; only the
 /// BROOT/prefix seed is shared with the preceding resolve pass.
-pub fn check_with_snapshot(
+/// Run the pre-flight check with BROOT rows and shared VDB root snapshots.
+pub fn check_with_snapshot_and_cache(
     plan: &[PlannedMerge],
     roots: &Roots,
     broot_snapshot: &BrootSnapshot,
+    vdb_snapshots: &VdbSnapshotCache,
     provided: &[(Cpv, Option<String>)],
     hard_cycle_edges: &[(Cpv, Cpv)],
 ) -> Result<()> {
-    let mut depend_avail = Avail::initial_depend(roots);
+    let mut depend_avail = Avail::initial_depend_with_cache(roots, vdb_snapshots);
     let mut bdepend_avail = Avail::initial_bdepend_from_snapshot(broot_snapshot);
     // Board-root topology only — an empty, cheap `Avail` everywhere else
     // (the `Base` arms below can never fire there, but the value still
     // needs to exist for the match to type-check).
     let mut base_avail = if roots.base_merge_root().is_some() {
-        Avail::initial_base_depend(roots)
+        Avail::initial_base_depend_with_cache(roots, vdb_snapshots)
     } else {
         Avail::default()
     };
@@ -292,7 +295,17 @@ mod tests {
 
         let mut entry = planned(MergeRoot::Host, Cpv::parse("app-misc/consumer-1.0")?, "")?;
         entry.bdepend = DepEntry::parse("dev-build/tool")?;
-        assert!(check_with_snapshot(&[entry], &roots, &snapshot, &[], &[]).is_ok());
+        assert!(
+            check_with_snapshot_and_cache(
+                &[entry],
+                &roots,
+                &snapshot,
+                &VdbSnapshotCache::default(),
+                &[],
+                &[],
+            )
+            .is_ok()
+        );
         Ok(())
     }
 

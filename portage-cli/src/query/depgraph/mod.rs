@@ -19,6 +19,7 @@ use portage_resolve::{
 use portage_resolve::force_mask;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use camino::Utf8Path;
@@ -155,6 +156,8 @@ pub struct DepgraphOutcome {
     pub provided: Vec<(Cpv, Option<String>)>,
     /// Raw BROOT/prefix rows retained until the real-merge preflight check consumes them.
     pub(crate) broot_snapshot: Option<installed::BrootSnapshot>,
+    /// VDB root snapshots shared by resolver, closure, and preflight adapters.
+    pub(crate) vdb_snapshots: Option<Arc<installed::VdbSnapshotCache>>,
     /// Installed packages the merge will unmerge to satisfy blockers (PMS 8.3.2).
     /// Strong `!!` entries run before the merge loop; weak `!` after.
     pub unmerges: Vec<portage_resolve::conflicts::PlannedUnmerge>,
@@ -412,6 +415,9 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // `set` is built once by the caller (shared with the atom-resolution step)
     // and already carries any caller-supplied aliases prepended onto it.
 
+    let vdb_snapshots = Arc::new(installed::VdbSnapshotCache::default());
+    let target_snapshots = Arc::clone(&vdb_snapshots);
+    let broot_snapshots = Arc::clone(&vdb_snapshots);
     let (
         (raw_data, repo_load_elapsed),
         ((target_installed, installed_blockers), target_load_elapsed),
@@ -428,14 +434,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         // other concurrent loads instead of running serially before the solve.
         async {
             let start = Instant::now();
-            let ti = installed::load_target_installed(roots);
+            let ti = installed::load_target_installed_with_cache(roots, &target_snapshots);
             let blockers: Vec<Vec<Dep>> =
                 ti.iter().map(conflicts::installed_blocker_atoms).collect();
             ((ti, blockers), start.elapsed())
         },
         async {
             let start = Instant::now();
-            let snapshot = installed::BrootSnapshot::load(roots);
+            let snapshot = installed::BrootSnapshot::load_with_cache(roots, &broot_snapshots);
             let host = installed::load_host_installed_from_snapshot(&snapshot);
             (snapshot, host, start.elapsed())
         },
@@ -715,7 +721,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     // reading it from disk on every fixpoint iteration — as `build_and_solve`
     // used to, inline — was pure waste. Computed once here instead.
     let sysroot_installed: Vec<(PortagePackage, Version)> = if cross.active {
-        installed::load_sysroot_entries(cross.sysroot.as_path())
+        installed::load_sysroot_entries_with_cache(cross.sysroot.as_path(), &vdb_snapshots)
             .into_iter()
             .map(|e| {
                 let pkg = match e.slot.filter(|s| !s.is_empty()) {
@@ -1408,11 +1414,12 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 // (base != target) has a distinct build sysroot to trim against.
                 let before = order.len();
                 let trim_start = Instant::now();
-                order = depend_trim::trim_sysroot_satisfied_depend(
+                order = depend_trim::trim_sysroot_satisfied_depend_with_cache(
                     order,
                     roots.build_sysroot().or(Some(cross.target.as_path())),
                     cross.target.as_path(),
                     &trim_ctx,
+                    &vdb_snapshots,
                 );
                 round_metrics.depend_trimmed += before.saturating_sub(order.len());
                 round_metrics.record("depend_trim", trim_start.elapsed());
@@ -1551,7 +1558,8 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // host_config_stage Target-only retain above, so it never
             // schedules an entry the plan doesn't hold, and its own entries
             // are never retained away.
-            let base_plan = root_closure::base(&order, &closure_adapter, roots);
+            let base_plan =
+                root_closure::base_with_cache(&order, &closure_adapter, roots, &vdb_snapshots);
             order = base_plan.order;
             let mut closure_blockers = host_plan.blockers;
             closure_blockers.extend(base_plan.blockers);
@@ -2216,6 +2224,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         hard_cycle_edges,
         provided: provided_avail,
         broot_snapshot: Some(broot_snapshot),
+        vdb_snapshots: Some(vdb_snapshots),
         unmerges,
     })
 }

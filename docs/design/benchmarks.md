@@ -57,7 +57,7 @@ dependency resolution) and the wall-clock comparison scripts against real
 parsing, and freshness validation; `avail_lookup` measures indexed availability
 lookups; `trim_scaling` measures BDEPEND/DEPEND trim growth over synthetic plans
 and VDBs; `graph_scaling` measures graph/order work on synthetic cyclic plans;
-`vdb_snapshot` compares shared and independent BROOT/prefix VDB enumeration;
+`vdb_snapshot` compares shared and independent BROOT/prefix and target/sysroot VDB enumeration;
 `policy_facts` measures uncached, cold-cached, warm-cached, and multi-generation
 policy-fact evaluation; `policy_lists` measures full acceptance filtering with
 CPN-indexed final policy lists; `repo_cache_lookup` measures exact-CPV cache

@@ -523,8 +523,7 @@ cargo bench -p portage-bench --bench vdb_snapshot -- --noplot
 
 The owner-boundary regressions remove both VDB roots after capture and verify
 that the host adapter retains host-then-prefix order while availability retains
-both union rows. Broader target/sysroot snapshot sharing is tracked separately
-as BF-404.
+both union rows. The target/sysroot extension is measured in section 30.
 
 ### 14. Policy-scoped version facts (thalia, 2026-09-24)
 
@@ -867,6 +866,28 @@ cargo test --release -p portage-vdb field_cache::tests::benchmark_parsed_metadat
 ```
 
 The historical row was reproduced from a temporary detached worktree at `9bc6c785`; it was removed after the run.
+
+---
+
+### 30. Target/sysroot VDB snapshot sharing (thalia, 2026-09-25)
+
+The `vdb_snapshot` benchmark's `resolver/vdb_target_sysroot_snapshot` group models a board-root resolve with a toolchain sysroot and target VDB. The current `load_once` path captures each distinct VDB root once, then derives target-installed, sysroot-installed, `DEPEND`, and base-DB views. The exact `450e3bf9` baseline independently enumerates the roots for each view. Both fixtures are filesystem-warmed before measurement; Criterion used 10 samples with a one-second warm-up and three-second measurement window.
+
+| Packages per root | `450e3bf9` independent views | Current shared snapshots | Reduction |
+|------------------:|---------------------------:|-----------------------:|----------:|
+| 128 | 9.0683 ms | 5.3268 ms | 41.3% |
+| 512 | 39.666 ms | 22.517 ms | 43.2% |
+| 2,048 | 189.47 ms | 110.11 ms | 41.9% |
+
+This is a synthetic target/sysroot enumeration-and-adapter workload, not a full resolve or merge claim. The snapshot is invocation-scoped and root-selection rules remain separate for target, sysroot, and base views. No separate allocation profile was run.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-bench --bench vdb_snapshot -- --noplot --sample-size 10 --warm-up-time 1 --measurement-time 3
+```
+
+The historical row was reproduced from a temporary detached worktree at `450e3bf9`; it was removed after the run.
 
 ---
 

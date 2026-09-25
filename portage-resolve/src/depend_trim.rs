@@ -14,6 +14,7 @@ use portage_atom::{Cpn, Cpv, DepEntry, Version};
 use portage_atom_pubgrub::PortagePackage;
 
 use crate::Avail;
+use crate::installed::VdbSnapshotCache;
 
 use crate::bdepend_trim::TrimCtx;
 use crate::effective_use;
@@ -27,13 +28,30 @@ pub fn trim_sysroot_satisfied_depend(
     target: &camino::Utf8Path,
     ctx: &TrimCtx<'_>,
 ) -> Vec<(PortagePackage, Version)> {
+    trim_sysroot_satisfied_depend_with_cache(
+        order,
+        sysroot,
+        target,
+        ctx,
+        &VdbSnapshotCache::default(),
+    )
+}
+
+/// [`trim_sysroot_satisfied_depend`] using VDB snapshots shared with the resolve.
+pub fn trim_sysroot_satisfied_depend_with_cache(
+    order: Vec<(PortagePackage, Version)>,
+    sysroot: Option<&camino::Utf8Path>,
+    target: &camino::Utf8Path,
+    ctx: &TrimCtx<'_>,
+    snapshots: &VdbSnapshotCache,
+) -> Vec<(PortagePackage, Version)> {
     if order.is_empty() || sysroot == Some(target) {
         return order;
     }
 
     let mut kept_cpvs: Vec<Cpv> = Vec::with_capacity(order.len());
     let mut kept_indices: Vec<usize> = Vec::with_capacity(order.len());
-    let sysroot_avail = Avail::initial_sysroot_depend(sysroot);
+    let sysroot_avail = Avail::initial_sysroot_depend_with_cache(sysroot, snapshots);
     let mut evaluated = effective_use::EvaluatedDepsCache::new(ctx.data, ctx.policy, false);
     let evaluated_order = evaluated.snapshot(&order);
     let consumers = depend_consumers(&evaluated_order);

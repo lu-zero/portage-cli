@@ -12,7 +12,7 @@ use portage_atom_pubgrub::{DepClass, MergeRoot, PortagePackage};
 
 use crate::Roots;
 use crate::effective_use;
-use crate::installed::BrootSnapshot;
+use crate::installed::{BrootSnapshot, VdbSnapshotCache};
 use crate::repo::Adapter;
 use crate::root_aware::CrossContext;
 use crate::{Avail, all_cpns, unsatisfied_cpns};
@@ -62,13 +62,23 @@ pub fn base(
     adapter: &Adapter<'_>,
     roots: &Roots,
 ) -> Plan {
+    base_with_cache(target_order, adapter, roots, &VdbSnapshotCache::default())
+}
+
+/// [`base`] using VDB snapshots shared with the rest of the resolve.
+pub fn base_with_cache(
+    target_order: &[(PortagePackage, Version)],
+    adapter: &Adapter<'_>,
+    roots: &Roots,
+    snapshots: &VdbSnapshotCache,
+) -> Plan {
     if roots.base_merge_root().is_none() {
         return passthrough(target_order);
     }
     run(
         target_order,
         adapter,
-        Avail::initial_base_depend(roots),
+        Avail::initial_base_depend_with_cache(roots, snapshots),
         &BASE,
     )
 }

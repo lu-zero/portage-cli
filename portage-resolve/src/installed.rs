@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use portage_atom::DepEntry;
 use portage_atom::interner::{DefaultInterner, Interned};
@@ -38,6 +39,63 @@ pub struct VdbEntry {
     pub deps: Vec<DepEntry>,
 }
 
+/// One captured VDB root and its installed-package handles.
+#[derive(Debug)]
+pub struct VdbSnapshot {
+    packages: Vec<InstalledPackage>,
+}
+
+impl VdbSnapshot {
+    /// The installed rows captured for this VDB root.
+    pub fn packages(&self) -> &[InstalledPackage] {
+        &self.packages
+    }
+
+    /// Number of installed rows in this root snapshot.
+    pub fn len(&self) -> usize {
+        self.packages.len()
+    }
+
+    /// Whether this root snapshot contains no installed rows.
+    pub fn is_empty(&self) -> bool {
+        self.packages.is_empty()
+    }
+}
+
+/// Invocation-scoped VDB root snapshots shared by resolver adapters.
+///
+/// Root selection remains the caller's responsibility; this cache only avoids
+/// enumerating the same VDB root more than once during one resolve. Missing or
+/// unreadable roots are captured as empty snapshots, matching the adapters'
+/// existing best-effort behavior.
+#[derive(Debug, Default)]
+pub struct VdbSnapshotCache {
+    roots: Mutex<HashMap<camino::Utf8PathBuf, Arc<VdbSnapshot>>>,
+}
+
+impl VdbSnapshotCache {
+    /// Return the captured rows for `root`, loading that VDB on first use.
+    pub fn snapshot(&self, root: Option<&camino::Utf8Path>) -> Arc<VdbSnapshot> {
+        let path = root
+            .map(|root| root.join("var/db/pkg"))
+            .unwrap_or_else(|| camino::Utf8PathBuf::from("/var/db/pkg"));
+        let mut roots = self.lock();
+        if let Some(snapshot) = roots.get(&path) {
+            return Arc::clone(snapshot);
+        }
+        let packages = Vdb::open(&path)
+            .map(|vdb| vdb.packages().collect_vec())
+            .unwrap_or_default();
+        let snapshot = Arc::new(VdbSnapshot { packages });
+        roots.insert(path, Arc::clone(&snapshot));
+        snapshot
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<camino::Utf8PathBuf, Arc<VdbSnapshot>>> {
+        self.roots.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// Raw VDB rows visible to the build host during one resolver invocation.
 ///
 /// The BROOT rows are followed by the prefix rows when `--prefix` is active.
@@ -46,30 +104,36 @@ pub struct VdbEntry {
 /// make the prefix row win. VDB fields remain lazy on each `InstalledPackage`.
 #[derive(Debug, Clone)]
 pub struct BrootSnapshot {
-    host: Vec<InstalledPackage>,
-    prefix: Option<Vec<InstalledPackage>>,
+    host: Arc<VdbSnapshot>,
+    prefix: Option<Arc<VdbSnapshot>>,
 }
 
 impl BrootSnapshot {
     /// Enumerate the BROOT and optional prefix VDBs once for this invocation.
     pub fn load(roots: &Roots) -> Self {
-        let host = vdb_packages_at(roots.satisfaction_root(DepClass::Bdepend));
+        Self::load_with_cache(roots, &VdbSnapshotCache::default())
+    }
+
+    /// Enumerate BROOT/prefix rows through a shared invocation snapshot cache.
+    pub fn load_with_cache(roots: &Roots, cache: &VdbSnapshotCache) -> Self {
+        let host = cache.snapshot(Some(roots.satisfaction_root(DepClass::Bdepend)));
         let prefix = roots
             .is_overlay()
-            .then(|| vdb_packages_at(roots.merge_root()));
+            .then(|| cache.snapshot(Some(roots.merge_root())));
         Self { host, prefix }
     }
 
     /// Visit the raw rows in host-then-prefix order.
     pub fn packages(&self) -> impl Iterator<Item = &InstalledPackage> + '_ {
         self.host
+            .packages()
             .iter()
-            .chain(self.prefix.iter().flat_map(|packages| packages.iter()))
+            .chain(self.prefix.iter().flat_map(|snapshot| snapshot.packages()))
     }
 
     /// Number of raw rows in the snapshot.
     pub fn len(&self) -> usize {
-        self.host.len() + self.prefix.as_ref().map_or(0, |packages| packages.len())
+        self.host.len() + self.prefix.as_ref().map_or(0, |snapshot| snapshot.len())
     }
 
     /// Whether the snapshot contains no installed rows.
@@ -79,18 +143,12 @@ impl BrootSnapshot {
 
     pub(crate) fn into_vec(self) -> Vec<InstalledPackage> {
         let Self { host, prefix } = self;
-        let mut out = host;
+        let mut out = host.packages().to_vec();
         if let Some(prefix) = prefix {
-            out.extend(prefix);
+            out.extend(prefix.packages().iter().cloned());
         }
         out
     }
-}
-
-fn vdb_packages_at(root: &camino::Utf8Path) -> Vec<InstalledPackage> {
-    Vdb::open(root.join("var/db/pkg"))
-        .map(|vdb| vdb.packages().collect_vec())
-        .unwrap_or_default()
 }
 
 /// Installed view for **ROOT** / RDEPEND / merge filtering / action tags
@@ -106,15 +164,23 @@ fn vdb_packages_at(root: &camino::Utf8Path) -> Vec<InstalledPackage> {
 /// (see `Roots::with_target_only_installed_view`'s doc comment for why this
 /// is a dedicated flag rather than reusing `base` itself).
 pub fn load_target_installed(roots: &crate::Roots) -> Vec<VdbEntry> {
+    load_target_installed_with_cache(roots, &VdbSnapshotCache::default())
+}
+
+/// Load the target installed view through a shared invocation snapshot cache.
+pub fn load_target_installed_with_cache(
+    roots: &crate::Roots,
+    snapshots: &VdbSnapshotCache,
+) -> Vec<VdbEntry> {
     let target = roots.target();
     if roots.installed_view_target_only() {
-        return load_one(target);
+        return load_one_with_cache(target, snapshots);
     }
     let base = roots.base();
     if base != target {
-        return load_installed(base, target);
+        return load_installed_with_cache(base, target, snapshots);
     }
-    load_one(target.or(base))
+    load_one_with_cache(target.or(base), snapshots)
 }
 
 /// Union of two VDB roots with target shadowing base (prefix / general overlay)
@@ -127,6 +193,15 @@ pub fn load_installed(
     base: Option<&camino::Utf8Path>,
     target: Option<&camino::Utf8Path>,
 ) -> Vec<VdbEntry> {
+    load_installed_with_cache(base, target, &VdbSnapshotCache::default())
+}
+
+/// Load and merge target/base installed rows through a shared snapshot cache.
+pub fn load_installed_with_cache(
+    base: Option<&camino::Utf8Path>,
+    target: Option<&camino::Utf8Path>,
+    snapshots: &VdbSnapshotCache,
+) -> Vec<VdbEntry> {
     let mut roots = vec![target];
     if target != base {
         roots.push(base);
@@ -135,7 +210,7 @@ pub fn load_installed(
         std::collections::HashSet::new();
     let mut out: Vec<VdbEntry> = Vec::new();
     for root in roots {
-        for entry in load_one(root) {
+        for entry in load_one_with_cache(root, snapshots) {
             if seen.insert((entry.cpn, entry.slot)) {
                 out.push(entry);
             }
@@ -181,7 +256,15 @@ pub struct HostInstalledEntry {
 /// in the prefix drives" for a package present in both (host entries come
 /// first, prefix second).
 pub fn load_host_installed(roots: &crate::Roots) -> Vec<HostInstalledEntry> {
-    let snapshot = BrootSnapshot::load(roots);
+    load_host_installed_with_cache(roots, &VdbSnapshotCache::default())
+}
+
+/// Derive the solver's host-installed view through a shared snapshot cache.
+pub fn load_host_installed_with_cache(
+    roots: &crate::Roots,
+    snapshots: &VdbSnapshotCache,
+) -> Vec<HostInstalledEntry> {
+    let snapshot = BrootSnapshot::load_with_cache(roots, snapshots);
     load_host_installed_from_snapshot(&snapshot)
 }
 
@@ -221,19 +304,25 @@ fn host_installed_entry(pkg: &InstalledPackage) -> HostInstalledEntry {
 
 /// VDB entries from a cross sysroot (`ESYSROOT`) for `DEPEND` satisfaction
 pub fn load_sysroot_entries(sysroot: &camino::Utf8Path) -> Vec<VdbEntry> {
-    load_one(Some(sysroot))
+    load_sysroot_entries_with_cache(sysroot, &VdbSnapshotCache::default())
 }
 
-fn load_one(root: Option<&camino::Utf8Path>) -> Vec<VdbEntry> {
-    let vdb = match root {
-        Some(r) => Vdb::open(r.join("var/db/pkg")),
-        None => Vdb::open_default(),
-    };
-    let Ok(vdb) = vdb else {
-        return Vec::new();
-    };
-    vdb.packages()
-        .into_iter()
+/// Load cross-sysroot entries through a shared invocation snapshot cache.
+pub fn load_sysroot_entries_with_cache(
+    sysroot: &camino::Utf8Path,
+    snapshots: &VdbSnapshotCache,
+) -> Vec<VdbEntry> {
+    load_one_with_cache(Some(sysroot), snapshots)
+}
+
+fn load_one_with_cache(
+    root: Option<&camino::Utf8Path>,
+    snapshots: &VdbSnapshotCache,
+) -> Vec<VdbEntry> {
+    snapshots
+        .snapshot(root)
+        .packages()
+        .iter()
         .map(|pkg| {
             let active_use = pkg
                 .use_flags()
@@ -302,6 +391,7 @@ pub fn action_tag<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use camino::Utf8PathBuf;
 
     // Regression test for the riscv64 stage3 shakeout (#28/#30): a Host
     // BDEPEND rebuilt into `base_roots()` must be recognized as satisfied
@@ -403,6 +493,35 @@ mod tests {
         let entries = load_host_installed(&roots);
 
         assert_eq!(entries.len(), 1, "must still find the host-only entry");
+    }
+
+    #[test]
+    fn snapshot_cache_reuses_rows_after_the_root_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fake_vdb_entry(tmp.path(), "dev-libs/foo-1.0", "foo");
+        let cache = VdbSnapshotCache::default();
+        let first = cache.snapshot(Some(&Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap()));
+        assert_eq!(first.len(), 1);
+
+        std::fs::remove_dir_all(tmp.path()).unwrap();
+        let second = cache.snapshot(Some(&Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap()));
+        assert_eq!(second.len(), 1);
+        assert_eq!(second.packages()[0].cpv().to_string(), "dev-libs/foo-1.0");
+    }
+
+    #[test]
+    fn target_loader_uses_the_shared_root_snapshot() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fake_vdb_entry(tmp.path(), "dev-libs/foo-1.0", "foo");
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let roots = crate::Roots::for_test(root.as_str());
+        let cache = VdbSnapshotCache::default();
+        let first = load_target_installed_with_cache(&roots, &cache);
+        std::fs::remove_dir_all(tmp.path()).unwrap();
+        let second = load_target_installed_with_cache(&roots, &cache);
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].version.to_string(), "1.0");
     }
 
     #[test]

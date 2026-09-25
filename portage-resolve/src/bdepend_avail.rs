@@ -11,10 +11,10 @@ use portage_atom::Slot;
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpn, Cpv, Dep, DepEntry, UseDefault, UseDep, UseDepKind};
 use portage_atom_pubgrub::{DepClass, MergeRoot};
-use portage_vdb::{InstalledPackage, Vdb};
+use portage_vdb::InstalledPackage;
 
 use crate::Roots;
-use crate::installed::BrootSnapshot;
+use crate::installed::{BrootSnapshot, VdbSnapshotCache};
 
 /// Interned `(enabled, iuse)` USE state — see `AvailEntry::interned_use`
 type InternedUse = (
@@ -107,10 +107,18 @@ impl Avail {
     /// `--root` resolves DEPEND against BROOT, so a partially populated target must
     /// still count as satisfied.
     pub fn initial_depend(roots: &Roots) -> Self {
+        Self::initial_depend_with_cache(roots, &VdbSnapshotCache::default())
+    }
+
+    /// `DEPEND` availability from shared invocation VDB snapshots.
+    pub fn initial_depend_with_cache(roots: &Roots, snapshots: &VdbSnapshotCache) -> Self {
         let depend_root = roots.satisfaction_root(DepClass::Depend);
-        let mut out = vdb_avail_entries(Some(depend_root));
+        let mut out = vdb_avail_entries_from_cache(Some(depend_root), snapshots);
         if roots.merge_root() != depend_root {
-            out.extend(vdb_avail_entries(Some(roots.merge_root())));
+            out.extend(vdb_avail_entries_from_cache(
+                Some(roots.merge_root()),
+                snapshots,
+            ));
         }
         Self::from_entries(out)
     }
@@ -119,7 +127,15 @@ impl Avail {
     ///
     /// `None` is the host `/var/db/pkg`.
     pub fn initial_sysroot_depend(sysroot: Option<&camino::Utf8Path>) -> Self {
-        Self::from_entries(vdb_avail_entries(sysroot))
+        Self::initial_sysroot_depend_with_cache(sysroot, &VdbSnapshotCache::default())
+    }
+
+    /// `DEPEND` availability against a fixed sysroot using shared snapshots.
+    pub fn initial_sysroot_depend_with_cache(
+        sysroot: Option<&camino::Utf8Path>,
+        snapshots: &VdbSnapshotCache,
+    ) -> Self {
+        Self::from_entries(vdb_avail_entries_from_cache(sysroot, snapshots))
     }
 
     /// `DEPEND` availability at the toolchain sysroot alone (`ESYSROOT`),
@@ -135,9 +151,15 @@ impl Avail {
     /// Reads [`Roots::satisfaction_root`]`(DepClass::Depend)` rather than a
     /// raw path, so it cannot drift from the rule `Roots` itself encodes.
     pub fn initial_base_depend(roots: &Roots) -> Self {
-        Self::from_entries(vdb_avail_entries(Some(
-            roots.satisfaction_root(DepClass::Depend),
-        )))
+        Self::initial_base_depend_with_cache(roots, &VdbSnapshotCache::default())
+    }
+
+    /// Base-sysroot `DEPEND` availability using shared invocation snapshots.
+    pub fn initial_base_depend_with_cache(roots: &Roots, snapshots: &VdbSnapshotCache) -> Self {
+        Self::from_entries(vdb_avail_entries_from_cache(
+            Some(roots.satisfaction_root(DepClass::Depend)),
+            snapshots,
+        ))
     }
 
     /// Target `ROOT` visibility from an explicit set of installed CPVs
@@ -343,16 +365,12 @@ fn use_dep_satisfied(
 /// [`AvailEntry::installed`]).
 ///
 /// `None` = host `/var/db/pkg`.
-fn vdb_avail_entries(root: Option<&Utf8Path>) -> Vec<AvailEntry> {
-    let vdb = match root {
-        Some(r) => Vdb::open(r.join("var/db/pkg")),
-        None => Vdb::open_default(),
-    };
-    let Ok(vdb) = vdb else {
-        return Vec::new();
-    };
-    let packages = vdb.packages().collect_vec();
-    avail_entries_from(packages.iter())
+fn vdb_avail_entries_from_cache(
+    root: Option<&Utf8Path>,
+    snapshots: &VdbSnapshotCache,
+) -> Vec<AvailEntry> {
+    let snapshot = snapshots.snapshot(root);
+    avail_entries_from(snapshot.packages().iter())
 }
 
 fn avail_entries_from<'a>(packages: impl Iterator<Item = &'a InstalledPackage>) -> Vec<AvailEntry> {
@@ -913,6 +931,28 @@ mod tests {
             avail.atom_satisfied(dep),
             "a provider in the sysroot itself must satisfy it"
         );
+    }
+
+    #[test]
+    fn cached_views_keep_target_and_sysroot_selection_distinct() {
+        let sysroot = tempfile::tempdir().unwrap();
+        let board = tempfile::tempdir().unwrap();
+        write_fake_vdb_entry(sysroot.path(), "dev-libs/sysroot-only-1.0");
+        write_fake_vdb_entry(board.path(), "dev-libs/board-only-1.0");
+        let roots = Roots::for_test_board_root(
+            sysroot.path().to_str().unwrap(),
+            board.path().to_str().unwrap(),
+        );
+        let cache = VdbSnapshotCache::default();
+        let depend = Avail::initial_depend_with_cache(&roots, &cache);
+        let base = Avail::initial_base_depend_with_cache(&roots, &cache);
+
+        let board_dep = Dep::parse("dev-libs/board-only").unwrap();
+        let sysroot_dep = Dep::parse("dev-libs/sysroot-only").unwrap();
+        assert!(depend.atom_satisfied(&board_dep));
+        assert!(!base.atom_satisfied(&board_dep));
+        assert!(depend.atom_satisfied(&sysroot_dep));
+        assert!(base.atom_satisfied(&sysroot_dep));
     }
 
     // The same weave also still finds a host-only entry — the overlay adds

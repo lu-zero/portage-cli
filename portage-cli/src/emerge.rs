@@ -639,16 +639,22 @@ async fn emerge_atoms_inner(
         .broot_snapshot
         .take()
         .expect("depgraph outcome missing BROOT snapshot");
+    let vdb_snapshots = outcome
+        .vdb_snapshots
+        .take()
+        .expect("depgraph outcome missing VDB snapshot cache");
     if !nodeps {
-        preflight::check_with_snapshot(
+        preflight::check_with_snapshot_and_cache(
             &outcome.plan,
             &roots,
             &broot_snapshot,
+            &vdb_snapshots,
             &outcome.provided,
             &outcome.hard_cycle_edges,
         )?;
     }
     drop(broot_snapshot);
+    drop(vdb_snapshots);
 
     if cli.pretend() {
         return Ok(());
