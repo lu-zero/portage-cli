@@ -468,20 +468,27 @@ impl MergeBatchState {
         }
     }
 
-    fn take_or_build(&mut self, vdb: &Vdb) -> Result<Option<OwnershipIndex>> {
+    fn take_or_build(
+        &mut self,
+        merge_root: &Utf8Path,
+        vdb: &Vdb,
+    ) -> Result<Option<OwnershipIndex>> {
         if !self.reuse_index {
             self.finish_preserve_all();
             return Ok(None);
         }
-        let root = vdb.root().to_owned();
+        // The two maps have different identities: the ownership index is
+        // stamped from the VDB, the preserve state from the merge root (which
+        // is also where its registry lives, and what names the merge lock).
+        let vdb_key = vdb.root().to_owned();
         let current = self
             .ownership
-            .get(&root)
+            .get(&vdb_key)
             .is_some_and(|index| index.is_current(vdb));
         if !current {
-            self.finish_preserve(&root);
+            self.finish_preserve(merge_root);
         }
-        Ok(Some(match self.ownership.remove(&root) {
+        Ok(Some(match self.ownership.remove(&vdb_key) {
             Some(index) if current => index,
             _ => OwnershipIndex::build(vdb)?,
         }))
@@ -548,38 +555,54 @@ impl MergeGate {
         self.state.lock().await
     }
 
-    /// Flush deferred preserve-libs reclamation after the merge loop while
-    /// holding the same cross-process merge lock as qmerge.
-    pub(crate) async fn finish(&self, work_base: &Utf8Path) {
+    /// Flush deferred preserve-libs reclamation after the merge loop, holding
+    /// the cross-process merge lock qmerge takes — the same inode
+    /// [`lock_merge_flock`] resolves from a package work dir, one per work
+    /// base rather than per merge root.
+    pub(crate) async fn finish(&self, work_base: &Utf8Path) -> Result<()> {
         let mut state = self.state.lock().await;
         if state.preserve.is_empty() {
-            return;
+            return Ok(());
         }
-        let _merge_lock = acquire_flock(
-            work_base.join(".merge.lock").into_std_path_buf(),
-            "merge lock",
-        )
-        .await;
+        let _merge_lock = lock_merge_lock(work_base).await?;
         state.finish_preserve_all();
+        Ok(())
     }
 
-    pub(crate) async fn with_invalidation<F, Fut>(&self, work_base: &Utf8Path, f: F) -> Fut::Output
+    pub(crate) async fn with_invalidation<F, Fut>(&self, work_base: &Utf8Path, f: F) -> Result<()>
     where
         F: FnOnce() -> Fut,
-        Fut: Future,
+        Fut: Future<Output = Result<()>>,
     {
         let mut state = self.state.lock().await;
-        let _merge_lock = acquire_flock(
-            work_base.join(".merge.lock").into_std_path_buf(),
-            "merge lock",
-        )
-        .await;
+        let _merge_lock = lock_merge_lock(work_base).await?;
         state.finish_preserve_all();
         let output = f().await;
         state.ownership.clear();
         state.preserve.clear();
         output
     }
+}
+
+/// The merge lock for a work base: the same file [`lock_merge_flock`] reaches
+/// by popping three parents off a package work dir, named directly for callers
+/// that know only the work base.
+///
+/// Failing to take it aborts the flush rather than proceeding unlocked —
+/// `prune_unneeded` unlinks files and `store` rewrites a shared registry, so
+/// running either without the lock is worse than skipping the flush.
+async fn lock_merge_lock(work_base: &Utf8Path) -> Result<std::fs::File> {
+    acquire_flock(
+        work_base.join(".merge.lock").into_std_path_buf(),
+        "merge lock",
+    )
+    .await
+    .ok_or_else(|| {
+        anyhow!(
+            "could not acquire merge lock at {}",
+            work_base.join(".merge.lock")
+        )
+    })
 }
 
 /// Inputs for [`build_and_merge`] — one resolved plan entry through the full
@@ -1993,7 +2016,7 @@ async fn run_merge(
 
     let exclude_cpv = old_pkg.as_ref().map(|p| p.cpv().clone());
     let mut ownership_index = if let Some(state) = merge_state.as_deref_mut() {
-        state.take_or_build(&vdb)?
+        state.take_or_build(root, &vdb)?
     } else {
         None
     };
@@ -3194,6 +3217,50 @@ mod tests {
     use portage_vdb::ContentsKind;
     use std::fs;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn a_stale_vdb_stamp_drops_the_preserve_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = camino::Utf8PathBuf::try_from(tmp.path().join("root")).unwrap();
+        let vdb = open_or_create_vdb(&vdb_root_for(&root)).unwrap();
+        let mut state = MergeBatchState::new(true);
+        state.preserve_mut(&root, &vdb);
+        assert_eq!(state.preserve.len(), 1);
+        // The ownership key is the VDB path and the preserve key is the merge
+        // root; passing the wrong one to finish_preserve left stale preserve
+        // state (a pre-rebuild LinkGraph and registry) in the batch.
+        state.take_or_build(&root, &vdb).unwrap();
+        assert!(
+            state.preserve.is_empty(),
+            "a stale VDB stamp must drop the merge root's preserve state"
+        );
+    }
+
+    /// The batch-boundary flush must resolve to the same lock file qmerge
+    /// takes, or a concurrent `em` can have `prune_unneeded` unlink a library
+    /// the other's in-flight merge still needs.
+    ///
+    /// Regression guard: a work base is `work_base/<root-key>/<cat>/<pf>` deep
+    /// when `lock_merge_flock` sees it, so three parents land on the work base —
+    /// not on `<root-key>`, which is the off-by-one that once made these two
+    /// look like different inodes.
+    #[tokio::test]
+    async fn the_batch_flush_takes_the_same_lock_file_as_qmerge() {
+        let tmp = tempfile::tempdir().unwrap();
+        let work_base = Utf8PathBuf::try_from(tmp.path().join("work")).unwrap();
+        let wd = package_work_dir(&work_base, Utf8Path::new("/"), "dev-libs", "zlib-1.3.1");
+        let from_qmerge = wd
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(".merge.lock");
+        assert_eq!(work_base.join(".merge.lock"), from_qmerge);
+        std::fs::create_dir_all(&work_base).unwrap();
+        assert!(lock_merge_lock(&work_base).await.is_ok());
+    }
 
     // Dual-root same-CPV plan entries must not share a WORKDIR (Sonnet
     #[test]
