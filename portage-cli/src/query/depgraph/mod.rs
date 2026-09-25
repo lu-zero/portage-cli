@@ -1118,74 +1118,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             // loop settles (see below).
             let autounmask_candidates =
                 repo::find_autounmask_candidates(&data, provider.dropped_deps(), &final_policy);
-            // Widened phase-2 selections: a chosen version outside acceptance is
-            // the hard-solve-failure case the `DroppedDep` path never sees (the
-            // solve failed there instead of dropping the dep gracefully). Each
-            // selected tagged cpv becomes a regular candidate via the same
-            // reason machinery. Kept out of the dropped-dep list until after its
-            // actionable-set post-filter below — that filter's
-            // `!solution_cpns.contains` guard would discard every one of these
-            // by construction.
-            let widened_candidates: Vec<_> = if widened.get() {
-                let mut selections: Vec<(PortagePackage, Version)> = solution
-                    .iter()
-                    .filter(|(pkg, ver)| {
-                        !pkg.is_virtual() && provider.selection_needs_unmask(pkg, ver)
-                    })
-                    .map(|(pkg, ver)| (pkg.clone(), ver.clone()))
-                    .collect();
-                selections.sort_by_key(|(pkg, _)| pkg.to_string());
-                let mut cands = Vec::new();
-                for (pkg, ver) in selections {
-                    let vs = PortageVersionSet::from_operator(Operator::Equal, false, ver.clone());
-                    let is_live = provider.selection_is_live(&pkg, &ver);
-                    // Bound persisted slot grants below the slot's lowest
-                    // live version, so accepting the slot never invites a
-                    // `.9999` pick on the next resolve (newest-wins applies
-                    // to accepted candidates, where no tiering runs). A live
-                    // selection gets an unbounded grant — there is nothing
-                    // to protect.
-                    // Lowest live version in the same slot *above* the
-                    // selection; anything else would produce a grant that
-                    // excludes the very version being selected.
-                    let live_upper_bound = match (is_live, pkg.slot()) {
-                        (false, Some(sel_slot)) => repo::live_upper_bound(
-                            data.versions
-                                .get(pkg.cpn())
-                                .map(Vec::as_slice)
-                                .unwrap_or_default(),
-                            &ver,
-                            Some(&sel_slot),
-                        )
-                        .filter(|bound| {
-                            // Same-slot guarantee comes from the entries
-                            // themselves; keep only bounds that genuinely
-                            // sit above the selection (live_upper_bound
-                            // already enforces this — belt and braces).
-                            bound > &ver
-                        }),
-                        _ => None,
-                    };
-                    cands.extend(
-                        repo::filter_reasons_for(&data, pkg.cpn(), &vs, &final_policy)
-                            .into_iter()
-                            .map(|mut c| {
-                                c.widened = true;
-                                c.live_upper_bound = live_upper_bound.clone();
-                                c.is_live = is_live;
-                                c
-                            }),
-                    );
-                }
-                let mut seen: HashSet<String> = autounmask_candidates
-                    .iter()
-                    .map(|c| c.cpv.to_string())
-                    .collect();
-                cands.retain(|c| seen.insert(c.cpv.to_string()));
-                cands
-            } else {
-                Vec::new()
-            };
+            let widened_candidates = widened_autounmask_candidates(
+                widened.get(),
+                &solution,
+                &provider,
+                &data,
+                &final_policy,
+                &autounmask_candidates,
+            );
 
             // Packages that need a same-version rebuild (USE change) must stay in the
             // merge list even though their installed CPV is unchanged — keep them in
@@ -2177,6 +2117,72 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// version satisfies — checked structurally (like `repo::cpns_for`, not
 /// USE-evaluated, since this candidate's resolved USE isn't computed yet).
 /// Falls back to `rb.version` untouched otherwise.
+/// Widened phase-2 selections, as autounmask candidates.
+///
+/// A chosen version *outside* acceptance is the hard-solve-failure case the
+/// [`repo::find_autounmask_candidates`] dropped-dep path never sees — the solve
+/// failed there instead of dropping the dep gracefully. Each selected tagged cpv
+/// becomes a regular candidate through the same reason machinery.
+///
+/// The result is deliberately kept separate from the dropped-dep candidates
+/// until after the actionable-set post-filter, whose
+/// `!solution_cpns.contains` guard would otherwise discard every one of these
+/// by construction.
+fn widened_autounmask_candidates(
+    widened: bool,
+    solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
+    provider: &PortageDependencyProvider,
+    data: &repo::RepoData,
+    final_policy: &repo::ResolvePolicy,
+    existing: &[repo::AutounmaskCandidate],
+) -> Vec<repo::AutounmaskCandidate> {
+    if !widened {
+        return Vec::new();
+    }
+    let mut selections: Vec<(PortagePackage, Version)> = solution
+        .iter()
+        .filter(|(pkg, ver)| !pkg.is_virtual() && provider.selection_needs_unmask(pkg, ver))
+        .map(|(pkg, ver)| (pkg.clone(), ver.clone()))
+        .collect();
+    selections.sort_by_key(|(pkg, _)| pkg.to_string());
+    let mut cands = Vec::new();
+    for (pkg, ver) in selections {
+        let vs = PortageVersionSet::from_operator(Operator::Equal, false, ver.clone());
+        let is_live = provider.selection_is_live(&pkg, &ver);
+        // Bound persisted slot grants below the slot's lowest live version, so
+        // accepting the slot never invites a `.9999` pick on the next resolve
+        // (newest-wins applies to accepted candidates, where no tiering runs). A
+        // live selection gets an unbounded grant — nothing to protect. Lowest
+        // live version in the same slot *above* the selection; anything else
+        // would produce a grant excluding the very version being selected.
+        let live_upper_bound = match (is_live, pkg.slot()) {
+            (false, Some(sel_slot)) => repo::live_upper_bound(
+                data.versions
+                    .get(pkg.cpn())
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+                &ver,
+                Some(&sel_slot),
+            )
+            .filter(|bound| bound > &ver),
+            _ => None,
+        };
+        cands.extend(
+            repo::filter_reasons_for(data, pkg.cpn(), &vs, final_policy)
+                .into_iter()
+                .map(|mut c| {
+                    c.widened = true;
+                    c.live_upper_bound = live_upper_bound.clone();
+                    c.is_live = is_live;
+                    c
+                }),
+        );
+    }
+    let mut seen: HashSet<String> = existing.iter().map(|c| c.cpv.to_string()).collect();
+    cands.retain(|c| seen.insert(c.cpv.to_string()));
+    cands
+}
+
 /// Map each `package.provided` CPV onto the repo slot(s) a `:slot` dep would
 /// reference, so both the solver's host seed and the pre-flight check treat it
 /// as present at that slot.
