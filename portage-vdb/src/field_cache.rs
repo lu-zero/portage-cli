@@ -160,12 +160,10 @@ impl FieldCache {
     }
 
     pub(crate) fn invalidate_package(&self, path: &Utf8Path) {
-        let fields = self
-            .packages
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(path);
-        if let Some(fields) = fields {
+        // Clear in place. Removing the `Arc` lets a handle that refetches
+        // after the first clear keep a value the next invalidate never sees.
+        let packages = self.packages.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(fields) = packages.get(path) {
             fields.clear();
         }
     }

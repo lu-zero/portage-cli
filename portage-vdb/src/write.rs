@@ -573,6 +573,27 @@ mod tests {
     }
 
     #[test]
+    fn a_handle_that_rereads_after_invalidate_sees_the_next_register() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root: camino::Utf8PathBuf = tmp.path().to_path_buf().try_into().unwrap();
+        let vdb = Vdb::open(root).unwrap();
+        let cpv = Cpv::parse("app-shells/testsh-1.0").unwrap();
+
+        let pkg = vdb.register(&make_spec(cpv.clone())).unwrap();
+        assert_eq!(pkg.use_flags().unwrap(), vec!["readline", "nls"]);
+
+        let mut mid = make_spec(cpv.clone());
+        mid.use_flags = vec!["nls".into()];
+        vdb.register(&mid).unwrap();
+        assert_eq!(pkg.use_flags().unwrap(), vec!["nls"]);
+
+        let mut last = make_spec(cpv);
+        last.use_flags = vec!["unicode".into()];
+        vdb.register(&last).unwrap();
+        assert_eq!(pkg.use_flags().unwrap(), vec!["unicode"]);
+    }
+
+    #[test]
     fn register_invalidates_parsed_field_caches() {
         let tmp = tempfile::tempdir().unwrap();
         let root: camino::Utf8PathBuf = tmp.path().to_path_buf().try_into().unwrap();
