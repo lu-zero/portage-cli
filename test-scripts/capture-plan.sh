@@ -53,6 +53,16 @@ run_case() {
 
 cmd_capture() {
   local outdir="$1"
+  # Refuse to capture with a binary older than the sources: a failed build
+  # leaves the previous `em` in place, and the capture then describes the *old*
+  # code — which reads exactly like "my change had no effect".
+  local newest
+  newest=$(find portage-cli/src portage-resolve/src -name '*.rs' -newer "$EM" -print -quit 2>/dev/null || true)
+  if [ -n "$newest" ]; then
+    echo "ERROR: $EM is older than $newest — rebuild before capturing" >&2
+    exit 2
+  fi
+
   mkdir -p "$outdir"
   # Warm the secondary cache first: the plan body is stable either way, but a
   # warm run avoids doing cold-cache work inside the measured comparison.
