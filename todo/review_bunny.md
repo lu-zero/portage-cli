@@ -124,3 +124,141 @@ four identical" because it ran the *previous* binary, and I only caught it
 because a clippy error had scrolled past. `7be564ea` now makes `capture` exit 2
 on a stale binary. Worth a reviewer confirming that guard actually fires in the
 ways I'd expect — I tested it, but I tested my own test.
+
+---
+
+# Hostile self-review (subagent pool, 2026-09-25)
+
+Six focused adversarial reviews, each told to report only defects it could point
+at in code. Every item below I then verified by hand. Three are regressions
+introduced by this session's own commits.
+
+## HIGH-1 — `9bc6c785`: preserve-libs state is never invalidated (key mismatch)
+
+`MergeBatchState.preserve` is keyed by **merge root** (`preserve_mut(root, vdb)`
+→ `entry(root.to_owned())`, `ebuild/mod.rs:496`), but `take_or_build` calls
+`finish_preserve` with `vdb.root()` (`mod.rs:476,482`).
+
+`vdb_root_for` (`mod.rs:3017-3023`) returns `<root>/var/db/pkg`, so for EROOT `/`
+the insert key is `/` and the removal key is `/var/db/pkg`. They can never match;
+`HashMap::remove` always misses, so the stamp guard the doc comment advertises is
+a **no-op for the preserve half**. The ownership half is unaffected — it really is
+keyed by `vdb.root()` (`mod.rs:513`).
+
+Consequence: a stale `MergePreserveState` (pre-invalidation `LinkGraph` +
+in-memory `PreservedLibsRegistry`) survives and is handed to the next merge.
+
+## HIGH-2 — `9bc6c785`: the batch-boundary lock is a different inode from qmerge's
+
+`finish`/`with_invalidation` lock `work_base/.merge.lock` (`mod.rs:558,572`).
+qmerge locks `work_base/<root-key>/.merge.lock`, because `package_work_dir` is
+`$work_base/<root-key>/<category>/<pf>` (`mod.rs:317-329`) and `lock_merge_flock`
+pops three parents (`flock.rs:57-61`). Different inodes ⇒ zero mutual exclusion.
+The doc comment's "holding the same cross-process merge lock as qmerge" is false.
+
+This is a regression, not a lost claim: before this commit `registry.reclaim()` +
+`store()` ran inside `run_merge` under the real flock. `reclaim` →
+`prune_unneeded` **unlinks files**, and `store()` is a read-modify-write of
+`var/lib/portage/preserved_libs_registry`. Two concurrent `em` runs against one
+root can now have one prune a library the other's in-flight merge needs, or one
+`store()` clobber the other's registry entries.
+
+Blast radius is small: `finish` 2 call sites, `with_invalidation` 2, and a fix
+needs no new parameter because `state.preserve`'s keys already carry the merge
+roots.
+
+## HIGH-3 — `UseDep` implements `Ord` that contradicts its own `Eq`, and the doc says it doesn't
+
+`use_dep.rs:83` derives `PartialEq`/`Eq`/`Hash` over all three fields, but
+`use_dep.rs:160-164` implements `Ord::cmp` as `self.flag.cmp(&other.flag)` — flag
+only. So `cmp(a,b) == Equal` while `a != b`: a direct `Ord` law violation.
+
+`9f836561` (this session) added a doc comment at `use_dep.rs:76-80` stating
+"Deliberately `PartialEq`/`Eq` but **not** `Ord`", and its commit message repeats
+it. The impl dates to `c32e372b` and was never removed. So this session wrote a
+durable false claim into a doc comment — the exact pattern the Slop Warning
+exists to stop.
+
+`UseDepBuilder` is public (`lib.rs:76`) and the fields are `pub`, so this is one
+`BTreeSet` away from silent data loss. Zero workspace callers of `UseDep`
+ordering today, so it is latent rather than live. Fix: delete the `Ord`/
+`PartialOrd` impls, which is what the doc already promises.
+
+## MEDIUM-1 — `Dep::parse` without an operator folds an unparseable version into the package name
+
+`dep.rs:257-263`: when `has_version_suffix` holds but `parse_cpv` backtracks,
+`parse_cpn_or_cpv` falls through to `parse_cpn` instead of erroring, and
+`cpn.rs:153-168` accepts any `[A-Za-z0-9_+-]` run. So the `u64::MAX` rejection
+documented at `version.rs:261-263` is **not** applied at this entry point:
+
+```
+Dep::parse("cat/pkg-99999999999999999999999") -> Ok(cpn: "cat/pkg-99999999999999999999999", version: None)
+Dep::parse("cat/pkg-1abc")                    -> Ok(cpn: "cat/pkg-1abc", version: None)
+```
+
+`Version::parse`, `Cpv::parse`, `Pf::parse`, and the *operator* form of
+`Dep::parse` (wrapped in `cut_err` at `dep.rs:293`) all reject the same input. The
+operator-less `Dep` path is the odd one out, so the guarantee holds everywhere
+except where I documented it. The resulting atom is inert (its cpn matches no
+real package), so this is silent-acceptance plus name corruption, not a wrong solve.
+
+## MEDIUM-2 — `9f329680` canonicalises an unreachable state, and its doc says otherwise
+
+`parse_slot_dep` (`slot.rs:262-274`) emits only `Operator(op)` for a bare operator
+and always `slot: Some(..)` otherwise; the fields are private with no
+builder/`From`/serde, so `Slot { slot: None, op: Some(_) }` is unconstructible
+outside `slot.rs`'s test module. The `Canonical` machinery is harmless and robust
+(`canonical()` is a method used by both `PartialEq` and `Hash`, so no path can skip
+it) — but the doc at `slot.rs:123-128` claims PMS 8.3.3 makes the
+`Slot { slot: None }` spelling "the *common* case (`:=` outnumbers every named form
+in the Gentoo tree)". It is not: the parser routes every one of those to
+`Operator`. That false claim legitimises three now-unreachable match arms
+(`portage-atom-pubgrub/src/convert.rs:334`, `validate.rs:573`,
+`portage-atom-resolvo/src/provider.rs:1419`) as load-bearing.
+
+## LOW / process
+
+- `3c873f62` `cache.rs:601,637`: `spawn_blocking(...).await.unwrap_or_default()`
+  turns a panic or cancelled task into "this repo has zero metadata" — an empty
+  depgraph, an unresolvable atom, or a gap index covering a whole repo. Silent
+  wrong answer instead of a crash.
+- `cb046ebc` `portage-binpkg/src/index.rs:111`: new `eprintln!` per container
+  missing `CATEGORY`/`PF` on every index open. `AGENTS.md` requires new narration
+  to be `tracing::warn!`; this bypasses `-q` and the subscriber.
+- `203ff850`: the `u64` PMS 3.2 deviation is recorded **only** in `todo/`, which
+  `AGENTS.md` designates prunable scratch that must not be the durable record, and
+  `portage-atom/CHANGELOG.md` (published crate, 0.11.1) does not mention it either.
+  When the scratch is pruned the justification dies.
+- `de02498f` `cache.rs:172-175`: `reconcile_repo_cache` needs the staging target to
+  be the *primary* cache dir, so a read-only primary (the ordinary unprivileged
+  `em regen`) stages the secondary store and `reconcile_gap_index` is never called.
+  Correct results, permanently stale sidecar. Also bundles an unmentioned
+  behaviour change: `cache.rs:239-247` now publishes nothing when `error_count > 0`.
+- `b122fc18`: the same false-edge defect survives in the resolvo bridge
+  (`portage-atom-resolvo/src/provider.rs:1097-1102` matches every alternative of an
+  `AnyOf` against every solution member). Low impact — nothing calls that graph
+  today — but the fix landed in one of two copies.
+- `de9bb272`: silently changed `em which` for an operator-less versioned atom
+  (`_ => true` became `self.version.is_none()`). The new behaviour is the
+  consistent one, but an unmentioned semantic change in a `refactor:` commit.
+
+## Verified clean (worth recording, since these were the likely suspects)
+
+- `c735f182` binhost cache key: `hex(Sha256(sync_uri))` as a single path component
+  is injective up to a SHA-256 collision, and the pre-fix collision was real
+  (`http` vs `https`, `?x=1` vs `?x=2`). Atomicity is genuine —
+  `NamedTempFile` + `persist` is a same-directory `rename(2)`.
+- `6a39c0ef` USE-justification determinism: every other order source feeding the
+  BFS is already deterministic (explicit sort, `BTreeSet`, `FxHashMap`); the
+  `RandomState` map it replaced was the only one in the path. Fix is complete,
+  not local.
+- `ba14cf1b` → `c722c1c8`: the revert is exact (`git diff ba14cf1b^ c722c1c8 --
+  portage-atom/src/version.rs` empty) and the justification checks out — all three
+  named call sites read `numbers` directly, so saturating really would have made
+  distinct versions compare equal in the resolver.
+- `Version`'s core comparison: brute-forced over 672 three-component versions
+  plus 10M randomised triples — no antisymmetry, transitivity, or Eq/Hash
+  violation. `BTreeMap<Version, _>` in the pubgrub provider is safe.
+- `3329d5ea`, `774ebef5`, `b122fc18` (pubgrub side), `54a9e67d`, `cd0b37d2`,
+  `d10ec9a4`, `f898dd99`, `b9eb8b11`, `6b76d606`, `450e3bf9`, `1973feb3`: no
+  finding.
