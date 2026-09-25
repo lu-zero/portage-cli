@@ -1590,26 +1590,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         entries
     };
 
-    let _display_adapter = repo::Adapter {
-        data: &data,
-        accept_keywords: &accept_keywords,
-        package_mask: &package_mask,
-        package_unmask: &package_unmask,
-        accept_licenses: &accept_licenses,
-        accept_properties: &accept_properties,
-        accept_restrict: &accept_restrict,
-        defaults: &defaults,
-        conf: &conf,
-        env_use: &env_use,
-        package_use: &package_use,
-        profile_package_use: &profile_package_use,
-        force_mask: &force_mask,
-        facts: final_policy.facts,
-        installed_cpvs: solver_installed_cpvs,
-        rebuilding_cpvs: &rebuilding_installed_cpvs,
-        autosolve_use: false,
-        autounmask_widen: false,
-    };
     // `order` is already exclude-filtered above, so `plan_entries` (and the
     // Pretty/JSON/Tree preview built from it) inherit the exclusion for free.
     let plan_entries = root_aware::build_plan(order.clone());
@@ -2020,21 +2000,6 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     })
 }
 
-/// Prefer a newer available version for a slot-operator rebuild's target
-///
-/// `subslot::find_rebuilds` only sees the installed VDB entry, so it always
-/// names the currently-installed version — rebuilding at that stale version
-/// when a newer one is sitting right there is pure waste (host-verified
-/// 2026-08-20: `dev-cpp/abseil-cpp` bumping unconditionally force-rebuilt
-/// `dev-libs/protobuf` at its old 33.1 even though 34.2 was available and
-/// depends on abseil-cpp identically).
-///
-/// Looks for the newest accepted (keyword/mask-ok) same-slot candidate
-/// above `rb.version`, and uses it only if its own raw DEPEND+RDEPEND still
-/// references every trigger with a version range the trigger's planned
-/// version satisfies — checked structurally (like `repo::cpns_for`, not
-/// USE-evaluated, since this candidate's resolved USE isn't computed yet).
-/// Falls back to `rb.version` untouched otherwise.
 /// Narrow the round's autounmask candidates to the ones still actionable.
 ///
 /// A candidate survives when the solve did not already satisfy its CPN and the
@@ -2269,7 +2234,7 @@ fn provided_availability(provided: &[Cpv], data: &repo::RepoData) -> Vec<(Cpv, O
 struct RootTargets {
     /// One solver root dep per acceptable atom
     deps: Vec<(PortagePackage, PortageVersionSet)>,
-    /// The CPNs named by the requested atoms, satisfiable or not
+    /// CPNs that became solver roots. Unsatisfiable atoms are not inserted.
     cpns: std::collections::HashSet<Cpn>,
     /// Atoms dropped with a warning, reported after the plan
     unsatisfiable: Vec<output::UnsatisfiableTarget>,
@@ -2347,6 +2312,10 @@ fn classify_root_targets(
     })
 }
 
+/// Prefer a newer accepted same-slot version for a slot-operator rebuild.
+///
+/// Uses it only when that version's raw DEPEND and RDEPEND still accept every
+/// trigger. Otherwise returns `rb.version`.
 fn best_rebuild_version(
     data: &repo::RepoData,
     policy: &repo::ResolvePolicy,
