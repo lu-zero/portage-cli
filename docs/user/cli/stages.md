@@ -66,7 +66,7 @@ How the solver and build scheduler behave.
 - **`--keep-going`** — Continue merging as much as possible even if some packages fail
 
   > **Warning:** Exists for portage parity; do not use it. A failed package must stop the run.
-- **`--autounmask`** — Automatically add required USE flags and package unmask entries to config files
+- **`--autounmask`** — Accepted so existing command lines keep parsing. Config writes follow `--autounmask-write` and whether this run is pretend or `--ask`; this flag is not consulted.
 - **`--autosolve-use`** — Let the solver choose USE flags to satisfy REQUIRED_USE (Level C) rather than only reporting violations
 
   Off by default; flips are reported.

@@ -117,7 +117,9 @@ pub struct MergeFlags {
     )]
     pub keep_going: bool,
 
-    /// Automatically add required USE flags and package unmask entries to config files
+    /// Accepted so existing command lines keep parsing. Config writes follow
+    /// `--autounmask-write` and whether this run is pretend or `--ask`; this
+    /// flag is not consulted.
     #[usage(long)]
     pub autounmask: bool,
 
