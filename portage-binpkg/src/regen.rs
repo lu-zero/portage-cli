@@ -29,7 +29,7 @@ use std::time::UNIX_EPOCH;
 use camino::Utf8Path;
 
 use crate::error::Result;
-use crate::scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
+use crate::scan::{ContainerFacts, checksum, find_gpkg_containers};
 
 /// Walk `pkgdir` for `*.gpkg.tar`, build per-package entries, and write the
 /// `Packages` index.
@@ -68,15 +68,8 @@ pub fn index_pkgdir(pkgdir: &Utf8Path, chost: &str) -> Result<(usize, usize)> {
 /// index-translated form (`DESC`, `REPO`).
 fn build_entry(rel: &str, full: &Path) -> Result<(String, BTreeMap<String, String>)> {
     let meta = crate::read_metadata(full)?;
-
-    let cat = meta.get("CATEGORY").map(String::as_str).unwrap_or("");
-    let pf = meta.get("PF").map(String::as_str).unwrap_or("");
-    if cat.is_empty() || pf.is_empty() {
-        return Err(crate::error::Error::Corrupt(
-            "missing CATEGORY/PF in metadata".to_string(),
-        ));
-    }
-    let cpv = format!("{cat}/{pf}");
+    let facts = ContainerFacts::from_metadata(&meta, rel)?;
+    let cpv = facts.cpv;
 
     let (md5, sha1, size, mtime) = checksum(full)?;
 
@@ -88,9 +81,7 @@ fn build_entry(rel: &str, full: &Path) -> Result<(String, BTreeMap<String, Strin
     f.insert("MTIME".to_string(), mtime.to_string());
     f.insert("PATH".to_string(), rel.to_string());
 
-    if let Some(bid) = meta.get("BUILD_ID") {
-        f.insert("BUILD_ID".to_string(), bid.clone());
-    } else if let Some(bid) = parse_build_id_from_name(rel) {
+    if let Some(bid) = facts.build_id {
         f.insert("BUILD_ID".to_string(), bid.to_string());
     }
 
@@ -276,5 +267,60 @@ mod tests {
                 ""
             )
         );
+    }
+
+    // The `Packages` writer and the no-index scan path resolve a container's
+    // `BUILD_ID` the same way, so a package whose GPKG metadata predates the
+    // field — carrying its instance only in the filename — reports one build
+    // id, not two. They used to disagree here, and the scan's answer (always
+    // `0`) made `--usepkg` pick the oldest instance of a multi-instance cpv.
+    #[test]
+    fn written_index_and_direct_scan_agree_on_a_filename_only_build_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkgdir = camino::Utf8Path::from_path(tmp.path()).unwrap();
+
+        let image = tmp.path().join("image");
+        std::fs::create_dir_all(image.join("usr/bin")).unwrap();
+        std::fs::write(image.join("usr/bin/hello"), b"hi\n").unwrap();
+
+        let meta = tmp.path().join("vdb/foo-1.0");
+        std::fs::create_dir_all(&meta).unwrap();
+        for (k, v) in [("PF", "foo-1.0"), ("CATEGORY", "app-test"), ("SLOT", "0")] {
+            std::fs::write(meta.join(k), format!("{v}\n")).unwrap();
+        }
+
+        for build_id in [1, 2] {
+            let container = pkgdir.join(format!("app-test/foo-1.0-{build_id}.gpkg.tar"));
+            std::fs::create_dir_all(container.parent().unwrap()).unwrap();
+            write_gpkg(
+                &crate::GpkgInput {
+                    image_dir: &image,
+                    metadata_dir: &meta,
+                    basename: "foo-1.0",
+                    signing: None,
+                },
+                container.as_std_path(),
+            )
+            .unwrap();
+        }
+
+        index_pkgdir(pkgdir, "x86_64-pc-linux-gnu").unwrap();
+        let written = crate::BinpkgIndex::open(pkgdir.as_std_path()).unwrap();
+
+        std::fs::remove_file(pkgdir.join("Packages")).unwrap();
+        let scanned = crate::BinpkgIndex::open(pkgdir.as_std_path()).unwrap();
+
+        let ids = |idx: &crate::BinpkgIndex| -> Vec<u32> {
+            let mut ids: Vec<u32> = idx
+                .get("app-test/foo-1.0")
+                .unwrap()
+                .iter()
+                .map(|e| e.build_id)
+                .collect();
+            ids.sort_unstable();
+            ids
+        };
+        assert_eq!(ids(&written), vec![1, 2]);
+        assert_eq!(ids(&scanned), ids(&written));
     }
 }

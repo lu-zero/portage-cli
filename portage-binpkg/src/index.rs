@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use sokgi::Dialect;
 
 use crate::error::Result;
-use crate::scan::find_gpkg_containers;
+use crate::scan::{ContainerFacts, find_gpkg_containers};
 
 /// One `Packages` index entry, parsed into the fields the reuse check needs
 #[derive(Debug, Clone)]
@@ -105,35 +105,29 @@ impl BinpkgIndex {
                     continue;
                 }
             };
-            let cat = meta.get("CATEGORY").map(String::as_str).unwrap_or("");
-            let pf = meta.get("PF").map(String::as_str).unwrap_or("");
-            if cat.is_empty() || pf.is_empty() {
-                continue;
-            }
-            let cpv = format!("{cat}/{pf}");
-            let cflags = meta.get("CFLAGS").cloned().unwrap_or_default();
-            let cxxflags = meta.get("CXXFLAGS").cloned().unwrap_or_default();
-            let ldflags = meta.get("LDFLAGS").cloned().unwrap_or_default();
-            let rustflags = meta.get("RUSTFLAGS").cloned().unwrap_or_default();
-            let build_env_key = build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
-            let build_id = meta
-                .get("BUILD_ID")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
+            let facts = match ContainerFacts::from_metadata(&meta, rel) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("warning: skipping {}: {e:#}", full.display());
+                    continue;
+                }
+            };
+            let build_env_key = facts.build_env_key();
+            let build_id = facts.build_id_or_zero();
 
             let entry = BinpkgEntry {
                 path: rel.clone(),
                 use_set: split_use(meta.get("USE").map(String::as_str).unwrap_or("")),
                 iuse: split_iuse(meta.get("IUSE").map(String::as_str).unwrap_or("")),
-                chost: meta.get("CHOST").cloned().unwrap_or_default(),
-                cflags,
-                cxxflags,
-                ldflags,
-                rustflags,
+                chost: facts.chost,
+                cflags: facts.cflags,
+                cxxflags: facts.cxxflags,
+                ldflags: facts.ldflags,
+                rustflags: facts.rustflags,
                 build_id,
                 build_env_key,
             };
-            entries.entry(cpv).or_default().push(entry);
+            entries.entry(facts.cpv).or_default().push(entry);
         }
         Ok(Self {
             entries,

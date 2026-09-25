@@ -31,7 +31,7 @@ use crate::gpg::Keyring;
 use crate::gpkg::VerifyPolicy;
 use crate::index::parse_index_blocks;
 use crate::regen::index_pkgdir;
-use crate::scan::{checksum, find_gpkg_containers, parse_build_id_from_name};
+use crate::scan::{ContainerFacts, checksum, find_gpkg_containers};
 
 /// One `Packages` index entry, with the digest/size fields [`verify`]/
 /// [`list_index`] need that [`crate::index::BinpkgEntry`] doesn't carry.
@@ -367,19 +367,14 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
         let Ok(meta) = crate::read_metadata(full) else {
             continue;
         };
-        let Some(cpv) = container_cpv_from_meta(&meta) else {
+        let Ok(facts) = ContainerFacts::from_metadata(&meta, rel) else {
             continue;
         };
-        let chost_val = meta.get("CHOST").cloned().unwrap_or_default();
-        let cflags = meta.get("CFLAGS").cloned().unwrap_or_default();
-        let cxxflags = meta.get("CXXFLAGS").cloned().unwrap_or_default();
-        let ldflags = meta.get("LDFLAGS").cloned().unwrap_or_default();
-        let rustflags = meta.get("RUSTFLAGS").cloned().unwrap_or_default();
-        let build_env_key = crate::index::build_env_key(&cflags, &cxxflags, &ldflags, &rustflags);
-        let build_id = container_build_id(&meta, rel);
+        let build_env_key = facts.build_env_key();
+        let build_id = facts.build_id_or_zero();
 
         by_identity
-            .entry((cpv, chost_val, build_env_key))
+            .entry((facts.cpv, facts.chost, build_env_key))
             .or_default()
             .push((build_id, rel.clone(), full.clone()));
     }
@@ -420,28 +415,6 @@ pub fn prune(pkgdir: &Utf8Path, chost: &str, dry_run: bool) -> Result<PruneRepor
         removed,
         reindexed,
     })
-}
-
-/// Extract CPV from metadata (same as container_cpv but from already-read metadata)
-fn container_cpv_from_meta(meta: &BTreeMap<String, String>) -> Option<String> {
-    let cat = meta.get("CATEGORY")?;
-    let pf = meta.get("PF")?;
-    if cat.is_empty() || pf.is_empty() {
-        return None;
-    }
-    Some(format!("{cat}/{pf}"))
-}
-
-/// A container's `BUILD_ID` from its already-read metadata: prefer the
-/// metadata's own field, else parse it from the `<PF>-<BUILD_ID>.gpkg.tar`
-/// filename, else `0` (the implicit single-instance case — sorts below any
-/// explicit build id, so it's always pruned in favor of a numbered one
-/// sharing the same cpv).
-fn container_build_id(meta: &BTreeMap<String, String>, rel: &str) -> u32 {
-    meta.get("BUILD_ID")
-        .and_then(|s| s.parse().ok())
-        .or_else(|| parse_build_id_from_name(rel))
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

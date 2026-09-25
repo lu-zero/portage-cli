@@ -1,6 +1,7 @@
 //! Walking `PKGDIR` for `*.gpkg.tar` containers, and the per-container
 //! checksums/build-id parsing the index and maintenance operations need.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -8,7 +9,7 @@ use std::time::UNIX_EPOCH;
 use sha1::Digest as _;
 use sha1::Sha1;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Recursively enumerate `*.gpkg.tar` container files under `root`
 ///
@@ -88,9 +89,84 @@ pub fn parse_build_id_from_name(rel: &str) -> Option<u32> {
     id.parse::<u32>().ok()
 }
 
+/// Identity and build provenance shared by everything that reads one container
+///
+/// The one place `CATEGORY`/`PF`, the recorded flag sets, and `BUILD_ID` are
+/// resolved, so the index scan, the index writer, and `maint binpkg prune`
+/// cannot drift apart on precedence.
+#[derive(Debug, Clone)]
+pub(crate) struct ContainerFacts {
+    /// `<CATEGORY>/<PF>` — the container's CPV
+    pub cpv: String,
+    /// Recorded `CHOST` (empty when absent)
+    pub chost: String,
+    /// Recorded build-time `CFLAGS` (empty when absent)
+    pub cflags: String,
+    /// Recorded build-time `CXXFLAGS` (empty when absent)
+    pub cxxflags: String,
+    /// Recorded build-time `LDFLAGS` (empty when absent)
+    pub ldflags: String,
+    /// Recorded build-time `RUSTFLAGS` (empty when absent)
+    pub rustflags: String,
+    /// `BUILD_ID`: the metadata field, else the filename suffix, else absent
+    /// for the implicit single-instance form
+    pub build_id: Option<u32>,
+}
+
+impl ContainerFacts {
+    /// Read the facts out of one container's [`crate::read_metadata`] map
+    ///
+    /// `rel` is the PKGDIR-relative container path, read only for the
+    /// `<PF>-<BUILD_ID>.gpkg.tar` fallback. A recorded `BUILD_ID` that is not a
+    /// number is not representable in the index, so the filename is consulted
+    /// instead.
+    pub(crate) fn from_metadata(meta: &BTreeMap<String, String>, rel: &str) -> Result<Self> {
+        let cat = meta.get("CATEGORY").map(String::as_str).unwrap_or("");
+        let pf = meta.get("PF").map(String::as_str).unwrap_or("");
+        if cat.is_empty() || pf.is_empty() {
+            return Err(Error::Corrupt(
+                "missing CATEGORY/PF in metadata".to_string(),
+            ));
+        }
+        let field = |key: &str| meta.get(key).cloned().unwrap_or_default();
+        Ok(Self {
+            cpv: format!("{cat}/{pf}"),
+            chost: field("CHOST"),
+            cflags: field("CFLAGS"),
+            cxxflags: field("CXXFLAGS"),
+            ldflags: field("LDFLAGS"),
+            rustflags: field("RUSTFLAGS"),
+            build_id: meta
+                .get("BUILD_ID")
+                .and_then(|s| s.parse().ok())
+                .or_else(|| parse_build_id_from_name(rel)),
+        })
+    }
+
+    /// The build-environment key over the recorded flag sets
+    pub(crate) fn build_env_key(&self) -> String {
+        crate::index::build_env_key(&self.cflags, &self.cxxflags, &self.ldflags, &self.rustflags)
+    }
+
+    /// The build id, with the implicit single-instance form as `0`
+    ///
+    /// Sorts below any explicit build id, so a single-instance container is
+    /// always pruned in favor of a numbered one sharing the same cpv.
+    pub(crate) fn build_id_or_zero(&self) -> u32 {
+        self.build_id.unwrap_or(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn meta(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
 
     #[test]
     fn parse_build_id_from_name_reads_the_trailing_number() {
@@ -103,5 +179,55 @@ mod tests {
     #[test]
     fn parse_build_id_from_name_none_for_single_instance() {
         assert_eq!(parse_build_id_from_name("app-test/foo-1.0.gpkg.tar"), None);
+    }
+
+    #[test]
+    fn facts_take_the_build_id_from_metadata_before_the_filename() {
+        let facts = ContainerFacts::from_metadata(
+            &meta(&[
+                ("CATEGORY", "app-test"),
+                ("PF", "foo-1.0"),
+                ("BUILD_ID", "2"),
+            ]),
+            "app-test/foo-1.0-7.gpkg.tar",
+        )
+        .unwrap();
+        assert_eq!(facts.cpv, "app-test/foo-1.0");
+        assert_eq!(facts.build_id, Some(2));
+    }
+
+    // A container written before `BUILD_ID` reached the GPKG metadata (or by a
+    // hand-built one) still records its instance in the filename — the index
+    // scan has to see it too, or it picks the oldest instance for reuse.
+    #[test]
+    fn facts_fall_back_to_the_filename_build_id() {
+        let facts = ContainerFacts::from_metadata(
+            &meta(&[("CATEGORY", "app-test"), ("PF", "foo-1.0")]),
+            "app-test/foo-1.0-7.gpkg.tar",
+        )
+        .unwrap();
+        assert_eq!(facts.build_id, Some(7));
+        assert_eq!(facts.build_id_or_zero(), 7);
+    }
+
+    #[test]
+    fn facts_report_no_build_id_for_the_single_instance_form() {
+        let facts = ContainerFacts::from_metadata(
+            &meta(&[("CATEGORY", "app-test"), ("PF", "foo-1.0")]),
+            "app-test/foo-1.0.gpkg.tar",
+        )
+        .unwrap();
+        assert_eq!(facts.build_id, None);
+        assert_eq!(facts.build_id_or_zero(), 0);
+    }
+
+    #[test]
+    fn facts_reject_metadata_without_a_category_or_pf() {
+        let err = ContainerFacts::from_metadata(
+            &meta(&[("CATEGORY", "app-test")]),
+            "app-test/foo-1.0.gpkg.tar",
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Corrupt(_)), "got {err:?}");
     }
 }
