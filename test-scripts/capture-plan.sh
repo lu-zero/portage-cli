@@ -25,10 +25,10 @@ REPO="${REPO:-/var/db/repos/gentoo}"
 EM="${EM:-target/quick/em}"
 RUNS="${RUNS:-3}"
 
-# Four pipeline stages, not four packages: a successful verbose plan, a failing
-# plan (constraint list + USE-change report), the autounmask suggestion path
-# (where the `# required by` narration lives), and the Level-C co-solve
-# fixpoint. Each is a different part of `depgraph()`.
+# Four commands, not four pipeline bodies. `--autounmask` is not consulted, so
+# `plan-system-autounmask` does not enter `widened_autounmask_candidates`
+# (only `--target` or a cross-alias atom sets `autounmask_widen`). None of the
+# cases pass `--exclude`, `--resume`, or a cross root.
 CASES=(
   "plan-verbose:-vp --emptytree dev-libs/openssl"
   "plan-system:-p --emptytree @system"
@@ -57,7 +57,14 @@ cmd_capture() {
   # leaves the previous `em` in place, and the capture then describes the *old*
   # code — which reads exactly like "my change had no effect".
   local newest
-  newest=$(find portage-cli/src portage-resolve/src -name '*.rs' -newer "$EM" -print -quit 2>/dev/null || true)
+  if ! newest=$(find \
+    portage-cli/src portage-resolve/src portage-repo/src portage-atom/src \
+    portage-atom-pubgrub/src portage-metadata/src portage-vdb/src \
+    portage-binpkg/src portage-distfiles/src \
+    -name '*.rs' -newer "$EM" -print -quit); then
+    echo "ERROR: could not compare $EM against the sources (run from the repo root)" >&2
+    exit 2
+  fi
   if [ -n "$newest" ]; then
     echo "ERROR: $EM is older than $newest — rebuild before capturing" >&2
     exit 2
@@ -70,18 +77,18 @@ cmd_capture() {
 
   for spec in "${CASES[@]}"; do
     local name="${spec%%:*}" flags="${spec#*:}"
-    # Repeat and keep the first: a case that is still nondeterministic will show
-    # up as a compare failure rather than silently drifting.
-    for i in $(seq 1 "$RUNS"); do
-      run_case "$name" "$flags" | normalize > "$outdir/$name.txt"
-      if [ "$i" -lt "$RUNS" ]; then
-        run_case "$name" "$flags" | normalize > "$outdir/$name.run$i.txt"
-        if ! cmp -s "$outdir/$name.txt" "$outdir/$name.run$i.txt"; then
-          echo "WARNING: $name is not deterministic across $RUNS runs" >&2
-          diff -u "$outdir/$name.txt" "$outdir/$name.run$i.txt" >&2 || true
-        fi
-        rm -f "$outdir/$name.run$i.txt"
+    # Keep the first run. Later runs must match it; the saved file is that first run.
+    run_case "$name" "$flags" | normalize > "$outdir/$name.txt"
+    local i
+    for i in $(seq 2 "$RUNS"); do
+      run_case "$name" "$flags" | normalize > "$outdir/$name.run.txt"
+      if ! cmp -s "$outdir/$name.txt" "$outdir/$name.run.txt"; then
+        echo "ERROR: $name is not deterministic (run 1 vs run $i)" >&2
+        diff -u "$outdir/$name.txt" "$outdir/$name.run.txt" >&2 || true
+        rm -f "$outdir/$name.run.txt"
+        exit 1
       fi
+      rm -f "$outdir/$name.run.txt"
     done
     printf '  %-24s %5s lines\n' "$name" "$(wc -l < "$outdir/$name.txt")"
   done
