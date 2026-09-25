@@ -173,26 +173,32 @@ impl BackgroundSink {
     ///
     /// Waits for queue space if the worker is behind.
     pub fn flush(&self) {
-        let ack = {
+        let tx = {
             let guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
             let Some(tx) = guard.as_ref() else {
                 return;
             };
-            let (ack_tx, ack_rx) = std::sync::mpsc::channel();
-            if tx.send(Msg::Barrier(ack_tx)).is_err() {
-                return;
-            }
-            ack_rx
+            tx.clone()
         };
-        let _ = ack.recv();
+        let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+        if tx.send(Msg::Barrier(ack_tx)).is_err() {
+            tracing::error!("activity sink worker is gone; flush dropped");
+            return;
+        }
+        let _ = ack_rx.recv();
     }
 }
 
 impl ActivitySink for BackgroundSink {
     fn on_event(&self, event: &ActivityEvent) {
-        let guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(tx) = guard.as_ref() {
-            let _ = tx.send(Msg::Event(event.clone()));
+        let tx = {
+            let guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().cloned()
+        };
+        if let Some(tx) = tx
+            && tx.send(Msg::Event(event.clone())).is_err()
+        {
+            tracing::error!("activity sink worker is gone; event dropped");
         }
     }
 }
