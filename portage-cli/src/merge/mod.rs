@@ -1089,6 +1089,7 @@ fn extend_blockers_with_unmerges(
 /// be deferred).
 async fn run_due_unmerges(
     cli: &cli::Cli,
+    work_base: &camino::Utf8Path,
     due: &[&portage_resolve::conflicts::PlannedUnmerge],
     failures: &mut Vec<MergeFailure>,
     merge_gate: &ebuild::MergeGate,
@@ -1097,7 +1098,9 @@ async fn run_due_unmerges(
     // Scheduled unmerges mutate the same VDB, so they must invalidate the batch snapshot.
     for u in due {
         let result = merge_gate
-            .with_invalidation(|| crate::emerge::unmerge_blocker_victim(cli, &u.cpv))
+            .with_invalidation(work_base, || {
+                crate::emerge::unmerge_blocker_victim(cli, &u.cpv)
+            })
             .await;
         if let Err(e) = result {
             let rendered = crate::style::render_error_chain(&e);
@@ -1143,7 +1146,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             break;
         }
         if let Some(due) = before_unmerges.get(&i)
-            && !run_due_unmerges(run.globals, due, &mut failures, &merge_gate).await
+            && !run_due_unmerges(run.globals, run.work_base, due, &mut failures, &merge_gate).await
         {
             // A strong (`!!`) victim failed to unmerge: it must be gone
             // before its owner can merge at all, so this cannot be deferred
@@ -1235,13 +1238,14 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         // merged — matches the old `done`-filtered after-the-whole-plan
         // batch, just checked per-owner instead of once at the very end.
         if succeeded && let Some(due) = after_unmerges.get(&i) {
-            run_due_unmerges(run.globals, due, &mut failures, &merge_gate).await;
+            run_due_unmerges(run.globals, run.work_base, due, &mut failures, &merge_gate).await;
         }
         if !keep_going {
             crate::style::error_line!("stopping (pass --keep-going to continue past failures)");
             break;
         }
     }
+    merge_gate.finish(run.work_base).await;
     (merged, skipped, failures)
 }
 
@@ -1427,7 +1431,9 @@ async fn merge_parallel(
                 inflight.push(Box::pin(
                     async move {
                         let res = gate
-                            .with_invalidation(|| crate::emerge::unmerge_blocker_victim(cli, &cpv))
+                            .with_invalidation(run.work_base, || {
+                                crate::emerge::unmerge_blocker_victim(cli, &cpv)
+                            })
                             .await;
                         (i, res, FinishedNode::Unmerge { cpv })
                     }
@@ -1593,6 +1599,7 @@ async fn merge_parallel(
             }
         }
     }
+    merge_gate.finish(run.work_base).await;
     (merged, skipped, failures)
 }
 

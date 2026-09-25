@@ -826,4 +826,26 @@ The baseline used the same fixture and command in a detached worktree at `0feec1
 
 ---
 
+### 28. Preserve-libs state reuse (thalia, 2026-09-25)
+
+The ignored `portage-cli` test `preserve_libs::tests::benchmark_reused_preserve_state` models a batch of synthetic VDB replacements. The exact `dc57ead3` baseline was measured in a detached worktree with the same fixture: it reloads the registry, rebuilds the link graph, reclaims, and stores once per replacement. The current path retains the registry and graph, updates package records incrementally, and performs one final reclaim/store. Each row is the median of three release-test runs on this host:
+
+| Packages | `dc57ead3` repeated state operations | Current reused state | Reduction |
+|---------:|------------------------------------:|-------------------:|----------:|
+| 32 | 6.687708 ms | 524.407 µs | 92.2% |
+| 64 | 14.918696 ms | 948.012 µs | 93.6% |
+| 128 | 47.864809 ms | 3.027420 ms | 93.7% |
+
+This is a synthetic state-workload measurement, not a full merge or real-system claim. The current implementation still scans the VDB once when its run-scoped graph is first needed and updates only the changed package thereafter; no separate allocation profile was run. The current fixture also prints its own repeated-operation control, but the table uses the exact historical worktree for the comparison.
+
+Reproduction on the current tree:
+
+```sh
+cargo test --release -p portage-cli preserve_libs::tests::benchmark_reused_preserve_state --lib -- --ignored --nocapture
+```
+
+The historical row was reproduced from a temporary detached worktree at `dc57ead3`; it was removed after the run.
+
+---
+
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

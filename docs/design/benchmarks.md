@@ -162,6 +162,9 @@ library entry point (an `examples/` binary), not the `em` CLI:
   `regen_only`; writes `/tmp/benchmark_results.csv`.
 - `portage-repo/benchmark_baseline.txt` — a hand-maintained historical
   timing table; update it when a change intentionally affects performance.
+- `portage-cli`'s ignored `benchmark_reused_preserve_state` test — synthetic
+  repeated-vs-reused preserve-libs graph/registry workload; run it explicitly
+  with the command in [`benchmarks/BENCHMARKS.md`](../../benchmarks/BENCHMARKS.md).
 
 Full usage and a worked example table are in `portage-repo/AGENTS.md`'s
 "Scripts" section; `benchmarks/machines/mneme.md` collects every one of

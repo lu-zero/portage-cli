@@ -445,6 +445,7 @@ pub async fn run(
 
 struct MergeBatchState {
     ownership: HashMap<Utf8PathBuf, OwnershipIndex>,
+    preserve: HashMap<Utf8PathBuf, preserve_libs::MergePreserveState>,
     reuse_index: bool,
 }
 
@@ -452,18 +453,50 @@ impl MergeBatchState {
     fn new(reuse_index: bool) -> Self {
         Self {
             ownership: HashMap::new(),
+            preserve: HashMap::new(),
             reuse_index,
         }
     }
 
     fn take_or_build(&mut self, vdb: &Vdb) -> Result<Option<OwnershipIndex>> {
         if !self.reuse_index {
+            self.finish_preserve_all();
             return Ok(None);
         }
-        Ok(Some(match self.ownership.remove(vdb.root()) {
-            Some(index) if index.is_current(vdb) => index,
+        let root = vdb.root().to_owned();
+        let current = self
+            .ownership
+            .get(&root)
+            .is_some_and(|index| index.is_current(vdb));
+        if !current {
+            self.finish_preserve(&root);
+        }
+        Ok(Some(match self.ownership.remove(&root) {
+            Some(index) if current => index,
             _ => OwnershipIndex::build(vdb)?,
         }))
+    }
+
+    fn preserve_mut(
+        &mut self,
+        root: &Utf8Path,
+        vdb: &Vdb,
+    ) -> &mut preserve_libs::MergePreserveState {
+        self.preserve
+            .entry(root.to_owned())
+            .or_insert_with(|| preserve_libs::MergePreserveState::load(root, vdb))
+    }
+
+    fn finish_preserve(&mut self, root: &Utf8Path) {
+        if let Some(mut preserve) = self.preserve.remove(root) {
+            preserve.finish();
+        }
+    }
+
+    fn finish_preserve_all(&mut self) {
+        for (_, mut preserve) in std::mem::take(&mut self.preserve) {
+            preserve.finish();
+        }
     }
 
     fn put(&mut self, vdb: &Vdb, index: OwnershipIndex) {
@@ -471,19 +504,22 @@ impl MergeBatchState {
     }
 }
 
-/// Serializes in-process qmerge and carries one ownership snapshot per VDB root.
+/// Serializes in-process qmerge and carries per-VDB-root ownership and
+/// preserve-libs state.
 ///
-/// The snapshot is run-scoped and is updated after successful qmerge mutations;
-/// scheduled unmerges clear it under the same gate. A VDB metadata stamp catches
-/// normal external register/unregister changes after the merge lock; in-place
-/// `CONTENTS` edits require a new batch. Child privilege workers do not share
-/// this in-memory state and use the one-shot collision path.
+/// Both snapshots are run-scoped and are updated after successful qmerge
+/// mutations; scheduled unmerges persist preserve-libs state and clear both
+/// snapshots under the same gate. A VDB metadata stamp catches normal external
+/// register/unregister changes after the merge lock; in-place `CONTENTS` edits
+/// require a new batch. Plans below the indexed threshold flush preserve state
+/// per qmerge, and child privilege workers do not share this in-memory state and
+/// use the one-shot paths.
 pub struct MergeGate {
     state: tokio::sync::Mutex<MergeBatchState>,
 }
 
 impl MergeGate {
-    /// Create an empty merge gate with ownership-index reuse enabled.
+    /// Create an empty merge gate with both run-scoped snapshot caches enabled.
     pub fn new() -> Self {
         Self::with_index(true)
     }
@@ -502,14 +538,36 @@ impl MergeGate {
         self.state.lock().await
     }
 
-    pub(crate) async fn with_invalidation<F, Fut>(&self, f: F) -> Fut::Output
+    /// Flush deferred preserve-libs reclamation after the merge loop while
+    /// holding the same cross-process merge lock as qmerge.
+    pub(crate) async fn finish(&self, work_base: &Utf8Path) {
+        let mut state = self.state.lock().await;
+        if state.preserve.is_empty() {
+            return;
+        }
+        let _merge_lock = acquire_flock(
+            work_base.join(".merge.lock").into_std_path_buf(),
+            "merge lock",
+        )
+        .await;
+        state.finish_preserve_all();
+    }
+
+    pub(crate) async fn with_invalidation<F, Fut>(&self, work_base: &Utf8Path, f: F) -> Fut::Output
     where
         F: FnOnce() -> Fut,
         Fut: Future,
     {
         let mut state = self.state.lock().await;
+        let _merge_lock = acquire_flock(
+            work_base.join(".merge.lock").into_std_path_buf(),
+            "merge lock",
+        )
+        .await;
+        state.finish_preserve_all();
         let output = f().await;
         state.ownership.clear();
+        state.preserve.clear();
         output
     }
 }
@@ -2318,117 +2376,135 @@ async fn run_merge(
         );
     }
 
-    if let Some(ref old) = old_pkg {
-        let exclude: HashSet<Cpv> = std::iter::once(old.cpv().clone()).collect();
-        let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
-        let graph = preserve_libs::build_link_graph(&vdb, &exclude, &registry, root);
-        // The old occupant's pkg_prerm/pkg_postrm run on this same shell, from
-        // a different ebuild path — if it shares an eclass with `ebuild` (the
-        // package actually being installed), `inherit`'s dedup list *and* the
-        // eclass's own include guard would otherwise treat it as
-        // already-sourced on the way back to pkg_postinst, silently dropping
-        // that eclass's IUSE/RDEPEND/etc. contribution (found live: awk-4's
-        // reinstall losing app-alternatives.eclass's `mawk` IUSE this way).
-        let session = shell.save_session();
-        unmerge_slot_occupant(UnmergeSlotOccupant {
-            shell,
-            old_pkg: old,
-            work_root,
-            root,
-            vdb: &vdb,
-            new_contents: &contents,
-            new_version: &ebuild.cpv().version,
-            graph: &graph,
-            registry: &mut registry,
-        })
-        .await?;
-        shell.restore_session(session);
-        if let Some(index) = ownership_index.as_mut() {
-            index.remove_package(old.cpv());
+    let preserve_is_local = merge_state.is_none();
+    let mut local_preserve =
+        preserve_is_local.then(|| preserve_libs::MergePreserveState::load(root, &vdb));
+    let preserve = if let Some(state) = merge_state.as_deref_mut() {
+        state.preserve_mut(root, &vdb)
+    } else {
+        local_preserve
+            .as_mut()
+            .expect("local preserve state initialized")
+    };
+    let mut local_preserve_finished = false;
+    let result: Result<()> = async {
+        if let Some(ref old) = old_pkg {
+            let (graph, registry) = preserve.graph_and_registry(old.cpv());
+            // The old occupant's pkg_prerm/pkg_postrm run on this same shell, from
+            // a different ebuild path — if it shares an eclass with `ebuild` (the
+            // package actually being installed), `inherit`'s dedup list *and* the
+            // eclass's own include guard would otherwise treat it as
+            // already-sourced on the way back to pkg_postinst, silently dropping
+            // that eclass's IUSE/RDEPEND/etc. contribution (found live: awk-4's
+            // reinstall losing app-alternatives.eclass's `mawk` IUSE this way).
+            let session = shell.save_session();
+            unmerge_slot_occupant(UnmergeSlotOccupant {
+                shell,
+                old_pkg: old,
+                work_root,
+                root,
+                vdb: &vdb,
+                new_contents: &contents,
+                new_version: &ebuild.cpv().version,
+                graph,
+                registry,
+            })
+            .await?;
+            shell.restore_session(session);
+            preserve.package_removed(old.cpv());
+            if let Some(index) = ownership_index.as_mut() {
+                index.remove_package(old.cpv());
+            }
         }
-        registry.store();
-    }
 
-    let build_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let counter = vdb.next_counter()?;
-    let elf = crate::elfscan::scan_image(&image_dir);
-    let spec = merge_spec_from_env(
-        env,
-        ebuild.cpv().clone(),
-        contents,
-        elf,
-        size,
-        build_time,
-        counter,
-    );
-    let installed = vdb.register(&spec)?;
-    if let Some(index) = ownership_index.as_mut() {
-        index.add_package(&installed, &spec.contents);
-        index.refresh(&vdb);
-    }
-    // A newly registered package may own paths still listed in the
-    // preserved-libs registry from a prior unmerge — reclaim those keys.
-    {
-        let mut registry = preserve_libs::PreservedLibsRegistry::load(root);
-        registry.reclaim(&vdb, root);
-        registry.store();
-    }
-
-    // Copy the ebuild into the VDB entry as `<PF>.ebuild`, as portage does.
-    let pf = format!("{}-{}", ebuild.name(), ebuild.version());
-    let ebuild_dest = installed.path().join(format!("{pf}.ebuild"));
-    if let Err(e) = std::fs::copy(ebuild.path(), ebuild_dest.as_std_path()) {
-        crate::style::warn_line!("could not copy ebuild into VDB: {e}");
-    }
-
-    if let Ok(ref data) = env_dump
-        && let Err(e) = write_environment_bz2(&installed, data)
-    {
-        crate::style::warn_line!("could not write environment.bz2: {e}");
-    }
-
-    // debug, not info: this is internal VDB bookkeeping (the counter), and
-    // at info level it was rendered with the enclosing `phase{phase="qmerge"}:`
-    // span label leaking straight into default output — real portage has no
-    // equivalent line at all in normal mode.
-    tracing::debug!(
-        "merge: {}/{}-{} registered (counter={counter})",
-        ebuild.category(),
-        ebuild.name(),
-        ebuild.version()
-    );
-
-    if !protected.is_empty() {
-        println!();
-        crate::style::einfo_line!(
-            "{} protected config file(s) were installed with a ._cfg name.",
-            protected.len()
+        let build_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let counter = vdb.next_counter()?;
+        let elf = crate::elfscan::scan_image(&image_dir);
+        let spec = merge_spec_from_env(
+            env,
+            ebuild.cpv().clone(),
+            contents,
+            elf,
+            size,
+            build_time,
+            counter,
         );
-        crate::style::einfo_line!("Run `em dispatch` (dispatch-conf) or `em etc` to merge them:");
-        for p in &protected {
-            crate::style::einfo_line!("  {p}");
+        let installed = vdb.register(&spec)?;
+        preserve.package_added(&installed);
+        if let Some(index) = ownership_index.as_mut() {
+            index.add_package(&installed, &spec.contents);
+            index.refresh(&vdb);
         }
+        if preserve_is_local {
+            preserve.finish();
+            local_preserve_finished = true;
+        }
+
+        // Copy the ebuild into the VDB entry as `<PF>.ebuild`, as portage does.
+        let pf = format!("{}-{}", ebuild.name(), ebuild.version());
+        let ebuild_dest = installed.path().join(format!("{pf}.ebuild"));
+        if let Err(e) = std::fs::copy(ebuild.path(), ebuild_dest.as_std_path()) {
+            crate::style::warn_line!("could not copy ebuild into VDB: {e}");
+        }
+
+        if let Ok(ref data) = env_dump
+            && let Err(e) = write_environment_bz2(&installed, data)
+        {
+            crate::style::warn_line!("could not write environment.bz2: {e}");
+        }
+
+        // debug, not info: this is internal VDB bookkeeping (the counter), and
+        // at info level it was rendered with the enclosing `phase{phase="qmerge"}:`
+        // span label leaking straight into default output — real portage has no
+        // equivalent line at all in normal mode.
+        tracing::debug!(
+            "merge: {}/{}-{} registered (counter={counter})",
+            ebuild.category(),
+            ebuild.name(),
+            ebuild.version()
+        );
+
+        if !protected.is_empty() {
+            println!();
+            crate::style::einfo_line!(
+                "{} protected config file(s) were installed with a ._cfg name.",
+                protected.len()
+            );
+            crate::style::einfo_line!(
+                "Run `em dispatch` (dispatch-conf) or `em etc` to merge them:"
+            );
+            for p in &protected {
+                crate::style::einfo_line!("  {p}");
+            }
+        }
+
+        shell
+            .run_phase(
+                ebuild,
+                "postinst",
+                work_root.as_std_path(),
+                root.as_std_path(),
+            )
+            .await
+            .context("pkg_postinst failed")?;
+
+        Ok(())
     }
+    .await;
 
-    shell
-        .run_phase(
-            ebuild,
-            "postinst",
-            work_root.as_std_path(),
-            root.as_std_path(),
-        )
-        .await
-        .context("pkg_postinst failed")?;
-
-    if let Some(state) = merge_state
+    if preserve_is_local && !local_preserve_finished {
+        preserve.finish();
+    }
+    if result.is_ok()
+        && let Some(state) = merge_state
         && let Some(index) = ownership_index
     {
         state.put(&vdb, index);
     }
-    Ok(())
+    result
 }
 
 /// Run `pkg_prerm`, delete `old_pkg`'s CONTENTS files that aren't also owned
@@ -2533,8 +2609,8 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
     // preserve-libs (portage's FEATURES=preserve-libs): never physically
     // delete a shared library some other still-installed object's
     // NEEDED.ELF.2 genuinely requires and that nothing else provides. See
-    // `preserve_libs` module doc. `graph`/`registry` are built/loaded once
-    // per batch by the caller, not per package here.
+    // `preserve_libs` module doc. Normal merges retain and update the
+    // graph/registry across the batch; standalone removals share one pair.
     let to_preserve = preserve_libs::find_libs_to_preserve(graph, old_pkg, &old_contents);
     // Slot replace: files the incoming package already owns (or will leave
     // on disk via remove_old_unique_files) must not enter the preserved-libs
@@ -2599,10 +2675,8 @@ async fn unmerge_package(u: UnmergePackage<'_>) -> Result<()> {
     Ok(())
 }
 
-/// `graph`/`registry`: built/loaded once by the caller (a single in-place
-/// replace only ever removes this one old occupant, so "once per batch"
-/// and "once per call" coincide here — no batching concern like `-C`'s
-/// multi-atom case).
+/// `graph`/`registry` are supplied by the caller. A normal merge keeps them
+/// in its run-scoped state; a standalone replacement has one occupant only.
 struct UnmergeSlotOccupant<'a> {
     shell: &'a mut portage_repo::EbuildShell,
     old_pkg: &'a InstalledPackage,

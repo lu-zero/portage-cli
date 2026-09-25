@@ -231,10 +231,15 @@ Installed package database reader/writer for `/var/db/pkg`.
 - `fn format_contents()` — Serialize contents back to VDB format
 - `struct Collision` — File collision between planned and installed packages
 - `struct MergeSpec` — Specification for registering a new installed package
-- The CLI `MergeGate` shares one `OwnershipIndex` per VDB root across
-  in-process qmerges; scheduled unmerges serialize under the gate and invalidate it.
-  Cross-process normal register/unregister changes are detected by the stamp after `.merge.lock`; in-place `CONTENTS` edits require a new batch.
-  Privilege-worker children use the one-shot collision path.
+- The CLI `MergeGate` shares one `OwnershipIndex` and one preserve-libs
+  `LinkGraph`/registry per VDB root across in-process qmerges. The graph is
+  updated as each old occupant is unregistered and its replacement is registered;
+  reclamation and registry persistence run once after the merge batch. Scheduled
+  unmerges serialize under the gate, flush preserve-libs state, and invalidate both
+  snapshots. Cross-process normal register/unregister changes are detected by the
+  ownership stamp after `.merge.lock`; in-place `CONTENTS` edits require a new batch.
+  Plans below the indexed threshold, and privilege-worker children, use the one-shot
+  paths.
 - Directory iterators: `AllPackages`, `Category`, `Categories`, `Packages`
 
 ### `portage-binpkg` (v0.2.1)

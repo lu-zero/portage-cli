@@ -24,6 +24,7 @@ use crate::util::write_atomic;
 /// One parsed `NEEDED.ELF.2` line: `MACHINE;path;SONAME;RPATH;needed,csv;category`
 /// — the exact format `elfscan::scan_image` writes. `pub(crate)` so
 /// `revdep.rs` can reuse the same parsing instead of re-implementing it.
+#[derive(Clone)]
 pub(crate) struct NeededRecord {
     pub(crate) category: String,
     pub(crate) path: Utf8PathBuf,
@@ -91,6 +92,11 @@ impl PreservedLibsRegistry {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         Self { path, data }
+    }
+
+    /// Whether the registry has no tracked preserved paths.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.data.is_empty()
     }
 
     /// Write the registry back out
@@ -350,15 +356,103 @@ pub struct PreserveEntry {
 
 /// The workspace-wide `(category, soname)` provider/consumer index —
 /// everything [`find_libs_to_preserve`] needs to decide what to preserve,
-/// minus the one package actually being removed. Expensive to build (a
-/// full VDB scan), cheap to query — build **once per invocation** and
-/// reuse it across an entire `-C`/depclean batch.
-///
-/// Correct to share across the batch because `exclude` already names every
-/// cpv it's committed to removing, so the graph doesn't change mid-batch.
+/// minus the packages currently being replaced. Expensive to build (a full
+/// VDB scan), cheap to query and update as a merge changes its package set.
 pub struct LinkGraph {
     providers: HashSet<(String, String)>,
     consumer_files: HashMap<(String, String), Vec<Utf8PathBuf>>,
+    provider_counts: HashMap<(String, String), usize>,
+    package_records: HashMap<Cpv, Vec<NeededRecord>>,
+    preserved_providers: HashSet<(String, String)>,
+}
+
+impl LinkGraph {
+    fn new() -> Self {
+        Self {
+            providers: HashSet::new(),
+            consumer_files: HashMap::new(),
+            provider_counts: HashMap::new(),
+            package_records: HashMap::new(),
+            preserved_providers: HashSet::new(),
+        }
+    }
+
+    fn refresh_providers(&mut self) {
+        self.providers.clear();
+        self.providers.extend(self.provider_counts.keys().cloned());
+        self.providers
+            .extend(self.preserved_providers.iter().cloned());
+    }
+
+    /// Add a package's dynamic-link records to the graph.
+    pub(crate) fn add_package(&mut self, pkg: &InstalledPackage) {
+        self.remove_package(pkg.cpv());
+        let records = package_needed(pkg);
+        for rec in &records {
+            if let Some(soname) = &rec.soname {
+                let key = (rec.category.clone(), soname.clone());
+                *self.provider_counts.entry(key.clone()).or_insert(0) += 1;
+                self.providers.insert(key);
+            }
+            for needed in &rec.needed {
+                self.consumer_files
+                    .entry((rec.category.clone(), needed.clone()))
+                    .or_default()
+                    .push(rec.path.clone());
+            }
+        }
+        self.package_records.insert(pkg.cpv().clone(), records);
+    }
+
+    /// Remove a package's dynamic-link records from the graph.
+    pub(crate) fn remove_package(&mut self, cpv: &Cpv) {
+        let Some(records) = self.package_records.remove(cpv) else {
+            return;
+        };
+        for rec in records {
+            if let Some(soname) = rec.soname {
+                let key = (rec.category.clone(), soname);
+                let remove_provider = if let Some(count) = self.provider_counts.get_mut(&key) {
+                    *count -= 1;
+                    *count == 0
+                } else {
+                    false
+                };
+                if remove_provider {
+                    self.provider_counts.remove(&key);
+                    if !self.preserved_providers.contains(&key) {
+                        self.providers.remove(&key);
+                    }
+                }
+            }
+            for needed in rec.needed {
+                let key = (rec.category.clone(), needed);
+                let remove_consumers = self.consumer_files.get_mut(&key).is_some_and(|files| {
+                    if let Some(index) = files.iter().position(|path| path == &rec.path) {
+                        files.remove(index);
+                    }
+                    files.is_empty()
+                });
+                if remove_consumers {
+                    self.consumer_files.remove(&key);
+                }
+            }
+        }
+    }
+
+    /// Refresh the providers contributed by registry-carried preserved files.
+    pub(crate) fn refresh_preserved(&mut self, registry: &PreservedLibsRegistry, root: &Utf8Path) {
+        self.preserved_providers.clear();
+        for path in registry.all_paths() {
+            let rel = path.as_str().trim_start_matches('/');
+            if let Some(info) = elfscan::scan_file(root.join(rel).as_std_path())
+                && let Some(soname) = info.soname
+            {
+                self.preserved_providers.insert((info.category, soname));
+            }
+        }
+        self.refresh_providers();
+    }
 }
 
 /// Build the [`LinkGraph`] for a removal batch: every installed package
@@ -376,41 +470,81 @@ pub fn build_link_graph(
     registry: &PreservedLibsRegistry,
     root: &Utf8Path,
 ) -> LinkGraph {
-    let mut providers: HashSet<(String, String)> = HashSet::new();
-    let mut consumer_files: HashMap<(String, String), Vec<Utf8PathBuf>> = HashMap::new();
-
+    let mut graph = LinkGraph::new();
     for pkg in vdb.packages() {
-        if exclude.contains(pkg.cpv()) {
-            continue;
+        if !exclude.contains(pkg.cpv()) {
+            graph.add_package(&pkg);
         }
-        for rec in package_needed(&pkg) {
-            if let Some(soname) = &rec.soname {
-                providers.insert((rec.category.clone(), soname.clone()));
-            }
-            for needed in &rec.needed {
-                consumer_files
-                    .entry((rec.category.clone(), needed.clone()))
-                    .or_default()
-                    .push(rec.path.clone());
-            }
+    }
+    graph.refresh_preserved(registry, root);
+    graph
+}
+
+/// Preserve-libs state retained while one merge changes several VDB packages.
+///
+/// Reclamation is deferred until the batch ends; keeping a preserved file on disk
+/// until then is safe and lets a later replacement still use it as a provider.
+pub(crate) struct MergePreserveState {
+    root: Utf8PathBuf,
+    vdb: Vdb,
+    registry: PreservedLibsRegistry,
+    graph: Option<LinkGraph>,
+    dirty: bool,
+}
+
+impl MergePreserveState {
+    pub(crate) fn load(root: &Utf8Path, vdb: &Vdb) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            vdb: vdb.clone(),
+            registry: PreservedLibsRegistry::load(root),
+            graph: None,
+            dirty: false,
         }
     }
 
-    // Registry-carried preserved libs from a previous run: no longer part
-    // of any live package's CONTENTS/NEEDED.ELF.2, so re-scan them
-    // directly to know what they still provide.
-    for path in registry.all_paths() {
-        let rel = path.as_str().trim_start_matches('/');
-        if let Some(info) = elfscan::scan_file(root.join(rel).as_std_path())
-            && let Some(soname) = info.soname
-        {
-            providers.insert((info.category, soname));
+    /// Return the graph with `excluded` removed and the live registry.
+    pub(crate) fn graph_and_registry(
+        &mut self,
+        excluded: &Cpv,
+    ) -> (&LinkGraph, &mut PreservedLibsRegistry) {
+        if self.graph.is_none() {
+            self.graph = Some(build_link_graph(
+                &self.vdb,
+                &HashSet::new(),
+                &self.registry,
+                &self.root,
+            ));
+        }
+        let graph = self.graph.as_mut().expect("graph initialized above");
+        graph.remove_package(excluded);
+        (graph, &mut self.registry)
+    }
+
+    pub(crate) fn package_removed(&mut self, cpv: &Cpv) {
+        self.dirty = true;
+        if let Some(graph) = &mut self.graph {
+            graph.remove_package(cpv);
+            graph.refresh_preserved(&self.registry, &self.root);
         }
     }
 
-    LinkGraph {
-        providers,
-        consumer_files,
+    pub(crate) fn package_added(&mut self, pkg: &InstalledPackage) {
+        if let Some(graph) = &mut self.graph {
+            graph.add_package(pkg);
+        }
+    }
+
+    /// Reclaim and persist the registry after the merge has finished changing
+    /// the VDB.
+    pub(crate) fn finish(&mut self) {
+        let had_entries = !self.registry.is_empty();
+        self.registry.reclaim(&self.vdb, &self.root);
+        if self.dirty || had_entries || !self.registry.is_empty() {
+            self.registry.store();
+        }
+        self.graph = None;
+        self.dirty = false;
     }
 }
 
@@ -664,6 +798,209 @@ mod tests {
             preserved[0].consumers,
             vec![Utf8PathBuf::from("/usr/bin/consumer")]
         );
+    }
+
+    #[test]
+    fn link_graph_tracks_package_updates_for_merge_batch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let vdb_root = root.join("var/db/pkg");
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "sys-libs",
+            "libfoo-1.0",
+            "obj /usr/lib64/libfoo.so.1 aaaa 0\n",
+            "X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64\n",
+        );
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "app-misc",
+            "consumer-1.0",
+            "obj /usr/bin/consumer bbbb 0\n",
+            "X86_64;/usr/bin/consumer;;;libfoo.so.1;x86_64\n",
+        );
+        let vdb = Vdb::open(&vdb_root).unwrap();
+        let libfoo = vdb
+            .category("sys-libs")
+            .unwrap()
+            .package("libfoo-1.0")
+            .unwrap();
+        let old_contents = libfoo.contents().unwrap();
+        let mut graph = build_link_graph(
+            &vdb,
+            &HashSet::new(),
+            &PreservedLibsRegistry::load(&root),
+            &root,
+        );
+
+        graph.remove_package(libfoo.cpv());
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "app-misc",
+            "consumer-2.0",
+            "obj /usr/bin/consumer2 bbbb 0\n",
+            "X86_64;/usr/bin/consumer2;;;libfoo.so.1;x86_64\n",
+        );
+        let consumer = vdb
+            .category("app-misc")
+            .unwrap()
+            .package("consumer-2.0")
+            .unwrap();
+        graph.add_package(&consumer);
+        assert_eq!(
+            find_libs_to_preserve(&graph, &libfoo, &old_contents)
+                .first()
+                .map(|entry| entry.path.as_str()),
+            Some("/usr/lib64/libfoo.so.1")
+        );
+        let first_consumer = vdb
+            .category("app-misc")
+            .unwrap()
+            .package("consumer-1.0")
+            .unwrap();
+        graph.remove_package(first_consumer.cpv());
+        assert_eq!(
+            find_libs_to_preserve(&graph, &libfoo, &old_contents).len(),
+            1
+        );
+        graph.remove_package(consumer.cpv());
+        assert!(find_libs_to_preserve(&graph, &libfoo, &old_contents).is_empty());
+        graph.add_package(&consumer);
+
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "sys-libs",
+            "libfoo-2.0",
+            "obj /usr/lib64/libfoo.so.1 cccc 0\n",
+            "X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64\n",
+        );
+        let replacement = vdb
+            .category("sys-libs")
+            .unwrap()
+            .package("libfoo-2.0")
+            .unwrap();
+        graph.add_package(&replacement);
+        assert!(find_libs_to_preserve(&graph, &libfoo, &old_contents).is_empty());
+        write_fake_package(
+            vdb_root.as_std_path(),
+            "sys-libs",
+            "libfoo-3.0",
+            "obj /usr/lib64/libfoo.so.1 dddd 0\n",
+            "X86_64;/usr/lib64/libfoo.so.1;libfoo.so.1;;;x86_64\n",
+        );
+        let second_replacement = vdb
+            .category("sys-libs")
+            .unwrap()
+            .package("libfoo-3.0")
+            .unwrap();
+        graph.add_package(&second_replacement);
+        graph.remove_package(replacement.cpv());
+        assert!(find_libs_to_preserve(&graph, &libfoo, &old_contents).is_empty());
+        graph.remove_package(second_replacement.cpv());
+        assert_eq!(
+            find_libs_to_preserve(&graph, &libfoo, &old_contents).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn merge_preserve_state_persists_registry_at_batch_finish() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+        let vdb_root = root.join("var/db/pkg");
+        std::fs::create_dir_all(&vdb_root).unwrap();
+        let path = root.join("usr/lib64/libfoo.so");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"not an ELF file").unwrap();
+        let vdb = Vdb::open(&vdb_root).unwrap();
+        let cpv = Cpv::parse("sys-libs/foo-1.0").unwrap();
+        let mut state = MergePreserveState::load(&root, &vdb);
+        {
+            let (_graph, registry) = state.graph_and_registry(&cpv);
+            registry.register(
+                &cpv,
+                "0",
+                1,
+                vec![Utf8PathBuf::from("/usr/lib64/libfoo.so")],
+            );
+        }
+        state.package_removed(&cpv);
+        assert!(
+            !root
+                .join("var/lib/portage/preserved_libs_registry")
+                .exists()
+        );
+        state.finish();
+
+        let reloaded = PreservedLibsRegistry::load(&root);
+        assert_eq!(reloaded.all_paths().count(), 1);
+    }
+
+    #[test]
+    #[ignore = "explicit performance benchmark"]
+    fn benchmark_reused_preserve_state() {
+        use std::hint::black_box;
+        use std::time::{Duration, Instant};
+
+        for count in [32usize, 64, 128] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = Utf8PathBuf::try_from(tmp.path().to_owned()).unwrap();
+            let vdb_root = root.join("var/db/pkg");
+            for i in 0..count {
+                let pf = format!("lib{i:03}-1.0");
+                let path = format!("/usr/lib64/lib{i:03}.so.1");
+                write_fake_package(
+                    vdb_root.as_std_path(),
+                    "bench-libs",
+                    &pf,
+                    &format!("obj {path} aaaa 0\n"),
+                    &format!("X86_64;{path};lib{i:03}.so.1;;;x86_64\n"),
+                );
+            }
+            let vdb = Vdb::open(&vdb_root).unwrap();
+            let category = vdb.category("bench-libs").unwrap();
+            let packages: Vec<_> = (0..count)
+                .map(|i| category.package(&format!("lib{i:03}-1.0")).unwrap())
+                .collect();
+
+            let mut baseline = Vec::new();
+            let mut reused = Vec::new();
+            for _ in 0..3 {
+                let start = Instant::now();
+                for pkg in &packages {
+                    let mut registry = PreservedLibsRegistry::load(&root);
+                    let exclude = HashSet::from([pkg.cpv().clone()]);
+                    let graph = build_link_graph(&vdb, &exclude, &registry, &root);
+                    black_box(graph.providers.len());
+                    registry.reclaim(&vdb, &root);
+                    registry.store();
+                }
+                baseline.push(start.elapsed());
+
+                let start = Instant::now();
+                let mut state = MergePreserveState::load(&root, &vdb);
+                for pkg in &packages {
+                    {
+                        let (graph, _registry) = state.graph_and_registry(pkg.cpv());
+                        black_box(graph.providers.len());
+                    }
+                    state.package_removed(pkg.cpv());
+                    state.package_added(pkg);
+                }
+                state.finish();
+                reused.push(start.elapsed());
+            }
+            let median = |mut values: Vec<Duration>| {
+                values.sort();
+                values[values.len() / 2]
+            };
+            let baseline = median(baseline);
+            let reused = median(reused);
+            println!(
+                "preserve-state {count}: baseline {baseline:?}, reused {reused:?}, reduction {:.1}%",
+                (1.0 - reused.as_secs_f64() / baseline.as_secs_f64()) * 100.0
+            );
+        }
     }
 
     #[test]
