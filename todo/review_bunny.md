@@ -28,6 +28,27 @@ Concretely: I'd like a before/after on the real tree. I can produce a binary at
 needs a release-ish build of both and that's a long build — but it's the obvious
 next measurement and I'd rather someone else decide it matters.
 
+## 1b. Two perf commits shipped with no measurement at all
+
+Checking this prompted by the commit count, and it's the sharpest thing I found.
+Of 19 `perf(...)` commits, 17 carry a number in `benchmarks/BENCHMARKS.md` or a
+paired `bench(...)` commit. Two carry nothing:
+
+- `1a52b6b1 perf(activity): bound background sink queues`
+- `0c30acb1 perf(activity): skip unused orphan history`
+
+Neither appears in `BENCHMARKS.md`, and neither has a follow-up bench commit —
+unlike `cd0b37d2`/`02018404`, whose measurements landed in `29458ac1` and
+`0cb67883` respectively. These two went in on reasoning alone ("skip unused
+work", "bound the queue") and broke the discipline the other seventeen kept.
+
+They're also the pair I trust *least*. Both touch `portage-activity`, both are
+about not doing work, and "we no longer do this work" is exactly the shape of
+change that produces a wrong answer rather than a slow one. A bounded queue can
+also silently drop or reorder entries, which is a correctness question, not just
+a throughput one. I should not have shipped them unmeasured and I can't
+retroactively vouch for them.
+
 ## 2. `depgraph()` refactor — oracle coverage is narrower than it looks
 
 BF-511, six phases, 1,890 → 1,663 lines, all four `capture-plan.sh` cases
