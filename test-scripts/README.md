@@ -19,6 +19,30 @@ it down (mounts + directory) on exit.
 
 ## Scripts
 
+### `capture-plan.sh`
+
+Snapshots `em -p` output for four stages of the resolve pipeline (a successful
+verbose plan, a failing plan, the autounmask USE-change path, and the Level-C
+co-solve fixpoint) so a change to `query/depgraph/` can be checked by diffing
+before against after:
+
+```sh
+REPO=/var/db/repos/gentoo ./test-scripts/capture-plan.sh capture /tmp/plan-before
+# ... change, rebuild ...
+REPO=/var/db/repos/gentoo ./test-scripts/capture-plan.sh capture /tmp/plan-after
+./test-scripts/capture-plan.sh compare /tmp/plan-before /tmp/plan-after
+```
+
+The only oracle for that code: `query/depgraph/mod.rs` has no `#[cfg(test)]`
+module, and the binary crate has no end-to-end `em -p` test. Captures are
+deliberately **not** committed as goldens — the target tree moves, so an
+expected-output file in git breaks on every sync; the A/B diff is the contract
+instead. Each case is captured `RUNS` times (default 3) and the script warns if
+one is not byte-stable, which is how the per-process `HashMap`-order
+nondeterminism in the `# required by` narration was found. Exits non-zero on any
+difference. Needs a repo with `metadata/md5-cache` populated; no sandbox, no
+root, no network.
+
 ### `regression-matrix.sh`
 
 Root-topology regression matrix for the toolchain/crossdev/stages bootstrap
