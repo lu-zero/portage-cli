@@ -1164,7 +1164,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
             round_metrics.record("install_order", install_order_start.elapsed());
             round_metrics.record("dependency_graph", graph_stats.graph_build_time);
 
-            let mut order: Vec<_> = full_order
+            let order: Vec<_> = full_order
                 .iter()
                 .filter(|(pkg, ver)| {
                     let cpv = Cpv::new(*pkg.cpn(), ver.clone());
@@ -1215,60 +1215,14 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
                 })
                 .collect();
 
-            // Fallback: any reinstall the solver didn't route through install_order
-            // (rare) is appended so it is not silently dropped.
-            {
-                let in_order: std::collections::HashSet<Cpn> =
-                    order.iter().map(|(pkg, _)| *pkg.cpn()).collect();
-                let to_reinstall: Vec<(PortagePackage, Version)> = provider
-                    .reinstall_deps()
-                    .into_iter()
-                    .filter(|r| !in_order.contains(r.package.cpn()))
-                    .map(|r| {
-                        let ver = r.upgrade_to.as_ref().unwrap_or(&r.version).clone();
-                        (r.package.clone(), ver)
-                    })
-                    .collect();
-                order.extend(to_reinstall);
-            }
-
-            // `-X`/`--exclude` (see `DepgraphOpts::exclude`'s doc): drop matching
-            // packages from `order` itself, before any display path (Pretty/JSON/
-            // Tree) or the final `PlannedMerge` list is built from it — so every
-            // consumer agrees on what will actually happen, not just the merge loop.
-            let mut exclude_omitted = 0usize;
-            if !exclude_atoms.is_empty() {
-                let before = order.len();
-                order.retain(|(pkg, ver)| {
-                    let cpv = Cpv::new(*pkg.cpn(), ver.clone());
-                    let slot = pkg.slot().map(portage_atom::Slot::from_name);
-                    !exclude_atoms
-                        .iter()
-                        .any(|d| d.matches_cpv(&cpv, slot.as_ref()))
-                });
-                // Printed once after the repair loop settles (an intermediate round's
-                // count would otherwise be reported and then superseded).
-                exclude_omitted = before.saturating_sub(order.len());
-            }
-
-            // `-r` completion progress: same post-solve drop as `--exclude`, so the
-            // preview and merge omit work already finished in a prior attempt.
-            let mut resume_omitted = 0usize;
-            if !resume_completed.is_empty() {
-                let before = order.len();
-                order.retain(|(pkg, ver)| {
-                    let cpv = Cpv::new(*pkg.cpn(), ver.clone()).to_string();
-                    !resume_completed.contains(&(pkg.merge_root(), cpv))
-                });
-                resume_omitted = before.saturating_sub(order.len());
-            }
-
-            // Cross-arch host-config stage: pretend output lists target ROOT merges only
-            // (emerge -p). A native offset instead keeps the Host build-dep merges (the
-            // host-side installs needed to build the target packages), matching emerge.
-            if host_config_stage && cross.is_cross_arch() {
-                order.retain(|(pkg, _)| pkg.merge_root() == MergeRoot::Target);
-            }
+            let (filtered_order, exclude_omitted, resume_omitted) = apply_order_filters(
+                order,
+                &provider.reinstall_deps(),
+                &exclude_atoms,
+                &resume_completed,
+                host_config_stage && cross.is_cross_arch(),
+            );
+            let mut order = filtered_order;
 
             let trim_ctx = bdepend_trim::TrimCtx {
                 broot_snapshot: &broot_snapshot,
@@ -2117,6 +2071,72 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// version satisfies — checked structurally (like `repo::cpns_for`, not
 /// USE-evaluated, since this candidate's resolved USE isn't computed yet).
 /// Falls back to `rb.version` untouched otherwise.
+/// Re-append reinstalls the solver never routed through `install_order`, then
+/// drop what the invocation asked to skip. Returns the filtered order and how
+/// many entries `--exclude` and `--resume` each removed.
+///
+/// The exclusions run against `order` itself, before any display path
+/// (Pretty/JSON/Tree) or the final `PlannedMerge` list is built from it, so
+/// every consumer agrees on what will happen — not just the merge loop.
+fn apply_order_filters(
+    mut order: Vec<(PortagePackage, Version)>,
+    reinstall_deps: &[&UseFlagRequirement],
+    exclude_atoms: &[Dep],
+    resume_completed: &std::collections::HashSet<(MergeRoot, String)>,
+    cross_arch_host_stage: bool,
+) -> (Vec<(PortagePackage, Version)>, usize, usize) {
+    // Fallback: any reinstall the solver didn't route through install_order
+    // (rare) is appended so it is not silently dropped.
+    let in_order: std::collections::HashSet<Cpn> =
+        order.iter().map(|(pkg, _)| *pkg.cpn()).collect();
+    let to_reinstall: Vec<(PortagePackage, Version)> = reinstall_deps
+        .iter()
+        .filter(|r| !in_order.contains(r.package.cpn()))
+        .map(|r| {
+            let ver = r.upgrade_to.as_ref().unwrap_or(&r.version).clone();
+            (r.package.clone(), ver)
+        })
+        .collect();
+    order.extend(to_reinstall);
+
+    // `-X`/`--exclude` (see `DepgraphOpts::exclude`'s doc).
+    let mut exclude_omitted = 0usize;
+    if !exclude_atoms.is_empty() {
+        let before = order.len();
+        order.retain(|(pkg, ver)| {
+            let cpv = Cpv::new(*pkg.cpn(), ver.clone());
+            let slot = pkg.slot().map(portage_atom::Slot::from_name);
+            !exclude_atoms
+                .iter()
+                .any(|d| d.matches_cpv(&cpv, slot.as_ref()))
+        });
+        // Counted here but printed once after the repair loop settles (an
+        // intermediate round's count would otherwise be reported and superseded).
+        exclude_omitted = before.saturating_sub(order.len());
+    }
+
+    // `-r` completion progress: same post-solve drop, so the preview and merge
+    // omit work already finished in a prior attempt.
+    let mut resume_omitted = 0usize;
+    if !resume_completed.is_empty() {
+        let before = order.len();
+        order.retain(|(pkg, ver)| {
+            let cpv = Cpv::new(*pkg.cpn(), ver.clone()).to_string();
+            !resume_completed.contains(&(pkg.merge_root(), cpv))
+        });
+        resume_omitted = before.saturating_sub(order.len());
+    }
+
+    // Cross-arch host-config stage: pretend output lists target ROOT merges only
+    // (emerge -p). A native offset instead keeps the Host build-dep merges (the
+    // host-side installs needed to build the target packages), matching emerge.
+    if cross_arch_host_stage {
+        order.retain(|(pkg, _)| pkg.merge_root() == MergeRoot::Target);
+    }
+
+    (order, exclude_omitted, resume_omitted)
+}
+
 /// Widened phase-2 selections, as autounmask candidates.
 ///
 /// A chosen version *outside* acceptance is the hard-solve-failure case the
