@@ -262,3 +262,137 @@ in the Gentoo tree)". It is not: the parser routes every one of those to
 - `3329d5ea`, `774ebef5`, `b122fc18` (pubgrub side), `54a9e67d`, `cd0b37d2`,
   `d10ec9a4`, `f898dd99`, `b9eb8b11`, `6b76d606`, `450e3bf9`, `1973feb3`: no
   finding.
+
+## HIGH-4 — `--autounmask` is a user-facing flag with zero consumers
+
+`MergeFlags::autounmask` (`cli/merge_flags.rs:122`) is parsed, documented, and
+propagated, but nothing reads it. The only reference outside its own declaration
+is the pass-through copy at `maint/resume.rs:423` (`saved.autounmask ||
+cli.autounmask`). `emerge.rs:541` forwards only `autounmask_write`, and
+`emerge.rs:554` sets `autounmask_widen` from `--target`/cross atoms explicitly
+*not* from this flag, exactly as `DepgraphOpts::autounmask_widen`'s own doc says.
+
+So `em -p --emptytree --autounmask @system` is byte-identical to the same command
+without `--autounmask` **by construction**. Two consequences: the oracle is three
+scenarios, not four; and `capture-plan.sh:28-31` justifies that case as covering
+"the autounmask suggestion path", which it does not. The `# required by` line it
+was credited with lives in `package_use.rs:396` in the USE-change report, and the
+autounmask report is gated on `dropped_autounmask` being non-empty — neither is
+flag-dependent.
+
+A documented flag that does nothing is its own finding, independent of the oracle.
+
+## HIGH-5 — my own refactor series fused two doc comments, orphaning a contract
+
+`b077a897` inserted `RootTargets`'s doc directly beneath `best_rebuild_version`'s
+last line, fusing the two into one `///` block. Three later extractions re-anchored
+on that same final line and the last insertion won. Result at
+`depgraph/mod.rs:2023-2045`: lines 2023-2037 document `best_rebuild_version` (naming
+`subslot::find_rebuilds`, `rb.version`, `dev-cpp/abseil-cpp`, `dev-libs/protobuf`)
+and run straight into `actionable_autounmask_candidates`'s doc with no separator. So
+the 30-line autounmask filter carries a 15-line contract about a function whose name
+appears nowhere in it, and `fn best_rebuild_version` at 2350 has **no doc comment at
+all** — a host-verified policy decision, documented, now attached to nothing.
+
+`RUSTDOCFLAGS='-D warnings' cargo doc` cannot catch this: both items are private, so
+rustdoc never renders or link-lints them. Four commits of this series reported
+"full verification passed".
+
+## The oracle is weaker than "four cases byte-identical" conveys
+
+Beyond HIGH-4, these extractions are **vacuously** verified — the case exercises the
+helper but not its body, so byte-identity would hold even if the body were
+`Vec::new()`:
+
+| helper | why it is vacuous |
+|---|---|
+| `widened_autounmask_candidates` | `autounmask_widen` is false in all cases (only `--target`/crossdev set it), so it returns at its second line |
+| `provided_availability` | `package.provided` is empty on this host, so `flat_map` runs zero times |
+| `apply_order_filters` | 3 of its 4 filters are dead (`--exclude`, `--resume`, cross-arch host stage); only the reinstall re-append can run |
+| `actionable_autounmask_candidates` | `if !widened.is_empty()` only ever takes the false side; the `retain` never runs |
+| `target_conflicts` | the `merge_root() == Target` filter is a tautology — no Host/Base entries exist |
+
+Every case also pins `emptytree_native = true` and `cross.active = false`, leaving
+the entire non-emptytree half and the entire multi-root half dark: the
+`--complete-graph` repair loop, the subslot `:=` rebuild insertion, the `-N`/`-U`
+reinstall detection, `best_rebuild_version`, and the Host/Base arms of
+`already_installed`.
+
+The code itself is sound — all six bodies are token-identical to their inline
+originals, argument order and evaluation order check out (including the
+`widened.get()` `Cell` hoist, which is correct because both `set` sites precede the
+call and none follow), and the `exclude_omitted`/`resume_omitted` guards are
+verbatim so neither `println!` can fire spuriously. It is the *evidence* that is
+thin, not the refactor.
+
+## Also in the depgraph series
+
+- `_display_adapter` (`mod.rs:1593-1612`): an 18-field `repo::Adapter` literal
+  field-for-field identical to `closure_adapter`, constructed and dropped for
+  nothing. Invisible to clippy because of the `_` prefix. Pre-existing
+  (`e7a5d0ce`), and the only `_`-prefixed construction in the function.
+- `classify_root_targets` takes three consecutive bare `bool`s
+  (`empty, selective, is_multi`). Correct today, but a future swap compiles
+  silently — the one signature of the six a later edit could break undetected. The
+  other five are type-distinct and swap-proof.
+- `057bbcd9`'s message claims "the later one at the plan-membership filter is a
+  separate binding and stays". There is no such binding: at `057bbcd9^` there is
+  one definition, one use, and one doc mention. The commit message asserts a safety
+  property that does not exist.
+
+## ebuild module split: not pure code motion, but no production behaviour change
+
+A token-level diff (injective token stream, `syn`-based, comments/uses/`#[doc]`
+stripped) over the whole split: of 92 pre-split top-level items, **91 are
+token-identical**; 119 functions before and after with identical name sets, none
+lost or duplicated; 26 tests before and after, identical names; 428 → 450 doc
+lines with **zero dropped or reworded**; 394 → 395 plain comments, none dropped.
+The entire production delta is three `mod` declarations.
+
+The deviations:
+- 15 items widened `priv` → `pub(crate)`. 12 are required by the move. **3 are
+  gratuitous**, with no cross-module caller at all: `binpkg::write_binpkg`,
+  `protect::env_d_protect_mask`, `protect::merge_protect_layers`. Blast radius is
+  bounded — the modules are private inside `pub(crate) mod ebuild`, so this is
+  effectively `pub(in crate::ebuild)`.
+- 3 test bodies rewritten for the new `super` (value-identical, and the
+  `ConfigProtect::for_test` rewrite is provably equivalent).
+- `flock.rs:54` — the intra-doc link `[`package_work_dir`]` no longer resolves,
+  because that item lives in `mod.rs` and is not imported. Not linted:
+  `lib.rs:17` declares `pub(crate) mod ebuild`, so rustdoc renders nothing inside
+  it, and CI's `doc` job uses no `--document-private-items`. Latent, not a CI
+  failure — it will bite the day `ebuild` becomes `pub`.
+
+## `portage-atom` details worth carrying forward
+
+- `parse_component` (`version.rs:616-620`) is the only numeric sub-parser without
+  `cut_err`, so `Version::parse("1.99999999999999999999999")` reports a generic
+  trailing-input error rather than the number-too-large one. No `parse_next` caller
+  exists, so nothing is truncated today; the documented guarantee holds by accident
+  of call-site choice, not by construction.
+- `Version`'s `Hash` is inconsistent with its `Eq` for a NUL letter: `letter` is
+  hashed as an `Option<char>` discriminant (`version.rs:374`) but compared as
+  `unwrap_or('\0')` (`version.rs:509-511`), so `None` and `Some('\0')` compare equal
+  and hash differently — the same defect shape `9f329680` just fixed for `SlotDep`.
+  Only reachable via the `builder` feature, which no workspace crate enables.
+- PMS 8.3.3 says a slot in `slot=` must not carry a sub-slot, but `slot.rs:246-250`
+  parses one and two tests pin the non-compliant behaviour
+  (`test_subslot_with_operator`, and `"0/1.75="` in `test_slot_round_trip`).
+- The `builder` feature's tests never run in the gating job: no workspace crate
+  enables `builder`, and CI's `test` job uses default features. So
+  `test_version_builder_roundtrip` — the only test pinning builder-vs-parse `Eq` for
+  `Version` — is compiled out of the gate (it does run in the `coverage` job, which
+  uses `--all-features`).
+- `Version::base()` and `Version::without_suffix()` now have zero callers after
+  `de9bb272`, and `without_suffix`'s doc misattributes itself to PMS 8.3.1's `=V*`
+  glob, which matches on numeric components only.
+
+## Verified clean — `Version`'s comparison core
+
+Brute-forced by transcription into Python: 0 antisymmetry/transitivity/Eq/Hash
+violations across 672 three-component versions over a leading-zero-heavy alphabet,
+plus 10M randomised triples with letters, suffixes and revisions, plus an exhaustive
+`cmp_component` check over an 18-string digit alphabet. `hash_component` mirrors
+`cmp_component`'s pair-dependent branch choice, and `Hash` uses the same
+`max(numbers.len(), digits.len())` length rule as `cmp_without_revision`, so the two
+cannot diverge. `BTreeMap<Version, _>` in the pubgrub provider is safe.
