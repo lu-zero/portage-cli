@@ -102,11 +102,22 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         && let Some(cpvs) = read_gap_index(index, stamp)
     {
         let mut stale = false;
-        let mut out: Vec<(Cpv, CacheEntry)> =
-            cache_entries_parallel(std::slice::from_ref(repo), &cache_opts, |text| {
+        let (primary_rows, discovery_failed) =
+            match cache_entries_parallel(std::slice::from_ref(repo), &cache_opts, |text| {
                 CacheEntry::parse(text).map_err(crate::Error::from)
             })
             .await
+            {
+                Ok(rows) => (rows, false),
+                Err(e) => {
+                    tracing::error!(
+                        "repo '{}': metadata cache discovery failed, rescanning: {e}",
+                        repo.name()
+                    );
+                    (Vec::new(), true)
+                }
+            };
+        let mut out: Vec<(Cpv, CacheEntry)> = primary_rows
             .into_iter()
             .filter_map(|(cpv, e)| {
                 let entry = e.ok()?;
@@ -118,14 +129,22 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
                 }
             })
             .collect();
-        let primary_covered: HashSet<Cpv> = out.iter().map(|(cpv, _)| cpv.clone()).collect();
+        let mut md5_covered: HashSet<Cpv> = HashSet::new();
         let mut recovered = 0usize;
         for cpv in &cpvs {
-            if primary_covered.contains(cpv) {
-                recovered += 1;
-                continue;
+            if let Some(pos) = out.iter().position(|(candidate, _)| candidate == cpv) {
+                // Eclass freshness is not enough: a gap line exists because the
+                // primary `_md5_` did not match the ebuild. Drop the line only
+                // when that file now matches. Otherwise serve secondary.
+                if primary_md5_matches_ebuild(repo, cpv, &out[pos].1) {
+                    recovered += 1;
+                    md5_covered.insert(cpv.clone());
+                    continue;
+                }
+                out.swap_remove(pos);
             }
-            if let Ok(Some(entry)) = repo.cache_entry(cpv)
+            if let Some(entry) = secondary_cache_entry(repo, cpv)
+                && primary_md5_matches_ebuild(repo, cpv, &entry)
                 && repo.is_fresh_cached(&entry, &mut eclass_digests.by_name)
             {
                 recovered += 1;
@@ -134,11 +153,11 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         }
         // A pruned secondary would silently re-hide packages; fall through and
         // rebuild rather than resolve against a tree we can only partly see.
-        if !stale && recovered == cpvs.len() {
-            if cpvs.iter().any(|cpv| primary_covered.contains(cpv)) {
+        if !discovery_failed && !stale && recovered == cpvs.len() {
+            if !md5_covered.is_empty() {
                 let remaining: Vec<Cpv> = cpvs
                     .iter()
-                    .filter(|cpv| !primary_covered.contains(cpv))
+                    .filter(|cpv| !md5_covered.contains(*cpv))
                     .cloned()
                     .collect();
                 write_gap_index(index, stamp, remaining.iter());
@@ -161,7 +180,7 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
     }
 
     let scan = repo.ebuilds().ok();
-    let (bulk, secondary_bulk, ebuilds) = tokio::join!(
+    let (bulk_res, secondary_res, ebuilds) = tokio::join!(
         cache_entries_parallel_with_mtime(std::slice::from_ref(repo), &cache_opts, |text| {
             CacheEntry::parse(text).map_err(crate::Error::from)
         }),
@@ -176,7 +195,7 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
         }),
         async {
             match scan {
-                Some(s) => tokio::task::spawn_blocking(move || {
+                Some(s) => match tokio::task::spawn_blocking(move || {
                     s.into_iter()
                         .map(|e| {
                             let modified = std::fs::metadata(e.path().as_std_path())
@@ -187,11 +206,36 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
                         .collect::<Vec<_>>()
                 })
                 .await
-                .unwrap_or_default(),
+                {
+                    Ok(listed) => listed,
+                    Err(e) => {
+                        tracing::error!(
+                            "repo '{}': ebuild mtime walk failed, listing without mtimes: {e}",
+                            repo.name()
+                        );
+                        repo.ebuilds()
+                            .map(|iter| iter.into_iter().map(|e| (e, None)).collect())
+                            .unwrap_or_default()
+                    }
+                },
                 None => Vec::new(),
             }
         }
     );
+    let bulk = bulk_res.unwrap_or_else(|e| {
+        tracing::error!(
+            "repo '{}': primary cache read failed, sourcing ebuilds: {e}",
+            repo.name()
+        );
+        Vec::new()
+    });
+    let secondary_bulk = secondary_res.unwrap_or_else(|e| {
+        tracing::error!(
+            "repo '{}': secondary cache read failed, sourcing ebuilds: {e}",
+            repo.name()
+        );
+        Vec::new()
+    });
 
     let mut out: Vec<(Cpv, CacheEntry)> = Vec::with_capacity(bulk.len() + secondary_bulk.len());
     // The cache file's own mtime, per cpv — the "cache file serving e.cpv"
@@ -284,6 +328,32 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
 ///
 /// `None` on any mismatch or read failure — the caller then rescans, so a
 /// corrupt or partial sidecar costs time, never correctness.
+fn secondary_cache_entry(repo: &Repository, cpv: &Cpv) -> Option<CacheEntry> {
+    let pf = format!("{}-{}", cpv.cpn.package, cpv.version);
+    let path = repo
+        .secondary_cache_dir()?
+        .join(cpv.cpn.category.as_str())
+        .join(pf);
+    let text = std::fs::read_to_string(path.as_std_path()).ok()?;
+    CacheEntry::parse(&text).ok()
+}
+
+fn primary_md5_matches_ebuild(repo: &Repository, cpv: &Cpv, entry: &CacheEntry) -> bool {
+    let Some(recorded) = entry.md5.as_deref() else {
+        return false;
+    };
+    let pf = format!("{}-{}", cpv.cpn.package, cpv.version);
+    let path = repo
+        .path()
+        .join(cpv.cpn.category.as_str())
+        .join(cpv.cpn.package.as_str())
+        .join(format!("{pf}.ebuild"));
+    let Ok(bytes) = std::fs::read(path.as_std_path()) else {
+        return false;
+    };
+    recorded.eq_ignore_ascii_case(&format!("{:x}", md5::compute(&bytes)))
+}
+
 fn read_gap_index(path: &camino::Utf8Path, stamp: &str) -> Option<Vec<Cpv>> {
     let text = std::fs::read_to_string(path.as_std_path()).ok()?;
     let mut lines = text.lines();
@@ -447,20 +517,34 @@ async fn resolve_ebuilds(
         {
             Ok(sourced) => {
                 let mut eclasses = Vec::with_capacity(sourced.eclasses.len());
+                let mut eclass_unreadable = false;
                 for (name, path) in &sourced.eclasses {
-                    let digest = digests
-                        .by_path
-                        .entry(path.clone())
-                        .or_insert_with(|| {
-                            std::fs::read(path).ok().map(|bytes| md5::compute(&bytes))
-                        })
-                        .as_ref()
-                        .copied();
+                    let digest = match digests.by_path.get(path) {
+                        Some(cached) => *cached,
+                        None => {
+                            let computed =
+                                std::fs::read(path).ok().map(|bytes| md5::compute(&bytes));
+                            // A failed read is not memoized: the next ebuild retries it.
+                            if computed.is_some() {
+                                digests.by_path.insert(path.clone(), computed);
+                            }
+                            computed
+                        }
+                    };
                     if let Some(digest) = digest {
                         let name = portage_atom::interner::Interned::intern(name);
                         digests.by_name.insert(name, Some(digest));
                         eclasses.push((name, digest));
+                    } else {
+                        eclass_unreadable = true;
                     }
+                }
+                if eclass_unreadable {
+                    tracing::error!(
+                        "repo '{}': {cpv}: eclass could not be read, not caching the entry",
+                        repo.name()
+                    );
+                    continue;
                 }
                 let entry = CacheEntry {
                     metadata: sourced.metadata,
@@ -716,6 +800,62 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(sidecar).unwrap(),
             format!("{stamp}\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gap_line_is_kept_when_the_primary_md5_does_not_match_the_ebuild() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata/layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        std::fs::write(dir.path().join("profiles/categories"), "sys-apps\n").unwrap();
+        std::fs::write(dir.path().join("metadata/timestamp.chk"), "1\n").unwrap();
+        let repo = Repository::builder()
+            .user_cache_root(
+                camino::Utf8PathBuf::from_path_buf(cache_root.path().to_owned()).unwrap(),
+            )
+            .open(dir.path())
+            .unwrap();
+
+        let pkg_dir = dir.path().join("sys-apps/foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let ebuild_path = pkg_dir.join("foo-1.0.ebuild");
+        let ebuild = "EAPI=8\nDESCRIPTION=\"from-ebuild\"\nSLOT=0\n";
+        std::fs::write(&ebuild_path, ebuild).unwrap();
+        let cache_file = dir.path().join("metadata/md5-cache/sys-apps/foo-1.0");
+        std::fs::create_dir_all(cache_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &cache_file,
+            "EAPI=8\nDESCRIPTION=stale-primary\nSLOT=0\n_md5_=00000000000000000000000000000000\n",
+        )
+        .unwrap();
+
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        set_mtime(&ebuild_path, base);
+        set_mtime(&cache_file, base + Duration::from_secs(60));
+        let stamp = repo.sync_stamp().unwrap();
+        let sidecar = repo.sidecar_path(GAP_INDEX).unwrap();
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, format!("{stamp}\nsys-apps/foo-1.0\n")).unwrap();
+
+        let secondary_dir = repo.secondary_cache_dir().unwrap().join("sys-apps");
+        std::fs::create_dir_all(&secondary_dir).unwrap();
+        let digest = format!("{:x}", md5::compute(ebuild.as_bytes()));
+        std::fs::write(
+            secondary_dir.join("foo-1.0"),
+            format!("EAPI=8\nDESCRIPTION=from-secondary\nSLOT=0\n_md5_={digest}\n"),
+        )
+        .unwrap();
+
+        let entries = repo_entries(&repo).await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.metadata.description, "from-secondary");
+        let sidecar_text = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(
+            sidecar_text.contains("sys-apps/foo-1.0"),
+            "the gap line must stay while primary _md5_ does not match, got {sidecar_text}"
         );
     }
 
