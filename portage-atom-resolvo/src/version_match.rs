@@ -25,20 +25,7 @@ pub fn version_matches(
     glob: bool,
     constraint: &Version,
 ) -> bool {
-    match op {
-        Operator::Less => candidate < constraint,
-        Operator::LessOrEqual => candidate <= constraint,
-        Operator::Equal => {
-            if glob {
-                candidate.glob_matches(constraint)
-            } else {
-                candidate == constraint
-            }
-        }
-        Operator::GreaterOrEqual => candidate >= constraint,
-        Operator::Greater => candidate > constraint,
-        Operator::Approximate => candidate.base() == constraint.base(),
-    }
+    candidate.matches_operator(*op, glob, constraint)
 }
 
 #[cfg(test)]

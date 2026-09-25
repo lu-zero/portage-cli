@@ -101,7 +101,7 @@ PMS atom parser — the vocabulary every other crate speaks.
 - `struct Dep` — Full dependency atom with blocker, operator, version, slot, USE, repo
 - `enum Blocker` — `Weak` (!) or `Strong` (!!)
 - `enum DepEntry` — Dependency tree node: `Atom`, `UseConditional`, `AllOf`, `AnyOf`, `ExactlyOneOf`, `AtMostOneOf`
-- `struct Version` — PMS version with suffixes and revision: `glob_matches()`, `base()`
+- `struct Version` — PMS version with suffixes and revision: `glob_matches()`, `matches_operator()`, `base()`
 - `struct Revision(u64)` — Package revision (`-rN`)
 - `enum Operator` — `<`, `<=`, `=`, `~`, `>=`, `>`
 - `struct Suffix` / `enum SuffixKind` — Version suffix segment (`Alpha`, `Beta`, `Pre`, `Rc`, `Post`)

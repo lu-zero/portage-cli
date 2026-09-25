@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use gentoo_core::Arch;
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpn, Cpv, Dep, Operator, Version};
+use portage_atom::{Cpn, Cpv, Dep, Version};
 use portage_atom_pubgrub::{
     DroppedDep, IUseDefault, PackageDeps, PackageRepository, PackageVersions, RequiredUse,
     UseConfig, UseOverride,
@@ -755,26 +755,7 @@ pub fn mask_matches(mask_dep: &Dep, cpv: &Cpv) -> bool {
         return mask_dep.version.is_none();
     };
     let cand = &cpv.version;
-    match op {
-        Operator::Equal => {
-            if mask_dep.glob {
-                cand.glob_matches(mask_ver)
-            } else {
-                cand == mask_ver
-            }
-        }
-        Operator::GreaterOrEqual => cand >= mask_ver,
-        Operator::Greater => cand > mask_ver,
-        Operator::LessOrEqual => cand <= mask_ver,
-        Operator::Less => cand < mask_ver,
-        Operator::Approximate => {
-            let mut base_mask = mask_ver.clone();
-            base_mask.revision = Default::default();
-            let mut base_cand = cand.clone();
-            base_cand.revision = Default::default();
-            base_cand == base_mask
-        }
-    }
+    cand.matches_operator(op, mask_dep.glob, mask_ver)
 }
 
 /// Every loaded package fact: the main repo's md5-cache plus overlay/alias
@@ -2272,6 +2253,7 @@ pub fn find_autounmask_candidates(
 mod tests {
     use super::*;
     use crate::force_mask::{ForceMask, index_by_cpn};
+    use portage_atom::Operator;
     use portage_atom_pubgrub::{PackageRepository, UseFlagState};
     use portage_repo::{AcceptSet, LicenseGroupRegistry, Repository};
 

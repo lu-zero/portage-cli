@@ -147,26 +147,7 @@ impl Dep {
             return self.version.is_none();
         };
         let cand = &cpv.version;
-        match op {
-            Operator::Equal => {
-                if self.glob {
-                    cand.glob_matches(want)
-                } else {
-                    cand == want
-                }
-            }
-            Operator::GreaterOrEqual => cand >= want,
-            Operator::Greater => cand > want,
-            Operator::LessOrEqual => cand <= want,
-            Operator::Less => cand < want,
-            Operator::Approximate => {
-                let mut base_want = want.clone();
-                base_want.revision = Default::default();
-                let mut base_cand = cand.clone();
-                base_cand.revision = Default::default();
-                base_cand == base_want
-            }
-        }
+        cand.matches_operator(op, self.glob, want)
     }
 
     /// Create a minimal dependency from a [`Cpn`]

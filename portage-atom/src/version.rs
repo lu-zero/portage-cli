@@ -457,6 +457,78 @@ impl Version {
         }
     }
 
+    /// Whether this version satisfies a PMS dependency operator
+    ///
+    /// `glob` selects the `=cat/pkg-1.2*` prefix form and is ignored for
+    /// operators other than [`Operator::Equal`]. See
+    /// [PMS 8.3.1](https://projects.gentoo.org/pms/9/pms.html#operators).
+    pub fn matches_operator(&self, op: Operator, glob: bool, constraint: &Self) -> bool {
+        match op {
+            Operator::Less => self < constraint,
+            Operator::LessOrEqual => self <= constraint,
+            Operator::Equal if glob => self.glob_matches(constraint),
+            Operator::Equal => self == constraint,
+            Operator::GreaterOrEqual => self >= constraint,
+            Operator::Greater => self > constraint,
+            Operator::Approximate => self.cmp_without_revision(constraint) == Ordering::Equal,
+        }
+    }
+
+    fn cmp_without_revision(&self, other: &Self) -> Ordering {
+        // Algorithms 3.2–3.3: pairwise component compare; when one side runs
+        // out of components first, the longer version is greater (no zero-pad).
+        let a_len = self.numbers.len().max(self.digits.len());
+        let b_len = other.numbers.len().max(other.digits.len());
+        let shared = a_len.min(b_len);
+        for i in 0..shared {
+            let a = component_digits(self, i).expect("component in range");
+            let b = component_digits(other, i).expect("component in range");
+            match cmp_component(i, a.as_ref(), b.as_ref()) {
+                Ordering::Equal => continue,
+                o => return o,
+            }
+        }
+        match a_len.cmp(&b_len) {
+            Ordering::Equal => {}
+            o => return o,
+        }
+
+        // Algorithm 3.4: letter (absent sorts before any letter)
+        let a_letter = self.letter.unwrap_or('\0');
+        let b_letter = other.letter.unwrap_or('\0');
+        match a_letter.cmp(&b_letter) {
+            Ordering::Equal => {}
+            o => return o,
+        }
+
+        // Algorithms 3.5–3.6: suffixes (_p above base; others below)
+        let max_suffixes = self.suffixes.len().max(other.suffixes.len());
+        for i in 0..max_suffixes {
+            match (self.suffixes.get(i), other.suffixes.get(i)) {
+                (Some(a), Some(b)) => match a.cmp(b) {
+                    Ordering::Equal => continue,
+                    o => return o,
+                },
+                (Some(s), None) => {
+                    return if s.kind == SuffixKind::P {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Less
+                    };
+                }
+                (None, Some(s)) => {
+                    return if s.kind == SuffixKind::P {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    };
+                }
+                (None, None) => break,
+            }
+        }
+        Ordering::Equal
+    }
+
     /// Return the version stripped of suffixes and revision, for `*` glob
     /// comparison per [PMS 8.3.1]
     ///
@@ -514,60 +586,11 @@ impl PartialOrd for Version {
 
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Algorithms 3.2–3.3: pairwise component compare; when one side runs
-        // out of components first, the longer version is greater (no zero-pad).
-        let a_len = self.numbers.len().max(self.digits.len());
-        let b_len = other.numbers.len().max(other.digits.len());
-        let shared = a_len.min(b_len);
-        for i in 0..shared {
-            let a = component_digits(self, i).expect("component in range");
-            let b = component_digits(other, i).expect("component in range");
-            match cmp_component(i, a.as_ref(), b.as_ref()) {
-                Ordering::Equal => continue,
-                o => return o,
-            }
+        // Algorithm 3.7: revision is compared after every other component.
+        match self.cmp_without_revision(other) {
+            Ordering::Equal => self.revision.cmp(&other.revision),
+            ordering => ordering,
         }
-        match a_len.cmp(&b_len) {
-            Ordering::Equal => {}
-            o => return o,
-        }
-
-        // Algorithm 3.4: letter (absent sorts before any letter)
-        let a_letter = self.letter.unwrap_or('\0');
-        let b_letter = other.letter.unwrap_or('\0');
-        match a_letter.cmp(&b_letter) {
-            Ordering::Equal => {}
-            o => return o,
-        }
-
-        // Algorithms 3.5–3.6: suffixes (_p above base; others below)
-        let max_suffixes = self.suffixes.len().max(other.suffixes.len());
-        for i in 0..max_suffixes {
-            match (self.suffixes.get(i), other.suffixes.get(i)) {
-                (Some(a), Some(b)) => match a.cmp(b) {
-                    Ordering::Equal => continue,
-                    o => return o,
-                },
-                (Some(s), None) => {
-                    return if s.kind == SuffixKind::P {
-                        Ordering::Greater
-                    } else {
-                        Ordering::Less
-                    };
-                }
-                (None, Some(s)) => {
-                    return if s.kind == SuffixKind::P {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    };
-                }
-                (None, None) => break,
-            }
-        }
-
-        // Algorithm 3.7: revision
-        self.revision.cmp(&other.revision)
     }
 }
 
@@ -1026,6 +1049,31 @@ mod tests {
                 .unwrap()
                 .glob_matches(&Version::parse("1.01").unwrap())
         );
+    }
+
+    #[test]
+    fn operator_matching_handles_glob_and_revision_free_approximation() {
+        let candidate = Version::parse("1.2.3-r2").unwrap();
+        assert!(candidate.matches_operator(
+            Operator::Approximate,
+            false,
+            &Version::parse("1.2.3").unwrap()
+        ));
+        assert!(!candidate.matches_operator(
+            Operator::Approximate,
+            false,
+            &Version::parse("1.2.4").unwrap()
+        ));
+        assert!(Version::parse("1.2.3.4").unwrap().matches_operator(
+            Operator::Equal,
+            true,
+            &Version::parse("1.2").unwrap(),
+        ));
+        assert!(!Version::parse("1.2").unwrap().matches_operator(
+            Operator::Equal,
+            true,
+            &Version::parse("1.2.3").unwrap(),
+        ));
     }
 
     #[test]

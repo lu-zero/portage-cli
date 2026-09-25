@@ -1,7 +1,5 @@
-use std::cmp::Ordering;
-
 use anyhow::Result;
-use portage_atom::{Cpv, Dep, Operator};
+use portage_atom::{Cpv, Dep};
 use portage_repo::RepoSet;
 use portage_vdb::Vdb;
 
@@ -44,31 +42,7 @@ fn best_ebuild_path<'a>(
 }
 
 pub fn dep_matches_cpv(dep: &Dep, cpv: &Cpv) -> bool {
-    if dep.cpn != cpv.cpn {
-        return false;
-    }
-    match (&dep.version, &dep.op) {
-        (None, _) => true,
-        (Some(v), Some(Operator::Equal)) if dep.glob => cpv.version.glob_matches(v),
-        (Some(v), Some(op)) => {
-            let ord = cpv.version.cmp(v);
-            match op {
-                Operator::Less => ord == Ordering::Less,
-                Operator::LessOrEqual => ord != Ordering::Greater,
-                Operator::Equal => ord == Ordering::Equal,
-                Operator::Approximate => {
-                    let mut base = v.clone();
-                    base.revision = Default::default();
-                    let mut cv = cpv.version.clone();
-                    cv.revision = Default::default();
-                    cv == base
-                }
-                Operator::GreaterOrEqual => ord != Ordering::Less,
-                Operator::Greater => ord == Ordering::Greater,
-            }
-        }
-        _ => true,
-    }
+    dep.matches_cpv(cpv, None)
 }
 
 #[cfg(test)]

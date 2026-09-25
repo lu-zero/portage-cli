@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use portage_atom::interner::{DefaultInterner, Interned};
-use portage_atom::{Cpv, Dep, Operator, Revision, UseFlagLookup};
+use portage_atom::{Cpv, Dep, UseFlagLookup};
 
 use crate::IUseDefault;
 
@@ -593,7 +593,6 @@ fn apply_group_clears(
 /// atom-matching operators (including `~` revision-stripping and `=*` glob)
 /// without taking a solver dependency.
 pub fn atom_matches_cpv(dep: &Dep, cpv: &Cpv, slot: Option<Interned<DefaultInterner>>) -> bool {
-    use std::cmp::Ordering;
     if dep.cpn != cpv.cpn {
         return false;
     }
@@ -604,29 +603,7 @@ pub fn atom_matches_cpv(dep: &Dep, cpv: &Cpv, slot: Option<Interned<DefaultInter
     }
     match (dep.op, &dep.version) {
         (None, None) => true,
-        (Some(op), Some(ver)) => {
-            let cmp = cpv.version.cmp(ver);
-            match op {
-                Operator::Equal => {
-                    if dep.glob {
-                        cpv.version.glob_matches(ver)
-                    } else {
-                        cmp == Ordering::Equal
-                    }
-                }
-                Operator::GreaterOrEqual => cmp != Ordering::Less,
-                Operator::Greater => cmp == Ordering::Greater,
-                Operator::LessOrEqual => cmp != Ordering::Greater,
-                Operator::Less => cmp == Ordering::Less,
-                Operator::Approximate => {
-                    let mut base_target = ver.clone();
-                    base_target.revision = Revision::default();
-                    let mut base_candidate = cpv.version.clone();
-                    base_candidate.revision = Revision::default();
-                    base_candidate == base_target
-                }
-            }
-        }
+        (Some(op), Some(ver)) => cpv.version.matches_operator(op, dep.glob, ver),
         _ => false,
     }
 }

@@ -581,28 +581,7 @@ pub(crate) fn version_matches_operator(
     glob: bool,
     target: &Version,
 ) -> bool {
-    use std::cmp::Ordering;
-    let cmp = candidate.cmp(target);
-    match op {
-        portage_atom::Operator::Equal => {
-            if glob {
-                candidate.glob_matches(target)
-            } else {
-                cmp == Ordering::Equal
-            }
-        }
-        portage_atom::Operator::GreaterOrEqual => cmp != Ordering::Less,
-        portage_atom::Operator::Greater => cmp == Ordering::Greater,
-        portage_atom::Operator::LessOrEqual => cmp != Ordering::Greater,
-        portage_atom::Operator::Less => cmp == Ordering::Less,
-        portage_atom::Operator::Approximate => {
-            let mut base_target = target.clone();
-            base_target.revision = portage_atom::Revision::default();
-            let mut base_candidate = candidate.clone();
-            base_candidate.revision = portage_atom::Revision::default();
-            base_candidate == base_target
-        }
-    }
+    candidate.matches_operator(op, glob, target)
 }
 
 pub(crate) fn resolve_flag_state(
