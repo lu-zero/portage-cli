@@ -1,5 +1,7 @@
 //! Installed package representation
 
+use std::sync::Arc;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::interner::{DefaultInterner, Interned};
 use portage_atom::{Cpv, DepEntry, Pf, Slot};
@@ -8,7 +10,7 @@ use portage_metadata::{Eapi, IUse};
 use crate::Result;
 use crate::contents::ContentsEntry;
 use crate::error::Error;
-use crate::field_cache;
+use crate::field_cache::{FieldCache, PackageFields, TypedField};
 
 /// An interned SLOT name — the part before any `/`, as stored per package
 ///
@@ -25,13 +27,19 @@ pub type SlotName = Interned<DefaultInterner>;
 pub struct InstalledPackage {
     path: Utf8PathBuf,
     cpv: Cpv,
+    fields: Arc<PackageFields>,
+    /// Keeps the run cache alive while a package handle outlives its `Vdb`.
+    _cache: Arc<FieldCache>,
 }
 
 impl InstalledPackage {
-    pub(crate) fn from_dir(path: &Utf8Path, cpv: Cpv) -> Self {
+    pub(crate) fn from_dir(path: &Utf8Path, cpv: Cpv, cache: Arc<FieldCache>) -> Self {
+        let fields = cache.package(path);
         Self {
             path: path.to_path_buf(),
             cpv,
+            fields,
+            _cache: cache,
         }
     }
 
@@ -86,25 +94,29 @@ impl InstalledPackage {
 
     fn read_field_opt(&self, name: &str) -> Result<Option<String>> {
         let p = self.path.join(name);
-        field_cache::get_or_fetch(&p, || match std::fs::read_to_string(&p) {
-            Ok(s) => Ok(Some(s.trim().to_string())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-        })
-        .map_err(|source| Error::Io { path: p, source })
+        self.fields
+            .get_raw(name, || match std::fs::read_to_string(&p) {
+                Ok(s) => Ok(Some(s.trim().to_string())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e),
+            })
+            .map_err(|source| Error::Io { path: p, source })
     }
 
     /// The package description
     pub fn description(&self) -> Result<String> {
-        self.read_field("DESCRIPTION")
+        self.fields
+            .get_or_parse(TypedField::Description, || self.read_field("DESCRIPTION"))
     }
 
     /// The EAPI this package was built with
     pub fn eapi(&self) -> Result<Eapi> {
-        let raw = self.read_field("EAPI")?;
-        raw.parse().map_err(|_| Error::MalformedPackage {
-            path: self.path.clone(),
-            reason: format!("invalid EAPI: {raw}"),
+        self.fields.get_or_parse(TypedField::Eapi, || {
+            let raw = self.read_field("EAPI")?;
+            raw.parse().map_err(|_| Error::MalformedPackage {
+                path: self.path.clone(),
+                reason: format!("invalid EAPI: {raw}"),
+            })
         })
     }
 
@@ -115,24 +127,27 @@ impl InstalledPackage {
     /// [`portage_atom::Dep::matches_cpv`]. Use [`Self::slot_main`] for just
     /// the name.
     pub fn slot(&self) -> Result<Slot> {
-        let raw = self.read_field("SLOT")?;
-        // An empty but present SLOT is the legitimate old-EAPI implicit-slot
-        // case, and portage reads it as slot "0" (`_pkg_str`'s
-        // `slot_invalid` fallback). An unreadable one stays an error, so
-        // callers can still tell "no slot recorded" from "cannot read it".
-        if raw.is_empty() {
-            return Ok(Slot::new("0"));
-        }
-        Slot::parse(&raw).map_err(|_| Error::MalformedPackage {
-            path: self.path.clone(),
-            reason: format!("invalid SLOT: {raw}"),
+        self.fields.get_or_parse(TypedField::Slot, || {
+            let raw = self.read_field("SLOT")?;
+            // An empty but present SLOT is the legitimate old-EAPI implicit-slot
+            // case, and portage reads it as slot "0" (`_pkg_str`'s
+            // `slot_invalid` fallback). An unreadable one stays an error, so
+            // callers can still tell "no slot recorded" from "cannot read it".
+            if raw.is_empty() {
+                return Ok(Slot::new("0"));
+            }
+            Slot::parse(&raw).map_err(|_| Error::MalformedPackage {
+                path: self.path.clone(),
+                reason: format!("invalid SLOT: {raw}"),
+            })
         })
     }
 
     /// The raw `SLOT` file contents, for the rare caller that needs the text
     /// exactly as recorded rather than its parts.
     pub fn slot_raw(&self) -> Result<String> {
-        self.read_field("SLOT")
+        self.fields
+            .get_or_parse(TypedField::SlotRaw, || self.read_field("SLOT"))
     }
 
     /// The main slot only (the part before `/`, e.g. `0` from `0/5.1`)
@@ -156,9 +171,11 @@ impl InstalledPackage {
     ///
     /// Interned: a system draws these from the two or three repos it has configured.
     pub fn repository(&self) -> Result<Option<Interned<DefaultInterner>>> {
-        Ok(self
-            .read_field_opt("repository")?
-            .map(|r| Interned::intern(&r)))
+        self.fields.get_or_parse(TypedField::Repository, || {
+            Ok(self
+                .read_field_opt("repository")?
+                .map(|r| Interned::intern(&r)))
+        })
     }
 
     /// USE flags active at build time
@@ -167,8 +184,10 @@ impl InstalledPackage {
     /// database (3257 tokens over 275 distinct names on one measured host),
     /// and every caller that keeps them was interning them anyway.
     pub fn use_flags(&self) -> Result<Vec<Interned<DefaultInterner>>> {
-        let raw = self.read_field("USE")?;
-        Ok(raw.split_whitespace().map(Interned::intern).collect())
+        self.fields.get_or_parse(TypedField::UseFlags, || {
+            let raw = self.read_field("USE")?;
+            Ok(raw.split_whitespace().map(Interned::intern).collect())
+        })
     }
 
     /// IUSE flags declared by the package, with their `+`/`-` defaults
@@ -177,47 +196,55 @@ impl InstalledPackage {
     /// stop stripping the prefix and re-interning what it already holds —
     /// use `Interned::from(&iu)` for the bare name.
     pub fn iuse(&self) -> Result<Vec<IUse>> {
-        let raw = self.read_field("IUSE")?;
-        IUse::parse_line(&raw).map_err(|e| Error::MalformedPackage {
-            path: self.path.clone(),
-            reason: format!("invalid IUSE: {e}"),
+        self.fields.get_or_parse(TypedField::Iuse, || {
+            let raw = self.read_field("IUSE")?;
+            IUse::parse_line(&raw).map_err(|e| Error::MalformedPackage {
+                path: self.path.clone(),
+                reason: format!("invalid IUSE: {e}"),
+            })
         })
     }
 
     /// Build timestamp (Unix epoch)
     pub fn build_time(&self) -> Result<Option<u64>> {
-        self.read_field_opt("BUILD_TIME")?
-            .map(|s| {
-                s.parse().map_err(|_| Error::MalformedPackage {
-                    path: self.path.clone(),
-                    reason: format!("invalid BUILD_TIME: {s}"),
+        self.fields.get_or_parse(TypedField::BuildTime, || {
+            self.read_field_opt("BUILD_TIME")?
+                .map(|s| {
+                    s.parse().map_err(|_| Error::MalformedPackage {
+                        path: self.path.clone(),
+                        reason: format!("invalid BUILD_TIME: {s}"),
+                    })
                 })
-            })
-            .transpose()
+                .transpose()
+        })
     }
 
     /// Installed size in bytes
     pub fn size(&self) -> Result<Option<u64>> {
-        self.read_field_opt("SIZE")?
-            .map(|s| {
-                s.parse().map_err(|_| Error::MalformedPackage {
-                    path: self.path.clone(),
-                    reason: format!("invalid SIZE: {s}"),
+        self.fields.get_or_parse(TypedField::Size, || {
+            self.read_field_opt("SIZE")?
+                .map(|s| {
+                    s.parse().map_err(|_| Error::MalformedPackage {
+                        path: self.path.clone(),
+                        reason: format!("invalid SIZE: {s}"),
+                    })
                 })
-            })
-            .transpose()
+                .transpose()
+        })
     }
 
     /// Installation counter (monotonically increasing)
     pub fn counter(&self) -> Result<Option<u64>> {
-        self.read_field_opt("COUNTER")?
-            .map(|s| {
-                s.parse().map_err(|_| Error::MalformedPackage {
-                    path: self.path.clone(),
-                    reason: format!("invalid COUNTER: {s}"),
+        self.fields.get_or_parse(TypedField::Counter, || {
+            self.read_field_opt("COUNTER")?
+                .map(|s| {
+                    s.parse().map_err(|_| Error::MalformedPackage {
+                        path: self.path.clone(),
+                        reason: format!("invalid COUNTER: {s}"),
+                    })
                 })
-            })
-            .transpose()
+                .transpose()
+        })
     }
 
     /// Keywords. Empty if the KEYWORDS file is absent
@@ -225,69 +252,73 @@ impl InstalledPackage {
     /// Interned: the vocabulary is one entry per arch plus its `~` form, so a
     /// whole database's keywords resolve to a few dozen distinct strings.
     pub fn keywords(&self) -> Result<Vec<Interned<DefaultInterner>>> {
-        let raw = self.read_field_opt("KEYWORDS")?.unwrap_or_default();
-        Ok(raw.split_whitespace().map(Interned::intern).collect())
+        self.fields.get_or_parse(TypedField::Keywords, || {
+            let raw = self.read_field_opt("KEYWORDS")?.unwrap_or_default();
+            Ok(raw.split_whitespace().map(Interned::intern).collect())
+        })
     }
 
     /// License string
     pub fn license(&self) -> Result<Option<String>> {
-        self.read_field_opt("LICENSE")
+        self.fields
+            .get_or_parse(TypedField::License, || self.read_field_opt("LICENSE"))
     }
 
     /// Homepage URL(s)
     pub fn homepage(&self) -> Result<Option<String>> {
-        self.read_field_opt("HOMEPAGE")
+        self.fields
+            .get_or_parse(TypedField::Homepage, || self.read_field_opt("HOMEPAGE"))
     }
 
     // -- Dependency fields --
 
     /// DEPEND (build dependencies) parsed as a dep tree
     pub fn depend(&self) -> Result<Option<Vec<DepEntry>>> {
-        self.read_dep_field("DEPEND")
+        self.read_dep_field(TypedField::Depend, "DEPEND")
     }
 
     /// RDEPEND (runtime dependencies) parsed as a dep tree
     pub fn rdepend(&self) -> Result<Option<Vec<DepEntry>>> {
-        self.read_dep_field("RDEPEND")
+        self.read_dep_field(TypedField::Rdepend, "RDEPEND")
     }
 
     /// BDEPEND (build-tool dependencies) parsed as a dep tree
     pub fn bdepend(&self) -> Result<Option<Vec<DepEntry>>> {
-        self.read_dep_field("BDEPEND")
+        self.read_dep_field(TypedField::Bdepend, "BDEPEND")
     }
 
     /// PDEPEND (post-merge dependencies) parsed as a dep tree
     pub fn pdepend(&self) -> Result<Option<Vec<DepEntry>>> {
-        self.read_dep_field("PDEPEND")
+        self.read_dep_field(TypedField::Pdepend, "PDEPEND")
     }
 
     /// IDEPEND (install-time dependencies) parsed as a dep tree
     pub fn idepend(&self) -> Result<Option<Vec<DepEntry>>> {
-        self.read_dep_field("IDEPEND")
+        self.read_dep_field(TypedField::Idepend, "IDEPEND")
     }
 
-    fn read_dep_field(&self, name: &str) -> Result<Option<Vec<DepEntry>>> {
-        let raw = match self.read_field_opt(name)? {
-            Some(s) if !s.is_empty() => s,
-            _ => return Ok(None),
-        };
-        DepEntry::parse(&raw)
-            .map(Some)
-            .map_err(|source| Error::MalformedPackage {
-                path: self.path.clone(),
-                reason: format!("failed to parse {name}: {source}"),
-            })
+    fn read_dep_field(&self, field: TypedField, name: &str) -> Result<Option<Vec<DepEntry>>> {
+        self.fields.get_or_parse(field, || {
+            let raw = match self.read_field_opt(name)? {
+                Some(s) if !s.is_empty() => s,
+                _ => return Ok(None),
+            };
+            DepEntry::parse(&raw)
+                .map(Some)
+                .map_err(|source| Error::MalformedPackage {
+                    path: self.path.clone(),
+                    reason: format!("failed to parse {name}: {source}"),
+                })
+        })
     }
 
     // -- CONTENTS --
     //
-    // Deliberately outside `field_cache`. That cache exists for the small
-    // fields a depgraph build re-reads 3-4 times (USE, IUSE, SLOT); CONTENTS
-    // averages ~216 KB and is the whole installed-file list, so memoizing it
-    // retains the entire VDB's file list for the process lifetime and hands
-    // back a full copy per hit. Reading it fresh also keeps it correct
-    // against a VDB another process is writing, which the cache — invalidated
-    // only by this process's own `register`/`unregister` — is not.
+    // Deliberately outside `field_cache`. The cache is for small metadata
+    // fields a depgraph build reads repeatedly; CONTENTS averages ~216 KB and
+    // is the whole installed-file list, so retaining it would keep the VDB's
+    // file list live and return a full copy per hit. Reading it fresh also
+    // preserves the existing external-writer behavior.
 
     /// Parse the CONTENTS file — the list of files installed by this package
     pub fn contents(&self) -> Result<Vec<ContentsEntry>> {
@@ -392,7 +423,7 @@ mod tests {
             ("repository", "gentoo"),
         ];
         let pkg_dir = make_fake_pkg(tmp.path(), "app-shells", "bash-5.3_p9-r2", &fields);
-        let pkg = InstalledPackage::from_dir(&pkg_dir, cpv);
+        let pkg = InstalledPackage::from_dir(&pkg_dir, cpv, FieldCache::for_root(&pkg_dir));
 
         assert_eq!(pkg.category(), "app-shells");
         assert_eq!(pkg.pf(), "bash-5.3_p9-r2");
@@ -417,7 +448,7 @@ mod tests {
         let contents = "dir /etc\nobj /etc/foo abc123 100\nsym /etc/bar -> baz 200\n";
         let fields = [("CONTENTS", contents)];
         let pkg_dir = make_fake_pkg(tmp.path(), "app-shells", "bash-5.3", &fields);
-        let pkg = InstalledPackage::from_dir(&pkg_dir, cpv);
+        let pkg = InstalledPackage::from_dir(&pkg_dir, cpv, FieldCache::for_root(&pkg_dir));
 
         let entries = pkg.contents().unwrap();
         assert_eq!(entries.len(), 3);
@@ -431,7 +462,7 @@ mod tests {
         let contents = "dir /etc\nobj /etc/foo abc123 100\n";
         let fields = [("CONTENTS", contents)];
         let pkg_dir = make_fake_pkg(tmp.path(), "app-shells", "bash-5.3", &fields);
-        let pkg = InstalledPackage::from_dir(&pkg_dir, cpv);
+        let pkg = InstalledPackage::from_dir(&pkg_dir, cpv, FieldCache::for_root(&pkg_dir));
 
         assert!(pkg.owns(Utf8Path::new("/etc/foo")).unwrap());
         assert!(!pkg.owns(Utf8Path::new("/etc/bar")).unwrap());

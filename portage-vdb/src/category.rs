@@ -5,6 +5,7 @@ use std::sync::Arc;
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpv, Pf};
 
+use crate::field_cache::FieldCache;
 use crate::package::InstalledPackage;
 
 pub(crate) type PackageFilter = dyn Fn(&InstalledPackage) -> bool + Send + Sync;
@@ -15,11 +16,16 @@ type CategoryFilter = dyn Fn(&Category) -> bool + Send + Sync;
 pub struct Category {
     name: String,
     path: Utf8PathBuf,
+    field_cache: Arc<FieldCache>,
 }
 
 impl Category {
-    pub(crate) fn new(name: String, path: Utf8PathBuf) -> Self {
-        Self { name, path }
+    pub(crate) fn new(name: String, path: Utf8PathBuf, field_cache: Arc<FieldCache>) -> Self {
+        Self {
+            name,
+            path,
+            field_cache,
+        }
     }
 
     /// The category name (e.g. `app-shells`)
@@ -39,7 +45,11 @@ impl Category {
 
     /// Lazy iterator over all installed packages in this category, sorted by CPV
     pub fn packages(&self) -> Packages {
-        Packages::new(self.path.clone(), self.name.clone())
+        Packages::new(
+            self.path.clone(),
+            self.name.clone(),
+            Arc::clone(&self.field_cache),
+        )
     }
 
     /// Look up a specific installed package by PF (e.g. `bash-5.3_p9-r2`)
@@ -49,7 +59,11 @@ impl Category {
             return None;
         }
         let cpv = parse_cpv(&self.name, pf)?;
-        Some(InstalledPackage::from_dir(&path, cpv))
+        Some(InstalledPackage::from_dir(
+            &path,
+            cpv,
+            Arc::clone(&self.field_cache),
+        ))
     }
 }
 
@@ -60,6 +74,7 @@ impl Category {
 pub struct Packages {
     path: Utf8PathBuf,
     category: String,
+    field_cache: Arc<FieldCache>,
     filter: Option<Arc<PackageFilter>>,
 }
 
@@ -70,10 +85,11 @@ pub struct PackagesIter {
 }
 
 impl Packages {
-    fn new(path: Utf8PathBuf, category: String) -> Self {
+    fn new(path: Utf8PathBuf, category: String, field_cache: Arc<FieldCache>) -> Self {
         Self {
             path,
             category,
+            field_cache,
             filter: None,
         }
     }
@@ -98,6 +114,7 @@ impl IntoIterator for Packages {
     type IntoIter = PackagesIter;
 
     fn into_iter(self) -> PackagesIter {
+        let field_cache = Arc::clone(&self.field_cache);
         let Ok(entries) = std::fs::read_dir(&self.path) else {
             return PackagesIter {
                 entries: Vec::new().into_iter(),
@@ -119,7 +136,11 @@ impl IntoIterator for Packages {
                 }
                 let cpv = parse_cpv(&self.category, pf)?;
                 let utf8_path: Utf8PathBuf = path.try_into().ok()?;
-                Some(InstalledPackage::from_dir(&utf8_path, cpv))
+                Some(InstalledPackage::from_dir(
+                    &utf8_path,
+                    cpv,
+                    Arc::clone(&field_cache),
+                ))
             })
             .collect();
         packages.sort_by(|a, b| a.cpv().cmp(b.cpv()));
@@ -159,6 +180,7 @@ impl Iterator for PackagesIter {
 /// ```
 pub struct Categories {
     root: Utf8PathBuf,
+    field_cache: Arc<FieldCache>,
     filter: Option<Arc<CategoryFilter>>,
 }
 
@@ -169,8 +191,12 @@ pub struct CategoriesIter {
 }
 
 impl Categories {
-    pub(crate) fn new(root: Utf8PathBuf) -> Self {
-        Self { root, filter: None }
+    pub(crate) fn new(root: Utf8PathBuf, field_cache: Arc<FieldCache>) -> Self {
+        Self {
+            root,
+            field_cache,
+            filter: None,
+        }
     }
 
     /// Retain only categories matching the predicate
@@ -193,6 +219,7 @@ impl IntoIterator for Categories {
     type IntoIter = CategoriesIter;
 
     fn into_iter(self) -> CategoriesIter {
+        let field_cache = Arc::clone(&self.field_cache);
         let mut entries: Vec<Category> = std::fs::read_dir(&self.root)
             .into_iter()
             .flatten()
@@ -204,7 +231,7 @@ impl IntoIterator for Categories {
                 }
                 let name = path.file_name()?.to_str()?.to_string();
                 let utf8_path: Utf8PathBuf = path.try_into().ok()?;
-                Some(Category::new(name, utf8_path))
+                Some(Category::new(name, utf8_path, Arc::clone(&field_cache)))
             })
             .collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));

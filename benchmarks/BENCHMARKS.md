@@ -848,4 +848,26 @@ The historical row was reproduced from a temporary detached worktree at `dc57ead
 
 ---
 
+### 29. Run-scoped parsed VDB fields (thalia, 2026-09-25)
+
+The ignored `portage-vdb` test `field_cache::tests::benchmark_parsed_metadata_reuse` builds synthetic packages and repeatedly reads EAPI, SLOT, USE, IUSE, and RDEPEND through independent live VDB handles. The exact `9bc6c785` baseline used the process-wide raw-string cache; the current tree shares parsed values through a weak-root run cache. Each row is the median of three release-test runs after a warm-up scan on this host:
+
+| Packages | `9bc6c785` repeated parsing | Current parsed cache | Reduction |
+|---------:|----------------------------:|--------------------:|----------:|
+| 64 | 1.532920 ms | 477.587 µs | 68.8% |
+| 128 | 3.080220 ms | 849.951 µs | 72.4% |
+| 256 | 4.152914 ms | 1.234116 ms | 70.3% |
+
+This is a synthetic parsed-field workload, not a full `em -p` or merge claim. The current cache retains raw and typed values only while live VDB/package handles exist; `register`/`unregister` clear one package without a global `retain()`. External writes remain invisible to a live cache, matching the prior push-invalidation policy. No separate allocation profile was run.
+
+Reproduction on the current tree:
+
+```sh
+cargo test --release -p portage-vdb field_cache::tests::benchmark_parsed_metadata_reuse --lib -- --ignored --nocapture
+```
+
+The historical row was reproduced from a temporary detached worktree at `9bc6c785`; it was removed after the run.
+
+---
+
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

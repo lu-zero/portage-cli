@@ -1,5 +1,7 @@
 //! VDB write API: package registration (merge) and removal (unmerge)
 
+use std::sync::Arc;
+
 use camino::{Utf8Path, Utf8PathBuf};
 use portage_atom::{Cpn, Cpv, Pf};
 
@@ -223,9 +225,13 @@ impl Vdb {
         // Drop any fields cached for this entry (e.g. a same-version rebuild
         // overwriting USE in place) so later reads in this process see what
         // was just written, not whatever an earlier scan cached.
-        crate::field_cache::invalidate_entry(&pkg_dir);
+        self.field_cache().invalidate_package(&pkg_dir);
 
-        Ok(InstalledPackage::from_dir(&pkg_dir, spec.cpv.clone()))
+        Ok(InstalledPackage::from_dir(
+            &pkg_dir,
+            spec.cpv.clone(),
+            Arc::clone(self.field_cache()),
+        ))
     }
 
     /// Remove a package's VDB directory
@@ -238,7 +244,7 @@ impl Vdb {
             path: path.clone(),
             source,
         })?;
-        crate::field_cache::invalidate_entry(&path);
+        self.field_cache().invalidate_package(&path);
         Ok(())
     }
 
@@ -287,7 +293,7 @@ impl Vdb {
                 continue;
             }
             let cpv = Cpv::from_parts(category, package_name, pf.version);
-            let pkg = InstalledPackage::from_dir(&pkg_path, cpv);
+            let pkg = InstalledPackage::from_dir(&pkg_path, cpv, Arc::clone(self.field_cache()));
             let Ok(pkg_slot) = pkg.slot() else {
                 continue;
             };
@@ -564,6 +570,60 @@ mod tests {
             "the pre-rebuild handle must also see the new value: it's the same on-disk \
              entry and the cache is keyed by path, not by InstalledPackage instance"
         );
+    }
+
+    #[test]
+    fn register_invalidates_parsed_field_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root: camino::Utf8PathBuf = tmp.path().to_path_buf().try_into().unwrap();
+        let vdb = Vdb::open(root.clone()).unwrap();
+        let cpv = Cpv::parse("app-shells/testsh-1.0").unwrap();
+
+        let mut first = make_spec(cpv.clone());
+        first.description = "old description".into();
+        first.slot = "0".into();
+        first.use_flags = vec!["old".into()];
+        first.iuse = vec!["+old".into()];
+        first.rdepend = Some("sys-libs/old".into());
+        first.size = 10;
+        let old = vdb.register(&first).unwrap();
+        assert_eq!(old.description().unwrap(), "old description");
+        assert_eq!(old.slot().unwrap().to_string(), "0");
+        assert_eq!(old.use_flags().unwrap(), ["old"]);
+        assert_eq!(old.iuse().unwrap()[0].to_string(), "+old");
+        assert_eq!(
+            old.rdepend().unwrap().unwrap()[0].to_string(),
+            "sys-libs/old"
+        );
+        assert_eq!(old.size().unwrap(), Some(10));
+        let other_vdb = Vdb::open(&root).unwrap();
+        let other_old = other_vdb
+            .category("app-shells")
+            .unwrap()
+            .package("testsh-1.0")
+            .unwrap();
+        assert_eq!(other_old.use_flags().unwrap(), ["old"]);
+
+        let mut second = make_spec(cpv);
+        second.description = "new description".into();
+        second.slot = "2".into();
+        second.use_flags = vec!["new".into()];
+        second.iuse = vec!["+new".into()];
+        second.rdepend = Some("sys-libs/new".into());
+        second.size = 20;
+        let new = vdb.register(&second).unwrap();
+
+        for pkg in [&old, &new, &other_old] {
+            assert_eq!(pkg.description().unwrap(), "new description");
+            assert_eq!(pkg.slot().unwrap().to_string(), "2");
+            assert_eq!(pkg.use_flags().unwrap(), ["new"]);
+            assert_eq!(pkg.iuse().unwrap()[0].to_string(), "+new");
+            assert_eq!(
+                pkg.rdepend().unwrap().unwrap()[0].to_string(),
+                "sys-libs/new"
+            );
+            assert_eq!(pkg.size().unwrap(), Some(20));
+        }
     }
 
     #[test]

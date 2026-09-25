@@ -224,9 +224,10 @@ patch/pin workflow.
 
 Installed package database reader/writer for `/var/db/pkg`.
 
-- `struct Vdb` — Main entry point: `open()`, `open_default()`, `owner()`, `find_collisions()`, `register()`, `unregister()`, `find_slot_occupant()`
+- `struct Vdb` — Main entry point: `open()`, `open_default()`, `owner()`, `find_collisions()`, `register()`, `unregister()`, `find_slot_occupant()`; owns the run-scoped field-cache handle
+- `struct InstalledPackage` — Rich accessor: cpv, slot, eapi, USE flags, deps, contents, etc.; shares parsed field values with other live handles from the same VDB root
+- `FieldCache` / `PackageFields` — Weak-root run cache for raw and typed fields; package registration/unregistration clears one package's values without a global cache scan. External writers are not observed while a live cache exists, matching the existing push-invalidation policy
 - `struct OwnershipIndex` — Run-scoped `CONTENTS` path-to-owner snapshot used by the merge batch; its metadata stamp invalidates the snapshot after normal external VDB changes
-- `struct InstalledPackage` — Rich accessor: cpv, slot, eapi, USE flags, deps, contents, etc.
 - `struct ContentsEntry` / `enum ContentsKind` — Parsed CONTENTS entries (obj/dir/sym/fifo/dev)
 - `fn format_contents()` — Serialize contents back to VDB format
 - `struct Collision` — File collision between planned and installed packages

@@ -7,6 +7,7 @@ use camino::{Utf8Path, Utf8PathBuf};
 use crate::Result;
 use crate::category::{Categories, CategoriesIter, Category, PackageFilter, PackagesIter};
 use crate::error::Error;
+use crate::field_cache::FieldCache;
 use crate::package::InstalledPackage;
 
 /// The default VDB path
@@ -32,6 +33,7 @@ pub const DEFAULT_VDB_PATH: &str = "/var/db/pkg";
 #[derive(Debug, Clone)]
 pub struct Vdb {
     root: Utf8PathBuf,
+    field_cache: Arc<FieldCache>,
 }
 
 /// Cap on [`Vdb::scan`]'s default worker count: past this, parallel opens
@@ -52,6 +54,7 @@ impl Vdb {
         if path.is_dir() {
             Ok(Self {
                 root: path.to_path_buf(),
+                field_cache: FieldCache::for_root(path),
             })
         } else {
             Err(Error::RootNotFound(path.to_path_buf()))
@@ -68,16 +71,24 @@ impl Vdb {
         &self.root
     }
 
+    pub(crate) fn field_cache(&self) -> &Arc<FieldCache> {
+        &self.field_cache
+    }
+
     /// Lazy iterator over all categories in the VDB
     pub fn categories(&self) -> Categories {
-        Categories::new(self.root.clone())
+        Categories::new(self.root.clone(), Arc::clone(&self.field_cache))
     }
 
     /// Look up a single category by name
     pub fn category(&self, name: &str) -> Option<Category> {
         let path = self.root.join(name);
         if path.is_dir() {
-            Some(Category::new(name.to_string(), path))
+            Some(Category::new(
+                name.to_string(),
+                path,
+                Arc::clone(&self.field_cache),
+            ))
         } else {
             None
         }

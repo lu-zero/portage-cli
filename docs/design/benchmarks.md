@@ -165,6 +165,9 @@ library entry point (an `examples/` binary), not the `em` CLI:
 - `portage-cli`'s ignored `benchmark_reused_preserve_state` test — synthetic
   repeated-vs-reused preserve-libs graph/registry workload; run it explicitly
   with the command in [`benchmarks/BENCHMARKS.md`](../../benchmarks/BENCHMARKS.md).
+- `portage-vdb`'s ignored `benchmark_parsed_metadata_reuse` test — repeated
+  typed-field parsing versus the run-scoped parsed cache; its command is also
+  recorded in [`benchmarks/BENCHMARKS.md`](../../benchmarks/BENCHMARKS.md).
 
 Full usage and a worked example table are in `portage-repo/AGENTS.md`'s
 "Scripts" section; `benchmarks/machines/mneme.md` collects every one of
