@@ -75,10 +75,27 @@ pub fn checksum(path: &Path) -> Result<(String, String, u64, u64)> {
     Ok((md5, sha1, size, mtime))
 }
 
+/// Build id only when the basename is `{pf}-{id}.gpkg.tar`.
+///
+/// A version that is itself an integer (`awk-1`, `linux-firmware-20250101`)
+/// must stay the single-instance form. Splitting on the last `-` treats that
+/// integer as a build id and can make prune delete the real rebuild.
+fn build_id_after_pf(rel: &str, pf: &str) -> Option<u32> {
+    let base = std::path::Path::new(rel).file_name()?.to_str()?;
+    let stem = base.strip_suffix(".gpkg.tar")?;
+    let rest = stem.strip_prefix(pf)?.strip_prefix('-')?;
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse().ok()
+}
+
 /// Parse the trailing `-<n>` build-id from a container basename, portage's
 /// `<PF>-<BUILD_ID>.gpkg.tar` layout.
 ///
-/// `None` for the single-instance `<PF>.gpkg.tar` form.
+/// `None` for the single-instance `<PF>.gpkg.tar` form. This splits on the
+/// last `-` only; callers that know `PF` should not use it for versions whose
+/// last component is an integer.
 pub fn parse_build_id_from_name(rel: &str) -> Option<u32> {
     let base = std::path::Path::new(rel).file_name()?.to_str()?;
     let stem = base.strip_suffix(".gpkg.tar")?;
@@ -139,7 +156,7 @@ impl ContainerFacts {
             build_id: meta
                 .get("BUILD_ID")
                 .and_then(|s| s.parse().ok())
-                .or_else(|| parse_build_id_from_name(rel)),
+                .or_else(|| build_id_after_pf(rel, pf)),
         })
     }
 
@@ -219,6 +236,28 @@ mod tests {
         .unwrap();
         assert_eq!(facts.build_id, None);
         assert_eq!(facts.build_id_or_zero(), 0);
+    }
+
+    #[test]
+    fn facts_do_not_treat_an_integer_version_as_a_build_id() {
+        for (pf, rel) in [
+            ("awk-1", "virtual/awk-1.gpkg.tar"),
+            (
+                "linux-firmware-20250101",
+                "sys-kernel/linux-firmware-20250101.gpkg.tar",
+            ),
+        ] {
+            let facts =
+                ContainerFacts::from_metadata(&meta(&[("CATEGORY", "virtual"), ("PF", pf)]), rel)
+                    .unwrap();
+            assert_eq!(facts.build_id, None, "{rel}");
+        }
+        let rebuilt = ContainerFacts::from_metadata(
+            &meta(&[("CATEGORY", "virtual"), ("PF", "awk-1")]),
+            "virtual/awk-1-2.gpkg.tar",
+        )
+        .unwrap();
+        assert_eq!(rebuilt.build_id, Some(2));
     }
 
     #[test]
