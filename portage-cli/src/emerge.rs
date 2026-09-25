@@ -1646,7 +1646,7 @@ mod tests {
         };
 
         assert!(!needs_after_blocker_history(&[]));
-        assert!(!needs_after_blocker_history(&[before.clone()]));
+        assert!(!needs_after_blocker_history(std::slice::from_ref(&before)));
         assert!(needs_after_blocker_history(&[before, after]));
     }
 
