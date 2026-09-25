@@ -595,62 +595,19 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         })
         .collect();
 
-    let mut root_deps = Vec::new();
-    let mut root_cpns: std::collections::HashSet<Cpn> = std::collections::HashSet::new();
-    // Root targets with no acceptable candidate, dropped from the solve and
-    // reported after the plan (world-family provenance only — anything else is
-    // fatal below).
-    let mut unsatisfiable: Vec<output::UnsatisfiableTarget> = Vec::new();
-    for target in atoms {
-        let atom = &target.atom;
-        let dep = Dep::parse(atom).map_err(|e| anyhow::anyhow!("bad atom '{atom}': {e}"))?;
-        let pkg = repo::target_package(&data, &dep, &target_policy);
-        let vs = match &dep.version {
-            Some(v) => {
-                let op = dep.op.unwrap_or(Operator::GreaterOrEqual);
-                PortageVersionSet::from_operator(op, dep.glob, v.clone())
-            }
-            None => PortageVersionSet::any(),
-        };
-        // `target_package` hands back an unslotted package when nothing the atom
-        // matches survives keyword/mask/license filtering — an identity the
-        // provider never registers, so leaving it in `root_deps` turns into an
-        // opaque solver failure. Classify it here instead, the way portage does
-        // in argument processing.
-        if pkg.slot().is_none() {
-            let reasons = repo::filter_reasons_for_atom(&data, &dep, &vs, &target_policy);
-            let problem = if reasons.is_empty() {
-                targets::TargetProblem::NoEbuilds
-            } else {
-                targets::TargetProblem::AllFiltered
-            };
-            let unsat = output::UnsatisfiableTarget {
-                atom: atom.clone(),
-                origin: target.origin.clone(),
-                problem,
-                reasons,
-            };
-            // `--emptytree` deliberately ignores what is installed, so a
-            // satisfying VDB entry must not silence the atom there.
-            let satisfied = !empty && targets::installed_satisfies(&dep, &installed);
-            match targets::classify_root_target(&target.origin, satisfied, selective) {
-                targets::RootTargetDecision::DropWithWarning => {
-                    unsatisfiable.push(unsat);
-                    continue;
-                }
-                targets::RootTargetDecision::DropSilently => continue,
-                targets::RootTargetDecision::Fatal => {
-                    anyhow::bail!(output::unsatisfiable_target_message(
-                        &unsat,
-                        &data,
-                        set.is_multi()
-                    ));
-                }
-            }
-        }
-        root_cpns.insert(dep.cpn);
-        root_deps.push((pkg, vs));
-    }
+    let RootTargets {
+        deps: root_deps,
+        cpns: root_cpns,
+        unsatisfiable,
+    } = classify_root_targets(
+        atoms,
+        &data,
+        &target_policy,
+        &installed,
+        empty,
+        selective,
+        set.is_multi(),
+    )?;
 
     // The whole-repository slot map (unslotted-dep resolution against
     // multi-slot packages) computed once, up front, and reused by every
@@ -2244,6 +2201,89 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// version satisfies — checked structurally (like `repo::cpns_for`, not
 /// USE-evaluated, since this candidate's resolved USE isn't computed yet).
 /// Falls back to `rb.version` untouched otherwise.
+/// The requested atoms after classification: what the solver is given, which
+/// CPNs were asked for, and what could not be satisfied.
+struct RootTargets {
+    /// One solver root dep per acceptable atom
+    deps: Vec<(PortagePackage, PortageVersionSet)>,
+    /// The CPNs named by the requested atoms, satisfiable or not
+    cpns: std::collections::HashSet<Cpn>,
+    /// Atoms dropped with a warning, reported after the plan
+    unsatisfiable: Vec<output::UnsatisfiableTarget>,
+}
+
+/// Classify each requested atom into a solver root dep, a reported
+/// unsatisfiable target, or a silent drop.
+fn classify_root_targets(
+    atoms: &[TargetAtom],
+    data: &repo::RepoData,
+    target_policy: &repo::ResolvePolicy,
+    installed: &HashMap<Cpn, HashMap<Interned<DefaultInterner>, Version>>,
+    empty: bool,
+    selective: bool,
+    multi_repo: bool,
+) -> anyhow::Result<RootTargets> {
+    let mut deps = Vec::new();
+    let mut cpns: std::collections::HashSet<Cpn> = std::collections::HashSet::new();
+    // Root targets with no acceptable candidate, dropped from the solve and
+    // reported after the plan (world-family provenance only — anything else is
+    // fatal below).
+    let mut unsatisfiable: Vec<output::UnsatisfiableTarget> = Vec::new();
+    for target in atoms {
+        let atom = &target.atom;
+        let dep = Dep::parse(atom).map_err(|e| anyhow::anyhow!("bad atom '{atom}': {e}"))?;
+        let pkg = repo::target_package(data, &dep, target_policy);
+        let vs = match &dep.version {
+            Some(v) => {
+                let op = dep.op.unwrap_or(Operator::GreaterOrEqual);
+                PortageVersionSet::from_operator(op, dep.glob, v.clone())
+            }
+            None => PortageVersionSet::any(),
+        };
+        // `target_package` hands back an unslotted package when nothing the atom
+        // matches survives keyword/mask/license filtering — an identity the
+        // provider never registers, so leaving it in `deps` turns into an
+        // opaque solver failure. Classify it here instead, the way portage does
+        // in argument processing.
+        if pkg.slot().is_none() {
+            let reasons = repo::filter_reasons_for_atom(data, &dep, &vs, target_policy);
+            let problem = if reasons.is_empty() {
+                targets::TargetProblem::NoEbuilds
+            } else {
+                targets::TargetProblem::AllFiltered
+            };
+            let unsat = output::UnsatisfiableTarget {
+                atom: atom.clone(),
+                origin: target.origin.clone(),
+                problem,
+                reasons,
+            };
+            // `--emptytree` deliberately ignores what is installed, so a
+            // satisfying VDB entry must not silence the atom there.
+            let satisfied = !empty && targets::installed_satisfies(&dep, installed);
+            match targets::classify_root_target(&target.origin, satisfied, selective) {
+                targets::RootTargetDecision::DropWithWarning => {
+                    unsatisfiable.push(unsat);
+                    continue;
+                }
+                targets::RootTargetDecision::DropSilently => continue,
+                targets::RootTargetDecision::Fatal => {
+                    anyhow::bail!(output::unsatisfiable_target_message(
+                        &unsat, data, multi_repo
+                    ));
+                }
+            }
+        }
+        cpns.insert(dep.cpn);
+        deps.push((pkg, vs));
+    }
+    Ok(RootTargets {
+        deps,
+        cpns,
+        unsatisfiable,
+    })
+}
+
 fn best_rebuild_version(
     data: &repo::RepoData,
     policy: &repo::ResolvePolicy,
