@@ -257,13 +257,10 @@ async fn main() {
                     }
                 };
 
-                let ebuild_md5 = fs::read(ebuild.path())
-                    .map(|b| format!("{:x}", md5::compute(&b)))
-                    .ok();
-
                 let portage_repo::source::SourcedEbuild {
                     metadata,
                     eclasses: eclass_paths,
+                    ebuild_md5,
                 } = metadata;
                 let eclasses: Vec<(portage_atom::interner::Interned<_>, md5::Digest)> =
                     eclass_paths
@@ -280,7 +277,7 @@ async fn main() {
 
                 let sourced_entry = CacheEntry {
                     metadata,
-                    md5: ebuild_md5,
+                    md5: Some(ebuild_md5),
                     eclasses,
                 };
 

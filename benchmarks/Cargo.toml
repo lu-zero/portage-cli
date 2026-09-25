@@ -52,6 +52,7 @@ dhat = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true, features = ["html_reports"] }
+flume = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 
 [[bench]]
@@ -118,4 +119,8 @@ harness = false
 
 [[bench]]
 name = "eclass_memo"
+harness = false
+
+[[bench]]
+name = "regen_reads"
 harness = false

@@ -411,6 +411,10 @@ async fn resolve_ebuilds(
             continue;
         }
 
+        let Ok(content) = String::from_utf8(bytes) else {
+            continue;
+        };
+
         // Source the ebuild (shell started lazily, masters' eclasses visible).
         let sh = match &mut shell {
             Some(s) => s,
@@ -428,7 +432,10 @@ async fn resolve_ebuilds(
                 }
             }
         };
-        match sh.source_ebuild(&ebuild).await {
+        match sh
+            .source_ebuild_with_content(&ebuild, &content, digest.clone())
+            .await
+        {
             Ok(sourced) => {
                 let mut eclasses = Vec::with_capacity(sourced.eclasses.len());
                 for (name, path) in &sourced.eclasses {
@@ -448,7 +455,7 @@ async fn resolve_ebuilds(
                 }
                 let entry = CacheEntry {
                     metadata: sourced.metadata,
-                    md5: Some(digest),
+                    md5: Some(sourced.ebuild_md5),
                     eclasses,
                 };
                 // Sourcing is the freshest possible source of truth - if the

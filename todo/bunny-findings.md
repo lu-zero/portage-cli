@@ -1,7 +1,7 @@
 # Bunny findings — simplification and performance queue
 
 Status: active implementation queue
-Updated: 2026-09-24
+Updated: 2026-09-25
 Scope: workspace-wide review of `em`, `portage-resolve`, `portage-repo`, solver bridges, VDB, binpkg, and supporting libraries.
 
 This file is the source of truth for the review findings. Work one phase at a time; do not bundle a broad architectural rewrite with a correctness fix.
@@ -62,7 +62,7 @@ Status markers: `[ ]` open · `[~]` in progress · `[x]` complete · `[!]` block
 - [x] **BF-301 — Reuse one shell per source worker.** `source_parallel_join()` now creates one shell per worker and reuses the existing hermetic baseline reset for each ebuild; `source_single()` still creates a fresh shell. The synthetic `source_reuse` benchmark measures 64.6–74.7% lower sourcing time across 32/128/512 ebuilds at one or four workers, with a two-ebuild hermeticity regression.
 - [x] **BF-302 — Resolve distdir writability once per shell/context.** `EbuildShell` now caches the resolved primary/read-only distdir pair and invalidates it when `set_distdir()` changes the shell configuration. The BF-301 source benchmark measures a further 5.3–6.6% reduction at 32/128/512 ebuilds for one or four workers.
 - [x] **BF-303 — Share eclass digest/path memo during live sourcing.** Live-sourced entries reuse eclass digests by resolved path and seed the name memo used by cache validation. The fresh-repository `eclass_memo` benchmark is neutral/noisy (+2.5%, -2.4%, +0.2% at 32/128/512 ebuilds), so no end-to-end speedup is claimed; full `portage-repo` tests, clippy, rustdoc, and benchmark smoke checks pass.
-- [ ] **BF-304 — Avoid repeated ebuild reads.** Carry pre-read bytes or MD5 through EAPI detection, sourcing, and cache construction where practical; measure the regen I/O change.
+- [x] **BF-304 — Avoid repeated ebuild reads.** `source_ebuild` parses the single content read used for EAPI detection, `SourcedEbuild` carries its MD5 into cache construction, and `repo_entries` passes its pre-read bytes into live sourcing. The lock-matched `regen_reads` benchmark measures 6.4%/4.8%/3.6% lower synthetic medians at 32/128/512 ebuilds versus `f898dd99`; this is not a real-tree claim. A BASH_SOURCE/digest regression, full workspace nextest/doctests, clippy, rustdoc, workspace target check, and benchmark smoke check pass.
 - [ ] **BF-305 — Stream metadata serialization.** Replace nested temporary `String`/`Vec<String>` construction in `portage-metadata` with direct `fmt::Write` or a prepared writer.
 - [ ] **BF-306 — Avoid redundant staging directory creation.** Reuse prepared category directories and a prepared staging writer instead of creating a new `DirMetadataCache` and calling `create_dir_all` per entry.
 - [ ] **BF-307 — Move cache discovery into blocking work.** Do not perform synchronous jwalk before the first await; use a shared job budget and move descriptor chunks instead of cloning them.

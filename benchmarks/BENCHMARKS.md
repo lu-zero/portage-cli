@@ -696,6 +696,26 @@ cargo bench -p portage-bench --bench eclass_memo -- --noplot --warm-up-time 1 --
 
 The baseline was run from a detached worktree at `d10ec9a4` with the same fresh-repository fixture.
 
+### 22. Ebuild content reuse during regen (thalia, 2026-09-25)
+
+`regen_reads` creates 32/128/512 trivial ebuilds and runs one-worker `regen_cache` against a staging output. Each iteration reuses the source tree but re-reads each ebuild, so this measures the complete synthetic regen path rather than raw syscall counts. The baseline is the exact `f898dd99` worktree with the same lockfile and fixture; the current tree parses the one content read and carries its digest into cache construction.
+
+| Ebuilds | `f898dd99` baseline | Current | Reduction |
+|--------:|---------------------:|--------:|----------:|
+| 32 | 5.3384 ms | 4.9981 ms | 6.4% |
+| 128 | 20.311 ms | 19.341 ms | 4.8% |
+| 512 | 80.968 ms | 78.031 ms | 3.6% |
+
+The synthetic median improvement is modest and narrows as the fixture grows; it is not a real-tree or end-to-end Portage claim. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench --locked -p portage-bench --bench regen_reads -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline was run from a detached worktree at `f898dd99` with the same fresh fixture and lockfile.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

@@ -895,6 +895,25 @@ impl EbuildShell {
     ///
     /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
     pub async fn source_ebuild(&mut self, ebuild: &Ebuild) -> Result<crate::source::SourcedEbuild> {
+        let content = match ebuild.read_raw() {
+            Ok(content) => content,
+            Err(error) => {
+                self.restore_baseline();
+                self.phase_sourced_ebuild = None;
+                return Err(error);
+            }
+        };
+        let ebuild_md5 = format!("{:x}", md5::compute(content.as_bytes()));
+        self.source_ebuild_with_content(ebuild, &content, ebuild_md5)
+            .await
+    }
+
+    pub(crate) async fn source_ebuild_with_content(
+        &mut self,
+        ebuild: &Ebuild,
+        content: &str,
+        ebuild_md5: String,
+    ) -> Result<crate::source::SourcedEbuild> {
         // Hermetic sourcing: start from the configured baseline so nothing
         // from a previously sourced ebuild survives into this one.
         self.restore_baseline();
@@ -919,7 +938,7 @@ impl EbuildShell {
         self.set_var("FILESDIR", filesdir.as_str());
 
         // Detect EAPI before sourcing per PMS 7.3.1
-        let eapi = ebuild.detect_eapi()?;
+        let eapi = crate::repo::ebuild::detect_eapi_from_str(content);
         self.set_var("EAPI", &eapi.to_string());
 
         // Absolute path to the ebuild file (PMS 11.1)
@@ -1007,15 +1026,32 @@ impl EbuildShell {
         // each eclass's contribution into E_{VAR} and restores the var after
         // each eclass (PMS 10.2 / Portage B_*/E_* pattern).
         let params = self.shell.default_exec_params();
-        let source_result = self
-            .shell
-            .source_script(
-                ebuild.path().as_std_path(),
-                std::iter::empty::<&str>(),
-                &params,
-            )
-            .await
-            .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?;
+        let source_result = match self.shell.parse(content.as_bytes()) {
+            Ok(program) => {
+                let source_info = SourceInfo::from(ebuild.path().as_std_path().to_owned());
+                let mut result = self
+                    .shell
+                    .source_program(&program, &source_info, std::iter::empty::<&str>(), &params)
+                    .await
+                    .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?;
+                if matches!(
+                    result.next_control_flow,
+                    brush_core::ExecutionControlFlow::ReturnFromFunctionOrScript
+                ) {
+                    result.next_control_flow = brush_core::ExecutionControlFlow::Normal;
+                }
+                result
+            }
+            Err(_) => self
+                .shell
+                .source_script(
+                    ebuild.path().as_std_path(),
+                    std::iter::empty::<&str>(),
+                    &params,
+                )
+                .await
+                .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?,
+        };
         if !source_result.exit_code.is_success() {
             return Err(Error::Shell(format!(
                 "sourcing {} returned status {}",
@@ -1069,7 +1105,11 @@ impl EbuildShell {
             .collect();
         let eclasses = inherited.into_iter().map(|e| (e.name, e.path)).collect();
 
-        Ok(crate::source::SourcedEbuild { metadata, eclasses })
+        Ok(crate::source::SourcedEbuild {
+            metadata,
+            eclasses,
+            ebuild_md5,
+        })
     }
 
     /// Locate portage's script directory under `/usr/lib/portage`

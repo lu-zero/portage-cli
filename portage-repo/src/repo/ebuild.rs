@@ -145,7 +145,7 @@ impl Ebuild {
 /// Parse EAPI from ebuild file content per PMS 7.3.1
 ///
 /// Extracted as a free function for testability without filesystem access.
-fn detect_eapi_from_str(content: &str) -> Eapi {
+pub(crate) fn detect_eapi_from_str(content: &str) -> Eapi {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {

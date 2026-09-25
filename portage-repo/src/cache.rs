@@ -346,13 +346,14 @@ fn build_entry(
     sourced: SourcedEbuild,
     checksum_cache: &ChecksumCache,
 ) -> std::result::Result<CacheEntry, String> {
-    let ebuild_bytes = fs::read(ebuild.path()).map_err(|e| format!("read ebuild: {e}"))?;
-    let ebuild_md5 = format!("{:x}", md5::compute(&ebuild_bytes));
-
     // Md5 every eclass that was actually sourced, using its resolved path.
     // This is path-accurate across master repos — a name-only lookup would
     // miss eclasses inherited from a master overlay's eclass/ directory.
-    let SourcedEbuild { metadata, eclasses } = sourced;
+    let SourcedEbuild {
+        metadata,
+        eclasses,
+        ebuild_md5,
+    } = sourced;
     if metadata.has_parse_failure() {
         return Err(format!(
             "{}: {}",

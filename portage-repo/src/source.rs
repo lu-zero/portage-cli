@@ -27,6 +27,8 @@ pub struct SourcedEbuild {
     pub metadata: EbuildMetadata,
     /// Eclasses sourced for this ebuild, paired `(name, file path)`
     pub eclasses: Vec<(String, Utf8PathBuf)>,
+    /// MD5 digest of the ebuild content that was sourced
+    pub ebuild_md5: String,
 }
 
 /// One finished source attempt, in completion order
@@ -309,6 +311,24 @@ mod tests {
         }
         descriptions.sort();
         assert_eq!(descriptions, ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn sourced_ebuild_keeps_script_path_and_content_digest() {
+        let (_tmp, repo, ebuilds) = repo_with_eclass("");
+        let ebuild = &ebuilds[0];
+        let path = ebuild.path().to_owned();
+        let content = "EAPI=8\nDESCRIPTION=\"${BASH_SOURCE[0]}\"\nSLOT=0\n";
+        std::fs::write(&path, content).unwrap();
+        let expected_md5 = format!("{:x}", md5::compute(content.as_bytes()));
+        let masters = repo.masters();
+
+        let sourced = source_single(&repo, masters, ebuild, &SourceContext::new())
+            .await
+            .unwrap();
+
+        assert_eq!(sourced.metadata.description, path.as_str());
+        assert_eq!(sourced.ebuild_md5, expected_md5);
     }
 
     #[tokio::test]
