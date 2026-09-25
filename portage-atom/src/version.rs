@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::convert::Infallible;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::str::FromStr;
@@ -258,9 +259,11 @@ pub struct Version {
     /// range algebra. Leading zeros are preserved separately in
     /// [`Self::digits`] for PMS Algorithm 3.3.
     ///
-    /// Each component must fit in a `u64`; a longer one is a parse error
-    /// rather than a truncation, since a silently shortened component would
-    /// mis-compare against a package that spells it in full.
+    /// A component wider than `u64` saturates here at `u64::MAX` — PMS 3.2
+    /// forbids fixing a limit on component length, so such a version is
+    /// accepted rather than rejected. [`Self::digits`] keeps the exact text,
+    /// and every comparison, ordering and hash reads *that*, so only this
+    /// convenience view loses precision.
     #[cfg_attr(feature = "builder", builder(start_fn))]
     pub numbers: Numbers,
     /// Original decimal digit strings for each component (same length as
@@ -608,14 +611,28 @@ impl Ord for Version {
 
 // Winnow parsers
 
+/// Parse an unsigned integer, saturating rather than failing past `u64::MAX`
+///
+/// PMS 3.2: "The package manager must neither impose fixed limits upon the
+/// number of version components, nor upon the length of any component." A
+/// component that wide is still a *valid* version, so rejecting it would be
+/// non-compliant. Every comparison, ordering and hash goes through
+/// [`component_digits`] (the original text), never through this `u64`, so
+/// saturating here only costs precision in the [`Version::numbers`] view.
 fn parse_number(input: &mut &str) -> ModalResult<u64> {
-    digit1.try_map(|s: &str| s.parse::<u64>()).parse_next(input)
+    digit1
+        .try_map(|s: &str| -> std::result::Result<_, Infallible> {
+            Ok(s.parse::<u64>().unwrap_or(u64::MAX))
+        })
+        .parse_next(input)
 }
 
 /// Parse one version component, keeping the original digit text for PMS 3.3
 fn parse_component(input: &mut &str) -> ModalResult<(SmolStr, u64)> {
     digit1
-        .try_map(|s: &str| s.parse::<u64>().map(|n| (SmolStr::new(s), n)))
+        .try_map(|s: &str| -> std::result::Result<_, Infallible> {
+            Ok((SmolStr::new(s), s.parse::<u64>().unwrap_or(u64::MAX)))
+        })
         .parse_next(input)
 }
 
@@ -803,10 +820,17 @@ mod tests {
         let version = Version::parse(many_components).unwrap();
         assert_eq!(version.numbers.len(), 15);
 
-        // Test long component values
+        // Test long component values. 12345678901234567890 is 20 digits but
+        // still under u64::MAX, so on its own it never exercised the rule it
+        // is quoting — the first width that actually did is u64::MAX + 1.
         let long_component = "12345678901234567890"; // 20 digits
         let version = Version::parse(long_component).unwrap();
         assert_eq!(version.numbers[0], 12345678901234567890u64);
+
+        let past_u64 = "18446744073709551616"; // u64::MAX + 1
+        let version = Version::parse(past_u64).unwrap();
+        assert_eq!(version.digits[0].as_str(), past_u64);
+        assert!(version > Version::parse("18446744073709551615").unwrap());
     }
 
     #[test]
@@ -905,18 +929,21 @@ mod tests {
         assert_eq!(zeroed.to_string(), "1.01");
     }
 
-    // PMS sets no bound on a version component; u64 is ours, so the limit is
-    // documented and enforced by rejecting rather than truncating.
+    // PMS 3.2 forbids a fixed limit on component length, so a component wider
+    // than u64 is still a valid version. `numbers` saturates, `digits` keeps
+    // the truth, and comparison reads `digits` — so ordering stays exact.
     #[test]
-    fn a_component_past_u64_is_rejected_rather_than_truncated() {
-        assert!(
-            Version::parse("18446744073709551615").is_ok(),
-            "u64::MAX fits"
-        );
-        let over = Version::parse("18446744073709551616")
-            .unwrap_err()
-            .to_string();
-        assert!(over.contains("number too large"), "{over}");
+    fn a_component_past_u64_is_accepted_and_compares_exactly() {
+        let over = Version::parse("18446744073709551616").unwrap();
+        assert_eq!(over.numbers[0], u64::MAX, "the convenience view saturates");
+        assert_eq!(over.digits[0].as_str(), "18446744073709551616");
+        assert_eq!(over.to_string(), "18446744073709551616", "round-trips");
+
+        let at_max = Version::parse("18446744073709551615").unwrap();
+        assert!(at_max < over, "u64::MAX sorts below u64::MAX + 1");
+        let far_over = Version::parse("99999999999999999999999999").unwrap();
+        assert!(over < far_over, "a 26-digit component still orders exactly");
+        assert_ne!(over, far_over);
     }
 
     #[test]
