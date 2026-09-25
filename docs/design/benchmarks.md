@@ -22,6 +22,7 @@ Each crate with a hot path worth isolating owns its own `benches/`:
 | `portage-atom` | `parsing` | atom/dep-string parsing, vs pkgcraft |
 | `portage-atom-resolvo` | `parsing` | same, resolvo-side types |
 | `portage-vdb` | `vdb` | VDB open/iterate/category-scan against a real `/var/db/pkg` |
+| `portage-vdb` | `ownership` | Repeated VDB `CONTENTS` collision scans versus a reusable ownership index |
 | `portage-cli` | `elfscan` | install-image ELF scan serial vs parallel (merge-time `NEEDED.ELF.2`) |
 
 Run one directly with `cargo bench -p <crate> --bench <name>`, e.g.:
@@ -30,6 +31,7 @@ Run one directly with `cargo bench -p <crate> --bench <name>`, e.g.:
 cargo bench -p gentoo-interner --bench interner
 cargo bench -p portage-atom --bench parsing
 cargo bench -p portage-vdb --bench vdb
+cargo bench -p portage-vdb --bench ownership
 cargo bench -p portage-cli --bench elfscan
 # optional tree (default: /usr/lib64)
 ELFSCAN_BENCH_DIR=/path/to/image cargo bench -p portage-cli --bench elfscan

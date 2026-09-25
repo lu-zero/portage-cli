@@ -26,7 +26,7 @@ mod vdb;
 mod write;
 
 pub use category::{Categories, CategoriesIter, Category, Packages, PackagesIter};
-pub use collision::Collision;
+pub use collision::{Collision, OwnershipIndex};
 pub use contents::{ContentsEntry, ContentsKind, ContentsRef, format_contents};
 pub use error::Error;
 pub use package::{InstalledPackage, SlotName};

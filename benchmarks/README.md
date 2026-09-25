@@ -27,6 +27,8 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 | `regen_reads` | Ebuild content reuse during synthetic cache regeneration |
 | `metadata_serialize` | Direct-buffer metadata cache serialization |
 
+The `portage-vdb` crate also has the per-crate `ownership` benchmark, which compares repeated full `CONTENTS` scans with a reusable collision index on synthetic package sets.
+
 `pkgcraft-compare` is off by default (it pulls in `gix`, a sizeable compile) —
 enable it explicitly whenever you actually want the pkgcraft comparison
 numbers, e.g. `cargo bench --features pkgcraft-compare`.

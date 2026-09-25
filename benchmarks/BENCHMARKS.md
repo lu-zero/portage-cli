@@ -200,7 +200,7 @@ Repro: `cargo build --release -p portage-cli`, then the two-binary
 - `gentoo-interner/benches/interner.rs` + tables in `gentoo-interner/README.md`
 - `portage-atom/benches/parsing.rs` (compares to pkgcraft baseline)
 - `portage-atom-resolvo/benches/parsing.rs`
-- `portage-vdb/benches/vdb.rs`
+- `portage-vdb/benches/vdb.rs`, `portage-vdb/benches/ownership.rs`
 - `portage-cli/benches/elfscan.rs` — criterion serial vs parallel `scan_image` (merge-time NEEDED.ELF.2 path)
 
 **No benches** in: portage-repo, portage-metadata, gentoo-core, gentoo-stages, portage-distfiles (they are exercised via the central ones or examples).
@@ -793,6 +793,36 @@ GENTOO_REPO=/var/db/repos/gentoo cargo bench --locked -p portage-bench --bench c
 ```
 
 The baseline used the same fixture, benchmark, and lockfile in a detached worktree at `3c873f62`.
+
+---
+
+### 27. Merge-batch VDB ownership index (thalia, 2026-09-25)
+
+`portage-vdb/benches/ownership.rs` creates synthetic VDBs with 32 `obj` entries per package and performs one collision query per package. The baseline is the exact `0feec1ea` worktree using the pre-index `Vdb::find_collisions` implementation once per query. The current benchmark builds one ownership index, checks its VDB metadata stamp, and reuses it for the whole query batch.
+
+| Packages | `0feec1ea` repeated scans | Current checked index batch | Reduction |
+|---------:|--------------------------:|--------------------------:|----------:|
+| 128 | 99.457 ms | 11.781 ms | 88.2% |
+| 256 | 418.47 ms | 21.215 ms | 94.9% |
+| 512 | 1.7788 s | 47.716 ms | 97.3% |
+
+This is a synthetic VDB benchmark, not a full merge or real-system claim. The index retains path/CPV maps and `InstalledPackage` handles to avoid repeatedly allocating and parsing every `CONTENTS` file; each query also performs a small VDB metadata-stamp check. The CLI enables reuse only for plans with at least 16 merge entries; smaller plans and privilege-worker children retain the one-shot scan path because a full index build costs more than several streaming scans. No separate allocation profiler was run for this change. Criterion used 10 samples with its default warm-up and measurement windows.
+
+On the real 727-package, 1,388,688-entry `/var/db/pkg` tree, the same benchmark's one-shot build measured a 3.343 s median and a 64-query reuse batch measured 26.8 µs. This is a build/reuse measurement, not a full merge claim; it motivated the CLI's 16-entry activation threshold. The real-tree benchmark is:
+
+```sh
+VDB_ROOT=/var/db/pkg cargo bench -p portage-vdb --bench ownership -- --noplot vdb_ownership_real
+```
+
+The benchmark's repeated-build RSS is allocator-retention noise, so no peak-memory claim is made here.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench -p portage-vdb --bench ownership -- --noplot index_batch
+```
+
+The baseline used the same fixture and command in a detached worktree at `0feec1ea`, with a temporary benchmark registration that exercised the pre-index API.
 
 ---
 

@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,7 +11,7 @@ use portage_atom::Cpv;
 use portage_distfiles::{DistfileResolver, FetchConfig, FetchStatus, Fetcher, RestrictGate};
 use portage_metadata::{Eapi, RestrictExpr, SrcUriEntry};
 use portage_repo::{Ebuild, EbuildEnv, MakeConf, Manifest, ReposConf, Repository};
-use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, MergeSpec, Vdb};
+use portage_vdb::{ContentsEntry, ContentsKind, InstalledPackage, MergeSpec, OwnershipIndex, Vdb};
 use tracing::Instrument;
 
 use crate::postprocess;
@@ -442,6 +443,77 @@ pub async fn run(
     .await
 }
 
+struct MergeBatchState {
+    ownership: HashMap<Utf8PathBuf, OwnershipIndex>,
+    reuse_index: bool,
+}
+
+impl MergeBatchState {
+    fn new(reuse_index: bool) -> Self {
+        Self {
+            ownership: HashMap::new(),
+            reuse_index,
+        }
+    }
+
+    fn take_or_build(&mut self, vdb: &Vdb) -> Result<Option<OwnershipIndex>> {
+        if !self.reuse_index {
+            return Ok(None);
+        }
+        Ok(Some(match self.ownership.remove(vdb.root()) {
+            Some(index) if index.is_current(vdb) => index,
+            _ => OwnershipIndex::build(vdb)?,
+        }))
+    }
+
+    fn put(&mut self, vdb: &Vdb, index: OwnershipIndex) {
+        self.ownership.insert(vdb.root().to_owned(), index);
+    }
+}
+
+/// Serializes in-process qmerge and carries one ownership snapshot per VDB root.
+///
+/// The snapshot is run-scoped and is updated after successful qmerge mutations;
+/// scheduled unmerges clear it under the same gate. A VDB metadata stamp catches
+/// normal external register/unregister changes after the merge lock; in-place
+/// `CONTENTS` edits require a new batch. Child privilege workers do not share
+/// this in-memory state and use the one-shot collision path.
+pub struct MergeGate {
+    state: tokio::sync::Mutex<MergeBatchState>,
+}
+
+impl MergeGate {
+    /// Create an empty merge gate with ownership-index reuse enabled.
+    pub fn new() -> Self {
+        Self::with_index(true)
+    }
+
+    pub(crate) fn without_index() -> Self {
+        Self::with_index(false)
+    }
+
+    fn with_index(reuse_index: bool) -> Self {
+        Self {
+            state: tokio::sync::Mutex::new(MergeBatchState::new(reuse_index)),
+        }
+    }
+
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, MergeBatchState> {
+        self.state.lock().await
+    }
+
+    pub(crate) async fn with_invalidation<F, Fut>(&self, f: F) -> Fut::Output
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future,
+    {
+        let mut state = self.state.lock().await;
+        let output = f().await;
+        state.ownership.clear();
+        output
+    }
+}
+
 /// Inputs for [`build_and_merge`] — one resolved plan entry through the full
 /// phase chain into `root`.
 pub struct BuildAndMerge<'a> {
@@ -454,7 +526,7 @@ pub struct BuildAndMerge<'a> {
     pub distdir: Option<&'a Utf8Path>,
     pub quiet: bool,
     pub roots: RootContext<'a>,
-    pub merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    pub merge_gate: Option<&'a MergeGate>,
     pub buildpkg: bool,
     /// `-B`/`--buildpkgonly`: package the image, never qmerge it
     ///
@@ -637,7 +709,7 @@ pub struct MergeBinpkg<'a> {
     pub root: &'a Utf8Path,
     pub quiet: bool,
     pub roots: RootContext<'a>,
-    pub merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    pub merge_gate: Option<&'a MergeGate>,
     /// This binpkg's origin (a `binrepos.conf` entry with
     /// `verify-signature = yes`) forces cryptographic signature
     /// verification, independent of `FEATURES=binpkg-request-signature`.
@@ -1037,7 +1109,7 @@ struct RunInner<'a> {
     distdir: Option<&'a Utf8Path>,
     phase_log: Option<(Utf8PathBuf, bool)>,
     roots: RootContext<'a>,
-    merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    merge_gate: Option<&'a MergeGate>,
     buildpkg: bool,
     /// Pre-built GPKG to extract after clean (`-k`/`-g`); Install group only
     binpkg: Option<&'a Utf8Path>,
@@ -1373,12 +1445,16 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
             // The in-process gate only covers tasks in this process; parallel
             // `__worker` children serialise on the flock (design Q2 — released by
             // the kernel if a worker dies).
-            let _merge_guard = match (merge_gate, *phase) {
+            let mut _merge_guard = match (merge_gate, *phase) {
                 (Some(gate), RunPhase::Qmerge) => Some(gate.lock().await),
                 _ => None,
             };
             let _merge_flock = match (merge_mode, work_dir, *phase) {
-                (true, Some(wd), RunPhase::Qmerge) => lock_merge_flock(wd).await,
+                (true, Some(wd), RunPhase::Qmerge) => Some(
+                    lock_merge_flock(wd)
+                        .await
+                        .ok_or_else(|| anyhow!("could not acquire merge lock"))?,
+                ),
                 _ => None,
             };
             let phase_name = phase.to_string();
@@ -1391,7 +1467,10 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
                     *phase,
                     &work_root,
                     root,
-                    fetch_all_uri,
+                    PhaseContext {
+                        fetch_all_uri,
+                        merge_state: _merge_guard.as_deref_mut(),
+                    },
                 )
                 .await
             }
@@ -1954,6 +2033,11 @@ fn post_process_after_install(
     Ok(())
 }
 
+struct PhaseContext<'a> {
+    fetch_all_uri: bool,
+    merge_state: Option<&'a mut MergeBatchState>,
+}
+
 async fn run_one_phase(
     shell: &mut portage_repo::EbuildShell,
     ebuild: &Ebuild,
@@ -1961,12 +2045,12 @@ async fn run_one_phase(
     phase: RunPhase,
     work_root: &Utf8Path,
     root: &Utf8Path,
-    fetch_all_uri: bool,
+    context: PhaseContext<'_>,
 ) -> Result<()> {
     match phase {
-        RunPhase::Fetch => run_fetch(shell, ebuild, repo, work_root, fetch_all_uri).await,
+        RunPhase::Fetch => run_fetch(shell, ebuild, repo, work_root, context.fetch_all_uri).await,
         RunPhase::Clean => run_clean(work_root),
-        RunPhase::Qmerge => run_merge(shell, ebuild, work_root, root).await,
+        RunPhase::Qmerge => run_merge(shell, ebuild, work_root, root, context.merge_state).await,
         RunPhase::Ebuild(p) => shell
             .run_phase(
                 ebuild,
@@ -2155,6 +2239,7 @@ async fn run_merge(
     ebuild: &Ebuild,
     work_root: &Utf8Path,
     root: &Utf8Path,
+    mut merge_state: Option<&mut MergeBatchState>,
 ) -> Result<()> {
     let temp_dir = work_root.join("temp");
     std::fs::create_dir_all(temp_dir.as_std_path()).context("creating temp dir")?;
@@ -2212,9 +2297,17 @@ async fn run_merge(
     )?;
 
     let exclude_cpv = old_pkg.as_ref().map(|p| p.cpv().clone());
-    let collisions = vdb
-        .find_collisions(&contents, exclude_cpv.as_ref())
-        .context("collision check failed")?;
+    let mut ownership_index = if let Some(state) = merge_state.as_deref_mut() {
+        state.take_or_build(&vdb)?
+    } else {
+        None
+    };
+    let collisions = if let Some(index) = ownership_index.as_ref() {
+        index.find_collisions(&contents, exclude_cpv.as_ref())
+    } else {
+        vdb.find_collisions(&contents, exclude_cpv.as_ref())
+            .context("collision check failed")?
+    };
     if !collisions.is_empty() {
         for c in &collisions {
             crate::style::warn_line!("collision: {} is already owned by {}", c.path, c.owner);
@@ -2250,6 +2343,9 @@ async fn run_merge(
         })
         .await?;
         shell.restore_session(session);
+        if let Some(index) = ownership_index.as_mut() {
+            index.remove_package(old.cpv());
+        }
         registry.store();
     }
 
@@ -2269,7 +2365,10 @@ async fn run_merge(
         counter,
     );
     let installed = vdb.register(&spec)?;
-
+    if let Some(index) = ownership_index.as_mut() {
+        index.add_package(&installed, &spec.contents);
+        index.refresh(&vdb);
+    }
     // A newly registered package may own paths still listed in the
     // preserved-libs registry from a prior unmerge — reclaim those keys.
     {
@@ -2324,6 +2423,11 @@ async fn run_merge(
         .await
         .context("pkg_postinst failed")?;
 
+    if let Some(state) = merge_state
+        && let Some(index) = ownership_index
+    {
+        state.put(&vdb, index);
+    }
     Ok(())
 }
 

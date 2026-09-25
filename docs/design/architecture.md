@@ -225,11 +225,16 @@ patch/pin workflow.
 Installed package database reader/writer for `/var/db/pkg`.
 
 - `struct Vdb` — Main entry point: `open()`, `open_default()`, `owner()`, `find_collisions()`, `register()`, `unregister()`, `find_slot_occupant()`
+- `struct OwnershipIndex` — Run-scoped `CONTENTS` path-to-owner snapshot used by the merge batch; its metadata stamp invalidates the snapshot after normal external VDB changes
 - `struct InstalledPackage` — Rich accessor: cpv, slot, eapi, USE flags, deps, contents, etc.
 - `struct ContentsEntry` / `enum ContentsKind` — Parsed CONTENTS entries (obj/dir/sym/fifo/dev)
 - `fn format_contents()` — Serialize contents back to VDB format
 - `struct Collision` — File collision between planned and installed packages
 - `struct MergeSpec` — Specification for registering a new installed package
+- The CLI `MergeGate` shares one `OwnershipIndex` per VDB root across
+  in-process qmerges; scheduled unmerges serialize under the gate and invalidate it.
+  Cross-process normal register/unregister changes are detected by the stamp after `.merge.lock`; in-place `CONTENTS` edits require a new batch.
+  Privilege-worker children use the one-shot collision path.
 - Directory iterators: `AllPackages`, `Category`, `Categories`, `Packages`
 
 ### `portage-binpkg` (v0.2.1)

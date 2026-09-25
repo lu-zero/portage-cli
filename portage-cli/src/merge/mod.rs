@@ -250,7 +250,7 @@ struct PackageAction<'a> {
     distdir: Option<&'a camino::Utf8Path>,
     flags: &'a ActionFlags,
     extra_path: &'a [camino::Utf8PathBuf],
-    merge_gate: Option<&'a tokio::sync::Mutex<()>>,
+    merge_gate: Option<&'a ebuild::MergeGate>,
     binpkg_index: Option<&'a portage_binpkg::BinpkgIndex>,
     remote_indices: &'a [portage_binpkg::RemoteBinpkgIndex],
     desired_chost: &'a str,
@@ -1091,10 +1091,15 @@ async fn run_due_unmerges(
     cli: &cli::Cli,
     due: &[&portage_resolve::conflicts::PlannedUnmerge],
     failures: &mut Vec<MergeFailure>,
+    merge_gate: &ebuild::MergeGate,
 ) -> bool {
     let mut keep_going = true;
+    // Scheduled unmerges mutate the same VDB, so they must invalidate the batch snapshot.
     for u in due {
-        if let Err(e) = crate::emerge::unmerge_blocker_victim(cli, &u.cpv).await {
+        let result = merge_gate
+            .with_invalidation(|| crate::emerge::unmerge_blocker_victim(cli, &u.cpv))
+            .await;
+        if let Err(e) = result {
             let rendered = crate::style::render_error_chain(&e);
             crate::style::print_failure_banner(
                 format_args!(">>> Failed to unmerge {} — ", u.cpv),
@@ -1113,11 +1118,19 @@ async fn run_due_unmerges(
     keep_going
 }
 
+// A full ownership index costs more than several streaming scans; short plans keep the one-shot path.
+const MIN_INDEXED_MERGES: usize = 16;
+
 /// Sequential build+merge in install order (the `--jobs 1` / default path)
 /// Returns `(merged, skipped, failures)`.
 async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure>) {
     let flags = run.action_flags();
     let total = run.plan.len();
+    let merge_gate = if run.plan.len() >= MIN_INDEXED_MERGES {
+        ebuild::MergeGate::new()
+    } else {
+        ebuild::MergeGate::without_index()
+    };
     let mut merged = 0usize;
     let mut skipped = 0usize;
     let mut failures: Vec<MergeFailure> = Vec::new();
@@ -1130,7 +1143,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             break;
         }
         if let Some(due) = before_unmerges.get(&i)
-            && !run_due_unmerges(run.globals, due, &mut failures).await
+            && !run_due_unmerges(run.globals, due, &mut failures, &merge_gate).await
         {
             // A strong (`!!`) victim failed to unmerge: it must be gone
             // before its owner can merge at all, so this cannot be deferred
@@ -1190,7 +1203,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
             distdir: run.distdir,
             flags: &flags,
             extra_path: run.extra_path,
-            merge_gate: None,
+            merge_gate: Some(&merge_gate),
             binpkg_index: entry_index,
             remote_indices: run.remote_indices,
             desired_chost: &desired_env.chost,
@@ -1222,7 +1235,7 @@ async fn merge_sequential(run: &MergeRun<'_>) -> (usize, usize, Vec<MergeFailure
         // merged — matches the old `done`-filtered after-the-whole-plan
         // batch, just checked per-owner instead of once at the very end.
         if succeeded && let Some(due) = after_unmerges.get(&i) {
-            run_due_unmerges(run.globals, due, &mut failures).await;
+            run_due_unmerges(run.globals, due, &mut failures, &merge_gate).await;
         }
         if !keep_going {
             crate::style::error_line!("stopping (pass --keep-going to continue past failures)");
@@ -1360,7 +1373,11 @@ async fn merge_parallel(
 ) -> (usize, usize, Vec<MergeFailure>) {
     let flags = run.action_flags();
     let total = run.plan.len();
-    let merge_gate = tokio::sync::Mutex::new(());
+    let merge_gate = if run.plan.len() >= MIN_INDEXED_MERGES {
+        ebuild::MergeGate::new()
+    } else {
+        ebuild::MergeGate::without_index()
+    };
 
     let mut sched = Scheduler::new(blockers);
     let mut merged = 0usize;
@@ -1405,10 +1422,13 @@ async fn merge_parallel(
                 let u = &run.unmerges[i - run.plan.len()];
                 let cpv = u.cpv.clone();
                 let cli = run.globals;
+                let gate = &merge_gate;
                 let unmerge_span = tracing::info_span!("unmerge", cpv = %cpv);
                 inflight.push(Box::pin(
                     async move {
-                        let res = crate::emerge::unmerge_blocker_victim(cli, &cpv).await;
+                        let res = gate
+                            .with_invalidation(|| crate::emerge::unmerge_blocker_victim(cli, &cpv))
+                            .await;
                         (i, res, FinishedNode::Unmerge { cpv })
                     }
                     .instrument(unmerge_span),
