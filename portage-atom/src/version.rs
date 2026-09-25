@@ -371,7 +371,9 @@ impl Hash for Version {
                 hash_component(i, d.as_ref(), state);
             }
         }
-        self.letter.hash(state);
+        // `Ord` treats a missing letter as `'\0'`. Hash the same value so
+        // `None` and `Some('\0')` stay one key.
+        self.letter.unwrap_or('\0').hash(state);
         self.suffixes.hash(state);
         self.revision.hash(state);
     }
