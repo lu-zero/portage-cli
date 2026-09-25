@@ -2,7 +2,7 @@
 //! requirements into concrete `package.use` lines, and the co-solve fixpoint
 //! that auto-applies them (emerge's autounmask-preview behaviour)
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use camino::Utf8Path;
 use portage_atom::{Cpn, Cpv, Dep, Version};
@@ -295,10 +295,15 @@ fn req_targets(
 
 /// Adjacency map: CPN → Vec<(to_CPN, annotation)>
 /// annotation = "from-cpv\[flag\]" when gated, "from-cpv" otherwise
-type Adjacency = HashMap<String, Vec<(String, String)>>;
+///
+/// Ordered, not hashed: [`build_comments`] seeds its search by iterating this
+/// and keeps the *first* chain that reaches the target, so a randomized key
+/// order made the `# required by` justification flip between equally-valid
+/// requirers from run to run. The map is plan-sized, so ordering costs nothing.
+type Adjacency = BTreeMap<String, Vec<(String, String)>>;
 
 fn build_adjacency(edges: &[DepEdge]) -> Adjacency {
-    let mut adj: Adjacency = HashMap::new();
+    let mut adj: Adjacency = BTreeMap::new();
     for e in edges {
         if e.from.0.is_virtual() || e.to.0.is_virtual() {
             continue;
