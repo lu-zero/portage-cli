@@ -2356,7 +2356,9 @@ impl EbuildShell {
         };
         let use_flags = self.use_flags.clone();
         let mut files: Vec<String> = Vec::new();
-        collect_src_filenames(&entries, &use_flags, &mut files);
+        for entry in &entries {
+            entry.collect_filenames(&|flag| use_flags.contains(flag), &mut files);
+        }
         self.set_var("A", &files.join(" "));
     }
 
@@ -2449,37 +2451,6 @@ pub(crate) fn is_bash_internal_var(name: &str) -> bool {
             | "GROUPS"
             | "HISTCMD"
     ) || name.starts_with("BASH_")
-}
-
-///
-/// USE-conditional groups are evaluated against `use_flags`; unconditional
-/// files are always appended.  The `->` arrow rename case is handled by
-/// the `Renamed` variant (target filename is used, not the source URL).
-fn collect_src_filenames(
-    entries: &[SrcUriEntry],
-    use_flags: &HashSet<String>,
-    files: &mut Vec<String>,
-) {
-    for entry in entries {
-        match entry {
-            SrcUriEntry::Uri { filename, .. } => files.push(filename.clone()),
-            SrcUriEntry::Renamed { target, .. } => files.push(target.clone()),
-            SrcUriEntry::UseConditional {
-                flag,
-                negated,
-                entries,
-            } => {
-                let flag_set = use_flags.contains(flag.as_str());
-                // Include when: (not negated AND flag set) OR (negated AND flag not set).
-                if flag_set != *negated {
-                    collect_src_filenames(entries, use_flags, files);
-                }
-            }
-            SrcUriEntry::Group(entries) => {
-                collect_src_filenames(entries, use_flags, files);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

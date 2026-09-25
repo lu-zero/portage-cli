@@ -18,4 +18,4 @@ pub use fetch::{
     DistDigests, FetchConfig, FetchStatus, FetchStrategy, Fetcher, is_atomic_temp_name,
 };
 pub use mirrors::{Endpoint, Mirror, MirrorList, default_mirror_list};
-pub use resolver::{Distfile, DistfileResolver, ResolveOpts, RestrictGate, collect_filenames};
+pub use resolver::{Distfile, DistfileResolver, ResolveOpts, RestrictGate};

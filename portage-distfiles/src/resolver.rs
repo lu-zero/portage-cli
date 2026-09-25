@@ -351,43 +351,6 @@ impl DistfileResolver {
     }
 }
 
-/// Walk `SRC_URI` entries collecting `(url, filename, restriction)` tuples
-///
-/// USE-conditional groups are evaluated against `use_flags`.
-/// This is the public equivalent of the private `collect_src_filenames`
-/// in `portage-repo`.
-pub fn collect_filenames(entries: &[SrcUriEntry], use_flags: &HashSet<String>) -> Vec<String> {
-    let mut out = Vec::new();
-    collect_filenames_inner(entries, use_flags, &mut out);
-    out
-}
-
-fn collect_filenames_inner(
-    entries: &[SrcUriEntry],
-    use_flags: &HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    for entry in entries {
-        match entry {
-            SrcUriEntry::Uri { filename, .. } => out.push(filename.clone()),
-            SrcUriEntry::Renamed { target, .. } => out.push(target.clone()),
-            SrcUriEntry::UseConditional {
-                flag,
-                negated,
-                entries,
-            } => {
-                let active = use_flags.contains(flag.as_str());
-                if active != *negated {
-                    collect_filenames_inner(entries, use_flags, out);
-                }
-            }
-            SrcUriEntry::Group(entries) => {
-                collect_filenames_inner(entries, use_flags, out);
-            }
-        }
-    }
-}
-
 fn collect_uri_pairs(
     entries: &[SrcUriEntry],
     use_flags: &HashSet<String>,
