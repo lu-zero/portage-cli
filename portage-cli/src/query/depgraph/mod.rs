@@ -1542,35 +1542,13 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
         .unwrap_or(camino::Utf8Path::new("/"))
         .join("etc/portage");
 
-    // CPNs referenced in the raw dep data of newly-installed packages.
-    let solution_cpns: HashSet<Cpn> = solution
-        .iter()
-        .filter(|(p, _)| !p.is_virtual())
-        .map(|(p, _)| *p.cpn())
-        .collect();
-    let new_needed_cpns: std::collections::HashSet<Cpn> = order
-        .iter()
-        .filter(|(pkg, _)| !pkg.is_virtual())
-        .flat_map(|(pkg, ver)| repo::cpns_for(&data, pkg.cpn(), ver))
-        .collect();
-
-    let mut dropped_autounmask: Vec<_> = autounmask_candidates
-        .into_iter()
-        .filter(|c| !solution_cpns.contains(&c.cpv.cpn) && new_needed_cpns.contains(&c.cpv.cpn))
-        .collect();
-
-    // A widened selection supersedes any exact-pin advisories for the same
-    // cpn+slot: the bounded grant replaces the everything-grant set, and
-    // keeping both would write two conflicting shapes for one package. Keyed
-    // on slot too — a widened `clang:21` must not suppress a real dropped-dep
-    // pin for `clang:16`; the two slots are independent packages.
-    if !widened_autounmask_candidates.is_empty() {
-        let widened_cpn_slots: HashSet<(Cpn, Option<_>)> = widened_autounmask_candidates
-            .iter()
-            .map(|c| (c.cpv.cpn, c.slot))
-            .collect();
-        dropped_autounmask.retain(|c| !widened_cpn_slots.contains(&(c.cpv.cpn, c.slot)));
-    }
+    let dropped_autounmask = actionable_autounmask_candidates(
+        autounmask_candidates,
+        &widened_autounmask_candidates,
+        &solution,
+        &order,
+        &data,
+    );
 
     // emerge preview semantics: the plan was computed as if the needed USE
     // changes were applied (the co-solve fixpoint), so the changes the user
@@ -2057,6 +2035,45 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// version satisfies — checked structurally (like `repo::cpns_for`, not
 /// USE-evaluated, since this candidate's resolved USE isn't computed yet).
 /// Falls back to `rb.version` untouched otherwise.
+/// Narrow the round's autounmask candidates to the ones still actionable.
+///
+/// A candidate survives when the solve did not already satisfy its CPN and the
+/// plan still needs it. A widened selection then supersedes any exact-pin
+/// advisory for the same cpn+slot: the bounded grant replaces the
+/// everything-grant set, and keeping both would write two conflicting shapes for
+/// one package. Keyed on slot too — a widened `clang:21` must not suppress a
+/// real dropped-dep pin for `clang:16`; the two slots are independent packages.
+fn actionable_autounmask_candidates(
+    candidates: Vec<repo::AutounmaskCandidate>,
+    widened: &[repo::AutounmaskCandidate],
+    solution: &pubgrub::SelectedDependencies<PortagePackage, Version>,
+    order: &[(PortagePackage, Version)],
+    data: &repo::RepoData,
+) -> Vec<repo::AutounmaskCandidate> {
+    let solution_cpns: HashSet<Cpn> = solution
+        .iter()
+        .filter(|(p, _)| !p.is_virtual())
+        .map(|(p, _)| *p.cpn())
+        .collect();
+    let new_needed_cpns: HashSet<Cpn> = order
+        .iter()
+        .filter(|(pkg, _)| !pkg.is_virtual())
+        .flat_map(|(pkg, ver)| repo::cpns_for(data, pkg.cpn(), ver))
+        .collect();
+
+    let mut dropped: Vec<_> = candidates
+        .into_iter()
+        .filter(|c| !solution_cpns.contains(&c.cpv.cpn) && new_needed_cpns.contains(&c.cpv.cpn))
+        .collect();
+
+    if !widened.is_empty() {
+        let widened_cpn_slots: HashSet<(Cpn, Option<_>)> =
+            widened.iter().map(|c| (c.cpv.cpn, c.slot)).collect();
+        dropped.retain(|c| !widened_cpn_slots.contains(&(c.cpv.cpn, c.slot)));
+    }
+    dropped
+}
+
 /// The target-routed packages this round proposes, and the reverse-dependency
 /// conflicts they would cause against what is installed.
 ///
