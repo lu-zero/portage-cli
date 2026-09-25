@@ -131,8 +131,16 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
             .collect();
         let mut md5_covered: HashSet<Cpv> = HashSet::new();
         let mut recovered = 0usize;
+        // Positional index, not a scan: the primary cache runs to tens of
+        // thousands of entries and the gap list to thousands of lines.
+        let primary_at: HashMap<Cpv, usize> = out
+            .iter()
+            .enumerate()
+            .map(|(i, (cpv, _))| (cpv.clone(), i))
+            .collect();
+        let mut drop_primary: Vec<usize> = Vec::new();
         for cpv in &cpvs {
-            if let Some(pos) = out.iter().position(|(candidate, _)| candidate == cpv) {
+            if let Some(&pos) = primary_at.get(cpv) {
                 // Eclass freshness is not enough: a gap line exists because the
                 // primary `_md5_` did not match the ebuild. Drop the line only
                 // when that file now matches. Otherwise serve secondary.
@@ -141,7 +149,7 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
                     md5_covered.insert(cpv.clone());
                     continue;
                 }
-                out.swap_remove(pos);
+                drop_primary.push(pos);
             }
             if let Some(entry) = secondary_cache_entry(repo, cpv)
                 && primary_md5_matches_ebuild(repo, cpv, &entry)
@@ -150,6 +158,13 @@ pub async fn repo_entries(repo: &Repository) -> Vec<(Cpv, CacheEntry)> {
                 recovered += 1;
                 out.push((cpv.clone(), entry));
             }
+        }
+        // Descending, so the surviving entries keep the primary cache's order —
+        // `repo_entries` output order must not depend on the gap list's.
+        drop_primary.sort_unstable_by(|a, b| b.cmp(a));
+        drop_primary.dedup();
+        for pos in drop_primary {
+            out.remove(pos);
         }
         // A pruned secondary would silently re-hide packages; fall through and
         // rebuild rather than resolve against a tree we can only partly see.
