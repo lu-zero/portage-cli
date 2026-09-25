@@ -752,6 +752,24 @@ Reproduction on the current tree:
 cargo bench --locked -p portage-bench --bench regen_reads -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
 ```
 
+### 25. Async cache discovery (thalia, 2026-09-25)
+
+`repository/load/repo_entries` runs the cache-discovery and read path against the real `/var/db/repos/gentoo` tree (33,121 metadata entries). The baseline is the exact `6b76d606` worktree with the same lockfile and benchmark command; the current tree moves jwalk discovery to `spawn_blocking` and moves descriptor chunks into the read workers.
+
+| Measurement | `6b76d606` baseline | Current | Reduction |
+|-------------|--------------------:|--------:|----------:|
+| Median time | 787.35 ms | 674.80 ms | 14.3% |
+
+This is a real-tree repository-load measurement, not a full `em -p` claim. Criterion used 10 samples, a one-second warm-up, and a requested two-second measurement window; it automatically expanded the collection window for this benchmark.
+
+Reproduction on the current tree:
+
+```sh
+GENTOO_REPO=/var/db/repos/gentoo cargo bench --locked -p portage-bench --bench repo_load -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline used the same command and lockfile in a detached worktree at `6b76d606`.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

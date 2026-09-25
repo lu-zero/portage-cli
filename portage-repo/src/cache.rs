@@ -417,6 +417,16 @@ pub struct CacheReadOpts {
     pub latest_per_cpn: bool,
 }
 
+fn cache_jobs(opts: &CacheReadOpts) -> usize {
+    opts.jobs
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        })
+        .max(1)
+}
+
 /// List every `(Cpv, file path)` pair found under each repo's
 /// `metadata/md5-cache/` directory.
 ///
@@ -523,10 +533,10 @@ fn cache_cpvs_in_dirs(
 /// Read every `md5-cache` entry across `repos` in parallel, applying
 /// `decode` to each file's text on the worker that reads it.
 ///
-/// Two-phase: (1) a single jwalk pass collects `(Cpv, path)` for every
-/// well-named cache file; (2) the slice is chunked across `jobs` blocking
-/// tasks that each do `fs::read` + `decode(&text)` end-to-end, then the
-/// per-task vectors are concatenated. No channel, no shared mutex.
+/// Two-phase: (1) a blocking task runs a single jwalk pass and collects
+/// `(Cpv, path)` for every well-named cache file; (2) the descriptors are
+/// moved into owned chunks across `jobs` blocking tasks that each do
+/// `fs::read` + `decode(&text)` end-to-end. No channel, no shared mutex.
 ///
 /// `decode` runs on a [`tokio::task::spawn_blocking`] thread and must be
 /// `Send + Sync + Clone + 'static`. Pass [`CacheEntry::parse`] (via a
@@ -584,11 +594,17 @@ where
     T: Send + 'static,
     F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
 {
-    // Phase 1 — discover (and optionally pre-dedupe) every cache file.
-    // For ~30k entries that work is ~50-100ms — small enough to keep
-    // serial so we can chunk evenly in phase 2.
-    let items = cache_cpvs_inner(repos, opts, with_mtime);
-    read_and_decode(items, opts, decode).await
+    // Phase 1 — discover (and optionally pre-dedupe) every cache file off
+    // the async runtime. Phase 2 receives the same worker budget below.
+    let jobs = cache_jobs(opts);
+    let dirs = repos.iter().map(Repository::cache_dir).collect::<Vec<_>>();
+    let discovery_opts = opts.clone();
+    let items = tokio::task::spawn_blocking(move || {
+        cache_cpvs_in_dirs(dirs.into_iter(), &discovery_opts, with_mtime)
+    })
+    .await
+    .unwrap_or_default();
+    read_and_decode(items, jobs, decode).await
 }
 
 /// The durable secondary (user) cache's own entries — bulk-read the same
@@ -613,20 +629,27 @@ where
     let Some(dir) = repo.secondary_cache_dir() else {
         return Vec::new();
     };
-    let items = cache_cpvs_in_dirs(std::iter::once(dir.to_owned()), opts, true);
-    read_and_decode(items, opts, decode).await
+    let jobs = cache_jobs(opts);
+    let dir = dir.to_owned();
+    let discovery_opts = opts.clone();
+    let items = tokio::task::spawn_blocking(move || {
+        cache_cpvs_in_dirs(std::iter::once(dir), &discovery_opts, true)
+    })
+    .await
+    .unwrap_or_default();
+    read_and_decode(items, jobs, decode).await
 }
 
 /// Phase 2 shared by [`cache_entries_parallel_inner`] and
 /// [`secondary_cache_entries_with_mtime`]
 ///
-/// Fans `items` out into `jobs` chunks; one blocking task each does
-/// `fs::read` + `decode` for its slice end-to-end, accumulating into a
+/// Moves `items` into `jobs` owned chunks; one blocking task each does
+/// `fs::read` + `decode` for its chunk end-to-end, accumulating into a
 /// local `Vec`. Concat at the end. Avoids shared-mutex contention that
 /// would otherwise dominate on many-core boxes.
 async fn read_and_decode<T, F>(
     items: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)>,
-    opts: &CacheReadOpts,
+    jobs: usize,
     decode: F,
 ) -> Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)>
 where
@@ -636,20 +659,17 @@ where
     if items.is_empty() {
         return Vec::new();
     }
-    let jobs = opts
-        .jobs
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-        })
-        .max(1);
 
     let total = items.len();
     let chunk_size = total.div_ceil(jobs);
+    let mut items = items.into_iter();
     let mut handles = Vec::with_capacity(jobs);
-    for chunk in items.chunks(chunk_size) {
-        let chunk: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> = chunk.to_vec();
+    for _ in 0..jobs {
+        let chunk: Vec<(portage_atom::Cpv, PathBuf, Option<SystemTime>)> =
+            items.by_ref().take(chunk_size).collect();
+        if chunk.is_empty() {
+            break;
+        }
         let decode = decode.clone();
         handles.push(tokio::task::spawn_blocking(move || {
             let mut out: Vec<(portage_atom::Cpv, Option<SystemTime>, Result<T>)> =
@@ -686,6 +706,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn async_cache_read_discovers_and_deduplicates_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("metadata/md5-cache/cat")).unwrap();
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "test\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "cat\n").unwrap();
+        let cache = root.join("metadata/md5-cache/cat");
+        std::fs::write(cache.join("pkg-1.0"), "old").unwrap();
+        std::fs::write(cache.join("pkg-2.0"), "new").unwrap();
+        std::fs::write(cache.join("other-1.0"), "other").unwrap();
+
+        let repo = Repository::builder().in_memory_cache().open(root).unwrap();
+        let opts = CacheReadOpts {
+            jobs: Some(2),
+            latest_per_cpn: true,
+        };
+        let mut entries = cache_entries_parallel(std::slice::from_ref(&repo), &opts, |text| {
+            Ok(text.to_owned())
+        })
+        .await;
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].0,
+            portage_atom::Cpv::parse("cat/other-1.0").unwrap()
+        );
+        assert_eq!(entries[0].1.as_ref().unwrap(), "other");
+        assert_eq!(
+            entries[1].0,
+            portage_atom::Cpv::parse("cat/pkg-2.0").unwrap()
+        );
+        assert_eq!(entries[1].1.as_ref().unwrap(), "new");
+    }
+
+    #[tokio::test]
     async fn zero_jobs_reads_all_cache_entries() {
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("first");
@@ -701,7 +759,7 @@ mod tests {
             ..CacheReadOpts::default()
         };
 
-        let out = read_and_decode(items, &opts, |text| Ok(text.to_owned())).await;
+        let out = read_and_decode(items, cache_jobs(&opts), |text| Ok(text.to_owned())).await;
 
         assert_eq!(out.len(), 2);
         assert!(out.iter().all(|(_, _, entry)| entry.is_ok()));
