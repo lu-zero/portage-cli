@@ -1029,7 +1029,7 @@ blocked by the three independent findings above, tracked separately.
     next to the `fetch_index` it wraps) implements real portage's exact
     decision tree from
     `bintree.py::_populate_remote_repo`: a local cache at
-    `${EROOT}/var/cache/edb/binhost/<host>/<url-path>/Packages` carries
+    `${EROOT}/var/cache/edb/binhost/<host>/<url-sha256>/Packages` carries
     `TIMESTAMP` (server generation time, echoed back as the next
     `If-Modified-Since`), `DOWNLOAD_TIMESTAMP` (our last fetch/revalidation),
     and `TTL` (freshness window). `frozen` or a live `TTL` skips the network

@@ -2,9 +2,9 @@
 //! `Packages` index, so `-g`/`--getbinpkg` doesn't re-download the whole
 //! index on every run.
 //!
-//! Mirrors real portage's `binarytree._populate_remote_repo`
-//! (`dbapi/bintree.py`): the cache lives at
-//! `${EROOT}/var/cache/edb/binhost/<host>/<url-path>/Packages`, carrying two
+//! Follows real portage's `binarytree._populate_remote_repo`
+//! (`dbapi/bintree.py`) decision tree. The cache lives at
+//! `${EROOT}/var/cache/edb/binhost/<host>/<url-sha256>/Packages`, carrying two
 //! extra header fields alongside the ones `em maint binhost`/portage already
 //! write: `TIMESTAMP` (when the *server* generated this index — echoed back
 //! as `If-Modified-Since` on the next fetch) and `DOWNLOAD_TIMESTAMP` (when
@@ -13,7 +13,11 @@
 //! the network entirely; otherwise a conditional GET either confirms the
 //! cache (HTTP 304) or returns fresh content.
 
+use std::io::Write;
+
 use camino::{Utf8Path, Utf8PathBuf};
+use sha2::{Digest, Sha256};
+use tempfile::NamedTempFile;
 
 use crate::binhost::{IndexFetch, fetch_index};
 use crate::error::{Error, Result};
@@ -66,21 +70,22 @@ fn set_header_field(text: &str, key: &str, value: &str) -> String {
     out
 }
 
-/// `${EROOT}/var/cache/edb/binhost/<host>/<url-path>/Packages` — real
-/// portage's own local-cache layout (`CACHE_PATH` = `var/cache/edb`).
+/// `${EROOT}/var/cache/edb/binhost/<host>/<url-sha256>/Packages`.
 ///
-/// `None` if `sync_uri` isn't a parseable absolute URL (no cache, so the
-/// caller always fetches fresh — safe fallback, never a hard error over a
+/// The host keeps the cache browsable; the SHA-256 of the complete URL is the
+/// collision-safe key, so scheme, port, path, query, and fragment all remain
+/// distinct. `None` if `sync_uri` isn't a parseable absolute URL (no cache, so
+/// the caller always fetches fresh — safe fallback, never a hard error over a
 /// cache-path oddity).
 fn local_cache_path(eroot: &Utf8Path, sync_uri: &str) -> Option<Utf8PathBuf> {
     let parsed = url::Url::parse(sync_uri).ok()?;
     let host = parsed.host_str()?;
-    let path = parsed.path().trim_start_matches('/');
+    let key = hex::encode(Sha256::digest(sync_uri.as_bytes()));
     Some(
         eroot
             .join("var/cache/edb/binhost")
             .join(host)
-            .join(path)
+            .join(key)
             .join("Packages"),
     )
 }
@@ -93,14 +98,30 @@ fn now_unix() -> i64 {
 }
 
 fn write_cache(path: &Utf8Path, text: &str) {
-    if let Some(parent) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_str().is_empty())
+        .unwrap_or_else(|| Utf8Path::new("."));
+    if let Err(e) = std::fs::create_dir_all(parent) {
         eprintln!("warning: could not create binhost cache dir {parent}: {e}");
         return;
     }
-    if let Err(e) = std::fs::write(path, text) {
+    let mut tmp = match NamedTempFile::new_in(parent.as_std_path()) {
+        Ok(tmp) => tmp,
+        Err(e) => {
+            eprintln!("warning: could not create binhost cache temp in {parent}: {e}");
+            return;
+        }
+    };
+    if let Err(e) = tmp.write_all(text.as_bytes()) {
         eprintln!("warning: could not write binhost cache {path}: {e}");
+        return;
+    }
+    if let Err(e) = tmp.persist(path.as_std_path()) {
+        eprintln!(
+            "warning: could not replace binhost cache {path}: {}",
+            e.error
+        );
     }
 }
 
@@ -244,13 +265,41 @@ mod tests {
     }
 
     #[test]
-    fn local_cache_path_matches_real_portages_layout() {
+    fn local_cache_path_keeps_the_host_and_hashes_the_complete_url() {
         let eroot = Utf8Path::new("/");
         let path = local_cache_path(eroot, "https://example.com:8080/binhost/amd64/").unwrap();
         assert_eq!(
             path.as_str(),
-            "/var/cache/edb/binhost/example.com/binhost/amd64/Packages"
+            "/var/cache/edb/binhost/example.com/a9a9bd6d2cdc1945d2eca873ddcdd7c1042eaaa360fe3ccd10de5054626e7ea3/Packages"
         );
+    }
+
+    #[test]
+    fn local_cache_path_distinguishes_scheme_port_and_query() {
+        let eroot = Utf8Path::new("/");
+        let base = local_cache_path(eroot, "https://example.com:8443/binhost").unwrap();
+        let scheme = local_cache_path(eroot, "http://example.com:8443/binhost").unwrap();
+        let port = local_cache_path(eroot, "https://example.com:9443/binhost").unwrap();
+        let query =
+            local_cache_path(eroot, "https://example.com:8443/binhost?channel=stable").unwrap();
+        assert_ne!(base, scheme);
+        assert_ne!(base, port);
+        assert_ne!(base, query);
+    }
+
+    #[test]
+    fn write_cache_replaces_the_file_without_leaving_a_temp_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::try_from(tmp.path().join("Packages")).unwrap();
+        write_cache(&path, "old");
+        write_cache(&path, "new");
+        assert_eq!(std::fs::read_to_string(path.as_std_path()).unwrap(), "new");
+        let mut names: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec![std::ffi::OsString::from("Packages")]);
     }
 
     #[test]
