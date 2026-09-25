@@ -80,6 +80,9 @@ fn set_header_field(text: &str, key: &str, value: &str) -> String {
 fn local_cache_path(eroot: &Utf8Path, sync_uri: &str) -> Option<Utf8PathBuf> {
     let parsed = url::Url::parse(sync_uri).ok()?;
     let host = parsed.host_str()?;
+    if host.is_empty() || host == "." || host == ".." {
+        return None;
+    }
     let key = hex::encode(Sha256::digest(sync_uri.as_bytes()));
     Some(
         eroot
