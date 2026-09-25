@@ -917,6 +917,9 @@ impl EbuildShell {
         // Hermetic sourcing: start from the configured baseline so nothing
         // from a previously sourced ebuild survives into this one.
         self.restore_baseline();
+        // `DieFlag` is an `Arc` shared with that baseline clone. A previous
+        // ebuild's non-zero `die` returns before `take()` and would fail this one.
+        let _ = self.die_flag.take();
         // This re-sources from a clean baseline, so any phase-run sourcing of an
         // ebuild into the live shell is no longer valid; force the next phase to
         // re-source. (See `phase_sourced_ebuild`.)
@@ -1053,6 +1056,7 @@ impl EbuildShell {
                 .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?,
         };
         if !source_result.exit_code.is_success() {
+            let _ = self.die_flag.take();
             return Err(Error::Shell(format!(
                 "sourcing {} returned status {}",
                 ebuild.path(),

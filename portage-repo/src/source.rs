@@ -307,6 +307,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_die_in_one_ebuild_does_not_fail_the_next_on_the_same_worker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "test\n").unwrap();
+        std::fs::write(root.join("profiles/categories"), "cat\n").unwrap();
+        let mut ebuilds = Vec::new();
+        for (name, body) in [
+            ("first", "die \"from first\"\nDESCRIPTION=\"one\"\n"),
+            ("second", "DESCRIPTION=\"two\"\n"),
+        ] {
+            let dir = root.join("cat").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join(format!("{name}-1.0.ebuild"));
+            std::fs::write(&path, format!("EAPI=8\n{body}SLOT=0\n")).unwrap();
+            ebuilds.push(Ebuild::from_path(Utf8Path::from_path(&path).unwrap()).unwrap());
+        }
+        let repo = Repository::builder().in_memory_cache().open(root).unwrap();
+        let receiver = source_parallel(
+            &repo,
+            ebuilds,
+            &SourceOpts {
+                jobs: Some(1),
+                dedup: false,
+            },
+            &SourceContext::new(),
+        );
+        let mut saw_second = false;
+        while let Ok((ebuild, result)) = receiver.recv_async().await {
+            if ebuild.name() == "first" {
+                assert!(result.is_err(), "the dying ebuild must fail");
+            }
+            if ebuild.name() == "second" {
+                saw_second = true;
+                let sourced = result.expect("a later ebuild must not inherit the previous die");
+                assert_eq!(sourced.metadata.description, "two");
+            }
+        }
+        assert!(saw_second);
+    }
+
+    #[tokio::test]
     async fn sourced_ebuild_keeps_script_path_and_content_digest() {
         let (_tmp, repo, ebuilds) = repo_with_eclass("");
         let ebuild = &ebuilds[0];
