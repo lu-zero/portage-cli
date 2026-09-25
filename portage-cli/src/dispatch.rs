@@ -491,14 +491,13 @@ async fn run_maint(command: &MaintCommand, globals: &cli::Cli) -> Result<()> {
         ),
         MaintCommand::Movebin => {
             let pkgdir = crate::binpkg::resolve_pkgdir(globals).await;
-            let resolved = globals.repo_path();
-            maint::movebin::run(camino::Utf8Path::new(&resolved), &pkgdir)
+            let repo = crate::repo_open::open(globals.repo_path())?;
+            maint::movebin::run(&repo, &pkgdir)
         }
         MaintCommand::Moveinst => {
             let vdb = open_cli_vdb(globals)?;
-            let resolved = globals.repo_path();
-            let repo_path = camino::Utf8Path::new(&resolved);
-            maint::moveinst::run(repo_path, &vdb)
+            let repo = crate::repo_open::open(globals.repo_path())?;
+            maint::moveinst::run(&repo, &vdb)
         }
         MaintCommand::RegenUse { output } => {
             let resolved = globals.repo_path();

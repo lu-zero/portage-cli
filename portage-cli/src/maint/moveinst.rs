@@ -1,32 +1,19 @@
-use anyhow::{Context, Result};
-use camino::Utf8Path;
-use portage_vdb::Vdb;
-
-pub(crate) enum UpdateEntry {
-    Move {
-        from: String,
-        to: String,
-    },
-    SlotMove {
-        cpn: String,
-        from_slot: String,
-        to_slot: String,
-    },
-}
+use anyhow::Result;
+use portage_atom::Cpv;
+use portage_repo::{ProfileUpdate, Repository};
+use portage_vdb::{InstalledPackage, Vdb};
 
 /// Detect installed packages affected by package moves recorded in
 /// `profiles/updates/`
 ///
 /// Reports what would need to be renamed; does not modify the VDB.
-pub fn run(repo_path: &Utf8Path, vdb: &Vdb) -> Result<()> {
-    let updates_dir = repo_path.join("profiles/updates");
-
-    if !updates_dir.exists() {
+pub fn run(repo: &Repository, vdb: &Vdb) -> Result<()> {
+    if !has_updates_dir(repo) {
         println!("No profiles/updates directory found.");
         return Ok(());
     }
 
-    let moves = load_moves(&updates_dir)?;
+    let moves = repo.profile_updates()?;
 
     if moves.is_empty() {
         println!("No package moves found.");
@@ -37,34 +24,17 @@ pub fn run(repo_path: &Utf8Path, vdb: &Vdb) -> Result<()> {
 
     let mut any = false;
     for entry in &moves {
-        match entry {
-            UpdateEntry::Move { from, to } => {
-                let affected: Vec<_> = installed
-                    .iter()
-                    .filter(|pkg| pkg.cpn().to_string() == *from)
-                    .collect();
-                for pkg in affected {
-                    any = true;
-                    let old_cpv = pkg.cpv().to_string();
-                    let new_cpv = old_cpv.replacen(from, to, 1);
-                    println!("move:     {old_cpv}  →  {new_cpv}");
+        for pkg in affected(&installed, entry) {
+            any = true;
+            match entry {
+                ProfileUpdate::Move { new, .. } => {
+                    let new_cpv = Cpv::new(*new, pkg.cpv().version.clone());
+                    println!("move:     {}  →  {new_cpv}", pkg.cpv());
                 }
-            }
-            UpdateEntry::SlotMove {
-                cpn,
-                from_slot,
-                to_slot,
-            } => {
-                let affected: Vec<_> = installed
-                    .iter()
-                    .filter(|pkg| {
-                        pkg.cpn().to_string() == *cpn
-                            && pkg.slot_main().ok().as_deref() == Some(from_slot.as_str())
-                    })
-                    .collect();
-                for pkg in affected {
-                    any = true;
-                    println!("slotmove: {}  slot {} → {}", pkg.cpv(), from_slot, to_slot);
+                ProfileUpdate::SlotMove {
+                    old_slot, new_slot, ..
+                } => {
+                    println!("slotmove: {}  slot {old_slot} → {new_slot}", pkg.cpv());
                 }
             }
         }
@@ -77,47 +47,106 @@ pub fn run(repo_path: &Utf8Path, vdb: &Vdb) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn load_moves(updates_dir: &Utf8Path) -> Result<Vec<UpdateEntry>> {
-    let mut entries = Vec::new();
+/// Installed packages one `profiles/updates` entry applies to
+///
+/// A `slotmove` names a full atom, so its version, glob, and slot constraints
+/// decide the match — not just the CPN string.
+fn affected<'a>(
+    installed: &'a [InstalledPackage],
+    entry: &ProfileUpdate,
+) -> Vec<&'a InstalledPackage> {
+    match entry {
+        ProfileUpdate::Move { old, .. } => {
+            installed.iter().filter(|pkg| pkg.cpn() == old).collect()
+        }
+        ProfileUpdate::SlotMove { dep, old_slot, .. } => installed
+            .iter()
+            .filter(|pkg| match pkg.slot() {
+                Ok(slot) => {
+                    dep.matches_cpv(pkg.cpv(), Some(&slot)) && slot.slot.as_str() == old_slot
+                }
+                Err(_) => false,
+            })
+            .collect(),
+    }
+}
 
-    let mut files: Vec<_> = std::fs::read_dir(updates_dir)
-        .with_context(|| format!("reading {updates_dir}"))?
-        .flatten()
-        .filter_map(|e| {
-            let path = e.path();
-            if path.is_file() {
-                camino::Utf8PathBuf::try_from(path).ok()
-            } else {
-                None
-            }
-        })
-        .collect();
+/// Whether the repo has a `profiles/updates` directory at all
+///
+/// The typed parser answers "no moves" for both a missing directory and an
+/// empty one, and the two cases report differently.
+pub(crate) fn has_updates_dir(repo: &Repository) -> bool {
+    repo.path().join("profiles").join("updates").is_dir()
+}
 
-    files.sort();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use portage_atom::Dep;
 
-    for file in &files {
-        let content = std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?;
+    fn installed_pkg(vdb_root: &std::path::Path, cat: &str, pf: &str, slot: &str) {
+        let dir = vdb_root.join(cat).join(pf);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SLOT"), slot).unwrap();
+    }
 
-        for line in content.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let parts: Vec<&str> = line.splitn(4, ' ').collect();
-            match parts.as_slice() {
-                ["move", from, to] => entries.push(UpdateEntry::Move {
-                    from: from.to_string(),
-                    to: to.to_string(),
-                }),
-                ["slotmove", cpn, old_slot, new_slot] => entries.push(UpdateEntry::SlotMove {
-                    cpn: cpn.to_string(),
-                    from_slot: old_slot.to_string(),
-                    to_slot: new_slot.to_string(),
-                }),
-                _ => {}
-            }
+    /// The VDB half of the fixture: two slots of one package, plus a bystander
+    fn installed() -> (tempfile::TempDir, Vec<InstalledPackage>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let vdb_root = tmp.path().join("var/db/pkg");
+        installed_pkg(&vdb_root, "dev-libs", "libfoo-1.0", "2");
+        installed_pkg(&vdb_root, "dev-libs", "libfoo-2.0", "3");
+        installed_pkg(&vdb_root, "app-misc", "other-1.0", "0");
+        let vdb = Vdb::open(camino::Utf8PathBuf::try_from(tmp.path().join("var/db/pkg")).unwrap())
+            .unwrap();
+        let pkgs: Vec<_> = vdb.packages().into_iter().collect();
+        (tmp, pkgs)
+    }
+
+    fn slotmove(atom: &str, old: &str, new: &str) -> ProfileUpdate {
+        ProfileUpdate::SlotMove {
+            dep: Box::new(Dep::parse(atom).unwrap()),
+            old_slot: old.to_string(),
+            new_slot: new.to_string(),
         }
     }
 
-    Ok(entries)
+    fn cpvs(matched: &[&InstalledPackage]) -> Vec<String> {
+        matched.iter().map(|p| p.cpv().to_string()).collect()
+    }
+
+    // A `slotmove` atom is a full dependency atom: only the package whose own
+    // slot is the recorded old one is affected, whichever version carries it.
+    #[test]
+    fn slotmove_atom_matches_only_its_own_slot() {
+        let (_tmp, pkgs) = installed();
+        let entry = slotmove("dev-libs/libfoo", "2", "3");
+
+        assert_eq!(cpvs(&affected(&pkgs, &entry)), vec!["dev-libs/libfoo-1.0"]);
+    }
+
+    // A versioned slotmove atom is legal per PMS 4.4.4 and used to match
+    // nothing: the reader compared the whole atom text against a bare CPN.
+    #[test]
+    fn versioned_slotmove_atom_matches_through_the_version_constraint() {
+        let (_tmp, pkgs) = installed();
+        let entry = slotmove(">=dev-libs/libfoo-2.0", "3", "4");
+
+        assert_eq!(cpvs(&affected(&pkgs, &entry)), vec!["dev-libs/libfoo-2.0"]);
+    }
+
+    // A `move` renames by CPN, so every installed version of it is affected.
+    #[test]
+    fn move_entry_matches_every_version_of_the_cpn() {
+        let (_tmp, pkgs) = installed();
+        let entry = ProfileUpdate::Move {
+            old: portage_atom::Cpn::parse("dev-libs/libfoo").unwrap(),
+            new: portage_atom::Cpn::parse("dev-libs/libfoo2").unwrap(),
+        };
+
+        assert_eq!(
+            cpvs(&affected(&pkgs, &entry)),
+            vec!["dev-libs/libfoo-1.0", "dev-libs/libfoo-2.0"]
+        );
+    }
 }
