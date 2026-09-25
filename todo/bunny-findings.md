@@ -88,7 +88,7 @@ Status markers: `[ ]` open · `[~]` in progress · `[x]` complete · `[!]` block
 
 ## Phase 5 — simplification and architecture decisions
 
-- [ ] **BF-501 — Decide the `portage-solver` abstraction direction.** Either make both bridges consume the shared model and implement `Solver`, or remove the unused facade/models after checking publishable external intent.
+- [!] **BF-501 — Decide the `portage-solver` abstraction direction.** Decision: keep `portage-solver` as the published shared vocabulary used by the PubGrub bridge; do not remove it or force a Resolvo storage/API migration now. `portage-solver` 0.3.0 is published, its only crates.io reverse dependency is `portage-atom-pubgrub` 0.8.0, and its 0.2.0 changelog explicitly calls Resolvo a best-effort parallel stack. BF-903 already defers merging the two storage models. No code or public-API change is made; stale “both bridges implement” wording is left for BF-510.
 - [ ] **BF-502 — Centralize PMS version matching.** Make `Dep::matches_cpv`, mask matching, and Resolvo matching use one `portage-atom` primitive; avoid revision-cloning comparisons.
 - [ ] **BF-503 — Centralize effective-USE construction.** Remove the duplicated pre-cede folds in filtering, solver ingestion, and policy evaluation.
 - [ ] **BF-504 — Reuse typed maintenance parsers.** Wire `maint moveinst` to `portage-repo`'s tested `ProfileUpdates` parser.
