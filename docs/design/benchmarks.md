@@ -63,11 +63,12 @@ construction and lookup scaling; `provider_postprocess` measures provider
 construction with complete versus missing branches; `source_reuse` measures
 worker-local shell reuse during synthetic sourcing; `eclass_memo` measures
 path-keyed eclass digest reuse during fresh-repository live sourcing; `regen_reads`
-measures ebuild content reuse during synthetic cache regeneration; `resolve`
+measures ebuild content reuse during synthetic cache regeneration;
+`metadata_serialize` measures direct-buffer metadata serialization; `resolve`
 measures the in-memory adapter and solver path:
 
 ```sh
-# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess, source_reuse, eclass_memo, regen_reads)
+# All criterion benches (dep_parsing, realworld_dep_parsing, resolve, dedup, repo_load, avail_lookup, trim_scaling, graph_scaling, vdb_snapshot, policy_facts, policy_lists, repo_cache_lookup, provider_postprocess, source_reuse, eclass_memo, regen_reads, metadata_serialize)
 cargo bench -p portage-bench
 
 # One
@@ -84,6 +85,7 @@ cargo bench -p portage-bench --bench provider_postprocess
 cargo bench -p portage-bench --bench source_reuse
 cargo bench -p portage-bench --bench eclass_memo
 cargo bench -p portage-bench --bench regen_reads
+cargo bench -p portage-bench --bench metadata_serialize
 
 # Alternative interner (see benchmarks/Cargo.toml's [features])
 cargo bench -p portage-bench --no-default-features --features lasso

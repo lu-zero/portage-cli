@@ -1,5 +1,7 @@
+use std::fmt::Write as _;
+
 use crate::interner::{DefaultInterner, Interned, Interner};
-use portage_atom::{DepEntry, LazyDepList, Slot};
+use portage_atom::{LazyDepList, Slot};
 
 use crate::eapi::Eapi;
 use crate::error::{Error, Result};
@@ -317,95 +319,91 @@ impl<I: Interner> CacheEntry<I> {
     /// Empty-valued fields are omitted.
     pub fn serialize(&self) -> String {
         let m = &self.metadata;
-        let mut lines = Vec::new();
+        let mut out = String::new();
 
-        // Always emit mandatory fields
-        lines.push(format!(
-            "DEFINED_PHASES={}",
-            format_phases(&m.defined_phases)
-        ));
+        out.push_str("DEFINED_PHASES=");
+        write_phases(&mut out, &m.defined_phases);
+        out.push('\n');
 
         if !m.depend.is_empty() {
-            lines.push(format!("DEPEND={}", format_dep_entries(m.depend.list())));
+            write_joined_field(&mut out, "DEPEND", m.depend.list(), ' ');
         }
 
-        lines.push(format!("DESCRIPTION={}", m.description));
-        lines.push(format!("EAPI={}", m.eapi));
+        write_field(&mut out, "DESCRIPTION", m.description.as_str());
+        write_field(&mut out, "EAPI", m.eapi);
 
         if !m.homepage.is_empty() {
-            lines.push(format!("HOMEPAGE={}", m.homepage.join(" ")));
+            write_joined_field(&mut out, "HOMEPAGE", &m.homepage, ' ');
         }
 
         if !m.iuse.is_empty() {
-            let iuse_str: Vec<String> = m.iuse.iter().map(|i| i.to_string()).collect();
-            lines.push(format!("IUSE={}", iuse_str.join(" ")));
+            write_joined_field(&mut out, "IUSE", &m.iuse, ' ');
         }
 
         if !m.keywords.is_empty() {
-            let kw_str: Vec<String> = m.keywords.iter().map(|k| k.to_string()).collect();
-            lines.push(format!("KEYWORDS={}", kw_str.join(" ")));
+            write_joined_field(&mut out, "KEYWORDS", &m.keywords, ' ');
         }
 
-        if let Some(ref lic) = m.license {
-            lines.push(format!("LICENSE={}", lic));
+        if let Some(license) = &m.license {
+            write_field(&mut out, "LICENSE", license);
         }
 
         if !m.pdepend.is_empty() {
-            lines.push(format!("PDEPEND={}", format_dep_entries(m.pdepend.list())));
+            write_joined_field(&mut out, "PDEPEND", m.pdepend.list(), ' ');
         }
 
         if !m.rdepend.is_empty() {
-            lines.push(format!("RDEPEND={}", format_dep_entries(m.rdepend.list())));
+            write_joined_field(&mut out, "RDEPEND", m.rdepend.list(), ' ');
         }
 
-        if let Some(ref ru) = m.required_use {
-            lines.push(format!("REQUIRED_USE={}", ru));
+        if let Some(required_use) = &m.required_use {
+            write_field(&mut out, "REQUIRED_USE", required_use);
         }
 
         if !m.restrict.is_empty() {
-            let r_str: Vec<String> = m.restrict.iter().map(|r| r.to_string()).collect();
-            lines.push(format!("RESTRICT={}", r_str.join(" ")));
+            write_joined_field(&mut out, "RESTRICT", &m.restrict, ' ');
         }
 
-        lines.push(format!("SLOT={}", m.slot));
+        write_field(&mut out, "SLOT", m.slot);
 
         if !m.src_uri.is_empty() {
-            let uri_str: Vec<String> = m.src_uri.list().iter().map(|u| u.to_string()).collect();
-            lines.push(format!("SRC_URI={}", uri_str.join(" ")));
+            write_joined_field(&mut out, "SRC_URI", m.src_uri.list(), ' ');
         }
 
         if !m.bdepend.is_empty() {
-            lines.push(format!("BDEPEND={}", format_dep_entries(m.bdepend.list())));
+            write_joined_field(&mut out, "BDEPEND", m.bdepend.list(), ' ');
         }
 
         if !m.idepend.is_empty() {
-            lines.push(format!("IDEPEND={}", format_dep_entries(m.idepend.list())));
+            write_joined_field(&mut out, "IDEPEND", m.idepend.list(), ' ');
         }
 
         if !m.properties.is_empty() {
-            let p_str: Vec<String> = m.properties.iter().map(|p| p.to_string()).collect();
-            lines.push(format!("PROPERTIES={}", p_str.join(" ")));
+            write_joined_field(&mut out, "PROPERTIES", &m.properties, ' ');
         }
 
         if !m.inherit.is_empty() {
-            lines.push(format!("INHERIT={}", m.inherit.join(" ")));
+            write_joined_field(&mut out, "INHERIT", &m.inherit, ' ');
         }
 
         if !self.eclasses.is_empty() {
-            let parts: Vec<String> = self
-                .eclasses
-                .iter()
-                .flat_map(|(name, checksum)| vec![name.to_string(), format!("{checksum:x}")])
-                .collect();
-            lines.push(format!("_eclasses_={}", parts.join("\t")));
+            out.push_str("_eclasses_=");
+            for (index, (name, checksum)) in self.eclasses.iter().enumerate() {
+                if index != 0 {
+                    out.push('\t');
+                }
+                write_display(&mut out, name);
+                out.push('\t');
+                write!(out, "{checksum:x}").expect("writing to a String cannot fail");
+            }
+            out.push('\n');
         }
 
-        if let Some(ref md5) = self.md5 {
-            lines.push(format!("_md5_={}", md5));
+        if let Some(md5) = &self.md5 {
+            write_field(&mut out, "_md5_", md5);
         }
 
-        lines.push(String::new()); // trailing newline
-        lines.join("\n")
+        out
     }
 }
 
@@ -515,23 +513,45 @@ fn parse_md5_hex(s: &str) -> Option<md5::Digest> {
     Some(md5::Digest(value.to_be_bytes()))
 }
 
-/// Format DEFINED_PHASES for serialization
-fn format_phases(phases: &[Phase]) -> String {
-    if phases.is_empty() {
-        "-".to_string()
-    } else {
-        phases
-            .iter()
-            .map(|p| p.as_str())
-            .collect::<Vec<&str>>()
-            .join(" ")
+fn write_display(out: &mut String, value: impl std::fmt::Display) {
+    write!(out, "{value}").expect("writing to a String cannot fail");
+}
+
+fn write_field(out: &mut String, key: &str, value: impl std::fmt::Display) {
+    out.push_str(key);
+    out.push('=');
+    write_display(out, value);
+    out.push('\n');
+}
+
+fn write_joined<T: std::fmt::Display>(out: &mut String, values: &[T], separator: char) {
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            out.push(separator);
+        }
+        write_display(out, value);
     }
 }
 
-/// Format dependency entries for serialization
-fn format_dep_entries(entries: &[DepEntry]) -> String {
-    let strs: Vec<String> = entries.iter().map(|e| e.to_string()).collect();
-    strs.join(" ")
+fn write_joined_field<T: std::fmt::Display>(
+    out: &mut String,
+    key: &str,
+    values: &[T],
+    separator: char,
+) {
+    out.push_str(key);
+    out.push('=');
+    write_joined(out, values, separator);
+    out.push('\n');
+}
+
+/// Write DEFINED_PHASES using the cache format's empty-value marker.
+fn write_phases(out: &mut String, phases: &[Phase]) {
+    if phases.is_empty() {
+        out.push('-');
+    } else {
+        write_joined(out, phases, ' ');
+    }
 }
 
 #[cfg(test)]
@@ -673,6 +693,7 @@ _md5_=4539d849d3cea8ac84debad9b3154143
     fn serialize_round_trip() {
         let entry = CacheEntry::parse(EXAMPLE_CACHE).unwrap();
         let serialized = entry.serialize();
+        assert_eq!(serialized, EXAMPLE_CACHE);
         let reparsed = CacheEntry::parse(&serialized).unwrap();
         assert_eq!(entry.metadata.eapi, reparsed.metadata.eapi);
         assert_eq!(entry.metadata.description, reparsed.metadata.description);

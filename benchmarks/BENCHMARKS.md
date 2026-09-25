@@ -716,6 +716,24 @@ cargo bench --locked -p portage-bench --bench regen_reads -- --noplot --warm-up-
 
 The baseline was run from a detached worktree at `f898dd99` with the same fresh fixture and lockfile.
 
+### 23. Metadata cache serialization (thalia, 2026-09-25)
+
+`metadata_serialize` parses one representative full `CacheEntry` and repeatedly serializes it. The baseline is the exact `774ebef5` worktree with the same fixture and lockfile; the current tree writes fields directly into the final buffer instead of constructing per-field vectors and strings.
+
+| Measurement | `774ebef5` baseline | Current | Reduction |
+|-------------|---------------------:|--------:|----------:|
+| Median time | 4.3334 µs | 2.1491 µs | 50.4% |
+
+The result is a synthetic microbenchmark for the serializer, not a real-repository or full-regeneration claim. The exact serialized bytes are also covered by the cache serialization regression. Criterion used 10 samples, a one-second warm-up, and a two-second measurement window.
+
+Reproduction on the current tree:
+
+```sh
+cargo bench --locked -p portage-bench --bench metadata_serialize -- --noplot --warm-up-time 1 --measurement-time 2 --sample-size 10
+```
+
+The baseline was run from a detached worktree at `774ebef5` with the same fixture and lockfile.
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*

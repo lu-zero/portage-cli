@@ -124,3 +124,7 @@ harness = false
 [[bench]]
 name = "regen_reads"
 harness = false
+
+[[bench]]
+name = "metadata_serialize"
+harness = false

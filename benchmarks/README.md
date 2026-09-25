@@ -23,6 +23,7 @@ Benchmarks for the Gentoo Portage Rust ecosystem.
 | `source_reuse` | Worker-local shell reuse during synthetic ebuild sourcing |
 | `eclass_memo` | Eclass digest/path memo during fresh-repository live sourcing |
 | `regen_reads` | Ebuild content reuse during synthetic cache regeneration |
+| `metadata_serialize` | Direct-buffer metadata cache serialization |
 
 `pkgcraft-compare` is off by default (it pulls in `gix`, a sizeable compile) —
 enable it explicitly whenever you actually want the pkgcraft comparison
