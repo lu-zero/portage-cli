@@ -110,8 +110,7 @@ pub const C_PKG_NOMERGE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColo
 ///
 /// Matches real emerge's `PKG_MERGE_WORLD`/`PKG_NOMERGE_WORLD`/`PKG_BINARY_MERGE_WORLD` and
 /// their two-part gate: bold when already in `@selected`, or a literal target of a
-/// non-`--oneshot` run that would record it (see `PrettyCtx::selected`'s doc and the
-/// `6f25f52` fix).
+/// non-`--oneshot` run that would record it (see `PrettyCtx::selected`'s doc).
 ///
 /// Same three hues real portage's `_WORLD` variants use — note
 /// `_NOMERGE_SELECTED` is bold **blue**, not teal.

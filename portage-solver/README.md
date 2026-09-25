@@ -7,9 +7,12 @@
 Solver-agnostic vocabulary and [`Solver`] trait for Gentoo Portage dependency
 resolution.
 
-Shared layer between the two solver bridges
-[`portage-atom-pubgrub`](https://crates.io/crates/portage-atom-pubgrub) and
-[`portage-atom-resolvo`](https://crates.io/crates/portage-atom-resolvo).
+The vocabulary layer
+[`portage-atom-pubgrub`](https://crates.io/crates/portage-atom-pubgrub)
+resolves through.
+[`portage-atom-resolvo`](https://crates.io/crates/portage-atom-resolvo) is a
+separate comparison stack that keeps its own vocabulary and does not implement
+`Solver`.
 
 ## Installation
 
@@ -26,7 +29,8 @@ portage-solver = "0.3"
 - **USE policy vocabulary** — `UseConfig`, `UseFlagState`, `UseLayer`,
   `resolve_effective_use`
 - **Solution vocabulary** — `SelectedPackage`, `DepEdge`, `TargetSpec`
-- **`Solver` trait** — single interface both bridges implement for cross-checking
+- **`Solver` trait** — the post-construction surface `portage-atom-pubgrub`
+  implements, for cross-checking plans across backends
 
 Depends only on [`portage-atom`](https://crates.io/crates/portage-atom); no
 pubgrub or resolvo.

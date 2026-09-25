@@ -306,11 +306,14 @@ impl DesiredBuildEnv {
 }
 
 /// One `binrepos.conf` section — real portage's `BinRepoConfig`, restricted
-/// to the fields em's remote binpkg fetch path uses. `frozen`/
-// `verify_signature` are parsed and carried but not yet *enforced*: `frozen`
-// ("prefer a locally cached index over fetching fresh") needs the
-// not-yet-built local index cache to have any effect, and
-// `verify_signature` needs the not-yet-built GPG verify step.
+/// to the fields em's remote binpkg fetch path uses.
+///
+/// Both flags are honoured end to end: `frozen` is passed to
+/// [`fetch_index_cached`] to prefer this binhost's cached `Packages` over
+/// refetching, and `verify_signature` reaches
+/// [`VerifyPolicy`](portage_binpkg::VerifyPolicy)'s `require_signature` when
+/// the container is extracted, so a binhost can demand a signed package and
+/// have an unsigned one rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinRepoEntry {
     /// Section name, or an md5 hex digest of the `sync-uri` for a

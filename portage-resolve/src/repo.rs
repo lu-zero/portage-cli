@@ -1273,7 +1273,7 @@ pub struct Adapter<'a> {
     ///
     /// Level-C treats these as "being built": `REQUIRED_USE` is re-decided for the
     /// new build's USE context, unlike a package staying installed untouched (see
-    /// [`Self::installed_cpvs`], `b919014`).
+    /// [`Self::installed_cpvs`]).
     ///
     /// Mid-solve USE-dep-forced reinstalls and post-solve subslot rebuilds
     /// aren't known yet when this set is built, so those stay Level-A

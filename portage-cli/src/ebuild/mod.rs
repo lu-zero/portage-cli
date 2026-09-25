@@ -1638,8 +1638,9 @@ async fn run_inner(opts: RunInner<'_>) -> Result<()> {
     Ok(())
 }
 
-/// The next free GPKG build-id for `<cat>/<pf>` in `pkgdir` (portage numbers
-/// rebuilds `<pf>-1`, `<pf>-2`, …); 1 when none exist.
+/// Build the ecompress/estrip configuration from the post-`src_install`
+/// shell state (docompress/dostrip accumulators, FEATURES, RESTRICT,
+/// PORTAGE_COMPRESS) and run the image post-processing pass.
 fn post_process_after_install(
     shell: &portage_repo::EbuildShell,
     work_root: &Utf8Path,

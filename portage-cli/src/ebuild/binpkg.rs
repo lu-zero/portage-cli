@@ -16,10 +16,6 @@ use super::{
     rewrite_d_symlinks, walk_image, write_environment_bz2,
 };
 
-/// Build the ecompress/estrip configuration from the post-`src_install`
-/// shell state (docompress/dostrip accumulators, FEATURES, RESTRICT,
-/// PORTAGE_COMPRESS) and run the image post-processing pass.
-///
 /// The image subtree that gets post-processed and merged: the shell's `ED`
 /// (`image/${EPREFIX}`, set by `init_build_env`), falling back to
 /// `work_root/image` when `ED` is unset or empty. With `EPREFIX=""` this is

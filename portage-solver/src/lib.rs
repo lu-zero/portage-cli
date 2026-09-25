@@ -1,8 +1,8 @@
 //! Solver-agnostic vocabulary and [`Solver`] trait for Portage dependency
 //! resolution.
 //!
-//! `portage-solver` is the shared layer between the two solver bridges
-//! ([`portage-atom-pubgrub`], [`portage-atom-resolvo`]). It defines:
+//! `portage-solver` is the vocabulary layer [`portage-atom-pubgrub`] resolves
+//! through. It defines:
 //!
 //! - **Facts vocabulary** — [`PackageRepository`], [`VersionFacts`],
 //!   [`PackageDeps`], [`DepClass`], [`RequiredUse`]: what a consumer feeds a
@@ -15,14 +15,14 @@
 //!   [`InstalledPackage`], [`TargetSpec`], [`Violation`]: what a solver
 //!   produces, in plain Portage terms (`Cpn`, `Version`, slot) rather than
 //!   solver-internal IDs.
-//! - **The [`Solver`] trait** — the single abstraction both bridges implement,
-//!   so a plan can be produced — and cross-checked — by two independent
-//!   algorithms behind one interface.
+//! - **The [`Solver`] trait** — the post-construction surface
+//!   [`portage-atom-pubgrub`] implements, so a plan can be produced — and
+//!   cross-checked — through one interface.
 //!
 //! This crate depends only on [`portage_atom`] (and `thiserror`); it knows
-//! nothing of pubgrub or resolvo. The canonical model is the richer
-//! `portage-atom-pubgrub` API, so that bridge's eventual [`Solver`] impl is a
-//! thin translation; `portage-atom-resolvo` implements a best-effort subset.
+//! nothing of pubgrub or resolvo. [`portage-atom-resolvo`] is a separate
+//! comparison stack that keeps its own vocabulary and does not implement
+//! [`Solver`].
 //!
 //! [`portage-atom-pubgrub`]: https://crates.io/crates/portage-atom-pubgrub
 //! [`portage-atom-resolvo`]: https://crates.io/crates/portage-atom-resolvo

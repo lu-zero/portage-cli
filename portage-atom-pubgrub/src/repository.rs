@@ -29,9 +29,10 @@ pub struct PackageVersions {
     /// interned-flag vocabulary ([`RequiredUse`])
     ///
     /// `None` when the ebuild declares no `REQUIRED_USE`. This is an
-    /// intrinsic ebuild **fact**, not policy — as of Phase 0 it is stored
-    /// but not yet consumed by the solver (Level-C auto-satisfaction is the
-    /// future consumer — see `docs/required-use-level-c.md`).
+    /// intrinsic ebuild **fact**, not policy: it reaches the solver as a
+    /// dependency (`Solved`/`SolverDecided`) under `--autosolve-use`, and the
+    /// flags the solver cedes come back on `portage_solver::Plan`'s
+    /// `ceded_flags`. See `portage-atom-pubgrub/docs/required-use-level-c.md`.
     pub required_use: Option<RequiredUse>,
     /// PMS table 8.6: empty `||` / `^^` after USE strip matches (EAPI 0–6)
     pub empty_any_of_matches: bool,

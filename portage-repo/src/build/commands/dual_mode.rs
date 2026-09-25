@@ -17,8 +17,8 @@
 //! ever defined for any of these names, so there is no
 //! function-shadows-builtin question (a bash function always outranks a
 //! same-named builtin in this shell — that's what let `eapply`'s old
-//! metadata-mode bash stub silently win over its real builtin for two
-//! weeks after the migration to a builtin, `f811d8a`). Switching mode is
+//! metadata-mode bash stub silently win over its real builtin after the
+//! migration to a builtin). Switching mode is
 //! exactly overwriting this registry slot, called from
 //! `EbuildShell::new_with_cache` (initial state), `source_ebuild` (every
 //! call), and `init_build_env` (every real phase).

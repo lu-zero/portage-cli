@@ -82,7 +82,7 @@ fi
 
 /// The `bashrc` recipe for the relocatable overlay (`--prefix DIR`): host (/)
 /// is the build sysroot, the prefix is layered on top. Since `--prefix` sets
-/// `EPREFIX` (`b3f20c1`), `econf` passes `--prefix=${EPREFIX}/usr`, so a
+/// `EPREFIX`, `econf` passes `--prefix=${EPREFIX}/usr`, so a
 /// package's own `.pc`/headers/libs installed *into* the prefix already
 /// record prefix-relative paths, same as `--local` — this recipe only needs
 /// to put them (and the host's own) on the search path, no sysroot rewriting.

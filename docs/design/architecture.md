@@ -130,9 +130,9 @@ Ebuild metadata cache parser.
 
 ### `portage-solver` (v0.3.0)
 
-Solver-agnostic vocabulary shared by both solver bridges.
+Solver-agnostic vocabulary for the PubGrub bridge, which `em` resolves through.
 
-- `trait Solver` — single abstraction both bridges implement
+- `trait Solver` — post-construction surface `portage-atom-pubgrub` implements
 - `trait PackageRepository`, `struct VersionFacts`, `struct PackageDeps` — facts fed to a solver
 - `struct UseConfig`, `enum UseFlagState`, `struct UseLayer` — per-package resolved USE policy (computed by consumer, not solver)
 - `struct SelectedPackage`, `struct DepEdge`, `struct TargetSpec` — solution/plan vocabulary in Portage terms

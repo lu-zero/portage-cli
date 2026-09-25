@@ -9,8 +9,8 @@
 //! Computes policy; renders nothing (no usage-rs, no anstream/anstyle
 //! dependency — that boundary is deliberate).
 //!
-//! Unpublishable past its placeholder `v0.0.1` (see `Cargo.toml`): depends on
-//! `portage-repo`, which pulls in the brush fork via git.
+//! Unpublishable: depends on `portage-repo`, which pulls in the brush fork via
+//! git.
 #![warn(missing_docs)]
 
 mod bdepend_avail;

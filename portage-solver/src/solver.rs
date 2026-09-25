@@ -1,4 +1,4 @@
-//! The solver abstraction both bridges implement
+//! The solver abstraction `portage-atom-pubgrub` implements
 //!
 //! [`Solver`] covers the post-construction surface a consumer needs: feed in
 //! installed packages and knobs, then run [`Solver::resolve_targets`], which
@@ -6,25 +6,24 @@
 //! together with the solver's advisory output (dropped deps, ceded USE
 //! decisions, violations).
 //!
-//! Construction is intentionally **not** part of the trait: each bridge takes
+//! Construction is intentionally **not** part of the trait: the bridge takes
 //! its own `PackageRepository` adapter and options via a concrete `new`, so the
-//! consumer picks the bridge at the call site (e.g. `em --solver=resolvo`) and
-//! then talks to it through `Box<dyn Solver>` (or the concrete type). Knobs
-//! that only some bridges support (cross-compilation host/sysroot sets) stay
-//! bridge-specific extension methods on the concrete type; the trait models the
-//! common native path that both bridges implement.
+//! consumer constructs the concrete type and then talks to it through
+//! `Box<dyn Solver>` (or the concrete type). Knobs only some backends support
+//! (cross-compilation host/sysroot sets) stay bridge-specific extension methods
+//! on the concrete type; the trait models the common native path.
 
 use crate::{InstalledPackage, Plan, SolveError, TargetSpec};
 
 /// A Portage dependency solver
 ///
-/// Both `portage-atom-pubgrub` and `portage-atom-resolvo` implement this so a
-/// plan can be produced — and cross-checked — by two independent algorithms
-/// behind one interface.
+/// Implemented by `portage-atom-pubgrub`, the bridge `em` resolves through.
+/// `portage-atom-resolvo` is a separate comparison stack that keeps its own
+/// vocabulary and does not implement this trait.
 ///
 /// # Lifecycle
 ///
-/// 1. Construct the concrete bridge (each bridge's own `new`), passing the
+/// 1. Construct the concrete bridge (its own `new`), passing the
 ///    [`crate::PackageRepository`] adapter and any bridge-specific options.
 /// 2. Register installed packages via [`Solver::add_installed`] and set knobs.
 /// 3. Call [`Solver::resolve_targets`] with the resolve targets — a single
