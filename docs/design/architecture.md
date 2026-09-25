@@ -251,6 +251,9 @@ Gentoo binary package (GPKG) read/write per [GLEP 78](https://www.gentoo.org/gle
 - `fn write_gpkg()` — GPKG container writer (GNU `tar` + `zstd`)
 - `fn read_metadata()` — read GPKG metadata without full extraction
 - `fn extract_image()` — extract installed image from a GPKG
+- Read/verify paths stream file digests and decompression through fixed buffers;
+  outer members needed for a check are staged in one `tar` pass. The detached
+  OpenPGP API still requires a contiguous member buffer.
 - `struct GpkgInput` — input specification for writing
 - Used by `em` for `-b`/`--buildpkg`, `-k`/`--usepkg`, and `-g`/`--getbinpkg`
 

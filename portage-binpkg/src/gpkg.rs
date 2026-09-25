@@ -14,9 +14,10 @@
 //! image so file capabilities/ACLs and device nodes survive) and compressed with
 //! zstd — the Portage default. Requires `tar` and `zstd` on `PATH`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use blake2::Blake2b512;
 use sha2::{Digest, Sha512};
@@ -232,33 +233,54 @@ fn parse_manifest_entries(text: &str) -> Vec<ManifestEntry> {
     entries
 }
 
-/// Check `data` against `entry`'s recorded size/hashes
-fn check_entry(entry: &ManifestEntry, data: &[u8]) -> Result<()> {
-    if data.len() as u64 != entry.size {
+/// Read a file's size and digests without materializing it in memory
+fn file_digests(path: &Path) -> Result<(u64, String, String)> {
+    let mut file = std::fs::File::open(path)?;
+    let mut sha512 = Sha512::new();
+    let mut blake2b = Blake2b512::new();
+    let mut size = 0u64;
+    let mut buffer = [0u8; 128 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let chunk = &buffer[..read];
+        sha512.update(chunk);
+        blake2b.update(chunk);
+        size += read as u64;
+    }
+    Ok((
+        size,
+        hex::encode(sha512.finalize()),
+        hex::encode(blake2b.finalize()),
+    ))
+}
+
+/// Check `file` against `entry`'s recorded size/hashes
+fn check_entry_file(entry: &ManifestEntry, file: &Path) -> Result<()> {
+    let (size, sha512, blake2b) = file_digests(file)?;
+    if size != entry.size {
         return Err(Error::Corrupt(format!(
             "size mismatch for {}: Manifest {}, file {}",
-            entry.name,
-            entry.size,
-            data.len()
+            entry.name, entry.size, size
         )));
     }
-    if let Some(expect) = &entry.sha512 {
-        let got = hex::encode(Sha512::digest(data));
-        if got != *expect {
-            return Err(Error::Corrupt(format!(
-                "SHA512 mismatch for {}",
-                entry.name
-            )));
-        }
+    if let Some(expect) = &entry.sha512
+        && sha512 != *expect
+    {
+        return Err(Error::Corrupt(format!(
+            "SHA512 mismatch for {}",
+            entry.name
+        )));
     }
-    if let Some(expect) = &entry.blake2b {
-        let got = hex::encode(Blake2b512::digest(data));
-        if got != *expect {
-            return Err(Error::Corrupt(format!(
-                "BLAKE2B mismatch for {}",
-                entry.name
-            )));
-        }
+    if let Some(expect) = &entry.blake2b
+        && blake2b != *expect
+    {
+        return Err(Error::Corrupt(format!(
+            "BLAKE2B mismatch for {}",
+            entry.name
+        )));
     }
     Ok(())
 }
@@ -283,20 +305,16 @@ fn verify_data_member(manifest: &Path, member_name: &Path, file: &Path) -> Resul
             "Manifest has no DATA line for {want_name}"
         )));
     };
-    let data = std::fs::read(file)?;
-    check_entry(entry, &data)
+    check_entry_file(entry, file)
 }
 
 /// Write a GLEP 74-style Manifest with one `DATA` line per member
 fn write_manifest(out: &Path, members: &[(String, PathBuf)]) -> Result<()> {
     let mut text = String::new();
     for (name, path) in members {
-        let data = std::fs::read(path)?;
-        let sha512 = hex::encode(Sha512::digest(&data));
-        let blake2b = hex::encode(Blake2b512::digest(&data));
+        let (size, sha512, blake2b) = file_digests(path)?;
         text.push_str(&format!(
-            "DATA {name} {} SHA512 {sha512} BLAKE2B {blake2b}\n",
-            data.len()
+            "DATA {name} {size} SHA512 {sha512} BLAKE2B {blake2b}\n"
         ));
     }
     std::fs::write(out, text)?;
@@ -351,18 +369,56 @@ fn list_container(container: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Extract member `name` from `container` into `dest_dir`, returning its path
-fn extract_member(container: &Path, name: &str, dest_dir: &Path) -> Result<PathBuf> {
-    run(
-        "tar",
-        Command::new("tar")
-            .arg("-xf")
-            .arg(container)
-            .arg("-C")
-            .arg(dest_dir)
-            .arg(name),
-    )?;
-    Ok(dest_dir.join(name))
+/// Extract all `names` from `container` with one `tar` invocation.
+fn extract_members(
+    container: &Path,
+    names: &[String],
+    dest_dir: &Path,
+) -> Result<HashMap<String, PathBuf>> {
+    if names.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut cmd = Command::new("tar");
+    cmd.arg("-xf")
+        .arg(container)
+        .arg("-C")
+        .arg(dest_dir)
+        .args(names);
+    run("tar", &mut cmd)?;
+    Ok(names
+        .iter()
+        .map(|name| (name.clone(), dest_dir.join(name)))
+        .collect())
+}
+
+fn member_basename(member: &str) -> Option<&str> {
+    Path::new(member).file_name().and_then(|n| n.to_str())
+}
+
+fn staged_path<'a>(paths: &'a HashMap<String, PathBuf>, member: &str) -> Result<&'a Path> {
+    paths
+        .get(member)
+        .map(PathBuf::as_path)
+        .ok_or_else(|| Error::Corrupt(format!("member {member} was not staged")))
+}
+
+struct VerifiedContainer {
+    _staging: tempfile::TempDir,
+    paths: HashMap<String, PathBuf>,
+    manifest_member: String,
+    image_member: Option<String>,
+    report: SignatureReport,
+    verified: HashSet<String>,
+}
+
+impl VerifiedContainer {
+    fn root(&self) -> &Path {
+        self._staging.path()
+    }
+
+    fn path(&self, member: &str) -> Result<&Path> {
+        staged_path(&self.paths, member)
+    }
 }
 
 /// Verify a GPKG container's signature per `policy`, without extracting the
@@ -372,34 +428,81 @@ pub fn verify_container_signature(
     container: &Path,
     policy: &VerifyPolicy,
 ) -> Result<SignatureReport> {
+    Ok(stage_verified_container(container, policy, false)?.report)
+}
+
+fn stage_verified_container(
+    container: &Path,
+    policy: &VerifyPolicy,
+    include_image: bool,
+) -> Result<VerifiedContainer> {
     let staging = tempfile::Builder::new().prefix("em-gpkg-sig-").tempdir()?;
     let root = staging.path();
     let members = list_container(container)?;
     let manifest_member = members
         .iter()
-        .find(|m| Path::new(m).file_name().and_then(|n| n.to_str()) == Some("Manifest"))
+        .find(|m| member_basename(m) == Some("Manifest"))
+        .cloned()
         .ok_or_else(|| Error::Corrupt(format!("no Manifest member in {}", container.display())))?;
-    let manifest_path = extract_member(container, manifest_member, root)?;
-    let manifest_text = std::fs::read_to_string(&manifest_path)?;
+    let mut paths = extract_members(container, std::slice::from_ref(&manifest_member), root)?;
+    let manifest_text = std::fs::read_to_string(staged_path(&paths, &manifest_member)?)?;
 
     if !gpg::looks_signed(&manifest_text) {
         if policy.require_signature {
             return Err(Error::SignatureRequired(container.to_path_buf()));
         }
-        return Ok(SignatureReport {
-            signed: false,
-            signature_valid: None,
-            signer_fingerprint: None,
-            member_signatures: Vec::new(),
+        let image_member = if include_image {
+            Some(find_member(&members, "image.tar", container)?.to_string())
+        } else {
+            None
+        };
+        if let Some(image) = &image_member {
+            paths.extend(extract_members(
+                container,
+                std::slice::from_ref(image),
+                root,
+            )?);
+        }
+        return Ok(VerifiedContainer {
+            _staging: staging,
+            paths,
+            manifest_member,
+            image_member,
+            report: SignatureReport {
+                signed: false,
+                signature_valid: None,
+                signer_fingerprint: None,
+                member_signatures: Vec::new(),
+            },
+            verified: HashSet::new(),
         });
     }
 
     let Some(keyring) = policy.keyring else {
-        return Ok(SignatureReport {
-            signed: true,
-            signature_valid: None,
-            signer_fingerprint: None,
-            member_signatures: Vec::new(),
+        let image_member = if include_image {
+            Some(find_member(&members, "image.tar", container)?.to_string())
+        } else {
+            None
+        };
+        if let Some(image) = &image_member {
+            paths.extend(extract_members(
+                container,
+                std::slice::from_ref(image),
+                root,
+            )?);
+        }
+        return Ok(VerifiedContainer {
+            _staging: staging,
+            paths,
+            manifest_member,
+            image_member,
+            report: SignatureReport {
+                signed: true,
+                signature_valid: None,
+                signer_fingerprint: None,
+                member_signatures: Vec::new(),
+            },
+            verified: HashSet::new(),
         });
     };
 
@@ -414,76 +517,98 @@ pub fn verify_container_signature(
     // plaintext DATA lines (not the raw, possibly-clearsign-wrapped file) —
     // matches real portage's own `_verify_binpkg` sequence.
     let entries = parse_manifest_entries(&plain);
+    let image_member = if include_image {
+        Some(find_member(&members, "image.tar", container)?.to_string())
+    } else {
+        None
+    };
+    let mut wanted = Vec::new();
     for member in &members {
-        let base = Path::new(member).file_name().and_then(|n| n.to_str());
-        let Some(name) = base else { continue };
-        if name == "Manifest" || name.ends_with(".sig") {
+        let Some(base) = member_basename(member) else {
+            continue;
+        };
+        if base == "Manifest" {
             continue;
         }
-        if let Some(entry) = entries.iter().find(|e| e.name == name) {
-            let path = extract_member(container, member, root)?;
-            let data = std::fs::read(&path)?;
-            check_entry(entry, &data)?;
+        let is_entry = entries.iter().any(|e| e.name == base);
+        let is_image = image_member.as_deref() == Some(member.as_str());
+        if is_entry || is_image {
+            wanted.push(member.clone());
+        } else if base.ends_with(".sig") {
+            wanted.push(member.clone());
+            if let Some(data_member) = members
+                .iter()
+                .find(|m| member_basename(m) == base.strip_suffix(".sig"))
+            {
+                wanted.push(data_member.clone());
+            }
+        }
+    }
+    wanted.sort();
+    wanted.dedup();
+    paths.extend(extract_members(container, &wanted, root)?);
+
+    let mut verified = HashSet::new();
+    for member in &members {
+        let Some(base) = member_basename(member) else {
+            continue;
+        };
+        if base == "Manifest" || base.ends_with(".sig") {
+            continue;
+        }
+        if let Some(entry) = entries.iter().find(|e| e.name == base) {
+            check_entry_file(entry, staged_path(&paths, member)?)?;
+            verified.insert(base.to_string());
         }
     }
 
     // Per-member detached signatures (metadata.tar.<c>.sig, image.tar.<c>.sig).
     let mut member_signatures = Vec::new();
     for member in &members {
-        let Some(base) = Path::new(member).file_name().and_then(|n| n.to_str()) else {
+        let Some(base) = member_basename(member) else {
             continue;
         };
         let Some(data_name) = base.strip_suffix(".sig") else {
             continue;
         };
-        let data_member = members
+        let Some(data_member) = members
             .iter()
-            .find(|m| Path::new(m).file_name().and_then(|n| n.to_str()) == Some(data_name));
-        let Some(data_member) = data_member else {
+            .find(|m| member_basename(m) == Some(data_name))
+        else {
             member_signatures.push((base.to_string(), Some(false)));
             continue;
         };
-        let sig_path = extract_member(container, member, root)?;
-        let data_path = extract_member(container, data_member, root)?;
-        let armored_sig = std::fs::read_to_string(&sig_path)?;
-        let data = std::fs::read(&data_path)?;
+        let armored_sig = std::fs::read_to_string(staged_path(&paths, member)?)?;
+        // `pgp`'s detached verifier takes a contiguous slice; this is the one
+        // member path that still needs an in-memory copy.
+        let data = std::fs::read(staged_path(&paths, data_member)?)?;
         let ok = gpg::verify_detached(&data, &armored_sig, keyring).is_ok();
         member_signatures.push((base.to_string(), Some(ok)));
     }
 
-    Ok(SignatureReport {
-        signed: true,
-        signature_valid: Some(signature_valid),
-        signer_fingerprint,
-        member_signatures,
+    Ok(VerifiedContainer {
+        _staging: staging,
+        paths,
+        manifest_member,
+        image_member,
+        report: SignatureReport {
+            signed: true,
+            signature_valid: Some(signature_valid),
+            signer_fingerprint,
+            member_signatures,
+        },
+        verified,
     })
 }
 
-/// `tar -tf` the container, returning its member listing (one path per line)
-fn container_member_listing(container: &Path) -> Result<String> {
-    Ok(String::from_utf8_lossy(&capture(
-        "tar",
-        Command::new("tar").arg("-tf").arg(container),
-    )?)
-    .into_owned())
-}
-
-/// The first container member whose basename starts with `prefix`
-/// (e.g. `image.tar` / `metadata.tar`), as GNU tar lists it (trailing
-/// slash trimmed).
+/// The first container member whose basename starts with `prefix`.
 ///
 /// `Corrupt` if none is present.
-fn find_container_member<'a>(listing: &'a str, prefix: &str, container: &Path) -> Result<&'a str> {
-    listing
-        .lines()
-        .map(|l| l.trim_end_matches('/'))
-        .find(|m| {
-            Path::new(m)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .starts_with(prefix)
-        })
+fn find_member<'a>(members: &'a [String], prefix: &str, container: &Path) -> Result<&'a str> {
+    members
+        .iter()
+        .map(String::as_str)
+        .find(|m| member_basename(m).unwrap_or("").starts_with(prefix))
         .ok_or_else(|| Error::Corrupt(format!("no {prefix}.* member in {}", container.display())))
 }
 
@@ -499,7 +624,8 @@ fn find_container_member<'a>(listing: &'a str, prefix: &str, container: &Path) -
 /// before any extraction happens. `VerifyPolicy::default()` reproduces the
 /// old unconditional (no signature checking at all) behavior.
 pub fn extract_image(container: &Path, dest: &Path, policy: VerifyPolicy) -> Result<()> {
-    let report = verify_container_signature(container, &policy)?;
+    let staged = stage_verified_container(container, &policy, true)?;
+    let report = &staged.report;
     if report.signature_valid == Some(false) {
         return Err(Error::Signature(format!(
             "Manifest signature does not verify against the configured keyring: {}",
@@ -515,44 +641,18 @@ pub fn extract_image(container: &Path, dest: &Path, policy: VerifyPolicy) -> Res
         }
     }
 
-    let staging = tempfile::Builder::new().prefix("em-gpkg-img-").tempdir()?;
-    let root = staging.path().to_path_buf();
-
-    // Locate the inner `image.tar.<c>` member.
-    let listing = container_member_listing(container)?;
-    let member = find_container_member(&listing, "image.tar", container)?;
-    let compressed = root.join(member);
-    // Also pull Manifest so we can verify the image member before trust.
-    let manifest_member = listing
-        .lines()
-        .map(|l| l.trim_end_matches('/'))
-        .find(|m| Path::new(m).file_name().and_then(|n| n.to_str()) == Some("Manifest"));
-    let mut extract_args = vec![member.to_string()];
-    if let Some(m) = manifest_member {
-        extract_args.push(m.to_string());
+    let member = staged.image_member.as_deref().ok_or_else(|| {
+        Error::Corrupt(format!("no image.tar.* member in {}", container.display()))
+    })?;
+    let compressed = staged.path(member)?;
+    let manifest_path = staged.path(&staged.manifest_member)?;
+    let member_base = member_basename(member).unwrap_or("");
+    if !staged.verified.contains(member_base) {
+        verify_data_member(manifest_path, Path::new(member), compressed)?;
     }
-    let mut tar_xf = Command::new("tar");
-    tar_xf
-        .arg("-xf")
-        .arg(container)
-        .arg("-C")
-        .arg(&root)
-        .args(&extract_args);
-    run("tar", &mut tar_xf)?;
-
-    if let Some(m) = manifest_member {
-        let manifest_path = root.join(m);
-        verify_data_member(&manifest_path, Path::new(member), &compressed)?;
-    }
-
-    // Decompress to image.tar.
+    let root = staged.root();
     let image_tar = root.join("image.tar");
-    let bytes = match compressed.extension().and_then(|e| e.to_str()) {
-        Some("zst") => capture("zstd", Command::new("zstd").arg("-dc").arg(&compressed))?,
-        Some("gz") => capture("gzip", Command::new("gzip").arg("-dc").arg(&compressed))?,
-        _ => std::fs::read(&compressed)?,
-    };
-    std::fs::write(&image_tar, bytes)?;
+    decompress_to_file(compressed, &image_tar)?;
 
     // Reject absolute members and `..` path components (classic tar slip)
     // before writing anything under `dest`.
@@ -661,6 +761,41 @@ fn capture(tool: &'static str, cmd: &mut Command) -> Result<Vec<u8>> {
     }
 }
 
+/// Decompress a GPKG member straight into `out`, never holding the image in
+/// memory.
+fn decompress_to_file(compressed: &Path, out: &Path) -> Result<()> {
+    let (tool, mut cmd) = match compressed.extension().and_then(|e| e.to_str()) {
+        Some("zst") => ("zstd", Command::new("zstd")),
+        Some("gz") => ("gzip", Command::new("gzip")),
+        _ => {
+            std::fs::copy(compressed, out)?;
+            return Ok(());
+        }
+    };
+    cmd.arg("-dc").arg(compressed).stdout(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::Io(std::io::Error::other("decompressor stdout unavailable")))?;
+    let mut output = std::fs::File::create(out)?;
+    if let Err(e) = std::io::copy(&mut stdout, &mut output) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e.into());
+    }
+    drop(output);
+    let status = child.wait()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::Tool {
+            tool,
+            code: status.code().unwrap_or(-1),
+        })
+    }
+}
+
 /// Read the flat VDB-style metadata from a GPKG container's inner
 /// `metadata.tar.<c>`.
 ///
@@ -675,30 +810,15 @@ pub fn read_metadata(container: &Path) -> Result<BTreeMap<String, String>> {
 
     // 1. Locate the inner `metadata.tar.<c>` member in the container. GNU tar
     //    lists members relative to the archive root (`<basename>/metadata.tar.zst`).
-    let listing = container_member_listing(container)?;
-    let member = find_container_member(&listing, "metadata.tar", container)?;
-    let compressed = root.join(member);
+    let members = list_container(container)?;
+    let member = find_member(&members, "metadata.tar", container)?.to_string();
+    let paths = extract_members(container, std::slice::from_ref(&member), &root)?;
+    let compressed = staged_path(&paths, &member)?;
 
-    // 2. Extract just that one member.
-    run(
-        "tar",
-        Command::new("tar")
-            .arg("-xf")
-            .arg(container)
-            .arg("-C")
-            .arg(&root)
-            .arg(member),
-    )?;
-
-    // 3. Decompress it to `metadata.tar`. `metadata.tar` is uncompressed for
+    // 2. Decompress it to `metadata.tar`. `metadata.tar` is uncompressed for
     //    GPKG, but accept a `.zst`/`.gz` suffix in case BINPKG_COMPRESS differs.
     let metadata_tar: PathBuf = root.join("metadata.tar");
-    let bytes = match compressed.extension().and_then(|e| e.to_str()) {
-        Some("zst") => capture("zstd", Command::new("zstd").arg("-dc").arg(&compressed))?,
-        Some("gz") => capture("gzip", Command::new("gzip").arg("-dc").arg(&compressed))?,
-        _ => std::fs::read(&compressed)?,
-    };
-    std::fs::write(&metadata_tar, bytes)?;
+    decompress_to_file(compressed, &metadata_tar)?;
 
     // 4. Extract `metadata/*` (flat: the writer emits files with no dir entry).
     run(
@@ -1051,5 +1171,49 @@ mod tests {
             fs::read_to_string(dest.join("usr/bin/hello")).unwrap(),
             "#!/bin/sh\necho hi\n"
         );
+    }
+
+    #[test]
+    #[ignore = "explicit performance benchmark"]
+    fn benchmark_extract_image_streams_large_member() {
+        use std::time::Instant;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let image = root.join("image");
+        fs::create_dir_all(image.join("usr/lib")).unwrap();
+        fs::write(image.join("usr/lib/small"), b"small\n").unwrap();
+        fs::File::create(image.join("usr/lib/large.bin"))
+            .unwrap()
+            .set_len(64 * 1024 * 1024)
+            .unwrap();
+
+        let meta = root.join("vdb/foo-1.0");
+        fs::create_dir_all(&meta).unwrap();
+        for (k, v) in [("PF", "foo-1.0"), ("CATEGORY", "app-test"), ("SLOT", "0")] {
+            fs::write(meta.join(k), format!("{v}\n")).unwrap();
+        }
+        let container = root.join("app-test/foo-1.0-1.gpkg.tar");
+        fs::create_dir_all(container.parent().unwrap()).unwrap();
+        write_gpkg(
+            &GpkgInput {
+                image_dir: &image,
+                metadata_dir: &meta,
+                basename: "foo-1.0",
+                signing: None,
+            },
+            &container,
+        )
+        .unwrap();
+
+        let dest = root.join("dest");
+        let started = Instant::now();
+        extract_image(&container, &dest, VerifyPolicy::default()).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(
+            fs::metadata(dest.join("usr/lib/large.bin")).unwrap().len(),
+            64 * 1024 * 1024
+        );
+        println!("gpkg extract benchmark: 64 MiB image in {elapsed:?}");
     }
 }

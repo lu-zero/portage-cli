@@ -901,6 +901,18 @@ Reproduction on the current tree:
 cargo test --release -p portage-cli benchmark_binpkg_key_and_reuse_lookup -- --ignored --nocapture
 ```
 
+### 32. GPKG streaming verification/extraction (thalia, 2026-09-25)
+
+The ignored `portage-binpkg` test `gpkg::tests::benchmark_extract_image_streams_large_member` builds an unsigned 64 MiB image GPKG and times only `extract_image`. Three release runs of the identical test at exact `c735f182` and on the current tree measured medians of 89.793 ms and 80.357 ms respectively. The timing difference is modest and synthetic; the main result is memory: a matched standalone run reported 65,536 KiB peak RSS at `c735f182` versus 4,032 KiB after streaming, and `strace` observed 12 fewer process executions because the outer image/Manifest extraction is no longer repeated.
+
+Manifest generation and verification now hash members in fixed-size chunks, decompression streams to a temporary tar, and all members needed by one verification are staged with a single `tar` invocation. Detached OpenPGP verification still buffers its member because the `pgp` API requires a contiguous slice. No full-merge speedup is claimed, and no separate allocation profiler was run.
+
+Reproduction on the current tree:
+
+```sh
+cargo test --release -p portage-binpkg benchmark_extract_image_streams_large_member -- --ignored --nocapture
+```
+
 ---
 
 *Generated from scattered sources in the repo. Run the scripts on current HEAD to refresh.*
