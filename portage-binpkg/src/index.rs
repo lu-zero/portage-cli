@@ -101,14 +101,14 @@ impl BinpkgIndex {
             let meta = match crate::read_metadata(full) {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!("warning: skipping {}: {e:#}", full.display());
+                    tracing::warn!("skipping {}: {e:#}", full.display());
                     continue;
                 }
             };
             let facts = match ContainerFacts::from_metadata(&meta, rel) {
                 Ok(f) => f,
                 Err(e) => {
-                    eprintln!("warning: skipping {}: {e:#}", full.display());
+                    tracing::warn!("skipping {}: {e:#}", full.display());
                     continue;
                 }
             };

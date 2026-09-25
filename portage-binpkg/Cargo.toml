@@ -25,6 +25,7 @@ sokgi = "0.3"
 pgp = "0.20.0"
 # pgp 0.20 still requires rand 0.8; do not bump until pgp does.
 rand = "0.8"
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
