@@ -569,31 +569,7 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
     metrics.record("collapse_duplicates", collapse_start.elapsed());
     let target_policy = target_policy.with_package_use(&policy_facts, &package_use);
 
-    // Map each `package.provided` CPV onto the repo slot(s) a `:slot` dep would
-    // reference (the version sharing its major.minor series), so both the solver
-    // (host-seed, below) and the pre-flight check treat it as present at that
-    // slot. A CPV with no matching repo version is recorded slotless.
-    let provided_avail: Vec<(Cpv, Option<String>)> = provided
-        .iter()
-        .flat_map(|cpv| {
-            let mut slots: Vec<String> = Vec::new();
-            if let Some(entries) = data.versions.get(&cpv.cpn) {
-                for (rcpv, ce) in entries {
-                    if same_slot_series(&rcpv.version, &cpv.version) {
-                        let s = ce.metadata.slot.slot.to_string();
-                        if !slots.contains(&s) {
-                            slots.push(s);
-                        }
-                    }
-                }
-            }
-            if slots.is_empty() {
-                vec![(cpv.clone(), None)]
-            } else {
-                slots.into_iter().map(|s| (cpv.clone(), Some(s))).collect()
-            }
-        })
-        .collect();
+    let provided_avail = provided_availability(&provided, &data);
 
     let RootTargets {
         deps: root_deps,
@@ -2201,6 +2177,35 @@ pub async fn depgraph(opts: DepgraphOpts<'_>) -> anyhow::Result<DepgraphOutcome>
 /// version satisfies — checked structurally (like `repo::cpns_for`, not
 /// USE-evaluated, since this candidate's resolved USE isn't computed yet).
 /// Falls back to `rb.version` untouched otherwise.
+/// Map each `package.provided` CPV onto the repo slot(s) a `:slot` dep would
+/// reference, so both the solver's host seed and the pre-flight check treat it
+/// as present at that slot.
+///
+/// A CPV with no matching repo version is recorded slotless (`None`).
+fn provided_availability(provided: &[Cpv], data: &repo::RepoData) -> Vec<(Cpv, Option<String>)> {
+    provided
+        .iter()
+        .flat_map(|cpv| {
+            let mut slots: Vec<String> = Vec::new();
+            if let Some(entries) = data.versions.get(&cpv.cpn) {
+                for (rcpv, ce) in entries {
+                    if same_slot_series(&rcpv.version, &cpv.version) {
+                        let s = ce.metadata.slot.slot.to_string();
+                        if !slots.contains(&s) {
+                            slots.push(s);
+                        }
+                    }
+                }
+            }
+            if slots.is_empty() {
+                vec![(cpv.clone(), None)]
+            } else {
+                slots.into_iter().map(|s| (cpv.clone(), Some(s))).collect()
+            }
+        })
+        .collect()
+}
+
 /// The requested atoms after classification: what the solver is given, which
 /// CPNs were asked for, and what could not be satisfied.
 struct RootTargets {
