@@ -73,6 +73,12 @@ impl fmt::Display for UseDepKind {
 /// Each `UseDep` constrains one flag on the dependency package, optionally
 /// relative to the parent package's flag state.
 ///
+/// Deliberately `PartialEq`/`Eq` but **not** `Ord`: a `Dep`'s `use_deps` list
+/// is order-significant (`a/b[ssl,debug]` and `a/b[debug,ssl]` are different
+/// atoms), so an `Ord` impl would invite callers to sort or dedupe the list
+/// into a `BTreeSet`/`IndexSet` and silently change what the atom means. Sort
+/// the rendered strings, not the values.
+///
 /// See [PMS 8.3.4](https://projects.gentoo.org/pms/9/pms.html#style-and-style-use-dependencies).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "builder", derive(bon::Builder))]

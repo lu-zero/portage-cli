@@ -257,6 +257,10 @@ pub struct Version {
     /// Integer form used by callers that need major/minor extraction or
     /// range algebra. Leading zeros are preserved separately in
     /// [`Self::digits`] for PMS Algorithm 3.3.
+    ///
+    /// Each component must fit in a `u64`; a longer one is a parse error
+    /// rather than a truncation, since a silently shortened component would
+    /// mis-compare against a package that spells it in full.
     #[cfg_attr(feature = "builder", builder(start_fn))]
     pub numbers: Numbers,
     /// Original decimal digit strings for each component (same length as
@@ -284,6 +288,14 @@ pub struct Version {
     /// of thousands of one-shot values per scan the interner never frees).
     ///
     /// `None` when constructed programmatically via [`Version::new`] or the builder.
+    ///
+    /// [`Display`](fmt::Display) echoes this verbatim, which is deliberate —
+    /// an ebuild's version should print as it spells it, and the Gentoo tree
+    /// has 13 versions whose *first* component carries leading zeros
+    /// (`003.03`, `019`, `073`). The consequence is that rendering is **not** a
+    /// faithful inverse of `Eq`: `01.1 == 1.1` (Algorithm 3.2 compares the
+    /// first component numerically) yet they render as `01.1` and `1.1`. Key a
+    /// map or dedupe a set on the fields, never on the rendered string.
     #[cfg_attr(feature = "builder", builder(skip))]
     pub raw: Option<SmolStr>,
 }
@@ -874,6 +886,37 @@ mod tests {
 
         let cpv = Cpv::parse("app-accessibility/kontrast-26.04.0").unwrap();
         assert_eq!(cpv.to_string(), "app-accessibility/kontrast-26.04.0");
+    }
+
+    // Rendering preserves the ebuild's spelling, so it is deliberately *not*
+    // an inverse of `Eq`: Algorithm 3.2 compares the first component
+    // numerically, so a leading zero there is not significant. Pinned because
+    // "make Display canonical" would look like a free cleanup and would
+    // rewrite how the tree's `003.03`/`019`/`073` versions print.
+    #[test]
+    fn display_is_not_an_inverse_of_eq_for_a_padded_first_component() {
+        let padded = Version::parse("01.1").unwrap();
+        let plain = Version::parse("1.1").unwrap();
+        assert_eq!(padded, plain, "first component compares numerically");
+        assert_ne!(padded.to_string(), plain.to_string());
+        // A non-first component's zero *is* significant, so both survive.
+        let zeroed = Version::parse("1.01").unwrap();
+        assert_ne!(zeroed, plain, "Algorithm 3.3 keeps non-first zeros");
+        assert_eq!(zeroed.to_string(), "1.01");
+    }
+
+    // PMS sets no bound on a version component; u64 is ours, so the limit is
+    // documented and enforced by rejecting rather than truncating.
+    #[test]
+    fn a_component_past_u64_is_rejected_rather_than_truncated() {
+        assert!(
+            Version::parse("18446744073709551615").is_ok(),
+            "u64::MAX fits"
+        );
+        let over = Version::parse("18446744073709551616")
+            .unwrap_err()
+            .to_string();
+        assert!(over.contains("number too large"), "{over}");
     }
 
     #[test]
